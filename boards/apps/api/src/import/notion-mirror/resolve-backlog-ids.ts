@@ -64,12 +64,18 @@ export function resolveBacklogIds(
   return { dropped, groups };
 }
 
-// The run's warning: which IDs stayed in a footer, on how many cards.
+// The run's warnings: which IDs stayed in a footer, on how many cards, then
+// each group with its holder and the pages that carry the ID in the footer
+// (role 1, 30.10).
 export function backlogWarnings(groups: readonly BacklogGroup[]): string[] {
   const moved = groups.filter(({ footer }) => footer.length > 0);
   if (moved.length === 0) return [];
   const cards = moved.reduce((sum, { footer }) => sum + footer.length, 0);
   return [
     `Kept a Backlog ID another card holds in the footer of ${cards === 1 ? "1 card" : `${cards} cards`}: ${moved.map(({ value }) => value).join(", ")}.`,
+    ...moved.map(
+      ({ value, holder, footer }) =>
+        `Backlog ID ${value}: held by ${holder ? `page ${holder}` : "a card outside this mirror"}; in the footer: ${footer.join(", ")}.`,
+    ),
   ];
 }

@@ -225,4 +225,40 @@ describe("API integration: Notion mirror re-import (R-080)", () => {
       .where(eq(schema.taskTable.id, footer?.id ?? ""));
     expect(body?.description).toBe('Body z\n\nNotion: {"Backlog ID":"B-1"}');
   });
+
+  it("leaves each Backlog ID with its holder on every normal pass", async () => {
+    const { user, workspace } = await createWorkspaceMember({ role: "owner" });
+    const holding = (id: string, createdTime: string) =>
+      page(id, T1, {
+        footer: { "Backlog ID": "B-1" },
+        sourceRef: {
+          system: "notion",
+          pageId: id,
+          lastEditedTime: T1,
+          createdTime,
+        },
+      });
+    // Page z came first into the mirror, page a is older in Notion.
+    const first = await importNotion(workspace.id, user.id, [holding("z", T2)]);
+    const pages = [holding("a", T1), holding("z", T2)];
+    const second = await importNotion(workspace.id, user.id, pages);
+    const third = await importNotion(workspace.id, user.id, pages);
+
+    const holders = async () =>
+      (await cards(first.projectId)).map(({ pageId, backlogId }) => ({
+        pageId,
+        backlogId,
+      }));
+    expect(await holders()).toEqual([
+      { pageId: "z", backlogId: "B-1" },
+      { pageId: "a", backlogId: null },
+    ]);
+    expect(third.warnings).toEqual([
+      "Notion mirror: 0 new, 0 updated, 2 unchanged, 0 with changed meta.",
+      ...second.warnings.slice(1),
+    ]);
+    expect(second.warnings).toContain(
+      "Backlog ID B-1: held by page z; in the footer: a.",
+    );
+  });
 });

@@ -63,7 +63,7 @@ describe("resolveBacklogIds", () => {
 });
 
 describe("backlogWarnings", () => {
-  it("names each value once and counts the cards that keep it in the footer", () => {
+  it("counts the footer cards, then names each holder and the rest by page id", () => {
     expect(
       backlogWarnings([
         { value: "FIX-07", holder: "b", footer: ["c", "a"] },
@@ -71,6 +71,8 @@ describe("backlogWarnings", () => {
       ]),
     ).toEqual([
       "Kept a Backlog ID another card holds in the footer of 3 cards: FIX-07, B-1.",
+      "Backlog ID FIX-07: held by page b; in the footer: c, a.",
+      "Backlog ID B-1: held by a card outside this mirror; in the footer: z.",
     ]);
     expect(backlogWarnings([])).toEqual([]);
   });
