@@ -82,6 +82,8 @@ describe("richTextMarkdown", () => {
     ["https://e.example/#/cb?access_token=1", "signed"],
     ["https://e.example/a?access%5Ftoken=1", "signed"],
     ["https://e.example/a#!sig=1", "signed"],
+    ["https://e.example/a?access%5Ftoken=1&x=%ZZ", "signed"],
+    ["https://e.example/a?q=%E0%A4%A&%73ig=1", "signed"],
   ])("keeps only the text of %j", (href, loss) => {
     expect(richTextMarkdown([link("a", href)])).toEqual({
       text: "a",

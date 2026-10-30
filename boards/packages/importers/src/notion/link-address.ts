@@ -46,12 +46,14 @@ function isSigned(address: string, url: URL): boolean {
   return SIGNED_PARAM.test(tail) || SIGNED_PARAM.test(decoded(tail));
 }
 
+// Each valid escape on its own, as Python's unquote_plus does: one broken
+// `%` elsewhere must not switch the decoded check off (lens 4, 30.10).
 function decoded(text: string): string {
-  try {
-    return decodeURIComponent(text.replaceAll("+", " "));
-  } catch {
-    return text;
-  }
+  return text
+    .replaceAll("+", " ")
+    .replace(/%([0-9a-f]{2})/gi, (_, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    );
 }
 
 function percent(char: string): string {
