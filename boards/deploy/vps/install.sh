@@ -136,19 +136,21 @@ write_files() {
   chmod 0600 "$ROOT/.env"
 }
 
-# The app's fixed address on its bridge, the one the tunnel lets through to the memory proxy.
-app_ip() { sed -n 's/^ *ipv4_address: //p' "$ROOT/compose.yml"; }
+# The app's fixed address and its bridge, the pair the tunnel lets through to the memory proxy.
+app_ip() { sed -n '/^  app:/,/^  [a-z]/s/^ *ipv4_address: //p' "$ROOT/compose.yml"; }
+app_bridge() { sed -n 's/^ *com\.docker\.network\.bridge\.name: //p' "$ROOT/compose.yml"; }
 
 # wg-setup.sh lets the t-boards app reach the claude-mem proxy at the address
 # in .env (OPS-19: only the app); this script does not re-run it.
 check_tunnel_rules() {
-  local host port app rules=/etc/wireguard/t-boards-rules.sh
+  local host port app bridge rules=/etc/wireguard/t-boards-rules.sh
   host="$(sed -n 's/^CLAUDE_MEM_WORKER_HOST=//p' "$ROOT/.env" | tail -1)"
   port="$(sed -n 's/^CLAUDE_MEM_WORKER_PORT=//p' "$ROOT/.env" | tail -1)"
   app="$(app_ip)"
-  { grep -qF -e "-s $app -d $host -p tcp --dport $port " "$rules" &&
-    grep -qF -e "-d $app -s $host -p tcp --sport $port " "$rules"; } 2>/dev/null ||
-    log "ВНИМАНИЕ: туннель не пускает t-boards ($app) к памяти $host:$port — перезапустите $ROOT/wg-setup.sh с ключом Mac"
+  bridge="$(app_bridge)"
+  { grep -qF -e "-i $bridge -o \"\$wg_if\" -s $app -d $host -p tcp --dport $port " "$rules" &&
+    grep -qF -e "-i \"\$wg_if\" -o $bridge -d $app -s $host -p tcp --sport $port " "$rules"; } 2>/dev/null ||
+    log "ВНИМАНИЕ: туннель не пускает t-boards ($app, мост $bridge) к памяти $host:$port — перезапустите $ROOT/wg-setup.sh с ключом Mac"
 }
 
 load_image() {

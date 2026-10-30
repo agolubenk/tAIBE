@@ -39,8 +39,9 @@ the tunnel:
   rest, so the VPS's internal Docker networks stay out of reach. Containers may not open connections into the
   tunnel. The one exception is the app (bridge `br-tboards`, address `10.78.0.2`, both fixed in `compose.yml`) to the
   Mac's claude-mem proxy (`CLAUDE_MEM_WORKER_HOST:PORT` from `/opt/t-boards/.env`), and only its replies come back.
-  postgres and backup on the same bridge, other containers, the VPS host and host-network containers (chain
-  `TB-WG-OUT` in `OUTPUT`) cannot reach it, nor the Mac's other ports. After changing that address in `.env`, re-run
+  postgres and backup on the same bridge and other containers cannot reach it, nor the Mac's other ports. The VPS
+  host and host-network containers cannot reach the proxy either (chain `TB-WG-OUT` in `OUTPUT`); the Mac's other
+  ports stay open to them, as before. After changing that address in `.env`, re-run
   `wg-setup.sh` with the Mac's key; `install.sh` warns while the rules disagree and stops if the app did not get its
   address (subnet `10.78.0.0/28` taken).
 

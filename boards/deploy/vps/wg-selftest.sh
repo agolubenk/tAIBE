@@ -125,11 +125,16 @@ chain 10.77.0.2 37702 | diff - /tmp/chain || fail "forwarding chain differs"
 mkdir -p /tmp/root
 printf "CLAUDE_MEM_WORKER_HOST=10.77.0.2\nCLAUDE_MEM_WORKER_PORT=37702\n" >/tmp/root/.env
 cp /kit/compose.yml /tmp/root/compose.yml
-sed -n "/^app_ip()/p; /^check_tunnel_rules() {/,/^}/p" /kit/install.sh >/tmp/ctr.sh
+sed -n "/^app_ip()/p; /^app_bridge()/p; /^check_tunnel_rules() {/,/^}/p" /kit/install.sh >/tmp/ctr.sh
 tunnel_check() { ROOT=/tmp/root bash -c ". /tmp/ctr.sh; log() { echo \"\$*\"; }; check_tunnel_rules"; }
 [ -z "$(tunnel_check)" ] || fail "install.sh warns about matching rules: $(tunnel_check)"
 sed -i "s/ipv4_address: 10.78.0.2$/ipv4_address: 10.78.0.3/" /tmp/root/compose.yml
 tunnel_check | grep -q ВНИМАНИЕ || fail "install.sh misses rules made for another app address"
+sed "s/bridge.name: br-tboards$/bridge.name: br-other/" /kit/compose.yml >/tmp/root/compose.yml
+tunnel_check | grep -q ВНИМАНИЕ || fail "install.sh misses rules made for another bridge"
+# Only the app service counts, not another service with a fixed address.
+awk "/^  backup:/ { print \"    networks:\"; print \"      tb:\"; print \"        ipv4_address: 10.78.0.9\" } { print }" /kit/compose.yml >/tmp/root/compose.yml
+[ "$(ROOT=/tmp/root bash -c ". /tmp/ctr.sh; app_ip")" = 10.78.0.2 ] || fail "install.sh takes an address that is not the app one"
 cp /kit/compose.yml /tmp/root/compose.yml
 sed -i "s/=37702$/=38000/" /tmp/root/.env
 tunnel_check | grep -q ВНИМАНИЕ || fail "install.sh misses rules made for another memory port"
