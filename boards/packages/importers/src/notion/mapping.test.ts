@@ -187,9 +187,7 @@ describe("mapPage", () => {
       { ...CONTEXT, footerFields: ["Task ID", "Очередь"] },
     );
     expect(task.footer).toEqual({ "Task ID": "T-3" });
-    expect(task.footerLosses).toEqual([
-      { field: "Очередь", reason: "personal" },
-    ]);
+    expect(task.losses).toEqual([{ field: "Очередь", reason: "personal" }]);
   });
 
   it("keeps a link's text and reports its address as lost", () => {
@@ -202,8 +200,38 @@ describe("mapPage", () => {
       { ...CONTEXT, footerFields: ["Backlog ID"] },
     );
     expect(task.footer).toEqual({ "Backlog ID": "FIX-07" });
-    expect(task.footerLosses).toEqual([
-      { field: "Backlog ID", reason: "link" },
+    expect(task.losses).toEqual([{ field: "Backlog ID", reason: "link" }]);
+  });
+
+  it("keeps Report links as markdown and reports a linked title", () => {
+    const { task } = mapPage(
+      page("p-8", {
+        Name: prop("title", {
+          title: [
+            { plain_text: "Fix ", href: null },
+            { plain_text: "login", href: "/a1" },
+          ],
+        }),
+        Report: prop("rich_text", {
+          rich_text: [
+            { plain_text: "done in " },
+            { plain_text: "PR [1]", href: "https://github.com/x/pull/1" },
+            {
+              plain_text: ", log",
+              href: "https://prod-files-secure.s3.amazonaws.com/l",
+            },
+          ],
+        }),
+      }),
+      CONTEXT,
+    );
+    expect(task.title).toBe("Fix login");
+    expect(task.extraFields?.Report).toBe(
+      "done in [PR \\[1\\]](https://github.com/x/pull/1), log",
+    );
+    expect(task.losses).toEqual([
+      { field: "Name", reason: "link" },
+      { field: "Report", reason: "signed" },
     ]);
   });
 

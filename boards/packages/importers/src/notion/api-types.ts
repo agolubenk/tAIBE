@@ -3,7 +3,7 @@ export type NotionRichText = {
   plain_text: string;
   href?: string | null;
   // Only the kind is read: a user mention also carries the person's email.
-  mention?: { type?: string };
+  mention?: { type?: string; page?: { id?: string } };
   annotations?: {
     bold?: boolean;
     italic?: boolean;

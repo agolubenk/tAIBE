@@ -3,7 +3,7 @@ import { toIsoDate } from "../markdown.js";
 import type {
   ImportedColumn,
   ImportedComment,
-  ImportedFooterLoss,
+  ImportedFieldLoss,
   ImportedLabel,
   ImportedPerson,
   ImportedPriority,
@@ -21,6 +21,7 @@ import {
   type NotionSelectOption,
 } from "./api-types.js";
 import { footerRisk } from "./footer-risk.js";
+import { hasLink, richTextMarkdown } from "./rich-text-markdown.js";
 import { notionIdempotencyKey } from "./idempotency.js";
 
 const STATUS_NAME = /^status$/i;
@@ -183,6 +184,7 @@ export type MapPageContext = {
 export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
   const key = notionIdempotencyKey(context.product, page.id);
   const extraFields: Record<string, string | number | boolean | null> = {};
+  const losses: ImportedFieldLoss[] = [];
   const relations: ImportedRelation[] = [];
   const labels: ImportedLabel[] = [];
 
@@ -193,7 +195,13 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
   let fallbackAssignee: ImportedPerson | undefined;
 
   for (const [name, value] of Object.entries(page.properties)) {
-    if (value.type === "title") continue;
+    if (value.type === "title") {
+      // The card's title stays plain text; its links are reported lost.
+      if (value.title?.some(hasLink)) {
+        losses.push({ field: name, reason: "link" });
+      }
+      continue;
+    }
 
     if (value.type === "relation") {
       for (const target of value.relation ?? []) {
@@ -246,6 +254,15 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
       }
     }
 
+    if (value.type === "rich_text") {
+      // Kept with its links (Report lives in the card's meta as markdown).
+      const rich = richTextMarkdown(value.rich_text ?? []);
+      extraFields[name] = rich.text.trim();
+      if (!context.footerFields?.includes(name)) {
+        for (const reason of rich.losses) losses.push({ field: name, reason });
+      }
+      continue;
+    }
     const scalar = scalarOf(value);
     if (scalar !== undefined) extraFields[name] = scalar;
   }
@@ -259,18 +276,17 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
   const createdAt = toIsoDate(page.created_time);
   const assigneePerson = assignee ?? fallbackAssignee;
   const footer: Record<string, string | number> = {};
-  const footerLosses: ImportedFooterLoss[] = [];
   for (const name of context.footerFields ?? []) {
     const property = page.properties[name];
     const value = footerValueOf(property);
     if (value === undefined) continue;
     if (footerRisk(value, property)) {
-      footerLosses.push({ field: name, reason: "personal" });
+      losses.push({ field: name, reason: "personal" });
       continue;
     }
     footer[name] = value;
-    if (property?.rich_text?.some((part) => part.href))
-      footerLosses.push({ field: name, reason: "link" });
+    if (property?.rich_text?.some(hasLink))
+      losses.push({ field: name, reason: "link" });
   }
 
   const task: ImportedTask = {
@@ -302,7 +318,7 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
     },
     ...(Object.keys(extraFields).length > 0 ? { extraFields } : {}),
     ...(Object.keys(footer).length > 0 ? { footer } : {}),
-    ...(footerLosses.length > 0 ? { footerLosses } : {}),
+    ...(losses.length > 0 ? { losses } : {}),
   };
 
   return { task, relations, labels };

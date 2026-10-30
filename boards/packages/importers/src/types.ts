@@ -35,9 +35,11 @@ export type ImportedComment = {
   url?: string;
 };
 
-export type ImportedFooterLoss = {
+// What a field lost on the way: a value that looked personal (left out),
+// a link reduced to its text, a signed file address or an unsafe scheme.
+export type ImportedFieldLoss = {
   field: string;
-  reason: "personal" | "link";
+  reason: "personal" | "link" | "signed" | "scheme";
 };
 
 export type ImportedTask = {
@@ -62,9 +64,8 @@ export type ImportedTask = {
   // Source fields the card carries only as the body's last line (b13 В′),
   // raw and in the source's field order.
   footer?: Record<string, string | number>;
-  // What the footer could not carry: a value that looked personal or signed
-  // (left out), or a link whose address is not its text (text kept).
-  footerLosses?: ImportedFooterLoss[];
+  // One entry per field and reason, for the run report.
+  losses?: ImportedFieldLoss[];
   // Why an archived task left the board in the source, when it says so.
   terminalReason?: string;
 };
