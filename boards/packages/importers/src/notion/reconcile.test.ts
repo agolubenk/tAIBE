@@ -93,6 +93,30 @@ describe("reconcile", () => {
     ]);
   });
 
+  it("does not flag a page Notion itself gives no status to", () => {
+    const pages = [page("a", "", "Note")];
+    const [task] = imported(pages);
+    if (!task) throw new Error("expected a task");
+    // The writer places statusless pages into the board's default column;
+    // that placement must not read as a divergence from Notion.
+    const placed = { ...task, columnKey: "kaneo:planned" };
+
+    expect(reconcile(pages, [placed], DATABASE).discrepancies).toEqual([]);
+  });
+
+  it("still flags a page with a status whose card has no column", () => {
+    const pages = [page("a", "Open", "Bug")];
+    const [task] = imported(pages);
+    if (!task) throw new Error("expected a task");
+    const withoutColumn = { ...task, columnKey: null };
+
+    expect(
+      reconcile(pages, [withoutColumn], DATABASE).discrepancies.map(
+        (d) => d.kind,
+      ),
+    ).toEqual(["status-mismatch"]);
+  });
+
   it("matches tasks by key when they carry no source reference", () => {
     const pages = [page("a", "Open", "Bug")];
     const [task] = imported(pages);
