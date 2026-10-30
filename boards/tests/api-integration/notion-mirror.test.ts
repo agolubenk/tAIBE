@@ -87,7 +87,12 @@ describe("API integration: Notion mirror re-import (R-080)", () => {
   it("rewrites edited pages, skips the rest, adds new ones, keeps agent fields", async () => {
     const { user, workspace } = await createWorkspaceMember({ role: "owner" });
     const first = await importNotion(workspace.id, user.id, [
-      page("a", T1, { number: 7 }, { "Backlog ID": "B-1", Type: "Bug" }),
+      page(
+        "a",
+        T1,
+        { number: 7, footer: { "Backlog ID": "B-1" } },
+        { Type: "Bug" },
+      ),
       page("b", T1),
     ]);
     expect(first.warnings).not.toContain(
@@ -118,8 +123,13 @@ describe("API integration: Notion mirror re-import (R-080)", () => {
       page(
         "a",
         T2,
-        { title: "Page a, fixed", columnKey: "fixed", number: 7 },
-        { "Backlog ID": "B-1", Type: "Bug", Status: "Fixed" },
+        {
+          title: "Page a, fixed",
+          columnKey: "fixed",
+          number: 7,
+          footer: { "Backlog ID": "B-1" },
+        },
+        { Type: "Bug", Status: "Fixed" },
       ),
       page("b", T1, { title: "Ignored: Notion did not edit it" }),
       page("c", T2, { number: 7 }),
@@ -127,7 +137,7 @@ describe("API integration: Notion mirror re-import (R-080)", () => {
 
     expect(second.projectId).toBe(first.projectId);
     expect(second.warnings[0]).toBe(
-      "Notion mirror: 1 new, 1 updated, 1 unchanged.",
+      "Notion mirror: 1 new, 1 updated, 1 unchanged, 1 with changed meta.",
     );
     expect(second.counts.tasks).toBe(2);
 
@@ -194,17 +204,25 @@ describe("API integration: Notion mirror re-import (R-080)", () => {
 
   it("drops a Backlog ID a card outside the import already holds", async () => {
     const { user, workspace } = await createWorkspaceMember({ role: "owner" });
-    await importNotion(workspace.id, user.id, [
-      page("a", T1, {}, { "Backlog ID": "B-1" }),
+    const B1 = { footer: { "Backlog ID": "B-1" } };
+    const first = await importNotion(workspace.id, user.id, [
+      page("a", T1, B1),
     ]);
 
     const again = await importNotion(workspace.id, user.id, [
-      page("a", T1, {}, { "Backlog ID": "B-1" }),
-      page("z", T1, {}, { "Backlog ID": "B-1" }),
+      page("a", T1, B1),
+      page("z", T1, B1),
     ]);
 
     expect(again.warnings).toContain(
-      "Left a card without a Backlog ID another card already uses: B-1.",
+      "Kept a Backlog ID another card holds in the footer of 1 card: B-1.",
     );
+    const [held, footer] = await cards(first.projectId);
+    expect([held?.backlogId, footer?.backlogId]).toEqual(["B-1", null]);
+    const [body] = await db
+      .select({ description: schema.taskTable.description })
+      .from(schema.taskTable)
+      .where(eq(schema.taskTable.id, footer?.id ?? ""));
+    expect(body?.description).toBe('Body z\n\nNotion: {"Backlog ID":"B-1"}');
   });
 });

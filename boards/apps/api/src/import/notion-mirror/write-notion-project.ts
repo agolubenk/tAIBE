@@ -11,6 +11,11 @@ import { writeProjectContent } from "../writer/write-project-content";
 import { loadMirroredCards } from "./load-mirrored-cards";
 import { notionMetaRows } from "./notion-meta-rows";
 import { planNotionSync } from "./plan-notion-sync";
+import {
+  type PreparedNotionProject,
+  prepareNotionProject,
+} from "./prepare-notion-tasks";
+import { backlogWarnings } from "./resolve-backlog-ids";
 import { syncNotionProject } from "./sync-notion-project";
 import { writeNotionCardMeta } from "./write-notion-card-meta";
 
@@ -31,21 +36,40 @@ export async function writeNotionProject(
     });
   }
 
-  const plan = planNotionSync(project.tasks, cards);
-  if (plan.projectId === null) return createMirror(input);
+  // Every page gets its footer, and each Backlog ID one holder, before the
+  // plan: the footer is part of the body the sync compares.
+  const prepared = await prepareNotionProject(workspaceId, project, false);
+  const ready = { ...input, project: prepared.project };
+  const plan = planNotionSync(prepared.project.tasks, cards);
+  if (plan.projectId === null) {
+    return createMirror(ready, prepared);
+  }
 
   const projectId = plan.projectId;
   const synced = await db.transaction((tx) =>
-    syncNotionProject(tx, { ...input, projectId, plan }),
+    syncNotionProject(tx, {
+      ...ready,
+      projectId,
+      plan,
+      backlogDropped: prepared.backlogDropped,
+    }),
   );
   const [row] = await db
     .select({ slug: projectTable.slug })
     .from(projectTable)
     .where(eq(projectTable.id, projectId));
-  return { projectId, projectSlug: row?.slug ?? "", ...synced };
+  return {
+    projectId,
+    projectSlug: row?.slug ?? "",
+    ...synced,
+    warnings: [...synced.warnings, ...backlogWarnings(prepared.backlogGroups)],
+  };
 }
 
-function createMirror(input: WriteImportedProjectInput) {
+function createMirror(
+  input: WriteImportedProjectInput,
+  prepared: PreparedNotionProject,
+) {
   const { workspaceId, userId, project } = input;
   return createImportProject(
     {
@@ -59,16 +83,16 @@ function createMirror(input: WriteImportedProjectInput) {
         ...input,
         projectId: created.id,
       });
-      const metaWarnings = await writeNotionCardMeta(tx, {
+      await writeNotionCardMeta(tx, {
         workspaceId,
         userId,
-        rows: notionMetaRows(project.tasks, taskIds),
+        rows: notionMetaRows(project.tasks, taskIds, prepared.backlogDropped),
       });
       return {
         projectId: created.id,
         projectSlug: created.slug,
         counts,
-        warnings: [...warnings, ...metaWarnings],
+        warnings: [...warnings, ...backlogWarnings(prepared.backlogGroups)],
       };
     },
   );
