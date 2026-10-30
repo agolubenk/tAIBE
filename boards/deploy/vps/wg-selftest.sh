@@ -70,8 +70,10 @@ esac
 EOF
 chmod +x /stub/*
 export PATH="/stub:$PATH"
-# Docker on the VPS owns DOCKER-USER; the rules must hook into it.
+# Docker on the VPS owns DOCKER-USER; the rules must hook into it, ahead of the RETURN
+# older Docker ends it with.
 iptables -N DOCKER-USER
+iptables -A DOCKER-USER -j RETURN
 iptables -I FORWARD -j DOCKER-USER
 ip netns add mac
 ip -n mac link set lo up
@@ -119,8 +121,18 @@ EOF
 }
 iptables -S TB-WG | tail -n +2 >/tmp/chain
 chain 10.77.0.2 37702 | diff - /tmp/chain || fail "forwarding chain differs"
-grep -qF -e "-s 10.77.0.2 -p tcp --sport 37702 " /etc/wireguard/t-boards-rules.sh || fail "install.sh check misses the reply rule"
-grep -qF -e "-d 10.77.0.2 -p tcp --dport 37702 " /etc/wireguard/t-boards-rules.sh || fail "install.sh check misses the allow rule"
+# install.sh warns while the rules disagree with .env or with the app address; its own check runs here.
+mkdir -p /tmp/root
+printf "CLAUDE_MEM_WORKER_HOST=10.77.0.2\nCLAUDE_MEM_WORKER_PORT=37702\n" >/tmp/root/.env
+cp /kit/compose.yml /tmp/root/compose.yml
+sed -n "/^app_ip()/p; /^check_tunnel_rules() {/,/^}/p" /kit/install.sh >/tmp/ctr.sh
+tunnel_check() { ROOT=/tmp/root bash -c ". /tmp/ctr.sh; log() { echo \"\$*\"; }; check_tunnel_rules"; }
+[ -z "$(tunnel_check)" ] || fail "install.sh warns about matching rules: $(tunnel_check)"
+sed -i "s/ipv4_address: 10.78.0.2$/ipv4_address: 10.78.0.3/" /tmp/root/compose.yml
+tunnel_check | grep -q ВНИМАНИЕ || fail "install.sh misses rules made for another app address"
+cp /kit/compose.yml /tmp/root/compose.yml
+sed -i "s/=37702$/=38000/" /tmp/root/.env
+tunnel_check | grep -q ВНИМАНИЕ || fail "install.sh misses rules made for another memory port"
 grep -q "com.docker.network.bridge.name: br-tboards$" /kit/compose.yml || fail "compose.yml bridge is not the one the rules allow"
 grep -q "ipv4_address: 10.78.0.2$" /kit/compose.yml || fail "compose.yml app address is not the one the rules allow"
 grep -q "subnet: 10.78.0.0/28$" /kit/compose.yml && grep -q "ip_range: 10.78.0.8/29$" /kit/compose.yml || fail "compose.yml may hand the app address to another container"
@@ -180,13 +192,28 @@ live
 iptables -D FORWARD -j DOCKER-USER && iptables -D FORWARD -j DOCKER-FWD
 iptables -I FORWARD 1 -j DOCKER-FWD && iptables -I FORWARD 1 -j DOCKER-USER
 live
+# Boot: wg0 comes up before Docker, so there is no DOCKER-USER yet. Docker then finds the
+# chain, keeps it and puts its jumps on top of FORWARD (its nat rules stay here for brevity).
+/etc/wireguard/t-boards-rules.sh down wg0
+iptables -D FORWARD -j DOCKER-USER && iptables -D FORWARD -j DOCKER-FWD
+iptables -F DOCKER-USER && iptables -X DOCKER-USER
+/etc/wireguard/t-boards-rules.sh up wg0
+iptables -C DOCKER-USER -j TB-WG 2>/dev/null || fail "wg0 up before Docker: no DOCKER-USER hook"
+iptables -N DOCKER-USER 2>/dev/null || true
+iptables -A DOCKER-USER -j RETURN
+iptables -I FORWARD 1 -j DOCKER-FWD && iptables -I FORWARD 1 -j DOCKER-USER
+live
+/etc/wireguard/t-boards-rules.sh down wg0
+iptables -C DOCKER-USER -j RETURN 2>/dev/null || fail "down took Docker rules out of DOCKER-USER"
+iptables -C DOCKER-USER -j TB-WG 2>/dev/null && fail "down left the DOCKER-USER hook"
+/etc/wireguard/t-boards-rules.sh up wg0
 kill $l1 $l2 $l3
 ip netns del app && ip netns del db && ip netns del other && ip link del br-tboards && ip link del br-other
 iptables -t nat -D PREROUTING -i wg0 -d 10.77.0.1 -p tcp --dport 8080 -j DNAT --to-destination 172.31.0.2:80
 iptables -t nat -D POSTROUTING -s 10.78.0.0/28 ! -o br-tboards -j MASQUERADE
 iptables -t nat -D POSTROUTING -s 172.31.0.0/24 ! -o br-other -j MASQUERADE
 iptables -F DOCKER-FWD
-echo "ok: only the app reaches the memory proxy (not its neighbours, other networks, the host or other Mac ports), devices still reach published ports, also after a Docker restart"
+echo "ok: only the app reaches the memory proxy (not its neighbours, other networks, the host or other Mac ports), devices still reach published ports, also after a Docker restart and when wg0 starts before Docker"
 
 # The claude-mem proxy address comes from the app .env; a bad value falls back.
 mkdir -p /opt/t-boards
@@ -256,7 +283,15 @@ bash /kit/wg-issue.sh --revoke spare >/dev/null 2>&1 </dev/null || fail "revoke 
 for f in /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.bak-[0-9]*; do
   [ "$(stat -c %a "$f")" = 600 ] || fail "$f is $(stat -c %a "$f"), not 600"
 done
-echo "ok: backups keep the last real state and the newest three edits of one second, all 600"
+# A hundredth copy of one second stops: -100 would sort first and be pruned at once.
+mkdir /tmp/bk && echo old >/tmp/bk/wg0.conf.bak-20991231-120000-99 && echo new >/tmp/bk/wg0.conf
+export FAKE_TS=20991231-120000
+rc=0
+CONF=/tmp/bk/wg0.conf bash -c ". /tmp/backup.setup; die() { echo \"СТОП: \$*\"; exit 1; }; backup" >/tmp/out 2>&1 || rc=$?
+unset FAKE_TS
+[ "$rc" = 1 ] && grep -q "дошли до -99" /tmp/out || fail "backup() went past -99 (rc $rc): $(ls /tmp/bk)"
+[ "$(ls /tmp/bk | wc -l)" = 2 ] || fail "backup() at -99 changed the copies: $(ls /tmp/bk)"
+echo "ok: backups keep the last real state and the newest three edits of one second, all 600, stop at the 99th"
 
 # Each of the three scripts waits for the lock another one holds.
 held() { rm -f /tmp/held; ( flock 9; sleep 3; : >/tmp/held ) 9>/etc/wireguard/wg0.conf.lock & sleep 1; }
@@ -278,7 +313,7 @@ grep -qF "$new_psk" /tmp/out && fail "wg-psk.sh printed the key"
 bash /kit/wg-psk.sh --remove 10.77.0.2 >/tmp/out 2>&1 </dev/null || { cat /tmp/out; fail "wg-psk.sh --remove"; }
 [ -z "$(psk_of mac)" ] || fail "wg-psk.sh --remove left the PresharedKey"
 [ "$(tail -1 /tmp/wg-set.log)" = "$mac_pub " ] || fail "wg-psk.sh --remove did not clear the live key"
-[ ! -e /etc/wireguard/wg0.conf.bak-psk ] || fail "wg-psk.sh left its backup"
+[ ! -e /etc/wireguard/wg0.conf.bak-psk ] && [ ! -e /etc/wireguard/wg0.conf.bak-psk.peer ] || fail "wg-psk.sh left its backup"
 
 # Refusals leave wg0.conf as it was.
 cp /etc/wireguard/wg0.conf /tmp/conf.before
@@ -300,7 +335,10 @@ grep -qF "$new_psk" /tmp/out && fail "wg-psk.sh printed the key on failure"
 cp /etc/wireguard/wg0.conf /tmp/conf.before
 printf %s "$new_psk" | refused 10.77.0.2
 cmp -s /tmp/conf.before /etc/wireguard/wg0.conf.bak-psk && fail "the next run overwrote bak-psk"
+# Its rollback clears the live key of that very peer: an older wg syncconf would keep it.
+grep -qF "wg set wg0 peer $mac_pub preshared-key /dev/null && wg syncconf" /tmp/out || fail "leftover rollback does not clear the live key of the peer"
 mv /etc/wireguard/wg0.conf.bak-psk /etc/wireguard/wg0.conf
+rm /etc/wireguard/wg0.conf.bak-psk.peer
 [ -z "$(psk_of mac)" ] || fail "rollback from bak-psk did not restore the mac peer"
 echo "ok: wg-psk.sh waits for the lock, sets and removes one peer live, refuses bad input and keeps the backup of a failed run"
 

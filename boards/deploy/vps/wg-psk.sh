@@ -35,7 +35,14 @@ wg show "$WG_IF" >/dev/null 2>&1 || die "$WG_IF не поднят: systemctl sta
 # The backup holds the server PrivateKey: root-only, one file, kept only until the live check passes.
 # One left over is the only way back from a failed run; a new run must not overwrite it.
 backup="$CONF.bak-psk"
-[ ! -e "$backup" ] || die "остался $backup от прерванного запуска — сначала откат: cp $backup $CONF && wg syncconf $WG_IF <(wg-quick strip $WG_IF) && rm $backup"
+# The way back clears the peer's live key first: an older wg syncconf keeps a key that is no
+# longer in the file. The peer's public key lies next to the backup for a later run to name it.
+undo() { echo "cp $backup $CONF && wg set $WG_IF peer $1 preshared-key /dev/null && wg syncconf $WG_IF <(wg-quick strip $WG_IF) && rm -f $backup $backup.peer"; }
+if [ -e "$backup" ]; then
+  left="$(cat "$backup.peer" 2>/dev/null || true)"
+  [[ "$left" =~ ^[A-Za-z0-9+/]{43}=$ ]] || left="<PublicKey устройства>"
+  die "остался $backup от прерванного запуска — сначала откат: $(undo "$left")"
+fi
 
 psk=""
 if [ "$mode" = set ]; then
@@ -92,11 +99,12 @@ if [ "$(peer_psk count "$tmp")" != "$want" ] || ! cmp -s <(peer_psk rest "$CONF"
   die "правка $CONF не сошлась — файл не тронут"
 fi
 
+printf '%s\n' "$pub" >"$backup.peer"
 cp "$CONF" "$backup"
 chmod 0600 "$backup" "$tmp"
 mv "$tmp" "$CONF"
 trap - EXIT
-rollback="cp $backup $CONF && wg set $WG_IF peer $pub preshared-key /dev/null && wg syncconf $WG_IF <(wg-quick strip $WG_IF) && rm $backup"
+rollback="$(undo "$pub")"
 
 # Apply live to that one peer: other devices and the product are not touched.
 if [ "$mode" = set ]; then
@@ -110,7 +118,7 @@ expect=нет
 state="$(wg show "$WG_IF" preshared-keys | awk -v k="$pub" '$1 == k { print ($2 == "(none)") ? "нет" : "есть" }')" ||
   die "$CONF записан, но живой $WG_IF не прочитан"
 [ "$state" = "$expect" ] || die "$CONF записан, но в живом $WG_IF ключ: «${state:-?}», ждали «$expect»"
-rm -f "$backup" || log "Не удалил $backup (в нём PrivateKey сервера) — удалите вручную."
+rm -f "$backup" "$backup.peer" || log "Не удалил $backup (в нём PrivateKey сервера) — удалите вручную."
 
 if [ "$mode" = set ]; then
   log "PresharedKey для $ip (${pub:0:8}…) записан в $CONF и применён к живому $WG_IF; остальные устройства не тронуты."

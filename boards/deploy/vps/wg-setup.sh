@@ -128,11 +128,14 @@ spec=(FORWARD -j "\$CHAIN")
 rule -t filter
 spec=(OUTPUT -j "\$CHAIN-OUT")
 rule -t filter
-# Docker evaluates DOCKER-USER before its own rules, also after it restarts.
-if iptables -t filter -L DOCKER-USER -n >/dev/null 2>&1; then
-  spec=(DOCKER-USER -j "\$CHAIN")
-  rule -t filter
+# Docker evaluates DOCKER-USER before its own rules, also after it restarts. When wg0 comes
+# up first (boot), the chain is made here: Docker keeps it and jumps to it ahead of its accepts.
+# down leaves the chain itself, it belongs to Docker.
+if [ "\$action" = up ]; then
+  iptables -N DOCKER-USER 2>/dev/null || true
 fi
+spec=(DOCKER-USER -j "\$CHAIN")
+rule -t filter
 if [ "\$action" = up ]; then
   sysctl -q -w net.ipv4.ip_forward=1
 else
@@ -162,6 +165,8 @@ backup() {
   if [ -e "$last" ] && [[ ! "$dst" > "$last" ]]; then
     base="${last%-[0-9][0-9]}"
     [ "$base" = "$last" ] || n="${last##*-}"
+    # Past -99 the next name would sort first and be pruned at once.
+    [ $((10#$n)) -lt 99 ] || die "копии $CONF с одним временем дошли до -99 — проверьте часы (date) и лишние $CONF.bak-*"
     printf -v dst '%s-%02d' "$base" $((10#$n + 1))
   fi
   cp -a "$CONF" "$dst"
