@@ -176,6 +176,37 @@ describe("mapPage", () => {
     expect(task.priority).toBe("medium");
   });
 
+  it("holds back a footer value that looks personal and names its field", () => {
+    const { task } = mapPage(
+      page("p-6", {
+        "Task ID": prop("rich_text", { rich_text: [{ plain_text: "T-3" }] }),
+        Очередь: prop("rich_text", {
+          rich_text: [{ plain_text: "ask ann@example.com" }],
+        }),
+      }),
+      { ...CONTEXT, footerFields: ["Task ID", "Очередь"] },
+    );
+    expect(task.footer).toEqual({ "Task ID": "T-3" });
+    expect(task.footerLosses).toEqual([
+      { field: "Очередь", reason: "personal" },
+    ]);
+  });
+
+  it("keeps a link's text and reports its address as lost", () => {
+    const { task } = mapPage(
+      page("p-7", {
+        "Backlog ID": prop("rich_text", {
+          rich_text: [{ plain_text: "FIX-07", href: "/a1b2c3" }],
+        }),
+      }),
+      { ...CONTEXT, footerFields: ["Backlog ID"] },
+    );
+    expect(task.footer).toEqual({ "Backlog ID": "FIX-07" });
+    expect(task.footerLosses).toEqual([
+      { field: "Backlog ID", reason: "link" },
+    ]);
+  });
+
   it("keeps footer fields raw and in the given order, leaving empty ones out", () => {
     const { task } = mapPage(
       page("p-5", {

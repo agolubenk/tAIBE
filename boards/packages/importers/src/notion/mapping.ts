@@ -3,6 +3,7 @@ import { toIsoDate } from "../markdown.js";
 import type {
   ImportedColumn,
   ImportedComment,
+  ImportedFooterLoss,
   ImportedLabel,
   ImportedPerson,
   ImportedPriority,
@@ -19,6 +20,7 @@ import {
   type NotionPropertyValue,
   type NotionSelectOption,
 } from "./api-types.js";
+import { footerRisk } from "./footer-risk.js";
 import { notionIdempotencyKey } from "./idempotency.js";
 
 const STATUS_NAME = /^status$/i;
@@ -257,9 +259,18 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
   const createdAt = toIsoDate(page.created_time);
   const assigneePerson = assignee ?? fallbackAssignee;
   const footer: Record<string, string | number> = {};
+  const footerLosses: ImportedFooterLoss[] = [];
   for (const name of context.footerFields ?? []) {
-    const value = footerValueOf(page.properties[name]);
-    if (value !== undefined) footer[name] = value;
+    const property = page.properties[name];
+    const value = footerValueOf(property);
+    if (value === undefined) continue;
+    if (footerRisk(value, property)) {
+      footerLosses.push({ field: name, reason: "personal" });
+      continue;
+    }
+    footer[name] = value;
+    if (property?.rich_text?.some((part) => part.href))
+      footerLosses.push({ field: name, reason: "link" });
   }
 
   const task: ImportedTask = {
@@ -291,6 +302,7 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
     },
     ...(Object.keys(extraFields).length > 0 ? { extraFields } : {}),
     ...(Object.keys(footer).length > 0 ? { footer } : {}),
+    ...(footerLosses.length > 0 ? { footerLosses } : {}),
   };
 
   return { task, relations, labels };
