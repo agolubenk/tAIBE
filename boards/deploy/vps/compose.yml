@@ -15,6 +15,7 @@ services:
       - pg:/var/lib/postgresql/data
       - ./secrets/postgres_password:/run/tb-secrets/postgres_password:ro
     mem_limit: 256m
+    networks: [tb]
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U t_boards -d t_boards"]
@@ -67,6 +68,9 @@ services:
       - "127.0.0.1:5180:5173"
     # Until the K-6 measurements (R-005) say otherwise.
     mem_limit: 1g
+    networks:
+      tb:
+        ipv4_address: 10.78.0.2
     restart: unless-stopped
 
   tls:
@@ -110,7 +114,23 @@ services:
       - ./secrets/postgres_password:/run/tb-secrets/postgres_password:ro
       - ./backups:/backups
     mem_limit: 128m
+    networks: [tb]
     restart: unless-stopped
+
+# The tunnel firewall lets only the app open connections to the Mac's
+# claude-mem proxy (wg-setup.sh, OPS-19): it matches this bridge and the app's
+# address, so both are fixed here. Others get addresses from ip_range, never
+# the app's. A new network rather than a changed default: Docker cannot change
+# a live network, and compose recreates the containers on a new one.
+networks:
+  tb:
+    driver_opts:
+      com.docker.network.bridge.name: br-tboards
+    ipam:
+      config:
+        - subnet: 10.78.0.0/28
+          ip_range: 10.78.0.8/29
+          gateway: 10.78.0.1
 
 volumes:
   pg:

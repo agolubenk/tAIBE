@@ -2,8 +2,9 @@
 # Local proof of the WireGuard scripts on Linux (Mac + Docker): a privileged
 # container with real iptables, a dummy wg0 and stand-ins for wg and systemctl.
 # Checks a split and a full device, a re-run that changes nothing, the
-# claude-mem proxy address taken from .env, preshared keys and MTU from
-# wg-setup.sh and wg-issue.sh, the shared lock in all three scripts, wg-psk.sh
+# claude-mem proxy address taken from .env, live packets from the t-boards
+# network and another container network to the Mac proxy, preshared keys and MTU
+# from wg-setup.sh and wg-issue.sh, the shared lock in all three scripts, wg-psk.sh
 # live and its refusals, backup retention and file modes, the upgrade of a wg0
 # from the first kit and a clean down. Leaves
 # nothing behind.
@@ -13,7 +14,7 @@ set -euo pipefail
 vps="$(cd "$(dirname "$0")" && pwd)"
 
 docker run --rm --privileged -v "$vps:/kit:ro" alpine:3.20 sh -euc '
-apk add -q bash iptables iproute2 flock >/dev/null
+apk add -q bash coreutils iptables iproute2 flock socat >/dev/null
 mkdir -p /stub
 # The live peers are read back from wg0.conf, since syncconf is a no-op here.
 cat >/stub/peers.awk <<"EOF"
@@ -55,7 +56,10 @@ cat >/stub/systemctl <<"EOF"
 case "$1" in
   is-active) ip link show wg0 >/dev/null 2>&1 ;;
   start)
-    ip link add wg0 type dummy
+    # wg0 is a veth whose other end is the Mac (10.77.0.2) in its own namespace.
+    ip link add wg0 type veth peer name wgmac netns mac
+    ip -n mac addr add 10.77.0.2/24 dev wgmac
+    ip -n mac link set wgmac up
     ip addr add 10.77.0.1/24 dev wg0
     ip link set wg0 up
     /etc/wireguard/t-boards-rules.sh up wg0 ;;
@@ -69,6 +73,8 @@ export PATH="/stub:$PATH"
 # Docker on the VPS owns DOCKER-USER; the rules must hook into it.
 iptables -N DOCKER-USER
 iptables -I FORWARD -j DOCKER-USER
+ip netns add mac
+ip -n mac link set lo up
 
 fail() { echo "FAIL: $*"; exit 1; }
 setup() { bash /kit/wg-setup.sh "$@" >/tmp/out 2>&1 || { cat /tmp/out; fail "wg-setup.sh $*"; }; }
@@ -104,22 +110,90 @@ chain() {
   cat <<EOF
 -A TB-WG -i wg0 -o eth0 -j ACCEPT
 -A TB-WG -i eth0 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
--A TB-WG -s $1/32 -i wg0 -p tcp -m tcp --sport $2 -m conntrack --ctstate ESTABLISHED -j RETURN
+-A TB-WG -s 10.78.0.2/32 -d $1/32 -i br-tboards -o wg0 -p tcp -m tcp --dport $2 -m conntrack --ctstate NEW -j RETURN
+-A TB-WG -o wg0 -m conntrack ! --ctstate RELATED,ESTABLISHED -j DROP
+-A TB-WG -s $1/32 -d 10.78.0.2/32 -i wg0 -o br-tboards -p tcp -m tcp --sport $2 -m conntrack --ctstate ESTABLISHED -j RETURN
 -A TB-WG -i wg0 -m conntrack --ctstate DNAT -j RETURN
 -A TB-WG -i wg0 -j DROP
 EOF
 }
 iptables -S TB-WG | tail -n +2 >/tmp/chain
 chain 10.77.0.2 37702 | diff - /tmp/chain || fail "forwarding chain differs"
-grep -qF -e "-s 10.77.0.2 -p tcp --sport 37702 " /etc/wireguard/t-boards-rules.sh || fail "install.sh check misses the rule"
+grep -qF -e "-s 10.77.0.2 -p tcp --sport 37702 " /etc/wireguard/t-boards-rules.sh || fail "install.sh check misses the reply rule"
+grep -qF -e "-d 10.77.0.2 -p tcp --dport 37702 " /etc/wireguard/t-boards-rules.sh || fail "install.sh check misses the allow rule"
+grep -q "com.docker.network.bridge.name: br-tboards$" /kit/compose.yml || fail "compose.yml bridge is not the one the rules allow"
+grep -q "ipv4_address: 10.78.0.2$" /kit/compose.yml || fail "compose.yml app address is not the one the rules allow"
+grep -q "subnet: 10.78.0.0/28$" /kit/compose.yml && grep -q "ip_range: 10.78.0.8/29$" /kit/compose.yml || fail "compose.yml may hand the app address to another container"
+[ "$(iptables -S TB-WG-OUT | tail -n +2)" = "-A TB-WG-OUT -d 10.77.0.2/32 -o wg0 -p tcp -m tcp --dport 37702 -j DROP" ] || fail "host namespace not shut out of the proxy"
+iptables -C OUTPUT -j TB-WG-OUT || fail "no OUTPUT hook"
 iptables -C DOCKER-USER -j TB-WG || fail "no DOCKER-USER hook"
 echo "ok: forwarding chain in order, hooked into FORWARD and DOCKER-USER"
+
+# Live packets (OPS-19). Container networks the way Docker builds them: a
+# bridge, MASQUERADE out of it, accept out and replies back in its own chain
+# after DOCKER-USER. The Mac proxy and another Mac port listen in the mac
+# namespace; a published port of the other network stands in for the product.
+iptables -N DOCKER-FWD
+iptables -A FORWARD -j DOCKER-FWD
+bridge() {
+  ip link add "$1" type bridge
+  ip addr add "$2.1/$3" dev "$1"
+  ip link set "$1" up
+  iptables -t nat -A POSTROUTING -s "$2.0/$3" ! -o "$1" -j MASQUERADE
+  iptables -A DOCKER-FWD -o "$1" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  iptables -A DOCKER-FWD -i "$1" ! -o "$1" -j ACCEPT
+}
+container() {
+  ip netns add "$1"
+  ip link add "v$1" type veth peer name ceth netns "$1"
+  ip link set "v$1" master "$2" up
+  ip -n "$1" addr add "$3/$4" dev ceth
+  ip -n "$1" link set ceth up
+  ip -n "$1" route add default via "${3%.*}.1"
+}
+bridge br-tboards 10.78.0 28
+bridge br-other 172.31.0 24
+container app br-tboards 10.78.0.2 28
+container db br-tboards 10.78.0.9 28
+container other br-other 172.31.0.2 24
+iptables -P FORWARD DROP
+iptables -t nat -A PREROUTING -i wg0 -d 10.77.0.1 -p tcp --dport 8080 -j DNAT --to-destination 172.31.0.2:80
+iptables -A DOCKER-FWD -o br-other -d 172.31.0.2 -p tcp --dport 80 -j ACCEPT
+ip netns exec mac socat TCP-LISTEN:37702,fork,reuseaddr /dev/null 2>/dev/null & l1=$!
+ip netns exec mac socat TCP-LISTEN:2222,fork,reuseaddr /dev/null 2>/dev/null & l2=$!
+ip netns exec other socat TCP-LISTEN:80,fork,reuseaddr /dev/null 2>/dev/null & l3=$!
+sleep 1
+# 0 = connected, 124 = timed out (a DROP); "refused" would mean no listener.
+reach() { timeout 3 ${1:+ip netns exec "$1"} bash -c "exec 3<>/dev/tcp/$2/$3" 2>/dev/null; }
+open_() { reach "$@" || fail "${1:-host} cannot reach $2:$3"; }
+dropped() { local rc=0; reach "$@" || rc=$?; [ "$rc" = 124 ] || fail "${1:-host} -> $2:$3 not dropped (rc $rc)"; }
+live() {
+  open_ app 10.77.0.2 37702
+  dropped db 10.77.0.2 37702
+  dropped other 10.77.0.2 37702
+  dropped app 10.77.0.2 2222
+  dropped "" 10.77.0.2 37702
+  open_ mac 10.77.0.1 8080
+}
+live
+# Docker restart puts its own jumps back on top of FORWARD; DOCKER-USER keeps ours.
+iptables -D FORWARD -j DOCKER-USER && iptables -D FORWARD -j DOCKER-FWD
+iptables -I FORWARD 1 -j DOCKER-FWD && iptables -I FORWARD 1 -j DOCKER-USER
+live
+kill $l1 $l2 $l3
+ip netns del app && ip netns del db && ip netns del other && ip link del br-tboards && ip link del br-other
+iptables -t nat -D PREROUTING -i wg0 -d 10.77.0.1 -p tcp --dport 8080 -j DNAT --to-destination 172.31.0.2:80
+iptables -t nat -D POSTROUTING -s 10.78.0.0/28 ! -o br-tboards -j MASQUERADE
+iptables -t nat -D POSTROUTING -s 172.31.0.0/24 ! -o br-other -j MASQUERADE
+iptables -F DOCKER-FWD
+echo "ok: only the app reaches the memory proxy (not its neighbours, other networks, the host or other Mac ports), devices still reach published ports, also after a Docker restart"
 
 # The claude-mem proxy address comes from the app .env; a bad value falls back.
 mkdir -p /opt/t-boards
 printf "CLAUDE_MEM_WORKER_HOST=10.77.0.5\nCLAUDE_MEM_WORKER_PORT=38000\n" >/opt/t-boards/.env
 setup "$k2" phone full
 iptables -S TB-WG | tail -n +2 | diff <(chain 10.77.0.5 38000) - || fail "memory address from .env not applied"
+[ "$(iptables -S TB-WG-OUT | tail -n +2)" = "-A TB-WG-OUT -d 10.77.0.5/32 -o wg0 -p tcp -m tcp --dport 38000 -j DROP" ] || fail "host rule kept the old memory address"
 printf "CLAUDE_MEM_WORKER_HOST=192.168.1.2\nCLAUDE_MEM_WORKER_PORT=38000\n" >/opt/t-boards/.env
 setup "$k2" phone full
 iptables -S TB-WG | tail -n +2 | diff <(chain 10.77.0.2 37702) - || fail "address outside the tunnel kept"

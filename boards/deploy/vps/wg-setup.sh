@@ -20,6 +20,9 @@ CONF=/etc/wireguard/$WG_IF.conf
 RULES=/etc/wireguard/t-boards-rules.sh
 SYSCTL=/etc/sysctl.d/99-t-boards-wg.conf
 TB_ENV=/opt/t-boards/.env
+# Bridge and app address of the t-boards compose network (compose.yml, networks.tb).
+TB_BRIDGE=br-tboards
+TB_APP_IP=10.78.0.2
 FULL_DNS="1.1.1.1, 9.9.9.9"
 
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
@@ -77,7 +80,10 @@ fi
 # - Full-tunnel devices leave through the external interface (NAT). The tunnel
 #   may forward only there and to the product's published ports (Docker DNAT,
 #   the same reach the internet has): its internal networks stay out of reach.
-#   The one way back in is the claude-mem proxy's replies to a container.
+#   Containers may not open connections into the tunnel, except the t-boards
+#   app (bridge and address fixed in compose.yml) to the claude-mem proxy; the
+#   proxy's replies are the one way back in, and only to the app. The VPS host
+#   and host-network containers do not pass FORWARD: OUTPUT shuts the proxy to them.
 #   The forwarding rules sit in their own chain, rebuilt in order on every up.
 # - Nothing from outside may address the tunnel network directly.
 write_rules() {
@@ -109,11 +115,18 @@ if [ "\$action" = up ]; then
   iptables -N "\$CHAIN" 2>/dev/null || iptables -F "\$CHAIN"
   iptables -A "\$CHAIN" -i "\$wg_if" -o "\$ext_if" -j ACCEPT
   iptables -A "\$CHAIN" -i "\$ext_if" -o "\$wg_if" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-  iptables -A "\$CHAIN" -i "\$wg_if" -s $mem_host -p tcp --sport $mem_port -m conntrack --ctstate ESTABLISHED -j RETURN
+  iptables -A "\$CHAIN" -i $TB_BRIDGE -o "\$wg_if" -s $TB_APP_IP -d $mem_host -p tcp --dport $mem_port -m conntrack --ctstate NEW -j RETURN
+  iptables -A "\$CHAIN" -o "\$wg_if" -m conntrack ! --ctstate RELATED,ESTABLISHED -j DROP
+  iptables -A "\$CHAIN" -i "\$wg_if" -o $TB_BRIDGE -d $TB_APP_IP -s $mem_host -p tcp --sport $mem_port -m conntrack --ctstate ESTABLISHED -j RETURN
   iptables -A "\$CHAIN" -i "\$wg_if" -m conntrack --ctstate DNAT -j RETURN
   iptables -A "\$CHAIN" -i "\$wg_if" -j DROP
+  # Its own chain too: a changed memory address must not leave the old rule.
+  iptables -N "\$CHAIN-OUT" 2>/dev/null || iptables -F "\$CHAIN-OUT"
+  iptables -A "\$CHAIN-OUT" -o "\$wg_if" -d $mem_host -p tcp --dport $mem_port -j DROP
 fi
 spec=(FORWARD -j "\$CHAIN")
+rule -t filter
+spec=(OUTPUT -j "\$CHAIN-OUT")
 rule -t filter
 # Docker evaluates DOCKER-USER before its own rules, also after it restarts.
 if iptables -t filter -L DOCKER-USER -n >/dev/null 2>&1; then
@@ -124,6 +137,7 @@ if [ "\$action" = up ]; then
   sysctl -q -w net.ipv4.ip_forward=1
 else
   iptables -F "\$CHAIN" 2>/dev/null && iptables -X "\$CHAIN" 2>/dev/null
+  iptables -F "\$CHAIN-OUT" 2>/dev/null && iptables -X "\$CHAIN-OUT" 2>/dev/null
 fi
 exit 0
 EOF
