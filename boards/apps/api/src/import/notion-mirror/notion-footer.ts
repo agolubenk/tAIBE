@@ -10,6 +10,11 @@ export const BACKLOG_ID_FIELD = /^backlog\s*id$/i;
 
 const MARKER = "Notion: ";
 const FOOTER_LINE = /(?:^|\n\n)Notion: (\{.*\})[ \t]*$/;
+// The body is markdown, and its other text is escaped (lens 4, 30.10): the
+// characters richTextMarkdown escapes, which could open a tag, an entity or
+// a link, go as JSON \u escapes and parse back to the same raw value. JSON
+// already escapes the backslash; parentheses without brackets open nothing.
+const MARKUP = /[<>&[\]]/g;
 
 export type NotionFooter = Readonly<Record<string, string | number>>;
 
@@ -28,7 +33,8 @@ export function footerOf(task: ImportedTask, keepsBacklogId: boolean) {
 export function withNotionFooter(body: string, footer: NotionFooter): string {
   const text = body.replace(FOOTER_LINE, "").trimEnd();
   if (Object.keys(footer).length === 0) return text;
-  const line = `${MARKER}${JSON.stringify(footer)}`;
+  const json = JSON.stringify(footer).replace(MARKUP, unicodeEscape);
+  const line = `${MARKER}${json}`;
   return text ? `${text}\n\n${line}` : line;
 }
 
@@ -40,4 +46,8 @@ export function readNotionFooter(body: string): NotionFooter | null {
   } catch {
     return null;
   }
+}
+
+function unicodeEscape(char: string): string {
+  return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
 }

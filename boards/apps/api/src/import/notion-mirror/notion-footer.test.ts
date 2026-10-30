@@ -40,6 +40,18 @@ describe("withNotionFooter", () => {
     expect(readNotionFooter("Text")).toBeNull();
   });
 
+  it("writes markup in values as JSON escapes, which read back raw", () => {
+    const footer = {
+      Очередь: "<img src=x onerror=alert(1)> [a](javascript:x) &lt; \\",
+    };
+    const body = withNotionFooter("Text", footer);
+    expect(body).toBe(
+      'Text\n\nNotion: {"Очередь":"\\u003cimg src=x onerror=alert(1)\\u003e \\u005ba\\u005d(javascript:x) \\u0026lt; \\\\"}',
+    );
+    expect(readNotionFooter(body)).toEqual(footer);
+    expect(JSON.parse(PY_FOOTER.exec(body)?.[1] ?? "")).toEqual(footer);
+  });
+
   it("keeps values raw, spaces included", () => {
     const body = withNotionFooter("Text", { "Backlog ID": " FIX-07 " });
     expect(readNotionFooter(body)).toEqual({ "Backlog ID": " FIX-07 " });
