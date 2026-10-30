@@ -79,10 +79,22 @@ describe("richTextMarkdown", () => {
     ["https://e.example/a?access_token=1", "signed"],
     ["https://e.example/cb#access_token=1", "signed"],
     ["https://e.example/a?SIG=1", "signed"],
+    ["https://e.example/#/cb?access_token=1", "signed"],
+    ["https://e.example/a?access%5Ftoken=1", "signed"],
+    ["https://e.example/a#!sig=1", "signed"],
   ])("keeps only the text of %j", (href, loss) => {
     expect(richTextMarkdown([link("a", href)])).toEqual({
       text: "a",
       losses: [loss],
+    });
+  });
+
+  it("keeps an address whose keys only contain a signed word", () => {
+    expect(
+      richTextMarkdown([link("d", "https://e.example/a?design=1&tokens=2")]),
+    ).toEqual({
+      text: "[d](https://e.example/a?design=1&tokens=2)",
+      losses: [],
     });
   });
 

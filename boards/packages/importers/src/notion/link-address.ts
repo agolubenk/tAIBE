@@ -7,15 +7,11 @@ export type LinkLoss = "personal" | "signed" | "scheme";
 const NOTION_URL = "https://www.notion.so";
 const SIGNED =
   /X-Amz-Signature|prod-files-secure|file\.notion\.so\/f\/|secure\.notion-static\.com/i;
-const SIGNED_PARAMS = new Set([
-  "token",
-  "access_token",
-  "sig",
-  "signature",
-  "x-goog-signature",
-  "x-amz-signature",
-  "expires",
-]);
+// A signature or token key anywhere in the query or the fragment, raw or
+// decoded: a hash router puts its own query after `#/path?`.
+const SIGNED_PARAM =
+  /(?:^|[?&#/!;])(?:token|access_token|sig|signature|x-goog-signature|x-amz-signature|expires)=/i;
+
 // The parser's form already encodes controls, spaces, `<` and `>`;
 // parentheses and a backslash in the query or fragment would still end
 // the markdown destination.
@@ -46,11 +42,16 @@ export function vetLink(href: string): { url: string } | { loss: LinkLoss } {
 
 function isSigned(address: string, url: URL): boolean {
   if (SIGNED.test(address) || SIGNED.test(url.href)) return true;
-  const params = [
-    ...url.searchParams.keys(),
-    ...new URLSearchParams(url.hash.slice(1)).keys(),
-  ];
-  return params.some((name) => SIGNED_PARAMS.has(name.toLowerCase()));
+  const tail = `${url.search}${url.hash}`;
+  return SIGNED_PARAM.test(tail) || SIGNED_PARAM.test(decoded(tail));
+}
+
+function decoded(text: string): string {
+  try {
+    return decodeURIComponent(text.replaceAll("+", " "));
+  } catch {
+    return text;
+  }
 }
 
 function percent(char: string): string {
