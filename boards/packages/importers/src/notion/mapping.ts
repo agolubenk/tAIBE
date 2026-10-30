@@ -2,6 +2,7 @@ import { toColumnSlug, uniqueKey } from "../keys.js";
 import { toIsoDate } from "../markdown.js";
 import type {
   ImportedColumn,
+  ImportedComment,
   ImportedLabel,
   ImportedPerson,
   ImportedPriority,
@@ -26,7 +27,8 @@ const SEVERITY_NAME = /^severity$/i;
 const DUE_DATE_NAME = /^(due|due date|deadline)$/i;
 const ASSIGNEE_NAME = /^(assignee|owner|responsible)$/i;
 const PARENT_NAME = /^parent/i;
-const SUBITEM_NAME = /^(sub-?items?|subtasks?|children)$/i;
+const SUBITEM_NAME = /^(sub-?items?|sub-?tasks?|sub-?bugs?|children)$/i;
+const TYPE_NAME = /^type$/i;
 const FINAL_STATUS_NAME =
   /^(done|complete[ds]?|closed|resolved|cancelled|canceled|won't do|готово|закрыт[оа]?|выполнено)/i;
 const COMPLETE_GROUP = "complete";
@@ -141,7 +143,7 @@ export function statusNameOf(page: NotionPage): string | undefined {
 
 export function typeNameOf(page: NotionPage): string | undefined {
   for (const [name, value] of Object.entries(page.properties)) {
-    if (!/^type$/i.test(name)) continue;
+    if (!TYPE_NAME.test(name)) continue;
     return value.select?.name ?? value.status?.name ?? undefined;
   }
   return undefined;
@@ -167,6 +169,13 @@ export type MapPageContext = {
   product: string;
   columnKeyByStatus: ReadonlyMap<string, string>;
   description: string;
+  database?: string;
+  // Select fields with no place of their own: each value becomes a label
+  // «Field: value».
+  labelSelects?: ReadonlySet<string>;
+  // Fields kept as the body's footer, in the database's field order.
+  footerFields?: readonly string[];
+  comments?: ImportedComment[];
 };
 
 export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
@@ -176,7 +185,6 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
   const labels: ImportedLabel[] = [];
 
   let priorityRaw: string | undefined;
-  let severityRaw: string | undefined;
   let number: number | undefined;
   let dueDate: string | undefined;
   let assignee: ImportedPerson | undefined;
@@ -198,10 +206,16 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
       continue;
     }
 
+    // Severity stays a field of its own: standing in for Priority, it would
+    // give a card a priority Notion never set.
     if (PRIORITY_NAME.test(name)) {
       priorityRaw = value.select?.name ?? value.status?.name ?? priorityRaw;
-    } else if (SEVERITY_NAME.test(name)) {
-      severityRaw = value.select?.name ?? value.status?.name ?? severityRaw;
+    }
+
+    if (value.type === "select" && value.select?.name) {
+      if (context.labelSelects?.has(name)) {
+        labels.push(selectLabel(name, value.select));
+      }
     }
 
     if (value.type === "multi_select") {
@@ -242,6 +256,11 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
   const archived = page.archived || inTrash;
   const createdAt = toIsoDate(page.created_time);
   const assigneePerson = assignee ?? fallbackAssignee;
+  const footer: Record<string, string | number> = {};
+  for (const name of context.footerFields ?? []) {
+    const value = footerValueOf(page.properties[name]);
+    if (value !== undefined) footer[name] = value;
+  }
 
   const task: ImportedTask = {
     key,
@@ -257,18 +276,21 @@ export function mapPage(page: NotionPage, context: MapPageContext): MappedPage {
       : {}),
     title: pageTitleOf(page),
     description: context.description,
-    priority: mapPriorityName(priorityRaw ?? severityRaw),
+    priority: mapPriorityName(priorityRaw),
     ...(dueDate ? { dueDate } : {}),
     ...(createdAt ? { createdAt } : {}),
     ...(assigneePerson ? { assignee: assigneePerson } : {}),
     labelKeys: labels.map((label) => label.key),
-    comments: [],
+    comments: context.comments ?? [],
     sourceRef: {
       system: "notion",
       pageId: page.id,
       lastEditedTime: page.last_edited_time,
+      createdTime: page.created_time,
+      ...(context.database ? { database: context.database } : {}),
     },
     ...(Object.keys(extraFields).length > 0 ? { extraFields } : {}),
+    ...(Object.keys(footer).length > 0 ? { footer } : {}),
   };
 
   return { task, relations, labels };
@@ -287,6 +309,32 @@ function toRelation(
     return { sourceKey, targetKey, type: "subtask" };
   }
   return { sourceKey, targetKey, type: "related" };
+}
+
+function selectLabel(
+  property: string,
+  option: NotionSelectOption,
+): ImportedLabel {
+  return {
+    key: `${property}:${option.id ?? option.name}`,
+    name: `${property}: ${option.name}`,
+    color: NOTION_COLORS[option.color ?? ""] ?? FALLBACK_LABEL_COLOR,
+  };
+}
+
+// Raw, as Notion holds it: the reconciliation compares the footer with the
+// page value for value (text untrimmed, numbers unconverted).
+function footerValueOf(
+  value: NotionPropertyValue | undefined,
+): string | number | undefined {
+  if (!value) return undefined;
+  if (value.type === "number") return value.number ?? undefined;
+  const scalar =
+    value.type === "rich_text"
+      ? (value.rich_text ?? []).map((part) => part.plain_text).join("")
+      : scalarOf(value);
+  if (typeof scalar === "number") return scalar;
+  return typeof scalar === "string" && scalar !== "" ? scalar : undefined;
 }
 
 function toPerson(
@@ -341,13 +389,66 @@ function scalarOf(
   }
 }
 
+export type MapDatabaseOptions = {
+  // Fields the card keeps only as its body's footer (the mirror's choice).
+  footerFields?: RegExp;
+  // Page id → its comments, for the pages whose comments were read.
+  comments?: ReadonlyMap<string, ImportedComment[]>;
+};
+
+// Select fields that no other part of the card takes.
+function labelSelectsOf(database: NotionDatabase): Set<string> {
+  const status = statusPropertyOf(database)?.name;
+  return new Set(
+    Object.entries(database.properties)
+      .filter(
+        ([name, schema]) =>
+          schema.type === "select" &&
+          name !== status &&
+          !STATUS_NAME.test(name) &&
+          !PRIORITY_NAME.test(name) &&
+          !SEVERITY_NAME.test(name) &&
+          !TYPE_NAME.test(name),
+      )
+      .map(([name]) => name),
+  );
+}
+
+function labelNamesOf(
+  database: NotionDatabase,
+  labelSelects: ReadonlySet<string>,
+): string[] {
+  const names = new Set<string>();
+  for (const [name, schema] of Object.entries(database.properties)) {
+    if (schema.type === "multi_select") {
+      for (const option of schema.multi_select?.options ?? []) {
+        names.add(option.name);
+      }
+    } else if (labelSelects.has(name)) {
+      for (const option of schema.select?.options ?? []) {
+        names.add(selectLabel(name, option).name);
+      }
+    }
+  }
+  return [...names];
+}
+
 export function mapDatabase(
   database: NotionDatabase,
   pages: NotionPage[],
   bodies: ReadonlyMap<string, string>,
   product: string,
+  options: MapDatabaseOptions = {},
 ): ImportedProject {
   const { columns, columnKeyByStatus } = mapColumns(database);
+  const name = plainText(database.title) || "Notion database";
+  const labelSelects = labelSelectsOf(database);
+  const { footerFields: footerPattern } = options;
+  const footerFields = footerPattern
+    ? Object.keys(database.properties).filter((field) =>
+        footerPattern.test(field),
+      )
+    : [];
   const warnings: string[] = [];
   if (columns.length === 0) {
     warnings.push(
@@ -364,6 +465,10 @@ export function mapDatabase(
       product,
       columnKeyByStatus,
       description: bodies.get(page.id) ?? "",
+      database: name,
+      labelSelects,
+      footerFields,
+      comments: options.comments?.get(page.id),
     });
     tasks.push(mapped.task);
     for (const relation of mapped.relations) {
@@ -375,7 +480,6 @@ export function mapDatabase(
     }
   }
 
-  const name = plainText(database.title) || "Notion database";
   const description = plainText(database.description);
 
   return {
@@ -385,6 +489,7 @@ export function mapDatabase(
     labels: [...labelsByKey.values()],
     tasks,
     relations: [...relationsByEdge.values()],
+    labelNames: labelNamesOf(database, labelSelects),
     warnings,
   };
 }
