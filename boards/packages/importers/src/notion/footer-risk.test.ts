@@ -15,6 +15,17 @@ describe("footerRisk", () => {
     "see https://example.com",
     "https://prod-files-secure.s3.amazonaws.com/x?X-Amz-Signature=1",
     "file.notion.so/f/abc",
+    // Not dates: the rest after a date, a month 34, no edge, spaces.
+    "20123456",
+    "291234567",
+    "+375 29 123-45-67",
+    "20250115-1234567",
+    "15.01.2025 1234567",
+    "+37520250115",
+    "Д20250115",
+    "2025 01 15",
+    "+375 2912-34-56",
+    "2026-10-30T1234567",
   ])("holds back %s", (value) => {
     expect(footerRisk(value, undefined)).toBe(true);
   });
@@ -23,6 +34,11 @@ describe("footerRisk", () => {
     "w-n-ats-all · ATS и кандидаты: задачи — без срока",
     "T-12",
     "до 2026-10-30",
+    "с 2026-10-30T21:39:00.000Z",
+    "30.10.2026",
+    "срок 1.1.2026, потом 20261030",
+    "20261030-213900-0001",
+    "Ошибка 20261030-213900",
     "B-1234",
     " FIX-07 ",
     87.5,

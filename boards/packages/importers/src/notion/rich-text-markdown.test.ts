@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { NotionRichText } from "./api-types.js";
 import { richTextMarkdown } from "./rich-text-markdown.js";
 
+const link = (plain_text: string, href: string): NotionRichText => ({
+  plain_text,
+  href,
+});
+
 describe("richTextMarkdown", () => {
-  it("leaves text without links as it is", () => {
-    expect(richTextMarkdown([{ plain_text: "a [b] (c)" }])).toEqual({
-      text: "a [b] (c)",
+  it("leaves plain text as it is, apart from markup characters", () => {
+    expect(richTextMarkdown([{ plain_text: "a (c) — b" }])).toEqual({
+      text: "a (c) — b",
       losses: [],
     });
   });
@@ -12,7 +18,7 @@ describe("richTextMarkdown", () => {
   it("keeps a link, joining runs that share its address", () => {
     const { text, losses } = richTextMarkdown([
       { plain_text: "see " },
-      { plain_text: "PR ", href: "https://github.com/x/pull/1" },
+      link("PR ", "https://github.com/x/pull/1"),
       {
         plain_text: "#1",
         href: "https://github.com/x/pull/1",
@@ -23,11 +29,18 @@ describe("richTextMarkdown", () => {
     expect(losses).toEqual([]);
   });
 
-  it("escapes brackets in the text and parentheses in the address", () => {
+  it("escapes markup in the text and percent-encodes the address", () => {
     const { text } = richTextMarkdown([
-      { plain_text: "a]b[c", href: "https://e.com/x_(y) z" },
+      link("a]b[c", "https://e.com/x_(y) z<w>"),
     ]);
-    expect(text).toBe("[a\\]b\\[c](https://e.com/x_\\(y\\)%20z)");
+    expect(text).toBe("[a\\]b\\[c](https://e.com/x_%28y%29%20z%3Cw%3E)");
+  });
+
+  it("writes the address in the parser's form", () => {
+    const { text } = richTextMarkdown([
+      link("q", "HTTPS://Example.COM/a b?x=\\(1)#f g"),
+    ]);
+    expect(text).toBe("[q](https://example.com/a%20b?x=%5C%281%29#f%20g)");
   });
 
   it("links a page mention and a relative link to Notion", () => {
@@ -39,23 +52,70 @@ describe("richTextMarkdown", () => {
         href: "https://www.notion.so/1a2b3c4d",
       },
       { plain_text: " · " },
-      { plain_text: "spec", href: "/5e6f" },
+      link("spec", "/5e6f"),
     ]);
     expect(text).toBe(
       "[Roadmap](https://www.notion.so/1a2b3c4d) · [spec](https://www.notion.so/5e6f)",
     );
   });
 
-  it("keeps only the text of a signed file link or another scheme", () => {
+  // Lens 4, 30.10: each case gives the text and the line of losses.
+  it.each([
+    ["javascript:alert(1)", "scheme"],
+    ["JAVASCRIPT:alert(1)", "scheme"],
+    ["\tjavascript:alert(1)", "scheme"],
+    ["\tjava script:alert(1)", "scheme"],
+    ["//evil.example/x", "scheme"],
+    ["evil.example/x", "scheme"],
+    ["data:text/html,x", "scheme"],
+    ["mailto:ann@example.com", "personal"],
+    ["https://user:pass@example.com/", "signed"],
+    [
+      "https://prod-files-secure.s3.amazonaws.com/a?X-Amz-Signature=1",
+      "signed",
+    ],
+    ["https://storage.example/a?X-Goog-Signature=1", "signed"],
+    ["https://e.example/a?Expires=1&x=2", "signed"],
+    ["https://e.example/a?access_token=1", "signed"],
+    ["https://e.example/cb#access_token=1", "signed"],
+    ["https://e.example/a?SIG=1", "signed"],
+  ])("keeps only the text of %j", (href, loss) => {
+    expect(richTextMarkdown([link("a", href)])).toEqual({
+      text: "a",
+      losses: [loss],
+    });
+  });
+
+  it("keeps an address that ends in a parenthesis inside the link", () => {
+    expect(richTextMarkdown([link("x", "https://a)b")])).toEqual({
+      text: "[x](https://a%29b/)",
+      losses: [],
+    });
+  });
+
+  it.each([
+    ["](https://evil)", "\\](https://evil)"],
+    ["[a](javascript:x)", "\\[a\\](javascript:x)"],
+    ["<img src=x onerror=alert(1)>", "\\<img src=x onerror=alert(1)\\>"],
+    ["&lt; a & b \\", "\\&lt; a \\& b \\\\"],
+  ])("escapes %j in plain text so it opens no link or tag", (input, out) => {
+    expect(richTextMarkdown([{ plain_text: input }])).toEqual({
+      text: out,
+      losses: [],
+    });
+  });
+
+  it("names each kind of loss once", () => {
     const { text, losses } = richTextMarkdown([
-      {
-        plain_text: "file",
-        href: "https://prod-files-secure.s3.amazonaws.com/a?X-Amz-Signature=1",
-      },
+      link("file", "https://e.example/a?token=1"),
       { plain_text: " and " },
-      { plain_text: "run", href: "javascript:alert(1)" },
+      link("run", "javascript:alert(1)"),
+      { plain_text: " or " },
+      link("mail", "mailto:x@example.com"),
+      { plain_text: " · " },
+      link("code", "https://e.example/b?signature=2"),
     ]);
-    expect(text).toBe("file and run");
-    expect(losses).toEqual(["signed", "scheme"]);
+    expect(text).toBe("file and run or mail · code");
+    expect(losses).toEqual(["signed", "scheme", "personal"]);
   });
 });
