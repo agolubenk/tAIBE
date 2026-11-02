@@ -144,18 +144,39 @@ bash ~/Desktop/Development/tAIBE/infra/scripts/split/rollback.sh
    - незакоммиченные правки вложенных репозиториев (`scan-*/*.uncommitted.patch`, `*.untracked.tgz`, `*.stash.txt`);
    - изменённые отслеживаемые файлы `supertick-eval/` (`scan-*/hr-dirs.uncommitted.patch`);
    - неотслеживаемые файлы, перенесённые в tAIBE (`state/tb-status-after.txt`).
-5. Синк блокнота стоит на паузе, нужно решение владельца (см. ниже).
+5. Синк блокнота стоит на паузе — как снять, раздел «Синк блокнота и SSR после разделения».
 6. Бэкап `~/Backups/split-2026-11-02` хранить не меньше недели.
 
-## Почему синк блокнота на паузе
+## Синк блокнота и SSR после разделения
 
-Синк отправляет на сервер файлы, которые числит git HR (`git ls-files`), а исчезнувшие удаляет из блокнота. После
-разделения git HR больше не числит `t-boards/*.md` (там спецификация досок) и `supertick-eval/**/*.md`. Включённый
-синк удалил бы эти документы из блокнота на сервере. Включать его — только по решению владельца:
-- либо синк из двух корней, HR и tAIBE (M3 дорожной карты);
-- либо принять потерю этих документов в блокноте.
+Синк отправляет на сервер документы, которые числит git HR, и удаляет из блокнота исчезнувшие. После разделения
+git HR больше не числит `t-boards/*.md` и `supertick-eval/pipeline/*.md`. Поэтому шаг 5a ставит синк на паузу.
 
-Синк SSR (`ssr-sync.mjs`) руками не запускать по той же причине.
+С 02.11 оба синка (блокнота и SSR) читают эти документы из tAIBE под прежними именами (`t-boards/…`,
+`supertick-eval/…`), так что на сервере ничего не удаляется и не архивируется. tAIBE синк находит сам — по ссылке
+`HR/t-boards/app` — или берёт из `extraRoots` в `~/.t-boards-notebook/config.json`. Если ссылка ведёт в никуда,
+синк останавливается и ничего не удаляет.
+
+Снять синк блокнота с паузы (владелец, в Терминале):
+
+```bash
+git -C ~/Desktop/Development/tAIBE pull --ff-only origin board-agents
+```
+
+```bash
+bash ~/Desktop/Development/tAIBE/boards/deploy/vps/mac/notebook-agent.sh check
+```
+
+В выводе пробного прогона не должно быть строки `would prune`. Если она есть — не включать, прислать вывод. Если
+её нет:
+
+```bash
+bash ~/Desktop/Development/tAIBE/boards/deploy/vps/mac/notebook-agent.sh install
+```
+
+`install` копирует новые скрипты в `~/.t-boards-notebook` и перезапускает воркер и синк. Синк SSR запускается
+руками, как раньше: `node ~/Desktop/Development/tAIBE/boards/deploy/vps/mac/ssr-sync.mjs --dry-run`, потом без
+`--dry-run`.
 
 ## Чего не делать до следующих шагов дорожной карты
 

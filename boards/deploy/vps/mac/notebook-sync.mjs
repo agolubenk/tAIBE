@@ -7,7 +7,13 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadConfig, notebookApi, stamp } from "./notebook-client.mjs";
+import {
+  extraRoots,
+  loadConfig,
+  mapRef,
+  notebookApi,
+  stamp,
+} from "./notebook-client.mjs";
 
 const KIND = "repo-doc";
 const TEXT_MAX = 500_000;
@@ -29,7 +35,14 @@ export const PATHSPECS = [
   ":(exclude)docs/plans/BACKLOG.md",
 ];
 
-export function listDocuments(repoRoot, git = "git") {
+// Documents the host lost at the split, read from the product home under their
+// old refs (top-level *.md only, as the host patterns were).
+export const HOME_DOCS = {
+  "boards/docs/": "t-boards/",
+  "eval/pipeline/": "supertick-eval/pipeline/",
+};
+
+export function listDocuments(repoRoot, git = "git", pathspecs = PATHSPECS) {
   const out = execFileSync(
     git,
     [
@@ -39,11 +52,32 @@ export function listDocuments(repoRoot, git = "git") {
       "--exclude-standard",
       "-z",
       "--",
-      ...PATHSPECS,
+      ...pathspecs,
     ],
     { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
   );
   return [...new Set(out.toString("utf8").split("\0").filter(Boolean))].sort();
+}
+
+// ref → file on disk: the host's own documents, then the product home's under
+// their old refs (the host wins on a clash). Throws when an extra root cannot
+// be read, so nothing is pruned on a partial listing.
+export function listAll(config) {
+  const entries = new Map();
+  for (const path of listDocuments(config.repoRoot, config.git)) {
+    entries.set(path, join(config.repoRoot, path));
+  }
+  const { roots, error } = extraRoots(config);
+  if (error)
+    throw new Error(`${error}: sync stopped, nothing uploaded or pruned`);
+  const specs = Object.keys(HOME_DOCS).map((prefix) => `:(glob)${prefix}*.md`);
+  for (const root of roots) {
+    for (const path of listDocuments(root, config.git, specs)) {
+      const ref = mapRef(path, HOME_DOCS);
+      if (ref && !entries.has(ref)) entries.set(ref, join(root, path));
+    }
+  }
+  return new Map([...entries].sort(([a], [b]) => a.localeCompare(b)));
 }
 
 export function titleOf(path, text) {
@@ -57,7 +91,8 @@ async function main() {
   const config = loadConfig();
   const dryRun = process.argv.includes("--dry-run");
   if (!config.repoRoot) throw new Error("config.json needs repoRoot");
-  const paths = listDocuments(config.repoRoot, config.git);
+  const entries = listAll(config);
+  const paths = [...entries.keys()];
   const server = await notebookApi(config, "GET", "/sources");
   const known = new Map(
     server.sources
@@ -72,7 +107,7 @@ async function main() {
   for (const path of paths) {
     let text;
     try {
-      text = readFileSync(join(config.repoRoot, path), "utf8");
+      text = readFileSync(entries.get(path), "utf8");
     } catch {
       skipped++;
       continue;
@@ -101,6 +136,13 @@ async function main() {
   }
 
   let pruned = 0;
+  const keepSet = new Set(keep);
+  const gone = [...known.keys()].filter((ref) => !keepSet.has(ref));
+  if (dryRun && gone.length) {
+    console.log(
+      `${stamp()} would prune ${gone.length}: ${gone.slice(0, 20).join(", ")}${gone.length > 20 ? ", …" : ""}`,
+    );
+  }
   if (known.size && keep.length < known.size * PRUNE_FLOOR) {
     console.error(
       `${stamp()} prune refused: ${keep.length} local files against ${known.size} on the server`,

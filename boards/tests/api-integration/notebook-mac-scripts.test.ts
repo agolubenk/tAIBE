@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -145,6 +146,80 @@ describe("API integration: notebook Mac scripts", () => {
     expect(third.stdout).toContain(
       "2 files, uploaded 0, unchanged 2, skipped 0, pruned 1",
     );
+  });
+
+  it("keeps documents moved to the product home under their old refs and stops on a broken link", async () => {
+    const { repo, node, sources } = await setup();
+    const spec = "# Спека досок\n\nКолонки и карточки.";
+    mkdirSync(join(repo, "t-boards"), { recursive: true });
+    writeFileSync(join(repo, "t-boards/spec.md"), spec);
+    const before = await node("notebook-sync.mjs");
+    expect(before.stdout).toContain("4 files, uploaded 4");
+
+    // The split: the document moves to the product home, the host keeps a link.
+    unlinkSync(join(repo, "t-boards/spec.md"));
+    const home = join(dir, "tAIBE");
+    mkdirSync(join(home, "boards/docs"), { recursive: true });
+    writeFileSync(join(home, "boards/docs/spec.md"), spec);
+    writeFileSync(
+      join(home, "boards/docs/new.md"),
+      "# Новое\n\nТолько в доме.",
+    );
+    await run("git", ["init", "-q"], { cwd: home });
+    symlinkSync(join(home, "boards"), join(repo, "t-boards/app"));
+
+    const dry = await node("notebook-sync.mjs", "--dry-run");
+    expect(dry.stdout).not.toContain("would prune");
+    const after = await node("notebook-sync.mjs");
+    expect(after.stdout).toContain(
+      "5 files, uploaded 1, unchanged 4, skipped 0, pruned 0",
+    );
+    const refs = (await sources()).sources.map((s) => s.ref);
+    expect(refs).toContain("t-boards/spec.md");
+    expect(refs).toContain("t-boards/new.md");
+
+    // A link that leads nowhere stops the sync before anything is pruned.
+    rmSync(home, { recursive: true, force: true });
+    const broken = await node("notebook-sync.mjs").then(
+      () => null,
+      (error: { stderr: string }) => error,
+    );
+    expect(broken?.stderr).toContain("leads nowhere");
+    expect((await sources()).sources.map((s) => s.ref)).toContain(
+      "t-boards/spec.md",
+    );
+  });
+
+  it("sends the SSR corpus of the product home under the old supertick-eval paths", async () => {
+    const { repo, node } = await setup();
+    const git = (cwd: string, ...args: string[]) =>
+      run("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+        cwd,
+      });
+    mkdirSync(join(repo, ".claude/rules"), { recursive: true });
+    writeFileSync(join(repo, ".claude/rules/01-base.md"), "# Правила\n");
+    await git(repo, "add", ".claude/rules/01-base.md");
+    await git(repo, "commit", "-q", "-m", "host");
+    const home = join(dir, "tAIBE");
+    mkdirSync(join(home, "eval/nerve"), { recursive: true });
+    mkdirSync(join(home, "boards"), { recursive: true });
+    writeFileSync(join(home, "eval/nerve/README.md"), "# Нерв\n");
+    writeFileSync(join(home, "boards/README.md"), "# Доски\n");
+    await git(home, "init", "-q");
+    await git(home, "add", "-A");
+    await git(home, "commit", "-q", "-m", "home");
+    mkdirSync(join(repo, "t-boards"), { recursive: true });
+    symlinkSync(join(home, "boards"), join(repo, "t-boards/app"));
+
+    const dry = await node("ssr-sync.mjs", "--dry-run");
+    expect(dry.stdout).toContain("2 corpus files");
+
+    rmSync(home, { recursive: true, force: true });
+    const broken = await node("ssr-sync.mjs", "--dry-run").then(
+      () => null,
+      (error: { stderr: string }) => error,
+    );
+    expect(broken?.stderr).toContain("SSR sync stopped, nothing sent");
   });
 
   it("embeds the uploaded chunks with nomic task prefixes", async () => {
