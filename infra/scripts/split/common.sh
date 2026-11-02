@@ -59,7 +59,11 @@ launch_agent() {
 }
 
 # Живые процессы Нерва, его тапов у сессий и роя (пусто — всё остановлено).
-nerve_procs() { pgrep -fl 'nerve\.py|swarm\.py' 2>/dev/null || true; }
+# Только процессы, чей исполняемый файл — python (не оболочка, в строке запуска которой есть этот текст,
+# и не редактор с открытым файлом). Строки: «PID команда …».
+nerve_procs() {
+  pgrep -fl '(nerve|swarm)\.py' 2>/dev/null | awk '$2 ~ /(^|\/)[Pp]ython[0-9.]*$/' || true
+}
 
 # Последний снимок scan.sh (папка с summary.txt, unpushed.txt …).
 last_scan() { cat "$BK/last-scan" 2>/dev/null || true; }

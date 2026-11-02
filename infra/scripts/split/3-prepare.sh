@@ -30,11 +30,10 @@ if [ "${SPLIT_SKIP_DEPS:-0}" = 1 ]; then
   warn "SPLIT_SKIP_DEPS=1 — зависимости досок не ставятся (только для проверки скриптов)"
 else
   has corepack || stop "нет corepack (идёт вместе с node)"
-  corepack enable >/dev/null 2>&1 || true
-  corepack prepare pnpm@10.32.1 --activate >/dev/null 2>&1 || stop "corepack не поставил pnpm 10.32.1"
-  (cd boards && pnpm install --frozen-lockfile >"$BK/state/pnpm-install.txt" 2>&1) ||
+  (cd boards && corepack pnpm --version >/dev/null 2>&1) || stop "corepack не запускает pnpm (boards/package.json: pnpm@10.32.1)"
+  (cd boards && corepack pnpm install --frozen-lockfile >"$BK/state/pnpm-install.txt" 2>&1) ||
     stop "pnpm install в boards/ не прошёл: $(tail -3 "$BK/state/pnpm-install.txt" | tr '\n' ' ')"
-  (cd boards && pnpm --filter "./packages/*" build >"$BK/state/pnpm-build.txt" 2>&1) ||
+  (cd boards && corepack pnpm --filter "./packages/*" build >"$BK/state/pnpm-build.txt" 2>&1) ||
     stop "сборка пакетов досок не прошла: $(tail -3 "$BK/state/pnpm-build.txt" | tr '\n' ' ')"
   [ -f boards/packages/mcp/dist/index.js ] || stop "после сборки нет boards/packages/mcp/dist/index.js"
   ok "зависимости досок стоят, пакет MCP собран"

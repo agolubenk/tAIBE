@@ -10,7 +10,10 @@ log "python: $("$PY" --version 2>&1)"
 has git || stop "нет git"
 has node || stop "нет node (нужен для сборки MCP досок)"
 major="$(node -v | sed 's/^v//; s/\..*//')"
-[ "$major" -ge "${SPLIT_MIN_NODE:-24}" ] || stop "node $(node -v): нужен 24.11 или новее"
+minor="$(node -v | sed 's/^v[0-9]*\.//; s/\..*//')"
+if [ "$major" -lt "${SPLIT_MIN_NODE:-24}" ] || { [ "$major" = 24 ] && [ "$minor" -lt 11 ]; }; then
+  stop "node $(node -v): нужен 24.11 или новее"
+fi
 free_gb="$(df -k "$HOME" | awk 'NR==2 {print int($4/1024/1024)}')"
 [ "$free_gb" -ge "${SPLIT_MIN_FREE_GB:-20}" ] || stop "свободно ${free_gb} ГБ, нужно не меньше 20"
 ok "инструменты: node $(node -v), свободно ${free_gb} ГБ"
