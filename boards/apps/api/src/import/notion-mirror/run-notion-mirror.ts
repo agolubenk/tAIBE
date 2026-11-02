@@ -15,6 +15,7 @@ import { createGuardedFetch } from "../guarded-fetch";
 import { writeImportedProject } from "../write-imported-project";
 import { loadMirroredCards } from "./load-mirrored-cards";
 import { findWorkspaceOwner, loadMirrorRows } from "./load-mirror-rows";
+import { NOTION_FOOTER_FIELDS } from "./notion-footer";
 import {
   mirrorDatabaseOrder,
   type NotionMirrorConfig,
@@ -166,6 +167,7 @@ async function mirrorDatabase(
     const counted = { fresh: 0, changed: 0 };
     const read = await readNotionMirror(client, databaseId, {
       product: config.product ?? NOTION_DEFAULT_PRODUCT,
+      footerFields: NOTION_FOOTER_FIELDS,
       selectBodies: async (pages) => {
         const cards = await loadMirroredCards(pages.map(({ id }) => id));
         const editedAt = new Map(

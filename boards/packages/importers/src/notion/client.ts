@@ -2,6 +2,7 @@ import { createJsonClient, type JsonClient } from "../http.js";
 import type { FetchLike } from "../types.js";
 import type {
   NotionBlock,
+  NotionComment,
   NotionDatabase,
   NotionListResponse,
   NotionPage,
@@ -20,14 +21,21 @@ export type NotionClientOptions = {
   token: string;
   fetch?: FetchLike;
   signal?: AbortSignal;
+  // Shared by the clients withSignal derives, so a run counts every call.
+  counter?: { calls: number };
 };
 
 export class NotionClient {
   private readonly options: NotionClientOptions;
   private readonly http: JsonClient;
+  readonly counter: { calls: number };
 
   constructor(options: NotionClientOptions) {
     this.options = options;
+    const counter = options.counter ?? { calls: 0 };
+    this.counter = counter;
+    const base: FetchLike =
+      options.fetch ?? ((input, init) => fetch(input, init));
     this.http = createJsonClient({
       service: "Notion",
       baseUrl: NOTION_API_URL,
@@ -35,7 +43,11 @@ export class NotionClient {
         Authorization: `Bearer ${options.token}`,
         "Notion-Version": NOTION_VERSION,
       }),
-      fetch: options.fetch,
+      // Counted at the wire: a retried request is two calls against the limit.
+      fetch: (input, init) => {
+        counter.calls += 1;
+        return base(input, init);
+      },
       signal: options.signal,
       describeUnauthorized:
         "unauthorized (HTTP 401), check the Notion integration token and that it is shared with the databases",
@@ -47,6 +59,7 @@ export class NotionClient {
     const current = this.options.signal;
     return new NotionClient({
       ...this.options,
+      counter: this.counter,
       signal: current ? AbortSignal.any([current, signal]) : signal,
     });
   }
@@ -57,6 +70,31 @@ export class NotionClient {
 
   me(): Promise<NotionUser> {
     return this.http.request<NotionUser>("/v1/users/me");
+  }
+
+  getUser(userId: string): Promise<NotionUser> {
+    return this.http.request<NotionUser>(
+      `/v1/users/${encodeURIComponent(userId)}`,
+    );
+  }
+
+  // Open page-level comments only: Notion's API returns neither resolved
+  // discussions nor, for a page id, the ones on its blocks.
+  async listComments(pageId: string): Promise<NotionComment[]> {
+    const comments: NotionComment[] = [];
+    let cursor: string | null = null;
+    do {
+      const params = new URLSearchParams({
+        block_id: pageId,
+        page_size: String(NOTION_PAGE_SIZE),
+      });
+      if (cursor) params.set("start_cursor", cursor);
+      const response: NotionListResponse<NotionComment> =
+        await this.http.request(`/v1/comments?${params}`);
+      comments.push(...response.results);
+      cursor = response.has_more ? response.next_cursor : null;
+    } while (cursor);
+    return comments;
   }
 
   getDatabase(databaseId: string): Promise<NotionDatabase> {

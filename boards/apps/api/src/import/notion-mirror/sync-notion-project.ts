@@ -37,6 +37,8 @@ export type SyncNotionProjectInput = {
   project: ImportedProject;
   includeComments: boolean;
   plan: NotionSyncPlan;
+  // Keys of pages whose Backlog ID stays in the footer only.
+  backlogDropped: ReadonlySet<string>;
 };
 
 // A re-import of a mirrored database (R-080): edited pages rewrite their
@@ -135,12 +137,13 @@ export async function syncNotionProject(
     ),
   );
 
-  const metaWarnings = await writeNotionCardMeta(tx, {
+  const metaChanged = await writeNotionCardMeta(tx, {
     workspaceId,
     userId,
     rows: notionMetaRows(
       [...plan.changed.map(({ task }) => task), ...plan.fresh],
       taskIds,
+      input.backlogDropped,
     ),
   });
 
@@ -156,11 +159,10 @@ export async function syncNotionProject(
       relations,
     },
     warnings: [
-      `Notion mirror: ${fresh.length} new, ${changed.length} updated, ${plan.unchanged} unchanged.`,
+      `Notion mirror: ${fresh.length} new, ${changed.length} updated, ${plan.unchanged} unchanged, ${metaChanged} with changed meta.`,
       ...project.warnings,
       ...planImportColumns(project.columns).warnings,
       ...(unmatched ? [unmatched] : []),
-      ...metaWarnings,
     ],
   };
 }

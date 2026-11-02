@@ -1,4 +1,5 @@
 import type { ImportedTask } from "@kaneo/importers";
+import { BACKLOG_ID_FIELD } from "./notion-footer";
 
 // The Notion fields a card keeps next to kaneo's own (R-024), read from the
 // page's source fields by name.
@@ -13,7 +14,6 @@ export type NotionCardMeta = {
   notionEditedAt: Date | null;
 };
 
-const BACKLOG_ID = /^backlog\s*id$/i;
 const HALF_BAKED = /^half[-\s]?baked/i;
 const REPORT = /^report$/i;
 const SEVERITY = /^severity$/i;
@@ -21,7 +21,12 @@ const TYPE = /^type$/i;
 const STATUS = /^status$/i;
 const BUG_TYPE = /bug|ошибк|баг/i;
 
-export function notionCardMeta(task: ImportedTask): NotionCardMeta | null {
+// keepsBacklogId is false for a page whose Backlog ID another card holds
+// (resolveBacklogIds): the ID then stays in the body's footer only.
+export function notionCardMeta(
+  task: ImportedTask,
+  keepsBacklogId = true,
+): NotionCardMeta | null {
   const ref = task.sourceRef;
   if (ref?.system !== "notion") return null;
 
@@ -36,9 +41,10 @@ export function notionCardMeta(task: ImportedTask): NotionCardMeta | null {
   const editedAt = Date.parse(ref.lastEditedTime);
 
   return {
-    kind: BUG_TYPE.test(text(TYPE) ?? "") ? "bug" : "task",
+    // A page without Type takes its database's kind: Ошибки holds bugs.
+    kind: BUG_TYPE.test(text(TYPE) ?? ref.database ?? "") ? "bug" : "task",
     severity: text(SEVERITY),
-    backlogId: text(BACKLOG_ID),
+    backlogId: keepsBacklogId ? backlogIdOf(task) : null,
     halfBaked: field(HALF_BAKED) === true,
     report: text(REPORT),
     notionPageId: ref.pageId,
@@ -47,23 +53,11 @@ export function notionCardMeta(task: ImportedTask): NotionCardMeta | null {
   };
 }
 
-// backlog_id is unique per workspace. A second page with the same ID, or one a
-// card outside this import already holds, keeps its card without the ID.
-export function releaseTakenBacklogIds<T extends { meta: NotionCardMeta }>(
-  rows: readonly T[],
-  takenElsewhere: ReadonlySet<string>,
-): { rows: T[]; dropped: string[] } {
-  const seen = new Set<string>();
-  const dropped: string[] = [];
-  const kept = rows.map((row) => {
-    const id = row.meta.backlogId;
-    if (id === null) return row;
-    if (seen.has(id) || takenElsewhere.has(id)) {
-      dropped.push(id);
-      return { ...row, meta: { ...row.meta, backlogId: null } };
-    }
-    seen.add(id);
-    return row;
-  });
-  return { rows: kept, dropped };
+// Raw, untrimmed, as the footer and the reconciliation hold it: the value is
+// a unique key, and two IDs that differ by a space are two IDs.
+export function backlogIdOf(task: ImportedTask): string | null {
+  const entry = Object.entries(task.footer ?? {}).find(([name]) =>
+    BACKLOG_ID_FIELD.test(name),
+  );
+  return entry ? String(entry[1]) : null;
 }

@@ -1,6 +1,9 @@
 export type NotionRichText = {
+  type?: string;
   plain_text: string;
   href?: string | null;
+  // Only the kind is read: a user mention also carries the person's email.
+  mention?: { type?: string; page?: { id?: string } };
   annotations?: {
     bold?: boolean;
     italic?: boolean;
@@ -45,6 +48,16 @@ export type NotionUser = {
   id: string;
   name?: string | null;
   type?: string;
+};
+
+// A page-level comment (GET /v1/comments). Notion gives the author's id only.
+export type NotionComment = {
+  id: string;
+  discussion_id: string;
+  created_time: string;
+  last_edited_time?: string;
+  created_by?: { id?: string };
+  rich_text?: NotionRichText[];
 };
 
 export type NotionDateValue = {
@@ -100,6 +113,9 @@ export type NotionBlockPayload = {
   external?: { url?: string };
   file?: { url?: string };
   url?: string;
+  caption?: NotionRichText[];
+  expression?: string;
+  cells?: NotionRichText[][];
 };
 
 export type NotionBlock = {
