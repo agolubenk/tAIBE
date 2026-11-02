@@ -121,6 +121,13 @@ SSR), SQL сделан повторяемым (`IF NOT EXISTS`, `DROP TRIGGER IF
 `tb-27`, `s6-notion-full` уже входили в `board-agents`; ветка dependabot обновляла `agentscan.yml`, который удалён при
 реструктуризации, — закрыта без переноса.
 
+## Разделение на машине владельца (план 02.11)
+
+`t-boards/` и `supertick-eval/` уходят из checkout'а инкубатора, на их местах — ссылки на checkout этого
+репозитория (`supertick-eval`, `eval` → `eval/`; `t-boards/app` → `boards/`), поэтому пути инстанса в геномах, plist
+Нерва и MCP досок не меняются. ИИ-сервисы `infra/` и копия слоя `.claude/` пока остаются в инкубаторе. Пошагово, с
+проверками и откатом — [`docs/ops/split-hr-taibe.md`](../docs/ops/split-hr-taibe.md).
+
 ## Стенд d4dev — пока собирается из инкубатора
 
 Сейчас `d4dev.admin.hrhelper.space` собирается из checkout'а инкубатора (`t-boards/app` на Mac, образ и

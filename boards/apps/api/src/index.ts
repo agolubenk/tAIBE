@@ -776,6 +776,19 @@ export function createApp() {
     },
   );
 
+  // better-auth 1.7 serves generic OAuth ("custom") callbacks at
+  // /auth/callback/:id. Identity providers still configured with the old
+  // /auth/oauth2/callback/:id keep working: 307 keeps the method and body
+  // (form_post responses), and the query (code, state) is carried over.
+  api.on(["GET", "POST"], "/auth/oauth2/callback/:providerId", (c) => {
+    const url = new URL(c.req.url);
+    const target = url.pathname.replace(
+      "/auth/oauth2/callback/",
+      "/auth/callback/",
+    );
+    return c.redirect(`${target}${url.search}`, 307);
+  });
+
   api.on(["POST", "GET", "PUT", "PATCH", "DELETE"], "/auth/*", async (c) => {
     const authHeader = c.req.header("Authorization");
     const apiKeyHeader = c.req.header("x-api-key")?.trim();

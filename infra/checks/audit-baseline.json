@@ -2,34 +2,10 @@
  "note": "known advisories of production dependencies — debt, each one a bug on the board; a new high/critical one fails CI (infra/checks/audit.py)",
  "accepted": {
   "boards": {
-   "GHSA-22jm-h49p-29qw": {
-    "module": "@modelcontextprotocol/sdk",
-    "severity": "high",
-    "title": "MCP TypeScript SDK: Experimental tasks were not tied to the session that created them",
-    "since": "2026-11-01"
-   },
    "GHSA-238p-pmpm-9mq7": {
     "module": "katex",
     "severity": "low",
     "title": "KaTeX: Existing prototype pollution can bypass trust restrictions",
-    "since": "2026-11-01"
-   },
-   "GHSA-2464-fhr4-w9xw": {
-    "module": "next",
-    "severity": "critical",
-    "title": "Next.js: Unauthenticated Remote Code Execution in Image Optimization API when SVG files are used",
-    "since": "2026-11-01"
-   },
-   "GHSA-27r3-jxmh-p828": {
-    "module": "body-parser",
-    "severity": "high",
-    "title": "body-parser vulnerable to Denial of Service via trailing bytes after a compressed request body",
-    "since": "2026-11-01"
-   },
-   "GHSA-2m5v-pch6-74hx": {
-    "module": "undici",
-    "severity": "high",
-    "title": "undici vulnerable to TLS certificate validation bypass via dropped tls options in Agent",
     "since": "2026-11-01"
    },
    "GHSA-2vr4-cq9g-pvrc": {
@@ -50,36 +26,6 @@
     "title": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal",
     "since": "2026-11-01"
    },
-   "GHSA-44jh-23m7-hpcf": {
-    "module": "@better-auth/drizzle-adapter",
-    "severity": "low",
-    "title": "@better-auth/drizzle-adapter: Concurrent requests can exceed rate limits on PostgreSQL",
-    "since": "2026-11-01"
-   },
-   "GHSA-46jr-4wx8-v453": {
-    "module": "@modelcontextprotocol/sdk",
-    "severity": "high",
-    "title": "MCP TypeScript SDK: One HTTP request within the default size limit could exhaust server memory during validation",
-    "since": "2026-11-01"
-   },
-   "GHSA-4qv8-2p9j-2685": {
-    "module": "undici",
-    "severity": "moderate",
-    "title": "undici vulnerable to Denial of Service via unbounded memory in the EventSource parser",
-    "since": "2026-11-01"
-   },
-   "GHSA-4w7w-5xrc-9h26": {
-    "module": "undici",
-    "severity": "high",
-    "title": "undici vulnerable to cache poisoning and cross-user disclosure via cross-origin redirects",
-    "since": "2026-11-01"
-   },
-   "GHSA-55wc-3pg8-jfw6": {
-    "module": "undici",
-    "severity": "moderate",
-    "title": "undici vulnerable to Denial of Service via unhandled exception in the decompress interceptor",
-    "since": "2026-11-01"
-   },
    "GHSA-587h-7wmj-h5pm": {
     "module": "vite",
     "severity": "high",
@@ -92,40 +38,16 @@
     "title": "Hono: `serveStatic` decodes the request path a second time, leading to bypass of middleware on static paths",
     "since": "2026-11-01"
    },
-   "GHSA-673q-mjm6-r5xr": {
-    "module": "next",
-    "severity": "critical",
-    "title": "Next.js: Unauthenticated Remote Code Execution in `use cache` functions returning typed arrays",
-    "since": "2026-11-01"
-   },
    "GHSA-698v-4r3x-3vcv": {
     "module": "vite",
     "severity": "moderate",
     "title": "launch-editor: escapeCmdArgs() omits % escaping on Windows",
     "since": "2026-11-01"
    },
-   "GHSA-6j4f-fj2g-mc7p": {
-    "module": "brace-expansion",
-    "severity": "high",
-    "title": "brace-expansion: DoS via uncontrolled recursion in parseCommaParts causing stack exhaustion",
-    "since": "2026-11-01"
-   },
    "GHSA-6pq8-jhm2-2vcw": {
     "module": "qs",
     "severity": "moderate",
     "title": "qs : qs.stringify with arrayFormat 'comma' throws an uncaught TypeError on array elements carrying a non-callable own to",
-    "since": "2026-11-01"
-   },
-   "GHSA-6prh-2h8m-c8cw": {
-    "module": "@modelcontextprotocol/sdk",
-    "severity": "moderate",
-    "title": "MCP TypeScript client SDK: HTTP client transports and OAuth requests followed cross-origin redirects and re-sent custom ",
-    "since": "2026-11-01"
-   },
-   "GHSA-7rv5-mrxv-xcr9": {
-    "module": "seroval",
-    "severity": "high",
-    "title": "Seroval: Deserialization invokes attacker-chosen callables: AsyncIteratorFactoryInstance calls source.on(listener) witho",
     "since": "2026-11-01"
    },
    "GHSA-85x2-q946-cp5h": {
@@ -140,58 +62,10 @@
     "title": "Nodemailer: A nested comment ends early in addressparser, releasing the rest of the comment as a recipient",
     "since": "2026-11-01"
    },
-   "GHSA-965c-763c-88jm": {
-    "module": "better-auth",
-    "severity": "critical",
-    "title": "better-auth: OAuth state can be used as a Magic Link to sign in as another user",
-    "since": "2026-11-01"
-   },
-   "GHSA-97r2-qh9m-474h": {
-    "module": "seroval",
-    "severity": "high",
-    "title": "Seroval: fromJSON deserializer trusts node-supplied array length and sequence doneAt (unauthenticated event-loop DoS)",
-    "since": "2026-11-01"
-   },
-   "GHSA-9fm3-97px-rjf6": {
-    "module": "undici",
-    "severity": "moderate",
-    "title": "undici WebSocket client vulnerable to Denial of Service via unbounded automatic PONG buffering",
-    "since": "2026-11-01"
-   },
    "GHSA-9jrq-w75r-8gcw": {
     "module": "vite",
     "severity": "low",
     "title": "Vite: Cross origin script execution through Vite custom middleware",
-    "since": "2026-11-01"
-   },
-   "GHSA-9wx9-5pv9-3349": {
-    "module": "seroval",
-    "severity": "moderate",
-    "title": "Seroval: Script injection through RegExp sources in serialized output",
-    "since": "2026-11-01"
-   },
-   "GHSA-c6gr-qvv4-5v3f": {
-    "module": "dompurify",
-    "severity": "low",
-    "title": "DOMPurify: SMIL attributeName=href guard is skipped when PARSER_MEDIA_TYPE is application/xhtml+xml",
-    "since": "2026-11-01"
-   },
-   "GHSA-cg2g-xh64-v4q7": {
-    "module": "dompurify",
-    "severity": "critical",
-    "title": "DOMPurify SAFE_FOR_TEMPLATES bypass: split template expressions survive in attached shadow root content on DOM output mo",
-    "since": "2026-11-01"
-   },
-   "GHSA-f72v-6w45-q472": {
-    "module": "undici",
-    "severity": "moderate",
-    "title": "undici vulnerable to Subresource Integrity bypass via non-lowercase algorithm tokens",
-    "since": "2026-11-01"
-   },
-   "GHSA-f86p-h4j2-7qgj": {
-    "module": "seroval",
-    "severity": "moderate",
-    "title": "Seroval: Code injection through a typed array's own constructor property",
     "since": "2026-11-01"
    },
    "GHSA-g3hv-75wg-m249": {
@@ -218,40 +92,10 @@
     "title": "ip-address: isInSubnet() and isHostInSubnet() compare addresses of different families as if they shared an address space",
     "since": "2026-11-01"
    },
-   "GHSA-jm63-cq47-j5jp": {
-    "module": "@modelcontextprotocol/server",
-    "severity": "high",
-    "title": "MCP  TypeScript server SDK: Shared transport or server instances delivered one HTTP client's messages to another",
-    "since": "2026-11-01"
-   },
-   "GHSA-jqcg-44mw-7w3h": {
-    "module": "proxy-addr",
-    "severity": "critical",
-    "title": "proxy-addr vulnerable to IP spoofing via IPv4-mapped IPv6 trust subnet",
-    "since": "2026-11-01"
-   },
    "GHSA-m943-m63m-w62w": {
     "module": "nodemailer",
     "severity": "moderate",
     "title": "Nodemailer: A \";\" inside a quoted string or comment ends an address group early in addressparser, turning display text i",
-    "since": "2026-11-01"
-   },
-   "GHSA-mrhx-c7xc-m3w5": {
-    "module": "zod",
-    "severity": "high",
-    "title": "Zod can exhaust memory while validating oversized constrained collections",
-    "since": "2026-11-01"
-   },
-   "GHSA-mrv2-3pqr-j5jr": {
-    "module": "dompurify",
-    "severity": "high",
-    "title": "DOMPurify IN_PLACE: hook that removes a parent or sibling leaves the detached subtree's event handlers armed (incomplete",
-    "since": "2026-11-01"
-   },
-   "GHSA-p3m5-59mp-jv5r": {
-    "module": "next",
-    "severity": "high",
-    "title": "Next.js: Denial of Service in App Router using Server Actions",
     "since": "2026-11-01"
    },
    "GHSA-p458-7748-mcp3": {
@@ -260,40 +104,10 @@
     "title": "Vitest: Servers misapply `server.fs.deny`, serving `.env`, private keys, `.git`, and the API token file",
     "since": "2026-11-01"
    },
-   "GHSA-q2hr-2g5m-vwhr": {
-    "module": "brace-expansion",
-    "severity": "moderate",
-    "title": "brace-expansion: Quadratic-time expansion of the `{a},b}` rewrite causes CPU denial of service",
-    "since": "2026-11-01"
-   },
-   "GHSA-q84f-53jg-9ppm": {
-    "module": "better-auth",
-    "severity": "high",
-    "title": "better-auth: Device login approval does not show the requesting client or permissions",
-    "since": "2026-11-01"
-   },
-   "GHSA-qhr7-859c-m2p7": {
-    "module": "brace-expansion",
-    "severity": "high",
-    "title": "brace-expansion: DoS via uncontrolled recursion on nested brace groups causing stack exhaustion",
-    "since": "2026-11-01"
-   },
-   "GHSA-qrxm-fqhp-jwvm": {
-    "module": "undici",
-    "severity": "high",
-    "title": "undici vulnerable to Denial of Service via TLS 1.2 certificate-changing renegotiation",
-    "since": "2026-11-01"
-   },
    "GHSA-qxg6-89mg-rqv8": {
     "module": "@vitest/mocker",
     "severity": "moderate",
     "title": "Vitest: Code injection via unauthenticated manual mock registration",
-    "since": "2026-11-01"
-   },
-   "GHSA-r4xp-prcw-77qf": {
-    "module": "better-auth",
-    "severity": "high",
-    "title": "better-auth: OAuth Proxy lets an attacker sign in as another user",
     "since": "2026-11-01"
    },
    "GHSA-r825-w8mm-5pxw": {
@@ -320,12 +134,6 @@
     "title": "Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine",
     "since": "2026-11-01"
    },
-   "GHSA-rvq5-wwqv-78pq": {
-    "module": "@modelcontextprotocol/sdk",
-    "severity": "moderate",
-    "title": "MCP TypeScript SDK: Server bearer authentication accepted tokens issued for another service",
-    "since": "2026-11-01"
-   },
    "GHSA-rxp7-6hxx-x8q5": {
     "module": "ip-address",
     "severity": "moderate",
@@ -350,28 +158,10 @@
     "title": "fast-uri vulnerable to host confusion via unchecked WHATWG host canonicalization",
     "since": "2026-11-01"
    },
-   "GHSA-wp97-x4hv-qvhp": {
-    "module": "seroval",
-    "severity": "high",
-    "title": "Seroval `fromJSON`/`fromCrossJSON` denial of service via unvalidated array node length",
-    "since": "2026-11-01"
-   },
-   "GHSA-wq5f-xc86-pv6w": {
-    "module": "sharp",
-    "severity": "high",
-    "title": "sharp : Vulnerability in librsvg dependency CVE-2026-96889",
-    "since": "2026-11-01"
-   },
    "GHSA-xhq7-xmqj-769h": {
     "module": "fast-uri",
     "severity": "low",
     "title": "fast-uri vulnerable to improper path equivalence in relative reference normalization",
-    "since": "2026-11-01"
-   },
-   "GHSA-xjj6-f33q-929c": {
-    "module": "undici",
-    "severity": "high",
-    "title": "undici vulnerable to Denial of Service via unhandled error on excessive content-encodings",
     "since": "2026-11-01"
    },
    "GHSA-xp26-3454-mjgp": {
@@ -382,24 +172,6 @@
    }
   },
   "infra/ops-console": {
-   "GHSA-85x2-q946-cp5h": {
-    "module": "nodemailer",
-    "severity": "moderate",
-    "title": "Nodemailer: A \">\" inside a quoted local part ends an angle-addr early in addressparser, delivering to a domain the heade",
-    "since": "2026-11-01"
-   },
-   "GHSA-8c8m-p3m8-cjg8": {
-    "module": "nodemailer",
-    "severity": "moderate",
-    "title": "Nodemailer: A nested comment ends early in addressparser, releasing the rest of the comment as a recipient",
-    "since": "2026-11-01"
-   },
-   "GHSA-m943-m63m-w62w": {
-    "module": "nodemailer",
-    "severity": "moderate",
-    "title": "Nodemailer: A \";\" inside a quoted string or comment ends an address group early in addressparser, turning display text i",
-    "since": "2026-11-01"
-   },
    "GHSA-mrhx-c7xc-m3w5": {
     "module": "zod",
     "severity": "high",

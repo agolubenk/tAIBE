@@ -27,16 +27,12 @@ export function useProviderSignIn({
       setPending(provider);
       const options = { headers: captcha.headers };
       try {
-        const result =
-          provider === "custom"
-            ? await authClient.signIn.oauth2(
-                { providerId: "custom", callbackURL, errorCallbackURL },
-                options,
-              )
-            : await authClient.signIn.social(
-                { provider, callbackURL, errorCallbackURL },
-                options,
-              );
+        // better-auth 1.7: generic OAuth providers (our "custom") are social
+        // providers — one sign-in endpoint for both.
+        const result = await authClient.signIn.social(
+          { provider, callbackURL, errorCallbackURL },
+          options,
+        );
         if (result.error) throw new Error(result.error.message);
         return true;
       } catch (error) {

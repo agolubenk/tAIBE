@@ -30,8 +30,10 @@ const endpoints = [
     { provider: "github", callbackURL: "http://localhost:5173/dashboard" },
   ],
   [
-    "/sign-in/oauth2",
-    { providerId: "custom", callbackURL: "http://localhost:5173/dashboard" },
+    // better-auth 1.7: the generic OAuth ("custom") provider signs in through
+    // /sign-in/social; /sign-in/oauth2 no longer exists.
+    "/sign-in/social",
+    { provider: "custom", callbackURL: "http://localhost:5173/dashboard" },
   ],
   ["/sign-in/anonymous", {}],
   ["/request-password-reset", { email: "captcha@example.com" }],

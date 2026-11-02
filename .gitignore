@@ -108,3 +108,9 @@ infra/scripts/security/.env.strix
 
 # pnpm store inside the tree (R4-PLAN Ф0.4: makes `git status -uall` slow)
 .pnpm-store/
+
+# Локальные данные машины (сверка разделения 02.11): индекс DAMS и его ключ GLM, Serena, прототипы, Playwright MCP
+.claude/rag/
+.serena/
+prototipes/
+.playwright-mcp/

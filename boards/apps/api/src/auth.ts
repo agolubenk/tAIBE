@@ -705,6 +705,12 @@ export const auth = betterAuth({
       config: [
         {
           providerId: "custom",
+          // better-auth 1.7 would send /api/auth/callback/custom; identity
+          // providers set up before the upgrade expect the old address, so it
+          // stays the default (index.ts forwards it to the new handler).
+          redirectURI:
+            process.env.CUSTOM_OAUTH_REDIRECT_URI ||
+            `${baseURLWithoutPath}/api/auth/oauth2/callback/custom`,
           clientId: process.env.CUSTOM_OAUTH_CLIENT_ID || "",
           clientSecret: resolveFileSecret("CUSTOM_OAUTH_CLIENT_SECRET"),
           authorizationUrl: process.env.CUSTOM_OAUTH_AUTHORIZATION_URL || "",

@@ -282,6 +282,8 @@ export const teamTable = pgTable(
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
+    // better-auth 1.7: durable seat counter (reserved before a membership row).
+    memberCount: integer("member_count").notNull().default(0),
     workspaceId: text("workspace_id")
       .notNull()
       .references(() => workspaceTable.id, { onDelete: "cascade" }),
@@ -303,6 +305,9 @@ export const teamMemberTable = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => userTable.id, { onDelete: "cascade" }),
+    // better-auth 1.7: sha256(teamId,userId) — single-column uniqueness of a
+    // user within a team; legacy rows stay null (lookup falls back to the pair).
+    membershipKey: text("membership_key").unique(),
     createdAt: timestamp("created_at"),
   },
   (table) => [

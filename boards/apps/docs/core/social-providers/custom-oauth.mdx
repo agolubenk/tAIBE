@@ -31,6 +31,7 @@ If you use a discovery URL, the provider can supply the authorization, token, an
 |----------|-------------|---------|
 | `CUSTOM_OAUTH_DISCOVERY_URL` | OpenID Connect discovery document URL | - |
 | `CUSTOM_OAUTH_SCOPES` | Comma-separated list of OAuth scopes | `profile,email` |
+| `CUSTOM_OAUTH_REDIRECT_URI` | Redirect URI sent to the provider | `<API URL>/api/auth/oauth2/callback/custom` |
 | `CUSTOM_OAUTH_RESPONSE_TYPE` | OAuth response type | `code` |
 | `CUSTOM_AUTH_PKCE` | Enable/disable PKCE (Proof Key for Code Exchange) | `true` |
 | `CUSTOM_OAUTH_NAME` | Provider name on the sign-in button, for example `Authentik` | `SSO` |
@@ -47,6 +48,8 @@ First, create an OAuth 2.0 or OIDC application in your identity provider:
 2. Create a new OAuth 2.0 or OIDC application
 3. Set the redirect URI to: `https://kaneo.example.com/api/auth/oauth2/callback/custom`
    - Example: `https://api.kaneo.example.com/api/auth/oauth2/callback/custom`
+   - To use another address (for example the newer `/api/auth/callback/custom`), set `CUSTOM_OAUTH_REDIRECT_URI`
+     to the exact URL registered with the provider. Both paths are served.
 4. Copy the client ID and client secret
 5. Note the authorization, token, and userinfo endpoint URLs
 

@@ -7,8 +7,7 @@ export type TurnstileResult = { ok: true } | { ok: false; reason: string };
 export const authCaptchaPaths = new Set([
   "/sign-in/email",
   "/sign-up/email",
-  "/sign-in/social",
-  "/sign-in/oauth2",
+  "/sign-in/social", // also the generic OAuth ("custom") provider since better-auth 1.7
   "/sign-in/anonymous",
   "/sign-in/magic-link",
   "/request-password-reset",
