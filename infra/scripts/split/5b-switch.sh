@@ -9,12 +9,17 @@ git -C "$HR" fetch -q origin main || stop "git fetch HR не прошёл"
 if git -C "$HR" cat-file -e origin/main:supertick-eval 2>/dev/null || git -C "$HR" cat-file -e origin/main:t-boards 2>/dev/null; then
   wait_owner "PR очистки HR ещё не влит в main ($(cat "$BK/hr-pr-url" 2>/dev/null)). После мёржа: bash $0"
 fi
+cd "$HR" || stop "нет $HR"
+# Повторный запуск после того, как ссылки уже стоят (например, остановились на запуске Нерва): переключение не
+# повторяем, идём сразу к запуску и проверкам.
+switched=0
+[ -L supertick-eval ] && [ -L eval ] && [ -L boards ] && [ -L t-boards/app ] && switched=1
+if [ "$switched" = 0 ]; then
 p="$(nerve_procs)"
 [ -z "$p" ] || stop "процессы Нерва/тапов снова живы: $(printf '%s' "$p" | tr '\n' ';') — закрыть сессии, затем bash $SPLIT_DIR/5a-freeze.sh"
 
-cd "$HR" || stop "нет $HR"
 moved=""
-for d in supertick-eval t-boards tAIBoard_and_Eval; do
+for d in supertick-eval t-boards; do # tAIBoard_and_Eval (старый вложенный клон tAIBE) не трогаем: он вне рамки, снят в бэкап scan.sh
   if [ -e "$d" ] && [ ! -L "$d" ] && [ ! -L "$d/app" ]; then
     [ -e "$BK/moved/$d" ] && stop "в бэкапе уже есть $BK/moved/$d — разобраться, прежде чем переносить снова"
     mv "$d" "$BK/moved/$d" || stop "не перенеслась папка $d"
@@ -27,8 +32,8 @@ if ! git pull -q --ff-only origin main; then
   for d in $moved; do mv "$BK/moved/$d" "$HR/$d"; done
   stop "git pull --ff-only в HR не прошёл — папки возвращены на место; вывод git выше (обычно мешает локальная правка того же файла)"
 fi
-git -c core.quotepath=off status --porcelain | grep -qE '(supertick-eval|t-boards)' &&
-  stop "после pull git HR всё ещё видит supertick-eval/t-boards: $(git status --short | grep -E 'supertick-eval|t-boards' | head -3 | tr '\n' ';')"
+git -c core.quotepath=off status --porcelain | grep -qE '^.. "?(supertick-eval|t-boards)(/|$|")' &&
+  stop "после pull git HR всё ещё видит supertick-eval/t-boards: $(git -c core.quotepath=off status --porcelain | grep -E '^.. "?(supertick-eval|t-boards)(/|$|")' | head -3 | tr '\n' ';')"
 ok "HR на $(git log --oneline -1), пути сняты с учёта"
 
 [ -e supertick-eval ] || ln -s "$TB/eval" supertick-eval
@@ -43,9 +48,12 @@ done
 for x in /supertick-eval /eval /boards /t-boards/ /.claude/pipeline-settings.json; do
   grep -qxF -- "$x" .git/info/exclude 2>/dev/null || echo "$x" >>.git/info/exclude
 done
-git -c core.quotepath=off status --porcelain | grep -qE '^\?\? (supertick-eval|eval|boards|t-boards)' &&
+git -c core.quotepath=off status --porcelain | grep -qE '^\?\? (supertick-eval|eval|boards|t-boards)(/|$)' &&
   stop "git HR показывает ссылки — .git/info/exclude не сработал"
 ok "ссылки: supertick-eval, eval → $TB/eval; boards, t-boards/app → $TB/boards (скрыты в .git/info/exclude)"
+else
+  ok "ссылки уже стоят (повторный запуск): переключение пропущено"
+fi
 
 if has launchctl; then
   launch_agent space.hrhelper.nerve 2>>"$LOG" || stop "Нерв не запустился (launchctl)"

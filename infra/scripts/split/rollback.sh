@@ -26,8 +26,14 @@ for x in /supertick-eval /eval /boards /t-boards/ /.claude/pipeline-settings.jso
 done
 if has launchctl; then
   launch_agent space.hrhelper.nerve 2>>"$LOG" && log "Нерв запущен"
-  [ -f "$HOME/Library/LaunchAgents/space.hrhelper.t-boards-notebook-sync.plist" ] &&
-    launch_agent space.hrhelper.t-boards-notebook-sync 2>>"$LOG" && log "синк блокнота запущен"
+  # Синк блокнота шлёт то, что числит git HR, и удаляет из блокнота остальное. Если PR очистки уже в HEAD, git HR
+  # не числит вернувшиеся папки — включённый синк удалил бы их документы с сервера. Тогда синк остаётся на паузе.
+  if git -C "$HR" cat-file -e HEAD:t-boards 2>/dev/null; then
+    [ -f "$HOME/Library/LaunchAgents/space.hrhelper.t-boards-notebook-sync.plist" ] &&
+      launch_agent space.hrhelper.t-boards-notebook-sync 2>>"$LOG" && log "синк блокнота запущен"
+  else
+    warn "синк блокнота оставлен на паузе: PR очистки уже в HR, включённый синк удалил бы документы t-boards из блокнота (решение владельца)"
+  fi
 fi
 [ -f infra/scripts/dev-ai/mcp-hub.sh ] && bash infra/scripts/dev-ai/mcp-hub.sh restart hub >>"$LOG" 2>&1
 log "откат сделан. Если PR очистки уже в main, git HR покажет вернувшиеся папки неотслеживаемыми — работе не мешает; вернуть их в git — revert PR очистки (решение владельца)."

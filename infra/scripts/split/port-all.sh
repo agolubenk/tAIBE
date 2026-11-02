@@ -16,7 +16,7 @@ run="$BK/port-last.txt" # только этот прогон: решение «�
   echo "--- $(date '+%Y-%m-%d %H:%M:%S'), снимок $S"
   while read -r repo branch _n; do
     [ -n "$repo" ] || continue
-    bash "$SPLIT_DIR/port.sh" "$repo" "$branch"
+    bash "$SPLIT_DIR/port.sh" "$repo" "$branch" || echo "НЕ ПРИМЕНИЛСЯ: port.sh вернул ошибку для $repo $branch"
   done <"$S/unpushed.txt"
 } >"$run"
 tee -a "$report" <"$run"
@@ -26,7 +26,11 @@ for rb in $(git -C "$TB" for-each-ref --format='%(refname:short)' 'refs/heads/re
   if [ "$n" = 0 ]; then
     git -C "$TB" branch -q -D "$rb" && echo "пустая ветка удалена: $rb" | tee -a "$report" "$run"
   else
-    git -C "$TB" push -q -u origin "$rb" && echo "отправлена: $rb ($n коммитов, не мёржить)" | tee -a "$report" "$run"
+    if git -C "$TB" push -q -u origin "$rb"; then
+      echo "отправлена: $rb ($n коммитов, не мёржить)" | tee -a "$report" "$run"
+    else
+      echo "НЕ ПРИМЕНИЛСЯ: ветка $rb не отправилась (сеть/доступ) — коммиты есть локально в $TB" | tee -a "$report" "$run"
+    fi
   fi
 done
 grep -q 'НЕ ПРИМЕНИЛСЯ' "$run" && exit 5

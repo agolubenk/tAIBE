@@ -42,7 +42,8 @@
 | `1` или другой | ошибка | Как `3`: показать вывод владельцу и ждать |
 
 Скрипт можно запускать повторно: сделанное он пропускает. После СТОП, когда владелец ответил, тот же шаг
-запускают ещё раз.
+запускают ещё раз. Это касается и 5b: если ссылки уже стоят, переключение не повторяется, шаг сразу переходит к
+запуску Нерва и проверкам.
 
 **Переменные-разрешения** ставятся перед командой, и только когда владелец прямо сказал это в ответ на
 конкретный СТОП. Например: `SPLIT_OWNER_OK_DUMP=1 bash …/2-backup.sh`.
@@ -53,6 +54,7 @@
 | `SPLIT_OWNER_OK_DUMP=1` | Продолжить без дампа базы досок моложе суток (шаг 2) |
 | `SPLIT_OWNER_OK_799=1` | Продолжить, хотя коммита `799fae6` нет в бандлах (шаг 2) |
 | `SPLIT_OWNER_OK_WAKES=1` | Продолжить с выключенным на доске `nerveWakes` (шаг 3) |
+| `SPLIT_OWNER_OK_KILL_TAPS=1` | Окна сессий уже закрыты, но остались их процессы `nerve.py tap`. Шаг 5a их завершит |
 
 ## Правила для исполнителя
 
@@ -71,15 +73,21 @@
 mkdir -p ~/Desktop/Development
 ```
 
-```bash
-[ -e ~/Desktop/Development/tAIBE ] && echo "СТОП: папка tAIBE уже есть — спросить владельца" || git clone https://github.com/agolubenk/tAIBE.git ~/Desktop/Development/tAIBE
-```
+Папка `~/Desktop/Development/tAIBE` у владельца уже может быть. Тогда её используют, если это клон
+`agolubenk/tAIBE` без незакоммиченных правок; иначе клонируют заново:
 
 ```bash
-cd ~/Desktop/Development/tAIBE && git switch board-agents && git log --oneline -1 && ls infra/scripts/split/
+T=~/Desktop/Development/tAIBE; if [ ! -e "$T" ]; then git clone https://github.com/agolubenk/tAIBE.git "$T"; elif git -C "$T" remote get-url origin 2>/dev/null | grep -q 'agolubenk/tAIBE'; then [ -z "$(git -C "$T" status --porcelain)" ] && echo "есть чистый клон tAIBE — используем" || echo "СТОП: в $T незакоммиченные правки — спросить владельца"; else echo "СТОП: $T — не клон agolubenk/tAIBE — спросить владельца"; fi
 ```
 
-Ожидаемо: последний коммит `board-agents`, в папке 12 скриптов. Иначе — СТОП.
+Если строка начинается со «СТОП», остановиться. Иначе:
+
+```bash
+cd ~/Desktop/Development/tAIBE && git fetch origin && git switch board-agents && git pull --ff-only origin board-agents && git log --oneline -1 && ls infra/scripts/split/
+```
+
+Ожидаемо: последний коммит `board-agents` и в папке 12 скриптов. Иначе — СТОП. Если `git switch` или `git pull` не
+проходят (например, клон был на другой ветке с локальными коммитами), тоже СТОП и вопрос владельцу.
 
 ## Шаги 1–6
 
@@ -118,9 +126,12 @@ plan, frontend, backend, release, boards. Пауза не подходит.
 bash ~/Desktop/Development/tAIBE/infra/scripts/split/rollback.sh
 ```
 
-Откат возвращает папки из бэкапа, убирает ссылки и запускает Нерв и синк блокнота. Ничего не удаляет, кроме самих
-ссылок. Если PR очистки уже влит, git HR покажет вернувшиеся папки неотслеживаемыми. Работе это не мешает; вернуть
-их в git можно revert'ом PR, это решает владелец.
+Откат возвращает папки из бэкапа, убирает ссылки и запускает Нерв. Ничего не удаляет, кроме самих ссылок.
+
+Синк блокнота откат включает, только если git HR ещё числит `t-boards/`. Если PR очистки уже влит, синк остаётся
+на паузе: иначе он удалил бы документы досок из блокнота на сервере. Вернувшиеся папки git HR покажет
+неотслеживаемыми, работе это не мешает. Вернуть их в git — revert PR очистки; это и включение синка решает
+владелец.
 
 ## Отчёт владельцу (в чат и пунктом очереди `oq_*`)
 
@@ -152,5 +163,10 @@ bash ~/Desktop/Development/tAIBE/infra/scripts/split/rollback.sh
   (`process/TRANSFER.md`, раздел «Стенд d4dev»; дорожная карта, M6).
 - **Не вливать в HR ветки, которые меняют `supertick-eval/` или `t-boards/`** (список — шаг 1). Мёрж такой ветки
   вернёт настоящие папки на место ссылок.
+- `tAIBoard_and_Eval` (старый вложенный клон tAIBE в HR, из git HR удалён 01.11) не переносится. Он остаётся на
+  месте, его снимок — в бэкапе шага 2. Что с ним делать, решает владелец.
+- Worktree `t-boards/worktrees/fix/tb-notion-5xx-retry` после переноса лежит в бэкапе. Git в нём заработает после
+  `git -C ~/Backups/split-2026-11-02/moved/t-boards/app worktree repair`. Коммит `799fae6` и так есть в бандле шага 2
+  и в ветке `rescue/*`.
 - Старые worktree HR держат свои копии этих папок, пока не подтянут `main`. После этого они работают через
   основной checkout: команда наследника идёт через `git rev-parse --git-common-dir`.

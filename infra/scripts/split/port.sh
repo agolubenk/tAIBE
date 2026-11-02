@@ -30,7 +30,8 @@ fi
 for s in $todo; do
   short="$(printf '%s' "$s" | cut -c1-7)"
   subj="$(git -C "$r" log -1 --format=%s "$s")"
-  if git -C "$TB" log HEAD --format=%s | grep -qxF -- "$subj"; then
+  key="$(git -C "$r" log -1 --format='%ae %at %s' "$s")"
+  if git -C "$TB" log HEAD --since=2026-10-01 --format='%ae %at %s' | grep -qxF -- "$key"; then
     echo "уже есть (тема совпала): $short $subj"
     continue
   fi

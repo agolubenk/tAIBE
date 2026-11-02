@@ -15,6 +15,7 @@ if [ ! -d "$HR_WT" ]; then
   fi
 fi
 cd "$HR_WT" || stop "нет $HR_WT"
+[ -L supertick-eval ] && rm supertick-eval # временная ссылка прерванного запуска (см. тесты хуков ниже)
 git cat-file -e HEAD:supertick-eval 2>/dev/null && git rm -r -q supertick-eval
 git cat-file -e HEAD:t-boards 2>/dev/null && git rm -r -q t-boards
 [ -d t-boards ] && find t-boards -depth -type d -empty -delete # пустые папки бывших gitlink
@@ -61,7 +62,8 @@ rm supertick-eval # это ссылка, не папка; в PR её быть н
 ok "тесты хуков HR зелёные"
 
 git add -A
-bad="$(git -c core.quotepath=off diff --cached --name-only -z origin/main | "$PY" -I -c '
+base="$(git merge-base HEAD origin/main)"
+bad="$(git -c core.quotepath=off diff --cached --name-only -z "$base" | "$PY" -I -c '
 import sys
 ok = ("docs/", ".claude/", ".github/", "supertick-eval/", "t-boards/")
 print(" ".join(p for p in sys.stdin.read().split("\0") if p and not (p.startswith(ok) or p.endswith(".md"))))')"

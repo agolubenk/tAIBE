@@ -30,16 +30,21 @@ c_hooks() {
   for t in .claude/hooks/test_*.py; do "$PY" "$t" >/dev/null 2>&1 || bad="$bad $t"; done
   [ -z "$bad" ] || { echo "$bad"; return 1; }
 }
-c_nerve() { "$PY" -I "$HR/eval/nerve/nerve.py" status; }
+c_nerve() { # status всегда выходит с 0 — смотрим, что демон жив: heartbeat моложе 5 минут (интервал 60 с)
+  "$PY" -I "$HR/eval/nerve/nerve.py" status >/dev/null 2>&1 || return 1
+  [ -n "$(find "$TB/eval/nerve/state/heartbeat" -mmin -5 2>/dev/null)" ] || { echo "heartbeat старше 5 минут или нет"; return 1; }
+}
 c_tap() { "$PY" -I "$HR/eval/nerve/nerve.py" tap selftest --once >/dev/null; }
 c_tied() {
   local f p bad=""
   while read -r f; do
     [ -n "$f" ] || continue
-    for p in $(plutil -p "$f" 2>/dev/null | grep -oE '/Users/[^"<]+'); do
-      case "$p" in */state/* | *.log) continue ;; esac
-      [ -e "$p" ] || bad="$bad $p"
-    done
+    while read -r p; do
+      case "$p" in "" | */state/* | *.log) continue ;; esac
+      [ -e "$p" ] || bad="$bad [$p]"
+    done <<EOP
+$(plutil -p "$f" 2>/dev/null | grep -oE '/Users/[^"<]+')
+EOP
   done <"$BK/launchd/tied.txt"
   [ -z "$bad" ] || { echo "нет путей:$bad"; return 1; }
 }
@@ -64,7 +69,7 @@ c_notebook() {
 }
 c_backup() { ! tail -1 "$HOME/t-boards-backups/pull.log" 2>/dev/null | grep -q FAILED; }
 c_git() {
-  [ -z "$(git -C "$HR" -c core.quotepath=off status --porcelain | grep -E 'supertick-eval|t-boards|^\?\? (eval|boards)')" ] || return 1
+  [ -z "$(git -C "$HR" -c core.quotepath=off status --porcelain | grep -E '^.. "?(supertick-eval|t-boards|eval|boards)(/|$|")')" ] || return 1
   git -C "$TB" status --short >"$BK/state/tb-status-after.txt"
 }
 
