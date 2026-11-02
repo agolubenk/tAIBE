@@ -28,7 +28,14 @@ log "свежий снимок: $S"
 grep -q 'БАНДЛ НЕ СОЗДАН' "$S/summary.txt" && stop "не создался бандл (см. $S/summary.txt)"
 bash "$SPLIT_DIR/port-all.sh" >/dev/null
 rc=$?
-[ "$rc" = 5 ] && stop "часть коммитов не применилась в tAIBE (см. $BK/port-report.txt)"
+if [ "$rc" = 5 ]; then
+  if [ "${SPLIT_OWNER_OK_PORT:-0}" = 1 ]; then
+    warn "часть коммитов не применилась в tAIBE — по решению владельца дальше: они целы в бандлах и в $BK/patches"
+    rc=0
+  else
+    stop "часть коммитов не применилась в tAIBE (см. $BK/port-report.txt) — целы в бандлах и патчах. Продолжить: SPLIT_OWNER_OK_PORT=1 bash $0"
+  fi
+fi
 [ "$rc" = 0 ] || stop "перенос коммитов не прошёл (код $rc)"
 ok "коммиты вложенных репозиториев перенесены (отчёт $BK/port-report.txt)"
 
