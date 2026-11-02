@@ -55,6 +55,8 @@ backup() {
   if [ -e "$last" ] && [[ ! "$dst" > "$last" ]]; then
     base="${last%-[0-9][0-9]}"
     [ "$base" = "$last" ] || n="${last##*-}"
+    # Past -99 the next name would sort first and be pruned at once.
+    [ $((10#$n)) -lt 99 ] || die "копии $CONF с одним временем дошли до -99 — проверьте часы (date) и лишние $CONF.bak-*"
     printf -v dst '%s-%02d' "$base" $((10#$n + 1))
   fi
   cp -a "$CONF" "$dst"
