@@ -65,8 +65,10 @@ log "агенты с путями в переезжающие папки: $(tr '
 : >"$BK/patches/hr-branches-touching.txt"
 for b in $(git -C "$HR" for-each-ref --format='%(refname:short)' refs/remotes/origin); do
   case "$b" in origin/main | origin/HEAD | origin) continue ;; esac
-  n="$(git -C "$HR" log --oneline "origin/main..$b" -- supertick-eval t-boards 2>/dev/null | wc -l | tr -d ' ')"
-  [ "$n" -gt 0 ] && echo "$b: $n коммитов" >>"$BK/patches/hr-branches-touching.txt"
+  # Собственные изменения ветки от точки ответвления (три точки), а не все её коммиты: мёрж main в ветку
+  # приносит чужие правки этих папок и ложно её помечал.
+  n="$(git -C "$HR" diff --name-only "origin/main...$b" -- supertick-eval t-boards 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -gt 0 ] && echo "$b: $n файлов" >>"$BK/patches/hr-branches-touching.txt"
 done
 if [ -s "$BK/patches/hr-branches-touching.txt" ] && [ "${SPLIT_OWNER_OK_BRANCHES:-0}" != 1 ]; then
   stop "ветки HR меняют supertick-eval/ или t-boards/: $(tr '\n' ';' <"$BK/patches/hr-branches-touching.txt") — владелец: их нельзя вливать после разделения, пока правки не перенесены в tAIBE. Продолжить: SPLIT_OWNER_OK_BRANCHES=1 bash $0"

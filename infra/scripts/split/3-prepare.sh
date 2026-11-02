@@ -29,11 +29,20 @@ fi
 if [ "${SPLIT_SKIP_DEPS:-0}" = 1 ]; then
   warn "SPLIT_SKIP_DEPS=1 — зависимости досок не ставятся (только для проверки скриптов)"
 else
-  has corepack || stop "нет corepack (идёт вместе с node)"
-  (cd boards && corepack pnpm --version >/dev/null 2>&1) || stop "corepack не запускает pnpm (boards/package.json: pnpm@10.32.1)"
-  (cd boards && corepack pnpm install --frozen-lockfile >"$BK/state/pnpm-install.txt" 2>&1) ||
+  # pnpm 10.x: через corepack, если он есть (с Node 25 его нет в поставке), иначе свой pnpm 10.x, иначе npx.
+  PNPM=""
+  if has corepack && (cd boards && corepack pnpm --version >/dev/null 2>&1); then
+    PNPM="corepack pnpm"
+  elif has pnpm && pnpm --version 2>/dev/null | grep -q '^10\.'; then
+    PNPM="pnpm"
+  elif has npx; then
+    PNPM="npx -y pnpm@10.32.1"
+  fi
+  [ -n "$PNPM" ] || stop "нет pnpm 10.x: ни corepack, ни pnpm 10, ни npx"
+  log "pnpm: $PNPM ($(cd boards && $PNPM --version 2>/dev/null))"
+  (cd boards && $PNPM install --frozen-lockfile >"$BK/state/pnpm-install.txt" 2>&1) ||
     stop "pnpm install в boards/ не прошёл: $(tail -3 "$BK/state/pnpm-install.txt" | tr '\n' ' ')"
-  (cd boards && corepack pnpm --filter "./packages/*" build >"$BK/state/pnpm-build.txt" 2>&1) ||
+  (cd boards && $PNPM --filter "./packages/*" build >"$BK/state/pnpm-build.txt" 2>&1) ||
     stop "сборка пакетов досок не прошла: $(tail -3 "$BK/state/pnpm-build.txt" | tr '\n' ' ')"
   [ -f boards/packages/mcp/dist/index.js ] || stop "после сборки нет boards/packages/mcp/dist/index.js"
   ok "зависимости досок стоят, пакет MCP собран"
@@ -48,7 +57,14 @@ done
 bash "$SPLIT_DIR/port-all.sh"
 rc=$?
 [ "$rc" = 2 ] && stop "нет снимка вложенных репозиториев — сначала шаг 2"
-[ "$rc" = 5 ] && stop "часть коммитов не применилась в tAIBE (строки «НЕ ПРИМЕНИЛСЯ» в $BK/port-report.txt) — патчи в $BK/patches, решение владельца"
+if [ "$rc" = 5 ]; then
+  if [ "${SPLIT_OWNER_OK_PORT:-0}" = 1 ]; then
+    warn "часть коммитов не применилась в tAIBE — по решению владельца идём дальше: они целы в бандлах снимка и в $BK/patches"
+    rc=0
+  else
+    stop "часть коммитов не применилась в tAIBE (строки «НЕ ПРИМЕНИЛСЯ» в $BK/port-report.txt) — они целы в бандлах снимка и в $BK/patches; разбор — потом, решение владельца. Продолжить: SPLIT_OWNER_OK_PORT=1 bash $0"
+  fi
+fi
 [ "$rc" = 0 ] || stop "перенос коммитов не прошёл (код $rc), см. $BK/port-report.txt"
 ok "неотправленные коммиты: отчёт $BK/port-report.txt"
 next "bash $SPLIT_DIR/4-hr-pr.sh"
