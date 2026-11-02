@@ -2,15 +2,24 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import type { FetchLike } from "../types.js";
 import { connectKaneo } from "./index.js";
 
-type Reply = { status: number; body: unknown };
+type Reply = {
+  status: number;
+  body: unknown;
+  headers?: Record<string, string>;
+};
 
 const BASE = "https://kaneo.example.com";
 const API_KEY = "key-123";
 
 const ok = (body: unknown): Reply => ({ status: 200, body });
-const fail = (status: number, message: string): Reply => ({
+const fail = (
+  status: number,
+  message: string,
+  headers?: Record<string, string>,
+): Reply => ({
   status,
   body: { message, code: "ERR" },
+  headers,
 });
 
 function fakeFetch(routes: Record<string, Reply>) {
@@ -24,7 +33,7 @@ function fakeFetch(routes: Record<string, Reply>) {
       typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body);
     return new Response(body, {
       status: reply.status,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...reply.headers },
     });
   });
   return { fetch, calls, paths: () => calls.map((call) => call.path) };
@@ -556,12 +565,17 @@ describe("readProject", () => {
     ]);
   });
 
-  it.each([401, 400, 500])(
+  it.each([
+    [401, undefined],
+    [400, undefined],
+    // 5xx is retried now; Retry-After: 0 keeps the retries instant in the test.
+    [500, { "Retry-After": "0" }],
+  ] as const)(
     "stops when reading custom fields fails with HTTP %i",
-    async (status) => {
+    async (status, headers) => {
       const fake = fakeFetch({
         ...routes(),
-        "/api/custom-field/project/p1": fail(status, "Nope"),
+        "/api/custom-field/project/p1": fail(status, "Nope", headers),
       });
       const source = await connectKaneo(
         { url: BASE, apiKey: API_KEY },

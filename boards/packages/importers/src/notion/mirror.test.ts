@@ -66,9 +66,42 @@ function fakeNotion(pages: NotionPage[]) {
         next_cursor: null,
       });
     }
+    if (pathname === "/v1/comments") {
+      const cursor = new URL(url).searchParams.get("start_cursor");
+      const comment = (id: string, by: string) => ({
+        id: `c-${id}`,
+        discussion_id: "d-1",
+        created_time: "2026-10-04T08:00:00.000Z",
+        created_by: { id: by },
+        rich_text: [{ plain_text: `Comment ${id}` }],
+      });
+      return cursor
+        ? json({
+            results: [comment("2", "u-bot")],
+            has_more: false,
+            next_cursor: null,
+          })
+        : json({
+            results: [comment("1", "u-ann")],
+            has_more: true,
+            next_cursor: "next",
+          });
+    }
+    const user = /^\/v1\/users\/([^/]+)$/.exec(pathname);
+    if (user?.[1]) {
+      userReads.push(user[1]);
+      return user[1] === "u-ann"
+        ? json({ object: "user", id: "u-ann", name: "Ann" })
+        : new Response("{}", { status: 403 });
+    }
     return new Response("{}", { status: 404 });
   };
-  return { client: new NotionClient({ token: "ntn_x", fetch }), blockReads };
+  const userReads: string[] = [];
+  return {
+    client: new NotionClient({ token: "ntn_x", fetch }),
+    blockReads,
+    userReads,
+  };
 }
 
 describe("readNotionMirror", () => {
@@ -109,6 +142,45 @@ describe("readNotionMirror", () => {
       "",
       "Body b",
     ]);
+  });
+});
+
+describe("readNotionMirror with comments", () => {
+  it("pages through comments, names each author once and counts every call", async () => {
+    const { client, userReads } = fakeNotion([
+      page("a", "2026-10-02T10:00:00.000Z"),
+      page("b", "2026-10-03T10:00:00.000Z"),
+    ]);
+
+    const read = await readNotionMirror(client, "db-1", {
+      product: "hr",
+      comments: true,
+    });
+
+    expect(read.project.tasks[0]?.comments).toEqual([
+      {
+        author: { name: "Ann" },
+        body: "Comment 1",
+        createdAt: "2026-10-04T08:00:00.000Z",
+        url: "https://www.notion.so/a?d=d1#c1",
+      },
+      {
+        author: { name: "Notion" },
+        body: "Comment 2",
+        createdAt: "2026-10-04T08:00:00.000Z",
+        url: "https://www.notion.so/a?d=d1#c2",
+      },
+    ]);
+    expect(userReads).toEqual(["u-ann", "u-bot"]);
+    // database, query, then per page: blocks and two comment pages; two users.
+    expect(client.counter.calls).toBe(2 + 2 * 3 + 2);
+  });
+
+  it("leaves comments unread without the option", async () => {
+    const { client } = fakeNotion([page("a", "2026-10-02T10:00:00.000Z")]);
+    const read = await readNotionMirror(client, "db-1", { product: "hr" });
+    expect(read.project.tasks[0]?.comments).toEqual([]);
+    expect(client.counter.calls).toBe(3);
   });
 });
 

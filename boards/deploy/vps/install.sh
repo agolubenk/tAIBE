@@ -136,14 +136,21 @@ write_files() {
   chmod 0600 "$ROOT/.env"
 }
 
-# wg-setup.sh lets the claude-mem proxy's replies through the tunnel firewall
-# for the address in .env; this script does not re-run it.
+# The app's fixed address and its bridge, the pair the tunnel lets through to the memory proxy.
+app_ip() { sed -n '/^  app:/,/^  [a-z]/s/^ *ipv4_address: //p' "$ROOT/compose.yml"; }
+app_bridge() { sed -n 's/^ *com\.docker\.network\.bridge\.name: //p' "$ROOT/compose.yml"; }
+
+# wg-setup.sh lets the t-boards app reach the claude-mem proxy at the address
+# in .env (OPS-19: only the app); this script does not re-run it.
 check_tunnel_rules() {
-  local host port
+  local host port app bridge rules=/etc/wireguard/t-boards-rules.sh
   host="$(sed -n 's/^CLAUDE_MEM_WORKER_HOST=//p' "$ROOT/.env" | tail -1)"
   port="$(sed -n 's/^CLAUDE_MEM_WORKER_PORT=//p' "$ROOT/.env" | tail -1)"
-  grep -qF -e "-s $host -p tcp --sport $port " /etc/wireguard/t-boards-rules.sh 2>/dev/null ||
-    log "ВНИМАНИЕ: туннель не пропускает ответы памяти $host:$port — перезапустите $ROOT/wg-setup.sh с ключом Mac"
+  app="$(app_ip)"
+  bridge="$(app_bridge)"
+  { grep -qF -e "-i $bridge -o \"\$wg_if\" -s $app -d $host -p tcp --dport $port " "$rules" &&
+    grep -qF -e "-i \"\$wg_if\" -o $bridge -d $app -s $host -p tcp --sport $port " "$rules"; } 2>/dev/null ||
+    log "ВНИМАНИЕ: туннель не пускает t-boards ($app, мост $bridge) к памяти $host:$port — перезапустите $ROOT/wg-setup.sh с ключом Mac"
 }
 
 load_image() {
@@ -179,6 +186,16 @@ start_and_wait() {
     die "app не стал healthy за 5 минут (статус $status)"
   fi
   log "app healthy"
+  # The tunnel lets only this address reach the claude-mem proxy (OPS-19). up
+  # fails without recreating anything when the subnet is taken; the app then
+  # still runs on its old network.
+  local want got
+  want="$(app_ip)"
+  got="$(docker inspect -f '{{with index .NetworkSettings.Networks "t-boards_tb"}}{{.IPAddress}}{{end}}' "$app")"
+  [ "$got" = "$want" ] || die "app не в сети t-boards_tb с адресом $want (сейчас «$got»): подсеть занята? docker network ls"
+  # Before OPS-19 the stack ran on the default network; it is empty now, and an
+  # older compose.yml recreates it.
+  docker network rm t-boards_default >/dev/null 2>&1 || true
 }
 
 check_migrations() {

@@ -82,7 +82,10 @@ export function reconcile(
     }
 
     const taskStatusKey = task.columnKey ?? NO_STATUS;
-    if (taskStatusKey !== statusKey) {
+    // A page with no status in Notion cannot match any column: the importer
+    // places it in the default one, which is a placement choice, not a
+    // divergence. Comparing anyway flagged such a page on every run forever.
+    if (statusKey !== NO_STATUS && taskStatusKey !== statusKey) {
       discrepancies.push({
         pageId: page.id,
         title: pageTitleOf(page),
