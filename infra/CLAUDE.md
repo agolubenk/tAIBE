@@ -15,6 +15,7 @@ MCP-хаб, шлюз моделей, сжатие контекста, ops-кон
 | `llm-gateway/` | OpenAI-совместимый шлюз `:8789` — ротация ключей и моделей OpenRouter / GLM Z.AI / Ollama для Continue, роя и консилиума | node, без зависимостей · `npm run llm-gateway:test` |
 | `headroom/` | Сжатие контекста на входе/handoff задачи (`headroom_compress`/`headroom_retrieve`), проверка контракта | python · `runtime/contract_check.py` |
 | `scripts/dev-ai/` | Запуск и обслуживание контура: хаб, секреты (`mcp-secret.sh`: env → Keychain), MCP досок (`mcp-t-boards.sh`), Ollama, Open WebUI | bash (macOS — хозяйская машина) |
+| `scripts/split/` | Разделение HR / tAIBE на Mac владельца: шаги `1-preflight` … `6-verify`, `rollback`, снимок и перенос коммитов вложенных репозиториев. Инструкция — `docs/ops/split-hr-taibe.md` | bash 3.2 · `shellcheck -x` |
 | `scripts/dev/wt-deps.sh` | Свои зависимости git worktree (pnpm досок / npm хоста) — для `make wt-*` и хука `PreToolUse` | bash |
 | `checks/` | Детерминированные проверки репозитория без модели: секреты, гигиена, полнота данных (планы, журнал решений, журнал миграций drizzle), синтаксис; аудит зависимостей храповиком. Описание — `checks/README.md` | python stdlib · `make check-repo`, CI `checks-ci.yml` |
 | `scripts/misc/done-index.py` | Таблица модулей `docs/plans/DONE.md` и проверка формата журнала закрытого | python stdlib |
