@@ -8,7 +8,7 @@
 //   node ssr-sync.mjs [--dry-run]
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { loadConfig } from "./notebook-client.mjs";
+import { extraRoots, loadConfig, mapRef } from "./notebook-client.mjs";
 
 const PATHSPECS = [
   ":(glob).claude/skills/**",
@@ -29,10 +29,19 @@ const PATHSPECS = [
 
 const FILE_MAX = 600_000;
 
-function listCorpus(repoRoot, git = "git") {
+// The eval tree the host lost at the split, read from the product home at its
+// HEAD under the old supertick-eval/ paths: the server archives whatever a
+// sync leaves out, so these keep their entities instead of being archived.
+const HOME_CORPUS = {
+  "eval/pipeline/genome/": "supertick-eval/pipeline/genome/",
+  "eval/prompts/": "supertick-eval/prompts/",
+  "eval/nerve/": "supertick-eval/nerve/",
+};
+
+function listCorpus(repoRoot, git = "git", pathspecs = PATHSPECS) {
   const out = execFileSync(
     git,
-    ["ls-files", "--cached", "-z", "--", ...PATHSPECS],
+    ["ls-files", "--cached", "-z", "--", ...pathspecs],
     { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
   );
   return out.toString("utf8").split("\0").filter(Boolean).sort();
@@ -80,11 +89,27 @@ async function main() {
   const config = await loadConfig();
   const repoRoot = config.repoRoot ?? process.cwd();
   const commitSha = headCommit(repoRoot, config.git);
-  const paths = listCorpus(repoRoot, config.git);
+  // path → [checkout, path there]: the host first, then the product home under old paths.
+  const sources = new Map(
+    listCorpus(repoRoot, config.git).map((path) => [path, [repoRoot, path]]),
+  );
+  const { roots, error } = extraRoots(config);
+  if (error) throw new Error(`${error}: SSR sync stopped, nothing sent`);
+  const homeSpecs = Object.keys(HOME_CORPUS).map(
+    (prefix) => `:(glob)${prefix}**`,
+  );
+  for (const root of roots) {
+    for (const path of listCorpus(root, config.git, homeSpecs)) {
+      const ref = mapRef(path, HOME_CORPUS);
+      if (ref && !sources.has(ref)) sources.set(ref, [root, path]);
+    }
+  }
+  const paths = [...sources.keys()].sort();
 
   const files = [];
   for (const path of paths) {
-    const content = fileAtHead(repoRoot, path, config.git);
+    const [root, rel] = sources.get(path);
+    const content = fileAtHead(root, rel, config.git);
     if (content.byteLength > FILE_MAX) {
       stamp(`skip ${path}: larger than ${FILE_MAX} bytes`);
       continue;
