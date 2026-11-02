@@ -48,7 +48,7 @@ git -c core.quotepath=off status --porcelain | grep -qE '^\?\? (supertick-eval|e
 ok "ссылки: supertick-eval, eval → $TB/eval; boards, t-boards/app → $TB/boards (скрыты в .git/info/exclude)"
 
 if has launchctl; then
-  launchctl bootstrap "$(gui)" "$HOME/Library/LaunchAgents/space.hrhelper.nerve.plist" 2>>"$LOG" || stop "Нерв не запустился (launchctl bootstrap)"
+  launch_agent space.hrhelper.nerve 2>>"$LOG" || stop "Нерв не запустился (launchctl)"
   sleep 10
   launchctl print "$(gui)/space.hrhelper.nerve" 2>/dev/null | grep -qE 'state = running' || stop "Нерв не в состоянии running: $(launchctl print "$(gui)/space.hrhelper.nerve" 2>&1 | grep -E 'state|last exit' | tr '\n' ' ')"
   ok "Нерв запущен из tAIBE (plist тот же: путь supertick-eval теперь ведёт в tAIBE)"

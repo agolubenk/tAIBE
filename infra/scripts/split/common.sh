@@ -48,6 +48,16 @@ next() {
 has() { command -v "$1" >/dev/null 2>&1; }
 gui() { printf 'gui/%s' "$(id -u)"; }
 
+# Запустить агента launchd по метке: уже загружен — перезапуск (kickstart -k), иначе bootstrap из ~/Library/LaunchAgents.
+# Повторный bootstrap загруженного агента на macOS падает («Bootstrap failed: 5»), поэтому так.
+launch_agent() {
+  if launchctl print "$(gui)/$1" >/dev/null 2>&1; then
+    launchctl kickstart -k "$(gui)/$1"
+  else
+    launchctl bootstrap "$(gui)" "$HOME/Library/LaunchAgents/$1.plist"
+  fi
+}
+
 # Живые процессы Нерва, его тапов у сессий и роя (пусто — всё остановлено).
 nerve_procs() { pgrep -fl 'nerve\.py|swarm\.py' 2>/dev/null || true; }
 

@@ -25,10 +25,9 @@ for x in /supertick-eval /eval /boards /t-boards/ /.claude/pipeline-settings.jso
   grep -vxF -- "$x" .git/info/exclude >.git/info/exclude.tmp 2>/dev/null && mv .git/info/exclude.tmp .git/info/exclude
 done
 if has launchctl; then
-  launchctl bootstrap "$(gui)" "$HOME/Library/LaunchAgents/space.hrhelper.nerve.plist" 2>>"$LOG" && log "Нерв запущен"
+  launch_agent space.hrhelper.nerve 2>>"$LOG" && log "Нерв запущен"
   [ -f "$HOME/Library/LaunchAgents/space.hrhelper.t-boards-notebook-sync.plist" ] &&
-    launchctl bootstrap "$(gui)" "$HOME/Library/LaunchAgents/space.hrhelper.t-boards-notebook-sync.plist" 2>>"$LOG" &&
-    log "синк блокнота запущен"
+    launch_agent space.hrhelper.t-boards-notebook-sync 2>>"$LOG" && log "синк блокнота запущен"
 fi
 [ -f infra/scripts/dev-ai/mcp-hub.sh ] && bash infra/scripts/dev-ai/mcp-hub.sh restart hub >>"$LOG" 2>&1
 log "откат сделан. Если PR очистки уже в main, git HR покажет вернувшиеся папки неотслеживаемыми — работе не мешает; вернуть их в git — revert PR очистки (решение владельца)."
