@@ -8,10 +8,17 @@ export {
   type NotionPropertyValue,
   type NotionRichText,
   type NotionSelectOption,
+  type NotionComment,
   type NotionUser,
   plainText,
 } from "./api-types.js";
-export { blocksToHtml, blocksToMarkdown } from "./body.js";
+export {
+  type BodyGaps,
+  blocksToHtml,
+  blocksToMarkdown,
+  bodyGaps,
+  FILE_STUB,
+} from "./body.js";
 export {
   NOTION_API_URL,
   NOTION_PAGE_SIZE,
@@ -50,3 +57,4 @@ export {
   type ReconcileSide,
 } from "./reconcile.js";
 export { connectNotion, type NotionCredentials } from "./source.js";
+export { commentUrl } from "./comments.js";

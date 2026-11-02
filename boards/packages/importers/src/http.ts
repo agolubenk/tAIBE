@@ -76,7 +76,9 @@ export function createJsonClient(options: JsonClientOptions): JsonClient {
         throw new Error(`${options.service} ${stripQuery(path)}: ${reason}`);
       }
 
-      if (res.status === 429 && attempt < maxRetries) {
+      // 429 and 5xx are transient: one blip (Notion answers 502 every so
+      // often) must not fail a whole database read.
+      if ((res.status === 429 || res.status >= 500) && attempt < maxRetries) {
         await res.body?.cancel();
         await wait(retryDelayMs(res.headers, attempt), options.signal);
         continue;
