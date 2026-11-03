@@ -4,14 +4,9 @@
 # Usage: deploy/vps/bundle.sh <image-tag> <out-dir>
 set -euo pipefail
 
-# Since the split (02.11) this tree is tAIBE, also reached from the host as t-boards/app. The stand still runs the
-# image built from the Mac fork: switch it on purpose, after process/TRANSFER.md «Стенд d4dev» (database backup,
-# the fork's local commits merged — rescue/*), not by a routine bundle.
-if [ "${TB_STAND_FROM_TAIBE:-}" != 1 ]; then
-  echo "stop: the d4dev stand has not been switched to tAIBE yet — follow process/TRANSFER.md «Стенд d4dev»," >&2
-  echo "then run: TB_STAND_FROM_TAIBE=1 $0 $*" >&2
-  exit 2
-fi
+# Since the split (02.11) this tree is tAIBE, also reached from the host as
+# t-boards/app. Since 03.11 the d4dev stand runs images built from here
+# (process/TRANSFER.md «Стенд d4dev»).
 
 tag="${1:?image tag, e.g. 3eacffa-b1}"
 out="${2:?output directory}"
