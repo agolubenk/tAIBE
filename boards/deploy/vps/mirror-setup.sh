@@ -5,6 +5,9 @@
 # seeds the HR Helper product the mirror writes into.
 # Usage: mirror-setup.sh [DATABASE_ID,…,all [WORKSPACE_ID]]  (asks for the token)
 # "all" also mirrors every other database shared with the integration; the
+# owner disabled discovery 04.11: with "all" the TAI-5 database made the mirror
+# create a duplicate "TAI-5 activation probe" project every run (no anchor).
+# Pass "…,all" explicitly to turn it back on.
 # API looks them up on each run, so a newly shared database needs no rerun.
 set -euo pipefail
 
@@ -16,7 +19,7 @@ MIRROR_SLUG=hr-helper-lavaeon
 OWNED_SQL="select w.id, w.name from workspace w join workspace_member m on m.workspace_id = w.id and m.role = 'owner' join \"user\" u on u.id = m.user_id where u.email = 'admin@t-boards.local' order by w.created_at"
 PRODUCT_SQL="select w.id, w.name from workspace w where w.slug = '$MIRROR_SLUG'"
 # «Задачи» and «Ошибки»: database ids for /v1/databases, not data-source ids.
-databases="${1:-256853cd-b4ae-4394-a768-a2a2ebd3c5fe,714f2a2f-5274-485e-84ca-ee701ed5df19,all}"
+databases="${1:-256853cd-b4ae-4394-a768-a2a2ebd3c5fe,714f2a2f-5274-485e-84ca-ee701ed5df19}"
 workspace="${2:-}"
 compose=(docker compose -p t-boards --project-directory "$ROOT" -f "$ROOT/compose.yml")
 
