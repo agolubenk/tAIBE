@@ -1,5 +1,5 @@
 import { createId } from "@paralleldrive/cuid2";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import db from "../../database";
 import {
@@ -232,7 +232,8 @@ async function duplicateTask({
       ),
     );
 
-  // A duplicated subtask stays a subtask of the same parents. The source's own
+  // A duplicated subtask stays a subtask of the same parent: the one the tree
+  // reads (the oldest link), as a card has one parent (E7). The source's own
   // subtasks are not duplicated: a copy is one task, not a tree.
   const parentRelations = await db
     .select({
@@ -250,7 +251,9 @@ async function duplicateTask({
         eq(taskRelationTable.relationType, "subtask"),
         projectAccessCondition(currentUserId, taskTable.projectId),
       ),
-    );
+    )
+    .orderBy(asc(taskRelationTable.createdAt), asc(taskRelationTable.id))
+    .limit(1);
 
   if (parentRelations.length > 0 && !canUpdateTasks) {
     throw new HTTPException(403, {

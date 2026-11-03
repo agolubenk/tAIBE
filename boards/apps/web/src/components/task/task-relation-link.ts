@@ -13,10 +13,12 @@ export function buildRelationLink(
   pickedTaskId: string,
 ) {
   if (mode === "parent") {
+    // A task has one parent: picking one moves the task from its current parent.
     return {
       sourceTaskId: pickedTaskId,
       targetTaskId: taskId,
       relationType: "subtask" as const,
+      replaceParent: true,
     };
   }
   if (mode === "blockedBy") {

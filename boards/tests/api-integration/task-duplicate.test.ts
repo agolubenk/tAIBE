@@ -708,6 +708,44 @@ describe("API integration: task duplication", () => {
     });
   });
 
+  it("copies only the parent the tree reads when legacy data holds two (E7)", async () => {
+    const own = await fixture();
+    const { project, columns } = await createProjectFixture({
+      workspaceId: own.workspace.id,
+    });
+    const [older, newer] = await Promise.all(
+      [1, 2].map((number) =>
+        seedTask({
+          projectId: project.id,
+          columnId: columns.todo.id,
+          overrides: { number, position: number },
+        }),
+      ),
+    );
+    await db.insert(schema.taskRelationTable).values([
+      {
+        sourceTaskId: newer.id,
+        targetTaskId: own.task.id,
+        relationType: "subtask",
+        createdAt: new Date("2026-02-01T00:00:00Z"),
+      },
+      {
+        sourceTaskId: older.id,
+        targetTaskId: own.task.id,
+        relationType: "subtask",
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+      },
+    ]);
+    const response = await requestDuplicate(own.app, own.task.id);
+    expect(response.status).toBe(200);
+    const copy = (await response.json()) as { id: string };
+    expect(
+      await db.query.taskRelationTable.findMany({
+        where: eq(schema.taskRelationTable.targetTaskId, copy.id),
+      }),
+    ).toMatchObject([{ sourceTaskId: older.id }]);
+  });
+
   it("allocates distinct task numbers and positions for simultaneous copies", async () => {
     const own = await fixture();
     const responses = await Promise.all([

@@ -96,6 +96,7 @@ export async function writeProjectContent(
   const taskIds = new Map(tasks.map((task) => [task.key, task.id]));
   const relations = await writeImportRelations(
     tx,
+    workspaceId,
     planImportRelations(project.relations, taskIds),
   );
 

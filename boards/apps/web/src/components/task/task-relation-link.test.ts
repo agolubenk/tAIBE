@@ -50,6 +50,7 @@ describe("buildRelationLink", () => {
       sourceTaskId: "picked",
       targetTaskId: "task",
       relationType: "subtask",
+      replaceParent: true,
     });
   });
 });

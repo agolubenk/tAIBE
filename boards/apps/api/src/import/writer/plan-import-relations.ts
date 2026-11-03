@@ -13,6 +13,9 @@ export function planImportRelations(
   taskIds: ReadonlyMap<string, string>,
 ): PlannedImportRelation[] {
   const seen = new Set<string>();
+  // A card has one parent (E7): the first subtask link to it wins, later ones
+  // are dropped, as the tree would never read them.
+  const parented = new Set<string>();
   const planned: PlannedImportRelation[] = [];
 
   for (const relation of relations) {
@@ -27,6 +30,10 @@ export function planImportRelations(
     const identity = `${relation.type}:${pair}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
+    if (relation.type === "subtask") {
+      if (parented.has(targetTaskId)) continue;
+      parented.add(targetTaskId);
+    }
 
     planned.push({ sourceTaskId, targetTaskId, relationType: relation.type });
   }

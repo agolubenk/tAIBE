@@ -146,7 +146,9 @@ const createTaskRelationRoute = createRoute({
       "No access to the project, or missing task:update permission",
     ),
     404: errorResponse("Source or target task not found"),
-    409: errorResponse("This relation already exists"),
+    409: errorResponse(
+      "This relation already exists, or a subtask link would close a cycle or give the target a second parent",
+    ),
   },
 });
 
@@ -183,12 +185,14 @@ const taskRelation = apiRouter<BaseVariables & { workspaceId: string }>()
     ),
   )
   .openapi(createTaskRelationRoute, async (c) => {
-    const { sourceTaskId, targetTaskId, relationType } = c.req.valid("json");
+    const { sourceTaskId, targetTaskId, relationType, replaceParent } =
+      c.req.valid("json");
     return c.json(
       await createTaskRelation({
         sourceTaskId,
         targetTaskId,
         relationType,
+        replaceParent,
         userId: c.get("userId"),
         workspaceId: c.get("workspaceId"),
       }),

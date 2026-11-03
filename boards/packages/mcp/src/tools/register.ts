@@ -565,11 +565,12 @@ export function registerTools(
     "create_task_relation",
     {
       description:
-        "Create a relation between two tasks. relationType: 'subtask' (sourceTaskId is the parent, targetTaskId the child), 'blocks' (sourceTaskId blocks targetTaskId), or 'related' (bidirectional).",
+        "Create a relation between two tasks. relationType: 'subtask' (sourceTaskId is the parent, targetTaskId the child), 'blocks' (sourceTaskId blocks targetTaskId), or 'related' (bidirectional). A task has one parent: a subtask link to a child that already has one is refused unless replaceParent is true, which moves the child to the new parent.",
       inputSchema: z.object({
         sourceTaskId: nonEmptyString,
         targetTaskId: nonEmptyString,
         relationType: z.enum(["subtask", "blocks", "related"]),
+        replaceParent: z.boolean().optional(),
       }),
     },
     async (args) =>
@@ -580,6 +581,7 @@ export function registerTools(
             sourceTaskId: args.sourceTaskId,
             targetTaskId: args.targetTaskId,
             relationType: args.relationType,
+            ...(args.replaceParent ? { replaceParent: true } : {}),
           }),
         }),
       ),

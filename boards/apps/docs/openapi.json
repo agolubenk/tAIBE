@@ -24412,6 +24412,10 @@
                       "blocks",
                       "related"
                     ]
+                  },
+                  "replaceParent": {
+                    "type": "boolean",
+                    "description": "Subtask only: a task has one parent, so a second one is refused (409). Set true to move the target from its current parent in one step."
                   }
                 },
                 "required": [
@@ -24475,7 +24479,7 @@
             }
           },
           "409": {
-            "description": "This relation already exists",
+            "description": "This relation already exists, or a subtask link would close a cycle or give the target a second parent",
             "content": {
               "application/json": {
                 "schema": {

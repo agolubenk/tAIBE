@@ -130,6 +130,7 @@ export async function syncNotionProject(
   ]);
   const relations = await writeImportRelations(
     tx,
+    workspaceId,
     planImportRelations(project.relations, taskIds).filter(
       (relation) =>
         freshIds.has(relation.sourceTaskId) ||

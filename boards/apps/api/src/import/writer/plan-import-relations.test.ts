@@ -62,4 +62,34 @@ describe("planImportRelations", () => {
       },
     ]);
   });
+
+  it("keeps the first parent of a card and drops later ones (E7)", () => {
+    expect(
+      planImportRelations(
+        [
+          { sourceKey: "a", targetKey: "c", type: "subtask" },
+          { sourceKey: "b", targetKey: "c", type: "subtask" },
+          { sourceKey: "b", targetKey: "c", type: "related" },
+          { sourceKey: "a", targetKey: "b", type: "subtask" },
+        ],
+        taskIds,
+      ),
+    ).toEqual([
+      {
+        sourceTaskId: "task-a",
+        targetTaskId: "task-c",
+        relationType: "subtask",
+      },
+      {
+        sourceTaskId: "task-b",
+        targetTaskId: "task-c",
+        relationType: "related",
+      },
+      {
+        sourceTaskId: "task-a",
+        targetTaskId: "task-b",
+        relationType: "subtask",
+      },
+    ]);
+  });
 });

@@ -361,6 +361,30 @@ describe("registerTools", () => {
     expect(result?.isError).toBe(false);
   });
 
+  it("passes replaceParent through only when it is set", async () => {
+    const { server, tools } = createServerMock();
+    const client = { json: vi.fn().mockResolvedValue({ id: "rel-1" }) };
+
+    registerTools(server as never, { client: client as never });
+
+    await tools.get("create_task_relation")?.handler({
+      sourceTaskId: "task-1",
+      targetTaskId: "task-2",
+      relationType: "subtask",
+      replaceParent: true,
+    });
+
+    expect(client.json).toHaveBeenCalledWith("/api/task-relation", {
+      method: "POST",
+      body: JSON.stringify({
+        sourceTaskId: "task-1",
+        targetTaskId: "task-2",
+        relationType: "subtask",
+        replaceParent: true,
+      }),
+    });
+  });
+
   it("validates relationType for create_task_relation", () => {
     const { server, tools } = createServerMock();
     const client = { json: vi.fn() };

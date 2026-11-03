@@ -6,16 +6,19 @@ async function createTaskRelation({
   sourceTaskId,
   targetTaskId,
   relationType,
+  replaceParent,
 }: {
   sourceTaskId: string;
   targetTaskId: string;
   relationType: "subtask" | "blocks" | "related";
+  replaceParent?: boolean;
 }) {
   const response = await client["task-relation"].$post({
     json: {
       sourceTaskId,
       targetTaskId,
       relationType,
+      ...(replaceParent ? { replaceParent } : {}),
     },
   });
 
