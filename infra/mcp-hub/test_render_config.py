@@ -133,6 +133,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["mcpServers"]["git"]["args"][2], LAYER)
 
+    def test_broken_live_json_one_line_error(self):
+        self.live.write_text("{oops", encoding="utf-8")
+        for mode in ("render", "drift"):
+            code, out, err = self.run_cli(mode, "--host-root", HOST, "--live", str(self.live))
+            self.assertEqual((code, out), (rc.EXIT_BAD_INPUT, ""))
+            self.assertTrue(err.startswith(f"✗ render_config.py {mode}:"), err)
+            self.assertEqual(err.count("\n"), 1)
+
     def test_render_without_live_and_drift_without_live(self):
         code, out, _ = self.run_cli("render", "--host-root", HOST, "--live", "")
         self.assertEqual(code, 0)

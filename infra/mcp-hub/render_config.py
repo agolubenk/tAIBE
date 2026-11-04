@@ -23,6 +23,7 @@ import sys
 HOST_VAR = "${TAIBE_HOST_ROOT}"
 SERVE_VAR = "${HR_HELPER_ROOT}"
 HOST_CHANGE_ENV = "MCP_HUB_HOST_CHANGE"
+EXIT_BAD_INPUT = 2
 EXIT_HOST_MISMATCH = 3
 
 
@@ -127,9 +128,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--live", default="", help="живой mcp.json; пусто — нет")
     args = parser.parse_args(argv)
 
-    template = load_json(args.template)
-    enabled = enabled_connectors(args.connectors)
-    live = load_json(args.live) if args.live and os.path.exists(args.live) else None
+    try:
+        template = load_json(args.template)
+        enabled = enabled_connectors(args.connectors)
+        live = load_json(args.live) if args.live and os.path.exists(args.live) else None
+    except (OSError, ValueError) as exc:  # битый JSON или нет доступа — одной строкой, без трейсбека
+        print(f"✗ render_config.py {args.mode}: {exc}", file=sys.stderr)
+        return EXIT_BAD_INPUT
 
     if args.mode == "drift":
         if live is not None:

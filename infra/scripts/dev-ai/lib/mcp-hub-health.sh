@@ -74,7 +74,8 @@ cmd_status() {
   probe_http || true
   # По серверам, а не текстом: хост расходится — подсказка с TAIBE_HOST_ROOT, иначе — что sync перепишет.
   if [ -f "$CONFIG_DIR/mcp.json" ]; then
-    render_config drift --live "$CONFIG_DIR/mcp.json" 2>/dev/null | sed 's/^/  /' || true
+    render_config drift --live "$CONFIG_DIR/mcp.json" 2>&1 | sed 's/^/  /' \
+      || echo "  ⚠ расхождение с шаблоном не посчитано (строка выше) — sync при той же ошибке откажет"
   fi
 }
 
