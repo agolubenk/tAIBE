@@ -89,9 +89,16 @@ export function nonRoutableDestinationMessage(label: string): string {
   return `${label} destination resolves to a non-routable address`;
 }
 
+export type DestinationPolicy = {
+  // Ignore KANEO_ALLOW_PRIVATE_WEBHOOK_DESTINATIONS and always require a
+  // public address.
+  alwaysPublic?: boolean;
+};
+
 export async function assertPublicDestination(
   destinationUrl: string,
   label: string,
+  { alwaysPublic = false }: DestinationPolicy = {},
 ): Promise<void> {
   const url = new URL(destinationUrl);
 
@@ -99,7 +106,7 @@ export async function assertPublicDestination(
     throw new Error(`${label} URL must use http or https`);
   }
 
-  if (privateDestinationsAllowed()) {
+  if (!alwaysPublic && privateDestinationsAllowed()) {
     return;
   }
 

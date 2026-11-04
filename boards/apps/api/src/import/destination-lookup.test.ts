@@ -101,6 +101,17 @@ describe("createDestinationLookup", () => {
     );
   });
 
+  it("keeps refusing private addresses for an always-public fetch", async () => {
+    vi.stubEnv("KANEO_ALLOW_PRIVATE_WEBHOOK_DESTINATIONS", "true");
+    const lookup = createDestinationLookup(resolver([PRIVATE_V4]), {
+      alwaysPublic: true,
+    });
+
+    await expect(lookupOne(lookup, "planka.internal")).rejects.toMatchObject({
+      code: BLOCKED_DESTINATION_CODE,
+    });
+  });
+
   it("passes resolver failures through", async () => {
     const failure = Object.assign(new Error("getaddrinfo ENOTFOUND"), {
       code: "ENOTFOUND",

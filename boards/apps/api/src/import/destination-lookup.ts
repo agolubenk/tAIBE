@@ -1,6 +1,7 @@
 import dns, { type LookupAddress, type LookupAllOptions } from "node:dns";
 import type { LookupFunction } from "node:net";
 import {
+  type DestinationPolicy,
   isDisallowedAddress,
   privateDestinationsAllowed,
 } from "../utils/assert-public-destination";
@@ -24,6 +25,7 @@ function notFound(hostname: string) {
 
 export function createDestinationLookup(
   resolve: ResolveAll = dns.lookup,
+  { alwaysPublic = false }: DestinationPolicy = {},
 ): LookupFunction {
   return (hostname, options, callback) => {
     resolve(
@@ -37,7 +39,7 @@ export function createDestinationLookup(
       (error, addresses) => {
         if (error) return callback(error, []);
         const blocked =
-          !privateDestinationsAllowed() &&
+          (alwaysPublic || !privateDestinationsAllowed()) &&
           addresses.some(({ address }) => isDisallowedAddress(address));
         if (blocked) return callback(blockedDestinationError(), []);
 

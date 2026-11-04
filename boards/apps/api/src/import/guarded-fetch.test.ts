@@ -66,6 +66,31 @@ describe("createGuardedFetch", () => {
     );
   });
 
+  it("keeps private destinations out for an always-public fetch", async () => {
+    vi.stubEnv("KANEO_ALLOW_PRIVATE_WEBHOOK_DESTINATIONS", "true");
+    const baseFetch = vi.fn(async () => new Response("ok"));
+    const guard = createGuardedFetch("Link", { baseFetch, alwaysPublic: true });
+
+    await expect(guard.fetch("https://10.0.0.5/api")).rejects.toMatchObject({
+      reason: "destination",
+    });
+    expect(baseFetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses http on any hop of an https-only fetch", async () => {
+    const baseFetch = vi.fn(async () => redirect(`${PUBLIC}/plain`));
+    const guard = createGuardedFetch("Link", { baseFetch, httpsOnly: true });
+
+    await expect(guard.fetch(`${PUBLIC}/api`)).rejects.toMatchObject({
+      reason: "protocol",
+    });
+    expect(baseFetch).not.toHaveBeenCalled();
+    await expect(
+      guard.fetch("https://93.184.216.34/api"),
+    ).rejects.toMatchObject({ reason: "protocol" });
+    expect(baseFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("checks every redirect hop", async () => {
     const baseFetch = vi.fn(async () => redirect("http://127.0.0.1/admin"));
     const guard = createGuardedFetch("Kaneo", { baseFetch });
