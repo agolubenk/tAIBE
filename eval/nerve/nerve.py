@@ -135,7 +135,9 @@ def cmd_run(cfg, a):
         ctx = Ctx(cfg, STATE_DIR, deliver=not seed and wakes_on())
         one_pass(ctx)
         seed = False
-        time.sleep(cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval))
+        pause = cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval)
+        save_json(os.path.join(STATE_DIR, "cycle.json"), {"seconds": pause, "at": now_iso()})
+        time.sleep(pause)
 
 
 def cycle_seconds(cfg, mode, interval=None):
@@ -145,22 +147,36 @@ def cycle_seconds(cfg, mode, interval=None):
     return base * (cfg.get("night_interval_factor", 5) if mode.get("phase") == "night" else 1)
 
 
-def heartbeat_stale_after(cfg, mode):
+def slept_cycle(cfg, mode, cycle):
+    """The pause the daemon really went to sleep on: state/cycle.json, which cmd_run writes right before time.sleep.
+    It carries a manual «run --interval N» the config does not know. A missing or malformed file (a daemon from
+    before this file existed) falls back to the config."""
+    s = (cycle or {}).get("seconds")
+    if isinstance(s, (int, float)) and not isinstance(s, bool) and s > 0:
+        return s
+    return cycle_seconds(cfg, mode)
+
+
+def heartbeat_stale_after(cfg, mode, cycle=None):
     """The heartbeat is stale once the daemon missed a cycle: at least two cycles, never under heartbeat_stale_min.
     Night cycle 60 s × 5 = 300 s equalled the 5-minute threshold, so any pass a second late raised a false
     «НЕРВ МОЛЧИТ» (04.11 22:22 and 22:37, heartbeat 5 s old). Day stays 5 minutes, night becomes 10."""
-    return max(timedelta(minutes=cfg["tap"]["heartbeat_stale_min"]), timedelta(seconds=2 * cycle_seconds(cfg, mode)))
+    return max(timedelta(minutes=cfg["tap"]["heartbeat_stale_min"]),
+               timedelta(seconds=2 * slept_cycle(cfg, mode, cycle)))
 
 
 def resolve_roles(cfg, spec, strict=True):
     """Target of emit/tap → role keys. Takes a key («boards»), the role number of the team registry (1 = coord …
     6 = boards, the order of team.roles), «all» and comma lists («backend,release»). A record whose «to» no tap
     matches is lost without a trace: on 04.11 21 assignments went to «6», «4» and «backend,release» and reached
-    nobody. strict (emit) refuses an unknown name; tap stays lenient for helper taps such as «selftest»."""
+    nobody. strict (emit) refuses an unknown name; tap stays lenient only for named helper taps such as «selftest».
+    A number outside 1…N is refused in both modes: emit can never write it, so a tap on it would listen to nobody."""
     roles = list(cfg.get("team", {}).get("roles", []))
     out = []
     for part in (p.strip() for p in spec.split(",")):
-        if part.isdigit() and 1 <= int(part) <= len(roles):
+        if part.isdigit():
+            if not 1 <= int(part) <= len(roles):
+                raise ValueError(part)
             part = roles[int(part) - 1]
         if strict and part != ALL and part not in roles:
             raise ValueError(part or spec)
@@ -234,7 +250,8 @@ def cmd_tap(cfg, a):
             cur["last_flush"] = now_iso() if due else cur["last_flush"]
         if role in tc["heartbeat_watchers"]:
             hb = load_json(os.path.join(STATE_DIR, "state.json"), {}).get("heartbeat")
-            stale = not hb or now - datetime.fromisoformat(hb) > heartbeat_stale_after(cfg, mode)
+            cycle = load_json(os.path.join(STATE_DIR, "cycle.json"), None)
+            stale = not hb or now - datetime.fromisoformat(hb) > heartbeat_stale_after(cfg, mode, cycle)
             if stale and not cur["dead_warned"]:
                 print(f"НЕРВ МОЛЧИТ с {hb[11:16] if hb else '—'} UTC: демон не пишет пульс — "
                       f"launchctl kickstart -k gui/{os.getuid()}/space.hrhelper.nerve", flush=True)

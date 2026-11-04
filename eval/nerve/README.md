@@ -58,9 +58,13 @@ python3 -I $N/nerve.py once [--seed]       # один проход руками 
 python3 -I -m unittest discover -s $N -p 'test_*.py'
 ```
 
-Роли: `coord plan backend frontend release review` (ключи реестра Т3) и `supertick`, `tboards` (по `source` пунктов).
+Роли — `team.roles` в `config.json`, по порядку номеров реестра Т3: 1 `coord`, 2 `plan`, 3 `frontend`, 4 `backend`,
+5 `release`, 6 `boards`; ещё `supertick` и `tboards` (по `source` пунктов). `emit` и `tap` принимают ключ или номер
+1–6. Номер вне диапазона и неизвестное имя у `emit` дают код 2.
 Сессия роли ставит **один** Monitor: `python3 -I eval/nerve/nerve.py tap <роль>` — фильтр внутри, без `| grep`
 (память `feedback_monitor_no_pipe_filters`). Курсор тапа — `state/tap-<роль>.json`, первый запуск начинает с конца журнала.
+Пульс (`coord`, `release`) считается устаревшим через два цикла демона, но не раньше `heartbeat_stale_min`. Цикл
+берётся из `state/cycle.json`: туда демон перед сном пишет фактическую паузу, включая ручной `run --interval N`.
 
 ## Установка и откат
 

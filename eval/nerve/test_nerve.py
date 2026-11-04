@@ -362,6 +362,44 @@ class TapTest(unittest.TestCase):
         self.assertEqual(nerve.heartbeat_stale_after(CFG, {"phase": "night"}), timedelta(minutes=10))
         self.assertEqual(nerve.cycle_seconds(CFG, {"phase": "night"}, 30), 150, "--interval демона учитывается")
 
+    def test_stale_threshold_follows_the_pause_the_daemon_slept_on(self):
+        night = {"phase": "night"}
+        # Ручной «run --interval 120» ночью: пауза 600 с, порог от конфига (10 мин) снова дал бы ложную тревогу.
+        self.assertEqual(nerve.heartbeat_stale_after(CFG, night, {"seconds": 600}), timedelta(minutes=20))
+        self.assertEqual(nerve.heartbeat_stale_after(CFG, {"phase": "day"}, {"seconds": 30}), timedelta(minutes=5),
+                         "короткий цикл не опускает порог ниже heartbeat_stale_min")
+        for bad in (None, {}, {"seconds": 0}, {"seconds": -5}, {"seconds": "600"}, {"seconds": True}):
+            self.assertEqual(nerve.heartbeat_stale_after(CFG, night, bad), timedelta(minutes=10),
+                             f"нет или битый cycle.json → конфиг: {bad!r}")
+
+    def test_run_writes_the_pause_before_sleeping(self):
+        from argparse import Namespace
+        from unittest import mock
+
+        class Slept(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as d:
+            wj(os.path.join(d, "mode.json"), {"phase": "night"})
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            with mock.patch.object(nerve, "STATE_DIR", d), mock.patch.object(nerve, "one_pass"), \
+                    mock.patch.object(nerve, "Ctx"), mock.patch.object(nerve, "wakes_on", return_value=False), \
+                    mock.patch.object(nerve.time, "sleep", side_effect=Slept) as sleep:
+                with self.assertRaises(Slept):
+                    nerve.cmd_run(CFG, Namespace(interval=120))
+            sleep.assert_called_once_with(600)
+            with open(os.path.join(d, "cycle.json"), encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["seconds"], 600, "ручной --interval 120 ночью = 600 с")
+
+    def test_tap_reads_cycle_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            self.heartbeat_ago(d, 15, "night")
+            wj(os.path.join(d, "cycle.json"), {"seconds": 600, "at": "2026-11-04T20:00:00+00:00"})
+            self.assertEqual(self.run_tap(d, "coord"), "", "ночью при паузе 600 с 15 мин — меньше двух циклов")
+            self.heartbeat_ago(d, 21, "night")
+            self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d, "release"))
+
 
 class EmitTest(unittest.TestCase):
     def nerve(self, d, *args):
@@ -402,6 +440,9 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "tap", "backend,release", "--once").returncode, 2)
             self.assertEqual(self.nerve(d, "tap", "selftest", "--once").returncode, 0, "split/6-verify.sh")
             self.assertTrue(os.path.exists(os.path.join(d, "tap-selftest.json")))
+            for n in ("0", "7", "99"):
+                self.assertEqual(self.nerve(d, "tap", n, "--once").returncode, 2, f"emit не запишет «{n}»")
+                self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
 
 
 if __name__ == "__main__":
