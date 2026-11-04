@@ -464,7 +464,20 @@ if c or not err:
     failures.append("load_control: испорченный локальный файл должен давать пустой список и ошибку")
 
 # --- матчер в settings.json: хук вызывается на всех инструментах, которые разбирает ---
-settings = json.loads((Path(__file__).resolve().parents[1] / "settings.json").read_text(encoding="utf-8"))
+dup_keys = []
+
+
+def no_dup(pairs):
+    """json.loads молча оставляет последний из повторных ключей — второй "PreToolUse" стёр бы первый (мёрж ec2491433)."""
+    seen = [k for k, _ in pairs]
+    dup_keys.extend(sorted({k for k in seen if seen.count(k) > 1}))
+    return dict(pairs)
+
+
+settings = json.loads((Path(__file__).resolve().parents[1] / "settings.json").read_text(encoding="utf-8"),
+                      object_pairs_hook=no_dup)
+if dup_keys:
+    failures.append(f"settings.json: повторные ключи {dup_keys} — JSON оставит только последний")
 matchers = [m["matcher"] for m in settings["hooks"]["PreToolUse"]
             if any("merge-guard" in h.get("command", "") for h in m["hooks"])]
 covered = ["Bash", "Monitor", "Edit", "Write", "MultiEdit", "NotebookEdit", "mcp__github__merge_pull_request",
