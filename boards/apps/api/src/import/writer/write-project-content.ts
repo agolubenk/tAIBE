@@ -94,7 +94,8 @@ export async function writeProjectContent(
     : 0;
 
   const taskIds = new Map(tasks.map((task) => [task.key, task.id]));
-  const relations = await writeImportRelations(
+  // Every card here is new to the board: none has a parent yet.
+  const { written: relations } = await writeImportRelations(
     tx,
     planImportRelations(project.relations, taskIds),
   );

@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Ban, Link2, Search, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
@@ -33,6 +34,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { invalidateRelationTaskProject } from "@/hooks/mutations/task-relation/invalidate-relation-task-project";
 import useCreateTaskRelation from "@/hooks/mutations/task-relation/use-create-task-relation";
 import useDeleteTaskRelation from "@/hooks/mutations/task-relation/use-delete-task-relation";
 import useGetProject from "@/hooks/queries/project/use-get-project";
@@ -99,6 +101,7 @@ export default function TaskRelations({
   const { data: workspaceUsers } = useGetActiveWorkspaceUsers(
     workspace?.id ?? "",
   );
+  const queryClient = useQueryClient();
   const createRelation = useCreateTaskRelation();
   const deleteRelation = useDeleteTaskRelation(taskId);
   const { canUpdateTasks } = useWorkspacePermission();
@@ -209,11 +212,19 @@ export default function TaskRelations({
         ? findParentRelation(taskId, relations)
         : undefined;
     try {
+      // A parent link moves the task in one request (replaceParent): the API
+      // refuses a second parent, and the old link goes in the same transaction.
       await createRelation.mutateAsync(
         buildRelationLink(selectedRelationType, taskId, pickedTaskId),
       );
       if (previousParent) {
-        await deleteRelation.mutateAsync(previousParent.id);
+        void invalidateRelationTaskProject(
+          queryClient,
+          previousParent.sourceTaskId,
+        );
+        queryClient.invalidateQueries({
+          queryKey: ["task-relations", previousParent.sourceTaskId],
+        });
       }
       setCommandOpen(false);
       setSearchQuery("");
