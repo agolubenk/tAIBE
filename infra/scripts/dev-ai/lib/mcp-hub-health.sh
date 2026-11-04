@@ -72,8 +72,10 @@ cmd_status() {
     done
   done
   probe_http || true
-  if [ -f "$CONFIG_DIR/mcp.json" ] && [ "$(render_config 2>/dev/null)" != "$(cat "$CONFIG_DIR/mcp.json")" ]; then
-    echo "  ⚠ $CONFIG_DIR/mcp.json отличается от infra/mcp-hub/mcp.json — npm run mcp-hub:sync"
+  # По серверам, а не текстом: хост расходится — подсказка с TAIBE_HOST_ROOT, иначе — что sync перепишет.
+  if [ -f "$CONFIG_DIR/mcp.json" ]; then
+    render_config drift --live "$CONFIG_DIR/mcp.json" 2>&1 | sed 's/^/  /' \
+      || echo "  ⚠ расхождение с шаблоном не посчитано (строка выше) — sync при той же ошибке откажет"
   fi
 }
 

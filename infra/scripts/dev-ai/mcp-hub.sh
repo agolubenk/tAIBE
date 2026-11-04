@@ -372,31 +372,24 @@ ensure_service() { # <kind>
 }
 
 # ── команды ─────────────────────────────────────────────────────────────────────────────────
-# Итоговый конфиг хаба: каталог из репо + личный список включённых коннекторов.
-render_config() {
-  python3 - "$CONFIG_SRC" "$CONNECTORS_FILE" <<'PY'
-import json, os, sys
-src, enabled_file = sys.argv[1], sys.argv[2]
-cfg = json.load(open(src))
-enabled = {line.strip() for line in open(enabled_file) if line.strip()} if os.path.exists(enabled_file) else set()
-# Невключённые коннекторы в итоговый конфиг не попадают вовсе: выключение через
-# `disabled: true` 1mcp 0.38 на лету не применяет («configuration is missing after reload»).
-for name, server in list(cfg["mcpServers"].items()):
-    if "connector" in server.get("tags", []):
-        if name in enabled:
-            server["disabled"] = False
-        else:
-            del cfg["mcpServers"][name]
-print(json.dumps(cfg, indent=2, ensure_ascii=False))
-PY
+# Итоговый конфиг хаба: каталог из репо + личный список включённых коннекторов, ${TAIBE_HOST_ROOT} →
+# HOST_ROOT при сборке (infra/mcp-hub/render_config.py). `render_config drift --live <файл>` — для status.
+render_config() { # <render|drift> [--live <живой mcp.json>]
+  local mode="$1"
+  shift
+  python3 -I "$ROOT/infra/mcp-hub/render_config.py" "$mode" --template "$CONFIG_SRC" \
+    --connectors "$CONNECTORS_FILE" --host-root "$HOST_ROOT" --serve-root "$SERVE_ROOT" "$@"
 }
 
 cmd_sync() {
   mkdir -p "$CONFIG_DIR"
   chmod 700 "$CONFIG_DIR"
-  local rendered
+  local rendered live=""
+  # Предохранитель: живой конфиг обслуживает другой хост — отказ, код 1 (TAIBE_HOST_ROOT забыт в окружении).
+  # Это же закрывает connect/disconnect. Сменить хост осознанно: MCP_HUB_HOST_CHANGE=1.
+  [ -f "$CONFIG_DIR/mcp.json" ] && live="$CONFIG_DIR/mcp.json"
   # Сначала собрать, потом писать: при ошибке сборки пустой конфиг выгрузил бы из хаба все серверы.
-  rendered="$(render_config)" || { echo "⚠ конфиг хаба не собран — оставляю прежний" >&2; return 1; }
+  rendered="$(render_config render --live "$live")" || { echo "⚠ конфиг хаба не собран — оставляю прежний" >&2; return 1; }
   printf '%s\n' "$rendered" >"$CONFIG_DIR/mcp.json"
   echo "Конфиг хаба → $CONFIG_DIR/mcp.json (запущенный хаб подхватит без рестарта)"
   [ -d "$ONE_MCP_PKG_DIR" ] && patch_admin

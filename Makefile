@@ -96,6 +96,7 @@ check-infra:
 	node --test infra/owner-queue-mcp/test/*.test.mjs
 	cd infra/owner-queue-bot && node --test test/*.test.mjs
 	cd infra/ai-council && python3 selftest.py
+	python3 -I -m unittest discover -s infra/mcp-hub -p 'test_*.py'
 	python3 infra/scripts/misc/done-index.py --check
 	python3 .claude/scripts/docs_linkcheck.py
 	@for f in infra/scripts/dev-ai/*.sh infra/scripts/dev-ai/lib/*.sh infra/scripts/dev/*.sh; do bash -n "$$f" || exit 1; done

@@ -2,7 +2,14 @@
 # MCP-хаб: OAuth, коннекторы, админ-консоль 1mcp и ссылки хаба в ней. Подключается через source из
 # infra/scripts/dev-ai/mcp-hub.sh и пользуется его переменными (ROOT, SCRIPT_DIR, CONFIG_DIR, HUB_PORT,
 # ONE_MCP_PKG_DIR, ONE_MCP_BIN, AUTH_MARK_DIR, CONNECTORS_FILE, CONFIG_SRC) и функциями (pidfile_pid,
-# descendants, ensure_runtime, cmd_sync). Запуск и остановка процессов — не здесь, а в mcp-hub.sh.
+# descendants, ensure_runtime, cmd_sync, render_config). Запуск и остановка процессов — не здесь, а в mcp-hub.sh.
+
+# Предохранитель хоста до правки connectors.enabled: иначе при отказе sync имя уже записано, и следующий
+# удачный sync молча включил бы (или выключил) коннектор. Код 1 — хост живого конфига другой.
+host_guard() {
+  [ -f "$CONFIG_DIR/mcp.json" ] || return 0
+  render_config render --live "$CONFIG_DIR/mcp.json" >/dev/null
+}
 
 # Дашборд serena слушает первый свободный порт от 24282 — берём фактический у процесса serena.
 serena_dashboard_url() {
@@ -203,6 +210,7 @@ cmd_connect() {
     echo "Коннектора «${name}» нет в infra/mcp-hub/mcp.json — список: npm run mcp-hub:connectors" >&2
     return 1
   fi
+  host_guard || return 1
   mkdir -p "$CONFIG_DIR"
   touch "$CONNECTORS_FILE"
   grep -qxF "$name" "$CONNECTORS_FILE" || echo "$name" >>"$CONNECTORS_FILE"
@@ -246,6 +254,7 @@ PY
 
 cmd_disconnect() {
   local name="${1:?usage: mcp-hub.sh disconnect <имя коннектора>}"
+  host_guard || return 1
   if [ -f "$CONNECTORS_FILE" ]; then
     grep -vxF "$name" "$CONNECTORS_FILE" >"$CONNECTORS_FILE.tmp" || true
     mv "$CONNECTORS_FILE.tmp" "$CONNECTORS_FILE"
