@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Проверка merge-guard (pre-tool-use-merge-guard.py): кому отказ, кому проход, что не путается с упоминанием; git, API,
-MCP, защищённые файлы, реестр, список Контроля, matcher и формат ответа. Формы shell — test_merge_guard_shell.py, он
-запускается отсюда же; общее — merge_guard_testkit.py.
+MCP, защищённые файлы, реестр, список Контроля, matcher и формат ответа. Формы shell — test_merge_guard_shell.py,
+защищённые ветки — test_merge_guard_branches.py; они
+запускаются отсюда же; общее — merge_guard_testkit.py.
 
 Запуск: python3 -I .claude/hooks/test_merge_guard.py  (все проверки; exit 1 при расхождении)
 """
@@ -423,6 +424,7 @@ bash("$PWD с пробелом: путь — одно слово", "git -C $PWD 
 bash("$PWD с пробелом, через переменную", "X=$PWD; git -C $X push origin HEAD:main", True, cwd=spaced)
 
 import test_merge_guard_shell  # noqa: E402,F401  — формы shell, те же счётчики
+import test_merge_guard_branches  # noqa: E402,F401  — защищённые ветки (origin/HEAD, protected)
 
 # --- бюджет git ---
 mg_git = sys.modules["merge_guard_git"]

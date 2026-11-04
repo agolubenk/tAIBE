@@ -1,5 +1,6 @@
 """
-`git` для merge-guard (pre-tool-use-merge-guard.py): уйдёт ли команда в main/master мимо PR.
+`git` для merge-guard (pre-tool-use-merge-guard.py): уйдёт ли команда в защищённую ветку мимо PR — main/master,
+основную ветку remote (у tAIBE — board-agents) или ветку из `protected` в .claude/merge-guard.json.
 
 Учитывает `-C`, `-c` (push.default, remote.*.push, remote.*.mirror, alias.*), явные refspec с `+`, `:`, `HEAD`,
 масками, голый `git push` по push.default/upstream/remote.*.push/mirror, `send-pack` и псевдонимы git — свои и
@@ -12,9 +13,10 @@ import shlex
 import subprocess
 import time
 
+import merge_guard_identity as identity
 from merge_guard_shell import CURRENT, SUBST, is_lost
 
-MAIN_WRITE = "запись в main мимо PR"
+MAIN_WRITE = "запись в защищённую ветку (main, основная ветка remote) мимо PR"
 PROTECTED_BRANCHES = {"main", "master"}
 # Встроенные подкоманды: для них псевдоним не ищем (git сам не даёт псевдониму перекрыть встроенную).
 GIT_BUILTINS = set("""add am apply archive bisect blame branch bundle cat-file check-ignore checkout cherry cherry-pick
@@ -70,17 +72,52 @@ def conf_get(gdir, conf, key):
     return git_out(gdir, "config", key)
 
 
+def protected_branches(gdir):
+    """Защищённые ветки репозитория в gdir: main/master, основная ветка каждого remote (`refs/remotes/<r>/HEAD`;
+    с M1 у продукта своя, у tAIBE — board-agents) и `protected` из .claude/merge-guard(.local).json основной папки.
+    Один вызов git на решение (кэш git_out); бюджет исчерпан — GitTimeout, как у остальных вызовов."""
+    key = ("protected", os.path.normpath(gdir))
+    if key not in _seen:
+        out = set(PROTECTED_BRANCHES) | identity.load_protected()
+        for line in git_out(gdir, "for-each-ref", "--format=%(refname) %(symref)", "refs/remotes/*/HEAD").splitlines():
+            ref, _, target = line.partition(" ")
+            prefix = ref.removesuffix("HEAD")
+            if target.startswith(prefix) and len(target) > len(prefix):
+                out.add(target[len(prefix):])
+        _seen[key] = out
+    return _seen[key]
+
+
+def is_protected(branch, gdir):
+    """Ветка защищена. Не успели спросить git (GitTimeout) — да: так же грубо, как push при исчерпанном бюджете."""
+    try:
+        return branch.removeprefix("refs/heads/") in protected_branches(gdir)
+    except GitTimeout:
+        return True
+
+
+def mentions_protected(text, gdir):
+    """В тексте (GraphQL, код python/node) есть имя защищённой ветки словом. GitTimeout — да."""
+    try:
+        names = protected_branches(gdir)
+    except GitTimeout:
+        return True
+    return bool(re.search(r"\b(" + "|".join(sorted(map(re.escape, names))) + r")\b", text))
+
+
 def hits_main(refspec, gdir):
-    """Цель refspec — main/master. Пустая цель (`:`) — matching, маска — может задеть main: тоже да.
-    Цель из `$(…)` или неизвестной переменной не видна — тоже да. `$(git branch --show-current)` и подобные
-    classify_git заранее заменяет на HEAD (push в папке shell) или на SUBST (`-C` в другую папку)."""
+    """Цель refspec — защищённая ветка (protected_branches). Пустая цель (`:`) — matching, маска — может задеть
+    main: тоже да. Цель из `$(…)` или неизвестной переменной не видна — тоже да. `$(git branch --show-current)` и
+    подобные classify_git заранее заменяет на HEAD (push в папке shell) или на SUBST (`-C` в другую папку)."""
     dst = refspec.lstrip("+").split(":", 1)[-1]
     if SUBST in dst or "$" in dst:
         return True
     if dst in ("HEAD", "@"):
-        dst = git_out(gdir, "symbolic-ref", "--short", "-q", "HEAD") or "main"
+        dst = git_out(gdir, "symbolic-ref", "--short", "-q", "HEAD")
+        if not dst:
+            return True  # ветку не видно (detached HEAD, нет папки) — как защищённую
     short = dst.removeprefix("refs/").removeprefix("heads/")  # git сам дописывает refs/ и heads/ (DWIM)
-    return not dst or "*" in dst or short in PROTECTED_BRANCHES
+    return not dst or "*" in dst or short in protected_branches(gdir)
 
 
 def remote_config(gdir):
@@ -112,7 +149,7 @@ def implicit_push(gdir, conf):
         return True
     if mode in ("upstream", "tracking"):
         branch = conf_get(gdir, conf, f"branch.{branch}.merge").removeprefix("refs/heads/")
-    return not branch or branch in PROTECTED_BRANCHES
+    return not branch or branch in protected_branches(gdir)
 
 
 CONFIG_VALUE_OPTS = {"-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--worktree-file"}
@@ -121,8 +158,8 @@ RISKY_KEY = re.compile(r"alias\.|include\.|includeif\.|remote\..+\.(push|mirror)
                        re.I)
 
 
-def config_bypass(args):
-    """`git config` пишет заготовку обхода: псевдоним-скрипт или с push, include, remote.*.push в main."""
+def config_bypass(args, gdir="."):
+    """`git config` пишет заготовку обхода: псевдоним-скрипт или с push, include, remote.*.push в защищённую ветку."""
     pos, i = [], 0
     while i < len(args):
         if args[i] in CONFIG_VALUE_OPTS:
@@ -140,7 +177,7 @@ def config_bypass(args):
         return MAIN_WRITE
     if key.startswith(("include.", "includeif.")):
         return MAIN_WRITE
-    if re.fullmatch(r"remote\..+\.push", key) and any(hits_main(v, ".") for v in pos[1:]):
+    if re.fullmatch(r"remote\..+\.push", key) and any(hits_main(v, gdir) for v in pos[1:]):
         return MAIN_WRITE
     if re.fullmatch(r"remote\..+\.mirror", key) and value.strip().lower() in TRUE:
         return MAIN_WRITE
@@ -176,7 +213,7 @@ def classify_git(a, cwd, depth=0, env_config=False, guess=False):
     here = os.path.normpath(gdir) == os.path.normpath(cwd)  # ветку из $(…) shell берёт в своей папке, а не в -C
     sub, rest = a[i], [r.replace(CURRENT, "HEAD" if here else SUBST) for r in a[i + 1:]]
     if sub == "config":
-        return config_bypass(rest)
+        return config_bypass(rest, gdir)
     if opaque and (sub in PUSHERS or sub not in GIT_BUILTINS):
         return MAIN_WRITE
     if SUBST in sub or "$" in sub:  # `git $X …`: подкоманда не видна, в $X может быть `push origin HEAD:main`

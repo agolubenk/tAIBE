@@ -39,6 +39,22 @@ def load_control(project_dir=MAIN_ROOT):
     return [], ".claude/merge-guard.json не найден — Контроля нет"
 
 
+def load_protected(project_dir=None):
+    """Добавочные защищённые ветки — `protected` из обоих файлов списка, объединением: файл только добавляет защиту,
+    снять main/master или основную ветку remote им нельзя. Нужен, если у клона не задан origin/HEAD. Испорченный
+    файл ничего не добавляет. Папка по умолчанию — MAIN_ROOT на момент вызова (тест подменяет)."""
+    out = set()
+    for name in ("merge-guard.local.json", "merge-guard.json"):
+        try:
+            extra = json.loads((Path(project_dir or MAIN_ROOT) / ".claude" / name).read_text(encoding="utf-8"))
+            extra = extra.get("protected", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(extra, list):
+            out |= {x.removeprefix("refs/heads/") for x in extra if isinstance(x, str) and x}
+    return out
+
+
 def control_verdict(session_id, sessions, control):
     """None — Контроль; иначе причина отказа."""
     me = next((s for s in sessions if s.get("sessionId") == session_id), None)

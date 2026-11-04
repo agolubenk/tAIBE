@@ -1,11 +1,11 @@
 """
-MCP для merge-guard (pre-tool-use-merge-guard.py): мёрж, деплой и запись в main через GitHub MCP, вердикт мёржа и
+MCP для merge-guard (pre-tool-use-merge-guard.py): мёрж, деплой и запись в защищённую ветку через GitHub MCP, вердикт мёржа и
 подпись в очереди владельца, пути пишущих MCP-инструментов (serena и подобные). Имена — и прямые, и через хаб
 (`mcp__hub__<сервер>_1mcp_<операция>`).
 """
 import re
 
-from merge_guard_git import MAIN_WRITE, PROTECTED_BRANCHES
+from merge_guard_git import MAIN_WRITE, is_protected
 
 MERGE = "мёрж PR"
 DEPLOY = "деплой или повтор прогона GitHub Actions"
@@ -16,14 +16,14 @@ def mcp_op(tool):
     return re.split(r"__|_1mcp_", tool)[-1]
 
 
-def classify_mcp(tool, inp):
+def classify_mcp(tool, inp, cwd="."):
     op = mcp_op(tool)
     if tool.startswith("mcp__") and "github" in tool.lower():
         if op == "merge_pull_request" or "auto_merge" in op:
             return MERGE
         if op in ("push_files", "create_or_update_file", "delete_file"):
-            branch = str(inp.get("branch") or "").removeprefix("refs/heads/")
-            return MAIN_WRITE if not branch or branch in PROTECTED_BRANCHES else None
+            branch = str(inp.get("branch") or "")
+            return MAIN_WRITE if not branch or is_protected(branch, cwd) else None
         if re.search(r"run_workflow|rerun|dispatch|actions_run_trigger", op):
             return DEPLOY
     return None

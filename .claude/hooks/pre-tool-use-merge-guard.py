@@ -2,7 +2,7 @@
 """
 PreToolUse — merge-guard (d-merge-guard-3010, «да» владельца 30.10).
 
-Только сессия «Контроля»: мёрж PR, деплой руками (workflow_dispatch, повтор прогона) и запись в main мимо PR.
+Только сессия «Контроля»: мёрж PR, деплой руками (workflow_dispatch, повтор прогона) и запись в защищённую ветку (main, master, основная ветка remote, protected) мимо PR.
 Любой сессии нельзя: подписываться в очереди владельца чужим именем, править в основной папке законы и настройки
 хуков (`.claude/rules`, `.claude/hooks`, `settings*.json`, список Контроля) и реестр сессий `~/.claude/sessions`.
 
@@ -114,7 +114,7 @@ def interp_found(text, cwd, roots, by_line=False):
     запись и защищённый путь ищутся в одной строке (или путь в переменной из path_vars), иначе любой скрипт, который
     читает законы и пишет своё, — отказ."""
     found = []
-    kind = classify_interp(["_", text])
+    kind = classify_interp(["_", text], cwd)
     if kind:
         found.append((kind, text[:120]))
     chunks = text.splitlines() if by_line else [text]
@@ -313,8 +313,9 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
         found += interp_found(" ".join(a[1:]), cwd, roots)
     found += launched(a, cwd, roots, depth, git_env, whole)
     written = whole[3] or ()
-    kind = {"gh": lambda x: classify_gh(x, cwd, written), "curl": classify_http, "wget": classify_http,
-            "http": classify_http, "xh": classify_http}.get(a[0], lambda _: None)(a)
+    http = lambda x: classify_http(x, cwd)  # noqa: E731
+    kind = {"gh": lambda x: classify_gh(x, cwd, written), "curl": http, "wget": http, "http": http,
+            "xh": http}.get(a[0], lambda _: None)(a)
     if a[0] == "git":
         kind = classify_git(a, cwd, env_config=git_env)
     if "$" in exe or SUBST in exe:  # имя не видно: `$GH pr merge 1`, `$(echo gh) pr merge 1`, `${G/x/gh}` — как gh, git, curl
@@ -326,7 +327,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
                                            hid) if b else [])
         g = "blind" if hidden else True  # имя задано невидимо: голый push на main — тоже отказ (classify_git)
         kind = kind or (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
-                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a))
+                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd))
         tail = strip_prefix(a[1:])  # `$X` раскроется и в пусто, и в префикс (`$SUDO`, `${DRY:+echo}`): `$X gh pr merge 1`
         if tail:
             found += classify_argv(normalize(tail), cwd, roots, depth, git_env, whole, tail[0], stdin_files, procs, hid)
@@ -434,7 +435,7 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
         if p:
             found = [("file", p)]
     elif tool.startswith("mcp__"):
-        kind = classify_mcp(tool, inp) or oq_merge_write(tool, inp)
+        kind = classify_mcp(tool, inp, cwd) or oq_merge_write(tool, inp)
         if kind:
             found = [(kind, tool)]
         if re.search(r"shell|command|terminal", mcp_op(tool)) and isinstance(inp.get("command"), str):

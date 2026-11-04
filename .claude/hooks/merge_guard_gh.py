@@ -1,13 +1,14 @@
 """
-gh, curl и код интерпретаторов для merge-guard (pre-tool-use-merge-guard.py): мёрж PR, деплой руками и запись в main
-через `gh pr`/`gh api`/GraphQL/`gh workflow`, HTTP к api.github.com и те же команды внутри subprocess-кода.
+gh, curl и код интерпретаторов для merge-guard (pre-tool-use-merge-guard.py): мёрж PR, деплой руками и запись в
+защищённую ветку (merge_guard_git.protected_branches) через `gh pr`/`gh api`/GraphQL/`gh workflow`, HTTP к
+api.github.com и те же команды внутри subprocess-кода.
 """
 import os
 import re
 import shlex
 
 from merge_guard_files import GH_MOVED, GH_WRITTEN, open_regular, rewritten
-from merge_guard_git import MAIN_WRITE, PROTECTED_BRANCHES
+from merge_guard_git import MAIN_WRITE, is_protected, mentions_protected
 from merge_guard_mcp import DEPLOY, MERGE
 from merge_guard_shell import SUBST, device
 
@@ -107,7 +108,7 @@ def classify_gh_api(a, cwd=".", written=()):
             return UNSEEN_BODY
         if re.search(r"\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b", blob):
             return MERGE
-        if re.search(r"\b(createCommitOnBranch|updateRefs?|deleteRef)\b", blob) and re.search(r"\b(main|master)\b", blob):
+        if re.search(r"\b(createCommitOnBranch|updateRefs?|deleteRef)\b", blob) and mentions_protected(blob, cwd):
             return MAIN_WRITE
         if re.search(r"\b(updateBranchProtectionRule|deleteBranchProtectionRule)\b", blob):
             return MAIN_WRITE
@@ -118,11 +119,14 @@ def classify_gh_api(a, cwd=".", written=()):
         return MERGE
     if re.search(r"/dispatches$|/actions/runs/\d+/rerun(-failed-jobs)?$|/actions/jobs/\d+/rerun$", p):
         return DEPLOY
-    if re.search(r"/git/refs/heads/(main|master)$|/branches/(main|master)(/|$)|/rulesets", p):
+    if re.search(r"/rulesets", p):
+        return MAIN_WRITE
+    ref = re.search(r"/git/refs/heads/(.+)$|/branches/([^/]+)(?:/|$)", p)
+    if ref and is_protected(ref.group(1) or ref.group(2), cwd):
         return MAIN_WRITE
     if "/contents/" in p:
         branch = contents_branch(fields)
-        if branch is None or branch == "@" or branch.removeprefix("refs/heads/") in PROTECTED_BRANCHES:
+        if branch is None or branch == "@" or is_protected(branch, cwd):
             return MAIN_WRITE
     return None
 
@@ -273,7 +277,7 @@ def classify_gh(a, cwd=".", written=(), depth=0, guess=False):
     return None
 
 
-def classify_interp(a):
+def classify_interp(a, cwd="."):
     """Защищённая команда, запущенная из python/node/… списком аргументов или строкой."""
     blob = " ".join(a[1:])
     q = r"[\"',\s\]\[]+"
@@ -281,12 +285,13 @@ def classify_interp(a):
         return MERGE
     if re.search(rf"\bgh{q}(workflow{q}run|run{q}rerun)\b|/dispatches\b", blob):
         return DEPLOY
-    if re.search(rf"\bgit{q}push\b", blob) and re.search(r"\b(main|master|--all|--mirror)\b", blob):
+    if re.search(rf"\bgit{q}push\b", blob) and (re.search(r"(?<![\w-])--(all|mirror)\b", blob) or
+                                                 mentions_protected(blob, cwd)):
         return MAIN_WRITE
     return None
 
 
-def classify_http(a):
+def classify_http(a, cwd="."):
     blob = " ".join(a)
     if "api.github.com" not in blob:
         return None
@@ -294,7 +299,10 @@ def classify_http(a):
         return MERGE
     if re.search(r"/dispatches\b|/rerun", blob):
         return DEPLOY
-    if re.search(r"/git/refs/heads/(main|master)\b|/contents/|/branches/(main|master)/protection", blob):
+    if "/contents/" in blob:
+        return MAIN_WRITE
+    refs = re.findall(r"/git/refs/heads/([\w./-]+)|/branches/([^/\s\"']+)/protection", blob)
+    if any(is_protected(head or branch, cwd) for head, branch in refs):
         return MAIN_WRITE
     return None
 
