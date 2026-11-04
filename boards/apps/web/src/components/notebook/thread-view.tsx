@@ -6,6 +6,7 @@ import { ConfirmDialog } from "@/components/settings/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import useDeleteNotebookThread from "@/hooks/mutations/notebook/use-delete-notebook-thread";
 import useNotebookThread from "@/hooks/queries/notebook/use-notebook-thread";
+import { BriefButton } from "./brief-button";
 import { MessageItem } from "./message-item";
 import { PendingQuestion } from "./pending-question";
 
@@ -40,17 +41,22 @@ export function ThreadView({
       {data ? (
         <section className="flex flex-col gap-3">
           <header className="flex items-start justify-between gap-2">
-            <h2 className="font-medium text-base">{data.thread.title}</h2>
-            {canDelete ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t("workspace:notebook.chat.delete")}
-                onClick={() => setConfirming(true)}
-              >
-                <Trash2 aria-hidden="true" />
-              </Button>
-            ) : null}
+            <h2 className="min-w-0 break-words font-medium text-base">
+              {data.thread.title}
+            </h2>
+            <div className="flex shrink-0 items-start gap-1">
+              <BriefButton workspaceId={workspaceId} threadId={threadId} />
+              {canDelete ? (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t("workspace:notebook.chat.delete")}
+                  onClick={() => setConfirming(true)}
+                >
+                  <Trash2 aria-hidden="true" />
+                </Button>
+              ) : null}
+            </div>
           </header>
           {data.messages.map((message) => (
             <MessageItem key={message.id} message={message} />

@@ -1,5 +1,6 @@
 import { AnswerNote } from "./answer-note";
 import { AnswerText } from "./answer-text";
+import { BriefBody } from "./brief-body";
 import { CitationList } from "./citation-list";
 import type { NotebookMessage } from "./notebook-types";
 
@@ -12,9 +13,13 @@ export function MessageItem({ message }: { message: NotebookMessage }) {
     );
   }
 
+  const brief = message.status === "brief" || message.status === "brief-failed";
+
   return (
     <article className="flex flex-col gap-2 rounded-lg border bg-card px-3 py-2.5">
-      {message.status === "answered" ? (
+      {brief ? (
+        <BriefBody status={message.status} content={message.content} />
+      ) : message.status === "answered" ? (
         <AnswerText
           messageId={message.id}
           content={message.content}
@@ -26,7 +31,9 @@ export function MessageItem({ message }: { message: NotebookMessage }) {
           hasSources={message.citations.length > 0}
         />
       )}
-      <CitationList messageId={message.id} citations={message.citations} />
+      {brief ? null : (
+        <CitationList messageId={message.id} citations={message.citations} />
+      )}
       {message.model ? (
         <p className="text-[11px] text-muted-foreground">{message.model}</p>
       ) : null}

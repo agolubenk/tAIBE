@@ -7060,9 +7060,11 @@
                     "capped",
                     "rate-limited",
                     "failed",
+                    "brief",
+                    "brief-failed",
                     null
                   ],
-                  "description": "Assistant turns only. Anything but answered carries the sources without a written answer."
+                  "description": "Assistant turns only. answered is a written answer; retrieval-only, capped, rate-limited and failed carry the sources without one. brief is a GOAL/CONSTRAINTS/ACCEPTANCE brief of the thread, brief-failed a brief call that returned none."
                 },
                 "citations": {
                   "type": "array",
@@ -28491,6 +28493,96 @@
           },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/notebook/{workspaceId}/threads/{threadId}/brief": {
+      "post": {
+        "operationId": "briefNotebookThread",
+        "tags": [
+          "Notebook"
+        ],
+        "summary": "Brief a notebook thread",
+        "description": "Asks the model for a GOAL / CONSTRAINTS / ACCEPTANCE brief of the thread's questions and answers and stores it in the thread as status brief, or brief-failed when the model returned none. The call counts under the daily budget.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "threadId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored brief",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotebookThread"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing workspace:read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Notebook thread not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No model is connected (NOTEBOOK_MODEL_NOT_CONFIGURED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Today's model call limit is reached (NOTEBOOK_DAILY_LIMIT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }

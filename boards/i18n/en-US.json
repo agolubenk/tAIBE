@@ -4018,6 +4018,15 @@
 					"rate-limited": "The model is busy. Here are the sources; try again in a minute.",
 					"failed": "The model did not answer. Here are the sources."
 				},
+				"brief": {
+					"button": "Brief",
+					"pending": "Writing the brief…",
+					"title": "Brief",
+					"failed": "The model did not return a brief in the GOAL / CONSTRAINTS / ACCEPTANCE format. Try again later.",
+					"noModel": "No model is connected, so there is no brief.",
+					"capped": "Today’s model limit is reached; briefs resume tomorrow (UTC).",
+					"toastError": "Could not write the brief"
+				},
 				"toast": {
 					"error": "Could not ask the question",
 					"deleted": "Thread deleted",

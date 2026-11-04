@@ -87,6 +87,53 @@ describe("MessageItem", () => {
     expect(screen.queryByRole("list")).toBeNull();
   });
 
+  it("shows a brief as written, without source markers or a source list", () => {
+    render(
+      <MessageItem
+        message={message({
+          status: "brief",
+          content:
+            "GOAL: extend the lease [1]\nCONSTRAINTS: none stated\nACCEPTANCE: lease renewed",
+          citations: [],
+          model: "test-model",
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByText("workspace:notebook.chat.brief.title"),
+    ).toBeTruthy();
+    const brief = screen.getByText(/^GOAL: extend the lease \[1\]/);
+    expect(brief.textContent).toBe(
+      "GOAL: extend the lease [1]\nCONSTRAINTS: none stated\nACCEPTANCE: lease renewed",
+    );
+    expect(screen.getByText("test-model")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("list")).toBeNull();
+    expect(
+      screen.queryByText("workspace:notebook.chat.answerStatus.nothingFound"),
+    ).toBeNull();
+  });
+
+  it("says a brief did not come out rather than that nothing was found", () => {
+    render(
+      <MessageItem
+        message={message({
+          status: "brief-failed",
+          citations: [],
+          model: "test-model",
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByText("workspace:notebook.chat.brief.failed"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("workspace:notebook.chat.answerStatus.nothingFound"),
+    ).toBeNull();
+  });
+
   it("shows the reader's question as plain text", () => {
     render(
       <MessageItem

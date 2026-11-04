@@ -4002,6 +4002,15 @@
 					"deleted": "Thread deleted",
 					"deleteError": "Could not delete the thread",
 					"error": "Could not ask the question"
+				},
+				"brief": {
+					"button": "Brief",
+					"capped": "Today’s model limit is reached; briefs resume tomorrow (UTC).",
+					"failed": "The model did not return a brief in the GOAL / CONSTRAINTS / ACCEPTANCE format. Try again later.",
+					"noModel": "No model is connected, so there is no brief.",
+					"pending": "Writing the brief…",
+					"title": "Brief",
+					"toastError": "Could not write the brief"
 				}
 			},
 			"hints": {

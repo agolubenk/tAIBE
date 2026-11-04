@@ -197,11 +197,19 @@ const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   status: z
-    .enum(["answered", "retrieval-only", "capped", "rate-limited", "failed"])
+    .enum([
+      "answered",
+      "retrieval-only",
+      "capped",
+      "rate-limited",
+      "failed",
+      "brief",
+      "brief-failed",
+    ])
     .nullable()
     .openapi({
       description:
-        "Assistant turns only. Anything but answered carries the sources without a written answer.",
+        "Assistant turns only. answered is a written answer; retrieval-only, capped, rate-limited and failed carry the sources without one. brief is a GOAL/CONSTRAINTS/ACCEPTANCE brief of the thread, brief-failed a brief call that returned none.",
     }),
   citations: z.array(
     z.object({
