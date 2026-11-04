@@ -53,7 +53,15 @@ export type ClaudeMemReaderOptions = {
   signal?: AbortSignal;
   /** Short default: the worker is local, so a slow answer means it is down. */
   timeoutMs?: number;
+  /**
+   * Called before every request (e.g. resolveProxyToken). A value goes only
+   * into the PROXY_TOKEN_HEADER header, never into errors or results.
+   */
+  proxyToken?: () => string | undefined;
 };
+
+/** The header the Mac's read-only memory proxy checks (OPS-19). */
+export const PROXY_TOKEN_HEADER = "x-cmem-proxy-token";
 
 export type ClaudeMemReader = {
   health(): Promise<WorkerHealth>;
@@ -79,12 +87,15 @@ export function createClaudeMemReader(
   async function get<T>(path: string, parse: (body: unknown) => T): Promise<T> {
     const signals = [AbortSignal.timeout(timeoutMs)];
     if (options.signal) signals.push(options.signal);
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const token = options.proxyToken?.();
+    if (token) headers[PROXY_TOKEN_HEADER] = token;
 
     let res: Response;
     try {
       res = await fetchImpl(`${baseUrl}${path}`, {
         method: "GET",
-        headers: { Accept: "application/json" },
+        headers,
         signal: AbortSignal.any(signals),
       });
     } catch (error) {

@@ -19,10 +19,13 @@ export {
   ClaudeMemUnavailableError,
   createClaudeMemReader,
   type ListObservationsParams,
+  PROXY_TOKEN_HEADER,
 } from "./client.js";
 export {
   DEFAULT_WORKER_HOST,
   DEFAULT_WORKER_PORT,
+  resolveProxyToken,
+  type ResolveProxyTokenOptions,
   resolveWorkerUrl,
   type ResolveWorkerUrlOptions,
 } from "./settings.js";
