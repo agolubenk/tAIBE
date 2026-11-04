@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
+import db from "../../apps/api/src/database";
+import {
+  ssrEntityTable,
+  ssrVersionTable,
+} from "../../apps/api/src/database/ssr-schema";
+import { rejectDraft } from "../../apps/api/src/ssr/approve";
 import { resetTestDatabase } from "./helpers/database";
 import { createForest } from "./helpers/forest";
 
@@ -53,5 +60,59 @@ describe("API integration: SSR corpus sync", () => {
     expect(third.status).toBe(200);
     expect(third.body.created).toHaveLength(1);
     expect(third.body.unchanged).toBe(1);
+  });
+
+  it("a rejected draft with new content waits as draft 2, never goes live, and does not break the sync", async () => {
+    const forest = await createForest();
+    const path = ".claude/skills/gamma/NOTE.md";
+    const commitSha = "4041424344454647484940414243444546474849";
+    const sync = (text: string) =>
+      forest.ownerApi("POST", `/ssr/${forest.workspace.id}/sync`, {
+        commitSha,
+        files: [{ path, sha256: sha256(text), content: text }],
+      });
+
+    const first = await sync("v1");
+    expect(first.status).toBe(200);
+    const [draft] = first.body.created;
+    const [entity] = await db
+      .select()
+      .from(ssrEntityTable)
+      .where(eq(ssrEntityTable.workspaceId, forest.workspace.id));
+    if (!entity || !draft) throw new Error("the first sync made no draft");
+    await rejectDraft(
+      forest.workspace.id,
+      entity.id,
+      draft.versionId,
+      forest.ownerId,
+    );
+
+    // Numbering from "latest" reused 1 here (ssr_version_entity_number_key),
+    // and the rejected entity would have gone live without the owner (Q-015).
+    const changed = await sync("v2");
+    expect(changed.status).toBe(200);
+    expect(changed.body.created).toEqual([
+      expect.objectContaining({ number: 2, status: "draft" }),
+    ]);
+    expect(changed.body.bumped).toHaveLength(0);
+
+    const again = await sync("v2");
+    expect(again.status).toBe(200);
+    expect(again.body.unchanged).toBe(1);
+
+    const versions = await db
+      .select()
+      .from(ssrVersionTable)
+      .where(eq(ssrVersionTable.entityId, entity.id))
+      .orderBy(ssrVersionTable.number);
+    expect(versions.map((v) => [v.number, v.status])).toEqual([
+      [1, "rejected"],
+      [2, "draft"],
+    ]);
+    const [after] = await db
+      .select()
+      .from(ssrEntityTable)
+      .where(eq(ssrEntityTable.id, entity.id));
+    expect(after?.latestVersionId).toBeNull();
   });
 });

@@ -234,7 +234,6 @@ export async function syncCorpus(
               commitSha: input.commitSha,
               createdBy: actor,
               createdAt: new Date(),
-              message: "First draft — waiting for owner approval (Q-015)",
             })
             .where(eq(ssrVersionTable.id, current.id))
             .returning({ id: ssrVersionTable.id });
@@ -246,14 +245,41 @@ export async function syncCorpus(
             number: current.number,
             status: "draft",
           });
+        } else if (!latest) {
+          // Never approved: the owner rejected the newest version
+          // (approve.ts) or there is none. The changed corpus waits for the
+          // owner again (Q-015) instead of going live, and it is numbered
+          // after the highest version — numbering from "latest" reused 1 and
+          // hit ssr_version_entity_number_key on every sync.
+          const number = (current?.number ?? 0) + 1;
+          const [version] = await tx
+            .insert(ssrVersionTable)
+            .values({
+              entityId: existing.id,
+              number,
+              blobSha,
+              files: snapshot,
+              status: "draft",
+              origin: "sync",
+              commitSha: input.commitSha,
+              createdBy: actor,
+              message: "Changed draft — waiting for owner approval (Q-015)",
+            })
+            .returning({ id: ssrVersionTable.id });
+          if (!version) throw new Error("version insert returned nothing");
+          result.created.push({
+            entity: group.name,
+            kind: group.kind,
+            versionId: version.id,
+            number,
+            status: "draft",
+          });
         } else {
-          if (latest) {
-            await tx
-              .update(ssrVersionTable)
-              .set({ status: "superseded" })
-              .where(eq(ssrVersionTable.id, latest.id));
-          }
-          const number = (latest?.number ?? 0) + 1;
+          await tx
+            .update(ssrVersionTable)
+            .set({ status: "superseded" })
+            .where(eq(ssrVersionTable.id, latest.id));
+          const number = latest.number + 1;
           const [version] = await tx
             .insert(ssrVersionTable)
             .values({
