@@ -58,7 +58,10 @@ Hooks and tools call `.claude/scripts/pipeline_settings.py` (stdlib).
   - the product: the key names it. The key must reach exactly one product, and that product is read. A key that
     reaches several is refused. `boards.product` / `T_BOARDS_PRODUCT` (the name or slug people see) and
     `boards.workspace` / `T_BOARDS_WORKSPACE` (an id) are only a check. If the key is for another product, it is
-    refused, so a key put into the wrong install cannot turn on another product's switches. The product is asked
+    refused, so a key put into the wrong install cannot turn on another product's switches. The check works only
+    when the install names its product: tAIBE's `eval/nerve/config.json` names «aiBoards&eval» (`aiboards-eval`)
+    and its workspace id, and a test keeps it so. With no product and no workspace set, any one product's key is
+    read. The product is asked
     again on every refresh (two calls per 10 minutes), so a key swapped for a wider one is refused within one
     refresh.
 - **Cache.** The answer is kept in `.claude/pipeline-settings.json` (gitignored, mode 600). A cache from another
@@ -85,8 +88,10 @@ python3 -I .claude/scripts/pipeline_settings.py fetch    # refresh now
 
 ### Connect an install (owner)
 
-1. On the board: Settings → API keys → choose the product → Create. The key is shown once; the board keeps only its
-   hash.
+1. On the board: Settings → API keys → choose the product → Create. For tAIBE the product is «aiBoards&eval»: a key
+   for any other product is refused by the config's check. The key is shown once; the board keeps only its hash.
+   Another install first names its own product in its own config (`boards.product`, `boards.workspace`) or in
+   `T_BOARDS_PRODUCT` / `T_BOARDS_WORKSPACE`.
 2. On the Mac: `security add-generic-password -U -s hr-helper-mcp -a T_BOARDS_PIPELINE_KEY -w`. Paste the key at the
    prompt: it never reaches the shell history.
 3. Check: `python3 -I .claude/scripts/pipeline_settings.py fetch`, then the status command. The source is `board`, and
@@ -109,4 +114,6 @@ python3 -I .claude/scripts/pipeline_settings.py fetch    # refresh now
   - environment override, cache, fetch from a fake board;
   - an outage keeps the last known values; a broken cache falls back to defaults;
   - a key for one product reads it; a key for several, a key for another product than the config names, or only
-    `T_BOARDS_API_KEY` is refused; the product is asked on every refresh.
+    `T_BOARDS_API_KEY` is refused; the product is asked on every refresh;
+  - the shipped `eval/nerve/config.json` names its product, and a key for another product keeps this product's
+    «off»; a URL the key is never sent to costs no Keychain call.

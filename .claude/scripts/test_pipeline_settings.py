@@ -19,6 +19,7 @@ sys.path.insert(0, HERE)
 import pipeline_settings as ps  # noqa: E402
 
 TS = os.path.join(HERE, '..', '..', 'boards', 'packages', 'permissions', 'src', 'pipeline-toggles.ts')
+SHIPPED = os.path.join(HERE, '..', '..', 'eval', 'nerve', 'config.json')
 
 
 FULL = {'automation': True, 'toggles': {name: True for name in ps.TOGGLES}}
@@ -188,6 +189,28 @@ class PipelineSettingsTest(unittest.TestCase):
         os.environ['T_BOARDS_WORKSPACE'] = 'ws-other'
         self.assertIn("not for the workspace 'ws-other'", ps.fetch(self.root)[1])
 
+    @unittest.skipUnless(os.path.isfile(SHIPPED), 'no instance config in this tree')
+    def test_the_shipped_config_refuses_a_key_for_another_product(self):
+        # Without boards.product nothing is checked, and a key put into the wrong install would turn on another
+        # product's switches (lens of role 4 on f26a895e). The shipped config names its product.
+        with open(SHIPPED, encoding='utf-8') as f:
+            boards = json.load(f)['boards']
+        product = str(boards.get('product') or '').strip()
+        self.assertTrue(product, 'eval/nerve/config.json: boards.product is not set')
+        os.makedirs(os.path.join(self.root, 'eval', 'nerve'))
+        shutil.copy(SHIPPED, os.path.join(self.root, 'eval', 'nerve', 'config.json'))
+        self.connect()
+        del os.environ['T_BOARDS_WORKSPACE']  # the config's own workspace (if any) is the check
+        own = str(boards.get('workspace') or '').strip() or 'ws-own'
+        Board.workspaces = [{'id': own, 'name': product, 'slug': 'own'}]
+        self.assertFalse(ps.enabled('councilReview', self.root))  # the owner's «off» on this product
+        Board.workspaces = [{'id': 'ws-other', 'name': 'Another product', 'slug': 'another'}]
+        Board.body = FULL
+        self.age_cache(10 * ps.TTL_SECONDS)
+        settings, source = ps.load(self.root)
+        self.assertFalse(settings['toggles']['councilReview'])  # the other product's «on» does not leak in
+        self.assertIn("the key is for 'Another product'", source)
+
     def test_the_boards_mcp_key_is_never_used(self):
         self.connect()
         del os.environ['T_BOARDS_PIPELINE_KEY']
@@ -264,7 +287,8 @@ class PipelineSettingsTest(unittest.TestCase):
         settings, source = ps.load(self.root)
         self.assertFalse(settings['toggles']['councilReview'])
         self.assertIn('several products', source)
-        # A key for another product: its switches, not the cached ones.
+        # An install that names no product (this root has no config) reads whatever one product the key reaches:
+        # its switches, not the cached ones. The shipped config names its product — see the shipped-config test.
         Board.workspaces = [{'id': 'ws-c', 'name': 'HR Helper', 'slug': 'hr'}]
         Board.body = FULL
         self.assertIsNotNone(ps.fetch(self.root)[0])
