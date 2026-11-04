@@ -170,6 +170,107 @@ class FakeCtx:
         return self.journal.emit(key, kind, cls, to, text, src)
 
 
+class FakeGh:
+    """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
+    REPO = CFG["github"]["repo"]
+
+    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"'):
+        self.open_prs, self.merged, self.broken, self.etag = open_prs, set(merged), set(broken), etag
+        self.calls = []
+
+    def __call__(self, cmd, stdin=None, timeout=30):
+        self.calls.append(list(cmd))
+        if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/pulls"):
+            if "-H" in cmd and self.etag in cmd[cmd.index("-H") + 1]:
+                return 1, "HTTP/2.0 304 Not Modified\r\n\r\n", ""
+            return 0, f"HTTP/2.0 200 OK\r\nEtag: {self.etag}\r\n\r\n" + json.dumps(self.open_prs), ""
+        if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
+            return 0, "[]", ""
+        if cmd[:3] == ["gh", "pr", "view"]:
+            n = int(cmd[3])
+            if "--repo" not in cmd or cmd[cmd.index("--repo") + 1] != self.REPO:
+                return 1, "", f"GraphQL: Could not resolve to a PullRequest with the number of {n}."
+            if n in self.broken:
+                return 1, "", "HTTP 502"
+            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": "SUCCESS"}],
+                 "state": "MERGED" if n in self.merged else "OPEN", "mergedAt": "2026-11-04T15:55:00Z"
+                 if n in self.merged else None}
+            return 0, json.dumps(d), ""
+        raise AssertionError(f"неожиданный вызов: {cmd}")
+
+
+def _pr(n, sha, upd="2026-11-04T10:00:00Z"):
+    return {"number": n, "title": f"PR {n}", "updated_at": upd, "head": {"sha": sha}}
+
+
+class GithubPollTest(unittest.TestCase):
+    """SE-40: gh pr view без --repo искал номер HR PR в tAIBE (рабочая папка демона)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.ctx = FakeCtx(self.d)
+        self._run = sources.run
+        self.addCleanup(setattr, sources, "run", self._run)
+
+    def kinds(self):
+        return [(e["kind"], e["text"]) for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0]]
+
+    def test_every_gh_call_names_the_repo(self):
+        fake = FakeGh([_pr(458, "a" * 40)])
+        sources.run = fake
+        files, checks, state, _ = sources._gh_view(FakeGh.REPO, 458)
+        self.assertEqual((files, checks, state), (["apps/backend/src/x.ts"], ["SUCCESS"], "OPEN"))
+        sources.poll_github(self.ctx)
+        self.assertTrue(fake.calls)
+        for c in fake.calls:
+            if c[:3] == ["gh", "pr", "view"]:
+                self.assertEqual(c[c.index("--repo") + 1], FakeGh.REPO, c)
+            else:
+                self.assertTrue(c[-1].startswith(f"repos/{FakeGh.REPO}/"), c)
+        p = self.ctx.state["github"]["prs"]["458"]
+        self.assertEqual((p["checks"], p["head"]), (["SUCCESS"], "a" * 40))
+        self.assertIn("author", p)
+
+    def test_stuck_merged_pr_is_reported_once_after_upgrade(self):
+        # Состояние rev 1: #457 влит, но остался в prs; etag живой — без сброса 304 спрятал бы его навсегда.
+        self.ctx.state["github"] = {"etag": 'W/"e1"', "prs": {"457": {"head": "b" * 40, "updated": "x",
+                                                                       "seen": [], "changes_by": []}}}
+        sources.run = FakeGh([], merged={457})
+        sources.poll_github(self.ctx)
+        st = self.ctx.state["github"]
+        self.assertNotIn("457", st["prs"])
+        self.assertIn(("pr.closed", "#457 влит"), self.kinds())
+        self.assertEqual((st["rev"], st["etag"]), (sources.GH_STATE_REV, 'W/"e1"'))
+        sources.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
+        self.assertEqual(self.kinds().count(("pr.closed", "#457 влит")), 1)
+
+    def test_one_failing_pr_does_not_stop_the_pass_and_is_retried(self):
+        sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)], merged={9}, broken={1})
+        self.ctx.state["github"] = {"etag": "", "rev": sources.GH_STATE_REV,
+                                    "prs": {"9": {"head": "e" * 40, "updated": "x", "seen": [], "changes_by": []}}}
+        with self.assertRaisesRegex(RuntimeError, r"PR с ошибкой: 1; #1: gh pr view"):
+            sources.poll_github(self.ctx)
+        st = self.ctx.state["github"]
+        self.assertIn("author", st["prs"]["2"], "#2 разобран, хотя #1 упал раньше")
+        self.assertNotIn("9", st["prs"], "цикл закрытых прошёл")
+        self.assertEqual((st["prs"]["1"]["head"], st["prs"]["1"]["updated"]), ("", ""), "#1 не считается увиденным")
+        self.assertEqual(st["etag"], "", "без etag следующий проход берёт полный список, а не 304")
+        sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)])
+        sources.poll_github(self.ctx)
+        self.assertIn("author", st["prs"]["1"])
+        self.assertEqual(st["etag"], 'W/"e1"')
+        self.assertEqual(self.kinds().count(("pr.new", "#1 открыт: PR 1")), 1, "повтор не дублирует событие")
+
+    def test_closed_pr_that_fails_stays_for_retry(self):
+        sources.run = FakeGh([], broken={7})
+        self.ctx.state["github"] = {"etag": "", "rev": sources.GH_STATE_REV,
+                                    "prs": {"7": {"head": "f" * 40, "updated": "x", "seen": [], "changes_by": []}}}
+        with self.assertRaises(RuntimeError):
+            sources.poll_github(self.ctx)
+        self.assertIn("7", self.ctx.state["github"]["prs"])
+        self.assertNotIn("pr.closed", [k for k, _ in self.kinds()])
+
+
 class LimitActionTest(unittest.TestCase):
     def test_limit_sets_pause_and_wave_once(self):
         with tempfile.TemporaryDirectory() as d:

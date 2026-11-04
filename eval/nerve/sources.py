@@ -50,25 +50,40 @@ def _gh_comments(repo, n):
     return json.loads(out)
 
 
-def _gh_view(n):
-    code, out, err = run(["gh", "pr", "view", str(n), "--json", "files,statusCheckRollup,state,mergedAt"])
+def _gh_view(repo, n):
+    # --repo обязателен: без него gh берёт репозиторий из рабочей папки демона (tAIBE), а не из конфига (SE-40).
+    code, out, err = run(["gh", "pr", "view", str(n), "--repo", repo,
+                          "--json", "files,statusCheckRollup,state,mergedAt"])
     if code != 0:
-        raise RuntimeError(f"gh pr view #{n}: {err.strip()[:200]}")
+        raise RuntimeError(f"gh pr view {repo}#{n}: {err.strip()[:200]}")
     d = json.loads(out)
     checks = [c.get("conclusion") or c.get("status") or c.get("state") for c in d.get("statusCheckRollup") or []]
     return [f["path"] for f in d.get("files") or []], checks, d.get("state"), d.get("mergedAt")
 
 
+# rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. При первом проходе
+# нового кода etag сбрасывается: полный список разбирает их заново.
+GH_STATE_REV = 2
+
+
 def poll_github(ctx):
     g = ctx.cfg["github"]
     st = ctx.state.setdefault("github", {"etag": "", "prs": {}})
-    prs, st["etag"] = _gh_list(g["repo"], st.get("etag", ""))
+    if st.get("rev") != GH_STATE_REV:
+        st["etag"], st["rev"] = "", GH_STATE_REV
+    prs, etag = _gh_list(g["repo"], st.get("etag", ""))
     known = st["prs"]
+    fails = []
     if prs is None:
-        # 304: список не менялся, но CI мог доехать у PR, ждущего только CI.
+        # 304: список не менялся, но CI мог доехать у PR, ждущего только CI. Сбой — повтор на следующем проходе
+        # сам (await_ci не снят), etag не трогаем.
         for n, p in known.items():
             if p.get("await_ci"):
-                _check_pr(ctx, int(n), p, p["head"], refresh=True)
+                try:
+                    _check_pr(ctx, int(n), p, p["head"], refresh=True)
+                except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
+                    fails.append(f"#{n}: {e}")
+        _raise_fails(fails)
         return
     open_now = set()
     for pr in prs:
@@ -84,24 +99,40 @@ def poll_github(ctx):
             ctx.emit(f"gh:newhead:{n}:{pr['head']['sha']}", "pr.newhead", DIGEST, roles or ["coord"],
                      f"#{n}: новая голова {pr['head']['sha'][:9]} после changes ({', '.join(p['changes_by'])})",
                      "github")
-        p["updated"] = pr["updated_at"]
-        _check_pr(ctx, n, p, pr["head"]["sha"])
+        try:
+            _check_pr(ctx, n, p, pr["head"]["sha"])
+        except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
+            fails.append(f"#{n}: {e}")
+            continue
+        p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     for n in [k for k in known if k not in open_now]:
-        _, _, _, merged = _gh_view(int(n))
+        try:
+            _, _, _, merged = _gh_view(g["repo"], int(n))
+        except Exception as e:  # noqa: BLE001 — PR остаётся в prs, повтор на следующем проходе
+            fails.append(f"#{n}: {e}")
+            continue
         word = "влит" if merged else "закрыт"
         ctx.emit(f"gh:closed:{n}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}", "github")
         del known[n]
+    # etag — только после чистого прохода: иначе 304 спрячет недоразобранные PR до следующего изменения списка.
+    st["etag"] = "" if fails else etag
+    _raise_fails(fails)
+
+
+def _raise_fails(fails):
+    if fails:
+        raise RuntimeError(f"PR с ошибкой: {len(fails)}; " + "; ".join(fails))
 
 
 def _check_pr(ctx, n, p, head, refresh=False):
     g = ctx.cfg["github"]
     head_changed = p["head"] != head
-    p["head"] = head
     comments = _gh_comments(g["repo"], n)
     if head_changed or refresh or "author" not in p:
-        files, checks, _, _ = _gh_view(n)
+        files, checks, _, _ = _gh_view(g["repo"], n)
         p["author"] = quorum.author_role(files, g["path_roles"])
         p["checks"] = checks
+    p["head"] = head  # после запросов: при сбое голова не считается увиденной
     verdicts = []
     for c in comments:
         v = quorum.parse_verdict(c.get("body"))
