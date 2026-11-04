@@ -33,9 +33,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(REPO_ROOT / ".claude/scripts"))
+sys.path.insert(0, str(HERE.parents[1] / ".claude/scripts"))
+
+from config import REPO_ROOT  # noqa: E402 — поиск идёт по коду хоста
 
 try:
     import dams_common                       # переиспользуем поиск DAMS, не копируем

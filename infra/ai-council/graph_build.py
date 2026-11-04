@@ -36,7 +36,10 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parents[1]
+sys.path.insert(0, str(HERE))
+
+from config import REPO_ROOT  # noqa: E402 — граф строится по коду хоста
+
 OUT_DIR = REPO_ROOT / "graphify-out"
 GRAPH_JSON = OUT_DIR / "graph.json"
 DETECT = OUT_DIR / ".graphify_detect.json"

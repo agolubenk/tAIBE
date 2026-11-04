@@ -14,10 +14,17 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2]          # код слоя; данные — у хоста (TAIBE_HOST_ROOT)
 sys.path.insert(0, str(ROOT / ".claude" / "scripts"))
 
-from dams_common import (
+from host_root import host_root  # noqa: E402
+
+# Сервер хаба без индекса бесполезен: неверный TAIBE_HOST_ROOT — отказ на старте, а не
+# «Индекс не найден» в каждом ответе. Без env — как раньше: индекс этого репозитория.
+if host_root() != ROOT:
+    host_root(require=".claude/rag/index.db")
+
+from dams_common import (  # noqa: E402
     extract_search_terms,
     log_query,
     open_db,

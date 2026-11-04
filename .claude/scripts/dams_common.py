@@ -6,7 +6,10 @@ import sqlite3
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from host_root import host_root
+
+# Индекс, капитал, граф и сессии DAMS — данные хоста (TAIBE_HOST_ROOT; без него — этот репозиторий).
+REPO_ROOT = host_root()
 DB_PATH = REPO_ROOT / ".claude/rag/index.db"
 CAPITAL_PATH = REPO_ROOT / ".claude/memory/capital.json"
 GRAPH_PATH = REPO_ROOT / ".claude/memory/graph.json"

@@ -249,15 +249,15 @@ def _gateway(cfg, g, check, db: Path, base_window: int) -> None:
 
 def _settings_guard(cfg, check, gw, api, tmp: Path) -> None:
     """Правка лимитов режима из UI — под валидатором. Пишется КОПИЯ конфига во временном
-    каталоге (REPO_ROOT шлюза и config.load подменены): config.toml репозитория не трогается."""
+    каталоге (CONFIG_PATH и config.load подменены): config.toml репозитория не трогается."""
     real = HERE / "config.toml"
     real_before = real.read_bytes()
     root = tmp / "settings-root"
     target = root / "infra/ai-council/config.toml"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(real_before)
-    orig_root, orig_load = gw.REPO_ROOT, config_mod.load
-    gw.REPO_ROOT = root
+    orig_path, orig_load = config_mod.CONFIG_PATH, config_mod.load
+    config_mod.CONFIG_PATH = target
     config_mod.load = lambda path=None, strict=True: orig_load(target, strict)
     try:
         api.cfg = config_mod.load(strict=False)
@@ -266,7 +266,7 @@ def _settings_guard(cfg, check, gw, api, tmp: Path) -> None:
         good = api.update_setting("models.glm_all.max_calls_per_window", 450)
         applied = "max_calls_per_window = 450" in target.read_text(encoding="utf-8")
     finally:
-        gw.REPO_ROOT, config_mod.load = orig_root, orig_load
+        config_mod.CONFIG_PATH, config_mod.load = orig_path, orig_load
         api.cfg = cfg
     check("GLM 5.x: правка лимитов из UI под валидатором — сутки ниже окна откатываются, "
           "допустимая правка применяется; config.toml репозитория не тронут",

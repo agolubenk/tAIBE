@@ -1070,7 +1070,7 @@ class Api:
         except (TypeError, ValueError):
             return {"ok": False, "error": f"значение `{raw_value}` не приводится к {kind}"}
 
-        path = REPO_ROOT / "infra/ai-council/config.toml"
+        path = config_mod.CONFIG_PATH        # конфиг — код слоя, не данные хоста
         section, _, leaf = key.rpartition(".")
         try:
             lines = path.read_text(encoding="utf-8").splitlines()

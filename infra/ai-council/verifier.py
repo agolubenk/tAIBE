@@ -31,8 +31,9 @@ from difflib import get_close_matches
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
+
+from config import REPO_ROOT  # noqa: E402 — сверяем код хоста, а не слоя
 
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 

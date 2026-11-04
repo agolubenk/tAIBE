@@ -37,6 +37,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# Код слоя — от ROOT; данные хоста (ключи, логи консилиума, .mcp.json) — от TAIBE_HOST_ROOT, без него — ROOT.
+HOST_ROOT="${TAIBE_HOST_ROOT:-$ROOT}"
 # shellcheck source=../dev/dev-common.sh
 source "$ROOT/infra/scripts/dev/dev-common.sh"
 
@@ -52,10 +54,10 @@ HR_HEADROOM_BACKUP_ROOT="${HR_HEADROOM_BACKUP_ROOT:-$HOME/.headroom-backups}"
 # Постоянный архив журнала событий (по файлу на месяц): сам Headroom хранит журнал только 30 дней.
 HR_HEADROOM_ARCHIVE="${HR_HEADROOM_ARCHIVE:-$HOME/.headroom-archive/events}"
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
-GLM_KEY_FILE="$ROOT/.claude/rag/.glm-key"
+GLM_KEY_FILE="$HOST_ROOT/.claude/rag/.glm-key"
 DASHBOARD_PORT="${AI_TOOLING_DASHBOARD_PORT:-8788}"
-DASHBOARD_PID_FILE="$ROOT/.claude/rag/.ai-tooling-dashboard.pid"
-DASHBOARD_LOG_FILE="$ROOT/.claude/rag/.ai-tooling-dashboard.log"
+DASHBOARD_PID_FILE="$HOST_ROOT/.claude/rag/.ai-tooling-dashboard.pid"
+DASHBOARD_LOG_FILE="$HOST_ROOT/.claude/rag/.ai-tooling-dashboard.log"
 COUNCIL_SUPERVISOR="$ROOT/infra/ai-council/supervisor.py"
 CONFIG_FILE="$ROOT/infra/ai-council/config.toml"
 
@@ -171,7 +173,7 @@ check_strix() {
   else
     echo "→ CLI не найден в PATH (см. infra/scripts/README.md — self-hosted Docker или cloud API app.strix.ai)"
   fi
-  if [ -f "$ROOT/infra/scripts/security/.env.strix" ]; then
+  if [ -f "$HOST_ROOT/infra/scripts/security/.env.strix" ]; then
     echo "→ профиль настроен: infra/scripts/security/.env.strix"
   else
     echo "→ профиль не настроен — cp infra/scripts/security/.env.strix.example infra/scripts/security/.env.strix"
@@ -583,12 +585,12 @@ cmd_doctor() {
 
   echo
   echo "--- SESSION (поднимаются в AI-сессии, не этим пайплайном) ---"
-  if [ -f "$ROOT/.mcp.json" ]; then
-    if python3 -c "import json; json.load(open('$ROOT/.mcp.json'))" 2>/dev/null; then
+  if [ -f "$HOST_ROOT/.mcp.json" ]; then
+    if python3 -c "import json; json.load(open('$HOST_ROOT/.mcp.json'))" 2>/dev/null; then
       echo "  ✓ .mcp.json валиден"
       # Serena и headroom живут в user-scope Claude Code, не в project .mcp.json
       for mcp_name in notion github sentry postgres-readonly; do
-        if python3 -c "import json; d=json.load(open('$ROOT/.mcp.json')); exit(0 if 'mcpServers' in d and '$mcp_name' in d['mcpServers'] else 1)" 2>/dev/null; then
+        if python3 -c "import json; d=json.load(open('$HOST_ROOT/.mcp.json')); exit(0 if 'mcpServers' in d and '$mcp_name' in d['mcpServers'] else 1)" 2>/dev/null; then
           echo "  ✓ $mcp_name: описан в mcpServers (project scope)"
         else
           echo "  ! $mcp_name: не найден в project .mcp.json"
@@ -611,7 +613,7 @@ cmd_doctor() {
 
   echo
   echo "--- OPTIONAL ---"
-  if [ -n "${NOTION_TOKEN:-}${NOTION_API_KEY:-}" ] || [ -f "$ROOT/.claude/council/.notion-key" ]; then
+  if [ -n "${NOTION_TOKEN:-}${NOTION_API_KEY:-}" ] || [ -f "$HOST_ROOT/.claude/council/.notion-key" ]; then
     echo "  ✓ Notion access (council REST/internal-integration)"
   else echo "  ! Notion: OAuth запрашивается MCP-клиентом в сессии"; fi
   if [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then echo "  ✓ GitHub token"
@@ -644,10 +646,10 @@ cmd_logs() {
   if [ -n "$svc" ]; then
     if [ "$svc" = "dashboard" ]; then
       tail -n "$lines" "$DASHBOARD_LOG_FILE" 2>/dev/null || echo "(нет лога dashboard — ещё не запускался)"
-    elif [ -f "$ROOT/.claude/council/$svc.log" ]; then
-      tail -n "$lines" "$ROOT/.claude/council/$svc.log"
+    elif [ -f "$HOST_ROOT/.claude/council/$svc.log" ]; then
+      tail -n "$lines" "$HOST_ROOT/.claude/council/$svc.log"
     else
-      echo "Нет лога '$svc' в .claude/council/ (доступны: $(ls "$ROOT/.claude/council/" 2>/dev/null | grep '\.log$' | sed 's/\.log$//' | tr '\n' ' '))"
+      echo "Нет лога '$svc' в .claude/council/ (доступны: $(ls "$HOST_ROOT/.claude/council/" 2>/dev/null | grep '\.log$' | sed 's/\.log$//' | tr '\n' ' '))"
       return 1
     fi
     return 0
@@ -655,7 +657,7 @@ cmd_logs() {
   echo "=== Dashboard ($DASHBOARD_LOG_FILE) ==="
   tail -n "$lines" "$DASHBOARD_LOG_FILE" 2>/dev/null || echo "(нет лога — dashboard ещё не запускался)"
   echo
-  for f in "$ROOT"/.claude/council/*.log; do
+  for f in "$HOST_ROOT"/.claude/council/*.log; do
     [ -f "$f" ] || continue
     echo "=== Council: $(basename "$f") (последние $lines) ==="
     tail -n "$lines" "$f"

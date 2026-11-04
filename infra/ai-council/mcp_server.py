@@ -37,14 +37,15 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(REPO_ROOT / ".claude" / "scripts"))
+sys.path.insert(0, str(HERE.parent.parent / ".claude" / "scripts"))
 
 import config as config_mod  # noqa: E402
 import glm_client  # noqa: E402
 
-PIPELINE_SCRIPT = REPO_ROOT / "infra" / "scripts" / "dev-ai" / "ai-tooling-pipeline.sh"
+# Код слоя — от своего пути; cwd дочерних процессов — корень хоста (TAIBE_HOST_ROOT).
+REPO_ROOT = config_mod.REPO_ROOT
+PIPELINE_SCRIPT = config_mod.LAYER_ROOT / "infra" / "scripts" / "dev-ai" / "ai-tooling-pipeline.sh"
 SUPERVISOR = HERE / "supervisor.py"
 
 mcp = FastMCP("AI Council")

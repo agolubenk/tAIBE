@@ -15,13 +15,17 @@ import json
 import os
 import re
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from host_root import host_root  # noqa: E402
+
+REPO_ROOT = host_root()  # ключ и маркер «сеть лежит» — у хоста (TAIBE_HOST_ROOT)
 KEY_PATH = REPO_ROOT / ".claude/rag/.glm-key"
 DOWN_MARKER = REPO_ROOT / ".claude/rag/.glm-down"
 DOWN_TTL = 600  # сек: после сетевого сбоя не дёргаем API (офлайн ≠ +30s к каждому промпту)
