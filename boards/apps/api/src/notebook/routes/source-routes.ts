@@ -9,15 +9,21 @@ import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { notebookEmbedModel } from "../../notebook-model/effective-notebook-model";
+import { addPullRequestSource } from "../sources/github-pr-source";
+import { addLinkSource } from "../sources/link-source";
 import { listSources, pruneSources } from "../sources/list-sources";
 import { syncCardSources } from "../sources/sync-card-sources";
 import { upsertSource } from "../sources/upsert-source";
 import {
+  addedSourceSchema,
+  addLinkBody,
+  addPullRequestBody,
   cardSyncSchema,
   prunedSchema,
   pruneSourcesBody,
   putSourceBody,
   SOURCE_BODY_BYTES,
+  SOURCE_URL_BODY_BYTES,
   sourcesSchema,
   upsertedSourceSchema,
   workspaceParam,
@@ -115,6 +121,69 @@ const syncCardsRoute = createRoute({
   },
 });
 
+const addLinkRoute = createRoute({
+  method: "post",
+  operationId: "addNotebookLink",
+  path: "/{workspaceId}/sources/link",
+  tags: ["Notebook"],
+  summary: "Add or refresh a web page in the notebook",
+  description:
+    "Fetches one https page a member asked for: every redirect hop and the connected address must be public, whatever KANEO_ALLOW_PRIVATE_WEBHOOK_DESTINATIONS says. HTML, Markdown and plain text only, up to 2 MB and 10 seconds. Each refusal carries its own code (LINK_*).",
+  middleware: [
+    workspaceAccess.fromParam(),
+    requireWorkspacePermission({ workspace: ["manage_settings"] }),
+    boundedRequestBody(SOURCE_URL_BODY_BYTES),
+  ] as const,
+  request: {
+    params: workspaceParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: addLinkBody } },
+    },
+  },
+  responses: {
+    200: jsonResponse("Page stored", addedSourceSchema),
+    400: errorResponse("Not an https URL"),
+    403: errorResponse("Missing workspace:manage_settings permission"),
+    413: errorResponse("The page or its text is too large"),
+    415: errorResponse("Not HTML, Markdown or plain text; PDF is refused"),
+    422: errorResponse(
+      "Private address, unreachable, timed out, error status or no text",
+    ),
+  },
+});
+
+const addPullRequestRoute = createRoute({
+  method: "post",
+  operationId: "addNotebookPullRequest",
+  path: "/{workspaceId}/sources/github-pr",
+  tags: ["Notebook"],
+  summary: "Add or refresh a GitHub pull request in the notebook",
+  description:
+    "Reads the title, description and the first 100 comments through the GitHub App. The repository must be linked by a verified integration of a project every member may open.",
+  middleware: [
+    workspaceAccess.fromParam(),
+    requireWorkspacePermission({ workspace: ["manage_settings"] }),
+    boundedRequestBody(SOURCE_URL_BODY_BYTES),
+  ] as const,
+  request: {
+    params: workspaceParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: addPullRequestBody } },
+    },
+  },
+  responses: {
+    200: jsonResponse("Pull request stored", addedSourceSchema),
+    400: errorResponse("Not a GitHub pull request URL"),
+    403: errorResponse("Missing workspace:manage_settings permission"),
+    404: errorResponse("No such pull request in the repository"),
+    422: errorResponse("The repository is not linked to this workspace"),
+    502: errorResponse("GitHub did not answer"),
+    503: errorResponse("The GitHub App is not configured"),
+  },
+});
+
 export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listSourcesRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -140,4 +209,14 @@ export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(syncCardsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     return c.json(await syncCardSources(workspaceId), 200);
+  })
+  .openapi(addLinkRoute, async (c) => {
+    const { workspaceId } = c.req.valid("param");
+    const { url } = c.req.valid("json");
+    return c.json(await addLinkSource(workspaceId, url), 200);
+  })
+  .openapi(addPullRequestRoute, async (c) => {
+    const { workspaceId } = c.req.valid("param");
+    const { url } = c.req.valid("json");
+    return c.json(await addPullRequestSource(workspaceId, url), 200);
   });

@@ -6768,6 +6768,42 @@
           "pruned"
         ]
       },
+      "NotebookAddedSource": {
+        "type": "object",
+        "properties": {
+          "sourceId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "github-pr",
+              "link"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the fetched text matched the stored one."
+          },
+          "chunks": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sourceId",
+          "kind",
+          "ref",
+          "title",
+          "changed",
+          "chunks"
+        ]
+      },
       "NotebookEmbedWork": {
         "type": "object",
         "properties": {
@@ -27796,6 +27832,248 @@
           },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/notebook/{workspaceId}/sources/link": {
+      "post": {
+        "operationId": "addNotebookLink",
+        "tags": [
+          "Notebook"
+        ],
+        "summary": "Add or refresh a web page in the notebook",
+        "description": "Fetches one https page a member asked for: every redirect hop and the connected address must be public, whatever KANEO_ALLOW_PRIVATE_WEBHOOK_DESTINATIONS says. HTML, Markdown and plain text only, up to 2 MB and 10 seconds. Each refusal carries its own code (LINK_*).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "An https page with HTML, Markdown or plain text, up to 2 MB. The same URL again refreshes it."
+                  }
+                },
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Page stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotebookAddedSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an https URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing workspace:manage_settings permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The page or its text is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not HTML, Markdown or plain text; PDF is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Private address, unreachable, timed out, error status or no text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/notebook/{workspaceId}/sources/github-pr": {
+      "post": {
+        "operationId": "addNotebookPullRequest",
+        "tags": [
+          "Notebook"
+        ],
+        "summary": "Add or refresh a GitHub pull request in the notebook",
+        "description": "Reads the title, description and the first 100 comments through the GitHub App. The repository must be linked by a verified integration of a project every member may open.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "A GitHub pull request URL, or its notebook ref owner/repo#12. The same PR again refreshes it."
+                  }
+                },
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pull request stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotebookAddedSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a GitHub pull request URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing workspace:manage_settings permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such pull request in the repository",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The repository is not linked to this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          },
+          "502": {
+            "description": "GitHub did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The GitHub App is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
