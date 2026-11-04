@@ -1150,6 +1150,32 @@ export async function startServer(
 
   injectWebSocket(server);
 
+  // A client dropping a keep-alive socket mid-read surfaces as an unhandled
+  // 'error' on the Socket and takes the whole API down (the first stand sync
+  // crashed it with ECONNRESET from its request timeouts). Connection noise
+  // is logged and served through; anything else still exits the process.
+  const connectionNoise = new Set([
+    "ECONNRESET",
+    "EPIPE",
+    "EPROTO",
+    "ECONNABORTED",
+  ]);
+  process.on("uncaughtException", (error: NodeJS.ErrnoException) => {
+    if (connectionNoise.has(error.code ?? "")) {
+      console.error(
+        "[api] connection noise, serving on:",
+        error.code,
+        error.message,
+      );
+      return;
+    }
+    console.error("[api] uncaught exception, exiting:", error);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("[api] unhandled rejection:", reason);
+  });
+
   const gracefulShutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
