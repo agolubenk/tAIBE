@@ -14,6 +14,7 @@ import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { askNotebook } from "../chat/ask-notebook";
+import { briefThread } from "../chat/brief-thread";
 import { deleteThread, listThreads, readThread } from "../chat/read-threads";
 import {
   askBody,
@@ -149,6 +150,30 @@ const askInThreadRoute = createRoute({
   },
 });
 
+const briefThreadRoute = createRoute({
+  method: "post",
+  operationId: "briefNotebookThread",
+  path: "/{workspaceId}/threads/{threadId}/brief",
+  tags: ["Notebook"],
+  summary: "Brief a notebook thread",
+  description:
+    "Asks the model for a GOAL / CONSTRAINTS / ACCEPTANCE brief of the thread's questions and answers and stores it in the thread as status brief, or brief-failed when the model returned none. The call counts under the daily budget.",
+  middleware: [
+    workspaceAccess.fromParam(),
+    requireWorkspacePermission({ workspace: ["read"] }),
+  ] as const,
+  request: { params: threadParam },
+  responses: {
+    200: jsonResponse("The stored brief", threadWithMessagesSchema),
+    403: errorResponse("Missing workspace:read permission"),
+    404: errorResponse("Notebook thread not found"),
+    409: errorResponse("No model is connected (NOTEBOOK_MODEL_NOT_CONFIGURED)"),
+    429: errorResponse(
+      "Today's model call limit is reached (NOTEBOOK_DAILY_LIMIT)",
+    ),
+  },
+});
+
 const deleteThreadRoute = createRoute({
   method: "delete",
   operationId: "deleteNotebookThread",
@@ -201,6 +226,15 @@ export const chatRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       userId: c.get("userId") ?? null,
     });
     return c.json(toThreadResponse(asked), 200);
+  })
+  .openapi(briefThreadRoute, async (c) => {
+    const { workspaceId, threadId } = c.req.valid("param");
+    const briefed = await briefThread({
+      workspaceId,
+      threadId,
+      userId: c.get("userId") ?? null,
+    });
+    return c.json(toThreadResponse(briefed), 200);
   })
   .openapi(deleteThreadRoute, async (c) => {
     const { workspaceId, threadId } = c.req.valid("param");

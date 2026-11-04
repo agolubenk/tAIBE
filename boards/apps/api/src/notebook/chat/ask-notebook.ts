@@ -7,7 +7,6 @@ import {
   notebookMessageTable,
   notebookThreadTable,
 } from "../../database/notebook-schema";
-import { chatCompletion, LlmError } from "../llm/chat-completion";
 import {
   effectiveNotebookModel,
   type NotebookModel,
@@ -15,11 +14,9 @@ import {
 import { type NotebookHit, searchNotebook } from "../search/search-notebook";
 import { buildPrompt, HISTORY_MESSAGES } from "./build-prompt";
 import { releaseCall, reserveCall } from "./call-budget";
+import { callModel } from "./call-model";
 
 export const ANSWER_SOURCES = 6;
-// R-053: a rate-limited call waits for the window instead of moving to
-// another provider; past this the reader gets the sources without waiting.
-export const RATE_LIMIT_WAIT_MAX_MS = 20_000;
 
 const titleOf = (question: string) =>
   question.length > 120 ? `${question.slice(0, 119)}…` : question;
@@ -40,7 +37,10 @@ export async function findThread(workspaceId: string, threadId: string) {
   return thread;
 }
 
-async function threadHistory(threadId: string) {
+// The thread's real exchanges in order: questions and written answers. A turn
+// without a written answer adds nothing, and a brief is not part of the talk,
+// so neither reaches a later answer or the next brief.
+export async function threadTurns(threadId: string) {
   const rows = await db
     .select({
       role: notebookMessageTable.role,
@@ -51,11 +51,13 @@ async function threadHistory(threadId: string) {
     .where(eq(notebookMessageTable.threadId, threadId))
     .orderBy(asc(notebookMessageTable.createdAt))
     .limit(200);
-  // Only real exchanges: a turn without a written answer adds nothing.
   return rows
     .filter((row) => row.role === "user" || row.status === "answered")
-    .slice(-HISTORY_MESSAGES)
     .map(({ role, content }) => ({ role, content }));
+}
+
+async function threadHistory(threadId: string) {
+  return (await threadTurns(threadId)).slice(-HISTORY_MESSAGES);
 }
 
 type Outcome = {
@@ -86,31 +88,15 @@ async function writeAnswer(
   if (!(await reserveCall(config.dailyMax))) {
     return { status: "capped", content: "", model: null };
   }
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const content = await chatCompletion(config, key, messages);
-      return { status: "answered", content, model: config.model };
-    } catch (error) {
-      const wait = error instanceof LlmError ? error.retryAfterMs : undefined;
-      if (
-        error instanceof LlmError &&
-        error.reason === "rate-limited" &&
-        attempt === 0 &&
-        wait !== undefined &&
-        wait <= RATE_LIMIT_WAIT_MAX_MS
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, wait));
-        continue;
-      }
-      const limited =
-        error instanceof LlmError && error.reason === "rate-limited";
-      return {
-        status: limited ? "rate-limited" : "failed",
-        content: "",
-        model: config.model,
-      };
-    }
+  const reply = await callModel(config, key, messages);
+  if (reply.ok) {
+    return { status: "answered", content: reply.content, model: config.model };
   }
+  return {
+    status: reply.limited ? "rate-limited" : "failed",
+    content: "",
+    model: config.model,
+  };
 }
 
 export async function askNotebook(input: {
@@ -174,11 +160,17 @@ export async function askNotebook(input: {
     })
     .returning()
     .finally(() => (outcome.model ? releaseCall() : undefined));
+  const touched = await touchThread(thread.id);
+  if (!asked || !answer) throw new Error("notebook message insert failed");
+  return { thread: touched ?? thread, messages: [asked, answer] };
+}
+
+// A new turn moves the thread to the top of the list.
+export async function touchThread(threadId: string) {
   const [touched] = await db
     .update(notebookThreadTable)
     .set({ updatedAt: sql`(now() AT TIME ZONE 'utc')` })
-    .where(eq(notebookThreadTable.id, thread.id))
+    .where(eq(notebookThreadTable.id, threadId))
     .returning();
-  if (!asked || !answer) throw new Error("notebook message insert failed");
-  return { thread: touched ?? thread, messages: [asked, answer] };
+  return touched;
 }

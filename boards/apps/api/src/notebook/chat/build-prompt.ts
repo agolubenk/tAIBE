@@ -25,7 +25,7 @@ export function sourcesBlock(hits: NotebookHit[]): string {
 // Everything here leaves for an external model: sources, history and the
 // question go through the same secret scrubber as the MCP journal (K-2, N-009),
 // so a token pasted into a card or a document never reaches the provider.
-const scrub = (text: string) => redact(text).text;
+export const scrub = (text: string) => redact(text).text;
 
 // The sources sit between fences with a fresh random code per question, so a
 // document cannot close the block or pass its text off as the rules (idea

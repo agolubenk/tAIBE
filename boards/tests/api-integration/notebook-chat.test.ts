@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import {
   afterAll,
   afterEach,
@@ -378,6 +379,123 @@ describe("API integration: notebook chat", () => {
     ]);
   });
 
+  it("stores a brief in the thread, counts it and keeps it out of later answers", async () => {
+    useLlm();
+    const brief =
+      "GOAL: Extend a card lease.\nCONSTRAINTS: none stated\nACCEPTANCE: lease renewed";
+    script = [
+      { status: 200, content: "Через час [1]." },
+      { status: 200, content: `Вот бриф:\n${brief}` },
+      { status: 200, content: "В бревно [1]." },
+    ];
+    const nb = await chatFixture();
+    const asked = await nb.owner("POST", "/threads", {
+      question: "аренда карточки",
+    });
+    const threadId = asked.body.thread.id;
+
+    const briefed = await nb.owner("POST", `/threads/${threadId}/brief`);
+    expect(briefed.status).toBe(200);
+    expect(briefed.body.thread.id).toBe(threadId);
+    expect(briefed.body.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        status: "brief",
+        content: brief,
+        model: "test-model",
+        citations: [],
+      }),
+    ]);
+    const prompt = seen[1]?.messages ?? [];
+    expect(prompt[0]?.content).toContain("GOAL: <one sentence>");
+    expect(prompt[1]?.content).toMatch(
+      /^<<<ИСТОЧНИКИ-[0-9a-f]{12}\nQ: аренда карточки\n\nA: Через час \[1\]\./,
+    );
+    expect(JSON.stringify(prompt)).not.toContain(KEY);
+
+    const status = await nb.owner("GET", "/status");
+    expect(status.body.llm.callsToday).toBe(2);
+
+    await nb.owner("POST", `/threads/${threadId}/messages`, {
+      question: "а рубка?",
+    });
+    expect(seen[2]?.messages.slice(1)).toEqual([
+      { role: "user", content: "аренда карточки" },
+      { role: "assistant", content: "Через час [1]." },
+      { role: "user", content: "а рубка?" },
+    ]);
+
+    const thread = await nb.owner("GET", `/threads/${threadId}`);
+    expect(
+      thread.body.messages.map((m: { status: string | null }) => m.status),
+    ).toEqual([null, "answered", "brief", null, "answered"]);
+  });
+
+  it("stores a reply out of format as brief-failed and still counts it", async () => {
+    useLlm();
+    script = [
+      { status: 200, content: "Через час [1]." },
+      { status: 200, content: "Аренда истекает через час." },
+      { status: 500 },
+    ];
+    const nb = await chatFixture();
+    const asked = await nb.owner("POST", "/threads", { question: "аренда" });
+    const threadId = asked.body.thread.id;
+
+    const unformatted = await nb.owner("POST", `/threads/${threadId}/brief`);
+    expect(unformatted.status).toBe(200);
+    expect(unformatted.body.messages[0]).toMatchObject({
+      status: "brief-failed",
+      content: "",
+      model: "test-model",
+    });
+    const failed = await nb.owner("POST", `/threads/${threadId}/brief`);
+    expect(failed.body.messages[0]).toMatchObject({ status: "brief-failed" });
+
+    const status = await nb.owner("GET", "/status");
+    expect(status.body.llm.callsToday).toBe(3);
+    expect(
+      await db.$count(
+        schema.notebookMessageTable,
+        eq(schema.notebookMessageTable.status, "brief"),
+      ),
+    ).toBe(0);
+  });
+
+  it("refuses a brief at the daily cap without calling the model", async () => {
+    useLlm(1);
+    const nb = await chatFixture();
+    const asked = await nb.owner("POST", "/threads", { question: "аренда" });
+    expect(asked.body.messages[1].status).toBe("answered");
+
+    const capped = await nb.owner(
+      "POST",
+      `/threads/${asked.body.thread.id}/brief`,
+    );
+    expect(capped.status).toBe(429);
+    expect(capped.body).toMatchObject({ code: "NOTEBOOK_DAILY_LIMIT" });
+    expect(seen).toHaveLength(1);
+    expect(await db.$count(schema.notebookMessageTable)).toBe(2);
+  });
+
+  it("refuses a brief without a model with a 409, not a 500", async () => {
+    const nb = await chatFixture();
+    const asked = await nb.owner("POST", "/threads", { question: "аренда" });
+
+    const refused = await nb.owner(
+      "POST",
+      `/threads/${asked.body.thread.id}/brief`,
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({
+      code: "NOTEBOOK_MODEL_NOT_CONFIGURED",
+    });
+    expect(typeof refused.body.message).toBe("string");
+    expect(seen).toHaveLength(0);
+    const status = await nb.owner("GET", "/status");
+    expect(status.body.llm.configured).toBe(false);
+  });
+
   it("lets members ask and read, leaves deleting to managers and keeps other workspaces out", async () => {
     const nb = await chatFixture();
     const [member] = await db
@@ -423,9 +541,14 @@ describe("API integration: notebook chat", () => {
       await as(member, "POST", `${thread}/messages`, { question: "рубка" }),
     ).toBe(200);
     expect(await as(member, "GET", thread)).toBe(200);
+    // Past the permission check: no model is connected here.
+    expect(await as(member, "POST", `${thread}/brief`)).toBe(409);
     expect(await as(member, "DELETE", thread)).toBe(403);
 
     expect([403, 404]).toContain(await as(other.user, "GET", thread));
+    expect([403, 404]).toContain(
+      await as(other.user, "POST", `${thread}/brief`),
+    );
     expect([403, 404]).toContain(
       await as(other.user, "POST", `${ws}/threads`, { question: "аренда" }),
     );
@@ -437,6 +560,8 @@ describe("API integration: notebook chat", () => {
         question: "аренда",
       }),
     ).toBe(404);
+    // The thread is looked up in the outsider's workspace before the model.
+    expect(await as(other.user, "POST", `${foreign}/brief`)).toBe(404);
     expect(await as(other.user, "DELETE", foreign)).toBe(404);
 
     expect(

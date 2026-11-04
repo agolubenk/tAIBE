@@ -140,7 +140,12 @@ export type NotebookMessageStatus =
   | "retrieval-only"
   | "capped"
   | "rate-limited"
-  | "failed";
+  | "failed"
+  // A GOAL/CONSTRAINTS/ACCEPTANCE brief of the thread (TB-3), and a brief
+  // call that reached the model without one: both carry the model, so both
+  // count under the daily cap.
+  | "brief"
+  | "brief-failed";
 
 // A citation keeps the source's name as it was, so the answer still reads
 // after the chunk is re-cut or its source pruned.
