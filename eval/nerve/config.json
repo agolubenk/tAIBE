@@ -1,6 +1,7 @@
 {
   "repo_root": "/Users/agolubenko/Desktop/Development/HR_Helper-v2",
   "product_tree": "supertick-eval",
+  "layer_home": "/Users/agolubenko/Desktop/Development/tAIBE/eval",
   "interval_seconds": 60,
   "sources": {
     "github": true,

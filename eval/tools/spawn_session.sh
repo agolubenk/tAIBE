@@ -45,7 +45,13 @@ MAIN="$(git -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/n
 in_tree() { if [ -e "$CWD/$1" ] || [ -z "$MAIN" ]; then echo "$CWD/$1"; else echo "$MAIN/$1"; fi; }
 # Корень дерева продукта — родитель папки скрипта: supertick-eval/ (инстанс HR) или eval/ (канонический дом).
 TREE_REL="$(basename "$(cd "$TOOLS/.." && pwd)")"
-in_tree_product() { in_tree "$TREE_REL/$1"; }
+# Дом слоя — настоящая папка скрипта, без ссылок (05.11: в хосте ссылок на tAIBE больше нет).
+LAYER="$(cd "$TOOLS/.." && pwd -P)"
+# Своя копия дерева в рабочей папке (worktree tAIBE) — её; дерево хоста через ссылку или без дерева — дом слоя:
+# геном и пусковые файлы тогда не идут через ссылку, которую снимут под живой сессией.
+in_tree_product() {
+  if [ -d "$CWD/$TREE_REL" ] && [ ! -L "$CWD/$TREE_REL" ]; then in_tree "$TREE_REL/$1"; else echo "$LAYER/$1"; fi
+}
 PROMPT_DIR="${PROMPT_DIR:-$(in_tree_product prompts/launch-3010/roles)}"
 case "$TERMINAL" in terminal|iterm|print) ;; *) die "--terminal: terminal, iterm или print" ;; esac
 

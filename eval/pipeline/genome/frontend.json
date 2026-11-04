@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/sh /Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/pipeline/reflex/now.sh"
+            "command": "/bin/sh /Users/agolubenko/Desktop/Development/tAIBE/eval/pipeline/reflex/now.sh"
           }
         ]
       }
@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/sh /Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/pipeline/reflex/now.sh"
+            "command": "/bin/sh /Users/agolubenko/Desktop/Development/tAIBE/eval/pipeline/reflex/now.sh"
           }
         ]
       },
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -I /Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/pipeline/reflex/antigen.py"
+            "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -I /Users/agolubenko/Desktop/Development/tAIBE/eval/pipeline/reflex/antigen.py"
           }
         ]
       }

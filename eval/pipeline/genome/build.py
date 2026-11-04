@@ -32,7 +32,9 @@ def instance():
     """Instance paths come from eval/nerve/config.json (the one home of instance paths, with .claude/rules):
     repo_root — the host checkout the team runs in, product_tree — where this tree sits in it (`supertick-eval`
     in the incubator instance, `eval` in the product home). Env GENOME_ROOT / GENOME_TREE override both; without
-    config the genome is built for the checkout it lives in."""
+    config the genome is built for the checkout it lives in. layer_home (env GENOME_LAYER_HOME) — where the
+    layer's eval tree lives when it is not inside the host (tAIBE's own checkout after the links in the host are
+    removed, 05.11): hooks then run the layer's reflex from there, not through a link in the host."""
     cfg = {}
     try:
         with open(os.path.join(HERE, '..', '..', 'nerve', 'config.json'), encoding='utf-8') as f:
@@ -42,11 +44,12 @@ def instance():
     root = os.environ.get('GENOME_ROOT') or cfg.get('repo_root') or main_checkout()
     tree = os.environ.get('GENOME_TREE') or cfg.get('product_tree') or os.path.basename(
         os.path.normpath(os.path.join(HERE, '..', '..')))
-    return root, tree
+    layer = os.environ.get('GENOME_LAYER_HOME') or cfg.get('layer_home') or os.path.join(root, tree)
+    return root, tree, layer
 
 
-ROOT, TREE = instance()
-REFLEX = os.path.join(ROOT, TREE, 'pipeline', 'reflex')
+ROOT, TREE, LAYER_HOME = instance()
+REFLEX = os.path.join(LAYER_HOME, 'pipeline', 'reflex')
 LOCAL_REFLEX = os.path.normpath(os.path.join(HERE, '..', 'reflex'))
 
 
