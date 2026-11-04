@@ -23,6 +23,8 @@ const KEPT_LIVE_KEYS = 3;
 // Enabled agents per owner: a bridge looping over labels cannot fill the
 // workspace with users, and every agent fits the owner's list to disable.
 export const MAX_AGENTS_PER_OWNER = 50;
+export const AGENTS_SETTINGS_PATH = "/dashboard/settings/account/agents";
+export const AGENT_CAP_MESSAGE = `the owner already has ${MAX_AGENTS_PER_OWNER} enabled agents, the most allowed, so a new session gets no agent; only the owner can disable the ones no longer working, in Settings → Account → Agents and MCP (${AGENTS_SETTINGS_PATH}); agents already on the list keep working`;
 // Better Auth's default limit for key names.
 const KEY_NAME_MAX = 32;
 
@@ -84,10 +86,9 @@ async function assertMayAddAgent(ownerId: string) {
       ),
     );
   if ((enabled?.n ?? 0) >= MAX_AGENTS_PER_OWNER) {
-    throw new ForestError(
-      "agent_forbidden",
-      `an owner keeps at most ${MAX_AGENTS_PER_OWNER} enabled agents; disable the ones no longer working`,
-    );
+    // The agent reading this cannot free a place itself (TB-72): it has to
+    // hand the owner the step, so the text names who acts and where.
+    throw new ForestError("agent_forbidden", AGENT_CAP_MESSAGE);
   }
 }
 

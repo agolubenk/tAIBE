@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 import removeWorkspaceMember from "../../apps/api/src/admin/controllers/remove-workspace-member";
 import transferWorkspaceOwnership from "../../apps/api/src/admin/controllers/transfer-workspace-ownership";
 import updateWorkspaceMemberRole from "../../apps/api/src/admin/controllers/update-workspace-member-role";
-import { MAX_AGENTS_PER_OWNER } from "../../apps/api/src/agent-identity/issue-agent-key";
+import {
+  AGENTS_SETTINGS_PATH,
+  MAX_AGENTS_PER_OWNER,
+} from "../../apps/api/src/agent-identity/issue-agent-key";
 import { auth } from "../../apps/api/src/auth";
 import db, { schema } from "../../apps/api/src/database";
 import { createApp } from "../../apps/api/src/index";
@@ -325,7 +328,9 @@ describe("API integration: an agent follows its owner (R-010)", () => {
       session: "one too many",
     });
     expect(refused.status).toBe(403);
-    expect(refused.body.message).toContain("at most");
+    // The agent cannot free a place: the text says the owner does, and where (TB-72).
+    expect(refused.body.message).toContain("only the owner can disable");
+    expect(refused.body.message).toContain(AGENTS_SETTINGS_PATH);
     // An agent that already exists keeps getting keys.
     expect(
       (await issue(key, "kimi review r010 pass2 with a long label")).status,
