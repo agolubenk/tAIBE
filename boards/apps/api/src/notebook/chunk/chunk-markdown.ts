@@ -1,8 +1,22 @@
 export type MarkdownChunk = { heading: string; text: string };
 
 export const CHUNK_MAX_CHARS = 1600;
-const HEADING = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+const HEADING = /^(#{1,6})\s+(.+)$/;
 const FENCE = /^\s*(```|~~~)/;
+
+// "## Data ##" is the heading "Data". The closing #s are cut by hand: a lazy
+// regex for them backtracks quadratically on a long line of #s, and linked
+// pages and PR bodies are written by people outside the workspace.
+export function markdownHeading(line: string) {
+  const match = HEADING.exec(line);
+  if (!match?.[1] || !match[2]) return null;
+  const text = match[2].trimEnd();
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "#") end -= 1;
+  const closed = end > 0 && /\s/.test(text[end - 1] ?? "");
+  const title = closed ? text.slice(0, end).trimEnd() : text;
+  return { level: match[1].length, title };
+}
 
 type Section = { heading: string; lines: string[] };
 
@@ -14,10 +28,10 @@ function sections(markdown: string): Section[] {
   let fenced = false;
   for (const line of markdown.replace(/\r\n?/g, "\n").split("\n")) {
     if (FENCE.test(line)) fenced = !fenced;
-    const match = fenced ? null : HEADING.exec(line);
-    if (match?.[1] && match[2]) {
-      path.length = match[1].length - 1;
-      path[match[1].length - 1] = match[2];
+    const heading = fenced ? null : markdownHeading(line);
+    if (heading) {
+      path.length = heading.level - 1;
+      path[heading.level - 1] = heading.title;
       out.push({ heading: path.filter(Boolean).join(" › "), lines: [] });
       continue;
     }

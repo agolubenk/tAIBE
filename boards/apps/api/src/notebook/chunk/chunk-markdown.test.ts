@@ -44,4 +44,20 @@ describe("chunkMarkdown", () => {
     ]);
     expect(chunkMarkdown("")).toEqual([]);
   });
+
+  it("cuts a closing run of #s only after a space", () => {
+    expect(
+      chunkMarkdown("## Data ##\n\nRows.\n\n## C#\n\nCode.").map(
+        (chunk) => chunk.heading,
+      ),
+    ).toEqual(["Data", "C#"]);
+  });
+
+  // The lazy heading regex took minutes on such a line (quadratic).
+  it("reads a long line of #s in linear time", () => {
+    const line = `# x${"#".repeat(400_000)}y`;
+    const started = performance.now();
+    expect(chunkMarkdown(`${line}\n\nText`)[0]?.heading).toBe(line.slice(2));
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
 });
