@@ -96,6 +96,10 @@
 Фазы M0–M7 — [`multi-product.md`](multi-product.md). M0 — разделение HR и tAIBE на Mac владельца
 (`docs/ops/split-hr-taibe.md`, скрипты `infra/scripts/split/`), исполнитель — GLM, 02.11.
 
+**Осталось до самостоятельного tAIBE** (указание владельца 03.11 21:10: HR без `t-boards/`, `supertick-eval/`,
+`eval/` и ссылок; tAIBE сам собирается, тестируется и разворачивается; данные без потерь) — единый чек-лист
+[`standalone-checklist.md`](standalone-checklist.md): данные → сервисы Mac → слой HR → сам tAIBE → снятие ссылок.
+
 ## Этап 2 и банк идей
 
 Перманентные вопросы П1–П5 (R-100–R-105), библиотека/хаб (R-060, R-061 — `docs/plans/evolution-ideas.md` §2),
