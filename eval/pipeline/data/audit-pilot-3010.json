@@ -1,0 +1,212 @@
+{
+ "money": {
+  "вход": 0.0011199999999999977,
+  "запись кэша 5 мин": 0.0,
+  "запись кэша 1 ч": 5.391184000000002,
+  "чтение кэша": 3.5217248000000003,
+  "выход": 2.5559800000000013
+ },
+ "cold": {
+  "старт": {
+   "n": 1,
+   "usd": 0.436512
+  },
+  "прочее": {
+   "n": 3,
+   "usd": 2.4029040000000004
+  },
+  "сжатие": {
+   "n": 1,
+   "usd": 0.479032
+  }
+ },
+ "held": {
+  "хук:SessionStart": {
+   "n": 2,
+   "tok": 8869,
+   "tail_tok": 694619
+  },
+  "сообщение:человек/прочее": {
+   "n": 1,
+   "tok": 45,
+   "tail_tok": 3195
+  },
+  "вложение:skill_listing": {
+   "n": 3,
+   "tok": 3073,
+   "tail_tok": 235815
+  },
+  "хук:UserPromptSubmit": {
+   "n": 5,
+   "tok": 1912,
+   "tail_tok": 134517
+  },
+  "вложение:instructions": {
+   "n": 2,
+   "tok": 28434,
+   "tail_tok": 1009407
+  },
+  "хук:PreToolUse": {
+   "n": 31,
+   "tok": 1066,
+   "tail_tok": 55789
+  },
+  "результат:Bash": {
+   "n": 107,
+   "tok": 50682,
+   "tail_tok": 2460687
+  },
+  "результат:Read": {
+   "n": 5,
+   "tok": 9750,
+   "tail_tok": 652230
+  },
+  "результат:ToolSearch": {
+   "n": 4,
+   "tok": 0,
+   "tail_tok": 0
+  },
+  "результат:mcp:plugin_claude-mem_mcp-search": {
+   "n": 3,
+   "tok": 1530,
+   "tail_tok": 50507
+  },
+  "вложение:nested_memory": {
+   "n": 6,
+   "tok": 7506,
+   "tail_tok": 499149
+  },
+  "результат:Write": {
+   "n": 25,
+   "tok": 1517,
+   "tail_tok": 36027
+  },
+  "результат:Edit": {
+   "n": 1,
+   "tok": 66,
+   "tail_tok": 990
+  },
+  "результат:mcp:plugin_context-mode_context-mode": {
+   "n": 1,
+   "tok": 940,
+   "tail_tok": 68620
+  },
+  "результат:mcp:plugin_playwright_playwright": {
+   "n": 14,
+   "tok": 4970,
+   "tail_tok": 263043
+  },
+  "результат:TaskStop": {
+   "n": 2,
+   "tok": 344,
+   "tail_tok": 12040
+  },
+  "сообщение:монитор/фон": {
+   "n": 1,
+   "tok": 117,
+   "tail_tok": 3042
+  }
+ },
+ "ups_by_wake": {
+  "человек/прочее": {
+   "n": 2,
+   "tok": 1873
+  },
+  "сжатие": {
+   "n": 2,
+   "tok": 26
+  },
+  "монитор/фон": {
+   "n": 1,
+   "tok": 13
+  }
+ },
+ "hook_src": {
+  "SessionStart/context_window_protection": {
+   "n": 2,
+   "tok": 8869
+  },
+  "UserPromptSubmit/без тега": {
+   "n": 4,
+   "tok": 52
+  },
+  "UserPromptSubmit/dams-context": {
+   "n": 1,
+   "tok": 1860
+  },
+  "PreToolUse/context_guidance": {
+   "n": 2,
+   "tok": 315
+  },
+  "PreToolUse/без тега": {
+   "n": 28,
+   "tok": 677
+  },
+  "PreToolUse/pkg": {
+   "n": 1,
+   "tok": 74
+  }
+ },
+ "nested": {
+  "t-boards/app-pilot/CLAUDE.md": {
+   "n": 2,
+   "tok": 142,
+   "dup": 0
+  },
+  "t-boards/app-pilot/AGENTS.md": {
+   "n": 2,
+   "tok": 3224,
+   "dup": 0
+  },
+  ".claude/rules/06-testing.md": {
+   "n": 2,
+   "tok": 4140,
+   "dup": 0
+  }
+ },
+ "instr": {
+  "~/.claude/CLAUDE.md": 4918,
+  "CLAUDE.md": 8732,
+  ".claude/rules/00-antipatterns.md": 7004,
+  ".claude/rules/00-task-ingress.md": 1544,
+  ".claude/rules/01-base.md": 2116,
+  "CLAUDE.local.md": 3526,
+  "~/.claude/projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2/memory/MEMORY.md": 594
+ },
+ "tools": {
+  "Bash": 107,
+  "Read": 5,
+  "ToolSearch": 4,
+  "mcp:plugin_claude-mem_mcp-search": 3,
+  "Write": 25,
+  "Edit": 1,
+  "mcp:plugin_context-mode_context-mode": 1,
+  "mcp:plugin_playwright_playwright": 14,
+  "TaskStop": 2
+ },
+ "skills": {},
+ "models": {
+  "claude-opus-5-5": 140,
+  "<synthetic>": 1
+ },
+ "base": [
+  54566
+ ],
+ "sessions": 1,
+ "calls": 141,
+ "ctx_avg": 129665,
+ "observer": {
+  "files": 137,
+  "calls": 137,
+  "money": {
+   "вход": 0.001644000000000003,
+   "запись кэша 5 мин": 0.0,
+   "запись кэша 1 ч": 11.210360000000005,
+   "чтение кэша": 0.012484799999999999,
+   "выход": 8.916319999999995
+  },
+  "models": {
+   "claude-haiku-4-5-20251001": 137
+  }
+ }
+}

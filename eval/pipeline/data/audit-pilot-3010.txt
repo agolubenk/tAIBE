@@ -1,0 +1,32 @@
+Окно 29.10 20:00 – 30.10 09:00: сессий 1, вызовов 141, $11.5, средний контекст 129,665; модели: claude-opus-5-5 140, <synthetic> 1
+1. Деньги: запись кэша 1 ч $5.4 (47.0%) · чтение кэша $3.5 (30.7%) · выход $2.6 (22.3%) · вход $0.0 (0.0%) · запись кэша 5 мин $0.0 (0.0%)
+   Холодные вызовы по причине: прочее 3 = $2.4 (20.9%) · сжатие 1 = $0.5 (4.2%) · старт 1 = $0.4 (3.8%)
+2. Что лежит в контексте: n · токены · хвост · $ хвоста по чтению кэша Opus
+   результат:Bash                        107 ·     50,682 ·      2,460,687 · $    0.5
+   вложение:instructions                   2 ·     28,434 ·      1,009,407 · $    0.2
+   хук:SessionStart                        2 ·      8,869 ·        694,619 · $    0.1
+   результат:Read                          5 ·      9,750 ·        652,230 · $    0.1
+   вложение:nested_memory                  6 ·      7,506 ·        499,149 · $    0.1
+   результат:mcp:plugin_playwright_playwright     14 ·      4,970 ·        263,043 · $    0.1
+   вложение:skill_listing                  3 ·      3,073 ·        235,815 · $    0.0
+   хук:UserPromptSubmit                    5 ·      1,912 ·        134,517 · $    0.0
+   результат:mcp:plugin_context-mode_context-mode      1 ·        940 ·         68,620 · $    0.0
+   хук:PreToolUse                         31 ·      1,066 ·         55,789 · $    0.0
+   результат:mcp:plugin_claude-mem_mcp-search      3 ·      1,530 ·         50,507 · $    0.0
+   результат:Write                        25 ·      1,517 ·         36,027 · $    0.0
+   результат:TaskStop                      2 ·        344 ·         12,040 · $    0.0
+   сообщение:человек/прочее                1 ·         45 ·          3,195 · $    0.0
+   сообщение:монитор/фон                   1 ·        117 ·          3,042 · $    0.0
+   результат:Edit                          1 ·         66 ·            990 · $    0.0
+   итого хвост учтённого $1.2 из чтения кэша $3.5
+3. UserPromptSubmit по причине хода: человек/прочее 2/1,873т · сжатие 2/26т · монитор/фон 1/13т
+   Источники вставок хуков (событие, первый тег): SessionStart/context_window_protection 2/8,869т · UserPromptSubmit/dams-context 1/1,860т · PreToolUse/без тега 28/677т · PreToolUse/context_guidance 2/315т · PreToolUse/pkg 1/74т · UserPromptSubmit/без тега 4/52т
+4. nested_memory по файлу (n · токены · из них повтор в том же контексте); повторы всего 0т
+   .claude/rules/06-testing.md                             2 ·     4,140 ·         0
+   t-boards/app-pilot/AGENTS.md                            2 ·     3,224 ·         0
+   t-boards/app-pilot/CLAUDE.md                            2 ·       142 ·         0
+   instructions по файлу (токены за окно): CLAUDE.md 8,732 · .claude/rules/00-antipatterns.md 7,004 · ~/.claude/CLAUDE.md 4,918 · CLAUDE.local.md 3,526 · .claude/rules/01-base.md 2,116 · .claude/rules/00-task-ingress.md 1,544 · ~/.claude/projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2/memory/MEMORY.md 594
+5. Инструменты: Bash 107, Write 25, mcp:plugin_playwright_playwright 14, Read 5, ToolSearch 4, mcp:plugin_claude-mem_mcp-search 3, TaskStop 2, Edit 1, mcp:plugin_context-mode_context-mode 1
+   скиллы: —
+6. Первый вызов сессии: мин 54,566 · медиана 54,566 · макс 54,566 (сессий 1)
+7. Наблюдатель claude-mem: сессий 137, вызовов 137, $20.1 по прайсу; модели: claude-haiku-4-5-20251001 137
