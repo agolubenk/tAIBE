@@ -53,6 +53,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash|Monitor|Edit|Write|MultiEdit|NotebookEdit|mcp__.*(github|owner-queue|context-mode|serena).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-merge-guard.py\" || true",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

@@ -78,6 +78,8 @@ eval/swarm/state/
 .claude/settings.local.json
 .claude/pipeline-settings.json
 .claude/settings.local.json.bak-*
+# merge-guard: список сессий «Контроля» этой машины (правит владелец после раскладки сессий)
+.claude/merge-guard.local.json
 .claude/skill-observations/
 .claude/scheduled_tasks.lock
 CLAUDE.local.md
