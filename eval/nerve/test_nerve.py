@@ -445,5 +445,20 @@ class EmitTest(unittest.TestCase):
                 self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
 
 
+class RoleNumberingTest(unittest.TestCase):
+    """Role numbers live in two places: team.roles here and role_num() in spawn_session.sh. If only one changes,
+    «emit 4» silently reaches a different role than the session launched as role 4."""
+
+    def test_spawn_session_role_num_matches_team_roles(self):
+        import re
+        path = os.path.join(HERE, "..", "tools", "spawn_session.sh")
+        with open(path, encoding="utf-8") as f:
+            body = re.search(r"^role_num\(\) \{\n(.*?)^\}", f.read(), re.S | re.M)
+        self.assertIsNotNone(body, f"role_num() not found in {path}")
+        numbered = {key: int(n) for key, n in re.findall(r"(\w+)\) echo (\d+)", body.group(1))}
+        expected = {key: i for i, key in enumerate(CFG["team"]["roles"], 1)}
+        self.assertEqual(numbered, expected)
+
+
 if __name__ == "__main__":
     unittest.main()
