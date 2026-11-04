@@ -94,12 +94,15 @@ ensure_secrets() {
     chown 1001:1001 "$ROOT/secrets/$name"
     chmod 0400 "$ROOT/secrets/$name"
   done
-  for optional in notion_token notebook_llm_key; do
+  for optional in notion_token notebook_llm_key claude_mem_proxy_token; do
     if [ -f "$ROOT/secrets/$optional" ]; then
       chown 1001:1001 "$ROOT/secrets/$optional"
       chmod 0400 "$ROOT/secrets/$optional"
     fi
   done
+  # The Mac owns the memory proxy token (OPS-19): it is delivered, never made here.
+  [ -s "$ROOT/secrets/claude_mem_proxy_token" ] ||
+    log "ВНИМАНИЕ: нет secrets/claude_mem_proxy_token — app читает память без токена, это работает, только пока прокси Mac в режиме раскатки; доставка — mac/memory-token-push.sh"
 }
 
 write_files() {

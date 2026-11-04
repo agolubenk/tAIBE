@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_WORKER_HOST,
   DEFAULT_WORKER_PORT,
+  resolveProxyToken,
   resolveWorkerUrl,
 } from "./settings.js";
 
@@ -104,5 +105,39 @@ describe("resolveWorkerUrl with an empty env var", () => {
           }),
       }),
     ).toBe("http://10.0.0.2:4888");
+  });
+});
+
+describe("resolveProxyToken", () => {
+  it("reads and trims the file named by CLAUDE_MEM_PROXY_TOKEN_FILE", () => {
+    const seen: string[] = [];
+    const token = resolveProxyToken({
+      env: { CLAUDE_MEM_PROXY_TOKEN_FILE: "/run/tb-secrets/synthetic" },
+      readFile: (path) => {
+        seen.push(path);
+        return "synthetic-proxy-token\n";
+      },
+    });
+    expect(token).toBe("synthetic-proxy-token");
+    expect(seen).toEqual(["/run/tb-secrets/synthetic"]);
+  });
+
+  it("gives nothing without the variable and reads no file", () => {
+    const seen: string[] = [];
+    const token = resolveProxyToken({
+      env: { CLAUDE_MEM_PROXY_TOKEN_FILE: " " },
+      readFile: (path) => {
+        seen.push(path);
+        return "synthetic-proxy-token";
+      },
+    });
+    expect(token).toBeUndefined();
+    expect(seen).toEqual([]);
+  });
+
+  it("gives nothing for a missing or empty file (rollout mode)", () => {
+    const env = { CLAUDE_MEM_PROXY_TOKEN_FILE: "/run/tb-secrets/synthetic" };
+    expect(resolveProxyToken({ env, readFile: noFile })).toBeUndefined();
+    expect(resolveProxyToken({ env, readFile: () => "\n" })).toBeUndefined();
   });
 });

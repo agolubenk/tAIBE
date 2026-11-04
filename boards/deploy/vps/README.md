@@ -41,7 +41,8 @@ the tunnel:
   Mac's claude-mem proxy (`CLAUDE_MEM_WORKER_HOST:PORT` from `/opt/t-boards/.env`), and only its replies come back.
   postgres and backup on the same bridge and other containers cannot reach it, nor the Mac's other ports. The VPS
   host and host-network containers cannot reach the proxy either (chain `TB-WG-OUT` in `OUTPUT`); the Mac's other
-  ports stay open to them, as before. After changing that address in `.env`, re-run
+  ports stay open to them, as before. Behind the filter the proxy also asks for a token (see «Memory proxy token»).
+  After changing that address in `.env`, re-run
   `wg-setup.sh` with the Mac's key; `install.sh` warns while the rules disagree and stops if the app did not get its
   address (subnet `10.78.0.0/28` taken).
 
@@ -66,6 +67,8 @@ the tunnel:
 | `mac/backup-agent.sh` | Mac | `key` / `install` / `remove` for the pull key and the LaunchAgent, which runs every 2 h |
 | `mac/pull-backup.sh` | Mac, launchd | Pulls `latest.dump`, checks the `PGDMP` header, skips duplicates, keeps 14 days |
 | `mac/restore-check.sh` | Mac | AC-004: restores a dump into a throwaway Postgres and prints the row counts |
+| `mac/memory-agent.sh` | Mac | `token` / `install` / `check` / `remove` for the read-only claude-mem proxy `mac/memory-proxy.mjs` (LaunchAgent). `token` makes `~/.t-boards-memory/proxy_token` once (600, directory 700) and never prints it. `check` expects 401 without the header, 200 with it and 405 for POST; without the token file, 200 and 405 |
+| `mac/memory-token-push.sh` | Mac | `memory-token-push.sh <vps host>` sends that token to `secrets/claude_mem_proxy_token` on ssh's stdin (never argv, stdout or history), then `up -d app` |
 | `selftest.sh` | Mac | Proves the whole kit locally before a delivery |
 
 ## Secrets
@@ -80,11 +83,46 @@ environment variables (N-007).
 | `settings_key` | 0400, owner 1001. Seals the notebook model key an instance admin saves in the settings |
 | `notion_token` | 0400, owner 1001. Optional: the owner puts it there |
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
+| `claude_mem_proxy_token` | 0400, owner 1001. The Mac memory proxy token (OPS-19). The Mac owns it: `mac/memory-agent.sh token` makes it, `mac/memory-token-push.sh` delivers it. `install.sh` never makes it and warns while it is missing. The app reads it on every request |
 
 `install.sh` generates the first three once and never overwrites them. The database password only takes effect when the
 volume is first initialised. A replaced `settings_key` leaves the saved model key unreadable: the admin enters it again.
 The app reads `settings_key` once at start, so a new one needs `docker compose -p t-boards up -d app`; anything shorter
 than 32 characters counts as no key.
+
+## Memory proxy token
+
+The tunnel filter lets only the app open connections to the Mac's claude-mem proxy, but it cannot see past the VPS
+host: root there, or anything with a raw socket in the host's network, can still talk to the proxy. So the proxy
+also wants the header `x-cmem-proxy-token` (OPS-19). It compares it in constant time and answers 401 with an empty
+body when the header is missing or wrong. The peer allowlist and the GET-only rule stay as they were. The proxy reads
+`~/.t-boards-memory/proxy_token` (`CMEM_PROXY_TOKEN_FILE`) at start. Without that file it runs as before and logs one
+warning (rollout mode). A file that is there but unreadable or shorter than 32 characters stops it. The app reads
+`/run/tb-secrets/claude_mem_proxy_token` (`CLAUDE_MEM_PROXY_TOKEN_FILE`) on every request and sends no header while it
+is missing. Neither side logs the token.
+
+Rollout, in this order (the app must send the header before the proxy asks for it):
+
+1. Mac: `boards/deploy/vps/mac/memory-agent.sh token`. The running proxy does not change yet.
+2. Mac: `boards/deploy/vps/mac/memory-token-push.sh <vps host>`.
+3. Deploy the b16 bundle (`install.sh`). The app sends the header, and the proxy still accepts reads without it.
+4. Mac: `memory-agent.sh install`. The proxy restarts and now requires the token; its `check` prints 401 / 200 / 405.
+5. Acceptance, on the VPS in `/opt/t-boards`:
+   - `docker inspect t-boards-tls-1 --format '{{.HostConfig.CapDrop}}'` shows `[NET_RAW]`. Every host-network container
+     and its dropped capabilities:
+     `docker ps -q | xargs docker inspect --format '{{.Name}} {{.HostConfig.NetworkMode}} {{.HostConfig.CapDrop}}' | awk '$2 == "host"'`;
+   - from the host, `curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://10.77.0.2:37702/api/health` prints `000`,
+     because `TB-WG-OUT` drops it. If it ever gets an answer, that answer must be 401;
+   - from the app without the header, 401:
+     `docker compose -p t-boards exec -T app node -e 'fetch("http://10.77.0.2:37702/api/health").then(r => console.log(r.status))'`;
+   - the app reads memory, 200:
+     `docker compose -p t-boards exec -T app node -e 'const t = require("fs").readFileSync(process.env.CLAUDE_MEM_PROXY_TOKEN_FILE, "utf8").trim(); fetch("http://10.77.0.2:37702/api/health", { headers: { "x-cmem-proxy-token": t } }).then(r => console.log(r.status))'`.
+     A card's memory is no longer marked stale.
+   - A repeated `install.sh` leaves the file in `secrets/` as it is.
+
+Rollback: on the Mac `rm ~/.t-boards-memory/proxy_token && boards/deploy/vps/mac/memory-agent.sh install`. The
+proxy is back in rollout mode, and the app's header no longer matters. Rotation: delete the Mac file, then run
+`token`, `memory-token-push.sh` and `install` again. Between the push and the restart, reads get 401 for a few seconds.
 
 ## Notion mirror
 
@@ -124,5 +162,9 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
 - A device without `/etc/hosts` (a phone) needs a DNS override for the subdomain. There is no DNS server in the
   tunnel yet.
 - The backup pull key accepts only `10.77.0.2`, the first peer. The Mac has to be added first.
+- The memory proxy token travels as plain HTTP inside the tunnel. Whoever can listen on wg0 on the VPS can read it:
+  root on the host, or a host-network container with `NET_RAW`. The `tls` container drops `NET_RAW`. The product's
+  own host-network containers are outside this kit; the acceptance command above lists them. Root on the VPS can also
+  read the secret file itself.
 - From the VPS itself, `10.77.0.1:443` reaches the edge nginx: Docker's OUTPUT DNAT takes it. Local clients on the
   VPS (bot, runner) use `10.77.0.1:8443` or `127.0.0.1:5180`.

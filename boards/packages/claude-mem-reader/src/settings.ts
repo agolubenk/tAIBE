@@ -82,3 +82,25 @@ export function resolveWorkerUrl(
   const host = hostRaw ?? DEFAULT_WORKER_HOST;
   return `http://${host}:${validPort}`;
 }
+
+export type ResolveProxyTokenOptions = {
+  /** Defaults to process.env. */
+  env?: Record<string, string | undefined>;
+  /** Defaults to a readFileSync wrapper that returns undefined on any error. */
+  readFile?: (path: string) => string | undefined;
+};
+
+/**
+ * The token of the Mac's read-only memory proxy (OPS-19), from the file named
+ * by CLAUDE_MEM_PROXY_TOKEN_FILE. Read on every call, so a delivered or
+ * rotated file needs no restart. No variable, no file or an empty file gives
+ * undefined: requests go without the header, the proxy's rollout mode.
+ */
+export function resolveProxyToken(
+  options: ResolveProxyTokenOptions = {},
+): string | undefined {
+  const env = options.env ?? process.env;
+  const path = nonEmpty(env.CLAUDE_MEM_PROXY_TOKEN_FILE);
+  if (!path) return undefined;
+  return nonEmpty((options.readFile ?? defaultReadFile)(path));
+}
