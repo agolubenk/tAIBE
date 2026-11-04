@@ -46,6 +46,14 @@ if [ -f "$ROOT/.git" ]; then
 fi
 SERVE_ROOT="$MAIN_ROOT"
 if [ "${MCP_HUB_ALLOW_WORKTREE:-}" = 1 ]; then SERVE_ROOT="$ROOT"; fi
+# Что индексирует serena: код продукта. Хаб слоя tAIBE обслуживает продукт-хост — TAIBE_HOST_ROOT
+# (абсолютный путь, тот же, что у ai-council и dams-rag); без него — обслуживаемая копия, как раньше.
+HOST_ROOT="${TAIBE_HOST_ROOT:-$SERVE_ROOT}"
+case "$HOST_ROOT" in
+  /*) [ -d "$HOST_ROOT" ] || { echo "✗ TAIBE_HOST_ROOT=$HOST_ROOT: каталога нет" >&2; exit 1; } ;;
+  *) echo "✗ TAIBE_HOST_ROOT=$HOST_ROOT: нужен абсолютный путь" >&2; exit 1 ;;
+esac
+HOST_ROOT="$(cd "$HOST_ROOT" && pwd)"
 
 HUB_PORT="${MCP_HUB_PORT:-3050}"
 SERENA_PORT="${SERENA_HTTP_PORT:-9121}"
@@ -98,7 +106,7 @@ source "$SCRIPT_DIR/lib/mcp-hub-autostart.sh"
 # Узнаём по командной строке, а не только по pid-файлу: сироты прошлых запусков pid-файла не
 # имеют, а pid из файла после смерти процесса может достаться чужому.
 #   serena — программа uv/uvx (обёртка) или serena (python), `serena start-mcp-server … --port <порт>`;
-#            строго (усыновить сироту, остановить лишнюю) — ещё `--project <SERVE_ROOT>` и
+#            строго (усыновить сироту, остановить лишнюю) — ещё `--project <HOST_ROOT>` и
 #            HTTP-транспорт: stdio-serena клиентов и serena других проектов не трогаем никогда;
 #   hub    — программа 1mcp, `1mcp serve --config <наш mcp.json> … --port <порт>`.
 # Программа — argv[0], а у интерпретатора (sh/bash/node/python) — его скрипт, argv[1]. Без этого
@@ -128,7 +136,7 @@ cmd_matches() { # <serena|hub> <strict|loose> <командная строка>
   esac
   case "$1:${prog##*/}" in serena:uv | serena:uvx | serena:serena | hub:1mcp) ;; *) return 1 ;; esac
   if [ "$1" = hub ] || [ "$2" = loose ]; then return 0; fi
-  case "$cmd" in *" --project $SERVE_ROOT "*) ;; *) return 1 ;; esac
+  case "$cmd" in *" --project $HOST_ROOT "*) ;; *) return 1 ;; esac
   case "$cmd" in *" --transport streamable-http "*) return 0 ;; esac
   return 1
 }
@@ -143,15 +151,16 @@ start_wait_of() { if [ "$1" = serena ]; then echo "$SERENA_START_WAIT"; else ech
 # Какую копию репо обслуживает процесс: serena — `--project`, хаб — рабочий каталог (spawn_hub
 # запускает его из SERVE_ROOT, там же HR_HELPER_ROOT его stdio-серверов). Пусто — та, что нужна.
 project_problem() { # <kind> <pid>
-  local p
+  local p want="$SERVE_ROOT"
   if [ "$1" = serena ]; then
+    want="$HOST_ROOT"
     p=" $(proc_cmd "$2") "
     case "$p" in *" --project "*) p="${p#* --project }" && p="${p%% *}" ;; *) p="" ;; esac
   else
     p="$(lsof -a -p "$2" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n 1p || true)"
   fi
-  if [ -z "$p" ] || [ "$p" = "$SERVE_ROOT" ]; then return 0; fi
-  if [ "$1" = serena ]; then printf 'индексирует %s, а не %s' "$p" "$SERVE_ROOT"; else printf 'запущен из %s, а не из %s' "$p" "$SERVE_ROOT"; fi
+  if [ -z "$p" ] || [ "$p" = "$want" ]; then return 0; fi
+  if [ "$1" = serena ]; then printf 'индексирует %s, а не %s' "$p" "$want"; else printf 'запущен из %s, а не из %s' "$p" "$SERVE_ROOT"; fi
   if [ ! -d "$p" ]; then printf ' (этого каталога уже нет)'; fi
   echo
 }
@@ -270,7 +279,7 @@ spawn_serena() {
   rotate_log "$SERENA_LOG"
   cd "$SERVE_ROOT"
   spawn_detached "$SERENA_LOG" "$UVX" --from git+https://github.com/oraios/serena serena start-mcp-server \
-    --project "$SERVE_ROOT" --context claude-code \
+    --project "$HOST_ROOT" --context claude-code \
     --transport streamable-http --host 127.0.0.1 --port "$SERENA_PORT" \
     --open-web-dashboard False
   echo "$SPAWNED_PID" >"$SERENA_PID_FILE"
