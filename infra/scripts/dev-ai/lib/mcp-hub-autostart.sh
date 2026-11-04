@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Автозапуск хаба и serena при входе в систему. Подключается из mcp-hub.sh (source): нужны SERVE_ROOT,
-# CONFIG_DIR, LOG_DIR.
+# HOST_ROOT, CONFIG_DIR, LOG_DIR.
 #
 #   LaunchAgent (RunAtLoad) → open «HR Helper MCP Hub.app» → mcp-hub.sh start
 #
@@ -73,6 +73,8 @@ autostart_command() { # <PATH>
   local log
   log="$(autostart_log)"
   printf 'export PATH=%q; ' "$1"
+  # Хост продукта (TAIBE_HOST_ROOT) — в саму команду: без него вход в систему поднял бы serena на коде слоя.
+  if [ "$HOST_ROOT" != "$SERVE_ROOT" ]; then printf 'export TAIBE_HOST_ROOT=%q; ' "$HOST_ROOT"; fi
   printf 'l=%q; if [ "$(stat -f%%z "$l" 2>/dev/null || echo 0)" -gt %d ]; then ' "$log" "$AUTOSTART_LOG_MAX"
   printf 'tail -c 262144 "$l" >"$l.1" && cat "$l.1" >"$l"; rm -f "$l.1"; fi; exec >>"$l" 2>&1; '
   printf 'echo "== $(date "+%%F %%T") автозапуск"; '

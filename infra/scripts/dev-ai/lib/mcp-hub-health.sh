@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # MCP-хаб: команды только на чтение — status, check, logs. Ничего не запускают, не останавливают и
 # не берут под управление. Подключается через source из infra/scripts/dev-ai/mcp-hub.sh и пользуется
-# его переменными (ROOT, SERVE_ROOT, CONFIG_DIR, SERENA_PORT, HUB_PORT, SERENA_LOG, HUB_LOG) и
+# его переменными (ROOT, SERVE_ROOT, HOST_ROOT, CONFIG_DIR, SERENA_PORT, HUB_PORT, SERENA_LOG, HUB_LOG) и
 # функциями (pidfile_pid, our_roots, is_ours, project_problem, render_config, port_of).
 
 # Отвечают ли serena (initialize по MCP) и хаб (/health/mcp). Код 1 — если хоть один не ответил.
@@ -43,6 +43,7 @@ PY
 cmd_status() {
   local kind pid port tty root listener problem
   if [ "$ROOT" != "$SERVE_ROOT" ]; then echo "  (общие хаб и serena обслуживают основную папку $SERVE_ROOT)"; fi
+  if [ "$HOST_ROOT" != "$SERVE_ROOT" ]; then echo "  (serena индексирует продукт-хост $HOST_ROOT — TAIBE_HOST_ROOT)"; fi
   for kind in serena hub; do
     port="$(port_of "$kind")"
     listener="$(port_listener "$port")"
