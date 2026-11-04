@@ -1,4 +1,8 @@
-import { SOURCE_TEXT_MAX } from "../routes/schema";
+import {
+  FETCHED_SOURCE_CHUNKS_MAX,
+  SOURCE_TEXT_MAX,
+  SOURCE_URL_MAX,
+} from "../routes/schema";
 import { fetchLink, linkRefusal } from "./link-fetch";
 import { linkSourceText } from "./link-text";
 import { upsertSource } from "./upsert-source";
@@ -23,6 +27,11 @@ export function linkRef(input: string) {
     );
   }
   url.hash = "";
+  // The ref is the encoded href, which can grow several times longer than
+  // what was typed; a refresh sends it back through the same limit.
+  if (url.href.length > SOURCE_URL_MAX) {
+    throw linkRefusal(400, "LINK_INVALID_URL", "The link is too long.");
+  }
   return url;
 }
 
@@ -49,6 +58,7 @@ export async function addLinkSource(workspaceId: string, input: string) {
     ref: url.href,
     title: page.title,
     text: page.text,
+    maxChunks: FETCHED_SOURCE_CHUNKS_MAX,
   });
   return { ...stored, kind: "link" as const, ref: url.href, title: page.title };
 }

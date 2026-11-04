@@ -1,7 +1,13 @@
 export type MarkdownChunk = { heading: string; text: string };
 
 export const CHUNK_MAX_CHARS = 1600;
-const HEADING = /^(#{1,6})\s+(.+)$/;
+// [ \t] and the s flag: with \s a line ending in U+2028 (whitespace that "."
+// does not match) backtracked quadratically, 40 000 characters took 0.8 s.
+const HEADING = /^(#{1,6})[ \t]+(\S.*)$/s;
+// Every chunk under a heading copies its whole path, so a 250 000-character
+// heading over thousands of sections would fill the heap.
+const HEADING_TITLE_MAX = 200;
+const HEADING_PATH_MAX = 500;
 const FENCE = /^\s*(```|~~~)/;
 
 // "## Data ##" is the heading "Data". The closing #s are cut by hand: a lazy
@@ -15,7 +21,7 @@ export function markdownHeading(line: string) {
   while (end > 0 && text[end - 1] === "#") end -= 1;
   const closed = end > 0 && /\s/.test(text[end - 1] ?? "");
   const title = closed ? text.slice(0, end).trimEnd() : text;
-  return { level: match[1].length, title };
+  return { level: match[1].length, title: title.slice(0, HEADING_TITLE_MAX) };
 }
 
 type Section = { heading: string; lines: string[] };
@@ -32,7 +38,10 @@ function sections(markdown: string): Section[] {
     if (heading) {
       path.length = heading.level - 1;
       path[heading.level - 1] = heading.title;
-      out.push({ heading: path.filter(Boolean).join(" › "), lines: [] });
+      out.push({
+        heading: path.filter(Boolean).join(" › ").slice(0, HEADING_PATH_MAX),
+        lines: [],
+      });
       continue;
     }
     out[out.length - 1]?.lines.push(line);

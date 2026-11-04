@@ -27917,7 +27917,7 @@
             }
           },
           "413": {
-            "description": "The page or its text is too large",
+            "description": "The page, its text or its chunk count is too large",
             "content": {
               "application/json": {
                 "schema": {
@@ -28042,8 +28042,18 @@
               }
             }
           },
+          "413": {
+            "description": "The pull request cuts into too many chunks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "422": {
-            "description": "The repository is not linked to this workspace",
+            "description": "The repository is not linked to this workspace, or the App may not read it",
             "content": {
               "application/json": {
                 "schema": {

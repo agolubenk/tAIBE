@@ -16,6 +16,8 @@ export const SOURCE_ERROR_CODES = [
   "PR_NOT_FOUND",
   "GITHUB_APP_NOT_CONFIGURED",
   "GITHUB_UNAVAILABLE",
+  "GITHUB_NO_ACCESS",
+  "SOURCE_TOO_MANY_CHUNKS",
 ] as const;
 export type SourceErrorCode = (typeof SOURCE_ERROR_CODES)[number];
 

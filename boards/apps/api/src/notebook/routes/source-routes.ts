@@ -145,7 +145,7 @@ const addLinkRoute = createRoute({
     200: jsonResponse("Page stored", addedSourceSchema),
     400: errorResponse("Not an https URL"),
     403: errorResponse("Missing workspace:manage_settings permission"),
-    413: errorResponse("The page or its text is too large"),
+    413: errorResponse("The page, its text or its chunk count is too large"),
     415: errorResponse("Not HTML, Markdown or plain text; PDF is refused"),
     422: errorResponse(
       "Private address, unreachable, timed out, error status or no text",
@@ -178,7 +178,10 @@ const addPullRequestRoute = createRoute({
     400: errorResponse("Not a GitHub pull request URL"),
     403: errorResponse("Missing workspace:manage_settings permission"),
     404: errorResponse("No such pull request in the repository"),
-    422: errorResponse("The repository is not linked to this workspace"),
+    413: errorResponse("The pull request cuts into too many chunks"),
+    422: errorResponse(
+      "The repository is not linked to this workspace, or the App may not read it",
+    ),
     502: errorResponse("GitHub did not answer"),
     503: errorResponse("The GitHub App is not configured"),
   },

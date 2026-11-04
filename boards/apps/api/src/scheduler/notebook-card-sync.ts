@@ -1,5 +1,6 @@
 import db from "../database";
 import { workspaceTable } from "../database/schema";
+import { pruneUnlinkedPullRequests } from "../notebook/sources/linked-repositories";
 import { syncCardSources } from "../notebook/sources/sync-card-sources";
 import { withJobLease } from "./leader-lock";
 
@@ -20,6 +21,7 @@ export async function syncNotebookCards() {
       for (const workspace of workspaces) {
         try {
           await syncCardSources(workspace.id);
+          await pruneUnlinkedPullRequests(workspace.id);
         } catch (error) {
           degraded = true;
           console.error(

@@ -4078,7 +4078,9 @@
 					"PR_REPO_NOT_LINKED": "This repository is not linked to a project every member of the workspace can open.",
 					"PR_NOT_FOUND": "This pull request was not found in the linked repository.",
 					"GITHUB_APP_NOT_CONFIGURED": "The GitHub App is not configured on this instance.",
-					"GITHUB_UNAVAILABLE": "GitHub did not answer. Try again, or reconnect the integration."
+					"GITHUB_UNAVAILABLE": "GitHub did not answer. Try again, or reconnect the integration.",
+					"GITHUB_NO_ACCESS": "The GitHub App may not read this repository's pull requests. Grant it pull request access, or reconnect the integration.",
+					"SOURCE_TOO_MANY_CHUNKS": "The text splits into too many parts for one source (at most 2000)."
 				}
 			}
 		},

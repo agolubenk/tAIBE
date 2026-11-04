@@ -6,6 +6,7 @@ import {
   notebookChunkTable,
   notebookSourceTable,
 } from "../../database/notebook-schema";
+import { ApiError } from "../../errors/api-error";
 import { chunkMarkdown } from "../chunk/chunk-markdown";
 import { notifyEmbedWork } from "../embed/embed-queue";
 
@@ -15,7 +16,13 @@ export type SourceInput = {
   ref: string;
   title: string;
   text: string;
+  // Refuse a text that cuts into more chunks: a fetched page of tiny
+  // sections would flood the embedding worker and the vector index.
+  maxChunks?: number;
 };
+
+// Keeps one insert far under the Postgres limit of 65 535 parameters.
+const INSERT_BATCH = 1000;
 
 export type UpsertedSource = {
   sourceId: string;
@@ -60,6 +67,12 @@ export async function upsertSource(
   }
 
   const chunks = chunkMarkdown(input.text);
+  if (input.maxChunks !== undefined && chunks.length > input.maxChunks) {
+    throw new ApiError(413, {
+      code: "SOURCE_TOO_MANY_CHUNKS",
+      message: `The text cuts into ${chunks.length} chunks; the notebook takes at most ${input.maxChunks} from one source.`,
+    });
+  }
   const sourceId = await db.transaction(async (tx) => {
     const [source] = await tx
       .insert(notebookSourceTable)
@@ -89,12 +102,12 @@ export async function upsertSource(
     await tx
       .delete(notebookChunkTable)
       .where(eq(notebookChunkTable.sourceId, source.id));
-    if (chunks.length) {
+    for (let start = 0; start < chunks.length; start += INSERT_BATCH) {
       await tx.insert(notebookChunkTable).values(
-        chunks.map((chunk, ordinal) => ({
+        chunks.slice(start, start + INSERT_BATCH).map((chunk, index) => ({
           sourceId: source.id,
           workspaceId: input.workspaceId,
-          ordinal,
+          ordinal: start + index,
           heading: chunk.heading,
           text: chunk.text,
         })),

@@ -11,6 +11,7 @@ import db, { schema } from "../../apps/api/src/database";
 import { createApp } from "../../apps/api/src/index";
 import { resetEmbedQueueForTests } from "../../apps/api/src/notebook/embed/embed-queue";
 import { clearVectorCacheForTests } from "../../apps/api/src/notebook/search/vector-index";
+import { syncNotebookCards } from "../../apps/api/src/scheduler/notebook-card-sync";
 import { mockAuthenticatedSession } from "./helpers/auth";
 import { resetTestDatabase } from "./helpers/database";
 import { createForest } from "./helpers/forest";
@@ -229,6 +230,20 @@ describe("API integration: notebook PR and link sources", () => {
     expect(mocks.verify).not.toHaveBeenCalled();
   });
 
+  it("drops a stored PR once its project is no longer open to every member", async () => {
+    const nb = await notebook();
+    await linkRepo(nb.project.id, nb.ownerId);
+    mocks.pullsGet.mockResolvedValue(pullRequest("Аренда истекает через час."));
+    await nb.owner("POST", "/sources/github-pr", { url: PR_URL });
+
+    await syncNotebookCards();
+    expect((await nb.search("fencing"))[0]?.source.ref).toBe("example/repo#7");
+
+    await addMember(nb.workspace.id, true);
+    await syncNotebookCards();
+    expect(await nb.search("fencing")).toEqual([]);
+  });
+
   it("answers a missing PR or a missing GitHub App without a 500", async () => {
     const nb = await notebook();
     await linkRepo(nb.project.id, nb.ownerId);
@@ -241,6 +256,23 @@ describe("API integration: notebook PR and link sources", () => {
     });
     expect(missing.status).toBe(404);
     expect(missing.body.code).toBe("PR_NOT_FOUND");
+
+    mocks.pullsGet.mockRejectedValue(
+      Object.assign(new Error("Resource not accessible by integration"), {
+        status: 403,
+      }),
+    );
+    const denied = await nb.owner("POST", "/sources/github-pr", {
+      url: PR_URL,
+    });
+    expect([denied.status, denied.body.code]).toEqual([
+      422,
+      "GITHUB_NO_ACCESS",
+    ]);
+
+    mocks.pullsGet.mockRejectedValue(new Error("socket hang up"));
+    const down = await nb.owner("POST", "/sources/github-pr", { url: PR_URL });
+    expect([down.status, down.body.code]).toEqual([502, "GITHUB_UNAVAILABLE"]);
 
     mocks.verify.mockRejectedValue(new Error("GitHub App not configured"));
     const noApp = await nb.owner("POST", "/sources/github-pr", { url: PR_URL });
@@ -277,6 +309,32 @@ describe("API integration: notebook PR and link sources", () => {
       (await nb.owner("POST", "/sources/link", { url: PAGE_URL })).body.changed,
     ).toBe(false);
 
+    mocks.page.mockImplementationOnce(
+      async () =>
+        new Response("# Аренда\n\nПродлена до пятницы.", {
+          headers: { "content-type": "text/markdown" },
+        }),
+    );
+    const refreshed = await nb.owner("POST", "/sources/link", {
+      url: PAGE_URL,
+    });
+    expect(refreshed.body).toMatchObject({ ref: PAGE_URL, changed: true });
+    expect(await nb.search("fencing")).toEqual([]);
+    expect((await nb.search("пятницы"))[0]?.source.ref).toBe(PAGE_URL);
+
+    mocks.page.mockImplementationOnce(
+      async () =>
+        new Response("## a\n\nb\n\n".repeat(2001), {
+          headers: { "content-type": "text/plain" },
+        }),
+    );
+    const flood = await nb.owner("POST", "/sources/link", { url: PAGE_URL });
+    expect([flood.status, flood.body.code]).toEqual([
+      413,
+      "SOURCE_TOO_MANY_CHUNKS",
+    ]);
+    expect((await nb.search("пятницы"))[0]?.source.ref).toBe(PAGE_URL);
+
     for (const [url, status, code] of [
       ["https://127.0.0.1/admin", 422, "LINK_PRIVATE_DESTINATION"],
       ["https://localhost:5432/", 422, "LINK_PRIVATE_DESTINATION"],
@@ -285,7 +343,8 @@ describe("API integration: notebook PR and link sources", () => {
       const refused = await nb.owner("POST", "/sources/link", { url });
       expect([refused.status, refused.body.code]).toEqual([status, code]);
     }
-    expect(mocks.page).toHaveBeenCalledTimes(2);
+    // Add, unchanged, refresh and flood; the refused links send nothing.
+    expect(mocks.page).toHaveBeenCalledTimes(4);
 
     mocks.page.mockResolvedValue(
       new Response("%PDF-1.7", {

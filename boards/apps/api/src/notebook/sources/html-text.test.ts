@@ -39,6 +39,28 @@ describe("htmlToText", () => {
     ).toBe("Text\n\nlink");
   });
 
+  it("finds the end of a script after characters that lowercase longer", () => {
+    expect(
+      htmlToText(
+        `<p>${"İ".repeat(30)}</p><script>if (a > b) leak();</script><h2>Başlık</h2><p>Gövde</p>`,
+      ).text,
+    ).toBe(`${"İ".repeat(30)}\n\n## Başlık\n\nGövde`);
+  });
+
+  it("opens a code fence on its own line inside a list item", () => {
+    expect(
+      htmlToText(
+        `<ul><li><div><pre>npm i</pre></div></li></ul><h2>Next</h2><p>body</p>`,
+      ).text,
+    ).toBe("```\nnpm i\n```\n\n## Next\n\nbody");
+  });
+
+  it("keeps a < that does not start a tag, and decodes before collapsing", () => {
+    expect(htmlToText("<p>I <3 cats, x <- 5</p><p>a&#10;# b</p>").text).toBe(
+      "I <3 cats, x <- 5\n\na # b",
+    );
+  });
+
   it("returns nothing for a page that only renders with JavaScript", () => {
     expect(
       htmlToText(`<body><div id="root"></div><script>app()</script></body>`),

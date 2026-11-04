@@ -4123,7 +4123,9 @@
 					"LINK_UPSTREAM_STATUS": "The page answered with an error.",
 					"PR_INVALID_URL": "Enter a GitHub pull request link, such as https://github.com/owner/repo/pull/12.",
 					"PR_NOT_FOUND": "This pull request was not found in the linked repository.",
-					"PR_REPO_NOT_LINKED": "This repository is not linked to a project every member of the workspace can open."
+					"PR_REPO_NOT_LINKED": "This repository is not linked to a project every member of the workspace can open.",
+					"GITHUB_NO_ACCESS": "The GitHub App may not read this repository's pull requests. Grant it pull request access, or reconnect the integration.",
+					"SOURCE_TOO_MANY_CHUNKS": "The text splits into too many parts for one source (at most 2000)."
 				},
 				"refresh": "Refresh {{title}}",
 				"toast": {

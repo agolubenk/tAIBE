@@ -56,6 +56,7 @@ const BLOCKS = new Set([
   "ul",
 ]);
 const VOID = new Set(["br", "hr", "img", "input", "meta", "link", "wbr"]);
+const NAME_START = /[a-z]/i;
 const NAME_CHAR = /[a-z0-9-]/i;
 
 type Tag = { name: string; closing: boolean; selfClosing: boolean };
@@ -92,7 +93,7 @@ class TextWriter {
       this.raw(decodeEntities(raw));
       return;
     }
-    let text = decodeEntities(raw.replace(/\s+/g, " "));
+    let text = decodeEntities(raw).replace(/\s+/g, " ");
     if (this.breaks || this.prefix || !this.parts.length) {
       text = text.trimStart();
       if (!text) return;
@@ -117,6 +118,8 @@ class TextWriter {
 function readTag(html: string, start: number): [Tag | null, number] {
   const closing = html[start + 1] === "/";
   const nameStart = start + (closing ? 2 : 1);
+  // As in browsers, "<3" and "<- x" are text, not a tag.
+  if (!NAME_START.test(html[nameStart] ?? "")) return [null, start + 1];
   let end = nameStart;
   while (end < html.length && NAME_CHAR.test(html[end] ?? "")) end++;
   if (end === nameStart) return [null, start + 1];
@@ -172,7 +175,9 @@ function applyTag(out: TextWriter, { name, closing }: Tag) {
         }
       } else {
         if (!out.pre) {
-          out.block(2);
+          // A fence must open its own line: "- ```" inside a list item
+          // would leave the chunker fenced to the end of the page.
+          out.startLine("", 2);
           out.raw("```\n");
         }
         out.pre += 1;
@@ -182,8 +187,19 @@ function applyTag(out: TextWriter, { name, closing }: Tag) {
   if (BLOCKS.has(name)) out.block(2);
 }
 
+// Not html.toLowerCase(): "İ" lowercases to two code units, so every index in
+// the lowered copy would drift and a Turkish page would cut at the wrong tag.
+function closingTag(html: string, name: string, from: number) {
+  for (let at = html.indexOf("</", from); at >= 0;) {
+    if (html.slice(at + 2, at + 2 + name.length).toLowerCase() === name) {
+      return at;
+    }
+    at = html.indexOf("</", at + 2);
+  }
+  return -1;
+}
+
 export function htmlToText(html: string): { title: string; text: string } {
-  const lower = html.toLowerCase();
   const out = new TextWriter();
   let title = "";
   let skip = 0;
@@ -210,10 +226,10 @@ export function htmlToText(html: string): { title: string; text: string } {
       continue;
     }
     if (RAW_TEXT.has(tag.name) && !tag.closing && !tag.selfClosing) {
-      const end = lower.indexOf(`</${tag.name}`, at);
+      const end = closingTag(html, tag.name, at);
       const content = html.slice(at, end < 0 ? html.length : end);
       if (tag.name === "title" && !title && !skip) {
-        title = decodeEntities(content.slice(0, 2000).replace(/\s+/g, " "));
+        title = decodeEntities(content.slice(0, 2000)).replace(/\s+/g, " ");
       }
       const close = end < 0 ? -1 : html.indexOf(">", end);
       at = close < 0 ? html.length : close + 1;

@@ -7,6 +7,9 @@ import {
 import { EMBED_RESULTS_MAX } from "../embed/embed-work";
 
 export const SOURCE_TEXT_MAX = 500_000;
+// SOURCE_TEXT_MAX of ordinary prose is ~320 chunks; a page or PR of tiny
+// sections must not cut into tens of thousands.
+export const FETCHED_SOURCE_CHUNKS_MAX = 2000;
 export const SEARCH_LIMIT_MAX = 20;
 // Russian text is two bytes a character before JSON escaping.
 export const SOURCE_BODY_BYTES = 2 * 1024 * 1024;
