@@ -1,6 +1,8 @@
 #!/bin/sh
 # Mac side of the t-boards notebook: the embedding worker (always on, local
-# Ollama, one request at a time) and the document sync (every 15 min).
+# Ollama, one request at a time) and the document sync: once a day at 04:17
+# and on demand (owner, d-notebook-sync-0411), never on load or login:
+#   launchctl kickstart gui/$(id -u)/space.hrhelper.t-boards-notebook-sync
 #   notebook-agent.sh config <workspaceId> [repoRoot] [baseUrl] — write config.json
 #   notebook-agent.sh key     — read the workspace API key from stdin (pbpaste | …)
 #   notebook-agent.sh check   — one sync dry run and one worker round, in the foreground
@@ -29,11 +31,12 @@ copy_scripts() {
   done
 }
 
-write_plist() { # label script keepalive|interval log
+write_plist() { # label script keepalive|daily log
   if [ "$3" = keepalive ]; then
-    schedule="<key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>"
+    schedule="<key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer><key>RunAtLoad</key><true/>"
   else
-    schedule="<key>StartInterval</key><integer>900</integer>"
+    # Off the hour, at night; a missed run (Mac asleep) happens on wake.
+    schedule="<key>StartCalendarInterval</key><dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>17</integer></dict><key>RunAtLoad</key><false/>"
   fi
   cat >"$agents/$1.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,7 +47,6 @@ write_plist() { # label script keepalive|interval log
   <key>ProgramArguments</key>
   <array><string>$node</string><string>$home/$2</string></array>
   $schedule
-  <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>$home/$4</string>
   <key>StandardErrorPath</key><string>$home/$4</string>
 </dict>
@@ -95,7 +97,7 @@ case "${1:-}" in
     copy_scripts
     mkdir -p "$agents"
     write_plist "$worker_label" notebook-worker.mjs keepalive worker.log
-    write_plist "$sync_label" notebook-sync.mjs interval sync.log
+    write_plist "$sync_label" notebook-sync.mjs daily sync.log
     for label in "$worker_label" "$sync_label"; do
       launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
       launchctl bootstrap "gui/$(id -u)" "$agents/$label.plist"

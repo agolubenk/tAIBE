@@ -7,7 +7,7 @@
 ## Что получилось
 
 ```
-Mac: notebook-sync (раз в 15 мин) ── PUT /notebook/{ws}/sources ──▶ API: разбивка по заголовкам → notebook_chunk
+Mac: notebook-sync (раз в сутки, 04:17, и по запросу) ── PUT /notebook/{ws}/sources ──▶ API: разбивка по заголовкам → notebook_chunk
 Mac: notebook-worker (всегда) ◀── long-poll /embed/work ── очередь: чанки и запросы поиска
                               ── Ollama nomic-embed-text, по одному ──▶ /embed/results → вектор в БД
 Читатель ── POST /search ──▶ ключевые слова (russian tsvector) + векторы (если воркер онлайн) → RRF
