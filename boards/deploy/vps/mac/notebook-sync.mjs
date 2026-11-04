@@ -74,8 +74,7 @@ export function listAll(config) {
   const specs = Object.keys(HOME_DOCS).map((prefix) => `:(glob)${prefix}*.md`);
   for (const root of roots) {
     for (const path of listDocuments(root, config.git, specs)) {
-      const ref =
-        config.evalRefs === "new" ? path : mapRef(path, HOME_DOCS);
+      const ref = config.evalRefs === "new" ? path : mapRef(path, HOME_DOCS);
       if (ref && !entries.has(ref)) entries.set(ref, join(root, path));
     }
   }

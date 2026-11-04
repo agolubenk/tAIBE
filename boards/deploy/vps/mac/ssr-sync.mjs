@@ -105,8 +105,7 @@ async function main() {
     for (const path of listCorpus(root, config.git, homeSpecs)) {
       // config.evalRefs "new": native eval/… paths — D-008 "close the old
       // records"; "old" (default): the pre-split supertick-eval/… refs.
-      const ref =
-        config.evalRefs === "new" ? path : mapRef(path, HOME_CORPUS);
+      const ref = config.evalRefs === "new" ? path : mapRef(path, HOME_CORPUS);
       if (ref && !sources.has(ref)) sources.set(ref, [root, path]);
     }
   }
