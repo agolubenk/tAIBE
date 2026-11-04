@@ -210,6 +210,9 @@ export function createApp() {
   app.use("*", clientIpMiddleware());
 
   app.onError((err) => {
+    // Without this a real failure with Sentry off answers 500 and leaves no
+    // trace anywhere (the first stand sync sat undiagnosed for that reason).
+    console.error("[api] unhandled error:", err);
     if (err instanceof HTTPException) {
       // expected errors (401/404/...) are not reported; real failures are
       if (err.status >= 500) {

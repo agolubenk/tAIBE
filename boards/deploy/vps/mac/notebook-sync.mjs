@@ -60,7 +60,8 @@ export function listDocuments(repoRoot, git = "git", pathspecs = PATHSPECS) {
 }
 
 // ref → file on disk: the host's own documents, then the product home's under
-// their old refs (the host wins on a clash). Throws when an extra root cannot
+// their old refs (the host wins on a clash; config.evalRefs "new" keeps their
+// native paths instead — D-008). Throws when an extra root cannot
 // be read, so nothing is pruned on a partial listing.
 export function listAll(config) {
   const entries = new Map();
@@ -73,7 +74,8 @@ export function listAll(config) {
   const specs = Object.keys(HOME_DOCS).map((prefix) => `:(glob)${prefix}*.md`);
   for (const root of roots) {
     for (const path of listDocuments(root, config.git, specs)) {
-      const ref = mapRef(path, HOME_DOCS);
+      const ref =
+        config.evalRefs === "new" ? path : mapRef(path, HOME_DOCS);
       if (ref && !entries.has(ref)) entries.set(ref, join(root, path));
     }
   }

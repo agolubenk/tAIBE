@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import db from "../database";
 import {
   ssrBlobTable,
@@ -98,9 +98,19 @@ export async function syncCorpus(
   };
 
   await db.transaction(async (tx) => {
-    const newBlobs = input.files.filter(
-      (file) => file.content !== undefined && !knownBlobs.has(file.sha256),
-    );
+    const newBlobs = [
+      ...input.files
+        .filter(
+          (file) => file.content !== undefined && !knownBlobs.has(file.sha256),
+        )
+        // two empty files share the empty-string sha; a multi-row insert
+        // would hit ssr_blob_pkey twice in one statement
+        .reduce(
+          (bySha, file) => bySha.set(file.sha256, file),
+          new Map<string, SyncFile>(),
+        )
+        .values(),
+    ];
     if (newBlobs.length > 0) {
       await tx.insert(ssrBlobTable).values(
         newBlobs.map((file) => ({
@@ -201,17 +211,41 @@ export async function syncCorpus(
           status: "draft",
         });
       } else {
-        const [latest] = await tx
+        // The highest version, draft or latest: an entity may still wait as
+        // a draft (Q-015) — a re-sync used to insert its number again and
+        // hit ssr_version_entity_number_key.
+        const [current] = await tx
           .select()
           .from(ssrVersionTable)
-          .where(
-            and(
-              eq(ssrVersionTable.entityId, existing.id),
-              eq(ssrVersionTable.status, "latest"),
-            ),
-          );
-        if (latest && latest.blobSha === blobSha) {
+          .where(eq(ssrVersionTable.entityId, existing.id))
+          .orderBy(desc(ssrVersionTable.number))
+          .limit(1);
+        const latest = current?.status === "latest" ? current : undefined;
+        if (current && current.blobSha === blobSha) {
           result.unchanged += 1;
+        } else if (current?.status === "draft") {
+          // The owner has not seen the draft yet (Q-015): the newer corpus
+          // replaces it in place instead of stacking numbers.
+          const [version] = await tx
+            .update(ssrVersionTable)
+            .set({
+              blobSha,
+              files: snapshot,
+              commitSha: input.commitSha,
+              createdBy: actor,
+              createdAt: new Date(),
+              message: "First draft — waiting for owner approval (Q-015)",
+            })
+            .where(eq(ssrVersionTable.id, current.id))
+            .returning({ id: ssrVersionTable.id });
+          if (!version) throw new Error("version update returned nothing");
+          result.created.push({
+            entity: group.name,
+            kind: group.kind,
+            versionId: version.id,
+            number: current.number,
+            status: "draft",
+          });
         } else {
           if (latest) {
             await tx
