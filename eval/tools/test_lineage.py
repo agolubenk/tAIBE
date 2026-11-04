@@ -21,6 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lineage as L  # noqa: E402
 import lineage_reap as R  # noqa: E402
+import lineage_retire as LR  # noqa: E402
 
 TERMINAL = "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
 ST = "Wed Nov  4 20:00:00 2026"
@@ -130,7 +131,7 @@ class Base(unittest.TestCase):
 class WatchTest(Base):
     def run_watch(self, sx, role="backend", timeout=600):
         self.pred = sx.p[300]
-        return L.watch(sx, self.pred, PARENT, CHILD, role, timeout, self.log, poll=1)
+        return LR.watch(sx, self.pred, PARENT, CHILD, role, timeout, self.log, poll=1)
 
     def fake(self, **kw):
         return FakeSys(tree(**kw), env={400: CHILD, 300: PARENT})

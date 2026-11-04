@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 import lineage as L
+import lineage_retire as LR
 
 ROLE_RE = re.compile(r"/genome/([a-z]+)\.json")
 
@@ -159,7 +160,7 @@ def cmd_reap(sx, a):
     log = L.make_log(sys.stdout)
     for r in chosen:
         log(f"— {r['pid']} {r['name']} ({r['verdict']})")
-        L.take_down(sx, r["proc"], r["line"], protect, log)
+        LR.take_down(sx, r["proc"], r["line"], protect, log)
     after = sx.metrics()
     print(f"claude: {before['claude']} → {after['claude']}; окон Terminal: {before['terminal_windows']} → "
           f"{after['terminal_windows']}\nswap до:    {before['swap']}\nswap после: {after['swap']}")
