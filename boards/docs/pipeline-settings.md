@@ -51,11 +51,16 @@ Hooks and tools call `.claude/scripts/pipeline_settings.py` (stdlib).
     with plain http only to localhost. An address from the repository is used only for a trusted host: the known
     board host, localhost, or `T_BOARDS_ALLOWED_HOSTS` from your own environment. A pull request that changes the
     address cannot redirect the key;
-  - the product: found by itself. It is the one product the key reaches; with several, the one named in
-    `boards.product` / `T_BOARDS_PRODUCT` (the name or slug people see). An id in `boards.workspace` /
-    `T_BOARDS_WORKSPACE` pins it;
-  - the key: `T_BOARDS_API_KEY`, else Keychain through `infra/scripts/dev-ai/mcp-secret.sh`, which is the key the
-    boards MCP already uses.
+  - the key: this install's own `T_BOARDS_PIPELINE_KEY`, from your environment or else Keychain through
+    `infra/scripts/dev-ai/mcp-secret.sh` (service `hr-helper-mcp`, account `T_BOARDS_PIPELINE_KEY`). Every product
+    and every install gets its own key (owner's decision `d-tb-product-key-0411`). There is no fallback to the boards
+    MCP's `T_BOARDS_API_KEY`: that key reaches every product;
+  - the product: the key names it. The key must reach exactly one product, and that product is read. A key that
+    reaches several is refused. `boards.product` / `T_BOARDS_PRODUCT` (the name or slug people see) and
+    `boards.workspace` / `T_BOARDS_WORKSPACE` (an id) are only a check. If the key is for another product, it is
+    refused, so a key put into the wrong install cannot turn on another product's switches. The product is asked
+    again on every refresh (two calls per 10 minutes), so a key swapped for a wider one is refused within one
+    refresh.
 - **Cache.** The answer is kept in `.claude/pipeline-settings.json` (gitignored, mode 600). A cache from another
   workspace is ignored.
 - **Strict answers.** Only a complete answer is accepted. Redirects are refused, so the key never goes to another
@@ -65,15 +70,29 @@ Hooks and tools call `.claude/scripts/pipeline_settings.py` (stdlib).
 - **Hot paths.** The successor hook runs on every tool call. It reads the cache only, after its own cheap exits.
 - **Environment.** `TAIBE_PIPELINE` can only switch parts off on top of the board: `off`, or `swarm=off,…`.
   A session cannot overrule the owner.
-- **Not connected.** With no board address, product or key, the defaults apply, and the status command below
-  says what is missing.
+- **Not connected.** With no board address, no `T_BOARDS_PIPELINE_KEY`, a key that reaches several products, or a
+  key for another product than the config names, the layer keeps the last known switches of its product (defaults
+  if it never read the board). The status command below says what is missing.
 
-Limits: one product per checkout (the layer reads one workspace). The page keeps only the last change (who and when), with no per-switch history. An open page does not update live when someone else changes a switch.
+Limits: one product per install (the key reaches one workspace). `eval/` is shared by symlink between tAIBE and HR
+Helper, so both read the same `eval/nerve/config.json`; when the layer comes to HR Helper, that install needs its
+own key and a product check outside git (for example `.claude/pipeline.local.json`). The page keeps only the last change (who and when), with no per-switch history. An open page does not update live when someone else changes a switch.
 
 ```bash
 python3 -I .claude/scripts/pipeline_settings.py          # effective switches and their source
 python3 -I .claude/scripts/pipeline_settings.py fetch    # refresh now
 ```
+
+### Connect an install (owner)
+
+1. On the board: Settings → API keys → choose the product → Create. The key is shown once; the board keeps only its
+   hash.
+2. On the Mac: `security add-generic-password -U -s hr-helper-mcp -a T_BOARDS_PIPELINE_KEY -w`. Paste the key at the
+   prompt: it never reaches the shell history.
+3. Check: `python3 -I .claude/scripts/pipeline_settings.py fetch`, then the status command. The source is `board`, and
+   the product is the one you chose.
+4. Undo: `security delete-generic-password -s hr-helper-mcp -a T_BOARDS_PIPELINE_KEY`. The hooks go back to the
+   last known switches, and to the defaults once the cache is removed.
 
 ## Tests
 
@@ -83,7 +102,11 @@ python3 -I .claude/scripts/pipeline_settings.py fetch    # refresh now
   - agents, keys and members get 403 on update;
   - an unknown switch gets 400;
   - with `cardAutofill` off, no fields are filled and the comment is still posted.
+- `tests/api-integration/api-key-workspace-scope.test.ts`: a key limited to product A reads A's switches (200), gets
+  404 on B and 403 on an update.
 - `.claude/scripts/test_pipeline_settings.py`:
   - the keys match the TypeScript list;
   - environment override, cache, fetch from a fake board;
-  - an outage keeps the last known values; a broken cache falls back to defaults.
+  - an outage keeps the last known values; a broken cache falls back to defaults;
+  - a key for one product reads it; a key for several, a key for another product than the config names, or only
+    `T_BOARDS_API_KEY` is refused; the product is asked on every refresh.

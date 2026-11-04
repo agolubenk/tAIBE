@@ -211,6 +211,20 @@ class PipelineSettingsTest(unittest.TestCase):
             self.assertEqual(f.read().split(), ['T_BOARDS_PIPELINE_KEY'])
         self.assertEqual({k for _, k in Board.seen}, {'k-chain'})
 
+    def test_a_missing_key_is_looked_up_once_per_ttl(self):
+        self.connect()
+        del os.environ['T_BOARDS_PIPELINE_KEY']
+        tools = os.path.join(self.root, 'infra', 'scripts', 'dev-ai')
+        os.makedirs(tools)
+        with open(os.path.join(tools, 'mcp-secret.sh'), 'w', encoding='utf-8') as f:
+            f.write('printf "%s\\n" "$1" >> "$(dirname "$0")/asked"\nexit 1\n')
+        for _ in range(5):
+            self.assertTrue(ps.enabled('swarm', self.root))  # no key yet → defaults
+        with open(os.path.join(tools, 'asked'), encoding='utf-8') as f:
+            self.assertEqual(len(f.read().split()), 1)  # one Keychain call, not one per prompt
+        self.assertIn('no T_BOARDS_PIPELINE_KEY', ps.load(self.root, refresh=False)[1])
+        self.assertEqual(Board.seen, [])
+
     def test_unresolved_product_is_asked_once_per_ttl(self):
         self.connect()
         del os.environ['T_BOARDS_WORKSPACE']

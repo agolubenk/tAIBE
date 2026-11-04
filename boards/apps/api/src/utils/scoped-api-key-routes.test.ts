@@ -10,6 +10,7 @@ describe("scopedKeyMayCall", () => {
       ["POST", "/api/task-relation"],
       ["GET", "/api/forest/ws-a/trees"],
       ["POST", "/api/notebook/ws-a/search"],
+      ["GET", "/api/pipeline-settings/workspace/ws-a"],
       ["GET", "/api/workspace/"],
       ["GET", "/api/user/me"],
     ] as const) {

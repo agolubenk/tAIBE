@@ -208,6 +208,22 @@ def _write_cache(root, data):
     os.replace(tmp, path)
 
 
+def _remember(root, error):
+    """A refresh that stopped before the board is remembered like a failed read: the last known switches of this
+    product stay, `lastAttempt` starts the TTL."""
+    product, pinned = _product(root), _workspace(root)
+    data = _read_cache(root)
+    if data.get('broken') or data.get('product', product) != product \
+            or (pinned and data.get('workspace') not in (None, pinned)):
+        data = {}  # another product's switches are not this product's
+    data.setdefault('workspace', pinned or None)
+    data.update({'product': product, 'lastAttempt': time.time(), 'lastError': error})
+    try:
+        _write_cache(root, data)
+    except OSError:
+        pass
+
+
 def fetch(root=ROOT, timeout=TIMEOUT_SECONDS):
     """Read the board, write the cache. Returns (settings, error); a failure is remembered (`lastAttempt`, `lastError`)
     and keeps the last known settings."""
@@ -225,8 +241,10 @@ def fetch(root=ROOT, timeout=TIMEOUT_SECONDS):
         return None, 'not connected: set boards.url in eval/nerve/config.json (or T_BOARDS_URL)'
     key = _key(root)
     if not key:
-        return None, ('not connected: no %s — a key limited to this product (env or Keychain, '
-                      'infra/scripts/dev-ai/mcp-secret.sh)' % KEY_NAME)
+        error = ('not connected: no %s — a key limited to this product (env or Keychain, '
+                 'infra/scripts/dev-ai/mcp-secret.sh)' % KEY_NAME)
+        _remember(root, error)  # until the owner adds the key, Keychain is asked once per TTL, not on every prompt
+        return None, error
     if url is None:
         return None, 'T_BOARDS_URL must be https (http only to localhost)'
     opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_tls_context()))

@@ -256,6 +256,6 @@
     "url": "https://d4dev.admin.hrhelper.space",
     "product": null,
     "workspace": null,
-    "note": "tAI-Boards of this instance: pipeline settings are read from here. The product is found by itself — the one product the key reaches; with several, set product to its name or slug as people see it; workspace (an id) only to pin it"
+    "note": "tAI-Boards of this instance: pipeline settings are read from here with this install's own key T_BOARDS_PIPELINE_KEY (env or Keychain), limited to one product — that product is read, a key for several is refused. product (name or slug as people see it) and workspace (an id) only check the key's product"
   }
 }
