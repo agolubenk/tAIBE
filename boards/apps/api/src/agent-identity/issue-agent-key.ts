@@ -23,6 +23,12 @@ const KEPT_LIVE_KEYS = 3;
 // Enabled agents per owner: a bridge looping over labels cannot fill the
 // workspace with users, and every agent fits the owner's list to disable.
 export const MAX_AGENTS_PER_OWNER = 50;
+
+// The cap is the owner's to lift: only the owner can list and disable agents
+// (agent-identity/index.ts), so the refusal must not read as the agent's job.
+export function agentCapMessage(max: number = MAX_AGENTS_PER_OWNER): string {
+  return `an owner keeps at most ${max} enabled agents; the owner disables the ones no longer working in the board's agent settings — an agent cannot`;
+}
 // Better Auth's default limit for key names.
 const KEY_NAME_MAX = 32;
 
@@ -84,10 +90,7 @@ async function assertMayAddAgent(ownerId: string) {
       ),
     );
   if ((enabled?.n ?? 0) >= MAX_AGENTS_PER_OWNER) {
-    throw new ForestError(
-      "agent_forbidden",
-      `an owner keeps at most ${MAX_AGENTS_PER_OWNER} enabled agents; disable the ones no longer working`,
-    );
+    throw new ForestError("agent_forbidden", agentCapMessage());
   }
 }
 
