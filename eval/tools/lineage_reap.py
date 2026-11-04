@@ -1,8 +1,9 @@
 """lineage.py reap — уборка закончившихся сессий Claude Code по списку (карточка 2 relaunch-terminal).
 
 Список строится из ~/.claude/sessions/<pid>.json: только живой pid с тем же стартом (procStart) и argv0 claude.
-Кандидат — наследник принял (квитанция <линия>.<4 симв>.ack, наследник жив) ИЛИ простой дольше --idle-hours и
-это не текущая сессия своей роли (самая длинная линия на ключ роли). Чужой проект (cwd вне корней), «waiting»
+Кандидат — наследник принял (квитанция <линия>.<4 симв>.ack, наследник жив) ИЛИ сменён: жива сессия той же роли с
+линией «<линия>.…», простой ≥ --superseded-idle-hours и не busy (сессии без квитанции — после --resume и до паритета
+tap) ИЛИ простой дольше --idle-hours и это не текущая сессия своей роли (самая длинная линия на ключ роли). Чужой проект (cwd вне корней), «waiting»
 и своя сессия показываются, но не снимаются. --kill — действие владельца: только кандидаты из списка последнего
 показа (не старше 10 мин, pid и старт совпали) и только после «y» в терминале (или --yes).
 """
@@ -19,6 +20,8 @@ ROLE_RE = re.compile(r"/genome/([a-z]+)\.json")
 
 def add_reap_args(p):
     p.add_argument("--idle-hours", type=float, default=24.0)
+    p.add_argument("--superseded-idle-hours", type=float, default=1.0,
+                   help="сменённая наследником сессия — кандидат после такого простоя")
     p.add_argument("--include-waiting", action="store_true", help="снимать и сессии в состоянии waiting")
     p.add_argument("--root", action="append", default=[], help="ещё один корень своих проектов (можно несколько)")
     p.add_argument("--kill", action="store_true", help="снять кандидатов последнего показа (действие владельца)")
@@ -72,7 +75,17 @@ def ack_state(procs, line):
     return state
 
 
-def scan(sx, idle_hours, include_waiting, roots):
+def successor_gen(rows, r):
+    """Поколение самого дальнего живого наследника той же роли (линия начинается с «<линия>.»); 0 — его нет.
+    Префикс с точкой: сиблинг r.a1.b2 для r.a1.c3 и r.a10.x для r.a1 наследниками не считаются."""
+    if not r["role"] or not r["line"]:
+        return 0
+    pre = r["line"] + "."
+    return max((s["line"].count(".") for s in rows
+                if s is not r and s["role"] == r["role"] and (s["line"] or "").startswith(pre)), default=0)
+
+
+def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
     procs = sx.procs()
     me = L.ancestor_claude(procs, os.getpid())
     now = sx.now()
@@ -101,6 +114,7 @@ def scan(sx, idle_hours, include_waiting, roots):
     for r in rows:
         r["ack"] = ack_state(procs, r["line"])
         is_current = r["role"] is not None and current[r["role"]][1] == r["pid"]
+        gen = successor_gen(rows, r)
         r["cand"] = False
         if me is not None and r["pid"] == me.pid:
             r["verdict"] = "своя"
@@ -110,6 +124,8 @@ def scan(sx, idle_hours, include_waiting, roots):
             r["verdict"] = "ждёт ввода"
         elif r["ack"] == "ack":
             r["cand"], r["verdict"] = True, "кандидат: наследник принял"
+        elif gen and r["status"] != "busy" and r["idle_h"] >= superseded_idle_hours:
+            r["cand"], r["verdict"] = True, f"кандидат: сменён наследником (поколение {gen})"
         elif r["idle_h"] >= idle_hours and not is_current:
             r["cand"], r["verdict"] = True, f"кандидат: простой {r['idle_h']:.0f} ч"
         else:
@@ -129,7 +145,7 @@ def show(rows, out=None):
 
 def cmd_reap(sx, a):
     roots = own_roots(a.root)
-    procs, rows = scan(sx, a.idle_hours, a.include_waiting, roots)
+    procs, rows = scan(sx, a.idle_hours, a.include_waiting, roots, a.superseded_idle_hours)
     show(rows)
     cands = [r for r in rows if r["cand"]]
     listfile = L.ldir() / "reap-list.json"

@@ -356,7 +356,7 @@ class ReapTest(Base):
         self.sess(702, line="r.a1.b2", idle_h=0.1)                  # наследник, текущая роль
         L.write_json(L.ldir() / "r.a1.b2.ack", {"pid": 702, "start": ST})
         self.sess(703, line="r.c3", role="plan", idle_h=25)         # простой, не текущая роль plan
-        self.sess(704, line="r.c3.d4", role="plan", idle_h=30)      # текущая роль plan, хоть и простой
+        self.sess(704, line="r.x9.d4", role="plan", idle_h=30)      # текущая роль plan (не наследник 703), хоть и простой
         self.sess(705, line="r.e5", role="coord", idle_h=40, cwd="/elsewhere/proj")
         self.sess(706, line="r.f6", role="boards", status="waiting", idle_h=50)
         self.sess(707, line="r.g7", role=None, idle_h=3)             # не роль Т3, простой меньше суток
@@ -395,7 +395,47 @@ class ReapTest(Base):
         v = self.verdicts(out)
         self.assertIn("текущая роль", v[701])                          # линия r.a1.b2 длиннее, чем у 702
         self.assertIn(" 2 ", v[701])
-        self.assertIn("простой 30", v[702])
+        self.assertIn("сменён наследником (поколение 2)", v[702])  # 701 продолжает линию 702
+
+    def test_superseded_without_ack(self):
+        """Наследник той же роли продолжает линию, квитанции нет (--resume, ночные передачи) — кандидат через 1 ч."""
+        self.sess(701, line="r.a1", idle_h=2)
+        self.sess(702, line="r.a1.b2.c3", idle_h=0.1)
+        _, out, _ = self.reap()
+        v = self.verdicts(out)
+        self.assertIn("сменён наследником (поколение 3)", v[701])
+        self.assertIn("текущая роль", v[702])
+        self.assertEqual([c["pid"] for c in L.read_json(L.ldir() / "reap-list.json")["candidates"]], [701])
+
+    def test_superseded_short_idle_kept(self):
+        self.sess(701, line="r.a1", idle_h=0.5)
+        self.sess(702, line="r.a1.b2", idle_h=0.1)
+        self.assertIn("живая", self.verdicts(self.reap()[1])[701])
+        _, out, _ = self.reap("--superseded-idle-hours", "0.25")
+        self.assertIn("сменён наследником", self.verdicts(out)[701])
+
+    def test_sibling_or_other_role_is_not_successor(self):
+        self.sess(701, line="r.a1.b2", idle_h=5)                    # сиблинг: та же длина, другая ветка
+        self.sess(702, line="r.a1.c3", idle_h=0.1)
+        self.sess(703, line="r.a10.x1", idle_h=0.1)                  # префикс без точки — не наследник r.a1
+        self.sess(704, line="r.a1", role="plan", idle_h=5)           # наследник есть, но роли backend
+        self.sess(705, line="r.e5", role=None, idle_h=5)             # не роль Т3
+        self.sess(706, line="r.e5.f6", role=None, idle_h=0.1)
+        v = self.verdicts(self.reap()[1])
+        for pid in (701, 704, 705):
+            self.assertNotIn("сменён", v[pid])
+            self.assertNotIn("кандидат", v[pid])
+
+    def test_superseded_busy_or_waiting_kept(self):
+        self.sess(701, line="r.a1", status="busy", idle_h=5)
+        self.sess(702, line="r.a1.b2", idle_h=0.1)
+        self.sess(703, line="r.c3", role="plan", status="waiting", idle_h=5)
+        self.sess(704, line="r.c3.d4", role="plan", idle_h=0.1)
+        _, out, _ = self.reap("--superseded-idle-hours", "0")
+        v = self.verdicts(out)
+        self.assertIn("живая", v[701])
+        self.assertIn("ждёт ввода", v[703])
+        self.assertEqual(L.read_json(L.ldir() / "reap-list.json")["candidates"], [])
 
     def test_line_subcommand(self):
         sx = FakeSys([P(700, 1, 700, "ttys001", "claude --resume x"), P(self.me, 700, self.me, "??", "python3")])
