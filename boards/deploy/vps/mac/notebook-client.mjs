@@ -26,6 +26,11 @@ export function loadConfig() {
     ),
     repoRoot: config.repoRoot,
     extraRoots: config.extraRoots,
+    // "old" (default): extra-root eval/boards files ride under their pre-split
+    // refs (supertick-eval/…, t-boards/…). "new": under their native paths —
+    // D-008 "close the old records": fresh entities under eval/… and
+    // boards/docs/…, the server archives whatever the sync leaves out.
+    evalRefs: config.evalRefs === "new" ? "new" : "old",
     git: config.git || "git",
     apiKey,
   };

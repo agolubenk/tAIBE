@@ -11,7 +11,10 @@ import { createHash } from "node:crypto";
 import { extraRoots, loadConfig, mapRef } from "./notebook-client.mjs";
 
 const PATHSPECS = [
-  ":(glob).claude/skills/**",
+  // the server corpus (apps/api/src/ssr/corpus.ts) takes skills as folders
+  // only — .claude/skills/<name>/<file> — so flat *.md at the skills root
+  // stay out; a sync that sends them aborts the whole push (RU-9).
+  ":(glob).claude/skills/*/**",
   ":(glob).claude/rules/*.md",
   ":(glob).claude/agents/*.md",
   ":(glob)supertick-eval/pipeline/genome/**",
@@ -100,7 +103,9 @@ async function main() {
   );
   for (const root of roots) {
     for (const path of listCorpus(root, config.git, homeSpecs)) {
-      const ref = mapRef(path, HOME_CORPUS);
+      // config.evalRefs "new": native eval/… paths — D-008 "close the old
+      // records"; "old" (default): the pre-split supertick-eval/… refs.
+      const ref = config.evalRefs === "new" ? path : mapRef(path, HOME_CORPUS);
       if (ref && !sources.has(ref)) sources.set(ref, [root, path]);
     }
   }
