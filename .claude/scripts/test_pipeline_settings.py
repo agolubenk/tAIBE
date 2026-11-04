@@ -225,6 +225,20 @@ class PipelineSettingsTest(unittest.TestCase):
         self.assertIn('no T_BOARDS_PIPELINE_KEY', ps.load(self.root, refresh=False)[1])
         self.assertEqual(Board.seen, [])
 
+    def test_a_url_the_key_is_never_sent_to_does_not_ask_keychain(self):
+        self.connect()
+        del os.environ['T_BOARDS_PIPELINE_KEY']
+        os.environ['T_BOARDS_URL'] = 'http://boards.example.org'  # plain http, not localhost
+        tools = os.path.join(self.root, 'infra', 'scripts', 'dev-ai')
+        os.makedirs(tools)
+        with open(os.path.join(tools, 'mcp-secret.sh'), 'w', encoding='utf-8') as f:
+            f.write('printf "%s\\n" "$1" >> "$(dirname "$0")/asked"\necho k-1\n')
+        for _ in range(5):
+            self.assertTrue(ps.enabled('swarm', self.root))  # bad URL → defaults
+        self.assertFalse(os.path.exists(os.path.join(tools, 'asked')))  # the key is not read for a refused URL
+        self.assertIn('https', ps.fetch(self.root)[1])
+        self.assertEqual(Board.seen, [])
+
     def test_unresolved_product_is_asked_once_per_ttl(self):
         self.connect()
         del os.environ['T_BOARDS_WORKSPACE']

@@ -239,14 +239,14 @@ def fetch(root=ROOT, timeout=TIMEOUT_SECONDS):
                           'set T_BOARDS_URL or T_BOARDS_ALLOWED_HOSTS in your own environment' % host)
     if not raw_url:
         return None, 'not connected: set boards.url in eval/nerve/config.json (or T_BOARDS_URL)'
+    if url is None:  # before the key: a URL the key is never sent to must not cost a Keychain call per prompt
+        return None, 'T_BOARDS_URL must be https (http only to localhost)'
     key = _key(root)
     if not key:
         error = ('not connected: no %s — a key limited to this product (env or Keychain, '
                  'infra/scripts/dev-ai/mcp-secret.sh)' % KEY_NAME)
         _remember(root, error)  # until the owner adds the key, Keychain is asked once per TTL, not on every prompt
         return None, error
-    if url is None:
-        return None, 'T_BOARDS_URL must be https (http only to localhost)'
     opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_tls_context()))
 
     deadline = time.monotonic() + timeout  # one budget for the whole refresh, however many calls it takes
