@@ -133,6 +133,12 @@ class Sys:
             res[pid] = Proc(pid, ppid, pgid, t[4], " ".join(t[5:10]), t[10] if len(t) > 10 else "")
         return res
 
+    def alive(self, p):
+        """Жив ли p (старт тот же — тот же процесс) без полного ps -A: ≈3 мс CPU вместо ≈355 мс (замер роли 6)."""
+        r = subprocess.run(["ps", "-o", "stat=,lstart=", "-p", str(p.pid)], capture_output=True, text=True, env=C_ENV)
+        t = r.stdout.split(None, 1)
+        return len(t) == 2 and not t[0].startswith("Z") and norm(t[1]) == norm(p.start)
+
     def env_line(self, pid):
         """TAIBE_LINEAGE из окружения процесса (ps -E: только свои процессы). Последнее вхождение — окружение
         печатается после аргументов, а в аргументах (первое сообщение) могло встретиться то же слово."""
@@ -379,12 +385,17 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     """Сторож предшественника p. Код возврата: 0 — снят или уже ушёл сам, 3 — проверка не прошла, p не тронут."""
     ack = ldir() / f"{child}.ack"
     deadline = sx.now() + timeout
+    # Паритет: tap требуем от наследника, только если он был у предшественника (ночью мониторов нет — TEAM-0 §10.6).
+    tap = re.compile(TAP.format(re.escape(role))) if role else None
+    if tap and not tapped(sx.procs(), p, tap):
+        log(f"у предшественника {p.pid} нет nerve.py tap {role} — от наследника tap не требую")
+        tap = None
     log(f"жду квитанцию {ack} до {timeout:.0f} с; предшественник {p.pid}, линия {parent or '—'}")
     while not ack.exists():
         if sx.now() >= deadline:
             log("квитанции нет — предшественника не трогаю")
             return 3
-        if not same(sx.procs(), p):
+        if not sx.alive(p):
             log("предшественник уже завершился сам")
             return 0
         sx.sleep(poll)
@@ -398,7 +409,6 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     if not same(procs, p):
         log("предшественник уже завершился сам")
         return 0
-    tap = re.compile(TAP.format(re.escape(role))) if role else None
     if tap:
         until = sx.now() + TAP_WAIT
         while not tapped(procs, s, tap):

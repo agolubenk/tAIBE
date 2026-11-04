@@ -44,7 +44,12 @@ class FakeSys:
         self.stubborn = set()
 
     def procs(self):
+        self.n_procs = getattr(self, "n_procs", 0) + 1
         return dict(self.p)
+
+    def alive(self, p):
+        q = self.p.get(p.pid)
+        return q is not None and L.norm(q.start) == L.norm(p.start)
 
     def env_line(self, pid):
         return self.env.get(pid)
@@ -229,6 +234,21 @@ class WatchTest(Base):
         self.assertEqual(self.run_watch(sx), 3, self.lines)
         self.assertEqual(sx.sent, [])
         self.assertIn("пропал", " ".join(self.lines))
+
+    def test_no_tap_on_either_side_takes_down(self):
+        """Ночь (TEAM-0 §10.6): монитора нет ни у предшественника, ни у наследника — паритет, P снят."""
+        sx = self.fake(with_tap=False)
+        sx.p.pop(303)
+        self.ack()
+        self.assertEqual(self.run_watch(sx), 0, self.lines)
+        self.assertNotIn(300, sx.p)
+        self.assertIn("tap не требую", " ".join(self.lines))
+
+    def test_pre_ack_wait_skips_full_ps(self):
+        """До квитанции — только дешёвый alive(p), полный procs() — один раз (паритет tap)."""
+        sx = self.fake()
+        self.assertEqual(self.run_watch(sx, timeout=300), 3)
+        self.assertEqual(sx.n_procs, 1)
 
     def test_busy_past_idle_wait_kept(self):
         sx = self.fake()
@@ -507,8 +527,9 @@ class RealProcessTest(Base):
 
     def test_successor_accepted_predecessor_gone(self):
         pred = self.spawn(PARENT, "pred")
-        time.sleep(1.0)
-        doomed = self.group_and_kids(pred.pid) | {pred.pid}
+        until = time.time() + 15  # под нагрузкой передний план retire (ps -A ≈0,4 с) ещё в группе — ждём, пока уйдёт
+        while len(doomed := self.group_and_kids(pred.pid) | {pred.pid}) != 4 and time.time() < until:
+            time.sleep(0.2)
         self.assertEqual(len(doomed), 4, doomed)  # claude, sleep в группе, сирота в группе, потомок в своей группе
         succ = self.spawn(CHILD, "succ")
         text = self.wait_log("TERM")
