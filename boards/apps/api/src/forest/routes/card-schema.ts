@@ -25,5 +25,9 @@ export const cardMetaSchema = z
     contextPack: z.string().nullable(),
     updatedBy: z.string().nullable(),
     updatedAt: nullableResponseTimestamp,
+    mirrored: z.boolean().openapi({
+      description:
+        "Notion is the source of this card's Notion fields: it came from a Notion page and the mirror runs for the workspace (R-081). They are read-only while true.",
+    }),
   })
   .openapi("ForestCardMeta");

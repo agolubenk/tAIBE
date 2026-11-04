@@ -15,7 +15,13 @@ const FIXED = {
 
 // A card without a row has the defaults, as the history trigger assumes.
 function defaultFields(taskId: string): Record<string, unknown> {
-  const { taskId: _, updatedBy, updatedAt, ...fields } = toCardMeta(taskId);
+  const {
+    taskId: _,
+    updatedBy,
+    updatedAt,
+    mirrored,
+    ...fields
+  } = toCardMeta(taskId);
   return fields;
 }
 

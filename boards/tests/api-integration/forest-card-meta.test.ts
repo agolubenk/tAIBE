@@ -1,5 +1,12 @@
 import { and, eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 import db from "../../apps/api/src/database";
 import {
   agentJournalTable,
@@ -184,21 +191,73 @@ describe("API integration: card fields (R-024, R-081)", () => {
     ).toBe(200);
   });
 
-  it("keeps a mirrored card's Notion fields read-only, agent fields open (R-081)", async () => {
-    const forest = await createForest();
-    const task = await addTask(forest.project.id, "Mirrored");
+  async function notionCard(forest: Forest) {
+    const task = await addTask(forest.project.id, "From Notion");
     await db.insert(cardMetaTable).values({
       taskId: task.id,
       workspaceId: forest.workspace.id,
       notionPageId: "notion-page-1",
       updatedBy: "import",
     });
+    return task;
+  }
+  const mirrorOn = (workspaceId: string) => {
+    vi.stubEnv("NOTION_MIRROR_WORKSPACE_ID", workspaceId);
+    vi.stubEnv("NOTION_MIRROR_TOKEN_FILE", "/run/secrets/notion-token");
+    vi.stubEnv("NOTION_MIRROR_DATABASES", "db-1");
+  };
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
+  it("keeps a mirrored card's Notion fields read-only, agent fields open (R-081)", async () => {
+    const forest = await createForest();
+    mirrorOn(forest.workspace.id);
+    const task = await notionCard(forest);
+
+    expect((await forest.owner(meta(task.id))).body).toMatchObject({
+      mirrored: true,
+    });
     const owner = await ownerPut(forest, task.id, { severity: "P0" });
     expect(owner.status).toBe(403);
     expect(owner.body.message).toContain("mirror_read_only");
+    const idea = await ownerPut(forest, task.id, { halfBaked: true });
+    expect(idea.status).toBe(403);
+    expect(idea.body.message).toContain("mirror_read_only");
 
     const agentFields = await ownerPut(forest, task.id, { executor: "dev-1" });
     expect(agentFields.status).toBe(200);
+  });
+
+  it("gives a Notion card's fields to the owner once the mirror is off (TB-71)", async () => {
+    const forest = await createForest();
+    // The mirror runs, but for another workspace: off for this one.
+    mirrorOn("another-workspace");
+    const task = await notionCard(forest);
+
+    expect((await forest.owner(meta(task.id))).body).toMatchObject({
+      notionPageId: "notion-page-1",
+      mirrored: false,
+    });
+    const marked = await ownerPut(forest, task.id, { halfBaked: true });
+    expect(marked.status).toBe(200);
+    expect(marked.body).toMatchObject({ halfBaked: true, mirrored: false });
+    expect((await ownerPut(forest, task.id, { halfBaked: false })).status).toBe(
+      200,
+    );
+    expect((await ownerPut(forest, task.id, { severity: "P1" })).status).toBe(
+      200,
+    );
+
+    // Half-baked stays the owner's alone (Q-011).
+    const token = await lease(forest, task.id);
+    const agentMark = await agentPut(
+      forest,
+      task.id,
+      { halfBaked: true },
+      token,
+    );
+    expect(agentMark.status).toBe(403);
+    expect(agentMark.body.message).toContain("owner_session_required");
   });
 });

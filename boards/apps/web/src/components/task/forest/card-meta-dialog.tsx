@@ -39,8 +39,10 @@ export function CardMetaDialog({
   const update = useUpdateCardMeta(workspaceId, taskId);
   const { patch, invalid } = draftToPatch(meta, draft);
   const changed = Object.keys(patch).length > 0;
-  // A card linked to Notion takes Notion's own fields from there (R-081).
-  const mirrored = Boolean(meta.notionPageId);
+  // Notion's own fields come from there while the mirror runs for this
+  // workspace (R-081); the API decides, as a Notion page id alone no longer
+  // means Notion is the source (TB-71).
+  const mirrored = meta.mirrored;
 
   const set =
     <K extends keyof MetaDraft>(key: K) =>

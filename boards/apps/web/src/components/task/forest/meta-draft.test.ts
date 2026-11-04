@@ -19,6 +19,7 @@ const meta: CardMeta = {
   contextPack: null,
   updatedBy: null,
   updatedAt: null,
+  mirrored: false,
 };
 
 describe("draftToPatch", () => {

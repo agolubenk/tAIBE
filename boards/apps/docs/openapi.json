@@ -4576,6 +4576,10 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "mirrored": {
+            "type": "boolean",
+            "description": "Notion is the source of this card's Notion fields: it came from a Notion page and the mirror runs for the workspace (R-081). They are read-only while true."
           }
         },
         "required": [
@@ -4595,7 +4599,8 @@
           "costUsd",
           "contextPack",
           "updatedBy",
-          "updatedAt"
+          "updatedAt",
+          "mirrored"
         ]
       },
       "ForestCardHistory": {
@@ -4871,6 +4876,10 @@
                   "null"
                 ],
                 "format": "date-time"
+              },
+              "mirrored": {
+                "type": "boolean",
+                "description": "Notion is the source of this card's Notion fields: it came from a Notion page and the mirror runs for the workspace (R-081). They are read-only while true."
               }
             },
             "required": [
@@ -4889,7 +4898,8 @@
               "costUsd",
               "contextPack",
               "updatedBy",
-              "updatedAt"
+              "updatedAt",
+              "mirrored"
             ]
           },
           "lease": {
