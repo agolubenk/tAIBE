@@ -90,7 +90,8 @@ def poll_github(ctx):
         n = pr["number"]
         open_now.add(str(n))
         p = known.setdefault(str(n), {"head": "", "updated": "", "seen": [], "changes_by": []})
-        if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"]:
+        # «author» — признак разобранного PR: в rev 1 head и updated писались до сбоя _gh_view (SE-40).
+        if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"] and "author" in p:
             continue
         if not p["head"]:
             ctx.emit(f"gh:new:{n}", "pr.new", DIGEST, ["coord"], f"#{n} открыт: {pr['title'][:80]}", "github")

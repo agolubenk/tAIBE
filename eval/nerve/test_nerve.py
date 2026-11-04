@@ -244,6 +244,17 @@ class GithubPollTest(unittest.TestCase):
         sources.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
         self.assertEqual(self.kinds().count(("pr.closed", "#457 влит")), 1)
 
+    def test_stuck_open_pr_without_author_is_resolved_after_upgrade(self):
+        # rev 1 записывал head и updated до падения _gh_view: PR выглядел увиденным, но author и checks пусты.
+        sha, upd = "9" * 40, "2026-11-04T10:00:00Z"
+        self.ctx.state["github"] = {"etag": 'W/"e1"', "prs": {"458": {"head": sha, "updated": upd,
+                                                                       "seen": [], "changes_by": []}}}
+        sources.run = FakeGh([_pr(458, sha, upd)])
+        sources.poll_github(self.ctx)
+        p = self.ctx.state["github"]["prs"]["458"]
+        self.assertEqual(p.get("checks"), ["SUCCESS"])
+        self.assertIn("author", p)
+
     def test_one_failing_pr_does_not_stop_the_pass_and_is_retried(self):
         sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)], merged={9}, broken={1})
         self.ctx.state["github"] = {"etag": "", "rev": sources.GH_STATE_REV,
