@@ -39,8 +39,10 @@ export function CardMetaDialog({
   const update = useUpdateCardMeta(workspaceId, taskId);
   const { patch, invalid } = draftToPatch(meta, draft);
   const changed = Object.keys(patch).length > 0;
-  // A card linked to Notion takes Notion's own fields from there (R-081).
-  const mirrored = Boolean(meta.notionPageId);
+  // The server says when the card's Notion fields are read-only: only while
+  // the Notion mirror runs for the workspace (R-081). A card imported long
+  // ago is fully editable once the mirror is off (R-084).
+  const mirrored = Boolean(meta.mirrored);
 
   const set =
     <K extends keyof MetaDraft>(key: K) =>

@@ -24,7 +24,7 @@ export function decideCardWrite(
     return {
       ok: false,
       code: "mirror_read_only",
-      message: `${notion.join(", ")} come from Notion while it is the source (R-081)`,
+      message: `${notion.join(", ")} are read-only while the Notion mirror runs (R-081)`,
     };
   }
   if (fields.includes("halfBaked") && ctx.actorKind !== "owner-ui") {

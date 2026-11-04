@@ -4482,6 +4482,9 @@
           "taskId": {
             "type": "string"
           },
+          "mirrored": {
+            "type": "boolean"
+          },
           "kind": {
             "type": "string",
             "enum": [
@@ -4580,6 +4583,7 @@
         },
         "required": [
           "taskId",
+          "mirrored",
           "kind",
           "severity",
           "backlogId",
@@ -4777,6 +4781,9 @@
           "meta": {
             "type": "object",
             "properties": {
+              "mirrored": {
+                "type": "boolean"
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -4874,6 +4881,7 @@
               }
             },
             "required": [
+              "mirrored",
               "kind",
               "severity",
               "backlogId",

@@ -1,6 +1,7 @@
 import { HTTPException } from "hono/http-exception";
 import getTaskRelations from "../../task-relation/controllers/get-task-relations";
 import { loadCardMeta, toCardMeta } from "../card/card-meta";
+import { isMirrorActive } from "../card/mirror-active";
 import {
   CONTEXT_LIMITS,
   type ContextSection,
@@ -50,7 +51,11 @@ export async function buildCardContext(
   const truncated = (Object.keys(sections) as ContextSection[]).filter(
     (section) => sections[section].cut,
   );
-  const { taskId: _, ...fields } = toCardMeta(taskId, meta);
+  const { taskId: _, ...fields } = toCardMeta(
+    taskId,
+    meta,
+    isMirrorActive(workspaceId),
+  );
 
   return {
     ...task,

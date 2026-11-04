@@ -7,6 +7,7 @@ import { writeJournal } from "../journal";
 import { loadCardMeta, toCardMeta } from "./card-meta";
 import { type CardMetaPatch, patchFields } from "./card-patch";
 import { decideCardWrite } from "./decide-card-write";
+import { isMirrorActive } from "./mirror-active";
 import { writeCardMeta } from "./write-card-meta";
 
 export const CARD_META_ACTION = "card.meta";
@@ -33,14 +34,16 @@ export async function setCardMeta(input: {
         })
       : Promise.resolve();
 
+  let mirrorActive = false;
   try {
     if (actor.kind === "agent") {
       await assertAgentLease(actor, taskId, input.headers);
     }
+    mirrorActive = isMirrorActive(workspaceId);
     const current = await loadCardMeta(taskId);
     const decision = decideCardWrite(fields, {
       actorKind: actor.kind,
-      mirrored: Boolean(current?.notionPageId),
+      mirrored: mirrorActive && Boolean(current?.notionPageId),
       agentAuthored: actor.kind === "agent" && (await isAgentAuthored(taskId)),
     });
     if (!decision.ok) throw new ForestError(decision.code, decision.message);
@@ -56,5 +59,5 @@ export async function setCardMeta(input: {
     actorId: actor.id,
   });
   await journal("allowed", fields.join(","));
-  return toCardMeta(taskId, row);
+  return toCardMeta(taskId, row, mirrorActive);
 }

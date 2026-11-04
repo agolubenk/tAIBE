@@ -3,6 +3,7 @@ import type { CardMeta } from "./card-types";
 import { draftToPatch, toMetaDraft } from "./meta-draft";
 
 const meta: CardMeta = {
+  mirrored: false,
   kind: "task",
   severity: null,
   backlogId: "T-1",
