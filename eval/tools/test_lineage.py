@@ -211,6 +211,33 @@ class WatchTest(Base):
         self.assertEqual(self.run_watch(sx), 0)
         self.assertGreaterEqual(sx.t, 1120)
 
+    def test_successor_dies_while_predecessor_busy(self):
+        sx = self.fake()
+        sx.st[300] = lambda t: "busy" if t < 1120 else "idle"
+        self.ack()
+        sx.at(30, lambda: [sx.p.pop(q) for q in (402, 401, 400)])
+        self.assertEqual(self.run_watch(sx), 3, self.lines)
+        self.assertEqual(sx.sent, [])
+        self.assertIn(300, sx.p)
+        self.assertIn("не жив", " ".join(self.lines))
+
+    def test_tap_dropped_while_predecessor_busy(self):
+        sx = self.fake()
+        sx.st[300] = lambda t: "busy" if t < 1120 else "idle"
+        self.ack()
+        sx.at(30, lambda: sx.p.pop(402))
+        self.assertEqual(self.run_watch(sx), 3, self.lines)
+        self.assertEqual(sx.sent, [])
+        self.assertIn("пропал", " ".join(self.lines))
+
+    def test_busy_past_idle_wait_kept(self):
+        sx = self.fake()
+        sx.st[300] = "busy"
+        self.ack()
+        self.assertEqual(self.run_watch(sx), 3, self.lines)
+        self.assertEqual(sx.sent, [])
+        self.assertIn("занят дольше", " ".join(self.lines))
+
     def test_vscode_host_window_untouched(self):
         sx = self.fake(pred_host="/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin)")
         self.ack()

@@ -352,6 +352,10 @@ def take_down(sx, p, line, protect, log):
 TAP = "nerve\\.py\\s+tap\\s+{}(\\s|$)"
 
 
+def tapped(procs, s, tap):
+    return any(tap.search(procs[q].command) for q in descendants(procs, s.pid) if q in procs)
+
+
 def successor_problem(sx, procs, p, s, a, child):
     """Почему квитанции нельзя верить (None — можно): наследник жив, это claude с той же линией, не сам p и не его
     потомок (иначе снятие p убило бы и наследника)."""
@@ -394,9 +398,10 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     if not same(procs, p):
         log("предшественник уже завершился сам")
         return 0
-    if role:
-        tap, until = re.compile(TAP.format(re.escape(role))), sx.now() + TAP_WAIT
-        while not any(tap.search(procs[q].command) for q in descendants(procs, s.pid) if q in procs):
+    tap = re.compile(TAP.format(re.escape(role))) if role else None
+    if tap:
+        until = sx.now() + TAP_WAIT
+        while not tapped(procs, s, tap):
             if sx.now() >= until or not same(procs, s):
                 log(f"у наследника {s.pid} нет nerve.py tap {role} за {TAP_WAIT} с — предшественника не трогаю")
                 return 3
@@ -407,10 +412,17 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     while sx.status(p.pid) == "busy" and sx.now() < until:
         sx.sleep(poll)
     procs = sx.procs()
-    protect = {s.pid} | descendants(procs, s.pid)
     if not same(procs, p):
         log("предшественник уже завершился сам")
         return 0
+    # За IDLE_WAIT мир мог смениться: ход не кончился — не рвём его; наследник упал или снял tap — роль без сессии.
+    why = (sx.status(p.pid) == "busy" and f"предшественник {p.pid} занят дольше {IDLE_WAIT} с") or \
+        successor_problem(sx, procs, p, procs.get(s.pid), a, child) or \
+        (tap and not tapped(procs, s, tap) and f"у наследника {s.pid} пропал nerve.py tap {role}")
+    if why:
+        log("перед снятием: " + why + " — предшественника не трогаю")
+        return 3
+    protect = {s.pid} | descendants(procs, s.pid)
     return 0 if take_down(sx, p, parent, protect, log) else 3
 
 
