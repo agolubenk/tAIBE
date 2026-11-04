@@ -36,6 +36,9 @@ def host_root(require: str = "") -> Path:
     root = root.resolve()
     if not root.is_dir():
         raise HostRootError(f"{ENV}={raw!r}: каталога нет")
+    if root == LAYER_ROOT:
+        # Хаб без хоста подставляет сюда свою же папку: это режим по умолчанию, не внешний хост.
+        return LAYER_ROOT
     if require and not (root / require).is_file():
         raise HostRootError(
             f"{ENV}={raw!r}: нет {require} — каталог не тот или данные хоста не созданы "
