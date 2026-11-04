@@ -30,10 +30,13 @@ DOWN_TTL = 120  # сек: после сетевого сбоя не долбим
 # Один локальный инференс на машину: генерацию и эмбеддинги всех процессов консилиума (воркер,
 # облачные полосы воркера, контекст, планировщик) пропускает один файловый лок. Модельный лок
 # (`large_model`) держит только резидентность L-моделей, S-модели и эмбеддинги шли мимо него.
+# Лок — у хоста, а не у копии кода: процессы консилиума из старой и новой папки слоя на одном хосте
+# делят один лок, иначе два инференса пойдут на ноутбуке параллельно.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import REPO_ROOT as _HOST_ROOT  # noqa: E402
+
 LOCAL_INFERENCE_LOCK = os.environ.get(
-    "AI_COUNCIL_LOCAL_LOCK",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".claude", "council",
-                 "ollama-local.lock"))
+    "AI_COUNCIL_LOCAL_LOCK", str(_HOST_ROOT / ".claude" / "council" / "ollama-local.lock"))
 
 
 @contextmanager

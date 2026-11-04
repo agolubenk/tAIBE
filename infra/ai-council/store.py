@@ -22,8 +22,36 @@ import time
 import uuid
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = REPO_ROOT / ".claude/council/council.db"
+import sys
+
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config import COUNCIL_DB_REL, REPO_ROOT  # noqa: E402 — корень хоста (TAIBE_HOST_ROOT)
+
+DB_PATH = REPO_ROOT / COUNCIL_DB_REL
+INIT_ENV = "AI_COUNCIL_INIT_DB"
+
+
+class CouncilDbMissing(RuntimeError):
+    """Рабочей council.db нет, а создавать её молча нельзя."""
+
+
+def ensure_db_allowed(path: Path) -> None:
+    """Рабочая база (DB_PATH) создаётся только явно: env AI_COUNCIL_INIT_DB=1.
+
+    Иначе процесс из копии слоя без TAIBE_HOST_ROOT создал бы рядом с собой пустую council.db и
+    работал бы с ней вместо базы хоста: две живые базы, корпус пуст, прогоны теряются. Явные пути
+    (тесты, --db) не трогаем — за них отвечает вызывающий.
+    """
+    if path.exists() or path.resolve() != DB_PATH.resolve():
+        return
+    if os.environ.get(INIT_ENV, "").strip() == "1":
+        return
+    raise CouncilDbMissing(
+        f"нет базы консилиума {DB_PATH}. Хост задаёт TAIBE_HOST_ROOT "
+        f"(сейчас {os.environ.get('TAIBE_HOST_ROOT') or 'не задан — хост = этот репозиторий'}). "
+        f"Новая база — только явно: {INIT_ENV}=1 python3 infra/ai-council/store.py")
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 SCHEMA_VERSION = 1
@@ -48,6 +76,7 @@ class Store:
 
     def __init__(self, path: Path | str = DB_PATH):
         self.path = Path(path)
+        ensure_db_allowed(self.path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # isolation_level=None → управляем транзакциями руками (нужно для BEGIN IMMEDIATE)
         self.conn = sqlite3.connect(str(self.path), timeout=15.0, isolation_level=None)

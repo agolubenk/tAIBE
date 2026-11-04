@@ -10,11 +10,22 @@ Status на борде, наличие Notion-ключа) выражается �
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+_SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.append(str(_SCRIPTS))
+
+from host_root import HostRootError, LAYER_ROOT, host_root  # noqa: E402,F401
+
+# Единственный корень данных консилиума: council.db, логи, ключи, корпус знаний, код хоста для
+# поиска и сверки. Остальные модули берут его отсюда. Код слоя (config.toml, schema.sql, промпты)
+# читается от своего пути: CONFIG_PATH и HERE в модулях. TAIBE_HOST_ROOT без council.db — ошибка.
+COUNCIL_DB_REL = ".claude/council/council.db"
+REPO_ROOT = host_root(require=COUNCIL_DB_REL)
 CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
 # Канонический словарь Module (docs/plans/notion-board.md). Новых опций не создаём.

@@ -32,8 +32,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REPO_ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
+
+from config import REPO_ROOT  # noqa: E402 — ключи и .continue/.env лежат у хоста
 
 from netutil import SSL_CTX   # noqa: E402  — python.org на macOS не видит системные CA
 from ollama import Completion  # noqa: E402  — один тип результата на оба яруса

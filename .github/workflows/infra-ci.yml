@@ -41,6 +41,7 @@ jobs:
         run: |
           python3 -m pip install --quiet -r requirements.txt
           python3 selftest.py
+          python3 selftest_host_root.py
       - name: closed-items index and docs links
         run: |
           python3 infra/scripts/misc/done-index.py --check

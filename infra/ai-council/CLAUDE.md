@@ -9,6 +9,12 @@ Python-сервис вне npm workspaces: `supervisor.py` (оркестраци
 
 ## Логика решений
 
+- **Код — у слоя, данные — у хоста (`TAIBE_HOST_ROOT`).** Корень данных один, `config.REPO_ROOT`: `council.db`, логи,
+  лок Ollama, ключи и `.continue/.env`, корпус знаний, код хоста для поиска и сверки. Модули берут его из `config`, а не
+  считают от `__file__`. `config.toml`, `schema.sql` и промпты читаются от своего пути. Без env хост — сам репозиторий.
+  Неверный env (относительный путь, нет каталога, нет `.claude/council/council.db`) — ошибка на импорте. Рабочая база
+  не создаётся молча: `AI_COUNCIL_INIT_DB=1 python3 infra/ai-council/store.py`. Схему одной базы, которую читают две
+  копии кода, меняем только добавлением (`ADDED_COLUMNS`). Проверка — `selftest_host_root.py [--live <хост>]`.
 - **Локальные модели (Ollama) — строго последовательно:** никаких параллельных или пакетных local-инференсов —
   железо разработчика этого не выдерживает (memory-guard откладывает прогон, а не грузит модель в своп). Между
   процессами — файловый лок `ollama.local_inference_slot` на каждый вызов. Облачные полосы воркера (`council-cloud-N`,
@@ -58,7 +64,8 @@ Python-сервис вне npm workspaces: `supervisor.py` (оркестраци
 
 ## Гейт
 
-`npm run ai-council:selftest` и `ai-council:doctor` зелёные; изменение схемы БД — миграция в `store.py`, не ручной SQL.
+`npm run ai-council:selftest` и `ai-council:doctor` зелёные; правка корней путей — ещё `python3 -E -s
+infra/ai-council/selftest_host_root.py`; изменение схемы БД — миграция в `store.py`, не ручной SQL.
 Модели и их роли — `docs/ai/LOCAL_OLLAMA_MODELS.md`.
 
 ## Адверсариальная проверка — ≥ 3 участника (обязательно)
