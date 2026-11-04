@@ -4,6 +4,7 @@
 
 Запуск: python3 -I .claude/hooks/test_merge_guard_shell.py  (только эти формы; все проверки — test_merge_guard.py)
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,12 @@ from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
 
 on_main, on_branch = repo_on("main"), repo_on("fix/a")
+# Псевдонимы gh — из своего конфига, а не с машины: на раннере ~/.config/gh нет, и `gh co` (псевдоним gh по
+# умолчанию) там не прочитать — r21 «не запись» падали бы только в CI.
+GH_CONF = TMP / "gh-shell"
+GH_CONF.mkdir()
+(GH_CONF / "config.yml").write_text("aliases:\n    co: pr checkout\n")
+os.environ["GH_CONFIG_DIR"] = str(GH_CONF)
 
 # --- автоматическое ревью 4 на f24846b9b: переполнение, деление слов, <(…), <<<, stdin, скрипты, $(…) в цели ---
 many = " ".join(f"f/{i}" for i in range(16))
@@ -353,7 +360,7 @@ for form in ("git restore --source=feat . && bash ok.sh", "git checkout feat -- 
              "git checkout feat -- scripts && make -C scripts"):
     bash(f"r13, вслепую: {form!r}", form, True, cwd=o)
 for form in ("gh pr view 5 && bash ok.sh", "gh run view 1 && bash ok.sh", "git restore notes.md && bash ok.sh",
-             "git checkout -- notes.md docs/a.md && bash scripts/ok.sh", "git worktree list && bash ok.sh",
+             "git checkout -- notes.md pages/a.md && bash scripts/ok.sh", "git worktree list && bash ok.sh",
              "gh release list && make", "git restore --source=feat docs && bash scripts/ok.sh", "git -C . status && bash ok.sh"):
     bash(f"r13, видно: {form!r}", form, False, cwd=o)
 
