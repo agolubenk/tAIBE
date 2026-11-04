@@ -65,10 +65,13 @@ role_num() {
 # поколение — число точек. Один шаблон запуска делает сессии единообразными, id — различимыми в журналах, на
 # карточках (метка session) и в handoff: наследник не путает свою работу с работой предка или сиблинга.
 child_lineage() {
-  local tail
+  local tail parent
   tail="$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null | head -c 4)" || true
   [ -n "$tail" ] || tail="$$"
-  printf '%s.%s' "${TAIBE_LINEAGE:-r}" "$tail"
+  # Сессия после --resume теряет TAIBE_LINEAGE: линию даёт её первый промпт (lineage.py line), иначе корень «r».
+  parent="${TAIBE_LINEAGE:-}"
+  [ -n "$parent" ] || parent="$(python3 -I "$TOOLS/lineage.py" line 2>/dev/null)" || parent=""
+  printf '%s.%s' "${parent:-r}" "$tail"
 }
 generation() { printf '%s' "$1" | tr -cd '.' | wc -c | tr -d ' '; }
 

@@ -14,7 +14,6 @@ import sys
 import lineage as L
 
 ROLE_RE = re.compile(r"/genome/([a-z]+)\.json")
-LINE_ARG_RE = re.compile(r"Линия: (r(?:\.[a-z0-9]+)+)")
 
 
 def add_reap_args(p):
@@ -84,10 +83,7 @@ def scan(sx, idle_hours, include_waiting, roots):
         p = procs.get(d["pid"])
         if p is None or L.argv0(p) != "claude" or L.norm(p.start) != L.norm(d.get("procStart")):
             continue  # файл от завершённой сессии или pid уже у другого процесса
-        line = sx.env_line(p.pid)
-        if not L.valid_line(line or ""):
-            m = LINE_ARG_RE.search(p.command)
-            line = m.group(1) if m else None
+        line = L.session_line(sx, p)
         m = ROLE_RE.search(p.command)
         last = max(d.get("updatedAt") or 0, d.get("statusUpdatedAt") or 0) / 1000.0
         status = d.get("status") or "?"
@@ -120,7 +116,8 @@ def scan(sx, idle_hours, include_waiting, roots):
     return procs, rows
 
 
-def show(rows, out=sys.stdout):
+def show(rows, out=None):
+    out = out or sys.stdout  # не по умолчанию в сигнатуре: sys.stdout подменяют после импорта
     print(f"{'pid':>6}  {'имя':<20} {'статус':<8} {'возраст':>7} {'простой':>7}  {'роль':<8} {'пок.':>4}  "
           f"{'ack':<4}  вердикт · cwd", file=out)
     for r in sorted(rows, key=lambda r: (not r["cand"], -r["idle_h"])):

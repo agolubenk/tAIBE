@@ -3,6 +3,8 @@
 
   lineage.py record --line L --terminal terminal|iterm|print [--window-id N] [--tty /dev/ttysNNN] [--role K]
       spawn_session.sh при открытии окна: id окна и tty вкладки → <каталог>/<L>.json
+  lineage.py line
+      своя линия: TAIBE_LINEAGE → «Линия:» в аргументах claude → первый промпт транскрипта (сессия после --resume)
   lineage.py ack
       наследник после приёма, перевзвода Monitor и кронов: квитанция <TAIBE_LINEAGE>.ack (pid и старт его claude)
   lineage.py retire --child L [--role K] [--timeout 5400] [--foreground]
@@ -27,6 +29,7 @@ from pathlib import Path
 
 Proc = namedtuple("Proc", "pid ppid pgid tty start command")
 LINE_RE = re.compile(r"^r(\.[a-z0-9]+)*$")
+LINE_ARG_RE = re.compile(r"Линия: (r(?:\.[a-z0-9]+)+)")  # в первом сообщении, которое пишет spawn_session.sh
 SHELLS = {"login", "zsh", "bash", "sh", "fish", "tcsh", "csh"}
 TERM_WAIT = 10          # с между TERM и KILL
 TAP_WAIT = 180          # с на взвод Monitor наследника (nerve.py tap <роль>)
@@ -76,6 +79,10 @@ def ldir():
 
 def sessions_dir():
     return Path(os.environ.get("CLAUDE_SESSIONS_DIR") or Path.home() / ".claude" / "sessions")
+
+
+def projects_dir():
+    return Path(os.environ.get("CLAUDE_PROJECTS_DIR") or Path.home() / ".claude" / "projects")
 
 
 def norm(s):
@@ -169,6 +176,50 @@ class Sys:
 
     def sleep(self, s):
         time.sleep(s)
+
+
+def transcript_line(session_id):
+    """Линия из первого промпта транскрипта: у сессии, поднятой через --resume, нет ни TAIBE_LINEAGE, ни первого
+    сообщения в аргументах (так 05.11 воскресили роли после лимита)."""
+    if not re.fullmatch(r"[0-9a-f-]{36}", str(session_id or "")):
+        return None
+    for f in sorted(projects_dir().glob(f"*/{session_id}.jsonl")):
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for i, ln in enumerate(fh):
+                    if i >= 400:
+                        break
+                    if '"user"' not in ln:
+                        continue
+                    try:
+                        r = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if r.get("type") != "user" or r.get("isMeta"):
+                        continue
+                    c = (r.get("message") or {}).get("content")
+                    text = c if isinstance(c, str) else " ".join(
+                        str(x.get("text", "")) for x in c or [] if isinstance(x, dict))
+                    m = LINE_ARG_RE.search(text)
+                    return m.group(1) if m else None  # только первый промпт: дальше линии чужих сессий в цитатах
+        except OSError:
+            continue
+    return None
+
+
+def session_line(sx, p):
+    """Линия сессии p: окружение → «Линия:» в аргументах → первый промпт транскрипта (sessions/<pid>.json того же
+    старта, иначе pid уже у другого процесса)."""
+    line = sx.env_line(p.pid)
+    if valid_line(line or ""):
+        return line
+    m = LINE_ARG_RE.search(p.command)
+    if m:
+        return m.group(1)
+    d = read_json(sessions_dir() / f"{p.pid}.json")
+    if isinstance(d, dict) and norm(d.get("procStart")) == norm(p.start):
+        return transcript_line(d.get("sessionId"))
+    return None
 
 
 def ancestor_claude(procs, pid):
@@ -397,23 +448,33 @@ def cmd_record(sx, a):
     return 0
 
 
-def cmd_ack(sx, a):
-    line = os.environ.get("TAIBE_LINEAGE", "")
+def cmd_line(sx, a):
+    """Своя линия — для spawn_session.sh, когда TAIBE_LINEAGE в окружении нет (сессия поднята через --resume)."""
+    me = ancestor_claude(sx.procs(), os.getpid())
+    line = os.environ.get("TAIBE_LINEAGE", "") or (session_line(sx, me) if me else None) or ""
     if not valid_line(line):
-        return die("нет TAIBE_LINEAGE — сессию открыл не spawn_session.sh, квитанция не нужна")
+        return 1
+    print(line)
+    return 0
+
+
+def cmd_ack(sx, a):
     me = ancestor_claude(sx.procs(), os.getpid())
     if me is None:
         return die("не под claude: квитанцию пишет сама сессия-наследник из своего Bash")
+    line = os.environ.get("TAIBE_LINEAGE", "") or session_line(sx, me) or ""
+    if not valid_line(line):
+        return die("нет линии (TAIBE_LINEAGE, первый промпт) — сессию открыл не spawn_session.sh, квитанция не нужна")
     write_json(ldir() / f"{line}.ack", {"line": line, "pid": me.pid, "start": me.start, "at": stamp()})
     print(f"ack: линия {line}, claude {me.pid} — предшественника снимет его сторож")
     return 0
 
 
 def cmd_retire(sx, a):
-    parent = os.environ.get("TAIBE_LINEAGE", "")
+    p = ancestor_claude(sx.procs(), os.getpid())
+    parent = os.environ.get("TAIBE_LINEAGE", "") or (session_line(sx, p) if p else None) or ""
     if not valid_line(a.child) or (parent and not a.child.startswith(parent + ".")):
         return die(f"линия наследника {a.child!r} не продолжает свою ({parent or '—'})")
-    p = ancestor_claude(sx.procs(), os.getpid())
     if p is None:
         print("retire: запуск не из сессии claude — снимать некого")
         return 0
@@ -446,6 +507,7 @@ def main(argv=None, sx=None):
     r.add_argument("--tty", default="")
     r.add_argument("--role", default="")
     sub.add_parser("ack")
+    sub.add_parser("line")
     t = sub.add_parser("retire")
     t.add_argument("--child", required=True)
     t.add_argument("--role", default="")
@@ -456,7 +518,8 @@ def main(argv=None, sx=None):
     add_reap_args(sub.add_parser("reap"))
     a = ap.parse_args(argv)
     sx = sx or Sys()
-    return {"record": cmd_record, "ack": cmd_ack, "retire": cmd_retire, "reap": cmd_reap}[a.cmd](sx, a)
+    return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire,
+            "reap": cmd_reap}[a.cmd](sx, a)
 
 
 if __name__ == "__main__":

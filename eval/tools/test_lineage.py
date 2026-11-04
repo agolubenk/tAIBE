@@ -277,14 +277,15 @@ class ReapTest(Base):
         self.me = os.getpid()
         self.procs = [P(100, 1, 100, "??", TERMINAL), P(700, 100, 700, "ttys001", "claude"),
                       P(self.me, 700, self.me, "??", "python3 lineage.py reap")]
-        self.env_l, self.n = {}, 0
+        self.env_l = {}
+        self.now = 1.8e9  # часы FakeSys: updatedAt в sessions/*.json — мс от эпохи
 
     def sess(self, pid, line=None, role="backend", status="idle", idle_h=1.0, cwd=None, start=ST, pstart=None):
         cmd = "claude" + (f" --settings /x/genome/{role}.json" if role else "")
         self.procs.append(P(pid, 100, pid, f"ttys{pid % 1000:03d}", cmd, start))
         if line:
             self.env_l[pid] = line
-        now = 1000.0
+        now = self.now
         L.write_json(L.sessions_dir() / f"{pid}.json", {
             "pid": pid, "procStart": pstart or start, "name": f"s-{pid}", "status": status,
             "cwd": str(cwd or self.root / "worktrees" / "x"), "startedAt": (now - 48 * 3600) * 1000,
@@ -292,6 +293,7 @@ class ReapTest(Base):
 
     def reap(self, *args, stdin=None):
         sx = FakeSys(self.procs, env=self.env_l)
+        sx.t = self.now
         out = io.StringIO()
         with mock.patch("sys.stdout", out), mock.patch("sys.stderr", out), \
                 mock.patch("sys.stdin", stdin or io.StringIO("")):
@@ -309,7 +311,7 @@ class ReapTest(Base):
         self.sess(704, line="r.c3.d4", role="plan", idle_h=30)      # текущая роль plan, хоть и простой
         self.sess(705, line="r.e5", role="coord", idle_h=40, cwd="/elsewhere/proj")
         self.sess(706, line="r.f6", role="boards", status="waiting", idle_h=50)
-        self.sess(707, line="r.g7", role="frontend", idle_h=3)       # живая
+        self.sess(707, line="r.g7", role=None, idle_h=3)             # не роль Т3, простой меньше суток
         self.sess(708, line="r.h8", pstart="Mon Nov  2 10:00:00 2026")  # файл от другого процесса — не в списке
         (L.sessions_dir() / "x.key").write_text("k")
         rc, out, _ = self.reap()
@@ -326,6 +328,35 @@ class ReapTest(Base):
         shown = L.read_json(L.ldir() / "reap-list.json")
         self.assertEqual(sorted(c["pid"] for c in shown["candidates"]), [701, 703])
 
+    def test_resumed_session_line_from_transcript(self):
+        """--resume теряет TAIBE_LINEAGE: линия — из первого промпта транскрипта по sessionId (05.11, роль 4)."""
+        sid = "3904fd53-0ebf-4dcc-a5a9-10b640809dcd"
+        self.sess(701, line=None, idle_h=1)
+        self.sess(702, line="r.a1", idle_h=30)                         # предшественник, gen 1
+        d = L.read_json(L.sessions_dir() / "701.json")
+        d["sessionId"] = sid
+        L.write_json(L.sessions_dir() / "701.json", d)
+        proj = self.dir / "projects" / "-x-proj"
+        proj.mkdir(parents=True)
+        recs = [{"type": "mode"}, {"type": "user", "isMeta": True, "message": {"content": "Линия: r.zz.zz"}},
+                {"type": "user", "message": {"content": "Сборка Т3, ключ реестра backend… Линия: r.a1.b2 (поколение 2)"}},
+                {"type": "user", "message": {"content": [{"type": "text", "text": "Линия: r.q.q"}]}}]
+        (proj / f"{sid}.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECTS_DIR": str(self.dir / "projects")}):
+            _, out, _ = self.reap()
+        v = self.verdicts(out)
+        self.assertIn("текущая роль", v[701])                          # линия r.a1.b2 длиннее, чем у 702
+        self.assertIn(" 2 ", v[701])
+        self.assertIn("простой 30", v[702])
+
+    def test_line_subcommand(self):
+        sx = FakeSys([P(700, 1, 700, "ttys001", "claude --resume x"), P(self.me, 700, self.me, "??", "python3")])
+        with mock.patch.dict(os.environ, {"TAIBE_LINEAGE": ""}), mock.patch("sys.stdout", io.StringIO()) as out:
+            self.assertEqual(L.main(["line"], sx), 1)
+            sx.env[700] = "r.k1.k2"
+            self.assertEqual(L.main(["line"], sx), 0)
+        self.assertEqual(out.getvalue().strip(), "r.k1.k2")
+
     def test_own_session_never_candidate(self):
         self.procs = [q for q in self.procs if q.pid != 700]
         self.sess(700, line="r.me", idle_h=99)
@@ -334,14 +365,16 @@ class ReapTest(Base):
 
     def test_kill_needs_fresh_list(self):
         self.sess(703, line="r.c3", role="plan", idle_h=25)
+        self.sess(704, line="r.c3.d4", role="plan", idle_h=1)
         rc, out, sx = self.reap("--kill", "--yes")
         self.assertEqual(rc, 2, out)
         self.assertEqual(sx.sent, [])
 
     def test_kill_only_listed_and_confirmed(self):
         self.sess(703, line="r.c3", role="plan", idle_h=25)
+        self.sess(704, line="r.c3.d4", role="plan", idle_h=1)        # текущая plan — 703 кандидат
         self.reap()
-        self.sess(709, line="r.k9", role="release", idle_h=26)       # стал кандидатом после показа
+        self.sess(709, line="r.k9", role=None, idle_h=26)            # стал кандидатом после показа
         rc, out, sx = self.reap("--kill")                             # нет tty и нет --yes
         self.assertEqual(rc, 2, out)
         self.assertEqual(sx.sent, [])
@@ -355,7 +388,8 @@ class ReapTest(Base):
 
     def test_kill_stale_list(self):
         self.sess(703, line="r.c3", role="plan", idle_h=25)
-        self.reap()
+        self.sess(704, line="r.c3.d4", role="plan", idle_h=1)
+        self.assertIn("кандидатов 1", self.reap()[1])
         shown = L.read_json(L.ldir() / "reap-list.json")
         shown["at"] -= L.LIST_TTL + 1
         L.write_json(L.ldir() / "reap-list.json", shown)
@@ -363,42 +397,69 @@ class ReapTest(Base):
         self.assertEqual((rc, sx.sent), (2, []))
 
 
+FAKE_CLAUDE = r"""
+import subprocess, sys, time
+mode, lin, child = sys.argv[1:4]
+py = sys.executable
+if mode == "pred":
+    subprocess.Popen(["sleep", "600"])                                   # MCP-сервер: в группе
+    subprocess.run(["sh", "-c", "sleep 600 &"])                          # сирота в группе (ppid 1)
+    subprocess.Popen([py, "-c", "import time; time.sleep(600)"], process_group=0)  # Bash-инструмент: своя группа
+    subprocess.run([py, "-I", lin, "retire", "--child", child, "--role", "backend", "--poll", "0.2",
+                    "--timeout", "60"])
+elif mode == "succ":
+    subprocess.Popen(["sh", "-c", "sleep 600; :", "x", "nerve.py", "tap", "backend"])  # Monitor наследника
+    time.sleep(0.3)
+    subprocess.run([py, "-I", lin, "ack"])
+else:                                                                     # наследник упал сразу после квитанции
+    subprocess.run([py, "-I", lin, "ack"])
+    sys.exit(0)
+time.sleep(600)
+"""
+
+
 @unittest.skipUnless(sys.platform == "darwin", "ps -E и lstart — macOS")
 class RealProcessTest(Base):
-    """Настоящие процессы: предшественник — `exec -a claude bash` в своей сессии (лидер группы) с потомком в группе,
-    сиротой в группе и потомком в своей группе; наследник — такой же «claude» с потомком `… nerve.py tap backend`."""
+    """Настоящие процессы. Предшественник — лидер своей группы: потомок в группе, сирота в группе, потомок в своей
+    группе, сторож retire. Наследник — такой же «claude» с потомком `… nerve.py tap backend`. osascript — заглушка,
+    у процессов нет tty: окна не трогаются."""
 
     def setUp(self):
         super().setUp()
         osa = self.dir / "osa.sh"
         osa.write_text('#!/bin/sh\necho "$@" >> "%s"\necho "not found"\n' % (self.dir / "osa.log"))
         osa.chmod(0o700)
-        os.environ["LINEAGE_OSASCRIPT"] = str(osa)
+        os.environ["LINEAGE_OSASCRIPT"] = str(osa)  # Base.setUp патчит os.environ целиком — вернётся в tearDown
+        self.real = subprocess.run(["ps", "-o", "comm=", "-p", str(os.getpid())], capture_output=True,
+                                   text=True).stdout.strip()
         self.started = []
 
     def tearDown(self):
         for p in self.started:
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+            for pid in self.group_and_kids(p.pid) | {p.pid}:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
             p.wait(timeout=5)
+        for ln in subprocess.run(["ps", "-A", "-o", "pid=,command="], capture_output=True, text=True).stdout.splitlines():
+            if f"retire --child {CHILD}" in ln and str(L.ldir()) not in ln:  # сторож этого теста (отцеплен, ppid 1)
+                env = subprocess.run(["ps", "-E", "-ww", "-o", "command=", "-p", ln.split()[0]], capture_output=True,
+                                     text=True).stdout
+                if f"TAIBE_LINEAGE_DIR={L.ldir()}" in env:
+                    os.kill(int(ln.split()[0]), signal.SIGKILL)
         super().tearDown()
 
-    def spawn(self, line, script):
-        env = {**os.environ, "TAIBE_LINEAGE": line}
-        p = subprocess.Popen(["bash", "-c", 'exec -a claude bash -c "$0"', script], env=env, start_new_session=True,
+    def spawn(self, line, mode):
+        p = subprocess.Popen(["claude", "-I", "-c", FAKE_CLAUDE, mode, os.path.join(HERE, "lineage.py"), CHILD],
+                             executable=self.real, env={**os.environ, "TAIBE_LINEAGE": line}, start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.started.append(p)
         return p
 
     def alive(self, pid):
-        try:
-            os.kill(pid, 0)
-            return subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True,
-                                  text=True).stdout.strip()[:1] not in ("", "Z")
-        except ProcessLookupError:
-            return False
+        st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        return st[:1] not in ("", "Z")
 
     def wait_log(self, needle, secs=40):
         log = L.ldir() / f"{CHILD}.retire.log"
@@ -410,38 +471,32 @@ class RealProcessTest(Base):
             time.sleep(0.2)
         self.fail(f"нет «{needle}» в журнале: {log.read_text(encoding='utf-8') if log.exists() else '—'}")
 
-    def predecessor(self):
-        lin = sys.executable + " -I " + os.path.join(HERE, "lineage.py")
-        return self.spawn(PARENT, f"sleep 600 & (sleep 600 &) ; {sys.executable} -c 'import os,time; os.setpgid(0,0);"
-                                  f" time.sleep(600)' & {lin} retire --child {CHILD} --role backend --poll 0.2"
-                                  f" --timeout 60; wait")
-
     def group_and_kids(self, pid):
         out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid="], capture_output=True, text=True).stdout
         rows = [tuple(map(int, ln.split())) for ln in out.splitlines() if ln.strip()]
         res = {r[0] for r in rows if r[2] == pid}
         res |= L.descendants({r[0]: L.Proc(r[0], r[1], r[2], "", "", "") for r in rows}, pid)
-        return res
+        return res - {pid}
 
     def test_successor_accepted_predecessor_gone(self):
-        pred = self.predecessor()
-        time.sleep(0.5)
-        doomed = self.group_and_kids(pred.pid)
-        self.assertGreaterEqual(len(doomed), 4, doomed)
-        lin = sys.executable + " -I " + os.path.join(HERE, "lineage.py")
-        succ = self.spawn(CHILD, f"sh -c 'sleep 600; :' x nerve.py tap backend & sleep 0.3; {lin} ack; wait")
+        pred = self.spawn(PARENT, "pred")
+        time.sleep(1.0)
+        doomed = self.group_and_kids(pred.pid) | {pred.pid}
+        self.assertEqual(len(doomed), 4, doomed)  # claude, sleep в группе, сирота в группе, потомок в своей группе
+        succ = self.spawn(CHILD, "succ")
         text = self.wait_log("TERM")
         time.sleep(0.5)
         self.assertEqual([p for p in doomed if self.alive(p)], [], text)
         self.assertTrue(self.alive(succ.pid), text)
-        self.assertTrue(any(self.alive(p) for p in self.group_and_kids(succ.pid) - {succ.pid}), text)
+        self.assertTrue(any(self.alive(p) for p in self.group_and_kids(succ.pid)), text)
         self.assertIn("окно не трогаю", text)
 
     def test_successor_crashed_predecessor_kept(self):
-        pred = self.predecessor()
-        lin = sys.executable + " -I " + os.path.join(HERE, "lineage.py")
-        self.spawn(CHILD, f"{lin} ack; exit 0")
+        pred = self.spawn(PARENT, "pred")
+        time.sleep(0.5)
+        self.spawn(CHILD, "crash")
         text = self.wait_log("предшественника не трогаю")
+        self.assertIn("не жив", text)
         self.assertTrue(self.alive(pred.pid), text)
 
 
