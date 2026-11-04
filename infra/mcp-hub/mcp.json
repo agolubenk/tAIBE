@@ -9,6 +9,7 @@
       "command": "python3",
       "args": ["infra/ai-council/mcp_server.py"],
       "cwd": "${HR_HELPER_ROOT}",
+      "env": {"TAIBE_HOST_ROOT": "${TAIBE_HOST_ROOT}"},
       "restartOnExit": true,
       "tags": ["project"]
     },
@@ -49,12 +50,13 @@
       "command": "python3",
       "args": ["infra/mcp-hub/dams_rag_server.py"],
       "cwd": "${HR_HELPER_ROOT}",
+      "env": {"TAIBE_HOST_ROOT": "${TAIBE_HOST_ROOT}"},
       "restartOnExit": true,
       "tags": ["code", "project"]
     },
     "git": {
       "command": "uvx",
-      "args": ["mcp-server-git@2026.8.18", "--repository", "${HR_HELPER_ROOT}"],
+      "args": ["mcp-server-git@2026.8.18", "--repository", "${TAIBE_HOST_ROOT}"],
       "restartOnExit": true,
       "disabledTools": ["git_commit", "git_add", "git_reset", "git_create_branch", "git_checkout"],
       "tags": ["git"]
@@ -62,7 +64,7 @@
     "postgres-readonly": {
       "command": "bash",
       "args": ["infra/scripts/dev-ai/mcp-postgres.sh"],
-      "cwd": "${HR_HELPER_ROOT}",
+      "cwd": "${TAIBE_HOST_ROOT}",
       "restartOnExit": true,
       "tags": ["db"]
     },
