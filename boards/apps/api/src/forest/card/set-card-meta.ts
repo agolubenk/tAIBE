@@ -4,6 +4,7 @@ import type { AgentHeaders } from "../agent-guard/agent-headers";
 import { assertAgentLease } from "../agent-guard/assert-agent-lease";
 import { ForestError } from "../forest-error";
 import { writeJournal } from "../journal";
+import { isMirroredCard } from "./card-mirror";
 import { loadCardMeta, toCardMeta } from "./card-meta";
 import { type CardMetaPatch, patchFields } from "./card-patch";
 import { decideCardWrite } from "./decide-card-write";
@@ -40,7 +41,7 @@ export async function setCardMeta(input: {
     const current = await loadCardMeta(taskId);
     const decision = decideCardWrite(fields, {
       actorKind: actor.kind,
-      mirrored: Boolean(current?.notionPageId),
+      mirrored: isMirroredCard(workspaceId, current?.notionPageId),
       agentAuthored: actor.kind === "agent" && (await isAgentAuthored(taskId)),
     });
     if (!decision.ok) throw new ForestError(decision.code, decision.message);
