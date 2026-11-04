@@ -23,12 +23,15 @@ A failed read keeps the last known switches (an outage never re-enables what the
 retried for 10 minutes, so a board that is down costs one timeout per 10 minutes, not one per tool call. Only a
 complete answer (automation and every switch, all booleans) is accepted; redirects are refused, so the key never
 leaves for another host. Never raises into a hook. Stdlib only.
+TLS: an interpreter without its own CA store (python.org's macOS build before «Install Certificates.command»)
+verifies against the system bundle instead of failing every read (ОШИБКИ #634).
 
 The keys are the board's (`boards/packages/permissions/src/pipeline-toggles.ts`); `test_pipeline_settings.py`
 fails when the two lists differ.
 """
 import json
 import os
+import ssl
 import subprocess
 import sys
 import time
@@ -47,6 +50,8 @@ OFF = ('off', '0', 'false', 'no')
 # it) is used only for these hosts or for `T_BOARDS_ALLOWED_HOSTS` from the person's own environment; `T_BOARDS_URL`
 # set in the environment is the person's choice and is trusted as is.
 KNOWN_HOSTS = ('d4dev.admin.hrhelper.space', 'localhost', '127.0.0.1', '::1')
+# The system's CA bundle — macOS and BSD, Debian and Ubuntu, RHEL — for an interpreter that has no CA store of its own.
+SYSTEM_CA_FILES = ('/etc/ssl/cert.pem', '/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt')
 
 
 def defaults():
@@ -103,6 +108,22 @@ def _board_url(url):
     local = parts.hostname in ('localhost', '127.0.0.1', '::1')
     if parts.scheme == 'https' or (parts.scheme == 'http' and local):
         return url.rstrip('/')
+    return None
+
+
+def _tls_context():
+    """None — the interpreter's own CA store works; else a verifying context on the system bundle.
+
+    python.org's macOS Python has neither its CA file nor its CA directory until «Install Certificates.command» runs
+    (`get_default_verify_paths()` → `cafile=None, capath=None`): every https read fails CERTIFICATE_VERIFY_FAILED and
+    the switches silently stay at defaults. Verification stays on — certificate and host name — only the trust store
+    changes. `SSL_CERT_FILE` / `SSL_CERT_DIR` from the environment show up as cafile/capath and keep the default."""
+    paths = ssl.get_default_verify_paths()
+    if paths.cafile or paths.capath:
+        return None
+    for cafile in SYSTEM_CA_FILES:
+        if os.path.isfile(cafile):
+            return ssl.create_default_context(cafile=cafile)
     return None
 
 
@@ -202,7 +223,7 @@ def fetch(root=ROOT, timeout=TIMEOUT_SECONDS):
         return None, 'not connected: no T_BOARDS_API_KEY (env or Keychain, infra/scripts/dev-ai/mcp-secret.sh)'
     if url is None:
         return None, 'T_BOARDS_URL must be https (http only to localhost)'
-    opener = urllib.request.build_opener(_NoRedirect)
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_tls_context()))
 
     deadline = time.monotonic() + timeout  # one budget for the whole refresh, however many calls it takes
 
