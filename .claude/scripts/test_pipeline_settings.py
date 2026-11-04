@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import sys
 import tempfile
 import threading
@@ -225,6 +226,58 @@ class PipelineSettingsTest(unittest.TestCase):
         with open(os.path.join(self.root, ps.CACHE), 'w', encoding='utf-8') as f:
             json.dump({'fetchedAt': time.time(), 'settings': dict(FULL, automation=False)}, f)
         self.assertFalse(ps.enabled('cardAutofill', self.root))
+
+
+def _paths(cafile=None, capath=None):
+    return ssl.DefaultVerifyPaths(cafile, capath, 'SSL_CERT_FILE', '/nowhere/cert.pem', 'SSL_CERT_DIR', '/nowhere/certs')
+
+
+class TlsContextTest(unittest.TestCase):
+    """ОШИБКИ #634: python.org's macOS Python without a CA store must verify against the system bundle."""
+
+    def test_own_store_keeps_the_default(self):
+        for paths in (_paths(cafile='/x/cert.pem'), _paths(capath='/x/certs')):
+            with mock.patch.object(ps.ssl, 'get_default_verify_paths', return_value=paths):
+                self.assertIsNone(ps._tls_context(), paths)
+
+    def test_no_store_takes_the_first_system_bundle(self):
+        with tempfile.TemporaryDirectory() as d:
+            bundle = os.path.join(d, 'cert.pem')
+            open(bundle, 'w').close()
+            with mock.patch.object(ps.ssl, 'get_default_verify_paths', return_value=_paths()), \
+                    mock.patch.object(ps, 'SYSTEM_CA_FILES', (os.path.join(d, 'missing.pem'), bundle)), \
+                    mock.patch.object(ps.ssl, 'create_default_context', return_value='ctx') as create:
+                self.assertEqual(ps._tls_context(), 'ctx')
+            create.assert_called_once_with(cafile=bundle)
+
+    def test_no_store_and_no_bundle_keeps_the_default(self):
+        with mock.patch.object(ps.ssl, 'get_default_verify_paths', return_value=_paths()), \
+                mock.patch.object(ps, 'SYSTEM_CA_FILES', ('/nowhere/a.pem', '/nowhere/b.pem')):
+            self.assertIsNone(ps._tls_context())
+
+    @unittest.skipUnless(any(os.path.isfile(f) for f in ps.SYSTEM_CA_FILES), 'no system CA bundle here')
+    def test_fallback_still_verifies(self):
+        with mock.patch.object(ps.ssl, 'get_default_verify_paths', return_value=_paths()):
+            ctx = ps._tls_context()
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+        self.assertGreater(ctx.cert_store_stats()['x509_ca'], 0)
+
+    def test_fetch_uses_the_context(self):
+        real, seen = ps.urllib.request.build_opener, []
+
+        def build_opener(*handlers):
+            seen.extend(h for h in handlers if isinstance(h, ps.urllib.request.HTTPSHandler))
+            return real(*handlers)
+        ctx = ssl.create_default_context()
+        with mock.patch.object(ps, '_tls_context', return_value=ctx), \
+                mock.patch.object(ps.urllib.request, 'build_opener', side_effect=build_opener), \
+                mock.patch.dict(os.environ, {'T_BOARDS_URL': 'http://127.0.0.1:9', 'T_BOARDS_API_KEY': 'k-1',
+                                             'T_BOARDS_WORKSPACE': 'ws 1'}), \
+                tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, '.claude'))
+            ps.fetch(root, timeout=0.2)
+        self.assertEqual([h._context for h in seen], [ctx])
 
 
 if __name__ == '__main__':
