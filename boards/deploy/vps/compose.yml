@@ -62,6 +62,10 @@ services:
       # reader's last copy.
       CLAUDE_MEM_WORKER_HOST: ${CLAUDE_MEM_WORKER_HOST:-}
       CLAUDE_MEM_WORKER_PORT: ${CLAUDE_MEM_WORKER_PORT:-}
+      # The proxy's token (OPS-19), made on the Mac and delivered by
+      # mac/memory-token-push.sh. Read on every request; without the file the
+      # reader sends no header, which only the proxy's rollout mode accepts.
+      CLAUDE_MEM_PROXY_TOKEN_FILE: /run/tb-secrets/claude_mem_proxy_token
     volumes:
       - ./secrets:/run/tb-secrets:ro
     ports:
@@ -78,6 +82,9 @@ services:
     # Binds the WireGuard address only; the edge nginx of the product owns
     # 0.0.0.0:443. Restarts until wg0 is up.
     network_mode: host
+    # In the host's network a raw socket could read the memory proxy token off
+    # wg0 (plain HTTP inside the tunnel, OPS-19). nginx only needs TCP.
+    cap_drop: [NET_RAW]
     depends_on:
       - app
     # Re-read certificates the shared certbot sidecar renews.
