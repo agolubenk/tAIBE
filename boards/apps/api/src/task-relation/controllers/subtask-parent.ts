@@ -23,11 +23,12 @@ export type SubtaskParentLink = {
   parentWorkspaceId: string;
 };
 
-// The link the tree reads: the oldest one, as in forest/tree/card-place.ts.
-export async function findSubtaskParent(
+// Every parent link of the card, oldest first: the tree reads the first one,
+// as in forest/tree/card-place.ts. More than one is data from before E7.
+export async function findSubtaskParents(
   executor: Executor,
   childId: string,
-): Promise<SubtaskParentLink | undefined> {
+): Promise<SubtaskParentLink[]> {
   const result = await executor.execute<{
     id: string;
     parent_id: string;
@@ -42,17 +43,13 @@ export async function findSubtaskParent(
     JOIN project p ON p.id = t.project_id
     WHERE r.target_task_id = ${childId} AND r.relation_type = 'subtask'
     ORDER BY r.created_at, r.id
-    LIMIT 1
   `);
-  const row = result.rows[0];
-  return row
-    ? {
-        id: row.id,
-        parentId: row.parent_id,
-        parentProjectId: row.parent_project_id,
-        parentWorkspaceId: row.parent_workspace_id,
-      }
-    : undefined;
+  return result.rows.map((row) => ({
+    id: row.id,
+    parentId: row.parent_id,
+    parentProjectId: row.parent_project_id,
+    parentWorkspaceId: row.parent_workspace_id,
+  }));
 }
 
 // Cards among childIds that already have a parent (for writers that link in bulk).

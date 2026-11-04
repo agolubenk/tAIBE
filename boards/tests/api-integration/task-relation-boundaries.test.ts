@@ -227,12 +227,14 @@ describe("subtask links stay a forest", () => {
       });
 
     expect((await parent(a.id, c.id)).status).toBe(200);
+    m.publish.mockClear();
     const second = await parent(b.id, c.id);
     expect(second.status).toBe(409);
     expect((await readErrorBody(second)).message).toContain(
       "subtask_second_parent",
     );
     expect(await subtaskLinks()).toEqual([`${a.id}>${c.id}`]);
+    expect(m.publish).not.toHaveBeenCalled();
 
     m.publish.mockClear();
     const moved = await parent(b.id, c.id, true);
@@ -271,12 +273,63 @@ describe("subtask links stay a forest", () => {
     expect((await link(d.id, e.id)).status).toBe(200);
 
     // Moving C under its own grandchild E: refused, and C keeps A.
+    m.publish.mockClear();
     const loop = await link(e.id, c.id);
     expect(loop.status).toBe(409);
     expect((await readErrorBody(loop)).message).toContain("subtask_cycle");
     expect((await subtaskLinks()).sort()).toEqual(
       [`${a.id}>${c.id}`, `${c.id}>${d.id}`, `${d.id}>${e.id}`].sort(),
     );
+    expect(m.publish).not.toHaveBeenCalled();
+  });
+
+  const subtaskLink = (sourceTaskId: string, targetTaskId: string) =>
+    db
+      .insert(schema.taskRelationTable)
+      .values({ sourceTaskId, targetTaskId, relationType: "subtask" });
+  const move = (parentId: string, childId: string) =>
+    request("", "POST", {
+      sourceTaskId: parentId,
+      targetTaskId: childId,
+      relationType: "subtask",
+      replaceParent: true,
+    });
+
+  it("a move drops every parent of a card linked twice before E7", async () => {
+    const own = await context();
+    mockAuthenticatedSession(own.user);
+    const a = own.task;
+    const b = await addCard(a.projectId, "B");
+    const c = await addCard(a.projectId, "C");
+    const d = await addCard(a.projectId, "D");
+    await subtaskLink(a.id, c.id);
+    await subtaskLink(b.id, c.id);
+
+    expect((await move(d.id, c.id)).status).toBe(200);
+    expect(await subtaskLinks()).toEqual([`${d.id}>${c.id}`]);
+    expect(m.publish.mock.calls.map(([name]) => name)).toEqual([
+      "task-relation.deleted",
+      "task-relation.deleted",
+      "task-relation.created",
+    ]);
+    expect(m.publish.mock.calls[0][1]).toMatchObject({ sourceTaskId: a.id });
+    expect(m.publish.mock.calls[1][1]).toMatchObject({ sourceTaskId: b.id });
+  });
+
+  it("names a parent in another workspace instead of asking for replaceParent", async () => {
+    const own = await context();
+    const foreign = await context();
+    mockAuthenticatedSession(own.user);
+    const b = await addCard(own.task.projectId, "B");
+    await subtaskLink(foreign.task.id, own.task.id);
+
+    const refused = await move(b.id, own.task.id);
+    expect(refused.status).toBe(409);
+    expect((await readErrorBody(refused)).message).toContain(
+      "subtask_parent_in_other_workspace",
+    );
+    expect(await subtaskLinks()).toEqual([`${foreign.task.id}>${own.task.id}`]);
+    expect(m.publish).not.toHaveBeenCalled();
   });
 
   it("lets only one of two simultaneous parents through", async () => {
@@ -310,13 +363,17 @@ describe("subtask links stay a forest", () => {
     });
 
     const written = await db.transaction((tx) =>
-      writeImportRelations(tx, own.workspace.id, [
-        { sourceTaskId: b.id, targetTaskId: c.id, relationType: "subtask" },
-        { sourceTaskId: b.id, targetTaskId: a.id, relationType: "subtask" },
-        { sourceTaskId: b.id, targetTaskId: c.id, relationType: "related" },
-      ]),
+      writeImportRelations(
+        tx,
+        [
+          { sourceTaskId: b.id, targetTaskId: c.id, relationType: "subtask" },
+          { sourceTaskId: b.id, targetTaskId: a.id, relationType: "subtask" },
+          { sourceTaskId: b.id, targetTaskId: c.id, relationType: "related" },
+        ],
+        { workspaceId: own.workspace.id },
+      ),
     );
-    expect(written).toBe(2);
+    expect(written).toEqual({ written: 2, keptParent: 1 });
     expect((await subtaskLinks()).sort()).toEqual(
       [`${a.id}>${c.id}`, `${b.id}>${a.id}`].sort(),
     );

@@ -128,16 +128,6 @@ export async function syncNotionProject(
     ...plan.mirrored,
     ...fresh.map((task): [string, string] => [task.key, task.id]),
   ]);
-  const relations = await writeImportRelations(
-    tx,
-    workspaceId,
-    planImportRelations(project.relations, taskIds).filter(
-      (relation) =>
-        freshIds.has(relation.sourceTaskId) ||
-        freshIds.has(relation.targetTaskId),
-    ),
-  );
-
   const metaChanged = await writeNotionCardMeta(tx, {
     workspaceId,
     userId,
@@ -147,6 +137,18 @@ export async function syncNotionProject(
       input.backlogDropped,
     ),
   });
+
+  // Last: a link to a card already on the board takes the workspace's subtask
+  // lock (E7), held until the commit, so nothing else runs under it.
+  const { written: relations, keptParent } = await writeImportRelations(
+    tx,
+    planImportRelations(project.relations, taskIds).filter(
+      (relation) =>
+        freshIds.has(relation.sourceTaskId) ||
+        freshIds.has(relation.targetTaskId),
+    ),
+    { workspaceId },
+  );
 
   const unmatched = assignees.warning();
   const written = [...changed, ...fresh];
@@ -161,6 +163,11 @@ export async function syncNotionProject(
     },
     warnings: [
       `Notion mirror: ${fresh.length} new, ${changed.length} updated, ${plan.unchanged} unchanged, ${metaChanged} with changed meta.`,
+      ...(keptParent > 0
+        ? [
+            `Notion mirror: ${keptParent} subtask links skipped, the card already has a parent on the board (one parent per card).`,
+          ]
+        : []),
       ...project.warnings,
       ...planImportColumns(project.columns).warnings,
       ...(unmatched ? [unmatched] : []),

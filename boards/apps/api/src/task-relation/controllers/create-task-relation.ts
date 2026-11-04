@@ -9,7 +9,7 @@ import {
 import { publishEvent } from "../../events";
 import { assertProjectAccess } from "../../project-access/assert-project-access";
 import { wouldCloseSubtaskCycle } from "./subtask-cycle";
-import { findSubtaskParent, lockSubtaskLinks } from "./subtask-parent";
+import { findSubtaskParents, lockSubtaskLinks } from "./subtask-parent";
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Relation = typeof taskRelationTable.$inferSelect;
@@ -17,10 +17,13 @@ type ReplacedParent = { relation: Relation; projectId: string };
 
 const SECOND_PARENT =
   "subtask_second_parent: the task already has a parent; send replaceParent to move it";
+const PARENT_ELSEWHERE =
+  "subtask_parent_in_other_workspace: the task's parent link is in another workspace; remove it there first";
 
 // A subtask link keeps the forest a forest: no cycle through any ancestor (E6)
-// and one parent per card (E7). With replaceParent the card's current parent
-// link is dropped in the same transaction, so a move never leaves it orphaned.
+// and one parent per card (E7). With replaceParent the card's parent links are
+// dropped in the same transaction, so a move never leaves it orphaned. All of
+// them: a card linked twice before E7 would otherwise surface its next parent.
 async function settleSubtaskLink(
   tx: Transaction,
   input: {
@@ -30,7 +33,7 @@ async function settleSubtaskLink(
     userId: string;
     workspaceId: string;
   },
-): Promise<ReplacedParent | undefined> {
+): Promise<ReplacedParent[]> {
   // Two opposite links created at once would each pass the check alone;
   // one lock per workspace serializes subtask links (cheap: they are rare).
   await lockSubtaskLinks(tx, input.workspaceId);
@@ -41,19 +44,33 @@ async function settleSubtaskLink(
     });
   }
 
-  const current = await findSubtaskParent(tx, input.childId);
-  if (!current) return undefined;
-  if (!input.replaceParent || current.parentWorkspaceId !== input.workspaceId) {
+  const current = await findSubtaskParents(tx, input.childId);
+  if (current.length === 0) return [];
+  // replaceParent cannot help here, so the answer must not ask for it.
+  if (current.some((link) => link.parentWorkspaceId !== input.workspaceId)) {
+    throw new HTTPException(409, { message: PARENT_ELSEWHERE });
+  }
+  if (!input.replaceParent) {
     throw new HTTPException(409, { message: SECOND_PARENT });
   }
-  await assertProjectAccess(input.userId, current.parentProjectId);
-  const [relation] = await tx
+  const projects = new Set(current.map((link) => link.parentProjectId));
+  for (const projectId of projects) {
+    await assertProjectAccess(input.userId, projectId);
+  }
+  const removed = await tx
     .delete(taskRelationTable)
-    .where(eq(taskRelationTable.id, current.id))
+    .where(
+      inArray(
+        taskRelationTable.id,
+        current.map((link) => link.id),
+      ),
+    )
     .returning();
-  return relation
-    ? { relation, projectId: current.parentProjectId }
-    : undefined;
+  const byId = new Map(removed.map((relation) => [relation.id, relation]));
+  return current.flatMap((link) => {
+    const relation = byId.get(link.id);
+    return relation ? [{ relation, projectId: link.parentProjectId }] : [];
+  });
 }
 
 async function createTaskRelation({
@@ -171,7 +188,7 @@ async function createTaskRelation({
             userId,
             workspaceId,
           })
-        : undefined;
+        : [];
 
     const [relation] = await tx
       .insert(taskRelationTable)
@@ -191,11 +208,11 @@ async function createTaskRelation({
     return { relation, sourceTask, prior };
   });
 
-  if (prior) {
+  for (const replaced of prior) {
     await publishEvent("task-relation.deleted", {
-      ...prior.relation,
-      taskId: prior.relation.sourceTaskId,
-      projectId: prior.projectId,
+      ...replaced.relation,
+      taskId: replaced.relation.sourceTaskId,
+      projectId: replaced.projectId,
       userId,
     });
   }

@@ -9,20 +9,36 @@ import type { PlannedImportRelation } from "./plan-import-relations";
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+export type WrittenImportRelations = {
+  written: number;
+  // Subtask links not written: the card already had a parent on the board.
+  keptParent: number;
+};
+
+// `onBoard`: some of the cards were on the board before this import (a
+// re-import), so they may have a parent already. Without it every card is new
+// to this transaction: none has a parent and no other request can see them
+// before the commit, so neither the lock nor the lookup is needed.
 export async function writeImportRelations(
   tx: Transaction,
-  workspaceId: string,
   relations: readonly PlannedImportRelation[],
-): Promise<number> {
-  const writable = await withoutSecondParents(tx, workspaceId, relations);
+  onBoard?: { workspaceId: string },
+): Promise<WrittenImportRelations> {
+  const writable = onBoard
+    ? await withoutSecondParents(tx, onBoard.workspaceId, relations)
+    : relations;
   for (const batch of chunk(writable)) {
     await tx.insert(taskRelationTable).values(batch);
   }
-  return writable.length;
+  return {
+    written: writable.length,
+    keptParent: relations.length - writable.length,
+  };
 }
 
 // A re-import can link a card that already has a parent on the board (a
 // mirrored card under a new page): that card keeps the parent it has (E7).
+// The lock holds until the commit, so the caller writes these links last.
 async function withoutSecondParents(
   tx: Transaction,
   workspaceId: string,
