@@ -44,4 +44,35 @@ describe("chunkMarkdown", () => {
     ]);
     expect(chunkMarkdown("")).toEqual([]);
   });
+
+  it("cuts a closing run of #s only after a space", () => {
+    expect(
+      chunkMarkdown("## Data ##\n\nRows.\n\n## C#\n\nCode.").map(
+        (chunk) => chunk.heading,
+      ),
+    ).toEqual(["Data", "C#"]);
+  });
+
+  // The lazy heading regex took minutes on such a line (quadratic).
+  // Both regex forms backtracked quadratically: minutes on 400 000 characters.
+  it.each([
+    ["#s", `# x${"#".repeat(400_000)}y`],
+    ["spaces before U+2028", `# ${" ".repeat(400_000)}\u2028x`],
+  ])("reads a long heading line of %s in linear time", (_case, line) => {
+    const started = performance.now();
+    chunkMarkdown(`${line}\n\nText`);
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  it("caps a heading and its path so chunks do not copy huge titles", () => {
+    const chunks = chunkMarkdown(
+      `# ${"a".repeat(5000)}\n\n${"## b\n\nc\n\n".repeat(3)}`,
+    );
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]?.heading).toBe(`${"a".repeat(200)} › b`);
+    const deep = chunkMarkdown(
+      `${["#", "##", "###", "####"].map((h) => `${h} ${"d".repeat(200)}`).join("\n")}\n\nx`,
+    );
+    expect(deep[0]?.heading.length).toBe(500);
+  });
 });

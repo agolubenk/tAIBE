@@ -7,6 +7,9 @@ import {
 import { EMBED_RESULTS_MAX } from "../embed/embed-work";
 
 export const SOURCE_TEXT_MAX = 500_000;
+// SOURCE_TEXT_MAX of ordinary prose is ~320 chunks; a page or PR of tiny
+// sections must not cut into tens of thousands.
+export const FETCHED_SOURCE_CHUNKS_MAX = 2000;
 export const SEARCH_LIMIT_MAX = 20;
 // Russian text is two bytes a character before JSON escaping.
 export const SOURCE_BODY_BYTES = 2 * 1024 * 1024;
@@ -37,6 +40,37 @@ export const upsertedSourceSchema = z
     chunks: z.number().int(),
   })
   .openapi("NotebookUpsertedSource");
+
+// Percent-encoding can make a pasted URL longer than an uploaded ref.
+export const SOURCE_URL_MAX = 2048;
+export const SOURCE_URL_BODY_BYTES = 8 * 1024;
+
+export const addLinkBody = z.object({
+  url: z.string().trim().min(1).max(SOURCE_URL_MAX).openapi({
+    description:
+      "An https page with HTML, Markdown or plain text, up to 2 MB. The same URL again refreshes it.",
+  }),
+});
+
+export const addPullRequestBody = z.object({
+  url: z.string().trim().min(1).max(SOURCE_URL_MAX).openapi({
+    description:
+      "A GitHub pull request URL, or its notebook ref owner/repo#12. The same PR again refreshes it.",
+  }),
+});
+
+export const addedSourceSchema = z
+  .object({
+    sourceId: z.string(),
+    kind: z.enum(["github-pr", "link"]),
+    ref: z.string(),
+    title: z.string(),
+    changed: z.boolean().openapi({
+      description: "False when the fetched text matched the stored one.",
+    }),
+    chunks: z.number().int(),
+  })
+  .openapi("NotebookAddedSource");
 
 export const sourcesSchema = z
   .object({

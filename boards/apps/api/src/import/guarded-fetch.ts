@@ -32,10 +32,25 @@ export type GuardedFetch = {
 type GuardOptions = {
   cancelSignal?: AbortSignal;
   baseFetch?: FetchLike;
+  // Refuse private addresses even when the instance allows them.
+  alwaysPublic?: boolean;
+  // Refuse plain http on the first request and on every redirect hop.
+  httpsOnly?: boolean;
 };
 
-class GuardError extends Error {
-  constructor(message: string) {
+// Why the guard refused, so a caller can answer with its own code.
+export type GuardReason =
+  | "invalid-url"
+  | "protocol"
+  | "destination"
+  | "unresolved"
+  | "redirects";
+
+export class GuardError extends Error {
+  constructor(
+    message: string,
+    readonly reason: GuardReason,
+  ) {
     super(message);
     this.name = "ImportDestinationError";
   }
@@ -82,25 +97,39 @@ function redirectInit(
 
 export function createGuardedFetch(
   label: string,
-  { cancelSignal, baseFetch = destinationFetch }: GuardOptions = {},
+  {
+    cancelSignal,
+    baseFetch = destinationFetch,
+    alwaysPublic = false,
+    httpsOnly = false,
+  }: GuardOptions = {},
 ): GuardedFetch {
   let failure: GuardFailure | null = null;
   let lastHost: string | null = null;
 
-  function fail(next: GuardFailure, message: string): never {
+  function fail(
+    next: GuardFailure,
+    message: string,
+    reason: GuardReason = "destination",
+  ): never {
     failure = next;
-    throw new GuardError(message);
+    throw new GuardError(message, reason);
   }
 
   async function checkDestination(url: URL) {
     lastHost = url.host;
+    if (httpsOnly && url.protocol !== "https:") {
+      const message = `${label} URL must use https`;
+      fail({ kind: "destination", message }, message, "protocol");
+    }
     try {
-      await assertPublicDestination(url.href, label);
+      await assertPublicDestination(url.href, label, { alwaysPublic });
     } catch (error) {
       if (errorCode(error)) {
         fail(
           { kind: "unreachable", host: url.host },
           `${label} at ${url.host} could not be resolved`,
+          "unresolved",
         );
       }
       const message =
@@ -114,7 +143,7 @@ export function createGuardedFetch(
       return new URL(input, base);
     } catch {
       const message = `Enter a valid ${label} URL.`;
-      return fail({ kind: "destination", message }, message);
+      return fail({ kind: "destination", message }, message, "invalid-url");
     }
   }
 
@@ -152,7 +181,7 @@ export function createGuardedFetch(
       await response.body?.cancel().catch(() => {});
       if (redirects >= MAX_IMPORT_REDIRECTS) {
         const message = `${label} redirected too many times. Check the URL.`;
-        fail({ kind: "destination", message }, message);
+        fail({ kind: "destination", message }, message, "redirects");
       }
 
       const next = parse(location, url);

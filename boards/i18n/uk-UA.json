@@ -4165,7 +4165,39 @@
 			"sources": {
 				"chunks": "{{embedded}} of {{chunks}} chunks with vectors",
 				"empty": "No sources yet. They appear after the Mac agent's first sync.",
-				"model": "Embedding model: {{model}}"
+				"model": "Embedding model: {{model}}",
+				"add": {
+					"hint": "A web page (HTML, Markdown or plain text, up to 2 MB) is read once; a pull request comes through the GitHub App with its discussion. Adding the same link again refreshes it. PDF is not supported yet.",
+					"label": "Link or GitHub pull request",
+					"placeholder": "https://… or https://github.com/owner/repo/pull/12",
+					"submit": "Add"
+				},
+				"errors": {
+					"GITHUB_APP_NOT_CONFIGURED": "The GitHub App is not configured on this instance.",
+					"GITHUB_UNAVAILABLE": "GitHub did not answer. Try again, or reconnect the integration.",
+					"LINK_CONTENT_TYPE": "Only HTML, Markdown and plain text pages can be added.",
+					"LINK_EMPTY": "The page has no text to add; it may need JavaScript to show it.",
+					"LINK_INVALID_URL": "Enter a valid https link without a user name or password.",
+					"LINK_NOT_HTTPS": "Only https links can be added.",
+					"LINK_PDF_UNSUPPORTED": "PDF links are not supported yet.",
+					"LINK_PRIVATE_DESTINATION": "This link points to a private or local address and cannot be added.",
+					"LINK_TIMEOUT": "The page did not answer within 10 seconds.",
+					"LINK_TOO_LARGE": "The page is too large for the notebook (2 MB, 500 000 characters of text).",
+					"LINK_TOO_MANY_REDIRECTS": "The link redirects too many times.",
+					"LINK_UNREACHABLE": "The page could not be reached.",
+					"LINK_UPSTREAM_STATUS": "The page answered with an error.",
+					"PR_INVALID_URL": "Enter a GitHub pull request link, such as https://github.com/owner/repo/pull/12.",
+					"PR_NOT_FOUND": "This pull request was not found in the linked repository.",
+					"PR_REPO_NOT_LINKED": "This repository is not linked to a project every member of the workspace can open.",
+					"GITHUB_NO_ACCESS": "The GitHub App may not read this repository's pull requests. Grant it pull request access, or reconnect the integration.",
+					"SOURCE_TOO_MANY_CHUNKS": "The text splits into too many parts for one source (at most 2000)."
+				},
+				"refresh": "Refresh {{title}}",
+				"toast": {
+					"added": "In the notebook: {{title}}",
+					"error": "Could not add the source",
+					"unchanged": "Nothing changed: {{title}}"
+				}
 			},
 			"status": {
 				"counts": "{{sources}} sources · {{chunks}} chunks · {{embedded}} with vectors",
