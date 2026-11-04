@@ -74,9 +74,9 @@ Hooks and tools call `.claude/scripts/pipeline_settings.py` (stdlib).
   key for another product than the config names, the layer keeps the last known switches of its product (defaults
   if it never read the board). The status command below says what is missing.
 
-Limits: one product per install (the key reaches one workspace). `eval/` is shared by symlink between tAIBE and HR
-Helper, so both read the same `eval/nerve/config.json`; when the layer comes to HR Helper, that install needs its
-own key and a product check outside git (for example `.claude/pipeline.local.json`). The page keeps only the last change (who and when), with no per-switch history. An open page does not update live when someone else changes a switch.
+Limits: one product per install (the key reaches one workspace). Another install (HR Helper, when the layer comes
+there) needs its own key, and its product check must come from its own config, not from a copy of tAIBE's. On one
+Mac the Keychain account name is fixed today, so a second install needs its own account name first. The page keeps only the last change (who and when), with no per-switch history. An open page does not update live when someone else changes a switch.
 
 ```bash
 python3 -I .claude/scripts/pipeline_settings.py          # effective switches and their source
