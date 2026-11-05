@@ -431,11 +431,33 @@ class ReapTest(Base):
         self.sess(702, line="r.a1.b2", idle_h=0.1)
         self.sess(703, line="r.c3", role="plan", status="waiting", idle_h=5)
         self.sess(704, line="r.c3.d4", role="plan", idle_h=0.1)
+        self.sess(705, line="r.e5", role="coord", status="shell", idle_h=5)  # гоняет команду — не «сменён»
+        self.sess(706, line="r.e5.f6", role="coord", idle_h=0.1)
         _, out, _ = self.reap("--superseded-idle-hours", "0")
         v = self.verdicts(out)
         self.assertIn("живая", v[701])
         self.assertIn("ждёт ввода", v[703])
+        self.assertIn("живая", v[705])
         self.assertEqual(L.read_json(L.ldir() / "reap-list.json")["candidates"], [])
+
+    def test_prune_old_lineage_records(self):
+        old = time.time() - 31 * 86400
+        L.ldir().mkdir(parents=True, exist_ok=True)
+        for name in ("r.old.json", "r.old.x1y2.ack", "r.old.log", "notes.txt"):
+            f = L.ldir() / name
+            f.write_text("{}")
+            os.utime(f, (old, old))
+        fresh = L.ldir() / "r.new.json"
+        fresh.write_text("{}")
+        _, out, _ = self.reap()
+        self.assertIn("удалено: 3", out)
+        left = sorted(f.name for f in L.ldir().iterdir())
+        self.assertEqual(left, ["notes.txt", "r.new.json", "reap-list.json"])
+        (L.ldir() / "r.old2.json").write_text("{}")
+        os.utime(L.ldir() / "r.old2.json", (old, old))
+        _, out, _ = self.reap("--prune-days", "0")
+        self.assertNotIn("удалено", out)
+        self.assertTrue((L.ldir() / "r.old2.json").exists())
 
     def test_line_subcommand(self):
         sx = FakeSys([P(700, 1, 700, "ttys001", "claude --resume x"), P(self.me, 700, self.me, "??", "python3")])

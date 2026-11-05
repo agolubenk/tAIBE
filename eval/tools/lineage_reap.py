@@ -2,15 +2,17 @@
 
 Список строится из ~/.claude/sessions/<pid>.json: только живой pid с тем же стартом (procStart) и argv0 claude.
 Кандидат — наследник принял (квитанция <линия>.<4 симв>.ack, наследник жив) ИЛИ сменён: жива сессия той же роли с
-линией «<линия>.…», простой ≥ --superseded-idle-hours и не busy (сессии без квитанции — после --resume и до паритета
+линией «<линия>.…», простой ≥ --superseded-idle-hours и статус idle (сессии без квитанции — после --resume и до паритета
 tap) ИЛИ простой дольше --idle-hours и это не текущая сессия своей роли (самая длинная линия на ключ роли). Чужой проект (cwd вне корней), «waiting»
 и своя сессия показываются, но не снимаются. --kill — действие владельца: только кандидаты из списка последнего
 показа (не старше 10 мин, pid и старт совпали) и только после «y» в терминале (или --yes).
+Показ списка заодно удаляет из каталога линий записи (*.json, *.ack, *.log) старше --prune-days дней.
 """
 import os
 import re
 import subprocess
 import sys
+import time
 
 import lineage as L
 import lineage_retire as LR
@@ -26,6 +28,26 @@ def add_reap_args(p):
     p.add_argument("--root", action="append", default=[], help="ещё один корень своих проектов (можно несколько)")
     p.add_argument("--kill", action="store_true", help="снять кандидатов последнего показа (действие владельца)")
     p.add_argument("--yes", action="store_true", help="без вопроса в терминале — только сам владелец")
+    p.add_argument("--prune-days", type=float, default=30.0,
+                   help="при показе удалить записи каталога линий старше стольких дней (0 — не удалять)")
+
+
+def prune_lineage_dir(days, now=None):
+    """Старые <линия>.json/.ack/.log — по mtime файла (реальные часы ФС, не часы sx). reap-list.json не трогаем."""
+    if days <= 0:
+        return 0
+    cutoff = (now if now is not None else time.time()) - days * 86400
+    n = 0
+    for f in L.ldir().glob("*"):
+        if f.name == "reap-list.json" or f.suffix not in {".json", ".ack", ".log"} or not f.is_file():
+            continue
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                n += 1
+        except OSError:
+            continue  # файл убрал другой процесс
+    return n
 
 
 def git_root(path):
@@ -124,7 +146,7 @@ def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
             r["verdict"] = "ждёт ввода"
         elif r["ack"] == "ack":
             r["cand"], r["verdict"] = True, "кандидат: наследник принял"
-        elif gen and r["status"] != "busy" and r["idle_h"] >= superseded_idle_hours:
+        elif gen and r["status"] == "idle" and r["idle_h"] >= superseded_idle_hours:  # shell/busy — работает
             r["cand"], r["verdict"] = True, f"кандидат: сменён наследником (поколение {gen})"
         elif r["idle_h"] >= idle_hours and not is_current:
             r["cand"], r["verdict"] = True, f"кандидат: простой {r['idle_h']:.0f} ч"
@@ -153,6 +175,9 @@ def cmd_reap(sx, a):
         L.write_json(listfile, {"at": sx.now(), "roots": roots,
                                 "candidates": [{"pid": r["pid"], "start": r["start"], "name": r["name"]} for r in cands]})
         print(f"\nсессий {len(rows)}, кандидатов {len(cands)}; свои проекты: {', '.join(roots) or '—'}")
+        pruned = prune_lineage_dir(a.prune_days)
+        if pruned:
+            print(f"записей линий старше {a.prune_days:g} дн. удалено: {pruned}")
         if cands:
             print("снять (владелец, в течение 10 мин): bash eval/tools/reap_sessions.sh --kill")
         return 0

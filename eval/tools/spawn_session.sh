@@ -87,7 +87,7 @@ first_message() {
   tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди."
   if [ -n "$HANDOFF" ]; then
     # Квитанция — последним шагом приёма: по ней сторож снимает предшественника, Monitor и кроны к этому времени свои.
-    tag="$tag После приёма и перевзвода Monitor и кронов выполни: python3 -I $TOOLS/lineage.py ack — по этой квитанции предшественник закроется сам."
+    tag="$tag Последним шагом приёма (после Monitor, если ты его взводишь) выполни: python3 -I $TOOLS/lineage.py ack — по этой квитанции предшественник закроется сам."
     if [ -n "$role" ]; then
       num="$(role_num "$role")" || die "неизвестная роль: $role (coord plan frontend backend release boards)"
       printf 'Сборка Т3, ключ реестра %s, роль %s, наследник. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику подтверди приём через SendMessage.%s' "$role" "$num" "$HANDOFF" "$tag"
