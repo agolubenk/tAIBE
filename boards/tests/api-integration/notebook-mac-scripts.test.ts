@@ -401,7 +401,7 @@ describe("API integration: notebook Mac scripts", () => {
     }
   });
 
-  it("refuses a worker config whose workspaceIds is empty", async () => {
+  it("refuses a worker config whose workspaceIds is empty, and the sync still runs", async () => {
     const { home, node } = await setup();
     const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
     writeFileSync(
@@ -411,5 +411,8 @@ describe("API integration: notebook Mac scripts", () => {
     await expect(node("notebook-worker.mjs", "--once")).rejects.toThrow(
       /workspaceIds must list workspace ids/,
     );
+    // the sync never reads workspaceIds, so a typo there must not stop it
+    const sync = await node("notebook-sync.mjs");
+    expect(sync.stdout).toContain("uploaded 3");
   });
 });

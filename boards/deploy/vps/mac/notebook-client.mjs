@@ -20,7 +20,9 @@ export function loadConfig() {
       "",
     ),
     workspaceId: config.workspaceId,
-    workspaceIds: workerWorkspaces(config, home),
+    // Read by the worker only (workerWorkspaces): a typo here must not stop
+    // the sync, which never uses it.
+    workspaceIds: config.workspaceIds,
     ollamaUrl: (config.ollamaUrl || "http://127.0.0.1:11434").replace(
       /\/+$/,
       "",
@@ -40,14 +42,15 @@ export function loadConfig() {
 // The workspaces the embedding worker serves. One worker per Mac embeds for
 // every product notebook (Ollama takes one request at a time), while each
 // sync home uploads one repo into its own workspaceId. Without workspaceIds
-// the worker serves the sync's workspace, as before.
-function workerWorkspaces(config, home) {
+// the worker serves the sync's workspace, as before. The home's one API key
+// must reach every listed workspace.
+export function workerWorkspaces(config) {
   if (config.workspaceIds === undefined) return [config.workspaceId];
   const ids = Array.isArray(config.workspaceIds)
     ? [...new Set(config.workspaceIds)]
     : [];
   if (!ids.length || ids.some((id) => typeof id !== "string" || !id)) {
-    throw new Error(`${home}: workspaceIds must list workspace ids`);
+    throw new Error(`${config.home}: workspaceIds must list workspace ids`);
   }
   return ids;
 }

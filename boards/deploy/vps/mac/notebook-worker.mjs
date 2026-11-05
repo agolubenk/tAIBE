@@ -10,7 +10,12 @@
 // its query vector (QUERY_EMBED_WAIT_MS) and would fall back to keywords while
 // the worker sat in another workspace's poll. The polls only wait on the
 // network; the Ollama calls behind them go through one queue.
-import { loadConfig, notebookApi, stamp } from "./notebook-client.mjs";
+import {
+  loadConfig,
+  notebookApi,
+  stamp,
+  workerWorkspaces,
+} from "./notebook-client.mjs";
 
 const POLL_WAIT_S = 25;
 const BACKOFF_MS = [5_000, 15_000, 60_000];
@@ -81,6 +86,12 @@ async function round(config, label) {
   return work.items.length;
 }
 
+// A refused workspace usually means the home's key is scoped to another one.
+const explain = (config, error) =>
+  /HTTP (401|403|404)\b/.test(error.message)
+    ? `${error.message} — does ${config.home}/api_key reach this workspace?`
+    : error.message;
+
 async function serve(config, label) {
   let failures = 0;
   for (;;) {
@@ -91,7 +102,7 @@ async function serve(config, label) {
       const delay = BACKOFF_MS[Math.min(failures, BACKOFF_MS.length - 1)];
       failures++;
       console.error(
-        `${stamp()}${label} ${error.message}; retry in ${delay / 1000}s`,
+        `${stamp()}${label} ${explain(config, error)}; retry in ${delay / 1000}s`,
       );
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
@@ -100,25 +111,40 @@ async function serve(config, label) {
 
 async function main() {
   const config = loadConfig();
+  const ids = workerWorkspaces(config);
+  if (!ids.includes(config.workspaceId)) {
+    console.error(
+      `${stamp()} warning: workspaceIds leaves out ${config.workspaceId}, the notebook this home syncs`,
+    );
+  }
   // One workspace keeps the old log lines; several get their id in each line.
-  const many = config.workspaceIds.length > 1;
-  const targets = config.workspaceIds.map((workspaceId) => ({
+  const many = ids.length > 1;
+  const targets = ids.map((workspaceId) => ({
     config: { ...config, workspaceId },
     label: many ? ` [${workspaceId}]` : "",
   }));
   if (process.argv.includes("--once")) {
-    await Promise.all(
+    // Every workspace gets its round even when another one fails.
+    const results = await Promise.allSettled(
       targets.map(async ({ config: target, label }) => {
-        if (!(await round(target, label))) {
-          console.log(`${stamp()}${label} no work`);
+        try {
+          if (!(await round(target, label))) {
+            console.log(`${stamp()}${label} no work`);
+          }
+        } catch (error) {
+          console.error(`${stamp()}${label} ${explain(target, error)}`);
+          throw error;
         }
       }),
     );
+    if (results.some((result) => result.status === "rejected")) {
+      process.exitCode = 1;
+    }
     return;
   }
   console.log(
     `${stamp()} worker up: ${config.baseUrl}, ollama ${config.ollamaUrl}` +
-      (many ? `, workspaces ${config.workspaceIds.join(", ")}` : ""),
+      (many ? `, workspaces ${ids.join(", ")}` : ""),
   );
   await Promise.all(
     targets.map(({ config: target, label }) => serve(target, label)),

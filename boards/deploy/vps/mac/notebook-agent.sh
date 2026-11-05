@@ -6,12 +6,16 @@
 #   notebook-agent.sh key     — read the workspace API key from stdin (pbpaste | …)
 #   notebook-agent.sh workspaces <id>… — the notebooks the one worker embeds for
 #   notebook-agent.sh check   — one sync dry run and one worker round, in the foreground
-#   notebook-agent.sh install — install both LaunchAgents
+#   notebook-agent.sh sync    — run the installed sync now
+#   notebook-agent.sh install — install the LaunchAgents (worker and sync; sync only in a second home)
 #   notebook-agent.sh remove  — unload and delete them (config and key stay)
 # One repo per product notebook: a second product gets its own home
 # (T_BOARDS_NOTEBOOK_HOME=~/.t-boards-notebook-<name>) with only a sync agent,
 # at 04:47; the worker in ~/.t-boards-notebook lists its workspace.
 set -eu
+# Byte ranges in the name check: under a UTF-8 locale [a-z] also lets "Hr" in.
+LC_ALL=C
+export LC_ALL
 
 here="$(cd "$(dirname "$0")" && pwd)"
 default_home="$HOME/.t-boards-notebook"
@@ -21,13 +25,17 @@ worker_label="space.hrhelper.t-boards-notebook-worker"
 sync_label="space.hrhelper.t-boards-notebook-sync"
 sync_minute=17
 if [ "$home" != "$default_home" ]; then
-  name="$(basename "$home" | sed 's/^\.t-boards-notebook-//')"
+  # Directly in $HOME and named after the product: the name is the label
+  # suffix, so two homes can never share one plist.
+  folder="$(basename "$home")"
+  name="${folder#.t-boards-notebook-}"
   case "$name" in
-    "" | *[!a-z0-9-]*)
-      echo "T_BOARDS_NOTEBOOK_HOME: нужен ~/.t-boards-notebook-<имя> (a-z, 0-9, -)" >&2
-      exit 2
-      ;;
+    "$folder" | "" | *[!a-z0-9-]*) name="" ;;
   esac
+  if [ -z "$name" ] || [ "$(dirname "$home")" != "$HOME" ]; then
+    echo "T_BOARDS_NOTEBOOK_HOME: нужен ~/.t-boards-notebook-<имя> (a-z, 0-9, -)" >&2
+    exit 2
+  fi
   sync_label="$sync_label-$name"
   sync_minute=47
 fi
@@ -84,11 +92,19 @@ case "${1:-}" in
     git_bin="$(command -v git)"
     mkdir -p "$home"
     chmod 700 "$home"
-    WS="$2" REPO="$repo" BASE="$base" GIT="$git_bin" node -e '
+    # Merged into the existing file: workspaceIds, extraRoots and evalRefs
+    # set earlier survive a change of workspace or repo.
+    WS="$2" REPO="$repo" BASE="$base" GIT="$git_bin" FILE="$home/config.json" node -e '
+      const fs = require("fs");
       const e = process.env;
-      process.stdout.write(JSON.stringify({ workspaceId: e.WS, repoRoot: e.REPO,
-        baseUrl: e.BASE, ollamaUrl: "http://127.0.0.1:11434", git: e.GIT }, null, 2) + "\n");
-    ' >"$home/config.json"
+      let old = {};
+      try { old = JSON.parse(fs.readFileSync(e.FILE, "utf8")); } catch {}
+      const config = { ollamaUrl: "http://127.0.0.1:11434", ...old,
+        workspaceId: e.WS, repoRoot: e.REPO, baseUrl: e.BASE, git: e.GIT };
+      fs.writeFileSync(e.FILE, JSON.stringify(config, null, 2) + "\n");
+      const kept = ["workspaceIds", "extraRoots", "evalRefs"].filter((k) => k in old);
+      if (kept.length) console.log("сохранено из прежнего config.json: " + kept.join(", "));
+    '
     echo "config: $home/config.json (repo $repo, $base)"
     ;;
   key)
@@ -105,28 +121,52 @@ case "${1:-}" in
     echo "ключ записан: $home/api_key (0600)"
     ;;
   workspaces)
+    if [ "$home" != "$default_home" ]; then
+      echo "воркер один на Mac и читает только $default_home" >&2
+      exit 2
+    fi
     need_setup
     shift
-    [ "$#" -gt 0 ] || {
-      echo "usage: $0 workspaces <workspaceId>…" >&2
-      exit 2
-    }
     CONFIG="$home/config.json" node -e '
       const fs = require("fs");
       const file = process.env.CONFIG;
+      const ids = [...new Set(process.argv.slice(1).filter(Boolean))];
+      if (!ids.length) {
+        console.error("usage: notebook-agent.sh workspaces <workspaceId>…");
+        process.exit(2);
+      }
       const config = JSON.parse(fs.readFileSync(file, "utf8"));
-      config.workspaceIds = [...new Set(process.argv.slice(1))];
+      if (!ids.includes(config.workspaceId)) {
+        console.error("внимание: в списке нет " + config.workspaceId + " — блокнота синка этого дома");
+      }
+      config.workspaceIds = ids;
       fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
-      console.log("воркер обслуживает: " + config.workspaceIds.join(", "));
+      console.log("воркер обслуживает: " + ids.join(", "));
     ' "$@"
+    # The worker reads the list at start: restart it if it runs.
+    if launchctl print "gui/$(id -u)/$worker_label" >/dev/null 2>&1; then
+      launchctl kickstart -k "gui/$(id -u)/$worker_label"
+      echo "воркер перезапущен"
+    fi
     ;;
   check)
     need_setup
     copy_scripts
     node "$home/notebook-sync.mjs" --dry-run
-    if [ "$home" = "$default_home" ]; then
+    # A second worker next to the running one would send Ollama two calls.
+    if [ "$home" != "$default_home" ]; then
+      :
+    elif launchctl print "gui/$(id -u)/$worker_label" >/dev/null 2>&1; then
+      echo "воркер уже работает (LaunchAgent) — пробный раунд пропущен, лог: $home/worker.log"
+    else
       node "$home/notebook-worker.mjs" --once
     fi
+    ;;
+  sync)
+    # On request, through the agent: its environment and its log.
+    need_setup
+    launchctl kickstart "gui/$(id -u)/$sync_label"
+    echo "синк запущен, лог: $home/sync.log"
     ;;
   install)
     need_setup
@@ -143,13 +183,17 @@ case "${1:-}" in
       launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
       launchctl bootstrap "gui/$(id -u)" "$agents/$label.plist"
     done
-    sleep 5
-    tail -2 "$home/worker.log" "$home/sync.log" 2>&1 || true
+    echo "синк: каждый день в 04:$sync_minute (пропущенный — при пробуждении), сейчас: T_BOARDS_NOTEBOOK_HOME=$home $0 sync"
+    if [ "$home" = "$default_home" ]; then
+      sleep 5
+      tail -2 "$home/worker.log" 2>&1 || true
+    fi
     ;;
   remove)
     labels="$sync_label"
     if [ "$home" = "$default_home" ]; then
       labels="$worker_label $sync_label"
+      echo "снимается и воркер — он обслуживает блокноты всех продуктов этого Mac"
     fi
     for label in $labels; do
       launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
@@ -158,7 +202,7 @@ case "${1:-}" in
     echo "LaunchAgents удалены; настройки и ключ на месте: $home"
     ;;
   *)
-    echo "usage: $0 config|key|workspaces|check|install|remove" >&2
+    echo "usage: $0 config|key|workspaces|check|sync|install|remove" >&2
     exit 2
     ;;
 esac
