@@ -25,7 +25,7 @@ sys.path.insert(0, HERE)
 
 import actions  # noqa: E402
 import sources  # noqa: E402
-from journal import DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
+from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
 
 STATE_DIR = os.environ.get("NERVE_STATE_DIR", os.path.join(HERE, "state"))
 
@@ -135,8 +135,40 @@ def cmd_run(cfg, a):
         ctx = Ctx(cfg, STATE_DIR, deliver=not seed and wakes_on())
         one_pass(ctx)
         seed = False
-        night = load_json(os.path.join(STATE_DIR, "mode.json"), {}).get("phase") == "night"
-        time.sleep(a.interval * (cfg.get("night_interval_factor", 5) if night else 1))
+        time.sleep(cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval))
+
+
+def cycle_seconds(cfg, mode, interval=None):
+    """Pause of the daemon after a pass: night_interval_factor times longer at night. The phase comes from mode.json,
+    which only the daemon's own pass writes (budget.py), so a tap reading it sees the phase the daemon slept on."""
+    base = cfg["interval_seconds"] if interval is None else interval
+    return base * (cfg.get("night_interval_factor", 5) if mode.get("phase") == "night" else 1)
+
+
+def heartbeat_stale_after(cfg, mode):
+    """The heartbeat is stale once the daemon missed a cycle: at least two cycles, never under heartbeat_stale_min.
+    Night cycle 60 s × 5 = 300 s equalled the 5-minute threshold, so any pass a second late raised a false
+    «НЕРВ МОЛЧИТ» (04.11 22:22 and 22:37, heartbeat 5 s old). Day stays 5 minutes, night becomes 10."""
+    return max(timedelta(minutes=cfg["tap"]["heartbeat_stale_min"]), timedelta(seconds=2 * cycle_seconds(cfg, mode)))
+
+
+def resolve_roles(cfg, spec, strict=True):
+    """Target of emit/tap → role keys. Takes a key («boards»), the role number of the team registry (1 = coord …
+    6 = boards, the order of team.roles), «all» and comma lists («backend,release»). A record whose «to» no tap
+    matches is lost without a trace: on 04.11 21 assignments went to «6», «4» and «backend,release» and reached
+    nobody. strict (emit) refuses an unknown name; tap stays lenient for helper taps such as «selftest»."""
+    roles = list(cfg.get("team", {}).get("roles", []))
+    out = []
+    for part in (p.strip() for p in spec.split(",")):
+        if part.isdigit() and 1 <= int(part) <= len(roles):
+            part = roles[int(part) - 1]
+        if strict and part != ALL and part not in roles:
+            raise ValueError(part or spec)
+        if part and part not in out:
+            out.append(part)
+    if not out:
+        raise ValueError(spec)
+    return out
 
 
 def cmd_once(cfg, a):
@@ -153,7 +185,15 @@ def fmt(rec, tz):
 
 
 def cmd_tap(cfg, a):
-    role = a.role
+    try:
+        roles = resolve_roles(cfg, a.role, strict=False)
+    except ValueError:
+        roles = []
+    if len(roles) != 1:
+        print(f"tap слушает одну роль, а не «{a.role}»: {', '.join(cfg['team']['roles'])} или номер 1–"
+              f"{len(cfg['team']['roles'])}", file=sys.stderr)
+        return 2
+    role = roles[0]
     tc = cfg["tap"]
     jpath = os.path.join(STATE_DIR, "journal.jsonl")
     cpath = os.path.join(STATE_DIR, f"tap-{role}.json")
@@ -194,7 +234,7 @@ def cmd_tap(cfg, a):
             cur["last_flush"] = now_iso() if due else cur["last_flush"]
         if role in tc["heartbeat_watchers"]:
             hb = load_json(os.path.join(STATE_DIR, "state.json"), {}).get("heartbeat")
-            stale = not hb or now - datetime.fromisoformat(hb) > timedelta(minutes=tc["heartbeat_stale_min"])
+            stale = not hb or now - datetime.fromisoformat(hb) > heartbeat_stale_after(cfg, mode)
             if stale and not cur["dead_warned"]:
                 print(f"НЕРВ МОЛЧИТ с {hb[11:16] if hb else '—'} UTC: демон не пишет пульс — "
                       f"launchctl kickstart -k gui/{os.getuid()}/space.hrhelper.nerve", flush=True)
@@ -206,10 +246,16 @@ def cmd_tap(cfg, a):
 
 
 def cmd_emit(cfg, a):
+    try:
+        to = resolve_roles(cfg, a.role)
+    except ValueError as e:
+        print(f"неизвестная роль «{e}» — ничего не записано. Роли: {', '.join(cfg['team']['roles'])}, {ALL}, "
+              f"номер 1–{len(cfg['team']['roles'])} или список через запятую", file=sys.stderr)
+        return 2
     j = Journal(os.path.join(STATE_DIR, "journal.jsonl"))
-    key = f"manual:{now_iso()}:{a.role}:{abs(hash(a.text)) % 10**8}"
-    j.emit(key, a.kind, NERVOUS, [a.role], a.text, "manual")
-    print(f"записано: {key}")
+    key = f"manual:{now_iso()}:{','.join(to)}:{abs(hash(a.text)) % 10**8}"
+    j.emit(key, a.kind, NERVOUS, to, a.text, "manual")
+    print(f"записано: {key} → {', '.join(to)}")
     return 0
 
 

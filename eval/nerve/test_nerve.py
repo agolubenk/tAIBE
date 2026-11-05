@@ -13,6 +13,7 @@ sys.path.insert(0, HERE)
 
 import actions  # noqa: E402
 import budget  # noqa: E402
+import nerve  # noqa: E402
 import quorum  # noqa: E402
 import sources  # noqa: E402
 from journal import DIGEST, NERVOUS, Journal, read_from  # noqa: E402
@@ -334,6 +335,73 @@ class TapTest(unittest.TestCase):
             self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d, "coord"))
             self.assertEqual(self.run_tap(d, "coord"), "", "одна строка на эпизод")
             self.assertEqual(self.run_tap(d, "backend"), "", "пульс смотрят только coord и release")
+
+    def heartbeat_ago(self, d, minutes, phase):
+        hb = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+        wj(os.path.join(d, "state.json"), {"heartbeat": hb})
+        wj(os.path.join(d, "mode.json"), {"phase": phase})
+
+    def test_tap_night_cycle_is_not_silence(self):
+        # Ночью демон спит 60 с × 5 = 300 с — ровно прежний порог 5 мин: затянувшийся проход давал ложную тревогу.
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            self.heartbeat_ago(d, 7, "night")
+            self.assertEqual(self.run_tap(d, "coord"), "", "ночью 7 мин — меньше двух циклов, пульс жив")
+            self.heartbeat_ago(d, 7, "day")
+            self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d, "release"), "днём порог прежний, 5 мин")
+
+    def test_tap_night_warns_after_two_cycles(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            self.heartbeat_ago(d, 11, "night")
+            self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d, "coord"))
+
+    def test_stale_threshold_values(self):
+        self.assertEqual(nerve.heartbeat_stale_after(CFG, {"phase": "day"}), timedelta(minutes=5))
+        self.assertEqual(nerve.heartbeat_stale_after(CFG, {"phase": "evening"}), timedelta(minutes=5))
+        self.assertEqual(nerve.heartbeat_stale_after(CFG, {"phase": "night"}), timedelta(minutes=10))
+        self.assertEqual(nerve.cycle_seconds(CFG, {"phase": "night"}, 30), 150, "--interval демона учитывается")
+
+
+class EmitTest(unittest.TestCase):
+    def nerve(self, d, *args):
+        env = dict(os.environ, NERVE_STATE_DIR=d)
+        return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), *args],
+                              capture_output=True, text=True, env=env, timeout=30)
+
+    def records(self, d):
+        return read_from(os.path.join(d, "journal.jsonl"), 0)[0]
+
+    def test_emit_resolves_role_numbers_and_lists(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            wj(os.path.join(d, "state.json"), {"heartbeat": datetime.now(timezone.utc).isoformat()})
+            self.assertEqual(self.nerve(d, "tap", "6", "--once").stdout, "")  # курсор boards — с конца журнала
+            self.assertEqual(self.nerve(d, "emit", "6", "роль 6: одна").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "backend, release,4", "двум").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "plan,frontend,backend,release,boards", "пятерым").returncode, 0)
+            to = [sorted(r["to"]) for r in self.records(d)]
+            self.assertEqual(to, [["boards"], ["backend", "release"], sorted(CFG["team"]["roles"][1:])])
+            out = self.nerve(d, "tap", "boards", "--once").stdout
+            self.assertIn("роль 6: одна", out, "tap 6 и tap boards — один курсор")
+            self.assertIn("пятерым", out)
+            self.assertNotIn("двум", out)
+
+    def test_emit_refuses_unknown_role(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            for target in ("tboards", "7", "backend,review", ","):
+                p = self.nerve(d, "emit", target, "никому")
+                self.assertEqual(p.returncode, 2, target)
+                self.assertIn("ничего не записано", p.stderr, target)
+            self.assertEqual(self.records(d), [])
+
+    def test_tap_takes_one_role_and_keeps_helper_taps(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            self.assertEqual(self.nerve(d, "tap", "backend,release", "--once").returncode, 2)
+            self.assertEqual(self.nerve(d, "tap", "selftest", "--once").returncode, 0, "split/6-verify.sh")
+            self.assertTrue(os.path.exists(os.path.join(d, "tap-selftest.json")))
 
 
 if __name__ == "__main__":
