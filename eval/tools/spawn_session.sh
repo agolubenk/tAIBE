@@ -7,7 +7,10 @@
 #
 # (в инстансе HR_Helper-v2 скрипт лежит в supertick-eval/tools/ — работает так же; корень дерева берётся из его места)
 # Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|print (print — только напечатать
-# команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать).
+# команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
+# · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам.
+# Handoff: наследник после приёма пишет квитанцию (lineage.py ack), сторож lineage.py retire проверяет его и снимает
+# предшественника — процессы и окно Terminal (id окна записан при открытии). Уборка остальных — reap_sessions.sh.
 # Роль Т3 получает свой геном (--settings genome/<ключ>.json) и первое сообщение «Сборка Т3, ключ реестра <ключ>…» —
 # по нему включается правило 90 и Нерв узнаёт роль. Окно открывает osascript: первый раз macOS спросит разрешение
 # на управление Terminal. Только bash 3.2 (системный на macOS): без ассоциативных массивов.
@@ -17,7 +20,8 @@ TOOLS="$(cd "$(dirname "$0")" && pwd)"
 CWD="$PWD"
 TERMINAL="${SPAWN_TERMINAL:-terminal}"
 PROMPT_DIR=""
-HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0
+HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}"
+SPAWNED_LINE=""  # линия последней открытой сессии (bash 3.2: из функции — только через глобальную)
 ORDER="coord release backend frontend plan boards"
 
 die() { echo "spawn_session: $*" >&2; exit 2; }
@@ -33,7 +37,8 @@ while [ $# -gt 0 ]; do
     --terminal) TERMINAL="${2:?}"; shift 2 ;;
     --prompt-dir) PROMPT_DIR="${2:?}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    --no-retire) RETIRE=off; shift ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) die "неизвестный аргумент: $1" ;;
   esac
 done
@@ -66,10 +71,13 @@ role_num() {
 # поколение — число точек. Один шаблон запуска делает сессии единообразными, id — различимыми в журналах, на
 # карточках (метка session) и в handoff: наследник не путает свою работу с работой предка или сиблинга.
 child_lineage() {
-  local tail
+  local tail parent
   tail="$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null | head -c 4)" || true
   [ -n "$tail" ] || tail="$$"
-  printf '%s.%s' "${TAIBE_LINEAGE:-r}" "$tail"
+  # Сессия после --resume теряет TAIBE_LINEAGE: линию даёт её первый промпт (lineage.py line), иначе корень «r».
+  parent="${TAIBE_LINEAGE:-}"
+  [ -n "$parent" ] || parent="$(python3 -I "$TOOLS/lineage.py" line 2>/dev/null)" || parent=""
+  printf '%s.%s' "${parent:-r}" "$tail"
 }
 generation() { printf '%s' "$1" | tr -cd '.' | wc -c | tr -d ' '; }
 
@@ -78,6 +86,8 @@ first_message() {
   local role="$1" lineage="$2" num file tag
   tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди."
   if [ -n "$HANDOFF" ]; then
+    # Квитанция — последним шагом приёма: по ней сторож снимает предшественника, Monitor и кроны к этому времени свои.
+    tag="$tag После приёма и перевзвода Monitor и кронов выполни: python3 -I $TOOLS/lineage.py ack — по этой квитанции предшественник закроется сам."
     if [ -n "$role" ]; then
       num="$(role_num "$role")" || die "неизвестная роль: $role (coord plan frontend backend release boards)"
       printf 'Сборка Т3, ключ реестра %s, роль %s, наследник. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику подтверди приём через SendMessage.%s' "$role" "$num" "$HANDOFF" "$tag"
@@ -95,8 +105,9 @@ first_message() {
 
 # Одна сессия: пусковой скрипт в $TMPDIR, затем окно терминала (или печать команды).
 spawn_one() {
-  local role="$1" msg genome="" dir launcher cmd lineage
+  local role="$1" msg genome="" dir launcher cmd lineage out wid tty
   lineage="$(child_lineage)"
+  SPAWNED_LINE="$lineage"
   msg="$(first_message "$role" "$lineage")"
   if [ -n "$role" ]; then
     genome="$(in_tree_product "pipeline/genome/$role.json")"
@@ -134,15 +145,30 @@ spawn_one() {
   if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then
     echo "# ${role:-наследник}: вставить в новую вкладку терминала"
     echo "$cmd"
-    if [ "$DRY" = 1 ]; then sed -n '2,$p' "$launcher"; cat "$launcher.msg"; echo; rm -rf "$dir"; fi
+    if [ "$DRY" = 1 ]; then sed -n '2,$p' "$launcher"; cat "$launcher.msg"; echo; rm -rf "$dir"; return; fi
+    record "$lineage" print "" "" "$role"
     return
   fi
   if [ "$TERMINAL" = iterm ]; then
     osascript -e "tell application \"iTerm\" to create window with default profile command \"$cmd\"" >/dev/null
+    record "$lineage" iterm "" "" "$role"
   else
-    osascript -e "tell application \"Terminal\" to do script \"$cmd\"" -e 'tell application "Terminal" to activate' >/dev/null
+    # id окна и tty вкладки — сразу при открытии: у окна нет tty, у вкладки нет id; по ним сторож закроет именно его.
+    out="$(osascript -e 'tell application "Terminal"' -e "set t to do script \"$cmd\"" -e 'activate' \
+      -e 'try' -e 'set w to first window whose tabs contains t' -e 'return ((id of w) as text) & " " & (tty of t)' \
+      -e 'on error' -e 'return "- " & (tty of t)' -e 'end try' -e 'end tell')" || out=""
+    wid="${out%% *}"; tty="${out#* }"
+    case "$wid" in *[!0-9]*|"") wid="" ;; esac
+    case "$tty" in /dev/tty*) ;; *) tty="" ;; esac
+    record "$lineage" terminal "$wid" "$tty" "$role"
   fi
   echo "открыто: ${role:-наследник} → $launcher"
+}
+
+# Запись линии (окно, tty) для сторожа и reap_sessions.sh. Сбой — предупреждение: окно уже открыто.
+record() {
+  python3 -I "$TOOLS/lineage.py" record --line "$1" --terminal "$2" --window-id "$3" --tty "$4" --role "$5" \
+    || echo "# spawn_session: запись линии $1 не сохранена — окно закроется только по tty" >&2
 }
 
 case "${TMPDIR:-}$CWD" in *\"*|*\\*) die "кавычка или обратный слэш в пути — osascript не примет" ;; esac
@@ -161,6 +187,11 @@ if [ -n "$HANDOFF" ]; then
       || echo "# spawn_session: handoff повторяет постоянный контекст — в следующий раз пиши только дельту" >&2
   fi
   spawn_one "$ROLE"
+  # Предшественник уходит сам: сторож ждёт квитанцию наследника и проверяет его, модель в этом не участвует.
+  if [ "$DRY" = 0 ] && [ "$RETIRE" != off ]; then
+    python3 -I "$TOOLS/lineage.py" retire --child "$SPAWNED_LINE" ${ROLE:+--role "$ROLE"} \
+      || echo "# spawn_session: сторож не запущен — предшественник останется, уберёт reap_sessions.sh" >&2
+  fi
 elif [ "$LAUNCH" = 1 ]; then
   if [ -n "$ROLES" ]; then
     [ "$ROLES" = all ] && ROLES="$ORDER"
