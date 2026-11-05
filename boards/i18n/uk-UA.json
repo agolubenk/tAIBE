@@ -2502,8 +2502,9 @@
 				"lastKey": "last key {{time}}",
 				"noKey": "no key yet",
 				"toggle": "Agent {{name}} may work",
-				"archived": "Archived",
-				"toArchive": "Move agent {{name}} to the archive; it comes back when its session does"
+				"toArchive": "Move to archive",
+				"toArchiveLabel": "Move to archive: {{name}}",
+				"mayReturn": "Agent {{name}} may come back"
 			},
 			"subtitle": "Agents that work under their own names, the tools MCP sessions see, and the model.",
 			"title": "Agents and MCP",
@@ -2514,7 +2515,8 @@
 				"disabled_other": "Agent turned off, {{count}} keys revoked",
 				"enabled": "Agent turned on",
 				"error": "Could not change the agent",
-				"archived": "Agent moved to the archive; it comes back when its session asks for a key"
+				"archived": "Agent moved to the archive; it comes back when its session asks for a key",
+				"disabledNoKeys": "Agent turned off"
 			},
 			"tools": {
 				"count_few": "{{count}} tools",
@@ -2527,7 +2529,7 @@
 				"title": "MCP tool sets"
 			},
 			"archive": {
-				"hint": "Agents idle for over a day; they hold no place among your active agents. Each comes back by itself, with its name and history, when its session asks for a key again.",
+				"hint": "They hold no place and come back by themselves, name and history intact, when their session asks for a key and a place is free.",
 				"title": "Archived ({{total}})"
 			}
 		},

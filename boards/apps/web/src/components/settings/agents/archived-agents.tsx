@@ -8,20 +8,29 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { type AgentItem, AgentRow } from "./agent-row";
+import { archiveCount } from "./group-agents";
 
 // TB-74: agents idle for a day, folded away. They hold no place under the
 // cap and come back by themselves, so the owner rarely needs to look.
-export function ArchivedAgents({ agents }: { agents: AgentItem[] }) {
+export function ArchivedAgents({
+  agents,
+  defaultOpen = false,
+}: {
+  agents: AgentItem[];
+  defaultOpen?: boolean;
+}) {
   const { t } = useTranslation();
 
   return (
-    <Collapsible className="space-y-2">
+    <Collapsible defaultOpen={defaultOpen} className="space-y-2">
       <CollapsibleTrigger className="flex items-center gap-1.5 rounded-md px-0.5 text-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-panel-open:[&_svg]:rotate-90">
         <ChevronRightIcon
           aria-hidden="true"
           className="size-4 transition-transform"
         />
-        {t("settings:agentsPage.archive.title", { total: agents.length })}
+        {t("settings:agentsPage.archive.title", {
+          total: archiveCount(agents.length),
+        })}
       </CollapsibleTrigger>
       <SettingsNote icon={ArchiveIcon}>
         {t("settings:agentsPage.archive.hint")}

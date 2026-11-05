@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { agentState, groupAgents } from "./group-agents";
+import { agentState, archiveCount, groupAgents } from "./group-agents";
 
 const at = "2026-11-05T08:00:00.000Z";
 
@@ -25,5 +25,13 @@ describe("agent groups (TB-74)", () => {
     expect(groups.active.map((a) => a.id)).toEqual(["a1", "a2"]);
     expect(groups.archived.map((a) => a.id)).toEqual(["r1", "r2"]);
     expect(groups.disabled.map((a) => a.id)).toEqual(["d1"]);
+  });
+});
+
+describe("archive count", () => {
+  it("says a full page of archived agents may hold more", () => {
+    expect(archiveCount(3)).toBe("3");
+    expect(archiveCount(99)).toBe("99");
+    expect(archiveCount(100)).toBe("100+");
   });
 });

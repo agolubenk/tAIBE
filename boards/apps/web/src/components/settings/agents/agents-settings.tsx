@@ -62,7 +62,9 @@ export function AgentsSettings() {
             ))}
           </SettingsCard>
         ) : null}
-        {archived.length ? <ArchivedAgents agents={archived} /> : null}
+        {archived.length ? (
+          <ArchivedAgents agents={archived} defaultOpen={listed.length === 0} />
+        ) : null}
       </>
     );
   };

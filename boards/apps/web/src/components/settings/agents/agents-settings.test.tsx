@@ -83,7 +83,7 @@ describe("AgentsSettings and the archive (TB-74)", () => {
     expect(screen.getByText("working · Codex")).toBeInTheDocument();
     expect(screen.getByText("off · Codex")).toBeInTheDocument();
     const trigger = screen.getByRole("button", {
-      name: /settings:agentsPage\.archive\.title \{"total":1\}/,
+      name: /settings:agentsPage\.archive\.title \{"total":"1"\}/,
     });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(
@@ -95,19 +95,17 @@ describe("AgentsSettings and the archive (TB-74)", () => {
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("idle · Codex")).toBeInTheDocument();
-    expect(
-      screen.getByText("settings:agentsPage.row.archived"),
-    ).toBeInTheDocument();
   });
 
-  it("labels the switch of a disabled agent as a move to the archive", () => {
+  it("offers a disabled agent a visible move to the archive, not a switch back on", () => {
     m.agents = [agent("working"), agent("off", { disabledAt: day })];
     render(<AgentsSettings />);
 
-    const toArchive = screen.getByRole("switch", {
-      name: /settings:agentsPage\.row\.toArchive .*off · Codex/,
+    const toArchive = screen.getByRole("button", {
+      name: /settings:agentsPage\.row\.toArchiveLabel .*off · Codex/,
     });
-    expect(toArchive).not.toBeChecked();
+    expect(toArchive).toHaveTextContent("settings:agentsPage.row.toArchive");
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
     fireEvent.click(toArchive);
     expect(m.mutate).toHaveBeenCalledWith({ agentId: "off", enabled: true });
 
@@ -122,20 +120,20 @@ describe("AgentsSettings and the archive (TB-74)", () => {
     });
   });
 
-  it("lets the owner disable an archived agent", () => {
+  it("opens the archive when it is all there is and lets the owner disable an archived agent", () => {
     m.agents = [agent("idle", { archivedAt: day })];
     render(<AgentsSettings />);
 
     expect(
       screen.queryByText("settings:agentsPage.emptyTitle"),
     ).not.toBeInTheDocument();
-    fireEvent.click(
+    expect(
       screen.getByRole("button", {
         name: /settings:agentsPage\.archive\.title/,
       }),
-    );
+    ).toHaveAttribute("aria-expanded", "true");
     const idle = screen.getByRole("switch", {
-      name: /settings:agentsPage\.row\.toggle .*idle · Codex/,
+      name: /settings:agentsPage\.row\.mayReturn .*idle · Codex/,
     });
     expect(idle).toBeChecked();
     fireEvent.click(idle);

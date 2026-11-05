@@ -9,6 +9,14 @@ export function agentState(agent: AgentStates): AgentState {
   return agent.archivedAt ? "archived" : "active";
 }
 
+// The API lists at most this many archived agents, the most recently active
+// (list-agents.ts); a full page means there may be more.
+const ARCHIVE_PAGE = 100;
+
+export function archiveCount(listed: number) {
+  return listed >= ARCHIVE_PAGE ? `${ARCHIVE_PAGE}+` : String(listed);
+}
+
 // Keeps the order the API sends within each group.
 export function groupAgents<T extends AgentStates>(agents: T[]) {
   const groups: Record<AgentState, T[]> = {

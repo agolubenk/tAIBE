@@ -2,6 +2,7 @@ import { BotIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { StatusBadge } from "@/components/settings/status-badge";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import type listAgents from "@/fetchers/agent-identity/list-agents";
 import useSetAgentEnabled from "@/hooks/mutations/agent-identity/use-set-agent-enabled";
@@ -11,36 +12,26 @@ import { agentState } from "./group-agents";
 export type AgentItem = Awaited<ReturnType<typeof listAgents>>[number];
 
 // One session's agent: what it is called, when it last took a key, and the
-// switch that stops all its keys at once. On a disabled agent the switch
-// moves it to the archive, from where its session brings it back (TB-74).
+// switch that stops all its keys at once. A disabled agent gets no switch
+// back on: the owner moves it to the archive, and its session brings it back
+// from there (TB-74).
 export function AgentRow({ agent }: { agent: AgentItem }) {
   const { t } = useTranslation();
   const { mutate, isPending } = useSetAgentEnabled();
   const state = agentState(agent);
   const active = state === "active";
   const switchId = `agent-enabled-${agent.id}`;
-  const switchLabel =
-    state === "disabled"
-      ? t("settings:agentsPage.row.toArchive", { name: agent.name })
-      : t("settings:agentsPage.row.toggle", { name: agent.name });
 
-  const badge = {
-    active: (
-      <StatusBadge tone={agent.keys.length ? "success" : "neutral"}>
-        {t("settings:agentsPage.row.keys", { count: agent.keys.length })}
-      </StatusBadge>
-    ),
-    archived: (
-      <StatusBadge tone="neutral">
-        {t("settings:agentsPage.row.archived")}
-      </StatusBadge>
-    ),
-    disabled: (
+  const badge =
+    state === "disabled" ? (
       <StatusBadge tone="destructive">
         {t("settings:agentsPage.row.disabled")}
       </StatusBadge>
-    ),
-  }[state];
+    ) : active ? (
+      <StatusBadge tone={agent.keys.length ? "success" : "neutral"}>
+        {t("settings:agentsPage.row.keys", { count: agent.keys.length })}
+      </StatusBadge>
+    ) : undefined;
 
   return (
     <SettingsRow
@@ -64,16 +55,36 @@ export function AgentRow({ agent }: { agent: AgentItem }) {
         </span>
       }
     >
-      <label htmlFor={switchId} className="sr-only">
-        {switchLabel}
-      </label>
-      <Switch
-        id={switchId}
-        title={switchLabel}
-        checked={state !== "disabled"}
-        disabled={isPending}
-        onCheckedChange={(next) => mutate({ agentId: agent.id, enabled: next })}
-      />
+      {state === "disabled" ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label={t("settings:agentsPage.row.toArchiveLabel", {
+            name: agent.name,
+          })}
+          disabled={isPending}
+          onClick={() => mutate({ agentId: agent.id, enabled: true })}
+        >
+          {t("settings:agentsPage.row.toArchive")}
+        </Button>
+      ) : (
+        <>
+          <label htmlFor={switchId} className="sr-only">
+            {active
+              ? t("settings:agentsPage.row.toggle", { name: agent.name })
+              : t("settings:agentsPage.row.mayReturn", { name: agent.name })}
+          </label>
+          <Switch
+            id={switchId}
+            checked
+            disabled={isPending}
+            onCheckedChange={(next) =>
+              mutate({ agentId: agent.id, enabled: next })
+            }
+          />
+        </>
+      )}
     </SettingsRow>
   );
 }

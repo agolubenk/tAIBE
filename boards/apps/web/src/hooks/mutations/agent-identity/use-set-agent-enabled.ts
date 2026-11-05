@@ -13,10 +13,13 @@ function useSetAgentEnabled() {
       setAgentEnabled(agentId, enabled),
     onSuccess: (result) => {
       if (!result.enabled) {
+        // An archived agent holds no keys to revoke.
         toast.success(
-          t("settings:agentsPage.toast.disabled", {
-            count: result.revokedKeys,
-          }),
+          result.revokedKeys
+            ? t("settings:agentsPage.toast.disabled", {
+                count: result.revokedKeys,
+              })
+            : t("settings:agentsPage.toast.disabledNoKeys"),
         );
       } else {
         // Enabling a disabled agent moves it to the archive (TB-74).
