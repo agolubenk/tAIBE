@@ -30476,6 +30476,255 @@
         }
       }
     },
+    "/ssr/{workspaceId}/drafts/matches": {
+      "get": {
+        "operationId": "listSsrDraftMatches",
+        "tags": [
+          "SSR"
+        ],
+        "summary": "Open drafts and the approved version each one is identical to",
+        "description": "A draft matches when a version with the same entity path and the same blob sha was approved (or auto-bumped by sync) in this workspace or another workspace the caller can read. Other workspaces are never revealed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open drafts with their match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "drafts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "entityId": {
+                            "type": "string"
+                          },
+                          "versionId": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "match": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "workspaceId": {
+                                "type": "string"
+                              },
+                              "workspaceName": {
+                                "type": "string"
+                              },
+                              "versionId": {
+                                "type": "string"
+                              },
+                              "number": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "workspaceId",
+                              "workspaceName",
+                              "versionId",
+                              "number"
+                            ],
+                            "description": "An approved version with the same path and blob sha in a workspace the caller can read, or null"
+                          }
+                        },
+                        "required": [
+                          "entityId",
+                          "versionId",
+                          "path",
+                          "kind",
+                          "match"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "drafts"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing workspace:read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/ssr/{workspaceId}/drafts/approve-matching": {
+      "post": {
+        "operationId": "approveMatchingSsrDrafts",
+        "tags": [
+          "SSR"
+        ],
+        "summary": "Approve every listed draft that matches an approved version (owner UI only)",
+        "description": "Takes draft ids from the matches list and re-checks each on the server in one transaction: all are approved, or none are.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "versionIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "description": "Draft version ids from the matches list; each is re-checked"
+                  }
+                },
+                "required": [
+                  "versionIds"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "approved": {
+                      "type": "number"
+                    },
+                    "versionIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "approved",
+                    "versionIds"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More than 200 ids, or an empty list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the owner's browser session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Some ids are no longer open drafts or no longer match; nothing was approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "versionIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Ids that are no longer open drafts or no longer match"
+                    }
+                  },
+                  "required": [
+                    "message",
+                    "code",
+                    "versionIds"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
     "/external-link/task/{taskId}": {
       "post": {
         "operationId": "createExternalLink",
