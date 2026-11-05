@@ -2,7 +2,8 @@
 """team_status.py — кто из ролей Т3 продукта жив и жив ли Нерв (OPS-24). Через него spawn_session.sh --launch
 не дублирует живые роли и поднимает нерв.
 
-  python3 -I eval/tools/team_status.py live --role KEY [--cwd DIR]     живая роль → «pid имя статус …», rc 0; нет — rc 1
+  python3 -I eval/tools/team_status.py live --role KEY [--cwd DIR]     живая роль → «pid имя статус …», rc 0; нет — rc 3
+                                                                       (другой rc — проверка сломалась, роль не открывать)
   python3 -I eval/tools/team_status.py wait --role KEY --line LINE [--timeout 90]   сессия этой линии поднялась → rc 0
   python3 -I eval/tools/team_status.py status [--cwd DIR]              роли по порядку 1→5→4→3→2→6 и пульс нерва
   python3 -I eval/tools/team_status.py stop [--cwd DIR]                команды kill живых ролей для владельца; сам не снимает
@@ -28,6 +29,9 @@ import lineage_reap as R  # noqa: E402
 ORDER = ("coord", "release", "backend", "frontend", "plan", "boards")
 NUM = {"coord": 1, "plan": 2, "frontend": 3, "backend": 4, "release": 5, "boards": 6}
 LABEL = "space.hrhelper.nerve"  # до OPS-25 — один Нерв на Mac для всех продуктов
+# «Роли нет» — свой код: 1 Python отдаёт и на трейсбек (сбой импорта, исключение), и по нему открылась бы вторая
+# сессия живой роли.
+RC_MISSING = 3
 WAIT_POLL = 2.0
 
 
@@ -183,7 +187,7 @@ def nerve_fix(sx, st, log):
 def cmd_live(sx, a):
     r = live_roles(role_rows(sx, product_root(a.cwd))).get(a.role)
     if r is None:
-        return 1
+        return RC_MISSING
     print(describe(r))
     return 0
 

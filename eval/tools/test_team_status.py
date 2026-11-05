@@ -92,7 +92,7 @@ class LiveRoleTest(Roles):
         self.assertEqual(rc, 0, out)
         self.assertIn("pid 702 s-702 idle", out)
         rc, out, _ = self.run_main("live", "--role", "plan", "--cwd", str(self.root))
-        self.assertEqual((rc, out), (1, ""))
+        self.assertEqual((rc, out), (TS.RC_MISSING, ""))
 
     def test_status_and_stop(self):
         self.sess(702, "r.z9", "coord")

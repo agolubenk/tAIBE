@@ -187,11 +187,13 @@ launch_role() {
   if [ "$FORCE" = 0 ]; then
     rc=0; live="$(python3 -I "$TOOLS/team_status.py" live --role "$r" --cwd "$CWD" 2>&1)" || rc=$?
     if [ "$rc" = 0 ]; then echo "жива: $r · $live"; note "$r — жива, не открывал: $live"; return; fi
-    # Проверка сломалась — не открывать: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
-    if [ "$rc" != 1 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
+    # Открывать только по явному «роли нет» (rc 3). Любой другой rc (1 — трейсбек Python, 2 — ошибка) — проверка
+    # сломалась: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
+    if [ "$rc" != 3 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
   fi
   spawn_one "$r"
   if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then note "$r — команда напечатана"; return; fi
+  echo "жду сессию $r (до ${SPAWN_WAIT:-90} с)…"
   got="$(python3 -I "$TOOLS/team_status.py" wait --role "$r" --line "$SPAWNED_LINE" --timeout "${SPAWN_WAIT:-90}" 2>&1)" \
     && note "$r — поднята: $got" || note "$r — открыта, сессия НЕ появилась: $got"
 }
@@ -227,6 +229,10 @@ elif [ "$LAUNCH" = 1 ]; then
     [ -n "$ROLE" ] || die "--launch: нужен --role KEY или --roles LIST"
     ROLES="$ROLE"
   fi
+  # Весь список — до нерва и первой роли: опечатка в третьей не должна срывать запуск после двух открытых.
+  for r in $(echo "$ROLES" | tr ',' ' '); do
+    role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
+  done
   # Сначала нерв: роли без него не получают назначений. Сбой — в итог, запуск ролей не останавливает.
   if [ "$DRY" = 1 ]; then nerve="$(python3 -I "$TOOLS/team_status.py" nerve 2>&1)" || true
   else nerve="$(python3 -I "$TOOLS/team_status.py" nerve --fix 2>&1)" || true; fi

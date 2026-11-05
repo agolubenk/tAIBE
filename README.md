@@ -71,7 +71,9 @@ bash $T/spawn_session.sh --stop                    # prints `kill <pid>` per liv
 
 `--force` opens a role even when it is alive, and `--terminal print` prints the commands for a VS Code tab instead of
 opening windows. A live role is the youngest live Claude Code session with that role's genome inside the product
-that has no successor yet (neither an acceptance receipt nor a live descendant of the same role). Until OPS-25 there
+that has no successor yet (neither an acceptance receipt nor a live descendant of the same role). If the liveness
+check itself fails, the role is not opened and the summary says so. Run one `--launch` at a time: two runs started
+together both see a missing role and both open it. Until OPS-25 there
 is one Nerve per Mac (`space.hrhelper.nerve`) and one set of role launch files (`eval/prompts/launch-3010/roles/`)
 for every product.
 
