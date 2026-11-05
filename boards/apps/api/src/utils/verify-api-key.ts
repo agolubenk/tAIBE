@@ -74,9 +74,10 @@ function keyAgent(row: {
 
 const agentOwner = alias(schema.userTable, "agent_owner");
 
-// R-010: an agent works only while it is enabled and its owner may work. A
-// disabled agent, a banned owner or one who deleted the account voids every
-// key of the agent at once, whatever the key's own expiry.
+// R-010: an agent works only while it is active and its owner may work. A
+// disabled or archived agent (TB-74), a banned owner or one who deleted the
+// account voids every key of the agent at once, whatever the key's own
+// expiry; an archived agent comes back through a new key only.
 function agentMayWork() {
   return or(
     sql`${keyOwnerRole} is distinct from 'agent'`,
@@ -92,6 +93,7 @@ function agentMayWork() {
           and(
             eq(schema.agentProfileTable.userId, keyOwnerId),
             isNull(schema.agentProfileTable.disabledAt),
+            isNull(schema.agentProfileTable.archivedAt),
             notBannedCondition(agentOwner),
           ),
         ),

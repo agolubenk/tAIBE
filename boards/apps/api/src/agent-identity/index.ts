@@ -28,7 +28,7 @@ const issueAgentKeyRoute = createRoute({
   tags: ["Agents"],
   summary: "Issue a key for an agent session",
   description:
-    "Gets or creates the agent of the caller, harness and session — a user of its own that cannot sign in — copies the caller's workspace memberships onto it (owner becomes admin) and returns a key valid for a day. Cards, comments and the journal then show the agent's name, not the caller's. Only a person's session or unscoped key may call it.",
+    "Gets or creates the agent of the caller, harness and session — a user of its own that cannot sign in — copies the caller's workspace memberships onto it (owner becomes admin) and returns a key valid for a day. Cards, comments and the journal then show the agent's name, not the caller's. An agent idle for a day is in the archive; asking again brings it back with its name and history while the caller has fewer than 50 active agents. Only a person's session or unscoped key may call it.",
   request: {
     body: {
       required: true,
@@ -39,7 +39,7 @@ const issueAgentKeyRoute = createRoute({
     200: jsonResponse("The agent and its new key", issuedAgentKeySchema),
     400: errorResponse("Harness or session label not accepted"),
     403: errorResponse(
-      "The caller is an agent, a one-workspace key, or the agent is disabled",
+      "The caller is an agent or a one-workspace key, the agent is disabled, or the caller already has 50 active agents",
     ),
   },
 });
@@ -51,7 +51,7 @@ const listAgentsRoute = createRoute({
   tags: ["Agents"],
   summary: "List your agents",
   description:
-    "Your agents with their live keys: name, harness, session, when each key was made, last used and expires. Key secrets are never returned.",
+    "Your agents with their live keys: name, harness, session, when each key was made, last used and expires. Active agents come first, then the archived ones, then the disabled ones. Key secrets are never returned.",
   responses: {
     200: jsonResponse("Your agents", agentListSchema),
     403: errorResponse("Agents and one-workspace keys do not list agents"),
@@ -65,7 +65,7 @@ const setAgentEnabledRoute = createRoute({
   tags: ["Agents"],
   summary: "Disable or enable an agent",
   description:
-    "Disabling revokes every key of the agent at once and refuses new ones; its work stays under its name. Enabling lets it get a key again.",
+    "Disabling revokes every key of the agent at once and refuses new ones; its work stays under its name. Enabling a disabled agent moves it to the archive: it takes a place among the active agents again when its session asks for a key. Enabling an active or archived agent changes nothing.",
   request: {
     params: agentParam,
     body: {

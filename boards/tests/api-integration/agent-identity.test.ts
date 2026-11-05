@@ -211,6 +211,7 @@ describe("API integration: agents under their own name (R-010)", () => {
     expect(off.body).toEqual({
       id: issued.agent.id,
       enabled: false,
+      archived: false,
       revokedKeys: 1,
     });
     const refused = await call(
@@ -233,11 +234,15 @@ describe("API integration: agents under their own name (R-010)", () => {
     );
     expect(foreign.status).toBe(404);
 
+    // Enabling moves it to the archive (TB-74); its session brings it back.
     const on = await call("PATCH", `/agent-identity/${issued.agent.id}`, key, {
       enabled: true,
     });
     expect(on.status).toBe(200);
-    expect((await issue(key)).status).toBe(200);
+    expect(on.body).toMatchObject({ enabled: true, archived: true });
+    const back = await issue(key);
+    expect(back.status).toBe(200);
+    expect((back.body as Issued).agent.id).toBe(issued.agent.id);
   });
 
   it("follows the owner's memberships and prunes old keys", async () => {
@@ -297,6 +302,7 @@ describe("API integration: agents under their own name (R-010)", () => {
         id: issued.agent.id,
         name: "successor bb · Claude Code",
         disabledAt: null,
+        archivedAt: null,
         keys: [
           expect.objectContaining({
             id: issued.keyId,
