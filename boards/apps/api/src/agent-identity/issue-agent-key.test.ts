@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { AGENT_CAP_MESSAGE, MAX_AGENTS_PER_OWNER } from "./agent-limits";
-import type { FakeDbState, FakeQuery } from "./fake-db";
+import type { FakeDbState, FakeQuery } from "./fake-db.test-helper";
 import { issueAgentKey } from "./issue-agent-key";
 
 type Agent = { disabledAt: Date | null; archivedAt: Date | null };
@@ -17,7 +17,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("../database", async () => {
-  const { createFakeDb, fakeSchema } = await import("./fake-db");
+  const { createFakeDb, fakeSchema } = await import("./fake-db.test-helper");
   m.db = createFakeDb(m.state);
   return { default: m.db, schema: fakeSchema };
 });

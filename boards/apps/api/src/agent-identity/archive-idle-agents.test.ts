@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { archiveIdleAgents } from "./archive-idle-agents";
-import { type FakeDbState, type FakeQuery, fakeSchema, step } from "./fake-db";
+import {
+  type FakeDbState,
+  type FakeQuery,
+  fakeSchema,
+  step,
+} from "./fake-db.test-helper";
 
 const m = vi.hoisted(() => ({
   state: { respond: () => undefined, queries: [] } as FakeDbState,
@@ -9,7 +14,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("../database", async () => {
-  const { createFakeDb, fakeSchema } = await import("./fake-db");
+  const { createFakeDb, fakeSchema } = await import("./fake-db.test-helper");
   return { default: createFakeDb(m.state), schema: fakeSchema };
 });
 vi.mock("../ws", () => ({ revokeUserConnections: m.revoke }));

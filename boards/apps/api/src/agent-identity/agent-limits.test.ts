@@ -25,6 +25,9 @@ describe("agent limits", () => {
     expect(AGENT_CAP_MESSAGE).toContain(
       "an archived agent comes back on its own when its session asks again",
     );
+    expect(AGENT_CAP_MESSAGE).toContain(
+      "while there is room, so ask again later",
+    );
     expect(AGENT_CAP_MESSAGE).toContain("only the owner disables agents");
     expect(AGENT_CAP_MESSAGE).toContain(AGENTS_SETTINGS_PATH);
     expect(AGENT_CAP_MESSAGE).not.toContain("enabled agents");

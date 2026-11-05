@@ -51,7 +51,7 @@ const listAgentsRoute = createRoute({
   tags: ["Agents"],
   summary: "List your agents",
   description:
-    "Your agents with their live keys: name, harness, session, when each key was made, last used and expires. Active agents come first, then the archived ones, then the disabled ones. Key secrets are never returned.",
+    "Your agents with their live keys: name, harness, session, when each key was made, last used and expires. Active agents come first, then the 100 most recently active archived ones, then the disabled ones. Key secrets are never returned.",
   responses: {
     200: jsonResponse("Your agents", agentListSchema),
     403: errorResponse("Agents and one-workspace keys do not list agents"),

@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { type FakeDbState, type FakeQuery, fakeSchema } from "./fake-db";
+import {
+  type FakeDbState,
+  type FakeQuery,
+  fakeSchema,
+} from "./fake-db.test-helper";
 import { listAgents } from "./list-agents";
 
 type Row = {
@@ -20,7 +24,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("../database", async () => {
-  const { createFakeDb, fakeSchema } = await import("./fake-db");
+  const { createFakeDb, fakeSchema } = await import("./fake-db.test-helper");
   return { default: createFakeDb(m.state), schema: fakeSchema };
 });
 
@@ -69,5 +73,17 @@ describe("listAgents (TB-74)", () => {
       null,
     ]);
     expect(agents[2]?.disabledAt).toBe(day.toISOString());
+  });
+
+  it("lists an agent once when it changed state between the two reads", async () => {
+    m.kept = [row("back")];
+    m.archived = [
+      row("back", { archivedAt: day }),
+      row("idle", { archivedAt: day }),
+    ];
+
+    const agents = await listAgents("owner-1");
+
+    expect(agents.map((a) => a.id)).toEqual(["back", "idle"]);
   });
 });

@@ -15,4 +15,4 @@ const IDLE_HOURS = AGENT_IDLE_ARCHIVE_MS / (60 * 60 * 1000);
 
 // The agent reading this cannot free a place itself (TB-72): the text says
 // what frees one by itself, who else acts and where.
-export const AGENT_CAP_MESSAGE = `the owner already has ${MAX_AGENTS_PER_OWNER} active agents, the most allowed, so this session gets no key for now; an agent idle for ${IDLE_HOURS} hours goes to the archive by itself and frees its place, and an archived agent comes back on its own when its session asks again; only the owner disables agents, in Settings → Account → Agents and MCP (${AGENTS_SETTINGS_PATH}); agents already active keep working`;
+export const AGENT_CAP_MESSAGE = `the owner already has ${MAX_AGENTS_PER_OWNER} active agents, the most allowed, so this session gets no key for now; an agent idle for ${IDLE_HOURS} hours goes to the archive by itself and frees its place, and an archived agent comes back on its own when its session asks again while there is room, so ask again later; only the owner disables agents, in Settings → Account → Agents and MCP (${AGENTS_SETTINGS_PATH}); agents already active keep working`;

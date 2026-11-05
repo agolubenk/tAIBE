@@ -54,13 +54,17 @@ export async function listAgents(ownerId: string) {
     agentRows(and(owned, isNull(schema.agentProfileTable.archivedAt))),
     agentRows(and(owned, isNotNull(schema.agentProfileTable.archivedAt))),
   ]);
+  // The two reads see their own moments: an agent archived or back between
+  // them is listed once.
+  const keptIds = new Set(kept.map((agent) => agent.id));
   const agents = [
     ...kept.filter((agent) => !agent.disabledAt),
-    ...archived,
+    ...archived.filter((agent) => !keptIds.has(agent.id)),
     ...kept.filter((agent) => agent.disabledAt),
   ];
 
-  const keys = agents.length
+  // Archived agents hold no keys.
+  const keys = kept.length
     ? await db
         .select({
           id: schema.apikeyTable.id,
@@ -73,10 +77,7 @@ export async function listAgents(ownerId: string) {
         .from(schema.apikeyTable)
         .where(
           and(
-            inArray(
-              schema.apikeyTable.referenceId,
-              agents.map((a) => a.id),
-            ),
+            inArray(schema.apikeyTable.referenceId, [...keptIds]),
             eq(schema.apikeyTable.enabled, true),
             or(
               isNull(schema.apikeyTable.expiresAt),

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { type FakeDbState, type FakeQuery, fakeSchema, step } from "./fake-db";
+import {
+  type FakeDbState,
+  type FakeQuery,
+  fakeSchema,
+  step,
+} from "./fake-db.test-helper";
 import { setAgentEnabled } from "./set-agent-enabled";
 
 type Profile = { disabledAt: Date | null; archivedAt: Date | null };
@@ -11,7 +16,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("../database", async () => {
-  const { createFakeDb, fakeSchema } = await import("./fake-db");
+  const { createFakeDb, fakeSchema } = await import("./fake-db.test-helper");
   return { default: createFakeDb(m.state), schema: fakeSchema };
 });
 vi.mock("../ws", () => ({ revokeUserConnections: m.revoke }));
