@@ -3,6 +3,7 @@ import { once } from "node:events";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { auth } from "../../apps/api/src/auth";
+import db, { schema } from "../../apps/api/src/database";
 import { createApp } from "../../apps/api/src/index";
 import { resetEmbedQueueForTests } from "../../apps/api/src/notebook/embed/embed-queue";
 import {
@@ -47,6 +49,10 @@ describe("API integration: notebook Mac scripts", () => {
   let api: ReturnType<typeof serve>;
   let ollama: Server;
   const embedInputs: string[] = [];
+  // How long the stand-in Ollama takes, and how many calls it held at once.
+  let ollamaDelayMs = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
 
   const port = (server: { address(): AddressInfo | string | null }) =>
     (server.address() as AddressInfo).port;
@@ -54,6 +60,9 @@ describe("API integration: notebook Mac scripts", () => {
   beforeEach(async () => {
     await resetTestDatabase();
     embedInputs.length = 0;
+    ollamaDelayMs = 0;
+    inFlight = 0;
+    maxInFlight = 0;
     dir = mkdtempSync(join(tmpdir(), "t-boards-notebook-"));
 
     api = serve({
@@ -63,6 +72,8 @@ describe("API integration: notebook Mac scripts", () => {
     });
     if (!api.listening) await once(api, "listening");
     ollama = createServer((req, res) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
       let body = "";
       req.on("data", (part) => {
         body += part;
@@ -70,8 +81,11 @@ describe("API integration: notebook Mac scripts", () => {
       req.on("end", () => {
         const { input } = JSON.parse(body) as { input: string[] };
         embedInputs.push(...input);
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ embeddings: input.map((_, i) => [1, i]) }));
+        setTimeout(() => {
+          inFlight--;
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ embeddings: input.map((_, i) => [1, i]) }));
+        }, ollamaDelayMs);
       });
     });
     ollama.listen(0, "127.0.0.1");
@@ -123,16 +137,16 @@ describe("API integration: notebook Mac scripts", () => {
       run(process.execPath, [join(MAC, script), ...args], {
         env: { ...process.env, T_BOARDS_NOTEBOOK_HOME: home },
       });
-    const sources = async () => {
+    const sources = async (workspaceId = workspace.id) => {
       const response = await fetch(
-        `http://127.0.0.1:${port(api)}/api/notebook/${workspace.id}/sources`,
+        `http://127.0.0.1:${port(api)}/api/notebook/${workspaceId}/sources`,
         { headers: { "x-api-key": key } },
       );
       return (await response.json()) as {
         sources: { ref: string; chunks: number; embedded: number }[];
       };
     };
-    return { repo, node, sources };
+    return { repo, home, node, sources, user, workspace };
   }
 
   it("syncs only the listed, tracked documents and prunes a deleted one", async () => {
@@ -330,5 +344,75 @@ describe("API integration: notebook Mac scripts", () => {
       [1, 1],
       [1, 1],
     ]);
+  });
+
+  it("serves several product notebooks with one worker, one Ollama call at a time", async () => {
+    const { repo, home, node, sources, user, workspace } = await setup();
+    // A second product's notebook of the same owner, with its own sync home.
+    const [other] = await db
+      .insert(schema.workspaceTable)
+      .values({
+        id: `workspace-other-${Date.now()}`,
+        createdAt: new Date(),
+        name: "Second product",
+        slug: `second-product-${Date.now()}`,
+      })
+      .returning();
+    await db.insert(schema.workspaceUserTable).values({
+      workspaceId: other.id,
+      userId: user.id,
+      role: "owner",
+      joinedAt: new Date(),
+    });
+    const otherHome = join(dir, "home-other");
+    mkdirSync(otherHome, { recursive: true });
+    const config = JSON.parse(
+      readFileSync(join(home, "config.json"), "utf8"),
+    ) as Record<string, unknown>;
+    writeFileSync(
+      join(otherHome, "config.json"),
+      JSON.stringify({ ...config, workspaceId: other.id, repoRoot: repo }),
+    );
+    writeFileSync(
+      join(otherHome, "api_key"),
+      readFileSync(join(home, "api_key")),
+    );
+    await node("notebook-sync.mjs");
+    await run(process.execPath, [join(MAC, "notebook-sync.mjs")], {
+      env: { ...process.env, T_BOARDS_NOTEBOOK_HOME: otherHome },
+    });
+
+    writeFileSync(
+      join(home, "config.json"),
+      JSON.stringify({ ...config, workspaceIds: [workspace.id, other.id] }),
+    );
+    ollamaDelayMs = 150;
+    const round = await node("notebook-worker.mjs", "--once");
+    expect(round.stdout).toContain(
+      `[${workspace.id}] embedded 3 (0 queries), saved 3, rejected 0`,
+    );
+    expect(round.stdout).toContain(
+      `[${other.id}] embedded 3 (0 queries), saved 3, rejected 0`,
+    );
+    expect(maxInFlight).toBe(1);
+    for (const id of [workspace.id, other.id]) {
+      const listed = await sources(id);
+      expect(listed.sources.every((s) => s.embedded === s.chunks)).toBe(true);
+    }
+  });
+
+  it("refuses a worker config whose workspaceIds is empty, and the sync still runs", async () => {
+    const { home, node } = await setup();
+    const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+    writeFileSync(
+      join(home, "config.json"),
+      JSON.stringify({ ...config, workspaceIds: [] }),
+    );
+    await expect(node("notebook-worker.mjs", "--once")).rejects.toThrow(
+      /workspaceIds must list workspace ids/,
+    );
+    // the sync never reads workspaceIds, so a typo there must not stop it
+    const sync = await node("notebook-sync.mjs");
+    expect(sync.stdout).toContain("uploaded 3");
   });
 });
