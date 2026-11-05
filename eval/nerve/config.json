@@ -255,8 +255,8 @@
   },
   "boards": {
     "url": "https://d4dev.admin.hrhelper.space",
-    "product": null,
-    "workspace": null,
-    "note": "tAI-Boards of this instance: pipeline settings are read from here. The product is found by itself — the one product the key reaches; with several, set product to its name or slug as people see it; workspace (an id) only to pin it"
+    "product": "aiboards-eval",
+    "workspace": "lth89qy6f8j1greiy4c5cn23",
+    "note": "tAI-Boards of this instance: pipeline settings are read from here with this install's own key T_BOARDS_PIPELINE_KEY (env or Keychain), limited to one product — that product is read, a key for several is refused. product (name or slug as people see it) and workspace (an id) check the key's product: this install is «aiBoards&eval», a key for another product is refused. Another install (HR Helper) names its own product in its own config or T_BOARDS_PRODUCT/T_BOARDS_WORKSPACE, never a copy of these"
   }
 }

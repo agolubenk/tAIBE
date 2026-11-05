@@ -118,6 +118,26 @@ describe("API integration: workspace-scoped API keys (AC-011)", () => {
         )
       ).status,
     ).toBe(404);
+
+    // The hooks' own key (card 4): its product's switches, nothing of B, and no write.
+    expect(
+      (await get(`/api/pipeline-settings/workspace/${workspaceA.id}`, key))
+        .status,
+    ).toBe(200);
+    expect(
+      (await get(`/api/pipeline-settings/workspace/${workspaceB.id}`, key))
+        .status,
+    ).toBe(404);
+    const { app } = createApp();
+    const write = await app.request(
+      `/api/pipeline-settings/workspace/${workspaceA.id}`,
+      {
+        method: "PUT",
+        headers: { "x-api-key": key, "content-type": "application/json" },
+        body: JSON.stringify({ toggles: { swarm: false } }),
+      },
+    );
+    expect(write.status).toBe(403);
   });
 
   it("refuses routes that span workspaces or widen the key", async () => {

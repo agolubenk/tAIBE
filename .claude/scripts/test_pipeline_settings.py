@@ -19,6 +19,7 @@ sys.path.insert(0, HERE)
 import pipeline_settings as ps  # noqa: E402
 
 TS = os.path.join(HERE, '..', '..', 'boards', 'packages', 'permissions', 'src', 'pipeline-toggles.ts')
+SHIPPED = os.path.join(HERE, '..', '..', 'eval', 'nerve', 'config.json')
 
 
 FULL = {'automation': True, 'toggles': {name: True for name in ps.TOGGLES}}
@@ -58,8 +59,8 @@ class PipelineSettingsTest(unittest.TestCase):
         os.makedirs(os.path.join(self.root, '.claude'))
         self.env = mock.patch.dict(os.environ, {}, clear=False)
         self.env.start()
-        for k in ('TAIBE_PIPELINE', 'T_BOARDS_URL', 'T_BOARDS_API_KEY', 'T_BOARDS_WORKSPACE', 'T_BOARDS_PRODUCT',
-                  'T_BOARDS_ALLOWED_HOSTS'):
+        for k in ('TAIBE_PIPELINE', 'T_BOARDS_URL', 'T_BOARDS_API_KEY', 'T_BOARDS_PIPELINE_KEY', 'T_BOARDS_WORKSPACE',
+                  'T_BOARDS_PRODUCT', 'T_BOARDS_ALLOWED_HOSTS'):
             os.environ.pop(k, None)
         Board.redirect, Board.seen, Board.missing = None, [], set()
         Board.workspaces = [{'id': 'ws 1', 'name': 'tAIBE', 'slug': 'taibe'}]
@@ -81,7 +82,7 @@ class PipelineSettingsTest(unittest.TestCase):
 
     def connect(self, body=None):
         Board.body = body if body is not None else dict(FULL, toggles=dict(FULL['toggles'], councilReview=False))
-        os.environ.update({'T_BOARDS_URL': self.url, 'T_BOARDS_API_KEY': 'k-1', 'T_BOARDS_WORKSPACE': 'ws 1'})
+        os.environ.update({'T_BOARDS_URL': self.url, 'T_BOARDS_PIPELINE_KEY': 'k-1', 'T_BOARDS_WORKSPACE': 'ws 1'})
 
     def age_cache(self, seconds):
         path = os.path.join(self.root, ps.CACHE)
@@ -150,7 +151,7 @@ class PipelineSettingsTest(unittest.TestCase):
         os.makedirs(os.path.join(self.root, 'eval', 'nerve'))
         with open(os.path.join(self.root, 'eval', 'nerve', 'config.json'), 'w', encoding='utf-8') as f:
             json.dump({'boards': {'url': 'https://evil.example.org', 'workspace': 'ws'}}, f)
-        os.environ['T_BOARDS_API_KEY'] = 'k-1'
+        os.environ['T_BOARDS_PIPELINE_KEY'] = 'k-1'
         settings, error = ps.fetch(self.root)
         self.assertIsNone(settings)
         self.assertIn('not trusted', error)
@@ -164,20 +165,102 @@ class PipelineSettingsTest(unittest.TestCase):
         self.assertFalse(ps.enabled('councilReview', self.root))  # the one product the key reaches
         self.assertIn(('/api/pipeline-settings/workspace/ws-a', 'k-1'), Board.seen)
 
-    def test_several_products_need_a_name(self):
+    def test_a_key_for_several_products_is_refused(self):
+        # A key per product (d-tb-product-key-0411): naming one of the key's products does not make it usable.
         self.connect()
         del os.environ['T_BOARDS_WORKSPACE']
         Board.workspaces = [{'id': 'ws-a', 'name': 'HR Helper', 'slug': 'hr'},
                             {'id': 'ws-b', 'name': 'tAIBE', 'slug': 'taibe'}]
+        for product in ('', 'TAIBE', 'ws-b'):
+            os.environ['T_BOARDS_PRODUCT'] = product
+            settings, error = ps.fetch(self.root)
+            self.assertIsNone(settings, product)
+            self.assertIn('several products (HR Helper, tAIBE)', error)
+            self.assertIn('limited to one product', error)
+        self.assertEqual([p for p, _ in Board.seen], ['/api/workspace'] * 3)  # no settings read with such a key
+
+    def test_the_config_only_checks_the_keys_product(self):
+        self.connect()
+        os.environ['T_BOARDS_PRODUCT'] = 'TAIBE'  # by name or slug, case does not matter
+        self.assertIsNotNone(ps.fetch(self.root)[0])
+        os.environ['T_BOARDS_PRODUCT'] = 'HR Helper'
+        self.assertIn("the key is for 'tAIBE', the config names 'HR Helper'", ps.fetch(self.root)[1])
+        del os.environ['T_BOARDS_PRODUCT']
+        os.environ['T_BOARDS_WORKSPACE'] = 'ws-other'
+        self.assertIn("not for the workspace 'ws-other'", ps.fetch(self.root)[1])
+
+    @unittest.skipUnless(os.path.isfile(SHIPPED), 'no instance config in this tree')
+    def test_the_shipped_config_refuses_a_key_for_another_product(self):
+        # Without boards.product nothing is checked, and a key put into the wrong install would turn on another
+        # product's switches (lens of role 4 on f26a895e). The shipped config names its product.
+        with open(SHIPPED, encoding='utf-8') as f:
+            boards = json.load(f)['boards']
+        product = str(boards.get('product') or '').strip()
+        self.assertTrue(product, 'eval/nerve/config.json: boards.product is not set')
+        os.makedirs(os.path.join(self.root, 'eval', 'nerve'))
+        shutil.copy(SHIPPED, os.path.join(self.root, 'eval', 'nerve', 'config.json'))
+        self.connect()
+        del os.environ['T_BOARDS_WORKSPACE']  # the config's own workspace (if any) is the check
+        own = str(boards.get('workspace') or '').strip() or 'ws-own'
+        Board.workspaces = [{'id': own, 'name': product, 'slug': 'own'}]
+        self.assertFalse(ps.enabled('councilReview', self.root))  # the owner's «off» on this product
+        Board.workspaces = [{'id': 'ws-other', 'name': 'Another product', 'slug': 'another'}]
+        Board.body = FULL
+        self.age_cache(10 * ps.TTL_SECONDS)
+        settings, source = ps.load(self.root)
+        self.assertFalse(settings['toggles']['councilReview'])  # the other product's «on» does not leak in
+        self.assertIn("the key is for 'Another product'", source)
+
+    def test_the_boards_mcp_key_is_never_used(self):
+        self.connect()
+        del os.environ['T_BOARDS_PIPELINE_KEY']
+        os.environ['T_BOARDS_API_KEY'] = 'k-mcp'
         settings, error = ps.fetch(self.root)
         self.assertIsNone(settings)
-        self.assertIn('several products (HR Helper, tAIBE)', error)
-        os.environ['T_BOARDS_PRODUCT'] = 'TAIBE'  # by name or slug, case does not matter
-        settings, error = ps.fetch(self.root)
-        self.assertIsNotNone(settings, error)
-        self.assertIn(('/api/pipeline-settings/workspace/ws-b', 'k-1'), Board.seen)
-        os.environ['T_BOARDS_PRODUCT'] = 'nope'
-        self.assertIn("no single product named 'nope'", ps.fetch(self.root)[1])
+        self.assertIn('no T_BOARDS_PIPELINE_KEY', error)
+        self.assertEqual(Board.seen, [])
+
+    def test_the_keychain_entry_is_this_installs_own(self):
+        self.connect()
+        del os.environ['T_BOARDS_PIPELINE_KEY']
+        os.environ['T_BOARDS_API_KEY'] = 'k-mcp'
+        tools = os.path.join(self.root, 'infra', 'scripts', 'dev-ai')
+        os.makedirs(tools)
+        with open(os.path.join(tools, 'mcp-secret.sh'), 'w', encoding='utf-8') as f:
+            f.write('printf "%s\\n" "$1" >> "$(dirname "$0")/asked"\n'
+                    '[ "$1" = T_BOARDS_PIPELINE_KEY ] && { echo k-chain; exit 0; }\nexit 1\n')
+        self.assertIsNotNone(ps.fetch(self.root)[0])
+        with open(os.path.join(tools, 'asked'), encoding='utf-8') as f:
+            self.assertEqual(f.read().split(), ['T_BOARDS_PIPELINE_KEY'])
+        self.assertEqual({k for _, k in Board.seen}, {'k-chain'})
+
+    def test_a_missing_key_is_looked_up_once_per_ttl(self):
+        self.connect()
+        del os.environ['T_BOARDS_PIPELINE_KEY']
+        tools = os.path.join(self.root, 'infra', 'scripts', 'dev-ai')
+        os.makedirs(tools)
+        with open(os.path.join(tools, 'mcp-secret.sh'), 'w', encoding='utf-8') as f:
+            f.write('printf "%s\\n" "$1" >> "$(dirname "$0")/asked"\nexit 1\n')
+        for _ in range(5):
+            self.assertTrue(ps.enabled('swarm', self.root))  # no key yet → defaults
+        with open(os.path.join(tools, 'asked'), encoding='utf-8') as f:
+            self.assertEqual(len(f.read().split()), 1)  # one Keychain call, not one per prompt
+        self.assertIn('no T_BOARDS_PIPELINE_KEY', ps.load(self.root, refresh=False)[1])
+        self.assertEqual(Board.seen, [])
+
+    def test_a_url_the_key_is_never_sent_to_does_not_ask_keychain(self):
+        self.connect()
+        del os.environ['T_BOARDS_PIPELINE_KEY']
+        os.environ['T_BOARDS_URL'] = 'http://boards.example.org'  # plain http, not localhost
+        tools = os.path.join(self.root, 'infra', 'scripts', 'dev-ai')
+        os.makedirs(tools)
+        with open(os.path.join(tools, 'mcp-secret.sh'), 'w', encoding='utf-8') as f:
+            f.write('printf "%s\\n" "$1" >> "$(dirname "$0")/asked"\necho k-1\n')
+        for _ in range(5):
+            self.assertTrue(ps.enabled('swarm', self.root))  # bad URL → defaults
+        self.assertFalse(os.path.exists(os.path.join(tools, 'asked')))  # the key is not read for a refused URL
+        self.assertIn('https', ps.fetch(self.root)[1])
+        self.assertEqual(Board.seen, [])
 
     def test_unresolved_product_is_asked_once_per_ttl(self):
         self.connect()
@@ -189,20 +272,27 @@ class PipelineSettingsTest(unittest.TestCase):
         self.assertEqual(len(Board.seen), 1)  # the failure is remembered, not retried by every hook
         self.assertIn('several products', ps.load(self.root, refresh=False)[1])
 
-    def test_resolved_id_is_reused_and_found_again_when_gone(self):
+    def test_the_key_is_asked_on_every_refresh(self):
         self.connect()
         del os.environ['T_BOARDS_WORKSPACE']
         Board.workspaces = [{'id': 'ws-a', 'name': 'HR Helper', 'slug': 'hr'}]
-        self.assertIsNotNone(ps.fetch(self.root)[0])
+        self.assertFalse(ps.enabled('councilReview', self.root))
         Board.seen = []
         self.assertIsNotNone(ps.fetch(self.root)[0])
-        self.assertEqual([p for p, _ in Board.seen], ['/api/pipeline-settings/workspace/ws-a'])  # one call
-        Board.missing = {'/api/pipeline-settings/workspace/ws-a'}
-        self.assertEqual(ps.fetch(self.root)[1], 'HTTP 404')
-        Board.missing, Board.seen = set(), []
+        self.assertEqual([p for p, _ in Board.seen], ['/api/workspace', '/api/pipeline-settings/workspace/ws-a'])
+        # The key is swapped for one that reaches several products: refused on the next refresh, and the owner's
+        # «off» of the product read before stays off.
+        Board.workspaces.append({'id': 'ws-b', 'name': 'tAIBE', 'slug': 'taibe'})
+        self.age_cache(10 * ps.TTL_SECONDS)
+        settings, source = ps.load(self.root)
+        self.assertFalse(settings['toggles']['councilReview'])
+        self.assertIn('several products', source)
+        # An install that names no product (this root has no config) reads whatever one product the key reaches:
+        # its switches, not the cached ones. The shipped config names its product — see the shipped-config test.
         Board.workspaces = [{'id': 'ws-c', 'name': 'HR Helper', 'slug': 'hr'}]
+        Board.body = FULL
         self.assertIsNotNone(ps.fetch(self.root)[0])
-        self.assertEqual([p for p, _ in Board.seen], ['/api/workspace', '/api/pipeline-settings/workspace/ws-c'])
+        self.assertTrue(ps.enabled('councilReview', self.root))
 
     def test_cache_of_another_workspace_is_ignored(self):
         self.connect()
@@ -210,6 +300,12 @@ class PipelineSettingsTest(unittest.TestCase):
         os.environ['T_BOARDS_WORKSPACE'] = 'other'
         os.environ['T_BOARDS_URL'] = 'http://127.0.0.1:9'
         self.assertTrue(ps.enabled('councilReview', self.root))  # not this product's switches → defaults
+        with open(os.path.join(self.root, ps.CACHE), encoding='utf-8') as f:
+            attempt = json.load(f)['lastAttempt']
+        for _ in range(3):
+            self.assertTrue(ps.enabled('councilReview', self.root))
+        with open(os.path.join(self.root, ps.CACHE), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['lastAttempt'], attempt)  # one attempt per TTL, not one per hook
 
     def test_not_connected_is_said(self):
         settings, error = ps.fetch(self.root)
@@ -272,7 +368,7 @@ class TlsContextTest(unittest.TestCase):
         ctx = ssl.create_default_context()
         with mock.patch.object(ps, '_tls_context', return_value=ctx), \
                 mock.patch.object(ps.urllib.request, 'build_opener', side_effect=build_opener), \
-                mock.patch.dict(os.environ, {'T_BOARDS_URL': 'http://127.0.0.1:9', 'T_BOARDS_API_KEY': 'k-1',
+                mock.patch.dict(os.environ, {'T_BOARDS_URL': 'http://127.0.0.1:9', 'T_BOARDS_PIPELINE_KEY': 'k-1',
                                              'T_BOARDS_WORKSPACE': 'ws 1'}), \
                 tempfile.TemporaryDirectory() as root:
             os.makedirs(os.path.join(root, '.claude'))

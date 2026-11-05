@@ -15,6 +15,9 @@ const WORKSPACE_RESOLVED_PREFIXES = [
   "/api/import",
   "/api/label",
   "/api/notebook",
+  // Hooks read their product's switches with a key limited to that product (d-tb-product-key-0411); both routes
+  // run workspaceAccess.fromParam(), and the update also needs a user session, so a key still cannot change them.
+  "/api/pipeline-settings",
   "/api/project",
   "/api/search",
   "/api/task",

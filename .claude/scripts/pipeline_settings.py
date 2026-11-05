@@ -11,10 +11,12 @@ In code: `import pipeline_settings; pipeline_settings.enabled("successorAuto")`.
 Where the switches come from:
 1. the board — cached in `.claude/pipeline-settings.json` (gitignored, runtime), written by `fetch` and refreshed by
    itself at most every 10 minutes when the board's address (`boards.url` in `eval/nerve/config.json` or
-   `T_BOARDS_URL`; https, or http only to localhost) and the key (`T_BOARDS_API_KEY`: env, else Keychain via
-   `infra/scripts/dev-ai/mcp-secret.sh`) are known. The product is found by itself: the one product the key
-   reaches, or among several the one named in `boards.product` / `T_BOARDS_PRODUCT` (name or slug, as people see
-   it); an explicit id (`boards.workspace` / `T_BOARDS_WORKSPACE`) still wins. The board
+   `T_BOARDS_URL`; https, or http only to localhost) and this install's own key (`T_BOARDS_PIPELINE_KEY`: env,
+   else Keychain via `infra/scripts/dev-ai/mcp-secret.sh`) are known. A key per product (owner's decision
+   d-tb-product-key-0411): the key must reach exactly one product, and that product is the one read. A key that
+   reaches several (the boards MCP's `T_BOARDS_API_KEY` does) is refused, and there is no fallback to it.
+   `boards.product` / `T_BOARDS_PRODUCT` (name or slug, as people see it) and `boards.workspace` /
+   `T_BOARDS_WORKSPACE` (an id) only check that the key is for the expected product. The board
    answers `GET /api/pipeline-settings/workspace/{id}`. A cache of another workspace is ignored;
 2. defaults — every switch on — when the board was never read;
 3. on top of either, `TAIBE_PIPELINE` in the environment can only switch parts OFF — `off` (everything) or
@@ -46,6 +48,8 @@ TIMEOUT_SECONDS = 1.5  # hooks run on every prompt: a slow board must not slow t
 TOGGLES = ('abJudge', 'askOnce', 'handoffDupes', 'promptBrief', 'successorAuto', 'grillHint', 'nerveWakes', 'swarm',
            'councilReview', 'cardAutofill')
 OFF = ('off', '0', 'false', 'no')
+# This install's key: the env name and the Keychain account (service hr-helper-mcp) of `mcp-secret.sh`.
+KEY_NAME = 'T_BOARDS_PIPELINE_KEY'
 # The key goes only to hosts the person trusts: an address written in the repository (config.json, a PR can change
 # it) is used only for these hosts or for `T_BOARDS_ALLOWED_HOSTS` from the person's own environment; `T_BOARDS_URL`
 # set in the environment is the person's choice and is trusted as is.
@@ -139,45 +143,46 @@ def _instance(root):
 
 
 def _workspace(root):
-    """An explicitly configured workspace id, or '' — then the product is resolved from the key (see `resolve`)."""
+    """The workspace id the config expects (`T_BOARDS_WORKSPACE` or `boards.workspace`), or '' — a check on the
+    key's product, not a choice."""
     return (os.environ.get('T_BOARDS_WORKSPACE', '').strip()
             or str(_instance(root).get('workspace') or '').strip())
 
 
 def _product(root):
-    """The product's name or slug as people see it (`T_BOARDS_PRODUCT` or `boards.product`), or ''."""
+    """The product's name or slug as people see it (`T_BOARDS_PRODUCT` or `boards.product`), or '' — a check too."""
     return (os.environ.get('T_BOARDS_PRODUCT', '').strip()
             or str(_instance(root).get('product') or '').strip())
 
 
-def pick_workspace(workspaces, product):
-    """(id, error) from the key's workspaces: one → it; several → the one whose name or slug is `product`."""
+def pick_workspace(workspaces, product='', expected=''):
+    """(id, error) from the key's workspaces. The key names the product: it must reach exactly one. `product`
+    (name or slug) and `expected` (id) from the config only check that it is the right one."""
     rows = [w for w in workspaces if isinstance(w, dict) and w.get('id')]
-    if product:
-        want = product.casefold()
-        hits = [w for w in rows if want in (str(w.get('name', '')).casefold(), str(w.get('slug', '')).casefold())]
-        if len(hits) == 1:
-            return hits[0]['id'], None
-        names = ', '.join(sorted(str(w.get('name', '?')) for w in rows)) or '—'
-        return None, 'not connected: no single product named %r among the key\'s products (%s)' % (product, names)
-    if len(rows) == 1:
-        return rows[0]['id'], None
     if not rows:
         return None, 'not connected: the key reaches no product'
-    names = ', '.join(sorted(str(w.get('name', '?')) for w in rows))
-    return None, ('not connected: the key reaches several products (%s) — name one in boards.product '
-                  '(or T_BOARDS_PRODUCT), or use a key limited to one product' % names)
+    if len(rows) > 1:
+        names = ', '.join(sorted(str(w.get('name', '?')) for w in rows))
+        return None, ('not connected: the key reaches several products (%s) — issue a key limited to one product '
+                      '(Settings → API keys → product) and keep it as %s' % (names, KEY_NAME))
+    ws, name = str(rows[0]['id']), str(rows[0].get('name', '?'))
+    if expected and ws != expected:
+        return None, 'not connected: the key is for %r, not for the workspace %r of the config' % (name, expected)
+    if product and product.casefold() not in (name.casefold(), str(rows[0].get('slug', '')).casefold()):
+        return None, 'not connected: the key is for %r, the config names %r' % (name, product)
+    return ws, None
 
 
 def _key(root):
-    """T_BOARDS_API_KEY from the environment, else the layer's secret chain (env → Keychain, mcp-secret.sh) — the
-    same key the boards MCP uses. Called only when a fetch is due (≤ once per 10 minutes)."""
-    key = os.environ.get('T_BOARDS_API_KEY', '').strip()
+    """This install's own key: `T_BOARDS_PIPELINE_KEY` from the environment, else the Keychain entry of that name
+    (mcp-secret.sh). Never the boards MCP's `T_BOARDS_API_KEY`, which reaches every product. Called only when a
+    fetch is due (≤ once per 10 minutes)."""
+    key = os.environ.get(KEY_NAME, '').strip()
     script = os.path.join(root, 'infra', 'scripts', 'dev-ai', 'mcp-secret.sh')
     if key or not os.path.isfile(script):
         return key
     try:
-        out = subprocess.run(['bash', script, 'T_BOARDS_API_KEY'], capture_output=True, text=True, timeout=3)
+        out = subprocess.run(['bash', script, KEY_NAME], capture_output=True, text=True, timeout=3)
         return out.stdout.strip() if out.returncode == 0 else ''
     except (OSError, subprocess.TimeoutExpired):
         return ''
@@ -203,6 +208,22 @@ def _write_cache(root, data):
     os.replace(tmp, path)
 
 
+def _remember(root, error):
+    """A refresh that stopped before the board is remembered like a failed read: the last known switches of this
+    product stay, `lastAttempt` starts the TTL."""
+    product, pinned = _product(root), _workspace(root)
+    data = _read_cache(root)
+    if data.get('broken') or data.get('product', product) != product \
+            or (pinned and data.get('workspace') not in (None, pinned)):
+        data = {}  # another product's switches are not this product's
+    data.setdefault('workspace', pinned or None)
+    data.update({'product': product, 'lastAttempt': time.time(), 'lastError': error})
+    try:
+        _write_cache(root, data)
+    except OSError:
+        pass
+
+
 def fetch(root=ROOT, timeout=TIMEOUT_SECONDS):
     """Read the board, write the cache. Returns (settings, error); a failure is remembered (`lastAttempt`, `lastError`)
     and keeps the last known settings."""
@@ -218,11 +239,14 @@ def fetch(root=ROOT, timeout=TIMEOUT_SECONDS):
                           'set T_BOARDS_URL or T_BOARDS_ALLOWED_HOSTS in your own environment' % host)
     if not raw_url:
         return None, 'not connected: set boards.url in eval/nerve/config.json (or T_BOARDS_URL)'
+    if url is None:  # before the key: a URL the key is never sent to must not cost a Keychain call per prompt
+        return None, 'T_BOARDS_URL must be https (http only to localhost)'
     key = _key(root)
     if not key:
-        return None, 'not connected: no T_BOARDS_API_KEY (env or Keychain, infra/scripts/dev-ai/mcp-secret.sh)'
-    if url is None:
-        return None, 'T_BOARDS_URL must be https (http only to localhost)'
+        error = ('not connected: no %s — a key limited to this product (env or Keychain, '
+                 'infra/scripts/dev-ai/mcp-secret.sh)' % KEY_NAME)
+        _remember(root, error)  # until the owner adds the key, Keychain is asked once per TTL, not on every prompt
+        return None, error
     opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_tls_context()))
 
     deadline = time.monotonic() + timeout  # one budget for the whole refresh, however many calls it takes
@@ -237,17 +261,12 @@ def fetch(root=ROOT, timeout=TIMEOUT_SECONDS):
     data = _read_cache(root)
     if data.get('broken'):
         data = {}
-    error, settings = None, None
-    ws = _workspace(root)
-    resolved = None  # the id found by name: kept in the cache, so a refresh is one call, not two
-    if not ws and data.get('product', '') == product and data.get('workspace'):
-        ws = resolved = str(data['workspace'])
+    error, settings, ws = None, None, None
     try:
-        if not ws:
-            # People see products by name; the system needs the id — take it from what the key reaches.
-            _, workspaces = get('/api/workspace')
-            ws, error = pick_workspace(workspaces if isinstance(workspaces, list) else [], product)
-            resolved = ws
+        # The key names the product. It is asked on every refresh, not taken from the cache, so a key swapped for
+        # a wider one is refused within one TTL: two calls per 10 minutes.
+        _, workspaces = get('/api/workspace')
+        ws, error = pick_workspace(workspaces if isinstance(workspaces, list) else [], product, _workspace(root))
         if ws:
             status, body = get('/api/pipeline-settings/workspace/%s' % urllib.parse.quote(ws, safe=''))
             settings = complete(body)
@@ -255,14 +274,15 @@ def fetch(root=ROOT, timeout=TIMEOUT_SECONDS):
                 error = 'HTTP %s: incomplete settings in the answer' % status
     except urllib.error.HTTPError as e:
         error = 'HTTP %s' % e.code
-        if resolved and e.code in (403, 404):
-            ws = None  # the product is gone or renamed: find it again on the next refresh
     except Exception as e:  # noqa: BLE001 — any failure keeps the last known switches
         error = '%s: %s' % (type(e).__name__, str(e)[:120])
-    if data.get('workspace') not in (None, ws) or (not _workspace(root) and data.get('product', product) != product):
-        data = {}
-    # A failure is remembered too — unresolved product included — so the board is asked once per TTL, not per hook.
-    data.update({'workspace': ws, 'product': product, 'lastAttempt': time.time()})
+    # The product this cache is about: the key's, else the pinned one, else the one read before. A refused key keeps
+    # the last known switches of that product: a wrong key never re-enables what the owner switched off.
+    mine = ws or _workspace(root) or data.get('workspace')
+    if data.get('workspace') not in (None, mine) or data.get('product', product) != product:
+        data = {}  # another product's switches are not this product's
+    # A failure is remembered too, so the board is asked once per TTL, not per hook.
+    data.update({'workspace': mine, 'product': product, 'lastAttempt': time.time()})
     if settings is not None:
         data.update({'fetchedAt': data['lastAttempt'], 'settings': settings, 'lastError': None})
     else:
