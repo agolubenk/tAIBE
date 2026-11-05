@@ -14,6 +14,7 @@
 import argparse
 import fcntl
 import json
+import math
 import os
 import subprocess
 import sys
@@ -28,6 +29,13 @@ import sources  # noqa: E402
 from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
 
 STATE_DIR = os.environ.get("NERVE_STATE_DIR", os.path.join(HERE, "state"))
+# Awake time since boot, one count for every process: CLOCK_UPTIME_RAW on macOS, CLOCK_MONOTONIC on Linux.
+# Neither runs while the system sleeps — and neither does the daemon's time.sleep.
+AWAKE_CLOCK = getattr(time, "CLOCK_UPTIME_RAW", time.CLOCK_MONOTONIC)
+
+
+def awake_seconds():
+    return time.clock_gettime(AWAKE_CLOCK)
 
 
 def wakes_on():
@@ -135,7 +143,9 @@ def cmd_run(cfg, a):
         ctx = Ctx(cfg, STATE_DIR, deliver=not seed and wakes_on())
         one_pass(ctx)
         seed = False
-        time.sleep(cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval))
+        pause = cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval)
+        save_json(os.path.join(STATE_DIR, "cycle.json"), {"seconds": pause, "at": now_iso(), "awake": awake_seconds()})
+        time.sleep(pause)
 
 
 def cycle_seconds(cfg, mode, interval=None):
@@ -145,22 +155,79 @@ def cycle_seconds(cfg, mode, interval=None):
     return base * (cfg.get("night_interval_factor", 5) if mode.get("phase") == "night" else 1)
 
 
-def heartbeat_stale_after(cfg, mode):
+MAX_CYCLE_SECONDS = 24 * 3600
+
+
+def as_obj(x):
+    """A state file that is valid JSON but not an object ([1], "x", 5) reads as empty — the tap must not die on it."""
+    return x if isinstance(x, dict) else {}
+
+
+def finite_number(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def slept_cycle(cfg, mode, cycle):
+    """The pause the daemon really went to sleep on: state/cycle.json, which cmd_run writes right before time.sleep.
+    It carries a manual «run --interval N» the config does not know. A missing, malformed or implausible file (a
+    daemon from before it; Infinity; over a day — 1e12 would silence the watchdog for good) falls back to the config."""
+    s = as_obj(cycle).get("seconds")
+    if finite_number(s) and 0 < s <= MAX_CYCLE_SECONDS:
+        return s
+    return cycle_seconds(cfg, mode)
+
+
+def heartbeat_stale_after(cfg, mode, cycle=None):
     """The heartbeat is stale once the daemon missed a cycle: at least two cycles, never under heartbeat_stale_min.
     Night cycle 60 s × 5 = 300 s equalled the 5-minute threshold, so any pass a second late raised a false
     «НЕРВ МОЛЧИТ» (04.11 22:22 and 22:37, heartbeat 5 s old). Day stays 5 minutes, night becomes 10."""
-    return max(timedelta(minutes=cfg["tap"]["heartbeat_stale_min"]), timedelta(seconds=2 * cycle_seconds(cfg, mode)))
+    return max(timedelta(minutes=cfg["tap"]["heartbeat_stale_min"]),
+               timedelta(seconds=2 * slept_cycle(cfg, mode, cycle)))
+
+
+def awake_since_sleep(cycle, hb, awake_now):
+    """Awake seconds since the daemon went to sleep after the heartbeat `hb`, or None when that is unknown: no
+    «awake» in cycle.json (a daemon from before it), a cycle of an older pass than the heartbeat, or a count that
+    went back (a reboot)."""
+    c = as_obj(cycle)
+    a, at = c.get("awake"), c.get("at")
+    if not finite_number(a) or not isinstance(at, str):
+        return None
+    try:
+        if datetime.fromisoformat(at) < datetime.fromisoformat(hb):
+            return None
+    except (TypeError, ValueError):  # not a date, or a date without a time zone against an aware heartbeat
+        return None
+    return awake_now - a if awake_now >= a else None
+
+
+def heartbeat_silent(cfg, mode, cycle, hb, now, awake_now):
+    """The daemon missed its cycle — only when both clocks say so. time.sleep counts awake time only, so on a
+    sleeping Mac a night pause stretches over the whole system sleep. Night 05.11: heartbeat 02:48:29, four
+    «НЕРВ МОЛЧИТ» at 03:40, 03:56, 04:00 and 04:17 (DarkWake), and by 04:17 the Mac had been awake 272 s of
+    88 min — less than the 300 s pause. Without a trusted awake count — the wall clock, as before."""
+    limit = heartbeat_stale_after(cfg, mode, cycle)
+    try:
+        if now - datetime.fromisoformat(hb) <= limit:
+            return False
+    except (TypeError, ValueError):  # no pulse, or a broken one
+        return True
+    slept = awake_since_sleep(cycle, hb, awake_now)
+    return slept is None or slept > limit.total_seconds()
 
 
 def resolve_roles(cfg, spec, strict=True):
     """Target of emit/tap → role keys. Takes a key («boards»), the role number of the team registry (1 = coord …
     6 = boards, the order of team.roles), «all» and comma lists («backend,release»). A record whose «to» no tap
     matches is lost without a trace: on 04.11 21 assignments went to «6», «4» and «backend,release» and reached
-    nobody. strict (emit) refuses an unknown name; tap stays lenient for helper taps such as «selftest»."""
+    nobody. strict (emit) refuses an unknown name; tap stays lenient only for named helper taps such as «selftest».
+    A number outside 1…N is refused in both modes: emit can never write it, so a tap on it would listen to nobody."""
     roles = list(cfg.get("team", {}).get("roles", []))
     out = []
     for part in (p.strip() for p in spec.split(",")):
-        if part.isdigit() and 1 <= int(part) <= len(roles):
+        if part.isdigit():
+            if not 1 <= int(part) <= len(roles):
+                raise ValueError(part)
             part = roles[int(part) - 1]
         if strict and part != ALL and part not in roles:
             raise ValueError(part or spec)
@@ -204,7 +271,7 @@ def cmd_tap(cfg, a):
     tz = local_tz()
     while True:
         recs, cur["offset"] = read_from(jpath, cur["offset"])
-        mode = load_json(os.path.join(STATE_DIR, "mode.json"), {})
+        mode = as_obj(load_json(os.path.join(STATE_DIR, "mode.json"), {}))
         now = datetime.now(timezone.utc)
         pause = bool(mode.get("pause"))
         for r in recs:
@@ -233,8 +300,9 @@ def cmd_tap(cfg, a):
         elif not cur["pending"]:
             cur["last_flush"] = now_iso() if due else cur["last_flush"]
         if role in tc["heartbeat_watchers"]:
-            hb = load_json(os.path.join(STATE_DIR, "state.json"), {}).get("heartbeat")
-            stale = not hb or now - datetime.fromisoformat(hb) > heartbeat_stale_after(cfg, mode)
+            hb = as_obj(load_json(os.path.join(STATE_DIR, "state.json"), {})).get("heartbeat")
+            cycle = load_json(os.path.join(STATE_DIR, "cycle.json"), None)
+            stale = heartbeat_silent(cfg, mode, cycle, hb, now, awake_seconds())
             if stale and not cur["dead_warned"]:
                 print(f"НЕРВ МОЛЧИТ с {hb[11:16] if hb else '—'} UTC: демон не пишет пульс — "
                       f"launchctl kickstart -k gui/{os.getuid()}/space.hrhelper.nerve", flush=True)
