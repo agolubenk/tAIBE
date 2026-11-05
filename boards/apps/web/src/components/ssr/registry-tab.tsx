@@ -11,6 +11,7 @@ import {
   type SsrVersionSummary,
 } from "@/fetchers/ssr/ssr-fetchers";
 import { Button } from "@/components/ui/button";
+import { ApproveMatchingBar } from "./approve-matching-bar";
 
 // «Скиллы и правила» (spec RU-2, RU-11): the registry. Every entity with its
 // versions; a diff opens before any owner decision — approve and rollback
@@ -58,10 +59,16 @@ function VersionRow({
     enabled: diffOpen,
   });
 
+  // The matching bar counts open drafts, so a single decision refreshes it too.
   const invalidate = () =>
-    queryClient.invalidateQueries({
-      queryKey: ["ssr", "entities", workspaceId],
-    });
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["ssr", "entities", workspaceId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["ssr", "drafts", workspaceId],
+      }),
+    ]);
 
   const approve = useMutation({
     mutationFn: () => approveSsrDraft(workspaceId, entity.id, version.id),
@@ -235,6 +242,7 @@ export function RegistryTab({ workspaceId }: { workspaceId: string }) {
 
   return (
     <div className="flex flex-col gap-3">
+      <ApproveMatchingBar workspaceId={workspaceId} />
       {list.map((entity) => (
         <section
           key={entity.id}

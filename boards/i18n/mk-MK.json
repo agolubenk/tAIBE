@@ -4106,7 +4106,18 @@
 			"diffHide": "Hide diff",
 			"diffFrom": "from",
 			"empty": "Nothing synced yet.",
-			"loadError": "Failed to load SSR data."
+			"loadError": "Failed to load SSR data.",
+			"approveMatching": {
+				"approvedIn": "approved in {{workspace}} · v{{number}}",
+				"button": "Approve matching ({{matching}})",
+				"changed": "Some drafts changed after the list loaded, so nothing was approved. Check the refreshed list and try again.",
+				"description": "These {{matching}} drafts are byte-identical to a version you already approved. The other {{rest}} stay for per-item review with the diff.",
+				"done": "Approved drafts: {{approved}}.",
+				"error": "Could not approve the matching drafts.",
+				"pending": "Approving…",
+				"summary": "Drafts: {{total}} · match already approved: {{matching}}",
+				"title": "Approve matching drafts?"
+			}
 		}
 	},
 	"team": {
