@@ -11,6 +11,7 @@ council.db и логи консилиума, индекс DAMS, ключи, docs
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 ENV = "TAIBE_HOST_ROOT"
@@ -44,3 +45,21 @@ def host_root(require: str = "") -> Path:
             f"{ENV}={raw!r}: нет {require} — каталог не тот или данные хоста не созданы "
             f"(новый хост: создать пустой файл {require})")
     return root
+
+
+def layer_version(root: Path = LAYER_ROOT) -> str:
+    """Какой код слоя запущен: коммит и флаг грязного дерева. Устаревшая или правленая копия кода
+    видна в статусе сразу, а не по странному поведению. Грязное — правки отслеживаемых файлов, как
+    у `git describe --dirty`: неотслеживаемые не считаются. Индекс не пишется (`--no-optional-locks`)."""
+    def git(*args: str) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(["git", "--no-optional-locks", "-C", str(root), *args],
+                                  capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    head = git("rev-parse", "--short=12", "HEAD")
+    if head is None or head.returncode != 0 or not head.stdout.strip():
+        return "коммит неизвестен (нет git или не репозиторий)"
+    diff = git("diff", "--quiet", "HEAD", "--")
+    flag = {0: "чистое дерево", 1: "ГРЯЗНОЕ дерево"}.get(diff.returncode if diff else -1, "дерево не проверено")
+    return f"{head.stdout.strip()} · {flag}"

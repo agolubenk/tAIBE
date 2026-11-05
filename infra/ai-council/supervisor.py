@@ -32,6 +32,8 @@ import config as config_mod                      # noqa: E402
 import learning as learning_mod                  # noqa: E402
 import ollama as ollama_mod                      # noqa: E402
 from store import REPO_ROOT, Store, git_sha      # noqa: E402
+from config import LAYER_ROOT                     # noqa: E402
+from host_root import layer_version              # noqa: E402
 
 STATE_DIR = REPO_ROOT / ".claude/council"
 SUPERVISOR_PID = STATE_DIR / "supervisor.pid"
@@ -295,6 +297,7 @@ def cmd_status(cfg, _args) -> int:
     sup = read_pid(SUPERVISOR_PID)
     print("=== AI Council ===")
     print(f"супервизор: {'работает, pid ' + str(sup) if alive(sup) else 'остановлен'}")
+    print(f"код слоя:   {layer_version()} · {LAYER_ROOT}")
     _print_service_table(cfg)
 
     problems = getattr(cfg, "problems", [])
@@ -321,7 +324,8 @@ def cmd_status(cfg, _args) -> int:
     except Exception as exc:                                  # noqa: BLE001
         print(f"БД:         недоступна — {exc}")
 
-    print(f"git:        {git_sha()}")
+    if REPO_ROOT != LAYER_ROOT:
+        print(f"хост git:   {git_sha() or 'неизвестен'} · {REPO_ROOT}")
     if problems:
         print("\n⚠ проблемы конфига:")
         for m in problems:

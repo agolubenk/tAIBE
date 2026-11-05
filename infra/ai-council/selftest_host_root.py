@@ -4,8 +4,10 @@
 Код консилиума и DAMS живёт в слое, данные — у продукта-хоста. Проверяется, что:
 - без env хост = сам слой (поведение репозитория без хоста не меняется);
 - неверный env (относительный путь, нет каталога, нет council.db) — громкая ошибка на импорте;
-- с env все корни данных (council.db, лок Ollama, ключи и .continue/.env, граф, индекс DAMS, ключ GLM)
+- с env все корни данных (council.db, ключи и .continue/.env, граф, индекс DAMS, ключ GLM)
   смотрят в хост, а код (config.toml, schema.sql, скрипт пайплайна) — в слой;
+- замок Ollama один на машину (домашняя папка, вне хостов): два хоста не держат его одновременно,
+  убитый kill -9 держатель его не уносит, старая копия слоя в хосте (прежний лок у хоста) тоже исключается;
 - рабочая council.db не создаётся молча, только с AI_COUNCIL_INIT_DB=1;
 - dams_rag_server с env без индекса хоста отказывается стартовать.
 
@@ -20,9 +22,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -39,15 +43,28 @@ def check(name: str, ok: bool, detail: object = "") -> None:
         FAILS.append(name)
 
 
-def py(code: str, host: str | Path | None = None, cwd: Path = HERE, **extra: str) -> subprocess.CompletedProcess:
-    """Отдельный процесс: корни считаются на импорте, в этом процессе их не перезагрузить."""
+PRELUDE = f"import sys, json; sys.path[:0] = [{str(HERE)!r}, {str(SCRIPTS)!r}]\n"
+MACHINE_LOCK_REL = ".local/state/taibe/council/ollama-local.lock"
+
+
+def child_env(host: str | Path | None, extra: dict[str, str]) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k not in CLEAN_ENV}
     if host is not None:
         env["TAIBE_HOST_ROOT"] = str(host)
     env.update(extra)
-    prelude = f"import sys, json; sys.path[:0] = [{str(HERE)!r}, {str(SCRIPTS)!r}]\n"
-    return subprocess.run([sys.executable, "-E", "-s", "-c", prelude + code], cwd=str(cwd), env=env,
-                          capture_output=True, text=True, timeout=120)
+    return env
+
+
+def py(code: str, host: str | Path | None = None, cwd: Path = HERE, **extra: str) -> subprocess.CompletedProcess:
+    """Отдельный процесс: корни считаются на импорте, в этом процессе их не перезагрузить."""
+    return subprocess.run([sys.executable, "-E", "-s", "-c", PRELUDE + code], cwd=str(cwd),
+                          env=child_env(host, extra), capture_output=True, text=True, timeout=120)
+
+
+def spawn(code: str, host: str | Path | None = None, **extra: str) -> subprocess.Popen:
+    """Как py(), но без ожидания: для процессов, которые должны идти одновременно."""
+    return subprocess.Popen([sys.executable, "-E", "-s", "-c", PRELUDE + code], cwd=str(HERE),
+                            env=child_env(host, extra), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
 def last_json(proc: subprocess.CompletedProcess) -> dict:
@@ -64,7 +81,7 @@ print(json.dumps({
     "config_path": str(config.CONFIG_PATH), "schema": str(store.SCHEMA_PATH),
     "db": str(store.DB_PATH), "verifier": str(verifier.REPO_ROOT), "cloud": str(cloud.REPO_ROOT),
     "dotenv": str(cloud.DOTENV_PATH), "graph": str(graph_build.OUT_DIR), "retrieval": str(retrieval.REPO_ROOT),
-    "lock": str(ollama.LOCAL_INFERENCE_LOCK), "dams_db": str(dams_common.DB_PATH), "glm_key": str(glm_client.KEY_PATH),
+    "lock": str(ollama.LOCAL_INFERENCE_LOCK), "legacy_lock": ollama.LEGACY_HOST_LOCK, "dams_db": str(dams_common.DB_PATH), "glm_key": str(glm_client.KEY_PATH),
     "zai": cloud.read_key("zai"),
 }))
 """
@@ -76,6 +93,8 @@ def default_layer() -> None:
           r.get("config") == str(LAYER) and r.get("layer") == str(LAYER)
           and r.get("db") == str(LAYER / ".claude/council/council.db")
           and r.get("dams_db") == str(LAYER / ".claude/rag/index.db"), r)
+    check("без TAIBE_HOST_ROOT замок Ollama — в домашней папке, не в слое",
+          r.get("lock") == os.path.join(os.path.expanduser("~"), MACHINE_LOCK_REL), r.get("lock", r))
 
 
 def bad_env(tmp: Path) -> None:
@@ -105,15 +124,20 @@ def host_fixture(tmp: Path) -> Path:
 
 def host_roots(tmp: Path) -> None:
     host = host_fixture(tmp).resolve()
-    r = last_json(py(ROOTS, host=host))
+    home = tmp / "home-roots"
+    home.mkdir()
+    r = last_json(py(ROOTS, host=host, HOME=str(home)))
     data_ok = (r.get("config") == r.get("verifier") == r.get("cloud") == r.get("retrieval") == str(host)
                and r.get("db") == str(host / ".claude/council/council.db")
-               and r.get("lock") == str(host / ".claude/council/ollama-local.lock")
                and r.get("dotenv") == str(host / ".continue/.env")
                and r.get("graph") == str(host / "graphify-out")
                and r.get("dams_db") == str(host / ".claude/rag/index.db")
                and r.get("glm_key") == str(host / ".claude/rag/.glm-key"))
-    check("с TAIBE_HOST_ROOT все корни данных — у хоста (база, лок Ollama, ключи, граф, DAMS, GLM)", data_ok, r)
+    check("с TAIBE_HOST_ROOT все корни данных — у хоста (база, ключи, граф, DAMS, GLM)", data_ok, r)
+    check("с TAIBE_HOST_ROOT замок Ollama — машинный (домашняя папка), не у хоста",
+          r.get("lock") == str(home / MACHINE_LOCK_REL), r.get("lock", r))
+    check("с TAIBE_HOST_ROOT второй, переходный лок — прежний путь у хоста (его держат старые копии слоя)",
+          r.get("legacy_lock") == str(host / ".claude/council/ollama-local.lock"), r.get("legacy_lock", r))
     check("ключ провайдера читается из .continue/.env хоста, а не слоя",
           r.get("zai") == "key-from-host-dotenv", r.get("zai", r))
     check("код остаётся в слое: config.toml и schema.sql",
@@ -133,6 +157,103 @@ def host_roots(tmp: Path) -> None:
     else:
         check("dams_rag_server: хост без индекса DAMS — отказ на старте",
               proc.returncode != 0 and ".claude/rag/index.db" in (proc.stderr or ""), (proc.stderr or "")[-300:])
+
+
+SLOT = """
+import os, time, ollama
+from pathlib import Path
+log = Path(os.environ["T_LOG"])
+with ollama.local_inference_slot(30):
+    with log.open("a") as f: f.write(f"in {time.time()} {ollama.LOCAL_INFERENCE_LOCK}\\n")
+    time.sleep(float(os.environ["T_HOLD"]))
+    with log.open("a") as f: f.write(f"out {time.time()} {ollama.LOCAL_INFERENCE_LOCK}\\n")
+"""
+
+HOLD = """
+import os, time, ollama
+from pathlib import Path
+with ollama.local_inference_slot(10):
+    Path(os.environ["T_READY"]).touch()
+    time.sleep(120)
+"""
+
+OLD_COPY = """
+import fcntl, os, time
+from pathlib import Path
+handle = open(os.environ["T_LOCK"], "a+")
+fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+Path(os.environ["T_READY"]).touch()
+time.sleep(120)
+"""
+
+PROBE = """
+import os, time, ollama
+started = time.time()
+try:
+    with ollama.local_inference_slot(float(os.environ["T_WAIT"])):
+        got = True
+except TimeoutError:
+    got = False
+print(json.dumps({"got": got, "waited": round(time.time() - started, 2)}))
+"""
+
+
+def machine_lock(tmp: Path) -> None:
+    """Замок Ollama один на Mac: консилиумы двух хостов без AI_COUNCIL_LOCAL_LOCK идут по одному."""
+    home = tmp / "home"
+    home.mkdir()
+    hosts = []
+    for name in ("host-a", "host-b"):
+        (tmp / name / ".claude/council").mkdir(parents=True)
+        (tmp / name / ".claude/council/council.db").touch()
+        hosts.append((tmp / name).resolve())
+    log = tmp / "slot.log"
+    procs = [spawn(SLOT, host=h, HOME=str(home), T_LOG=str(log), T_HOLD="0.6") for h in hosts for _ in range(2)]
+    errs = [p.communicate(timeout=90)[1][-300:] for p in procs]
+    events = [ln.split() for ln in log.read_text().splitlines()] if log.exists() else []
+    depth = peak = 0
+    for kind, _ts, _lock in sorted(events, key=lambda e: float(e[1])):
+        depth += 1 if kind == "in" else -1
+        peak = max(peak, depth)
+    check("замок Ollama: у двух хостов один файл — в домашней папке, вне хостов",
+          {e[2] for e in events} == {str(home / MACHINE_LOCK_REL)}, {e[2] for e in events})
+    check("замок Ollama: четыре процесса двух хостов — по одному, без пересечений",
+          [p.returncode for p in procs] == [0, 0, 0, 0] and len(events) == 8 and peak == 1,
+          (peak, len(events), [p.returncode for p in procs], [e for e in errs if e]))
+
+    ready = tmp / "holder.ready"
+    holder = spawn(HOLD, host=hosts[0], HOME=str(home), T_READY=str(ready))
+    try:
+        deadline = time.time() + 30
+        while not ready.exists() and holder.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        busy = last_json(py(PROBE, host=hosts[1], HOME=str(home), T_WAIT="0.5"))
+        check("замок Ollama: пока держатель хоста A жив, хост B получает отказ по таймауту",
+              ready.exists() and busy.get("got") is False, busy)
+    finally:
+        os.kill(holder.pid, signal.SIGKILL)
+        holder.wait(timeout=10)
+    freed = last_json(py(PROBE, host=hosts[1], HOME=str(home), T_WAIT="2"))
+    check("замок Ollama: после kill -9 держателя замок свободен сразу",
+          holder.returncode == -signal.SIGKILL and freed.get("got") is True and freed.get("waited", 9) < 1.0,
+          (holder.returncode, freed))
+
+    ready = tmp / "old-copy.ready"
+    old = subprocess.Popen([sys.executable, "-E", "-s", "-c", OLD_COPY], env=child_env(None, {
+        "T_LOCK": str(hosts[0] / ".claude/council/ollama-local.lock"), "T_READY": str(ready)}))
+    try:
+        deadline = time.time() + 30
+        while not ready.exists() and old.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        busy = last_json(py(PROBE, host=hosts[0], HOME=str(home), T_WAIT="0.5"))
+        other = last_json(py(PROBE, host=hosts[1], HOME=str(home), T_WAIT="0.5"))
+        check("замок Ollama: старая копия слоя держит лок у хоста — новый код этого хоста ждёт, другой хост — нет",
+              ready.exists() and busy.get("got") is False and other.get("got") is True, (busy, other))
+    finally:
+        os.kill(old.pid, signal.SIGKILL)
+        old.wait(timeout=10)
+    held = last_json(py(PROBE, host=hosts[0], HOME=str(home), T_WAIT="2"))
+    check("замок Ollama: старая копия завершилась — новый код хоста берёт оба лока", held.get("got") is True, held)
 
 
 DB_GUARD = """
@@ -221,6 +342,7 @@ def main() -> int:
         (tmp / "bad").mkdir()
         bad_env(tmp / "bad")
         host_roots(tmp)
+        machine_lock(tmp)
         db_guard(tmp)
     if args.live:
         live(Path(args.live))
