@@ -81,6 +81,24 @@ write_plist() { # label script keepalive|daily log
 EOF
 }
 
+# bootout returns before launchd lets go of a running KeepAlive job, and a
+# bootstrap right after it fails with "Bootstrap failed: 5: Input/output
+# error" — the old worker is gone and the new one never starts (05.11).
+# Wait until the label is gone (≤ 10 s), then load; one retry after 2 s.
+reload_agent() { # label
+  domain="gui/$(id -u)"
+  launchctl bootout "$domain/$1" 2>/dev/null || true
+  waited=0
+  while launchctl print "$domain/$1" >/dev/null 2>&1 && [ "$waited" -lt 20 ]; do
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  launchctl bootstrap "$domain" "$agents/$1.plist" 2>/dev/null || {
+    sleep 2
+    launchctl bootstrap "$domain" "$agents/$1.plist"
+  }
+}
+
 case "${1:-}" in
   config)
     [ -n "${2:-}" ] || {
@@ -180,8 +198,7 @@ case "${1:-}" in
     fi
     write_plist "$sync_label" notebook-sync.mjs daily sync.log
     for label in $labels; do
-      launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-      launchctl bootstrap "gui/$(id -u)" "$agents/$label.plist"
+      reload_agent "$label"
     done
     echo "синк: каждый день в 04:$sync_minute (пропущенный — при пробуждении), сейчас: T_BOARDS_NOTEBOOK_HOME=$home $0 sync"
     if [ "$home" = "$default_home" ]; then
