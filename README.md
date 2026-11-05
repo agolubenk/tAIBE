@@ -53,6 +53,28 @@ npm run ai-council:status     # AI council
 npm run done:check            # closed-items index
 ```
 
+### Team T3 — one command per product (`eval/tools/spawn_session.sh`)
+
+Run it from the product's folder (its main checkout; worktrees count as the same product). It checks and raises
+the Nerve first: not loaded → `launchctl bootstrap`, silent pulse → `kickstart -k`. Then it opens the roles in the
+canonical order 1→5→4→3→2→6, waiting until each new session shows up before the next one, up to `SPAWN_WAIT`
+seconds (default 90). At the end it prints who came up and who did not. A role that is already alive in this
+product is skipped, so running the command again opens only the missing roles.
+
+```bash
+T=~/Desktop/Development/tAIBE/eval/tools
+cd ~/Desktop/Development/HR_Helper-v2              # HR Helper; tAIBE — cd ~/Desktop/Development/tAIBE
+bash $T/spawn_session.sh --launch --roles all      # whole team; one role: --launch --role release
+bash $T/spawn_session.sh --status                  # roles → session (pid, name, status, generation, idle) + Nerve pulse
+bash $T/spawn_session.sh --stop                    # prints `kill <pid>` per live role for the owner; kills nothing
+```
+
+`--force` opens a role even when it is alive, and `--terminal print` prints the commands for a VS Code tab instead of
+opening windows. A live role is the youngest live Claude Code session with that role's genome inside the product
+that has no successor yet (neither an acceptance receipt nor a live descendant of the same role). Until OPS-25 there
+is one Nerve per Mac (`space.hrhelper.nerve`) and one set of role launch files (`eval/prompts/launch-3010/roles/`)
+for every product.
+
 Laying the layer over another project — [`process/README.md`](process/README.md).
 
 ## Repository layout
