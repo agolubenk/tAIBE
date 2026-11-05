@@ -368,7 +368,8 @@ class TapTest(unittest.TestCase):
         self.assertEqual(nerve.heartbeat_stale_after(CFG, night, {"seconds": 600}), timedelta(minutes=20))
         self.assertEqual(nerve.heartbeat_stale_after(CFG, {"phase": "day"}, {"seconds": 30}), timedelta(minutes=5),
                          "короткий цикл не опускает порог ниже heartbeat_stale_min")
-        for bad in (None, {}, {"seconds": 0}, {"seconds": -5}, {"seconds": "600"}, {"seconds": True}):
+        for bad in (None, {}, {"seconds": 0}, {"seconds": -5}, {"seconds": "600"}, {"seconds": True}, [1], "x", 5,
+                    {"seconds": float("inf")}, {"seconds": float("nan")}, {"seconds": 1e12}):
             self.assertEqual(nerve.heartbeat_stale_after(CFG, night, bad), timedelta(minutes=10),
                              f"нет или битый cycle.json → конфиг: {bad!r}")
 
@@ -412,12 +413,14 @@ class TapTest(unittest.TestCase):
         self.assertTrue(silent(c, 88.5, 1601.0), "бодрствовал больше двух пауз — демон правда пропустил цикл")
         self.assertTrue(silent(dict(c, seconds=60), 6, 1360.0, "day"), "днём без сна — как раньше")
         self.assertFalse(silent(c, 9, 9e9), "свежий по стенным часам пульс жив при любом счёте")
-        self.assertTrue(silent(c, 88.5, 1272.0, h=None), "пульса нет — тишина")
+        for h in (None, "x", "2026-11-04T23:48:29", 5):
+            self.assertTrue(silent(c, 88.5, 1272.0, h=h), f"пульса нет или он битый — тишина: {h!r}")
         for why, cycle, awake in (("нет cycle.json", None, 1272.0), ("демон до правки", {"seconds": 300}, 1272.0),
                                   ("прошлый проход", dict(c, at="2026-11-04T23:43:29+00:00"), 1272.0),
                                   ("перезагрузка: счёт назад", c, 400.0), ("awake строкой", dict(c, awake="1"), 1272.0),
                                   ("awake логическое", dict(c, awake=True), 1272.0),
-                                  ("битое at", dict(c, at="x"), 1272.0)):
+                                  ("битое at", dict(c, at="x"), 1272.0), ("cycle не объект", [1], 1272.0),
+                                  ("at без пояса", dict(c, at="2026-11-05T02:48:30"), 1272.0)):
             self.assertTrue(silent(cycle, 88, awake), f"нет надёжного счёта → стенные часы: {why}")
 
     def test_tap_compares_the_daemons_awake_count_with_its_own(self):
@@ -430,6 +433,8 @@ class TapTest(unittest.TestCase):
             self.assertEqual(self.run_tap(d, "coord"), "", "30 мин по стене, 100 с бодрствования — Mac спал")
             wj(os.path.join(d, "cycle.json"), {"seconds": 300, "at": hb, "awake": nerve.awake_seconds() - 700})
             self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d, "release"))
+            [wj(os.path.join(d, n), v) for n, v in (("cycle.json", [1]), ("state.json", []), ("mode.json", "x"))]
+            self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d, "coord"), "битые файлы состояния не валят tap")
 
 
 class EmitTest(unittest.TestCase):
