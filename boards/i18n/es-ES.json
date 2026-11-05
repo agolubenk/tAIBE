@@ -2457,7 +2457,9 @@
 				"keys_other": "{{count}} live keys",
 				"lastKey": "last key {{time}}",
 				"noKey": "no key yet",
-				"toggle": "Agent {{name}} may work"
+				"toggle": "Agent {{name}} may work",
+				"archived": "Archived",
+				"toArchive": "Move agent {{name}} to the archive; it comes back when its session does"
 			},
 			"subtitle": "Agents that work under their own names, the tools MCP sessions see, and the model.",
 			"title": "Agents and MCP",
@@ -2466,7 +2468,8 @@
 				"disabled_one": "Agent turned off, {{count}} key revoked",
 				"disabled_other": "Agent turned off, {{count}} keys revoked",
 				"enabled": "Agent turned on",
-				"error": "Could not change the agent"
+				"error": "Could not change the agent",
+				"archived": "Agent moved to the archive; it comes back when its session asks for a key"
 			},
 			"tools": {
 				"count_many": "{{count}} tools",
@@ -2476,6 +2479,10 @@
 				"loadError": "Could not load the tool sets.",
 				"note": "A client names its role in the {{header}} header. A session may add up to {{extra}} more tools nearest to its request. A role trims the list; the server still checks every call.",
 				"title": "MCP tool sets"
+			},
+			"archive": {
+				"hint": "Agents idle for over a day; they hold no place among your active agents. Each comes back by itself, with its name and history, when its session asks for a key again.",
+				"title": "Archived ({{total}})"
 			}
 		},
 		"adminNotebookModel": {

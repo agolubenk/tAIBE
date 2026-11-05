@@ -2463,10 +2463,17 @@
 				"disabled": "Off",
 				"lastKey": "last key {{time}}",
 				"noKey": "no key yet",
-				"toggle": "Agent {{name}} may work"
+				"toggle": "Agent {{name}} may work",
+				"archived": "Archived",
+				"toArchive": "Move agent {{name}} to the archive; it comes back when its session does"
+			},
+			"archive": {
+				"title": "Archived ({{total}})",
+				"hint": "Agents idle for over a day; they hold no place among your active agents. Each comes back by itself, with its name and history, when its session asks for a key again."
 			},
 			"toast": {
 				"enabled": "Agent turned on",
+				"archived": "Agent moved to the archive; it comes back when its session asks for a key",
 				"disabled_one": "Agent turned off, {{count}} key revoked",
 				"disabled_other": "Agent turned off, {{count}} keys revoked",
 				"error": "Could not change the agent"

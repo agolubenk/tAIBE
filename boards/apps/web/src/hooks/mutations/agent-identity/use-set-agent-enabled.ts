@@ -12,13 +12,20 @@ function useSetAgentEnabled() {
     mutationFn: ({ agentId, enabled }: { agentId: string; enabled: boolean }) =>
       setAgentEnabled(agentId, enabled),
     onSuccess: (result) => {
-      toast.success(
-        result.enabled
-          ? t("settings:agentsPage.toast.enabled")
-          : t("settings:agentsPage.toast.disabled", {
-              count: result.revokedKeys,
-            }),
-      );
+      if (!result.enabled) {
+        toast.success(
+          t("settings:agentsPage.toast.disabled", {
+            count: result.revokedKeys,
+          }),
+        );
+      } else {
+        // Enabling a disabled agent moves it to the archive (TB-74).
+        toast.success(
+          result.archived
+            ? t("settings:agentsPage.toast.archived")
+            : t("settings:agentsPage.toast.enabled"),
+        );
+      }
       return queryClient.invalidateQueries({ queryKey: agentKeys.all });
     },
     onError: (error) => {
