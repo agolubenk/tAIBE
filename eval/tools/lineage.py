@@ -9,8 +9,8 @@
       наследник после приёма, перевзвода Monitor и кронов: квитанция <TAIBE_LINEAGE>.ack (pid и старт его claude)
   lineage.py retire --child L [--role K] [--timeout 5400] [--foreground]
       spawn_session.sh --handoff: отцепленный сторож ждёт квитанцию L, проверяет наследника и снимает предшественника
-  lineage.py reap [--idle-hours 24] [--include-waiting] [--kill [--yes]]
-      без флагов — только список; --kill — действие владельца, только по списку последнего показа (≤ 10 мин)
+  lineage.py reap [--idle-hours 24] [--include-waiting] [--prune-days 30] [--kill [--yes]]
+      без флагов — список и чистка записей линий старше --prune-days; --kill — действие владельца, только по списку последнего показа (≤ 10 мин)
 
 Снимается сессия так: TERM группе claude и потомкам вне группы → 10 с → KILL выживших → окно Terminal (по id из
 record, иначе по tty; окно с другими вкладками, iTerm и VS Code не трогаются) → HUP shell-остаткам на tty.
