@@ -4,7 +4,11 @@
 #   bash eval/tools/spawn_session.sh --handoff FILE [--role KEY]     наследник (порог 80%, хук context-threshold)
 #   bash eval/tools/spawn_session.sh --launch --role KEY             запуск роли по её пусковому файлу
 #   bash eval/tools/spawn_session.sh --launch --roles all|coord,release,…   несколько ролей, по порядку 1→5→4→3→2→6
+#   bash eval/tools/spawn_session.sh --status | --stop                 роли продукта и пульс нерва | команды kill для владельца
 #
+# --launch идемпотентен (OPS-24): сначала поднимает нерв (не загружен → bootstrap, молчит → kickstart), живую роль
+# продукта пропускает («жива: …»), после открытия ждёт сессию новой линии до SPAWN_WAIT с (90), затем следующую роль;
+# в конце печатает итог. --force — открыть и при живой роли. Продукт — основной checkout папки --cwd (team_status.py).
 # (в инстансе HR_Helper-v2 скрипт лежит в supertick-eval/tools/ — работает так же; корень дерева берётся из его места)
 # Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|print (print — только напечатать
 # команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
@@ -20,7 +24,7 @@ TOOLS="$(cd "$(dirname "$0")" && pwd)"
 CWD="$PWD"
 TERMINAL="${SPAWN_TERMINAL:-terminal}"
 PROMPT_DIR=""
-HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}"
+HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO=""
 SPAWNED_LINE=""  # линия последней открытой сессии (bash 3.2: из функции — только через глобальную)
 ORDER="coord release backend frontend plan boards"
 
@@ -38,7 +42,10 @@ while [ $# -gt 0 ]; do
     --prompt-dir) PROMPT_DIR="${2:?}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --no-retire) RETIRE=off; shift ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    --force) FORCE=1; shift ;;
+    --status) INFO=status; shift ;;
+    --stop) INFO=stop; shift ;;
+    -h|--help) awk 'NR>1{if(/^#/)print;else exit}' "$0"; exit 0 ;;  # шапка до первой строки кода — без номеров строк
     *) die "неизвестный аргумент: $1" ;;
   esac
 done
@@ -171,9 +178,32 @@ record() {
     || echo "# spawn_session: запись линии $1 не сохранена — окно закроется только по tty" >&2
 }
 
+# Одна роль в --launch: живую пропустить, иначе открыть и дождаться её сессии. Итог — строкой в SUMMARY.
+SUMMARY=""
+note() { SUMMARY="$SUMMARY$(printf '\n  %s' "$*")"; }
+launch_role() {
+  local r="$1" live rc got
+  role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
+  if [ "$FORCE" = 0 ]; then
+    rc=0; live="$(python3 -I "$TOOLS/team_status.py" live --role "$r" --cwd "$CWD" 2>&1)" || rc=$?
+    if [ "$rc" = 0 ]; then echo "жива: $r · $live"; note "$r — жива, не открывал: $live"; return; fi
+    # Открывать только по явному «роли нет» (rc 3). Любой другой rc (1 — трейсбек Python, 2 — ошибка) — проверка
+    # сломалась: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
+    if [ "$rc" != 3 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
+  fi
+  spawn_one "$r"
+  if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then note "$r — команда напечатана"; return; fi
+  echo "жду сессию $r (до ${SPAWN_WAIT:-90} с)…"
+  got="$(python3 -I "$TOOLS/team_status.py" wait --role "$r" --line "$SPAWNED_LINE" --timeout "${SPAWN_WAIT:-90}" 2>&1)" \
+    && note "$r — поднята: $got" || note "$r — открыта, сессия НЕ появилась: $got"
+}
+
 case "${TMPDIR:-}$CWD" in *\"*|*\\*) die "кавычка или обратный слэш в пути — osascript не примет" ;; esac
 
-if [ -n "$HANDOFF" ]; then
+if [ -n "$INFO" ]; then
+  [ -z "$HANDOFF" ] && [ "$LAUNCH" = 0 ] || die "--status/--stop не сочетаются с --handoff/--launch"
+  exec python3 -I "$TOOLS/team_status.py" "$INFO" --cwd "$CWD"
+elif [ -n "$HANDOFF" ]; then
   [ "$LAUNCH" = 0 ] && [ -z "$ROLES" ] || die "--handoff не сочетается с --launch/--roles"
   [ -f "$HANDOFF" ] || die "нет файла handoff: $HANDOFF"
   HANDOFF="$(cd "$(dirname "$HANDOFF")" && pwd)/$(basename "$HANDOFF")"
@@ -195,16 +225,23 @@ if [ -n "$HANDOFF" ]; then
 elif [ "$LAUNCH" = 1 ]; then
   if [ -n "$ROLES" ]; then
     [ "$ROLES" = all ] && ROLES="$ORDER"
-    first=1
-    for r in $(echo "$ROLES" | tr ',' ' '); do
-      [ "$first" = 1 ] || [ "$TERMINAL" = print ] || [ "$DRY" = 1 ] || sleep 3  # окна не стартуют разом: MCP и индексация не толкаются
-      first=0
-      spawn_one "$r"
-    done
   else
     [ -n "$ROLE" ] || die "--launch: нужен --role KEY или --roles LIST"
-    spawn_one "$ROLE"
+    ROLES="$ROLE"
   fi
+  # Весь список — до нерва и первой роли: опечатка в третьей не должна срывать запуск после двух открытых.
+  for r in $(echo "$ROLES" | tr ',' ' '); do
+    role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
+  done
+  # Сначала нерв: роли без него не получают назначений. Сбой — в итог, запуск ролей не останавливает.
+  if [ "$DRY" = 1 ]; then nerve="$(python3 -I "$TOOLS/team_status.py" nerve 2>&1)" || true
+  else nerve="$(python3 -I "$TOOLS/team_status.py" nerve --fix 2>&1)" || true; fi
+  echo "$nerve"
+  # Следующая роль — после того, как сессия предыдущей появилась (wait): окна не стартуют разом, MCP и индексация
+  # не толкаются. Сессия не появилась — таймаут в итог, дальше по порядку.
+  for r in $(echo "$ROLES" | tr ',' ' '); do launch_role "$r"; done
+  echo "итог ($(basename "${MAIN:-$CWD}")):$SUMMARY"
+  python3 -I "$TOOLS/team_status.py" nerve 2>&1 | sed 's/^/  /' || true
 else
   die "нужен --handoff FILE или --launch (см. --help)"
 fi

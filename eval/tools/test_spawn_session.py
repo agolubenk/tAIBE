@@ -44,5 +44,56 @@ for name, ok in [
         print("FAIL:", name)
         print(proc.stdout, proc.stderr, sep="\n")
 
+# OPS-24: --launch в пустом каталоге сессий открывает роли по порядку и печатает итог; --status — «нет» у каждой роли.
+with tempfile.TemporaryDirectory() as tmp:
+    env = {**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
+           "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"), "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+    launch = subprocess.run(["bash", str(SCRIPT), "--launch", "--roles", "plan,coord", "--dry-run", "--cwd", tmp],
+                            capture_output=True, text=True, env=env, timeout=60)
+    status = subprocess.run(["bash", str(SCRIPT), "--status", "--cwd", tmp], capture_output=True, text=True, env=env,
+                            timeout=60)
+out = launch.stdout
+for name, ok in [
+    ("launch dry-run succeeds", launch.returncode == 0),
+    ("nerve is checked before roles", out.find("нерв:") != -1 and out.find("нерв:") < out.find("# plan: вставить")),
+    ("roles open in the given order", -1 < out.find("# plan: вставить") < out.find("# coord: вставить")),
+    ("summary lists every role", "итог (" in out and "plan — команда напечатана" in out
+     and "coord — команда напечатана" in out),
+    ("status: every role of ORDER, none alive", status.returncode == 0
+     and all(f"{n} {r:<9} нет" in status.stdout for n, r in
+             [(1, "coord"), (5, "release"), (4, "backend"), (3, "frontend"), (2, "plan"), (6, "boards")])),
+]:
+    if not ok:
+        failed += 1
+        print("FAIL:", name)
+        print(launch.stdout, launch.stderr, status.stdout, status.stderr, sep="\n")
+
+# OPS-24, линза 7b: проверка живой роли сломалась (копия без lineage_reap.py → трейсбек импорта, rc 1) — роль НЕ
+# открывается: вторая сессия живой роли хуже пропуска. Открывает только явный ответ «роли нет».
+with tempfile.TemporaryDirectory() as tmp:
+    tools = Path(tmp) / "layer" / "tools"
+    tools.mkdir(parents=True)
+    for f in ("spawn_session.sh", "team_status.py", "lineage.py"):
+        (tools / f).write_bytes((SCRIPT.parent / f).read_bytes())
+    (tools.parent / "pipeline").mkdir()
+    (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
+    env ={**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
+           "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"), "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+    prompts = str(SCRIPT.parent.parent / "prompts" / "launch-3010" / "roles")
+    broken = subprocess.run(["bash", str(tools / "spawn_session.sh"), "--launch", "--role", "coord", "--dry-run",
+                             "--prompt-dir", prompts, "--cwd", tmp], capture_output=True, text=True, env=env, timeout=60)
+    typo = subprocess.run(["bash", str(SCRIPT), "--launch", "--roles", "plan,cord", "--dry-run", "--cwd", tmp],
+                          capture_output=True, text=True, env=env, timeout=60)
+for name, ok in [
+    ("broken check: role not opened", broken.returncode == 0 and "# coord: вставить" not in broken.stdout),
+    ("broken check: summary says not opened", "coord — НЕ открыта: проверка не прошла" in broken.stdout),
+    ("role list checked before anything opens", typo.returncode != 0 and "# plan: вставить" not in typo.stdout
+     and "неизвестная роль: cord" in typo.stderr),
+]:
+    if not ok:
+        failed += 1
+        print("FAIL:", name)
+        print(broken.stdout, broken.stderr, typo.stdout, typo.stderr, sep="\n")
+
 print("spawn_session: %d failed" % failed)
 sys.exit(1 if failed else 0)
