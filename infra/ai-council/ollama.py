@@ -23,41 +23,54 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 
 DOWN_TTL = 120  # сек: после сетевого сбоя не долбим демона на каждом вызове
 # Один локальный инференс на машину: генерацию и эмбеддинги всех процессов консилиума (воркер,
 # облачные полосы воркера, контекст, планировщик) пропускает один файловый лок. Модельный лок
 # (`large_model`) держит только резидентность L-моделей, S-модели и эмбеддинги шли мимо него.
-# Лок — у хоста, а не у копии кода: процессы консилиума из старой и новой папки слоя на одном хосте
-# делят один лок, иначе два инференса пойдут на ноутбуке параллельно.
+# Лок — у машины, а не у хоста и не у копии кода: консилиумы всех продуктов-хостов на одном Mac делят
+# один файл, иначе два хоста дадут два инференса параллельно. Путь — в домашней папке пользователя вне
+# продуктов. Не $TMPDIR и не $XDG_STATE_HOME: у launchd и у терминала они разные, а HOME один.
+# Переходный второй лок — прежний путь у хоста: им пользуются старые копии слоя в папке продукта, пока
+# они не удалены. Порядок взятия постоянный (машинный, потом хостовый), поэтому взаимной блокировки нет.
+# AI_COUNCIL_LOCAL_LOCK — только для тестов: один заданный файл, без машинного и хостового.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import REPO_ROOT as _HOST_ROOT  # noqa: E402
 
-LOCAL_INFERENCE_LOCK = os.environ.get(
-    "AI_COUNCIL_LOCAL_LOCK", str(_HOST_ROOT / ".claude" / "council" / "ollama-local.lock"))
+MACHINE_LOCK_REL = os.path.join(".local", "state", "taibe", "council", "ollama-local.lock")
+_LOCK_OVERRIDE = os.environ.get("AI_COUNCIL_LOCAL_LOCK", "").strip()
+LOCAL_INFERENCE_LOCK = _LOCK_OVERRIDE or os.path.join(os.path.expanduser("~"), MACHINE_LOCK_REL)
+LEGACY_HOST_LOCK = "" if _LOCK_OVERRIDE else str(_HOST_ROOT / ".claude" / "council" / "ollama-local.lock")
+
+
+def _flock_by(handle, deadline: float, wait_seconds: float) -> None:
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.time() >= deadline:
+                raise TimeoutError(f"локальный инференс занят другим процессом дольше {int(wait_seconds)} с")
+            time.sleep(0.25)
 
 
 @contextmanager
 def local_inference_slot(wait_seconds: float):
     """Эксклюзивный доступ к локальному Ollama на время одного HTTP-вызова. Лок файловый (flock):
     снимается и при падении процесса. Не дождались — TimeoutError, вызов не делается."""
-    os.makedirs(os.path.dirname(LOCAL_INFERENCE_LOCK), exist_ok=True)
-    with open(LOCAL_INFERENCE_LOCK, "a+") as handle:
-        deadline = time.time() + wait_seconds
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.time() >= deadline:
-                    raise TimeoutError(f"локальный инференс занят другим процессом дольше {int(wait_seconds)} с")
-                time.sleep(0.25)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    paths = [LOCAL_INFERENCE_LOCK]
+    if LEGACY_HOST_LOCK and LEGACY_HOST_LOCK != LOCAL_INFERENCE_LOCK:
+        paths.append(LEGACY_HOST_LOCK)
+    deadline = time.time() + wait_seconds
+    with ExitStack() as held:
+        for path in paths:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            handle = held.enter_context(open(path, "a+"))
+            _flock_by(handle, deadline, wait_seconds)
+            held.callback(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+        yield
 PRESSURE_CRITICAL = 4   # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
 
 

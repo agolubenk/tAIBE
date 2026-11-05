@@ -141,12 +141,12 @@ def test_local_inference_slot(tmp: Path) -> None:
           rcs == [0, 0, 0] and len(events) == 6 and max_depth == 1, f"rc={rcs} depth={max_depth}")
 
     import ollama as ollama_mod
-    saved_lock = ollama_mod.LOCAL_INFERENCE_LOCK
+    saved_lock, saved_legacy = ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK
     holder = subprocess.Popen([_sys.executable, "-c", code.replace("time.sleep(0.6)", "time.sleep(3)")])
     time.sleep(1.0)
     os.environ["AI_COUNCIL_LOCAL_LOCK"] = str(lock)
     try:
-        ollama_mod.LOCAL_INFERENCE_LOCK = str(lock)
+        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = str(lock), ""
         started = time.time()
         try:
             with ollama_mod.local_inference_slot(0.5):
@@ -157,7 +157,7 @@ def test_local_inference_slot(tmp: Path) -> None:
               timed_out and time.time() - started < 2.0)
     finally:
         holder.wait(timeout=30)
-        ollama_mod.LOCAL_INFERENCE_LOCK = saved_lock
+        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = saved_lock, saved_legacy
         os.environ.pop("AI_COUNCIL_LOCAL_LOCK", None)
 
 
