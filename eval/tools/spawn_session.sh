@@ -45,7 +45,7 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1; shift ;;
     --status) INFO=status; shift ;;
     --stop) INFO=stop; shift ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) awk 'NR>1{if(/^#/)print;else exit}' "$0"; exit 0 ;;  # шапка до первой строки кода — без номеров строк
     *) die "неизвестный аргумент: $1" ;;
   esac
 done
