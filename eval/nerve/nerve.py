@@ -28,6 +28,13 @@ import sources  # noqa: E402
 from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
 
 STATE_DIR = os.environ.get("NERVE_STATE_DIR", os.path.join(HERE, "state"))
+# Awake time since boot, one count for every process: CLOCK_UPTIME_RAW on macOS, CLOCK_MONOTONIC on Linux.
+# Neither runs while the system sleeps — and neither does the daemon's time.sleep.
+AWAKE_CLOCK = getattr(time, "CLOCK_UPTIME_RAW", time.CLOCK_MONOTONIC)
+
+
+def awake_seconds():
+    return time.clock_gettime(AWAKE_CLOCK)
 
 
 def wakes_on():
@@ -136,7 +143,7 @@ def cmd_run(cfg, a):
         one_pass(ctx)
         seed = False
         pause = cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval)
-        save_json(os.path.join(STATE_DIR, "cycle.json"), {"seconds": pause, "at": now_iso()})
+        save_json(os.path.join(STATE_DIR, "cycle.json"), {"seconds": pause, "at": now_iso(), "awake": awake_seconds()})
         time.sleep(pause)
 
 
@@ -163,6 +170,36 @@ def heartbeat_stale_after(cfg, mode, cycle=None):
     «НЕРВ МОЛЧИТ» (04.11 22:22 and 22:37, heartbeat 5 s old). Day stays 5 minutes, night becomes 10."""
     return max(timedelta(minutes=cfg["tap"]["heartbeat_stale_min"]),
                timedelta(seconds=2 * slept_cycle(cfg, mode, cycle)))
+
+
+def awake_since_sleep(cycle, hb, awake_now):
+    """Awake seconds since the daemon went to sleep after the heartbeat `hb`, or None when that is unknown: no
+    «awake» in cycle.json (a daemon from before it), a cycle of an older pass than the heartbeat, or a count that
+    went back (a reboot)."""
+    c = cycle or {}
+    a, at = c.get("awake"), c.get("at")
+    if not isinstance(a, (int, float)) or isinstance(a, bool) or not isinstance(at, str):
+        return None
+    try:
+        if datetime.fromisoformat(at) < datetime.fromisoformat(hb):
+            return None
+    except ValueError:
+        return None
+    return awake_now - a if awake_now >= a else None
+
+
+def heartbeat_silent(cfg, mode, cycle, hb, now, awake_now):
+    """The daemon missed its cycle — only when both clocks say so. time.sleep counts awake time only, so on a
+    sleeping Mac a night pause stretches over the whole system sleep. Night 05.11: heartbeat 02:48:29, four
+    «НЕРВ МОЛЧИТ» at 03:40, 03:56, 04:00 and 04:17 (DarkWake), and by 04:17 the Mac had been awake 272 s of
+    88 min — less than the 300 s pause. Without a trusted awake count — the wall clock, as before."""
+    if not hb:
+        return True
+    limit = heartbeat_stale_after(cfg, mode, cycle)
+    if now - datetime.fromisoformat(hb) <= limit:
+        return False
+    slept = awake_since_sleep(cycle, hb, awake_now)
+    return slept is None or slept > limit.total_seconds()
 
 
 def resolve_roles(cfg, spec, strict=True):
@@ -251,7 +288,7 @@ def cmd_tap(cfg, a):
         if role in tc["heartbeat_watchers"]:
             hb = load_json(os.path.join(STATE_DIR, "state.json"), {}).get("heartbeat")
             cycle = load_json(os.path.join(STATE_DIR, "cycle.json"), None)
-            stale = not hb or now - datetime.fromisoformat(hb) > heartbeat_stale_after(cfg, mode, cycle)
+            stale = heartbeat_silent(cfg, mode, cycle, hb, now, awake_seconds())
             if stale and not cur["dead_warned"]:
                 print(f"НЕРВ МОЛЧИТ с {hb[11:16] if hb else '—'} UTC: демон не пишет пульс — "
                       f"launchctl kickstart -k gui/{os.getuid()}/space.hrhelper.nerve", flush=True)

@@ -389,7 +389,9 @@ class TapTest(unittest.TestCase):
                     nerve.cmd_run(CFG, Namespace(interval=120))
             sleep.assert_called_once_with(600)
             with open(os.path.join(d, "cycle.json"), encoding="utf-8") as f:
-                self.assertEqual(json.load(f)["seconds"], 600, "ручной --interval 120 ночью = 600 с")
+                cycle = json.load(f)
+            self.assertEqual(cycle["seconds"], 600, "ручной --interval 120 ночью = 600 с")
+            self.assertLessEqual(abs(nerve.awake_seconds() - cycle["awake"]), 5, "перед сном — часы бодрствования")
 
     def test_tap_reads_cycle_file(self):
         with tempfile.TemporaryDirectory() as d:
@@ -398,6 +400,35 @@ class TapTest(unittest.TestCase):
             wj(os.path.join(d, "cycle.json"), {"seconds": 600, "at": "2026-11-04T20:00:00+00:00"})
             self.assertEqual(self.run_tap(d, "coord"), "", "ночью при паузе 600 с 15 мин — меньше двух циклов")
             self.heartbeat_ago(d, 21, "night")
+            self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d, "release"))
+
+    def test_sleeping_mac_is_not_silence_and_unknown_awake_falls_back_to_the_wall(self):
+        # Ночь 05.11: пульс 02:48:29, тревоги в 03:40–04:17 (DarkWake); к 04:17 Mac бодрствовал 272 с из 88 мин.
+        hb = datetime(2026, 11, 4, 23, 48, 29, tzinfo=timezone.utc)
+        c = {"seconds": 300, "at": hb.isoformat(), "awake": 1000.0}
+        silent = lambda cycle, wall_min, awake, phase="night", h=hb.isoformat(): nerve.heartbeat_silent(  # noqa: E731
+            CFG, {"phase": phase}, cycle, h, hb + timedelta(minutes=wall_min), awake)
+        self.assertFalse(silent(c, 88.5, 1272.0), "ночь 05.11: 272 с бодрствования < 600 с")
+        self.assertTrue(silent(c, 88.5, 1601.0), "бодрствовал больше двух пауз — демон правда пропустил цикл")
+        self.assertTrue(silent(dict(c, seconds=60), 6, 1360.0, "day"), "днём без сна — как раньше")
+        self.assertFalse(silent(c, 9, 9e9), "свежий по стенным часам пульс жив при любом счёте")
+        self.assertTrue(silent(c, 88.5, 1272.0, h=None), "пульса нет — тишина")
+        for why, cycle, awake in (("нет cycle.json", None, 1272.0), ("демон до правки", {"seconds": 300}, 1272.0),
+                                  ("прошлый проход", dict(c, at="2026-11-04T23:43:29+00:00"), 1272.0),
+                                  ("перезагрузка: счёт назад", c, 400.0), ("awake строкой", dict(c, awake="1"), 1272.0),
+                                  ("awake логическое", dict(c, awake=True), 1272.0),
+                                  ("битое at", dict(c, at="x"), 1272.0)):
+            self.assertTrue(silent(cycle, 88, awake), f"нет надёжного счёта → стенные часы: {why}")
+
+    def test_tap_compares_the_daemons_awake_count_with_its_own(self):
+        # tap — другой процесс: счёт бодрствования должен быть общим для системы, а не своим у процесса.
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            self.heartbeat_ago(d, 30, "night")
+            hb = nerve.load_json(os.path.join(d, "state.json"), {})["heartbeat"]
+            wj(os.path.join(d, "cycle.json"), {"seconds": 300, "at": hb, "awake": nerve.awake_seconds() - 100})
+            self.assertEqual(self.run_tap(d, "coord"), "", "30 мин по стене, 100 с бодрствования — Mac спал")
+            wj(os.path.join(d, "cycle.json"), {"seconds": 300, "at": hb, "awake": nerve.awake_seconds() - 700})
             self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d, "release"))
 
 
