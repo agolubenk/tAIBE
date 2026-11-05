@@ -576,6 +576,13 @@
       "when": 1793554356947,
       "tag": "0081_t_boards_better_auth_17_team",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1793867402128,
+      "tag": "0082_t_boards_agent_archive",
+      "breakpoints": true
     }
   ]
 }

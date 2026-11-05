@@ -5,23 +5,25 @@ import { revokeUserConnections, revokeWorkspaceConnections } from "../ws";
 import { retryTransient } from "./retry-transient";
 import { syncAgent } from "./sync-agent";
 
-function ownerAgentIds(ownerId: string, enabledOnly = false) {
+function ownerAgentIds(ownerId: string, activeOnly = false) {
   return db
     .select({ userId: schema.agentProfileTable.userId })
     .from(schema.agentProfileTable)
     .where(
       and(
         eq(schema.agentProfileTable.ownerId, ownerId),
-        enabledOnly ? isNull(schema.agentProfileTable.disabledAt) : undefined,
+        activeOnly ? isNull(schema.agentProfileTable.disabledAt) : undefined,
+        activeOnly ? isNull(schema.agentProfileTable.archivedAt) : undefined,
       ),
     )
     .then((rows) => rows.map((row) => row.userId));
 }
 
-// The owner's role or project access changed: their agents follow now rather
-// than at their next key. One short transaction per agent, in turn: an owner
-// has few agents and role changes are rare. One agent failing never leaves
-// the others behind.
+// The owner's role or project access changed: their active agents follow now
+// rather than at their next key; an archived one follows when it comes back.
+// One short transaction per agent, in turn: an owner has at most the cap of
+// active agents and role changes are rare. One agent failing never leaves the
+// others behind.
 export async function refreshOwnerAgents(ownerId: string) {
   const failures: unknown[] = [];
   for (const agentId of await ownerAgentIds(ownerId, true)) {

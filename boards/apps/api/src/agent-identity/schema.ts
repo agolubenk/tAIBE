@@ -36,7 +36,14 @@ export const issuedAgentKeySchema = z
 export const agentListSchema = z
   .array(
     agentSchema.extend({
-      disabledAt: z.string().nullable(),
+      disabledAt: z.string().nullable().openapi({
+        description:
+          "When the owner disabled the agent; a disabled agent gets no keys until the owner enables it.",
+      }),
+      archivedAt: z.string().nullable().openapi({
+        description:
+          "When the agent went to the archive after a day without activity, or was enabled from disabled. An archived agent holds no keys and no place under the cap, and comes back when its session asks for a key.",
+      }),
       lastIssuedAt: z.string().nullable(),
       createdAt: z.string(),
       keys: z.array(
@@ -59,7 +66,15 @@ export const setAgentEnabledBody = z
   .openapi("SetAgentEnabledBody");
 
 export const agentEnabledSchema = z
-  .object({ id: z.string(), enabled: z.boolean(), revokedKeys: z.number() })
+  .object({
+    id: z.string(),
+    enabled: z.boolean(),
+    archived: z.boolean().openapi({
+      description:
+        "The agent is in the archive: it comes back when its session asks for a key.",
+    }),
+    revokedKeys: z.number(),
+  })
   .openapi("AgentEnabled");
 
 export const toolSetsSchema = z

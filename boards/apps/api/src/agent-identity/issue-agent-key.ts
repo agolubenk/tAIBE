@@ -11,20 +11,17 @@ import {
 import { auth } from "../auth";
 import db, { schema } from "../database";
 import { ForestError } from "../forest/forest-error";
+import {
+  AGENT_CAP_MESSAGE,
+  AGENT_KEY_TTL_SECONDS,
+  MAX_AGENTS_PER_OWNER,
+} from "./agent-limits";
 import { agentDisplayName, agentEmail } from "./agent-naming";
 import { syncAgent } from "./sync-agent";
 
-// A day: a key that leaks stops working by tomorrow, and the MCP bridge asks
-// for a new one when the old one is refused.
-export const AGENT_KEY_TTL_SECONDS = 24 * 60 * 60;
 // Live keys an agent keeps besides the one being issued: a few bridges of the
 // same session may run at once, and none of them should lose its key.
 const KEPT_LIVE_KEYS = 3;
-// Enabled agents per owner: a bridge looping over labels cannot fill the
-// workspace with users, and every agent fits the owner's list to disable.
-export const MAX_AGENTS_PER_OWNER = 50;
-export const AGENTS_SETTINGS_PATH = "/dashboard/settings/account/agents";
-export const AGENT_CAP_MESSAGE = `the owner already has ${MAX_AGENTS_PER_OWNER} enabled agents, the most allowed, so a new session gets no agent; only the owner can disable the ones no longer working, in Settings → Account → Agents and MCP (${AGENTS_SETTINGS_PATH}); agents already on the list keep working`;
 // Better Auth's default limit for key names.
 const KEY_NAME_MAX = 32;
 
@@ -56,6 +53,7 @@ async function findAgent(email: string) {
       name: schema.userTable.name,
       session: schema.agentProfileTable.session,
       disabledAt: schema.agentProfileTable.disabledAt,
+      archivedAt: schema.agentProfileTable.archivedAt,
     })
     .from(schema.userTable)
     .leftJoin(
@@ -76,24 +74,24 @@ async function assertMayAddAgent(ownerId: string) {
   if (!owner || owner.isAnonymous) {
     throw new ForestError("agent_forbidden", "a guest cannot have agents");
   }
-  const [enabled] = await db
+  const [active] = await db
     .select({ n: count() })
     .from(schema.agentProfileTable)
     .where(
       and(
         eq(schema.agentProfileTable.ownerId, ownerId),
         isNull(schema.agentProfileTable.disabledAt),
+        isNull(schema.agentProfileTable.archivedAt),
       ),
     );
-  if ((enabled?.n ?? 0) >= MAX_AGENTS_PER_OWNER) {
-    // The agent reading this cannot free a place itself (TB-72): it has to
-    // hand the owner the step, so the text names who acts and where.
+  if ((active?.n ?? 0) >= MAX_AGENTS_PER_OWNER) {
     throw new ForestError("agent_forbidden", AGENT_CAP_MESSAGE);
   }
 }
 
 // The stored agent of this owner, harness and session, or a new one. A
-// disabled agent is refused before any write.
+// disabled agent is refused before any write; an archived one needs a free
+// place under the cap to come back, which issueAgentKey then takes.
 async function ensureAgentUser({ ownerId, harness, session }: Identity) {
   const email = agentEmail(ownerId, harness, session);
   let agent = await findAgent(email);
@@ -116,6 +114,7 @@ async function ensureAgentUser({ ownerId, harness, session }: Identity) {
     throw new ForestError("agent_forbidden", "agent identity is unavailable");
   }
   if (agent.disabledAt) disabled();
+  if (agent.archivedAt) await assertMayAddAgent(ownerId);
   if (!agent.session) {
     await db
       .insert(schema.agentProfileTable)
@@ -176,9 +175,12 @@ export async function issueAgentKey(
     agent.userId,
     async (tx) => {
       await pruneKeys(tx, agent.userId);
+      // Leaving the archive and the fresh activity land in one write under
+      // the profile lock: the archive job never finds a returned agent with
+      // yesterday's activity, and one it archived a moment ago comes back.
       await tx
         .update(schema.agentProfileTable)
-        .set({ lastIssuedAt: new Date() })
+        .set({ lastIssuedAt: new Date(), archivedAt: null })
         .where(eq(schema.agentProfileTable.userId, agent.userId));
     },
   );

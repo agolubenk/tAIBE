@@ -7,7 +7,7 @@ import updateWorkspaceMemberRole from "../../apps/api/src/admin/controllers/upda
 import {
   AGENTS_SETTINGS_PATH,
   MAX_AGENTS_PER_OWNER,
-} from "../../apps/api/src/agent-identity/issue-agent-key";
+} from "../../apps/api/src/agent-identity/agent-limits";
 import { auth } from "../../apps/api/src/auth";
 import db, { schema } from "../../apps/api/src/database";
 import { createApp } from "../../apps/api/src/index";
@@ -328,8 +328,12 @@ describe("API integration: an agent follows its owner (R-010)", () => {
       session: "one too many",
     });
     expect(refused.status).toBe(403);
-    // The agent cannot free a place: the text says the owner does, and where (TB-72).
-    expect(refused.body.message).toContain("only the owner can disable");
+    // The agent cannot free a place: the text says what frees one by itself,
+    // that only the owner disables, and where (TB-72, TB-74).
+    expect(refused.body.message).toContain(
+      "goes to the archive by itself and frees its place",
+    );
+    expect(refused.body.message).toContain("only the owner disables agents");
     expect(refused.body.message).toContain(AGENTS_SETTINGS_PATH);
     // An agent that already exists keeps getting keys.
     expect(

@@ -2463,13 +2463,22 @@
 				"disabled": "Off",
 				"lastKey": "last key {{time}}",
 				"noKey": "no key yet",
-				"toggle": "Agent {{name}} may work"
+				"toggle": "Agent {{name}} may work",
+				"toArchive": "Move to archive",
+				"toArchiveLabel": "Move to archive: {{name}}",
+				"mayReturn": "Agent {{name}} may come back"
+			},
+			"archive": {
+				"title": "Archived ({{total}})",
+				"hint": "They hold no place and come back by themselves, name and history intact, when their session asks for a key and a place is free."
 			},
 			"toast": {
 				"enabled": "Agent turned on",
+				"archived": "Agent moved to the archive; it comes back when its session asks for a key",
 				"disabled_one": "Agent turned off, {{count}} key revoked",
 				"disabled_other": "Agent turned off, {{count}} keys revoked",
-				"error": "Could not change the agent"
+				"error": "Could not change the agent",
+				"disabledNoKeys": "Agent turned off"
 			},
 			"tools": {
 				"title": "MCP tool sets",

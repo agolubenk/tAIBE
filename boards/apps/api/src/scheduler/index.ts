@@ -1,3 +1,4 @@
+import { archiveIdleAgents } from "../agent-identity/archive-idle-agents";
 import { retryStorageCleanup } from "../storage/cleanup-queue";
 import { cleanupDraftUploads } from "./draft-upload-cleanup";
 import { replayDeferredIssueEdits } from "../plugins/github/services/deferred-issue-edits";
@@ -94,6 +95,13 @@ export function initializeScheduler(): void {
     new Cron("23 * * * *", withCheckIn("trial-reminders", checkTrialReminders)),
   );
   jobs.push(
+    new Cron(
+      "41 * * * *",
+      { protect: true },
+      withCheckIn("agent-archive", () => archiveIdleAgents()),
+    ),
+  );
+  jobs.push(
     new Cron("10 3 * * *", withCheckIn("ssr-nightly-push", runNightlySsrPush)),
   );
   jobs.push(
@@ -116,7 +124,7 @@ export function initializeScheduler(): void {
     );
   }
   console.log(
-    "⏰ Scheduler started (deferred integration edits every minute, reminders every 5 minutes, seat reconciliation and trial reminders hourly)",
+    "⏰ Scheduler started (deferred integration edits every minute, reminders every 5 minutes, seat reconciliation, trial reminders and the agent archive hourly)",
   );
 }
 
