@@ -1,14 +1,26 @@
-import { and, asc, eq, inArray, isNotNull, or } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  ne,
+  notExists,
+  sql,
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import db from "../database";
 import { ssrEntityTable, ssrVersionTable } from "../database/ssr-schema";
 
-// A draft "matches" when a version the owner already approved holds the same
-// bytes at the same corpus path: same entity path, same aggregate blob sha of
-// the files map, status latest or superseded and either an owner approval or
-// a sync auto-bump (a merge into main is consent, Q-014). Drafts and rejected
-// versions never vouch. Only workspaces in `readable` are searched, so a
-// workspace the caller cannot read is invisible here.
-type Executor = Pick<typeof db, "select">;
+// A draft matches when the caller already approved the same bytes at the
+// same corpus path: same entity path, same aggregate blob sha of the files
+// map, a latest or superseded version the caller approved themselves. A sync
+// auto-bump is consent for its own workspace only, and a version the owner
+// rolled away from no longer vouches. Only workspaces in `readable` are
+// searched, so a workspace the caller cannot read is invisible here.
+type Reader = Pick<typeof db, "select">;
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export type OpenDraft = {
   entityId: string;
@@ -16,6 +28,9 @@ export type OpenDraft = {
   path: string;
   kind: string;
   blobSha: string;
+  // The batch may take it: the entity is not archived, the draft is its
+  // highest version, and the entity never rejected these exact bytes.
+  eligible: boolean;
 };
 
 export type DraftMatch = {
@@ -25,12 +40,53 @@ export type DraftMatch = {
   number: number;
 };
 
+const later = alias(ssrVersionTable, "ssr_later_version");
+
+const isHighest = notExists(
+  db
+    .select({ one: sql`1` })
+    .from(later)
+    .where(
+      and(
+        eq(later.entityId, ssrVersionTable.entityId),
+        gt(later.number, ssrVersionTable.number),
+      ),
+    ),
+);
+
+const neverRejected = notExists(
+  db
+    .select({ one: sql`1` })
+    .from(later)
+    .where(
+      and(
+        eq(later.entityId, ssrVersionTable.entityId),
+        eq(later.status, "rejected"),
+        eq(later.blobSha, ssrVersionTable.blobSha),
+      ),
+    ),
+);
+
+const neverRolledAway = notExists(
+  db
+    .select({ one: sql`1` })
+    .from(later)
+    .where(
+      and(
+        eq(later.entityId, ssrVersionTable.entityId),
+        gt(later.number, ssrVersionTable.number),
+        eq(later.origin, "rollback"),
+      ),
+    ),
+);
+
 const draftColumns = {
   entityId: ssrEntityTable.id,
   versionId: ssrVersionTable.id,
   path: ssrEntityTable.path,
   kind: ssrEntityTable.kind,
   blobSha: ssrVersionTable.blobSha,
+  eligible: sql<boolean>`(${ne(ssrEntityTable.status, "archived")} and ${isHighest} and ${neverRejected})`,
 };
 
 export function listOpenDrafts(workspaceId: string): Promise<OpenDraft[]> {
@@ -47,10 +103,13 @@ export function listOpenDrafts(workspaceId: string): Promise<OpenDraft[]> {
     .orderBy(asc(ssrEntityTable.path), asc(ssrVersionTable.number));
 }
 
-// Row-locks the named drafts of this workspace that are still open, so a
-// concurrent sync or single decision cannot change them under the batch.
+// Row-locks the named drafts of this workspace that are still open, until the
+// batch commits. A sync, approve or reject that touches one of them waits on
+// the lock, and its own UPDATE re-checks status='draft', so it then leaves
+// the decided row alone. Twins are re-read in the same transaction but not
+// locked.
 export function lockOpenDrafts(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  tx: Tx,
   workspaceId: string,
   versionIds: string[],
 ): Promise<OpenDraft[]> {
@@ -70,13 +129,16 @@ export function lockOpenDrafts(
 
 const twinKey = (path: string, blobSha: string) => `${path}\u0000${blobSha}`;
 
+// The twin of every eligible draft, keyed by the draft's version id.
 export async function findApprovedTwins(
-  executor: Executor,
+  executor: Reader,
   drafts: OpenDraft[],
   readable: Map<string, string>,
+  ownerId: string,
 ): Promise<Map<string, DraftMatch>> {
   const matches = new Map<string, DraftMatch>();
-  if (drafts.length === 0 || readable.size === 0) return matches;
+  const eligible = drafts.filter((draft) => draft.eligible);
+  if (eligible.length === 0 || readable.size === 0) return matches;
   const rows = await executor
     .select({
       workspaceId: ssrEntityTable.workspaceId,
@@ -85,30 +147,29 @@ export async function findApprovedTwins(
       number: ssrVersionTable.number,
       blobSha: ssrVersionTable.blobSha,
       status: ssrVersionTable.status,
-      createdAt: ssrVersionTable.createdAt,
+      approvedAt: ssrVersionTable.approvedAt,
     })
     .from(ssrVersionTable)
     .innerJoin(ssrEntityTable, eq(ssrEntityTable.id, ssrVersionTable.entityId))
     .where(
       and(
         inArray(ssrEntityTable.workspaceId, [...readable.keys()]),
-        inArray(ssrEntityTable.path, [...new Set(drafts.map((d) => d.path))]),
+        inArray(ssrEntityTable.path, [...new Set(eligible.map((d) => d.path))]),
         inArray(ssrVersionTable.blobSha, [
-          ...new Set(drafts.map((d) => d.blobSha)),
+          ...new Set(eligible.map((d) => d.blobSha)),
         ]),
         inArray(ssrVersionTable.status, ["latest", "superseded"]),
-        or(
-          isNotNull(ssrVersionTable.approvedAt),
-          eq(ssrVersionTable.origin, "sync"),
-        ),
+        isNotNull(ssrVersionTable.approvedAt),
+        eq(ssrVersionTable.approvedBy, ownerId),
+        neverRolledAway,
       ),
     );
 
-  // One twin per (path, sha): a served latest first, then the newest.
+  // One twin per (path, sha): a served latest first, then the newest approval.
   rows.sort(
     (a, b) =>
       Number(b.status === "latest") - Number(a.status === "latest") ||
-      b.createdAt.getTime() - a.createdAt.getTime() ||
+      (b.approvedAt?.getTime() ?? 0) - (a.approvedAt?.getTime() ?? 0) ||
       a.versionId.localeCompare(b.versionId),
   );
   const byKey = new Map<string, DraftMatch>();
@@ -122,24 +183,25 @@ export async function findApprovedTwins(
       number: row.number,
     });
   }
-  for (const draft of drafts) {
+  for (const draft of eligible) {
     const match = byKey.get(twinKey(draft.path, draft.blobSha));
     if (match) matches.set(draft.versionId, match);
   }
   return matches;
 }
 
-export async function listDraftMatches(
-  workspaceId: string,
+export async function withMatches(
+  drafts: OpenDraft[],
   readable: Map<string, string>,
+  ownerId: string,
 ) {
-  const drafts = await listOpenDrafts(workspaceId);
-  const twins = await findApprovedTwins(db, drafts, readable);
+  const twins = await findApprovedTwins(db, drafts, readable, ownerId);
   return drafts.map((draft) => ({
     entityId: draft.entityId,
     versionId: draft.versionId,
     path: draft.path,
     kind: draft.kind,
+    blobSha: draft.blobSha,
     match: twins.get(draft.versionId) ?? null,
   }));
 }

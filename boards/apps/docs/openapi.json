@@ -30482,8 +30482,8 @@
         "tags": [
           "SSR"
         ],
-        "summary": "Open drafts and the approved version each one is identical to",
-        "description": "A draft matches when a version with the same entity path and the same blob sha was approved (or auto-bumped by sync) in this workspace or another workspace the caller can read. Other workspaces are never revealed.",
+        "summary": "Open drafts and the version you approved that each one is identical to",
+        "description": "A draft matches when the caller approved a version with the same entity path and the same blob sha, in this workspace or another workspace the caller can read, and no later rollback undid it. Sync auto-bumps do not count. Drafts of archived entities, drafts below a newer version and bytes the entity rejected never match. Other workspaces are never revealed.",
         "parameters": [
           {
             "schema": {
@@ -30519,6 +30519,10 @@
                           "kind": {
                             "type": "string"
                           },
+                          "blobSha": {
+                            "type": "string",
+                            "description": "The draft's aggregate sha; send it back"
+                          },
                           "match": {
                             "type": [
                               "object",
@@ -30544,7 +30548,7 @@
                               "versionId",
                               "number"
                             ],
-                            "description": "An approved version with the same path and blob sha in a workspace the caller can read, or null"
+                            "description": "A version with the same path and blob sha that the caller approved, in a workspace the caller can read, or null"
                           }
                         },
                         "required": [
@@ -30552,6 +30556,7 @@
                           "versionId",
                           "path",
                           "kind",
+                          "blobSha",
                           "match"
                         ]
                       }
@@ -30596,8 +30601,8 @@
         "tags": [
           "SSR"
         ],
-        "summary": "Approve every listed draft that matches an approved version (owner UI only)",
-        "description": "Takes draft ids from the matches list and re-checks each on the server in one transaction: all are approved, or none are.",
+        "summary": "Approve every listed draft that matches a version you approved (owner UI only)",
+        "description": "Takes drafts from the matches list with the blob sha the owner saw and re-checks each on the server in one transaction: all are approved, or none are.",
         "parameters": [
           {
             "schema": {
@@ -30615,19 +30620,34 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "versionIds": {
+                  "items": {
                     "type": "array",
                     "items": {
-                      "type": "string",
-                      "minLength": 1
+                      "type": "object",
+                      "properties": {
+                        "versionId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "blobSha": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$",
+                          "description": "The draft bytes the owner saw"
+                        }
+                      },
+                      "required": [
+                        "versionId",
+                        "blobSha"
+                      ]
                     },
                     "minItems": 1,
                     "maxItems": 200,
-                    "description": "Draft version ids from the matches list; each is re-checked"
+                    "description": "Drafts from the matches list with the blob sha shown; each is re-checked"
                   }
                 },
                 "required": [
-                  "versionIds"
+                  "items"
                 ]
               }
             }
@@ -30660,7 +30680,7 @@
             }
           },
           "400": {
-            "description": "More than 200 ids, or an empty list",
+            "description": "Empty list, more than 200 items, an id over 64 characters or a malformed sha",
             "content": {
               "application/json": {
                 "schema": {
@@ -30690,7 +30710,7 @@
             }
           },
           "409": {
-            "description": "Some ids are no longer open drafts or no longer match; nothing was approved",
+            "description": "Some drafts changed, were decided, or no longer match; nothing was approved",
             "content": {
               "application/json": {
                 "schema": {
@@ -30707,7 +30727,7 @@
                       "items": {
                         "type": "string"
                       },
-                      "description": "Ids that are no longer open drafts or no longer match"
+                      "description": "Ids that changed, were decided, or no longer match; nothing was approved"
                     }
                   },
                   "required": [
@@ -30715,6 +30735,16 @@
                     "code",
                     "versionIds"
                   ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

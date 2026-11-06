@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import {
   approveMatchingSsrDrafts,
   listSsrDraftMatches,
+  type SsrBatchItem,
 } from "@/fetchers/ssr/ssr-fetchers";
 import { HttpError } from "@/lib/http-error";
 import { toast } from "@/lib/toast";
@@ -21,8 +22,8 @@ export function ApproveMatchingBar({ workspaceId }: { workspaceId: string }) {
     queryFn: () => listSsrDraftMatches(workspaceId),
   });
   const approve = useMutation({
-    mutationFn: (versionIds: string[]) =>
-      approveMatchingSsrDrafts(workspaceId, versionIds),
+    mutationFn: (items: SsrBatchItem[]) =>
+      approveMatchingSsrDrafts(workspaceId, items),
     onSuccess: (result) => {
       toast.success(
         t("workspace:ssr.approveMatching.done", { approved: result.approved }),
@@ -75,7 +76,9 @@ export function ApproveMatchingBar({ workspaceId }: { workspaceId: string }) {
         rest={list.length - matching.length}
         pending={approve.isPending}
         onConfirm={() =>
-          approve.mutate(matching.map((draft) => draft.versionId))
+          approve.mutate(
+            matching.map(({ versionId, blobSha }) => ({ versionId, blobSha })),
+          )
         }
       />
     </div>

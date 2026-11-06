@@ -43,6 +43,7 @@ const draft = (
   versionId,
   path,
   kind: "skill",
+  blobSha: `sha-${versionId}`,
   match,
 });
 const twin = {
@@ -110,8 +111,8 @@ describe("ApproveMatchingBar", () => {
 
     await waitFor(() =>
       expect(approveMatchingSsrDrafts).toHaveBeenCalledWith("ws-1", [
-        "d1",
-        "d3",
+        { versionId: "d1", blobSha: "sha-d1" },
+        { versionId: "d3", blobSha: "sha-d3" },
       ]),
     );
     await waitFor(() =>

@@ -56,6 +56,7 @@ export type SsrDraftMatch = {
   versionId: string;
   path: string;
   kind: string;
+  blobSha: string;
   match: {
     workspaceId: string;
     workspaceName: string;
@@ -63,6 +64,8 @@ export type SsrDraftMatch = {
     number: number;
   } | null;
 };
+
+export type SsrBatchItem = { versionId: string; blobSha: string };
 
 async function toResult(response: Response) {
   if (!response.ok) throw await HttpError.fromResponse(response);
@@ -150,11 +153,11 @@ export async function listSsrDraftMatches(workspaceId: string) {
 
 export async function approveMatchingSsrDrafts(
   workspaceId: string,
-  versionIds: string[],
+  items: SsrBatchItem[],
 ) {
   const response = await client.ssr[":workspaceId"].drafts[
     "approve-matching"
-  ].$post({ param: { workspaceId }, json: { versionIds } });
+  ].$post({ param: { workspaceId }, json: { items } });
   return (await toResult(response)) as {
     approved: number;
     versionIds: string[];
