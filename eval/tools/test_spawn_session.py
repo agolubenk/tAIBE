@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory() as tmp:
         (tools / f).write_bytes((SCRIPT.parent / f).read_bytes())
     (tools.parent / "pipeline").mkdir()
     (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
-    env ={**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
+    env = {**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
            "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"), "NERVE_PLIST": os.path.join(tmp, "none.plist")}
     prompts = str(SCRIPT.parent.parent / "prompts" / "launch-3010" / "roles")
     broken = subprocess.run(["bash", str(tools / "spawn_session.sh"), "--launch", "--role", "coord", "--dry-run",

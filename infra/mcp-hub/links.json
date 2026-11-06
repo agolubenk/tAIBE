@@ -9,7 +9,6 @@
     { "label": "репозиторий", "url": "https://github.com/agolubenk/HR_Helper-v2" },
     { "label": "PR", "url": "https://github.com/agolubenk/HR_Helper-v2/pulls" }
   ],
-  "notion": [{ "label": "Notion", "url": "https://www.notion.so/" }],
   "sentry": [{ "label": "Sentry", "url": "https://sentry.io/" }],
   "cloudflare": [{ "label": "Cloudflare", "url": "https://dash.cloudflare.com/" }],
   "context7": [{ "label": "Context7", "url": "https://context7.com/" }],
