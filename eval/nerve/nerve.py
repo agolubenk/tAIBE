@@ -159,26 +159,54 @@ def product_state(slug, default):
 
 def other_product_passes(deliver):
     """Проход каждого активного продукта, кроме продукта по умолчанию. Сбой продукта — в его errors, остальным не
-    мешает; сбой загрузки instances/ — в errors продукта по умолчанию через исключение вызывающему."""
+    мешает; сбой загрузки instances/ — исключение вызывающему (run_products пишет его в журнал по умолчанию)."""
     default, cfgs = load_products()
     for slug, pcfg in cfgs.items():
         if slug == default or pcfg.get("active") is not True:
             continue
         pdir = product_state(slug, default)
         os.makedirs(pdir, exist_ok=True)
-        jpath = os.path.join(pdir, "journal.jsonl")
-        seed = not os.path.exists(jpath)
-        if seed:                    # R-4: файл журнала сразу — следующий проход уже доставляет
-            open(jpath, "a").close()
-        one_pass(Ctx(pcfg, pdir, deliver=deliver and not seed), PRODUCT_POLLS)
+        open(os.path.join(pdir, "journal.jsonl"), "a").close()
+        ctx = Ctx(pcfg, pdir)
+        # R-4: seed — пока нет отметки «seeded», а не пока нет файла журнала: emit до первого прохода или сбой gh в
+        # первом проходе иначе отдали бы все открытые PR будилками. Отметка — только после прохода без сбоя GitHub.
+        seeded = bool(ctx.state.get("seeded"))
+        ctx.deliver = deliver and seeded
+        one_pass(ctx, PRODUCT_POLLS)
+        if not seeded and "github" not in ctx.state.get("errors", {}):
+            ctx.state["seeded"] = now_iso()
+            ctx.save()
+
+
+def run_products(ctx, deliver):
+    """Проходы других продуктов после прохода по умолчанию; сбой загрузки instances/ — событие release в журнале по
+    умолчанию (один раз на текст ошибки) и stderr, демон продукта по умолчанию живёт дальше."""
+    try:
+        other_product_passes(deliver)
+    except Exception as e:  # noqa: BLE001
+        msg = f"{type(e).__name__}: {e}"[:200]
+        print(f"продукты: {msg}", file=sys.stderr, flush=True)
+        ctx.emit(f"err:products:{msg}", "nerve.error", DIGEST, ["release"], f"instances/ не читается: {msg}", "nerve")
+    # Пульс — после всех продуктов: долгий проход другого продукта не даёт ложное «НЕРВ МОЛЧИТ» ролям по умолчанию.
+    hb = now_iso()
+    ctx.state["heartbeat"] = hb
+    ctx.save()
+    with open(os.path.join(STATE_DIR, "heartbeat"), "w") as f:
+        f.write(hb)
 
 
 def resolve_product(cfg, a):
     """(cfg, папка журнала и курсоров, slug) для tap/emit/status: --product → TAIBE_PRODUCT → продукт по умолчанию.
     Фолбэк без флага и env — одна строка в stderr: ошибка видна, а живые Monitor ролей продукта по умолчанию не
-    падают."""
+    падают — даже если instances/ сломан."""
     want = getattr(a, "product", None) or os.environ.get("TAIBE_PRODUCT", "")
-    default, cfgs = load_products()
+    try:
+        default, cfgs = load_products()
+    except Exception as e:  # noqa: BLE001 — сломанный instances/ (в том числе файл неактивного продукта)
+        if want:
+            raise SystemExit(f"--product {want}: instances/ не читается: {e}") from None
+        print(f"instances/ не читается ({type(e).__name__}) — продукт по умолчанию из config.json", file=sys.stderr)
+        return cfg, STATE_DIR, ""
     if default is None:
         if want:
             raise SystemExit(f"--product {want}: нет instances/ — продукт один")
@@ -207,10 +235,7 @@ def cmd_run(cfg, a):
         ctx = Ctx(cfg, STATE_DIR, deliver=not seed and deliver)
         one_pass(ctx)
         seed = False
-        try:
-            other_product_passes(deliver)
-        except Exception as e:  # noqa: BLE001 — сломанный instances/ не валит демон продукта по умолчанию
-            print(f"продукты: {type(e).__name__}: {e}"[:300], file=sys.stderr, flush=True)
+        run_products(ctx, deliver)
         pause = cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval)
         save_json(os.path.join(STATE_DIR, "cycle.json"), {"seconds": pause, "at": now_iso(), "awake": awake_seconds()})
         time.sleep(pause)
@@ -310,7 +335,7 @@ def cmd_once(cfg, a):
     os.makedirs(STATE_DIR, exist_ok=True)
     ctx = Ctx(cfg, STATE_DIR, deliver=not a.seed and wakes_on())
     one_pass(ctx)
-    other_product_passes(not a.seed and wakes_on())
+    run_products(ctx, not a.seed and wakes_on())
     print(f"проход: событий {ctx.emitted}, ошибки {list(ctx.state.get('errors', {}))}")
     return 0
 
@@ -398,7 +423,10 @@ def read_heartbeat():
 
 
 def cmd_emit(cfg, a):
-    cfg, pdir, _slug = resolve_product(cfg, a)
+    cfg, pdir, slug = resolve_product(cfg, a)
+    if cfg.get("active") is False:   # журнал невключённого продукта никто не обходит и не читает
+        print(f"продукт {slug} не включён (active: false) — ничего не записано", file=sys.stderr)
+        return 2
     try:
         to = resolve_roles(cfg, a.role)
     except ValueError as e:

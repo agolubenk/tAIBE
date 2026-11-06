@@ -536,7 +536,60 @@ class ProductsTest(unittest.TestCase):
         self.assertIn("o/taibe k2", out)
         self.assertNotIn("k1", out)
         self.assertEqual(self.tap("hr-helper")[0], "", "событие tAIBE не приходит в tap HR")
-        self.assertFalse(os.path.exists(os.path.join(self.d, "heartbeat.tmp")))
+
+    def test_seed_survives_emit_before_first_pass_and_failed_github(self):
+        """Ни ранний emit, ни сбой gh в первом проходе не отменяют seed: открытые PR не уходят будилками."""
+        with redirect_stdout(io.StringIO()):
+            nerve.cmd_emit(CFG, Namespace(role="coord", text="рано", kind="assign", product="taibe"))
+        self.tap("taibe")
+        calls = []
+
+        def flaky(ctx):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("gh недоступен")
+            self.fake_github(ctx)
+
+        self.keys = ["pr1", "pr2"]
+        with mock.patch.object(nerve, "PRODUCT_POLLS", [("github", flaky)]):
+            nerve.other_product_passes(True)   # сбой gh — seed остаётся
+            nerve.other_product_passes(True)   # первый удачный проход — seed
+        self.assertEqual(self.tap("taibe")[0], "")
+        self.keys = ["pr1", "pr2", "pr3"]
+        nerve.other_product_passes(True)
+        out, _ = self.tap("taibe")
+        self.assertIn("pr3", out)
+        self.assertNotIn("pr1", out)
+
+    def test_taibe_tap_sees_shared_pause(self):
+        """tap другого продукта видит паузу общего mode.json: нервное событие придержано."""
+        wj(os.path.join(self.d, "mode.json"), {"phase": "day", "pause": True})
+        self.tap("taibe")
+        nerve.other_product_passes(True)
+        self.keys = ["k9"]
+        nerve.other_product_passes(True)
+        self.assertEqual(self.tap("taibe")[0], "", "в паузе нервное событие придержано")
+        wj(os.path.join(self.d, "mode.json"), {"phase": "day"})
+        self.assertIn("k9 (придержано на время лимита)", self.tap("taibe")[0])
+
+    def test_broken_instances_keeps_default_tap_alive(self):
+        with mock.patch.object(nerve, "load_products", side_effect=ValueError("taibe.json: не JSON")):
+            open(os.path.join(self.d, "journal.jsonl"), "w").close()
+            _, err = self.tap(None)
+            self.assertIn("instances/ не читается", err)
+            with self.assertRaises(SystemExit):
+                self.tap("taibe")
+            ctx = nerve.Ctx(CFG, self.d)
+            nerve.run_products(ctx, True)
+        recs, _ = read_from(os.path.join(self.d, "journal.jsonl"), 0)
+        self.assertTrue(any(r["kind"] == "nerve.error" and "instances/" in r["text"] for r in recs))
+
+    def test_emit_to_inactive_product_refused(self):
+        self.taibe["active"] = False
+        with redirect_stderr(io.StringIO()):
+            rc = nerve.cmd_emit(CFG, Namespace(role="coord", text="x", kind="assign", product="taibe"))
+        self.assertEqual(rc, 2)
+        self.assertFalse(os.path.exists(os.path.join(self.tdir(), "journal.jsonl")))
 
     def test_inactive_product_is_not_polled(self):
         self.taibe["active"] = False
@@ -571,6 +624,8 @@ class ProductsTest(unittest.TestCase):
             f.write("2026-11-07T00:00:00+00:00")
         wj(os.path.join(self.d, "state.json"), {"heartbeat": "old"})
         self.assertEqual(nerve.read_heartbeat(), "2026-11-07T00:00:00+00:00")
+        os.remove(os.path.join(self.d, "heartbeat"))
+        self.assertEqual(nerve.read_heartbeat(), "old", "демон старее — пульс из state.json")
 
 
 class RoleNumberingTest(unittest.TestCase):
