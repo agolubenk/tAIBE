@@ -230,6 +230,8 @@ class PlanTest(unittest.TestCase):
         self.git = lambda *a: subprocess.run(['git', '-C', self.root, *a], check=True, capture_output=True,  # noqa: E731
                                              text=True).stdout.strip()
         self.git('init', '-q')
+        self.git('config', 'user.email', 't@t')  # CI has no identity; commit-tree needs one
+        self.git('config', 'user.name', 't')
         self.write('.claude/skills/grill/SKILL.md', OLD)
         self.write('.claude/rules/50-x.md', 'rule v1\n')
         self.write('.claude/hooks/gate.py', 'print(1)\n')
