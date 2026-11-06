@@ -208,7 +208,8 @@ def resolve_product(cfg, a):
     except Exception as e:  # noqa: BLE001 — сломанный instances/ (в том числе файл неактивного продукта)
         if want:
             raise SystemExit(f"--product {want}: instances/ не читается: {e}") from None
-        print(f"instances/ не читается ({type(e).__name__}) — продукт по умолчанию из config.json", file=sys.stderr)
+        print(f"instances/ не читается ({type(e).__name__}: {str(e)[:120]}) — продукт по умолчанию из config.json; "
+              "проверка: python3 -I eval/nerve/products.py render --check", file=sys.stderr)
         return cfg, STATE_DIR, ""
     if default is None:
         if want:
@@ -351,7 +352,9 @@ def fmt(rec, tz):
 
 
 def cmd_tap(cfg, a):
-    cfg, pdir, _slug = resolve_product(cfg, a)
+    cfg, pdir, slug = resolve_product(cfg, a)
+    if cfg.get("active") is False:
+        print(f"продукт {slug} не включён (active: false) — событий нет до active: true в checkout демона", file=sys.stderr)
     try:
         roles = resolve_roles(cfg, a.role, strict=False)
     except ValueError:
@@ -457,7 +460,11 @@ def cmd_status(cfg, a):
     waves = b.get("waves", [])
     print(f"волн лимита окна: {len(waves)}; последние: " +
           ", ".join(f"{w['hit'][5:16]} ${w['usd']}" for w in waves[-6:]))
-    print(f"ошибки источников{' ' + slug if slug else ''}: {json.dumps(pst.get('errors', {}), ensure_ascii=False)}")
+    if slug:
+        print(f"продукт: {slug}")
+    print(f"ошибки источников (общие и продукта по умолчанию): {json.dumps(st.get('errors', {}), ensure_ascii=False)}")
+    if pst is not st:
+        print(f"ошибки источников {slug}: {json.dumps(pst.get('errors', {}), ensure_ascii=False)}")
     recs, _ = read_from(os.path.join(pdir, "journal.jsonl"), 0)
     live = [r for r in recs if r.get("to")]
     print(f"журнал: записей {len(recs)}, адресных {len(live)}")
