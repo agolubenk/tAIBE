@@ -7,7 +7,7 @@
 
 Твоя задача — опровергнуть оценку, а не подтвердить её.
 
-Что проверяешь: `/Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/EVALUATION.md`.
+Что проверяешь: `/Users/agolubenko/Desktop/Development/tAIBE/eval/EVALUATION.md`.
 
 Опорные материалы (читать долями):
 

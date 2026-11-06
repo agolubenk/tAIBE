@@ -73,7 +73,7 @@ python3 -I -m unittest discover -s $N -p 'test_*.py'
 ## Установка и откат
 
 ```bash
-cp supertick-eval/nerve/space.hrhelper.nerve.plist ~/Library/LaunchAgents/
+cp eval/nerve/space.hrhelper.nerve.plist ~/Library/LaunchAgents/   # из корня tAIBE
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/space.hrhelper.nerve.plist
 launchctl kickstart -k gui/$(id -u)/space.hrhelper.nerve      # перезапуск после правки кода
 launchctl bootout gui/$(id -u)/space.hrhelper.nerve           # ОТКАТ: сессии возвращаются к правилу 3 TEAM-0

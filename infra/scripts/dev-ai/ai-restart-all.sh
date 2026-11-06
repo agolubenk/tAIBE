@@ -29,7 +29,7 @@ cd "$ROOT"
 PY="$(command -v python3)"
 case "$PY" in /Library/Developer/CommandLineTools/*) PY="/usr/local/bin/python3";; esac
 
-COUNCIL_DB="$ROOT/.claude/council/council.db"
+COUNCIL_DB="${TAIBE_HOST_ROOT:-$ROOT}/.claude/council/council.db"  # база — у хоста (TAIBE_HOST_ROOT), код — в слое
 
 status() {
   echo "── MCP-хаб ─────────────────────────────────────────"
