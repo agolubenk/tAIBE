@@ -67,10 +67,18 @@ done
 # Продукт и его поля — из instances/ через products.py; без них (копия слоя в хосте) — как до OPS-25.
 PRODUCTS_PY="$TOOLS/../nerve/products.py"
 DEFAULT_PRODUCT=""
-if [ -f "$PRODUCTS_PY" ] && DEFAULT_PRODUCT="$(python3 -I "$PRODUCTS_PY" get default slug 2>/dev/null)"; then
-  [ -n "$PRODUCT" ] || PRODUCT="${TAIBE_PRODUCT:-$DEFAULT_PRODUCT}"
+if [ -f "$PRODUCTS_PY" ] && [ -d "$TOOLS/../../instances" ]; then
+  # instances/ есть, но не читается — стоп с причиной: иначе наследник tAIBE молча получил бы геном HR.
+  DEFAULT_PRODUCT="$(python3 -I "$PRODUCTS_PY" get default slug)" || die "instances/ не читается (см. ошибку выше)"
+  INHERITED="${TAIBE_PRODUCT:-$DEFAULT_PRODUCT}"
+  [ -n "$PRODUCT" ] || PRODUCT="$INHERITED"
   python3 -I "$PRODUCTS_PY" get "$PRODUCT" slug >/dev/null 2>&1 || die "нет продукта $PRODUCT в instances/"
-  if [ "$CWD_SET" = 0 ] && { [ "$LAUNCH" = 1 ] || [ -n "$INFO" ]; } && [ "$PRODUCT" != "$DEFAULT_PRODUCT" ]; then
+  # Наследник — того же продукта, что и сессия: иначе сторож снял бы живую роль другого продукта.
+  if [ -n "$HANDOFF" ] && [ "$PRODUCT" != "$INHERITED" ]; then
+    die "--handoff наследует продукт сессии ($INHERITED); роль продукта $PRODUCT — через --launch --product $PRODUCT"
+  fi
+  # --launch и --status без --cwd — в папке продукта (из tAIBE открылись бы роли HR в папке tAIBE).
+  if [ "$CWD_SET" = 0 ] && { [ "$LAUNCH" = 1 ] || [ -n "$INFO" ]; }; then
     CWD="$(python3 -I "$PRODUCTS_PY" get "$PRODUCT" repo_root)" || die "у продукта $PRODUCT нет repo_root"
   fi
 else
@@ -239,7 +247,7 @@ launch_role() {
   local r="$1" live rc got
   role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
   if [ "$FORCE" = 0 ]; then
-    rc=0; live="$(python3 -I "$TOOLS/team_status.py" live --role "$r" --cwd "$CWD" 2>&1)" || rc=$?
+    rc=0; live="$(python3 -I "$TOOLS/team_status.py" live --role "$r" --cwd "$CWD" ${PRODUCT:+--product "$PRODUCT"} 2>&1)" || rc=$?
     if [ "$rc" = 0 ]; then echo "жива: $r · $live"; note "$r — жива, не открывал: $live"; return; fi
     # Открывать только по явному «роли нет» (rc 3). Любой другой rc (1 — трейсбек Python, 2 — ошибка) — проверка
     # сломалась: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
@@ -256,7 +264,7 @@ case "${TMPDIR:-}$CWD" in *\"*|*\\*) die "кавычка или обратный
 
 if [ -n "$INFO" ]; then
   [ -z "$HANDOFF" ] && [ "$LAUNCH" = 0 ] || die "--status/--stop не сочетаются с --handoff/--launch"
-  exec python3 -I "$TOOLS/team_status.py" "$INFO" --cwd "$CWD"
+  exec python3 -I "$TOOLS/team_status.py" "$INFO" --cwd "$CWD" ${PRODUCT:+--product "$PRODUCT"}
 elif [ -n "$HANDOFF" ]; then
   [ "$LAUNCH" = 0 ] && [ -z "$ROLES" ] || die "--handoff не сочетается с --launch/--roles"
   [ -f "$HANDOFF" ] || die "нет файла handoff: $HANDOFF"

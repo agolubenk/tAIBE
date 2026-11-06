@@ -119,7 +119,8 @@ def successor_gen(rows, r):
         return 0
     pre = r["line"] + "."
     return max((s["line"].count(".") for s in rows
-                if s is not r and s["role"] == r["role"] and (s["line"] or "").startswith(pre)), default=0)
+                if s is not r and s["role"] == r["role"] and s.get("product", "") == r.get("product", "")
+                and (s["line"] or "").startswith(pre)), default=0)
 
 
 def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):

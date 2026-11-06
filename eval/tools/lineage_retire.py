@@ -119,8 +119,16 @@ def take_down(sx, p, line, protect, log):
     return True
 
 
-# Флаги — в любом месте (`tap --product taibe boards`, `tap boards --product taibe`, OPS-25).
-TAP = "nerve\\.py\\s+tap\\s+(?:--\\S+\\s+\\S+\\s+)*{}(\\s|$)"
+# Флаги — в любом месте (`tap --product taibe boards`, `tap --product=taibe --once boards`, `tap boards --product
+# taibe`, OPS-25).
+TAP = "nerve\\.py\\s+tap\\s+(?:--once\\s+|--product(?:=|\\s+)\\S+\\s+)*{}(\\s|$)"
+# Продукт сессии по её геному: genome/<роль>.json — продукт по умолчанию (''), genome/<slug>/<роль>.json — slug.
+GENOME_PRODUCT = re.compile(r"/genome/(?:([a-z][a-z0-9-]*[a-z0-9])/)?[a-z]+\.json")
+
+
+def genome_product(proc):
+    m = GENOME_PRODUCT.search(proc.command) if proc is not None else None
+    return (m.group(1) or "") if m else None
 TAP_PRODUCT = re.compile(r"--product[ =](\S+)")
 
 
@@ -186,6 +194,9 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     procs = sx.procs()
     s = procs.get(a.get("pid") if isinstance(a.get("pid"), int) else -1)
     why = successor_problem(sx, procs, p, s, a, child)
+    gp, gs = genome_product(p), genome_product(s)
+    if not why and gp is not None and gs is not None and gp != gs:
+        why = f"наследник с геномом другого продукта ({gs or 'по умолчанию'} против {gp or 'по умолчанию'})"
     if why:
         log("проверка не прошла: " + why + " — предшественника не трогаю")
         return 3

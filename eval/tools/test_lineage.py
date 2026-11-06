@@ -194,6 +194,15 @@ class WatchTest(Base):
         self.assertEqual(self.run_watch(sx, timeout=200), 3, self.lines)
         self.assertIn(300, sx.p)
 
+    def test_successor_with_other_product_genome_keeps_predecessor(self):
+        """OPS-25: наследник с геномом другого продукта — проверка не проходит, предшественник жив."""
+        sx = self.fake()
+        sx.p[400] = P(400, 211, 400, "ttys006", "claude --settings /x/genome/taibe/backend.json")
+        self.ack()
+        self.assertEqual(self.run_watch(sx, timeout=200), 3, self.lines)
+        self.assertIn(300, sx.p)
+        self.assertIn("другого продукта", " ".join(self.lines))
+
     def test_pid_reused(self):
         sx = self.fake()
         self.ack(start="Tue Nov  3 10:00:00 2026")
@@ -425,6 +434,13 @@ class ReapTest(Base):
         self.assertIn("сменён наследником (поколение 3)", v[701])
         self.assertIn("текущая роль", v[702])
         self.assertEqual([c["pid"] for c in L.read_json(L.ldir() / "reap-list.json")["candidates"]], [701])
+
+    def test_successor_of_other_product_does_not_supersede(self):
+        """OPS-25: линия роли tAIBE под линией роли HR (запуск из сессии HR) — HR не «сменён наследником»."""
+        self.sess(701, line="r.a1", idle_h=2)
+        self.sess(702, line="r.a1.b2", role="taibe/backend", idle_h=0.1)
+        v = self.verdicts(self.reap()[1])
+        self.assertNotIn("сменён наследником", v[701])
 
     def test_superseded_short_idle_kept(self):
         self.sess(701, line="r.a1", idle_h=0.5)

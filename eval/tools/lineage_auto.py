@@ -96,10 +96,11 @@ def verified_ack(sx, procs, r):
 def role_holders(rows):
     """pid держателей ролей — как team_status.py live, отдельно по каждому продукту (основной checkout папки)."""
     import team_status as T  # noqa: E402 — team_status сам импортирует lineage_reap
-    by_root = {}
+    by_root = {}   # (основной checkout, продукт генома): роль HR в worktree tAIBE не держит роль tAIBE (OPS-25)
     for r in rows:
         if r["role"]:
-            by_root.setdefault(R.git_root(r["cwd"]) or os.path.realpath(r["cwd"] or "/"), []).append(r)
+            root = R.git_root(r["cwd"]) or os.path.realpath(r["cwd"] or "/")
+            by_root.setdefault((root, r.get("product", "")), []).append(r)
     return {r["pid"] for group in by_root.values() for r in T.live_roles(group).values()}
 
 

@@ -48,12 +48,27 @@ def product_root(cwd):
     return R.git_root(cwd) or os.path.realpath(cwd)
 
 
-def role_rows(sx, root):
+def genome_key(product):
+    """Ключ продукта в пути генома: '' — продукт по умолчанию, slug — другой, None — без фильтра (копия слоя)."""
+    if not product:
+        return None
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nerve"))
+    try:
+        import products as P
+        default = P.load()[0]["default_product"]
+    except Exception:  # noqa: BLE001 — без instances/ продукт один
+        return None
+    return "" if product == default else product
+
+
+def role_rows(sx, root, product=None):
     """Сессии ролей внутри продукта (scan из lineage_reap: живой pid того же старта, argv0 claude). Корень — realpath:
     under() сравнивает с realpath папки сессии (/var и /private/var на macOS)."""
     root = os.path.realpath(root)
     _, rows = R.scan(sx, idle_hours=24.0, include_waiting=True, roots=[root])
-    return [r for r in rows if r["role"] in NUM and R.under(r["cwd"], [root])]
+    key = genome_key(product)
+    return [r for r in rows if r["role"] in NUM and R.under(r["cwd"], [root])
+            and (key is None or r.get("product", "") == key)]
 
 
 def live_roles(rows):
@@ -185,7 +200,7 @@ def nerve_fix(sx, st, log):
 
 # ── команды ──────────────────────────────────────────────────────────────────────────────────────────────────────
 def cmd_live(sx, a):
-    r = live_roles(role_rows(sx, product_root(a.cwd))).get(a.role)
+    r = live_roles(role_rows(sx, product_root(a.cwd), a.product)).get(a.role)
     if r is None:
         return RC_MISSING
     print(describe(r))
@@ -218,8 +233,8 @@ def product_roots():
     return [(s, items[s]["repo_root"]) for s in [default] + sorted(k for k in items if k != default)]
 
 
-def print_roles(sx, root, title):
-    rows = role_rows(sx, root)
+def print_roles(sx, root, title, product=None):
+    rows = role_rows(sx, root, product)
     live = live_roles(rows)
     print(title)
     for role in ORDER:
@@ -233,15 +248,15 @@ def cmd_status(sx, a):
     roots = product_roots() if a.all else []
     if roots:
         for slug, root in roots:
-            print_roles(sx, product_root(root), f"продукт {slug}: {root}")
+            print_roles(sx, product_root(root), f"продукт {slug}: {root}", slug)
     else:
-        print_roles(sx, product_root(a.cwd), f"продукт: {product_root(a.cwd)}")
+        print_roles(sx, product_root(a.cwd), f"продукт: {product_root(a.cwd)}", a.product)
     print(nerve_line(nerve_state(sx)))
     return 0
 
 
 def cmd_stop(sx, a):
-    live = live_roles(role_rows(sx, product_root(a.cwd)))
+    live = live_roles(role_rows(sx, product_root(a.cwd), a.product))
     if not live:
         print("живых ролей нет")
         return 0
@@ -269,6 +284,7 @@ def main(argv=None, sx=None):
     for name in ("live", "status", "stop"):
         p = sub.add_parser(name)
         p.add_argument("--cwd", default=os.getcwd())
+        p.add_argument("--product", help="только роли с геномом этого продукта (OPS-25)")
         if name == "live":
             p.add_argument("--role", required=True, choices=ORDER)
         if name == "status":

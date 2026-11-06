@@ -97,11 +97,10 @@ def products():
     """[(slug, out_dir, repo_root, reflex)] from instances/: the default product first, in genome/; others in
     genome/<slug>/. Without instances/ (a layer copy in a host) — one product from config.json, as before."""
     sys.path.insert(0, os.path.join(HERE, '..', '..', 'nerve'))
-    try:
-        import products as P
-        shared, items = P.load()
-    except Exception:  # noqa: BLE001 — no instances/ or no loader: the old single-product build
-        return [(None, HERE, ROOT, REFLEX)]
+    if not os.path.isdir(os.path.join(HERE, '..', '..', '..', 'instances')):
+        return [(None, HERE, ROOT, REFLEX)]   # a layer copy without instances/: the old single-product build
+    import products as P                      # instances/ is there but broken — fail loudly, do not drop the env
+    shared, items = P.load()
     default = shared['default_product']
     out = [(default, HERE, ROOT, REFLEX)]
     for slug in sorted(items):

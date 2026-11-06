@@ -130,8 +130,8 @@ def product_run(env_extra, *flags):
 
 for name, env_extra, flags, genome, product in [
     ("successor of a tAIBE role gets the tAIBE genome", {"TAIBE_PRODUCT": "taibe"}, [], "/genome/taibe/boards.json", "taibe"),
-    ("--product beats TAIBE_PRODUCT", {"TAIBE_PRODUCT": "taibe"}, ["--product", "hr-helper"], "/genome/boards.json",
-     "hr-helper"),
+    ("--product equal to the inherited product", {"TAIBE_PRODUCT": "taibe"}, ["--product", "taibe"],
+     "/genome/taibe/boards.json", "taibe"),
     ("no product — the default product", {"TAIBE_PRODUCT": ""}, [], "/genome/boards.json", "hr-helper"),
 ]:
     rc, out = product_run(env_extra, *flags)
@@ -140,6 +140,12 @@ for name, env_extra, flags, genome, product in [
         failed += 1
         print("FAIL:", name)
         print(out)
+# Наследник другого продукта через --handoff снял бы живую роль чужого продукта: отказ с подсказкой --launch.
+rc, out = product_run({"TAIBE_PRODUCT": ""}, "--product", "taibe")
+if rc == 0 or "--launch --product taibe" not in out:
+    failed += 1
+    print("FAIL: --handoff into another product is refused")
+    print(out)
 rc, out = product_run({}, "--product", "nope")
 if rc == 0 or "нет продукта nope" not in out:
     failed += 1
