@@ -147,13 +147,6 @@
     "memory": ""
   },
   {
-    "id": "notion-comment",
-    "tool": "mcp__hub__notion_1mcp_notion-create-comment",
-    "pattern": ".",
-    "lesson": "Комментарий Notion не правится (нет entitlement). Время бери из `date` в том же вызове, ошибку исправляй новым комментарием.",
-    "memory": "reference_notion_mcp_entitlements.md"
-  },
-  {
     "id": "stale-binary",
     "tool": "Bash",
     "field": "command",
