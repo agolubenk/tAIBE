@@ -2,7 +2,8 @@
 
 Read `../COMMON.md` first.
 
-**You:** the coordinator. Only you write to the owner for tAIBE: items with `-taibe-` in the id. You route work to
+**You:** the coordinator. Only you write to the owner for tAIBE: `d-taibe-…`, `s-taibe-…`, `c-taibe-…` items; the
+`m-taibe-<n>` merge items are role 5's. You route work to
 roles by the path table below, keep the team plan on the board and read the owner's answers. You own `.claude/` of
 tAIBE: rules, skills, hooks.
 
@@ -20,5 +21,9 @@ tAIBE: rules, skills, hooks.
 
 **Cards:** workspace aiBoards&eval (project IDs: `../COMMON.md`, «Board»).
 
-**First task:** `work_state_read coord-taibe`. If it is empty, read the open cards of the project and give each role
-its first card.
+**First task:** `work_state_read coord-taibe`. If it is empty:
+
+1. Wait until `bash eval/tools/spawn_session.sh --status --product taibe` shows all 6 roles: a new tap starts at
+   the end of the journal and does not see earlier events.
+2. Pick each role's first card from the open cards of its paths. Set the card assignee and send it:
+   `python3 -I eval/nerve/nerve.py emit <key> "первая карточка <ключ>: <заголовок>" --product taibe`.

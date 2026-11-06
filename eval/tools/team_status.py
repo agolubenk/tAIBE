@@ -256,7 +256,9 @@ def cmd_status(sx, a):
 
 
 def cmd_stop(sx, a):
-    live = live_roles(role_rows(sx, product_root(a.cwd), a.product))
+    root = product_root(a.cwd)
+    print(f"# продукт: {a.product or 'по умолчанию'} · {root}")
+    live = live_roles(role_rows(sx, root, a.product))
     if not live:
         print("живых ролей нет")
         return 0
@@ -265,7 +267,11 @@ def cmd_stop(sx, a):
         if role in live:
             r = live[role]
             print(f"kill {r['pid']}   # {NUM[role]} {role} {r['name'] or '—'}")
-    print(f"# нерв (общий на Mac до OPS-25): launchctl bootout gui/{os.getuid()}/{LABEL}")
+    # Нерв один на Mac для всех продуктов (OPS-25): его bootout остановил бы и другую команду.
+    if genome_key(a.product):
+        print(f"# нерв общий для всех продуктов — не снимать; выключить продукт: active: false в instances/{a.product}.json")
+    else:
+        print(f"# нерв (общий для всех продуктов — снимет и их): launchctl bootout gui/{os.getuid()}/{LABEL}")
     return 0
 
 

@@ -10,8 +10,13 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
 2. This file.
 3. Laws: `.claude/rules/90-team-t3.md` and only §10 of TEAM-0: Read
    `~/.claude/projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2/handoff/2026-10-25/team/TEAM-0-COMMON.md`
-   with `offset=200`. §1–9 describe the HR team; skip them.
-4. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
+   with `offset=200`. §1–9 describe the HR team; skip them. In §10, the HR files `state/<key>.md` and the
+   `TEAM-<n>` card are `state/<key>-taibe.md` and this folder for you.
+4. Board rules: `eval/prompts/launch-3010/T-BOARDS.md`, only the sections «Цикл работы с карточкой», «Что сервер
+   требует при смене статуса» and «PR и линзы». A lens verdict: the first non-empty line has the lens name, the word
+   `approve` or `changes`, and the head SHA after it (`Бэкенд: approve на 46b9f87e1`) — the Nerve quorum
+   (`eval/nerve/quorum.py`) reads only this line.
+5. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
 
 ## Board
 
@@ -24,9 +29,11 @@ TB «t-boards» `mf6jpr5wftbgr3z93lvw807v`, SE «supertick-eval» `tl3j7yc2mc7ly
 
 1. **Nerve.** One Monitor (persistent): `python3 -I eval/nerve/nerve.py tap <key> --product taibe`. Always write
    the flag: a session after `--resume` can lose the genome and its `TAIBE_PRODUCT`.
-2. **Board.** `forest_set_work_state` with `session: "taibe <key>"`, `harness: "claude-code"` and `step`. Take a
-   lease on a card only when you start work on it.
-3. **Done.** `forest_set_work_state` with `step: "started; next — <first task>"`.
+2. **Board.** `forest_set_work_state` with `workspaceId: "lth89qy6f8j1greiy4c5cn23"`, `session: "taibe <key>"`,
+   `harness: "claude-code"` and `step`. Take a lease on a card only when you start work on it.
+3. **First card.** Roles 2–6: if your work state is empty, wait. The coordinator sends your first card through the
+   Nerve, and your tap prints it. Do not message the coordinator for it.
+4. **Done.** `forest_set_work_state` with `step: "started; next — <first task>"`.
 
 ## On every step
 

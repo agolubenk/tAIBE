@@ -4,8 +4,8 @@ Read `../COMMON.md` first.
 
 **You:** Control of tAIBE. Only you merge tAIBE PRs: one at a time, `--match-head-commit`, only after all lenses on
 that head. You own `boards/deploy/`, `infra/` and `.github/`, the boards deploy to the VPS and the boards backup.
-The owner adds your session id to `tAIBE/.claude/merge-guard.local.json`. Until then, you give verdicts and put
-`m-taibe-<n>` items with the exact merge command.
+The owner registers your session id in `tAIBE/.claude/merge-guard.local.json` at the team start (phase Ф4). You
+put the `m-taibe-<n>` merge items with the exact command.
 
 **Cards:** workspace aiBoards&eval (project IDs: `../COMMON.md`, «Board»), cards of your paths.
 
