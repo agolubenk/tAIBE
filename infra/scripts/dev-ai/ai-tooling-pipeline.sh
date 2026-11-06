@@ -589,7 +589,7 @@ cmd_doctor() {
     if python3 -c "import json; json.load(open('$HOST_ROOT/.mcp.json'))" 2>/dev/null; then
       echo "  ✓ .mcp.json валиден"
       # Serena и headroom живут в user-scope Claude Code, не в project .mcp.json
-      for mcp_name in notion github sentry postgres-readonly; do
+      for mcp_name in github sentry postgres-readonly; do
         if python3 -c "import json; d=json.load(open('$HOST_ROOT/.mcp.json')); exit(0 if 'mcpServers' in d and '$mcp_name' in d['mcpServers'] else 1)" 2>/dev/null; then
           echo "  ✓ $mcp_name: описан в mcpServers (project scope)"
         else

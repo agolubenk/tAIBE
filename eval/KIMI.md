@@ -133,7 +133,7 @@ P1+. У автора заметная часть выигрыша — от св�
 ## Как запустить Kimi
 
 ```bash
-cd /Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval
+cd ~/Desktop/Development/tAIBE/eval
 ~/.kimi-code/bin/kimi -m kimi-code/kimi-for-coding \
   --add-dir ~/.claude/projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2
 ```
