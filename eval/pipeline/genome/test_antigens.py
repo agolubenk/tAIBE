@@ -21,7 +21,6 @@ import build  # noqa: E402
 B = 'Bash'
 PUT = 'mcp__owner-queue__oq_put'
 GET = 'mcp__owner-queue__oq_get'
-NOTION = 'mcp__hub__notion_1mcp_notion-create-comment'
 EXT = '~/.vscode/extensions/anthropic.claude-code-2.1.311-darwin-arm64/claude -p x'
 
 
@@ -123,10 +122,6 @@ CASES = {
         'fire': [bash('git commit -q --amend -m x'), bash('git -C /w push -q --force-with-lease origin fix/a'),
                  bash('git push -f origin fix/a'), bash("bash -c 'git commit --amend --no-edit'")],
         'quiet': [bash('git commit -m x && git push origin fix/a'), bash('echo "git push --force"')],
-    },
-    'notion-comment': {
-        'fire': [(NOTION, {'page_id': 'x', 'rich_text': []})],
-        'quiet': [('mcp__hub__notion_1mcp_notion-fetch', {'id': 'x'})],
     },
     'stale-binary': {
         'fire': [bash(EXT)],
