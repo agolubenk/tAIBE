@@ -137,6 +137,14 @@ async function setup() {
         { number: 2, text: "other", status: "rejected", approvedBy: mine },
       ])
     ).id(1),
+    // The owner approved these bytes before in this very workspace.
+    p13: (
+      await seedEntity(here, "skills/p13", [
+        { number: 1, text: "thirteen", status: "superseded", approvedBy: mine },
+        { number: 2, text: "thirteen-b", status: "latest", approvedBy: mine },
+        { number: 3, text: "thirteen", status: "draft", origin: "sync" },
+      ])
+    ).id(3),
   };
 
   await seedEntity(source.id, "skills/p1", [
@@ -207,6 +215,7 @@ async function setup() {
     p10: "ten",
     p11: "eleven",
     p12: "twelve",
+    p13: "thirteen",
   };
   const item = (key: keyof typeof drafts) => ({
     versionId: drafts[key],
@@ -309,11 +318,11 @@ describe("API integration: SSR approve-matching", () => {
 
   it("approves every listed draft in one transaction and records the twin", async () => {
     const { forest, drafts, here1, item, approve, matches } = await setup();
-    const response = await approve([item("p1"), item("p2")]);
+    const response = await approve([item("p1"), item("p2"), item("p13")]);
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      approved: 2,
-      versionIds: [drafts.p1, drafts.p2],
+      approved: 3,
+      versionIds: [drafts.p1, drafts.p2, drafts.p13],
     });
 
     expect(await statuses([here1.id(1), drafts.p1, drafts.p2])).toEqual({
@@ -324,17 +333,23 @@ describe("API integration: SSR approve-matching", () => {
     const approved = await db
       .select()
       .from(ssrVersionTable)
-      .where(inArray(ssrVersionTable.id, [drafts.p1, drafts.p2]))
+      .where(inArray(ssrVersionTable.id, [drafts.p1, drafts.p2, drafts.p13]))
       .orderBy(ssrVersionTable.blobSha);
     const byId = new Map(approved.map((row) => [row.id, row]));
     expect(byId.get(drafts.p1)?.approvedBy).toBe(forest.ownerId);
     expect(byId.get(drafts.p1)?.approvedAt).toBeInstanceOf(Date);
-    expect(byId.get(drafts.p1)?.message).toBe(
-      "Approved as byte-identical to aiBoards&eval v2",
+    // A twin elsewhere is named neither by workspace nor by number (R-002):
+    // every reader of this workspace, a scoped key included, sees the message.
+    const elsewhere =
+      "Approved as byte-identical to a version you approved earlier";
+    expect(byId.get(drafts.p1)?.message).toBe(elsewhere);
+    expect(byId.get(drafts.p2)?.message).toBe(elsewhere);
+    expect(byId.get(drafts.p13)?.message).toBe(
+      "Approved as byte-identical to v1",
     );
-    expect(byId.get(drafts.p2)?.message).toBe(
-      "Approved as byte-identical to aiBoards&eval v1",
-    );
+    for (const row of approved) {
+      expect(row.message).not.toContain("aiBoards&eval");
+    }
     const [entity] = await db
       .select()
       .from(ssrEntityTable)
@@ -343,7 +358,7 @@ describe("API integration: SSR approve-matching", () => {
     expect(entity?.status).toBe("active");
 
     // The approved drafts are no longer open: the list shrinks to the rest.
-    expect((await matches()).size).toBe(Object.keys(drafts).length - 2);
+    expect((await matches()).size).toBe(Object.keys(drafts).length - 3);
   });
 
   it("refuses the whole batch with 409 when any item does not match", async () => {
@@ -521,7 +536,7 @@ describe("API integration: SSR approve-matching", () => {
     expect(version?.status).toBe("latest");
     expect(version?.files).toHaveLength(2);
     expect(version?.message).toBe(
-      "Approved as byte-identical to aiBoards&eval v1",
+      "Approved as byte-identical to a version you approved earlier",
     );
   });
 

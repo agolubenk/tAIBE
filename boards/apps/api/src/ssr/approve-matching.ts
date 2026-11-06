@@ -22,8 +22,13 @@ export class DraftBatchConflict extends Error {
 
 export type BatchItem = { versionId: string; blobSha: string };
 
-export function provenance(twin: DraftMatch) {
-  return `Approved as byte-identical to ${twin.workspaceName} v${twin.number}`;
+// Anyone who reads this workspace, a key scoped to it included (R-002),
+// reads the message: a twin from another workspace is named neither by
+// workspace nor by number.
+export function provenance(twin: DraftMatch, workspaceId: string) {
+  return twin.workspaceId === workspaceId
+    ? `Approved as byte-identical to v${twin.number}`
+    : "Approved as byte-identical to a version you approved earlier";
 }
 
 function sentShas(items: BatchItem[]) {
@@ -92,7 +97,7 @@ export async function approveMatchingDrafts(
         message: caseById(ids, (id) => {
           const twin = twins.get(id);
           if (!twin) throw new Error("twin vanished after the check");
-          return provenance(twin);
+          return provenance(twin, workspaceId);
         }),
       })
       .where(
