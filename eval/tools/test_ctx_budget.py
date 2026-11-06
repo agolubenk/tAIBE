@@ -6,9 +6,13 @@ import json
 import os
 import subprocess
 import sys
+import argparse
+import itertools
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -19,6 +23,7 @@ import ctx_budget_params as cp  # noqa: E402
 HOOK = REPO / ".claude/hooks/context-threshold.py"
 WEFF = int(250_000 * 213 / 250)  # запасная точка сжатия для окна 250K
 SECRET = "Иванов Иван Петрович +7 999 123-45-67"
+UUIDS = itertools.count(1)
 KNOBS = ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "SUCCESSOR_WINDOW_TOKENS", "SUCCESSOR_AUTO", "T3_ROLE_KEY",
          "TAIBE_LINEAGE", "TAIBE_PIPELINE", "CLAUDE_CODE_SESSION_ID", "CTX_BUDGET_DIR", "CTX_BUDGET_PROJECTS",
          "TAIBE_LINEAGE_DIR", "ANTHROPIC_MODEL", "CLAUDE_PROJECT_DIR")
@@ -37,7 +42,7 @@ def answer(tokens, tools=(), sidechain=False, cwd="/nonexistent", ts="2026-11-06
     if model:
         msg["model"] = model
     return dumps({"parentUuid": "p", "isSidechain": sidechain, "message": msg, "type": "assistant", "cwd": cwd,
-                  "timestamp": ts})
+                  "timestamp": ts, "uuid": "a-%d" % next(UUIDS)})
 
 
 def user(text=SECRET):
@@ -202,6 +207,31 @@ class HookTest(Sandbox):
         self.assertIn("страховка", text)
         self.assertIn("По порядку", text)
 
+    def test_spike_over_window_does_not_pin_1m(self):
+        self.put(200_000)
+        self.hook()
+        self.assertEqual(self.state()["window"], 250_000)
+        self.put(260_000)                                     # один всплеск: от 1M без закрепления — тишина
+        self.assertEqual(self.hook(), "")
+        self.assertNotIn("one_m", self.state())
+        self.put(215_000)                                     # снова в окне 250K: W_eff 213K, s 1,01 — страховка
+        text = self.hook()
+        st = self.state()
+        self.assertEqual((st["window"], "one_m" in st), (250_000, False))
+        self.assertIn("страховка", text)
+
+    def test_private_permissions(self):
+        self.budget.mkdir(mode=0o755)
+        os.chmod(self.budget, 0o755)                          # каталог, созданный до 0700
+        self.grow(0.5)
+        self.hook()
+        self.cli("next", "x", "--size", "S")
+        self.assertEqual(self.cli("learn", "--projects", str(self.projects))[0], 0)
+        mode = lambda p: stat.S_IMODE(p.stat().st_mode)  # noqa: E731
+        self.assertEqual((mode(self.budget), mode(self.budget / "sessions")), (0o700, 0o700))
+        for f in ("journal.jsonl", "params.json", "sessions/%s.json" % self.sid, "sessions/%s.lock" % self.sid):
+            self.assertEqual(mode(self.budget / f), 0o600, f)
+
     def test_task_in_progress_finishes_then_hands_off(self):
         self.grow(0.70)
         self.assertEqual(self.hook(), "")
@@ -244,14 +274,13 @@ class OneMTest(Sandbox):
         st = self.state()
         self.assertEqual((st["window"], round(st["s"], 2), st["weff"]), (1_000_000, 0.57, 867_796))
 
-    def test_1m_by_u_alone_then_rules_apply(self):
+    def test_1m_by_u_needs_two_answers_and_ends_with_epoch(self):
         self.put(494_000)
-        self.assertEqual(self.hook(), "")                     # без пометки: U > 200K × 1,02 → окно 1M
-        self.assertEqual(self.state()["window"], 1_000_000)
-        self.put(30_000)
-        self.assertEqual(self.hook(), "")                     # сжатие: окно 1M держится
-        self.put(160_000)
-        self.assertEqual((self.hook(), self.state()["window"]), ("", 1_000_000))  # 160K < 200K — всё ещё 1M
+        self.assertEqual(self.hook(), "")                     # без пометки: U > 200K × 1,02 → от 1M, без закрепления
+        self.assertEqual((self.state()["window"], "one_m" in self.state()), (1_000_000, False))
+        self.put(495_000)
+        self.assertEqual(self.hook(), "")
+        self.assertEqual(self.state()["one_m"], "u")          # второй ответ подряд — 1M закреплено
         self.put(760_000)                                     # s 0,876, задача в работе: остаток 2 % → 0,936
         self.assertIn("можно закончить текущую", self.hook())
         self.put(762_000)                                     # граница: следующая 10 % + 4 % → 1,018
@@ -259,12 +288,26 @@ class OneMTest(Sandbox):
                       self.hook("Bash", {"command": "git commit -m wip"}))
         self.put(870_000)                                     # s 1,003 ≥ 0,985 − 0,04 — страховка
         self.assertIn("страховка", self.hook())
+        self.put(30_000)
+        self.hook()                                           # сжатие: 1M по U снято
+        self.put(100_000)
+        self.hook()
+        self.assertEqual((self.state()["window"], "one_m" in self.state()), (200_000, False))
+
+    def test_1m_mark_survives_compaction(self):
+        self.put(494_000, model="claude-opus-5-5[1m]")
+        self.hook()
+        self.put(30_000)
+        self.hook()
+        self.put(160_000)                                     # 160K < 200K, пометки в ответе нет — 1M держится
+        self.assertEqual(self.hook(), "")
+        self.assertEqual((self.state()["window"], self.state()["one_m"]), (1_000_000, "mark"))
 
     def test_status_shows_1m(self):
         self.put(494_000)
         rc, out = self.cli("status")
         self.assertEqual(rc, 0)
-        self.assertIn("окно 1000K — U больше окна", out)
+        self.assertIn("окно 1000K — U больше окна — ждём второй ответ", out)
         self.assertIn("W_eff 867K — доля 250K по истории", out)
         self.assertIn("решение: контекст 56,9 %", out)
 
@@ -370,6 +413,13 @@ class LearnTest(Sandbox):
                          str(Path(self.tmp.name) / "o.json"))
         self.assertEqual(rc, 0)
         self.assertEqual(self.cli("learn", "--days", "x")[0], 2)
+
+    def test_learn_runs_niced(self):
+        args = argparse.Namespace(days=1, projects=str(self.projects), out=None, dry_run=True)
+        with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(cp.os, "nice") as nice, \
+                mock.patch("sys.stdout"):
+            self.assertEqual(cp.run(args), 0)
+        nice.assert_called_once_with(10)
 
     def test_role_by_lineage_time(self):
         starts = [(1000.0, "plan"), (1026.0, "release")]

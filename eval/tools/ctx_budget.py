@@ -4,8 +4,8 @@
 100 % — точка автосжатия W_eff, а не номинальное окно: по истории сжатий этого окна, иначе доля W_eff/окно
 изученного окна (250K: 216,9K), иначе 213/250. s = U / W_eff, U — usage последнего ответа основной цепочки.
 Окно: SUCCESSOR_WINDOW_TOKENS → autoCompactWindow, пока U в него влезает (U > окна — окно определено неверно, а не
-сигнал передачи) → пометка 1M у модели (message.model, model в настройках, ANTHROPIC_MODEL) → U > окна × 1,02 →
-1M → 200K. Раз увиденное окно 1M держится до конца сессии.
+сигнал передачи) → пометка 1M у модели (message.model, model в настройках, ANTHROPIC_MODEL) → U > окна × 1,02 у
+двух разных ответов подряд → 1M → 200K. 1M по пометке держится до конца сессии, по U — до сжатия или /clear.
 H — цена передачи (savepoint, work_state, handoff, spawn): p80 по истории, иначе 4 %. T — оценка задачи:
 заявлена (`next --size`, × калибровка) → медиана цены задачи роли по истории → 10 %.
 
@@ -48,8 +48,8 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 from ctx_budget_params import (  # noqa: E402 — пути, окно сессии и выученные параметры
-    ONE_M, T_RANGE, budget_dir, calibration, clamp, handoff_cost, lineage_dir, load_params, pct, projects_dir,
-    session_window, task_estimate, w_eff)
+    ONE_M, T_RANGE, budget_dir, calibration, clamp, handoff_cost, lineage_dir, load_params, pct, private_dir,
+    projects_dir, session_window, task_estimate, w_eff)
 
 FLOOR, CEIL = 0.85, 0.985          # решение владельца 06.11
 REM_MIN = 0.02                      # остаток текущей задачи не меньше 2 %
@@ -133,14 +133,14 @@ def last_context_tokens(transcript):
 
 
 def last_answer(transcript):
-    """(usage, message.model) последнего ответа основной цепочки; (None, None) — нет."""
+    """(usage, message.model, uuid) последнего ответа основной цепочки; (None, None, None) — нет."""
     try:
         size = transcript.stat().st_size
         with transcript.open("rb") as fh:
             fh.seek(max(0, size - TAIL_BYTES))
             tail = fh.read().decode("utf-8", "ignore")
     except OSError:
-        return None, None
+        return None, None, None
     for ln in reversed(tail.splitlines()):
         if '"usage"' not in ln:
             continue
@@ -155,8 +155,8 @@ def last_answer(transcript):
         except (ValueError, TypeError, AttributeError):
             continue  # первая строка хвоста обрезана или запись не того вида
         if total > 0:
-            return total, (str(msg.get("model"))[:80] if msg.get("model") else None)
-    return None, None
+            return total, (str(msg.get("model"))[:80] if msg.get("model") else None), str(entry.get("uuid") or "")[:80]
+    return None, None, None
 
 
 def safe_sid(session_id):
@@ -176,7 +176,7 @@ def load_state(sid):
 
 
 def save_state(sid, st):
-    sessions_dir().mkdir(parents=True, exist_ok=True)
+    private_dir(sessions_dir())
     fd, tmp = tempfile.mkstemp(dir=sessions_dir(), prefix=sid + ".", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(st, fh, ensure_ascii=False, separators=(",", ":"))
@@ -186,7 +186,7 @@ def save_state(sid, st):
 @contextlib.contextmanager
 def session_lock(sid, timeout=2.0):
     """flock на <sid>.lock: параллельные вызовы хука и CLI не теряют записи друг друга."""
-    sessions_dir().mkdir(parents=True, exist_ok=True)
+    private_dir(sessions_dir())
     fd = os.open(sessions_dir() / (sid + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
     try:
         if fcntl is not None:
@@ -217,11 +217,12 @@ def prune(now=None):
 def journal(event):
     """Строка журнала задач: только числа, роль, sid и тип события."""
     try:
-        path = budget_dir() / "journal.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path = private_dir(budget_dir()) / "journal.jsonl"
         if path.exists() and path.stat().st_size > JOURNAL_MAX:
             os.replace(path, path.with_name("journal.1.jsonl"))
-        with open(path, "a", encoding="utf-8") as fh:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        os.fchmod(fd, 0o600)  # журнал, созданный до 0600
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
     except OSError:
         pass
@@ -272,6 +273,9 @@ def refresh(st, sid, u, window, params, now, log=True):
         st["epoch"] = st.get("epoch", 0) + 1
         st["printed"] = []
         st.pop("task", None)
+        st.pop("over", None)
+        if st.get("one_m") == "u":
+            st.pop("one_m")  # 1M по U — до сжатия или /clear; по пометке модели — до конца сессии
         if log:
             journal({"ts": int(now), "sid": sid, "role": st["role"], "ev": "reset", "u": u, "weff": weff})
     if not st.get("task"):
@@ -282,14 +286,27 @@ def refresh(st, sid, u, window, params, now, log=True):
     return weff
 
 
-def window_for(st, u, model):
-    """(окно, источник) сессии; окно 1M, раз увиденное (модель или U больше окна), держится до конца сессии."""
+def window_for(st, u, model, ident=None):
+    """(окно, источник) сессии. 1M по пометке модели или настроек — сразу и до конца сессии. По U — закрепляется,
+    только когда два разных ответа подряд (между ними хотя бы ход) больше окна × 1,02, и снимается при сбросе эпохи
+    (refresh). Первый такой ответ считается от 1M без закрепления: U не влезает в настроенное окно — передача по нему
+    была бы ложной; следующий ответ в окне возвращает настроенное. Иначе всплеск до 260K при окне 250K закрепил бы 1M,
+    и хук молчал бы до сжатия на 217K."""
     window, src = session_window(u, model)
-    if window == ONE_M:
-        st["one_m"] = True
-    elif st.get("one_m"):
-        window, src = ONE_M, "1M раньше в сессии"
-    return window, src
+    if src == "модель 1M" or st.get("one_m") == "mark":
+        st["one_m"] = "mark"
+        st.pop("over", None)
+        return ONE_M, "модель 1M"
+    if src != "U больше окна":
+        st.pop("over", None)  # подряд — значит без ответа в окне между ними
+        return (ONE_M, "1M по U в этой эпохе") if st.get("one_m") == "u" else (window, src)
+    over = st.get("over")
+    if st.get("one_m") == "u" or (over and ident and over.get("id") != ident):
+        st["one_m"] = "u"
+        st["over"] = {"id": ident}
+        return ONE_M, src
+    st["over"] = {"id": ident}
+    return ONE_M, "U больше окна — ждём второй ответ"
 
 
 def remember(st, v, now):
@@ -309,10 +326,10 @@ def _sid(args):
 def _measure(sid, st):
     """(U, окно, источник окна) по транскрипту сессии; U None — нет usage."""
     transcript = find_transcript(sid, st)
-    u, model = last_answer(transcript) if transcript else (None, None)
+    u, model, ident = last_answer(transcript) if transcript else (None, None, None)
     if transcript:
         st["transcript"] = str(transcript)
-    return (u,) + window_for(st, u, model)
+    return (u,) + window_for(st, u, model, ident)
 
 
 def cmd_next(args):

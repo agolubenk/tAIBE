@@ -5,8 +5,8 @@
 Что учится (доли — от W_eff окна сессии):
   w_eff[окно]  точка автосжатия: медиана U последнего ответа перед автосжатием (compact_boundary, trigger=auto),
                от 5 событий; в выборку — только сжатия с U/окно в 0,75–1,0. Окно сессии — как у живой
-               (session_window без окружения): настройки её cwd, пока U влезает → пометка 1M у модели → max U
-               больше окна → 1M. Окно без своей истории (1M) берёт долю W_eff/окно самого изученного окна
+               (session_window без окружения): настройки её cwd, пока U влезает → пометка 1M у модели → два
+               ответа больше окна (второй по величине U) → 1M. Окно без своей истории (1M) берёт долю W_eff/окно самого изученного окна
   handoff      цена передачи: от текста порога/бюджета (`<successor-threshold>`) или первого work_state после него
                до последнего usage сессии; только где был spawn_session.sh --handoff и не было сжатия
   tasks[роль]  цена задачи: куски между границами (git commit, gh pr create, смена статуса карточки,
@@ -64,6 +64,16 @@ def projects_dir():
 
 def lineage_dir():
     return Path(os.environ.get("TAIBE_LINEAGE_DIR") or Path.home() / ".claude" / "lineage")
+
+
+def private_dir(path):
+    """Каталог бюджета: 0700 (журнал и состояние сессий — только владельцу), в том числе созданный раньше."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
 
 
 def load_params():
@@ -422,8 +432,9 @@ def learn(days=30, projects=None, now=None):
         if not any(found):
             continue
         role = roles.get(path.stem) or (role_by_start(starts, scan["start"]) if scan["start"] else None) or "-"
-        max_u = max((val for kind, val in scan["events"] if kind == "u"), default=None)
-        window = session_window(max_u, scan["model"], scan["cwd"] or "/nonexistent", use_env=False)[0]
+        us = sorted(val for kind, val in scan["events"] if kind == "u")
+        second_u = us[-2] if len(us) > 1 else None  # как у живой сессии: 1M по U — от двух ответов больше окна
+        window = session_window(second_u, scan["model"], scan["cwd"] or "/nonexistent", use_env=False)[0]
         per_file.append((window, role) + found)
     params = {"version": 1, "learned_at": datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "days": days, "files": nfiles, "w_eff": {}, "tasks": {}}
@@ -474,7 +485,10 @@ def summary(params):
 
 
 def write_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if path == params_path():
+        private_dir(path.parent)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=1, sort_keys=True)
@@ -482,6 +496,10 @@ def write_json(path, data):
 
 
 def run(args):
+    try:
+        os.nice(10)  # learn — фоновая работа ежедневной эволюции: не мешать живым сессиям на слабой машине
+    except (AttributeError, OSError):
+        pass
     try:
         params, text = learn(days=args.days, projects=args.projects)
     except OSError as exc:
