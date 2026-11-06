@@ -96,7 +96,8 @@ def poll_github(ctx):
         if not p["head"]:
             ctx.emit(f"gh:new:{n}", "pr.new", DIGEST, ["coord"], f"#{n} открыт: {pr['title'][:80]}", "github")
         elif p["head"] != pr["head"]["sha"] and p.get("changes_by"):
-            roles = sorted({r for r in (quorum.role_of_lens(l, g["lens_roles"]) for l in p["changes_by"]) if r})
+            team = ctx.cfg["team"]["roles"]
+            roles = sorted({r for r in (quorum.role_of_lens(l, g["lens_roles"], team) for l in p["changes_by"]) if r})
             ctx.emit(f"gh:newhead:{n}:{pr['head']['sha']}", "pr.newhead", DIGEST, roles or ["coord"],
                      f"#{n}: новая голова {pr['head']['sha'][:9]} после changes ({', '.join(p['changes_by'])})",
                      "github")
@@ -136,7 +137,7 @@ def _check_pr(ctx, n, p, head, refresh=False):
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
     verdicts = []
     for c in comments:
-        v = quorum.parse_verdict(c.get("body"))
+        v = quorum.parse_verdict(c.get("body"), g["lens_roles"], ctx.cfg["team"]["roles"])
         if not v:
             continue
         verdicts.append(v)
