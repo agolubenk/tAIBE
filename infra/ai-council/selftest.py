@@ -161,6 +161,50 @@ def test_local_inference_slot(tmp: Path) -> None:
         os.environ.pop("AI_COUNCIL_LOCAL_LOCK", None)
 
 
+def test_local_lock_holder(tmp: Path) -> None:
+    """OPS-31: держатель замка, остановленный Ctrl+Z или SIGSTOP, виден в status по pid и состоянию T, а текст
+    таймаута ожидающего называет его и команду status."""
+    import signal
+    import subprocess
+    import sys as _sys
+    import ollama as ollama_mod
+    lock = tmp / "holder.lock"
+    check("лок Ollama: свободный замок — «свободен»", ollama_mod.local_lock_holder(str(lock)) is None)
+    code = (
+        "import os, sys, time\n"
+        f"os.environ['AI_COUNCIL_LOCAL_LOCK'] = {str(lock)!r}\n"
+        f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+        "import ollama\n"
+        "with ollama.local_inference_slot(30):\n"
+        "    print('in', flush=True)\n"
+        "    time.sleep(30)\n"
+    )
+    holder = subprocess.Popen([_sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    saved_lock, saved_legacy = ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK
+    try:
+        holder.stdout.readline()
+        os.kill(holder.pid, signal.SIGSTOP)
+        h = ollama_mod.local_lock_holder(str(lock))
+        check("лок Ollama: держатель под SIGSTOP — его pid и состояние T",
+              bool(h) and h["pid"] == holder.pid and h["state"].startswith("T") and h["who"] == "council",
+              f"{h}")
+        check("лок Ollama: описание подсказывает kill -CONT", f"kill -CONT {holder.pid}" in ollama_mod.describe_holder(h))
+        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = str(lock), ""
+        try:
+            with ollama_mod.local_inference_slot(0.3):
+                msg = ""
+        except TimeoutError as exc:
+            msg = str(exc)
+        check("лок Ollama: таймаут называет держателя и команду status",
+              str(holder.pid) in msg and "supervisor.py status" in msg, msg[:160])
+    finally:
+        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = saved_lock, saved_legacy
+        os.kill(holder.pid, signal.SIGCONT)
+        holder.kill()
+        holder.wait(timeout=10)
+    check("лок Ollama: держатель завершён — снова «свободен»", ollama_mod.local_lock_holder(str(lock)) is None)
+
+
 def test_cloud_lane(tmp: Path) -> None:
     """Облачная полоса воркера: пульс долгого прогона и отказ брать задачу без режима GLM 5.x."""
     import council_worker as worker_mod
@@ -2667,6 +2711,7 @@ def main() -> int:
         print("\n2. модельный лок (инвариант 24 GB)")
         test_model_lock(tmp)
         test_local_inference_slot(tmp)
+        test_local_lock_holder(tmp)
         test_cloud_lane(tmp)
         print("\n3. возврат зависших прогонов")
         test_reap(tmp)

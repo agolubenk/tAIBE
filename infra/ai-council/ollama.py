@@ -47,15 +47,74 @@ LOCAL_INFERENCE_LOCK = _LOCK_OVERRIDE or os.path.join(os.path.expanduser("~"), M
 LEGACY_HOST_LOCK = "" if _LOCK_OVERRIDE else str(_HOST_ROOT / ".claude" / "council" / "ollama-local.lock")
 
 
-def _flock_by(handle, deadline: float, wait_seconds: float) -> None:
+def _flock_by(handle, deadline: float, wait_seconds: float, path: str = "") -> None:
     while True:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
         except BlockingIOError:
             if time.time() >= deadline:
-                raise TimeoutError(f"локальный инференс занят другим процессом дольше {int(wait_seconds)} с")
+                who = describe_holder(local_lock_holder(path)) if path else "держатель неизвестен"
+                raise TimeoutError(f"локальный инференс занят другим процессом дольше {int(wait_seconds)} с: {who}. "
+                                   "Кто держит — python3 infra/ai-council/supervisor.py status")
             time.sleep(0.25)
+
+
+def mark_holder(handle, who: str) -> None:
+    """Держатель пишет «pid кто» в сам файл замка (OPS-31): flock на macOS не виден в lsof, а ожидающие открывают
+    тот же файл, поэтому иначе держателя не отличить от очереди."""
+    try:
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"{os.getpid()} {who}\n")
+        handle.flush()
+    except OSError:
+        pass
+
+
+def local_lock_holder(path: str | None = None) -> dict | None:
+    """Кто держит машинный замок локального инференса: None — свободен, иначе {pid, who, state, command}.
+    Замок пробуется на миг (LOCK_NB): взялся — свободен и сразу отпущен; занят — держатель из файла и его
+    состояние из ps (T — остановлен Ctrl+Z или SIGSTOP)."""
+    path = path or LOCAL_INFERENCE_LOCK
+    try:
+        handle = open(path, "a+")
+    except OSError:
+        return None
+    with handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.seek(0)
+            line = (handle.read(200).splitlines() or [""])[0]
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return None
+    parts = line.split(maxsplit=1)
+    pid = int(parts[0]) if parts and parts[0].isdigit() else None
+    info = {"pid": pid, "who": parts[1] if len(parts) > 1 else "", "state": "", "command": ""}
+    if pid:
+        try:
+            out = subprocess.run(["ps", "-o", "stat=,command=", "-p", str(pid)], capture_output=True, text=True,
+                                 timeout=5).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        state, _, command = out.partition(" ")
+        info.update(state=state, command=command.strip())
+    return info
+
+
+def describe_holder(h: dict | None) -> str:
+    if h is None:
+        return "свободен"
+    if not h["pid"]:
+        return "занят, держатель не записал pid (старая копия кода)"
+    who = f"pid {h['pid']} ({h['who'] or '?'})"
+    if h["state"].startswith("T"):
+        return f"держит {who} — ОСТАНОВЛЕН (Ctrl+Z или SIGSTOP): kill -CONT {h['pid']} или завершите процесс"
+    if not h["state"]:
+        return f"держит {who} — процесса уже нет, замок держит его потомок или файл открыт заново"
+    return f"держит {who}, состояние {h['state']}: {h['command'][:100]}"
 
 
 @contextmanager
@@ -72,8 +131,10 @@ def local_inference_slot(wait_seconds: float):
         for path in paths:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             handle = held.enter_context(open(path, "a+"))
-            _flock_by(handle, deadline, wait_seconds)
+            _flock_by(handle, deadline, wait_seconds, path)
             held.callback(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+            if path == LOCAL_INFERENCE_LOCK:
+                mark_holder(handle, "council")
         yield
 PRESSURE_CRITICAL = 4   # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
 
