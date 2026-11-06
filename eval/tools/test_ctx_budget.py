@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Бюджет окна (ctx_budget.py, ctx_budget_params.py, хук context-threshold.py) на синтетике: примеры владельца
+"""Бюджет окна (ctx_budget.py, ctx_budget_params.py, ctx_budget_learn.py, хук context-threshold.py) на синтетике: примеры владельца
 06.11, сброс после сжатия, запасные значения, битый транскрипт, CLI next/done/status, learn без утечки текста.
 Без сети и окон; состояние — во временном CTX_BUDGET_DIR. Run: python3 -I <this file>"""
 import json
@@ -18,6 +18,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 import ctx_budget as cb  # noqa: E402
+import ctx_budget_learn as cl  # noqa: E402
 import ctx_budget_params as cp  # noqa: E402
 
 HOOK = REPO / ".claude/hooks/context-threshold.py"
@@ -416,17 +417,17 @@ class LearnTest(Sandbox):
 
     def test_learn_runs_niced(self):
         args = argparse.Namespace(days=1, projects=str(self.projects), out=None, dry_run=True)
-        with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(cp.os, "nice") as nice, \
+        with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(cl.os, "nice") as nice, \
                 mock.patch("sys.stdout"):
-            self.assertEqual(cp.run(args), 0)
+            self.assertEqual(cl.run(args), 0)
         nice.assert_called_once_with(10)
 
     def test_role_by_lineage_time(self):
         starts = [(1000.0, "plan"), (1026.0, "release")]
-        self.assertEqual(cp.role_by_start(starts, 1030.0), "release")
-        self.assertEqual(cp.role_by_start(starts, 1020.0), "plan")
-        self.assertIsNone(cp.role_by_start(starts, 5000.0))
-        self.assertIsNone(cp.role_by_start(starts, 10.0))
+        self.assertEqual(cl.role_by_start(starts, 1030.0), "release")
+        self.assertEqual(cl.role_by_start(starts, 1020.0), "plan")
+        self.assertIsNone(cl.role_by_start(starts, 5000.0))
+        self.assertIsNone(cl.role_by_start(starts, 10.0))
 
 
 if __name__ == "__main__":

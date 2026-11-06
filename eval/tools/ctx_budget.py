@@ -20,7 +20,7 @@ H — цена передачи (savepoint, work_state, handoff, spawn): p80 п�
   ctx_budget.py next "<задача>" --size S|M|L|<n%>   начать задачу (S 3 %, M 7 %, L 15 %), вердикт
   ctx_budget.py done                                 закрыть задачу — граница, вердикт
   ctx_budget.py status                               s, W_eff, H, T, потолок и решение
-  ctx_budget.py learn [--days 30] [--dry-run]        параметры по транскриптам (ctx_budget_params.py)
+  ctx_budget.py learn [--days 30] [--dry-run]        параметры по транскриптам (ctx_budget_learn.py)
   сессия — CLAUDE_CODE_SESSION_ID (выставляет Claude Code) или --session. Коды: 0 — ок, 1 — нет данных или
   ошибка чтения/записи, 2 — аргументы.
 
@@ -405,8 +405,8 @@ def cmd_status(args):
 
 
 def cmd_learn(args):
-    import ctx_budget_params
-    return ctx_budget_params.run(args)
+    import ctx_budget_learn
+    return ctx_budget_learn.run(args)
 
 
 def main(argv=None):
