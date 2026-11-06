@@ -13,14 +13,15 @@
     <string>__DAILY_SH__</string>
     <string>run</string>
   </array>
-  <!-- 04:30 local: the night, so the run spends no daytime quota. A Mac asleep at 04:30 starts the job on wake;
-       outside 03:00–08:00 the cycle only logs and waits for the next night. -->
+  <!-- 05:00 local: the night, so the run spends no daytime quota, and after the notebook sync of 04:17 (the run also
+       waits while another heavy job is running). A Mac asleep at 05:00 starts the job on wake; outside 03:00–08:00 the
+       cycle only logs and waits for the next night. -->
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>4</integer>
+    <integer>5</integer>
     <key>Minute</key>
-    <integer>30</integer>
+    <integer>0</integer>
   </dict>
   <key>EnvironmentVariables</key>
   <dict>

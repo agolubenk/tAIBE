@@ -30,7 +30,10 @@ Cases per artifact: `.claude/skills/<n>/SKILL.md` → `cases/<n>.jsonl`; `.claud
 agents, commands, prompts → `agent-`, `command-`, `prompt-<f>.jsonl`; a role card → `card-<dir with ->.jsonl`.
 """
 import argparse
+import glob
 import hashlib
+import re
+import subprocess
 import json
 import os
 import sys
@@ -41,10 +44,12 @@ sys.path.insert(0, HERE)
 import ab  # noqa: E402
 import catalog  # noqa: E402
 import daily_git as g  # noqa: E402
+import daily_session as session  # noqa: E402
 import daily_steps as steps  # noqa: E402
 import judges as judging  # noqa: E402
 from daily_steps import STATE_DIR, load_json, log, now, save_json, switch  # noqa: E402,F401
 import quality  # noqa: E402
+import resources  # noqa: E402
 
 WORKTREE = 'worktrees/evolve/daily'
 TARGETS = {
@@ -53,6 +58,7 @@ TARGETS = {
            'repo': os.path.expanduser(os.environ.get('EVOLVE_HR_REPO') or '~/Desktop/Development/HR_Helper-v2')},
 }
 AB_KINDS = ('skill', 'rule', 'agent', 'command', 'prompt', 'card')  # text instructions; hooks and genome are code
+NOT_OURS = re.compile(r'embed|nomic', re.I)  # what may stay loaded after the night
 NIGHT = (3, 8)            # a scheduled run spends model time only between 03:00 and 08:00 local
 DEADLINE_MIN = 180        # judging stops after 3 hours; what is left waits for the next night
 
@@ -73,12 +79,20 @@ def cases_path(path, cases_dir=os.path.join(HERE, 'cases')):
 
 # --- plan and judge ----------------------------------------------------------------------------------------------
 
+def last_edit_base(repo, since, head, path):
+    """The parent of the last commit in (since, head] that changed `path`: A is the version just before the latest
+    edit, so a lost A/B reverts that edit only, not everything the window holds."""
+    last = g.git(repo, 'log', '-1', '--format=%H', '%s..%s' % (since, head), '--', path, check=False)
+    return '%s^' % last.strip() if last and last.strip() else since
+
+
 def plan(target, repo, since, head, cases_dir, pending=()):
     """(items to judge, items that need cases, notes) for the files changed between two revisions, plus the ones a
     previous night ran out of time for (`pending`: {path, a}), each against its own baseline."""
     items, need, notes = [], [], []
     changed = g.changed_files(repo, since, head)
-    pairs = [(p, since) for p in changed] + [(p['path'], p['a']) for p in pending if p['path'] not in changed]
+    pairs = [(p, last_edit_base(repo, since, head, p)) for p in changed] + \
+        [(p['path'], p['a']) for p in pending if p['path'] not in changed]
     for path, since in pairs:
         kind = catalog.kind_of(path, 'eval')
         if kind not in AB_KINDS:
@@ -97,22 +111,26 @@ def plan(target, repo, since, head, cases_dir, pending=()):
     return items, need, notes
 
 
-def judge(items, judges, factory, windows, deadline, after_judge=lambda j: None):
+def judge(items, judges, factory, windows, deadline, after_judge=lambda j: None, admit=lambda j: (True, '')):
     """[verdict] for each item: every judge in turn over every item (one model loaded at a time, unloaded after),
     then `quality.finalize` and `quality.combine`."""
     run = {j: {} for j in judges}
     for j in judges:
         call = factory(j)
-        for it in items:
-            key = it['path']
-            if time.time() > deadline:
-                run[j][key] = {'cases': 0, 'tokens_a': 0, 'tokens_b': 0, 'unavailable': 'out of time this night'}
-                continue
-            cases, canaries = quality.read_cases(it['cases'])
-            log('judge %s · %s · %d cases' % (j, key, len(cases)))
-            run[j][key] = quality.judge_artifact(call, cases, it['text_a'], it['text_b'], canaries,
-                                                 (windows or {}).get(j))
-        after_judge(j)
+        ok, why = admit(j)
+        try:
+            for it in items:
+                key = it['path']
+                if not ok or time.time() > deadline or swap_stop():
+                    reason = 'not loaded: %s' % why if not ok else 'out of time or swap this night'
+                    run[j][key] = {'cases': 0, 'tokens_a': 0, 'tokens_b': 0, 'unavailable': reason}
+                    continue
+                cases, canaries = quality.read_cases(it['cases'])
+                log('judge %s · %s · %d cases' % (j, key, len(cases)))
+                run[j][key] = quality.judge_artifact(call, cases, it['text_a'], it['text_b'], canaries,
+                                                     (windows or {}).get(j))
+        finally:
+            after_judge(j)
     final = quality.finalize(run)
     out = []
     for it in items:
@@ -159,42 +177,68 @@ def no_judge_line(it, calibration):
 def calibrate_judges(args, repo, wt, windows, deadline):
     """{candidates, passed, rows}: tonight's candidates, each calibrated in turn until two pass."""
     code_root = os.path.abspath(os.path.join(HERE, '..', '..'))
+    tags = judging.ollama_tags(steps.OLLAMA) if not args.factory else {}
     names = [j for j in args.judges.split(',') if j] if args.judges else judging.candidates(
-        list(windows or {}), judging.ollama_tags(steps.OLLAMA), switch('abJudgeClaude', code_root))
+        list(windows or {}), tags, switch('abJudgeClaude', code_root))
     with open(os.path.join(wt, judging.CALIBRATION_ARTIFACT), encoding='utf-8') as f:
         text = f.read()
     cases, _ = quality.read_cases(args.calibration_cases)
-    factory = args.factory or judge_factory(repo)
+    factory = args.factory or judge_factory(repo, args.budget)
     after = steps.unload if not args.factory else (lambda name: None)
     passed, rows = judging.select(names, factory, cases, text, windows, after=after, log=log,
-                                  stop=lambda: time.time() > deadline)
-    return {'candidates': names, 'passed': passed, 'rows': rows}
+                                  stop=lambda: time.time() > deadline or swap_stop(), admit=admit_local(tags))
+    return {'candidates': names, 'passed': passed, 'rows': rows, 'tags': tags}
 
 
-def judge_factory(repo):
+def admit_local(tags):
+    """(ok, why) per candidate: a local model loads only if it fits the memory left after the reserve."""
+    def admit(name):
+        info = tags.get(name[len('local/'):]) if name.startswith('local/') else None
+        return resources.fits(info['size']) if info else (True, 'not local')
+    return admit
+
+
+def swap_stop():
+    share = resources.swap_share()
+    if share > resources.SWAP_STOP:
+        log('swap %.0f%% used — the night stops here' % (share * 100))
+        return True
+    return False
+
+
+def judge_factory(repo, budget):
     revive = lambda: steps.ensure_gateway(repo)  # noqa: E731
 
     def factory(model):
         if model == judging.CLAUDE_JUDGE:
-            return judging.claude_call()
+            return judging.claude_call(budget)
         return steps.retrying(steps.stream_call(repo, model), revive)
     return factory
 
 
-def revert(repo, target, v, text_a, no_pr):
-    """An accepted loss of the merged version: a PR that puts the previous version back."""
+def revert(repo, target, v, text_a, no_pr, run_id=''):
+    """An accepted loss of the merged version: a PR that puts back the version before the losing edit. A skill or a
+    prompt (not a lens) is in the safe class and may merge by itself; anything else, and all of HR, waits for a
+    person. Nothing is opened when the file changed again since the verdict."""
     cfg = TARGETS[target]
     head = g.git(repo, 'rev-parse', 'origin/%s' % cfg['base']).strip()
-    title = 'evolve: revert %s to %s (A/B: the previous version wins)' % (v['path'], v['a'])
-    body = ('The daily evolution run judged the previous version of `%s` (%s) better than the merged one (%s).\n\n'
-            'Status: **accepted** — %s.\n\n```json\n%s\n```\n\n%s\nevolve-verdict: %s\n'
+    if g.blob_of(repo, head, v['path']) != g.blob_of(repo, v['b'], v['path']):
+        return 'not opened: %s changed again since %s' % (v['path'], v['b'])
+    safe = cfg['auto_merge'] and g.matches(v['path'], g.REVERT_PATHS) and not g.matches(v['path'], g.MANUAL_ONLY)
+    title = '%sevolve: revert %s to %s (A/B: the previous version wins)' % (
+        '' if safe else '[manual merge] ', v['path'], v['a'])
+    body = ('The daily evolution run judged the version of `%s` before its last edit (%s) better than the merged one '
+            '(%s).\n\nStatus: **accepted** — %s.\n\n```json\n%s\n```\n\n%s\nevolve-verdict: %s\n'
             % (v['path'], v['a'], v['b'], '; '.join(v['reasons']), json.dumps(v, ensure_ascii=False, indent=1)[:6000],
-               'Merged by the run when checks are green and evolveAutoMerge is on.' if cfg['auto_merge'] else
-               'HR: the run never merges this — Control does.', v['id']))
+               'Safe class (a revert to a version already in the base): merged by the run when checks are green, '
+               'required checks exist and evolveAutoMerge is on.' if safe else
+               '**Manual merge**: an owner or Control decision, never merged by the run.', v['id']))
     if no_pr:
         return 'not opened (--no-pr)'
-    commit = g.commit_files(repo, head, {v['path']: text_a}, title + '\n\nevolve-verdict: %s\n' % v['id'])
-    return g.open_pr(repo, cfg['base'], commit, 'evolve/revert-%s-%s' % (v['id'], v['date']), title, body)
+    expected = {v['path']: {'blob': g.blob_of(repo, v['a'], v['path']),
+                            'from': g.git(repo, 'rev-parse', v['a']).strip()}}
+    return g.open_run_pr(repo, cfg['base'], head, {v['path']: text_a}, 'evolve/revert-%s-%s' % (v['id'], v['date']),
+                         title, body, run_id, 'revert' if safe else 'manual', expected)
 
 
 def cmd_run(args):
@@ -246,8 +290,9 @@ def cmd_run(args):
                 report['calibration'] = calibration
             passed = calibration['passed'][:judging.WANT_JUDGES]
             if passed:
-                verdicts = judge(items, passed, args.factory or judge_factory(repo), windows, deadline,
-                                 after_judge=steps.unload if not args.factory else lambda j: None)
+                verdicts = judge(items, passed, args.factory or judge_factory(repo, args.budget), windows, deadline,
+                                 after_judge=steps.unload if not args.factory else lambda j: None,
+                                 admit=admit_local(calibration.get('tags', {})))
             else:
                 verdicts = [no_judge_line(it, calibration) for it in items]
                 if not posted and not args.no_card:
@@ -265,7 +310,7 @@ def cmd_run(args):
                     continue
                 if v['action'] == 'revert':
                     try:
-                        v['pr'] = revert(trepo, target, v, it['text_a'], args.no_pr)
+                        v['pr'] = revert(trepo, target, v, it['text_a'], args.no_pr, report['started'])
                     except Exception as e:  # noqa: BLE001 — the verdict is kept, the PR is retried by hand
                         v['pr'] = 'failed: %s' % e
                 with open(args.verdicts, 'a', encoding='utf-8') as f:
@@ -297,6 +342,20 @@ def summary(report):
     return 'evolve %s: A/B %s; cases needed for %d artifacts' % (report['date'], shown, len(report.get('queue', [])))
 
 
+def merge_switch(root):
+    """evolveAutoMerge, closed on doubt: on only when the board's answer was read (fresh or cached without a failed
+    read since) and says on. Defaults, a failed read or any error — off."""
+    try:
+        sys.path.insert(0, os.path.join(root, '.claude', 'scripts'))
+        import pipeline_settings as ps
+        settings, source = ps.load(root)
+    except Exception:  # noqa: BLE001
+        return False
+    if not (source.startswith('board') or source.startswith('cache')) or 'failed' in source:
+        return False
+    return bool(settings['automation'] and settings['toggles'].get('evolveAutoMerge'))
+
+
 def cmd_merge(args):
     code_root = os.path.abspath(os.path.join(HERE, '..', '..'))
     repo = g.main_repo(code_root)
@@ -304,28 +363,69 @@ def cmd_merge(args):
     if os.path.isfile(args.verdicts):
         with open(args.verdicts, encoding='utf-8') as f:
             verdicts = [json.loads(ln) for ln in f if ln.strip()]
-    enabled = switch('evolveAutoMerge', code_root)
-    rows = g.merge_ready(repo, TARGETS['taibe']['base'], verdicts, enabled, args.dry_run)
+    enabled = merge_switch(code_root)
+    rows = g.merge_ready(repo, TARGETS['taibe']['base'], verdicts, enabled, load_json('prs.json', {}), args.dry_run)
     print(json.dumps(rows, ensure_ascii=False, indent=1))
     return 0
 
 
 def cmd_cycle(args):
+    """run → session → publish → merge under the one lock (handed over by `nightly`, or taken here)."""
     hour = now().hour
     if not args.force and not NIGHT[0] <= hour < NIGHT[1]:
         log('outside the night window %02d:00–%02d:00 — waits for the next night (--force to run now)' % NIGHT)
         return 0
-    for step in (cmd_run, steps.cmd_session, steps.cmd_publish, cmd_merge):
-        try:
-            step(args)
-        except Exception as e:  # noqa: BLE001 — one failed step must not keep the next from reporting
-            log('%s failed: %s' % (step.__name__, e))
+    try:
+        with resources.Lock(os.path.join(STATE_DIR, 'run.lock'), args.lock_fd):
+            if not resources.wait_for_heavy(log) or swap_stop():
+                log('another heavy job or swap — the night is skipped')
+                return 0
+            for step in (cmd_run, session.cmd_session, session.cmd_publish, cmd_merge):
+                try:
+                    step(args)
+                except Exception as e:  # noqa: BLE001 — one failed step must not keep the next from reporting
+                    log('%s failed: %s' % (step.__name__, e))
+            for name in resources.loaded(steps.OLLAMA):
+                if not NOT_OURS.search(name):
+                    steps.unload('local/' + name)
+            log('loaded after the night: %s' % (resources.loaded(steps.OLLAMA) or 'nothing'))
+    except RuntimeError as e:  # the lock is held by another run
+        log(str(e))
     return 0
+
+
+def cmd_nightly(args):
+    """What launchd starts: take the lock, refresh the run's worktree, run its fresh `cycle` with the lock handed
+    over (the same open file, so nobody can start between the refresh and the cycle)."""
+    repo = g.main_repo(HERE)
+    try:
+        with resources.Lock(os.path.join(STATE_DIR, 'run.lock')) as lock:
+            g.refresh_worktree(repo, args.worktree, steps.BASE)
+            fresh = os.path.join(repo, args.worktree, 'eval', 'evolve', 'daily.py')
+            os.set_inheritable(lock.fd, True)
+            cmd = [sys.executable, '-I', fresh, 'cycle', '--lock-fd', str(lock.fd)] + (['--force'] if args.force else [])
+            return subprocess.run(cmd, pass_fds=(lock.fd,)).returncode
+    except RuntimeError as e:
+        log(str(e))
+        return 0
+
+
+def cmd_antigens(args):
+    """The session's one check of its antigen proposal (data only; nothing it wrote runs)."""
+    wt = os.path.abspath(os.path.join(HERE, '..', '..'))
+    changed = {}
+    for rel in (session.ANTIGENS, session.ANTIGEN_CASES):
+        if os.path.isfile(os.path.join(wt, rel)):
+            with open(os.path.join(wt, rel), encoding='utf-8') as f:
+                changed[rel] = f.read()
+    problems = session.antigen_problems(wt, 'origin/%s' % steps.BASE, changed)
+    print(json.dumps(problems or 'ok', ensure_ascii=False, indent=1))
+    return 1 if problems else 0
 
 
 def cmd_cases(args):
     bad = 0
-    for path in args.files:
+    for path in args.files or sorted(glob.glob(os.path.join(HERE, 'cases', '*.jsonl'))):
         problems = quality.check_cases(path)
         bad += bool(problems)
         print('%s: %s' % (path, '; '.join(problems) or 'ok'))
@@ -340,7 +440,8 @@ def cmd_status(args):
 
 def main(argv=None, factory=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('command', choices=('run', 'session', 'publish', 'merge', 'cycle', 'status', 'cases'))
+    ap.add_argument('command', choices=('run', 'session', 'publish', 'merge', 'cycle', 'nightly', 'status', 'cases',
+                                        'antigens'))
     ap.add_argument('files', nargs='*', help='cases: the files to check')
     ap.add_argument('--target', choices=('taibe', 'hr', 'all'), default='all')
     ap.add_argument('--since', help='baseline revision for every target (default: the last run, else a day ago)')
@@ -355,10 +456,13 @@ def main(argv=None, factory=None):
     ap.add_argument('--keep-state', action='store_true', help='do not move the state forward')
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--force', action='store_true', help='cycle outside the night window')
+    ap.add_argument('--lock-fd', type=int, help='the lock handed over by nightly')
     args = ap.parse_args(argv)
     args.factory = factory
-    return {'run': cmd_run, 'session': steps.cmd_session, 'publish': steps.cmd_publish, 'merge': cmd_merge,
-            'cycle': cmd_cycle, 'status': cmd_status, 'cases': cmd_cases}[args.command](args)
+    args.budget = resources.Budget()
+    return {'run': cmd_run, 'session': session.cmd_session, 'publish': session.cmd_publish, 'merge': cmd_merge,
+            'cycle': cmd_cycle, 'nightly': cmd_nightly, 'status': cmd_status, 'cases': cmd_cases,
+            'antigens': cmd_antigens}[args.command](args)
 
 
 if __name__ == '__main__':

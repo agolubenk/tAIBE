@@ -228,13 +228,28 @@ def evaluate(judged):
     decisive = wins_a + wins_b
     if judged['cases'] < MIN_CASES:
         return 'insufficient', ['%d cases (need %d)' % (judged['cases'], MIN_CASES)], None
-    if decisive < MIN_DECISIVE:
+    if decisive < MIN_DECISIVE and not cheaper_b(judged, wins_a, wins_b):
+        if wins_a >= wins_b and judged.get('tokens_a', 0) * LENGTH_GAP < judged.get('tokens_b', 0):
+            return 'insufficient', ['no quality difference (A %d, B %d); B costs %d tokens more — flagged, not '
+                                    'reverted' % (wins_a, wins_b, judged['tokens_b'] - judged['tokens_a'])], None
         return 'insufficient', ['%d decisive cases (need %d)' % (decisive, MIN_DECISIVE)], None
     pick, wins, other = ('a', wins_a, wins_b) if wins_a >= wins_b else ('b', wins_b, wins_a)
     if wins > other and wins >= math.ceil(WIN_SHARE * decisive):
         return 'ok', ['%s wins %d of %d decisive' % (pick.upper(), wins, decisive)], pick
+    # Not worse and cheaper (ab.select's rule) keeps the merged version B; it never reverts: a revert needs a clear
+    # quality loss. An old version that is cheaper at the same quality is only flagged.
+    tokens_a, tokens_b = judged.get('tokens_a', 0), judged.get('tokens_b', 0)
+    if wins_b >= wins_a and tokens_b * LENGTH_GAP < tokens_a:
+        return 'ok', ['B not worse (%d:%d) and %d tokens cheaper' % (wins_b, wins_a, tokens_a - tokens_b)], 'b'
+    if wins_a >= wins_b and tokens_a * LENGTH_GAP < tokens_b:
+        return 'insufficient', ['no quality difference (A %d, B %d); B costs %d tokens more — flagged, not reverted'
+                                % (wins_a, wins_b, tokens_b - tokens_a)], None
     return 'insufficient', ['no clear winner: A %d, B %d of %d decisive (need %d%%)'
                             % (wins_a, wins_b, decisive, WIN_SHARE * 100)], None
+
+
+def cheaper_b(judged, wins_a, wins_b):
+    return wins_b >= wins_a and judged.get('tokens_b', 0) * LENGTH_GAP < judged.get('tokens_a', 0)
 
 
 def length_bias(judged_list):

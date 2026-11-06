@@ -53,6 +53,22 @@ class AntigenTest(unittest.TestCase):
                 got = [row['id'] for row in antigen.matches(self.table, tool, payload)]
                 self.assertIn(want, got)
 
+    def test_cases_from_data_fire_and_stay_quiet(self):
+        # genome/antigen_cases.json: what each antigen fires on and stays quiet on, as data. The nightly evolution
+        # session proposes antigens only this way (it writes no test code); this test reads the file as it is.
+        path = os.path.join(os.path.dirname(antigen.TABLE), 'antigen_cases.json')
+        with open(path, encoding='utf-8') as f:
+            cases = json.load(f)
+        ids = {row['id'] for row in self.table}
+        for aid, own in cases.items():
+            self.assertIn(aid, ids, 'cases for an unknown antigen')
+            for case in own.get('fires', []):
+                with self.subTest(aid, fires=case):
+                    self.assertIn(aid, [r['id'] for r in antigen.matches(self.table, case['tool'], case['input'])])
+            for case in own.get('quiet', []):
+                with self.subTest(aid, quiet=case):
+                    self.assertNotIn(aid, [r['id'] for r in antigen.matches(self.table, case['tool'], case['input'])])
+
     def test_quiet_commands_stay_silent(self):
         for command in ('git -C /a/b status', 'ls -la', 'echo "${R}:apps/x"', 'while read f; do :; done < list'):
             with self.subTest(command):

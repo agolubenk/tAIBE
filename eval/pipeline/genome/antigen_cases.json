@@ -1,0 +1,38 @@
+{
+ "git-replay": {
+  "fires": [
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "git replay --onto main topic"
+    }
+   }
+  ],
+  "quiet": [
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "git rebase --onto main topic"
+    }
+   }
+  ]
+ },
+ "pr-merge": {
+  "fires": [
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "gh pr merge 445 --squash --match-head-commit abc"
+    }
+   }
+  ],
+  "quiet": [
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "gh pr view 445 --json mergeable"
+    }
+   }
+  ]
+ }
+}

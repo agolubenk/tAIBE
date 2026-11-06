@@ -104,6 +104,7 @@ class PipelineSettingsTest(unittest.TestCase):
         self.assertTrue(ps.enabled('askOnce', self.root))
         self.assertTrue(ps.enabled('notAToggle', self.root))  # unknown → on
         self.assertFalse(ps.enabled('abJudgeClaude', self.root))  # default off: the owner's tokens
+        self.assertFalse(ps.enabled('evolveAutoMerge', self.root))  # default off: closed
         # The owner switched councilReview off on the board: no env value turns it back on.
         self.connect()
         for value in ('on', 'councilReview=on', 'swarm=off'):
@@ -144,7 +145,7 @@ class PipelineSettingsTest(unittest.TestCase):
         old_board = dict(FULL, toggles={n: v for n, v in FULL['toggles'].items() if n not in ps.LATE_TOGGLES})
         self.connect(dict(old_board, toggles=dict(old_board['toggles'], councilReview=False)))
         self.assertFalse(ps.enabled('councilReview', self.root))
-        self.assertTrue(ps.enabled('evolveAutoMerge', self.root))
+        self.assertFalse(ps.enabled('evolveAutoMerge', self.root))  # closed until the board says on
         self.assertFalse(ps.enabled('abJudgeClaude', self.root))  # the owner's tokens: off until the board says on
         # A late switch that is sent is the board's: off stays off; a non-boolean is an incomplete answer.
         self.assertIsNone(ps.complete(dict(FULL, toggles=dict(FULL['toggles'], evolveAutoMerge='no'))))

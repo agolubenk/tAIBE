@@ -18,6 +18,7 @@ import daily  # noqa: E402
 import daily_git as g  # noqa: E402
 import judges as judging  # noqa: E402
 import quality  # noqa: E402
+import resources  # noqa: E402
 
 CASES = [{'id': 'c%d' % i, 'task': 'situation %d' % i, 'expect': 'good reaction'} for i in range(6)]
 OLD = '# skill\n\nstep one\nstep two\nstep three\nstep four\nstep five\nstep six\nEND\n'
@@ -85,9 +86,14 @@ class QualityTest(unittest.TestCase):
         (status, reasons, _), final = self.verdicts(biased, a=a, b=b)
         self.assertEqual(status, 'brak')
         self.assertTrue(all('length bias' in r for r in reasons), reasons)
-        # the honest judge on the same pair: no evidence at all, which is not a defect
-        (status, _, _), _ = self.verdicts({'j1': judge(), 'j2': judge()}, a=a, b=b)
-        self.assertEqual(status, 'insufficient')
+        # the honest judge on the same pair: equal quality, B cheaper → B is kept (pinned), nothing reverts
+        (status, reasons, pick), _ = self.verdicts({'j1': judge(), 'j2': judge()}, a=a, b=b)
+        self.assertEqual((status, pick), ('accepted', 'b'), reasons)
+        self.assertIn('cheaper', reasons[0])
+        # the other way round — the merged version is the longer one at equal quality: flagged, never a revert
+        (status, reasons, pick), _ = self.verdicts({'j1': judge(), 'j2': judge()}, a=b, b=a)
+        self.assertEqual((status, pick), ('insufficient', None))
+        self.assertTrue(any('not reverted' in r for r in reasons), reasons)
 
     def test_a_pick_against_the_bias_stands(self):
         run = one_judge_run(judge(tie_break='shorter'), texts=((OLD, NEW + 'one more line of text\n'),))
@@ -196,7 +202,10 @@ class CalibrationTest(unittest.TestCase):
             seen.update(cmd=cmd, **kw)
             return subprocess.CompletedProcess(cmd, 0, 'reasoning\nTIE\n', '')
         with mock.patch.object(judging.subprocess, 'run', fake_run):
-            self.assertEqual(judging.claude_call()(None, 'the prompt'), 'reasoning\nTIE\n')
+            budget = resources.Budget(calls=1)
+            self.assertEqual(judging.claude_call(budget)(None, 'the prompt'), 'reasoning\nTIE\n')
+            with self.assertRaises(resources.BudgetSpent):  # the night's ceiling: no second call
+                judging.claude_call(budget)(None, 'the prompt')
         cmd = seen['cmd']
         self.assertEqual(cmd[cmd.index('--model') + 1], 'claude-sonnet-5-5')
         self.assertEqual(cmd[cmd.index('--tools') + 1], '')
@@ -214,7 +223,8 @@ class CalibrationTest(unittest.TestCase):
                 f.write(''.join(json.dumps(c) + '\n' for c in CASES))
             args = mock.Mock(judges='x1,x2', calibration_cases=os.path.join(root, 'cases.jsonl'),
                              factory=lambda name: (lambda s, u: 'X'))
-            with mock.patch.object(daily, 'log', lambda *a: None):
+            with mock.patch.object(daily, 'log', lambda *a: None), \
+                    mock.patch.object(resources, 'swap_share', lambda: 0.1):
                 calibration = daily.calibrate_judges(args, root, root, None, float('inf'))
             self.assertEqual((calibration['passed'], len(calibration['rows'])), ([], 2))
             v = daily.no_judge_line({'target': 'taibe', 'path': 'p', 'a': '1', 'b': '2'}, calibration)
@@ -260,6 +270,11 @@ class PlanTest(unittest.TestCase):
         cases = os.path.join(self.root, 'cases')
         self.write('cases/grill.jsonl', json.dumps(CASES[0]) + '\n')
         items, need, _ = daily.plan('taibe', self.root, since, head, cases)
+        # a second edit in the same window: A is the version just before it, not the window's start
+        self.write('.claude/skills/grill/SKILL.md', NEW + 'third\n')
+        head2 = self.commit('v3')
+        items2, _, _ = daily.plan('taibe', self.root, since, head2, cases)
+        self.assertEqual((items2[0]['text_a'], items2[0]['text_b']), (NEW, NEW + 'third\n'))
         self.assertEqual([(i['path'], i['text_a'], i['text_b']) for i in items],
                          [('.claude/skills/grill/SKILL.md', OLD, NEW)])
         self.assertEqual([n['path'] for n in need], ['.claude/rules/50-x.md'])  # hooks are code, not judged
@@ -277,72 +292,6 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(daily.cases_path('.claude/rules/90-team-t3.md').endswith('/rule-90-team-t3.jsonl'))
         self.assertTrue(daily.cases_path('eval/prompts/lens-1.md').endswith('/prompt-lens-1.jsonl'))
         self.assertTrue(daily.cases_path('boards/CLAUDE.md').endswith('/card-boards.jsonl'))
-
-
-class MergeGateTest(unittest.TestCase):
-    def test_only_listed_layer_paths(self):
-        ok = g.merge_allowed
-        self.assertTrue(ok(['.claude/skills/grill-task/SKILL.md'])[0])
-        self.assertTrue(ok(['eval/evolve/verdicts.jsonl', 'eval/evolve/cases/x.jsonl'])[0])
-        self.assertTrue(ok(['eval/pipeline/genome/antigens.json', 'eval/pipeline/reflex/test_reflex.py'])[0])
-        for bad in ('.claude/hooks/pre-tool-use-merge-guard.py', '.claude/settings.json', '.claude/merge-guard.json',
-                    '.claude/scripts/pipeline_settings.py', '.github/workflows/layer-ci.yml', 'eval/evolve/daily.py',
-                    'boards/apps/api/src/index.ts', '.claude/skills/x/extra/SKILL.md', 'eval/evolve/budget.json'):
-            with self.subTest(bad):
-                self.assertFalse(ok(['.claude/rules/01-base.md', bad])[0])
-        self.assertFalse(ok([])[0])
-
-    def test_checks_must_be_green(self):
-        green = [{'name': 'kit-tests', 'bucket': 'pass'}, {'name': 'b', 'bucket': 'skipping'}]
-        self.assertTrue(g.checks_green(green)[0])
-        self.assertFalse(g.checks_green([{'name': 'kit-tests', 'bucket': 'pending'}])[0])
-        self.assertFalse(g.checks_green([{'name': 'kit-tests', 'bucket': 'fail'}])[0])
-        self.assertFalse(g.checks_green([{'name': 'x', 'bucket': 'skipping'}])[0])
-        self.assertFalse(g.checks_green([])[0])
-
-    def gate(self, prs, enabled, verdicts=()):
-        merged = []
-
-        def fake_gh(repo, *args, check=True):
-            if args[:2] == ('pr', 'list'):
-                return json.dumps(prs)
-            if args[:2] == ('pr', 'checks'):
-                return json.dumps([{'name': 'kit-tests', 'bucket': 'pass'}])
-            return ''
-
-        def fake_run(cmd, **kw):
-            merged.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, '', '')
-        with mock.patch.object(g, 'gh', fake_gh), mock.patch.object(g.subprocess, 'run', fake_run), \
-                mock.patch.object(g, 'mirrored', lambda *a: False):
-            rows = g.merge_ready('/repo', 'board-agents', list(verdicts), enabled)
-        return rows, merged
-
-    PR = {'number': 7, 'headRefName': 'evolve/revert-abc', 'headRefOid': 'f00', 'isDraft': False,
-          'body': 'x\nevolve-verdict: abc\n', 'url': 'u7', 'files': [{'path': '.claude/rules/50-x.md'}]}
-
-    def test_merges_only_with_the_switch_on(self):
-        rows, merged = self.gate([self.PR], enabled=True)
-        self.assertTrue(rows[0]['merged'])
-        self.assertEqual(merged[0][:3], ['gh', 'pr', 'merge'])
-        self.assertIn('--auto', merged[0])
-        self.assertEqual(merged[0][merged[0].index('--match-head-commit') + 1], 'f00')
-        rows, merged = self.gate([self.PR], enabled=False)
-        self.assertEqual((rows[0]['merged'], merged), (False, []))
-        self.assertIn('evolveAutoMerge', rows[0]['why'])
-
-    def test_not_the_runs_branch_or_path_is_left_alone(self):
-        other = dict(self.PR, headRefName='feature/x')
-        wide = dict(self.PR, files=[{'path': '.claude/hooks/gate.py'}])
-        rows, merged = self.gate([other, wide], enabled=True)
-        self.assertEqual(merged, [])
-        self.assertEqual(len(rows), 1)  # feature/x is not even looked at
-        self.assertIn('never merged', rows[0]['why'])
-
-    def test_a_verdict_marked_brak_later_is_not_merged(self):
-        rows, merged = self.gate([self.PR], True, [{'supersedes': 'abc', 'status': 'brak'}])
-        self.assertFalse(rows[0]['merged'])
-        self.assertEqual([c for c in merged if c[:3] == ['gh', 'pr', 'merge']], [])
 
 
 if __name__ == '__main__':

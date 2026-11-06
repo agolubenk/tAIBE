@@ -25,6 +25,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import quality  # noqa: E402
+from tokens import est_tokens  # noqa: E402
 
 # 06.11, first run: qwen2.5:7b (7.6B) and glm4 (9.4B) failed the truncate and harm canaries, glm4 also answered «X»
 # in both orders on every case. 7B-class models are not tried again; above that, calibration decides.
@@ -94,12 +95,14 @@ def candidates(gateway_models, tags, claude_on, min_params=MIN_LOCAL_PARAMS_B):
     return out + [CLAUDE_JUDGE] if claude_on else out
 
 
-def claude_call(model=CLAUDE_MODEL, timeout=600):
+def claude_call(budget, model=CLAUDE_MODEL, timeout=600):
     """A judge call through the Claude Code CLI: no tools, no MCP, no hooks, no session file, an empty folder (no
-    project instructions). The prompt goes on stdin; the answer format is ab.py's (last line X, Y or TIE)."""
+    project instructions). The prompt goes on stdin; the answer format is ab.py's (last line X, Y or TIE). Every call
+    is charged to `budget` (resources.Budget) first: past the night's ceiling the judge is unavailable."""
     settings = json.dumps({'disableAllHooks': True})
 
     def call(system, user):
+        budget.spend(est_tokens(user) + 600)  # the prompt plus a short reasoned answer
         cmd = ['claude', '-p', '--model', model, '--tools', '', '--strict-mcp-config', '--mcp-config',
                '{"mcpServers":{}}', '--settings', settings, '--no-session-persistence', '--output-format', 'text',
                '--system-prompt', system or 'You are a strict, impartial judge. Answer exactly as asked.']
@@ -137,15 +140,23 @@ def calibrate(call, cases, text, window=None):
 
 
 def select(names, factory, cases, text, windows=None, want=WANT_JUDGES, limit=MAX_CANDIDATES,
-           after=lambda name: None, log=lambda *a: None, stop=lambda: False):
-    """(passed names, [calibration row]) — candidates one at a time until `want` pass or `limit` are tried."""
+           after=lambda name: None, log=lambda *a: None, stop=lambda: False, admit=lambda name: (True, '')):
+    """(passed names, [calibration row]) — candidates one at a time until `want` pass or `limit` are tried. A
+    candidate `admit` refuses (not enough memory) is not loaded; every loaded one is unloaded, whatever happens."""
     passed, rows = [], []
     for name in names[:limit]:
         if len(passed) >= want or stop():
             break
+        ok, why = admit(name)
+        if not ok:
+            rows.append({'model': name, 'passed': False, 'reasons': ['not loaded: %s' % why], 'asks': []})
+            log('calibrate %s: skipped — %s' % (name, why))
+            continue
         log('calibrate %s' % name)
-        row = dict(calibrate(factory(name), cases, text, (windows or {}).get(name)), model=name)
-        after(name)
+        try:
+            row = dict(calibrate(factory(name), cases, text, (windows or {}).get(name)), model=name)
+        finally:
+            after(name)
         rows.append(row)
         log('calibrate %s: %s — %s' % (name, 'passed' if row['passed'] else 'failed', '; '.join(row['reasons'])))
         if row['passed']:

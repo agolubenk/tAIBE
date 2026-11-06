@@ -2,6 +2,7 @@
 """Steps of the daily evolution run around the judging (`daily.py`): state files, switches, the llm-gateway, the
 layer's cost metrics, the headless Claude session and publishing what the run wrote. Stdlib only."""
 import datetime
+import http.client
 import fnmatch
 import json
 import os
@@ -22,8 +23,9 @@ import quality  # noqa: E402
 SESSION_TURNS = 60
 SESSION_BUDGET_USD = '4'
 SESSION_TIMEOUT_MIN = 45
-QUOTA = re.compile(r'usage limit|rate.?limit|quota|credit balance|limit (?:reached|exceeded)|out of (?:extra )?usage',
-                   re.I)
+# «You've hit your limit · resets 4am» is what the CLI prints today; the rest are older and API wordings.
+QUOTA = re.compile(r"you(?:'|’)ve hit your (?:usage )?limit|hit your limit|usage limit|rate.?limit|quota|"
+                   r'credit balance|limit (?:reached|exceeded)|out of (?:extra )?usage', re.I)
 HUB = os.path.expanduser(os.environ.get('EVOLVE_HUB') or
                          '~/Desktop/Development/handoff/2026-11-06-restart/tools/hub.mjs')
 CARD, WORKSPACE = 'SE-49', 'lth89qy6f8j1greiy4c5cn23'
@@ -170,16 +172,26 @@ def stream_call(repo, model, timeout=900):
         body = json.dumps({'model': model, 'messages': messages, 'temperature': 0, 'stream': True}).encode('utf-8')
         req = urllib.request.Request(base + '/chat/completions', data=body, method='POST',
                                      headers={'Content-Type': 'application/json', 'Authorization': 'Bearer %s' % token})
-        parts = []
+        parts, done = [], False
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — local gateway URL
             for raw in resp:
                 line = raw.decode('utf-8', 'replace').strip()
-                if not line.startswith('data:') or line[5:].strip() == '[DONE]':
+                if not line.startswith('data:'):
                     continue
+                if line[5:].strip() == '[DONE]':
+                    done = True
+                    break
                 chunk = json.loads(line[5:].strip())
                 if chunk.get('error'):
                     raise OSError('gateway: %s' % str(chunk['error'])[:200])
-                parts.append(((chunk.get('choices') or [{}])[0].get('delta') or {}).get('content') or '')
+                choice = (chunk.get('choices') or [{}])[0]
+                parts.append((choice.get('delta') or {}).get('content') or '')
+                done = done or bool(choice.get('finish_reason'))
+        # A stream cut short or an empty answer is the backend failing, not the judge: unavailable, never brak.
+        if not done:
+            raise OSError('gateway: the answer stream ended early')
+        if not ''.join(parts).strip():
+            raise OSError('gateway: empty answer')
         return ''.join(parts)
     return call
 
@@ -191,7 +203,7 @@ def retrying(call, revive, attempts=3, pause=20):
         for n in range(attempts):
             try:
                 return call(system, user)
-            except (OSError, ValueError) as e:  # urllib's HTTPError and URLError are OSError
+            except (OSError, ValueError, http.client.HTTPException) as e:  # HTTPError, URLError, IncompleteRead
                 if n == attempts - 1:
                     raise
                 log('judge call failed (%s) — retry in %ds' % (str(e)[:80], pause))
@@ -237,91 +249,3 @@ def layer_metrics(wt):
     else:
         out['ctx_budget'] = 'skipped: eval/tools/ctx_budget.py is not in this revision'
     return out
-
-
-def cmd_session(args):
-    """The headless Claude session. Quiet exit (0) when the quota is spent or the master switch is off."""
-    wt = os.path.join(g.main_repo(HERE), args.worktree)
-    if not switch('automation', wt):
-        log('automation is off — no session')
-        return 0
-    with open(os.path.join(HERE, 'daily-prompt.md'), encoding='utf-8') as f:
-        prompt = f.read()
-    for key, value in (('__REPORT__', os.path.join(STATE_DIR, 'runs/latest.json')), ('__HUB__', HUB),
-                       ('__CARD__', CARD), ('__WORKSPACE__', WORKSPACE)):
-        prompt = prompt.replace(key, value)
-    env = dict(os.environ, WT_DEPS_CHECK='0',
-               TAIBE_PIPELINE='successorAuto=off,nerveWakes=off,swarm=off,promptBrief=off,councilReview=off')
-    # Edit rules cover every tool that writes a file: the session can write these paths and nothing else.
-    allowed = ['Read', 'Glob', 'Grep', 'Edit(eval/evolve/cases/**)', 'Edit(eval/evolve/verdicts.jsonl)',
-               'Edit(eval/pipeline/genome/antigens.json)', 'Edit(eval/pipeline/reflex/test_reflex.py)',
-               'Bash(git log:*)', 'Bash(git diff:*)', 'Bash(git show:*)', 'Bash(python3 -I eval/evolve/:*)',
-               'Bash(python3 -I -m unittest:*)', 'Bash(node %s:*)' % HUB]
-    cmd = ['claude', '-p', prompt, '--max-turns', str(SESSION_TURNS), '--max-budget-usd', SESSION_BUDGET_USD,
-           '--permission-mode', 'dontAsk', '--allowedTools', *allowed,
-           '--disallowedTools', 'Agent', 'WebFetch', 'WebSearch', 'Bash(gh:*)', 'Bash(git push:*)',
-           'Bash(git commit:*)', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-           '--add-dir', STATE_DIR, os.path.expanduser('~/.claude/projects'),
-           '--no-session-persistence', '--output-format', 'json']
-    if args.dry_run:
-        print(json.dumps(cmd[:2] + ['<daily-prompt.md>'] + cmd[3:]))
-        return 0
-    try:
-        res = subprocess.run(cmd, cwd=wt, env=env, capture_output=True, text=True, timeout=SESSION_TIMEOUT_MIN * 60)
-    except subprocess.TimeoutExpired:
-        log('session: stopped after %d min' % SESSION_TIMEOUT_MIN)
-        return 0
-    text = (res.stdout or '') + (res.stderr or '')
-    if QUOTA.search(text) and res.returncode != 0:
-        log('session: quota spent — quiet exit')
-        return 0
-    save_json('runs/session-latest.json', {'exit': res.returncode, 'tail': text[-4000:]})
-    log('session: exit %d' % res.returncode)
-    return 0
-
-
-def cmd_publish(args):
-    """Verdicts and cases (one PR), antigens with their test green (another PR), from the run's worktree."""
-    repo = g.main_repo(HERE)
-    wt = os.path.join(repo, args.worktree)
-    base = BASE
-    head = g.git(wt, 'rev-parse', 'HEAD').strip()
-    dirty = [ln[3:] for ln in (g.git(wt, 'status', '--porcelain', '--untracked-files=all') or '').splitlines()]
-    date = now().date().isoformat()
-    rows = []
-    groups = (('verdicts', [p for p in dirty if any(fnmatch.fnmatchcase(p, x) for x in PUBLISH)]),
-              ('antigens', [p for p in dirty if p in ANTIGENS]))
-    for name, paths in groups:
-        if not paths:
-            continue
-        files = {}
-        for p in paths:
-            with open(os.path.join(wt, p), encoding='utf-8') as f:
-                files[p] = f.read()
-            problems = quality.check_cases(os.path.join(wt, p)) if p.startswith('eval/evolve/cases/') else []
-            if problems:
-                files.pop(p)
-                rows.append({'skipped': p, 'why': '; '.join(problems)})
-        if name == 'antigens':
-            res = subprocess.run([sys.executable, '-I', '-m', 'unittest', 'discover', '-s',
-                                  os.path.join(wt, 'eval/pipeline/reflex'), '-p', 'test_reflex.py'],
-                                 capture_output=True, text=True, timeout=300)
-            if res.returncode != 0:
-                rows.append({'skipped': 'antigens', 'why': 'test_reflex.py is red: %s' % res.stderr[-300:]})
-                continue
-        if not files:
-            continue
-        title = 'evolve: %s of %s' % ('verdicts and cases' if name == 'verdicts' else 'antigens', date)
-        body = 'The daily evolution run (`eval/evolve/daily.py publish`), %s.\n\nFiles: %s\n\n%s' % (
-            date, ', '.join('`%s`' % p for p in sorted(files)), load_json('runs/latest.json', {}).get('summary', ''))
-        if args.dry_run:
-            rows.append({'would_open': title, 'files': sorted(files)})
-            continue
-        commit = g.commit_files(repo, head, files, title)
-        rows.append({'pr': g.open_pr(repo, base, commit, 'evolve/%s-%s' % (name, date), title, body)})
-    others = [p for p in dirty if p not in sum((ps for _, ps in groups), [])]
-    if others:
-        rows.append({'not_published': others, 'why': 'outside what the run publishes'})
-    print(json.dumps(rows, ensure_ascii=False, indent=1))
-    return 0
-

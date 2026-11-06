@@ -47,8 +47,9 @@ TTL_SECONDS = 600
 TIMEOUT_SECONDS = 1.5  # hooks run on every prompt: a slow board must not slow the session
 TOGGLES = ('abJudge', 'abJudgeClaude', 'askOnce', 'handoffDupes', 'evolveAutoMerge', 'promptBrief', 'successorAuto',
            'grillHint', 'nerveWakes', 'swarm', 'councilReview', 'cardAutofill')
-# Off unless the owner turns them on: they spend the owner's own tokens (the board's `default: false`).
-DEFAULT_OFF = ('abJudgeClaude',)
+# Off unless the owner turns them on (the board's `default: false`): the Claude judge spends the owner's tokens, and
+# the nightly auto-merge stays closed until the owner has watched a week of its journal (review of PR #83, 06.11).
+DEFAULT_OFF = ('abJudgeClaude', 'evolveAutoMerge')
 # Switches newer than the board that is deployed: a board from before them does not send them, and its answer is
 # still whole without them (they take their default). A late switch that is sent must be a boolean. Drop a name
 # from here once every board in use sends it.

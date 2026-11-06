@@ -60,7 +60,7 @@ python3 -I eval/evolve/daily.py cases eval/evolve/cases/*.jsonl   # cases fit fo
 > «А/В сравнения должна запускать отдельная автоматическая сессия 1 раз в сутки и вносить корректировки также
 > автоматически. Ложноположительные результаты должны помечаться как брак и не приниматься.»
 
-`daily.sh run` (launchd, 04:30 local) refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
+`daily.sh run` (launchd, 05:00 local, after the notebook sync of 04:17) runs `daily.py nightly`: it takes the run's one lock (`flock`, shared with `daily.py cycle --force`), refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
 `origin/board-agents`; no person's checkout is touched) and starts its fresh `daily.py cycle`:
 
 | Step | Who | What |
@@ -70,13 +70,13 @@ python3 -I eval/evolve/daily.py cases eval/evolve/cases/*.jsonl   # cases fit fo
 | calibrate | `judges.py` | Tonight's candidates — cloud models the gateway lists (OpenRouter keys), local models above 8B (one per weights blob, smallest first), Claude when `abJudgeClaude` is on — are calibrated one at a time on the reference skill (`grill-task`): identical texts TIE in both orders, the text beats its first 30 % and its copy with a harmful paragraph in both orders, 6 asks, all right. Only those that pass judge; the first two that pass are enough. None passes → every verdict of the night is insufficient, nothing acts, one line «нет годного судьи» goes to SE-49 |
 | judge | `daily.py run` + `quality.py` | Previous version against current for every changed file with cases, the calibrated judges one after the other (one model in memory at a time); files without cases go to `~/.claude/evolve/queue.json` |
 | act | `daily.py run` | Accepted loss of the merged version → revert PR; accepted win → pinned in `verdicts.jsonl`; brak and insufficient → recorded, never applied |
-| session | `daily_steps.cmd_session` | `claude -p` with `daily-prompt.md`: cases for the queue, a review of today's accepted verdicts for false positives, antigens from the day's incidents, one line to SE-49. 60 turns, $4, 45 min; quota spent — quiet exit; it cannot commit, push or merge |
-| publish | `daily.py publish` | Verdicts and cases → one PR; antigens with `test_reflex.py` green → another (`evolve/…` branches) |
-| merge | `daily.py merge` | The run's own PRs only: paths on `daily_git.AUTO_MERGE_PATHS`, none on `NEVER_MERGE` (hooks, scripts, settings, merge-guard, CI, this toolkit's code), every check green, switch `evolveAutoMerge` on → `gh pr merge --auto --squash --match-head-commit`. HR: PRs only, never merged by the run |
+| session | `daily_session.cmd_session` | `claude -p` with `daily-prompt.md` and one input file the code prepares (verdicts as labels and reasons, queued artifacts with their diffs, the day's incidents as scrubbed command templates): cases for the queue, a review of accepted verdicts (it can only append a `supersedes … brak` line), antigens as data (rows plus fire/quiet cases in `antigen_cases.json`), and a last line for SE-49 that the code posts after the personal-data scan. Exact rights: read the worktree, write four data paths, two exact check commands; no git, gh, hub, MCP, agents or code. 60 turns, $4, 45 min; quota spent — quiet exit |
+| publish | `daily_session.cmd_publish` | Runs nothing the model wrote. Data (cases, verdicts) passes `check_cases`, the past-lines rule and `guard.scan` (names, e-mails, phones, `/Users/`, UUIDs, tokens → refused) → one PR that may merge by itself; antigens pass `guard.check_antigens` (lesson ≤ 400, no «ignore/bypass» wording; pattern < 50 ms on 100 KB in a child process; own fire/quiet cases) → one PR for a person |
+| merge | `daily.py merge` | Only PRs this run opened (`prs.json` record + `Evolve-Run:` trailer, head unchanged), no `D`/`R` (`git diff --name-status -M`), safe class only — data, or a skill / prompt (not `lens-*`) restored to the exact blob of a version already in the base; every check green; the base branch has required checks (none → closed); `evolveAutoMerge` on and read from the board (defaults or a failed read → off) → `gh pr merge --auto --squash --match-head-commit`. Rules, cards, agents, commands, the genome, `*.py`, `*.sh`, lenses: PRs marked «[manual merge]». HR: PRs only |
 
 The merge is done by the owner's scheduled job, not by a Claude session: the sessions' merge-guard
 (`.claude/hooks/pre-tool-use-merge-guard.py`) is not bypassed and not changed, and the headless session itself has
-no `gh`, `git push` or `git commit`. A scheduled run outside 03:00–08:00 (a Mac asleep at 04:30 starts the job on
+no `gh`, `git push` or `git commit`. A scheduled run outside 03:00–08:00 (a Mac asleep at 05:00 starts the job on
 wake) logs and waits for the next night, so it never spends daytime quota; `--force` runs it now.
 
 ### Statuses and thresholds (`quality.py`)
@@ -105,6 +105,22 @@ verdict brak; a revert PR whose verdict was superseded is closed, not merged. No
 passed. Off by default because it spends the owner's tokens: a night with two artifacts is about 70 calls of
 5–10 K tokens each (calibration 12, each artifact ~26–30). Turning it on is the owner's decision in the board's
 settings (Pipeline & evolution).
+
+### Machine limits (`resources.py`)
+
+A local model loads only if `size × 1.2` fits free + inactive memory minus a 6 GB reserve; swap over 80 % stops the
+night (06.11 at 13:00: 86 % used — such a night is skipped); every model is unloaded in `finally` and `/api/ps` is
+checked at the end. Claude (judge and session together) is capped at 80 calls and 600 K tokens a night. A judge
+answer that is empty or cut short, or an `IncompleteRead`, is the backend failing: retried, then «unavailable» —
+never brak. A revert puts back only the version before the losing edit (A is the parent of the last commit that
+changed the file), and only if the file has not changed since the verdict. «Not worse and cheaper» keeps B; an old
+version that is cheaper at the same quality is only flagged, never reverted.
+
+### Turning auto-merge on (owner)
+
+`evolveAutoMerge` is **off** by default and off whenever the settings cannot be read. Leave it off for a week and
+read the journal (`~/.claude/evolve/runs/*.json`, the `[manual merge]` and data PRs it opened); then turn on
+«Allow auto-merge» and required checks for `board-agents` in GitHub, and the switch in the board's settings.
 
 ### Install (owner, after the merge)
 

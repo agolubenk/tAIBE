@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # The daily evolution run (eval/evolve/README.md «Daily run»): install | uninstall | run | status
 #
-#   bash eval/evolve/daily.sh install         # owner, after the merge: render the plist, load it (04:30 local)
+#   bash eval/evolve/daily.sh install         # owner, after the merge: render the plist, load it (05:00 local)
 #   bash eval/evolve/daily.sh uninstall       # unload and remove it
-#   bash eval/evolve/daily.sh run [--force]   # what launchd starts: refresh the run's own worktree, then its cycle
+#   bash eval/evolve/daily.sh run [--force]   # what launchd starts: `daily.py nightly` (lock → refresh → cycle)
 #   bash eval/evolve/daily.sh status          # launchd state, last run, state file
 #
 # `run` works only in worktrees/evolve/daily (detached on a fresh origin/board-agents): no person's checkout is
-# touched. The cycle (daily.py) is gateway → A/B with quality control → headless session → publish → merge; the merge
-# is done here, by the owner's scheduled job, never by a Claude session (their merge-guard stays as it is).
-# One run at a time (a lock in the state folder); the Mac is kept awake while it runs (caffeinate).
+# touched, and a folder that is not its own worktree's top is refused before any checkout or clean. The lock, the
+# refresh and the cycle are in daily.py (`nightly`): one kernel lock (flock) shared with `daily.py cycle --force`,
+# handed to the fresh cycle as an open file, so no second run can start in between. The merge is done by this
+# scheduled job, never by a Claude session (their merge-guard stays as it is).
 set -euo pipefail
 
 LABEL="space.hrhelper.evolve-daily"
@@ -21,43 +22,28 @@ repo_of() {
   dirname "$(git -C "$1" rev-parse --path-format=absolute --git-common-dir)"
 }
 
+own_worktree() {  # the folder is the top of its own worktree, not a folder inside someone's checkout
+  local top
+  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [[ "$(cd "$top" && pwd -P)" == "$(cd "$1" && pwd -P)" ]]
+}
+
 refresh() {  # the run's own worktree, detached on a fresh origin/$BASE
   local repo="$1" wt="$2"
   git -C "$repo" fetch --quiet origin "$BASE"
   if [[ ! -d "$wt" ]]; then
     git -C "$repo" worktree add --quiet --detach "$wt" "origin/$BASE"
-  else
+  elif own_worktree "$wt"; then
     git -C "$wt" checkout --quiet --force --detach "origin/$BASE"
     git -C "$wt" clean -fdq
-  fi
-}
-
-run() {
-  local repo="$1" wt="$2" state="$3"; shift 3
-  mkdir -p "$state"
-  if ! mkdir "$state/run.lock" 2>/dev/null; then
-    local pid; pid="$(cat "$state/run.lock/pid" 2>/dev/null || true)"
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-      echo "evolve: a run is already going (pid $pid)"; return 0
-    fi
-    rm -rf "$state/run.lock"; mkdir "$state/run.lock"   # a stale lock from a run that died
-  fi
-  echo $$ > "$state/run.lock/pid"
-  trap 'rm -rf "$state/run.lock"' EXIT
-  refresh "$repo" "$wt"
-  if [[ ! -f "$wt/eval/evolve/daily.py" ]]; then
-    echo "evolve: origin/$BASE has no eval/evolve/daily.py yet — nothing to run"; return 0
-  fi
-  # The fresh copy runs, not this one: the code that judges is the code that was merged.
-  if command -v caffeinate >/dev/null; then   # bash 3.2 (macOS): no empty-array expansion under set -u
-    caffeinate -i python3 -I "$wt/eval/evolve/daily.py" cycle "$@"
   else
-    python3 -I "$wt/eval/evolve/daily.py" cycle "$@"
+    echo "evolve: $wt is not its own worktree — refusing to check out or clean there" >&2
+    return 1
   fi
 }
 
 install_job() {
-  local repo="$1" wt="$2" state="$3" here="$4"
+  local repo="$1" wt="$2" state="$3"
   local plist="$HOME/Library/LaunchAgents/$LABEL.plist" path_dirs="" dir
   refresh "$repo" "$wt"
   if [[ ! -f "$wt/eval/evolve/daily.sh" ]]; then
@@ -69,11 +55,11 @@ install_job() {
   done
   mkdir -p "$state" "$(dirname "$plist")"
   sed -e "s#__DAILY_SH__#$wt/eval/evolve/daily.sh#g" -e "s#__PATH__#$path_dirs:/usr/bin:/bin:/usr/sbin:/sbin#g" \
-      -e "s#__STATE__#$state#g" -e "s#__HOME__#$HOME#g" "$here/$LABEL.plist" > "$plist"
+      -e "s#__STATE__#$state#g" -e "s#__HOME__#$HOME#g" "$wt/eval/evolve/$LABEL.plist" > "$plist"
   plutil -lint "$plist" >/dev/null
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$plist"
-  echo "evolve: installed $plist — every day at 04:30, log $state/launchd.log"
+  echo "evolve: installed $plist — every day at 05:00, log $state/launchd.log"
 }
 
 main() {
@@ -83,12 +69,18 @@ main() {
   wt="$repo/worktrees/evolve/daily"
   state="${EVOLVE_STATE_DIR:-$HOME/.claude/evolve}"
   case "${1:-}" in
-    install) install_job "$repo" "$wt" "$state" "$here" ;;
+    install) install_job "$repo" "$wt" "$state" ;;
     uninstall)
       launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
       rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
       echo "evolve: uninstalled (the worktree $wt and the state $state stay)" ;;
-    run) shift; run "$repo" "$wt" "$state" "$@" ;;
+    run)
+      shift
+      if command -v caffeinate >/dev/null; then   # keep the Mac awake while it runs
+        caffeinate -i python3 -I "$here/daily.py" nightly "$@"
+      else
+        python3 -I "$here/daily.py" nightly "$@"
+      fi ;;
     status)
       launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -E '^\s+(state|last exit code|runs) ' || echo "launchd: not installed"
       python3 -I "$here/daily.py" status ;;
