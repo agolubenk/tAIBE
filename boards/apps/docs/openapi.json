@@ -29341,7 +29341,7 @@
             }
           },
           "409": {
-            "description": "Corpus allowlist or secret scan rejection",
+            "description": "Corpus allowlist, secret scan or missing content rejection",
             "content": {
               "application/json": {
                 "schema": {

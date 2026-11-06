@@ -8,6 +8,7 @@ import {
   ssrVersionTable,
 } from "../database/ssr-schema";
 import { entityOfPath, isCorpusPath } from "./corpus";
+import { knownShas } from "./known-shas";
 import { replaceOpenDraft } from "./replace-open-draft";
 import { scanSecrets } from "./secret-scan";
 
@@ -75,6 +76,29 @@ export async function syncCorpus(
     );
   }
 
+  // A file without content reuses a blob that this workspace already holds
+  // (TB-86). Other shas need their bytes: else the version reads a blob of
+  // another workspace, or names a blob that never arrives.
+  const contentless = input.files.filter((file) => file.content === undefined);
+  if (contentless.length > 0) {
+    const held = new Set(
+      await knownShas(
+        workspaceId,
+        contentless.map((file) => file.sha256),
+      ),
+    );
+    const missing = contentless.filter((file) => !held.has(file.sha256));
+    if (missing.length > 0) {
+      throw new SyncError(
+        `Content required for files new to this workspace: ${missing
+          .slice(0, 5)
+          .map((file) => file.path)
+          .join(", ")}`,
+        "missing_content",
+      );
+    }
+  }
+
   const knownBlobs = new Set(
     (
       await db
@@ -113,13 +137,18 @@ export async function syncCorpus(
         .values(),
     ];
     if (newBlobs.length > 0) {
-      await tx.insert(ssrBlobTable).values(
-        newBlobs.map((file) => ({
-          sha256: file.sha256,
-          content: file.content as string,
-          bytes: Buffer.byteLength(file.content as string, "utf8"),
-        })),
-      );
+      // Blobs are shared: another workspace's sync can store the same sha
+      // between the read above and this insert.
+      await tx
+        .insert(ssrBlobTable)
+        .values(
+          newBlobs.map((file) => ({
+            sha256: file.sha256,
+            content: file.content as string,
+            bytes: Buffer.byteLength(file.content as string, "utf8"),
+          })),
+        )
+        .onConflictDoNothing({ target: ssrBlobTable.sha256 });
     }
 
     const blobSizes = new Map(

@@ -73,7 +73,9 @@ const syncRoute = createRoute({
   responses: {
     200: jsonResponse("What the sync changed", syncResultSchema),
     403: errorResponse("Missing workspace:manage_settings permission"),
-    409: errorResponse("Corpus allowlist or secret scan rejection"),
+    409: errorResponse(
+      "Corpus allowlist, secret scan or missing content rejection",
+    ),
     413: errorResponse("Request body is too large"),
   },
 });
@@ -461,7 +463,12 @@ export const ssrRoutes = apiRouter<SsrVariables>()
     const [entity] = await db
       .select()
       .from(ssrEntityTable)
-      .where(eq(ssrEntityTable.id, entityId));
+      .where(
+        and(
+          eq(ssrEntityTable.id, entityId),
+          eq(ssrEntityTable.workspaceId, workspaceId),
+        ),
+      );
     const push = await pushChangeset(
       workspaceId,
       `tAI-Boards SSR: restore ${entity?.name ?? entityId} from v${toVersion}`,

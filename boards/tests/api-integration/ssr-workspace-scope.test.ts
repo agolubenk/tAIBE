@@ -82,6 +82,7 @@ describe("API integration: SSR workspace scope", () => {
       `/ssr/${here.workspace.id}/conflicts/${foreign.id}/resolve`,
     );
     expect(response.status).toBe(404);
+    expect(response.body.message).toBe("Conflict not found");
     expect(await conflictRow(foreign.id)).toEqual(foreign);
 
     const unknown = await here.ownerApi(
@@ -96,18 +97,7 @@ describe("API integration: SSR workspace scope", () => {
     const other = await createForest();
     await syncText(here.workspace.id, here.ownerId, ["mine", "shared"]);
     await syncText(other.workspace.id, other.ownerId, ["shared", "theirs"]);
-    // A version may name a sha whose bytes never arrived: not stored, not known.
-    await syncCorpus(
-      here.workspace.id,
-      {
-        commitSha,
-        files: [
-          { path: ".claude/skills/dangling/NOTE.md", sha256: sha256("lost") },
-        ],
-      },
-      here.ownerId,
-    );
-    const shas = ["mine", "shared", "theirs", "lost", "never"].map(sha256);
+    const shas = ["mine", "shared", "theirs", "never"].map(sha256);
 
     const mine = await here.ownerApi(
       "POST",
@@ -128,6 +118,36 @@ describe("API integration: SSR workspace scope", () => {
     expect([...theirs.body.shas].sort()).toEqual(
       [sha256("shared"), sha256("theirs")].sort(),
     );
+  });
+
+  it("sync refuses a file without content whose sha this workspace does not hold", async () => {
+    const here = await createForest();
+    const other = await createForest();
+    await syncText(other.workspace.id, other.ownerId, ["theirs"]);
+    const sync = (text: string) =>
+      here.ownerApi("POST", `/ssr/${here.workspace.id}/sync`, {
+        commitSha,
+        files: [{ path: ".claude/skills/probe/NOTE.md", sha256: sha256(text) }],
+      });
+
+    // Another workspace's sha and a sha nobody stores answer the same way,
+    // so the sync is no oracle and no version can read the other blob.
+    for (const text of ["theirs", "never"]) {
+      const refused = await sync(text);
+      expect(refused.status).toBe(409);
+      expect(refused.body.message).toContain(".claude/skills/probe/NOTE.md");
+    }
+    const entities = await here.ownerApi(
+      "GET",
+      `/ssr/${here.workspace.id}/entities`,
+    );
+    expect(entities.body.entities).toEqual([]);
+    const known = await here.ownerApi(
+      "POST",
+      `/ssr/${here.workspace.id}/known-shas`,
+      { shas: [sha256("theirs")] },
+    );
+    expect(known.body.shas).toEqual([]);
   });
 
   it("known-shas answers an empty list for an empty request", async () => {
