@@ -28,34 +28,35 @@ def wj(path, data):
         json.dump(data, f)
 
 
-LR = CFG["github"]["lens_roles"]
+LR, TEAM = CFG["github"]["lens_roles"], CFG["team"]["roles"]
 
 
 def pv(body):
-    return quorum.parse_verdict(body, LR)
+    return quorum.parse_verdict(body, LR, TEAM)
 
 
 class QuorumTest(unittest.TestCase):
     def test_parses_t3_verdict_styles(self):
         self.assertEqual(pv("**Бэкенд: approve на 46b9f87e1.** План реализуем"),
-                         {"lens": "бэкенд", "verdict": "approve", "sha": "46b9f87e1"})
+                         {"lens": "backend", "verdict": "approve", "sha": "46b9f87e1"})
         v = pv("\n\nQA: changes на 901feb3e5 — тест падает")
-        self.assertEqual((v["lens"], v["verdict"]), ("qa", "changes"))
+        self.assertEqual((v["lens"], v["verdict"]), ("coord", "changes"))
         self.assertIsNone(pv("Спасибо, посмотрю позже"))
 
     def test_old_approve_sha_still_counts(self):
-        """Прежний формат без «на»: «approve <sha>» и «approve @<sha>»."""
+        """Прежний формат: «approve <sha>», «approve на <sha>», «approve @<sha>», «changes at <sha>»."""
         self.assertEqual(pv("**Бэкенд: approve 46b9f87e1**"),
-                         {"lens": "бэкенд", "verdict": "approve", "sha": "46b9f87e1"})
+                         {"lens": "backend", "verdict": "approve", "sha": "46b9f87e1"})
         self.assertEqual(pv("Контроль: approve @46B9F87E1")["sha"], "46b9f87e1")
         self.assertEqual(pv("Линза QA: changes at 901feb3e5")["verdict"], "changes")
+        self.assertEqual(pv("Линза QA: APPROVED на 901feb3e5")["verdict"], "approve")
 
     def test_accept_on_sha_counts_as_approve(self):
         """TB-84 ч. 2: вердикты линз Т3 — «ACCEPT на <sha>» (HR #481, #478, #477)."""
         self.assertEqual(pv("**Линза «корректность и отказы» (роль 4) — ACCEPT на 1d66762204**"),
-                         {"lens": "корректность и отказы", "verdict": "approve", "sha": "1d66762204"})
-        self.assertEqual(pv("## Линза «продукт и простота»: **ACCEPT** на `2bc2b66ff`"),
-                         {"lens": "продукт и простота", "verdict": "approve", "sha": "2bc2b66ff"})
+                         {"lens": "backend", "verdict": "approve", "sha": "1d66762204"})
+        self.assertEqual(pv("## Линза «корректность и отказы»: **ACCEPT** на `2bc2b66ff`"),
+                         {"lens": "корректность и отказы", "verdict": "approve", "sha": "2bc2b66ff"})
         cases = {
             "**Линза «продукт и простота» — ACCEPT на голове `479bcdaf9`.**": "479bcdaf9",
             "Линза «продукт и простота» (роль 2): **ACCEPT перенесён на `c6d61b7dd`**. Дельта сверена": "c6d61b7dd",
@@ -63,7 +64,10 @@ class QuorumTest(unittest.TestCase):
             "**HR #477 (#660), линза «продукт и простота» (роль 2, план): ACCEPT на 9e9b77ce9**": "9e9b77ce9",
             "**Контроль (роль 5: безопасность · отказы · поставка) — ACCEPT на голове `479bcdaf9`**": "479bcdaf9",
             "**Линза «дизайн» — ACCEPT с условиями на 1d66762204**: два нита": "1d66762204",
+            "**Линза «дизайн» — **ACCEPT** с оговорками на 1d66762204": "1d66762204",
             "Линза корректности: approve with changes на 1d66762204": "1d66762204",
+            "Линза корректности, ACCEPT на 1d66762204": "1d66762204",
+            "Линза корректности — вердикт ACCEPT на 1d66762204": "1d66762204",
         }
         for body, sha in cases.items():
             v = pv(body)
@@ -71,7 +75,12 @@ class QuorumTest(unittest.TestCase):
 
     def test_reject_counts_as_changes(self):
         for body in ("**Линза «корректность и отказы» (роль 6) — REJECT на 54c85848b**",
-                     "Линза QA: reject на 54c85848b", "**Линза роли 1 (QA): CHANGES на 54c85848b**"):
+                     "Линза QA: reject на 54c85848b", "**Линза роли 1 (QA): CHANGES на 54c85848b**",
+                     "Линза QA — REJECTED на 54c85848b", "Линза QA — CHANGES REQUESTED на 54c85848b",
+                     "Линза QA — CHANGES_REQUESTED @54c85848b", "Линза QA — REQUEST CHANGES на 54c85848b",
+                     "Линза QA — REJECT (на 54c85848b)", "Линза QA — REJECT, голова 54c85848b",
+                     "Линза QA — REJECT на [54c85848b](https://github.com/x/y/commit/54c85848b)",
+                     "Линза QA — REJECT по голове 54c85848b", "Линза QA — REJECT на коммит 54c85848b"):
             v = pv(body)
             self.assertEqual((v["verdict"], v["sha"]), ("changes", "54c85848b"), body)
 
@@ -81,6 +90,11 @@ class QuorumTest(unittest.TestCase):
                              "таймауты шлюза 504 и 524 больше не повторяются"))
         for body in ("Голова 2bc2b66ff — линза Контроля: CHANGES на 3b34254e2",
                      "**Автор (роль 3, t3-frontend): ACCEPT на 2bc2b66ff**",
+                     "Авторская правка по линзе корректности: changes на 2bc2b66ff",
+                     "Ответ линзе «корректность и отказы»: changes на 2bc2b66ff учтены",
+                     "Ответ линзе «корректность и отказы»: changes на 2bc2b66ff",
+                     "Сводка линз: ACCEPT на 2bc2b66ff (3/3)", "Итог по линзам: ACCEPT на 2bc2b66ff",
+                     "Итог Контроля: ACCEPT на 2bc2b66ff", "Проверено автором: approve на 2bc2b66ff",
                      "Спасибо: ACCEPT на 2bc2b66ff", "ACCEPT на 2bc2b66ff"):
             self.assertIsNone(pv(body), body)
 
@@ -91,9 +105,43 @@ class QuorumTest(unittest.TestCase):
                      "Линза QA — ACCEPT, дельта 9e9b77ce9..1fd7daab0 сверена",
                      "Линза 4 (ревью 1fd7daab0) — ACCEPT"):
             self.assertIsNone(pv(body), body)
-        self.assertEqual(pv("**Поправка к линзе (роль 4) — CHANGES на 76183ab0d, мой ACCEPT на 1e3a2b8ec отменяю**")
-                         ["sha"], "76183ab0d")
         self.assertIsNone(pv("Линза QA: ACCEPT на 9e9b77ce9abcxyz"), "SHA — целый токен")
+
+    def test_retraction_and_negative_verdict_win(self):
+        """Отзыв и changes в одной строке с ACCEPT не дают approve (HR #471: «мой ACCEPT выше отменяю»)."""
+        v = pv("**Поправка к линзе корректности (роль 4) — CHANGES на 76183ab0d, мой ACCEPT выше отменяю**")
+        self.assertEqual((v["lens"], v["verdict"], v["sha"]), ("backend", "changes", "76183ab0d"))
+        v = pv("Линза «корректность и отказы» (роль 4): ACCEPT на 76183ab0d отменяю — CHANGES на 76183ab0d")
+        self.assertEqual((v["verdict"], v["sha"]), ("changes", "76183ab0d"))
+        v = pv("Поправка к линзе корректности (роль 4) — мой ACCEPT на 76183ab0d отменяю")
+        self.assertEqual((v["verdict"], v["sha"]), ("withdrawn", "76183ab0d"))
+        v = pv("Линза корректности (роль 4): CHANGES на 1111111 закрыты — ACCEPT на 76183ab0d")
+        self.assertEqual((v["verdict"], v["sha"]), ("approve", "76183ab0d"))
+        head = "76183ab0d" + "0" * 31
+        vs = [pv(f"Линза «{l}» (роль {n}) — ACCEPT на 76183ab0d") for l, n in (("qa", 1), ("продукт", 2), ("к", 4))]
+        self.assertTrue(quorum.quorum(vs, head, [])[0])
+        vs.append(pv("Поправка к линзе корректности (роль 4) — мой ACCEPT на 76183ab0d отменяю"))
+        self.assertFalse(quorum.quorum(vs, head, [])[0], "отозванный ACCEPT не считается")
+
+    def test_quoted_line_is_skipped(self):
+        """Ответ с цитатой: вердикт — первая строка вне «>»."""
+        body = "> **Линза «продукт и простота» — ACCEPT на 76183ab0d**\n\n**Линза «корректность» — CHANGES на 76183ab0d**"
+        self.assertEqual(pv(body)["verdict"], "changes")
+        self.assertIsNone(pv("> Линза QA: ACCEPT на 76183ab0d\n\nСогласен"))
+
+    def test_one_lens_under_two_labels_is_one_key(self):
+        """Подпись линзы меняется (HR #477, #471): номер роли и lens_roles дают один ключ."""
+        head = "76183ab0d" + "0" * 31
+        vs = [pv(x) for x in ("Линза корректности (роль 4): ACCEPT на 76183ab0d",
+                              "**Линза «корректность и отказы» (роль 4) — ACCEPT на 76183ab0d**",
+                              "## Продуктовая линза (роль 2) — ACCEPT на 76183ab0d",
+                              "**Линза «продукт и простота» — ACCEPT на 76183ab0d**")]
+        ok, approved, _, _ = quorum.quorum(vs, head, [])
+        self.assertEqual((ok, approved), (False, ["backend", "plan"]))
+
+    def test_odd_unicode_does_not_raise(self):
+        self.assertEqual(pv("Линза QA: changeſ на 76183ab0d")["verdict"], "changes")
+        self.assertIsNone(pv("Линза QA: approve на " + " *_`" * 20000 + "76183ab0d"), "строка режется до 500 знаков")
 
     def test_quorum_needs_three_lenses_on_head_and_no_changes(self):
         head = "46b9f87e1aaaabbbbcccc"
@@ -102,10 +150,10 @@ class QuorumTest(unittest.TestCase):
         self.assertFalse(quorum.quorum(vs[:2], head, [])[0])
         old = [pv(f"{l}: approve на 1111111") for l in ("QA", "Бэкенд", "Контроль")]
         self.assertFalse(quorum.quorum(old, head, [])[0], "вердикт на старую голову не считается")
-        ch = vs + [pv("Безопасность: changes на 46b9f87e1 — секрет в логе")]
+        ch = vs + [pv("Линза «корректность и отказы»: changes на 46b9f87e1 — секрет в логе")]
         ok, _, changes, _ = quorum.quorum(ch, head, [])
         self.assertFalse(ok)
-        self.assertEqual(changes, ["безопасность"])
+        self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
 
     def test_later_verdict_of_a_lens_overrides(self):
@@ -121,6 +169,7 @@ class QuorumTest(unittest.TestCase):
                          "frontend")
         self.assertEqual(quorum.author_role(["README.md"], pr), "coord")
         self.assertEqual(quorum.role_of_lens("линза devops", CFG["github"]["lens_roles"]), "release")
+        self.assertEqual(quorum.role_of_lens("backend", LR, TEAM), "backend", "ключ-роль — сама роль")
 
 
 class BudgetTest(unittest.TestCase):
@@ -305,6 +354,15 @@ class GithubPollTest(unittest.TestCase):
         self.assertNotIn("pr.changes", kinds)
         self.assertIn("pr.quorum", kinds)
         self.assertEqual(self.ctx.state["github"]["prs"]["478"]["changes_by"], [])
+
+    def test_new_head_after_changes_goes_to_the_lens_role(self):
+        sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
+        sources.poll_github(self.ctx)
+        self.assertEqual(self.ctx.state["github"]["prs"]["479"]["changes_by"], ["backend"])
+        sources.run = FakeGh([_pr(479, "b" * 40, "2026-11-04T11:00:00Z")], etag='W/"e2"')
+        sources.poll_github(self.ctx)
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.newhead"]
+        self.assertEqual([e["to"] for e in rec], [["backend"]])
 
     def test_stuck_merged_pr_is_reported_once_after_upgrade(self):
         # Состояние rev 1: #457 влит, но остался в prs; etag живой — без сброса 304 спрятал бы его навсегда.
