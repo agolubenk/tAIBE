@@ -11,10 +11,12 @@
       spawn_session.sh --handoff: отцепленный сторож ждёт квитанцию L, проверяет наследника и снимает предшественника
   lineage.py reap [--idle-hours 24] [--include-waiting] [--prune-days 30] [--kill [--yes]]
       без флагов — список и чистка записей линий старше --prune-days; --kill — действие владельца, только по списку последнего показа (≤ 10 мин)
-  lineage.py reap --auto [--apply] [--ack-minutes 30] [--auto-idle-hours 8] [--keep-cwd DIR]
-      безопасная автоуборка (решение владельца 06.11, lineage_auto.py): без --apply — только список и журнал
-  lineage.py autoclose --tty /dev/ttysNNN
-      пусковой скрипт spawn_session.sh после выхода claude: окно Terminal своей линии закрывается само
+  lineage.py reap --auto [--apply] [--summary] [--ack-minutes 30] [--auto-idle-hours 8] [--window-minutes 10]
+      безопасная автоуборка (решение владельца 06.11, lineage_auto.py): без --apply — список, в журнал — изменения
+      плана; --apply — только launchd владельца; --summary — читаемая сводка журнала
+  lineage.py exited --rc N [--keep] · lineage.py autoclose --tty /dev/ttysNNN --pid PID
+      пусковой скрипт spawn_session.sh после выхода claude (lineage_close.py): код выхода в запись линии; при коде 0
+      и без Enter в 10-секундном отсчёте окно Terminal своей линии закрывается само
 
 Снимается сессия так: TERM группе claude и потомкам вне группы → 10 с → KILL выживших → окно Terminal (по id из
 record, иначе по tty; окно с другими вкладками, iTerm и VS Code не трогаются) → HUP shell-остаткам на tty.
@@ -72,9 +74,13 @@ def valid_line(line):
 
 
 def write_json(path, data):
+    """Атомарно и только для владельца (0600): записи линий и журнал называют окна, tty и папки."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(json.dumps(data, ensure_ascii=False, indent=1))
     os.replace(tmp, path)
 
 
@@ -150,15 +156,28 @@ class Sys:
                            capture_output=True, text=True, timeout=30)
         return (r.stdout or r.stderr).strip()
 
-    def dirty(self, path):
-        """Есть ли незакоммиченное (вкл. неотслеживаемое) в checkout папки path. Не git или сбой — «да»: не знаем —
-        не трогаем."""
+    def unsaved(self, path):
+        """Что в checkout папки path пропадёт со снятием сессии ('' — ничего): незакоммиченное (вкл.
+        неотслеживаемое), коммиты, которых нет ни на одном remote, stash этой ветки (stash общий для worktree).
+        Не git или сбой — причина: не знаем — не трогаем."""
+        def git(*args):
+            r = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                raise OSError(r.stderr.strip()[:80])
+            return r.stdout
         try:
-            r = subprocess.run(["git", "-C", str(path), "status", "--porcelain", "--untracked-files=normal"],
-                               capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return True
-        return r.returncode != 0 or bool(r.stdout.strip())
+            if git("status", "--porcelain", "--untracked-files=normal").strip():
+                return "незакоммиченное"
+            if int(git("rev-list", "--count", "HEAD", "--not", "--remotes").strip() or 0):
+                return "коммиты не на remote"
+            branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+            tag = "(no branch)" if branch == "HEAD" else branch
+            if any(re.match(r"(?:WIP on|On) " + re.escape(tag) + ":", ln)
+                   for ln in git("stash", "list", "--format=%gs").splitlines()):
+                return "stash этой ветки"
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return "git не ответил"
+        return ""
 
     def metrics(self):
         claude = sum(1 for p in self.procs().values() if argv0(p) == "claude")
@@ -350,13 +369,14 @@ def main(argv=None, sx=None):
     t.add_argument("--foreground", action="store_true", help="без отцепления (тесты, отладка)")
     from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
-    from lineage_auto import add_autoclose_args, cmd_autoclose  # noqa: E402
+    from lineage_close import add_autoclose_args, add_exited_args, cmd_autoclose, cmd_exited  # noqa: E402
     add_reap_args(sub.add_parser("reap"))
     add_autoclose_args(sub.add_parser("autoclose"))
+    add_exited_args(sub.add_parser("exited"))
     a = ap.parse_args(argv)
     sx = sx or Sys()
     return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire,
-            "reap": cmd_reap, "autoclose": cmd_autoclose}[a.cmd](sx, a)
+            "reap": cmd_reap, "autoclose": cmd_autoclose, "exited": cmd_exited}[a.cmd](sx, a)
 
 
 if __name__ == "__main__":

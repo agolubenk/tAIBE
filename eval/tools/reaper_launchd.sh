@@ -4,6 +4,8 @@
 #   bash eval/tools/reaper_launchd.sh install [--apply]    поставить: без --apply — сухо (только журнал), с --apply — снимает
 #   bash eval/tools/reaper_launchd.sh uninstall            снять (откат)
 #   --dry-run — install/uninstall только печатают, что сделали бы
+# --apply действует только под этим агентом (XPC_SERVICE_NAME = метка): прогон сейчас — launchctl kickstart
+# gui/$(id -u)/space.hrhelper.reaper. Сводка за сутки — reap_sessions.sh --auto --summary.
 # Код запускается из основного checkout слоя (не из worktree): поставить можно после мёржа lineage_auto.py.
 # Свои проекты — основной checkout слоя и repo_root из eval/nerve/config.json; ещё — --root DIR.
 # Журнал решений — ~/.claude/lineage/reap-auto.jsonl, ошибки — ~/.claude/lineage/reaper.err.log.

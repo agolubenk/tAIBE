@@ -14,8 +14,9 @@
 # команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
 # · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам
 # · --keep-window (или SPAWN_AUTOCLOSE=off): окно Terminal не закрывается само после выхода claude.
-# Окно Terminal закрывается само, когда claude в нём вышел с кодом 0 (lineage.py autoclose: окно этой линии, одна
-# вкладка, в ней только shell; настройка Terminal «When the shell exits» не важна). Код ≠ 0 — окно остаётся.
+# Окно Terminal закрывается само, когда claude в нём вышел с кодом 0: 10 с отсчёта (Enter — оставить), затем
+# lineage.py autoclose — окно этой линии, одна вкладка, в ней только shell; настройка Terminal «When the shell exits»
+# не важна. Код ≠ 0 — окно остаётся. Код выхода пишется в запись линии (lineage.py exited) для автоуборки.
 # Handoff: наследник после приёма пишет квитанцию (lineage.py ack), сторож lineage.py retire проверяет его и снимает
 # предшественника — процессы и окно Terminal (id окна записан при открытии). Уборка остальных — reap_sessions.sh.
 # Роль Т3 получает свой геном (--settings genome/<ключ>.json) и первое сообщение «Сборка Т3, ключ реестра <ключ>…» —
@@ -29,6 +30,8 @@ TERMINAL="${SPAWN_TERMINAL:-terminal}"
 PROMPT_DIR=""
 HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO=""
 CLOSE="${SPAWN_AUTOCLOSE:-on}"
+DELAY="${SPAWN_CLOSE_DELAY:-10}"  # с отсчёта перед закрытием окна (Enter — оставить)
+case "$DELAY" in ''|*[!0-9]*) DELAY=10 ;; esac
 SPAWNED_LINE=""  # линия последней открытой сессии (bash 3.2: из функции — только через глобальную)
 ORDER="coord release backend frontend plan boards"
 
@@ -156,8 +159,13 @@ spawn_one() {
       else
         echo "\"\${CLAUDE_BIN:-claude}\" \"\$m\"; rc=\$?"
       fi
+      # Код выхода — в запись линии: автоуборка закрывает только окна с кодом 0 и не раньше чем через 10 мин.
+      echo "L=$(sq "$TOOLS/lineage.py")"
+      echo "python3 -I \"\$L\" exited --rc \"\$rc\" >/dev/null 2>&1 </dev/null || true"
       echo "[ \"\$rc\" = 0 ] || { echo \"claude вышел с кодом \$rc — окно оставлено\"; exit \"\$rc\"; }"
-      echo "python3 -I $(sq "$TOOLS/lineage.py") autoclose --tty \"\$(tty)\" --pid \$\$ >/dev/null 2>&1 </dev/null || true"
+      echo "echo \"claude вышел. Окно закроется через $DELAY с — Enter, чтобы оставить.\""
+      echo "if read -r -t $DELAY _; then python3 -I \"\$L\" exited --rc 0 --keep >/dev/null 2>&1 </dev/null || true; echo \"окно оставлено\"; exit 0; fi"
+      echo "python3 -I \"\$L\" autoclose --tty \"\$(tty)\" --pid \$\$ >/dev/null 2>&1 </dev/null || true"
       echo "exit 0"
     elif [ -n "$genome" ]; then
       echo "exec \"\${CLAUDE_BIN:-claude}\" --settings $(sq "$genome") \"\$m\""
