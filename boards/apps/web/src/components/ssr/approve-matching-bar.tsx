@@ -65,7 +65,9 @@ export function ApproveMatchingBar({
   }
   if (status === "error") {
     return (
-      <p className="text-destructive text-xs">{t("workspace:ssr.loadError")}</p>
+      <p className={`${BAR} text-destructive text-sm`}>
+        {t("workspace:ssr.loadError")}
+      </p>
     );
   }
   // Until the refetch lands, the drafts just approved are still in the list.
@@ -116,7 +118,8 @@ export function ApproveMatchingBar({
                 <button
                   type="button"
                   title={draft.path}
-                  className="block max-w-full truncate font-mono underline-offset-2 hover:underline"
+                  // At least a 24 px touch target (WCAG 2.5.8).
+                  className="block min-h-6 min-w-6 max-w-full truncate py-1 text-left font-mono underline-offset-2 hover:underline"
                   onClick={() => onLocate(draft.entityId)}
                 >
                   {draft.path}
