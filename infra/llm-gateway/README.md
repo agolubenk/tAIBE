@@ -70,7 +70,10 @@
   по таймауту.
 - **Локальная модель.** Получает запрос только если он помещается в её окно. Окно — загруженное (`/api/ps`),
   иначе `num_ctx` из Modelfile (`/api/show`, только метаданные), иначе тег `:24k`, иначе обученное, но не больше
-  `GW_LOCAL_MAX_CONTEXT` (32 768). Запросы к Ollama идут строго по одному. Модели без `thinking` в возможностях
+  `GW_LOCAL_MAX_CONTEXT` (32 768). Запросы к Ollama идут строго по одному на весь Mac: семафор процесса и машинный
+  flock, общий с консилиумом (`~/.local/state/taibe/council/ollama-local.lock`, `GW_LOCAL_LOCK`; `off` — только
+  семафор). Замок держит дочерний `python3 -I -S` (`GW_PYTHON`) на время вызова: +13 мс на вызов, RSS 14 МБ. Ожидание
+  семафора и замка — один дедлайн `GW_LOCAL_MAX_WAIT_MS`; не дождались — 503 и следующая модель. Модели без `thinking` в возможностях
   Ollama поля рассуждений (`reasoning_effort`, `reasoning`, `include_reasoning`) не передаются: Ollama отвечает на них
   400 «does not support thinking», а расширение OpenRouter for Copilot шлёт `reasoning_effort: max` в каждом запросе.
 - **Каскад.** Провайдер (OpenRouter или GLM) с `GW_PROVIDER_SKIP_AFTER` отказами подряд в рамках

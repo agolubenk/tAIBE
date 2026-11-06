@@ -5,6 +5,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { MACHINE_LOCK } from './machine-lock.mjs'
 
 export const CODE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
 // Данные (.env, .state) — всегда в основной папке репо, даже если код запущен из worktree:
@@ -137,6 +138,9 @@ export function loadConfig({ envFile = join(PKG_DIR, '.env'), env = process.env 
     strategy: e.GW_STRATEGY === 'priority' ? 'priority' : 'roundrobin',
     autoFreeCount: int(e.GW_AUTO_FREE_COUNT, 8),
     localMaxWaitMs: int(e.GW_LOCAL_MAX_WAIT_MS, 180_000),
+    // Машинный замок локального инференса, общий с консилиумом (OPS-27). `off` — только семафор процесса.
+    localLock: e.GW_LOCAL_LOCK === 'off' ? '' : e.GW_LOCAL_LOCK || MACHINE_LOCK,
+    python: e.GW_PYTHON || 'python3',
     streamCommitMs: int(e.GW_STREAM_COMMIT_MS, 8_000),
     maxAttempts: int(e.GW_MAX_ATTEMPTS, 8),
     maxWaitMs: int(e.GW_MAX_WAIT_MS, 45_000),
