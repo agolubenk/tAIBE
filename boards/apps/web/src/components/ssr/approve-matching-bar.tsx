@@ -1,32 +1,46 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
   approveMatchingSsrDrafts,
-  listSsrDraftMatches,
-  type SsrBatchItem,
+  type SsrDraftMatch,
 } from "@/fetchers/ssr/ssr-fetchers";
 import { HttpError } from "@/lib/http-error";
 import { toast } from "@/lib/toast";
 import { ApproveMatchingDialog } from "./approve-matching-dialog";
+import { planBatch } from "./approve-matching-plan";
 
-// One owner action for drafts whose bytes were already approved (same path
-// and blob sha, proven by the server). The rest keep the per-item diff flow.
-export function ApproveMatchingBar({ workspaceId }: { workspaceId: string }) {
+// Same height loading and loaded, so the registry below does not jump while
+// the matches arrive on a slow network.
+const BAR =
+  "min-h-[5.25rem] rounded-md border border-border bg-card px-4 py-3 sm:min-h-14";
+
+// One owner action for drafts whose bytes the owner already approved (same
+// path and blob sha, proven by the server). The rest keep the per-item diff
+// flow; after a batch their paths are listed so they are easy to find.
+export function ApproveMatchingBar({
+  workspaceId,
+  drafts,
+  status,
+  onLocate,
+}: {
+  workspaceId: string;
+  drafts: SsrDraftMatch[] | undefined;
+  status: "pending" | "error" | "success";
+  onLocate: (entityId: string) => void;
+}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const drafts = useQuery({
-    queryKey: ["ssr", "drafts", workspaceId],
-    queryFn: () => listSsrDraftMatches(workspaceId),
-  });
+  const [approvedIds, setApprovedIds] = useState<Set<string> | null>(null);
   const approve = useMutation({
-    mutationFn: (items: SsrBatchItem[]) =>
+    mutationFn: (items: Array<{ versionId: string; blobSha: string }>) =>
       approveMatchingSsrDrafts(workspaceId, items),
     onSuccess: (result) => {
+      setApprovedIds(new Set(result.versionIds));
       toast.success(
-        t("workspace:ssr.approveMatching.done", { approved: result.approved }),
+        t("workspace:ssr.approveMatching.done", { count: result.approved }),
       );
     },
     onError: (error) => {
@@ -42,45 +56,92 @@ export function ApproveMatchingBar({ workspaceId }: { workspaceId: string }) {
     },
   });
 
-  if (drafts.isError) {
+  if (status === "pending") {
+    return (
+      <div className={`${BAR} text-muted-foreground text-sm`}>
+        {t("common:loading")}
+      </div>
+    );
+  }
+  if (status === "error") {
     return (
       <p className="text-destructive text-xs">{t("workspace:ssr.loadError")}</p>
     );
   }
-  const list = drafts.data ?? [];
+  // Until the refetch lands, the drafts just approved are still in the list.
+  const list = (drafts ?? []).filter(
+    (draft) => !approvedIds?.has(draft.versionId),
+  );
   if (list.length === 0) return null;
-  const matching = list.filter((draft) => draft.match);
+  const { matching, batch, review, later } = planBatch(list);
+  const label =
+    later > 0
+      ? t("workspace:ssr.approveMatching.buttonPartial", {
+          batch: batch.length,
+          matching: matching.length,
+        })
+      : t("workspace:ssr.approveMatching.button", {
+          matching: matching.length,
+        });
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card px-4 py-3">
-      <p className="text-sm">
-        {t("workspace:ssr.approveMatching.summary", {
-          total: list.length,
-          matching: matching.length,
-        })}
-      </p>
-      <Button
-        type="button"
-        size="sm"
-        disabled={matching.length === 0 || approve.isPending}
-        onClick={() => setOpen(true)}
-      >
-        {t("workspace:ssr.approveMatching.button", {
-          matching: matching.length,
-        })}
-      </Button>
-      <ApproveMatchingDialog
-        open={open}
-        onOpenChange={setOpen}
-        matching={matching}
-        rest={list.length - matching.length}
-        pending={approve.isPending}
-        onConfirm={() =>
-          approve.mutate(
-            matching.map(({ versionId, blobSha }) => ({ versionId, blobSha })),
-          )
-        }
-      />
+    <div className={`${BAR} flex flex-col gap-2`}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm">
+          {t("workspace:ssr.approveMatching.summary", {
+            total: list.length,
+            matching: matching.length,
+          })}
+        </p>
+        {matching.length > 0 ? (
+          <Button
+            type="button"
+            size="sm"
+            className="self-start sm:self-auto"
+            disabled={approve.isPending}
+            onClick={() => setOpen(true)}
+          >
+            {label}
+          </Button>
+        ) : null}
+      </div>
+      {approvedIds && review.length > 0 ? (
+        <div>
+          <p className="text-muted-foreground text-xs">
+            {t("workspace:ssr.approveMatching.left", { count: review.length })}
+          </p>
+          <ul className="mt-1 flex max-h-40 flex-col gap-0.5 overflow-auto text-xs">
+            {review.map((draft) => (
+              <li key={draft.versionId} className="min-w-0">
+                <button
+                  type="button"
+                  title={draft.path}
+                  className="block max-w-full truncate font-mono underline-offset-2 hover:underline"
+                  onClick={() => onLocate(draft.entityId)}
+                >
+                  {draft.path}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {matching.length > 0 ? (
+        <ApproveMatchingDialog
+          open={open}
+          onOpenChange={setOpen}
+          batch={batch}
+          later={later}
+          review={review.length}
+          confirmLabel={label}
+          pending={approve.isPending}
+          onConfirm={() =>
+            approve.mutate(
+              batch.map(({ versionId, blobSha }) => ({ versionId, blobSha })),
+            )
+          }
+        />
+      ) : null}
     </div>
   );
 }
