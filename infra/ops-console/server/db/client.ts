@@ -8,6 +8,7 @@ import { createClient, type Client } from '@libsql/client'
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql'
 import { getEnv } from '../env'
 import * as schema from './schema'
+import { gateClient } from './write-gate'
 
 export type OpsDb = LibSQLDatabase<typeof schema>
 
@@ -24,7 +25,8 @@ export function getDb(): OpsDb {
   if (db) return db
   const env = getEnv()
   ensureLocalDir(env.databaseUrl)
-  client = createClient({ url: env.databaseUrl, authToken: env.databaseAuthToken })
+  // Запись процесса — по одной, занятая чужим процессом база — асинхронным повтором (write-gate.ts), без busy_timeout.
+  client = gateClient(createClient({ url: env.databaseUrl, authToken: env.databaseAuthToken }))
   db = drizzle(client, { schema })
   return db
 }

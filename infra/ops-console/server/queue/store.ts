@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getDb } from '../db/client'
+import { retryBusy } from '../db/write-gate'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
 import { removeItemFiles } from './files/remove'
@@ -284,7 +285,8 @@ export interface WriteOptions {
 export async function writeDoc(actor: Actor, collection: Collection, id: string, data: Record<string, unknown>, opts: WriteOptions): Promise<Doc> {
   if (!DOC_ID.test(id)) throw apiError(422, 'Недопустимый id документа')
   const db = getDb()
-  return db.transaction(async (tx) => {
+  // COMMIT под чужой блокировкой чтения (бэкап) — SQLITE_BUSY и откат: транзакция повторяется целиком (write-gate.ts).
+  return retryBusy(() => db.transaction(async (tx) => {
     const row = await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
     const before = row ? (JSON.parse(row.dataJson) as Record<string, unknown>) : null
     if (opts.ifVersion !== undefined && (row?.version ?? 0) !== opts.ifVersion) {
@@ -321,7 +323,7 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
     }
     await tx.insert(oqEvents).values({ at, actor: actor.name, collection, docId: id, action: opts.merge ? 'update' : 'set', beforeJson: row?.dataJson ?? null, afterJson: json })
     return { id, data: parsed.data as Record<string, unknown>, version, updatedAt: at.getTime() }
-  })
+  }))
 }
 
 export async function deleteDoc(actor: Actor, collection: Collection, id: string): Promise<void> {
