@@ -77,6 +77,10 @@ if [ -f "$PRODUCTS_PY" ] && [ -d "$TOOLS/../../instances" ]; then
   if [ -n "$HANDOFF" ] && [ "$PRODUCT" != "$INHERITED" ]; then
     die "--handoff наследует продукт сессии ($INHERITED); роль продукта $PRODUCT — через --launch --product $PRODUCT"
   fi
+  # Продукт не включён (instances/<slug>.json active: false) — роли не открываются: Нерв ещё не ведёт его журнал.
+  if [ "$LAUNCH" = 1 ] && [ "$DRY" = 0 ] && [ "$(python3 -I "$PRODUCTS_PY" get "$PRODUCT" active)" != true ]; then
+    die "продукт $PRODUCT не включён (active: false в instances/$PRODUCT.json) — роли не открываю; проверка — --dry-run"
+  fi
   # --launch и --status без --cwd — в папке продукта (из tAIBE открылись бы роли HR в папке tAIBE).
   if [ "$CWD_SET" = 0 ] && { [ "$LAUNCH" = 1 ] || [ -n "$INFO" ]; }; then
     CWD="$(python3 -I "$PRODUCTS_PY" get "$PRODUCT" repo_root)" || die "у продукта $PRODUCT нет repo_root"

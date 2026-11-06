@@ -8,9 +8,17 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
 
 1. Your role file `roles/<N>-<key>.md`.
 2. This file.
-3. Laws: `.claude/rules/90-team-t3.md`, TEAM-0 §1–2 and §10
-   (`~/.claude/projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2/handoff/2026-10-25/team/TEAM-0-COMMON.md`).
-4. Your work state: `work_state_read <key>-taibe`.
+3. Laws: `.claude/rules/90-team-t3.md` and only §10 of TEAM-0: Read
+   `~/.claude/projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2/handoff/2026-10-25/team/TEAM-0-COMMON.md`
+   with `offset=200`. §1–9 describe the HR team; skip them.
+4. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
+
+## Board
+
+Workspace aiBoards&eval `lth89qy6f8j1greiy4c5cn23`. Projects: OPS «Инфраструктура» `mjwiozcdb50f7imppo1n2emv`,
+TB «t-boards» `mf6jpr5wftbgr3z93lvw807v`, SE «supertick-eval» `tl3j7yc2mc7lyro1on059dmh`, IDEA «Банк идей»
+`gfr6adn3iw3y4dxzbsuotrhv` (half-baked ideas: do not take), GL «Цели и планы» `czjtga2z1wdvfv3di7dxhm1x`.
+`forest_set_work_state` replaces the whole state: send `branch`, `taskId` and `waiting` every time.
 
 ## First steps
 

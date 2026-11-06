@@ -6,6 +6,6 @@ Read `../COMMON.md` first.
 `docs/plans/done/`. Before code of multi-step work, you write the spec. You ask product forks through the
 coordinator.
 
-**Cards:** project aiBoards&eval (workspace `lth89qy6f8j1greiy4c5cn23`), cards of your paths.
+**Cards:** workspace aiBoards&eval (project IDs: `../COMMON.md`, «Board»), cards of your paths.
 
 **First task:** `work_state_read plan-taibe`. If it is empty, ask the coordinator for the first card.
