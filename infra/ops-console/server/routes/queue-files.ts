@@ -148,8 +148,9 @@ filesRoutes.post('/', requireScope('owner'), async (c) => {
 filesRoutes.get('/', requireScope('read', 'agent'), async (c) => {
   const itemId = c.req.query('item') ?? ''
   if (!DOC_ID.test(itemId)) throw apiError(422, 'Нужен id входящего: ?item=i-…')
+  // Чужой пункт — тот же ответ, что у несуществующего: пусто.
   const info = await itemInfo(itemId)
-  if (info && !canSee(c.get('oqActor').products, info.product)) throw apiError(404, 'Нет такого входящего')
+  if (info && !canSee(c.get('oqActor').products, info.product)) return c.json({ files: [], expired: 0 })
   const { files, expired } = await listItemFiles(itemId)
   return c.json({ files: files.map(toPublic), expired })
 })
@@ -190,7 +191,8 @@ filesRoutes.get('/summary', requireScope('read', 'agent'), async (c) => {
   const body = JSON.stringify({
     enabled: true,
     limits: { maxBytes: cfg.maxBytes, maxPerItem: cfg.maxPerItem, kinds: cfg.kinds, retentionDays: cfg.retentionDays },
-    usage: { usedBytes: used, capBytes: cfg.totalCapBytes, warn },
+    // Занятое место — по всем продуктам: только владельцу (по его изменению видно размер и время чужих загрузок).
+    ...(products === '*' ? { usage: { usedBytes: used, capBytes: cfg.totalCapBytes, warn } } : {}),
     items,
     ...(summary.truncated.files || summary.truncated.groups ? { truncated: summary.truncated } : {}),
   })

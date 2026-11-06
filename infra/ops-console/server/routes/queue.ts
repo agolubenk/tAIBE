@@ -2,7 +2,7 @@
  * API очереди владельца: /api/oq/v1. Документы в формате базы артефакта (страница /queue, агенты, бот),
  * журнал, мёрж и деплой. Доступ — токен очереди или сессия владельца консоли (server/queue/auth.ts).
  */
-import { Hono, type Context } from 'hono'
+import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { z } from 'zod'
 import { apiError } from '../http-types'
 import { parseBody } from '../lib/validate'
@@ -14,7 +14,7 @@ import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
-import { canSee, listProducts, PRODUCT_SLUG, visibilityKey } from '../queue/products'
+import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_SLUG, visibilityKey } from '../queue/products'
 import { deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
 const writeSchema = z.object({
@@ -101,8 +101,14 @@ queueRoutes.delete('/db/:col/:id', requireScope('owner'), async (c) => {
 queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => c.json({ events: await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products) }))
 
 // Автопередача входящих сессии (queue/relay.ts): отметка процесса `server.mjs --relay` и состояние для страницы и бота.
-queueRoutes.get('/relay', requireScope('read', 'agent'), async (c) => c.json(await readRelay()))
-queueRoutes.put('/relay', requireScope('agent'), async (c) => {
+// Пока relay один — он про входящие HR: токен без HR не читает id входящих и не изображает живую автопередачу
+// (relay по продуктам — план, фаза 4a).
+const relayHr: MiddlewareHandler<QueueEnv> = async (c, next) => {
+  if (!canSee(c.get('oqActor').products, DEFAULT_PRODUCT)) throw apiError(404, 'Нет автопередачи для продуктов токена')
+  await next()
+}
+queueRoutes.get('/relay', requireScope('read', 'agent'), relayHr, async (c) => c.json(await readRelay()))
+queueRoutes.put('/relay', requireScope('agent'), relayHr, async (c) => {
   throttleWrite(c.get('oqActor').name)
   return c.json(await beatRelay(await parseBody(c, relayBeatSchema)))
 })

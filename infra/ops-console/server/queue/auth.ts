@@ -22,24 +22,36 @@ const TOUCH_MS = 5 * 60_000
 export type QueueEnv = AppEnv & { Variables: AppEnv['Variables'] & { oqActor: Actor } }
 
 export interface TokenOptions {
-  /** Продукты токена (slug); по умолчанию — HR, как у токенов до v2-lite. «*» — только с owner. */
+  /** Продукты токена (slug); по умолчанию — HR, как у токенов до v2-lite. У owner — только «*» (он видит всё). */
   products?: string[]
-  /** Срок действия в днях; без него — бессрочный. */
+  /** Срок действия в днях, целое 1…3650; без него — бессрочный. */
   expiresDays?: number
 }
+
+const EXPIRES_DAYS_MAX = 3650
 
 export async function createToken(name: string, scopes: Scope[], opts: TokenOptions = {}): Promise<{ id: number; token: string }> {
   const clean = [...new Set(scopes)].filter((s) => SCOPES.includes(s))
   if (!clean.length) throw new Error('Нужна хотя бы одна область: read, agent, owner')
-  const products = [...new Set(opts.products ?? ['hr-helper'])]
+  const owner = clean.includes('owner')
+  // owner видит все продукты (tokenVisibility): другой список в строке обещал бы ограничение, которого нет.
+  const products = [...new Set(opts.products ?? [owner ? '*' : 'hr-helper'])]
+  if (owner && (products.length !== 1 || products[0] !== '*')) throw new Error('Токен owner видит все продукты: продукты — только «*» или не указывать')
   if (products.includes('*')) {
-    if (!clean.includes('owner') || products.length > 1) throw new Error('Продукты «*» — только у токена с областью owner и без других продуктов')
+    if (!owner) throw new Error('Продукты «*» — только у токена с областью owner')
   } else {
     const known = new Set((await listProducts()).map((p) => p.slug))
     const bad = products.filter((p) => !PRODUCT_SLUG.test(p) || !known.has(p))
     if (!products.length || bad.length) throw new Error(`Нет продуктов: ${bad.join(', ') || '(пусто)'}`)
   }
-  const expiresAt = opts.expiresDays ? new Date(Date.now() + opts.expiresDays * 86_400_000) : null
+  const days = opts.expiresDays
+  if (days !== undefined && !(Number.isInteger(days) && days >= 1 && days <= EXPIRES_DAYS_MAX)) {
+    throw new Error(`Срок — целое число дней от 1 до ${EXPIRES_DAYS_MAX}`)
+  }
+  // Имя — ключ тормоза записи и подпись в журнале: два действующих токена с одним именем делили бы лимит.
+  const taken = await getDb().select({ id: oqTokens.id }).from(oqTokens).where(and(eq(oqTokens.name, name.slice(0, 80)), isNull(oqTokens.revokedAt))).limit(1)
+  if (taken.length) throw new Error(`Действующий токен «${name}» уже есть — отзовите его или выберите другое имя`)
+  const expiresAt = days ? new Date(Date.now() + days * 86_400_000) : null
   const token = TOKEN_PREFIX + randomToken(32)
   const [row] = await getDb()
     .insert(oqTokens)

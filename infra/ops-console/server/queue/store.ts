@@ -12,7 +12,7 @@ import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
 import { removeItemFiles } from './files/remove'
-import { canSee, checkNewId, DEFAULT_PRODUCT, productForNew, type Visibility } from './products'
+import { canSee, DEFAULT_PRODUCT, listProducts, namespaceOf, NOT_FOUND, productForNew, type Visibility } from './products'
 
 export const COLLECTIONS = ['checks', 'items', 'work'] as const
 export type Collection = (typeof COLLECTIONS)[number]
@@ -253,8 +253,6 @@ export interface WriteOptions {
   product?: string
 }
 
-const NOT_FOUND = 'Нет такого документа'
-
 export async function writeDoc(actor: Actor, collection: Collection, id: string, data: Record<string, unknown>, opts: WriteOptions): Promise<Doc> {
   if (!DOC_ID.test(id)) throw apiError(422, 'Недопустимый id документа')
   if ('product' in data) throw apiError(422, 'product — не поле документа: продукт нового пункта — поле запроса product, смена — отдельным запросом')
@@ -320,9 +318,7 @@ async function productOf(actor: Actor, id: string, row: Row | undefined, itemRow
     if (requested && requested !== itemRow.product) throw apiError(409, `Ответ — продукта пункта «${itemRow.product}»`)
     return itemRow.product
   }
-  const product = await productForNew(actor.products, requested)
-  await checkNewId(id, product)
-  return product
+  return productForNew(actor.products, id, requested)
 }
 
 export async function deleteDoc(actor: Actor, collection: Collection, id: string): Promise<void> {
@@ -339,8 +335,9 @@ export async function deleteDoc(actor: Actor, collection: Collection, id: string
   }
 }
 
-export async function logEvent(actor: string, collection: string, docId: string, action: string, after?: unknown, product?: string): Promise<void> {
-  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: after === undefined ? null : JSON.stringify(after).slice(0, 20_000), product: product ?? null })
+/** product — продукт документа события; null — событие не документа (деплой), его не видит никто, кроме владельца. */
+export async function logEvent(actor: string, collection: string, docId: string, action: string, after: unknown, product: string | null): Promise<void> {
+  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: after === undefined ? null : JSON.stringify(after).slice(0, 20_000), product })
 }
 
 /** История документа — события видимых продуктов (у событий старого образа продукта нет — это HR). */
@@ -364,7 +361,8 @@ export async function importDoc(collection: Collection, id: string, data: Record
   const exists = await db.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
   if (exists) return 'kept'
   const json = JSON.stringify(parsed.data)
-  await db.insert(oqDocs).values({ collection, id, dataJson: json, version: 1, updatedBy: source })
-  await db.insert(oqEvents).values({ actor: source, collection, docId: id, action: 'import', afterJson: json })
+  const product = namespaceOf(id, await listProducts())
+  await db.insert(oqDocs).values({ collection, id, dataJson: json, version: 1, updatedBy: source, product })
+  await db.insert(oqEvents).values({ actor: source, collection, docId: id, action: 'import', afterJson: json, product })
   return 'added'
 }

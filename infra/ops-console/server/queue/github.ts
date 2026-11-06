@@ -208,6 +208,6 @@ export async function redeploy(actor: Actor): Promise<string> {
   if (await deployRunning(repo, workflow, token)) throw apiError(409, 'Деплой уже идёт')
   const res = await call('POST', `/repos/${repo}/actions/workflows/${workflow}/dispatches`, token, { ref: 'main' })
   if (res.status !== 204) throw apiError(409, `GitHub не запустил деплой: HTTP ${res.status}`)
-  await logEvent(actor.name, 'deploy', 'main', 'redeploy')
+  await logEvent(actor.name, 'deploy', 'main', 'redeploy', undefined, null)
   return 'Деплой main запущен'
 }

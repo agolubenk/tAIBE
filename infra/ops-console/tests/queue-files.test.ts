@@ -444,8 +444,12 @@ describe('вложения: продукт (v3)', () => {
     expect(res.status).toBe(200)
     const etag = res.headers.get('etag')!
     const body = await res.json()
-    expect(body).toMatchObject({ enabled: true, limits: { maxBytes: 64 * 1024, maxPerItem: 3, retentionDays: 90 }, usage: { capBytes: 1024 * 1024, warn: false } })
-    expect(body.usage.usedBytes).toBeGreaterThan(0)
+    expect(body).toMatchObject({ enabled: true, limits: { maxBytes: 64 * 1024, maxPerItem: 3, retentionDays: 90 } })
+    // Занятое место — по всем продуктам: только тому, кто видит все (владелец), агенту продукта — нет (v2-lite).
+    expect(body.usage).toBeUndefined()
+    const full = (await (await get(owner, '/files/summary')).json()) as { usage: { capBytes: number; warn: boolean; usedBytes: number } }
+    expect(full.usage).toMatchObject({ capBytes: 1024 * 1024, warn: false })
+    expect(full.usage.usedBytes).toBeGreaterThan(0)
     expect(body.items[itemId]).toEqual({ files: [expect.objectContaining({ id: a.json.file.id, name: 'первый.png' }), expect.objectContaining({ id: b.json.file.id })], count: 2, expired: 0 })
     const again = await app.request('/api/oq/v1/files/summary', { headers: { Authorization: `Bearer ${agent}`, 'If-None-Match': etag } })
     expect(again.status).toBe(304)

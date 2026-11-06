@@ -52,32 +52,26 @@ export async function listProducts(): Promise<Product[]> {
   return rows.map((r) => ({ slug: r.slug, name: r.name, isDefault: r.isDefault }))
 }
 
-async function defaultProduct(): Promise<string> {
-  return (await listProducts()).find((p) => p.isDefault)?.slug ?? DEFAULT_PRODUCT
+/** Ответ на документ чужого продукта и на id чужого пространства — один, как на несуществующий. */
+export const NOT_FOUND = 'Нет такого документа (id пункта продукта — с префиксом «<slug>-», у продукта по умолчанию — без префикса)'
+
+/**
+ * Пространство id: продукт, чей slug с «-» — самое длинное начало id (`taibe-m-93` → taibe); без префикса — продукт по
+ * умолчанию. Продукт нового документа выводится из id: пункты разных продуктов не делят id (`c-backup-<дата>` у
+ * каждого свой), а запрет следует из id, а не из базы — ответ не раскрывает, есть ли документ.
+ */
+export function namespaceOf(id: string, all: readonly Product[]): string {
+  const prefixed = all.filter((p) => !p.isDefault && id.startsWith(`${p.slug}-`)).sort((a, b) => b.slug.length - a.slug.length)[0]
+  return prefixed?.slug ?? all.find((p) => p.isDefault)?.slug ?? DEFAULT_PRODUCT
 }
 
 /**
- * Продукт нового документа: единственный продукт токена; владельцу и токену с несколькими продуктами — `requested`
- * (поле запроса, не data) или продукт по умолчанию. Неизвестный или невидимый продукт — 422.
+ * Продукт нового документа — пространство его id; невидимое актору — 404, как чужой документ. Поле запроса product —
+ * подтверждение: другое — 422 (оба продукта актору видимы или названы им самим).
  */
-export async function productForNew(products: Visibility, requested: string | undefined): Promise<string> {
-  if (!requested && products !== '*' && products.length === 1) return products[0]!
-  const slug = requested ?? (await defaultProduct())
-  if (!(await listProducts()).some((p) => p.slug === slug)) throw apiError(422, `Нет продукта «${slug}»`)
-  if (!canSee(products, slug)) throw apiError(422, `Токену не разрешён продукт «${slug}»`)
-  return slug
-}
-
-/**
- * id нового документа: у продукта не по умолчанию — с префиксом `<slug>-` (`taibe-m-93`), чужой префикс — 409. Так
- * пункты разных продуктов не делят id (`c-backup-<дата>` у каждого свой), а запрет следует из id, а не из базы.
- */
-export async function checkNewId(id: string, product: string): Promise<void> {
-  const all = await listProducts()
-  const owner = all.find((p) => !p.isDefault && id.startsWith(`${p.slug}-`))
-  if (owner && owner.slug !== product) throw apiError(409, `id принадлежит продукту «${owner.slug}»`)
-  const own = all.find((p) => p.slug === product)
-  if (own && !own.isDefault && !id.startsWith(`${product}-`)) {
-    throw apiError(422, `id пункта продукта «${product}» начинается с «${product}-»`)
-  }
+export async function productForNew(products: Visibility, id: string, requested: string | undefined): Promise<string> {
+  const ns = namespaceOf(id, await listProducts())
+  if (!canSee(products, ns)) throw apiError(404, NOT_FOUND)
+  if (requested && requested !== ns) throw apiError(422, `id «${id}» — продукта «${ns}», а в запросе product «${requested}»`)
+  return ns
 }

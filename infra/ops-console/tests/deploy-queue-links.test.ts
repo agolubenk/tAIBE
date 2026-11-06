@@ -90,8 +90,8 @@ describe('GET /events/deploys — поле queue', () => {
     ] as const)
       expect(await importDoc('items', id, data as Record<string, unknown>, 'test')).toBe('added')
     await importDoc('checks', 'c-404-login', { done: true, at: new Date().toISOString() }, 'test')
-    await logEvent('console:owner@ops.test', 'items', 'm-hotfix', 'merge', { pr: 7, sha: 'f'.repeat(40), mergeSha: `5555aaaa6666${'0'.repeat(28)}`, skipCi: false })
-    await logEvent('console:owner@ops.test', 'items', 'm-404', 'merge', { pr: 404, sha: 'f'.repeat(40), mergeSha: `cccc2222dddd${'0'.repeat(28)}`, skipCi: false })
+    await logEvent('console:owner@ops.test', 'items', 'm-hotfix', 'merge', { pr: 7, sha: 'f'.repeat(40), mergeSha: `5555aaaa6666${'0'.repeat(28)}`, skipCi: false }, 'hr-helper')
+    await logEvent('console:owner@ops.test', 'items', 'm-404', 'merge', { pr: 404, sha: 'f'.repeat(40), mergeSha: `cccc2222dddd${'0'.repeat(28)}`, skipCi: false }, 'hr-helper')
   })
 
   const byRun = (list: Array<Record<string, any>>, runKey: string) => list.find((d) => d.runKey === runKey)!
@@ -118,7 +118,7 @@ describe('GET /events/deploys — поле queue', () => {
     expect(byRun((await owner.get('/events/deploys')).json.deploys, '3').queue).toBeNull()
     await getDb().insert(oqEvents).values({ actor: 'test', collection: 'items', docId: 'm-404', action: 'merge', afterJson: '{"mergeSha":"eeee3333' })
     await importDoc('items', 'm-500', { kind: 'merge', title: 'Влить хотфикс 2' }, 'test')
-    await logEvent('test', 'items', 'm-500', 'merge', { pr: 9, sha: 'f'.repeat(40), mergeSha: `eeee3333ffff${'0'.repeat(28)}`, skipCi: false })
+    await logEvent('test', 'items', 'm-500', 'merge', { pr: 9, sha: 'f'.repeat(40), mergeSha: `eeee3333ffff${'0'.repeat(28)}`, skipCi: false }, 'hr-helper')
     const res = await owner.get('/events/deploys')
     expect(res.status).toBe(200)
     expect(byRun(res.json.deploys, '3').queue.links.map((l: { id: string }) => l.id)).toEqual(['m-500'])

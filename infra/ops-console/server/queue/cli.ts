@@ -32,11 +32,12 @@ async function main(): Promise<void> {
         products: products ? products.split(',').map((s) => s.trim()) : undefined,
         expiresDays: days ? Number(days) : undefined,
       })
-      console.log(`Токен #${t.id} «${name}» (${scopes}; ${products ?? 'hr-helper'}) — сохраните сейчас, повторно не показывается:\n${t.token}`)
+      const until = days ? `до ${new Date(Date.now() + Number(days) * 86_400_000).toISOString().slice(0, 10)}` : 'бессрочный'
+      console.log(`Токен #${t.id} «${name}» (${scopes}; ${products ?? 'по умолчанию'}; ${until}) — сохраните сейчас, повторно не показывается:\n${t.token}`)
       return
     }
     case 'token-list':
-      for (const t of await listTokens()) console.log(`#${t.id}\t${t.name}\t${t.scopes}\t${t.revoked ? 'отозван' : 'активен'}\tпоследний раз: ${t.lastUsedAt?.toISOString() ?? '—'}`)
+      for (const t of await listTokens()) console.log(`#${t.id}\t${t.name}\t${t.scopes}\t${t.products}\t${t.revoked ? 'отозван' : 'активен'}\tдо: ${t.expiresAt?.toISOString() ?? 'бессрочно'}\tпоследний раз: ${t.lastUsedAt?.toISOString() ?? '—'}`)
       return
     case 'token-revoke': {
       const ok = await revokeToken(Number(args[0]))

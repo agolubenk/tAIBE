@@ -103,25 +103,36 @@ describe('продукт нового документа и id', () => {
     expect((await call(both, 'PATCH', '/db/items/d-hr-1', { data: { title: 'HR' }, product: 'taibe' })).status).toBe(409)
   })
 
-  it('id продукта не по умолчанию — с его префиксом; чужой префикс — 409', async () => {
-    expect((await call(taibe, 'PUT', '/db/items/d-no-prefix', { data: decision('x') })).status).toBe(422)
-    expect((await call(hr, 'PUT', '/db/items/taibe-d-9', { data: decision('x') })).status).toBe(409)
+  it('продукт нового документа — пространство id; чужое пространство — тот же 404, что у чужого документа', async () => {
+    const absent = await call(taibe, 'PUT', '/db/items/d-no-prefix', { data: decision('x') })
+    const foreign = await call(taibe, 'PUT', '/db/items/d-hr-1', { data: decision('x') })
+    expect([absent.status, foreign.status]).toEqual([404, 404])
+    expect(absent.json).toEqual(foreign.json)
+    expect((await call(hr, 'PUT', '/db/items/taibe-d-9', { data: decision('x') })).status).toBe(404)
+    expect((await call(taibe, 'PATCH', '/db/checks/d-none', { data: { agentStatus: 'doing' } })).status).toBe(404)
   })
 
   it('владелец и токен с несколькими продуктами — product запроса или продукт по умолчанию; невидимый — 422', async () => {
     expect((await call(owner, 'PUT', '/db/items/taibe-d-3', { data: decision('от владельца'), product: 'taibe' })).json).toMatchObject({ product: 'taibe' })
     expect((await call(owner, 'PUT', '/db/items/d-owner-1', { data: decision('по умолчанию') })).json).toMatchObject({ product: 'hr-helper' })
     expect((await call(both, 'PUT', '/db/items/d-both-1', { data: decision('по умолчанию') })).json).toMatchObject({ product: 'hr-helper' })
-    expect((await call(taibe, 'PUT', '/db/items/lavaeon-d-1', { data: decision('x'), product: 'lavaeon' })).status).toBe(422)
+    expect((await call(taibe, 'PUT', '/db/items/lavaeon-d-1', { data: decision('x'), product: 'lavaeon' })).status).toBe(404)
+    // product запроса — подтверждение пространства id: другой — 422, без справки о чужих продуктах.
+    expect((await call(owner, 'PUT', '/db/items/d-x-1', { data: decision('x'), product: 'taibe' })).status).toBe(422)
     expect((await call(owner, 'PUT', '/db/items/nope-d-1', { data: decision('x'), product: 'nope' })).status).toBe(422)
   })
 })
 
 describe('токены', () => {
-  it('«*» — только у owner; неизвестный продукт не выпускается', async () => {
+  it('«*» — только у owner; у owner — только «*»; неизвестный продукт, кривой срок и занятое имя не выпускаются', async () => {
     await expect(createToken('x', ['agent'], { products: ['*'] })).rejects.toThrow(/owner/)
     await expect(createToken('x', ['agent'], { products: ['nope'] })).rejects.toThrow(/nope/)
-    expect((await createToken('all', ['owner'], { products: ['*'] })).token).toMatch(/^oq_/)
+    await expect(createToken('x', ['owner'], { products: ['taibe'] })).rejects.toThrow(/все продукты/)
+    for (const d of [Number.NaN, 0, -1, 0.5, 4000]) await expect(createToken('x', ['read'], { expiresDays: d })).rejects.toThrow(/Срок/)
+    await expect(createToken('hr-agent', ['read'])).rejects.toThrow(/уже есть/)
+    const all = await createToken('all', ['owner'])
+    const [row] = await getDb().select({ products: oqTokens.products }).from(oqTokens).where(eq(oqTokens.id, all.id))
+    expect(row?.products).toBe('["*"]')
   })
 
   it('истёкший токен — 401', async () => {
@@ -136,6 +147,20 @@ describe('токены', () => {
     const [row] = await getDb().select({ products: oqTokens.products }).from(oqTokens).where(eq(oqTokens.id, t.id))
     expect(row?.products).toBe('["hr-helper"]')
     expect(ids(await call(t.token, 'GET', '/db/items'))).not.toContain('taibe-d-1')
+  })
+})
+
+describe('relay и вложения', () => {
+  it('relay — про входящие HR: токен без HR получает 404 на чтение и отметку', async () => {
+    expect((await call(taibe, 'GET', '/relay')).status).toBe(404)
+    expect((await call(taibe, 'PUT', '/relay', { session: 'hr-sess' })).status).toBe(404)
+    expect((await call(hr, 'GET', '/relay')).status).toBe(200)
+  })
+
+  it('файлы чужого пункта — как у несуществующего: пусто', async () => {
+    const foreign = await call(taibe, 'GET', '/files?item=d-hr-1')
+    const absent = await call(taibe, 'GET', '/files?item=d-none')
+    expect([foreign.status, foreign.json]).toEqual([absent.status, absent.json])
   })
 })
 
