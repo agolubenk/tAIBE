@@ -53,7 +53,7 @@ LEGACY_HOST_LOCK = "" if _LOCK_OVERRIDE else str(_HOST_ROOT / ".claude" / "counc
 # файл лежит рядом с ним.
 MACHINE_MODEL_LOCK = (os.path.join(os.path.dirname(_LOCK_OVERRIDE), "large-model.lock") if _LOCK_OVERRIDE
                       else os.path.join(os.path.expanduser("~"), ".local", "state", "taibe", "council", "large-model.lock"))
-_model_lock = {"depth": 0, "handle": None}   # процесс держит машинный модельный лок: вложенный large_model — без flock
+_model_lock = {"depth": 0}   # процесс держит машинный модельный лок: вложенный large_model — без flock
 
 
 def _flock_by(handle, deadline: float, wait_seconds: float, path: str = "", what: str = "локальный инференс") -> None:
@@ -92,11 +92,11 @@ def machine_model_slot(model: str, holder: str, wait_seconds: float):
     with open(path, "a+") as handle:
         _flock_by(handle, time.time() + wait_seconds, wait_seconds, path, what=f"модельный лок под {model}")
         mark_holder(handle, f"council {holder} {model}")
-        _model_lock.update(depth=1, handle=handle)
+        _model_lock.update(depth=1)
         try:
             yield
         finally:
-            _model_lock.update(depth=0, handle=None)
+            _model_lock.update(depth=0)
             clear_mark(handle)
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
@@ -155,7 +155,7 @@ def local_lock_holder(path: str | None = None) -> dict | None:
             return None
     parts = line.split(maxsplit=1)
     pid = int(parts[0]) if parts and parts[0].isdigit() else None
-    info = {"pid": pid, "who": parts[1] if len(parts) > 1 else "", "state": "", "command": "", "error": ""}
+    info = {"pid": pid, "who": parts[1] if len(parts) > 1 else "", "state": "", "command": "", "error": "", "path": path}
     if pid:
         ps = _ps(pid)
         if ps is None:
@@ -184,8 +184,10 @@ def describe_holder(h: dict | None) -> str:
     if h["state"].startswith("T"):
         return f"держит {who} — ОСТАНОВЛЕН (Ctrl+Z или SIGSTOP): kill -CONT {h['pid']} или завершите процесс"
     if not h["state"]:
-        return f"держит {who} — процесса уже нет, замок держит его потомок или файл открыт заново"
-    return f"держит {who}, состояние {h['state']}: {h['command'][:100]}"
+        return (f"pid {h['pid']} завершён; замок держит процесс без отметки — кто: lsof {h.get('path') or 'файл замка'}")
+    argv = h["command"].split(" ", 1)
+    command = " ".join([os.path.basename(argv[0])] + argv[1:])   # путь интерпретатора съедал всю строку
+    return f"держит {who}, состояние {h['state']}: {command[:100]}"
 
 
 @contextmanager
@@ -437,7 +439,7 @@ class OllamaClient:
         if not acquired:
             raise TimeoutError(
                 f"не удалось взять модельный лок под {model} за {wait_seconds}s — "
-                "держит другой воркер (см. таблицу locks)"
+                "держит другой воркер (таблица locks); кто держит — python3 infra/ai-council/supervisor.py status"
             )
 
         try:

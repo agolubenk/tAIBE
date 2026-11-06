@@ -414,13 +414,8 @@ class Council(LanguageGate, ExtraRounds, InfraRounds):
         return result
 
     def _maybe_locked(self, model: str):
-        """Контекст модельного лока: для L-модели эксклюзивно, для S — no-op. Ждать лок — не дольше остатка бюджета
-        карточки: лок машинный (OPS-29), его может держать консилиум другого хоста, а TimeoutError возвращает прогон в
-        очередь (council_worker), вместо того чтобы съесть бюджет и урезать раунды."""
-        left = getattr(self, "_card_deadline", None)
-        if left is None:
-            return self.ollama.large_model(model)
-        return self.ollama.large_model(model, wait_seconds=max(30, int(left - time.time())))
+        """Контекст модельного лока: для L-модели эксклюзивно, для S — no-op."""
+        return self.ollama.large_model(model)
 
     # ── R1: предложения ──────────────────────────────────────────────────────
     def propose(self, run_id: str, capsule: Capsule, roles: dict, track: str,
@@ -979,7 +974,6 @@ class Council(LanguageGate, ExtraRounds, InfraRounds):
         module = modules[1] if len(modules) > 1 else learning_mod.GLOBAL_MODULE
         started = time.time()
         deadline = started + self.cfg.get("council.max_wall_seconds_per_card", 420)
-        self._card_deadline = deadline
         self._lang_allowed = (capsule.pinned or "") + "\n" + capsule.evidence_text()
         self._lang_failed, self._extra_kind = [], ""
         self._infra, self._merge_mode = [], ""

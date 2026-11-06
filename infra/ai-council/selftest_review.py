@@ -338,7 +338,7 @@ class _E2EOllama:
     def context_length(self, _model):
         return 32768
 
-    def large_model(self, _model, wait_seconds=1800):
+    def large_model(self, _model):
         import contextlib
         return contextlib.nullcontext()
 

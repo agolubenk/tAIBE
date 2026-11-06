@@ -33,7 +33,7 @@ class _NoClient:
     def chat(self, *_a, **_kw):
         raise AssertionError("M7 не должен звать модели")
 
-    def large_model(self, _model, wait_seconds=1800):
+    def large_model(self, _model):
         return contextlib.nullcontext()
 
 

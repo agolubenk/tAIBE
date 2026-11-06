@@ -1957,7 +1957,7 @@ class _SpiralOllama:
         return SimpleNamespace(ok=True, text=json.dumps(item, ensure_ascii=False),
                                data=item, error="", ms=1, tokens_in=0, tokens_out=0)
 
-    def large_model(self, _model, wait_seconds=1800):
+    def large_model(self, _model):
         import contextlib
         return contextlib.nullcontext()
 
