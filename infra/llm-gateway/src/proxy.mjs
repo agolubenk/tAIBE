@@ -47,8 +47,8 @@ function asChunk(obj) {
 }
 
 export class Proxy {
-  constructor({ cfg, pool, router, discovery, log = () => {}, fetchImpl = fetch, machineLock = acquireMachineLock }) {
-    Object.assign(this, { cfg, pool, router, discovery, log, fetchImpl, machineLock })
+  constructor({ cfg, pool, router, discovery, log = () => {}, fetchImpl = fetch }) {
+    Object.assign(this, { cfg, pool, router, discovery, log, fetchImpl })
     this.remote = new Semaphore(cfg.maxConcurrency)
     // Локальные модели — строго по одной (политика машины владельца): семафор — внутри процесса, машинный замок
     // (cfg.localLock) — с консилиумом и другими процессами на этом Mac.
@@ -201,7 +201,7 @@ export class Proxy {
     if (!this.cfg.localLock) return { release }
     let lock
     try {
-      lock = await this.machineLock({ path: this.cfg.localLock, waitMs: this.cfg.localMaxWaitMs - (Date.now() - t0), signal: clientSignal, python: this.cfg.python })
+      lock = await acquireMachineLock({ path: this.cfg.localLock, waitMs: this.cfg.localMaxWaitMs - (Date.now() - t0), signal: clientSignal, python: this.cfg.python })
     } catch (e) {
       lock = { failed: e.message } // семафор не должен утечь ни при каком сбое замка
     }

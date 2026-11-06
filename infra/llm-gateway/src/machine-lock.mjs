@@ -10,20 +10,20 @@ import { join } from 'node:path'
 // Путь — как MACHINE_LOCK_REL в ollama.py: домашняя папка, вне продуктов (у launchd и терминала HOME один).
 export const MACHINE_LOCK = join(homedir(), '.local', 'state', 'taibe', 'council', 'ollama-local.lock')
 
-// Опрос раз в 0,25 с — как `_flock_by` консилиума: ни шлюз, ни консилиум не получают преимущества в очереди.
+// Блокирующий flock с таймером, а не опрос: ядро будит ждущего сразу при освобождении. Консилиум опрашивает раз в
+// 0,25 с (`_flock_by`), поэтому шлюз (интерактивные вызовы) получает следующий свободный слот. С опросом шлюз
+// голодал за серией вызовов консилиума: тот брал замок снова через миллисекунды (линза продукта, 3 из 3 прогонов).
 const HELPER = `
-import fcntl, os, sys, time
-path, deadline = sys.argv[1], time.time() + float(sys.argv[2])
+import fcntl, os, signal, sys
+path, wait = sys.argv[1], float(sys.argv[2])
 os.makedirs(os.path.dirname(path), exist_ok=True)
 f = open(path, "a+")
-while True:
-    try:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        break
-    except BlockingIOError:
-        if time.time() >= deadline:
-            sys.exit(3)
-        time.sleep(0.25)
+signal.signal(signal.SIGALRM, lambda *a: sys.exit(3))
+if wait <= 0:
+    sys.exit(3)
+signal.setitimer(signal.ITIMER_REAL, wait)
+fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+signal.setitimer(signal.ITIMER_REAL, 0)
 sys.stdout.write("ok\\n")
 sys.stdout.flush()
 sys.stdin.read()

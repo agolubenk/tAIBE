@@ -168,6 +168,22 @@ test('штатный release — не потеря, замок свободен 
   assert.equal(lost, false)
 })
 
+test('серия вызовов консилиума без пауз — шлюз получает следующий слот, а не голодает до таймаута', async () => {
+  // 20 вызовов по 200 мс с зазором 2 мс: при опросе раз в 0,25 с шлюз ждал бы до конца серии (линза продукта).
+  const code = `import sys, time\nsys.path.insert(0, ${JSON.stringify(COUNCIL)})\nimport ollama\nfor i in range(20):\n    with ollama.local_inference_slot(30):\n        print("in", flush=True) if i == 0 else None\n        time.sleep(0.2)\n    time.sleep(0.002)\n`
+  const loop = spawn('python3', ['-I', '-c', code], { env: { ...process.env, AI_COUNCIL_LOCAL_LOCK: LOCK }, stdio: ['ignore', 'pipe', 'inherit'] })
+  try {
+    await new Promise((r) => loop.stdout.once('data', r))
+    const started = Date.now()
+    const lock = await acquireMachineLock({ path: LOCK, waitMs: 3_000 })
+    assert.ok(lock.held, 'шлюз дождался слота внутри серии')
+    assert.ok(Date.now() - started < 1_000, `ждал ${Date.now() - started} мс — дольше одного вызова консилиума`)
+    lock.release()
+  } finally {
+    loop.kill('SIGKILL')
+  }
+})
+
 test('нет python3 — failed, а не исключение и не зависание', async () => {
   const r = await acquireMachineLock({ path: LOCK, waitMs: 100, python: '/nonexistent/python3' })
   assert.ok(r.failed)
