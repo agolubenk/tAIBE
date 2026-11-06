@@ -13,6 +13,7 @@ import { runMigrations } from '../db/migrate'
 import { encryptSecret } from '../lib/crypto'
 import { getGithubSettings, writeSetting } from '../settings/store'
 import { createToken, listTokens, revokeToken } from './auth'
+import { listProducts } from './products'
 import { COLLECTIONS, importDoc, type Scope } from './store'
 
 async function readStdin(): Promise<string> {
@@ -37,7 +38,7 @@ async function main(): Promise<void> {
       return
     }
     case 'token-list':
-      for (const t of await listTokens()) console.log(`#${t.id}\t${t.name}\t${t.scopes}\t${t.products}\t${t.revoked ? 'отозван' : 'активен'}\tдо: ${t.expiresAt?.toISOString() ?? 'бессрочно'}\tпоследний раз: ${t.lastUsedAt?.toISOString() ?? '—'}`)
+      for (const t of await listTokens()) console.log(`#${t.id}\t${t.name}\t${t.scopes}\t${t.products}\t${t.revoked ? 'отозван' : t.expiresAt && t.expiresAt.getTime() <= Date.now() ? 'истёк' : 'активен'}\tдо: ${t.expiresAt?.toISOString() ?? 'бессрочно'}\tпоследний раз: ${t.lastUsedAt?.toISOString() ?? '—'}`)
       return
     case 'token-revoke': {
       const ok = await revokeToken(Number(args[0]))
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
     case 'import': {
       const dir = args[0]
       if (!dir || !statSync(dir).isDirectory()) throw new Error('import <папка выгрузки с checks/ items/ work/>')
+      const products = await listProducts()
       for (const col of COLLECTIONS) {
         const sub = join(dir, col)
         const files = (() => { try { return readdirSync(sub).filter((f) => f.endsWith('.json')) } catch { return [] } })()
@@ -62,7 +64,7 @@ async function main(): Promise<void> {
         const bad: string[] = []
         for (const f of files) {
           const id = f.slice(0, -5)
-          const res = await importDoc(col, id, JSON.parse(readFileSync(join(sub, f), 'utf8')) as Record<string, unknown>, 'import:artifact')
+          const res = await importDoc(col, id, JSON.parse(readFileSync(join(sub, f), 'utf8')) as Record<string, unknown>, 'import:artifact', products)
           counts[res]++
           if (res === 'invalid') bad.push(id)
         }

@@ -21,7 +21,7 @@ const writeSchema = z.object({
   data: z.record(z.unknown()),
   ifVersion: z.number().int().nonnegative().optional(),
   ifAnswerAt: z.string().max(40).optional(),
-  /** Продукт нового документа (v2-lite): владельцу и токену с несколькими продуктами; у существующего — его же. */
+  /** Подтверждение продукта (v2-lite): сам продукт — пространство id; другой — 422 у нового, 409 у существующего. */
   product: z.string().regex(PRODUCT_SLUG).optional(),
 })
 const mergeSchema = z.object({ sha: z.string() })

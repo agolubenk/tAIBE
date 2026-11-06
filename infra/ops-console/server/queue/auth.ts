@@ -5,7 +5,7 @@
  */
 import type { MiddlewareHandler } from 'hono'
 import { getCookie } from 'hono/cookie'
-import { and, eq, isNull } from 'drizzle-orm'
+import { and, eq, gt, isNull, or } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { oqTokens } from '../db/schema'
 import { apiError, type AppEnv } from '../http-types'
@@ -49,7 +49,8 @@ export async function createToken(name: string, scopes: Scope[], opts: TokenOpti
     throw new Error(`Срок — целое число дней от 1 до ${EXPIRES_DAYS_MAX}`)
   }
   // Имя — ключ тормоза записи и подпись в журнале: два действующих токена с одним именем делили бы лимит.
-  const taken = await getDb().select({ id: oqTokens.id }).from(oqTokens).where(and(eq(oqTokens.name, name.slice(0, 80)), isNull(oqTokens.revokedAt))).limit(1)
+  const live = and(eq(oqTokens.name, name.slice(0, 80)), isNull(oqTokens.revokedAt), or(isNull(oqTokens.expiresAt), gt(oqTokens.expiresAt, new Date())))
+  const taken = await getDb().select({ id: oqTokens.id }).from(oqTokens).where(live).limit(1)
   if (taken.length) throw new Error(`Действующий токен «${name}» уже есть — отзовите его или выберите другое имя`)
   const expiresAt = days ? new Date(Date.now() + days * 86_400_000) : null
   const token = TOKEN_PREFIX + randomToken(32)

@@ -2,7 +2,7 @@
  * Продукты очереди (v2-lite, план мультипродуктовой очереди, фаза 3): матрица «токен продукта A × документ B» по всем
  * эндпоинтам, продукт нового документа, правило id, старый клиент HR без изменений, мёрж только для HR.
  */
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { freshApp } from './helpers'
 import { getDb } from '../server/db/client'
@@ -112,7 +112,7 @@ describe('продукт нового документа и id', () => {
     expect((await call(taibe, 'PATCH', '/db/checks/d-none', { data: { agentStatus: 'doing' } })).status).toBe(404)
   })
 
-  it('владелец и токен с несколькими продуктами — product запроса или продукт по умолчанию; невидимый — 422', async () => {
+  it('владелец и токен с несколькими продуктами — продукт из id, product запроса — подтверждение; невидимое пространство — 404', async () => {
     expect((await call(owner, 'PUT', '/db/items/taibe-d-3', { data: decision('от владельца'), product: 'taibe' })).json).toMatchObject({ product: 'taibe' })
     expect((await call(owner, 'PUT', '/db/items/d-owner-1', { data: decision('по умолчанию') })).json).toMatchObject({ product: 'hr-helper' })
     expect((await call(both, 'PUT', '/db/items/d-both-1', { data: decision('по умолчанию') })).json).toMatchObject({ product: 'hr-helper' })
@@ -147,6 +147,31 @@ describe('токены', () => {
     const [row] = await getDb().select({ products: oqTokens.products }).from(oqTokens).where(eq(oqTokens.id, t.id))
     expect(row?.products).toBe('["hr-helper"]')
     expect(ids(await call(t.token, 'GET', '/db/items'))).not.toContain('taibe-d-1')
+  })
+})
+
+describe('запись — надёжность и пары', () => {
+  it('два одновременных создания не ломают следующие записи процесса (справочник продуктов — до транзакции)', async () => {
+    const [x, y] = await Promise.all([
+      call(hr, 'PUT', '/db/items/d-race-1', { data: decision('гонка 1') }),
+      call(hr, 'PUT', '/db/items/d-race-2', { data: decision('гонка 2') }),
+    ])
+    expect([x.status, y.status]).toContain(200)
+    for (let i = 3; i <= 5; i++) expect((await call(hr, 'PUT', `/db/items/d-race-${i}`, { data: decision('после') })).status).toBe(200)
+  })
+
+  it('пункт, созданный заново при живом ответе, берёт продукт ответа — пара не расходится', async () => {
+    await getDb().insert(oqDocs).values({ collection: 'checks', id: 'taibe-legacy', dataJson: JSON.stringify({ done: true }), product: 'hr-helper' })
+    expect((await call(owner, 'PUT', '/db/items/taibe-legacy', { data: decision('заново') })).json).toMatchObject({ product: 'hr-helper' })
+    expect((await call(owner, 'PATCH', '/db/checks/taibe-legacy', { data: { note: 'ок' } })).status).toBe(200)
+  })
+
+  it('миграция 0015 ставит токенам owner ["*"]', async () => {
+    const t = await createToken('bot-legacy', ['owner'])
+    await getDb().update(oqTokens).set({ products: '["hr-helper"]' }).where(eq(oqTokens.id, t.id))
+    await getDb().run(sql.raw(`UPDATE oq_tokens SET products = '["*"]' WHERE ',' || scopes || ',' LIKE '%,owner,%'`))
+    const [row] = await getDb().select({ products: oqTokens.products }).from(oqTokens).where(eq(oqTokens.id, t.id))
+    expect(row?.products).toBe('["*"]')
   })
 })
 

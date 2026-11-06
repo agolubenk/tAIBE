@@ -67,10 +67,12 @@ export function namespaceOf(id: string, all: readonly Product[]): string {
 
 /**
  * Продукт нового документа — пространство его id; невидимое актору — 404, как чужой документ. Поле запроса product —
- * подтверждение: другое — 422 (оба продукта актору видимы или названы им самим).
+ * подтверждение: другое — 422 (оба продукта актору видимы или названы им самим). `all` — справочник, прочитанный до
+ * транзакции записи: чтение другим соединением пула libsql внутри транзакции оставляет блокировку, и после двух
+ * одновременных созданий падает каждая следующая запись процесса (линза корректности v2-lite.1, F1).
  */
-export async function productForNew(products: Visibility, id: string, requested: string | undefined): Promise<string> {
-  const ns = namespaceOf(id, await listProducts())
+export function productForNew(products: Visibility, id: string, requested: string | undefined, all: readonly Product[]): string {
+  const ns = namespaceOf(id, all)
   if (!canSee(products, ns)) throw apiError(404, NOT_FOUND)
   if (requested && requested !== ns) throw apiError(422, `id «${id}» — продукта «${ns}», а в запросе product «${requested}»`)
   return ns
