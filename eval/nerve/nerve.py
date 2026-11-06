@@ -111,7 +111,8 @@ POLLS = [("github", sources.poll_github), ("queue", sources.poll_queue), ("syste
          ("budget", actions.poll_budget)]
 
 
-def one_pass(ctx, polls=None):
+def one_pass(ctx, polls=None, finish=True):
+    """finish=False — пульс и запись state.json оставить run_products (одна запись ≈1 МБ за проход, а не две)."""
     errs = ctx.state.setdefault("errors", {})
     for name, fn in (POLLS if polls is None else polls):
         if not ctx.cfg["sources"].get(name, True):
@@ -131,6 +132,8 @@ def one_pass(ctx, polls=None):
             errs[name]["msg"] = msg
     if polls is not None:          # проход другого продукта: пульс и режим пишет только проход по умолчанию
         ctx.save()
+        return
+    if not finish:
         return
     ctx.state["heartbeat"] = now_iso()
     ctx.save()
@@ -212,7 +215,9 @@ def resolve_product(cfg, a):
             raise SystemExit(f"--product {want}: нет instances/ — продукт один")
         return cfg, STATE_DIR, ""
     if not want:
-        print(f"продукт не задан (--product, TAIBE_PRODUCT) — продукт по умолчанию {default}", file=sys.stderr)
+        # Строка — только когда есть другой включённый продукт: иначе она будила бы Monitor каждой роли (2>&1) зря.
+        if any(c.get("active") is True for s, c in cfgs.items() if s != default):
+            print(f"продукт не задан (--product, TAIBE_PRODUCT) — продукт по умолчанию {default}", file=sys.stderr)
         want = default
     if want not in cfgs:
         raise SystemExit(f"нет продукта {want}: {', '.join(sorted(cfgs))}")
@@ -233,7 +238,7 @@ def cmd_run(cfg, a):
     while True:
         deliver = wakes_on()
         ctx = Ctx(cfg, STATE_DIR, deliver=not seed and deliver)
-        one_pass(ctx)
+        one_pass(ctx, finish=False)
         seed = False
         run_products(ctx, deliver)
         pause = cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval)
@@ -334,7 +339,7 @@ def resolve_roles(cfg, spec, strict=True):
 def cmd_once(cfg, a):
     os.makedirs(STATE_DIR, exist_ok=True)
     ctx = Ctx(cfg, STATE_DIR, deliver=not a.seed and wakes_on())
-    one_pass(ctx)
+    one_pass(ctx, finish=False)
     run_products(ctx, not a.seed and wakes_on())
     print(f"проход: событий {ctx.emitted}, ошибки {list(ctx.state.get('errors', {}))}")
     return 0
