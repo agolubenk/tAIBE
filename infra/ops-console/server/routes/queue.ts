@@ -3,7 +3,6 @@
  * журнал, мёрж и деплой. Доступ — токен очереди или сессия владельца консоли (server/queue/auth.ts).
  */
 import { Hono, type Context } from 'hono'
-import { compress } from 'hono/compress'
 import { z } from 'zod'
 import { apiError } from '../http-types'
 import { parseBody } from '../lib/validate'
@@ -13,6 +12,7 @@ import { beatRelay, readRelay, relayBeatSchema } from '../queue/relay'
 import { throttleWrite } from '../queue/throttle'
 import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
+import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, deleteDoc, docHistory, getDoc, isCollection, listDocs, listOpenItems, openItemsTag, writeDoc, type Collection, type DocList } from '../queue/store'
 
 const writeSchema = z.object({
@@ -35,26 +35,27 @@ queueRoutes.use('*', requireQueueActor)
 /** Обрезка потолком — полями рядом с docs и только когда она была: без обрезки JSON прежний, только { docs }. */
 const listBody = ({ docs, capped }: DocList) => (capped ? { docs, truncated: true, total: capped.total, limit: capped.limit } : { docs })
 
-/** 304 — с теми же ETag и Vary, что у 200 (RFC 9110 §15.4.5): compress пропускает ответ без тела и Vary сам не ставит. */
-const notModified = (c: Context<QueueEnv>, tag: string) => c.body(null, 304, { ETag: tag, Vary: 'Accept-Encoding' })
+/**
+ * Список с тегом: совпал If-None-Match (слабое сравнение, etagMatches) — 304; иначе JSON, сжатый из кэша на тег
+ * (queue/list-gzip.ts), если клиент принимает gzip: 586 КБ против 2 МБ у items на каждом опросе. Теги списка слабые
+ * (store.ts) — один у gzip и несжатого ответа; 304 и 200 несут одни ETag и Vary (RFC 9110 §15.4.5).
+ * В теле списка нет секретов, CSRF — заголовок, а не токен в теле (BREACH).
+ */
+async function listResponse(c: Context<QueueEnv>, key: string, tag: string, build: () => Promise<unknown>) {
+  const headers = { ETag: tag, Vary: 'Accept-Encoding' }
+  if (etagMatches(c.req.header('if-none-match'), tag)) return c.body(null, 304, headers)
+  if (!acceptsGzip(c.req.header('accept-encoding'))) return c.json(await build(), 200, headers)
+  return c.body(await gzipListOnce(key, tag, build), 200, { ...headers, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' })
+}
 
-// Сжатие — только у списка (586 КБ gzip против 2 МБ у items на каждом опросе Нерва). Теги списка слабые (store.ts),
-// поэтому один и тот же у gzip и несжатого ответа; If-None-Match сравнивается слабо (etagMatches).
-// В теле списка нет секретов, CSRF — заголовок, а не токен в теле (BREACH).
-queueRoutes.get('/db/:col', requireScope('read', 'agent'), compress({ encoding: 'gzip' }), async (c) => {
+queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {
   const col = collectionOf(c.req.param('col'))
   // ?open=1 — только открытые владельцу пункты, по тому же правилу, что на странице (MCP oq_list open_only). Ответ
   // зависит и от checks — ETag по обеим коллекциям; open: true — сервер фильтр применил (старый сервер параметр не знает).
   if (col === 'items' && c.req.query('open') === '1') {
-    const openTag = await openItemsTag()
-    if (etagMatches(c.req.header('if-none-match'), openTag)) return notModified(c, openTag)
-    c.header('ETag', openTag)
-    return c.json({ ...listBody(await listOpenItems()), open: true })
+    return listResponse(c, 'items?open=1', await openItemsTag(), async () => ({ ...listBody(await listOpenItems()), open: true }))
   }
-  const tag = await collectionTag(col)
-  if (etagMatches(c.req.header('if-none-match'), tag)) return notModified(c, tag)
-  c.header('ETag', tag)
-  return c.json(listBody(await listDocs(col)))
+  return listResponse(c, col, await collectionTag(col), async () => listBody(await listDocs(col)))
 })
 
 queueRoutes.get('/db/:col/:id', requireScope('read', 'agent'), async (c) => {

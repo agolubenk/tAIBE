@@ -6,6 +6,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { freshApp } from './helpers'
 import { createToken } from '../server/queue/auth'
 import { etagMatches } from '../server/queue/etag'
+import { gzipListOnce } from '../server/queue/list-gzip'
 import { setListLimitsForTests } from '../server/queue/store'
 
 type App = Awaited<ReturnType<typeof freshApp>>
@@ -116,5 +117,35 @@ describe('потолок списка', () => {
     const body = (await (await get('/db/items')).json()) as Record<string, unknown>
     expect(Object.keys(body)).toEqual(['docs'])
     expect((body.docs as unknown[]).length).toBe(5)
+  })
+})
+
+describe('сжатый список — одна сборка на тег', () => {
+  it('одновременные запросы с одним тегом ждут одну сборку; новый тег — новая сборка; сбой не кэшируется', async () => {
+    let builds = 0
+    const build = async () => ({ docs: [{ id: `b-${++builds}` }] })
+    const [a, b] = await Promise.all([gzipListOnce('t-key', 'W/"1"', build), gzipListOnce('t-key', 'W/"1"', build)])
+    expect(builds).toBe(1)
+    expect(a).toBe(b)
+    await gzipListOnce('t-key', 'W/"1"', build)
+    expect(builds).toBe(1)
+    await gzipListOnce('t-key', 'W/"2"', build)
+    expect(builds).toBe(2)
+
+    await expect(gzipListOnce('t-fail', 'W/"1"', async () => { throw new Error('сбой') })).rejects.toThrow('сбой')
+    await new Promise((r) => setTimeout(r, 0))
+    await gzipListOnce('t-fail', 'W/"1"', build)
+    expect(builds).toBe(3)
+  })
+
+  it('после записи сжатый ответ — новый список, а не кэш прежнего тега', async () => {
+    const first = await get('/db/items', { 'Accept-Encoding': 'gzip' })
+    const before = JSON.parse(await gunzip(first)) as { docs: { id: string }[] }
+    await put('d-list-6')
+    const after = await get('/db/items', { 'Accept-Encoding': 'gzip' })
+    expect(after.headers.get('etag')).not.toBe(first.headers.get('etag'))
+    const docs = (JSON.parse(await gunzip(after)) as { docs: { id: string }[] }).docs.map((d) => d.id)
+    expect(docs).toContain('d-list-6')
+    expect(docs.length).toBe(before.docs.length + 1)
   })
 })

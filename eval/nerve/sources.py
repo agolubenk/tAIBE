@@ -167,12 +167,13 @@ def _oq_get(ctx, collection):
     cached = _OQ_CACHE.get(url)
     headers = f"Authorization: Bearer {ctx.oq_token()}\n" + (f"If-None-Match: {cached[0]}\n" if cached else "")
     code, out, err = run(["curl", "-sS", "-f", "--compressed", "-m", "20", "-H", "@-",
-                          "-w", "\n%{http_code} %{size_download} %{size_header} %header{etag}", url], stdin=headers)
+                          "-w", "\n%{http_code} %{size_download} %{size_header} %{size_request} %header{etag}", url],
+                         stdin=headers)
     if code != 0:
         raise RuntimeError(f"очередь {collection}: {err.strip()[:120]}")
     body, _, tail = out.rpartition("\n")
-    status, down, head, etag = (tail.split(" ", 3) + ["", "", "", ""])[:4]
-    _oq_count(ctx, int(down or 0) + int(head or 0))
+    status, down, head, req, etag = (tail.split(" ", 4) + [""] * 5)[:5]
+    _oq_count(ctx, sum(int(x or 0) for x in (down, head, req)))
     if status == "304":
         if not cached:
             raise RuntimeError(f"очередь {collection}: 304 без запомненного списка")
@@ -189,16 +190,28 @@ def _oq_get(ctx, collection):
 
 
 def _oq_count(ctx, n):
-    """Байты опроса очереди по дням (сжатое тело + заголовки, как по сети) — приёмка фазы 0 «Нерв ≤ 50 МБ в сутки».
+    """Байты опроса очереди по дням (сжатое тело, заголовки ответа и запрос — как по сети; TLS-рукопожатие нового
+    процесса curl, около 4 КБ на вызов по оценке, curl не сообщает) — приёмка фазы 0 «Нерв ≤ 50 МБ в сутки».
     prev — итог прошлого дня: его видно в state.json без журнала."""
     b = ctx.state.setdefault("queue", {}).setdefault("bytes", {})
     day = ctx.now.astimezone(ctx.tz).strftime("%Y-%m-%d")
     if b.get("day") != day:
         if b.get("day"):
             b["prev"] = {"day": b["day"], "n": b.get("n", 0), "calls": b.get("calls", 0)}
+            _oq_bytes_watch(ctx, b["prev"])
         b.update(day=day, n=0, calls=0)
     b["n"] += n
     b["calls"] += 1
+
+
+def _oq_bytes_watch(ctx, prev):
+    """Итог прошлых суток выше порога (по умолчанию 40 МБ при цели 50) — в сводку release. Порог по байтам, а не только
+    по числу документов: трафик растёт и с числом правок; в загруженный день 50 МБ наступают раньше 1500 документов."""
+    warn = ctx.cfg["queue"].get("bytes_warn", 40_000_000)
+    if prev["n"] > warn:
+        ctx.emit(f"oq:bytes:{prev['day']}", "queue.bytes", DIGEST, ["release"],
+                 f"Нерв: {prev['n'] / 1e6:.1f} МБ опроса очереди за {prev['day']} (порог {warn / 1e6:.0f}, цель ≤ 50) — "
+                 f"полный список на каждой правке дорог, пора /changes", "queue")
 
 
 def _oq_watch(ctx, collection, docs, meta):

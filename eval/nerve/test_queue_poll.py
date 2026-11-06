@@ -38,9 +38,9 @@ class FakeCurl:
         tag = self.tag_fmt.format(col=col, rev=self.rev[col])
         sent = next((ln.split(": ", 1)[1] for ln in (stdin or "").splitlines() if ln.startswith("If-None-Match: ")), None)
         if sent == tag:
-            return 0, f"\n304 0 120 {tag}", ""
+            return 0, f"\n304 0 120 80 {tag}", ""
         body = json.dumps({"docs": self.docs[col], **self.extra.get(col, {})})
-        return 0, f"{body}\n200 {len(body) // 4} 300 {tag}", ""
+        return 0, f"{body}\n200 {len(body) // 4} 300 80 {tag}", ""
 
 
 def _item(i, **data):
@@ -78,8 +78,8 @@ class QueuePollTest(unittest.TestCase):
         self.assertEqual(len([e for e in self.events() if e["kind"] == "owner.answer"]), 1)
         b = self.ctx.state["queue"]["bytes"]
         self.assertEqual(b["calls"], 4)
-        full = sum(len(json.dumps({"docs": d})) // 4 + 300 for d in fake.docs.values())
-        self.assertEqual(b["n"], full + 2 * 120, "сжатое тело + заголовки; у 304 — только заголовки")
+        full = sum(len(json.dumps({"docs": d})) // 4 + 300 + 80 for d in fake.docs.values())
+        self.assertEqual(b["n"], full + 2 * (120 + 80), "сжатое тело, заголовки и запрос; у 304 — без тела")
 
         fake.rev["checks"] = 2
         fake.docs["checks"] = []
@@ -121,6 +121,25 @@ class QueuePollTest(unittest.TestCase):
         ceil = [e for e in self.events() if e["kind"] == "queue.ceiling"]
         self.assertEqual([(e["key"], e["class"], e["to"]) for e in ceil], [("oq:ceiling:items:1500", DIGEST, ["release"])])
         self.assertFalse([e for e in self.events() if e["kind"] == "queue.capped"])
+
+    def test_bytes_over_threshold_digest_once_for_previous_day(self):
+        # cfg у FakeCtx общий на все тесты — порог только в копии.
+        self.ctx.cfg = {**self.ctx.cfg, "queue": {**self.ctx.cfg["queue"], "bytes_warn": 100}}
+        sources.run = FakeCurl({"items": [_item(1)], "checks": []})
+        sources.poll_queue(self.ctx)
+        self.assertFalse([e for e in self.events() if e["kind"] == "queue.bytes"], "итог — только за прошедшие сутки")
+        self.ctx.now += timedelta(hours=14)
+        sources.poll_queue(self.ctx)
+        sources.poll_queue(self.ctx)
+        ev = [e for e in self.events() if e["kind"] == "queue.bytes"]
+        self.assertEqual([(e["key"], e["class"], e["to"]) for e in ev], [("oq:bytes:2026-10-28", DIGEST, ["release"])])
+
+    def test_bytes_under_threshold_is_silent(self):
+        sources.run = FakeCurl({"items": [_item(1)], "checks": []})
+        sources.poll_queue(self.ctx)
+        self.ctx.now += timedelta(hours=14)
+        sources.poll_queue(self.ctx)
+        self.assertFalse([e for e in self.events() if e["kind"] == "queue.bytes"])
 
     def test_old_curl_without_header_var_polls_unconditionally(self):
         fake = FakeCurl({"items": [], "checks": []}, tag_fmt="%header{{etag}}")
