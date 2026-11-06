@@ -151,19 +151,16 @@ function parseDoc(row: typeof oqDocs.$inferSelect): Doc {
 }
 
 /**
- * Потолок списка коллекции. Раньше был молчаливый limit(2000): checks перерастали его, старые ответы выпадали, и
- * отвеченный пункт снова выглядел открытым. Теперь потолок большой и обрезка видна: `capped` → в ответе API
- * `truncated`, `total`, `limit`. warn — когда коллекция подходит к размеру, при котором нужен инкрементальный обмен
- * (/changes, v2-lite): средний пункт ~2,8 КБ, 1500 пунктов ≈ 4 МБ на полный ответ.
+ * Потолок списка коллекции — большой и видимый: `capped` → в ответе API `truncated`, `total`, `limit` (прежний
+ * limit(2000) обрезал молча, и обрезанные checks сделали бы отвеченные пункты снова открытыми). Убирает его /changes
+ * (v2-lite).
  */
-const LIST_LIMITS_DEFAULT = { max: 10_000, warn: 1500 }
-let listLimits = LIST_LIMITS_DEFAULT
-const warnedNear = new Set<Collection>()
+const LIST_MAX_DEFAULT = 10_000
+let listMax = LIST_MAX_DEFAULT
 
 /** Только для тестов: маленький потолок вместо 10 000 документов в фикстуре. null — вернуть обычный. */
-export function setListLimitsForTests(v: { max: number; warn: number } | null): void {
-  listLimits = v ?? LIST_LIMITS_DEFAULT
-  warnedNear.clear()
+export function setListMaxForTests(v: number | null): void {
+  listMax = v ?? LIST_MAX_DEFAULT
 }
 
 /**
@@ -173,13 +170,9 @@ export function setListLimitsForTests(v: { max: number; warn: number } | null): 
 export type DocList = { docs: Doc[]; capped?: { total: number; limit: number } }
 
 export async function listDocs(collection: Collection): Promise<DocList> {
-  const { max, warn } = listLimits
-  // max + 1 — узнать об обрезке без лишнего count(*) на каждом запросе; count — только когда обрезано.
+  const max = listMax
+  // max + 1 — узнать об обрезке без count(*) на каждом запросе; count — только когда обрезано.
   const rows = await getDb().select().from(oqDocs).where(eq(oqDocs.collection, collection)).orderBy(desc(oqDocs.updatedAt)).limit(max + 1)
-  if (rows.length >= warn && !warnedNear.has(collection)) {
-    warnedNear.add(collection)
-    console.warn(`[oq] коллекция ${collection}: ${rows.length > max ? `больше ${max}` : rows.length} документов (порог ${warn}) — полный список на каждом опросе дорог, нужен /changes`)
-  }
   if (rows.length <= max) return { docs: rows.map(parseDoc) }
   // count — отдельный запрос: удаление между ним и выборкой дало бы total ≤ limit при truncated.
   const { n } = await collectionStats(collection)
@@ -195,14 +188,12 @@ async function collectionStats(collection: Collection) {
 }
 
 /**
- * ETag коллекции: меняется при любой записи — опрос страницы раз в несколько секунд стоит один дешёвый запрос.
- * Слабый (W/): тег считается по составу коллекции, а не по байтам, и один и тот же у gzip и несжатого ответа — compress
- * его не переписывает, 200 и 304 несут одно значение. Потолок — в теге: клиент, который держит список, обрезанный
- * прежним потолком, после смены потолка получит 200 с полным списком, а не 304.
+ * ETag коллекции: меняется при любой записи. Слабый — один у gzip и несжатого ответа. Потолок — в теге: после его
+ * смены клиент со списком, обрезанным прежним потолком, получит 200, а не 304.
  */
 export async function collectionTag(collection: Collection): Promise<string> {
   const { n, last, v } = await collectionStats(collection)
-  return `W/"${createHash('sha1').update(`${collection}:${listLimits.max}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
+  return `W/"${createHash('sha1').update(`${collection}:${listMax}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
 }
 
 export async function getDoc(collection: Collection, id: string): Promise<Doc | null> {

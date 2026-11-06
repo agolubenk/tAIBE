@@ -204,28 +204,29 @@ def _oq_count(ctx, n):
     b["calls"] += 1
 
 
+# Байт на вызов curl сверх счётчика: новое TLS-соединение на каждый процесс; curl его не сообщает — оценка фазы 0.
+_OQ_TLS_EST = 4096
+
+
 def _oq_bytes_watch(ctx, prev):
-    """Итог прошлых суток выше порога (по умолчанию 40 МБ при цели 50) — в сводку release. Порог по байтам, а не только
-    по числу документов: трафик растёт и с числом правок; в загруженный день 50 МБ наступают раньше 1500 документов."""
+    """Итог прошлых суток с оценкой TLS выше порога (по умолчанию 40 МБ при цели 50) — в сводку release, раз в неделю:
+    /changes уже следующая фаза, ежедневный повтор — шум."""
     warn = ctx.cfg["queue"].get("bytes_warn", 40_000_000)
-    if prev["n"] > warn:
-        ctx.emit(f"oq:bytes:{prev['day']}", "queue.bytes", DIGEST, ["release"],
-                 f"Нерв: {prev['n'] / 1e6:.1f} МБ опроса очереди за {prev['day']} (порог {warn / 1e6:.0f}, цель ≤ 50) — "
-                 f"полный список на каждой правке дорог, пора /changes", "queue")
+    tls = prev["calls"] * _OQ_TLS_EST
+    if prev["n"] + tls > warn:
+        year, week, _ = datetime.strptime(prev["day"], "%Y-%m-%d").isocalendar()
+        ctx.emit(f"oq:bytes:{year}-W{week:02d}", "queue.bytes", DIGEST, ["release"],
+                 f"Нерв: {(prev['n'] + tls) / 1e6:.1f} МБ опроса очереди за {prev['day']} (из них TLS ≈ {tls / 1e6:.1f}, "
+                 f"оценка; порог {warn / 1e6:.0f}, цель ≤ 50) — полный список на каждой правке дорог, нужен /changes",
+                 "queue")
 
 
-def _oq_watch(ctx, collection, docs, meta):
-    """Размер очереди — сигнал роли release: обрезка потолком (старые ответы не видны) — сразу; рост к порогу, при
-    котором полный список на каждом опросе дорог (нужен /changes, v2-lite), — в сводку, раз на каждые 500 документов."""
-    warn = ctx.cfg["queue"].get("ceiling_warn", 1500)
+def _oq_watch(ctx, collection, meta):
+    """Обрезка потолком — сразу роли release: ответы владельца на выпавшие пункты Нерв не видит."""
     if meta:
-        ctx.emit(f"oq:truncated:{collection}:{ctx.now.astimezone(ctx.tz):%Y-%m-%d}", "queue.capped", NERVOUS, ["release"],
-                 f"очередь {collection}: консоль отдала {meta.get('limit')} из {meta.get('total')} — старые документы "
-                 f"Нерв не видит, нужен /changes", "queue")
-    elif len(docs) >= warn:
-        ctx.emit(f"oq:ceiling:{collection}:{len(docs) // 500 * 500}", "queue.ceiling", DIGEST, ["release"],
-                 f"очередь {collection}: {len(docs)} документов (порог {warn}) — полный список на каждом опросе дорог, "
-                 f"пора /changes", "queue")
+        ctx.emit(f"oq:capped:{collection}:{ctx.now.astimezone(ctx.tz):%Y-%m-%d}", "queue.capped", NERVOUS, ["release"],
+                 f"очередь {collection}: консоль отдала {meta.get('limit')} из {meta.get('total')} — ответы владельца "
+                 f"на старые пункты Нерв не видит, нужен /changes", "queue")
 
 
 def route_source(source, rules, default="coord"):
@@ -239,8 +240,8 @@ def poll_queue(ctx):
     q = ctx.cfg["queue"]
     item_docs, item_meta = _oq_get(ctx, "items")
     checks, check_meta = _oq_get(ctx, "checks")
-    _oq_watch(ctx, "items", item_docs, item_meta)
-    _oq_watch(ctx, "checks", checks, check_meta)
+    _oq_watch(ctx, "items", item_meta)
+    _oq_watch(ctx, "checks", check_meta)
     items = {d["id"]: d.get("data") or {} for d in item_docs}
     for c in checks:
         it = items.get(c["id"])

@@ -164,10 +164,10 @@ test('oq_list: список больше потолка ответа — next_of
   assert.equal(brief.docs[1].noteLen, 2_000);
 });
 
-test('oq_list: серверный потолок списка — serverCapped {total, limit}, не путается с truncated окна', { timeout: 30_000 }, async (t) => {
+test('oq_list: серверный потолок списка — serverCapped с числами, не путается с truncated окна', { timeout: 30_000 }, async (t) => {
   const m = await rig(t, 'ok');
   const capped = body(await m.call('oq_list', { collection: 'work' }));
-  assert.deepEqual(capped.serverCapped, { total: 7, limit: 2 });
+  assert.equal(capped.serverCapped, 'консоль отдала 2 самых свежих из 7 документов коллекции; старые — oq_get по id');
   assert.equal(capped.truncated, undefined, 'окно ответа не урезано');
   assert.deepEqual(capped.docs.map((d) => d.id), ['w-cap-1', 'w-cap-2']);
   assert.equal(body(await m.call('oq_list', { collection: 'checks', limit: 1 })).serverCapped, undefined, 'без обрезки консоли — поля нет');

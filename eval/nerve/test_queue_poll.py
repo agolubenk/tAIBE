@@ -111,17 +111,6 @@ class QueuePollTest(unittest.TestCase):
         _, meta = sources._oq_get(self.ctx, "items")
         self.assertEqual(meta, {"total": 12000, "limit": 10000})
 
-    def test_ceiling_digest_per_500_documents(self):
-        fake = FakeCurl({"items": [_item(i) for i in range(1500)], "checks": []})
-        sources.run = fake
-        sources.poll_queue(self.ctx)
-        fake.docs["items"] = [_item(i) for i in range(1700)]
-        fake.rev["items"] = 2
-        sources.poll_queue(self.ctx)
-        ceil = [e for e in self.events() if e["kind"] == "queue.ceiling"]
-        self.assertEqual([(e["key"], e["class"], e["to"]) for e in ceil], [("oq:ceiling:items:1500", DIGEST, ["release"])])
-        self.assertFalse([e for e in self.events() if e["kind"] == "queue.capped"])
-
     def test_bytes_over_threshold_digest_once_for_previous_day(self):
         # cfg у FakeCtx общий на все тесты — порог только в копии.
         self.ctx.cfg = {**self.ctx.cfg, "queue": {**self.ctx.cfg["queue"], "bytes_warn": 100}}
@@ -131,8 +120,11 @@ class QueuePollTest(unittest.TestCase):
         self.ctx.now += timedelta(hours=14)
         sources.poll_queue(self.ctx)
         sources.poll_queue(self.ctx)
+        self.ctx.now += timedelta(days=1)  # следующие сутки той же недели — без повтора
+        sources.poll_queue(self.ctx)
         ev = [e for e in self.events() if e["kind"] == "queue.bytes"]
-        self.assertEqual([(e["key"], e["class"], e["to"]) for e in ev], [("oq:bytes:2026-10-28", DIGEST, ["release"])])
+        self.assertEqual([(e["key"], e["class"], e["to"]) for e in ev], [("oq:bytes:2026-W44", DIGEST, ["release"])])
+        self.assertIn("за 2026-10-28", ev[0]["text"])
 
     def test_bytes_under_threshold_is_silent(self):
         sources.run = FakeCurl({"items": [_item(1)], "checks": []})

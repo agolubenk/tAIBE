@@ -1,13 +1,13 @@
 /**
  * Список коллекции очереди: потолок с видимой обрезкой, gzip ответа и 304 по слабому ETag (фаза 0 быстрого пути,
- * docs/plans/roadmap/owner-queue-multi-product.md в HR). Раньше limit(2000) молча обрезал checks.
+ * docs/plans/roadmap/owner-queue-multi-product.md в HR). Прежний limit(2000) обрезал молча.
  */
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { freshApp } from './helpers'
 import { createToken } from '../server/queue/auth'
 import { etagMatches } from '../server/queue/etag'
 import { gzipListOnce } from '../server/queue/list-gzip'
-import { setListLimitsForTests } from '../server/queue/store'
+import { setListMaxForTests } from '../server/queue/store'
 
 type App = Awaited<ReturnType<typeof freshApp>>
 let app: App
@@ -38,8 +38,7 @@ beforeAll(async () => {
 })
 
 afterEach(() => {
-  setListLimitsForTests(null)
-  vi.restoreAllMocks()
+  setListMaxForTests(null)
 })
 
 describe('etagMatches — If-None-Match по RFC 9110 §13.1.2', () => {
@@ -90,9 +89,8 @@ describe('gzip списка и 304 по тегу сжатого ответа', (
 
 describe('потолок списка', () => {
   it('обрезка видна: truncated, total, limit — самые свежие документы; старый клиент читает docs', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const before = (await get('/db/items')).headers.get('etag')!
-    setListLimitsForTests({ max: 3, warn: 2 })
+    setListMaxForTests(3)
     const res = await get('/db/items')
     const body = (await res.json()) as { docs: { id: string }[]; truncated?: boolean; total?: number; limit?: number }
     expect(body.truncated).toBe(true)
@@ -107,13 +105,10 @@ describe('потолок списка', () => {
     const open = (await (await get('/db/items?open=1')).json()) as { open: boolean; truncated?: boolean; total?: number; docs: unknown[] }
     expect(open).toMatchObject({ open: true, truncated: true, total: 5 })
     expect(open.docs.length).toBeLessThanOrEqual(3)
-    // Предупреждение о размере — один раз на коллекцию за процесс.
-    await get('/db/items')
-    expect(warn.mock.calls.filter((c) => String(c[0]).includes('коллекция items'))).toHaveLength(1)
   })
 
   it('коллекция в пределах потолка — без полей обрезки', async () => {
-    setListLimitsForTests({ max: 5, warn: 100 })
+    setListMaxForTests(5)
     const body = (await (await get('/db/items')).json()) as Record<string, unknown>
     expect(Object.keys(body)).toEqual(['docs'])
     expect((body.docs as unknown[]).length).toBe(5)

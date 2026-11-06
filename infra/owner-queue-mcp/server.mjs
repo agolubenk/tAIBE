@@ -132,8 +132,7 @@ const TOOLS = [
     name: 'oq_list',
     description: 'Список документов коллекции. Ответ — до 95 тыс. символов (дорого для контекста): {total, asOf, docs, next_offset?, '
       + 'shown + truncated? — окно урезал потолок размера, oversized? — id документов больше потолка, их целиком — oq_get, '
-      + 'serverCapped? {total, limit} — консоль прочла только limit самых свежих из total документов коллекции (с open_only — '
-      + 'открытые среди них): старые документы — oq_get по id}. '
+      + 'serverCapped? — консоль обрезала список, пояснение в поле}. '
       + 'Сначала сузьте: ответы владельца, которые вы не прочли, — checks с unread: true; обзор — brief: true (длинные строки — '
       + 'начало и длина, весь checks — один-два ответа). Не влез весь — тот же вызов с offset = next_offset и as_of = asOf: '
       + 'страницы одного обхода читают один снимок списка (живёт 2 мин), ничего не теряется и не повторяется; в ответе '
@@ -191,9 +190,8 @@ const TOOLS = [
         asOf: new Date(snap.at).toISOString(),
         ...(reuse && !snap.reused ? { resnapshot: 'снимок истёк или не найден — список перечитан, документы могли сдвинуться; полный обход — снова с offset 0' } : {}),
         ...(rows.some((r) => r.untrusted) ? { untrusted: UNTRUSTED_NOTE } : {}),
-        // Консоль отдала не всю коллекцию (потолок списка): total здесь — после обрезки. Не путать с truncated —
-        // это окно ответа MCP урезал потолок размера.
-        ...(res.truncated === true ? { serverCapped: { total: res.total, limit: res.limit } } : {}),
+        // Консоль обрезала коллекцию потолком; truncated — другое: окно ответа MCP урезал потолок размера.
+        ...(res.truncated === true ? { serverCapped: `консоль отдала ${res.limit} самых свежих из ${res.total} документов коллекции${wantOpen ? ' (здесь — открытые среди них)' : ''}; старые — oq_get по id` } : {}),
       };
       const plain = rows.map(({ untrusted: _u, ...r }) => r);
       return fitList(list.length, brief ? plain.map(briefDoc) : plain, from, extra);

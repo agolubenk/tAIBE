@@ -36,10 +36,9 @@ queueRoutes.use('*', requireQueueActor)
 const listBody = ({ docs, capped }: DocList) => (capped ? { docs, truncated: true, total: capped.total, limit: capped.limit } : { docs })
 
 /**
- * Список с тегом: совпал If-None-Match (слабое сравнение, etagMatches) — 304; иначе JSON, сжатый из кэша на тег
- * (queue/list-gzip.ts), если клиент принимает gzip: 586 КБ против 2 МБ у items на каждом опросе. Теги списка слабые
- * (store.ts) — один у gzip и несжатого ответа; 304 и 200 несут одни ETag и Vary (RFC 9110 §15.4.5).
- * В теле списка нет секретов, CSRF — заголовок, а не токен в теле (BREACH).
+ * Список с тегом: совпал If-None-Match — 304; иначе JSON, сжатый один раз на тег (queue/list-gzip.ts), если клиент
+ * принимает gzip. 304 и 200 несут одни ETag и Vary (RFC 9110 §15.4.5).
+ * BREACH: в теле списка нет секретов, CSRF — заголовок, а не токен в теле.
  */
 async function listResponse(c: Context<QueueEnv>, key: string, tag: string, build: () => Promise<unknown>) {
   const headers = { ETag: tag, Vary: 'Accept-Encoding' }
