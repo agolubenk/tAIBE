@@ -28909,8 +28909,8 @@
         "tags": [
           "SSR"
         ],
-        "summary": "Which blob shas the server already stores",
-        "description": "The Mac sync agent sends candidate shas and uploads content only for the rest.",
+        "summary": "Which blob shas the server already stores for this workspace",
+        "description": "The Mac sync agent sends candidate shas and uploads content only for the rest. A sha counts only when a version of this workspace references it.",
         "parameters": [
           {
             "schema": {
@@ -30476,6 +30476,16 @@
           },
           "403": {
             "description": "Not the owner's browser session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Conflict not found in this workspace",
             "content": {
               "application/json": {
                 "schema": {
