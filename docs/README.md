@@ -9,7 +9,7 @@
 | Продуктовый аналитик | [`specs/`](specs/) | `owner-queue.md` (очередь владельца), `ai-council.md` (ИИ-консилиум), `multi-product-m1-instances.md` и `multi-product-m2-state.md` (продукты и их состояние, фазы M1–M2); спека досок — `boards/docs/t-boards-spec.md` |
 | Планировщик · менеджер | [`plans/`](plans/README.md) | `DONE.md` + `done/` (закрытое по модулям), `evolution-ideas.md` (идеи и вопросы развития), `notion-board.md` (архив связки с Notion) |
 | DevOps / SRE | [`ops/`](ops/) | `owner-queue-cutover.md` — переезд очереди владельца в ops-консоль; `split-hr-taibe.md` — разделение HR и tAIBE на машине владельца (инструкция исполнителю); `taibe-extraction-runbook.md` — вывод tAIBE из HR до снятия ссылок: порядок, команды, откат |
-| AI/ML-инженер | [`ai/`](ai/README.md) | Локальные модели (Ollama), дрейф консилиума, TOON-формат |
+| AI/ML-инженер | [`ai/`](ai/README.md) | Локальные модели (Ollama), дрейф консилиума, TOON-формат, принципы «свой ИИ» |
 | Техписатель · все роли | [`guides/`](guides/README.md) | Описания и инструкции: развёртывание слоя, worktrees, ИИ-контур, доски, Нерв |
 | Архитектор · аналитик | [`integrations/`](integrations/README.md) | Аналитика встраивания внешних решений: единый реестр с вариантами и предложениями + разбор каждого инструмента в своей папке |
 | Технический писатель | этот файл + [`CLAUDE.md`](CLAUDE.md) | Структура `docs/`, стандарт документа, гигиена ссылок |
