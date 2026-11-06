@@ -120,7 +120,9 @@ Third-party foundations:
   **[i-have-adhd](https://github.com/ayghri/i-have-adhd)** (MIT) — blind pairwise A/B judging of skill versions →
   `eval/evolve/ab.py` (idea, own code); **[agno](https://github.com/agno-agi/agno)** (Apache-2.0) — untrusted text
   between fences with a per-call random nonce → the same judge, the AI council's review prompts and the board
-  notebook (idea, own code).
+  notebook (idea, own code); **ASD-STE100** (Simplified Technical English, ASD) — controlled-language writing rules
+  (sentence length, one word one meaning, imperative, active voice) → agent-to-agent text in all products,
+  `.claude/rules/00-agent-comms.md` (a short subset in own words, not the specification text).
 - The MCP hub runs [1mcp](https://github.com/1mcp-app/agent); the AI council and the gateway use local
   [Ollama](https://ollama.com) models and hosted providers (GLM Z.AI, OpenRouter) through their public APIs.
 
