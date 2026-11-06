@@ -7,6 +7,10 @@ Row keys: id, tool (fullmatch on the tool name), pattern, lesson, memory; option
 that string of the input (Bash: the command itself, with real newlines, not its description), otherwise the whole
 input as JSON (owner-queue rows look for keys like "cmd"); optional `unless` — a match is dropped when this regex
 matches the same text; optional `dormant` — why a row that has not fired lately is kept.
+`{CMD}` in a pattern is the start of a command: line start, `;` `&&` `|` `(` `$(` backtick, then/do/else, the
+string after `bash -c` / `ssh host` / `eval`, then prefixes time/sudo/env/command/nohup/exec/xargs and VAR=x.
+Only the first MAX_TEXT characters are matched: the hook has a 10 s timeout, a 100 KB heredoc must not reach it
+(review of #82: a backreference row took 9.6 s on 80 KB).
 Run: python3 -I antigen.py  (hook JSON on stdin)
 """
 
@@ -19,13 +23,26 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 TABLE = os.path.join(HERE, '..', 'genome', 'antigens.json')
 FLAGS = re.S | re.M
+MAX_TEXT = 20000
+# Quantifiers are bounded and whitespace after a command start is [ \t] only: an unbounded `\S*` or `\s*` from every
+# `;` or line start of a 20 KB command is quadratic (100 KB of newlines took 66 s before this).
+_WRAP = (r"""\b(?:ba|z|da|k)?sh[ \t]+(?:-[A-Za-z]{1,8}[ \t]+){0,4}-[A-Za-z]{0,8}c[ \t]+["']?"""
+         r"""|\bssh[ \t]+(?:-[A-Za-z]{1,8}(?:[ \t]+[^-\s]\S{0,200})?[ \t]+){0,6}[^-\s'"]\S{0,200}[ \t]+["']?"""
+         r"""|\beval[ \t]+["']?""")
+_SUDO = r"sudo(?:[ \t]+-[A-Za-z]{1,8}(?:[ \t]+[^-\s]\S{0,60})?){0,4}"
+_PREFIX = (r"(?:(?:[A-Za-z_]\w{0,60}=\S{0,200}|time|" + _SUDO + r"|command|env|nohup|exec|builtin|noglob|xargs"
+           r"|-\S{1,60})[ \t]+){0,8}")
+# No backtick start: in these sessions `…` is markdown in heredocs far more often than command substitution.
+CMD = r"(?:(?:^|(?<=[;&|(\n{])|\$\(|\b(?:then|do|else|elif)\b)[ \t]*|" + _WRAP + ")" + _PREFIX
 
 
 def load_table(path=TABLE):
     with open(path, encoding='utf-8') as f:
         rows = json.load(f)
-    return [dict(row, tool_re=re.compile(row['tool']), input_re=re.compile(row['pattern'], FLAGS),
-                 unless_re=re.compile(row['unless'], FLAGS) if row.get('unless') else None) for row in rows]
+    def rx(p):
+        return re.compile(p.replace('{CMD}', CMD), FLAGS)
+    return [dict(row, tool_re=re.compile(row['tool']), input_re=rx(row['pattern']),
+                 unless_re=rx(row['unless']) if row.get('unless') else None) for row in rows]
 
 
 def subject(row, tool_input):
@@ -41,7 +58,7 @@ def matches(table, tool_name, tool_input):
     for row in table:
         if not row['tool_re'].fullmatch(tool_name):
             continue
-        text = subject(row, tool_input)
+        text = subject(row, tool_input)[:MAX_TEXT]
         if row['input_re'].search(text) and not (row['unless_re'] and row['unless_re'].search(text)):
             hits.append(row)
     return hits

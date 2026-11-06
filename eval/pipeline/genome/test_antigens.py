@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -87,9 +88,11 @@ CASES = {
                   bash('cd .. && git log -1')],
     },
     'mutant-checkout': {
-        'fire': [bash('git checkout -- src/a.ts'), bash('sed -i "" s/a/b/ f; run; git -C $W restore --source=HEAD -- f')],
+        'fire': [bash('git checkout -- src/a.ts'), bash('sed -i "" s/a/b/ f; run; git -C $W restore --source=HEAD -- f'),
+                 bash("bash -c 'git checkout -- src/a.ts'"), bash('if x; then git restore --source=HEAD -- f; fi'),
+                 bash('xargs -n1 git checkout -- < list'), bash("ssh host 'cd r && git checkout -- a'")],
         'quiet': [bash('git -C $W checkout -- docs/engineering/packages-manifest.md'), bash('git checkout -b feat/x'),
-                  bash('echo "then use git checkout -- file"')],
+                  bash('echo "then use git checkout -- file"'), bash('grep -n "git checkout -- " notes.md')],
     },
     't-boards-vitest': {
         'fire': [bash('cd t-boards/apps/api && npx vitest run'), bash('cd ~/d/tAIBE/boards/apps/web && npx vitest run')],
@@ -110,12 +113,15 @@ CASES = {
     },
     'curl-hook': {
         'fire': [bash('curl -s http://x'), bash('x=$(curl -s -o /dev/null -w %{http_code} http://x)'),
-                 bash("for u in a b; do cu''rl -s $u; done")],
-        'quiet': [bash('grep -nE "curl .*http" f.sh'), bash('echo "uses curl here"')],
+                 bash("for u in a b; do cu''rl -s $u; done"), bash('time curl -sI http://x'),
+                 bash('env -i HOME=/x curl -s http://x'), bash("ssh vps 'curl -s localhost:3000'"),
+                 bash('sudo curl -o f http://x'), bash('bash -lc "curl -s http://x"')],
+        'quiet': [bash('grep -nE "curl .*http" f.sh'), bash('echo "uses curl here"'), bash('brew install curl'),
+                  bash('man curl')],
     },
     'git-history-rewrite': {
         'fire': [bash('git commit -q --amend -m x'), bash('git -C /w push -q --force-with-lease origin fix/a'),
-                 bash('git push -f origin fix/a')],
+                 bash('git push -f origin fix/a'), bash("bash -c 'git commit --amend --no-edit'")],
         'quiet': [bash('git commit -m x && git push origin fix/a'), bash('echo "git push --force"')],
     },
     'notion-comment': {
@@ -127,8 +133,18 @@ CASES = {
         'quiet': [bash('claude -p x')],
     },
     'pr-merge': {
-        'fire': [bash('gh pr merge 445 --squash --match-head-commit abc'), bash('GH_TOKEN=x gh pr merge 1')],
-        'quiet': [bash("printf 'gh pr merge 1\\n' > m.sh"), bash('gh pr view 445'), bash('x=1 # gh pr merge 1')],
+        'fire': [bash('gh pr merge 445 --squash --match-head-commit abc'), bash('GH_TOKEN=x gh pr merge 1'),
+                 bash('gh_token=x gh pr merge 1'), bash('bash -c "gh pr merge 1 --squash"'),
+                 bash("ssh -i k host 'cd r && gh pr merge 1'"), bash('if ok; then gh pr merge 1; fi'),
+                 bash('for n in 1 2; do gh pr merge $n; done'), bash('time gh pr merge 1'),
+                 bash('echo 1 | xargs -I{} gh pr merge {}'), bash('sudo -u ci gh pr merge 1'),
+                 bash('command gh pr merge 1'), bash('env GH_TOKEN=x gh pr merge 1'), bash('nohup gh pr merge 1 &'),
+                 bash('x=$(gh pr merge 1)'), bash('gh -R o/r pr merge 1'), bash('ls\ngh pr merge 1'),
+                 bash('true && gh pr merge 1'), bash('eval "gh pr merge 1"')],
+        'quiet': [bash("printf 'gh pr merge 1\\n' > m.sh"), bash('gh pr view 445'), bash('x=1 # gh pr merge 1'),
+                  bash('echo "gh pr merge"'), bash('grep -rn "gh pr merge" .claude/hooks'),
+                  bash("git log --grep='gh pr merge'"), bash("cat <<'MD' > b.md\nМёрж: `gh pr merge 1` — только Контроль\nMD"),
+                  bash("printf '| `gh pr merge 1` | 25 |\\n'")],
     },
 }
 
@@ -165,6 +181,23 @@ class AntigenCasesTest(unittest.TestCase):
             for tool, payload in case['quiet']:
                 with self.subTest(aid, payload=payload):
                     self.assertNotIn(aid, self.ids(tool, payload))
+
+    def test_long_or_hostile_commands_stay_fast(self):
+        """Review of #82: `A="x y z" ` × 8000 took 9.6 s (hook timeout 10 s). Whole table, 100 KB each, < 0.2 s."""
+        units = ['A="x y z" ', '\n', 'a=;', 'a=`', 'compose down ', 'cd worktrees/', 'ssh -o ', 'G="git -C', 'git ',
+                 'git commit ', 't-boards ', 'npx vitest ', '--include=', 'mem-gate.sh |', 'bash -c ', '$R:', 'echo =',
+                 '| grep ', 'jq .', 'for x in ', 'python3 -I -m unittest ', 'x']
+        for unit in units:
+            cmd = (unit * (100000 // len(unit) + 1))[:100000]
+            for tool in (B, 'Monitor'):
+                with self.subTest(unit=unit, tool=tool):
+                    t = time.perf_counter()
+                    self.ids(tool, {'command': cmd})
+                    self.assertLess(time.perf_counter() - t, 0.2)
+
+    def test_only_head_of_a_huge_command_is_matched(self):
+        self.assertIn('pr-merge', self.ids(B, {'command': 'gh pr merge 1' + ' ' * 30000}))
+        self.assertNotIn('pr-merge', self.ids(B, {'command': ' ' * (antigen.MAX_TEXT + 1) + 'gh pr merge 1'}))
 
     def test_field_rows_ignore_description(self):
         self.assertEqual(self.ids(B, {'command': 'ls -la', 'description': 'curl the site; echo ===='}), [])
