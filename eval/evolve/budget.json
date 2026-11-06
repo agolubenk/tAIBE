@@ -1,12 +1,12 @@
 {
  "note": "L1 tokens per role genome; a ratchet — raise a cap only on purpose (catalog.py --ratchet)",
  "l1": {
-  "(none)": 8100,
-  "backend": 5300,
-  "boards": 5100,
-  "coord": 5100,
-  "frontend": 6450,
-  "plan": 5250,
-  "release": 5300
+  "(none)": 8613,
+  "backend": 5813,
+  "boards": 5613,
+  "coord": 5613,
+  "frontend": 6963,
+  "plan": 5763,
+  "release": 5813
  }
 }

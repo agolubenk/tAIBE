@@ -29,6 +29,10 @@
    python3 -I eval/pipeline/genome/build.py --check
    ```
 5. Скиллы править только в `.claude/skills/` (канон); зеркала пересобирает `.claude/scripts/sync-agent-skills.sh` (`--check` ловит расхождение).
+6. Межагентный текст (ASD-STE100, `.claude/rules/00-agent-comms.md`) — один канон на все продукты машины: ссылка
+   `ln -sfn <tAIBE>/.claude/rules/00-agent-comms.md ~/.claude/rules/00-agent-comms.md`. Claude Code грузит её в каждом
+   проекте и в субагентах; в tAIBE, где тот же файл лежит в `.claude/rules/`, — один раз (проверено 06.11). Копию в
+   host-проект не класть.
 
 ## Что в слой НЕ входит (рантайм инстанса, не продукт)
 
