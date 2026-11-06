@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadConfig } from '../src/config.mjs'
+import { findPython, loadConfig } from '../src/config.mjs'
 import { createApp } from '../src/server.mjs'
 import { MACHINE_LOCK, acquireMachineLock } from '../src/machine-lock.mjs'
 
@@ -93,6 +93,12 @@ test('путь замка по умолчанию — тот же, что у к�
   // GW_TOKEN задан: без него loadConfig читает или создаёт токен живого шлюза в .state/.
   assert.equal(loadConfig({ envFile: '/nonexistent', env: { GW_TOKEN: 't' } }).localLock, MACHINE_LOCK)
   assert.equal(loadConfig({ envFile: '/nonexistent', env: { GW_TOKEN: 't', GW_LOCAL_LOCK: 'off' } }).localLock, '')
+})
+
+test('python держателя — абсолютный путь из списка, не python3 из PATH; GW_PYTHON сильнее', () => {
+  assert.equal(findPython(['/nonexistent/a', process.execPath]), process.execPath)
+  assert.equal(findPython(['/nonexistent/a']), 'python3')
+  assert.equal(loadConfig({ envFile: '/nonexistent', env: { GW_TOKEN: 't', GW_PYTHON: '/x/python3' } }).python, '/x/python3')
 })
 
 test('шлюз и консилиум одновременно — пик локальных инференсов 1, запрос шлюза дожидается слота', async () => {

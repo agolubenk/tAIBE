@@ -40,6 +40,12 @@ const int = (v, def) => {
   const n = Number.parseInt(v ?? '', 10)
   return Number.isFinite(n) && n >= 0 ? n : def
 }
+// Интерпретатор держателя машинного замка — абсолютным путём один раз на старте, а не `python3` из PATH: под голым
+// PATH launchd это шим xcrun `/usr/bin/python3` (вдвое медленнее, а запрос лицензии Xcode дал бы 503 на каждый
+// локальный вызов), а npm ставит перед ним свои `node_modules/.bin`.
+const PYTHONS = ['/Library/Frameworks/Python.framework/Versions/Current/bin/python3', '/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/usr/bin/python3']
+export const findPython = (candidates = PYTHONS) => candidates.find((p) => existsSync(p)) || 'python3'
+
 const bool = (v, def) => (v === undefined || v === '' ? def : /^(1|true|yes|on)$/i.test(v))
 
 // Токен клиентов: без него любой сайт в браузере мог бы слать POST на localhost и тратить ключи.
@@ -140,7 +146,7 @@ export function loadConfig({ envFile = join(PKG_DIR, '.env'), env = process.env 
     localMaxWaitMs: int(e.GW_LOCAL_MAX_WAIT_MS, 180_000),
     // Машинный замок локального инференса, общий с консилиумом (OPS-27). `off` — только семафор процесса.
     localLock: e.GW_LOCAL_LOCK === 'off' ? '' : e.GW_LOCAL_LOCK || MACHINE_LOCK,
-    python: e.GW_PYTHON || 'python3',
+    python: e.GW_PYTHON || findPython(),
     streamCommitMs: int(e.GW_STREAM_COMMIT_MS, 8_000),
     maxAttempts: int(e.GW_MAX_ATTEMPTS, 8),
     maxWaitMs: int(e.GW_MAX_WAIT_MS, 45_000),
