@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """Тесты Нерва на синтетике: python3 -I -m unittest discover -s supertick-eval/nerve -p 'test_*.py'"""
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -479,6 +483,94 @@ class EmitTest(unittest.TestCase):
             for n in ("0", "7", "99"):
                 self.assertEqual(self.nerve(d, "tap", n, "--once").returncode, 2, f"emit не запишет «{n}»")
                 self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
+
+
+class ProductsTest(unittest.TestCase):
+    """OPS-25 Ф2a: один процесс, журнал и курсоры у каждого продукта, режим и пульс — общие."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = self.tmp.name
+        self.taibe = dict(CFG, active=True, github=dict(CFG["github"], repo="o/taibe"))
+        self.cfgs = {"hr-helper": CFG, "taibe": self.taibe}
+        self.keys = []
+        self.patches = [mock.patch.object(nerve, "STATE_DIR", self.d),
+                        mock.patch.object(nerve, "load_products", return_value=("hr-helper", self.cfgs)),
+                        mock.patch.object(nerve, "PRODUCT_POLLS", [("github", self.fake_github)])]
+        for p in self.patches:
+            p.start()
+        wj(os.path.join(self.d, "mode.json"), {"phase": "day"})
+        with open(os.path.join(self.d, "heartbeat"), "w") as f:
+            f.write(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def fake_github(self, ctx):
+        for k in self.keys:
+            ctx.emit(k, "pr.new", NERVOUS, ["boards"], f"{ctx.cfg['github']['repo']} {k}", "github")
+
+    def tdir(self):
+        return os.path.join(self.d, "products", "taibe")
+
+    def tap(self, product, env_product=None):
+        out, err = io.StringIO(), io.StringIO()
+        env = {"TAIBE_PRODUCT": env_product} if env_product is not None else {"TAIBE_PRODUCT": ""}
+        with mock.patch.dict(os.environ, env), redirect_stdout(out), redirect_stderr(err):
+            nerve.cmd_tap(CFG, Namespace(role="boards", once=True, product=product))
+        return out.getvalue(), err.getvalue()
+
+    def test_seed_then_delivery_only_to_own_product(self):
+        open(os.path.join(self.d, "journal.jsonl"), "w").close()
+        self.tap("taibe")                       # курсоры с конца журнала
+        self.tap("hr-helper")
+        self.keys = ["k1"]
+        nerve.other_product_passes(True)       # первый проход нового продукта — seed: журнал есть, никого не будит
+        self.assertTrue(os.path.exists(os.path.join(self.tdir(), "journal.jsonl")))
+        self.assertEqual(self.tap("taibe")[0], "")
+        self.keys = ["k1", "k2"]
+        nerve.other_product_passes(True)       # следующий проход доставляет
+        out, _ = self.tap("taibe")
+        self.assertIn("o/taibe k2", out)
+        self.assertNotIn("k1", out)
+        self.assertEqual(self.tap("hr-helper")[0], "", "событие tAIBE не приходит в tap HR")
+        self.assertFalse(os.path.exists(os.path.join(self.d, "heartbeat.tmp")))
+
+    def test_inactive_product_is_not_polled(self):
+        self.taibe["active"] = False
+        self.keys = ["k1"]
+        nerve.other_product_passes(True)
+        self.assertFalse(os.path.exists(self.tdir()))
+
+    def test_product_from_env_and_fallback_line(self):
+        os.makedirs(self.tdir())
+        open(os.path.join(self.tdir(), "journal.jsonl"), "w").close()
+        open(os.path.join(self.d, "journal.jsonl"), "w").close()
+        _, err = self.tap(None, env_product="taibe")
+        self.assertEqual(err, "")
+        self.assertTrue(os.path.exists(os.path.join(self.tdir(), "tap-boards.json")))
+        _, err = self.tap(None)
+        self.assertIn("продукт по умолчанию hr-helper", err)
+        self.assertTrue(os.path.exists(os.path.join(self.d, "tap-boards.json")))
+
+    def test_emit_writes_to_product_journal(self):
+        with redirect_stdout(io.StringIO()):
+            nerve.cmd_emit(CFG, Namespace(role="coord", text="первая карточка", kind="assign", product="taibe"))
+        recs, _ = read_from(os.path.join(self.tdir(), "journal.jsonl"), 0)
+        self.assertEqual([r["text"] for r in recs], ["первая карточка"])
+        self.assertFalse(os.path.exists(os.path.join(self.d, "journal.jsonl")))
+
+    def test_unknown_product_refused(self):
+        with self.assertRaises(SystemExit):
+            nerve.resolve_product(CFG, Namespace(product="nope"))
+
+    def test_heartbeat_from_file(self):
+        with open(os.path.join(self.d, "heartbeat"), "w") as f:
+            f.write("2026-11-07T00:00:00+00:00")
+        wj(os.path.join(self.d, "state.json"), {"heartbeat": "old"})
+        self.assertEqual(nerve.read_heartbeat(), "2026-11-07T00:00:00+00:00")
 
 
 class RoleNumberingTest(unittest.TestCase):
