@@ -410,7 +410,7 @@ describe('вложения: линза GLM «корректность» #313', (
       headers: { Authorization: `Bearer ${owner}`, 'Content-Length': String(Buffer.byteLength('медленный файл')), 'X-File-Name': 'slow.txt' },
     } as RequestInit)
     await new Promise((r) => setTimeout(r, 30))
-    await deleteDoc({ name: 'test', scopes: ['owner'] }, 'items', itemId)
+    await deleteDoc({ name: 'test', scopes: ['owner'], products: '*' }, 'items', itemId)
     release()
     expect((await pending).status).toBe(404)
     const rows = (await getDb().all(sql`SELECT count(*) AS n FROM oq_files WHERE item_id = ${itemId}`)) as Array<{ n: number }>
@@ -457,11 +457,11 @@ describe('вложения: продукт (v3)', () => {
   it('сводка урезана по строкам — счётчик остаётся у всех пунктов и есть отметка: старый пункт не теряет вложения молча (ревью «Контроля» #313)', async () => {
     const itemId = await newItem()
     for (const [i, body] of [PNG, PDF, Buffer.from('третий файл')].entries()) await upload(owner, itemId, body, `f${i}`)
-    const cut = await listAllFiles(2)
+    const cut = await listAllFiles('*', 2)
     expect(cut.files).toHaveLength(2)
     expect(cut.counts.get(itemId)).toBe(3)
     expect(cut.truncated).toEqual({ files: true, groups: false })
-    const whole = await listAllFiles(10_000)
+    const whole = await listAllFiles('*', 10_000)
     expect(whole.truncated.files).toBe(false)
   })
 

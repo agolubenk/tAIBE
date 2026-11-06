@@ -70,7 +70,16 @@
 | `oq_work` | `id`, `title`, `track`, `status`, `who`, `session`, `planStart`, `planEnd`, `basePlanEnd`, `start`, `end`, `milestone`, `note`, `link`, `linkText`, `order`, `archived`, `version` | Сдвиг `planEnd` назад без `basePlanEnd` — отказ API |
 | `oq_tracks` | `id`, `name`, `color`, `order` | Направления «Хода работ» данными, а не кодом страницы |
 | `oq_events` | `at`, `actor` (пользователь консоли · Telegram id · токен агента), `entity`, `entityId`, `action`, `before`, `after` | Вся история изменений: журнал и ответ на вопрос «кто и когда» |
-| `oq_tokens` | `id`, `name` (сессия, аккаунт, клиент), `hash` (sha256), `scopes`, `createdAt`, `lastUsedAt`, `revokedAt` | Ключ показывается один раз (правило репозитория для MCP-ключей) |
+| `oq_tokens` | `id`, `name` (сессия, аккаунт, клиент), `hash` (sha256), `scopes`, `products` (JSON slug, по умолчанию `["hr-helper"]`), `createdAt`, `lastUsedAt`, `revokedAt`, `expiresAt` | Ключ показывается один раз (правило репозитория для MCP-ключей) |
+| `oq_products` | `slug` (PK), `name`, `isDefault` | Продукты очереди (v2-lite, миграции 0014–0015): `hr-helper` (по умолчанию), `taibe`, `lavaeon`. Строки правит CLI сервера |
+
+**Продукты (v2-lite, с 07.11).** У документа и события — `product`; в ответе API он рядом с `data`, в `data` запрещён
+(422). Изоляция — одна точка (`server/queue/products.ts`): токен видит продукты из `products`, owner и сессия
+владельца — все. Документ чужого продукта — 404 во всех эндпоинтах (`/db`, `?open=1`, `/history`, `/files*`), тег
+списка — по видимым продуктам. Продукт нового документа: единственный продукт токена; владельцу и токену с
+несколькими — поле запроса `product` или продукт по умолчанию; `checks/<id>` — продукт `items/<id>`. id продукта не по
+умолчанию начинается с `<slug>-` (`taibe-m-93`), чужой префикс — 409. Мёрж из очереди — только для `hr-helper` до
+PNR-1. Список продуктов актора — `GET /products`. Матрица — `infra/ops-console/tests/queue-products.test.ts`.
 
 **Импорт.** Пункты, вшитые в страницу (`ITEMS` и `WORK_SEED`), и выгрузка базы переносятся в таблицы с сохранением id,
 дат и `source`. HTML страницы и сырая выгрузка архивируются в консоли, откуда их можно скачать. Перед переключением

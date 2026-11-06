@@ -13,12 +13,16 @@ import { throttleWrite } from '../queue/throttle'
 import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
-import { collectionTag, deleteDoc, docHistory, getDoc, isCollection, listDocs, listOpenItems, openItemsTag, writeDoc, type Collection, type DocList } from '../queue/store'
+import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
+import { canSee, listProducts, PRODUCT_SLUG, visibilityKey } from '../queue/products'
+import { deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
 const writeSchema = z.object({
   data: z.record(z.unknown()),
   ifVersion: z.number().int().nonnegative().optional(),
   ifAnswerAt: z.string().max(40).optional(),
+  /** Продукт нового документа (v2-lite): владельцу и токену с несколькими продуктами; у существующего — его же. */
+  product: z.string().regex(PRODUCT_SLUG).optional(),
 })
 const mergeSchema = z.object({ sha: z.string() })
 
@@ -52,14 +56,23 @@ queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {
   const col = collectionOf(c.req.param('col'))
   // ?open=1 — только открытые владельцу пункты, по тому же правилу, что на странице (MCP oq_list open_only). Ответ
   // зависит и от checks — ETag по обеим коллекциям; open: true — сервер фильтр применил (старый сервер параметр не знает).
+  // Ключ кэша сжатого тела — с видимостью: у токенов разных продуктов разные списки.
+  const products = c.get('oqActor').products
+  const vis = visibilityKey(products)
   if (col === 'items' && c.req.query('open') === '1') {
-    return listResponse(c, 'items?open=1', await openItemsTag(), async () => ({ ...listBody(await listOpenItems()), open: true }))
+    return listResponse(c, `items?open=1|${vis}`, await openItemsTag(products), async () => ({ ...listBody(await listOpenItems(products)), open: true }))
   }
-  return listResponse(c, col, await collectionTag(col), async () => listBody(await listDocs(col)))
+  return listResponse(c, `${col}|${vis}`, await collectionTag(col, products), async () => listBody(await listDocs(col, products)))
+})
+
+/** Продукты, которые видит актор: метка и фильтр страницы, параметр product у MCP. */
+queueRoutes.get('/products', requireScope('read', 'agent'), async (c) => {
+  const products = c.get('oqActor').products
+  return c.json({ products: (await listProducts()).filter((p) => canSee(products, p.slug)) })
 })
 
 queueRoutes.get('/db/:col/:id', requireScope('read', 'agent'), async (c) => {
-  const doc = await getDoc(collectionOf(c.req.param('col')), c.req.param('id'))
+  const doc = await getDoc(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products)
   if (!doc) throw apiError(404, 'Нет такого документа')
   return c.json(doc)
 })
@@ -73,6 +86,7 @@ for (const [method, merge] of [['put', false], ['patch', true]] as const) {
       merge,
       ifVersion: body.ifVersion,
       ifAnswerAt: body.ifAnswerAt,
+      product: body.product,
     })
     return c.json(doc)
   })
@@ -84,7 +98,7 @@ queueRoutes.delete('/db/:col/:id', requireScope('owner'), async (c) => {
   return c.json({ ok: true })
 })
 
-queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => c.json({ events: await docHistory(collectionOf(c.req.param('col')), c.req.param('id')) }))
+queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => c.json({ events: await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products) }))
 
 // Автопередача входящих сессии (queue/relay.ts): отметка процесса `server.mjs --relay` и состояние для страницы и бота.
 queueRoutes.get('/relay', requireScope('read', 'agent'), async (c) => c.json(await readRelay()))

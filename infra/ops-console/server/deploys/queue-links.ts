@@ -17,7 +17,7 @@ import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { mergePlan } from '../queue/github'
 import { oqItemState } from '../queue/open-rule'
-import { collectionTag, listDocs } from '../queue/store'
+import { collectionTag, listDocs } from '../queue/list'
 import { MANUAL_RUN_TITLE } from './github'
 
 export interface QueueLink {
@@ -111,13 +111,13 @@ let indexBuild: { key: string; done: Promise<ItemRefs[]> } | null = null
 
 async function itemIndex(repo: string): Promise<ItemRefs[]> {
   const db = getDb()
-  const key = `${repo}|${await collectionTag('items')}`
+  const key = `${repo}|${await collectionTag('items', '*')}`
   if (indexCache && indexCache.db === db && indexCache.key === key) return indexCache.refs
   if (indexBuild?.key === key) return indexBuild.done
   const done = (async () => {
     // Тот же список, что у страницы очереди (порядок и лимит): ссылка не ведёт на пункт, которого она не покажет.
     // Все неархивные, а не только с номерами: мёрж из очереди находится и по событию «Влить» (mergedFromQueue).
-    const refs = (await listDocs('items')).docs.filter((doc) => doc.data.archived !== true).map((doc) => itemRefs(doc.id, doc.data, repo))
+    const refs = (await listDocs('items', '*')).docs.filter((doc) => doc.data.archived !== true).map((doc) => itemRefs(doc.id, doc.data, repo))
     indexCache = { db, key, refs }
     return refs
   })()

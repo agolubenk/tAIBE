@@ -1,7 +1,8 @@
 /** Метаданные вложений (`oq_files`). Сам файл — storage.ts; здесь — строки и правила лимитов. */
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { oqDocs, oqFiles } from '../../db/schema'
+import { canSee, productWhere, type Visibility } from '../products'
 
 /**
  * Счётчик изменений вложений в этом процессе (консоль — один процесс): входит в отпечаток сводки рядом с агрегатами
@@ -19,15 +20,21 @@ export type InsertResult =
   | { status: 'limit' }
   | { status: 'cap' }
 
-/** Пункт существует и это входящее (вложения бывают только у задач владельца). */
-export async function isInboxItem(itemId: string): Promise<boolean> {
+/** Пункт items/<id>: его продукт и входящее ли это; нет пункта — null. */
+export async function itemInfo(itemId: string): Promise<{ product: string; inbox: boolean } | null> {
   const row = await getDb().query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'items'), eq(oqDocs.id, itemId)) })
-  if (!row) return false
+  if (!row) return null
   try {
-    return (JSON.parse(row.dataJson) as { kind?: unknown }).kind === 'inbox'
+    return { product: row.product, inbox: (JSON.parse(row.dataJson) as { kind?: unknown }).kind === 'inbox' }
   } catch {
-    return false
+    return { product: row.product, inbox: false }
   }
+}
+
+/** Пункт существует, это входящее (вложения бывают только у задач владельца) и он в видимых продуктах. */
+export async function isInboxItem(itemId: string, products: Visibility): Promise<boolean> {
+  const info = await itemInfo(itemId)
+  return !!info && info.inbox && canSee(products, info.product)
 }
 
 /**
@@ -100,11 +107,13 @@ export interface FilesSummary {
  * надгробий — у всех пунктов. Так ответ ограничен, а старый пункт не теряет вложения молча: страница видит счётчик
  * и догружает список пункта по `GET /files?item=`.
  */
-export async function listAllFiles(limit = 300): Promise<FilesSummary> {
+export async function listAllFiles(products: Visibility, limit = 300): Promise<FilesSummary> {
   const db = getDb()
-  const rows = await db.select().from(oqFiles).where(isNull(oqFiles.deletedAt)).orderBy(desc(oqFiles.createdAt), sql`rowid desc`).limit(limit + 1)
-  const groups = (where: ReturnType<typeof isNull>) =>
-    db.select({ itemId: oqFiles.itemId, n: sql<number>`count(*)` }).from(oqFiles).where(where).groupBy(oqFiles.itemId).limit(SUMMARY_ITEMS_MAX + 1)
+  // Файлы только пунктов видимых продуктов: подзапрос по items, у владельца — без условия.
+  const own = products === '*' ? undefined : inArray(oqFiles.itemId, db.select({ id: oqDocs.id }).from(oqDocs).where(and(eq(oqDocs.collection, 'items'), productWhere(products))))
+  const rows = await db.select().from(oqFiles).where(and(isNull(oqFiles.deletedAt), own)).orderBy(desc(oqFiles.createdAt), sql`rowid desc`).limit(limit + 1)
+  const groups = (where: SQL) =>
+    db.select({ itemId: oqFiles.itemId, n: sql<number>`count(*)` }).from(oqFiles).where(and(where, own)).groupBy(oqFiles.itemId).limit(SUMMARY_ITEMS_MAX + 1)
   const [live, tombs] = await Promise.all([groups(isNull(oqFiles.deletedAt)), groups(eq(oqFiles.deletedReason, 'retention'))])
   const toMap = (list: { itemId: string; n: number }[]) => new Map(list.slice(0, SUMMARY_ITEMS_MAX).map((t) => [t.itemId, Number(t.n)]))
   return {

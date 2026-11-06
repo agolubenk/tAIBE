@@ -7,7 +7,7 @@ import { freshApp } from './helpers'
 import { createToken } from '../server/queue/auth'
 import { etagMatches } from '../server/queue/etag'
 import { gzipListOnce } from '../server/queue/list-gzip'
-import { setListLimitsForTests } from '../server/queue/store'
+import { setListLimitsForTests } from '../server/queue/list'
 
 type App = Awaited<ReturnType<typeof freshApp>>
 let app: App

@@ -15,6 +15,7 @@ import { getGithubSettings } from '../settings/store'
 import { decryptSecret } from '../lib/crypto'
 import { httpRequest } from '../lib/http'
 import { apiError } from '../http-types'
+import { DEFAULT_PRODUCT } from './products'
 import { getDoc, logEvent, writeDoc, type Actor } from './store'
 
 export interface GithubResponse {
@@ -133,8 +134,11 @@ export interface MergeInfo extends MergePlan {
 
 /** Всё для экрана подтверждения: что вливаем, какой SHA, будет ли деплой и не идёт ли он сейчас. */
 export async function mergeInfo(itemId: string): Promise<MergeInfo> {
-  const item = await getDoc('items', itemId)
+  const item = await getDoc('items', itemId, '*')
   if (!item || item.data.kind !== 'merge') throw apiError(404, 'Нет такого пункта мёржа')
+  // Репозиторий и токен мёржа — пока только HR (настройки консоли): пункт другого продукта влил бы PR не в тот
+  // репозиторий. Мёрж по продукту — после точки невозврата PNR-1 (план, фаза 7), отдельным «да».
+  if (item.product !== DEFAULT_PRODUCT) throw apiError(409, `Мёрж из очереди для продукта «${item.product}» ещё не подключён`)
   const plan = mergePlan(item.data)
   if (!plan.pr) throw apiError(422, 'В пункте нет номера PR (поле pr или команда gh pr merge N)')
   const { repo, workflow, token } = await settings()
@@ -190,10 +194,10 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string): Prom
   const merged = JSON.parse(res.text) as { sha?: string }
   const consequence = info.skipCi ? 'без деплоя ([skip ci])' : info.deploys && info.baseRef === 'main' ? 'запущен деплой прода' : 'деплой не ожидается'
   const message = `Влит PR #${info.pr} (${sha.slice(0, 7)}), ${consequence}`
-  const prevNote = (await getDoc('checks', itemId))?.data.note
+  const prevNote = (await getDoc('checks', itemId, '*'))?.data.note
   const note = typeof prevNote === 'string' && prevNote.trim() ? `${prevNote}\n${message}` : message
-  await writeDoc({ name: actor.name, scopes: ['owner'] }, 'checks', itemId, { done: true, note: note.slice(-20_000), at: new Date().toISOString() }, { merge: true })
-  await logEvent(actor.name, 'items', itemId, 'merge', { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi })
+  await writeDoc({ name: actor.name, scopes: ['owner'], products: '*' }, 'checks', itemId, { done: true, note: note.slice(-20_000), at: new Date().toISOString() }, { merge: true })
+  await logEvent(actor.name, 'items', itemId, 'merge', { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi }, DEFAULT_PRODUCT)
   return { sha: merged.sha ?? '', message }
 }
 

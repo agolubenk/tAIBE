@@ -1,6 +1,7 @@
 /**
  * Управление очередью владельца на сервере консоли (`npm run oq -- <команда>`):
- *   token-create <имя> <области через запятую: read,agent,owner>  — выпустить токен (показывается один раз)
+ *   token-create <имя> <области через запятую: read,agent,owner> [продукты через запятую, по умолчанию hr-helper; * — все,
+ *                только с owner] [срок в днях]                    — выпустить токен (показывается один раз)
  *   token-list                                                   — токены без секретов
  *   token-revoke <id>                                            — отозвать
  *   merge-token                                                  — токен GitHub для мёржей: читается из stdin
@@ -25,10 +26,13 @@ async function main(): Promise<void> {
   await runMigrations()
   switch (cmd) {
     case 'token-create': {
-      const [name, scopes] = args
-      if (!name || !scopes) throw new Error('token-create <имя> <read,agent,owner>')
-      const t = await createToken(name, scopes.split(',').map((s) => s.trim()) as Scope[])
-      console.log(`Токен #${t.id} «${name}» (${scopes}) — сохраните сейчас, повторно не показывается:\n${t.token}`)
+      const [name, scopes, products, days] = args
+      if (!name || !scopes) throw new Error('token-create <имя> <read,agent,owner> [продукты] [срок в днях]')
+      const t = await createToken(name, scopes.split(',').map((s) => s.trim()) as Scope[], {
+        products: products ? products.split(',').map((s) => s.trim()) : undefined,
+        expiresDays: days ? Number(days) : undefined,
+      })
+      console.log(`Токен #${t.id} «${name}» (${scopes}; ${products ?? 'hr-helper'}) — сохраните сейчас, повторно не показывается:\n${t.token}`)
       return
     }
     case 'token-list':
