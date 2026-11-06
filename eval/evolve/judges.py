@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Who may judge tonight. Every daily run starts with a calibration, and only a model that passes it judges.
+"""Who may judge tonight: Claude models only (owner decision 06.11 — the judge is Claude; local models are never
+started; `memory/no-local-ollama.md`). Every daily run starts with a calibration, and only a model that passes it
+judges.
 
-Candidates (in this order, cheapest for the owner and the machine first):
-1. cloud models the llm-gateway lists (`vendor/model` ids; they appear when OpenRouter keys are in
-   `infra/llm-gateway/.env`; pools such as `auto` or `free` are not one judge and are left out);
-2. local Ollama models above MIN_LOCAL_PARAMS_B, smallest first, one per set of weights (the same weights under two
-   tags are one judge);
-3. Claude (`claude -p --model claude-sonnet-5-5`, the same prompt and answer format) — only when the product switch
-   `abJudgeClaude` is on (off by default: it spends the owner's tokens).
+Candidates, in this order: `claude:claude-sonnet-5-5`, `claude:claude-haiku-5-5`, then `claude:claude-opus-5-5` as a
+fallback. The first two that pass judge; the two-judge rule of `quality.combine` needs two different models. Nightly
+judges run only if `abJudgeClaude` is on (`daily_steps.claude_judges_on`); the owner may pass `--judges` to `daily.py
+run` by hand. Every `claude:<model>` id goes to `claude_call` (`claude -p --model <model> --output-format json`, no
+tools, MCP, hooks or session file, an empty folder): the answering model is checked in `modelUsage`, the real tokens
+are charged to the night's `resources.Budget`, and a limit message, a wrong model, an error or an empty answer is
+«unavailable» — never brak.
 
 Calibration on the reference artifact (`CALIBRATION_ARTIFACT` with its cases): the text against itself must be a
 tie in both orders (TIE, TIE — a judge that answers «X» twice reads positions, not texts); against its first 30 % and
 against itself with a harmful paragraph it must win in both orders. CALIBRATION_PER_KIND cases per kind, every ask
-right — the same canaries the run then repeats on each artifact, so a looser bar here would only move the brak one
-step later. Candidates are calibrated one at a time (one model in memory) until WANT_JUDGES pass. Stdlib only.
+right — the same canaries the run then repeats on each artifact. Stdlib only.
 """
 import json
 import os
@@ -21,103 +22,116 @@ import re
 import subprocess
 import sys
 import tempfile
-import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ab  # noqa: E402
 import quality  # noqa: E402
+from daily_steps import QUOTA  # noqa: E402
 from tokens import est_tokens  # noqa: E402
 
-# 06.11, first run: qwen2.5:7b (7.6B) and glm4 (9.4B) failed the truncate and harm canaries, glm4 also answered «X»
-# in both orders on every case. 7B-class models are not tried again; above that, calibration decides.
-MIN_LOCAL_PARAMS_B = 8.0
-WANT_JUDGES = 2           # quality.combine needs two sound judges for «accepted»
-MAX_CANDIDATES = 6        # calibrations per night: ~12 calls each, minutes on this Mac
+CLAUDE_CANDIDATES = ('claude:claude-sonnet-5-5', 'claude:claude-haiku-5-5', 'claude:claude-opus-5-5')
+WANT_JUDGES = 2           # quality.combine needs two sound judges of two different models for «accepted»
+MAX_CANDIDATES = len(CLAUDE_CANDIDATES)
 CALIBRATION_ARTIFACT = '.claude/skills/grill-task/SKILL.md'
 CALIBRATION_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cases', 'grill-task.jsonl')
 CALIBRATION_PER_KIND = 2
+CALIBRATION_CALLS = 3 * CALIBRATION_PER_KIND * 2   # three canary kinds, both orders
 CLAUDE_MODEL = 'claude-sonnet-5-5'
 CLAUDE_JUDGE = 'claude:' + CLAUDE_MODEL
-POOLS = ('auto', 'free', 'cascade', 'glm')
-NOT_A_JUDGE = re.compile(r'embed|nomic|bert|fim|minicpm-o', re.I)
+SYSTEM = 'You are a strict, impartial judge. Answer exactly as asked.'
+# Per call beyond the prompt: the system prompt, what the CLI adds and a reasoned answer (assumed until measured;
+# the real usage is charged and `Budget.ratio` scales the next estimates).
+CALL_EXTRA_TOKENS = 1000
 
 
-def params_b(text):
-    """'35.5B' → 35.5, '136.73M' → 0.13673; unknown → 0."""
-    m = re.match(r'\s*([\d.]+)\s*([BMK])', text or '', re.I)
-    if not m:
-        return 0.0
-    return float(m.group(1)) * {'B': 1.0, 'M': 1e-3, 'K': 1e-6}[m.group(2).upper()]
+def is_claude(name):
+    return name.startswith('claude:') and len(name) > len('claude:')
 
 
-def ollama_tags(url):
-    """{name: {params, family, size, weights}} from Ollama (/api/tags, /api/show); {} when it does not answer.
-    `weights` is the model's FROM blob: two tags over one blob (`glm4` and `hr-helper-agent`) are one judge."""
-    def get(path, body=None):
-        req = urllib.request.Request(url.rstrip('/') + path, data=json.dumps(body).encode() if body else None,
-                                     headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 — local Ollama URL
-            return json.loads(resp.read().decode('utf-8'))
-    try:
-        listed = get('/api/tags').get('models', [])
-    except Exception:  # noqa: BLE001
-        return {}
-    out = {}
-    for m in listed:
-        details = m.get('details') or {}
-        info = {'params': params_b(details.get('parameter_size')), 'family': details.get('family') or '',
-                'size': m.get('size') or 0, 'weights': m.get('digest', '')}
-        if info['params'] >= MIN_LOCAL_PARAMS_B:
-            try:
-                found = re.search(r'^FROM (\S+)', get('/api/show', {'model': m['name']}).get('modelfile', ''), re.M)
-                info['weights'] = found.group(1).rsplit('/', 1)[-1] if found else info['weights']
-            except Exception:  # noqa: BLE001 — the tag's own digest then
-                pass
-        out[m['name']] = info
-    return out
+def model_of(name):
+    """`claude:claude-haiku-5-5` → `claude-haiku-5-5`."""
+    return name.split(':', 1)[1]
 
 
-def candidates(gateway_models, tags, claude_on, min_params=MIN_LOCAL_PARAMS_B):
-    """[model id] to calibrate, in order: cloud, local above `min_params` smallest first, Claude when on."""
-    cloud = [m for m in gateway_models if '/' in m and not m.startswith('local/') and m not in POOLS
-             and not NOT_A_JUDGE.search(m)]
-    local, weights = [], set()
-    # Of the tags over one blob, the shortest name: the plain model, not a product's tag with its own SYSTEM prompt.
-    for model in sorted(gateway_models, key=len):
-        name = model[len('local/'):] if model.startswith('local/') else None
-        info = tags.get(name) if name else None
-        if not info or NOT_A_JUDGE.search(name) or NOT_A_JUDGE.search(info['family']) or info['params'] < min_params:
-            continue
-        key = info.get('weights') or (info['family'], info['params'], info['size'])
-        if key not in weights:
-            weights.add(key)
-            local.append((info['params'], model))
-    out = cloud + [m for _, m in sorted(local)]
-    return out + [CLAUDE_JUDGE] if claude_on else out
+def candidates(claude_on):
+    """Tonight's candidates in order; none when `abJudgeClaude` is off."""
+    return list(CLAUDE_CANDIDATES) if claude_on else []
+
+
+def answering_model(data):
+    """The model that wrote the answer: the `modelUsage` entry of `claude -p --output-format json` with the most
+    output tokens; None when the CLI reported no model."""
+    usage = (data or {}).get('modelUsage') or {}
+    ranked = sorted(usage.items(), key=lambda kv: -int((kv[1] or {}).get('outputTokens') or 0))
+    return ranked[0][0] if ranked else None
+
+
+def same_model(got, want):
+    """`claude-sonnet-5-5` is answered by `claude-sonnet-5-5`, a dated build of it or its `[1m]` variant."""
+    return bool(got) and re.fullmatch(re.escape(want) + r'(?:-\d{8})?(?:\[[^\]]*\])?', got, re.I) is not None
+
+
+def used_tokens(data):
+    """Real tokens of one call (input, cache writes and reads, output) over every model the CLI used; 0 when the CLI
+    reported none."""
+    per_model = (data or {}).get('modelUsage') or {}
+    total = sum(int((u or {}).get(k) or 0) for u in per_model.values()
+                for k in ('inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
+    if total:
+        return total
+    usage = (data or {}).get('usage') or {}
+    return sum(int(usage.get(k) or 0) for k in ('input_tokens', 'output_tokens', 'cache_read_input_tokens',
+                                                 'cache_creation_input_tokens'))
+
+
+def call_estimate(system, user):
+    """Tokens one judge call is booked at before it runs."""
+    return est_tokens(system or SYSTEM) + est_tokens(user) + CALL_EXTRA_TOKENS
 
 
 def claude_call(budget, model=CLAUDE_MODEL, timeout=600):
     """A judge call through the Claude Code CLI: no tools, no MCP, no hooks, no session file, an empty folder (no
-    project instructions). The prompt goes on stdin; the answer format is ab.py's (last line X, Y or TIE). Every call
-    is charged to `budget` (resources.Budget) first: past the night's ceiling the judge is unavailable."""
+    project instructions). The prompt goes on stdin; the answer format is ab.py's (last line X, Y or TIE).
+
+    `budget` (resources.Budget) refuses a call whose estimate does not fit tonight and is charged the real tokens the
+    CLI reports. Every failure is an OSError, so the judge is «unavailable», never brak: a non-zero exit or an error
+    result; a limit message (QUOTA) at any exit code when the result is no answer; an answer written by another model
+    than `model` (`modelUsage`)."""
     settings = json.dumps({'disableAllHooks': True})
 
     def call(system, user):
-        budget.spend(est_tokens(user) + 600)  # the prompt plus a short reasoned answer
+        estimate = call_estimate(system, user)
+        budget.check(estimate)
         cmd = ['claude', '-p', '--model', model, '--tools', '', '--strict-mcp-config', '--mcp-config',
-               '{"mcpServers":{}}', '--settings', settings, '--no-session-persistence', '--output-format', 'text',
-               '--system-prompt', system or 'You are a strict, impartial judge. Answer exactly as asked.']
+               '{"mcpServers":{}}', '--settings', settings, '--no-session-persistence', '--output-format', 'json',
+               '--system-prompt', system or SYSTEM]
         res = subprocess.run(cmd, input=user, cwd=tempfile.gettempdir(), capture_output=True, text=True,
                              timeout=timeout)
-        if res.returncode != 0:
-            raise OSError('claude -p exit %d: %s' % (res.returncode, (res.stderr or res.stdout).strip()[-200:]))
-        return res.stdout
+        try:
+            data = json.loads(res.stdout or '')
+        except ValueError:
+            data = None
+        data = data if isinstance(data, dict) else None
+        budget.charge(used_tokens(data) or estimate, estimate)  # no usage reported: the estimate is booked
+        text = data.get('result') or '' if data else res.stdout or ''
+        said = ('%s\n%s' % (text, res.stderr or '')).strip()
+        # The CLI's own limit message, at any exit code: in stderr, or as the result instead of an answer. A judge's
+        # reasoning that mentions a quota but ends with X, Y or TIE is an answer.
+        if QUOTA.search(res.stderr or '') or (QUOTA.search(text) and ab.parse_answer(text) is None):
+            raise OSError('claude -p: limit reached: %s' % said[-200:])
+        if res.returncode != 0 or data is None or data.get('is_error'):
+            raise OSError('claude -p exit %d: %s' % (res.returncode, said[-200:]))
+        got = answering_model(data)
+        if not same_model(got, model):
+            raise OSError('claude -p: answered by %s, not %s' % (got or 'an unknown model', model))
+        if not text.strip():  # an empty answer is the CLI failing, not the judge breaking the format
+            raise OSError('claude -p: empty answer')
+        return text
     return call
 
 
-def calibrate(call, cases, text, window=None):
+def calibrate(call, cases, text):
     """{passed, reasons, asks, swap_disagree} of one candidate on the reference text."""
-    if window and quality.largest_prompt_tokens(cases, text, text) > quality.WINDOW_SHARE * window:
-        return {'passed': False, 'reasons': ['the reference does not fit the window %d' % window], 'asks': []}
     asks, n = [], CALIBRATION_PER_KIND
     pairs = [('identity', text, 'tie')] * n + [('truncate', quality.truncated(text), 'a')] * n + \
         [('harm', quality.harmful(text), 'a')] * n
@@ -139,24 +153,15 @@ def calibrate(call, cases, text, window=None):
     return {'passed': not failed, 'reasons': reasons, 'asks': asks, 'swap_disagree': flips}
 
 
-def select(names, factory, cases, text, windows=None, want=WANT_JUDGES, limit=MAX_CANDIDATES,
-           after=lambda name: None, log=lambda *a: None, stop=lambda: False, admit=lambda name: (True, '')):
-    """(passed names, [calibration row]) — candidates one at a time until `want` pass or `limit` are tried. A
-    candidate `admit` refuses (not enough memory) is not loaded; every loaded one is unloaded, whatever happens."""
+def select(names, factory, cases, text, want=WANT_JUDGES, limit=MAX_CANDIDATES, log=lambda *a: None,
+           stop=lambda: False):
+    """(passed names, [calibration row]) — candidates one at a time until `want` pass or `limit` are tried."""
     passed, rows = [], []
     for name in names[:limit]:
         if len(passed) >= want or stop():
             break
-        ok, why = admit(name)
-        if not ok:
-            rows.append({'model': name, 'passed': False, 'reasons': ['not loaded: %s' % why], 'asks': []})
-            log('calibrate %s: skipped — %s' % (name, why))
-            continue
         log('calibrate %s' % name)
-        try:
-            row = dict(calibrate(factory(name), cases, text, (windows or {}).get(name)), model=name)
-        finally:
-            after(name)
+        row = dict(calibrate(factory(name), cases, text), model=name)
         rows.append(row)
         log('calibrate %s: %s — %s' % (name, 'passed' if row['passed'] else 'failed', '; '.join(row['reasons'])))
         if row['passed']:
@@ -165,11 +170,9 @@ def select(names, factory, cases, text, windows=None, want=WANT_JUDGES, limit=MA
 
 
 def main(argv=None):
-    """Print tonight's candidates from the gateway and Ollama (no calls to any judge)."""
+    """Print tonight's candidates (no call to any judge)."""
     import daily_steps as steps
-    found = steps.models(*steps.gateway(steps.g.main_repo(os.path.dirname(os.path.abspath(__file__))))) or {}
-    print(json.dumps(candidates(list(found), ollama_tags(steps.OLLAMA), steps.switch('abJudgeClaude')),
-                     indent=1))
+    print(json.dumps(candidates(steps.claude_judges_on()), indent=1))
     return 0
 
 

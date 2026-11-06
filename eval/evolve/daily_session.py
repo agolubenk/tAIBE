@@ -25,7 +25,6 @@ import daily_git as g  # noqa: E402
 import daily_steps as steps  # noqa: E402
 import guard  # noqa: E402
 import quality  # noqa: E402
-import resources  # noqa: E402
 
 INPUT = 'eval/evolve/.session/input.json'   # inside the run's worktree; `git clean` removes it next night
 CASES = 'eval/evolve/cases/*.jsonl'
@@ -84,19 +83,13 @@ def comment_from(result_text):
     return line, 'ok'
 
 
-def cmd_session(args, budget=None):
-    """The headless Claude session. Quiet exit (0) when the quota is spent, the ceiling is reached or the master
-    switch is off."""
+def cmd_session(args):
+    """The headless Claude session with its own limits (turns, dollars, minutes). Quiet exit (0) when the quota is
+    spent or the master switch is off."""
     wt = os.path.join(g.main_repo(HERE), args.worktree)
     report = steps.load_json('runs/latest.json', {})
     if not steps.switch('automation'):
         steps.log('automation is off — no session')
-        return 0
-    budget = budget or getattr(args, 'budget', None) or resources.Budget()
-    try:
-        budget.spend(resources.CLAUDE_MAX_TOKENS // 4)  # the session counts as a call and a quarter of the tokens
-    except resources.BudgetSpent as e:
-        steps.log('session: %s — skipped' % e)
         return 0
     path = os.path.join(wt, INPUT)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -127,7 +120,7 @@ def cmd_session(args, budget=None):
     line, why = comment_from(result)
     posted = steps.post_card(line) if line and not report.get('card') and not args.no_card else 'not posted: %s' % (
         why if not line else 'the run already posted' if report.get('card') else '--no-card')
-    steps.save_json('runs/session-latest.json', {'exit': res.returncode, 'comment': posted, 'budget': budget.report()})
+    steps.save_json('runs/session-latest.json', {'exit': res.returncode, 'comment': posted})
     steps.log('session: exit %d, card %s' % (res.returncode, posted))
     return 0
 

@@ -49,7 +49,7 @@ install_job() {
   if [[ ! -f "$wt/eval/evolve/daily.sh" ]]; then
     echo "evolve: origin/$BASE has no eval/evolve/daily.sh — merge the PR first"; return 1
   fi
-  for tool in python3 git gh claude node ollama; do   # launchd starts with a bare PATH
+  for tool in python3 git gh claude node; do   # launchd starts with a bare PATH
     dir="$(dirname "$(command -v "$tool" 2>/dev/null || echo /usr/bin/x)")"
     [[ ":$path_dirs:" == *":$dir:"* ]] || path_dirs="${path_dirs:+$path_dirs:}$dir"
   done

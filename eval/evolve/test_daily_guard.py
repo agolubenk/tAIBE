@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """The daily run's safeguards (review of PR #83): the session's exact rights, data-only antigens, the personal-data
-scan, the worktree check, the merge gate (own PRs, no D/R, required checks, closed switch), the one lock, memory and
-swap, the Claude ceiling, the gateway's broken answers and the schedule.
+scan, the worktree check, the merge gate (own PRs, no D/R, required checks, closed switch), the one lock, heavy jobs
+and the schedule. Claude-only judges: test_daily_claude.py.
 Run: python3 -I -m unittest discover -s eval/evolve -p 'test_*.py'"""
-import http.client
-import http.server
 import json
 import os
 import plistlib
@@ -12,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 from unittest import mock
 
@@ -50,15 +47,6 @@ class SessionRightsTest(unittest.TestCase):
         self.assertEqual(session.comment_from('work…\nevolve 06.11: brak 2')[0], 'evolve 06.11: brak 2')
         self.assertIsNone(session.comment_from('evolve: see /Users/someone/notes.md')[0])
         self.assertIsNone(session.comment_from('x' * 700)[0])
-
-    def test_session_is_skipped_past_the_ceiling(self):
-        budget = resources.Budget(calls=0)
-        args = mock.Mock(worktree='wt', dry_run=False, no_card=True, budget=budget)
-        with mock.patch.object(g, 'main_repo', lambda p: '/nowhere'), \
-                mock.patch.object(steps, 'switch', lambda *a: True), mock.patch.object(steps, 'log', lambda *a: None), \
-                mock.patch.object(session.subprocess, 'run') as run:
-            self.assertEqual(session.cmd_session(args), 0)
-        run.assert_not_called()
 
 
 class GuardTest(unittest.TestCase):
@@ -218,32 +206,6 @@ class WorktreeAndMergeTest(unittest.TestCase):
 
 
 class ResourcesTest(unittest.TestCase):
-    VM = 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:  100000.\nPages inactive:  50000.\n'
-
-    def test_memory_and_swap(self):
-        self.assertEqual(resources.available_bytes(self.VM), 150000 * 16384)
-        self.assertAlmostEqual(resources.swap_share('total = 11264.00M  used = 9651.19M  free = 1612.81M'), 0.857, 2)
-        gb = 2 ** 30
-        self.assertFalse(resources.fits(15 * gb, available=20 * gb)[0])  # 18 GB needed, 14 GB room
-        self.assertTrue(resources.fits(5 * gb, available=20 * gb)[0])
-
-    def test_a_model_that_does_not_fit_is_never_loaded_and_loaded_ones_unload(self):
-        loaded, unloaded = [], []
-
-        def factory(name):
-            loaded.append(name)
-            if name == 'boom':
-                raise OSError('x')
-            return lambda s, u: 'TIE'
-        admit = lambda n: (n != 'huge', 'needs 18 GB')  # noqa: E731
-        passed, rows = judging.select(['huge', 'small'], factory, [{'id': 'c', 'task': 't', 'expect': 'e'}], 'x\n',
-                                      after=unloaded.append, admit=admit)
-        self.assertEqual(loaded, ['small'])
-        self.assertIn('not loaded', rows[0]['reasons'][0])
-        with self.assertRaises(OSError):
-            judging.select(['boom'], factory, [], 'x', after=unloaded.append)
-        self.assertEqual(unloaded, ['small', 'boom'])  # unloaded even when the call failed
-
     def test_one_lock_for_every_entry_point(self):
         path = os.path.join(tempfile.mkdtemp(), 'run.lock')
         with resources.Lock(path) as first:
@@ -267,69 +229,6 @@ class ResourcesTest(unittest.TestCase):
 
     def test_quota_line_of_today(self):
         self.assertTrue(steps.QUOTA.search("You've hit your limit · resets 4am (Europe/Moscow)"))
-
-
-class Sse(http.server.BaseHTTPRequestHandler):
-    body = b''
-
-    def do_POST(self):  # noqa: N802
-        self.rfile.read(int(self.headers['Content-Length']))
-        self.send_response(200)
-        self.send_header('content-type', 'text/event-stream')
-        self.end_headers()
-        self.wfile.write(Sse.body)
-
-    def log_message(self, *args):
-        pass
-
-
-class GatewayAnswersTest(unittest.TestCase):
-    def setUp(self):
-        self.server = http.server.HTTPServer(('127.0.0.1', 0), Sse)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.env = mock.patch.dict(os.environ, {'LLM_GATEWAY_URL': 'http://127.0.0.1:%d' % self.server.server_port,
-                                                'LLM_GATEWAY_TOKEN': 't'})
-        self.env.start()
-
-    def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.env.stop()
-
-    def chunk(self, content, finish=None):
-        return ('data: %s\n\n' % json.dumps({'choices': [{'delta': {'content': content}, 'finish_reason': finish}]}))
-
-    def test_whole_empty_and_cut_answers(self):
-        call = steps.stream_call('/repo', 'm')
-        Sse.body = (self.chunk('reason\n') + self.chunk('TIE', 'stop') + 'data: [DONE]\n\n').encode()
-        self.assertEqual(call(None, 'q'), 'reason\nTIE')
-        Sse.body = (self.chunk('', 'stop') + 'data: [DONE]\n\n').encode()
-        with self.assertRaises(OSError):
-            call(None, 'q')
-        Sse.body = self.chunk('reason, then the gateway fell').encode()
-        with self.assertRaises(OSError):
-            call(None, 'q')
-
-    def test_a_broken_backend_is_unavailable_not_brak(self):
-        Sse.body = b''
-        call = steps.stream_call('/repo', 'm')
-        judged = quality.judge_artifact(call, [{'id': str(i), 'task': 't', 'expect': 'e'} for i in range(6)],
-                                        'a\n', 'b\n')
-        self.assertIn('unavailable', judged)
-        self.assertEqual(quality.evaluate(judged)[0], 'insufficient')
-
-    def test_incomplete_read_is_retried(self):
-        calls = []
-
-        def flaky(system, user):
-            calls.append(1)
-            if len(calls) == 1:
-                raise http.client.IncompleteRead(b'part')
-            return 'TIE'
-        revived = []
-        with mock.patch.object(steps.time, 'sleep', lambda s: None), mock.patch.object(steps, 'log', lambda *a: None):
-            self.assertEqual(steps.retrying(flaky, lambda: revived.append(1))(None, 'q'), 'TIE')
-        self.assertEqual(revived, [1])
 
 
 if __name__ == '__main__':

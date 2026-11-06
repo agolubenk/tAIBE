@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
 """The daily evolution run: blind A/B of what changed in the layer since the last run, quality control that marks
 false positives as brak, and corrections that only an accepted verdict may start (owner, 06.11: once a day, by
-itself, «ложноположительные результаты — брак»).
+itself, «ложноположительные результаты — брак»). The judges are Claude models only (owner decision 06.11).
 
-    bash eval/evolve/daily.sh run                    # what launchd starts at 04:30: refresh, then `cycle`
-    python3 -I eval/evolve/daily.py cycle [--force]  # gateway → run → session → publish → merge
-    python3 -I eval/evolve/daily.py run [--target taibe|hr|all] [--since REV] [--judges m1,m2] [--no-pr] [--dry-run]
+    bash eval/evolve/daily.sh run                    # what launchd starts at 05:00: `nightly` (lock → refresh → cycle)
+    python3 -I eval/evolve/daily.py cycle [--force]  # run → session → publish → merge
+    python3 -I eval/evolve/daily.py run [--target taibe|hr|all] [--since REV] [--judges claude:m1,claude:m2]
+                                        [--no-pr] [--dry-run]
     python3 -I eval/evolve/daily.py session|publish|merge [--dry-run]
-    python3 -I eval/evolve/daily.py status
+    python3 -I eval/evolve/daily.py status | cases [FILE…] | antigens
 
-`run` is deterministic and makes no Claude call: it raises the llm-gateway when it is down, refreshes its own
-worktree (`worktrees/evolve/daily`, detached on a fresh `origin/board-agents`; nobody's checkout is touched), runs
-`catalog.py` and `dupes.py`, takes the layer files changed since the last run (`~/.claude/evolve/state.json`),
-judges each one that has cases (`cases/*.jsonl`, naming below) previous version against current with two different
-local judges, one after the other, and passes every verdict through `quality.py`. The rest go to the queue for
-cases. `eval/tools/ctx_budget.py learn` runs when it exists. An accepted loss of the merged version opens a revert
-PR (tAIBE; HR — the same PR, never merged by the run); an accepted win is pinned in `verdicts.jsonl`; brak and
-insufficient verdicts are written there as well and never act.
+`run` refreshes its own worktree (`worktrees/evolve/daily`, detached on a fresh `origin/board-agents`; nobody's
+checkout is touched), runs `catalog.py` and `dupes.py`, and takes the layer files changed since the last run
+(`~/.claude/evolve/state.json`). For each one with cases (`cases/*.jsonl`, naming below) it judges the version
+before its last edit against the current one. Judges: `--judges`, else the Claude candidates (`judges.py`) when
+`abJudgeClaude` is on — the board, closed on doubt, or the owner's file `~/.claude/evolve/abJudgeClaude.on`. They are
+calibrated first; with fewer than two that pass, nothing is judged and the artifacts stay pending. Artifacts are
+judged one at a time by every judge, at most `resources.MAX_ARTIFACTS` a night, and only while the night's budget
+covers the whole artifact. Every verdict passes `quality.py`. An accepted loss opens a revert PR of that edit; an
+accepted win is pinned in `verdicts.jsonl`; brak and insufficient verdicts are written there as well and never act.
+The state moves to head only when nothing is pending. No model, gateway or Ollama is started.
 
-`session` is a headless Claude session (`claude -p`, `daily-prompt.md`, turns and budget capped, quiet exit when
-the quota is spent): it writes missing cases, re-reads the fresh verdicts for false positives, proposes antigens
-and posts one line to SE-49. It does not commit, push or merge. `publish` commits what the run and the session wrote
-(verdicts, cases, antigens with their test passing) as PRs from `evolve/…` branches. `merge` is the only step that
-merges: the run's own PRs, paths from the explicit list (`daily_git.AUTO_MERGE_PATHS`), green checks, the switch
-`evolveAutoMerge`, `gh pr merge --auto --match-head-commit`. Sessions keep their merge-guard: this is the
-owner's scheduled job, not a session. Stdlib only.
+`session` is a headless Claude session (`daily_session.py`), `publish` opens the run's PRs, `merge` is the only step
+that merges (`daily_git.merge_ready`; sessions keep their merge-guard). Stdlib only.
 
 Cases per artifact: `.claude/skills/<n>/SKILL.md` → `cases/<n>.jsonl`; `.claude/rules/<f>.md` → `cases/rule-<f>.jsonl`;
 agents, commands, prompts → `agent-`, `command-`, `prompt-<f>.jsonl`; a role card → `card-<dir with ->.jsonl`.
@@ -32,7 +30,6 @@ agents, commands, prompts → `agent-`, `command-`, `prompt-<f>.jsonl`; a role c
 import argparse
 import glob
 import hashlib
-import re
 import subprocess
 import json
 import os
@@ -58,7 +55,6 @@ TARGETS = {
            'repo': os.path.expanduser(os.environ.get('EVOLVE_HR_REPO') or '~/Desktop/Development/HR_Helper-v2')},
 }
 AB_KINDS = ('skill', 'rule', 'agent', 'command', 'prompt', 'card')  # text instructions; hooks and genome are code
-NOT_OURS = re.compile(r'embed|nomic', re.I)  # what may stay loaded after the night
 NIGHT = (3, 8)            # a scheduled run spends model time only between 03:00 and 08:00 local
 DEADLINE_MIN = 180        # judging stops after 3 hours; what is left waits for the next night
 
@@ -107,38 +103,47 @@ def plan(target, repo, since, head, cases_dir, pending=()):
             notes.append('%s is new — no previous version to judge against' % path)
         elif a != b:
             items.append({'target': target, 'path': path, 'a': g.short(repo, since), 'b': g.short(repo, head),
-                          'text_a': a, 'text_b': b, 'cases': cases_path(path, cases_dir)})
+                          'b_blob': g.blob_of(repo, head, path), 'text_a': a, 'text_b': b,
+                          'cases': cases_path(path, cases_dir)})
     return items, need, notes
 
 
-def judge(items, judges, factory, windows, deadline, after_judge=lambda j: None, admit=lambda j: (True, '')):
-    """[verdict] for each item: every judge in turn over every item (one model loaded at a time, unloaded after),
-    then `quality.finalize` and `quality.combine`."""
-    run = {j: {} for j in judges}
-    for j in judges:
-        call = factory(j)
-        ok, why = admit(j)
-        try:
-            for it in items:
-                key = it['path']
-                if not ok or time.time() > deadline or swap_stop():
-                    reason = 'not loaded: %s' % why if not ok else 'out of time or swap this night'
-                    run[j][key] = {'cases': 0, 'tokens_a': 0, 'tokens_b': 0, 'unavailable': reason}
-                    continue
-                cases, canaries = quality.read_cases(it['cases'])
-                log('judge %s · %s · %d cases' % (j, key, len(cases)))
-                run[j][key] = quality.judge_artifact(call, cases, it['text_a'], it['text_b'], canaries,
-                                                     (windows or {}).get(j))
-        finally:
-            after_judge(j)
-    final = quality.finalize(run)
-    out = []
+def item_cost(it, n_judges):
+    """(calls, tokens) one artifact costs with `n_judges` judges, estimated before it starts: canaries, every case
+    and the repeat, both orders, each call at the size of the largest prompt (the length probe)."""
+    cases, _ = quality.read_cases(it['cases'])
+    asks = len(quality.canary_cases(cases)) + len(cases) + max(1, -(-len(cases) // 3))
+    calls = 2 * asks * n_judges
+    per_call = judging.call_estimate(None, '') + quality.largest_prompt_tokens(cases, it['text_a'], it['text_b'])
+    return calls, calls * per_call
+
+
+def judge(items, judges, factory, budget, deadline):
+    """(verdicts, pending): item by item, every judge on the item before the next one starts. An item starts only
+    when the budget covers it for all judges; one that does not fit, or comes after MAX_ARTIFACTS, stays pending."""
+    run, judged, pending = {j: {} for j in judges}, [], []
+    calls = {j: factory(j) for j in judges}
     for it in items:
+        cost = item_cost(it, len(judges))
+        if len(judged) >= resources.MAX_ARTIFACTS or time.time() > deadline or not budget.covers(*cost):
+            pending.append(it)
+            log('pending %s: %s' % (it['path'], 'artifact limit' if len(judged) >= resources.MAX_ARTIFACTS else
+                                    'out of time' if time.time() > deadline else
+                                    'budget does not cover %d calls / %d tokens' % cost))
+            continue
+        cases, canaries = quality.read_cases(it['cases'])
+        for j in judges:
+            log('judge %s · %s · %d cases' % (j, it['path'], len(cases)))
+            run[j][it['path']] = quality.judge_artifact(calls[j], cases, it['text_a'], it['text_b'], canaries)
+        judged.append(it)
+    final = quality.finalize({j: by_path for j, by_path in run.items()})
+    verdicts = []
+    for it in judged:
         per = [(j, final[j][it['path']]) for j in judges]
         status, reasons, pick = quality.combine(per)
-        out.append(verdict_line(it, status, reasons, pick, [(j, run[j][it['path']], final[j][it['path']])
-                                                           for j in judges]))
-    return out
+        verdicts.append(verdict_line(it, status, reasons, pick, [(j, run[j][it['path']], final[j][it['path']])
+                                                                 for j in judges]))
+    return verdicts, pending
 
 
 def verdict_line(it, status, reasons, pick, per_judge):
@@ -166,53 +171,45 @@ def verdict_line(it, status, reasons, pick, per_judge):
 
 
 def no_judge_line(it, calibration):
-    """A verdict of a night without a fit judge: insufficient, nothing acts, the file is tried again next night."""
-    tried = ', '.join('%s (%s)' % (r['model'], r['reasons'][0][:80]) for r in calibration['rows']) or 'no candidates'
-    v = verdict_line(it, 'insufficient', ['no fit judge: calibration passed none of %d candidates — %s'
-                                          % (len(calibration['rows']), tried)], None, [])
+    """A night with fewer than two calibrated judges: insufficient, nothing acts, the artifact stays pending."""
+    tried = ', '.join('%s (%s)' % (r['model'], r['reasons'][0][:80]) for r in calibration['rows'])
+    why = 'no judge: %d of %d candidates passed calibration (need %d) — %s' % (
+        len(calibration['passed']), len(calibration['rows']), judging.WANT_JUDGES, tried or 'no candidates')
+    v = verdict_line(it, 'insufficient', [why], None, [])
     v['calibration'] = [r['model'] for r in calibration['rows']]
     return v
 
 
-def calibrate_judges(args, repo, wt, windows, deadline):
-    """{candidates, passed, rows}: tonight's candidates, each calibrated in turn until two pass."""
-    code_root = os.path.abspath(os.path.join(HERE, '..', '..'))
-    tags = judging.ollama_tags(steps.OLLAMA) if not args.factory else {}
-    names = [j for j in args.judges.split(',') if j] if args.judges else judging.candidates(
-        list(windows or {}), tags, switch('abJudgeClaude', code_root))
+def judge_names(args, code_root):
+    """(names, why): tonight's candidates — `--judges` (the owner's own run), else the Claude candidates when
+    `abJudgeClaude` is on. Only `claude:<model>` ids: local models are never started (owner rule 06.11)."""
+    if args.judges:
+        names = [j.strip() for j in args.judges.split(',') if j.strip()]
+        bad = [j for j in names if not judging.is_claude(j)]
+        if bad:
+            return [], 'only Claude judges (owner decision 06.11), refused: %s' % ', '.join(bad)
+        return names, 'given by --judges'
+    if not steps.claude_judges_on(code_root):
+        return [], 'abJudgeClaude is off (board, or the file ~/.claude/evolve/%s)' % steps.CLAUDE_OVERRIDE
+    return judging.candidates(True), 'abJudgeClaude on'
+
+
+def calibrate_judges(args, wt, deadline, names):
+    """{candidates, passed, rows}: the candidates calibrated in turn until two pass."""
     with open(os.path.join(wt, judging.CALIBRATION_ARTIFACT), encoding='utf-8') as f:
         text = f.read()
     cases, _ = quality.read_cases(args.calibration_cases)
-    factory = args.factory or judge_factory(repo, args.budget)
-    after = steps.unload if not args.factory else (lambda name: None)
-    passed, rows = judging.select(names, factory, cases, text, windows, after=after, log=log,
-                                  stop=lambda: time.time() > deadline or swap_stop(), admit=admit_local(tags))
-    return {'candidates': names, 'passed': passed, 'rows': rows, 'tags': tags}
+    factory = args.factory or judge_factory(args.budget)
+    passed, rows = judging.select(names, factory, cases, text, log=log, stop=lambda: time.time() > deadline)
+    return {'candidates': names, 'passed': passed, 'rows': rows}
 
 
-def admit_local(tags):
-    """(ok, why) per candidate: a local model loads only if it fits the memory left after the reserve."""
-    def admit(name):
-        info = tags.get(name[len('local/'):]) if name.startswith('local/') else None
-        return resources.fits(info['size']) if info else (True, 'not local')
-    return admit
-
-
-def swap_stop():
-    share = resources.swap_share()
-    if share > resources.SWAP_STOP:
-        log('swap %.0f%% used — the night stops here' % (share * 100))
-        return True
-    return False
-
-
-def judge_factory(repo, budget):
-    revive = lambda: steps.ensure_gateway(repo)  # noqa: E731
-
-    def factory(model):
-        if model == judging.CLAUDE_JUDGE:
-            return judging.claude_call(budget)
-        return steps.retrying(steps.stream_call(repo, model), revive)
+def judge_factory(budget):
+    """Every `claude:<model>` id → `judges.claude_call` with that model and the night's budget."""
+    def factory(name):
+        if not judging.is_claude(name):
+            raise ValueError('not a Claude judge: %s' % name)
+        return judging.claude_call(budget, model=judging.model_of(name))
     return factory
 
 
@@ -249,10 +246,9 @@ def cmd_run(args):
     state, queue = load_json('state.json', {}), load_json('queue.json', [])
     queue = [q for q in queue if not os.path.isfile(os.path.join(HERE, q['cases']))]  # cases written since
     ab_on = switch('abJudge', code_root) and switch('automation', code_root)
-    windows, calibration, posted = None, None, False
-    if ab_on and not args.dry_run:
-        windows = steps.ensure_gateway(repo, [j for j in (args.judges or '').split(',') if j.startswith('local/')])
-        report['gateway'] = 'up, %d models' % len(windows) if windows is not None else 'down'
+    names, names_why = judge_names(args, code_root) if ab_on else ([], 'abJudge or automation is off')
+    report['judges'] = {'candidates': names, 'why': names_why}
+    calibration, posted = None, False
     for target in (TARGETS if args.target == 'all' else [args.target]):
         cfg = TARGETS[target]
         trepo = cfg.get('repo') or repo
@@ -264,50 +260,51 @@ def cmd_run(args):
             report['metrics'] = steps.layer_metrics(os.path.join(trepo, args.worktree))
         else:
             head = g.fetch(trepo, cfg['base'])
-        since = args.since or (state.get(target) or {}).get('rev') or g.since_day_ago(trepo, cfg['base'])
+        old = state.get(target) or {}
+        since = args.since or old.get('rev') or g.since_day_ago(trepo, cfg['base'])
         if g.git(trepo, 'rev-parse', '--verify', '--quiet', since + '^{commit}', check=False) is None:
             report['targets'][target] = {'skipped': 'no revision %s here' % since}
             continue
-        pending = (state.get(target) or {}).get('pending', []) if not args.since else []
-        items, need, notes = plan(target, trepo, since, head, args.cases, pending)
+        items, need, notes = plan(target, trepo, since, head, args.cases, [] if args.since else old.get('pending', []))
+        done = {} if args.since else dict(old.get('judged') or {})
+        items = [it for it in items if done.get(it['path']) != it['b_blob']]  # judged at this version already
         t = {'since': g.short(trepo, since), 'head': g.short(trepo, head), 'judged': [], 'need_cases': len(need),
              'notes': notes}
         known = {(q['target'], q['path']) for q in queue}
         queue += [q for q in need if (q['target'], q['path']) not in known]
-        late, judged_any = [], False
+        pending = []
         if args.dry_run:
             t['judged'] = [{'path': it['path'], 'a': it['a'], 'b': it['b'], 'status': 'dry-run'} for it in items]
-        elif not ab_on:
-            t['judged'] = [{'path': it['path'], 'status': 'skipped: abJudge or automation is off'} for it in items]
-        elif windows is None:
-            t['judged'] = [{'path': it['path'], 'status': 'skipped: the gateway is down'} for it in items]
+        elif items and not names:
+            pending = items
+            t['judged'] = [{'path': it['path'], 'status': 'skipped: %s' % names_why} for it in items]
         elif items:
-            judged_any = True
             for it in items:
                 it['run'] = report['started']
             if calibration is None:
-                calibration = calibrate_judges(args, repo, os.path.join(repo, args.worktree), windows, deadline)
+                calibration = calibrate_judges(args, os.path.join(repo, args.worktree), deadline, names)
                 report['calibration'] = calibration
             passed = calibration['passed'][:judging.WANT_JUDGES]
-            if passed:
-                verdicts = judge(items, passed, args.factory or judge_factory(repo, args.budget), windows, deadline,
-                                 after_judge=steps.unload if not args.factory else lambda j: None,
-                                 admit=admit_local(calibration.get('tags', {})))
-            else:
-                verdicts = [no_judge_line(it, calibration) for it in items]
+            if len(passed) >= judging.WANT_JUDGES:
+                verdicts, pending = judge(items, passed, args.factory or judge_factory(args.budget), args.budget,
+                                          deadline)
+            else:  # fewer than two judges: a verdict could never be accepted — no A/B, the artifacts stay pending
+                verdicts, pending = [no_judge_line(it, calibration) for it in items], list(items)
                 if not posted and not args.no_card:
-                    posted = steps.post_card('evolve %s: нет годного судьи — калибровку не прошёл ни один из %d '
-                                             'кандидатов (%s); A/B не выполнен, корректировок нет.' % (
-                                                 report['date'], len(calibration['rows']),
+                    posted = steps.post_card('evolve %s: нет годного судьи — калибровку прошли %d из %d кандидатов '
+                                             '(нужно 2: %s); A/B не выполнен, корректировок нет, артефакты ждут.' % (
+                                                 report['date'], len(calibration['passed']), len(calibration['rows']),
                                                  ', '.join(r['model'] for r in calibration['rows']) or 'нет'))
                     report['card'] = posted
-            for v, it in zip(verdicts, items):
-                measured = [j for j in v['judges'] if not any('unavailable' in r for r in j['reasons'])]
-                if len(measured) < len(v['judges']) or not v['judges']:  # not reached / no judge: retried next night
-                    late.append({'path': it['path'], 'a': it['a']})
-                if v['judges'] and not measured:  # judges chosen but none reached: no verdict, the report has it
+            by_path = {it['path']: it for it in items}
+            for v in verdicts:
+                it = by_path[v['path']]
+                if v['judges'] and all(any('unavailable' in r for r in j['reasons']) for j in v['judges']):
+                    pending.append(it)  # judges chosen but none reached: no verdict line, the report has it
                     t['judged'].append({'path': it['path'], 'status': 'not measured', 'reasons': v['reasons']})
                     continue
+                if any(any('unavailable' in r for r in j['reasons']) for j in v['judges']):
+                    pending.append(it)  # one judge not reached (limit, budget, error): measured again next night
                 if v['action'] == 'revert':
                     try:
                         v['pr'] = revert(trepo, target, v, it['text_a'], args.no_pr, report['started'])
@@ -315,12 +312,18 @@ def cmd_run(args):
                         v['pr'] = 'failed: %s' % e
                 with open(args.verdicts, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(v, ensure_ascii=False) + '\n')
+                if it not in pending:
+                    done[it['path']] = it['b_blob']
                 t['judged'].append({k: v.get(k) for k in ('id', 'path', 'a', 'b', 'status', 'pick', 'action', 'pr',
                                                           'reasons')})
-        # Nothing judged because the judge was off or down: the state stays, the next night takes the same range.
-        if not args.dry_run and not args.keep_state and (judged_any or not items):
-            state[target] = {'rev': head, 'date': report['date'], 'pending': late}
+            t['pending'] = sorted({it['path'] for it in pending})
+        # State moves to head only when nothing is pending; a pending artifact keeps the night's baseline.
+        if not args.dry_run and not args.keep_state:
+            late = list({it['path']: {'path': it['path'], 'a': it['a']} for it in pending}.values())
+            state[target] = {'rev': since if late else head, 'date': report['date'], 'pending': late,
+                             'judged': done}
         report['targets'][target] = t
+    report['budget'] = args.budget.report()
     report['queue'] = queue
     report['finished'] = now().isoformat(timespec='seconds')
     report['summary'] = summary(report)
@@ -343,17 +346,8 @@ def summary(report):
 
 
 def merge_switch(root):
-    """evolveAutoMerge, closed on doubt: on only when the board's answer was read (fresh or cached without a failed
-    read since) and says on. Defaults, a failed read or any error — off."""
-    try:
-        sys.path.insert(0, os.path.join(root, '.claude', 'scripts'))
-        import pipeline_settings as ps
-        settings, source = ps.load(root)
-    except Exception:  # noqa: BLE001
-        return False
-    if not (source.startswith('board') or source.startswith('cache')) or 'failed' in source:
-        return False
-    return bool(settings['automation'] and settings['toggles'].get('evolveAutoMerge'))
+    """evolveAutoMerge, closed on doubt (`daily_steps.closed_switch`)."""
+    return steps.closed_switch('evolveAutoMerge', root)
 
 
 def cmd_merge(args):
@@ -377,18 +371,14 @@ def cmd_cycle(args):
         return 0
     try:
         with resources.Lock(os.path.join(STATE_DIR, 'run.lock'), args.lock_fd):
-            if not resources.wait_for_heavy(log) or swap_stop():
-                log('another heavy job or swap — the night is skipped')
+            if not resources.wait_for_heavy(log):
+                log('another heavy job is still running — the night is skipped')
                 return 0
             for step in (cmd_run, session.cmd_session, session.cmd_publish, cmd_merge):
                 try:
                     step(args)
                 except Exception as e:  # noqa: BLE001 — one failed step must not keep the next from reporting
                     log('%s failed: %s' % (step.__name__, e))
-            for name in resources.loaded(steps.OLLAMA):
-                if not NOT_OURS.search(name):
-                    steps.unload('local/' + name)
-            log('loaded after the night: %s' % (resources.loaded(steps.OLLAMA) or 'nothing'))
     except RuntimeError as e:  # the lock is held by another run
         log(str(e))
     return 0
@@ -403,7 +393,8 @@ def cmd_nightly(args):
             g.refresh_worktree(repo, args.worktree, steps.BASE)
             fresh = os.path.join(repo, args.worktree, 'eval', 'evolve', 'daily.py')
             os.set_inheritable(lock.fd, True)
-            cmd = [sys.executable, '-I', fresh, 'cycle', '--lock-fd', str(lock.fd)] + (['--force'] if args.force else [])
+            cmd = [sys.executable, '-I', fresh, 'cycle', '--lock-fd', str(lock.fd)]
+            cmd += ['--force'] if args.force else []
             return subprocess.run(cmd, pass_fds=(lock.fd,)).returncode
     except RuntimeError as e:
         log(str(e))

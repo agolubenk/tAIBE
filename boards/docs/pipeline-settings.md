@@ -21,8 +21,8 @@ of the settings as **on**, except `abJudgeClaude` (the owner's tokens) and `evol
 
 | Switch | Group | Off means | Enforced in |
 |---|---|---|---|
-| `abJudge` | evolution | `ab.py` makes no model calls for A/B comparisons (exit 3) | `eval/evolve/ab.py` |
-| `abJudgeClaude` | evolution | **Off by default** (the owner's tokens). On: the nightly run may calibrate and use Claude (`claude -p --model claude-sonnet-5-5`) as a judge when fewer than two free judges pass | `eval/evolve/judges.py` (`daily.py run`) |
+| `abJudge` | evolution | `ab.py` makes no model calls for A/B comparisons (exit 3), and the nightly run judges nothing | `eval/evolve/ab.py`, `eval/evolve/daily.py` |
+| `abJudgeClaude` | evolution | **Off by default** and off when the settings cannot be read (the owner's tokens). On: the nightly run calibrates and uses Claude judges (`claude -p`, Sonnet and Haiku, Opus as a fallback) — the only judges it has (owner decision 06.11: no local models). Until the deployed board has this switch, the owner's local file `~/.claude/evolve/abJudgeClaude.on` turns it on | `eval/evolve/daily_steps.py` (`claude_judges_on`), `eval/evolve/judges.py` |
 | `askOnce` | evolution | `ask_once.py check` returns "ask as usual" without looking up | `eval/tools/ask_once.py` |
 | `handoffDupes` | evolution | no duplicate-context check before a successor starts | `eval/tools/spawn_session.sh` |
 | `evolveAutoMerge` | evolution | **Off by default** and off when the settings cannot be read. On: the nightly run merges its own PRs of the safe class only (cases, verdicts, a skill or prompt reverted to a version already merged), with required checks green; rules, the genome and code always wait for a person | `eval/evolve/daily.py merge` (`daily_git.merge_ready`) |

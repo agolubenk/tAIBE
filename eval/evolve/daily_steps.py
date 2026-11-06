@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-"""Steps of the daily evolution run around the judging (`daily.py`): state files, switches, the llm-gateway, the
-layer's cost metrics, the headless Claude session and publishing what the run wrote. Stdlib only."""
+"""Steps of the daily evolution run around the judging (`daily.py`): state files, switches (closed on doubt for
+the ones that spend the owner's tokens or merge), the card comment and the layer's cost metrics. No model, gateway
+or Ollama is started here (owner rule `memory/no-local-ollama.md`; the judges are Claude, `judges.py`). Stdlib
+only."""
 import datetime
-import http.client
-import fnmatch
 import json
 import os
 import re
 import subprocess
 import sys
-import time
-import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
-PAID = ('abJudgeClaude',)  # off when the settings cannot be read
+PAID = ('abJudgeClaude', 'evolveAutoMerge')  # off when the settings cannot be read
 sys.path.insert(0, HERE)
-import ab  # noqa: E402
 import daily_git as g  # noqa: E402
-import quality  # noqa: E402
 
 SESSION_TURNS = 60
 SESSION_BUDGET_USD = '4'
@@ -29,10 +25,8 @@ QUOTA = re.compile(r"you(?:'|’)ve hit your (?:usage )?limit|hit your limit|usa
 HUB = os.path.expanduser(os.environ.get('EVOLVE_HUB') or
                          '~/Desktop/Development/handoff/2026-11-06-restart/tools/hub.mjs')
 CARD, WORKSPACE = 'SE-49', 'lth89qy6f8j1greiy4c5cn23'
-PUBLISH = ('eval/evolve/verdicts.jsonl', 'eval/evolve/cases/*.jsonl')
-ANTIGENS = ('eval/pipeline/genome/antigens.json', 'eval/pipeline/reflex/test_reflex.py')
 STATE_DIR = os.path.expanduser(os.environ.get('EVOLVE_STATE_DIR') or '~/.claude/evolve')
-OLLAMA = os.environ.get('OLLAMA_HOST_URL', 'http://127.0.0.1:11434')
+CLAUDE_OVERRIDE = 'abJudgeClaude.on'  # in STATE_DIR: the owner's local «on» for nightly Claude judges
 BASE = 'board-agents'  # tAIBE's default branch: where the run's PRs go
 
 
@@ -60,6 +54,31 @@ def save_json(name, data):
     os.replace(path + '.tmp', path)
 
 
+def closed_switch(name, root=ROOT):
+    """A switch that is closed on doubt: on only if the board's answer was read (fresh, or cached with no failed
+    read since) and says on. Defaults, a failed read or any error — off."""
+    try:
+        sys.path.insert(0, os.path.join(root, '.claude', 'scripts'))
+        import pipeline_settings as ps
+        settings, source = ps.load(root)
+    except Exception:  # noqa: BLE001
+        return False
+    if not (source.startswith('board') or source.startswith('cache')) or 'failed' in source:
+        return False
+    return bool(settings['automation'] and settings['toggles'].get(name))
+
+
+def claude_judges_on(root=ROOT, override=None):
+    """Nightly Claude judges: on only if the owner said so — `abJudgeClaude` read from the board (closed on doubt), or
+    the owner's local file `~/.claude/evolve/abJudgeClaude.on` (the deployed board has no such switch yet).
+    `TAIBE_PIPELINE` with `off` or `abJudgeClaude=off` turns it off over both."""
+    env = os.environ.get('TAIBE_PIPELINE', '').replace(' ', '').lower()
+    if env in ('off', '0', 'false', 'no') or 'abjudgeclaude=off' in env.split(','):
+        return False
+    path = override or os.path.join(STATE_DIR, CLAUDE_OVERRIDE)
+    return closed_switch('abJudgeClaude', root) or os.path.isfile(path)
+
+
 def switch(name, root=ROOT):
     """The product's switch (`.claude/scripts/pipeline_settings.py`); `automation` is the master switch. A failed
     read is «on» (the module's own rule), except a switch that spends the owner's tokens."""
@@ -71,145 +90,6 @@ def switch(name, root=ROOT):
         return ps.enabled(name, root)
     except Exception:  # noqa: BLE001
         return name not in PAID
-
-
-def gateway(repo):
-    base = os.environ.get('LLM_GATEWAY_URL', ab.GATEWAY).rstrip('/')
-    token = os.environ.get('LLM_GATEWAY_TOKEN')
-    if not token:
-        try:
-            with open(os.path.join(repo, ab.TOKEN_FILE), encoding='utf-8') as f:
-                token = f.read().strip()
-        except OSError:
-            token = ''
-    return base, token
-
-
-def models(base, token):
-    """{model id: window in tokens} from the gateway, or None when it does not answer."""
-    req = urllib.request.Request(base + '/models', headers={'Authorization': 'Bearer %s' % token})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 — local gateway URL
-            data = json.loads(resp.read().decode('utf-8'))
-    except Exception:  # noqa: BLE001
-        return None
-    return {m['id']: m.get('context_length') or 0 for m in data.get('data', [])}
-
-
-def ensure_gateway(repo, judges=()):
-    """The gateway's models; the gateway is started from the main checkout's script (its data lives there) when
-    down, and Ollama (the judges' backend, which does not restart by itself) when no judge is listed."""
-    base, token = gateway(repo)
-    found = models(base, token)
-    if found is None:
-        log('gateway down — starting it')
-        subprocess.run(['bash', os.path.join(repo, 'infra/llm-gateway/bin/llm-gateway.sh'), 'start'],
-                       capture_output=True, text=True, timeout=120)
-        found = wait(lambda: models(*gateway(repo)))
-        base, token = gateway(repo)  # a first start writes the token
-    no_local = found is not None and not any(m.startswith('local/') for m in found)
-    if found is not None and (no_local or not all(j in found for j in judges)):
-        if not ollama_up():  # never reopen a running Ollama.app: on 06.11 a second `open` quit it
-            log('Ollama down — starting it')
-            start_ollama()
-            wait(lambda: True if ollama_up() else None, tries=45)
-
-        def ready():
-            m = models(base, token)
-            return m if m and any(k.startswith('local/') for k in m) and all(j in m for j in judges) else None
-        found = wait(ready, tries=45) or models(base, token)
-    if found is not None:
-        os.environ['LLM_GATEWAY_TOKEN'] = token
-    return found
-
-
-def wait(probe, tries=30, pause=2):
-    for _ in range(tries):
-        got = probe()
-        if got is not None:
-            return got
-        time.sleep(pause)
-    return None
-
-
-def ollama_up():
-    try:
-        with urllib.request.urlopen(OLLAMA + '/api/version', timeout=5):  # noqa: S310 — local Ollama URL
-            return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def start_ollama():
-    """Ollama.app on macOS, else `ollama serve` detached. On 06.11 the app quit by itself four times in two
-    hours, once in the middle of a judge call: the retry in `retrying` brings it back."""
-    if subprocess.run(['open', '-ga', 'Ollama'], capture_output=True).returncode != 0:
-        subprocess.Popen(['ollama', 'serve'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
-
-
-def unload(model):
-    """Free a local judge's memory before the next one loads: two 7–9B models at once is too much here."""
-    name = model.split('/', 1)[1] if model.startswith('local/') else None
-    if not name:
-        return
-    body = json.dumps({'model': name, 'keep_alive': 0}).encode('utf-8')
-    req = urllib.request.Request(OLLAMA + '/api/generate', data=body, headers={'Content-Type': 'application/json'})
-    try:
-        urllib.request.urlopen(req, timeout=60).read()  # noqa: S310 — local Ollama URL
-    except Exception:  # noqa: BLE001 — best effort
-        pass
-
-
-def stream_call(repo, model, timeout=900):
-    """ab.gateway_call with `stream: true`. The gateway gives up on a call whose first byte takes over 120 s
-    (GW_FIRST_BYTE_TIMEOUT_MS); without streaming the first byte is the whole answer, and on 06.11 every artifact
-    prompt of the 35B judge died there while the shorter calibration prompts passed. Streamed, the first byte
-    comes after the prefill."""
-    def call(system, user):
-        base, token = gateway(repo)
-        messages = ([{'role': 'system', 'content': system}] if system else []) + [{'role': 'user', 'content': user}]
-        body = json.dumps({'model': model, 'messages': messages, 'temperature': 0, 'stream': True}).encode('utf-8')
-        req = urllib.request.Request(base + '/chat/completions', data=body, method='POST',
-                                     headers={'Content-Type': 'application/json', 'Authorization': 'Bearer %s' % token})
-        parts, done = [], False
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — local gateway URL
-            for raw in resp:
-                line = raw.decode('utf-8', 'replace').strip()
-                if not line.startswith('data:'):
-                    continue
-                if line[5:].strip() == '[DONE]':
-                    done = True
-                    break
-                chunk = json.loads(line[5:].strip())
-                if chunk.get('error'):
-                    raise OSError('gateway: %s' % str(chunk['error'])[:200])
-                choice = (chunk.get('choices') or [{}])[0]
-                parts.append((choice.get('delta') or {}).get('content') or '')
-                done = done or bool(choice.get('finish_reason'))
-        # A stream cut short or an empty answer is the backend failing, not the judge: unavailable, never brak.
-        if not done:
-            raise OSError('gateway: the answer stream ended early')
-        if not ''.join(parts).strip():
-            raise OSError('gateway: empty answer')
-        return ''.join(parts)
-    return call
-
-
-def retrying(call, revive, attempts=3, pause=20):
-    """A judge call that survives a busy or restarting backend (HTTP 5xx, refused connection): `revive` raises
-    what fell, then the same call again. The last failure propagates — the judge is then unavailable."""
-    def wrapped(system, user):
-        for n in range(attempts):
-            try:
-                return call(system, user)
-            except (OSError, ValueError, http.client.HTTPException) as e:  # HTTPError, URLError, IncompleteRead
-                if n == attempts - 1:
-                    raise
-                log('judge call failed (%s) — retry in %ds' % (str(e)[:80], pause))
-                revive()
-                time.sleep(pause)
-    return wrapped
 
 
 def post_card(line):

@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
-"""The machine's limits for the daily run (review of PR #83, resources lens): memory before a model loads, swap,
-other heavy jobs, the Claude call ceiling, and the one lock every entry point shares. Stdlib only.
+"""The machine's and the owner's limits for the daily run: other heavy jobs, the one lock every entry point shares,
+and the Claude judge ceiling. No local model is ever loaded (owner rule `memory/no-local-ollama.md`), so there is no
+memory or swap gate. Stdlib only.
 
-- A local model is loaded only when `size × MODEL_OVERHEAD` fits the available memory (free + inactive pages from
-  `vm_stat`) minus RESERVE_GB for the person's own work.
-- Swap used over SWAP_STOP of its total stops the night.
 - HEAVY_JOBS (launchd labels of other nightly work, notebook sync at 04:17) running: the run waits for them.
 - One lock (`flock` on `<state>/run.lock`) for `daily.sh run`, `daily.py nightly` and `daily.py cycle --force`: taken
   atomically by the kernel, released when the process dies, so there is no stale lock and no window between a check
   and a take. `nightly` keeps it across the refresh and hands the open descriptor to the fresh `cycle`.
+- `Budget`: Claude judge calls and tokens per night (calibration and A/B together). The headless session keeps its
+  own limits (turns, dollars, minutes in `daily_steps`).
 """
 import fcntl
-import json
 import os
 import re
 import subprocess
 import time
-import urllib.request
 
-MODEL_OVERHEAD = 1.2      # weights plus KV cache and runtime buffers
-RESERVE_GB = 6            # left for the person's own work at any hour
-SWAP_STOP = 0.8
 HEAVY_JOBS = ('space.hrhelper.t-boards-notebook-sync', 'space.hrhelper.t-boards-backup')
 HEAVY_WAIT_MIN = 30
-CLAUDE_MAX_CALLS = 80     # Claude judge calls plus the session, per night
-CLAUDE_MAX_TOKENS = 600_000
+# Judge ceiling per night (council of 06.11): about 137 calls for a full first night with two artifacts.
+JUDGE_MAX_CALLS = 160
+JUDGE_MAX_TOKENS = 1_200_000
+MAX_ARTIFACTS = 2         # artifacts judged per night; the rest stay pending
+CLAUDE_MAX_CALLS, CLAUDE_MAX_TOKENS = JUDGE_MAX_CALLS, JUDGE_MAX_TOKENS  # the Budget defaults
 
 
 def _run(*cmd):
@@ -33,47 +31,6 @@ def _run(*cmd):
         return out.stdout if out.returncode == 0 else ''
     except (OSError, subprocess.TimeoutExpired):
         return ''
-
-
-def available_bytes(vm_stat=None):
-    """Free + inactive memory in bytes from `vm_stat` (macOS); None when it cannot be read."""
-    text = _run('vm_stat') if vm_stat is None else vm_stat
-    page = re.search(r'page size of (\d+) bytes', text)
-    pages = {k: int(v) for k, v in re.findall(r'Pages (free|inactive):\s+(\d+)', text)}
-    if not page or 'free' not in pages:
-        return None
-    return (pages['free'] + pages.get('inactive', 0)) * int(page.group(1))
-
-
-def swap_share(swapusage=None):
-    """Used share of swap from `sysctl vm.swapusage`; 0 when there is no swap or it cannot be read."""
-    text = _run('sysctl', '-n', 'vm.swapusage') if swapusage is None else swapusage
-    total, used = (re.search(r'%s = ([\d.]+)M' % k, text) for k in ('total', 'used'))
-    if not total or not used or float(total.group(1)) == 0:
-        return 0.0
-    return float(used.group(1)) / float(total.group(1))
-
-
-def fits(size_bytes, available=None):
-    """(ok, why) — may a model of this size load now?"""
-    free = available_bytes() if available is None else available
-    if free is None:
-        return True, 'memory unknown'
-    need = size_bytes * MODEL_OVERHEAD
-    room = free - RESERVE_GB * 2 ** 30
-    if need > room:
-        return False, 'needs %.1f GB, %.1f GB available after the %d GB reserve' % (need / 2 ** 30, room / 2 ** 30,
-                                                                                   RESERVE_GB)
-    return True, 'fits'
-
-
-def loaded(ollama):
-    """Model names Ollama holds in memory now ([] when it does not answer)."""
-    try:
-        with urllib.request.urlopen(ollama.rstrip('/') + '/api/ps', timeout=10) as resp:  # noqa: S310 — local
-            return [m['name'] for m in json.loads(resp.read().decode('utf-8')).get('models', [])]
-    except Exception:  # noqa: BLE001
-        return []
 
 
 def heavy_running(labels=HEAVY_JOBS):
@@ -122,19 +79,34 @@ class Lock:
 
 
 class Budget:
-    """Claude calls and tokens spent tonight; `spend` raises once the ceiling is reached."""
+    """Claude judge calls and tokens spent tonight. `check` refuses a call whose estimate does not fit; `charge` books
+    the real tokens of a call and keeps the worst ratio of real to estimated tokens seen tonight, which `covers` then
+    applies to an estimate of many calls."""
 
     def __init__(self, calls=CLAUDE_MAX_CALLS, tokens=CLAUDE_MAX_TOKENS):
-        self.max_calls, self.max_tokens, self.calls, self.tokens = calls, tokens, 0, 0
+        self.max_calls, self.max_tokens, self.calls, self.tokens, self.ratio = calls, tokens, 0, 0, 1.0
 
-    def spend(self, tokens):
-        if self.calls + 1 > self.max_calls or self.tokens + tokens > self.max_tokens:
+    def covers(self, calls, tokens):
+        """True when `calls` more calls of `tokens` estimated tokens in all still fit tonight's ceiling."""
+        return self.calls + calls <= self.max_calls and self.tokens + tokens * self.ratio <= self.max_tokens
+
+    def check(self, tokens):
+        if not self.covers(1, tokens):
             raise BudgetSpent('Claude ceiling for the night: %d calls, %d tokens' % (self.max_calls, self.max_tokens))
+
+    def charge(self, tokens, estimate=0):
         self.calls += 1
         self.tokens += tokens
+        if estimate:
+            self.ratio = max(self.ratio, tokens / estimate)
+
+    def spend(self, tokens):
+        self.check(tokens)
+        self.charge(tokens)
 
     def report(self):
-        return {'calls': self.calls, 'tokens': self.tokens, 'max_calls': self.max_calls, 'max_tokens': self.max_tokens}
+        return {'calls': self.calls, 'tokens': self.tokens, 'max_calls': self.max_calls, 'max_tokens': self.max_tokens,
+                'ratio': round(self.ratio, 2)}
 
 
 class BudgetSpent(OSError):

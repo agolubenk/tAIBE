@@ -149,7 +149,7 @@ class QualityTest(unittest.TestCase):
         self.assertIn('window', judged['unavailable'])
         self.assertEqual(quality.evaluate(judged)[0], 'insufficient')
 
-    def test_gateway_error_is_insufficient_not_brak(self):
+    def test_judge_error_is_insufficient_not_brak(self):
         def down(system, user):
             raise OSError('connection refused')
         status, reasons, _ = quality.finalize(one_judge_run(down))['j']['p0']
@@ -180,69 +180,19 @@ class CalibrationTest(unittest.TestCase):
         self.assertIn('harm', blind['reasons'][0])
         self.assertNotIn('truncate', blind['reasons'][0])
 
-    def test_unreachable_and_small_window_fail(self):
+    def test_unreachable_fails(self):
         def down(system, user):
-            raise OSError('502')
+            raise OSError('limit reached')
         self.assertIn('unavailable', judging.calibrate(down, CASES, NEW)['reasons'][0])
-        self.assertIn('window', judging.calibrate(judge(), CASES, NEW, window=40)['reasons'][0])
 
     def test_select_stops_at_two(self):
         calls = {'bad': lambda s, u: 'X', 'good1': judge(), 'good2': judge(), 'good3': judge()}
-        unloaded = []
-        passed, rows = judging.select(list(calls), calls.get, CASES, NEW, after=unloaded.append)  # quiet: no log
+        made = []
+        factory = lambda name: made.append(name) or calls[name]  # noqa: E731
+        passed, rows = judging.select(list(calls), factory, CASES, NEW)
         self.assertEqual(passed, ['good1', 'good2'])
-        self.assertEqual([r['model'] for r in rows], ['bad', 'good1', 'good2'])  # good3 is never loaded
-        self.assertEqual(unloaded, ['bad', 'good1', 'good2'])
-
-    def test_candidates(self):
-        listed = ['auto', 'free', 'cascade', 'local/auto', 'local/fast', 'local/qwen2.5:7b', 'local/nomic-embed-text',
-                  'local/hr-helper-agent:latest', 'local/glm4:latest', 'local/big:35b', 'openai/gpt-oss-120b:free']
-        tags = {'qwen2.5:7b': {'params': 7.6, 'family': 'qwen2', 'size': 4, 'weights': 'q'},
-                'nomic-embed-text': {'params': 0.1, 'family': 'nomic-bert', 'size': 1, 'weights': 'n'},
-                'hr-helper-agent:latest': {'params': 9.4, 'family': 'chatglm', 'size': 5, 'weights': 'g'},
-                'glm4:latest': {'params': 9.4, 'family': 'chatglm', 'size': 5, 'weights': 'g'},
-                'big:35b': {'params': 35.5, 'family': 'moe', 'size': 15, 'weights': 'b'}}
-        self.assertEqual(judging.candidates(listed, tags, claude_on=False),
-                         ['openai/gpt-oss-120b:free', 'local/glm4:latest', 'local/big:35b'])
-        self.assertEqual(judging.candidates(listed, tags, claude_on=True)[-1], judging.CLAUDE_JUDGE)
-
-    def test_claude_judge_has_no_tools_and_reads_stdin(self):
-        seen = {}
-
-        def fake_run(cmd, **kw):
-            seen.update(cmd=cmd, **kw)
-            return subprocess.CompletedProcess(cmd, 0, 'reasoning\nTIE\n', '')
-        with mock.patch.object(judging.subprocess, 'run', fake_run):
-            budget = resources.Budget(calls=1)
-            self.assertEqual(judging.claude_call(budget)(None, 'the prompt'), 'reasoning\nTIE\n')
-            with self.assertRaises(resources.BudgetSpent):  # the night's ceiling: no second call
-                judging.claude_call(budget)(None, 'the prompt')
-        cmd = seen['cmd']
-        self.assertEqual(cmd[cmd.index('--model') + 1], 'claude-sonnet-5-5')
-        self.assertEqual(cmd[cmd.index('--tools') + 1], '')
-        self.assertIn('disableAllHooks', cmd[cmd.index('--settings') + 1])
-        self.assertEqual(seen['input'], 'the prompt')
-
-    def test_a_night_without_a_fit_judge_is_insufficient(self):
-        root = tempfile.mkdtemp()
-        try:
-            path = os.path.join(root, judging.CALIBRATION_ARTIFACT)
-            os.makedirs(os.path.dirname(path))
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(NEW)
-            with open(os.path.join(root, 'cases.jsonl'), 'w', encoding='utf-8') as f:
-                f.write(''.join(json.dumps(c) + '\n' for c in CASES))
-            args = mock.Mock(judges='x1,x2', calibration_cases=os.path.join(root, 'cases.jsonl'),
-                             factory=lambda name: (lambda s, u: 'X'))
-            with mock.patch.object(daily, 'log', lambda *a: None), \
-                    mock.patch.object(resources, 'swap_share', lambda: 0.1):
-                calibration = daily.calibrate_judges(args, root, root, None, float('inf'))
-            self.assertEqual((calibration['passed'], len(calibration['rows'])), ([], 2))
-            v = daily.no_judge_line({'target': 'taibe', 'path': 'p', 'a': '1', 'b': '2'}, calibration)
-            self.assertEqual((v['status'], v['action'], v['pick']), ('insufficient', 'none', None))
-            self.assertIn('no fit judge', v['reasons'][0])
-        finally:
-            shutil.rmtree(root)
+        self.assertEqual([r['model'] for r in rows], ['bad', 'good1', 'good2'])
+        self.assertEqual(made, ['bad', 'good1', 'good2'])  # good3 is never called
 
 
 class PlanTest(unittest.TestCase):

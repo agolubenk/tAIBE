@@ -2618,8 +2618,8 @@
 					"title": "Blind A/B judge for new versions"
 				},
 				"abJudgeClaude": {
-					"description": "The nightly A/B may also ask Claude (claude -p, Sonnet) when the free judges fail calibration. Spends the owner's tokens, so it is off until turned on.",
-					"title": "Claude as a second judge"
+					"description": "The nightly A/B is judged by Claude models (claude -p: Sonnet and Haiku, Opus as a fallback); there are no other judges. Spends the owner's tokens, so it is off until turned on.",
+					"title": "Claude as the nightly A/B judge"
 				},
 				"askOnce": {
 					"description": "Sessions search earlier owner decisions and open questions before asking again.",
