@@ -24,13 +24,22 @@ if wait <= 0:
 signal.setitimer(signal.ITIMER_REAL, wait)
 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
 signal.setitimer(signal.ITIMER_REAL, 0)
-f.seek(0)
-f.truncate()
-f.write("%d gateway %d\\n" % (os.getpid(), os.getppid()))  # кто держит — для supervisor.py status (OPS-31)
-f.flush()
+try:  # кто держит — для supervisor.py status (OPS-31); не записали — замок всё равно наш
+    f.seek(0)
+    f.truncate()
+    f.write("%d gateway %d\\n" % (os.getpid(), os.getppid()))
+    f.flush()
+except OSError:
+    pass
 sys.stdout.write("ok\\n")
 sys.stdout.flush()
 sys.stdin.read()
+try:  # отметка стирается до снятия замка, иначе следующий держатель без отметки выглядел бы шлюзом
+    f.seek(0)
+    f.truncate()
+    f.flush()
+except OSError:
+    pass
 `
 const BUSY = 3
 
