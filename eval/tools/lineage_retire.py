@@ -119,11 +119,37 @@ def take_down(sx, p, line, protect, log):
     return True
 
 
-TAP = "nerve\\.py\\s+tap\\s+{}(\\s|$)"
+# Флаги — в любом месте (`tap --product taibe boards`, `tap --product=taibe --once boards`, `tap boards --product
+# taibe`, OPS-25).
+TAP = "nerve\\.py\\s+tap\\s+(?:--once\\s+|--product(?:=|\\s+)\\S+\\s+)*{}(\\s|$)"
+# Продукт сессии по её геному: genome/<роль>.json — продукт по умолчанию (''), genome/<slug>/<роль>.json — slug.
+GENOME_PRODUCT = re.compile(r"/genome/(?:([a-z][a-z0-9-]*[a-z0-9])/)?[a-z]+\.json")
 
 
-def tapped(procs, s, tap):
-    return any(tap.search(procs[q].command) for q in descendants(procs, s.pid) if q in procs)
+def genome_product(proc):
+    m = GENOME_PRODUCT.search(proc.command) if proc is not None else None
+    return (m.group(1) or "") if m else None
+TAP_PRODUCT = re.compile(r"--product[ =](\S+)")
+
+
+def tap_products(procs, s, tap):
+    """Продукты, которые слушают tap роли под s: '' — без флага (продукт из env генома или по умолчанию)."""
+    out = set()
+    for q in descendants(procs, s.pid):
+        if q in procs and tap.search(procs[q].command):
+            m = TAP_PRODUCT.search(procs[q].command)
+            out.add(m.group(1) if m else "")
+    return out
+
+
+def tapped(procs, s, tap, want=None):
+    """Есть tap роли; с want — того же продукта. '' (без флага) совместим с любым: флаг виден в argv, env — нет."""
+    got = tap_products(procs, s, tap)
+    if not got:
+        return False
+    if not want or "" in want or "" in got:
+        return True
+    return bool(got & want)
 
 
 def successor_problem(sx, procs, p, s, a, child):
@@ -151,7 +177,8 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     deadline = sx.now() + timeout
     # Паритет: tap требуем от наследника, только если он был у предшественника (ночью мониторов нет — TEAM-0 §10.6).
     tap = re.compile(TAP.format(re.escape(role))) if role else None
-    if tap and not tapped(sx.procs(), p, tap):
+    want = tap_products(sx.procs(), p, tap) if tap else set()
+    if tap and not want:
         log(f"у предшественника {p.pid} нет nerve.py tap {role} — от наследника tap не требую")
         tap = None
     log(f"жду квитанцию {ack} до {timeout:.0f} с; предшественник {p.pid}, линия {parent or '—'}")
@@ -167,6 +194,9 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     procs = sx.procs()
     s = procs.get(a.get("pid") if isinstance(a.get("pid"), int) else -1)
     why = successor_problem(sx, procs, p, s, a, child)
+    gp, gs = genome_product(p), genome_product(s)
+    if not why and gp is not None and gs is not None and gp != gs:
+        why = f"наследник с геномом другого продукта ({gs or 'по умолчанию'} против {gp or 'по умолчанию'})"
     if why:
         log("проверка не прошла: " + why + " — предшественника не трогаю")
         return 3
@@ -175,7 +205,7 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
         return 0
     if tap:
         until = sx.now() + TAP_WAIT
-        while not tapped(procs, s, tap):
+        while not tapped(procs, s, tap, want):
             if sx.now() >= until or not same(procs, s):
                 log(f"у наследника {s.pid} нет nerve.py tap {role} за {TAP_WAIT} с — предшественника не трогаю")
                 return 3
@@ -192,7 +222,7 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     # За IDLE_WAIT мир мог смениться: ход не кончился — не рвём его; наследник упал или снял tap — роль без сессии.
     why = (sx.status(p.pid) == "busy" and f"предшественник {p.pid} занят дольше {IDLE_WAIT} с") or \
         successor_problem(sx, procs, p, procs.get(s.pid), a, child) or \
-        (tap and not tapped(procs, s, tap) and f"у наследника {s.pid} пропал nerve.py tap {role}")
+        (tap and not tapped(procs, s, tap, want) and f"у наследника {s.pid} пропал nerve.py tap {role}")
     if why:
         log("перед снятием: " + why + " — предшественника не трогаю")
         return 3

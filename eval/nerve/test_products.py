@@ -45,6 +45,20 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(cfg["queue"]["match"], "-taibe-")
 
 
+class GetTest(unittest.TestCase):
+    def test_get_field_and_default(self):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(P.main(["get", "default", "slug"]), 0)
+            self.assertEqual(P.main(["get", "taibe", "github.repo"]), 0)
+            self.assertEqual(P.main(["get", "taibe", "active"]), 0)
+        self.assertEqual(out.getvalue().split(), ["hr-helper", "agolubenk/tAIBE", "false"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(P.main(["get", "taibe", "no.such"]), 1)
+
+
 class ErrorsTest(unittest.TestCase):
     def setUp(self):
         self.d = copy_instances()

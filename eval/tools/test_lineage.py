@@ -8,6 +8,7 @@ Run: python3 -I eval/tools/test_lineage.py
 import io
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -174,6 +175,33 @@ class WatchTest(Base):
         sx.at(60, lambda: sx.p.update({402: P(402, 401, 401, "??", "python3 -I eval/nerve/nerve.py tap backend")}))
         self.assertEqual(self.run_watch(sx), 0, self.lines)
         self.assertNotIn(300, sx.p)
+
+    def test_tap_with_product_flag_in_any_order(self):
+        """OPS-25: «tap --product taibe backend» и «tap backend --product taibe» — оба tap роли."""
+        for cmd in ("python3 -I eval/nerve/nerve.py tap --product taibe backend",
+                    "python3 -I eval/nerve/nerve.py tap backend --product taibe"):
+            tap = re.compile(LR.TAP.format("backend"))
+            self.assertTrue(tap.search(cmd), cmd)
+            self.assertEqual(LR.TAP_PRODUCT.search(cmd).group(1), "taibe")
+        self.assertFalse(re.compile(LR.TAP.format("backend")).search("nerve.py tap boards --product backend"))
+
+    def test_successor_taps_other_product_keeps_predecessor(self):
+        """Предшественник слушает tAIBE, наследник — HR (оба с флагом): предшественника не снимать."""
+        sx = self.fake()
+        sx.p[303] = P(303, 302, 302, "??", "python3 -I eval/nerve/nerve.py tap backend --product taibe")
+        sx.p[402] = P(402, 401, 401, "??", "python3 -I eval/nerve/nerve.py tap backend --product hr-helper")
+        self.ack()
+        self.assertEqual(self.run_watch(sx, timeout=200), 3, self.lines)
+        self.assertIn(300, sx.p)
+
+    def test_successor_with_other_product_genome_keeps_predecessor(self):
+        """OPS-25: наследник с геномом другого продукта — проверка не проходит, предшественник жив."""
+        sx = self.fake()
+        sx.p[400] = P(400, 211, 400, "ttys006", "claude --settings /x/genome/taibe/backend.json")
+        self.ack()
+        self.assertEqual(self.run_watch(sx, timeout=200), 3, self.lines)
+        self.assertIn(300, sx.p)
+        self.assertIn("другого продукта", " ".join(self.lines))
 
     def test_pid_reused(self):
         sx = self.fake()
@@ -406,6 +434,13 @@ class ReapTest(Base):
         self.assertIn("сменён наследником (поколение 3)", v[701])
         self.assertIn("текущая роль", v[702])
         self.assertEqual([c["pid"] for c in L.read_json(L.ldir() / "reap-list.json")["candidates"]], [701])
+
+    def test_successor_of_other_product_does_not_supersede(self):
+        """OPS-25: линия роли tAIBE под линией роли HR (запуск из сессии HR) — HR не «сменён наследником»."""
+        self.sess(701, line="r.a1", idle_h=2)
+        self.sess(702, line="r.a1.b2", role="taibe/backend", idle_h=0.1)
+        v = self.verdicts(self.reap()[1])
+        self.assertNotIn("сменён наследником", v[701])
 
     def test_superseded_short_idle_kept(self):
         self.sess(701, line="r.a1", idle_h=0.5)

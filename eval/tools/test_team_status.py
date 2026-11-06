@@ -67,6 +67,16 @@ class Roles(Base):
 
 
 class LiveRoleTest(Roles):
+    def test_product_filter_keeps_other_product_role_out(self):
+        """OPS-25: роль HR в worktree tAIBE не считается ролью tAIBE при --product."""
+        self.sess(701, "r.a1", "coord")              # геном продукта по умолчанию
+        self.sess(702, "r.b2", "taibe/coord")        # геном tAIBE
+        rc, out, _ = self.run_main("live", "--role", "coord", "--cwd", str(self.root), "--product", "taibe")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("pid 702", out)
+        rc, out, _ = self.run_main("live", "--role", "coord", "--cwd", str(self.root), "--product", "hr-helper")
+        self.assertIn("pid 701", out)
+
     def test_youngest_without_successor_wins(self):
         self.sess(701, "r.a1.b2.c3.d4", "coord", age_h=30)   # длинная старая линия Координатора
         self.sess(702, "r.z9", "coord", age_h=1)             # новая корневая линия после перезапуска — она живая
