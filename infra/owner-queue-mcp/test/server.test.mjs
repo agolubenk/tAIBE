@@ -37,6 +37,10 @@ async function consoleFake(files, state) {
       state.checksReads += 1;
       return json(200, { docs: state.checks });
     }
+    // Консоль с потолком списка: отдала 2 самых свежих из 7 (поля обрезки — рядом с docs).
+    if (pathname === '/api/oq/v1/db/work') {
+      return json(200, { docs: [1, 2].map((n) => ({ id: `w-cap-${n}`, version: 1, data: { title: `строка ${n}`, track: 'ops', status: 'todo' } })), truncated: true, total: 7, limit: 2 });
+    }
     if (pathname === '/api/oq/v1/files') {
       if (files === 'old') return json(404, { error: 'Not Found' });
       if (files === 'down') return json(503, { error: 'Service Unavailable' });
@@ -158,4 +162,13 @@ test('oq_list: список больше потолка ответа — next_of
   assert.equal(brief.docs.length, m.state.checks.length);
   assert.equal(brief.next_offset, undefined);
   assert.equal(brief.docs[1].noteLen, 2_000);
+});
+
+test('oq_list: серверный потолок списка — serverCapped {total, limit}, не путается с truncated окна', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  const capped = body(await m.call('oq_list', { collection: 'work' }));
+  assert.deepEqual(capped.serverCapped, { total: 7, limit: 2 });
+  assert.equal(capped.truncated, undefined, 'окно ответа не урезано');
+  assert.deepEqual(capped.docs.map((d) => d.id), ['w-cap-1', 'w-cap-2']);
+  assert.equal(body(await m.call('oq_list', { collection: 'checks', limit: 1 })).serverCapped, undefined, 'без обрезки консоли — поля нет');
 });

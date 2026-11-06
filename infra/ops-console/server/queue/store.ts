@@ -150,18 +150,50 @@ function parseDoc(row: typeof oqDocs.$inferSelect): Doc {
   return { id: row.id, data: JSON.parse(row.dataJson) as Record<string, unknown>, version: row.version, updatedAt: row.updatedAt.getTime() }
 }
 
-export async function listDocs(collection: Collection): Promise<Doc[]> {
-  const rows = await getDb().select().from(oqDocs).where(eq(oqDocs.collection, collection)).orderBy(desc(oqDocs.updatedAt)).limit(2000)
-  return rows.map(parseDoc)
+/**
+ * Потолок списка коллекции. Раньше был молчаливый limit(2000): checks перерастали его, старые ответы выпадали, и
+ * отвеченный пункт снова выглядел открытым. Теперь потолок большой и обрезка видна: `capped` → в ответе API
+ * `truncated`, `total`, `limit`. warn — когда коллекция подходит к размеру, при котором нужен инкрементальный обмен
+ * (/changes, v2-lite): средний пункт ~2,8 КБ, 1500 пунктов ≈ 4 МБ на полный ответ.
+ */
+const LIST_LIMITS_DEFAULT = { max: 10_000, warn: 1500 }
+let listLimits = LIST_LIMITS_DEFAULT
+const warnedNear = new Set<Collection>()
+
+/** Только для тестов: маленький потолок вместо 10 000 документов в фикстуре. null — вернуть обычный. */
+export function setListLimitsForTests(v: { max: number; warn: number } | null): void {
+  listLimits = v ?? LIST_LIMITS_DEFAULT
+  warnedNear.clear()
 }
 
-/** ETag коллекции: меняется при любой записи — опрос страницы раз в несколько секунд стоит один дешёвый запрос. */
-export async function collectionTag(collection: Collection): Promise<string> {
+/** capped — список обрезан потолком: total — сколько документов в коллекции, limit — сколько отдано (самые свежие). */
+export type DocList = { docs: Doc[]; capped?: { total: number; limit: number } }
+
+export async function listDocs(collection: Collection): Promise<DocList> {
+  const { max, warn } = listLimits
+  // max + 1 — узнать об обрезке без лишнего count(*) на каждом запросе; count — только когда обрезано.
+  const rows = await getDb().select().from(oqDocs).where(eq(oqDocs.collection, collection)).orderBy(desc(oqDocs.updatedAt)).limit(max + 1)
+  if (rows.length >= warn && !warnedNear.has(collection)) {
+    warnedNear.add(collection)
+    console.warn(`[oq] коллекция ${collection}: ${rows.length > max ? `больше ${max}` : rows.length} документов (порог ${warn}) — полный список на каждом опросе дорог, нужен /changes`)
+  }
+  if (rows.length <= max) return { docs: rows.map(parseDoc) }
+  const { n } = await collectionStats(collection)
+  return { docs: rows.slice(0, max).map(parseDoc), capped: { total: Number(n), limit: max } }
+}
+
+async function collectionStats(collection: Collection) {
   const [row] = await getDb()
     .select({ n: sql<number>`count(*)`, last: sql<number>`coalesce(max(${oqDocs.updatedAt}), 0)`, v: sql<number>`coalesce(sum(${oqDocs.version}), 0)` })
     .from(oqDocs)
     .where(eq(oqDocs.collection, collection))
-  return `"${createHash('sha1').update(`${collection}:${row?.n}:${row?.last}:${row?.v}`).digest('hex').slice(0, 20)}"`
+  return { n: row?.n ?? 0, last: row?.last ?? 0, v: row?.v ?? 0 }
+}
+
+/** ETag коллекции: меняется при любой записи — опрос страницы раз в несколько секунд стоит один дешёвый запрос. */
+export async function collectionTag(collection: Collection): Promise<string> {
+  const { n, last, v } = await collectionStats(collection)
+  return `"${createHash('sha1').update(`${collection}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
 }
 
 export async function getDoc(collection: Collection, id: string): Promise<Doc | null> {
@@ -176,8 +208,9 @@ export async function openItemsTag(): Promise<string> {
 }
 
 /** Пункты, открытые владельцу, — не archived и не закрытые по правилу страницы (open-rule.ts, «ждёт вас снова» — открыт). */
-export async function listOpenItems(): Promise<Doc[]> {
-  const items = (await listDocs('items')).filter((d) => d.data.archived !== true)
+export async function listOpenItems(): Promise<DocList> {
+  const { docs, capped } = await listDocs('items')
+  const items = docs.filter((d) => d.data.archived !== true)
   // Ответы — по id этих пунктов, а не последние 2000 checks: при большем числе ответов старые выпадали, и отвеченный
   // пункт снова считался открытым (ревью «Контроля» #324, п. 9). Порциями по 500 id.
   const answers = new Map<string, Record<string, unknown>>()
@@ -186,7 +219,8 @@ export async function listOpenItems(): Promise<Doc[]> {
     const rows = await getDb().select().from(oqDocs).where(and(eq(oqDocs.collection, 'checks'), inArray(oqDocs.id, ids)))
     for (const r of rows) answers.set(r.id, JSON.parse(r.dataJson) as Record<string, unknown>)
   }
-  return items.filter((d) => oqItemState(d.data.kind, answers.get(d.id)) !== 'done')
+  const open = items.filter((d) => oqItemState(d.data.kind, answers.get(d.id)) !== 'done')
+  return capped ? { docs: open, capped } : { docs: open }
 }
 
 /**

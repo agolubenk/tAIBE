@@ -154,13 +154,65 @@ def _check_pr(ctx, n, p, head, refresh=False):
 
 # ---------- Очередь владельца ----------
 
+# ETag и последний список — в памяти процесса: демон `nerve.py run` живёт весь процесс, Ctx — один проход. Тег на
+# диске без документов после рестарта дал бы 304 без данных; рестарт стоит один полный запрос. url → (etag, docs, meta).
+_OQ_CACHE = {}
+_OQ_TAG_RE = re.compile(r'^(W/)?"[^"]*"$')
+
+
 def _oq_get(ctx, collection):
+    """Список коллекции условным сжатым запросом: 304 — прежние docs из памяти, без тела. Возвращает (docs, meta);
+    meta — {"total", "limit"}, когда консоль обрезала список потолком (поле truncated ответа), иначе {}."""
     url = f"{ctx.cfg['queue']['url'].rstrip('/')}/api/oq/v1/db/{collection}"
-    code, out, err = run(["curl", "-sS", "-f", "-m", "20", "-H", "@-", url],
-                         stdin=f"Authorization: Bearer {ctx.oq_token()}\n")
+    cached = _OQ_CACHE.get(url)
+    headers = f"Authorization: Bearer {ctx.oq_token()}\n" + (f"If-None-Match: {cached[0]}\n" if cached else "")
+    code, out, err = run(["curl", "-sS", "-f", "--compressed", "-m", "20", "-H", "@-",
+                          "-w", "\n%{http_code} %{size_download} %{size_header} %header{etag}", url], stdin=headers)
     if code != 0:
         raise RuntimeError(f"очередь {collection}: {err.strip()[:120]}")
-    return json.loads(out)["docs"]
+    body, _, tail = out.rpartition("\n")
+    status, down, head, etag = (tail.split(" ", 3) + ["", "", "", ""])[:4]
+    _oq_count(ctx, int(down or 0) + int(head or 0))
+    if status == "304":
+        if not cached:
+            raise RuntimeError(f"очередь {collection}: 304 без запомненного списка")
+        return cached[1], cached[2]
+    j = json.loads(body)
+    meta = {k: j.get(k) for k in ("total", "limit")} if j.get("truncated") is True else {}
+    etag = etag.strip()
+    # curl < 7.84 не знает %header{} и печатает его как есть — такой «тег» не шлём, просто опрашиваем без 304.
+    if _OQ_TAG_RE.match(etag):
+        _OQ_CACHE[url] = (etag, j["docs"], meta)
+    else:
+        _OQ_CACHE.pop(url, None)
+    return j["docs"], meta
+
+
+def _oq_count(ctx, n):
+    """Байты опроса очереди по дням (сжатое тело + заголовки, как по сети) — приёмка фазы 0 «Нерв ≤ 50 МБ в сутки».
+    prev — итог прошлого дня: его видно в state.json без журнала."""
+    b = ctx.state.setdefault("queue", {}).setdefault("bytes", {})
+    day = ctx.now.astimezone(ctx.tz).strftime("%Y-%m-%d")
+    if b.get("day") != day:
+        if b.get("day"):
+            b["prev"] = {"day": b["day"], "n": b.get("n", 0), "calls": b.get("calls", 0)}
+        b.update(day=day, n=0, calls=0)
+    b["n"] += n
+    b["calls"] += 1
+
+
+def _oq_watch(ctx, collection, docs, meta):
+    """Размер очереди — сигнал роли release: обрезка потолком (старые ответы не видны) — сразу; рост к порогу, при
+    котором полный список на каждом опросе дорог (нужен /changes, v2-lite), — в сводку, раз на каждые 500 документов."""
+    warn = ctx.cfg["queue"].get("ceiling_warn", 1500)
+    if meta:
+        ctx.emit(f"oq:truncated:{collection}:{ctx.now.astimezone(ctx.tz):%Y-%m-%d}", "queue.capped", NERVOUS, ["release"],
+                 f"очередь {collection}: консоль отдала {meta.get('limit')} из {meta.get('total')} — старые документы "
+                 f"Нерв не видит, нужен /changes", "queue")
+    elif len(docs) >= warn:
+        ctx.emit(f"oq:ceiling:{collection}:{len(docs) // 500 * 500}", "queue.ceiling", DIGEST, ["release"],
+                 f"очередь {collection}: {len(docs)} документов (порог {warn}) — полный список на каждом опросе дорог, "
+                 f"пора /changes", "queue")
 
 
 def route_source(source, rules, default="coord"):
@@ -172,8 +224,12 @@ def route_source(source, rules, default="coord"):
 
 def poll_queue(ctx):
     q = ctx.cfg["queue"]
-    items = {d["id"]: d.get("data") or {} for d in _oq_get(ctx, "items")}
-    for c in _oq_get(ctx, "checks"):
+    item_docs, item_meta = _oq_get(ctx, "items")
+    checks, check_meta = _oq_get(ctx, "checks")
+    _oq_watch(ctx, "items", item_docs, item_meta)
+    _oq_watch(ctx, "checks", checks, check_meta)
+    items = {d["id"]: d.get("data") or {} for d in item_docs}
+    for c in checks:
         it = items.get(c["id"])
         a = c.get("data") or {}
         if not it or it.get("kind") == "inbox" or not a.get("at"):
