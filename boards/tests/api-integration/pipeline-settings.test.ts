@@ -53,12 +53,15 @@ describe("pipeline settings per workspace (product)", () => {
     await resetTestDatabase();
   });
 
-  it("starts with every automated part on", async () => {
+  it("starts with every automated part on except the paid Claude judge", async () => {
     const forest = await createForest();
     const res = await forest.ownerApi("GET", path(forest));
     expect(res.status).toBe(200);
     expect(res.body.automation).toBe(true);
-    expect(Object.values(res.body.toggles).every(Boolean)).toBe(true);
+    const off = Object.entries(res.body.toggles)
+      .filter(([, on]) => !on)
+      .map(([name]) => name);
+    expect(off).toEqual(["abJudgeClaude"]);
     expect(res.body.toggles).toHaveProperty("cardAutofill", true);
     expect(res.body.updatedAt).toBeNull();
   });

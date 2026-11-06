@@ -45,8 +45,14 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 CACHE = '.claude/pipeline-settings.json'
 TTL_SECONDS = 600
 TIMEOUT_SECONDS = 1.5  # hooks run on every prompt: a slow board must not slow the session
-TOGGLES = ('abJudge', 'askOnce', 'handoffDupes', 'promptBrief', 'successorAuto', 'grillHint', 'nerveWakes', 'swarm',
-           'councilReview', 'cardAutofill')
+TOGGLES = ('abJudge', 'abJudgeClaude', 'askOnce', 'handoffDupes', 'evolveAutoMerge', 'promptBrief', 'successorAuto',
+           'grillHint', 'nerveWakes', 'swarm', 'councilReview', 'cardAutofill')
+# Off unless the owner turns them on: they spend the owner's own tokens (the board's `default: false`).
+DEFAULT_OFF = ('abJudgeClaude',)
+# Switches newer than the board that is deployed: a board from before them does not send them, and its answer is
+# still whole without them (they take their default). A late switch that is sent must be a boolean. Drop a name
+# from here once every board in use sends it.
+LATE_TOGGLES = ('abJudgeClaude', 'evolveAutoMerge')
 OFF = ('off', '0', 'false', 'no')
 # This install's key: the env name and the Keychain account (service hr-helper-mcp) of `mcp-secret.sh`.
 KEY_NAME = 'T_BOARDS_PIPELINE_KEY'
@@ -59,7 +65,7 @@ SYSTEM_CA_FILES = ('/etc/ssl/cert.pem', '/etc/ssl/certs/ca-certificates.crt', '/
 
 
 def defaults():
-    return {'automation': True, 'toggles': {name: True for name in TOGGLES}}
+    return {'automation': True, 'toggles': {name: name not in DEFAULT_OFF for name in TOGGLES}}
 
 
 def normalize(value):
@@ -97,7 +103,9 @@ def complete(value):
     if not isinstance(value, dict) or not isinstance(value.get('automation'), bool):
         return None
     toggles = value.get('toggles')
-    if not isinstance(toggles, dict) or not all(isinstance(toggles.get(n), bool) for n in TOGGLES):
+    if not isinstance(toggles, dict):
+        return None
+    if not all(isinstance(toggles.get(n), bool) or (n in LATE_TOGGLES and n not in toggles) for n in TOGGLES):
         return None
     return normalize(value)
 
@@ -328,11 +336,12 @@ def load(root=ROOT, refresh=True):
 
 
 def enabled(name, root=ROOT, refresh=True):
-    """Is this automated part on? Unknown names are on (a new tool is not silently disabled)."""
+    """Is this automated part on? Unknown names are on (a new tool is not silently disabled); a switch that spends
+    the owner's tokens (DEFAULT_OFF) is off when the settings cannot be read."""
     try:
         settings, _ = load(root, refresh)
     except Exception:  # noqa: BLE001 — a hook must never fail on settings
-        return True
+        return name not in DEFAULT_OFF
     if name not in TOGGLES:
         return True
     return settings['automation'] and settings['toggles'][name]

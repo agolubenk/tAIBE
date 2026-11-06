@@ -2617,6 +2617,10 @@
 					"description": "A model compares two versions of a skill or prompt before one is chosen. Off: no model calls for comparisons.",
 					"title": "Blind A/B judge for new versions"
 				},
+				"abJudgeClaude": {
+					"description": "The nightly A/B may also ask Claude (claude -p, Sonnet) when the free judges fail calibration. Spends the owner's tokens, so it is off until turned on.",
+					"title": "Claude as a second judge"
+				},
 				"askOnce": {
 					"description": "Sessions search earlier owner decisions and open questions before asking again.",
 					"title": "Look up answers before asking the owner"
@@ -2636,6 +2640,10 @@
 				"handoffDupes": {
 					"description": "A successor's handoff is checked for lines every session already loads.",
 					"title": "Check handoffs for repeated context"
+				},
+				"evolveAutoMerge": {
+					"description": "The nightly evolution run merges its own pull requests (a revert after a lost A/B, verdicts, cases, antigens) once checks are green, only for layer paths on an explicit list. Off: they wait for a person.",
+					"title": "Auto-merge the layer's own corrections"
 				},
 				"nerveWakes": {
 					"description": "The watchdog wakes a session only when it has something to act on.",

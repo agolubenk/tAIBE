@@ -6,8 +6,11 @@
 export const pipelineToggles = {
   // Evolution of the process (eval/evolve, docs: eval/evolve/README.md)
   abJudge: { group: "evolution", default: true },
+  // Claude as a judge spends the owner's tokens: off until the owner turns it on.
+  abJudgeClaude: { group: "evolution", default: false },
   askOnce: { group: "evolution", default: true },
   handoffDupes: { group: "evolution", default: true },
+  evolveAutoMerge: { group: "evolution", default: true },
   // Automatic parts of the pipeline
   promptBrief: { group: "pipeline", default: true },
   successorAuto: { group: "pipeline", default: true },

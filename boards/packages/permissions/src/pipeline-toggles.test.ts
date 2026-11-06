@@ -7,10 +7,11 @@ import {
 } from "./pipeline-toggles";
 
 describe("pipeline toggles", () => {
-  it("defaults every toggle on", () => {
+  it("defaults every toggle on except the paid Claude judge", () => {
     const settings = defaultPipelineSettings();
     expect(settings.automation).toBe(true);
-    expect(PIPELINE_TOGGLE_NAMES.every((n) => settings.toggles[n])).toBe(true);
+    const off = PIPELINE_TOGGLE_NAMES.filter((n) => !settings.toggles[n]);
+    expect(off).toEqual(["abJudgeClaude"]);
   });
 
   it("keeps known stored values, drops unknown keys and fills missing ones", () => {
