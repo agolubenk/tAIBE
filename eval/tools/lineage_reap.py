@@ -30,6 +30,20 @@ def add_reap_args(p):
     p.add_argument("--yes", action="store_true", help="без вопроса в терминале — только сам владелец")
     p.add_argument("--prune-days", type=float, default=30.0,
                    help="при показе удалить записи каталога линий старше стольких дней (0 — не удалять)")
+    p.add_argument("--auto", action="store_true",
+                   help="безопасная автоуборка по правилам lineage_auto.py (решение владельца 06.11); без --apply — сухо")
+    p.add_argument("--apply", action="store_true",
+                   help="с --auto: действовать — только из launchd владельца (XPC_SERVICE_NAME=space.hrhelper.reaper)")
+    p.add_argument("--summary", action="store_true", help="с --auto: читаемая сводка журнала за --since-hours")
+    p.add_argument("--since-hours", type=float, default=24.0)
+    p.add_argument("--window-minutes", type=float, default=10.0,
+                   help="--auto: окно линии закрывается не раньше стольких минут после выхода claude с кодом 0")
+    p.add_argument("--ack-minutes", type=float, default=30.0,
+                   help="--auto: предшественник снимается, если проверенной квитанции наследника не меньше стольких минут")
+    p.add_argument("--auto-idle-hours", type=float, default=8.0,
+                   help="--auto: простой, после которого сессия — кандидат (не держатель роли, без незакоммиченного)")
+    p.add_argument("--keep-cwd", action="append", default=[],
+                   help="--auto: сессии ровно в этой папке не трогать (по умолчанию — папка над основным checkout слоя)")
 
 
 def prune_lineage_dir(days, now=None):
@@ -166,6 +180,11 @@ def show(rows, out=None):
 
 
 def cmd_reap(sx, a):
+    if a.auto or a.apply or a.summary:
+        if a.kill or not a.auto:
+            return L.die("--apply и --summary — только вместе с --auto; --kill с --auto не сочетается")
+        from lineage_auto import cmd_auto  # noqa: E402 — свой модуль (лимит 500 строк)
+        return cmd_auto(sx, a)
     roots = own_roots(a.root)
     procs, rows = scan(sx, a.idle_hours, a.include_waiting, roots, a.superseded_idle_hours)
     show(rows)

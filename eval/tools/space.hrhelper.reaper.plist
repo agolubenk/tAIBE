@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Автоуборка сессий Claude Code раз в 30 мин (решение владельца 06.11). Шаблон: поля @…@ подставляет
+     eval/tools/reaper_launchd.sh install (с флагом apply — снимает, без него — сухо, только журнал
+     ~/.claude/lineage/reap-auto.jsonl). Ставит и снимает только владелец; откат — reaper_launchd.sh uninstall. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>space.hrhelper.reaper</string>
+  <key>ProgramArguments</key>
+  <array>
+@ARGS@
+  </array>
+  <key>WorkingDirectory</key>
+  <string>@TOOLS@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>@ERRLOG@</string>
+</dict>
+</plist>

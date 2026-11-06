@@ -11,9 +11,16 @@
       spawn_session.sh --handoff: отцепленный сторож ждёт квитанцию L, проверяет наследника и снимает предшественника
   lineage.py reap [--idle-hours 24] [--include-waiting] [--prune-days 30] [--kill [--yes]]
       без флагов — список и чистка записей линий старше --prune-days; --kill — действие владельца, только по списку последнего показа (≤ 10 мин)
+  lineage.py reap --auto [--apply] [--summary] [--ack-minutes 30] [--auto-idle-hours 8] [--window-minutes 10]
+      безопасная автоуборка (решение владельца 06.11, lineage_auto.py): без --apply — список, в журнал — изменения
+      плана; --apply — только launchd владельца; --summary — читаемая сводка журнала
+  lineage.py exited --rc N [--keep] · lineage.py autoclose --tty /dev/ttysNNN --pid PID
+      пусковой скрипт spawn_session.sh после выхода claude (lineage_close.py): код выхода в запись линии; при коде 0
+      и без Enter в 10-секундном отсчёте окно Terminal своей линии закрывается само
 
 Снимается сессия так: TERM группе claude и потомкам вне группы → 10 с → KILL выживших → окно Terminal (по id из
 record, иначе по tty; окно с другими вкладками, iTerm и VS Code не трогаются) → HUP shell-остаткам на tty.
+Группа — claude-лидер или пусковой bash spawn_session.sh, в группе которого claude (без exec, чтобы закрыть окно).
 Каталог — TAIBE_LINEAGE_DIR (по умолчанию ~/.claude/lineage). Только stdlib, запуск python3 -I.
 """
 import argparse
@@ -30,6 +37,7 @@ from pathlib import Path
 Proc = namedtuple("Proc", "pid ppid pgid tty start command")
 LINE_RE = re.compile(r"^r(\.[a-z0-9]+)*$")
 LINE_ARG_RE = re.compile(r"Линия: (r(?:\.[a-z0-9]+)+)")  # в первом сообщении, которое пишет spawn_session.sh
+LAUNCHER_RE = re.compile(r"/claude-spawn\.[A-Za-z0-9]+/[a-z]+\.sh(\s|$)")  # пусковой скрипт spawn_session.sh
 SHELLS = {"login", "zsh", "bash", "sh", "fish", "tcsh", "csh"}
 TERM_WAIT = 10          # с между TERM и KILL
 TAP_WAIT = 180          # с на взвод Monitor наследника (nerve.py tap <роль>)
@@ -66,9 +74,13 @@ def valid_line(line):
 
 
 def write_json(path, data):
+    """Атомарно и только для владельца (0600): записи линий и журнал называют окна, tty и папки."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(json.dumps(data, ensure_ascii=False, indent=1))
     os.replace(tmp, path)
 
 
@@ -103,6 +115,16 @@ class Sys:
         t = r.stdout.split(None, 1)
         return len(t) == 2 and not t[0].startswith("Z") and norm(t[1]) == norm(p.start)
 
+    def pid_alive(self, pid):
+        """Есть ли процесс pid (сигнал 0): ожидание выхода своего родителя без ps."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
     def env_line(self, pid):
         """TAIBE_LINEAGE из окружения процесса (ps -E: только свои процессы). Последнее вхождение — окружение
         печатается после аргументов, а в аргументах (первое сообщение) могло встретиться то же слово."""
@@ -133,6 +155,29 @@ class Sys:
         r = subprocess.run([os.environ.get("LINEAGE_OSASCRIPT", "osascript"), "-", *args], input=script,
                            capture_output=True, text=True, timeout=30)
         return (r.stdout or r.stderr).strip()
+
+    def unsaved(self, path):
+        """Что в checkout папки path пропадёт со снятием сессии ('' — ничего): незакоммиченное (вкл.
+        неотслеживаемое), коммиты, которых нет ни на одном remote, stash этой ветки (stash общий для worktree).
+        Не git или сбой — причина: не знаем — не трогаем."""
+        def git(*args):
+            r = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                raise OSError(r.stderr.strip()[:80])
+            return r.stdout
+        try:
+            if git("status", "--porcelain", "--untracked-files=normal").strip():
+                return "незакоммиченное"
+            if int(git("rev-list", "--count", "HEAD", "--not", "--remotes").strip() or 0):
+                return "коммиты не на remote"
+            branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+            tag = "(no branch)" if branch == "HEAD" else branch
+            if any(re.match(r"(?:WIP on|On) " + re.escape(tag) + ":", ln)
+                   for ln in git("stash", "list", "--format=%gs").splitlines()):
+                return "stash этой ветки"
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return "git не ответил"
+        return ""
 
     def metrics(self):
         claude = sum(1 for p in self.procs().values() if argv0(p) == "claude")
@@ -216,12 +261,24 @@ def descendants(procs, root):
     return out
 
 
+def group_of(procs, p):
+    """Группа сессии p, которую можно снимать целиком: p — её лидер (exec в пусковом скрипте), или лидер — родитель
+    p, пусковой bash spawn_session.sh (claude без exec, чтобы потом закрыть окно). Иначе None — только дерево p."""
+    if p.pgid == p.pid:
+        return p.pgid
+    parent = procs.get(p.ppid)
+    if parent and parent.pid == p.pgid and argv0(parent) == "bash" and LAUNCHER_RE.search(parent.command):
+        return p.pgid
+    return None
+
+
 def doomed(procs, p):
-    """Что снимается вместе с сессией: она, её группа (если она лидер — MCP-серверы) и потомки вне группы
+    """Что снимается вместе с сессией: она, её группа (group_of — MCP-серверы, пусковой bash) и потомки вне группы
     (Bash-инструмент живёт в своей группе). Отцепленные демоны (ppid 1) сюда не попадают."""
     s = descendants(procs, p.pid) | {p.pid}
-    if p.pgid == p.pid:
-        s |= {q.pid for q in procs.values() if q.pgid == p.pid}
+    g = group_of(procs, p)
+    if g is not None:
+        s |= {q.pid for q in procs.values() if q.pgid == g}
     return s - {os.getpid()}
 
 
@@ -312,11 +369,14 @@ def main(argv=None, sx=None):
     t.add_argument("--foreground", action="store_true", help="без отцепления (тесты, отладка)")
     from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
+    from lineage_close import add_autoclose_args, add_exited_args, cmd_autoclose, cmd_exited  # noqa: E402
     add_reap_args(sub.add_parser("reap"))
+    add_autoclose_args(sub.add_parser("autoclose"))
+    add_exited_args(sub.add_parser("exited"))
     a = ap.parse_args(argv)
     sx = sx or Sys()
     return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire,
-            "reap": cmd_reap}[a.cmd](sx, a)
+            "reap": cmd_reap, "autoclose": cmd_autoclose, "exited": cmd_exited}[a.cmd](sx, a)
 
 
 if __name__ == "__main__":

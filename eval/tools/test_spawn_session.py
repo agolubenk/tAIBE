@@ -28,12 +28,16 @@ failed = 0
 proc = dry_run({"CLAUDE_CODE_CHILD_SESSION": "1", "CLAUDECODE": "1", "TAIBE_LINEAGE": "r.ab12"})
 lines = proc.stdout.splitlines()
 unset_at = next((i for i, ln in enumerate(lines) if ln.startswith("unset ") and "CLAUDE_CODE_CHILD_SESSION" in ln), None)
-exec_at = next((i for i, ln in enumerate(lines) if ln.startswith("exec ")), None)
+# Terminal: claude без exec (окно закроется само после выхода), иначе exec; в обоих случаях — после unset.
+exec_at = next((i for i, ln in enumerate(lines) if ln.startswith(("exec ", '"${CLAUDE_BIN:-claude}"'))), None)
 for name, ok in [
     ("dry-run succeeds", proc.returncode == 0),
     ("launcher unsets CLAUDE_CODE_CHILD_SESSION and CLAUDECODE",
      unset_at is not None and "CLAUDECODE" in lines[unset_at]),
-    ("unset comes before exec claude", unset_at is not None and exec_at is not None and unset_at < exec_at),
+    ("unset comes before claude starts", unset_at is not None and exec_at is not None and unset_at < exec_at),
+    ("Terminal: claude in its own group, window closes only after exit 0",
+     "set -m" in lines and any(ln.startswith('[ "$rc" = 0 ] ||') for ln in lines)
+     and any(" autoclose --tty " in ln for ln in lines) and lines[-1:] != [] and "exit 0" in lines),
     ("descendant gets its own lineage under the parent's",
      any(re.fullmatch(r"export TAIBE_LINEAGE='r\.ab12\.[a-z0-9]{4}'", ln) for ln in lines)),
     ("first message names the lineage and generation 2", re.search(r"Линия: r\.ab12\.[a-z0-9]{4} \(поколение 2\)", proc.stdout)
@@ -94,6 +98,24 @@ for name, ok in [
         failed += 1
         print("FAIL:", name)
         print(broken.stdout, broken.stderr, typo.stdout, typo.stderr, sep="\n")
+
+# 06.11: окно Terminal закрывается само; печать команды (--terminal print) и --keep-window — прежний exec без autoclose.
+def launcher_lines(*flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp, *flags],
+                             capture_output=True, text=True, env={**os.environ, "TMPDIR": tmp}, timeout=30)
+        return run.returncode, run.stdout.splitlines()
+
+
+for name, flags in [("print", ["--terminal", "print"]), ("keep-window", ["--keep-window"])]:
+    rc, out = launcher_lines(*flags)
+    ok = rc == 0 and any(ln.startswith("exec ") for ln in out) and not any("autoclose" in ln for ln in out)
+    if not ok:
+        failed += 1
+        print("FAIL: %s keeps exec and no autoclose" % name)
+        print("\n".join(out))
 
 print("spawn_session: %d failed" % failed)
 sys.exit(1 if failed else 0)
