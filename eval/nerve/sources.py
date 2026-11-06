@@ -136,7 +136,7 @@ def _check_pr(ctx, n, p, head, refresh=False):
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
     verdicts = []
     for c in comments:
-        v = quorum.parse_verdict(c.get("body"))
+        v = quorum.parse_verdict(c.get("body"), g["lens_roles"])
         if not v:
             continue
         verdicts.append(v)
