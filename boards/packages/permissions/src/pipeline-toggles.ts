@@ -10,7 +10,8 @@ export const pipelineToggles = {
   abJudgeClaude: { group: "evolution", default: false },
   askOnce: { group: "evolution", default: true },
   handoffDupes: { group: "evolution", default: true },
-  evolveAutoMerge: { group: "evolution", default: true },
+  // The nightly run merging its own PRs: closed until the owner turns it on.
+  evolveAutoMerge: { group: "evolution", default: false },
   // Automatic parts of the pipeline
   promptBrief: { group: "pipeline", default: true },
   successorAuto: { group: "pipeline", default: true },

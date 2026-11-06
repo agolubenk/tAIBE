@@ -17,7 +17,7 @@ API keys of the workspace can read them but never change them, so automation can
 ## Switches and where each is enforced
 
 A switch is listed only if something actually obeys it. Every enforcement point treats a missing or failed read
-of the settings as **on**, except `abJudgeClaude`, which spends the owner's tokens and stays **off**. The exception is the layer: there, the last known values stay in effect.
+of the settings as **on**, except `abJudgeClaude` (the owner's tokens) and `evolveAutoMerge` (closed on doubt), which stay **off**. The exception is the layer: there, the last known values stay in effect.
 
 | Switch | Group | Off means | Enforced in |
 |---|---|---|---|
@@ -25,7 +25,7 @@ of the settings as **on**, except `abJudgeClaude`, which spends the owner's toke
 | `abJudgeClaude` | evolution | **Off by default** (the owner's tokens). On: the nightly run may calibrate and use Claude (`claude -p --model claude-sonnet-5-5`) as a judge when fewer than two free judges pass | `eval/evolve/judges.py` (`daily.py run`) |
 | `askOnce` | evolution | `ask_once.py check` returns "ask as usual" without looking up | `eval/tools/ask_once.py` |
 | `handoffDupes` | evolution | no duplicate-context check before a successor starts | `eval/tools/spawn_session.sh` |
-| `evolveAutoMerge` | evolution | the nightly evolution run merges none of its own PRs (reverts after a lost A/B, verdicts, cases, antigens); they wait for a person. On by default (owner, 06.11) | `eval/evolve/daily.py merge` (`daily_git.merge_ready`) |
+| `evolveAutoMerge` | evolution | **Off by default** and off when the settings cannot be read. On: the nightly run merges its own PRs of the safe class only (cases, verdicts, a skill or prompt reverted to a version already merged), with required checks green; rules, the genome and code always wait for a person | `eval/evolve/daily.py merge` (`daily_git.merge_ready`) |
 | `promptBrief` | pipeline | no GLM brief of long prompts (one model call per prompt saved) | `.claude/hooks/user-prompt-submit.py` |
 | `successorAuto` | pipeline | no automatic successor at 80 % of the window | `.claude/hooks/context-threshold.py` |
 | `grillHint` | pipeline | no `<grill-task-auto>` reminder on new tasks (the rule to roast large tasks stays) | `.claude/hooks/user-prompt-submit.py` |

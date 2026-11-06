@@ -7,11 +7,11 @@ import {
 } from "./pipeline-toggles";
 
 describe("pipeline toggles", () => {
-  it("defaults every toggle on except the paid Claude judge", () => {
+  it("defaults every toggle on except the paid judge and the nightly auto-merge", () => {
     const settings = defaultPipelineSettings();
     expect(settings.automation).toBe(true);
     const off = PIPELINE_TOGGLE_NAMES.filter((n) => !settings.toggles[n]);
-    expect(off).toEqual(["abJudgeClaude"]);
+    expect(off).toEqual(["abJudgeClaude", "evolveAutoMerge"]);
   });
 
   it("keeps known stored values, drops unknown keys and fills missing ones", () => {

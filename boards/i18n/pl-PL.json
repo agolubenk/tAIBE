@@ -3722,7 +3722,7 @@
 					"title": "Check handoffs for repeated context"
 				},
 				"evolveAutoMerge": {
-					"description": "The nightly evolution run merges its own pull requests (a revert after a lost A/B, verdicts, cases, antigens) once checks are green, only for layer paths on an explicit list. Off: they wait for a person.",
+					"description": "Off by default. On: the nightly evolution run merges its own pull requests of the safe class only — cases and verdicts, and a skill or prompt put back to a version already merged — once required checks are green. Rules, the genome and code always wait for a person.",
 					"title": "Auto-merge the layer's own corrections"
 				},
 				"nerveWakes": {
