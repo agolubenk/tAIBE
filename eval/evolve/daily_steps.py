@@ -159,6 +159,31 @@ def unload(model):
         pass
 
 
+def stream_call(repo, model, timeout=900):
+    """ab.gateway_call with `stream: true`. The gateway gives up on a call whose first byte takes over 120 s
+    (GW_FIRST_BYTE_TIMEOUT_MS); without streaming the first byte is the whole answer, and on 06.11 every artifact
+    prompt of the 35B judge died there while the shorter calibration prompts passed. Streamed, the first byte
+    comes after the prefill."""
+    def call(system, user):
+        base, token = gateway(repo)
+        messages = ([{'role': 'system', 'content': system}] if system else []) + [{'role': 'user', 'content': user}]
+        body = json.dumps({'model': model, 'messages': messages, 'temperature': 0, 'stream': True}).encode('utf-8')
+        req = urllib.request.Request(base + '/chat/completions', data=body, method='POST',
+                                     headers={'Content-Type': 'application/json', 'Authorization': 'Bearer %s' % token})
+        parts = []
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — local gateway URL
+            for raw in resp:
+                line = raw.decode('utf-8', 'replace').strip()
+                if not line.startswith('data:') or line[5:].strip() == '[DONE]':
+                    continue
+                chunk = json.loads(line[5:].strip())
+                if chunk.get('error'):
+                    raise OSError('gateway: %s' % str(chunk['error'])[:200])
+                parts.append(((chunk.get('choices') or [{}])[0].get('delta') or {}).get('content') or '')
+        return ''.join(parts)
+    return call
+
+
 def retrying(call, revive, attempts=3, pause=20):
     """A judge call that survives a busy or restarting backend (HTTP 5xx, refused connection): `revive` raises
     what fell, then the same call again. The last failure propagates — the judge is then unavailable."""

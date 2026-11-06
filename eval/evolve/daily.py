@@ -177,7 +177,7 @@ def judge_factory(repo):
     def factory(model):
         if model == judging.CLAUDE_JUDGE:
             return judging.claude_call()
-        return steps.retrying(ab.gateway_call(repo, model, timeout=900), revive)
+        return steps.retrying(steps.stream_call(repo, model), revive)
     return factory
 
 
