@@ -61,7 +61,7 @@ def _flock_by(handle, deadline: float, wait_seconds: float) -> None:
 @contextmanager
 def local_inference_slot(wait_seconds: float):
     """Эксклюзивный доступ консилиума к локальному Ollama на время одного HTTP-вызова: между процессами
-    консилиума всех хостов, но не со шлюзом моделей и не с backend продукта (OPS-27, OPS-28). Лок файловый (flock):
+    консилиума всех хостов и со шлюзом моделей (машинный файл, OPS-27), но не с backend продукта (OPS-28). Лок файловый (flock):
     снимается и при падении процесса. Не дождались — TimeoutError, вызов не делается."""
     paths = [LOCAL_INFERENCE_LOCK]
     if LEGACY_HOST_LOCK and LEGACY_HOST_LOCK != LOCAL_INFERENCE_LOCK:

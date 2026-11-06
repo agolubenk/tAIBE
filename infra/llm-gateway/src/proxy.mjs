@@ -199,7 +199,12 @@ export class Proxy {
     const release = await this.local.acquire(this.cfg.localMaxWaitMs, clientSignal)
     if (!release) return { error: 'локальная модель занята другим запросом' }
     if (!this.cfg.localLock) return { release }
-    const lock = await this.machineLock({ path: this.cfg.localLock, waitMs: this.cfg.localMaxWaitMs - (Date.now() - t0), signal: clientSignal, python: this.cfg.python })
+    let lock
+    try {
+      lock = await this.machineLock({ path: this.cfg.localLock, waitMs: this.cfg.localMaxWaitMs - (Date.now() - t0), signal: clientSignal, python: this.cfg.python })
+    } catch (e) {
+      lock = { failed: e.message } // семафор не должен утечь ни при каком сбое замка
+    }
     if (lock.held) return { release, lock }
     release()
     if (lock.failed) this.log({ level: 'warn', msg: 'machine-lock', error: lock.failed })

@@ -90,8 +90,9 @@ const ask = (url = base) =>
 
 test('путь замка по умолчанию — тот же, что у консилиума (MACHINE_LOCK_REL в ollama.py)', () => {
   assert.ok(MACHINE_LOCK.endsWith(join('.local', 'state', 'taibe', 'council', 'ollama-local.lock')))
-  assert.equal(loadConfig({ envFile: '/nonexistent', env: {} }).localLock, MACHINE_LOCK)
-  assert.equal(loadConfig({ envFile: '/nonexistent', env: { GW_LOCAL_LOCK: 'off' } }).localLock, '')
+  // GW_TOKEN задан: без него loadConfig читает или создаёт токен живого шлюза в .state/.
+  assert.equal(loadConfig({ envFile: '/nonexistent', env: { GW_TOKEN: 't' } }).localLock, MACHINE_LOCK)
+  assert.equal(loadConfig({ envFile: '/nonexistent', env: { GW_TOKEN: 't', GW_LOCAL_LOCK: 'off' } }).localLock, '')
 })
 
 test('шлюз и консилиум одновременно — пик локальных инференсов 1, запрос шлюза дожидается слота', async () => {
@@ -174,4 +175,34 @@ test('клиент ушёл, пока ждал замок — busy, держат
   setTimeout(() => ac.abort(), 100)
   assert.deepEqual(await p, { busy: true })
   await c.exited
+  // Держатель снят вместе с ожиданием: замок свободен, а не занят забытым процессом.
+  const again = await acquireMachineLock({ path: LOCK, waitMs: 500 })
+  assert.ok(again.held)
+  again.release()
+})
+
+test('держатель замка не запускается — шлюз отвечает 503 с причиной и живёт дальше', async () => {
+  const broken = await makeGw({ GW_PYTHON: '/nonexistent/python3' })
+  try {
+    const url = `http://127.0.0.1:${broken.server.address().port}`
+    const r = await ask(url)
+    assert.equal(r.status, 503)
+    assert.match((await r.json()).error.message, /замок/)
+    assert.equal((await fetch(`${url}/health`)).status, 200)
+  } finally {
+    broken.server.close()
+  }
+})
+
+test('нет stdio у держателя (EMFILE) — failed, без исключения и без падения процесса', async () => {
+  const { EventEmitter } = await import('node:events')
+  const spawnImpl = () => {
+    const child = new EventEmitter()
+    Object.assign(child, { stdin: null, stdout: null, stderr: null, exitCode: null, signalCode: null, kill() {} })
+    process.nextTick(() => child.emit('error', Object.assign(new Error('spawn python3 EMFILE'), { code: 'EMFILE' })))
+    return child
+  }
+  const r = await acquireMachineLock({ path: LOCK, waitMs: 100, spawnImpl })
+  assert.ok(r.failed)
+  await new Promise((done) => setImmediate(done)) // 'error' уже пришёл и не роняет процесс
 })

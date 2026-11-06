@@ -43,6 +43,17 @@ export function acquireMachineLock({ path, waitMs, signal, python = 'python3', s
     let state = 'waiting'
     let err = ''
     let lost = null
+    // Сразу после spawn: при EMFILE/ENFILE Node отдаёт процесс без stdio и шлёт 'error' — без слушателя он роняет шлюз.
+    child.on('error', (e) => {
+      if (state !== 'waiting') return
+      state = 'done'
+      signal?.removeEventListener('abort', onAbort)
+      resolve({ failed: e.message })
+    })
+    if (!child.stdin || !child.stdout || !child.stderr) {
+      state = 'done'
+      return resolve({ failed: 'держатель замка запущен без stdio (нет свободных дескрипторов?)' })
+    }
     const kill = () => {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     }
@@ -73,12 +84,6 @@ export function acquireMachineLock({ path, waitMs, signal, python = 'python3', s
           lost = cb
         },
       })
-    })
-    child.on('error', (e) => {
-      if (state !== 'waiting') return
-      state = 'done'
-      signal?.removeEventListener('abort', onAbort)
-      resolve({ failed: e.message })
     })
     child.on('exit', (code, sig) => {
       const was = state
