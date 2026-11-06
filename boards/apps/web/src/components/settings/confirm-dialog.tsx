@@ -9,6 +9,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -21,6 +22,9 @@ type ConfirmDialogProps = {
   destructive?: boolean;
   onConfirm: () => void;
   children?: ReactNode;
+  // A long body (a list) can take `min-h-0 flex-1 flex flex-col` so it
+  // scrolls and the footer stays on screen.
+  bodyClassName?: string;
   confirmDisabled?: boolean;
 };
 
@@ -35,6 +39,7 @@ export function ConfirmDialog({
   destructive = true,
   onConfirm,
   children,
+  bodyClassName,
   confirmDisabled = false,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
@@ -48,7 +53,9 @@ export function ConfirmDialog({
             <AlertDialogDescription>{description}</AlertDialogDescription>
           ) : null}
         </AlertDialogHeader>
-        {children ? <div className="px-6 pb-4">{children}</div> : null}
+        {children ? (
+          <div className={cn("px-6 pb-4", bodyClassName)}>{children}</div>
+        ) : null}
         <AlertDialogFooter>
           <Button
             type="button"

@@ -37,10 +37,17 @@ export async function approveDraft(
           eq(ssrVersionTable.status, "latest"),
         ),
       );
-    await tx
+    const approved = await tx
       .update(ssrVersionTable)
       .set({ status: "latest", approvedBy: owner, approvedAt: new Date() })
-      .where(eq(ssrVersionTable.id, versionId));
+      .where(
+        and(
+          eq(ssrVersionTable.id, versionId),
+          eq(ssrVersionTable.status, "draft"),
+        ),
+      )
+      .returning({ id: ssrVersionTable.id });
+    if (approved.length === 0) throw notOpenDraft();
     await tx
       .update(ssrEntityTable)
       .set({
@@ -72,10 +79,19 @@ export async function rejectDraft(
   if (!draft || draft.status !== "draft") {
     throw new HTTPException(409, { message: "Version is not an open draft" });
   }
-  await db
+  // The status check sits in the UPDATE: a decision or sync that committed
+  // after the read above must not be overwritten (lost update).
+  const rejected = await db
     .update(ssrVersionTable)
     .set({ status: "rejected", approvedBy: owner, approvedAt: new Date() })
-    .where(eq(ssrVersionTable.id, versionId));
+    .where(
+      and(
+        eq(ssrVersionTable.id, versionId),
+        eq(ssrVersionTable.status, "draft"),
+      ),
+    )
+    .returning({ id: ssrVersionTable.id });
+  if (rejected.length === 0) throw notOpenDraft();
   return { entityId, versionId };
 }
 
@@ -132,6 +148,9 @@ export async function rollbackToVersion(
   });
   return { entityId, versionId: restored.id, number, restoredFrom: toNumber };
 }
+
+const notOpenDraft = () =>
+  new HTTPException(409, { message: "Version is not an open draft" });
 
 async function assertEntity(workspaceId: string, entityId: string) {
   const [entity] = await db

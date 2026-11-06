@@ -30476,6 +30476,285 @@
         }
       }
     },
+    "/ssr/{workspaceId}/drafts/matches": {
+      "get": {
+        "operationId": "listSsrDraftMatches",
+        "tags": [
+          "SSR"
+        ],
+        "summary": "Open drafts and the version you approved that each one is identical to",
+        "description": "A draft matches when the caller approved a version with the same entity path and the same blob sha, in this workspace or another workspace the caller can read, and no later rollback undid it. Sync auto-bumps do not count. Drafts of archived entities, drafts below a newer version and bytes the entity rejected never match. Other workspaces are never revealed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open drafts with their match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "drafts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "entityId": {
+                            "type": "string"
+                          },
+                          "versionId": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "blobSha": {
+                            "type": "string",
+                            "description": "The draft's aggregate sha; send it back"
+                          },
+                          "match": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "workspaceId": {
+                                "type": "string"
+                              },
+                              "workspaceName": {
+                                "type": "string"
+                              },
+                              "versionId": {
+                                "type": "string"
+                              },
+                              "number": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "workspaceId",
+                              "workspaceName",
+                              "versionId",
+                              "number"
+                            ],
+                            "description": "A version with the same path and blob sha that the caller approved, in a workspace the caller can read, or null"
+                          }
+                        },
+                        "required": [
+                          "entityId",
+                          "versionId",
+                          "path",
+                          "kind",
+                          "blobSha",
+                          "match"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "drafts"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing workspace:read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/ssr/{workspaceId}/drafts/approve-matching": {
+      "post": {
+        "operationId": "approveMatchingSsrDrafts",
+        "tags": [
+          "SSR"
+        ],
+        "summary": "Approve every listed draft that matches a version you approved (owner UI only)",
+        "description": "Takes drafts from the matches list with the blob sha the owner saw and re-checks each on the server in one transaction: all are approved, or none are.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "versionId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "blobSha": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$",
+                          "description": "The draft bytes the owner saw"
+                        }
+                      },
+                      "required": [
+                        "versionId",
+                        "blobSha"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "description": "Drafts from the matches list with the blob sha shown; each is re-checked"
+                  }
+                },
+                "required": [
+                  "items"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "approved": {
+                      "type": "number"
+                    },
+                    "versionIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "approved",
+                    "versionIds"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty list, more than 200 items, an id over 64 characters or a malformed sha",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the owner's browser session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Some drafts changed, were decided, or no longer match; nothing was approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "versionIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Ids that changed, were decided, or no longer match; nothing was approved"
+                    }
+                  },
+                  "required": [
+                    "message",
+                    "code",
+                    "versionIds"
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
     "/external-link/task/{taskId}": {
       "post": {
         "operationId": "createExternalLink",

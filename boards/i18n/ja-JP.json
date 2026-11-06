@@ -4041,7 +4041,24 @@
 			"diffHide": "Hide diff",
 			"diffFrom": "from",
 			"empty": "Nothing synced yet.",
-			"loadError": "Failed to load SSR data."
+			"loadError": "Failed to load SSR data.",
+			"approveMatching": {
+				"button": "Approve matching ({{matching}})",
+				"buttonPartial": "Approve {{batch}} of {{matching}}",
+				"changed": "Nothing was approved: since the list loaded, some drafts changed, were decided, or no longer match a version you approved. The list is refreshed; check it and try again.",
+				"description_other": "{{count}} drafts match a version you approved in {{workspaces}}.",
+				"done_other": "Approved {{count}} drafts.",
+				"effect_other": "{{count}} drafts become the served versions in this workspace; to undo, roll back each entity.",
+				"error": "Could not approve the matching drafts.",
+				"group": "{{workspace}} — {{count}}",
+				"later_other": "{{count}} more matching drafts go in the next batch.",
+				"left_other": "Left for per-item review: {{count}} drafts",
+				"listLabel": "Drafts to approve",
+				"pending": "Approving…",
+				"rest_other": "The other {{count}} drafts stay for per-item review with the diff.",
+				"summary": "Drafts: {{total}} · match a version you approved: {{matching}}",
+				"title": "Approve matching drafts?"
+			}
 		}
 	},
 	"team": {

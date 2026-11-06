@@ -6,7 +6,8 @@ import {
   ssrEntityTable,
   ssrVersionTable,
 } from "../../apps/api/src/database/ssr-schema";
-import { rejectDraft } from "../../apps/api/src/ssr/approve";
+import { approveDraft, rejectDraft } from "../../apps/api/src/ssr/approve";
+import { replaceOpenDraft } from "../../apps/api/src/ssr/replace-open-draft";
 import { resetTestDatabase } from "./helpers/database";
 import { createForest } from "./helpers/forest";
 
@@ -114,5 +115,76 @@ describe("API integration: SSR corpus sync", () => {
       .from(ssrEntityTable)
       .where(eq(ssrEntityTable.id, entity.id));
     expect(after?.latestVersionId).toBeNull();
+  });
+
+  it("an in-place draft update with a stale id never rewrites a version the owner approved", async () => {
+    const forest = await createForest();
+    const path = ".claude/skills/delta/NOTE.md";
+    const commitSha = "5051525354555657585950515253545556575859";
+    const sync = (text: string) =>
+      forest.ownerApi("POST", `/ssr/${forest.workspace.id}/sync`, {
+        commitSha,
+        files: [{ path, sha256: sha256(text), content: text }],
+      });
+    const first = await sync("approved bytes");
+    const [draft] = first.body.created;
+    const [entity] = await db
+      .select()
+      .from(ssrEntityTable)
+      .where(eq(ssrEntityTable.workspaceId, forest.workspace.id));
+    if (!entity || !draft) throw new Error("the first sync made no draft");
+    const [read] = await db
+      .select()
+      .from(ssrVersionTable)
+      .where(eq(ssrVersionTable.id, draft.versionId));
+    if (!read) throw new Error("no draft row");
+
+    // The sync read the draft, then the owner approved it.
+    await approveDraft(
+      forest.workspace.id,
+      entity.id,
+      draft.versionId,
+      forest.ownerId,
+    );
+    const replaced = await replaceOpenDraft(db, draft.versionId, {
+      blobSha: sha256("newer corpus"),
+      files: [],
+      commitSha,
+      createdBy: forest.ownerId,
+    });
+    expect(replaced).toBe(false);
+    const [kept] = await db
+      .select()
+      .from(ssrVersionTable)
+      .where(eq(ssrVersionTable.id, draft.versionId));
+    expect(kept?.status).toBe("latest");
+    expect(kept?.blobSha).toBe(read.blobSha);
+    expect(kept?.files).toEqual(read.files);
+
+    // The newer corpus then lands as a new version on top of the decision.
+    const changed = await sync("newer corpus");
+    expect(changed.status).toBe(200);
+    expect(changed.body.bumped).toEqual([
+      expect.objectContaining({ number: 2 }),
+    ]);
+    const versions = await db
+      .select()
+      .from(ssrVersionTable)
+      .where(eq(ssrVersionTable.entityId, entity.id))
+      .orderBy(ssrVersionTable.number);
+    expect(versions.map((v) => [v.number, v.status, v.blobSha])).toEqual([
+      [1, "superseded", read.blobSha],
+      [2, "latest", expect.not.stringMatching(read.blobSha)],
+    ]);
+
+    // Rejecting what is no longer a draft is refused, not overwritten.
+    await expect(
+      rejectDraft(
+        forest.workspace.id,
+        entity.id,
+        draft.versionId,
+        forest.ownerId,
+      ),
+    ).rejects.toMatchObject({ status: 409 });
   });
 });

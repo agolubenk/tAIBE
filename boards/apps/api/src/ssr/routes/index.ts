@@ -27,6 +27,7 @@ import {
   timeline,
 } from "../serve";
 import { SyncError, syncCorpus } from "../sync";
+import { assertOwnerUi } from "./owner-ui";
 import {
   approveBody,
   conflictSchema,
@@ -46,17 +47,8 @@ import {
 
 // tAI-Boards SSR (spec approved 31.10): the Mac sync agent writes versions,
 // agents and the owner read them, and only the owner's browser session
-// approves, rejects and rolls back (RU-6, RU-7) — a bearer token of any kind
-// is an agent and is refused on those routes.
+// approves, rejects and rolls back (RU-6, RU-7) — see ./owner-ui.
 const SYNC_BODY_BYTES = 12 * 1024 * 1024;
-
-function assertOwnerUi(headers: Headers) {
-  if (headers.has("authorization") || headers.has("x-api-key")) {
-    throw new HTTPException(403, {
-      message: "Owner decisions are made from the owner's browser session only",
-    });
-  }
-}
 
 type SsrVariables = BaseVariables & { workspaceId: string };
 

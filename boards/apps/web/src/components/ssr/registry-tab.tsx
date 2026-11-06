@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   approveSsrDraft,
   getSsrDiff,
+  listSsrDraftMatches,
   listSsrEntities,
   rejectSsrDraft,
   rollbackSsrEntity,
@@ -11,6 +12,7 @@ import {
   type SsrVersionSummary,
 } from "@/fetchers/ssr/ssr-fetchers";
 import { Button } from "@/components/ui/button";
+import { ApproveMatchingBar } from "./approve-matching-bar";
 
 // «Скиллы и правила» (spec RU-2, RU-11): the registry. Every entity with its
 // versions; a diff opens before any owner decision — approve and rollback
@@ -58,10 +60,16 @@ function VersionRow({
     enabled: diffOpen,
   });
 
+  // The matching bar counts open drafts, so a single decision refreshes it too.
   const invalidate = () =>
-    queryClient.invalidateQueries({
-      queryKey: ["ssr", "entities", workspaceId],
-    });
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["ssr", "entities", workspaceId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["ssr", "drafts", workspaceId],
+      }),
+    ]);
 
   const approve = useMutation({
     mutationFn: () => approveSsrDraft(workspaceId, entity.id, version.id),
@@ -195,11 +203,29 @@ function VersionRow({
   );
 }
 
+const entityAnchor = (entityId: string) => `ssr-entity-${entityId}`;
+
+function locateEntity(entityId: string) {
+  const section = document.getElementById(entityAnchor(entityId));
+  section?.scrollIntoView({ block: "start" });
+  section?.focus({ preventScroll: true });
+}
+
 export function RegistryTab({ workspaceId }: { workspaceId: string }) {
   const { t } = useTranslation();
   const entities = useQuery({
     queryKey: ["ssr", "entities", workspaceId],
     queryFn: () => listSsrEntities(workspaceId),
+  });
+  // Asked only when the registry shows a draft, and as soon as it does.
+  const hasDrafts =
+    entities.data?.some((entity) =>
+      entity.versions.some((version) => version.status === "draft"),
+    ) ?? false;
+  const drafts = useQuery({
+    queryKey: ["ssr", "drafts", workspaceId],
+    queryFn: () => listSsrDraftMatches(workspaceId),
+    enabled: hasDrafts,
   });
 
   if (entities.isPending) {
@@ -235,9 +261,19 @@ export function RegistryTab({ workspaceId }: { workspaceId: string }) {
 
   return (
     <div className="flex flex-col gap-3">
+      {hasDrafts ? (
+        <ApproveMatchingBar
+          workspaceId={workspaceId}
+          drafts={drafts.data}
+          status={drafts.status}
+          onLocate={locateEntity}
+        />
+      ) : null}
       {list.map((entity) => (
         <section
           key={entity.id}
+          id={entityAnchor(entity.id)}
+          tabIndex={-1}
           className="rounded-md border border-border bg-card overflow-hidden"
         >
           <header className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3">

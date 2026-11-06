@@ -8,6 +8,7 @@ import {
   ssrVersionTable,
 } from "../database/ssr-schema";
 import { entityOfPath, isCorpusPath } from "./corpus";
+import { replaceOpenDraft } from "./replace-open-draft";
 import { scanSecrets } from "./secret-scan";
 
 const sha256 = (text: string) =>
@@ -214,37 +215,39 @@ export async function syncCorpus(
         // The highest version, draft or latest: an entity may still wait as
         // a draft (Q-015) — a re-sync used to insert its number again and
         // hit ssr_version_entity_number_key.
-        const [current] = await tx
-          .select()
-          .from(ssrVersionTable)
-          .where(eq(ssrVersionTable.entityId, existing.id))
-          .orderBy(desc(ssrVersionTable.number))
-          .limit(1);
+        let current = await highestVersion(tx, existing.id);
+        if (current?.status === "draft" && current.blobSha !== blobSha) {
+          // The owner has not seen the draft yet (Q-015): the newer corpus
+          // replaces it in place instead of stacking numbers.
+          const replaced = await replaceOpenDraft(tx, current.id, {
+            blobSha,
+            files: snapshot,
+            commitSha: input.commitSha,
+            createdBy: actor,
+          });
+          if (replaced) {
+            result.created.push({
+              entity: group.name,
+              kind: group.kind,
+              versionId: current.id,
+              number: current.number,
+              status: "draft",
+            });
+            continue;
+          }
+          // The owner approved or rejected it after it was read: this corpus
+          // is a new change on top of that decision, never an edit of it.
+          current = await highestVersion(tx, existing.id);
+          if (current?.status === "draft") {
+            throw new SyncError(
+              `A concurrent change touched ${path}; sync again`,
+              "concurrent_change",
+            );
+          }
+        }
         const latest = current?.status === "latest" ? current : undefined;
         if (current && current.blobSha === blobSha) {
           result.unchanged += 1;
-        } else if (current?.status === "draft") {
-          // The owner has not seen the draft yet (Q-015): the newer corpus
-          // replaces it in place instead of stacking numbers.
-          const [version] = await tx
-            .update(ssrVersionTable)
-            .set({
-              blobSha,
-              files: snapshot,
-              commitSha: input.commitSha,
-              createdBy: actor,
-              createdAt: new Date(),
-            })
-            .where(eq(ssrVersionTable.id, current.id))
-            .returning({ id: ssrVersionTable.id });
-          if (!version) throw new Error("version update returned nothing");
-          result.created.push({
-            entity: group.name,
-            kind: group.kind,
-            versionId: version.id,
-            number: current.number,
-            status: "draft",
-          });
         } else if (!latest) {
           // Never approved: the owner rejected the newest version
           // (approve.ts) or there is none. The changed corpus waits for the
@@ -341,6 +344,19 @@ export async function syncCorpus(
   });
 
   return result;
+}
+
+async function highestVersion(
+  executor: Pick<typeof db, "select">,
+  entityId: string,
+) {
+  const [version] = await executor
+    .select()
+    .from(ssrVersionTable)
+    .where(eq(ssrVersionTable.entityId, entityId))
+    .orderBy(desc(ssrVersionTable.number))
+    .limit(1);
+  return version;
 }
 
 export class SyncError extends Error {

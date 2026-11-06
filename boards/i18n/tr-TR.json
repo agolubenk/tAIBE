@@ -4106,7 +4106,30 @@
 			"diffHide": "Hide diff",
 			"diffFrom": "from",
 			"empty": "Nothing synced yet.",
-			"loadError": "Failed to load SSR data."
+			"loadError": "Failed to load SSR data.",
+			"approveMatching": {
+				"button": "Approve matching ({{matching}})",
+				"buttonPartial": "Approve {{batch}} of {{matching}}",
+				"changed": "Nothing was approved: since the list loaded, some drafts changed, were decided, or no longer match a version you approved. The list is refreshed; check it and try again.",
+				"description_one": "{{count}} draft matches a version you approved in {{workspaces}}.",
+				"description_other": "{{count}} drafts match a version you approved in {{workspaces}}.",
+				"done_one": "Approved {{count}} draft.",
+				"done_other": "Approved {{count}} drafts.",
+				"effect_one": "{{count}} draft becomes the served version in this workspace; to undo, roll back each entity.",
+				"effect_other": "{{count}} drafts become the served versions in this workspace; to undo, roll back each entity.",
+				"error": "Could not approve the matching drafts.",
+				"group": "{{workspace}} — {{count}}",
+				"later_one": "{{count}} more matching draft goes in the next batch.",
+				"later_other": "{{count}} more matching drafts go in the next batch.",
+				"left_one": "Left for per-item review: {{count}} draft",
+				"left_other": "Left for per-item review: {{count}} drafts",
+				"listLabel": "Drafts to approve",
+				"pending": "Approving…",
+				"rest_one": "The other {{count}} draft stays for per-item review with the diff.",
+				"rest_other": "The other {{count}} drafts stay for per-item review with the diff.",
+				"summary": "Drafts: {{total}} · match a version you approved: {{matching}}",
+				"title": "Approve matching drafts?"
+			}
 		}
 	},
 	"team": {

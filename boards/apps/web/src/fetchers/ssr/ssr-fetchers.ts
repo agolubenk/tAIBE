@@ -51,6 +51,22 @@ export type SsrDiff = {
   files: Array<{ path: string; diff: string }>;
 };
 
+export type SsrDraftMatch = {
+  entityId: string;
+  versionId: string;
+  path: string;
+  kind: string;
+  blobSha: string;
+  match: {
+    workspaceId: string;
+    workspaceName: string;
+    versionId: string;
+    number: number;
+  } | null;
+};
+
+export type SsrBatchItem = { versionId: string; blobSha: string };
+
 async function toResult(response: Response) {
   if (!response.ok) throw await HttpError.fromResponse(response);
   return response.json();
@@ -125,4 +141,25 @@ export async function rollbackSsrEntity(
     json: { toVersion },
   });
   return toResult(response);
+}
+
+export async function listSsrDraftMatches(workspaceId: string) {
+  const response = await client.ssr[":workspaceId"].drafts.matches.$get({
+    param: { workspaceId },
+  });
+  const body = await toResult(response);
+  return body.drafts as SsrDraftMatch[];
+}
+
+export async function approveMatchingSsrDrafts(
+  workspaceId: string,
+  items: SsrBatchItem[],
+) {
+  const response = await client.ssr[":workspaceId"].drafts[
+    "approve-matching"
+  ].$post({ param: { workspaceId }, json: { items } });
+  return (await toResult(response)) as {
+    approved: number;
+    versionIds: string[];
+  };
 }
