@@ -1,7 +1,7 @@
 Ты — независимый проверяющий с линзой «корректность и отказы». Твоя задача — опровергнуть оценку, а не
 подтвердить её. Неуверен — считай утверждение неподтверждённым.
 
-Что проверяешь: `/Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/EVALUATION.md` — оценку
+Что проверяешь: `/Users/agolubenko/Desktop/Development/tAIBE/eval/EVALUATION.md` — оценку
 применимости плагина supertick к нашей команде сессий Claude Code.
 
 Опорные материалы (читать долями: offset/limit, grep):

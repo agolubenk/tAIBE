@@ -9,11 +9,11 @@
   <array>
     <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
     <string>-I</string>
-    <string>/Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/nerve/nerve.py</string>
+    <string>/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/nerve.py</string>
     <string>run</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/nerve</string>
+  <string>/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -35,8 +35,8 @@
   <key>Nice</key>
   <integer>10</integer>
   <key>StandardOutPath</key>
-  <string>/Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/nerve/state/nerve.log</string>
+  <string>/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state/nerve.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/agolubenko/Desktop/Development/HR_Helper-v2/supertick-eval/nerve/state/nerve.log</string>
+  <string>/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state/nerve.log</string>
 </dict>
 </plist>
