@@ -2,7 +2,7 @@
  * API очереди владельца: /api/oq/v1. Документы в формате базы артефакта (страница /queue, агенты, бот),
  * журнал, мёрж и деплой. Доступ — токен очереди или сессия владельца консоли (server/queue/auth.ts).
  */
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { compress } from 'hono/compress'
 import { z } from 'zod'
 import { apiError } from '../http-types'
@@ -32,23 +32,27 @@ export const queueRoutes = new Hono<QueueEnv>()
 queueRoutes.use('*', requireQueueActor)
 
 // Области — и на маршруте, и в хранилище (server/queue/store.ts): одна проверка не держится на другой.
-/** Обрезка потолком — полями рядом с docs и только когда она была: обычный ответ байт в байт прежний. */
+/** Обрезка потолком — полями рядом с docs и только когда она была: без обрезки JSON прежний, только { docs }. */
 const listBody = ({ docs, capped }: DocList) => (capped ? { docs, truncated: true, total: capped.total, limit: capped.limit } : { docs })
 
-// Сжатие — только у списка (586 КБ gzip против 2 МБ у items на каждом опросе Нерва). compress ставит тегу W/ —
-// поэтому 304 сравнивает слабо (etagMatches). В теле списка нет секретов, CSRF — заголовок, а не токен в теле (BREACH).
+/** 304 — с теми же ETag и Vary, что у 200 (RFC 9110 §15.4.5): compress пропускает ответ без тела и Vary сам не ставит. */
+const notModified = (c: Context<QueueEnv>, tag: string) => c.body(null, 304, { ETag: tag, Vary: 'Accept-Encoding' })
+
+// Сжатие — только у списка (586 КБ gzip против 2 МБ у items на каждом опросе Нерва). Теги списка слабые (store.ts),
+// поэтому один и тот же у gzip и несжатого ответа; If-None-Match сравнивается слабо (etagMatches).
+// В теле списка нет секретов, CSRF — заголовок, а не токен в теле (BREACH).
 queueRoutes.get('/db/:col', requireScope('read', 'agent'), compress({ encoding: 'gzip' }), async (c) => {
   const col = collectionOf(c.req.param('col'))
   // ?open=1 — только открытые владельцу пункты, по тому же правилу, что на странице (MCP oq_list open_only). Ответ
   // зависит и от checks — ETag по обеим коллекциям; open: true — сервер фильтр применил (старый сервер параметр не знает).
   if (col === 'items' && c.req.query('open') === '1') {
     const openTag = await openItemsTag()
-    if (etagMatches(c.req.header('if-none-match'), openTag)) return c.body(null, 304, { ETag: openTag })
+    if (etagMatches(c.req.header('if-none-match'), openTag)) return notModified(c, openTag)
     c.header('ETag', openTag)
     return c.json({ ...listBody(await listOpenItems()), open: true })
   }
   const tag = await collectionTag(col)
-  if (etagMatches(c.req.header('if-none-match'), tag)) return c.body(null, 304, { ETag: tag })
+  if (etagMatches(c.req.header('if-none-match'), tag)) return notModified(c, tag)
   c.header('ETag', tag)
   return c.json(listBody(await listDocs(col)))
 })

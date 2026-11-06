@@ -67,6 +67,9 @@ describe('gzip списка и 304 по тегу сжатого ответа', (
     const again = await get('/db/items', { 'Accept-Encoding': 'gzip', 'If-None-Match': tag })
     expect(again.status).toBe(304)
     expect(await again.text()).toBe('')
+    // 304 — с теми же ETag и Vary, что у 200 (RFC 9110 §15.4.5).
+    expect(again.headers.get('etag')).toBe(tag)
+    expect(again.headers.get('vary')).toMatch(/accept-encoding/i)
     // ?open=1 — тот же путь: тег сжатого ответа даёт 304.
     const open = await get('/db/items?open=1', { 'Accept-Encoding': 'gzip' })
     expect(open.headers.get('content-encoding')).toBe('gzip')
@@ -74,11 +77,11 @@ describe('gzip списка и 304 по тегу сжатого ответа', (
     expect((await get('/db/items?open=1', { 'If-None-Match': open.headers.get('etag')! })).status).toBe(304)
   })
 
-  it('без Accept-Encoding — прежний ответ: без сжатия, сильный тег, только docs', async () => {
+  it('без Accept-Encoding — без сжатия, только docs; тег тот же, что у сжатого ответа', async () => {
     const res = await get('/db/items')
     expect(res.headers.get('content-encoding')).toBeNull()
     const tag = res.headers.get('etag')!
-    expect(tag.startsWith('"')).toBe(true)
+    expect(tag).toBe((await get('/db/items', { 'Accept-Encoding': 'gzip' })).headers.get('etag'))
     expect(Object.keys((await res.json()) as object)).toEqual(['docs'])
     expect((await get('/db/items', { 'If-None-Match': tag })).status).toBe(304)
   })
@@ -87,6 +90,7 @@ describe('gzip списка и 304 по тегу сжатого ответа', (
 describe('потолок списка', () => {
   it('обрезка видна: truncated, total, limit — самые свежие документы; старый клиент читает docs', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const before = (await get('/db/items')).headers.get('etag')!
     setListLimitsForTests({ max: 3, warn: 2 })
     const res = await get('/db/items')
     const body = (await res.json()) as { docs: { id: string }[]; truncated?: boolean; total?: number; limit?: number }
@@ -94,7 +98,9 @@ describe('потолок списка', () => {
     expect(body.total).toBe(5)
     expect(body.limit).toBe(3)
     expect(body.docs.map((d) => d.id)).toEqual(['d-list-5', 'd-list-4', 'd-list-3'])
-    // Тег — тот же, что без потолка: 304 по-прежнему работает.
+    // Потолок — в теге: клиент со списком под прежним потолком получает 200, а не 304 со старым списком.
+    expect(res.headers.get('etag')).not.toBe(before)
+    expect((await get('/db/items', { 'If-None-Match': before })).status).toBe(200)
     expect((await get('/db/items', { 'If-None-Match': res.headers.get('etag')! })).status).toBe(304)
     // ?open=1 — та же форма; total — размер коллекции items.
     const open = (await (await get('/db/items?open=1')).json()) as { open: boolean; truncated?: boolean; total?: number; docs: unknown[] }

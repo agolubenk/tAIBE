@@ -166,7 +166,10 @@ export function setListLimitsForTests(v: { max: number; warn: number } | null): 
   warnedNear.clear()
 }
 
-/** capped — список обрезан потолком: total — сколько документов в коллекции, limit — сколько отдано (самые свежие). */
+/**
+ * capped — список обрезан потолком: total — сколько документов в коллекции, limit — сколько самых свежих прочитано.
+ * У listOpenItems docs — открытые среди этих limit, поэтому docs.length может быть меньше limit.
+ */
 export type DocList = { docs: Doc[]; capped?: { total: number; limit: number } }
 
 export async function listDocs(collection: Collection): Promise<DocList> {
@@ -178,8 +181,9 @@ export async function listDocs(collection: Collection): Promise<DocList> {
     console.warn(`[oq] коллекция ${collection}: ${rows.length > max ? `больше ${max}` : rows.length} документов (порог ${warn}) — полный список на каждом опросе дорог, нужен /changes`)
   }
   if (rows.length <= max) return { docs: rows.map(parseDoc) }
+  // count — отдельный запрос: удаление между ним и выборкой дало бы total ≤ limit при truncated.
   const { n } = await collectionStats(collection)
-  return { docs: rows.slice(0, max).map(parseDoc), capped: { total: Number(n), limit: max } }
+  return { docs: rows.slice(0, max).map(parseDoc), capped: { total: Math.max(Number(n), rows.length), limit: max } }
 }
 
 async function collectionStats(collection: Collection) {
@@ -190,10 +194,15 @@ async function collectionStats(collection: Collection) {
   return { n: row?.n ?? 0, last: row?.last ?? 0, v: row?.v ?? 0 }
 }
 
-/** ETag коллекции: меняется при любой записи — опрос страницы раз в несколько секунд стоит один дешёвый запрос. */
+/**
+ * ETag коллекции: меняется при любой записи — опрос страницы раз в несколько секунд стоит один дешёвый запрос.
+ * Слабый (W/): тег считается по составу коллекции, а не по байтам, и один и тот же у gzip и несжатого ответа — compress
+ * его не переписывает, 200 и 304 несут одно значение. Потолок — в теге: клиент, который держит список, обрезанный
+ * прежним потолком, после смены потолка получит 200 с полным списком, а не 304.
+ */
 export async function collectionTag(collection: Collection): Promise<string> {
   const { n, last, v } = await collectionStats(collection)
-  return `"${createHash('sha1').update(`${collection}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
+  return `W/"${createHash('sha1').update(`${collection}:${listLimits.max}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
 }
 
 export async function getDoc(collection: Collection, id: string): Promise<Doc | null> {
@@ -204,7 +213,7 @@ export async function getDoc(collection: Collection, id: string): Promise<Doc | 
 /** ETag ответа ?open=1: открытость пункта зависит от items и checks — тег меняется при записи в любую из них. */
 export async function openItemsTag(): Promise<string> {
   const [items, checks] = await Promise.all([collectionTag('items'), collectionTag('checks')])
-  return `"${createHash('sha1').update(`open:${items}:${checks}`).digest('hex').slice(0, 20)}"`
+  return `W/"${createHash('sha1').update(`open:${items}:${checks}`).digest('hex').slice(0, 20)}"`
 }
 
 /** Пункты, открытые владельцу, — не archived и не закрытые по правилу страницы (open-rule.ts, «ждёт вас снова» — открыт). */
