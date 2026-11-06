@@ -107,8 +107,11 @@ def ensure_gateway(repo, judges=()):
         base, token = gateway(repo)  # a first start writes the token
     no_local = found is not None and not any(m.startswith('local/') for m in found)
     if found is not None and (no_local or not all(j in found for j in judges)):
-        log('local models not listed — starting Ollama')
-        start_ollama()
+        if not ollama_up():  # never reopen a running Ollama.app: on 06.11 a second `open` quit it
+            log('Ollama down — starting it')
+            start_ollama()
+            wait(lambda: True if ollama_up() else None, tries=45)
+
         def ready():
             m = models(base, token)
             return m if m and any(k.startswith('local/') for k in m) and all(j in m for j in judges) else None
@@ -127,8 +130,17 @@ def wait(probe, tries=30, pause=2):
     return None
 
 
+def ollama_up():
+    try:
+        with urllib.request.urlopen(OLLAMA + '/api/version', timeout=5):  # noqa: S310 — local Ollama URL
+            return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def start_ollama():
-    """Ollama.app on macOS (it quit once during the first run, 06.11), else `ollama serve` detached."""
+    """Ollama.app on macOS, else `ollama serve` detached. On 06.11 the app quit by itself four times in two
+    hours, once in the middle of a judge call: the retry in `retrying` brings it back."""
     if subprocess.run(['open', '-ga', 'Ollama'], capture_output=True).returncode != 0:
         subprocess.Popen(['ollama', 'serve'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
