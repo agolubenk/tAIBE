@@ -2,79 +2,119 @@
   {
     "id": "git-replay",
     "tool": "Bash",
-    "pattern": "git\\b[^\\n]*\\breplay\\b",
+    "field": "command",
+    "pattern": "\\bgit\\b[^\\n]*\\breplay\\b",
     "lesson": "Git 2.54 `git replay` сам двигает ветки (20.10 сдвинул две). Симулируй через merge-tree/commit-tree или `--ref-action=print`.",
-    "memory": "feedback_git_replay_moves_refs.md"
+    "memory": "feedback_git_replay_moves_refs.md",
+    "dormant": "0 срабатываний за 30.10–06.11; держим: промах двигает чужие ветки, а молчащая строка ничего не стоит"
   },
   {
     "id": "zsh-colon",
     "tool": "Bash",
-    "pattern": "\"\\$[A-Za-z_][A-Za-z0-9_]*:[a-zA-Z]",
-    "lesson": "Bash здесь — zsh: `\"$R:apps/…\"` срабатывает как модификатор `:a`. Пиши `\"${R}:path\"`.",
+    "field": "command",
+    "pattern": "\\$[A-Za-z_][A-Za-z0-9_]*:[aAcehlPqQrstu&]",
+    "lesson": "Bash здесь — zsh: в `$R:apps` и `\"$R:apps\"` буква после двоеточия — модификатор (:a :e :h :t :r :s …). Путь портится (`ambiguous argument`) или вызов падает (`bad substitution`). Пиши `\"${R}:path\"`.",
     "memory": "feedback_zsh_colon_modifier.md"
   },
   {
     "id": "zsh-split",
     "tool": "Bash",
-    "pattern": "\\bfor [A-Za-z_]+ in \\$(\\(|[A-Za-z_{])",
-    "lesson": "zsh не делит слова: `for x in $var` и `$(…)` дают один элемент. Используй while-read, `${=var}` и положительный контроль.",
+    "field": "command",
+    "pattern": "\\bfor\\s+[A-Za-z_]\\w*\\s+in\\s+\\$\\{?[A-Za-z_]\\w*\\}?\\s*(?:;|$|\\bdo\\b)",
+    "lesson": "zsh не делит `$var` на слова: `for x in $var` проходит один раз по всей строке (`$(…)` и массивы делятся). Пиши `${=var}`, массив или while-read и ставь положительный контроль.",
     "memory": "feedback_zsh_word_splitting.md"
   },
   {
     "id": "zsh-glob",
     "tool": "Bash",
-    "pattern": "--include=\\*|\\bls [^|;&'\"]*\\*[^'\"]",
-    "lesson": "zsh: незакавыченный глоб без совпадений даёт «no matches found», и команда не выполняется. Бери глоб в кавычки.",
+    "field": "command",
+    "pattern": "(?<![\\w\"'-])--(?:include|exclude|exclude-dir|glob)=(?![\"'])[^\\s\"']*[*?]",
+    "lesson": "zsh: незакавыченный глоб без совпадений даёт «no matches found», и команда не выполняется. `--include=*.ts` не совпадает никогда. Бери глоб в кавычки: `--include='*.ts'`.",
     "memory": "feedback_zsh_word_splitting.md"
+  },
+  {
+    "id": "zsh-equals",
+    "tool": "Bash",
+    "field": "command",
+    "pattern": "(?:^|[;&|(]|\\b(?:do|then|else))\\s*echo\\s+(?:-[neE]+\\s+)*=",
+    "lesson": "zsh: слово с `=` в начале раскрывается как путь команды. `echo ====` даёт «= not found», и вызов обрывается на этом месте. Разделитель — в кавычках (`echo '===='`) или `echo ---`.",
+    "memory": ""
+  },
+  {
+    "id": "zsh-cmd-var",
+    "tool": "Bash",
+    "field": "command",
+    "pattern": "\\b([A-Za-z_]\\w*)=([\"'])[^\"'\\s]+\\s[^\"']*\\2.*?(?:^|[;&|(]|\\$\\(|\\b(?:do|then))\\s*\\$\\{?\\1\\}?(?=[\\s/;)]|$)",
+    "lesson": "zsh не делит `$G` на слова: после `G=\"git -C $W\"` вызов `$G status` ищет команду с именем «git -C …» → «no such file or directory». Команду держи в функции (`g(){ git -C \"$W\" \"$@\"; }`) или в массиве (`G=(git -C \"$W\"); $G status`).",
+    "memory": "feedback_zsh_word_splitting.md"
+  },
+  {
+    "id": "zsh-jq-glob",
+    "tool": "Bash",
+    "field": "command",
+    "pattern": "(?:--jq[ =]|(?:^|[|;&(])\\s*jq\\s+(?:-\\w+\\s+)*)(?![\"'])[^\\s\"'|;&)]*[\\[*?]",
+    "lesson": "zsh: незакавыченный фильтр jq с `[…]` — это глоб: `--jq .headRefOid[0:8]` даёт «no matches found». Фильтр — в одинарных кавычках: `--jq '.headRefOid[0:8]'`.",
+    "memory": ""
+  },
+  {
+    "id": "unittest-isolated",
+    "tool": "Bash",
+    "field": "command",
+    "pattern": "\\bpython3?(?:\\.\\d+)?\\s+(?:-\\w+\\s+)*-I\\s+(?:-\\w+\\s+)*-m\\s+unittest(?:\\s+-\\w+)*\\s+(?!discover\\b|-)[\\w./]",
+    "lesson": "`python3 -I` убирает cwd из sys.path: `-m unittest test_x` не импортирует модуль и даёт «Ran 1 test» с ImportError вместо всех тестов. Пиши `python3 -I -m unittest discover -s <папка> -p 'test_*.py'`.",
+    "memory": ""
   },
   {
     "id": "monitor-pipe",
     "tool": "Monitor",
-    "pattern": "\\|\\s*(grep|awk|sed)\\b",
-    "lesson": "Фильтр через пайп в Monitor держит строки в буфере, и событий 0. Отдай Monitor производителя, фильтр — внутри скрипта.",
-    "memory": "feedback_monitor_no_pipe_filters.md"
+    "field": "command",
+    "pattern": "\\|\\s*(?:grep\\b(?![^|\\n]*--line-buffered)|awk\\b(?![^|\\n]*fflush)|sed\\b(?![^|\\n]*\\s-u\\b))",
+    "unless": "\\$\\([^)]*\\|\\s*(?:grep|awk|sed)\\b",
+    "lesson": "Фильтр через пайп в Monitor держит строки в буфере, и событий 0. Отдай Monitor производителя, а фильтр — внутрь скрипта или `grep --line-buffered`.",
+    "memory": "feedback_monitor_no_pipe_filters.md",
+    "dormant": "30.10–06.11: 6 совпадений, все ложные (`grep --line-buffered`, `$(ps | grep)` в цикле опроса) — сужено до 0; держим: монитор без событий молчит часами"
   },
   {
     "id": "mem-gate-pipe",
     "tool": "Bash",
+    "field": "command",
     "pattern": "mem-gate\\.sh[^\\n|]*\\|[^\\n]*&&",
     "lesson": "`mem-gate.sh … | tail -1 && …` берёт код выхода tail. Тяжёлый прогон ушёл на «нельзя» (#399). Гейт — без пайпа или через `${pipestatus[1]}`.",
-    "memory": "feedback_mem_gate_pipe_exit.md"
+    "memory": "feedback_mem_gate_pipe_exit.md",
+    "dormant": "0 срабатываний за 30.10–06.11 при 10 вызовах mem-gate.sh; держим: промах пускает тяжёлую сборку при нехватке памяти"
   },
   {
     "id": "git-worktree-cd",
     "tool": "Bash",
-    "pattern": "cd [^;&\\n]*worktrees/[^;&\\n]*(&&|;)\\s*git ",
-    "lesson": "В worktree git — только `git -C <абсолютный путь>`. Промах с `cd ..` 20.10 запушил чужую ветку.",
+    "field": "command",
+    "pattern": "\\bcd\\s+(?:(?![\"']?[/~$])[^;&|\\n]*worktrees/[^;&|\\n]*(?:&&|;|\\n)|[^;&|\\n]*worktrees/[^;&|\\n]*(?:;|\\n))\\s*git\\s|\\bcd\\s+\\.\\.[^;&|\\n]*(?:&&|;|\\n)\\s*git\\s+(?:push|commit|merge|rebase|reset|checkout|switch)\\b",
+    "lesson": "В worktree git — `git -C <абсолютный путь>`. Относительный `cd` и `cd …;` без `&&` при промахе пускают git в чужом checkout: 20.10 `cd ..` запушил чужую ветку.",
     "memory": "feedback_git_c_in_worktrees.md"
   },
   {
     "id": "mutant-checkout",
     "tool": "Bash",
-    "pattern": "git (checkout|restore) (--\\s|--source)",
+    "field": "command",
+    "pattern": "(?:^|[;&|(])\\s*git\\s+(?:-C\\s+\\S+\\s+)?(?:checkout|restore)\\s+(?:--\\s|--source)",
+    "unless": "(?:checkout|restore)\\s+--\\s+\\S*packages-manifest\\.md\\s*(?:$|[;&|)])",
     "lesson": "Мутант: файл копируй в scratchpad и возвращай `cp`. `git checkout --` 21.10 стёр незакоммиченный фикс (#276).",
     "memory": "feedback_mutants_after_commit.md"
   },
   {
     "id": "t-boards-vitest",
     "tool": "Bash",
-    "pattern": "npx vitest",
+    "field": "command",
+    "pattern": "(?:\\bt-boards\\b|(?:^|[\\s/\"'])boards/).*?\\bnpx\\s+vitest\\b|\\bnpx\\s+vitest\\b.*?(?:\\bt-boards\\b|(?:^|[\\s/\"'])boards/)",
     "lesson": "В t-boards тесты — `vp test run` в пакете, интеграция — `zsh t-boards/tools/run-int.sh`. `npx vitest` из пакета нельзя. В основном репо vitest — из каталога пакета (`cd <wt>/apps/<pkg>`).",
     "memory": "feedback_worktree_tests_cwd.md"
   },
   {
-    "id": "macos-timeout",
-    "tool": "Bash",
-    "pattern": "(^|\"|[;&|(]\\s*)timeout \\d",
-    "lesson": "На macOS нет `timeout`. Ожидание — через Monitor с until-циклом или `run_in_background`.",
-    "memory": "feedback_relay_watch_monitor_not_bg.md"
-  },
-  {
     "id": "vps-volume",
     "tool": "Bash|mcp__owner-queue__oq_(put|patch)",
-    "pattern": "volume prune|compose[^\\n]*down[^\\n]*-v\\b",
+    "pattern": "volume\\s+prune|compose\\b[^\\\\;&|]*\\bdown\\b[^\\\\;&|]*\\s-v\\b",
     "lesson": "На VPS никаких `docker volume prune` и `compose down -v`: том MinIO — единственная копия файлов.",
-    "memory": "project_vps_minio_single_copy.md"
+    "memory": "project_vps_minio_single_copy.md",
+    "dormant": "30.10–06.11: 2 совпадения, оба ложные (шаблон шагал через строки JSON) — сужено до 0; держим: промах стирает единственную копию файлов"
   },
   {
     "id": "owner-s-command",
@@ -93,8 +133,17 @@
   {
     "id": "curl-hook",
     "tool": "Bash",
-    "pattern": "(^|[\"\\s;&|(])curl\\s",
-    "lesson": "Хук context-mode блокирует слово curl в Bash. Пиши `cu''rl` или используй MCP oq_*. Токены передавай через stdin (`-H @-`).",
+    "field": "command",
+    "pattern": "(?:^|[;&|(]|\\$\\(|\\b(?:do|then|else))\\s*(?:curl|cu''rl|c''url|cu\"\"rl|c\"\"url)\\s",
+    "lesson": "curl в Bash хук context-mode может завернуть в ctx_execute, а обход `cu''rl` классификатор auto-режима отклоняет как [Auto-Mode Bypass]. HTTP-пробу делай через ctx_execute (fetch), очередь — через MCP oq_*. Токены — через stdin (`-H @-`).",
+    "memory": ""
+  },
+  {
+    "id": "git-history-rewrite",
+    "tool": "Bash",
+    "field": "command",
+    "pattern": "(?:^|[;&|(])\\s*git\\s+(?:-C\\s+\\S+\\s+)?(?:commit\\b[^\\n;&|]*\\s--amend\\b|push\\b[^\\n;&|]*(?:\\s-f\\b|\\s--force))",
+    "lesson": "`git commit --amend` и force-push классификатор auto-режима отклоняет как [Git Destructive], и шаг встаёт. WIP снимай новым коммитом, базу вливай merge'ем в ветку и пушь обычным push; историю чистит squash при мёрже.",
     "memory": ""
   },
   {
@@ -107,14 +156,17 @@
   {
     "id": "stale-binary",
     "tool": "Bash",
+    "field": "command",
     "pattern": "anthropic\\.claude-code-\\d+\\.\\d+\\.\\d+",
     "lesson": "Путь к бинарю расширения устаревает с каждым обновлением (2.1.311 → 2.1.312 за день). Запускай `claude` из PATH, версию смотри `claude --version`.",
-    "memory": ""
+    "memory": "",
+    "dormant": "за 30.10–06.11 одно совпадение, и то строка теста; держим: путь к бинарю расширения ломает запуск после обновления"
   },
   {
     "id": "pr-merge",
     "tool": "Bash",
-    "pattern": "gh\\s+pr\\s+merge",
+    "field": "command",
+    "pattern": "(?:^|[;&|(]|\\$\\()\\s*(?:[A-Z_]+=\\S*\\s+)*gh\\s+pr\\s+merge\\b",
     "lesson": "Мёрж в main = деплой прода. Вливает только Контроль (роль release), по одному, `--match-head-commit <sha>` после кворума линз; если в PR только .md — `[skip ci]` в заголовке merge.",
     "memory": ""
   }

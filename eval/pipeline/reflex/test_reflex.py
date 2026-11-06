@@ -32,26 +32,19 @@ class AntigenTest(unittest.TestCase):
         for row in self.table:
             self.assertTrue(row['lesson'])
 
-    def test_known_traps_fire(self):
-        cases = {
-            'git-replay': ('Bash', {'command': 'git replay --onto main topic'}),
-            'zsh-colon': ('Bash', {'command': 'git show "$R:apps/x.ts"'}),
-            'zsh-split': ('Bash', {'command': 'for f in $files; do echo $f; done'}),
-            'monitor-pipe': ('Monitor', {'command': 'tail -f log | grep ERROR'}),
-            'mem-gate-pipe': ('Bash', {'command': 'mem-gate.sh heavy | tail -1 && npm test'}),
-            'mutant-checkout': ('Bash', {'command': 'git checkout -- src/a.ts'}),
-            'macos-timeout': ('Bash', {'command': 'timeout 30 npm test'}),
-            'vps-volume': ('Bash', {'command': 'docker compose down -v'}),
-            'owner-s-command': ('mcp__owner-queue__oq_put', {'id': 's-x', 'cmd': 'echo'}),
-            'oq-note-echo': ('mcp__owner-queue__oq_get', {'id': 'c-tb-ui-check'}),
-            'curl-hook': ('Bash', {'command': 'curl -s http://x'}),
-            'stale-binary': ('Bash', {'command': '~/.vscode/extensions/anthropic.claude-code-2.1.311-darwin-arm64/claude -p x'}),
-            'pr-merge': ('Bash', {'command': 'gh pr merge 445 --squash --match-head-commit abc'}),
-        }
-        for want, (tool, payload) in cases.items():
-            with self.subTest(want):
-                got = [row['id'] for row in antigen.matches(self.table, tool, payload)]
-                self.assertIn(want, got)
+    def test_field_unless_and_json_modes(self):
+        """Per-row fire/quiet cases live in genome/test_antigens.py; here — the matcher itself on a synthetic table."""
+        path = os.path.join(self.state, 'table.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump([{'id': 'cmd', 'tool': 'Bash', 'field': 'command', 'pattern': '^git push', 'unless': '--dry-run',
+                        'lesson': 'x'},
+                       {'id': 'json', 'tool': 'Bash', 'pattern': '"description"', 'lesson': 'y'}], f)
+        table = antigen.load_table(path)
+        got = lambda payload: [row['id'] for row in antigen.matches(table, 'Bash', payload)]  # noqa: E731
+        self.assertEqual(got({'command': 'ls\ngit push origin x'}), ['cmd'])   # ^ is a line start in the command
+        self.assertEqual(got({'command': 'git push --dry-run'}), [])           # unless drops the match
+        self.assertEqual(got({'command': 'echo; git push', 'description': 'git push'}), ['json'])
+        self.assertEqual(got({'command': ['git push']}), [])                   # a non-string field is silent
 
     def test_quiet_commands_stay_silent(self):
         for command in ('git -C /a/b status', 'ls -la', 'echo "${R}:apps/x"', 'while read f; do :; done < list'):

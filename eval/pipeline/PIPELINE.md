@@ -320,7 +320,7 @@
 |---|---|---|
 | П1, П3: геном автора | `genome/author.json` — 10 плагинов off, 25 скиллов off, 3 name-only, `disableBundledSkills`, `syncClaudeAiSkills: false`, `skillListingMaxDescChars: 100`, deny-список, `claudeMdExcludes` для копий в worktree и scratchpad | проба 17:43, ниже |
 | П4: усилие | `genome/coord.json`, `genome/control.json` — то же + `CLAUDE_CODE_EFFORT_LEVEL=medium`; `genome/agents/routine.md` — субагент рутины с `effort: medium` (копия, в `.claude/agents` не ставился) | на следующем запуске команды |
-| П2: антиген → урок | `reflex/antigen.py` + `genome/antigens.json` (15 ловушек), урок раз за сессию | `reflex/test_reflex.py` |
+| П2: антиген → урок | `reflex/antigen.py` + `genome/antigens.json` (21 ловушка; 06.11 — замер точности по 33 тыс. вызовов за 7 дней, сужены шумные, `macos-timeout` убран), урок раз за сессию, подсказка, не блок | `reflex/test_reflex.py`, `genome/test_antigens.py` (у каждой строки — пример на срабатывание и на тишину) |
 | П5: время и рефлексы | `reflex/now.sh` (UserPromptSubmit и PreToolUse `Write\|SendMessage\|oq_*`), `reflex/pr_state.py`, `reflex/wt_state.py`, `reflex/handoff_read.py` | там же, 20 тестов на синтетике |
 | П6: капсула | `capsule.py` → `capsules/<роль>.md` (≤ 8000 байт: сначала режется механика, длинные заметки — отказ) | `test_capsule.py`, 6 тестов |
 | П2: «био»-память | `MEMORY.md` 18 292 → 1 047 байт; полный индекс — `memory/MEMORY-index.md`; копия — `genome/MEMORY.before-2026-10-28.md` | файлы памяти не тронуты |
