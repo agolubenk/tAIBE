@@ -22,7 +22,8 @@ export const oqDocs = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.collection, t.id] }),
     index('idx_oq_docs_updated').on(t.collection, t.updatedAt),
-    index('idx_oq_docs_product').on(t.collection, t.product, t.updatedAt),
+    // version — чтобы ETag списка (count, max(updated_at), sum(version)) читался из индекса, без строк документов.
+    index('idx_oq_docs_product').on(t.collection, t.product, t.updatedAt, t.version),
   ],
 )
 

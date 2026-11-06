@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "769b10b0-6334-497f-a2f0-743b44549465",
+  "id": "3a47dbff-d00f-44c0-8b82-b064359ebd2b",
   "prevId": "59b3c842-4203-40ca-a1d3-6313546b6521",
   "tables": {
     "activity": {
@@ -3041,7 +3041,8 @@
           "columns": [
             "collection",
             "product",
-            "updated_at"
+            "updated_at",
+            "version"
           ],
           "isUnique": false
         }

@@ -47,9 +47,22 @@ export function visibilityKey(products: Visibility): string {
   return products === '*' ? '*' : [...products].sort().join(',')
 }
 
-export async function listProducts(): Promise<Product[]> {
-  const rows = await getDb().select().from(oqProducts).orderBy(asc(oqProducts.slug))
-  return rows.map((r) => ({ slug: r.slug, name: r.name, isDefault: r.isDefault }))
+// Справочник меняется только миграцией (= перезапуск процесса): читается один раз на базу. db в записи — тесты меняют базу.
+let productsCache: { db: unknown; list: Promise<Product[]> } | null = null
+
+export function listProducts(): Promise<Product[]> {
+  const db = getDb()
+  if (productsCache?.db === db) return productsCache.list
+  const list = db
+    .select()
+    .from(oqProducts)
+    .orderBy(asc(oqProducts.slug))
+    .then((rows) => rows.map((r) => ({ slug: r.slug, name: r.name, isDefault: r.isDefault })))
+  productsCache = { db, list }
+  list.catch(() => {
+    if (productsCache?.list === list) productsCache = null
+  })
+  return list
 }
 
 /** Ответ на документ чужого продукта и на id чужого пространства — один, как на несуществующий. */
