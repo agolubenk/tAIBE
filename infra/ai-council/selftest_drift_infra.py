@@ -43,7 +43,7 @@ class _Client:
         return SimpleNamespace(ok=True, text=json.dumps(data, ensure_ascii=False), data=data, error="", ms=ms,
                                model=model, tokens_in=0, tokens_out=0)
 
-    def large_model(self, _model):
+    def large_model(self, _model, wait_seconds=1800):
         return contextlib.nullcontext()
 
 

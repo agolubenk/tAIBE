@@ -427,9 +427,11 @@ class OllamaClient:
         """Лок в council.db хоста — под машинным: старые копии кода на том же хосте видят только его, а status
         показывает модель."""
         acquired = False
-        while time.time() < deadline:
+        while True:                    # хотя бы одна попытка: машинный лок мог достаться у самого дедлайна
             if self.store is None or self.store.acquire_model_lock(self.holder, model):
                 acquired = True
+                break
+            if time.time() >= deadline:
                 break
             time.sleep(2.0)
         if not acquired:
