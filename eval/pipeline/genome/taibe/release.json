@@ -1,0 +1,103 @@
+{
+  "enabledPlugins": {
+    "typescript-lsp@claude-plugins-official": false,
+    "pyright-lsp@claude-plugins-official": false,
+    "redis-development@claude-plugins-official": false,
+    "clickhouse-best-practices@claude-plugins-official": false,
+    "security-guidance@claude-plugins-official": false,
+    "frontend-design@claude-plugins-official": false,
+    "code-review@claude-plugins-official": false,
+    "chrome-devtools-mcp@claude-plugins-official": false,
+    "claude-security@claude-plugins-official": false,
+    "claude-mem-cowork@thedotmack": false
+  },
+  "skillOverrides": {
+    "animate": "off",
+    "animate-expo": "off",
+    "animation-vocabulary": "off",
+    "apple-design": "off",
+    "ask-sonner": "off",
+    "db-migration": "off",
+    "emil-design-eng": "off",
+    "find-animation-opportunities": "off",
+    "fix-security-vulnerabilities-with-strix": "off",
+    "hr-domain": "off",
+    "improve-animations": "off",
+    "mobile-native": "off",
+    "nestjs-service": "off",
+    "penetration-testing-with-strix": "off",
+    "pick-ui-library": "off",
+    "prototype": "off",
+    "react-feature": "off",
+    "repo-restructure": "off",
+    "review-animations": "off",
+    "write-swift": "off",
+    "graphify": "off",
+    "grill-task": "name-only",
+    "task-observer": "name-only",
+    "delegated-worktree-task": "name-only"
+  },
+  "disableBundledSkills": true,
+  "permissions": {
+    "deny": [
+      "Artifact",
+      "ArtifactComments",
+      "ArtifactData",
+      "ArtifactCheck",
+      "DesignSync",
+      "Workflow",
+      "NotebookEdit",
+      "RemoteTrigger",
+      "mcp__hub__cloudflare*",
+      "mcp__claude_ai_Claude_Docs",
+      "mcp__notion"
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH": "600",
+    "TAIBE_PRODUCT": "taibe"
+  },
+  "claudeMdExcludes": [
+    "/Users/agolubenko/Desktop/Development/tAIBE/worktrees/**/CLAUDE.md",
+    "/Users/agolubenko/Desktop/Development/tAIBE/worktrees/**/.claude/rules/00-*.md",
+    "/Users/agolubenko/Desktop/Development/tAIBE/worktrees/**/.claude/rules/01-*.md",
+    "/Users/agolubenko/Desktop/Development/tAIBE/worktrees/**/.claude/rules/90-team-t3.md",
+    "/private/tmp/claude-501/**/scratchpad/**/CLAUDE.md",
+    "/private/tmp/claude-501/**/scratchpad/**/.claude/rules/00-*.md",
+    "/private/tmp/claude-501/**/scratchpad/**/.claude/rules/01-*.md"
+  ],
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh /Users/agolubenko/Desktop/Development/tAIBE/eval/pipeline/reflex/now.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|SendMessage|mcp__owner-queue__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh /Users/agolubenko/Desktop/Development/tAIBE/eval/pipeline/reflex/now.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Monitor|mcp__owner-queue__.*|mcp__hub__notion_1mcp_notion-create-comment",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -I /Users/agolubenko/Desktop/Development/tAIBE/eval/pipeline/reflex/antigen.py"
+          }
+        ]
+      }
+    ]
+  },
+  "syncClaudeAiSkills": false,
+  "skillListingMaxDescChars": 100
+}

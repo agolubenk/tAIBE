@@ -117,5 +117,34 @@ for name, flags in [("print", ["--terminal", "print"]), ("keep-window", ["--keep
         print("FAIL: %s keeps exec and no autoclose" % name)
         print("\n".join(out))
 
+# OPS-25: продукт — --product, иначе TAIBE_PRODUCT из env (наследник берёт продукт предшественника), иначе по умолчанию.
+def product_run(env_extra, *flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = {**os.environ, "TMPDIR": tmp, **env_extra}
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--role", "boards", "--dry-run",
+                              "--cwd", tmp, *flags], capture_output=True, text=True, env=env, timeout=30)
+        return run.returncode, run.stdout + run.stderr
+
+
+for name, env_extra, flags, genome, product in [
+    ("successor of a tAIBE role gets the tAIBE genome", {"TAIBE_PRODUCT": "taibe"}, [], "/genome/taibe/boards.json", "taibe"),
+    ("--product beats TAIBE_PRODUCT", {"TAIBE_PRODUCT": "taibe"}, ["--product", "hr-helper"], "/genome/boards.json",
+     "hr-helper"),
+    ("no product — the default product", {"TAIBE_PRODUCT": ""}, [], "/genome/boards.json", "hr-helper"),
+]:
+    rc, out = product_run(env_extra, *flags)
+    ok = rc == 0 and genome in out and f"export TAIBE_PRODUCT='{product}'" in out
+    if not ok:
+        failed += 1
+        print("FAIL:", name)
+        print(out)
+rc, out = product_run({}, "--product", "nope")
+if rc == 0 or "нет продукта nope" not in out:
+    failed += 1
+    print("FAIL: unknown product is refused")
+    print(out)
+
 print("spawn_session: %d failed" % failed)
 sys.exit(1 if failed else 0)

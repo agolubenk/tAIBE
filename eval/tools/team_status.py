@@ -5,7 +5,7 @@
   python3 -I eval/tools/team_status.py live --role KEY [--cwd DIR]     живая роль → «pid имя статус …», rc 0; нет — rc 3
                                                                        (другой rc — проверка сломалась, роль не открывать)
   python3 -I eval/tools/team_status.py wait --role KEY --line LINE [--timeout 90]   сессия этой линии поднялась → rc 0
-  python3 -I eval/tools/team_status.py status [--cwd DIR]              роли по порядку 1→5→4→3→2→6 и пульс нерва
+  python3 -I eval/tools/team_status.py status [--cwd DIR | --all]      роли по порядку 1→5→4→3→2→6 и пульс нерва; --all — по продуктам
   python3 -I eval/tools/team_status.py stop [--cwd DIR]                команды kill живых ролей для владельца; сам не снимает
   python3 -I eval/tools/team_status.py nerve [--fix]                   пульс; --fix: не загружен → bootstrap, молчит → kickstart
 
@@ -89,7 +89,7 @@ def find_line(sx, role, line, since):
         if p is None or L.argv0(p) != "claude" or L.norm(p.start) != L.norm(d.get("procStart")):
             continue
         m = R.ROLE_RE.search(p.command)
-        if m and m.group(1) == role and L.session_line(sx, p) == line:
+        if m and m.group(2) == role and L.session_line(sx, p) == line:
             return {"pid": p.pid, "name": d.get("name") or "", "status": d.get("status") or "?"}
     return None
 
@@ -206,16 +206,36 @@ def cmd_wait(sx, a):
         sx.sleep(WAIT_POLL)
 
 
-def cmd_status(sx, a):
-    root = product_root(a.cwd)
+def product_roots():
+    """[(slug, repo_root)] из instances/: продукт по умолчанию первым (OPS-25). Без instances/ — пусто."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nerve"))
+    try:
+        import products as P
+        shared, items = P.load()
+    except Exception:  # noqa: BLE001 — копия слоя без instances/: только --cwd
+        return []
+    default = shared["default_product"]
+    return [(s, items[s]["repo_root"]) for s in [default] + sorted(k for k in items if k != default)]
+
+
+def print_roles(sx, root, title):
     rows = role_rows(sx, root)
     live = live_roles(rows)
-    print(f"продукт: {root}")
+    print(title)
     for role in ORDER:
         r = live.get(role)
         old = sum(1 for x in rows if x["role"] == role and x is not r)
         tail = f" · ещё {old} старых (reap_sessions.sh)" if old else ""
         print(f"{NUM[role]} {role:<9} {describe(r) if r else 'нет'}{tail}")
+
+
+def cmd_status(sx, a):
+    roots = product_roots() if a.all else []
+    if roots:
+        for slug, root in roots:
+            print_roles(sx, product_root(root), f"продукт {slug}: {root}")
+    else:
+        print_roles(sx, product_root(a.cwd), f"продукт: {product_root(a.cwd)}")
     print(nerve_line(nerve_state(sx)))
     return 0
 
@@ -251,6 +271,8 @@ def main(argv=None, sx=None):
         p.add_argument("--cwd", default=os.getcwd())
         if name == "live":
             p.add_argument("--role", required=True, choices=ORDER)
+        if name == "status":
+            p.add_argument("--all", action="store_true", help="роли каждого продукта из instances/ (OPS-25)")
     w = sub.add_parser("wait")
     w.add_argument("--role", required=True, choices=ORDER)
     w.add_argument("--line", required=True)

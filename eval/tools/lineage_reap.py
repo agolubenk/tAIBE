@@ -17,7 +17,8 @@ import time
 import lineage as L
 import lineage_retire as LR
 
-ROLE_RE = re.compile(r"/genome/([a-z]+)\.json")
+# genome/<роль>.json — продукт по умолчанию, genome/<slug>/<роль>.json — другие продукты (OPS-25).
+ROLE_RE = re.compile(r"/genome/(?:([a-z][a-z0-9-]*[a-z0-9])/)?([a-z]+)\.json")
 
 
 def add_reap_args(p):
@@ -138,18 +139,19 @@ def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
         last = max(d.get("updatedAt") or 0, d.get("statusUpdatedAt") or 0) / 1000.0
         status = d.get("status") or "?"
         rows.append({"pid": p.pid, "start": p.start, "proc": p, "name": d.get("name") or "", "status": status,
-                     "cwd": d.get("cwd") or "", "line": line, "role": m.group(1) if m else None,
+                     "cwd": d.get("cwd") or "", "line": line, "role": m.group(2) if m else None, "product": (m.group(1) or "") if m else "",
                      "age_h": max(0.0, now - (d.get("startedAt") or 0) / 1000.0) / 3600,
                      "idle_h": 0.0 if status == "busy" else max(0.0, now - last) / 3600})
-    current = {}
+    current = {}   # (продукт, роль) → текущая сессия: роль одного продукта не делает чужую «вытесненной»
     for r in rows:
         if r["role"]:
             key = (r["line"].count(".") if r["line"] else -1, -r["age_h"])  # длиннее линия, при равенстве — моложе
-            if r["role"] not in current or key > current[r["role"]][0]:
-                current[r["role"]] = (key, r["pid"])
+            pr = (r["product"], r["role"])
+            if pr not in current or key > current[pr][0]:
+                current[pr] = (key, r["pid"])
     for r in rows:
         r["ack"] = ack_state(procs, r["line"])
-        is_current = r["role"] is not None and current[r["role"]][1] == r["pid"]
+        is_current = r["role"] is not None and current[(r["product"], r["role"])][1] == r["pid"]
         gen = successor_gen(rows, r)
         r["cand"] = False
         if me is not None and r["pid"] == me.pid:
