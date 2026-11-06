@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The daily evolution run (eval/evolve/README.md «Daily run»). A template: `bash eval/evolve/daily.sh install`
+     fills __DAILY_SH__ (the run's own worktree), __PATH__, __STATE__ and __HOME__ and loads it. Not installed by
+     any session: the owner installs it after the merge. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>space.hrhelper.evolve-daily</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__DAILY_SH__</string>
+    <string>run</string>
+  </array>
+  <!-- 04:30 local: the night, so the run spends no daytime quota. A Mac asleep at 04:30 starts the job on wake;
+       outside 03:00–08:00 the cycle only logs and waits for the next night. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>EVOLVE_STATE_DIR</key>
+    <string>__STATE__</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__STATE__/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__STATE__/launchd.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+</dict>
+</plist>

@@ -1,6 +1,6 @@
 # eval/evolve — the layer evolves by itself, without paying twice
 
-> **Status (2026-11-01):** working toolkit, stdlib Python, tests `python3 -I -m unittest discover -s eval/evolve -p 'test_*.py'`.
+> **Status (2026-11-06):** working toolkit plus the daily run, stdlib Python, tests `python3 -I -m unittest discover -s eval/evolve -p 'test_*.py'`.
 > Source of truth: the code in this folder. The cycle is **variation → measurement → selection → pin**.
 
 The process layer (skills, rules, subagents, commands, role cards, launch prompts, hooks, genome source) changes
@@ -51,7 +51,75 @@ python3 -I eval/evolve/ab.py --artifact .claude/skills/grill-task/SKILL.md --a H
     --cases eval/evolve/cases/grill-task.jsonl                # needs the llm-gateway; --record only for commits
 python3 -I eval/tools/ask_once.py check "can a subtask have two parents?"
 python3 -I eval/tools/queue_focus.py eval/board/plan-*.json  # also: make focus
+python3 -I eval/evolve/daily.py run --target taibe --since <rev>  # the daily run's judging part, now
+python3 -I eval/evolve/daily.py cases eval/evolve/cases/*.jsonl   # cases fit for the daily run?
 ```
+
+## Daily run — selection without a person (owner, 06.11)
+
+> «А/В сравнения должна запускать отдельная автоматическая сессия 1 раз в сутки и вносить корректировки также
+> автоматически. Ложноположительные результаты должны помечаться как брак и не приниматься.»
+
+`daily.sh run` (launchd, 04:30 local) refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
+`origin/board-agents`; no person's checkout is touched) and starts its fresh `daily.py cycle`:
+
+| Step | Who | What |
+|---|---|---|
+| gateway | `daily_steps.ensure_gateway` | Starts the llm-gateway (main checkout's script) when down, and Ollama when no judge is listed |
+| measure | `daily.py run` | `catalog.py`, `dupes.py --l1`, `eval/tools/ctx_budget.py learn` when it exists; layer files changed since the last run (`~/.claude/evolve/state.json`) |
+| calibrate | `judges.py` | Tonight's candidates — cloud models the gateway lists (OpenRouter keys), local models above 8B (one per weights blob, smallest first), Claude when `abJudgeClaude` is on — are calibrated one at a time on the reference skill (`grill-task`): identical texts TIE in both orders, the text beats its first 30 % and its copy with a harmful paragraph in both orders, 6 asks, all right. Only those that pass judge; the first two that pass are enough. None passes → every verdict of the night is insufficient, nothing acts, one line «нет годного судьи» goes to SE-49 |
+| judge | `daily.py run` + `quality.py` | Previous version against current for every changed file with cases, the calibrated judges one after the other (one model in memory at a time); files without cases go to `~/.claude/evolve/queue.json` |
+| act | `daily.py run` | Accepted loss of the merged version → revert PR; accepted win → pinned in `verdicts.jsonl`; brak and insufficient → recorded, never applied |
+| session | `daily_steps.cmd_session` | `claude -p` with `daily-prompt.md`: cases for the queue, a review of today's accepted verdicts for false positives, antigens from the day's incidents, one line to SE-49. 60 turns, $4, 45 min; quota spent — quiet exit; it cannot commit, push or merge |
+| publish | `daily.py publish` | Verdicts and cases → one PR; antigens with `test_reflex.py` green → another (`evolve/…` branches) |
+| merge | `daily.py merge` | The run's own PRs only: paths on `daily_git.AUTO_MERGE_PATHS`, none on `NEVER_MERGE` (hooks, scripts, settings, merge-guard, CI, this toolkit's code), every check green, switch `evolveAutoMerge` on → `gh pr merge --auto --squash --match-head-commit`. HR: PRs only, never merged by the run |
+
+The merge is done by the owner's scheduled job, not by a Claude session: the sessions' merge-guard
+(`.claude/hooks/pre-tool-use-merge-guard.py`) is not bypassed and not changed, and the headless session itself has
+no `gh`, `git push` or `git commit`. A scheduled run outside 03:00–08:00 (a Mac asleep at 04:30 starts the job on
+wake) logs and waits for the next night, so it never spends daytime quota; `--force` runs it now.
+
+### Statuses and thresholds (`quality.py`)
+
+Every verdict is `accepted`, `brak` or `insufficient`, with its reasons. Only `accepted` acts.
+
+| Check | Threshold | Why there |
+|---|---|---|
+| Canaries, on every run, from the current text | the same text twice → TIE in both orders (`X` twice is a position reader); the first 30 % of it → loses; it with a harmful paragraph in the middle → loses | A judge that cannot see a cut or a harmful order cannot see a real difference either. A failed canary makes the judge's **whole run** brak, not only that file |
+| Swap agreement | at most 1/3 of cases change pick when the sides swap | A coin flips half the cases, a position reader all of them; 1/3 leaves room for real near-ties |
+| Format | 0 answers out of format | A broken answer is never read as a tie (ab.py's rule) |
+| Repeat | 1/3 of decisive cases asked again; a flip to the other side → brak, a fall to a tie counts as a tie | Temperature 0 should answer the same; +30 % calls |
+| Length | the same meaning at two lengths (the text, and it restated); a judge whose probes mostly go to one length is biased, and its picks of that length are brak | The judge prompt here says length is not a criterion (tokens are priced apart) |
+| Calibration | every candidate, every night, 6 asks on the reference skill, all right | 06.11: qwen2.5:7b and glm4 (9.4B) passed the identity canary and failed truncate and harm; a judge that cannot see half a skill missing cannot see a real edit |
+| Two judges | two different models must both pass and agree; one judge, a disagreement or an unreachable judge → insufficient | One model's taste is not evidence |
+| Evidence | ≥ 6 cases, ≥ 4 decisive, the winner ≥ 80 % of decisive | ab.py takes 2 and 60 %; a fair coin gives 4 of 4 one time in 16, 5 of 6 — 7 in 64 |
+
+A judge that is not reached (gateway or Ollama down, out of time) makes no verdict line: the file is retried the
+next night against the same baseline. The headless session may append a `supersedes` line that marks an accepted
+verdict brak; a revert PR whose verdict was superseded is closed, not merged. Nobody turns brak into accepted.
+
+### The Claude judge (`abJudgeClaude`, off by default)
+
+`claude -p --model claude-sonnet-5-5` with the same prompt and the same last-line format, no tools, no MCP, no hooks
+(`disableAllHooks`), from an empty folder. It is the last candidate: calibrated only when fewer than two free judges
+passed. Off by default because it spends the owner's tokens: a night with two artifacts is about 70 calls of
+5–10 K tokens each (calibration 12, each artifact ~26–30). Turning it on is the owner's decision in the board's
+settings (Pipeline & evolution).
+
+### Install (owner, after the merge)
+
+```bash
+bash eval/evolve/daily.sh install     # renders space.hrhelper.evolve-daily.plist into ~/Library/LaunchAgents, loads it
+bash eval/evolve/daily.sh status      # launchd state, last run's summary
+bash eval/evolve/daily.sh run --force # a run now (it takes the lock; one run at a time)
+bash eval/evolve/daily.sh uninstall
+```
+
+Optional: `sudo pmset repeat wakeorpoweron MTWRFSU 04:25:00` wakes the Mac for it. GitHub auto-merge is off in
+tAIBE and `board-agents` has no required checks today: the run checks every check of the PR itself before
+`gh pr merge --auto`; turning on «Allow auto-merge» and required checks in the repository makes GitHub hold the line
+too. Switches: `abJudge` off — no judge calls; `evolveAutoMerge` off — PRs wait for a person; the master switch off —
+no run steps that spend model time.
 
 ## Limits — measured, not assumed
 
