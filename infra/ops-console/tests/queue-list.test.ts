@@ -7,7 +7,7 @@ import { freshApp } from './helpers'
 import { createToken } from '../server/queue/auth'
 import { etagMatches } from '../server/queue/etag'
 import { gzipListOnce } from '../server/queue/list-gzip'
-import { setListMaxForTests } from '../server/queue/store'
+import { setListLimitsForTests } from '../server/queue/store'
 
 type App = Awaited<ReturnType<typeof freshApp>>
 let app: App
@@ -38,7 +38,7 @@ beforeAll(async () => {
 })
 
 afterEach(() => {
-  setListMaxForTests(null)
+  setListLimitsForTests(null)
 })
 
 describe('etagMatches — If-None-Match по RFC 9110 §13.1.2', () => {
@@ -90,7 +90,7 @@ describe('gzip списка и 304 по тегу сжатого ответа', (
 describe('потолок списка', () => {
   it('обрезка видна: truncated, total, limit — самые свежие документы; старый клиент читает docs', async () => {
     const before = (await get('/db/items')).headers.get('etag')!
-    setListMaxForTests(3)
+    setListLimitsForTests({ max: 3 })
     const res = await get('/db/items')
     const body = (await res.json()) as { docs: { id: string }[]; truncated?: boolean; total?: number; limit?: number }
     expect(body.truncated).toBe(true)
@@ -107,8 +107,20 @@ describe('потолок списка', () => {
     expect(open.docs.length).toBeLessThanOrEqual(3)
   })
 
+  it('потолок объёма: самые свежие, пока сумма data_json в пределах; total — вся коллекция', async () => {
+    const all = ((await (await get('/db/items')).json()) as { docs: { id: string; data: unknown }[] }).docs
+    const size = (i: number) => Buffer.byteLength(JSON.stringify(all[i]!.data))
+    setListLimitsForTests({ bytes: size(0) + size(1) })
+    const body = (await (await get('/db/items')).json()) as { docs: { id: string }[]; truncated?: boolean; total?: number; limit?: number }
+    expect(body).toMatchObject({ truncated: true, total: 5, limit: 2 })
+    expect(body.docs.map((d) => d.id)).toEqual([all[0]!.id, all[1]!.id])
+    // Самый свежий больше потолка — пусто, но обрезка видна и total верный.
+    setListLimitsForTests({ bytes: 1 })
+    expect(await (await get('/db/items')).json()).toMatchObject({ docs: [], truncated: true, total: 5, limit: 0 })
+  })
+
   it('коллекция в пределах потолка — без полей обрезки', async () => {
-    setListMaxForTests(5)
+    setListLimitsForTests({ max: 5 })
     const body = (await (await get('/db/items')).json()) as Record<string, unknown>
     expect(Object.keys(body)).toEqual(['docs'])
     expect((body.docs as unknown[]).length).toBe(5)
@@ -119,18 +131,31 @@ describe('сжатый список — одна сборка на тег', () =
   it('одновременные запросы с одним тегом ждут одну сборку; новый тег — новая сборка; сбой не кэшируется', async () => {
     let builds = 0
     const build = async () => ({ docs: [{ id: `b-${++builds}` }] })
-    const [a, b] = await Promise.all([gzipListOnce('t-key', 'W/"1"', build), gzipListOnce('t-key', 'W/"1"', build)])
+    const [a, b] = await Promise.all([gzipListOnce('t-key', 'W/"1"', build).body, gzipListOnce('t-key', 'W/"1"', build).body])
     expect(builds).toBe(1)
     expect(a).toBe(b)
-    await gzipListOnce('t-key', 'W/"1"', build)
+    await gzipListOnce('t-key', 'W/"1"', build).body
     expect(builds).toBe(1)
-    await gzipListOnce('t-key', 'W/"2"', build)
+    await gzipListOnce('t-key', 'W/"2"', build).body
     expect(builds).toBe(2)
 
-    await expect(gzipListOnce('t-fail', 'W/"1"', async () => { throw new Error('сбой') })).rejects.toThrow('сбой')
+    await expect(gzipListOnce('t-fail', 'W/"1"', async () => { throw new Error('сбой') }).body).rejects.toThrow('сбой')
     await new Promise((r) => setTimeout(r, 0))
-    await gzipListOnce('t-fail', 'W/"1"', build)
+    await gzipListOnce('t-fail', 'W/"1"', build).body
     expect(builds).toBe(3)
+  })
+
+  it('пока сборка идёт, новый тег её не дублирует: тело и тег — той сборки', async () => {
+    let builds = 0
+    let release!: () => void
+    const slow = () => new Promise<unknown>((r) => { builds++; release = () => r({ docs: [] }) })
+    const first = gzipListOnce('t-slow', 'W/"3"', slow)
+    const second = gzipListOnce('t-slow', 'W/"4"', slow)
+    expect(builds).toBe(1)
+    expect(second.tag).toBe('W/"3"')
+    release()
+    await first.body
+    expect(gzipListOnce('t-slow', 'W/"4"', async () => ({ docs: [] })).tag).toBe('W/"4"')
   })
 
   it('после записи сжатый ответ — новый список, а не кэш прежнего тега', async () => {

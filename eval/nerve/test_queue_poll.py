@@ -133,6 +133,13 @@ class QueuePollTest(unittest.TestCase):
         sources.poll_queue(self.ctx)
         self.assertFalse([e for e in self.events() if e["kind"] == "queue.bytes"])
 
+    def test_tag_with_control_chars_is_not_sent_back(self):
+        fake = FakeCurl({"items": [], "checks": []}, tag_fmt='W/"{col}\rX-Evil: 1"')  # LF до тега не доходит (rpartition), CR — да
+        sources.run = fake
+        sources.poll_queue(self.ctx)
+        sources.poll_queue(self.ctx)
+        self.assertFalse(any("If-None-Match" in (stdin or "") for _, stdin, _ in fake.calls))
+
     def test_old_curl_without_header_var_polls_unconditionally(self):
         fake = FakeCurl({"items": [], "checks": []}, tag_fmt="%header{{etag}}")
         sources.run = fake

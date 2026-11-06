@@ -44,7 +44,8 @@ async function listResponse(c: Context<QueueEnv>, key: string, tag: string, buil
   const headers = { ETag: tag, Vary: 'Accept-Encoding' }
   if (etagMatches(c.req.header('if-none-match'), tag)) return c.body(null, 304, headers)
   if (!acceptsGzip(c.req.header('accept-encoding'))) return c.json(await build(), 200, headers)
-  return c.body(await gzipListOnce(key, tag, build), 200, { ...headers, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' })
+  const gz = gzipListOnce(key, tag, build)
+  return c.body(await gz.body, 200, { ETag: gz.tag, Vary: 'Accept-Encoding', 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' })
 }
 
 queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {

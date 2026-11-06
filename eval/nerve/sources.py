@@ -157,7 +157,8 @@ def _check_pr(ctx, n, p, head, refresh=False):
 # ETag и последний список — в памяти процесса: демон `nerve.py run` живёт весь процесс, Ctx — один проход. Тег на
 # диске без документов после рестарта дал бы 304 без данных; рестарт стоит один полный запрос. url → (etag, docs, meta).
 _OQ_CACHE = {}
-_OQ_TAG_RE = re.compile(r'^(W/)?"[^"]*"$')
+# RFC 9110 etagc: без пробелов и управляющих символов — тег уходит обратно строкой заголовка в stdin curl.
+_OQ_TAG_RE = re.compile(r'^(W/)?"[\x21\x23-\x7e]*"$')
 
 
 def _oq_get(ctx, collection):

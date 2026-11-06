@@ -7,7 +7,7 @@
  * Каждое изменение — строка журнала oq_events.
  */
 import { createHash } from 'node:crypto'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
@@ -151,16 +151,17 @@ function parseDoc(row: typeof oqDocs.$inferSelect): Doc {
 }
 
 /**
- * Потолок списка коллекции — большой и видимый: `capped` → в ответе API `truncated`, `total`, `limit` (прежний
- * limit(2000) обрезал молча, и обрезанные checks сделали бы отвеченные пункты снова открытыми). Убирает его /changes
- * (v2-lite).
+ * Потолок списка коллекции — по числу документов и по объёму, видимый: `capped` → в ответе API `truncated`, `total`,
+ * `limit` (прежний limit(2000) обрезал молча, и обрезанные checks сделали бы отвеченные пункты снова открытыми).
+ * Объём — сумма data_json самых свежих: документ до 48 КБ, и 10 000 таких — около 470 МБ JSON на сборку, а сборка
+ * занимает в памяти ещё в несколько раз больше (лимит консоли 512 МБ). Убирает потолок /changes (v2-lite).
  */
-const LIST_MAX_DEFAULT = 10_000
-let listMax = LIST_MAX_DEFAULT
+const LIST_LIMITS_DEFAULT = { max: 10_000, bytes: 16 * 1024 * 1024 }
+let listLimits = LIST_LIMITS_DEFAULT
 
 /** Только для тестов: маленький потолок вместо 10 000 документов в фикстуре. null — вернуть обычный. */
-export function setListMaxForTests(v: number | null): void {
-  listMax = v ?? LIST_MAX_DEFAULT
+export function setListLimitsForTests(v: Partial<typeof LIST_LIMITS_DEFAULT> | null): void {
+  listLimits = { ...LIST_LIMITS_DEFAULT, ...v }
 }
 
 /**
@@ -170,13 +171,29 @@ export function setListMaxForTests(v: number | null): void {
 export type DocList = { docs: Doc[]; capped?: { total: number; limit: number } }
 
 export async function listDocs(collection: Collection): Promise<DocList> {
-  const max = listMax
-  // max + 1 — узнать об обрезке без count(*) на каждом запросе; count — только когда обрезано.
-  const rows = await getDb().select().from(oqDocs).where(eq(oqDocs.collection, collection)).orderBy(desc(oqDocs.updatedAt)).limit(max + 1)
-  if (rows.length <= max) return { docs: rows.map(parseDoc) }
-  // count — отдельный запрос: удаление между ним и выборкой дало бы total ≤ limit при truncated.
-  const { n } = await collectionStats(collection)
-  return { docs: rows.slice(0, max).map(parseDoc), capped: { total: Math.max(Number(n), rows.length), limit: max } }
+  const { max, bytes } = listLimits
+  // Накопленный объём от самых свежих и размер коллекции — окном по узкому подзапросу (id и числа, без тел), одним
+  // запросом: тела читаются только у документов в пределах потолка, total согласован с выборкой.
+  const w = getDb()
+    .select({
+      id: oqDocs.id,
+      run: sql<number>`sum(length(cast(${oqDocs.dataJson} as blob))) over (order by ${oqDocs.updatedAt} desc rows unbounded preceding)`.as('run'),
+      total: sql<number>`count(*) over ()`.as('total'),
+    })
+    .from(oqDocs)
+    .where(eq(oqDocs.collection, collection))
+    .as('w')
+  const rows = await getDb()
+    .select({ doc: oqDocs, total: w.total })
+    .from(oqDocs)
+    .innerJoin(w, and(eq(oqDocs.collection, collection), eq(oqDocs.id, w.id)))
+    .where(lte(w.run, bytes))
+    .orderBy(desc(oqDocs.updatedAt))
+    .limit(max)
+  const docs = rows.map((r) => parseDoc(r.doc))
+  // Пусто, а коллекция нет — самый свежий документ больше потолка объёма: total — отдельным count.
+  const total = rows.length ? Number(rows[0]!.total) : Number((await collectionStats(collection)).n)
+  return total > docs.length ? { docs, capped: { total, limit: docs.length } } : { docs }
 }
 
 async function collectionStats(collection: Collection) {
@@ -193,7 +210,7 @@ async function collectionStats(collection: Collection) {
  */
 export async function collectionTag(collection: Collection): Promise<string> {
   const { n, last, v } = await collectionStats(collection)
-  return `W/"${createHash('sha1').update(`${collection}:${listMax}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
+  return `W/"${createHash('sha1').update(`${collection}:${listLimits.max}:${listLimits.bytes}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
 }
 
 export async function getDoc(collection: Collection, id: string): Promise<Doc | null> {
