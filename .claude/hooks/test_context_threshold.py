@@ -66,11 +66,11 @@ with tempfile.TemporaryDirectory() as tmp:
     (tmp / ".claude").mkdir()
     (tmp / ".claude/settings.local.json").write_text('{"autoCompactWindow": 300000}', encoding="utf-8")
     os.environ["CLAUDE_PROJECT_DIR"] = str(tmp)
-    check("окно из settings.local", cb.window_tokens(), 300_000)
+    check("окно из settings.local", cb.session_window()[0], 300_000)
     os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "250000"
-    check("окно из env Claude Code", cb.window_tokens(), 250_000)
+    check("окно из env Claude Code", cb.session_window()[0], 250_000)
     os.environ["SUCCESSOR_WINDOW_TOKENS"] = "200000"
-    check("окно из env хука", cb.window_tokens(), 200_000)
+    check("окно из env хука", cb.session_window()[0], 200_000)
     del os.environ["SUCCESSOR_WINDOW_TOKENS"], os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]
 
     # хук целиком (окно 300K, без params.json: W_eff 255,6K, H 4 %): 245K = 95,9 % ≥ 98,5 − 4 — страховка с шагами;

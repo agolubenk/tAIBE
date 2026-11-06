@@ -21,20 +21,23 @@ WEFF = int(250_000 * 213 / 250)  # запасная точка сжатия дл
 SECRET = "Иванов Иван Петрович +7 999 123-45-67"
 KNOBS = ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "SUCCESSOR_WINDOW_TOKENS", "SUCCESSOR_AUTO", "T3_ROLE_KEY",
          "TAIBE_LINEAGE", "TAIBE_PIPELINE", "CLAUDE_CODE_SESSION_ID", "CTX_BUDGET_DIR", "CTX_BUDGET_PROJECTS",
-         "TAIBE_LINEAGE_DIR")
+         "TAIBE_LINEAGE_DIR", "ANTHROPIC_MODEL", "CLAUDE_PROJECT_DIR")
 
 
 def dumps(obj):
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
 
 
-def answer(tokens, tools=(), sidechain=False, cwd="/nonexistent", ts="2026-11-06T10:00:00.000Z"):
+def answer(tokens, tools=(), sidechain=False, cwd="/nonexistent", ts="2026-11-06T10:00:00.000Z", model=None):
     usage = {"input_tokens": 2, "cache_read_input_tokens": tokens - 102, "cache_creation_input_tokens": 50,
              "output_tokens": 50}
     content = [{"type": "tool_use", "id": "toolu_1", "name": n, "input": i} for n, i in tools] or [
         {"type": "text", "text": "ответ: " + SECRET}]
-    return dumps({"parentUuid": "p", "isSidechain": sidechain, "message": {"role": "assistant", "usage": usage,
-                  "content": content}, "type": "assistant", "cwd": cwd, "timestamp": ts})
+    msg = {"role": "assistant", "usage": usage, "content": content}
+    if model:
+        msg["model"] = model
+    return dumps({"parentUuid": "p", "isSidechain": sidechain, "message": msg, "type": "assistant", "cwd": cwd,
+                  "timestamp": ts})
 
 
 def user(text=SECRET):
@@ -98,13 +101,38 @@ class ParamsTest(unittest.TestCase):
                   "tasks": {"*": {"median": 0.15, "n": 900}, "plan": {"median": 0.035, "n": 30},
                             "boards": {"median": 0.2, "n": 2}}}
         self.assertEqual(cp.w_eff(250_000, params)[0], 216_000)
-        self.assertEqual(cp.w_eff(400_000, params)[0], 367_000)  # чужое окно — окно − запас
+        self.assertEqual(cp.w_eff(400_000, params), (345_600, "доля 250K по истории"))  # окно без истории — доля
+        self.assertEqual(cp.w_eff(1_000_000, params)[0], 864_000)
+        own = dict(params, w_eff=dict(params["w_eff"], **{"1000000": {"tokens": 900_000, "n": 5}}))
+        self.assertEqual(cp.w_eff(1_000_000, own), (900_000, "история окна"))
+        few = dict(params, w_eff=dict(params["w_eff"], **{"1000000": {"tokens": 600_000, "n": 4}}))
+        self.assertEqual(cp.w_eff(1_000_000, few)[0], 864_000)  # меньше 5 событий — доля
         self.assertEqual(cp.handoff_cost(params)[0], 0.046)
         self.assertEqual(cp.task_estimate("plan", params)[0], 0.035)
         self.assertEqual(cp.task_estimate("boards", params)[0], 0.15)  # мало замеров роли — все роли
         self.assertEqual(cp.calibration(params), 1.3)
         self.assertEqual(cp.calibration({"calibration": {"declared": {"median": 0.5, "n": 9}}}), 1.0)  # только вверх
         self.assertEqual(cp.handoff_cost({"handoff": {"p80": 0.5, "n": 9}})[0], cp.H_RANGE[1])
+
+
+class WindowTest(unittest.TestCase):
+    """U больше настроенного окна — окно определено неверно (сессия 1M), а не сигнал передачи."""
+
+    def test_resolve(self):
+        self.assertEqual(cp.resolve_window(200_000, True, 494_000), (1_000_000, "модель 1M"))
+        self.assertEqual(cp.resolve_window(200_000, False, 494_000), (1_000_000, "U больше окна"))
+        self.assertEqual(cp.resolve_window(None, False, 494_000), (1_000_000, "U больше окна"))
+        self.assertEqual(cp.resolve_window(250_000, True, 216_000), (250_000, "настройки"))  # влезает — настройки
+        self.assertEqual(cp.resolve_window(250_000, False, 254_000), (250_000, "настройки"))  # ≤ окна × 1,02
+        self.assertEqual(cp.resolve_window(None, True, 150_000), (1_000_000, "модель 1M"))
+        self.assertEqual(cp.resolve_window(None, False, 150_000), (200_000, "по умолчанию"))
+        self.assertEqual(cp.resolve_window(None, False, None), (200_000, "по умолчанию"))
+
+    def test_model_mark(self):
+        for name in ("opus[1m]", "claude-opus-5-5[1m]", "claude-sonnet-4-5-1m", "Opus [1M]"):
+            self.assertTrue(cp.is_1m(name), name)
+        for name in ("claude-opus-5-5", "claude-haiku-4-5-20251001", "opus", "x-11m", None, ""):
+            self.assertFalse(cp.is_1m(name), name)
 
 
 class Sandbox(unittest.TestCase):
@@ -121,7 +149,8 @@ class Sandbox(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items() if k not in KNOBS}
         self.env.update(CTX_BUDGET_DIR=str(self.budget), CTX_BUDGET_PROJECTS=str(self.projects),
                         SUCCESSOR_WINDOW_TOKENS="250000", CLAUDE_CODE_SESSION_ID=self.sid,
-                        TAIBE_LINEAGE_DIR=str(root / "lineage"))
+                        TAIBE_LINEAGE_DIR=str(root / "lineage"), HOME=str(root / "home"),
+                        CLAUDE_PROJECT_DIR=str(root / "home"))  # без настроек и модели владельца
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -130,6 +159,11 @@ class Sandbox(unittest.TestCase):
         """Дописать в транскрипт ≥ 24 KB и ответ с контекстом share·W_eff."""
         with open(self.tr, "a", encoding="utf-8") as fh:
             fh.write(user("x" * 25_000) + "".join(extra) + answer(int(share * WEFF)))
+
+    def put(self, tokens, model=None):
+        """Дописать ≥ 24 KB и ответ с контекстом tokens."""
+        with open(self.tr, "a", encoding="utf-8") as fh:
+            fh.write(user("x" * 25_000) + answer(tokens, model=model))
 
     def state(self):
         return json.loads((self.budget / "sessions" / (self.sid + ".json")).read_text(encoding="utf-8"))
@@ -194,6 +228,47 @@ class HookTest(Sandbox):
         self.assertIn("страховка", self.hook())              # тот же транскрипт — молчал выключатель, не порог
 
 
+class OneMTest(Sandbox):
+    """Окно 1M: U больше настроенного окна — не передача; W_eff 1M — доля выученного 250K (216,9/250)."""
+
+    def setUp(self):
+        super().setUp()
+        self.env["SUCCESSOR_WINDOW_TOKENS"] = "200000"
+        self.budget.mkdir(parents=True)
+        (self.budget / "params.json").write_text(json.dumps(
+            {"w_eff": {"250000": {"tokens": 216_949, "n": 596}}}), encoding="utf-8")
+
+    def test_1m_model_mark_is_silent(self):
+        self.put(494_000, model="claude-opus-5-5[1m]")
+        self.assertEqual(self.hook(), "")
+        st = self.state()
+        self.assertEqual((st["window"], round(st["s"], 2), st["weff"]), (1_000_000, 0.57, 867_796))
+
+    def test_1m_by_u_alone_then_rules_apply(self):
+        self.put(494_000)
+        self.assertEqual(self.hook(), "")                     # без пометки: U > 200K × 1,02 → окно 1M
+        self.assertEqual(self.state()["window"], 1_000_000)
+        self.put(30_000)
+        self.assertEqual(self.hook(), "")                     # сжатие: окно 1M держится
+        self.put(160_000)
+        self.assertEqual((self.hook(), self.state()["window"]), ("", 1_000_000))  # 160K < 200K — всё ещё 1M
+        self.put(760_000)                                     # s 0,876, задача в работе: остаток 2 % → 0,936
+        self.assertIn("можно закончить текущую", self.hook())
+        self.put(762_000)                                     # граница: следующая 10 % + 4 % → 1,018
+        self.assertIn("<successor-threshold>передай сейчас: контекст 87,8 %",
+                      self.hook("Bash", {"command": "git commit -m wip"}))
+        self.put(870_000)                                     # s 1,003 ≥ 0,985 − 0,04 — страховка
+        self.assertIn("страховка", self.hook())
+
+    def test_status_shows_1m(self):
+        self.put(494_000)
+        rc, out = self.cli("status")
+        self.assertEqual(rc, 0)
+        self.assertIn("окно 1000K — U больше окна", out)
+        self.assertIn("W_eff 867K — доля 250K по истории", out)
+        self.assertIn("решение: контекст 56,9 %", out)
+
+
 class CliTest(Sandbox):
     def test_next_small_task_at_86_continues(self):
         self.grow(0.86)
@@ -243,6 +318,10 @@ class LearnTest(Sandbox):
             (self.projects / "p" / ("c%d.jsonl" % i)).write_text(
                 answer(150_000, cwd=cwd) + user() + answer(216_000, cwd=cwd) + compact(221_000) + answer(30_000, cwd=cwd),
                 encoding="utf-8")
+        for i in range(5):  # пять сессий 1M без настроек окна: у трёх пометка модели, у двух — только U
+            model = "claude-opus-5-5[1m]" if i < 3 else "claude-opus-5-5"
+            (self.projects / "p" / ("m%d.jsonl" % i)).write_text(
+                answer(400_000, model=model) + answer(900_000, model=model) + compact(905_000), encoding="utf-8")
         (self.projects / "p" / "work.jsonl").write_text("".join([
             answer(60_000, cwd=cwd), user(),
             answer(90_000, [bash("git commit -m 'fix'")], cwd=cwd),
@@ -268,7 +347,9 @@ class LearnTest(Sandbox):
         params = json.loads((self.budget / "params.json").read_text(encoding="utf-8"))
         self.assertEqual(params["w_eff"]["250000"]["tokens"], 216_000)
         self.assertEqual(params["w_eff"]["250000"]["n"], 5)
-        self.assertEqual(params["reserve"]["tokens"], 34_000)
+        self.assertNotIn("reserve", params)
+        self.assertEqual(params["w_eff"]["1000000"], {"tokens": 900_000, "ratio": 0.9, "n": 5, "p10": 900_000,
+                                                      "p90": 900_000})  # 1M: пометка модели или U больше окна
         seg = round(30_000 / 216_000, 4)
         self.assertEqual(params["tasks"]["*"], {"median": seg, "p80": seg, "n": 3})
         self.assertEqual(params["tasks"]["release"]["n"], 3)  # роль — из журнала бюджета

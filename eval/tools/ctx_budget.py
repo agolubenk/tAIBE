@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Бюджет окна — живой потолок контекста каждой сессии Claude Code (решение владельца 06.11; порог 80 % снят).
 
-100 % — точка автосжатия W_eff, а не номинальное окно: по истории сжатий этого окна, иначе 213/250 окна (замер
-30.10: при окне 250K сжатие на 213–221K). s = U / W_eff, U — usage последнего ответа основной цепочки.
+100 % — точка автосжатия W_eff, а не номинальное окно: по истории сжатий этого окна, иначе доля W_eff/окно
+изученного окна (250K: 216,9K), иначе 213/250. s = U / W_eff, U — usage последнего ответа основной цепочки.
+Окно: SUCCESSOR_WINDOW_TOKENS → autoCompactWindow, пока U в него влезает (U > окна — окно определено неверно, а не
+сигнал передачи) → пометка 1M у модели (message.model, model в настройках, ANTHROPIC_MODEL) → U > окна × 1,02 →
+1M → 200K. Раз увиденное окно 1M держится до конца сессии.
 H — цена передачи (savepoint, work_state, handoff, spawn): p80 по истории, иначе 4 %. T — оценка задачи:
 заявлена (`next --size`, × калибровка) → медиана цены задачи роли по истории → 10 %.
 
@@ -45,8 +48,8 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 from ctx_budget_params import (  # noqa: E402 — пути, окно сессии и выученные параметры
-    T_RANGE, budget_dir, calibration, clamp, handoff_cost, lineage_dir, load_params, pct, projects_dir,
-    task_estimate, w_eff, window_tokens)
+    ONE_M, T_RANGE, budget_dir, calibration, clamp, handoff_cost, lineage_dir, load_params, pct, projects_dir,
+    session_window, task_estimate, w_eff)
 
 FLOOR, CEIL = 0.85, 0.985          # решение владельца 06.11
 REM_MIN = 0.02                      # остаток текущей задачи не меньше 2 %
@@ -126,13 +129,18 @@ def line(v):
 
 def last_context_tokens(transcript):
     """usage последнего ответа модели основной цепочки (не субагента) из хвоста транскрипта; None — нет."""
+    return last_answer(transcript)[0]
+
+
+def last_answer(transcript):
+    """(usage, message.model) последнего ответа основной цепочки; (None, None) — нет."""
     try:
         size = transcript.stat().st_size
         with transcript.open("rb") as fh:
             fh.seek(max(0, size - TAIL_BYTES))
             tail = fh.read().decode("utf-8", "ignore")
     except OSError:
-        return None
+        return None, None
     for ln in reversed(tail.splitlines()):
         if '"usage"' not in ln:
             continue
@@ -140,14 +148,15 @@ def last_context_tokens(transcript):
             entry = json.loads(ln)
             if entry.get("type") != "assistant" or entry.get("isSidechain"):
                 continue
-            usage = (entry.get("message") or {}).get("usage") or {}
+            msg = entry.get("message") or {}
+            usage = msg.get("usage") or {}
             total = sum(int(usage.get(k) or 0) for k in (
                 "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
         except (ValueError, TypeError, AttributeError):
             continue  # первая строка хвоста обрезана или запись не того вида
         if total > 0:
-            return total
-    return None
+            return total, (str(msg.get("model"))[:80] if msg.get("model") else None)
+    return None, None
 
 
 def safe_sid(session_id):
@@ -273,6 +282,16 @@ def refresh(st, sid, u, window, params, now, log=True):
     return weff
 
 
+def window_for(st, u, model):
+    """(окно, источник) сессии; окно 1M, раз увиденное (модель или U больше окна), держится до конца сессии."""
+    window, src = session_window(u, model)
+    if window == ONE_M:
+        st["one_m"] = True
+    elif st.get("one_m"):
+        window, src = ONE_M, "1M раньше в сессии"
+    return window, src
+
+
 def remember(st, v, now):
     st.update(u=v["u"], s=round(v["s"], 4), weff=v["weff"], window=v["window"], ts=int(now))
 
@@ -288,11 +307,12 @@ def _sid(args):
 
 
 def _measure(sid, st):
+    """(U, окно, источник окна) по транскрипту сессии; U None — нет usage."""
     transcript = find_transcript(sid, st)
+    u, model = last_answer(transcript) if transcript else (None, None)
     if transcript:
         st["transcript"] = str(transcript)
-        return last_context_tokens(transcript)
-    return None
+    return (u,) + window_for(st, u, model)
 
 
 def cmd_next(args):
@@ -304,7 +324,7 @@ def cmd_next(args):
     sid, now = _sid(args), time.time()
     with session_lock(sid):
         st = load_state(sid)
-        u, params, window = _measure(sid, st), load_params(), window_tokens()
+        (u, window, _), params = _measure(sid, st), load_params()
         cal = calibration(params)
         if u is not None:
             weff = refresh(st, sid, u, window, params, now)
@@ -331,7 +351,7 @@ def cmd_done(args):
     sid, now = _sid(args), time.time()
     with session_lock(sid):
         st = load_state(sid)
-        u, params, window = _measure(sid, st), load_params(), window_tokens()
+        (u, window, _), params = _measure(sid, st), load_params()
         if u is None:
             print("ctx_budget: в транскрипте нет usage — границу не поставить", file=sys.stderr)
             return 1
@@ -353,15 +373,15 @@ def cmd_done(args):
 def cmd_status(args):
     sid, now = _sid(args), time.time()
     st = load_state(sid)  # status ничего не записывает
-    u, params, window = _measure(sid, st), load_params(), window_tokens()
+    (u, window, win_src), params = _measure(sid, st), load_params()
     if u is None:
         print("ctx_budget: в транскрипте сессии %s нет usage" % sid, file=sys.stderr)
         return 1
     refresh(st, sid, u, window, params, now, log=False)
     v = verdict(st, u, window, params)
-    print("контекст %s %% (U %dK / W_eff %dK — %s; окно %dK) · передача ~%s %% (%s) · задача ~%s %% (%s%s) · "
+    print("контекст %s %% (U %dK / W_eff %dK — %s; окно %dK — %s) · передача ~%s %% (%s) · задача ~%s %% (%s%s) · "
           "потолок 98,5 %%, передача не раньше 85 %%" % (
-              pct(v["s"]), u // 1000, v["weff"] // 1000, v["wsrc"], window // 1000, pct(v["h"]), v["hsrc"],
+              pct(v["s"]), u // 1000, v["weff"] // 1000, v["wsrc"], window // 1000, win_src, pct(v["h"]), v["hsrc"],
               pct(v["t"]), v["tsrc"], ", граница" if v["boundary"] else ", осталось ~%s %%" % pct(v["rem"])))
     print("решение: " + line(v))
     return 0

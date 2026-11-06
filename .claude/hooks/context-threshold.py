@@ -10,7 +10,8 @@
 
 Тексты: `<successor-budget>` — «можно закончить текущую / взять следующую», `<successor-threshold>` — «передай
 сейчас» с шагами (метку читает learn: от неё считается цена передачи). Печать — только при смене решения;
-после сжатия или /clear (резкое падение контекста) состояние сбрасывается.
+после сжатия или /clear (резкое падение контекста) состояние сбрасывается. Контекст больше настроенного окна —
+окно определено неверно (сессия 1M), а не сигнал передачи: окно 1M по пометке модели или по самому U.
 
 Цена: хук срабатывает на каждый вызов инструмента — транскрипт читается, только когда вырос на 24 KB (с 80 % —
 на 6 KB) или на границе незаявленной задачи (git commit, gh pr create, смена статуса карточки), и только хвост
@@ -121,11 +122,11 @@ def check(cb, cli, payload, now):
         st = cb.load_state(sid)
         st["size"], st["transcript"] = size, str(transcript)
         # After the cheap exits, and from the cache only: this hook runs on every tool call; the prompt hook refreshes.
-        u = cb.last_context_tokens(transcript) if pipeline_on("successorAuto") else None
+        u, model = cb.last_answer(transcript) if pipeline_on("successorAuto") else (None, None)
         if u is None:
             cb.save_state(sid, st)
             return None
-        params, window = cb.load_params(), cb.window_tokens()
+        params, window = cb.load_params(), cb.window_for(st, u, model)[0]
         weff = cb.refresh(st, sid, u, window, params, now)
         task = st["task"]
         if boundary and not task.get("explicit") and (u - task["u0"]) / weff >= cb.BOUNDARY_PHASE:

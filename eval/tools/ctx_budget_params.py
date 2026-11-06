@@ -3,9 +3,10 @@
 по транскриптам ~/.claude/projects/* (решение и CLI сессии — ctx_budget.py).
 
 Что учится (доли — от W_eff окна сессии):
-  w_eff[окно]  точка автосжатия: медиана U последнего ответа перед автосжатием (compact_boundary, trigger=auto);
-               в выборку — только сжатия с U/окно в 0,75–1,0 (вне полосы окно сессии было другим)
-  reserve      окно − U перед сжатием (медиана) — для окон без своей истории
+  w_eff[окно]  точка автосжатия: медиана U последнего ответа перед автосжатием (compact_boundary, trigger=auto),
+               от 5 событий; в выборку — только сжатия с U/окно в 0,75–1,0. Окно сессии — как у живой
+               (session_window без окружения): настройки её cwd, пока U влезает → пометка 1M у модели → max U
+               больше окна → 1M. Окно без своей истории (1M) берёт долю W_eff/окно самого изученного окна
   handoff      цена передачи: от текста порога/бюджета (`<successor-threshold>`) или первого work_state после него
                до последнего usage сессии; только где был spawn_session.sh --handoff и не было сжатия
   tasks[роль]  цена задачи: куски между границами (git commit, gh pr create, смена статуса карточки,
@@ -31,7 +32,9 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 H_DEFAULT, T_DEFAULT = 0.04, 0.10
 WEFF_FALLBACK = 213 / 250           # сжатие при окне 250K — от 213K (30.10)
-DEFAULT_WINDOW = 200_000            # без autoCompactWindow — как раньше
+DEFAULT_WINDOW = 200_000            # без autoCompactWindow, пометки 1M и U больше окна
+ONE_M = 1_000_000
+WINDOW_FIT = 1.02                   # U больше окна × 1,02 — окно определено неверно
 H_RANGE, T_RANGE, CAL_RANGE = (0.02, 0.12), (0.01, 0.50), (1.0, 2.0)
 MIN_N = 5                           # выборка меньше — запасное значение
 WEFF_BAND = (0.75, 1.0)
@@ -82,8 +85,8 @@ def _n(entry):
         return 0
 
 
-def settings_window(project_dir):
-    """autoCompactWindow (или env.CLAUDE_CODE_AUTO_COMPACT_WINDOW) из settings.local → settings → пользовательских."""
+def _settings(project_dir):
+    """Словари настроек сессии по старшинству: settings.local → settings проекта → пользовательские."""
     project = Path(project_dir or REPO_ROOT)
     for path in (project / ".claude/settings.local.json", project / ".claude/settings.json",
                  Path.home() / ".claude/settings.json"):
@@ -91,38 +94,80 @@ def settings_window(project_dir):
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if not isinstance(data, dict):
-            continue
+        if isinstance(data, dict):
+            yield data
+
+
+def configured_window(project_dir, use_env=True):
+    """Настроенное окно или None: SUCCESSOR_WINDOW_TOKENS → CLAUDE_CODE_AUTO_COMPACT_WINDOW (env) → autoCompactWindow
+    (или env.CLAUDE_CODE_AUTO_COMPACT_WINDOW) в настройках. learn окружение не смотрит (use_env=False)."""
+    values = [os.environ.get(k, "") for k in ("SUCCESSOR_WINDOW_TOKENS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+              ] if use_env else []
+    for data in _settings(project_dir):
         env = data.get("env") if isinstance(data.get("env"), dict) else {}
-        for value in (data.get("autoCompactWindow"), env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")):
-            try:
-                value = int(value)
-            except (TypeError, ValueError):
-                continue
-            if value > 0:
-                return value
-    return DEFAULT_WINDOW
+        values += [data.get("autoCompactWindow"), env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")]
+    for value in values:
+        try:
+            value = int(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
 
 
-def window_tokens(project_dir=None):
-    """Номинальное окно живой сессии: SUCCESSOR_WINDOW_TOKENS → CLAUDE_CODE_AUTO_COMPACT_WINDOW → настройки."""
-    for knob in ("SUCCESSOR_WINDOW_TOKENS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"):
-        value = os.environ.get(knob, "").strip()
-        if value.isdigit() and int(value) > 0:
-            return int(value)
-    return settings_window(project_dir or os.environ.get("CLAUDE_PROJECT_DIR") or REPO_ROOT)
+def is_1m(model):
+    """Пометка контекста 1M в имени модели: `opus[1m]`, `claude-…-1m`, `context-1m`."""
+    return bool(model) and re.search(r"(?i)\[1m\]|(?:^|[-_.:\s])1m(?:$|[-_.:\]\s])", str(model)) is not None
+
+
+def model_1m(project_dir, use_env=True):
+    """Модель сессии из настроек с пометкой 1M: ANTHROPIC_MODEL → model в settings.local / settings / пользовательских.
+    message.model в транскрипте пометки не несёт (06.11: ни одного из ~180K ответов), поэтому смотрим и сюда."""
+    if use_env and os.environ.get("ANTHROPIC_MODEL"):
+        return is_1m(os.environ["ANTHROPIC_MODEL"])
+    for data in _settings(project_dir):
+        if data.get("model"):
+            return is_1m(data["model"])
+    return False
+
+
+def resolve_window(configured, one_m, u):
+    """(окно, источник). U больше настроенного окна (×1,02) — окно определено неверно, а не сигнал передачи:
+    настроенное, пока U в него влезает → модель 1M → U > окна → 1M → 200K."""
+    if configured and (u is None or u <= configured * WINDOW_FIT):
+        return configured, "настройки"
+    if one_m:
+        return ONE_M, "модель 1M"
+    if u is not None and u > (configured or DEFAULT_WINDOW) * WINDOW_FIT:
+        return ONE_M, "U больше окна"
+    return DEFAULT_WINDOW, "по умолчанию"
+
+
+def session_window(u=None, model=None, project_dir=None, use_env=True):
+    """Окно живой сессии (или сессии из истории — use_env=False) по U и модели последнего ответа."""
+    project = project_dir or (os.environ.get("CLAUDE_PROJECT_DIR") if use_env else None) or REPO_ROOT
+    return resolve_window(configured_window(project, use_env), is_1m(model) or model_1m(project, use_env), u)
+
+
+def window_tokens(project_dir=None, u=None, model=None):
+    return session_window(u, model, project_dir)[0]
 
 
 def w_eff(window, params):
-    """(токены точки сжатия, источник): история этого окна → окно − запас по истории → 213/250 окна."""
-    entry = (params.get("w_eff") or {}).get(str(window)) or {}
-    tokens = entry.get("tokens") if isinstance(entry, dict) else None
-    if _n(entry) >= MIN_N and isinstance(tokens, int) and 0 < tokens <= window:
-        return tokens, "история окна"
-    reserve = params.get("reserve") or {}
-    tokens = reserve.get("tokens") if isinstance(reserve, dict) else None
-    if _n(reserve) >= MIN_N and isinstance(tokens, int) and 0 < tokens < window / 2:
-        return window - tokens, "окно − запас по истории"
+    """(токены точки сжатия, источник): своя история окна (n ≥ 5) → доля W_eff/окно самого изученного окна
+    (для 1M без истории — доля 250K, 216,9/250) → 213/250 окна."""
+    table = params.get("w_eff") if isinstance(params.get("w_eff"), dict) else {}
+
+    def fit(key, e):
+        tokens = e.get("tokens") if isinstance(e, dict) else None
+        return _n(e) >= MIN_N and isinstance(tokens, int) and str(key).isdigit() and 0.5 < tokens / int(key) <= 1
+    if fit(window, table.get(str(window))):
+        return table[str(window)]["tokens"], "история окна"
+    known = [(_n(e), int(k), e["tokens"]) for k, e in table.items() if fit(k, e)]
+    if known:
+        _, key, tokens = max(known)
+        return int(window * tokens / key), "доля %dK по истории" % (key // 1000)
     return int(window * WEFF_FALLBACK), "213/250 окна"
 
 
@@ -195,9 +240,9 @@ def _tool_events(content):
 
 
 def scan_transcript(path):
-    """{"cwd", "start", "events": [(тип, число)]} основной цепочки. Типы: u (usage ответа), compact (preTokens,
+    """{"cwd", "start", "model", "events": [(тип, число)]} основной цепочки (model — последнего ответа). Типы: u (usage ответа), compact (preTokens,
     auto?), b (граница задачи), inject (текст порога/бюджета), ws (work_state), spawn."""
-    events, cwd, start = [], None, None
+    events, cwd, start, model = [], None, None, None
     with open(path, "rb") as fh:
         for raw in fh:
             if b'"compact_boundary"' in raw:
@@ -228,6 +273,8 @@ def scan_transcript(path):
             if cwd is None and isinstance(d.get("cwd"), str):
                 cwd = d["cwd"]
             msg = d.get("message") if isinstance(d.get("message"), dict) else {}
+            if isinstance(msg.get("model"), str) and msg["model"] != "<synthetic>":
+                model = msg["model"][:80]
             usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
             try:
                 u = sum(int(usage.get(k) or 0) for k in (
@@ -237,7 +284,7 @@ def scan_transcript(path):
             if u > 0:
                 events.append(("u", u))
             events.extend(_tool_events(msg.get("content")))
-    return {"cwd": cwd, "start": start, "events": events}
+    return {"cwd": cwd, "start": start, "model": model, "events": events}
 
 
 def analyze(events):
@@ -375,22 +422,22 @@ def learn(days=30, projects=None, now=None):
         if not any(found):
             continue
         role = roles.get(path.stem) or (role_by_start(starts, scan["start"]) if scan["start"] else None) or "-"
-        window = settings_window(scan["cwd"]) if scan["cwd"] else DEFAULT_WINDOW
+        max_u = max((val for kind, val in scan["events"] if kind == "u"), default=None)
+        window = session_window(max_u, scan["model"], scan["cwd"] or "/nonexistent", use_env=False)[0]
         per_file.append((window, role) + found)
     params = {"version": 1, "learned_at": datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "days": days, "files": nfiles, "w_eff": {}, "tasks": {}}
-    by_window, reserves = {}, []
+    by_window = {}
     for window, _role, comp, _segs, _hands in per_file:
         for _pre, before in comp:
             if WEFF_BAND[0] <= before / window <= WEFF_BAND[1]:
                 by_window.setdefault(window, []).append(before)
-                reserves.append(window - before)
     for window, xs in sorted(by_window.items()):
+        if len(xs) < MIN_N:
+            continue  # меньше 5 сжатий — окно берёт долю изученного (w_eff)
         tokens = int(quantile(xs, 0.5))
         params["w_eff"][str(window)] = {"tokens": tokens, "ratio": round(tokens / window, 4), "n": len(xs),
                                         "p10": int(quantile(xs, 0.1)), "p90": int(quantile(xs, 0.9))}
-    if reserves:
-        params["reserve"] = {"tokens": int(quantile(reserves, 0.5)), "n": len(reserves)}
     tasks, hands = {}, []
     for window, role, _comp, segs, hs in per_file:
         weff = w_eff(window, params)[0]
@@ -414,8 +461,8 @@ def summary(params):
     for window, e in sorted((params.get("w_eff") or {}).items(), key=lambda kv: int(kv[0])):
         parts.append("W_eff %dK→%dK (%s %% окна, n %d)" % (int(window) // 1000, e["tokens"] // 1000, p(e["ratio"]),
                                                           e["n"]))
-    if params.get("reserve"):
-        parts.append("запас %dK" % (params["reserve"]["tokens"] // 1000))
+    if str(ONE_M) not in (params.get("w_eff") or {}):
+        parts.append("W_eff 1000K→%dK (нет данных → доля)" % (w_eff(ONE_M, params)[0] // 1000))
     h = params.get("handoff")
     parts.append("H p50 %s %% p80 %s %% (n %d)" % (p(h["median"]), p(h["p80"]), h["n"]) if h else "H — нет данных")
     for role, e in (params.get("tasks") or {}).items():
