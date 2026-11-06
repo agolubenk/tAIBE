@@ -74,6 +74,17 @@ class QualityTest(unittest.TestCase):
         self.assertEqual(status, 'insufficient')
         self.assertTrue(any('sound judges' in r for r in reasons))
 
+    def test_one_model_twice_is_not_two_judges(self):
+        same = ('ok', ['B wins 6 of 6 decisive'], 'b')
+        for ids in (('claude:claude-sonnet-5-5', 'claude:claude-sonnet-5-5'),
+                    ('claude:claude-sonnet-5-5', 'claude-sonnet-5-5')):
+            with self.subTest(ids):
+                status, reasons, pick = quality.combine([(j, same) for j in ids])
+                self.assertEqual((status, pick), ('insufficient', None))
+                self.assertTrue(any('different models' in r for r in reasons), reasons)
+        status, _, pick = quality.combine([('claude:claude-sonnet-5-5', same), ('claude:claude-haiku-5-5', same)])
+        self.assertEqual((status, pick), ('accepted', 'b'))
+
     def test_position_biased_judge_is_brak(self):
         (status, reasons, _), final = self.verdicts({'j1': lambda s, u: 'X', 'j2': judge()})
         self.assertEqual(status, 'brak')

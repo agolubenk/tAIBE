@@ -293,9 +293,15 @@ def finalize(run):
     return out
 
 
+def model_id(judge):
+    """The model behind a judge id: `claude:claude-sonnet-5-5` and `claude-sonnet-5-5` are one model."""
+    return judge.split(':', 1)[-1].strip().lower()
+
+
 def combine(per_judge, min_judges=2):
     """[(judge, (status, reasons, pick))] → (status, reasons, pick) of the verdict. Any brak judge — brak; fewer than
-    `min_judges` sound judges, an insufficient one, or two picks that differ — insufficient."""
+    `min_judges` sound judges, fewer than `min_judges` different model ids, an insufficient one, or two picks that
+    differ — insufficient."""
     reasons = ['%s: %s' % (judge, '; '.join(why)) for judge, (status, why, _) in per_judge]
     if any(status == 'brak' for _, (status, _, _) in per_judge):
         return 'brak', reasons, None
@@ -304,6 +310,10 @@ def combine(per_judge, min_judges=2):
     picks = {pick for _, (_, _, pick) in per_judge}
     if len(per_judge) < min_judges:
         return 'insufficient', reasons + ['%d sound judges (need %d)' % (len(per_judge), min_judges)], None
+    models = {model_id(judge) for judge, _ in per_judge}
+    if len(models) < min_judges:  # one model asked twice is one taste, not two judges
+        return 'insufficient', reasons + ['%d different models among %d judges (need %d)'
+                                          % (len(models), len(per_judge), min_judges)], None
     if len(picks) != 1:
         return 'insufficient', reasons + ['the judges disagree on the winner'], None
     return 'accepted', reasons, picks.pop()
