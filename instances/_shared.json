@@ -1,0 +1,62 @@
+{
+  "default_product": "hr-helper",
+  "layer_home": "/Users/agolubenko/Desktop/Development/tAIBE/eval",
+  "interval_seconds": 60,
+  "sources": {
+    "github": true,
+    "queue": true,
+    "system": true,
+    "budget": true
+  },
+  "team": {
+    "projects_root": "~/.claude/projects"
+  },
+  "queue": {
+    "url": "https://ops.admin.hrhelper.space",
+    "secret_cmd": "infra/scripts/dev-ai/mcp-secret.sh",
+    "owner_items": true
+  },
+  "system": {
+    "mem_critical": 10,
+    "mem_warn": 20,
+    "hub_health": "http://127.0.0.1:3050/health"
+  },
+  "budget": {
+    "quota5h_default": 16.0,
+    "waves_for_quota": 6,
+    "warn_at": 0.8,
+    "batch_at": 0.6,
+    "tail_bytes": 262144,
+    "week_reset": {
+      "weekday": 3,
+      "time": "19:00"
+    }
+  },
+  "circadian": {
+    "day_from": "08:30",
+    "evening_from": "20:00",
+    "night_from": "22:00"
+  },
+  "tap": {
+    "poll_seconds": 15,
+    "digest_minutes": 30,
+    "batch_factor": 2,
+    "digest_max": 12,
+    "pass_in_pause": [
+      "limit.resume",
+      "owner.stop",
+      "limit.hit"
+    ],
+    "heartbeat_watchers": [
+      "coord",
+      "release"
+    ],
+    "heartbeat_stale_min": 5
+  },
+  "boards": {
+    "url": "https://d4dev.admin.hrhelper.space",
+    "product": "aiboards-eval",
+    "workspace": "lth89qy6f8j1greiy4c5cn23",
+    "note": "tAI-Boards of this instance: pipeline settings are read from here with this install's own key T_BOARDS_PIPELINE_KEY (env or Keychain), limited to one product — that product is read, a key for several is refused. product (name or slug as people see it) and workspace (an id) check the key's product: this install is «aiBoards&eval», a key for another product is refused. Another install (HR Helper) names its own product in its own config or T_BOARDS_PRODUCT/T_BOARDS_WORKSPACE, never a copy of these"
+  }
+}
