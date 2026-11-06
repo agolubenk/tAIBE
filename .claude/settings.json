@@ -1,4 +1,7 @@
 {
+  "claudeMdExcludes": [
+    "**/worktrees/**/.claude/rules/00-agent-comms.md"
+  ],
   "hooks": {
     "PreToolUse": [
       {

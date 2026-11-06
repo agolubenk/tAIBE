@@ -25,7 +25,7 @@ of the settings as **on**. The exception is the layer: there, the last known val
 | `askOnce` | evolution | `ask_once.py check` returns "ask as usual" without looking up | `eval/tools/ask_once.py` |
 | `handoffDupes` | evolution | no duplicate-context check before a successor starts | `eval/tools/spawn_session.sh` |
 | `promptBrief` | pipeline | no GLM brief of long prompts (one model call per prompt saved) | `.claude/hooks/user-prompt-submit.py` |
-| `successorAuto` | pipeline | no automatic successor at 80 % of the window | `.claude/hooks/context-threshold.py` |
+| `successorAuto` | pipeline | no automatic successor by the window budget (no handoff below 85 %, ceiling 98.5 % of the auto-compaction point) | `.claude/hooks/context-threshold.py` |
 | `grillHint` | pipeline | no `<grill-task-auto>` reminder on new tasks (the rule to roast large tasks stays) | `.claude/hooks/user-prompt-submit.py` |
 | `nerveWakes` | pipeline | Nerve still journals events but wakes nobody | `eval/nerve/nerve.py` |
 | `swarm` | pipeline | `swarm.py ask` refuses to call a model (exit 3); the session does the job itself | `eval/swarm/swarm.py` |

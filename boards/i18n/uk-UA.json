@@ -2643,7 +2643,7 @@
 				},
 				"successorAuto": {
 					"description": "A session saves its state and starts its successor by itself when the context is nearly full.",
-					"title": "Successor at 80% of the context window"
+					"title": "Successor by the context window budget"
 				},
 				"swarm": {
 					"description": "Routine read-only jobs run on low-cost models behind an outbound filter.",

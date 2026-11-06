@@ -29,6 +29,14 @@
    python3 -I eval/pipeline/genome/build.py --check
    ```
 5. Скиллы править только в `.claude/skills/` (канон); зеркала пересобирает `.claude/scripts/sync-agent-skills.sh` (`--check` ловит расхождение).
+6. Межагентный текст (ASD-STE100, `.claude/rules/00-agent-comms.md`) — один канон на все продукты машины:
+   `bash .claude/scripts/agent-comms-link.sh` ставит ссылку `~/.claude/rules/00-agent-comms.md` на файл основного
+   checkout (не worktree), `--check` её проверяет. Claude Code грузит ссылку в каждом проекте и в субагентах; в tAIBE,
+   где тот же файл лежит в `.claude/rules/`, — один раз (проверено 06.11). В сессии внутри worktree копию worktree
+   исключает `claudeMdExcludes` в `.claude/settings.json`: иначе вторая копия рядом со ссылкой (замер 06.11 — 2).
+   Копию в host-проект не класть. Ссылки нет у облачных сессий (claude.ai/code, облачные агенты): в клоне tAIBE
+   правило грузится из `.claude/rules/`, в клоне другого продукта — нет. Cowork пропускает ссылки из
+   `~/.claude/rules/` на файлы вне рабочей папки.
 
 ## Что в слой НЕ входит (рантайм инстанса, не продукт)
 

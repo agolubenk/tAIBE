@@ -1,7 +1,7 @@
 #!/bin/bash
 # Открыть новую сессию Claude Code в отдельном окне терминала: наследник по handoff или запуск роли Т3.
 #
-#   bash eval/tools/spawn_session.sh --handoff FILE [--role KEY]     наследник (порог 80%, хук context-threshold)
+#   bash eval/tools/spawn_session.sh --handoff FILE [--role KEY]     наследник (бюджет окна, хук context-threshold)
 #   bash eval/tools/spawn_session.sh --launch --role KEY             запуск роли по её пусковому файлу
 #   bash eval/tools/spawn_session.sh --launch --roles all|coord,release,…   несколько ролей, по порядку 1→5→4→3→2→6
 #   bash eval/tools/spawn_session.sh --status | --stop                 роли продукта и пульс нерва | команды kill для владельца

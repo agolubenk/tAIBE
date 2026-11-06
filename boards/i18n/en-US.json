@@ -2536,7 +2536,7 @@
 					"description": "Long prompts get a short structured brief from GLM before the session reads them. Off: no model call on each prompt."
 				},
 				"successorAuto": {
-					"title": "Successor at 80% of the context window",
+					"title": "Successor by the context window budget",
 					"description": "A session saves its state and starts its successor by itself when the context is nearly full."
 				},
 				"grillHint": {
