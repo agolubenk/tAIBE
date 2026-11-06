@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Порог наследника (context-threshold.py) и пусковой скрипт spawn_session.sh — без сети и без окон.
+"""Хук бюджета окна (context-threshold.py) и пусковой скрипт spawn_session.sh — без сети и без окон.
 
+Правила бюджета (примеры владельца 06.11, сброс, learn) проверяет test_ctx_budget.py рядом с ctx_budget.py;
+здесь — сам хук: модуль найден, границы задач, окно, текст передачи, гонки, выключатель, состояние вне репозитория.
 Запуск: python3 -I .claude/hooks/test_context_threshold.py  (exit 1 при расхождении).
 """
 import importlib.util
@@ -16,6 +18,7 @@ REPO = HOOKS.parents[1]
 spec = importlib.util.spec_from_file_location("ct", HOOKS / "context-threshold.py")
 ct = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ct)
+cb, rel = ct.load_budget()
 bad = []
 done = [0]
 
@@ -32,17 +35,22 @@ def line(kind, tokens, sidechain=False):
     return json.dumps({"type": kind, "isSidechain": sidechain, "message": {"usage": usage}}) + "\n"
 
 
-# decide(): уровни 0 → 1 (80%) → 2 (90%), сброс после сжатия, без повторов
-W, T = 250_000, 0.8
-check("ниже порога", ct.decide(150_000, W, T, 0), (0, None))
-check("80% — инструкция", ct.decide(200_000, W, T, 0), (1, ct.MESSAGE))
-check("80% повторно — тишина", ct.decide(205_000, W, T, 1), (1, None))
-check("84% — напоминание (сжатие на 213–221K)", ct.decide(211_000, W, T, 1), (2, ct.REMINDER))
-check("сразу 86% — инструкция, без второго", ct.decide(215_000, W, T, 0), (2, ct.MESSAGE))
-check("после 90% — тишина", ct.decide(240_000, W, T, 2), (2, None))
-check("после сжатия — сброс", ct.decide(90_000, W, T, 2), (0, None))
-check("ручной /compact на 85% до 60% — сброс", ct.decide(150_000, W, T, 1), (0, None))
-check("окно 200K: после сжатия 55% — сброс", ct.decide(110_000, 200_000, T, 2), (0, None))
+def bash(cmd):
+    return {"tool_name": "Bash", "tool_input": {"command": cmd}}
+
+
+check("модуль бюджета найден", rel in ct.BUDGET_PATHS, True)
+# границы незаявленной задачи: коммит, PR, статус карточки; CLI бюджета и прочее — не граница
+check("граница: git commit", ct.auto_boundary(bash("git -C wt commit -m 'x'")), "commit")
+check("граница: gh pr create", ct.auto_boundary(bash("git push && gh pr create --base main")), "pr")
+check("граница: карточка", ct.auto_boundary({"tool_name": "mcp__hub__t-boards_1mcp_update_task_status"}), "card")
+check("не граница: git status", ct.auto_boundary(bash("git status && git log -1")), None)
+check("не граница: CLI бюджета", ct.auto_boundary(bash("python3 eval/tools/ctx_budget.py next 'git commit' --size S")),
+      None)
+
+for knob in ("SUCCESSOR_WINDOW_TOKENS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "SUCCESSOR_AUTO", "T3_ROLE_KEY",
+             "TAIBE_LINEAGE", "TAIBE_PIPELINE", "CTX_BUDGET_DIR"):
+    os.environ.pop(knob, None)  # экспортированные в оболочке ручки не должны менять ожидания теста
 
 with tempfile.TemporaryDirectory() as tmp:
     tmp = Path(tmp)
@@ -50,39 +58,42 @@ with tempfile.TemporaryDirectory() as tmp:
     # последний ответ основной цепочки, а не субагента и не реплика пользователя
     tr.write_text(line("assistant", 120_000) + line("assistant", 205_000) + line("assistant", 30_000, True)
                   + json.dumps({"type": "user", "message": {"content": "x"}}) + "\n", encoding="utf-8")
-    check("usage основной цепочки", ct.last_context_tokens(tr), 205_000)
+    check("usage основной цепочки", cb.last_context_tokens(tr), 205_000)
     (tmp / "garbage.jsonl").write_text('{"usage": oops\n', encoding="utf-8")
-    check("битый хвост", ct.last_context_tokens(tmp / "garbage.jsonl"), None)
+    check("битый хвост", cb.last_context_tokens(tmp / "garbage.jsonl"), None)
 
-    # окно из настроек проекта
+    # окно из настроек проекта, env-ручки сверху
     (tmp / ".claude").mkdir()
     (tmp / ".claude/settings.local.json").write_text('{"autoCompactWindow": 300000}', encoding="utf-8")
     os.environ["CLAUDE_PROJECT_DIR"] = str(tmp)
-    for knob in ("SUCCESSOR_WINDOW_TOKENS", "SUCCESSOR_THRESHOLD", "SUCCESSOR_AUTO", "T3_ROLE_KEY"):
-        os.environ.pop(knob, None)  # экспортированные в оболочке ручки не должны менять ожидания теста
-    check("окно из settings.local", ct.window_tokens(), 300_000)
+    check("окно из settings.local", cb.window_tokens(), 300_000)
+    os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "250000"
+    check("окно из env Claude Code", cb.window_tokens(), 250_000)
     os.environ["SUCCESSOR_WINDOW_TOKENS"] = "200000"
-    check("окно из env", ct.window_tokens(), 200_000)
-    del os.environ["SUCCESSOR_WINDOW_TOKENS"]
+    check("окно из env хука", cb.window_tokens(), 200_000)
+    del os.environ["SUCCESSOR_WINDOW_TOKENS"], os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]
 
-    # хук целиком (окно 300K из settings.local выше): один раз на 80%, тишина без прироста; 6 параллельных — один текст
+    # хук целиком (окно 300K, без params.json: W_eff 255,6K, H 4 %): 245K = 95,9 % ≥ 98,5 − 4 — страховка с шагами;
+    # тишина без прироста; выключатель; 6 параллельных вызовов — один текст
     big = tmp / "big.jsonl"
     big.write_text(("x" * 30_000) + "\n" + line("assistant", 245_000), encoding="utf-8")
     sids = ["test-ct-%d-%d" % (os.getpid(), i) for i in range(3)]
+    budget = tmp / "budget"
 
     def start(sid):
         return subprocess.Popen([sys.executable, "-I", str(HOOKS / "context-threshold.py")],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-                                env=dict(os.environ, CLAUDE_PROJECT_DIR=str(tmp),
-                                         SUCCESSOR_STATE_DIR=str(tmp / "successor")))
+                                env=dict(os.environ, CLAUDE_PROJECT_DIR=str(tmp), CTX_BUDGET_DIR=str(budget)))
 
     def run(sid):
         proc = start(sid)
         return proc.communicate(json.dumps({"session_id": sid, "transcript_path": str(big)}), timeout=10)[0]
 
-    if True:  # состояние — в tmp (SUCCESSOR_STATE_DIR): живые сессии тест не задевает
+    if True:  # состояние — в tmp (CTX_BUDGET_DIR): живые сессии тест не задевает
         first = run(sids[0])
-        check("хук: инструкция на 80%", "successor-threshold" in first and "82%" in first, True)
+        check("хук: передача на 95,9 %", ("<successor-threshold>" in first, "95,9 %" in first, "По порядку" in first,
+                                          "spawn_session.sh --handoff" in first, "80 %" in first),
+              (True, True, True, True, False))
         check("хук: повтор без прироста — тишина", run(sids[0]), "")
         os.environ["SUCCESSOR_AUTO"] = "off"
         check("хук: выключатель", run(sids[1]), "")
@@ -91,7 +102,9 @@ with tempfile.TemporaryDirectory() as tmp:
         outs = [pr.communicate(json.dumps({"session_id": sids[2], "transcript_path": str(big)}), timeout=10)[0]
                 for pr in procs]
         check("хук: 6 параллельных вызовов — один текст", sum("successor-threshold" in o for o in outs), 1)
-        check("хук: состояние не в репозитории", any(ct.STATE_DIR.glob("test-ct-%d-*" % os.getpid())), False)
+        check("хук: состояние в CTX_BUDGET_DIR", (budget / "sessions" / (sids[0] + ".json")).is_file(), True)
+        check("хук: состояние не в репозитории",
+              any((REPO / ".claude/memory/session/successor").glob("test-ct-%d-*" % os.getpid())), False)
 
     # spawn_session.sh: dry-run печатает пусковой скрипт, ничего не открывает
     spawn = REPO / "supertick-eval/tools/spawn_session.sh"  # инстанс HR_Helper-v2

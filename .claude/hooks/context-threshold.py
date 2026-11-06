@@ -1,194 +1,97 @@
 #!/usr/bin/env python3
 """
-Порог наследника — PostToolUse hook (решение владельца 30.10: 80% окна).
+Бюджет окна наследника — PostToolUse hook (решение владельца 06.11; фиксированный порог 80 % от 30.10 снят).
 
-Когда контекст сессии доходит до SUCCESSOR_THRESHOLD (0.8) окна сжатия, хук один раз вставляет в контекст
-инструкцию: дописать шаг, записать work_state и handoff, открыть наследника в новом окне терминала
-(spawn_session.sh — `supertick-eval/tools/` в инстансе HR, `eval/tools/` в каноническом доме) и остановиться после его подтверждения. На 84% — одно напоминание:
-сжатие при окне 250K приходит на 213–221K (8 транскриптов 30.10), до 90% сессия не доживает.
-Сжатие на 100% переписывает ≈ 100K и теряет детали; свежая сессия стартует с базы ≈ 55K + handoff.
+Для каждой сессии на лету считает потолок контекста: 100 % — точка автосжатия W_eff (по истории; иначе 213/250
+окна — при окне 250K сжатие на 213–221K), передачи до 85 % нет; дальше — «передай сейчас», если контекст +
+остаток задачи + цена передачи не влезают в 98,5 %, и страховка на 98,5 % − H при любых оценках. Логика, CLI
+сессии (`next` / `done` / `status`) и learn — `ctx_budget.py`: в каноническом доме `eval/tools/`, в инстансе HR —
+`.claude/scripts/`; spawn_session.sh — рядом с ним или в checkout tAIBE (`$TAIBE_ROOT`).
 
-Контекст = usage последнего ответа модели в транскрипте: input + cache_read + cache_creation + output.
-Окно — `autoCompactWindow` из настроек проекта (settings.local.json, затем settings.json, затем
-пользовательские), иначе 200 000; переопределение — SUCCESSOR_WINDOW_TOKENS. Выключить: SUCCESSOR_AUTO=off.
+Тексты: `<successor-budget>` — «можно закончить текущую / взять следующую», `<successor-threshold>` — «передай
+сейчас» с шагами (метку читает learn: от неё считается цена передачи). Печать — только при смене решения;
+после сжатия или /clear (резкое падение контекста) состояние сбрасывается.
 
-Цена: хук срабатывает на каждый вызов инструмента, поэтому транскрипт читается, только когда он вырос на
-CHECK_EVERY_BYTES с прошлой проверки, и только хвост TAIL_BYTES. После сжатия или ручного /compact (контекст
-ниже порога − RESET_GAP) уровни сбрасываются — порог снова сработает в той же сессии.
-
-Параллельность: у каждой сессии свои файлы (`session/successor/<sid>.*`), общего read-modify-write нет.
-Уровень занимается атомарно — маркер `<sid>.lvlN` через O_CREAT|O_EXCL: из параллельных вызовов одной сессии
-печатает только тот, кто создал маркер.
-
-Fail-safe: любая ошибка → пустой вывод, exit 0.
+Цена: хук срабатывает на каждый вызов инструмента — транскрипт читается, только когда вырос на 24 KB (с 80 % —
+на 6 KB) или на границе незаявленной задачи (git commit, gh pr create, смена статуса карточки), и только хвост
+400 KB. Состояние — `~/.claude/ctx-budget/sessions/<sid>.json` под flock: из параллельных вызовов печатает один.
+Выключить: SUCCESSOR_AUTO=off (или переключатель продукта successorAuto). Fail-safe: ошибка → пусто, exit 0.
 """
+import importlib.util
 import json
 import os
+import re
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STATE_DIR = Path(os.environ.get("SUCCESSOR_STATE_DIR") or REPO_ROOT / ".claude/memory/session/successor")
-DEFAULT_WINDOW = 200_000  # без autoCompactWindow окно 200K: при 250K порог 80% совпал бы с самим сжатием
-DEFAULT_THRESHOLD = 0.8
-REMIND_AT = 0.84
-RESET_GAP = 0.15  # контекст растёт до сжатия монотонно: падение ниже порога − 0.15 — это сжатие или /clear
-CHECK_EVERY_BYTES = 24_000
-TAIL_BYTES = 400_000
-STATE_MAX_AGE_S = 3 * 86400
+BUDGET_PATHS = ("eval/tools/ctx_budget.py", ".claude/scripts/ctx_budget.py")
+GATE_BYTES, GATE_BYTES_HIGH = 24_000, 6_000
+GIT_COMMIT_RE = re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+commit\b")
+GH_PR_RE = re.compile(r"\bgh\s+pr\s+create\b")
+CARD_TOOLS = ("update_task_status", "move_task")
 
 
-def _spawn_relpath() -> str:
-    """Путь к spawn_session.sh относительно корня проекта: инстанс HR держит
-    его в supertick-eval/, канонический дом продукта — в eval/."""
-    for cand in ("supertick-eval/tools/spawn_session.sh", "eval/tools/spawn_session.sh"):
-        if (REPO_ROOT / cand).exists():
-            return cand
-    return "eval/tools/spawn_session.sh"
+def load_budget():
+    for rel in BUDGET_PATHS:
+        path = REPO_ROOT / rel
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("ctx_budget", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod, rel
+    return None, None
 
 
-SPAWN_CMD = f"bash {_spawn_relpath()} --handoff <файл>{{role_arg}}"
-
-MESSAGE = (
-    "<successor-threshold>Контекст ≈{pct}% окна ({used}K из {window}K), порог наследника {thr}% (решение "
-    "владельца 30.10). Новых крупных шагов не начинай. По порядку:\n"
-    "1) доведи текущий шаг до точки сохранения: WIP — коммитом в свою ветку, не в main;\n"
-    "2) состояние: work_state_write (now / waiting / next / blockers); роль Т3 — ещё forest_set_work_state;\n"
-    "3) handoff по скиллу successor-handoff в постоянный файл (не scratchpad): снимок на сейчас, ids — PR, "
-    "ветка@голова, пункты очереди, карточки; команды прямо в тексте;\n"
-    "4) наследник (если эта сессия его ещё не открыла — второго не открывай): "
-    f"`{SPAWN_CMD}` из своей рабочей папки (наследник откроется в ней же; другая — `--cwd`) — новое окно Terminal с claude (без окна: `--terminal print` печатает команду);\n"
-    "5) дождись от наследника подтверждения приёма (SendMessage), передай ему свои пункты очереди и остановись.\n"
-    "Выключить: SUCCESSOR_AUTO=off.</successor-threshold>"
-)
-REMINDER = (
-    "<successor-threshold>Контекст ≈{pct}% окна ({used}K из {window}K): сжатие близко. Если наследник ещё не "
-    f"открыт — handoff и `{SPAWN_CMD}` из своей папки сейчас, "
-    "до следующего шага.</successor-threshold>"
-)
+def spawn_cmd(role):
+    local = REPO_ROOT / "eval/tools/spawn_session.sh"
+    base = ("bash eval/tools/spawn_session.sh" if local.exists()
+            else "bash ${TAIBE_ROOT:-$HOME/Desktop/Development/tAIBE}/eval/tools/spawn_session.sh")
+    role_arg = (" --role " + role) if role and role != "-" else " [--role <ключ реестра> — роль Т3]"
+    return base + " --handoff <файл>" + role_arg
 
 
-def window_tokens():
-    env = os.environ.get("SUCCESSOR_WINDOW_TOKENS", "").strip()
-    if env.isdigit() and int(env) > 0:
-        return int(env)
-    project = Path(os.environ.get("CLAUDE_PROJECT_DIR") or REPO_ROOT)
-    for path in (project / ".claude/settings.local.json", project / ".claude/settings.json",
-                 Path.home() / ".claude/settings.json"):
-        try:
-            value = json.loads(path.read_text(encoding="utf-8")).get("autoCompactWindow")
-        except (OSError, ValueError, AttributeError):
-            continue
-        if isinstance(value, int) and value > 0:
-            return value
-    return DEFAULT_WINDOW
+def steps(role):
+    return (
+        "1) доведи текущий шаг до точки сохранения: WIP — коммитом в свою ветку, не в main;\n"
+        "2) состояние: work_state_write (now / waiting / next / blockers); роль Т3 — ещё forest_set_work_state;\n"
+        "3) handoff по скиллу successor-handoff в постоянный файл (не scratchpad): снимок на сейчас, ids — PR, "
+        "ветка@голова, пункты очереди, карточки; команды прямо в тексте;\n"
+        "4) наследник (если эта сессия его ещё не открыла — второго не открывай): `%s` из своей рабочей папки "
+        "(наследник откроется в ней же; другая — `--cwd`) — новое окно Terminal с claude (без окна: "
+        "`--terminal print` печатает команду);\n"
+        "5) дождись от наследника подтверждения приёма (SendMessage), передай ему свои пункты очереди и остановись.\n"
+        % spawn_cmd(role))
 
 
-def threshold():
-    try:
-        value = float(os.environ.get("SUCCESSOR_THRESHOLD", DEFAULT_THRESHOLD))
-    except ValueError:
-        return DEFAULT_THRESHOLD
-    return value if 0.1 <= value < 1.0 else DEFAULT_THRESHOLD
+def render(cb, v, role, cli):
+    if v["kind"] == "ok":
+        tail = ("Объяви её: `%s next \"<задача>\" --size S|M|L|<n%%>`." % cli) if v["boundary"] else (
+            "Закончишь — `%s done`; новую — только через `%s next \"<задача>\" --size …`." % (cli, cli))
+        return "<successor-budget>Бюджет окна: %s. %s</successor-budget>" % (cb.line(v), tail)
+    if v["kind"] == "safety" and v["handoff_said"]:
+        return ("<successor-threshold>%s. Если наследник ещё не открыт — handoff и `%s` из своей папки сейчас, "
+                "до следующего шага.</successor-threshold>" % (cb.line(v), spawn_cmd(role)))
+    return ("<successor-threshold>%s (100 %% — точка автосжатия ≈ %dK, окно %dK). Новых шагов не начинай. "
+            "По порядку:\n%sБюджет: `%s status`. Выключить: SUCCESSOR_AUTO=off.</successor-threshold>" % (
+                cb.line(v), v["weff"] // 1000, v["window"] // 1000, steps(role), cli))
 
 
-def last_context_tokens(transcript):
-    """usage последнего ответа модели основной цепочки (не субагента) из хвоста транскрипта."""
-    size = transcript.stat().st_size
-    with transcript.open("rb") as fh:
-        fh.seek(max(0, size - TAIL_BYTES))
-        tail = fh.read().decode("utf-8", "ignore")
-    for line in reversed(tail.splitlines()):
-        if '"usage"' not in line:
-            continue
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue  # первая строка хвоста обрезана
-        if entry.get("type") != "assistant" or entry.get("isSidechain"):
-            continue
-        usage = (entry.get("message") or {}).get("usage") or {}
-        total = sum(int(usage.get(k) or 0) for k in (
-            "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
-        if total > 0:
-            return total
+def auto_boundary(payload):
+    """Граница незаявленной задачи по вызову инструмента: карточка, PR, коммит; None — не граница."""
+    name = str(payload.get("tool_name") or "")
+    if name.endswith(CARD_TOOLS) and "boards" in name:
+        return "card"
+    if name == "Bash":
+        cmd = str((payload.get("tool_input") or {}).get("command") or "")
+        if "ctx_budget.py" in cmd:
+            return None  # next/done двигают границу сами
+        if GH_PR_RE.search(cmd):
+            return "pr"
+        if GIT_COMMIT_RE.search(cmd):
+            return "commit"
     return None
-
-
-def _safe_sid(session_id):
-    return "".join(ch for ch in session_id if ch.isalnum() or ch in "-_")[:80]
-
-
-def last_size(sid):
-    try:
-        return int((STATE_DIR / (sid + ".size")).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return 0
-
-
-def save_size(sid, size):
-    """Только подсказка «когда читать снова»: потеря записи при гонке стоит одной лишней проверки."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=sid + ".")
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(str(size))
-    os.replace(tmp, STATE_DIR / (sid + ".size"))
-
-
-def current_level(sid):
-    return max((n for n in (1, 2) if (STATE_DIR / ("%s.lvl%d" % (sid, n))).exists()), default=0)
-
-
-def claim_level(sid, level):
-    """True — этот вызов первым занял уровень и печатает; False — уровень уже занят другим вызовом."""
-    try:
-        os.close(os.open(STATE_DIR / ("%s.lvl%d" % (sid, level)), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
-    except FileExistsError:
-        return False
-    if level == 2:  # 80% пропущен (сразу 85%+) — нижний уровень тоже занят, второго текста не будет
-        try:
-            os.close(os.open(STATE_DIR / ("%s.lvl1" % sid), os.O_CREAT | os.O_WRONLY, 0o600))
-        except OSError:
-            pass
-    return True
-
-
-def reset_levels(sid):
-    for n in (1, 2):
-        try:
-            (STATE_DIR / ("%s.lvl%d" % (sid, n))).unlink()
-        except FileNotFoundError:
-            pass
-
-
-def prune(now):
-    try:
-        for path in STATE_DIR.iterdir():
-            if now - path.stat().st_mtime > STATE_MAX_AGE_S:
-                path.unlink()
-    except OSError:
-        pass
-
-
-def decide(used, window, thr, level):
-    """(новый уровень, текст или None). Уровни: 0 — тихо, 1 — инструкция дана, 2 — напоминание дано."""
-    share = used / window
-    if share < max(0.1, thr - RESET_GAP):
-        return 0, None
-    if level < 1 and share >= thr:
-        return (2 if share >= REMIND_AT else 1), MESSAGE
-    if level == 1 and share >= REMIND_AT:
-        return 2, REMINDER
-    return level, None
-
-
-def render(template, used, window, thr):
-    role = os.environ.get("T3_ROLE_KEY", "").strip()
-    return template.format(pct=round(used * 100 / window), used=used // 1000, window=window // 1000,
-                           thr=round(thr * 100),
-                           role_arg=(" --role " + role) if role else " [--role <ключ реестра> — роль Т3]")
 
 
 def pipeline_on(name):
@@ -201,42 +104,59 @@ def pipeline_on(name):
         return True
 
 
+def check(cb, cli, payload, now):
+    sid = cb.safe_sid(payload.get("session_id"))
+    transcript = Path(payload.get("transcript_path") or "")
+    if not sid or not transcript.is_file():
+        return None
+    size = transcript.stat().st_size
+    boundary = auto_boundary(payload)
+    peek = cb.load_state(sid)
+    gate = GATE_BYTES_HIGH if float(peek.get("s") or 0) >= 0.8 else GATE_BYTES
+    if not boundary and abs(size - int(peek.get("size") or 0)) < gate:
+        return None
+    if not peek:
+        cb.prune(now)
+    with cb.session_lock(sid):
+        st = cb.load_state(sid)
+        st["size"], st["transcript"] = size, str(transcript)
+        # After the cheap exits, and from the cache only: this hook runs on every tool call; the prompt hook refreshes.
+        u = cb.last_context_tokens(transcript) if pipeline_on("successorAuto") else None
+        if u is None:
+            cb.save_state(sid, st)
+            return None
+        params, window = cb.load_params(), cb.window_tokens()
+        weff = cb.refresh(st, sid, u, window, params, now)
+        task = st["task"]
+        if boundary and not task.get("explicit") and (u - task["u0"]) / weff >= cb.BOUNDARY_PHASE:
+            t, src = cb.task_estimate(st["role"], params)
+            cb.start_task(st, sid, u, weff, t, src, False, now)
+        v = cb.verdict(st, u, window, params)
+        text = None
+        if v["key"] and v["key"] not in st["printed"] and not (v["kind"] == "ok" and v["handoff_said"]):
+            text = render(cb, v, st["role"], cli)
+            st["printed"].append(v["key"])
+        cb.remember(st, v, now)
+        cb.save_state(sid, st)
+        return text
+
+
 def main():
     if os.environ.get("SUCCESSOR_AUTO", "").lower() in ("off", "0", "false"):
         return
     payload = json.load(sys.stdin)
-    sid = _safe_sid(payload.get("session_id") or "")
-    transcript = Path(payload.get("transcript_path") or "")
-    if not sid or not transcript.is_file():
+    cb, rel = load_budget()
+    if cb is None or not isinstance(payload, dict):
         return
-    size = transcript.stat().st_size
-    if abs(size - last_size(sid)) < CHECK_EVERY_BYTES:
-        return
-    first_seen = not (STATE_DIR / (sid + ".size")).exists()
-    save_size(sid, size)
-    if first_seen:
-        prune(time.time())
-    # After the cheap exits, and from the cache only: this hook runs on every tool call; the prompt hook refreshes.
-    if not pipeline_on("successorAuto"):
-        return
-    used = last_context_tokens(transcript)
-    if used is None:
-        return
-    window, thr = window_tokens(), threshold()
-    level = current_level(sid)
-    new_level, template = decide(used, window, thr, level)
-    if new_level == 0 and level:
-        reset_levels(sid)
-    if template and claim_level(sid, new_level):
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": render(template, used, window, thr),
-        }}, ensure_ascii=False))
+    text = check(cb, "python3 " + rel, payload, time.time())
+    if text:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}},
+                         ensure_ascii=False))
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception:
-        pass  # fail-safe: порог — подсказка, а не гейт
+        pass  # fail-safe: бюджет — подсказка, а не гейт
     sys.exit(0)

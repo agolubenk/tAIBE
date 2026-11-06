@@ -7,7 +7,7 @@ Evaluates how a long-lived team of AI coding sessions spends money and attention
 | `nerve/` | Watchdog daemon: GitHub / owner-queue / system / budget sources, quorum between roles, circadian modes (day/evening/night). |
 | `swarm/` | Egress orchestration for the session swarm. |
 | `pipeline/` | Capsule handoffs (author → review lenses), `genome/` configs (roles, boards, plan). |
-| `tools/` | `wake_anatomy.py` (what wakes a session, what it costs), `context_audit.py`, `call_purpose.py`, `spawn_session.sh` + `lineage.py` (predecessor retires itself after the successor's ack), `reap_sessions.sh` (list finished sessions; `--kill` is the owner's). |
+| `tools/` | `wake_anatomy.py` (what wakes a session, what it costs), `context_audit.py`, `call_purpose.py`, `spawn_session.sh` + `lineage.py` (predecessor retires itself after the successor's ack), `reap_sessions.sh` (list finished sessions; `--kill` is the owner's), `ctx_budget.py` (live window budget of a session: `next`/`done`/`status`, daily `learn` → `~/.claude/ctx-budget/params.json`; hook `context-threshold.py`). |
 | `data/` | Measurements: wake anatomy runs, cost audits per team wave. |
 | `reports/`, `shadow/` | Lens reports; shadow-mode watchdog probe. |
 | `context/` | Background: the evaluated [supertick](https://github.com/denizen24/supertick) approach (excerpt in `context/supertick-src/`, MIT) and team notes. |
