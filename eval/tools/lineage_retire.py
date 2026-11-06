@@ -5,8 +5,8 @@ import re
 import signal
 import sys
 
-from lineage import (IDLE_WAIT, SHELLS, TAP_WAIT, TERM_WAIT, ancestor_claude, argv0, descendants, die, doomed, host,
-                     ldir, make_log, norm, read_json, same, session_line, stamp, valid_line)
+from lineage import (IDLE_WAIT, SHELLS, TAP_WAIT, TERM_WAIT, ancestor_claude, argv0, descendants, die, doomed,
+                     group_of, host, ldir, make_log, norm, read_json, same, session_line, stamp, valid_line)
 
 
 # Окно Terminal: сначала по id из record (если в нём вкладка с этим tty), иначе перебором по tty. Окно с несколькими
@@ -56,11 +56,12 @@ def terminate(sx, p, protect, log):
         log(f"отказ: в снимаемом дереве {p.pid} есть защищённые pid {sorted(pids & protect)}")
         return False
     snap = {pid: procs[pid].start for pid in pids}
-    leader = p.pgid == p.pid
+    group = group_of(procs, p)
+    leader = group is not None
     if leader:
-        sx.killpg(p.pid, signal.SIGTERM)
+        sx.killpg(group, signal.SIGTERM)
     for pid in sorted(pids):
-        if not (leader and procs[pid].pgid == p.pid):
+        if not (leader and procs[pid].pgid == group):
             sx.kill(pid, signal.SIGTERM)
     deadline = sx.now() + TERM_WAIT
     while True:

@@ -11,9 +11,14 @@
       spawn_session.sh --handoff: отцепленный сторож ждёт квитанцию L, проверяет наследника и снимает предшественника
   lineage.py reap [--idle-hours 24] [--include-waiting] [--prune-days 30] [--kill [--yes]]
       без флагов — список и чистка записей линий старше --prune-days; --kill — действие владельца, только по списку последнего показа (≤ 10 мин)
+  lineage.py reap --auto [--apply] [--ack-minutes 30] [--auto-idle-hours 8] [--keep-cwd DIR]
+      безопасная автоуборка (решение владельца 06.11, lineage_auto.py): без --apply — только список и журнал
+  lineage.py autoclose --tty /dev/ttysNNN
+      пусковой скрипт spawn_session.sh после выхода claude: окно Terminal своей линии закрывается само
 
 Снимается сессия так: TERM группе claude и потомкам вне группы → 10 с → KILL выживших → окно Terminal (по id из
 record, иначе по tty; окно с другими вкладками, iTerm и VS Code не трогаются) → HUP shell-остаткам на tty.
+Группа — claude-лидер или пусковой bash spawn_session.sh, в группе которого claude (без exec, чтобы закрыть окно).
 Каталог — TAIBE_LINEAGE_DIR (по умолчанию ~/.claude/lineage). Только stdlib, запуск python3 -I.
 """
 import argparse
@@ -30,6 +35,7 @@ from pathlib import Path
 Proc = namedtuple("Proc", "pid ppid pgid tty start command")
 LINE_RE = re.compile(r"^r(\.[a-z0-9]+)*$")
 LINE_ARG_RE = re.compile(r"Линия: (r(?:\.[a-z0-9]+)+)")  # в первом сообщении, которое пишет spawn_session.sh
+LAUNCHER_RE = re.compile(r"/claude-spawn\.[A-Za-z0-9]+/[a-z]+\.sh(\s|$)")  # пусковой скрипт spawn_session.sh
 SHELLS = {"login", "zsh", "bash", "sh", "fish", "tcsh", "csh"}
 TERM_WAIT = 10          # с между TERM и KILL
 TAP_WAIT = 180          # с на взвод Monitor наследника (nerve.py tap <роль>)
@@ -103,6 +109,16 @@ class Sys:
         t = r.stdout.split(None, 1)
         return len(t) == 2 and not t[0].startswith("Z") and norm(t[1]) == norm(p.start)
 
+    def pid_alive(self, pid):
+        """Есть ли процесс pid (сигнал 0): ожидание выхода своего родителя без ps."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
     def env_line(self, pid):
         """TAIBE_LINEAGE из окружения процесса (ps -E: только свои процессы). Последнее вхождение — окружение
         печатается после аргументов, а в аргументах (первое сообщение) могло встретиться то же слово."""
@@ -133,6 +149,16 @@ class Sys:
         r = subprocess.run([os.environ.get("LINEAGE_OSASCRIPT", "osascript"), "-", *args], input=script,
                            capture_output=True, text=True, timeout=30)
         return (r.stdout or r.stderr).strip()
+
+    def dirty(self, path):
+        """Есть ли незакоммиченное (вкл. неотслеживаемое) в checkout папки path. Не git или сбой — «да»: не знаем —
+        не трогаем."""
+        try:
+            r = subprocess.run(["git", "-C", str(path), "status", "--porcelain", "--untracked-files=normal"],
+                               capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return True
+        return r.returncode != 0 or bool(r.stdout.strip())
 
     def metrics(self):
         claude = sum(1 for p in self.procs().values() if argv0(p) == "claude")
@@ -216,12 +242,24 @@ def descendants(procs, root):
     return out
 
 
+def group_of(procs, p):
+    """Группа сессии p, которую можно снимать целиком: p — её лидер (exec в пусковом скрипте), или лидер — родитель
+    p, пусковой bash spawn_session.sh (claude без exec, чтобы потом закрыть окно). Иначе None — только дерево p."""
+    if p.pgid == p.pid:
+        return p.pgid
+    parent = procs.get(p.ppid)
+    if parent and parent.pid == p.pgid and argv0(parent) == "bash" and LAUNCHER_RE.search(parent.command):
+        return p.pgid
+    return None
+
+
 def doomed(procs, p):
-    """Что снимается вместе с сессией: она, её группа (если она лидер — MCP-серверы) и потомки вне группы
+    """Что снимается вместе с сессией: она, её группа (group_of — MCP-серверы, пусковой bash) и потомки вне группы
     (Bash-инструмент живёт в своей группе). Отцепленные демоны (ppid 1) сюда не попадают."""
     s = descendants(procs, p.pid) | {p.pid}
-    if p.pgid == p.pid:
-        s |= {q.pid for q in procs.values() if q.pgid == p.pid}
+    g = group_of(procs, p)
+    if g is not None:
+        s |= {q.pid for q in procs.values() if q.pgid == g}
     return s - {os.getpid()}
 
 
@@ -312,11 +350,13 @@ def main(argv=None, sx=None):
     t.add_argument("--foreground", action="store_true", help="без отцепления (тесты, отладка)")
     from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
+    from lineage_auto import add_autoclose_args, cmd_autoclose  # noqa: E402
     add_reap_args(sub.add_parser("reap"))
+    add_autoclose_args(sub.add_parser("autoclose"))
     a = ap.parse_args(argv)
     sx = sx or Sys()
     return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire,
-            "reap": cmd_reap}[a.cmd](sx, a)
+            "reap": cmd_reap, "autoclose": cmd_autoclose}[a.cmd](sx, a)
 
 
 if __name__ == "__main__":

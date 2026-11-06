@@ -12,7 +12,10 @@
 # (в инстансе HR_Helper-v2 скрипт лежит в supertick-eval/tools/ — работает так же; корень дерева берётся из его места)
 # Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|print (print — только напечатать
 # команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
-# · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам.
+# · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам
+# · --keep-window (или SPAWN_AUTOCLOSE=off): окно Terminal не закрывается само после выхода claude.
+# Окно Terminal закрывается само, когда claude в нём вышел с кодом 0 (lineage.py autoclose: окно этой линии, одна
+# вкладка, в ней только shell; настройка Terminal «When the shell exits» не важна). Код ≠ 0 — окно остаётся.
 # Handoff: наследник после приёма пишет квитанцию (lineage.py ack), сторож lineage.py retire проверяет его и снимает
 # предшественника — процессы и окно Terminal (id окна записан при открытии). Уборка остальных — reap_sessions.sh.
 # Роль Т3 получает свой геном (--settings genome/<ключ>.json) и первое сообщение «Сборка Т3, ключ реестра <ключ>…» —
@@ -25,6 +28,7 @@ CWD="$PWD"
 TERMINAL="${SPAWN_TERMINAL:-terminal}"
 PROMPT_DIR=""
 HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO=""
+CLOSE="${SPAWN_AUTOCLOSE:-on}"
 SPAWNED_LINE=""  # линия последней открытой сессии (bash 3.2: из функции — только через глобальную)
 ORDER="coord release backend frontend plan boards"
 
@@ -42,6 +46,7 @@ while [ $# -gt 0 ]; do
     --prompt-dir) PROMPT_DIR="${2:?}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --no-retire) RETIRE=off; shift ;;
+    --keep-window) CLOSE=off; shift ;;
     --force) FORCE=1; shift ;;
     --status) INFO=status; shift ;;
     --stop) INFO=stop; shift ;;
@@ -120,6 +125,10 @@ spawn_one() {
     genome="$(in_tree_product "pipeline/genome/$role.json")"
     [ -f "$genome" ] || die "нет генома $genome (build.py собирает его из roles.json)"
   fi
+  if [ "$TERMINAL" != print ] && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
+    echo "# osascript нет (Linux/SSH) — окно не открыть, команда ниже (и без autoclose)" >&2
+    TERMINAL=print
+  fi
   # Своя папка 700 через mktemp: в общем /tmp предсказуемое имя дало бы чужому процессу подменить скрипт.
   dir="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/claude-spawn.XXXXXX")" || die "mktemp не создал папку"
   launcher="$dir/${role:-successor}.sh"
@@ -136,7 +145,21 @@ spawn_one() {
     echo "cd $(sq "$CWD") || exit 1"
     # текст прочитан — папка больше не нужна: временные пусковые файлы не копятся
     echo "m=\"\$(cat $(sq "$launcher.msg"))\"; rm -rf $(sq "$dir")"
-    if [ -n "$genome" ]; then
+    if [ "$TERMINAL" = terminal ] && [ "$CLOSE" = on ]; then
+      # Без exec: после выхода claude скрипт закрывает своё окно (06.11: 33 сессии и своп 36 из 37 ГБ — окна
+      # закончившихся сессий висели с zsh). set -m — claude лидер своей группы на переднем плане, как при exec:
+      # Ctrl-C и сторож retire снимают его группу. Код ≠ 0 (сбой, KILL) — окно остаётся, видна причина. Закрывает
+      # отцепленный lineage.py autoclose после выхода скрипта: только окно этой линии и только если в нём один shell.
+      echo "set -m"
+      if [ -n "$genome" ]; then
+        echo "\"\${CLAUDE_BIN:-claude}\" --settings $(sq "$genome") \"\$m\"; rc=\$?"
+      else
+        echo "\"\${CLAUDE_BIN:-claude}\" \"\$m\"; rc=\$?"
+      fi
+      echo "[ \"\$rc\" = 0 ] || { echo \"claude вышел с кодом \$rc — окно оставлено\"; exit \"\$rc\"; }"
+      echo "python3 -I $(sq "$TOOLS/lineage.py") autoclose --tty \"\$(tty)\" --pid \$\$ >/dev/null 2>&1 </dev/null || true"
+      echo "exit 0"
+    elif [ -n "$genome" ]; then
       echo "exec \"\${CLAUDE_BIN:-claude}\" --settings $(sq "$genome") \"\$m\""
     else
       echo "exec \"\${CLAUDE_BIN:-claude}\" \"\$m\""
@@ -145,10 +168,6 @@ spawn_one() {
   chmod 700 "$launcher"
   chmod 600 "$launcher.msg"
   cmd="/bin/bash $(sq "$launcher")"
-  if [ "$TERMINAL" != print ] && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
-    echo "# osascript нет (Linux/SSH) — окно не открыть, команда ниже" >&2
-    TERMINAL=print
-  fi
   if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then
     echo "# ${role:-наследник}: вставить в новую вкладку терминала"
     echo "$cmd"
