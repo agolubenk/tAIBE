@@ -22,7 +22,7 @@ TS = os.path.join(HERE, '..', '..', 'boards', 'packages', 'permissions', 'src', 
 SHIPPED = os.path.join(HERE, '..', '..', 'eval', 'nerve', 'config.json')
 
 
-FULL = {'automation': True, 'toggles': {name: True for name in ps.TOGGLES}}
+FULL = {'automation': True, 'toggles': {name: True for name in ps.TOGGLES}}  # the owner turned everything on
 
 
 class Board(http.server.BaseHTTPRequestHandler):
@@ -103,6 +103,8 @@ class PipelineSettingsTest(unittest.TestCase):
         self.assertFalse(ps.enabled('abJudge', self.root))
         self.assertTrue(ps.enabled('askOnce', self.root))
         self.assertTrue(ps.enabled('notAToggle', self.root))  # unknown → on
+        self.assertFalse(ps.enabled('abJudgeClaude', self.root))  # default off: the owner's tokens
+        self.assertFalse(ps.enabled('evolveAutoMerge', self.root))  # default off: closed
         # The owner switched councilReview off on the board: no env value turns it back on.
         self.connect()
         for value in ('on', 'councilReview=on', 'swarm=off'):
@@ -137,6 +139,19 @@ class PipelineSettingsTest(unittest.TestCase):
             self.age_cache(10 * ps.TTL_SECONDS)
             settings, _ = ps.load(self.root)
             self.assertFalse(settings['toggles']['councilReview'], body)  # a stray {} never resets an «off»
+
+    def test_a_board_from_before_a_late_switch_is_still_read(self):
+        # The deployed board does not know evolveAutoMerge yet: its answer is whole without it, the switch is on.
+        old_board = dict(FULL, toggles={n: v for n, v in FULL['toggles'].items() if n not in ps.LATE_TOGGLES})
+        self.connect(dict(old_board, toggles=dict(old_board['toggles'], councilReview=False)))
+        self.assertFalse(ps.enabled('councilReview', self.root))
+        self.assertFalse(ps.enabled('evolveAutoMerge', self.root))  # closed until the board says on
+        self.assertFalse(ps.enabled('abJudgeClaude', self.root))  # the owner's tokens: off until the board says on
+        # A late switch that is sent is the board's: off stays off; a non-boolean is an incomplete answer.
+        self.assertIsNone(ps.complete(dict(FULL, toggles=dict(FULL['toggles'], evolveAutoMerge='no'))))
+        self.assertFalse(ps.complete(dict(FULL, toggles=dict(FULL['toggles'], evolveAutoMerge=False)))
+                         ['toggles']['evolveAutoMerge'])
+        self.assertIsNone(ps.complete(dict(FULL, toggles={'evolveAutoMerge': True})))  # only late ones may be missing
 
     def test_redirect_and_plain_http_are_refused(self):
         self.connect()

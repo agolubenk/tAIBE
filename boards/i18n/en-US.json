@@ -2523,6 +2523,10 @@
 					"title": "Blind A/B judge for new versions",
 					"description": "A model compares two versions of a skill or prompt before one is chosen. Off: no model calls for comparisons."
 				},
+				"abJudgeClaude": {
+					"title": "Claude as the nightly A/B judge",
+					"description": "The nightly A/B is judged by Claude models (claude -p: Sonnet and Haiku, Opus as a fallback); there are no other judges. Spends the owner's tokens, so it is off until turned on."
+				},
 				"askOnce": {
 					"title": "Look up answers before asking the owner",
 					"description": "Sessions search earlier owner decisions and open questions before asking again."
@@ -2530,6 +2534,10 @@
 				"handoffDupes": {
 					"title": "Check handoffs for repeated context",
 					"description": "A successor's handoff is checked for lines every session already loads."
+				},
+				"evolveAutoMerge": {
+					"title": "Auto-merge the layer's own corrections",
+					"description": "Off by default. On: the nightly evolution run merges its own pull requests of the safe class only — cases and verdicts, and a skill or prompt put back to a version already merged — once required checks are green. Rules, the genome and code always wait for a person."
 				},
 				"promptBrief": {
 					"title": "Prompt brief by a cheap model",

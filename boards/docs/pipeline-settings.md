@@ -17,13 +17,15 @@ API keys of the workspace can read them but never change them, so automation can
 ## Switches and where each is enforced
 
 A switch is listed only if something actually obeys it. Every enforcement point treats a missing or failed read
-of the settings as **on**. The exception is the layer: there, the last known values stay in effect.
+of the settings as **on**, except `abJudgeClaude` (the owner's tokens) and `evolveAutoMerge` (closed on doubt), which stay **off**. The exception is the layer: there, the last known values stay in effect.
 
 | Switch | Group | Off means | Enforced in |
 |---|---|---|---|
-| `abJudge` | evolution | `ab.py` makes no model calls for A/B comparisons (exit 3) | `eval/evolve/ab.py` |
+| `abJudge` | evolution | `ab.py` makes no model calls for A/B comparisons (exit 3), and the nightly run judges nothing | `eval/evolve/ab.py`, `eval/evolve/daily.py` |
+| `abJudgeClaude` | evolution | **Off by default** and off when the settings cannot be read (the owner's tokens). On: the nightly run calibrates and uses Claude judges (`claude -p`, Sonnet and Haiku, Opus as a fallback) — the only judges it has (owner decision 06.11: no local models). Until the deployed board has this switch, the owner's local file `~/.claude/evolve/abJudgeClaude.on` turns it on | `eval/evolve/daily_steps.py` (`claude_judges_on`), `eval/evolve/judges.py` |
 | `askOnce` | evolution | `ask_once.py check` returns "ask as usual" without looking up | `eval/tools/ask_once.py` |
 | `handoffDupes` | evolution | no duplicate-context check before a successor starts | `eval/tools/spawn_session.sh` |
+| `evolveAutoMerge` | evolution | **Off by default** and off when the settings cannot be read. On: the nightly run merges its own PRs of the safe class only (cases, verdicts, a skill or prompt reverted to a version already merged), with required checks green; rules, the genome and code always wait for a person | `eval/evolve/daily.py merge` (`daily_git.merge_ready`) |
 | `promptBrief` | pipeline | no GLM brief of long prompts (one model call per prompt saved) | `.claude/hooks/user-prompt-submit.py` |
 | `successorAuto` | pipeline | no automatic successor by the window budget (no handoff below 85 %, ceiling 98.5 % of the auto-compaction point) | `.claude/hooks/context-threshold.py` |
 | `grillHint` | pipeline | no `<grill-task-auto>` reminder on new tasks (the rule to roast large tasks stays) | `.claude/hooks/user-prompt-submit.py` |
@@ -67,7 +69,8 @@ Hooks and tools call `.claude/scripts/pipeline_settings.py` (stdlib).
 - **Cache.** The answer is kept in `.claude/pipeline-settings.json` (gitignored, mode 600). A cache from another
   workspace is ignored.
 - **Strict answers.** Only a complete answer is accepted. Redirects are refused, so the key never goes to another
-  host.
+  host. A switch newer than the deployed board (`LATE_TOGGLES` in the script, today `abJudgeClaude` and `evolveAutoMerge`) may be
+  missing from the answer: it then takes its default, and the rest of the answer is still read.
 - **Failures.** A failed read keeps the last known values and is retried only after 10 minutes. So the board
   being down costs one timeout per 10 minutes, and an outage never turns back on what the owner switched off.
 - **Hot paths.** The successor hook runs on every tool call. It reads the cache only, after its own cheap exits.

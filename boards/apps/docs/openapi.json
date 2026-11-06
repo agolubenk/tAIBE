@@ -8752,10 +8752,16 @@
               "abJudge": {
                 "type": "boolean"
               },
+              "abJudgeClaude": {
+                "type": "boolean"
+              },
               "askOnce": {
                 "type": "boolean"
               },
               "handoffDupes": {
+                "type": "boolean"
+              },
+              "evolveAutoMerge": {
                 "type": "boolean"
               },
               "promptBrief": {
@@ -8782,8 +8788,10 @@
             },
             "required": [
               "abJudge",
+              "abJudgeClaude",
               "askOnce",
               "handoffDupes",
+              "evolveAutoMerge",
               "promptBrief",
               "successorAuto",
               "grillHint",
@@ -8826,10 +8834,16 @@
               "abJudge": {
                 "type": "boolean"
               },
+              "abJudgeClaude": {
+                "type": "boolean"
+              },
               "askOnce": {
                 "type": "boolean"
               },
               "handoffDupes": {
+                "type": "boolean"
+              },
+              "evolveAutoMerge": {
                 "type": "boolean"
               },
               "promptBrief": {

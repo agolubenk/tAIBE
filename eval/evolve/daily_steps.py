@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Steps of the daily evolution run around the judging (`daily.py`): state files, switches (closed on doubt for
+the ones that spend the owner's tokens or merge), the card comment and the layer's cost metrics. No model, gateway
+or Ollama is started here (owner rule `memory/no-local-ollama.md`; the judges are Claude, `judges.py`). Stdlib
+only."""
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
+PAID = ('abJudgeClaude', 'evolveAutoMerge')  # off when the settings cannot be read
+sys.path.insert(0, HERE)
+import daily_git as g  # noqa: E402
+
+SESSION_TURNS = 60
+SESSION_BUDGET_USD = '4'
+SESSION_TIMEOUT_MIN = 45
+# «You've hit your limit · resets 4am» is what the CLI prints today; the rest are older and API wordings.
+QUOTA = re.compile(r"you(?:'|’)ve hit your (?:usage )?limit|hit your limit|usage limit|rate.?limit|quota|"
+                   r'credit balance|limit (?:reached|exceeded)|out of (?:extra )?usage', re.I)
+HUB = os.path.expanduser(os.environ.get('EVOLVE_HUB') or
+                         '~/Desktop/Development/handoff/2026-11-06-restart/tools/hub.mjs')
+CARD, WORKSPACE = 'SE-49', 'lth89qy6f8j1greiy4c5cn23'
+STATE_DIR = os.path.expanduser(os.environ.get('EVOLVE_STATE_DIR') or '~/.claude/evolve')
+CLAUDE_OVERRIDE = 'abJudgeClaude.on'  # in STATE_DIR: the owner's local «on» for nightly Claude judges
+BASE = 'board-agents'  # tAIBE's default branch: where the run's PRs go
+
+
+def now():
+    return datetime.datetime.now().astimezone()
+
+
+def log(*parts):
+    print('[evolve %s]' % now().strftime('%H:%M:%S'), *parts, flush=True)
+
+
+def load_json(name, default):
+    try:
+        with open(os.path.join(STATE_DIR, name), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(name, data):
+    path = os.path.join(STATE_DIR, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + '.tmp', 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.replace(path + '.tmp', path)
+
+
+def closed_switch(name, root=ROOT):
+    """A switch that is closed on doubt: on only if the board's answer was read (fresh, or cached with no failed
+    read since) and says on. Defaults, a failed read or any error — off."""
+    try:
+        sys.path.insert(0, os.path.join(root, '.claude', 'scripts'))
+        import pipeline_settings as ps
+        settings, source = ps.load(root)
+    except Exception:  # noqa: BLE001
+        return False
+    if not (source.startswith('board') or source.startswith('cache')) or 'failed' in source:
+        return False
+    return bool(settings['automation'] and settings['toggles'].get(name))
+
+
+def claude_judges_on(root=ROOT, override=None):
+    """Nightly Claude judges: on only if the owner said so — `abJudgeClaude` read from the board (closed on doubt), or
+    the owner's local file `~/.claude/evolve/abJudgeClaude.on` (the deployed board has no such switch yet).
+    `TAIBE_PIPELINE` with `off` or `abJudgeClaude=off` turns it off over both."""
+    env = os.environ.get('TAIBE_PIPELINE', '').replace(' ', '').lower()
+    if env in ('off', '0', 'false', 'no') or 'abjudgeclaude=off' in env.split(','):
+        return False
+    path = override or os.path.join(STATE_DIR, CLAUDE_OVERRIDE)
+    return closed_switch('abJudgeClaude', root) or os.path.isfile(path)
+
+
+def switch(name, root=ROOT):
+    """The product's switch (`.claude/scripts/pipeline_settings.py`); `automation` is the master switch. A failed
+    read is «on» (the module's own rule), except a switch that spends the owner's tokens."""
+    try:
+        sys.path.insert(0, os.path.join(root, '.claude', 'scripts'))
+        import pipeline_settings as ps
+        if name == 'automation':
+            return ps.load(root)[0]['automation']
+        return ps.enabled(name, root)
+    except Exception:  # noqa: BLE001
+        return name not in PAID
+
+
+def post_card(line):
+    """One comment on the card through the boards hub; returns what happened (never raises)."""
+    def hub(tool, payload):
+        res = subprocess.run(['node', HUB, tool, json.dumps(payload, ensure_ascii=False)], capture_output=True,
+                             text=True, timeout=120)
+        if res.returncode != 0:
+            raise RuntimeError((res.stderr or res.stdout).strip()[:200])
+        return res.stdout
+    try:
+        task = json.loads(hub('get_task_by_ticket_id', {'ticketId': CARD, 'workspaceId': WORKSPACE}))['data']['id']
+        hub('create_task_comment', {'taskId': task, 'content': line, 'harness': 'claude-code'})
+        return 'posted to %s' % CARD
+    except Exception as e:  # noqa: BLE001 — the run report still has the line
+        return 'not posted: %s' % e
+
+
+def layer_metrics(wt):
+    out = {}
+    for name, cmd in (('catalog', ['catalog.py', '--root', wt, '--json']), ('dupes', ['dupes.py', '--root', wt,
+                                                                                      '--l1', '--json'])):
+        res = subprocess.run([sys.executable, '-I', os.path.join(wt, 'eval/evolve', cmd[0]), *cmd[1:]],
+                             capture_output=True, text=True, timeout=300)
+        try:
+            data = json.loads(res.stdout)
+        except ValueError:
+            out[name] = {'error': (res.stderr or res.stdout).strip()[:300]}
+            continue
+        out[name] = ({'l1': {r: v['total'] for r, v in data['l1'].items()}, 'budget': data['budget'],
+                      'over': data['over']} if name == 'catalog' else
+                     {'clusters': len(data['clusters']), 'l1_waste': data['l1_waste']})
+    tool = os.path.join(wt, 'eval/tools/ctx_budget.py')
+    if os.path.isfile(tool):
+        res = subprocess.run([sys.executable, '-I', tool, 'learn'], capture_output=True, text=True, timeout=600)
+        out['ctx_budget'] = {'exit': res.returncode, 'tail': (res.stdout + res.stderr).strip()[-300:]}
+    else:
+        out['ctx_budget'] = 'skipped: eval/tools/ctx_budget.py is not in this revision'
+    return out
