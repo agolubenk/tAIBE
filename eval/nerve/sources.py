@@ -244,6 +244,7 @@ def poll_queue(ctx):
     _oq_watch(ctx, "items", item_meta)
     _oq_watch(ctx, "checks", check_meta)
     items = {d["id"]: d.get("data") or {} for d in item_docs}
+    product = {d["id"]: d.get("product") for d in item_docs}       # v2-lite (#95): продукт документа, если есть
     for c in checks:
         it = items.get(c["id"])
         a = c.get("data") or {}
@@ -254,9 +255,9 @@ def poll_queue(ctx):
         opt = next((o for o in it.get("options") or [] if o.get("id") == a.get("choice")), None)
         label = (opt or {}).get("label", "")[:60] or str(a.get("choice") or ("сделано" if a.get("done") else "—"))
         # R-6: продукт пункта — по `queue.match` (id содержит `-taibe-`), не по папке сессии-автора; роль — его правилами.
-        target = getattr(ctx, "for_item", lambda _id: ctx)(c["id"])
+        target = ctx.for_item(c["id"], product.get(c["id"]))
         role = route_source(str(it.get("source", "")), target.cfg["queue"]["source_roles"])
-        target.emit(f"oq:answer:{c['id']}:{a['at']}", "owner.answer", NERVOUS, [role],
+        _emit_to(ctx, target, f"oq:answer:{c['id']}:{a['at']}", "owner.answer", NERVOUS, [role],
                  f"ответ владельца {c['id']}: {label}{' · есть заметка' if a.get('note') else ''}", "queue")
     for iid, it in items.items():
         if it.get("kind") != "inbox" or it.get("archived"):
@@ -265,12 +266,23 @@ def poll_queue(ctx):
         stop = bool(STOP_RE.search(ib.get("text", "")))
         urgent = ib.get("urgency") == "now" or ib.get("severity") == "critical"
         meta = " · ".join(x for x in (ib.get("type"), ib.get("urgency"), ib.get("severity")) if x)
-        if stop:                   # R-5: стоп владельца — во все журналы; входящее (R-7) — одному coord по умолчанию
-            for target in [ctx, *(getattr(ctx, "peers", None) or {}).values()]:
-                target.emit(f"oq:stop:{iid}", "owner.stop", NERVOUS, [ALL],
-                            f"входящее {iid}: стоп/откат от владельца — прочитать oq_get", "queue")
-        ctx.emit(f"oq:inbox:{iid}", "owner.inbox", NERVOUS if urgent else DIGEST, ["coord"],
+        # R-7: продукт входящего задал владелец (v2-lite) — его coord и его стоп; не задан — coord продукта по
+        # умолчанию, стоп во все журналы (продукт неизвестен).
+        own = ctx.for_item(iid, product.get(iid)) if product.get(iid) else None
+        if stop:
+            for target in [own] if own else [ctx, *(ctx.peers or {}).values()]:
+                _emit_to(ctx, target, f"oq:stop:{iid}", "owner.stop", NERVOUS, [ALL],
+                         f"входящее {iid}: стоп/откат от владельца — прочитать oq_get", "queue")
+        _emit_to(ctx, own or ctx, f"oq:inbox:{iid}", "owner.inbox", NERVOUS if urgent else DIGEST, ["coord"],
                  f"входящее {iid} ({meta})", "queue")
+
+
+def _emit_to(ctx, target, *args):
+    """Запись в журнал своего или другого продукта; сбой другого продукта не останавливает обход очереди."""
+    if target is ctx:
+        return ctx.emit(*args)
+    import nerve
+    return nerve.peer_emit(target, lambda p: p.emit(*args))
 
 
 # ---------- Транскрипты: роли и лимиты ----------
@@ -312,6 +324,7 @@ def map_roles(ctx):
         except OSError:
             continue
         if mt < horizon:
+            cache.pop(p, None)          # кэш — только свежих: worktree-папок сотни (R-9), state.json пишется каждый проход
             continue
         if p not in cache:
             m = KEY_RE.search(_first_prompt(p))

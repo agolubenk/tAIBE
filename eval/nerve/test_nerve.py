@@ -280,6 +280,12 @@ class FakeCtx:
     def emit(self, key, kind, cls, to, text, src=""):
         return self.journal.emit(key, kind, cls, to, text, src)
 
+    peers = None
+    emit_account = emit
+
+    def for_item(self, _id, _product=None):
+        return self
+
 
 class FakeGh:
     """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
@@ -772,6 +778,57 @@ class ProductsTest(unittest.TestCase):
         self.assertIn("owner.stop", [k for k, _ in tb])
         self.assertIn("owner.stop", [k for k, _ in hr])
         self.assertNotIn("owner.inbox", [k for k, _ in tb], "R-7: входящее — одному coord продукта по умолчанию")
+
+    def test_failing_peer_does_not_break_default_events(self):
+        """Линза 1: сбой журнала продукта — в его errors; событие и состояние продукта по умолчанию — как без продуктов."""
+        ctx = self.peered()
+        broken = ctx.peers["taibe"]
+        broken.emit = mock.Mock(side_effect=OSError("диск"))
+        self.assertTrue(ctx.emit_account("limit:hit:q", "limit.hit", NERVOUS, ["coord"], "лимит", "budget"))
+        self.assertEqual([r["kind"] for r in self.records()], ["limit.hit"])
+        self.assertIn("route", broken.state["errors"])
+        items = [{"id": "m-taibe-1", "data": {"kind": "merge", "source": "x"}},
+                 {"id": "m-2", "data": {"kind": "merge", "source": "Координатор"}}]
+        checks = [{"id": "m-taibe-1", "data": {"done": True, "at": "2026-11-07T10:00:00Z"}},
+                  {"id": "m-2", "data": {"done": True, "at": "2026-11-07T10:01:00Z"}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            sources.poll_queue(ctx)
+        self.assertIn("m-2", " ".join(r["text"] for r in self.records()), "обход очереди не остановился")
+
+    def test_reactivation_is_a_new_seed(self):
+        """Линза 1: выключенный продукт теряет отметку seed — включение заново не отдаёт накопленное будилками."""
+        self.peered()
+        self.taibe["active"] = False
+        ctx = nerve.Ctx(CFG, self.d)
+        nerve.attach_peers(ctx, True)
+        self.assertEqual(ctx.peers, {})
+        self.taibe["active"] = True
+        ctx = nerve.Ctx(CFG, self.d)
+        nerve.attach_peers(ctx, True)
+        self.assertFalse(ctx.peers["taibe"].deliver, "после простоя — снова seed")
+
+    def test_item_product_field_wins_over_id(self):
+        """Мост: продукт пункта выбирает владелец (поле `product` документа, v2-lite) — оно важнее метки в id;
+        входящее с продуктом — coord этого продукта и стоп только туда."""
+        ctx = self.peered()
+        self.assertIs(ctx.for_item("s-set-control-b1-0711", "taibe"), ctx.peers["taibe"])
+        self.assertIs(ctx.for_item("d-taibe-m1m2-0411", "hr-helper"), ctx)
+        items = [{"id": "i-2", "product": "taibe",
+                  "data": {"kind": "inbox", "inbox": {"text": "стоп", "urgency": "now"}}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else [], {})):
+            sources.poll_queue(ctx)
+        self.assertEqual(sorted(r["kind"] for r in self.records("taibe")), ["owner.inbox", "owner.stop"])
+        self.assertEqual(self.records(), [], "входящее tAIBE не будит coord HR")
+
+    def test_broken_instances_keeps_last_good_products(self):
+        """Линза 1: сбой instances/ на проходе — событие release и продукты последней удачной загрузки."""
+        self.peered()
+        with mock.patch.object(nerve, "load_products", side_effect=ValueError("taibe.json: не JSON")):
+            ctx = nerve.Ctx(CFG, self.d)
+            with redirect_stderr(io.StringIO()):
+                nerve.attach_peers(ctx, True)
+        self.assertIn("taibe", ctx.peers)
+        self.assertTrue(any(r["kind"] == "nerve.error" for r in self.records()))
 
     def test_map_roles_reads_worktree_transcripts(self):
         """R-9: сессия в worktree пишет транскрипт в `<project_dir>-worktrees-*`."""
