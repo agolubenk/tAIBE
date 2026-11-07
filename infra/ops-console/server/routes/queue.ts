@@ -15,14 +15,14 @@ import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
 import { canSee, DEFAULT_PRODUCT, listProducts, visibilityKey } from '../queue/products'
-import { deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
+import { SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
 const writeSchema = z.object({
   data: z.record(z.unknown()),
   ifVersion: z.number().int().nonnegative().optional(),
   ifAnswerAt: z.string().max(40).optional(),
   /** Входящее: перехват захвата у названной сессии (наследник) и отпуск своего захвата (queue/store.ts). */
-  takeover: z.string().min(1).max(120).optional(),
+  takeover: z.string().min(1).max(SESSION_MAX).optional(),
   release: z.boolean().optional(),
 })
 const mergeSchema = z.object({ sha: z.string() })

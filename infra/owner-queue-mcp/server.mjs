@@ -5,6 +5,7 @@
 // В stdout — только JSON-RPC; диагностика — в stderr.
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
+import { SESSION_MAX } from './relay.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
@@ -245,7 +246,7 @@ const TOOLS = [
       + 'Владелец ответил, но нужен снова (вопрос в ответ, вывод с ошибкой, «повторите проверку») — status blocked и просьба в note: пункт вернётся '
       + 'к нему в открытые с меткой «ждёт вас снова». doing после ответа — «работаю», пункт не переоткрывается; done и planned — тоже. '
       + 'Передача линии: session — своя линия из первого сообщения (r.…); наследник берёт входящее предка, назвав его '
-      + '(takeover: <линия предка>) — только если его линия продолжает линию держателя. Уходя без наследника — release: true '
+      + '(takeover: <линия предка>) — только если его линия продолжает линию держателя. Уходя без наследника — release: true (только у входящих) '
       + 'и note «передано <сессия>»: снимается только держатель, пункт берёт названная сессия.',
     inputSchema: {
       type: 'object',
@@ -261,13 +262,13 @@ const TOOLS = [
     },
     run: async ({ id, status, note, session, takeover, release }) => {
       if (!status && release !== true) throw new Error('Нужен status (или release: true — отпустить свой захват)');
-      const by = typeof session === 'string' ? session.trim().slice(0, 120) : '';
+      const by = typeof session === 'string' ? session.trim().slice(0, SESSION_MAX) : '';
       // Новый статус без note — заметка пустая, как раньше: старая просьба не уходит с новым статусом. Отпуск без
       // статуса заметку не трогает.
       const agentNote = note !== undefined ? String(note) : status ? '' : undefined;
       const res = await api('PATCH', `/db/checks/${encodeURIComponent(id)}`, {
         data: { ...(status ? { agentStatus: status } : {}), ...(agentNote !== undefined ? { agentNote } : {}), ...(by ? { agentBy: by } : {}) },
-        ...(takeover ? { takeover: String(takeover).trim().slice(0, 120) } : {}),
+        ...(takeover ? { takeover: String(takeover).trim().slice(0, SESSION_MAX) } : {}),
         ...(release === true ? { release: true } : {}),
       });
       // Консоль до OPS-35 поле release молча отбрасывает: захват остался бы, а сессия думала бы, что отпустила.

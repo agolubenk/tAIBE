@@ -213,6 +213,29 @@ describe('входящие из Telegram (kind: inbox)', () => {
     expect((await st({ agentBy: 'r.other' }, { release: true })).status).toBe(409)
   })
 
+  it('release — только у входящих: у обычного пункта захвата нет, подпись agentBy не стирается (линза безопасности HR #521)', async () => {
+    await bearer(owner).put('/db/items/d-release', { data: decision })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/d-release', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentNote: 'начал', agentBy: 'r.ab12' })).status).toBe(200)
+    const rel = await st({ agentBy: 'r.zz99' }, { release: true })
+    expect(rel.status).toBe(422)
+    expect(rel.json.error).toContain('только у входящих')
+    expect((await bearer(owner).patch('/db/checks/d-release', { data: {}, release: true })).status).toBe(422)
+    expect((await bearer(agent).get('/db/checks/d-release')).json.data.agentBy).toBe('r.ab12')
+    // Ответ без пункта (опечатка в id, пункт удалён) — 404, а не «только у входящих».
+    expect((await bearer(agent).patch('/db/checks/nope-release', { data: { agentBy: 'r.ab12' }, release: true })).status).toBe(404)
+  })
+
+  it('линия длиннее 120 символов (поколение 30): захват и перехват наследником работают', async () => {
+    const line = 'r' + Array.from({ length: 30 }, (_, i) => '.' + String(i).padStart(4, 'a')).join('')
+    expect(line.length).toBeGreaterThan(120)
+    await bearer(owner).put('/db/items/i-long-line', { data: inbox() })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-long-line', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentBy: line })).status).toBe(200)
+    expect((await st({ agentStatus: 'doing', agentBy: `${line}.zz99` }, { takeover: line })).status).toBe(200)
+    expect((await bearer(agent).get('/db/checks/i-long-line')).json.data.agentBy).toBe(`${line}.zz99`)
+  })
+
   it('передача линии: наследник по линии берёт пункт сразу, назвав держателя; не наследник — нет, как бы ни назвался', async () => {
     await bearer(owner).put('/db/items/i-takeover', { data: inbox() })
     const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-takeover', { data, ...extra })
