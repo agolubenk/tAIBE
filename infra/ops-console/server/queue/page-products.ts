@@ -27,6 +27,8 @@ export const PRODUCTS_JS = String.raw`(function () {
     for (var i = 0; i < docs.length; i++) docsById[docs[i].id] = docs[i];
   }
   function productOf(id) { var d = docsById[id]; return (d && d.product) || DEFAULT; }
+  // Для строки автопередачи страницы (page.html paintRelayItem): автопередача — только HR.
+  window.__oqProductOf = productOf;
   function movable(id) {
     var d = docsById[id], data = d && d.data;
     if (!data) return false;

@@ -131,6 +131,10 @@ describe('продукт пункта на странице', () => {
     // Вшитый в страницу пункт и мёрж с вердиктом «Контроля» не переносятся — выбора нет; входящее — переносится.
     expect([2, 4].map((i) => p.box(p.items[i]!))).toEqual([null, null])
     expect(p.select(p.items[3]!).value).toBe('hr-helper')
+    // Строка автопередачи страницы берёт продукт отсюда: автопередача — только HR.
+    const productOf = (p.window as unknown as { __oqProductOf: (id: string) => string }).__oqProductOf
+    expect(productOf('taibe-d-2')).toBe('taibe')
+    expect(productOf('i-1')).toBe('hr-helper')
   })
 
   it('входящее — с предупреждением владельца «задачу никто не возьмёт» (решение now-warn)', async () => {

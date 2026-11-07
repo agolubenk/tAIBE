@@ -168,7 +168,8 @@ const TOOLS = [
       const reuse = Number(offset) > 0;
       const snap = await readSnapshot(path, () => api('GET', path), { reuse, asOf });
       const res = snap.value;
-      const { docs } = res;
+      // Консоль до v2-lite.3 параметр product не знает и отдаёт всё — фильтр и здесь.
+      const docs = product ? res.docs.filter((d) => (d.product ?? 'hr-helper') === product) : res.docs;
       // Консоль до 23.10 параметр open не знает (нет open: true) — тогда прежний фильтр здесь, без «ждёт вас снова».
       const legacyOpen = wantOpen && res.open !== true;
       let list = docs;

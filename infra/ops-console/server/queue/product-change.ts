@@ -35,9 +35,12 @@ export async function changeItemProduct(actor: Actor, id: string, to: string, re
     const at = new Date()
     const check = await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)) })
     if (check) {
+      // Входящее — без захвата сессии прежнего продукта: она его больше не видит (404), а сессия нового продукта или HR
+      // после возврата получала бы 409 «Пункт уже ведёт …» до 12 ч. Перенос виден в истории (событие product).
+      const dataJson = data.kind === 'inbox' ? withoutAgent(check.dataJson) : check.dataJson
       await tx
         .update(oqDocs)
-        .set({ product: to, version: check.version + 1, updatedAt: at, updatedBy: actor.name })
+        .set({ product: to, dataJson, version: check.version + 1, updatedAt: at, updatedBy: actor.name })
         .where(and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)))
     }
     await tx
@@ -55,4 +58,12 @@ export async function changeItemProduct(actor: Actor, id: string, to: string, re
     ])
     return { id, from: item.product, to, changed: true }
   })
+}
+
+const AGENT_FIELDS = ['agentStatus', 'agentNote', 'agentBy', 'agentAt'] as const
+
+function withoutAgent(json: string): string {
+  const d = JSON.parse(json) as Record<string, unknown>
+  for (const k of AGENT_FIELDS) delete d[k]
+  return JSON.stringify(d)
 }
