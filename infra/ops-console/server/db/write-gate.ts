@@ -1,42 +1,21 @@
 /**
- * Запись в SQLite из одного процесса — по одной, а занятая чужим процессом база — асинхронным повтором.
+ * Запись в SQLite из одного процесса — по одной: транзакции, batch, миграции и пишущие execute ждут асинхронный шлюз,
+ * чтения идут мимо. Без него одновременные записи консоли конкурировали за BEGIN, и проигравшая падала с SQLITE_BUSY.
  *
  * Почему не busy_timeout libsql: его ожидание синхронное и стоит циклом событий — открытая транзакция того же процесса
- * не доходит до COMMIT, ожидающий падает через весь таймаут, а консоль всё это время не отвечает. Почему не повтор без
- * шлюза: неудачный BEGIN IMMEDIATE оставляет соединение пула так, что следующее чтение на нём держит блокировку, и
- * COMMIT победителя и все следующие записи процесса падают.
+ * не доходит до COMMIT, ожидающий падает через весь таймаут, а консоль это время не отвечает.
  *
- * Поэтому: транзакции, batch и пишущие execute ждут асинхронный шлюз — внутри процесса BEGIN не конкурирует. Чужой
- * процесс (бэкап читает базу под блокировкой чтения) даёт SQLITE_BUSY — повтор с паузами, цикл событий свободен.
- * Чтения идут мимо шлюза. Внутри транзакции писать через getDb(), а не tx, нельзя: шлюз занят — запись ждала бы саму
- * себя; ожидание шлюза ограничено GATE_WAIT_MS и заканчивается ошибкой, а не зависанием.
+ * Чужой процесс (CLI, бэкап) по-прежнему даёт SQLITE_BUSY — ошибку, а не повтор: libsql не сбрасывает оператор, упавший
+ * с BUSY, и повтор на том же соединении «проходит», но не фиксируется (запись теряется молча) или держит блокировку до
+ * сборки мусора. Защита от чужой блокировки — режим WAL (решение по деплою и бэкапу), а не повтор.
+ *
+ * Внутри транзакции писать через getDb(), а не tx, нельзя: шлюз занят — запись ждала бы саму себя; ожидание шлюза
+ * ограничено GATE_WAIT_MS и заканчивается 503, а не зависанием.
  */
 import type { Client, InStatement, Transaction, TransactionMode } from '@libsql/client'
+import { apiError } from '../http-types'
 
-/** Паузы повтора при SQLITE_BUSY, мс: всего ~1,6 с — дольше копии ночного бэкапа (доли секунды). */
-const BUSY_DELAYS_MS = [20, 50, 100, 200, 400, 800]
 const GATE_WAIT_MS = 10_000
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
-export function isBusy(e: unknown): boolean {
-  const err = e as { code?: unknown; rawCode?: unknown; message?: unknown; cause?: unknown } | null
-  if (!err) return false
-  if (err.code === 'SQLITE_BUSY' || err.code === 'SQLITE_LOCKED') return true
-  return typeof err.message === 'string' && /SQLITE_BUSY|database is locked/.test(err.message) ? true : isBusy(err.cause)
-}
-
-/** Повтор при SQLITE_BUSY с паузами; остальные ошибки — сразу. fn повторяется целиком: транзакция — с BEGIN. */
-export async function retryBusy<T>(fn: () => Promise<T>): Promise<T> {
-  for (let i = 0; ; i++) {
-    try {
-      return await fn()
-    } catch (e) {
-      if (!isBusy(e) || i >= BUSY_DELAYS_MS.length) throw e
-      await sleep(BUSY_DELAYS_MS[i]!)
-    }
-  }
-}
 
 /** Асинхронный замок: очередь ожидающих, без опроса. */
 class Gate {
@@ -63,7 +42,7 @@ class Gate {
       }
       const timer = setTimeout(() => {
         this.#waiters = this.#waiters.filter((w) => w !== grant)
-        reject(Object.assign(new Error('SQLITE_BUSY: запись процесса ждёт шлюз дольше 10 с'), { code: 'SQLITE_BUSY' }))
+        reject(apiError(503, 'Запись в базу консоли ждёт очереди дольше 10 с — повторите позже'))
       }, GATE_WAIT_MS)
       this.#waiters.push(grant)
     })
@@ -85,8 +64,9 @@ const sqlOf = (stmt: InStatement): string => (typeof stmt === 'string' ? stmt : 
 /** Транзакция держит шлюз до commit, rollback или close; неудачный commit — до rollback (его зовёт drizzle). */
 function gatedTransaction(tx: Transaction, release: () => void): Transaction {
   return new Proxy(tx, {
-    get(target, prop, receiver) {
-      const v = Reflect.get(target, prop, receiver) as unknown
+    get(target, prop) {
+      // receiver — сам объект: геттеры с приватными полями (closed) не работают на прокси.
+      const v = Reflect.get(target, prop, target) as unknown
       if (typeof v !== 'function') return v
       if (prop === 'commit') return async () => { await target.commit(); release() }
       if (prop === 'rollback') return async () => { try { await target.rollback() } finally { release() } }
@@ -99,27 +79,27 @@ function gatedTransaction(tx: Transaction, release: () => void): Transaction {
 export function gateClient(client: Client): Client {
   const gate = new Gate()
   return new Proxy(client, {
-    get(target, prop, receiver) {
-      const v = Reflect.get(target, prop, receiver) as unknown
+    get(target, prop) {
+      const v = Reflect.get(target, prop, target) as unknown
       if (typeof v !== 'function') return v
       if (prop === 'transaction') {
         return async (mode?: TransactionMode) => {
           const release = await gate.acquire()
           try {
-            return gatedTransaction(await retryBusy(() => target.transaction(mode)), release)
+            return gatedTransaction(await target.transaction(mode), release)
           } catch (e) {
             release()
             throw e
           }
         }
       }
-      if (prop === 'batch') {
-        return (stmts: InStatement[], mode?: TransactionMode) => gate.run(() => retryBusy(() => target.batch(stmts, mode)))
+      if (prop === 'batch' || prop === 'migrate' || prop === 'executeMultiple') {
+        return (...args: unknown[]) => gate.run(() => (v as (...a: unknown[]) => Promise<unknown>).apply(target, args))
       }
       if (prop === 'execute') {
         return (stmt: InStatement, args?: unknown) => {
           const exec = () => (args === undefined ? target.execute(stmt) : target.execute(stmt as string, args as never))
-          return READ_SQL.test(sqlOf(stmt)) ? retryBusy(exec) : gate.run(() => retryBusy(exec))
+          return READ_SQL.test(sqlOf(stmt)) ? exec() : gate.run(exec)
         }
       }
       return (v as (...a: unknown[]) => unknown).bind(target)

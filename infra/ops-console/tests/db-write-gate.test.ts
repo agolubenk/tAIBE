@@ -1,10 +1,9 @@
 /**
- * Запись консоли и занятая база (server/db/write-gate.ts): одновременные записи процесса не падают с SQLITE_BUSY,
- * запись под чужой блокировкой чтения (ночной бэкап, infra/scripts/prod/backup_ops_console.py в HR) дожидается её
- * асинхронно — цикл событий не стоит. Читатель — python3, как у бэкапа: mode=ro, явная транзакция чтения.
+ * Запись консоли и занятая база (server/db/write-gate.ts): одновременные записи процесса не падают с SQLITE_BUSY.
+ * Чужая блокировка (ночной бэкап, infra/scripts/prod/backup_ops_console.py в HR) — остаточный риск: запись падает сразу,
+ * без синхронного ожидания. Читатель — python3, как у бэкапа: mode=ro, явная транзакция чтения.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { createClient } from '@libsql/client'
 import { sql } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
 import { freshApp } from './helpers'
@@ -82,29 +81,25 @@ describe('шлюз записи', () => {
   })
 })
 
-describe.skipIf(!hasPython)('чужая блокировка чтения (бэкап)', () => {
-  it('без шлюза запись под блокировкой падает с SQLITE_BUSY', async () => {
+describe.skipIf(!hasPython)('чужая блокировка чтения (бэкап) — остаточный риск', () => {
+  it('запись под чужой блокировкой падает сразу с SQLITE_BUSY, без синхронного ожидания — цикл событий не стоит', async () => {
     await freshApp()
-    const bare = createClient({ url: getEnv().databaseUrl })
-    try {
-      await holdReadLock()
-      await expect(bare.execute('CREATE TABLE busy_bare (x INTEGER)')).rejects.toThrow(/SQLITE_BUSY|locked/i)
-    } finally {
-      bare.close()
-    }
-  })
-
-  it('запись консоли и транзакция дожидаются конца блокировки асинхронно — цикл событий не стоит', async () => {
-    await freshApp()
-    await getDb().run(sql`CREATE TABLE busy_probe (x INTEGER)`)
     await holdReadLock()
-    const { ticks, ms } = await ticksDuring(async () => {
-      await getDb().run(sql`INSERT INTO busy_probe (x) VALUES (1)`)
-      await getDb().transaction(async (tx) => { await tx.run(sql`INSERT INTO busy_probe (x) VALUES (2)`) })
-    })
-    expect(ms).toBeGreaterThanOrEqual(HOLD_SEC * 1000 * 0.5)
-    // Таймер 20 мс за время ожидания срабатывал: цикл событий работал, а не стоял в синхронном busy wait.
-    expect(ticks).toBeGreaterThanOrEqual(Math.floor((ms / 20) * 0.5))
-    expect(await getDb().all<{ x: number }>(sql`SELECT x FROM busy_probe ORDER BY x`)).toEqual([{ x: 1 }, { x: 2 }])
+    const { value, ms } = await ticksDuring(() => getDb().run(sql`CREATE TABLE busy_probe (x INTEGER)`).then(() => null, (e: unknown) => e))
+    // drizzle оборачивает ошибку драйвера: код — в cause.
+    const err = value as { message?: string; cause?: { code?: string } } | null
+    expect(`${err?.cause?.code ?? ''} ${err?.message ?? ''}`).toMatch(/SQLITE_BUSY|locked/i)
+    expect(ms).toBeLessThan(HOLD_SEC * 1000 * 0.5)
+  })
+})
+
+describe('прокси шлюза', () => {
+  it('свойства клиента и транзакции читаются как у самого объекта (геттеры с приватными полями)', async () => {
+    await freshApp()
+    const client = (getDb() as unknown as { $client: { closed: boolean; transaction: () => Promise<{ closed: boolean; rollback: () => Promise<void> }> } }).$client
+    expect(client.closed).toBe(false)
+    const tx = await client.transaction()
+    expect(tx.closed).toBe(false)
+    await tx.rollback()
   })
 })
