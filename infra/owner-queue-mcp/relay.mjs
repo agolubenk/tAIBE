@@ -2,6 +2,7 @@
  * Автопередача входящих (--relay <сессия>): процесс под Monitor сессии опрашивает очередь и передаёт новые входящие.
  * Вынесено из server.mjs (лимит 500 строк на файл); запуск — `node server.mjs --relay <сессия>`, как раньше.
  */
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +13,9 @@ import { join } from 'node:path';
 // (PUT /relay: страница и бот по ней говорят владельцу, жива ли автопередача). Что уже передано — в журнале
 // ~/.hr-owner-queue-bot/relay/<сессия>.json: перезапуск и перевзвод Monitor дублей не шлют.
 // Имя сессии — ключ объекта на сервере: служебные имена объекта не берём (ревью «Контроля» #324, п. 7).
-const RELAY_SESSION = /^(?!(?:__proto__|constructor|prototype)$)[A-Za-z0-9._-]{1,120}$/;
+// Предел имени сессии — как у консоли (server/queue/store.ts SESSION_MAX): линия растёт на 5 символов за поколение.
+export const SESSION_MAX = 1000;
+const RELAY_SESSION = new RegExp(`^(?!(?:__proto__|constructor|prototype)$)[A-Za-z0-9._-]{1,${SESSION_MAX}}$`);
 /** Сколько id принимает одна отметка (relayBeatSchema в консоли). */
 const RELAY_ACK_BATCH = 50;
 const RELAY_POLL_MS = 20_000;
@@ -68,7 +71,8 @@ export async function relayLoop(session, { BASE, TOKEN, api }) {
   }
   const dir = join(homedir(), '.hr-owner-queue-bot', 'relay');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const file = join(dir, `${session}.json`);
+  // Имя файла — до 255 байт: длинная линия — по хэшу; короткие имена — как раньше (журнал прежних запусков на месте).
+  const file = join(dir, `${session.length > 120 ? createHash('sha1').update(session).digest('hex') : session}.json`);
   // unacked — переданные сессии, но ещё не отмеченные в консоли: отправляются, пока PUT /relay не пройдёт (п. 3). Иначе
   // сбой одного PUT (таймаут, 5xx, 429, больше 50 id) оставлял пункт навсегда «📨 Передаётся…».
   let relayed = {}, unacked = [], first = false;

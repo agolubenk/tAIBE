@@ -40,6 +40,10 @@ const OWNER_FIELDS = ['done', 'choice', 'note', 'at'] as const
 const AGENT_STATUSES = ['taken', 'doing', 'blocked', 'done', 'planned'] as const
 
 const httpsLink = z.object({ href: z.string().regex(/^https:\/\/[^\s"<>]+$/).max(2000), text: z.string().max(200).optional() })
+// Предел имени сессии: линия растёт на 5 символов за поколение (r.62u1 → r.62u1.ab12), 120 символов хватало на 23
+// поколения, а роли уже за 27. 1000 — около 200 поколений; линия целиком, без хэша и хвоста — иначе наследника не узнать.
+export const SESSION_MAX = 1000
+
 // Входящее из Telegram (kind: 'inbox'): владелец переслал боту сообщение, бот уточнил тип и срочность кнопками.
 // Ведёт агент-сессия: карточка Notion или фикс; протокол — docs/specs/owner-queue.md «Входящие из Telegram».
 export const INBOX_TYPES = ['bug', 'idea', 'task', 'alert'] as const
@@ -81,7 +85,7 @@ const itemSchema = z
     chips: z.array(z.array(z.string().max(200)).min(1).max(2)).max(8).optional(),
     links: z.array(httpsLink).max(40).optional(),
     added: z.string().max(10).optional(),
-    source: z.string().max(80).optional(),
+    source: z.string().max(SESSION_MAX).optional(),
     archived: z.boolean().optional(),
     pr: z.number().int().positive().optional(),
     deploy: z.enum(['deploy', 'skip', 'none']).optional(),
@@ -104,7 +108,7 @@ const workSchema = z
     track: z.string().max(40).optional(),
     status: z.string().max(20).optional(),
     who: z.string().max(20).optional(),
-    session: z.string().max(200).optional(),
+    session: z.string().max(SESSION_MAX).optional(),
     planStart: dateStr.optional(),
     planEnd: dateStr.optional(),
     basePlanEnd: dateStr.optional(),
@@ -129,7 +133,7 @@ const checkSchema = z
     agentNote: z.string().max(2000).optional(),
     // Какая сессия ведёт пункт (для входящих — захват, см. authorize) и когда агент писал в последний раз:
     // agentAt ставит сервер, присланное агентом значение перезаписывается.
-    agentBy: z.string().max(120).optional(),
+    agentBy: z.string().max(SESSION_MAX).optional(),
     agentAt: z.string().max(40).optional(),
     // Серверные отметки (ревью «Контроля» #324, п. 4): когда сохранён ответ владельца и когда сессия перевела пункт
     // в blocked. Правило «ждёт вас снова» сравнивает их, а не часы устройства владельца с agentAt любой записи агента.
@@ -318,11 +322,18 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
     for (const [k, v] of Object.entries(merged)) if (v === null && collection !== 'checks') delete merged[k]
     const at = new Date()
     if (collection === 'checks') stampCheck(merged, before, data, { owner, merge: opts.merge, at: at.toISOString() })
+    // Входящее ли это — по пункту items/<id>: захват сессией действует только на входящие.
+    const inboxItem = !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
+    const inbox = !owner && inboxItem
+    // Отпуск — только у входящих: у обычных пунктов захвата нет, а agentBy — подпись, кто вёл пункт; без проверки
+    // держателя (она — только у входящих) любая сессия стирала бы чужую подпись.
+    if (collection === 'checks' && opts.release && !itemRow) throw apiError(404, `Нет пункта items/${id}: отпускать нечего`)
+    if (collection === 'checks' && opts.release && !inboxItem) {
+      throw apiError(422, 'release — только у входящих (kind: inbox): у других пунктов захвата нет. Статус и заметка не сохранены — повторите без release')
+    }
     // Отпуск снимает только держателя: статус и заметка («передано <сессия>») остаются — страница и бот показывают, кому
     // передано; пункт берёт названная живая сессия. Автопередача сама его не предложит: у него есть статус.
     if (collection === 'checks' && opts.release) delete merged.agentBy
-    // Входящее ли это — по пункту items/<id>: захват сессией действует только на входящие.
-    const inbox = !owner && !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
     const parsed = SCHEMAS[collection].safeParse(merged)
     if (!parsed.success) throw apiError(422, `Неверный документ: ${parsed.error.issues.map((i) => `${i.path.join('.') || '—'}: ${i.message}`).join('; ').slice(0, 400)}`)
     const json = JSON.stringify(parsed.data)
