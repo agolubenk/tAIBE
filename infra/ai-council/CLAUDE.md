@@ -1,8 +1,8 @@
 # infra/ai-council — роль: инженер ИИ-консилиума (Python · локальные LLM · борд задач)
 
-**Роль:** владелец локального консилиума моделей над бордом задач (до перевода источника на t-boards — снимок Notion, только чтение): проработка карточек несколькими ролями
+**Роль:** владелец локального консилиума моделей над доской задач t-boards (карточки — по запросу, только чтение; Notion заморожен и удалён из кода): проработка карточек несколькими ролями
 (proposer → critic/adversary → arbiter → verifier), дневной план, ревью карточек «на ревью», обучение калибровки.
-Python-сервис вне npm workspaces: `supervisor.py` (оркестрация), `gateway.py` (UI `:8790`), `notion_sync.py`,
+Python-сервис вне npm workspaces: `supervisor.py` (оркестрация), `gateway.py` (UI `:8790`), `tboards.py` (карточки t-boards),
 `planner_service.py`, `review_*.py`, `learning.py`, `mcp_server.py` (MCP `council_*`), хранилище — SQLite (`schema.sql`),
 промпты ролей — `prompts/`, значения — `config.toml`. Канон поведения — `docs/specs/ai-council.md` (на него ссылается
 шапка каждого модуля).
@@ -33,11 +33,14 @@ Python-сервис вне npm workspaces: `supervisor.py` (оркестраци
   пополнили раньше): `sqlite3 .claude/council/council.db "DELETE FROM council_state WHERE key LIKE 'cloud_quota:%'"`.
 - **Облако — по бюджету:** облачный ярус только по профилю (`hybrid`/`cloud`) и в пределах лимита
   (`npm run ai-council:cloud`, `.continue/rules/03-cloud-budget.md`).
-- **Запись наружу — по белому списку:** Notion заморожен с перехода на t-boards (R-084) — `sources.notion.read_only = true`
-  (клиент отклоняет любую запись до сети, включая переходы ревью и статус из UI), `[outputs.notion_writeback]` весь
-  `false`, `:sync` только читает архив; перевод источника карточек консилиума на t-boards — отдельная карточка; финальный статус
-  карточки — только по политике владельца или его явному подтверждению; в `docs/plans/BACKLOG.md` — только блок плана
-  (`ai-council:plan`) и только явной операцией (`plan-apply`; `watch_apply = false`).
+- **Карточки — t-boards по запросу, записи на доску нет (OPS-26, спека §10):** фона нет (Р0 б) — карточку читает вызов
+  (`council_cards`, `run --card OPS-26`, очередь ревью по `--refresh`), `next`/`all` — отказ. Ключ — свой на продукт в
+  `<хост>/.claude/council/tboards.json` (`0600`, пишет `tboards.py set-key`), только GET, бюджет 40 запросов на вызов;
+  ключ хаба `T_BOARDS_API_KEY` не брать. `card_id` перенесённой карточки — её `notionPageId`. Тело и комментарии — через
+  `scrub()`. Статус и комментарий на доску консилиум не пишет: «подтвердить» переход — `approved` в базе, карточку
+  переносит агент под арендой или владелец. Notion заморожен (R-084) и удалён: секции `[sources.notion]` и
+  `[outputs.notion_writeback]` в конфиге — ошибка. В `docs/plans/BACKLOG.md` — только блок плана (`ai-council:plan`) и
+  только явной операцией (`plan-apply`; `watch_apply = false`).
 - **Воздержание лучше выдумки:** не хватает улик — `needs_human` с конкретными вопросами; улики — код, `docs/plans/done/`,
   граф, прошлые вердикты.
 - **Изменение роли, промпта или калибровки** — с прогоном `selftest` и сверкой с историей вердиктов.
@@ -66,7 +69,7 @@ Python-сервис вне npm workspaces: `supervisor.py` (оркестраци
 
 ## Команды (из корня)
 
-`npm run ai-council:doctor` · `:status` · `:selftest` · `:sync` (Notion → локально) · `:run` / `:night` · `:plan` / `:plan-apply` ·
+`npm run ai-council:doctor` · `:status` · `:selftest` · `:cards` (t-boards: `-- --q OPS-26`) · `:run -- --card OPS-26` · `:plan` / `:plan-apply` ·
 `:review` · `:gateway` + `:ui` · `:learning-stats` · `:cloud-ping`. Ревью PR на GLM — `python3 infra/ai-council/glm_pr_review.py
 <PR> <out.json>` из основного checkout (`--dry-run` — план вызовов; спека §17.7).
 
@@ -82,6 +85,6 @@ x ≥ 3 независимых участника; базовые линзы, x 
 
 1. Проработка карточки уже многоролевая (proposer → critic/adversary → arbiter → verifier): не меньше трёх ролей на карточку. Для правок самого консилиума: **качество вердиктов** — selftest, история калибровки.
 2. **Ресурсы машины** — строгая последовательность локальных моделей, память, облачный бюджет.
-3. **Безопасность записи наружу** — Notion не пишется (заморожен), остальное — белый список, финальный статус только с подтверждением владельца.
+3. **Безопасность ключа и записи наружу** — ключ продукта только на доверенный хост и только GET; на доску консилиум не пишет, финальный статус — владелец.
 
 **Связи:** ↑ `infra/CLAUDE.md` · ↔ `apps/backend/src/modules/ai/CLAUDE.md` · `docs/plans/CLAUDE.md` (план в `BACKLOG.md`, закрытое — `done/`) · знания — `docs/specs/ai-council.md`, `docs/ai/LOCAL_OLLAMA_MODELS.md`

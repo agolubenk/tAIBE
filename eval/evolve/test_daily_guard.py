@@ -6,6 +6,7 @@ Run: python3 -I -m unittest discover -s eval/evolve -p 'test_*.py'"""
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -229,6 +230,27 @@ class ResourcesTest(unittest.TestCase):
 
     def test_quota_line_of_today(self):
         self.assertTrue(steps.QUOTA.search("You've hit your limit · resets 4am (Europe/Moscow)"))
+
+
+
+class LaunchdExecutableTest(unittest.TestCase):
+    """SE-52: the job's own executable is python3, not /bin/bash — TCC refuses /bin/bash a script in ~/Desktop
+    (exit 126 «Operation not permitted», 07.11 05:00), python3 has the access and its children inherit it."""
+
+    def test_plist_runs_caffeinate_python_daily_py_nightly(self):
+        with open(os.path.join(HERE, 'space.hrhelper.evolve-daily.plist'), 'rb') as f:
+            args = plistlib.load(f)['ProgramArguments']
+        self.assertEqual(args, ['/usr/bin/caffeinate', '-i', '__PYTHON__', '-I', '__DAILY_PY__', 'nightly'])
+        self.assertNotIn('/bin/bash', args)
+
+    def test_install_fills_every_placeholder(self):
+        with open(os.path.join(HERE, 'daily.sh'), encoding='utf-8') as f:
+            sh = f.read()
+        with open(os.path.join(HERE, 'space.hrhelper.evolve-daily.plist'), encoding='utf-8') as f:
+            used = set(re.findall(r'__[A-Z_]+__', f.read()))
+        self.assertTrue(used)
+        for name in used:
+            self.assertIn(f's#{name}#', sh, f'daily.sh install does not fill {name}')
 
 
 if __name__ == '__main__':

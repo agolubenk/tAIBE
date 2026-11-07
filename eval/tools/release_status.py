@@ -19,8 +19,19 @@ import re
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nerve"))
+NERVE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nerve")
+sys.path.insert(0, NERVE)
 import quorum  # noqa: E402
+
+
+def team_config(path=os.path.join(NERVE, "config.json")):
+    """(github.lens_roles, team.roles) инстанса — кто считается линзой, как у кворума Нерва (TB-84, #89)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return [], ()
+    return (cfg.get("github") or {}).get("lens_roles") or [], tuple((cfg.get("team") or {}).get("roles") or ())
 
 
 def gh_json(args):
@@ -35,8 +46,10 @@ def load(path):
         return json.load(f)
 
 
-def lenses_on_head(comments, head):
-    verdicts = [quorum.parse_verdict(c.get("body")) for c in comments]
+def lenses_on_head(comments, head, lens_roles=None, team_roles=None):
+    if lens_roles is None:
+        lens_roles, team_roles = team_config()
+    verdicts = [quorum.parse_verdict(c.get("body"), lens_roles, team_roles or ()) for c in comments]
     last = {}
     for v in verdicts:
         if v and quorum.on_head(v["sha"], head):

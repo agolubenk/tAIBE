@@ -2,7 +2,7 @@
 """AI Council — CLI ревью. Он же бэкенд MCP-инструментов council_review_* (mcp_server.py).
 
     python3 infra/ai-council/review_cli.py queue [--refresh] [--board bugs|tasks]
-    python3 infra/ai-council/review_cli.py start --card <id|B-65|next|all> [--profile <имя|id>]
+    python3 infra/ai-council/review_cli.py start --card <OPS-26|id|next|all> [--profile <имя|id>]
                                                  [--agents a,b] [--method ADVERSARIAL] [--note "…"]
     python3 infra/ai-council/review_cli.py prepare --card <ref> [--profile …]
     python3 infra/ai-council/review_cli.py result <run_id | --card ref>
@@ -70,7 +70,8 @@ def cmd_queue(cfg, rs, args):
     sync = svc.sync_queue(cfg, rs, boards=[args.board] if args.board else None) if args.refresh else None
     rows = rs.queue(args.board)
     payload = {"ok": True, "synced": sync, "count": len(rows), "cards": [{
-        "card_id": c["card_id"], "board": c["board"], "title": c["title"], "backlog_id": c["backlog_id"],
+        "card_id": c["card_id"], "ticket": c.get("ticket"), "board": c["board"], "title": c["title"],
+        "backlog_id": c["backlog_id"],
         "severity": c["severity"], "priority": c["priority"], "half_baked": bool(c["half_baked"]),
         "url": c["url"], "last_review": ({k: c["last_run"].get(k) for k in
                                           ("id", "status", "verdict", "transition_state")}
@@ -83,7 +84,7 @@ def cmd_queue(cfg, rs, args):
         for c in p["cards"]:
             last = c["last_review"]
             mark = f"{last['verdict'] or last['status']}" if last else "не ревьюилась"
-            print(f"  [{c['board']}] {c['backlog_id'] or c['card_id'][:8]:10} {c['title'][:70]:70} — {mark}")
+            print(f"  [{c['board']}] {c['ticket'] or c['backlog_id'] or c['card_id'][:8]:10} {c['title'][:70]:70} — {mark}")
     return _out(payload, args.json, human)
 
 
@@ -266,7 +267,7 @@ def process_run(cfg, engine, run: dict, log, escalation=None) -> tuple[str, str]
         try:
             svc.after_run(cfg, rs, run["id"], log=log)
         except Exception as exc:                         # noqa: BLE001
-            log(f"    ✗ итог в Notion не записан: {type(exc).__name__}: {exc}")
+            log(f"    ✗ политика итога не применена: {type(exc).__name__}: {exc}")
     return "ok", ""
 
 

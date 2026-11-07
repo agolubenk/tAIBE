@@ -322,12 +322,12 @@ describe('открытые пункты: GET /db/items?open=1 — правило
 describe('области проверяются в каждом слое отдельно', () => {
   // Каждый слой должен держать свойство «читатель не пишет» сам: снятие проверки на маршруте или в хранилище
   // по отдельности должно ронять тест (мутационная проверка «Контроля», 19.10).
-  const reader0 = { name: 'reader', scopes: ['read' as const] }
+  const reader0 = { name: 'reader', scopes: ['read' as const], products: ['hr-helper'] }
 
   it('хранилище: запись и удаление без области agent/owner — 403 без HTTP', async () => {
     await expect(writeDoc(reader0, 'checks', 'x-store', {}, { merge: true })).rejects.toMatchObject({ status: 403 })
     await expect(writeDoc(reader0, 'items', 'x-store', decision, { merge: false })).rejects.toMatchObject({ status: 403 })
-    await expect(deleteDoc({ name: 'agent', scopes: ['agent'] }, 'items', 'd-test')).rejects.toMatchObject({ status: 403 })
+    await expect(deleteDoc({ name: 'agent', scopes: ['agent'], products: ['hr-helper'] }, 'items', 'd-test')).rejects.toMatchObject({ status: 403 })
   })
 
   it('маршрут: отказ по области раньше разбора тела и коллекции', async () => {

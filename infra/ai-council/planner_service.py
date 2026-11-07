@@ -34,13 +34,24 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import config as config_mod                              # noqa: E402
-from emit import est_bucket                              # noqa: E402  — одна оценка на две функции
 from store import Store, new_id                          # noqa: E402
 
 SEVERITY_NORM = {"critical": 1.0, "high": 0.75, "medium": 0.5, "low": 0.25}
 PRIORITY_NORM = {"P0": 1.0, "P1": 0.75, "P2": 0.5, "P3": 0.25}
 BUG_TIER_SEVERITIES = frozenset({"critical", "high"})
-IN_PROGRESS = frozenset({"в работе"})
+# «в работе» — снимок Notion и колонки, перенесённые из него; slug колонок t-boards — in-progress, в-работе.
+IN_PROGRESS = frozenset({"в работе", "in-progress", "в-работе"})
+EST_ORDER = ("S", "M", "L", "XL")
+
+
+def est_bucket(payload: dict) -> str:
+    """Общая трудоёмкость карточки из бакетов пунктов: берём максимум, а не сумму.
+    Сумма ломается на длинных списках мелких шагов — десять S не равны XL."""
+    buckets = [str(s.get("est")) for s in (payload.get("decomposition") or [])
+               if isinstance(s, dict) and str(s.get("est")) in EST_ORDER]
+    if not buckets:
+        return ""
+    return max(buckets, key=lambda b: EST_ORDER.index(b))
 
 PLAN_BEGIN = "<!-- ai-council:plan:begin"
 PLAN_END = "<!-- ai-council:plan:end -->"
@@ -267,7 +278,7 @@ def toposort(items: list[Item], deps: dict[str, set]) -> tuple[list[Item], list[
 def score_items(cfg, items: list[Item], deps: dict[str, set]) -> None:
     weights = cfg.get("planner.weights", {}) or {}
     hard = set(cfg.get("planner.hard_rules", []) or [])
-    bug_weight = float(cfg.get("sources.notion.databases.bugs.weight", 2.0))
+    bug_weight = float(cfg.get("sources.tboards.bug_weight", 2.0))
 
     downstream: dict[str, int] = {i.card_id: 0 for i in items}
     for cid, required in deps.items():

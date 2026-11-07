@@ -145,6 +145,9 @@ spawn_one() {
     # не работают хук context-threshold, Stop-typecheck, замеры eval (wake_anatomy, context_audit) и claude-mem.
     echo "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE"
     echo "export TAIBE_LINEAGE=$(sq "$lineage")"
+    # Свой claude (обёртка с --settings, например антигены для сессии без генома) — в лаунчер: окно Terminal
+    # стартует с чистым окружением, и CLAUDE_BIN из вызывающего скрипта туда не доходит (06.11).
+    if [ -n "${CLAUDE_BIN:-}" ]; then echo "export CLAUDE_BIN=$(sq "$CLAUDE_BIN")"; fi
     echo "cd $(sq "$CWD") || exit 1"
     # текст прочитан — папка больше не нужна: временные пусковые файлы не копятся
     echo "m=\"\$(cat $(sq "$launcher.msg"))\"; rm -rf $(sq "$dir")"
