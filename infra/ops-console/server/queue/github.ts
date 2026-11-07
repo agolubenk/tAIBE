@@ -125,8 +125,23 @@ interface MergeFlags {
 }
 
 /** Части команды до разделителя (\n ; & |): кавычки и экранирование `\x` — часть слова, разделитель в них не режет. */
-const GH_PR = /\bgh[ \t]+pr\b(?:\\[\s\S]|[^\n;&|"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')*/g
+// `>&`, `<&` и `&>` — перенаправление, а не разделитель `&`: «… 2>&1 --squash» — та же команда.
+const GH_PR = /\bgh[ \t]+pr\b(?:\\[\s\S]|[<>]&|&>|[^\n;&|"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')*/g
 const SHELL_WORD = /(?:\\[\s\S]|[^\s"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+/g
+/** Перенаправление shell (`2>&1`, `>file`, `2>/dev/null`, `<in`, `&>log`): shell снимает его до запуска, gh его не видит. */
+const REDIRECT = /^(?:\d+|&)?(?:>>|>&|<&|>\||<>|<<<|<<|>|<)/
+/** Слова shell команды без перенаправлений; у голого оператора (`2>`, `>`) цель — следующее слово (ревью «Контроля» #114, F1). */
+function commandWords(seg: string): string[] {
+  const raw = seg.match(SHELL_WORD) ?? []
+  const out: string[] = []
+  for (let i = 0; i < raw.length; i++) {
+    const w = raw[i] ?? ''
+    const op = REDIRECT.exec(w)
+    if (!op) out.push(w)
+    else if (op[0].length === w.length) i++
+  }
+  return out
+}
 /** Слово shell → значение: кавычки сняты, `\x` → x (в двойных кавычках — только для $ ` " \ и перевода строки). */
 const unquote = (w: string): string =>
   w.replace(/\\([\s\S])|"((?:\\[\s\S]|[^"\\])*)"|'([^']*)'/g, (_m, esc?: string, dq?: string, sq?: string) =>
@@ -141,7 +156,7 @@ const unquote = (w: string): string =>
 function mergeFlags(cmd: string): MergeFlags {
   // Все `gh pr …` команды; мёрж — та, где первое слово после pr и его флагов (`gh pr -R x merge`) — merge.
   const merges = [...cmd.matchAll(GH_PR)].filter((m) => {
-    const ws = (m[0].match(SHELL_WORD) ?? []).slice(2).map(unquote)
+    const ws = commandWords(m[0]).slice(2).map(unquote)
     for (let i = 0; i < ws.length; i++) {
       const w = ws[i] ?? ''
       if (w === '-R' || w === '--repo') { i++; continue }
@@ -152,7 +167,7 @@ function mergeFlags(cmd: string): MergeFlags {
   const found = merges[0]
   const segment = found?.[0] ?? ''
   const before = found ? cmd.slice(0, found.index) : ''
-  const raw = segment.match(SHELL_WORD) ?? []
+  const raw = commandWords(segment)
   const words = raw.map(unquote)
   // $ и ` вне одинарных кавычек и без \ перед ними shell подставит — консоль увидела бы буквальный текст.
   const expands = (i: number) => /[$`]/.test((raw[i] ?? '').replace(/'[^']*'|\\[\s\S]/g, ''))

@@ -686,6 +686,25 @@ describe('мёрж из очереди', () => {
     expect(plan('gh pr merge 41 -b "see -R other/repo" --squash')).toMatchObject({ repo: null, method: 'squash', problem: null })
   })
 
+  it('перенаправления shell (2>&1, 2>/dev/null, > файл, &>) — не аргументы мёржа (ревью «Контроля» #114, F1)', () => {
+    const plan = (cmd: string) => mergePlan({ kind: 'merge', cmd })
+    const sha = 'a'.repeat(40)
+    // Форма реального пункта m-537: строка отвечает с 2>&1 — консоль вливает, а не 409.
+    expect(plan(`gh pr merge 537 --squash --match-head-commit ${sha} --subject "fix(calendar): IS-221 (#537)" 2>&1`))
+      .toMatchObject({ pr: 537, method: 'squash', subject: 'fix(calendar): IS-221 (#537)', repo: null, problem: null })
+    expect(plan(`gh pr merge 114 -R agolubenk/tAIBE --squash --match-head-commit ${sha} 2>&1`))
+      .toMatchObject({ pr: 114, repo: 'agolubenk/tAIBE', method: 'squash', problem: null })
+    expect(plan('gh pr merge 5 --squash 2>/dev/null')).toMatchObject({ pr: 5, problem: null })
+    expect(plan('gh pr merge 5 &>merge.log')).toMatchObject({ pr: 5, problem: null })
+    expect(plan('gh pr merge 5 2>&1 | tee merge.log')).toMatchObject({ pr: 5, problem: null })
+    // Флаги после перенаправления gh тоже видит; у голого оператора цель — следующее слово.
+    expect(plan('gh pr merge 5 2>&1 --squash')).toMatchObject({ pr: 5, method: 'squash', problem: null })
+    expect(plan('gh pr merge 5 > merge.log --squash -t "x"')).toMatchObject({ pr: 5, method: 'squash', subject: 'x', problem: null })
+    // Цепочка из двух мёржей с 2>&1 — по-прежнему отказ; «>x» в кавычках — буквальный аргумент.
+    expect(plan('gh pr merge 534 2>&1 && sleep 5 && gh pr merge 535 2>&1').problem).toContain('2 мёржа')
+    expect(plan('gh pr merge 5 ">x"').problem).toContain('больше одного аргумента')
+  })
+
   it('разбор не пропускает то, что gh поймёт иначе: хвост URL, флаги до merge, cd в кавычках, два мёржа, \\\' (ревью Q-29/Q-30, проход 2)', () => {
     const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
     // (a) URL PR с хвостом — репозиторий из URL, как у gh.
