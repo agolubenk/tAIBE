@@ -3,7 +3,8 @@
 #
 #   bash eval/evolve/daily.sh install         # owner, after the merge: render the plist, load it (05:00 local)
 #   bash eval/evolve/daily.sh uninstall       # unload and remove it
-#   bash eval/evolve/daily.sh run [--force]   # what launchd starts: `daily.py nightly` (lock → refresh → cycle)
+#   bash eval/evolve/daily.sh run [--force]   # by hand: `daily.py nightly` (lock → refresh → cycle); launchd runs
+#                                             # caffeinate → python3 daily.py nightly (SE-52: TCC blocks bash in ~/Desktop)
 #   bash eval/evolve/daily.sh status          # launchd state, last run, state file
 #
 # `run` works only in worktrees/evolve/daily (detached on a fresh origin/board-agents): no person's checkout is
@@ -54,7 +55,9 @@ install_job() {
     [[ ":$path_dirs:" == *":$dir:"* ]] || path_dirs="${path_dirs:+$path_dirs:}$dir"
   done
   mkdir -p "$state" "$(dirname "$plist")"
-  sed -e "s#__DAILY_SH__#$wt/eval/evolve/daily.sh#g" -e "s#__PATH__#$path_dirs:/usr/bin:/bin:/usr/sbin:/sbin#g" \
+  # The job runs python3 itself, not bash (SE-52: TCC blocks /bin/bash on a script in ~/Desktop).
+  sed -e "s#__PYTHON__#$(command -v python3)#g" -e "s#__DAILY_PY__#$wt/eval/evolve/daily.py#g" \
+      -e "s#__PATH__#$path_dirs:/usr/bin:/bin:/usr/sbin:/sbin#g" \
       -e "s#__STATE__#$state#g" -e "s#__HOME__#$HOME#g" "$wt/eval/evolve/$LABEL.plist" > "$plist"
   plutil -lint "$plist" >/dev/null
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true

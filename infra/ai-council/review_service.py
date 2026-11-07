@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""AI Council — сервис ревью: очередь из Notion, постановка, dry-run, итог на карточку.
+"""AI Council — сервис ревью: очередь из колонок ревью t-boards (по запросу), постановка, dry-run, итог.
 
-Один код для трёх входов — вкладка «Ревью» (gateway), CLI/MCP (review_cli.py) и
-council_worker. Запись в Notion — только отсюда и только двумя операциями:
-комментарий с итогом (outputs.notion_writeback.comments) и переход статуса
-(NotionClient.review_transition, разрешённые цели — из политики доски).
+Один код для трёх входов — вкладка «Ревью» (gateway), CLI/MCP (review_cli.py) и council_worker. Записи на доску
+нет (OPS-26): итог и предложенный политикой доски переход живут в базе консилиума; перенос карточки делает агент
+под арендой t-boards или владелец. Комментарий итогом на карточке — отдельная карточка (AUTO-70 ч. 2).
 """
 from __future__ import annotations
 
 import json
-import time
 
-import notion as notion_mod
 import review_catalog as cat
+import tboards
 from review_context import REVIEW_COMMENT_MARK, build_dossier, card_comments
 from review_plan import build_plan
 from review_store import ReviewStore
@@ -22,11 +20,11 @@ VERDICT_KEY = {"ACCEPT": "on_accept", "FAIL": "on_fail", "INCONCLUSIVE": "on_inc
                "NEEDS_HUMAN": "on_needs_human"}
 VERDICT_RU = {"ACCEPT": "ПРИНЯТО", "FAIL": "НА ДОРАБОТКУ", "NEEDS_HUMAN": "НУЖЕН ЧЕЛОВЕК",
               "INCONCLUSIVE": "НЕОДНОЗНАЧНО"}
-_STATUS_CACHE: dict[str, tuple[float, list[str]]] = {}
+SYNC_BUDGET = 95             # обновление очереди: проекты + колонки ревью + 3 запроса на новую или изменённую карточку
 
 
-def db_id(cfg, board: str) -> str:
-    return cfg.get(f"sources.notion.databases.{board}.id") or ""
+def review_slugs(cfg) -> tuple[str, ...]:
+    return tuple(cfg.get("sources.tboards.review_slugs", tboards.REVIEW_SLUGS) or tboards.REVIEW_SLUGS)
 
 
 def cloud_models(cfg) -> set[str]:
@@ -38,22 +36,9 @@ def cloud_models(cfg) -> set[str]:
     return out
 
 
-def board_statuses(cfg, board: str, client=None) -> tuple[list[str], str]:
-    """Опции Status живьём из схемы базы (кэш 10 мин); фолбэк — rules/17."""
-    hit = _STATUS_CACHE.get(board)
-    if hit and time.time() - hit[0] < 600:
-        return hit[1], "notion"
-    try:
-        client = client or notion_mod.build(cfg)
-        node = client.database_schema(db_id(cfg, board)).get("Status") or {}
-        kind = node.get("type") or "select"
-        names = [o["name"] for o in (node.get(kind) or {}).get("options", []) if o.get("name")]
-        if names:
-            _STATUS_CACHE[board] = (time.time(), names)
-            return names, "notion"
-    except Exception:                                              # noqa: BLE001
-        pass
-    return list(cat.KNOWN_STATUSES[board]), "fallback"
+def board_statuses(cfg, board: str, client=None) -> tuple[list[str], str]:  # noqa: ARG001 — подпись вызовов шлюза
+    """Статусы для политики доски: slug колонок t-boards и имена, перенесённые из Notion (каталог)."""
+    return list(cat.KNOWN_STATUSES[board]), "catalog"
 
 
 def review_hash(card: dict) -> str:
@@ -65,48 +50,105 @@ def review_hash(card: dict) -> str:
 
 
 # ── очередь ─────────────────────────────────────────────────────────────────
+def _unchanged(prev: dict | None, task: dict) -> bool:
+    """Строка очереди совпадает со списком доски: мета и комментарии не перечитываются (экономия 3 запросов)."""
+    if not prev or task.get("descriptionDeferred"):
+        return False
+    from knowledge_external import scrub
+    return (prev.get("title") == (task.get("title") or "") and prev.get("status") == task.get("status")
+            and prev.get("priority") == tboards.PRIORITY.get(str(task.get("priority") or ""))
+            and prev.get("body") == scrub(str(task.get("description") or "")))
+
+
+def _review_card(cfg, rs: ReviewStore, client, task: dict, project: dict, stats: dict) -> dict:
+    prev = rs.card_by_task(task["id"])
+    if prev is not None and _unchanged(prev, task):
+        return dict(prev)
+    if task.get("descriptionDeferred"):
+        task = client.task(task["id"])
+    else:
+        task = {**task, "workspaceId": client.workspace}
+    meta, labels, comments = client.meta(task["id"]), client.labels(task["id"]), client.comments(task["id"])
+    stats["fetched"] += 1
+    finals = tuple(cfg.get("sources.tboards.final_slugs", tboards.FINAL_SLUGS))
+    base = tboards.task_to_card(task, meta, labels, comments, project, client, finals)
+    card = {**base, "board": base["db"]}
+    card["review_hash"] = review_hash(card)
+    return card
+
+
 def sync_queue(cfg, rs: ReviewStore, client=None, boards: list[str] | None = None,
                verbose: bool = False) -> dict:
-    client = client or notion_mod.build(cfg)
-    stats = {"seen": 0, "fetched": 0, "left": 0, "errors": 0}
-    policies = rs.boards()
-    for board in boards or list(cat.BOARDS):
-        policy = policies[board]
-        if not policy.get("enabled") or not db_id(cfg, board):
-            continue
-        try:
-            pages = client.query_database(db_id(cfg, board), [policy["review_status"]])
-        except notion_mod.NotionError as exc:
-            stats["errors"] += 1
-            stats[f"{board}_error"] = str(exc)[:200]
-            continue
-        seen: set[str] = set()
-        for page in pages:
-            stats["seen"] += 1
-            seen.add(page["id"])
-            prev = rs.card(page["id"])
-            edited = page.get("last_edited_time", "")
-            if prev and prev.get("notion_edited_at") == edited and prev.get("body") is not None:
-                body, comments = prev["body"], json.loads(prev.get("comments") or "[]")
-            else:
-                try:
-                    body = client.page_text(page["id"], strip_council=False)
-                    comments = client.comments(page["id"])
-                except notion_mod.NotionError as exc:
-                    stats["errors"] += 1
-                    if verbose:
-                        print(f"    ✗ {page['id'][:8]}: {exc}")
-                    continue
-                stats["fetched"] += 1
-            base = notion_mod.page_to_card(page, board, body, comments)
-            card = {**base, "board": board}
-            card["review_hash"] = review_hash(card)
-            rs.upsert_card(card)
-        stats["left"] += rs.mark_left_queue(board, seen)
+    """Карточки колонок ревью (`sources.tboards.review_slugs`) по проектам продукта — только по запросу
+    (`--refresh`, кнопка вкладки). Новым и изменённым — мета, метки, комментарии. Полный проход снимает с очереди
+    ушедшие; неполный (бюджет, лимит ключа, сбой) не снимает ничего — повтор продолжит."""
+    stats = {"seen": 0, "fetched": 0, "left": 0, "errors": 0, "partial": False}
+    wanted = [b for b in (boards or list(cat.BOARDS)) if rs.boards().get(b, {}).get("enabled")]
+    seen: dict[str, set[str]] = {b: set() for b in cat.BOARDS}
+    own = client is None
+    try:
+        client = client or tboards.build(cfg, budget=SYNC_BUDGET)
+        tboards.check_pin(rs.s, client.workspace)
+        slugs = review_slugs(cfg)
+        for project in client.projects().values():
+            tasks, columns = client.board(project["id"], slugs[0])
+            present = {c.get("slug") for c in columns}
+            for slug in slugs[1:]:
+                if slug in present:
+                    tasks += client.board(project["id"], slug)[0]
+            for task in tasks:
+                stats["seen"] += 1
+                card = _review_card(cfg, rs, client, task, project, stats)
+                # Кэшируем и карточки других досок: иначе `--board tasks` перечитывал бы мету ошибок на каждом
+                # проходе. С очереди ушедших снимаем только у выбранных досок; выключенная политикой — не в очереди.
+                rs.upsert_card(card)
+                if not rs.boards().get(card["board"], {}).get("enabled"):
+                    rs.s.x("UPDATE review_cards SET in_queue = 0 WHERE card_id = ?", (card["card_id"],))
+                if card["board"] in wanted:
+                    seen[card["board"]].add(card["card_id"])
+    except tboards.TBoardsError as exc:
+        stats["errors"] += 1
+        stats["partial"] = True
+        stats["error"] = str(exc)
         if verbose:
-            print(f"  ревью/{board}: {len(seen)} в статусе «{policy['review_status']}»")
+            print(f"  ✗ ревью: {exc}")
+    finally:
+        if own and client is not None:
+            client.close()
+    if not stats["partial"]:
+        for board in wanted:
+            stats["left"] += rs.mark_left_queue(board, seen[board])
+    if verbose:
+        print(f"  ревью: в колонках ревью {stats['seen']}, перечитано {stats['fetched']}, ушло {stats['left']}"
+              + (" (неполный проход — с очереди ничего не снято)" if stats["partial"] else ""))
     rs.s.event("review.synced", "", json.dumps(stats, ensure_ascii=False))
     return stats
+
+
+def refresh_card(cfg, rs: ReviewStore, card: dict, client=None) -> dict:
+    """Карточка очереди на сейчас: деталь, мета, метки, комментарии (5 запросов). Исполнитель мог обновить отчёт или
+    ответить в комментарии, не меняя описания, — ревью по старым данным было бы ревью не того. Ушла из колонки ревью —
+    снимается с очереди. Снимок Notion (без board_task_id) не перечитывается."""
+    if not card.get("board_task_id"):
+        return card
+    own = client is None
+    client = client or tboards.build(cfg, budget=8)
+    try:
+        task = client.task(card["board_task_id"])
+        meta, labels = client.meta(task["id"]), client.labels(task["id"])
+        comments = client.comments(task["id"])
+        project = client.projects().get(task.get("projectId")) or {}
+    finally:
+        if own:
+            client.close()
+    finals = tuple(cfg.get("sources.tboards.final_slugs", tboards.FINAL_SLUGS))
+    base = tboards.task_to_card(task, meta, labels, comments, project, client, finals)
+    fresh = {**base, "board": base["db"]}
+    fresh["review_hash"] = review_hash(fresh)
+    rs.upsert_card(fresh)
+    if fresh["status"] not in review_slugs(cfg):
+        rs.s.x("UPDATE review_cards SET in_queue = 0 WHERE card_id = ?", (fresh["card_id"],))
+    return rs.card(fresh["card_id"]) or fresh
 
 
 def resolve_cards(rs: ReviewStore, ref: str, board: str = "") -> list[dict]:
@@ -123,14 +165,28 @@ def resolve_cards(rs: ReviewStore, ref: str, board: str = "") -> list[dict]:
 
 def enqueue(cfg, rs: ReviewStore, ref: str, profile_ref: str = "", requested_by: str = "ui",
             request: dict | None = None, board: str = "", priority: int = 5,
-            force: bool = False) -> dict:
+            force: bool = False, client=None) -> dict:
     request = {k: v for k, v in (request or {}).items() if v not in (None, "", [], {})}
     cards = resolve_cards(rs, ref, board)
     if not cards:
         return {"ok": False, "error": f"карточка «{ref}» не найдена в очереди ревью — "
-                                      "обновите очередь (синхронизация с Notion)", "queued": []}
-    queued, skipped = [], []
+                                      "обновите очередь из t-boards (council_review_queue refresh=True) или "
+                                      "укажите ключ карточки в колонке ревью", "queued": []}
+    queued, skipped, warnings = [], [], []
     policies = rs.boards()
+    if len(cards) <= 3:                            # «all» идёт по данным очереди: 5 запросов на карточку не по карману
+        fresh = []
+        for card in cards:
+            try:
+                card = refresh_card(cfg, rs, card, client)
+            except tboards.TBoardsError as exc:
+                warnings.append(f"{card.get('ticket') or card['card_id']}: данные очереди, не перечитаны ({exc})")
+            if card.get("status") in review_slugs(cfg) or not card.get("board_task_id"):
+                fresh.append(card)
+            else:
+                skipped.append({"card_id": card["card_id"], "title": card.get("title"),
+                                "why": f"ушла из колонки ревью: «{card.get('status')}»"})
+        cards = fresh
     for card in cards:
         active = rs.active_run(card["card_id"])
         if active and not force:
@@ -145,31 +201,7 @@ def enqueue(cfg, rs: ReviewStore, ref: str, profile_ref: str = "", requested_by:
                             priority + (1 if card["board"] == "bugs" else 0))
         queued.append({"run_id": run_id, "card_id": card["card_id"], "title": card.get("title"),
                        "profile": prof["name"]})
-    return {"ok": True, "queued": queued, "skipped": skipped}
-
-
-def autorun(cfg, rs: ReviewStore, verbose: bool = False) -> int:
-    """Автопостановка для досок с auto_run: один прогон на цикл ревью карточки, повтор —
-    только если исполнитель изменил содержимое (review_hash без наших комментариев)."""
-    n = 0
-    for board, policy in rs.boards().items():
-        if not (policy.get("enabled") and policy.get("auto_run")):
-            continue
-        for card in rs.queue(board):
-            if card.get("half_baked"):
-                continue
-            last = card.get("last_run")
-            if last and last["status"] in ("queued", "running"):
-                continue
-            if last and last.get("card_hash") == card.get("review_hash") \
-                    and (last.get("created_at") or 0) >= (card.get("first_seen_at") or 0):
-                continue
-            res = enqueue(cfg, rs, card["card_id"], policy.get("profile_id") or "", "auto",
-                          priority=3)
-            n += len(res.get("queued") or [])
-    if n and verbose:
-        print(f"  ревью: автопостановка {n}")
-    return n
+    return {"ok": True, "queued": queued, "skipped": skipped, **({"warnings": warnings} if warnings else {})}
 
 
 # ── dry-run ─────────────────────────────────────────────────────────────────
@@ -196,20 +228,19 @@ def prepare(cfg, rs: ReviewStore, ref: str, profile_ref: str = "", request: dict
                       int(cfg.get("models.num_ctx", 8192)),
                       client_o.context_length if alive else (lambda m: None),
                       lambda m: m in clouds)
-    status_ok = card.get("status") == policy["review_status"]
-    if live and cfg.notion_enabled():
+    slugs = review_slugs(cfg)
+    status_ok = card.get("status") in slugs
+    if live and card.get("board_task_id"):
         try:
-            page = notion_mod.build(cfg).call(f"/pages/{card['card_id']}")
-            node = page.get("properties", {}).get("Status") or {}
-            live_status = ((node.get(node.get("type") or "select") or {}).get("name")) or ""
-            status_ok = live_status == policy["review_status"]
-            add(status_ok, f"статус в Notion сейчас: «{live_status}»"
-                + ("" if status_ok else f" — ожидался «{policy['review_status']}»"))
-        except Exception as exc:                                   # noqa: BLE001
-            add(True, f"живой статус не прочитан ({type(exc).__name__}) — по снапшоту «{card.get('status')}»",
-                "warn")
+            card = refresh_card(cfg, rs, card)
+            status_ok = card.get("status") in slugs
+            add(status_ok, f"карточка перечитана из t-boards, колонка «{card.get('status')}»"
+                + ("" if status_ok else f" — ожидалась колонка ревью ({', '.join(slugs)})"))
+        except tboards.TBoardsError as exc:
+            add(True, f"карточка не перечитана ({exc}) — по очереди «{card.get('status')}»", "warn")
     else:
-        add(status_ok, f"статус по снапшоту: «{card.get('status')}»")
+        add(status_ok, f"статус по очереди: «{card.get('status')}»"
+            + ("" if card.get("board_task_id") else " (карточка из снимка Notion — архив)"))
     add(True, f"профиль «{prof['name']}» v{prof['version']}, метод {plan['method_label']}")
     if card.get("half_baked"):
         add(True, "карточка Half-baked — автозапуск её пропускает; ручной запуск — на ваше усмотрение", "warn")
@@ -222,14 +253,13 @@ def prepare(cfg, rs: ReviewStore, ref: str, profile_ref: str = "", request: dict
         elif alive and a["model"] not in installed:
             add(False, f"{key}: модель {a['model']} не установлена в Ollama")
     if policy.get("allow_transition"):
-        statuses, src = board_statuses(cfg, card["board"])
+        statuses, _ = board_statuses(cfg, card["board"])
         for vkey in VERDICT_KEY.values():
             target = policy.get(vkey)
             if target:
-                add(target in statuses, f"{vkey}: «{target}»" + ("" if target in statuses else " — нет на доске")
-                    + (" (схема из Notion)" if src == "notion" else " (схема по rules/17)"))
-        add(True, "переход потребует подтверждения человека" if policy.get("require_human_approval")
-            else "переход применится автоматически по вердикту", "warn")
+                add(target in statuses, f"{vkey}: «{target}»" + ("" if target in statuses else " — нет в каталоге"))
+        add(True, "переход будет предложен; на доску консилиум не пишет — карточку переносит агент или владелец",
+            "warn")
     else:
         add(True, "перевод статуса выключен политикой доски — итог будет рекомендацией", "")
     for w in plan["warnings"]:
@@ -324,74 +354,35 @@ def _comment_text(run: dict, transition_line: str) -> str:
     return "\n".join(lines)
 
 
-def after_run(cfg, rs: ReviewStore, run_id: str, client=None, log=print) -> dict:
-    """Политика доски по вердикту: рекомендация / предложение / автопереход + комментарий."""
+def after_run(cfg, rs: ReviewStore, run_id: str, client=None, log=print) -> dict:  # noqa: ARG001 — подпись воркера
+    """Политика доски по вердикту: рекомендация или предложение перехода. На доску консилиум не пишет (OPS-26):
+    переход, даже без подтверждения по политике, остаётся предложением, комментарий — `skipped`."""
     run = rs.run(run_id)
     if not run or run["status"] != "done" or not run.get("verdict"):
         return {"ok": False}
     card = rs.card(run["card_id"]) or {}
     policy = rs.boards().get(run["board"], {})
     target = policy.get(VERDICT_KEY.get(run["verdict"], ""), "")
-    allowed = {policy.get(k) for k in VERDICT_KEY.values() if policy.get(k)}
-    client = client or (notion_mod.build(cfg) if cfg.notion_enabled() else None)
     if not target:
         rs.set_transition(run_id, "none", "", f"для {run['verdict']} переход не настроен", "ai")
         line = "переход для этого вердикта не настроен — решает человек"
     elif not policy.get("allow_transition"):
         rs.set_transition(run_id, "none", target, "перевод выключен политикой доски — рекомендация", "ai")
         line = f"рекомендация «{policy['review_status']}» → «{target}» (автоперевод выключен)"
-    elif policy.get("require_human_approval"):
-        rs.set_transition(run_id, "proposed", target, "ждёт подтверждения человека", "ai")
+    else:
+        rs.set_transition(run_id, "proposed", target, "ждёт подтверждения; карточку переносит агент или владелец", "ai")
         rs.audit(run_id, run["card_id"], "transition.proposed", "ai", policy["review_status"], target)
         line = f"предложен переход «{policy['review_status']}» → «{target}», ждёт подтверждения"
-    else:
-        res = _apply(cfg, rs, run, policy, target, allowed, "ai", client)
-        line = (f"переход применён: «{policy['review_status']}» → «{target}»" if res["ok"]
-                else f"переход не применён: {res['error']}")
-    if policy.get("post_comment") and client is not None and getattr(client, "read_only", False):
-        rs.set_comment_state(run_id, "skipped")  # Notion заморожен (R-084): не ошибка, а политика
-    elif policy.get("post_comment") and client is not None:
-        try:
-            client.add_comment(run["card_id"], _comment_text(rs.run(run_id), line))
-            rs.set_comment_state(run_id, "posted")
-            rs.audit(run_id, run["card_id"], "comment.posted", "ai")
-        except notion_mod.NotionError as exc:
-            rs.set_comment_state(run_id, "failed")
-            rs.audit(run_id, run["card_id"], "comment.failed", "ai", detail=str(exc))
-            log(f"    ✗ комментарий в Notion: {exc}")
-    elif not policy.get("post_comment"):
-        rs.set_comment_state(run_id, "skipped")
+    rs.set_comment_state(run_id, "skipped")
     log(f"    ✎ {line}" + (f" · card «{(card.get('title') or '')[:40]}»" if card else ""))
     return {"ok": True, "transition": line}
 
 
-def _apply(cfg, rs: ReviewStore, run: dict, policy: dict, target: str, allowed: set[str],
-           actor: str, client) -> dict:
-    if client is None:
-        return {"ok": False, "error": "Notion выключен или нет ключа"}
-    try:
-        client.review_transition(run["card_id"], policy["review_status"], target, allowed)
-    except notion_mod.NotionForbidden as exc:
-        rs.set_transition(run["id"], "failed", target, str(exc), actor)
-        rs.audit(run["id"], run["card_id"], "transition.failed", actor, policy["review_status"], target, str(exc))
-        return {"ok": False, "error": str(exc)}
-    except notion_mod.NotionError as exc:
-        rs.set_transition(run["id"], "skipped", target, str(exc), actor)
-        rs.audit(run["id"], run["card_id"], "transition.skipped", actor, policy["review_status"], target, str(exc))
-        return {"ok": False, "error": str(exc)}
-    rs.set_transition(run["id"], "applied", target, "", actor)
-    rs.audit(run["id"], run["card_id"], "transition.applied", actor, policy["review_status"], target)
-    rs.s.log_notion_write(run["id"], run["card_id"], "review_status", "Status",
-                          policy["review_status"], target, True)
-    rs.s.x("UPDATE review_cards SET status = ?, in_queue = 0 WHERE card_id = ?", (target, run["card_id"]))
-    return {"ok": True}
-
-
-def decide_transition(cfg, rs: ReviewStore, run_id: str, approve: bool, actor: str,
+def decide_transition(cfg, rs: ReviewStore, run_id: str, approve: bool, actor: str,  # noqa: ARG001
                       comment: str = "") -> dict:
-    """Решение человека по предложенному переходу. Применение — только при разрешённом
-    политикой доски переводе; рекомендацию (прогон прошёл, пока перевод был выключен)
-    применить можно только из UI — это действие владельца, не агента."""
+    """Решение человека по предложенному переходу: `approved` или `rejected` — только в базе консилиума (калибровка
+    по согласию владельца). На доску консилиум не пишет: одобренный переход делает агент под арендой t-boards или
+    владелец. Рекомендацию (прогон прошёл, пока перевод был выключен) одобряет только владелец из UI."""
     run = rs.run(run_id)
     if not run:
         return {"ok": False, "error": "прогон не найден"}
@@ -412,14 +403,8 @@ def decide_transition(cfg, rs: ReviewStore, run_id: str, approve: bool, actor: s
         rs.audit(run_id, run["card_id"], "transition.rejected", actor, policy.get("review_status", ""),
                  target, comment)
         return {"ok": True, "state": "rejected"}
-    allowed = {policy.get(k) for k in VERDICT_KEY.values() if policy.get(k)} | {target}
-    client = notion_mod.build(cfg) if cfg.notion_enabled() else None
-    res = _apply(cfg, rs, run, policy, target, allowed, actor, client)
-    if res["ok"] and client is not None and policy.get("post_comment"):
-        try:
-            client.add_comment(run["card_id"], f"{REVIEW_COMMENT_MARK}: переход «{policy['review_status']}» → "
-                               f"«{target}» подтверждён ({actor}). run: {run_id}"
-                               + (f"\nКомментарий: {comment}" if comment else ""))
-        except notion_mod.NotionError:
-            pass
-    return {**res, "state": "applied" if res["ok"] else rs.run(run_id)["transition_state"]}
+    rs.set_transition(run_id, "approved", target, comment or "подтверждено; перенос карточки — на доске", actor)
+    rs.audit(run_id, run["card_id"], "transition.approved", actor, policy.get("review_status", ""), target, comment)
+    card = rs.card(run["card_id"]) or {}
+    return {"ok": True, "state": "approved",
+            "next": f"перенесите карточку {card.get('ticket') or run['card_id']} в «{target}» на доске t-boards"}

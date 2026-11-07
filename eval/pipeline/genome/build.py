@@ -60,7 +60,7 @@ def hooks(python):
         'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': now}]}],
         'PreToolUse': [
             {'matcher': 'Write|SendMessage|mcp__owner-queue__.*', 'hooks': [{'type': 'command', 'command': now}]},
-            {'matcher': 'Bash|Monitor|mcp__owner-queue__.*',
+            {'matcher': 'Bash|Monitor|ToolSearch|ScheduleWakeup|mcp__owner-queue__.*',
              'hooks': [{'type': 'command', 'command': antigen}]},
         ],
     }

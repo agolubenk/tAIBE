@@ -6,9 +6,10 @@
 Даёт обоим клиентам ОДИНАКОВЫЙ доступ к трём вещам, которые раньше были доступны
 только руками из терминала или только внутри Claude Code:
 
-  1. Notion-card-scoped консилиум — чтение через gateway.py (:8790, тот же HTTP API,
-     что у дашборда), запись/постановка в очередь — только через supervisor.py CLI
-     (белый список операций записи не дублируется здесь, см. §10).
+  1. Консилиум над карточками t-boards — чтение через gateway.py (:8790, тот же HTTP API,
+     что у дашборда; шлюз не запущен — тот же обработчик подпроцессом `gateway.py --get`),
+     карточки — из t-boards в момент вызова (tboards.py, OPS-26), постановка в очередь —
+     только через supervisor.py CLI. На доску консилиум не пишет.
   2. Жизненный цикл пайплайна (start/stop/status/doctor) — обёртка над
      infra/scripts/dev-ai/ai-tooling-pipeline.sh, тем же канон-скриптом, что и
      `npm run ai-pipeline:*`.
@@ -62,35 +63,47 @@ def _gateway_base() -> str:
     return f"http://{host}:{port}"
 
 
+def _run(argv: list[str], timeout: int, json_out: bool = False) -> str:
+    """Подпроцесс инструмента: stdout+stderr или понятный отказ по таймауту (а не исключение в клиент MCP).
+    json_out — ответ JSON: при коде 0 только stdout, чтобы диагностика в stderr не ломала разбор."""
+    try:
+        proc = subprocess.run(argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return json.dumps({"error": f"{Path(argv[1]).name}: не уложился в {timeout} с — сузьте запрос"},
+                          ensure_ascii=False)
+    if json_out and proc.returncode == 0 and (proc.stdout or "").strip():
+        return proc.stdout.strip()
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return out.strip() or f"(нет вывода, exit={proc.returncode})"
+
+
 def _gateway_get(path: str) -> str:
-    """GET на gateway.py — тот же READ API, что у дашборда. Никогда не пишет."""
+    """GET на gateway.py — тот же READ API, что у дашборда. Никогда не пишет. Шлюз не запущен (фона нет с 01.11,
+    Р0 б) — тот же обработчик подпроцессом `gateway.py --get <путь>`, без сокета. Шлюз запущен, но ответил ошибкой
+    или не уложился — это ответ, второй раз тот же запрос подпроцессом не повторяется."""
     url = _gateway_base() + path
     try:
         with urllib.request.urlopen(url, timeout=10) as resp:
             return resp.read().decode("utf-8")
-    except (urllib.error.URLError, ConnectionRefusedError, OSError) as exc:
-        return json.dumps({
-            "error": f"AI Council gateway недоступен на {_gateway_base()}: {exc}. "
-                     "Сначала ai_pipeline_start().",
-        })
+    except urllib.error.HTTPError as exc:
+        return json.dumps({"error": f"AI Council gateway: HTTP {exc.code}"}, ensure_ascii=False)
+    except urllib.error.URLError as exc:
+        if not isinstance(exc.reason, ConnectionRefusedError):
+            return json.dumps({"error": f"AI Council gateway недоступен: {type(exc.reason).__name__}"},
+                              ensure_ascii=False)
+    except ConnectionRefusedError:
+        pass
+    except OSError as exc:
+        return json.dumps({"error": f"AI Council gateway: {type(exc).__name__}"}, ensure_ascii=False)
+    return _run([sys.executable, str(HERE / "gateway.py"), "--get", path], timeout=60, json_out=True)
 
 
 def _run_pipeline(*args: str, timeout: int = 120) -> str:
-    proc = subprocess.run(
-        ["bash", str(PIPELINE_SCRIPT), *args],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout,
-    )
-    out = (proc.stdout or "") + (proc.stderr or "")
-    return out.strip() or f"(нет вывода, exit={proc.returncode})"
+    return _run(["bash", str(PIPELINE_SCRIPT), *args], timeout)
 
 
-def _run_supervisor(*args: str, timeout: int = 30) -> str:
-    proc = subprocess.run(
-        [sys.executable, str(SUPERVISOR), *args],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout,
-    )
-    out = (proc.stdout or "") + (proc.stderr or "")
-    return out.strip() or f"(нет вывода, exit={proc.returncode})"
+def _run_supervisor(*args: str, timeout: int = 60) -> str:
+    return _run([sys.executable, str(SUPERVISOR), *args], timeout)
 
 
 # ── Headroom — сжатие длинных ответов инструментов (план §P4/Ф2) ───────────
@@ -184,14 +197,19 @@ def ai_pipeline_stop() -> str:
     return _run_pipeline("stop")
 
 
-# ── Notion-card-scoped консилиум — чтение (gateway.py, read-only) ──────────
+# ── Консилиум над карточками t-boards — чтение ─────────────────────────────
 
 @mcp.tool()
-def council_cards(db: str = "", query: str = "", limit: int = 50) -> str:
-    """Карточки борда, известные консилиуму. db: bugs|tasks|"" (обе), query: подстрока."""
-    from urllib.parse import urlencode
-    qs = urlencode({"db": db, "q": query, "limit": limit})
-    return _gateway_get(f"/api/cards?{qs}")
+def council_cards(db: str = "", query: str = "", limit: int = 20) -> str:
+    """Карточки t-boards продукта этого хоста, строкой на карточку. query: ключ (OPS-26) или id — карточка из
+    t-boards на сейчас (с описанием); текст — поиск t-boards; пусто — карточки, уже прочитанные консилиумом
+    (без сети). db: bugs|tasks — для прочитанных. limit: до 50 (по умолчанию 20), ответ ≤ 6 КБ."""
+    args = ["cards", "--limit", str(max(1, min(int(limit or 20), 50)))]
+    if query:
+        args.append(f"--q={query}")              # запрос, начинающийся с «-», argparse иначе принял бы за флаг
+    if db in ("bugs", "tasks"):
+        args += ["--db", db]
+    return _run([sys.executable, str(HERE / "tboards.py"), *args], timeout=60)
 
 
 @mcp.tool()
@@ -271,14 +289,15 @@ def council_graph_neighbors(node: str, hops: int = 1, limit: int = 50) -> str:
     return result["text"] if result["uncompressed"] else json.dumps(result, ensure_ascii=False)
 
 
-# ── Notion-card-scoped консилиум — запись (только supervisor.py CLI) ───────
+# ── Постановка в очередь (только supervisor.py CLI) ────────────────────────
 
 @mcp.tool()
-def council_queue_card(card: str = "next", profile: str = "", glm: bool = False) -> str:
-    """Поставить карточку в очередь консилиума. card: id|next|all. profile: fast|deep|hybrid|cloud
-    (пусто = профиль из конфига). glm=True — режим «всё на GLM 5.x» для этой постановки: все
-    роли в подписку Z.AI Coding Plan (модели 5.x), локально только эмбеддинги; нужно включённое
-    облако. Ставит в очередь — исполняет демон-воркер под супервизором, не этот вызов."""
+def council_queue_card(card: str, profile: str = "", glm: bool = False) -> str:
+    """Поставить карточку в очередь консилиума. card: ключ t-boards (OPS-26), id t-boards или id черновика —
+    карточка перечитывается из t-boards в момент вызова; next/all больше нет (снимка нет, Р0 б). profile:
+    fast|deep|hybrid|cloud (пусто = профиль из конфига). glm=True — режим «всё на GLM 5.x» для этой постановки:
+    все роли в подписку Z.AI Coding Plan (модели 5.x), локально только эмбеддинги; нужно включённое облако.
+    Ставит в очередь — исполняет воркер (`council_worker.py --once` или демон под супервизором), не этот вызов."""
     args = ["run", "--card", card]
     if profile:
         args += ["--profile", profile]
@@ -290,11 +309,7 @@ def council_queue_card(card: str = "next", profile: str = "", glm: bool = False)
 # ── Управление очередью — queue_control.py (пауза / продолжение с того же места) ─
 
 def _run_queue(*args: str) -> str:
-    proc = subprocess.run(
-        [sys.executable, str(HERE / "queue_control.py"), *args, "--source", "mcp"],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
-    )
-    return (proc.stdout or "").strip() or (proc.stderr or "").strip() or f"(exit={proc.returncode})"
+    return _run([sys.executable, str(HERE / "queue_control.py"), *args, "--source", "mcp"], timeout=60)
 
 
 @mcp.tool()
@@ -329,21 +344,16 @@ def council_queue_resume(batch: str = "", restore_cancelled: bool = False,
 # ── Ревью карточек «на ревью» (вкладка «Ревью») — review_cli.py ────────────
 # Тот же принцип, что у council_queue_card: инструмент ставит в очередь и читает итог,
 # исполняет council_worker под супервизором — локальные модели, без токенов агента.
-# Переход статуса в Notion — только по политике доски (вкладка «Ревью» → «Доски»).
+# На доску консилиум не пишет: переход по итогу — предложение, карточку переносит агент или владелец.
 
 def _run_review(*args: str, timeout: int = 120) -> str:
-    proc = subprocess.run(
-        [sys.executable, str(HERE / "review_cli.py"), "--json", "--source", "mcp", *args],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout,
-    )
-    out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
-    return out or f"(нет вывода, exit={proc.returncode})"
+    return _run([sys.executable, str(HERE / "review_cli.py"), "--json", "--source", "mcp", *args], timeout)
 
 
 @mcp.tool()
 def council_review_queue(board: str = "", refresh: bool = False) -> str:
-    """Карточки Notion в статусе «на ревью» и итог их последнего ревью. board: bugs|tasks|""
-    (обе). refresh=True — сначала перечитать очередь из Notion (секунды–минута)."""
+    """Карточки колонок ревью t-boards и итог их последнего ревью. board: bugs|tasks|"" (обе). refresh=True —
+    сначала перечитать очередь из t-boards (до 95 запросов: новым и изменённым карточкам — мета и комментарии)."""
     args = ["queue"] + (["--board", board] if board else []) + (["--refresh"] if refresh else [])
     return _maybe_compress(_run_review(*args, timeout=300))["text"]
 
@@ -352,8 +362,8 @@ def council_review_queue(board: str = "", refresh: bool = False) -> str:
 def council_review_start(card: str = "next", profile: str = "", agents: str = "",
                          method: str = "", note: str = "", refresh: bool = False,
                          force: bool = False, glm: bool = False) -> str:
-    """Поставить ревью карточки в очередь локального консилиума. card: id/URL Notion |
-    Backlog ID (B-65) | часть названия | next (первая без ревью) | all (все без half-baked).
+    """Поставить ревью карточки в очередь локального консилиума. card: ключ t-boards (OPS-26) | id |
+    Backlog ID | часть названия | next (первая без ревью) | all (все без half-baked) — из очереди ревью.
     profile — имя/id профиля (пусто = профиль доски/по умолчанию); agents — ключи через
     запятую (ручной состав на этот запуск); method — ADVERSARIAL|DIVERGENT|CONVERGENT|PAIR|
     BLOCKING|COGNITIVE|ASCENDING|EVALUATIVE|TEST_ORIENTED|CASCADING|COMBINED; note — указание
@@ -373,7 +383,7 @@ def council_review_start(card: str = "next", profile: str = "", agents: str = ""
 
 @mcp.tool()
 def council_review_prepare(card: str, profile: str = "", agents: str = "", method: str = "") -> str:
-    """Dry-run ревью: проверки (статус в Notion, модели установлены, переходы), состав с
+    """Dry-run ревью: проверки (статус в t-boards, модели установлены, переходы), состав с
     причинами автоподбора, эффективные num_ctx/выход на агента, размер досье. Ничего не пишет."""
     args = ["prepare", "--card", card]
     for flag, value in (("--profile", profile), ("--agents", agents), ("--method", method)):
@@ -394,8 +404,8 @@ def council_review_result(run_id: str = "", card: str = "", full: bool = False) 
 @mcp.tool()
 def council_review_decide(run_id: str, approve: bool, comment: str = "") -> str:
     """Решение по ПРЕДЛОЖЕННОМУ политикой доски переходу статуса (transition_state=proposed).
-    approve=True — применить в Notion (статус перечитывается: если карточку уже сдвинул
-    человек, переход не применится), False — отклонить. Вызывать только по явному решению
+    approve=True — отметить согласие в базе (`approved`; на доску консилиум не пишет — карточку переносит агент
+    под арендой t-boards или владелец), False — отклонить. Вызывать только по явному решению
     пользователя в диалоге (rules/17 §6). Рекомендацию без предложения политики MCP не
     применяет — только владелец из UI."""
     args = ["decide", run_id, "--approve" if approve else "--reject"]

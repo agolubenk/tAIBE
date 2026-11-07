@@ -16,7 +16,8 @@ import { throttleFileRead, throttleSummary, throttleWrite } from '../queue/throt
 import { contentDisposition, displayName, extOf } from '../queue/files/names'
 import { sniffFile, UnsupportedFileError } from '../queue/files/sniff'
 import { ensureDirs, FILE_ID, filesConfig, finalPath, freeBytes, newFileId, removeQuiet, tmpPath } from '../queue/files/storage'
-import { deleteFileRow, filesEpoch, filesFingerprint, getFile, insertFile, isInboxItem, listAllFiles, listItemFiles, uniqueNameInItem, usedBytes, type FileRow } from '../queue/files/store'
+import { deleteFileRow, filesEpoch, filesFingerprint, getFile, insertFile, isInboxItem, itemInfo, listAllFiles, listItemFiles, uniqueNameInItem, usedBytes, type FileRow } from '../queue/files/store'
+import { canSee, visibilityKey } from '../queue/products'
 import { getEnv } from '../env'
 
 const HEAD_BYTES = 64
@@ -88,7 +89,7 @@ filesRoutes.post('/', requireScope('owner'), async (c) => {
   if (!Number.isInteger(declared) || declared <= 0) throw apiError(400, 'Пустой файл')
   if (declared > cfg.maxBytes) throw apiError(413, `Файл больше ${Math.round(cfg.maxBytes / 1024 / 1024)} МБ`)
   if (!c.req.raw.body) throw apiError(400, 'Пустой файл')
-  if (!(await isInboxItem(itemId))) throw apiError(404, 'Нет такого входящего')
+  if (!(await isInboxItem(itemId, actor.products))) throw apiError(404, 'Нет такого входящего')
   await ensureDirs(cfg.dir)
   const free = await freeBytes(cfg.dir)
   // Проверка и учёт идущей загрузки — без await между ними: параллельные запросы видят байты друг друга, и место на
@@ -119,7 +120,7 @@ filesRoutes.post('/', requireScope('owner'), async (c) => {
         await rename(path, finalPath(cfg.dir, res.row.id))
       } else if (res.status !== 'created') await removeQuiet(path)
       // Пункт удалили, пока шла загрузка: строка и файл не остаются сиротами до суточной уборки (линза GLM #313).
-      if (res.status === 'created' && !(await isInboxItem(itemId))) {
+      if (res.status === 'created' && !(await isInboxItem(itemId, actor.products))) {
         await deleteFileRow(id)
         throw apiError(404, 'Входящее удалено, пока шла загрузка')
       }
@@ -147,6 +148,9 @@ filesRoutes.post('/', requireScope('owner'), async (c) => {
 filesRoutes.get('/', requireScope('read', 'agent'), async (c) => {
   const itemId = c.req.query('item') ?? ''
   if (!DOC_ID.test(itemId)) throw apiError(422, 'Нужен id входящего: ?item=i-…')
+  // Чужой пункт — тот же ответ, что у несуществующего: пусто.
+  const info = await itemInfo(itemId)
+  if (info && !canSee(c.get('oqActor').products, info.product)) return c.json({ files: [], expired: 0 })
   const { files, expired } = await listItemFiles(itemId)
   return c.json({ files: files.map(toPublic), expired })
 })
@@ -168,11 +172,14 @@ filesRoutes.get('/summary', requireScope('read', 'agent'), async (c) => {
   const warn = used >= limit * 0.95
   // Отпечаток до тяжёлых выборок: строки вложений меняются только вставкой, удалением и надгробием — число, сумма,
   // последние created_at и deleted_at это ловят. Без изменений — 304 без GROUP BY по таблице (линза GLM #313).
+  // Видимость — в теге: у токенов разных продуктов разные сводки. Отпечаток общий: тег токена меняется и от загрузок
+  // в чужом продукте — раскрывает только, что где-то что-то загрузили, без пункта и файла.
+  const products = c.get('oqActor').products
   const fp = await filesFingerprint()
-  const etag = `W/"${createHash('sha256').update(JSON.stringify([fp, filesEpoch(), inFlightBytes, warn, cfg.maxBytes, cfg.maxPerItem, cfg.kinds, cfg.retentionDays, cfg.totalCapBytes])).digest('base64url').slice(0, 22)}"`
+  const etag = `W/"${createHash('sha256').update(JSON.stringify([visibilityKey(products), fp, filesEpoch(), inFlightBytes, warn, cfg.maxBytes, cfg.maxPerItem, cfg.kinds, cfg.retentionDays, cfg.totalCapBytes])).digest('base64url').slice(0, 22)}"`
   c.header('ETag', etag)
   if (c.req.header('if-none-match') === etag) return c.body(null, 304)
-  const summary = await listAllFiles()
+  const summary = await listAllFiles(products)
   noteTruncated(summary.truncated, summary.counts.size)
   // count — живых файлов у пункта; files короче count — строки не вошли в сводку, страница догрузит список пункта.
   const items: Record<string, { files: ReturnType<typeof toPublic>[]; count: number; expired: number }> = {}
@@ -184,7 +191,8 @@ filesRoutes.get('/summary', requireScope('read', 'agent'), async (c) => {
   const body = JSON.stringify({
     enabled: true,
     limits: { maxBytes: cfg.maxBytes, maxPerItem: cfg.maxPerItem, kinds: cfg.kinds, retentionDays: cfg.retentionDays },
-    usage: { usedBytes: used, capBytes: cfg.totalCapBytes, warn },
+    // Занятое место — по всем продуктам: только владельцу (по его изменению видно размер и время чужих загрузок).
+    ...(products === '*' ? { usage: { usedBytes: used, capBytes: cfg.totalCapBytes, warn } } : {}),
     items,
     ...(summary.truncated.files || summary.truncated.groups ? { truncated: summary.truncated } : {}),
   })
@@ -196,7 +204,7 @@ filesRoutes.get('/:id', requireScope('agent'), async (c) => {
   const id = c.req.param('id')
   if (!FILE_ID.test(id)) throw apiError(404, 'Нет такого файла')
   const row = await getFile(id)
-  if (!row || !(await isInboxItem(row.itemId))) throw apiError(404, 'Нет такого файла')
+  if (!row || !(await isInboxItem(row.itemId, c.get('oqActor').products))) throw apiError(404, 'Нет такого файла')
   if (row.deletedAt) throw apiError(410, 'Файл удалён по сроку хранения')
   const cfg = filesConfig()
   const path = finalPath(cfg.dir, id)

@@ -1,6 +1,7 @@
 /**
  * Управление очередью владельца на сервере консоли (`npm run oq -- <команда>`):
- *   token-create <имя> <области через запятую: read,agent,owner>  — выпустить токен (показывается один раз)
+ *   token-create <имя> <области через запятую: read,agent,owner> [продукты через запятую, по умолчанию hr-helper;
+ *                у owner не указывать — он видит все]            — выпустить токен (показывается один раз)
  *   token-list                                                   — токены без секретов
  *   token-revoke <id>                                            — отозвать
  *   merge-token                                                  — токен GitHub для мёржей: читается из stdin
@@ -12,6 +13,7 @@ import { runMigrations } from '../db/migrate'
 import { encryptSecret } from '../lib/crypto'
 import { getGithubSettings, writeSetting } from '../settings/store'
 import { createToken, listTokens, revokeToken } from './auth'
+import { listProducts } from './products'
 import { COLLECTIONS, importDoc, type Scope } from './store'
 
 async function readStdin(): Promise<string> {
@@ -25,14 +27,16 @@ async function main(): Promise<void> {
   await runMigrations()
   switch (cmd) {
     case 'token-create': {
-      const [name, scopes] = args
-      if (!name || !scopes) throw new Error('token-create <имя> <read,agent,owner>')
-      const t = await createToken(name, scopes.split(',').map((s) => s.trim()) as Scope[])
-      console.log(`Токен #${t.id} «${name}» (${scopes}) — сохраните сейчас, повторно не показывается:\n${t.token}`)
+      const [name, scopes, products] = args
+      if (!name || !scopes) throw new Error('token-create <имя> <read,agent,owner> [продукты]')
+      const t = await createToken(name, scopes.split(',').map((s) => s.trim()) as Scope[], {
+        products: products ? products.split(',').map((s) => s.trim()) : undefined,
+      })
+      console.log(`Токен #${t.id} «${name}» (${scopes}; ${products ?? 'по умолчанию'}) — сохраните сейчас, повторно не показывается:\n${t.token}`)
       return
     }
     case 'token-list':
-      for (const t of await listTokens()) console.log(`#${t.id}\t${t.name}\t${t.scopes}\t${t.revoked ? 'отозван' : 'активен'}\tпоследний раз: ${t.lastUsedAt?.toISOString() ?? '—'}`)
+      for (const t of await listTokens()) console.log(`#${t.id}\t${t.name}\t${t.scopes}\t${t.products}\t${t.revoked ? 'отозван' : t.expiresAt && t.expiresAt.getTime() <= Date.now() ? 'истёк' : 'активен'}\tдо: ${t.expiresAt?.toISOString() ?? 'бессрочно'}\tпоследний раз: ${t.lastUsedAt?.toISOString() ?? '—'}`)
       return
     case 'token-revoke': {
       const ok = await revokeToken(Number(args[0]))
@@ -50,6 +54,7 @@ async function main(): Promise<void> {
     case 'import': {
       const dir = args[0]
       if (!dir || !statSync(dir).isDirectory()) throw new Error('import <папка выгрузки с checks/ items/ work/>')
+      const products = await listProducts()
       for (const col of COLLECTIONS) {
         const sub = join(dir, col)
         const files = (() => { try { return readdirSync(sub).filter((f) => f.endsWith('.json')) } catch { return [] } })()
@@ -57,7 +62,7 @@ async function main(): Promise<void> {
         const bad: string[] = []
         for (const f of files) {
           const id = f.slice(0, -5)
-          const res = await importDoc(col, id, JSON.parse(readFileSync(join(sub, f), 'utf8')) as Record<string, unknown>, 'import:artifact')
+          const res = await importDoc(col, id, JSON.parse(readFileSync(join(sub, f), 'utf8')) as Record<string, unknown>, 'import:artifact', products)
           counts[res]++
           if (res === 'invalid') bad.push(id)
         }

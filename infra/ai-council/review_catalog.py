@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AI Council — каталог ревью-оркестрации: методы, встроенные агенты, параметры моделей.
 
-Канон: docs/specs/ai-council.md §17 (ревью) · .claude/rules/17-notion-board.md.
+Канон: docs/specs/ai-council.md §17 (ревью) · .claude/rules/17-notion-board.md (доска t-boards).
 
 Одиннадцать методов ревью — НЕ одиннадцать движков. Каждый метод раскладывается на
 стадии из восьми типов (review_engine.STAGE_RUNNERS): кто участвует, видят ли участники
@@ -418,11 +418,13 @@ DEFAULT_BOARDS = {
               "on_accept": "выполненные", "on_fail": "в работе", "on_inconclusive": "",
               "on_needs_human": "", "post_comment": True},
 }
-# Фолбэк, если схему базы Notion прочитать не удалось (rules/17 «Пайплайн завершения»).
+# Статусы для политики доски: slug колонок t-boards и имена колонок, перенесённых из Notion (rules/17
+# «Пайплайн завершения»). Колонку ревью карточки сверяет sources.tboards.review_slugs, а не эти имена.
+TBOARDS_SLUGS = ["new", "grilling", "to-do", "in-progress", "in-review", "confirmation", "done", "closed"]
 KNOWN_STATUSES = {
     "tasks": ["задача от пользователя", "прожаренные явные задачи", "в работе", "на ревью",
-              "выполненные", "завершённые"],
-    "bugs": ["открыто", "в работе", "на ревью", "закрыто"],
+              "выполненные", "завершённые"] + TBOARDS_SLUGS,
+    "bugs": ["открыто", "в работе", "на ревью", "закрыто"] + TBOARDS_SLUGS,
 }
 
 DEFAULT_SETTINGS = {
