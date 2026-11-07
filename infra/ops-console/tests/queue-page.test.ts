@@ -172,12 +172,14 @@ describe('карточки t-boards в строке плана', () => {
 describe('карточки в плане: со сроком, без срока, ждут владельца', () => {
   it('закрытые не считаются; строка владельца — «ждут», строка агента с planEnd — «со сроком»', () => {
     const { cleanCards, cardsInPlan } = pure()
-    const c = (n: number, st = 'открыто') => cleanCards(Array.from({ length: n }, (_, i) => ({ id: hex(i + 1 + n * 100), k: 'bug', st })))
+    const c = (n: number, st = 'открыто') => cleanCards(Array.from({ length: n }, (_, i) => ({ key: `OPS-${i + 1 + n * 100}`, ws: 'aiboards-eval', k: 'bug', st })))
     expect(cardsInPlan([
       { who: 'agent', planEnd: '2026-11-12', cards: [...c(3), ...c(2, 'закрыто')] },
       { who: 'agent', cards: c(4) },
       { who: 'owner', planEnd: '2026-11-12', cards: c(5) },
       { who: 'agent', planEnd: '2026-11-12' },
+      // Карточки прежнего трекера (архив) — не в счёт.
+      { who: 'agent', planEnd: '2026-11-12', cards: cleanCards([{ id: hex(9), k: 'bug', st: 'открыто' }]) },
     ])).toEqual({ dated: 3, undated: 4, owner: 5 })
   })
 })

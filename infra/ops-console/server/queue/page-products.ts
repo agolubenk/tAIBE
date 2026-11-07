@@ -1,34 +1,43 @@
 /**
- * Продукт пункта на странице /queue (v2-lite, часть 3): метка у каждого пункта, смена продукта владельцем и фильтр
- * «Все / продукт» в панели инструментов. Отдельный скрипт, как кнопки мёржа (page-scripts.ts ENHANCE): разметку пункта
- * не меняет, только дополняет. Метка — в шапке пункта вне `.chips` и `.item-body`: бот очереди читает эти места и
- * переносит в Telegram, метка ему не нужна. Продукт — из снимка коллекции (window.__oqDocs, поле product); пункты,
- * вшитые в страницу, — продукта HR. Фильтр запоминается в браузере (localStorage), счётчики разделов — по всем продуктам.
+ * Продукт пункта на странице /queue (v2-lite, часть 3): подпись «Продукт:» с выбором у пунктов, которые можно перенести,
+ * и фильтр «Все / продукт» в панели, когда в очереди больше одного продукта. Отдельный скрипт, как кнопки мёржа
+ * (page-scripts.ts ENHANCE): разметку пункта не меняет, только дополняет. Подпись — в шапке пункта вне `.chips` и
+ * `.item-body`: бот очереди читает эти места и переносит в Telegram, подпись ему не нужна.
+ * Переносятся пункты из базы, кроме входящих (только HR, пока автопередача одна) и мёржа с вердиктом «Контроля».
+ * Проход — на изменение снимка items (подписка db) и разметки списков, без периодической работы.
  */
 export const PRODUCTS_JS = String.raw`(function () {
   'use strict';
   var DEFAULT = 'hr-helper', KEY = 'oq-product-filter';
   var css = document.createElement('style');
   css.textContent = '.item.oq-off { display: none !important; }' +
-    '.item-product { justify-self: start; font-size: 12px; color: var(--muted); }' +
+    '.item-product { justify-self: start; display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }' +
     '.item-product select, .oq-product-filter select { font: inherit; font-size: 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }' +
     '.oq-product-filter { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; margin-left: 8px; }' +
-    '.oq-product-hint { color: var(--muted); font-size: 12px; }';
+    '.oq-product-hint { color: var(--muted); font-size: 12px; }' +
+    '@media (pointer: coarse) { .item-product select, .oq-product-filter select { font-size: 16px; min-height: 36px; } }';
   document.head.appendChild(css);
-  var products = [], names = Object.create(null), filter = '', busy = Object.create(null), byId = Object.create(null);
+  var products = [], names = Object.create(null), filter = '', busy = Object.create(null);
+  var docsById = Object.create(null), moved = Object.create(null);
   function readFilter() { try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } }
   function saveFilter(v) { try { if (v) localStorage.setItem(KEY, v); else localStorage.removeItem(KEY); } catch (e) { /* приватное окно */ } }
-  // Продукты пунктов — индексом на проход decorate, а не поиском по снимку на каждый пункт.
-  function indexProducts() {
+  function indexDocs() {
     var docs = window.__oqDocs ? window.__oqDocs('items') : [];
-    byId = Object.create(null);
-    for (var i = 0; i < docs.length; i++) byId[docs[i].id] = docs[i].product || DEFAULT;
+    docsById = Object.create(null);
+    for (var i = 0; i < docs.length; i++) docsById[docs[i].id] = docs[i];
   }
-  function productOf(id) { return byId[id] || DEFAULT; }
-  function option(slug, label, selected) {
+  function productOf(id) { var d = docsById[id]; return (d && d.product) || DEFAULT; }
+  function movable(id) {
+    var d = docsById[id], data = d && d.data;
+    if (!data) return false;
+    if (data.kind === 'inbox') return false;
+    return !(data.kind === 'merge' && (data.sha || data.base));
+  }
+  function label(slug) { return names[slug] || slug; }
+  function option(slug, text, selected) {
     var o = document.createElement('option');
     o.value = slug;
-    o.textContent = label;
+    o.textContent = text;
     if (selected) o.selected = true;
     return o;
   }
@@ -38,10 +47,11 @@ export const PRODUCTS_JS = String.raw`(function () {
     s.textContent = text;
     s.classList.toggle('err', !!err);
   }
-  function change(el, id, sel, from) {
-    var to = sel.value;
+  function change(el, id, sel) {
+    var from = sel.dataset.product || DEFAULT, to = sel.value;
     if (to === from) return;
-    if (!window.confirm('Перенести пункт в продукт «' + (names[to] || to) + '»?\n\nСессии продукта «' + (names[from] || from) + '» его больше не увидят.')) {
+    var warn = to === DEFAULT ? '' : '\n\nСессий «' + label(to) + '» в очереди пока нет: пункт и ваш ответ никто не прочтёт до их подключения.';
+    if (!window.confirm('Перенести пункт в продукт «' + label(to) + '»?\n\nСессии «' + label(from) + '» его больше не увидят.' + warn)) {
       sel.value = from;
       return;
     }
@@ -55,79 +65,100 @@ export const PRODUCTS_JS = String.raw`(function () {
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (j) { if (!res.ok) throw new Error(j.error || ('HTTP ' + res.status)); return j; });
     }).then(function () {
-      say(el, '✓ Продукт: ' + (names[to] || to));
+      // Сразу, не дожидаясь снимка: вернуть прежний продукт можно тут же, и подтверждение назовёт верный «из».
+      sel.dataset.product = to;
+      if (docsById[id]) docsById[id].product = to;
+      moved[id] = 1;
+      say(el, '✓ Продукт: ' + label(to));
       if (window.__oqRefresh) { window.__oqRefresh('items'); window.__oqRefresh('checks'); }
     }, function (e) {
       sel.value = from;
       say(el, e.message, true);
     }).then(function () { delete busy[id]; sel.disabled = false; });
   }
+  function fill(sel, p) {
+    sel.dataset.product = p;
+    sel.textContent = '';
+    products.forEach(function (x) { sel.appendChild(option(x.slug, x.name, x.slug === p)); });
+    if (!names[p]) sel.appendChild(option(p, p, true));
+  }
   function decorateItem(el) {
     var id = el.dataset.id, head = el.querySelector('.item-head');
     if (!id || !head) return;
     var p = productOf(id), box = head.querySelector('.item-product');
-    if (!box) {
+    var can = el.dataset.src === 'db' && movable(id);
+    if (box && !can && !busy[id]) { box.remove(); box = null; }
+    if (!box && can) {
       box = document.createElement('label');
       box.className = 'item-product';
+      box.appendChild(document.createTextNode('Продукт:'));
       var sel = document.createElement('select');
-      sel.setAttribute('aria-label', 'Продукт пункта');
-      // Пункты, вшитые в страницу, в базе не живут — менять их продукт нечем.
-      if (el.dataset.src !== 'db') sel.disabled = true;
-      sel.addEventListener('change', function () { change(el, id, sel, sel.dataset.product || DEFAULT); });
+      sel.addEventListener('change', function () { change(el, id, sel); });
       box.appendChild(sel);
       head.appendChild(box);
     }
-    var s = box.querySelector('select');
-    if (!busy[id] && (s.dataset.product !== p || !s.children.length)) {
-      s.dataset.product = p;
-      s.textContent = '';
-      products.forEach(function (x) { s.appendChild(option(x.slug, x.name, x.slug === p)); });
-      if (!names[p]) s.appendChild(option(p, p, true));
-    }
-    // Пункт из ссылки «#item=<id>» виден при любом фильтре.
-    el.classList.toggle('oq-off', !!filter && p !== filter && !el.classList.contains('is-target'));
+    var s = box && box.querySelector('select');
+    if (s && !busy[id] && (s.dataset.product !== p || !s.children.length)) fill(s, p);
+    // Пункт из ссылки «#item=<id>» и перенесённый на этой странице — видны при любом фильтре.
+    var off = !!filter && p !== filter && !el.classList.contains('is-target') && !moved[id];
+    el.classList.toggle('oq-off', off);
   }
+  /** Фильтр — только когда в очереди пункты больше одного продукта; спрятан — сохранённый выбор не действует. */
   function decorateBar() {
+    var seen = Object.create(null), n = 0;
+    Object.keys(docsById).forEach(function (id) { var p = productOf(id); if (!seen[p]) { seen[p] = 1; n++; } });
     var bar = document.querySelector('header .toolbar');
-    if (!bar || bar.querySelector('.oq-product-filter') || !products.length) return;
-    var box = document.createElement('label');
-    box.className = 'oq-product-filter';
-    box.appendChild(document.createTextNode('Продукт '));
-    var sel = document.createElement('select');
-    sel.appendChild(option('', 'Все', !filter));
-    products.forEach(function (x) { sel.appendChild(option(x.slug, x.name, x.slug === filter)); });
-    sel.addEventListener('change', function () { filter = sel.value; saveFilter(filter); decorate(); });
-    box.appendChild(sel);
-    var hint = document.createElement('small');
-    hint.className = 'oq-product-hint';
-    hint.textContent = 'счётчики разделов — по всем продуктам';
-    box.appendChild(hint);
-    bar.appendChild(box);
+    if (!bar) return;
+    var box = bar.querySelector('.oq-product-filter');
+    if (n < 2) {
+      if (box) box.hidden = true;
+      filter = '';
+      return;
+    }
+    if (!box) {
+      box = document.createElement('label');
+      box.className = 'oq-product-filter';
+      box.appendChild(document.createTextNode('Продукт '));
+      var sel = document.createElement('select');
+      sel.appendChild(option('', 'Все', true));
+      products.forEach(function (x) { sel.appendChild(option(x.slug, x.name, false)); });
+      sel.addEventListener('change', function () { saveFilter(sel.value); moved = Object.create(null); decorate(); });
+      box.appendChild(sel);
+      var hint = document.createElement('small');
+      hint.className = 'oq-product-hint';
+      hint.textContent = 'счётчики разделов — по всем продуктам';
+      box.appendChild(hint);
+      bar.appendChild(box);
+    }
+    box.hidden = false;
+    filter = readFilter();
+    if (filter && !names[filter]) { filter = ''; saveFilter(''); }
+    var s = box.querySelector('select');
+    if (s.value !== filter) s.value = filter;
+    var h = box.querySelector('.oq-product-hint');
+    if (h) h.hidden = !filter;
   }
   function decorate() {
-    indexProducts();
+    indexDocs();
     decorateBar();
-    var hint = document.querySelector('.oq-product-hint');
-    if (hint) hint.hidden = !filter;
     document.querySelectorAll('section[data-section] .item[data-id]').forEach(decorateItem);
   }
   var queued = false;
   function schedule() {
     if (queued) return;
     queued = true;
-    requestAnimationFrame(function () { queued = false; if (products.length) decorate(); });
+    requestAnimationFrame(function () { queued = false; decorate(); });
   }
   fetch('/api/oq/v1/products', { credentials: 'same-origin' }).then(function (res) { return res.ok ? res.json() : { products: [] }; })
     .then(function (j) {
       products = Array.isArray(j.products) ? j.products.filter(function (x) { return x && typeof x.slug === 'string' && typeof x.name === 'string'; }) : [];
-      // Без справочника — страница как до v2-lite: ни меток, ни фильтра.
+      // Без справочника — страница как до v2-lite: ни подписей, ни фильтра.
       if (!products.length) return;
       products.forEach(function (x) { names[x.slug] = x.name; });
-      filter = readFilter();
-      if (filter && !names[filter]) { filter = ''; saveFilter(''); }
       decorate();
-      new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
-      // Продукт пункта меняется без смены разметки (снимок items пришёл, а тело то же) — сверка раз в 4 с.
-      setInterval(schedule, 4000);
+      // Списки разделов — новые и перемонтированные пункты; снимок items — новый продукт без смены разметки.
+      var mo = new MutationObserver(schedule);
+      document.querySelectorAll('section[data-section] .list').forEach(function (l) { mo.observe(l, { childList: true }); });
+      if (window.claude) window.claude.use('db').then(function (db) { if (db) db.collection('items').onSnapshot(schedule); });
     }, function () { /* без справочника — страница как до v2-lite */ });
 })();`
