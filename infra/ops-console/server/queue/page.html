@@ -1391,6 +1391,15 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var closed = cards.filter(function (c) { return c.closed; }).length;
     return cards.length + ' ' + plural(cards.length, 'карточка', 'карточки', 'карточек') + (closed ? ' · закрыто ' + closed : '');
   }
+  // Строка окна карточек: всё из данных — через esc, и адрес тоже (ревью «Контроля» #239: заголовок без esc тест не ловил).
+  function cardRowHtml(c) {
+    var kind = c.k === 'bug' ? 'ошибка' : 'задача';
+    var url = cardUrl(c);
+    return '<li' + (c.closed ? ' class="is-closed"' : '') + '><span class="sev sev-' + esc(c.s || 'none') + '">' + esc(c.s || kind) + '</span>' +
+      (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc((c.key + ' ' + (c.t || '')).trim()) + '</a>'
+        : '<span>' + esc(c.t || 'карточка') + ' (архив)</span>') +
+      '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + '</small></li>';
+  }
   function statsFromDb(d) {
     if (!d || d.kind !== 'stats') return null;
     function n(v) { v = Number(v); return isFinite(v) && v >= 0 ? Math.min(Math.round(v), 1e6) : 0; }
@@ -2052,12 +2061,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (!w || !w.cards || !w.cards.length) return;
     document.getElementById('cards-dlg-title').textContent = w.title;
     document.getElementById('cards-dlg-sub').textContent = cardsLabel(w.cards) + (TRACK[w.track] ? ' · ' + TRACK[w.track].name : '');
-    document.getElementById('cards-dlg-list').innerHTML = w.cards.map(function (c) {
-      var kind = c.k === 'bug' ? 'ошибка' : 'задача';
-      return '<li' + (c.closed ? ' class="is-closed"' : '') + '><span class="sev sev-' + esc(c.s || 'none') + '">' + esc(c.s || kind) + '</span>' +
-        (cardUrl(c) ? '<a href="' + cardUrl(c) + '" target="_blank" rel="noopener">' + esc((c.key + ' ' + c.t).trim()) + '</a>' : '<span>' + esc(c.t || 'карточка') + ' (архив)</span>') +
-        '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + '</small></li>';
-    }).join('');
+    document.getElementById('cards-dlg-list').innerHTML = w.cards.map(cardRowHtml).join('');
     if (typeof cardsDlg.showModal === 'function') cardsDlg.showModal(); else cardsDlg.setAttribute('open', '');
   }
   document.getElementById('report').addEventListener('click', function (ev) {

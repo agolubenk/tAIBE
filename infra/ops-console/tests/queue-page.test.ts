@@ -19,6 +19,7 @@ type Pure = {
   mergeTracks: (seed: { id: string; name: string; c: string }[], extra: (Track | null)[]) => Track[]
   cleanCards: (list: unknown) => Card[]
   cardsLabel: (cards: Card[]) => string
+  cardRowHtml: (c: Record<string, unknown>) => string
   cardsInPlan: (rows: { who?: string; planEnd?: string; cards?: Card[] }[]) => { dated: number; undated: number; owner: number }
   statsFromDb: (d: unknown) => null | { bugs: Record<string, number>; tasks: Record<string, number>; inPlan: number; notInPlan: number; history: { d: string; bugs: number }[] }
   lagOf: (w: Row, t: Date) => number | null
@@ -63,7 +64,7 @@ function pure(): Pure {
     return v as Pure[K]
   }
   return {
-    trackFromDb: fn('trackFromDb'), mergeTracks: fn('mergeTracks'), cleanCards: fn('cleanCards'), cardsLabel: fn('cardsLabel'),
+    trackFromDb: fn('trackFromDb'), mergeTracks: fn('mergeTracks'), cleanCards: fn('cleanCards'), cardsLabel: fn('cardsLabel'), cardRowHtml: fn('cardRowHtml'),
     cardsInPlan: fn('cardsInPlan'), statsFromDb: fn('statsFromDb'), lagOf: fn('lagOf'), lagGroups: fn('lagGroups'),
     classifyOwnText: fn('classifyOwnText'), inboxTitleOf: fn('inboxTitleOf'), inboxDraftId: fn('inboxDraftId'), inboxItemOf: fn('inboxItemOf'),
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
@@ -166,6 +167,22 @@ describe('карточки t-boards в строке плана', () => {
     expect(cardsLabel(make(11))).toBe('11 карточек')
     expect(cardsLabel(make(22, 22))).toBe('22 карточки · закрыто 22')
     expect(cardsLabel(make(25))).toBe('25 карточек')
+  })
+
+  it('строка окна карточек: заголовок, статус и severity из данных — текстом, не разметкой (ревью «Контроля» #239)', () => {
+    const { cardRowHtml } = pure()
+    const row = cardRowHtml({ id: hex(1), key: 'APP-7', ws: 'w"s', k: 'bug', t: '<b>x</b>', s: '"><img src=x>', st: '<i>st</i>', c: '<a href="https://evil.org">c</a>' })
+    expect(row).not.toMatch(/<b>|<img|<i>|href="https:\/\/evil/)
+    expect(row).toContain('APP-7 &lt;b&gt;x&lt;/b&gt;')
+    expect(row).toContain('class="sev sev-&quot;&gt;&lt;img src=x&gt;"')
+    // Ссылка t-boards экранирована: кавычка из ws не закрывает атрибут href.
+    expect(row).toContain('<a href="https://d4dev.admin.hrhelper.space/w&quot;s/task/APP-7" target="_blank" rel="noopener">')
+    // Без ключа t-boards (архивная карточка Notion) — текст без ссылки.
+    const archived = cardRowHtml({ id: hex(2), k: 'task', closed: true, t: '<b>y</b>' })
+    expect(archived).toMatch(/^<li class="is-closed"><span class="sev sev-none">задача<\/span><span>&lt;b&gt;y&lt;\/b&gt; \(архив\)<\/span>/)
+    expect(archived).not.toContain('<a ')
+    // Ключ в обход cleanCards — ссылка и подпись тоже текстом: без esc(url) тест падает (линза #111).
+    expect(cardRowHtml({ id: hex(3), key: '"><img src=y>', ws: 'w', k: 'task' })).not.toContain('"><img')
   })
 })
 
