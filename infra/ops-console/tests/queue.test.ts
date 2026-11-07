@@ -706,6 +706,11 @@ describe('мёрж из очереди', () => {
     expect(mergeRequestBody({ ...base, skipCi: true }, SHA)).toMatchObject({ commit_title: 'Merge pull request #7 from agolubenk/feat/x [skip ci]' })
     expect(mergeRequestBody({ ...base, skipCi: true, subject: 'docs: y [SKIP CI]' }, SHA)).toMatchObject({ commit_title: 'docs: y [SKIP CI]' })
     expect(mergeRequestBody({ ...base, skipCi: true, subject: 'docs: y [no ci]' }, SHA)).toMatchObject({ commit_title: 'docs: y [no ci]' })
+    // Вложенная метка: один проход replace оставил бы «[skip ci]» и тихо отменил деплой (ревью безопасности).
+    const nested = mergeRequestBody({ ...base, method: 'squash', subject: 'x [sk[skip ci]ip ci]' }, SHA, ['fix: a [ci [no ci] skip]'])
+    expect(nested).toMatchObject({ commit_title: 'x', commit_message: '* fix: a' })
+    expect(String(nested.commit_title) + String(nested.commit_message)).not.toMatch(/\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i)
+    expect(mergeRequestBody({ ...base, title: 'feat: x [skip [skip ci] actions]' }, SHA)).toMatchObject({ commit_message: 'feat: x' })
   })
 
   it('вердикт «Контроля»: экран подтверждения говорит ok / missing / mismatch / base', async () => {

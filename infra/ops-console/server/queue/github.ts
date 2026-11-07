@@ -91,7 +91,12 @@ const SUBJECT = /^[^\r\n]{1,300}$/
 /** Метки, по которым GitHub Actions не запускает workflow на push (docs: «Skipping workflow runs»). */
 const SKIP_MARKER = /\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i
 const SKIP_MARKERS = / ?\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/gi
-const unskip = (s: string): string => s.replace(SKIP_MARKERS, '')
+/** До неподвижной точки: из «[sk[skip ci]ip ci]» один проход оставил бы «[skip ci]» (ревью безопасности). */
+const unskip = (s: string): string => {
+  let prev: string
+  do { prev = s; s = s.replace(SKIP_MARKERS, '') } while (s !== prev)
+  return s
+}
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null)
 /** `[HOST/]OWNER/REPO`, как принимает `gh -R`, и URL репозитория → `owner/name`. */
