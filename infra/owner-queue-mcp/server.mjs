@@ -5,6 +5,7 @@
 // В stdout — только JSON-RPC; диагностика — в stderr.
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
+import { SESSION_MAX } from './relay.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
@@ -13,8 +14,6 @@ import { briefDoc, filterDocs, fitList, pageList, snapshots } from './list.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BASE = `${(process.env.OQ_URL || 'https://ops.admin.hrhelper.space').replace(/\/$/, '')}/api/oq/v1`;
-// Предел имени сессии — как у консоли (server/queue/store.ts SESSION_MAX): линия растёт на 5 символов за поколение.
-const SESSION_MAX = 1000;
 
 function token() {
   if (process.env.OQ_TOKEN) return process.env.OQ_TOKEN;

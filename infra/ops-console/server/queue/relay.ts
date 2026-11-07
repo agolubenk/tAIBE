@@ -10,7 +10,7 @@
  */
 import { z } from 'zod'
 import { readSetting, writeSetting } from '../settings/store'
-import { DOC_ID } from './store'
+import { DOC_ID, SESSION_MAX } from './store'
 
 const KEY = 'oq-relay'
 /** Отметка — раз в минуту; три пропуска подряд — автопередачи нет. */
@@ -25,7 +25,8 @@ const storedSchema = z.object({
 export const relayBeatSchema = z.object({
   session: z
     .string()
-    .regex(/^[A-Za-z0-9._-]{1,120}$/, 'session — имя сессии: латиница, цифры, «.», «_», «-»')
+    .max(SESSION_MAX)
+    .regex(/^[A-Za-z0-9._-]+$/, 'session — имя сессии: латиница, цифры, «.», «_», «-»')
     // Имя — ключ объекта настройки: служебные имена объекта не берём (ревью #324, п. 7).
     .refine((s) => !['__proto__', 'constructor', 'prototype'].includes(s), 'служебное имя не подходит'),
   // id пункта как ключ объекта: служебные имена объекта не берём.
