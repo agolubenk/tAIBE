@@ -41,7 +41,7 @@ const AGENT_STATUSES = ['taken', 'doing', 'blocked', 'done', 'planned'] as const
 
 const httpsLink = z.object({ href: z.string().regex(/^https:\/\/[^\s"<>]+$/).max(2000), text: z.string().max(200).optional() })
 // Входящее из Telegram (kind: 'inbox'): владелец переслал боту сообщение, бот уточнил тип и срочность кнопками.
-// Ведёт агент-сессия: карточка Notion или фикс; протокол — docs/specs/owner-queue.md «Входящие из Telegram».
+// Ведёт агент-сессия: карточка t-boards или фикс; протокол — docs/specs/owner-queue.md «Входящие из Telegram».
 export const INBOX_TYPES = ['bug', 'idea', 'task', 'alert'] as const
 export const INBOX_URGENCIES = ['now', 'queue'] as const
 export const INBOX_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
