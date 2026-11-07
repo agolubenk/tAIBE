@@ -62,7 +62,7 @@ const PRODUCTS = [
   { slug: 'taibe', name: 'aiBoards&eval' },
 ]
 
-function mountPage(opts: { filter?: string; confirm?: boolean; post?: { status: number; body: unknown } } = {}) {
+function mountPage(opts: { filter?: string; confirm?: boolean; post?: { status: number; body: unknown }; products?: unknown[] } = {}) {
   const item = (id: string, src: string | null) => {
     const el = new FakeEl('article', 'item')
     el.dataset.id = id
@@ -101,7 +101,7 @@ function mountPage(opts: { filter?: string; confirm?: boolean; post?: { status: 
     localStorage: { getItem: (k: string) => store[k] ?? null, setItem: (k: string, v: string) => { store[k] = v }, removeItem: (k: string) => { delete store[k] } },
     fetch: (path: string, init?: { method?: string; body?: string }) => {
       calls.push({ path, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(init.body) : undefined })
-      if (path === '/api/oq/v1/products') return respond(200, { products: PRODUCTS })
+      if (path === '/api/oq/v1/products') return respond(200, { products: opts.products ?? PRODUCTS })
       return respond(opts.post?.status ?? 200, opts.post?.body ?? { changed: true })
     },
     MutationObserver: class { observe() {} },
@@ -170,6 +170,20 @@ describe('продукт пункта на странице', () => {
     bar.fire('change')
     expect(p.items.map((el) => el.classes.has('oq-off'))).toEqual([false, false, false])
     expect(p.store['oq-product-filter']).toBeUndefined()
+  })
+
+  it('пункт из ссылки «#item=» виден при любом фильтре', async () => {
+    const p = mountPage({ filter: 'taibe' })
+    p.items[0]!.classes.add('is-target')
+    await p.flush()
+    expect(p.items.map((el) => el.classes.has('oq-off'))).toEqual([false, false, true])
+  })
+
+  it('без справочника продуктов — страница как до v2-lite: ни меток, ни фильтра', async () => {
+    const p = mountPage({ products: [] })
+    await p.flush()
+    expect(p.items[0]!.querySelector('item-head')!.children).toEqual([])
+    expect(p.toolbar.children).toEqual([])
   })
 
   it('продукт пункта сменился в снимке — метка обновляется на следующей сверке', async () => {

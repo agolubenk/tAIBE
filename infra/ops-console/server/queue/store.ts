@@ -356,7 +356,18 @@ export async function docHistory(collection: Collection, id: string, products: V
     .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own))
     .orderBy(desc(oqEvents.at))
     .limit(Math.min(limit, 100))
-  return rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: r.afterJson ? JSON.parse(r.afterJson) : null }))
+  const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: r.afterJson ? JSON.parse(r.afterJson) : null, raw: r.afterJson }))
+  // Смена продукта пишет событие в оба продукта; кто видит оба (владелец), получает одно.
+  const seen = new Set<string>()
+  return events
+    .filter((e) => {
+      if (e.action !== 'product') return true
+      const k = `${e.at}|${e.actor}|${e.raw}`
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    })
+    .map(({ raw: _raw, ...e }) => e)
 }
 
 /**
