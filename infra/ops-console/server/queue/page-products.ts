@@ -3,7 +3,7 @@
  * и фильтр «Все / продукт» в панели, когда в очереди больше одного продукта. Отдельный скрипт, как кнопки мёржа
  * (page-scripts.ts ENHANCE): разметку пункта не меняет, только дополняет. Подпись — в шапке пункта вне `.chips` и
  * `.item-body`: бот очереди читает эти места и переносит в Telegram, подпись ему не нужна.
- * Переносятся пункты из базы, кроме входящих (только HR, пока автопередача одна) и мёржа с вердиктом «Контроля».
+ * Переносятся пункты из базы, кроме мёржа с вердиктом «Контроля»; входящее — с предупреждением, что его никто не возьмёт.
  * Проход — на изменение снимка items (подписка db) и разметки списков, без периодической работы.
  */
 export const PRODUCTS_JS = String.raw`(function () {
@@ -30,7 +30,6 @@ export const PRODUCTS_JS = String.raw`(function () {
   function movable(id) {
     var d = docsById[id], data = d && d.data;
     if (!data) return false;
-    if (data.kind === 'inbox') return false;
     return !(data.kind === 'merge' && (data.sha || data.base));
   }
   function label(slug) { return names[slug] || slug; }
@@ -50,7 +49,10 @@ export const PRODUCTS_JS = String.raw`(function () {
   function change(el, id, sel) {
     var from = sel.dataset.product || DEFAULT, to = sel.value;
     if (to === from) return;
-    var warn = to === DEFAULT ? '' : '\n\nСессий «' + label(to) + '» в очереди пока нет: пункт и ваш ответ никто не прочтёт до их подключения.';
+    var inbox = docsById[id] && docsById[id].data.kind === 'inbox';
+    var warn = to === DEFAULT ? '' : inbox
+      ? '\n\nСессий «' + label(to) + '» пока нет, задачу никто не возьмёт.'
+      : '\n\nСессий «' + label(to) + '» в очереди пока нет: пункт и ваш ответ никто не прочтёт до их подключения.';
     if (!window.confirm('Перенести пункт в продукт «' + label(to) + '»?\n\nСессии «' + label(from) + '» его больше не увидят.' + warn)) {
       sel.value = from;
       return;

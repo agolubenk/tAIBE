@@ -1,6 +1,6 @@
 /**
  * Смена продукта пункта (v2-lite, часть 3, server/queue/product-change.ts) и фильтр списка ?product=: владелец
- * переносит пункт вместе с ответом, сессии прежнего продукта его больше не видят; входящее и вердикт мёржа не
+ * переносит пункт вместе с ответом, сессии прежнего продукта его больше не видят; вердикт мёржа не
  * переезжают; фильтр — только видимые продукты.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -73,12 +73,14 @@ describe('смена продукта пункта', () => {
     expect((await call(owner, 'POST', '/items/m-move-8/product', { to: 'taibe' })).json).toMatchObject({ changed: true })
   })
 
-  it('входящее не уходит из HR, пока автопередача одна: 409, пункт и захват на месте', async () => {
+  it('входящее переносится (решение владельца now-warn): сессия HR его больше не видит', async () => {
     const inbox = { kind: 'inbox', title: 'Входящее', inbox: { type: 'task', urgency: 'queue', text: 'текст', originKind: 'self', forwarded: false, receivedAt: '2026-11-07T00:00:00Z' } }
     expect((await call(owner, 'PUT', '/db/items/i-move-1', { data: inbox })).status).toBe(200)
     expect((await call(hr, 'PATCH', '/db/checks/i-move-1', { data: { agentStatus: 'taken', agentBy: 'hr-sess' } })).status).toBe(200)
-    expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'taibe' })).status).toBe(409)
-    expect((await call(hr, 'GET', '/db/checks/i-move-1')).json).toMatchObject({ product: 'hr-helper', data: { agentBy: 'hr-sess' } })
+    expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'taibe' })).status).toBe(200)
+    expect((await call(hr, 'GET', '/db/checks/i-move-1')).status).toBe(404)
+    expect((await call(owner, 'GET', '/db/checks/i-move-1')).json).toMatchObject({ product: 'taibe', data: { agentBy: 'hr-sess' } })
+    expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'hr-helper' })).status).toBe(200)
   })
 })
 

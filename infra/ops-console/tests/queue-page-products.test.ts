@@ -128,8 +128,20 @@ describe('продукт пункта на странице', () => {
     expect(p.select(p.items[1]!).value).toBe('taibe')
     expect(p.box(p.items[0]!)!.children[0]!.textContent).toBe('Продукт:')
     expect(p.select(p.items[0]!).children.map((o) => o.textContent)).toEqual(['HR Helper', 'Lavaeon', 'aiBoards&eval'])
-    // Вшитый в страницу пункт, входящее и мёрж с вердиктом «Контроля» не переносятся — выбора нет.
-    expect([2, 3, 4].map((i) => p.box(p.items[i]!))).toEqual([null, null, null])
+    // Вшитый в страницу пункт и мёрж с вердиктом «Контроля» не переносятся — выбора нет; входящее — переносится.
+    expect([2, 4].map((i) => p.box(p.items[i]!))).toEqual([null, null])
+    expect(p.select(p.items[3]!).value).toBe('hr-helper')
+  })
+
+  it('входящее — с предупреждением владельца «задачу никто не возьмёт» (решение now-warn)', async () => {
+    const p = mountPage()
+    await p.flush()
+    const sel = p.select(p.items[3]!)
+    sel.value = 'taibe'
+    sel.fire('change')
+    await p.flush()
+    expect(String(p.window.confirm.mock.calls[0]?.[0])).toMatch(/Сессий «aiBoards&eval» пока нет, задачу никто не возьмёт/)
+    expect(p.calls.at(-1)).toEqual({ path: '/api/oq/v1/items/i-1/product', method: 'POST', body: { to: 'taibe' } })
   })
 
   it('смена — с подтверждением (о сессиях другого продукта), запросом владельца и перечиткой items и checks', async () => {

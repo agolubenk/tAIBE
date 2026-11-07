@@ -7,7 +7,7 @@ import { and, eq } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
-import { DEFAULT_PRODUCT, listProducts } from './products'
+import { listProducts } from './products'
 import type { Actor } from './store'
 
 export interface ProductChange {
@@ -30,11 +30,8 @@ export async function changeItemProduct(actor: Actor, id: string, to: string, re
     if (data.kind === 'merge' && (data.sha || data.base)) {
       throw apiError(409, 'Пункт мёржа с вердиктом «Контроля» не переносится: вердикт дан для репозитория его продукта. Нужен другой продукт — попросите «Контроль» завести пункт там')
     }
-    // Входящее — только в HR, пока автопередача одна (relay HR, фаза 4a плана): у другого продукта его никто не возьмёт,
-    // а страница и бот показывали бы «передаётся сессии» без срока.
-    if (data.kind === 'inbox' && to !== DEFAULT_PRODUCT) {
-      throw apiError(409, 'Входящее пока только в «HR Helper»: автопередачи для других продуктов ещё нет')
-    }
+    // Входящее переносится (решение владельца d-oq-inbox-product-0711, now-warn): до автопередачи по продуктам (фаза 4a)
+    // его в другом продукте никто не возьмёт — страница предупреждает перед переносом.
     const at = new Date()
     const check = await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)) })
     if (check) {
