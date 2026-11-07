@@ -311,6 +311,9 @@ def cmd_status(cfg, _args) -> int:
         print(f"Ollama:     жива · резидентно: {', '.join(loaded) if loaded else 'ничего'}")
     else:
         print(f"Ollama:     НЕ отвечает ({client.base_url})")
+    print(f"лок Ollama: {ollama_mod.describe_holder(ollama_mod.local_lock_holder())} · {ollama_mod.LOCAL_INFERENCE_LOCK}")
+    print(f"лок L-модели: {ollama_mod.describe_holder(ollama_mod.local_lock_holder(ollama_mod.MACHINE_MODEL_LOCK))}"
+          f" · {ollama_mod.MACHINE_MODEL_LOCK}")
 
     try:
         with Store() as store:

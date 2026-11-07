@@ -5,9 +5,10 @@
 
 Единственное место, где подсистема соблюдает главное физическое ограничение (C1): машина
 24 GB, тяжёлые модели 15–19 GB каждая. Две резидентные одновременно = своп до неюзабельности.
-Поэтому загрузка любой L-модели проходит через `large_model()`: взять лок в БД → вытеснить
-предыдущую L-модель (`keep_alive: 0`) → загрузить свою. Лок с TTL, чтобы упавший воркер
-не заблокировал очередь навсегда.
+Поэтому загрузка любой L-модели проходит через `large_model()`: взять машинный лок
+(`~/.local/state/taibe/council/large-model.lock`, один на Mac для всех хостов, OPS-29) и лок в БД хоста →
+вытеснить предыдущую L-модель (`keep_alive: 0`) → загрузить свою. Машинный лок снимает ядро при падении
+процесса, лок в БД — с TTL, чтобы упавший воркер не заблокировал очередь навсегда.
 
 Стиль fail-safe скопирован с .claude/scripts/glm_client.py: сетевые/HTTP-сбои возвращают
 результат с ok=False, но не бросают — вызывающий код обязан иметь фолбэк, а не падать.
@@ -31,7 +32,7 @@ DOWN_TTL = 120  # сек: после сетевого сбоя не долбим
 # облачные полосы воркера, контекст, планировщик) пропускает один файловый лок. Тот же машинный файл берёт шлюз
 # моделей (`infra/llm-gateway/src/machine-lock.mjs`, OPS-27). Мимо замка ходят backend продукта в docker (OPS-28),
 # роли Continue напрямую и прогрев (OPS-33), так что вместе с ними два инференса параллельно всё ещё возможны. Модельный лок
-# (`large_model`) держит только резидентность L-моделей, S-модели и эмбеддинги шли мимо него.
+# (`large_model`, машинный — OPS-29) держит только резидентность L-моделей, S-модели и эмбеддинги идут мимо него.
 # Лок — у машины, а не у хоста и не у копии кода: консилиумы всех продуктов-хостов на одном Mac делят
 # один файл, иначе два хоста дадут два инференса параллельно. Путь — в домашней папке пользователя вне
 # продуктов. Не $TMPDIR и не $XDG_STATE_HOME: у launchd и у терминала они разные, а HOME один.
@@ -45,17 +46,148 @@ MACHINE_LOCK_REL = os.path.join(".local", "state", "taibe", "council", "ollama-l
 _LOCK_OVERRIDE = os.environ.get("AI_COUNCIL_LOCAL_LOCK", "").strip()
 LOCAL_INFERENCE_LOCK = _LOCK_OVERRIDE or os.path.join(os.path.expanduser("~"), MACHINE_LOCK_REL)
 LEGACY_HOST_LOCK = "" if _LOCK_OVERRIDE else str(_HOST_ROOT / ".claude" / "council" / "ollama-local.lock")
+# Модельный лок L-моделей — тоже у машины (OPS-29). Лок в council.db держал «одну L-модель» только внутри хоста:
+# у каждого хоста своя база, и два хоста выгружали модели друг друга (пинг-понг 17–18 GB, в окне — две L-модели на
+# 24 GB). Порядок постоянный: модельный лок — внешний, на весь блок large_model; лок инференса — внутренний, на
+# вызов. Шлюз моделей берёт только лок инференса, поэтому взаимной блокировки нет. С AI_COUNCIL_LOCAL_LOCK (тесты)
+# файл лежит рядом с ним.
+MACHINE_MODEL_LOCK = (os.path.join(os.path.dirname(_LOCK_OVERRIDE), "large-model.lock") if _LOCK_OVERRIDE
+                      else os.path.join(os.path.expanduser("~"), ".local", "state", "taibe", "council", "large-model.lock"))
+_model_lock = {"depth": 0}   # процесс держит машинный модельный лок: вложенный large_model — без flock
 
 
-def _flock_by(handle, deadline: float, wait_seconds: float) -> None:
+def _flock_by(handle, deadline: float, wait_seconds: float, path: str = "", what: str = "локальный инференс") -> None:
     while True:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
         except BlockingIOError:
             if time.time() >= deadline:
-                raise TimeoutError(f"локальный инференс занят другим процессом дольше {int(wait_seconds)} с")
+                holder = local_lock_holder(path) if path else None
+                if path and holder is None:      # держатель ушёл между опросом и проверкой — ещё одна попытка
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        return
+                    except BlockingIOError:
+                        pass
+                who = describe_holder(holder) if path else "держатель неизвестен"
+                raise TimeoutError(f"{what} занят другим процессом дольше {int(wait_seconds)} с: {who}. "
+                                   "Кто держит — python3 infra/ai-council/supervisor.py status")
             time.sleep(0.25)
+
+
+@contextmanager
+def machine_model_slot(model: str, holder: str, wait_seconds: float):
+    """Машинный лок L-модели на блок large_model (OPS-29). Реентерабелен внутри процесса, как прежний лок в БД
+    для одного holder: вложенный блок не ждёт сам себя."""
+    if _model_lock["depth"]:
+        _model_lock["depth"] += 1
+        try:
+            yield
+        finally:
+            _model_lock["depth"] -= 1
+        return
+    path = MACHINE_MODEL_LOCK
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a+") as handle:
+        _flock_by(handle, time.time() + wait_seconds, wait_seconds, path, what=f"модельный лок под {model}")
+        mark_holder(handle, f"council {holder} {model}")
+        _model_lock.update(depth=1)
+        try:
+            yield
+        finally:
+            _model_lock.update(depth=0)
+            clear_mark(handle)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def mark_holder(handle, who: str) -> None:
+    """Держатель пишет «pid кто» в сам файл замка (OPS-31): flock на macOS не виден в lsof, а ожидающие открывают
+    тот же файл, поэтому иначе держателя не отличить от очереди."""
+    try:
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"{os.getpid()} {who}\n")
+        handle.flush()
+    except OSError:
+        pass
+
+
+def clear_mark(handle) -> None:
+    """Перед снятием замка: иначе следующий держатель без отметки (старые копии кода) выглядел бы прежним."""
+    try:
+        handle.seek(0)
+        handle.truncate()
+        handle.flush()
+    except OSError:
+        pass
+
+
+def _ps(pid: int) -> tuple[str, str] | None:
+    """(состояние, команда) процесса; ("", "") — процесса нет; None — ps не ответил."""
+    try:
+        p = subprocess.run(["ps", "-o", "stat=,command=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    state, _, command = p.stdout.strip().partition(" ")
+    return state, command.strip()
+
+
+def local_lock_holder(path: str | None = None) -> dict | None:
+    """Кто держит машинный замок локального инференса: None — свободен, иначе {pid, who, state, command}.
+    Замок пробуется на миг (LOCK_NB): взялся — свободен и сразу отпущен; занят — держатель из файла и его
+    состояние из ps (T — остановлен Ctrl+Z или SIGSTOP)."""
+    path = path or LOCAL_INFERENCE_LOCK
+    try:
+        handle = open(path, "r")           # flock берётся и на файле только для чтения; запись не нужна
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return {"pid": None, "who": "", "state": "", "command": "", "error": f"файл замка не открыть: {exc.strerror}"}
+    with handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.seek(0)
+            line = (handle.read(200).splitlines() or [""])[0]
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return None
+    parts = line.split(maxsplit=1)
+    pid = int(parts[0]) if parts and parts[0].isdigit() else None
+    info = {"pid": pid, "who": parts[1] if len(parts) > 1 else "", "state": "", "command": "", "error": "", "path": path}
+    if pid:
+        ps = _ps(pid)
+        if ps is None:
+            info["error"] = "ps не ответил — состояние не узнать"
+        else:
+            info.update(state=ps[0], command=ps[1])
+        # Держатель шлюза — дочерний python; остановить могли сам шлюз (node): «gateway <ppid>».
+        who = info["who"].split()
+        if len(who) == 2 and who[0] == "gateway" and who[1].isdigit():
+            parent = _ps(int(who[1]))
+            if parent and parent[0].startswith("T"):
+                info.update(pid=int(who[1]), who="шлюз моделей", state=parent[0], command=parent[1])
+    return info
+
+
+def describe_holder(h: dict | None) -> str:
+    if h is None:
+        return "свободен"
+    if h.get("error") and not h["pid"]:
+        return h["error"]
+    if h.get("error"):
+        return f"держит pid {h['pid']} ({h['who'] or '?'}) — {h['error']}"
+    if not h["pid"]:
+        return "занят, держатель не записал pid (старая копия кода)"
+    who = f"pid {h['pid']} ({h['who'] or '?'})"
+    if h["state"].startswith("T"):
+        return f"держит {who} — ОСТАНОВЛЕН (Ctrl+Z или SIGSTOP): kill -CONT {h['pid']} или завершите процесс"
+    if not h["state"]:
+        return (f"pid {h['pid']} завершён; замок держит процесс без отметки — кто: lsof {h.get('path') or 'файл замка'}")
+    argv = h["command"].split(" ", 1)
+    command = " ".join([os.path.basename(argv[0])] + argv[1:])   # путь интерпретатора съедал всю строку
+    return f"держит {who}, состояние {h['state']}: {command[:100]}"
 
 
 @contextmanager
@@ -72,8 +204,11 @@ def local_inference_slot(wait_seconds: float):
         for path in paths:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             handle = held.enter_context(open(path, "a+"))
-            _flock_by(handle, deadline, wait_seconds)
+            _flock_by(handle, deadline, wait_seconds, path)
             held.callback(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+            if path == LOCAL_INFERENCE_LOCK:
+                mark_holder(handle, "council")
+                held.callback(clear_mark, handle)    # LIFO: отметка стирается до снятия замка
         yield
 PRESSURE_CRITICAL = 4   # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
 
@@ -287,16 +422,24 @@ class OllamaClient:
             return
 
         deadline = time.time() + wait_seconds
+        with machine_model_slot(model, self.holder, wait_seconds):
+            yield from self._large_model_db(model, deadline, wait_seconds)
+
+    def _large_model_db(self, model: str, deadline: float, wait_seconds: int):
+        """Лок в council.db хоста — под машинным: старые копии кода на том же хосте видят только его, а status
+        показывает модель."""
         acquired = False
-        while time.time() < deadline:
+        while True:                    # хотя бы одна попытка: машинный лок мог достаться у самого дедлайна
             if self.store is None or self.store.acquire_model_lock(self.holder, model):
                 acquired = True
+                break
+            if time.time() >= deadline:
                 break
             time.sleep(2.0)
         if not acquired:
             raise TimeoutError(
                 f"не удалось взять модельный лок под {model} за {wait_seconds}s — "
-                "держит другой воркер (см. таблицу locks)"
+                "держит другой воркер (таблица locks); кто держит — python3 infra/ai-council/supervisor.py status"
             )
 
         try:
