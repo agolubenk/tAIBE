@@ -21,6 +21,9 @@ const writeSchema = z.object({
   data: z.record(z.unknown()),
   ifVersion: z.number().int().nonnegative().optional(),
   ifAnswerAt: z.string().max(40).optional(),
+  /** Входящее: перехват захвата у названной сессии (наследник) и отпуск своего захвата (queue/store.ts). */
+  takeover: z.string().min(1).max(120).optional(),
+  release: z.boolean().optional(),
 })
 const mergeSchema = z.object({ sha: z.string() })
 
@@ -84,6 +87,8 @@ for (const [method, merge] of [['put', false], ['patch', true]] as const) {
       merge,
       ifVersion: body.ifVersion,
       ifAnswerAt: body.ifAnswerAt,
+      takeover: body.takeover,
+      release: body.release,
     })
     return c.json(doc)
   })

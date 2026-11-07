@@ -193,11 +193,21 @@ function changedKeys(before: Record<string, unknown>, after: Record<string, unkn
 const CLAIMED = ['taken', 'doing']
 // Захват входящего, у которого сессия не писала 12 ч, снимается: сессия могла закончиться, не отпустив пункт.
 export const CLAIM_TTL_MS = 12 * 3600_000
+// Линия сессии (метка session из первого сообщения, eval/tools/spawn_session.sh, eval/tools/lineage.py): r и сегменты.
+// Наследник — линия держателя плюс сегмент (r.62u1 → r.62u1.ab12): только он перехватывает захват, назвав держателя
+// (takeover), и без ожидания — передача линии идёт минутами, а 12 ч блокировали входящие после каждой смены (OPS-35).
+// Тишина держателя наследства не доказывает: живая сессия часами ждёт мёржа.
+const LINE = /^r(\.[a-z0-9]+)+$/
+const heirOf = (by: string, prevBy: string) => LINE.test(prevBy) && LINE.test(by) && by.startsWith(`${prevBy}.`)
 
 interface WriteContext {
   /** checks/<id> относится к входящему (items/<id> с kind: inbox) — на него действует захват сессией. */
   inbox: boolean
   now: number
+  /** Имя держателя, у которого сессия перехватывает захват (наследник линии). */
+  takeover?: string
+  /** Держатель отпускает свой захват (уходя без наследника): пункт может взять названная им живая сессия. */
+  release?: boolean
 }
 
 function authorize(actor: Actor, collection: Collection, before: Record<string, unknown> | null, after: Record<string, unknown>, incoming: Record<string, unknown>, ctx: WriteContext): void {
@@ -216,11 +226,18 @@ function authorize(actor: Actor, collection: Collection, before: Record<string, 
       const by = typeof incoming.agentBy === 'string' ? incoming.agentBy : ''
       const prevBy = typeof before?.agentBy === 'string' ? before.agentBy : ''
       const since = typeof before?.agentAt === 'string' ? Date.parse(before.agentAt) : Number.NaN
-      const held = !!prevBy && !!before && before.agentStatus !== undefined && before.agentStatus !== 'done' && !(ctx.now - since > CLAIM_TTL_MS)
-      if (held && by !== prevBy) {
-        throw apiError(409, by
-          ? `Пункт уже ведёт ${prevBy} — возьмите другой или договоритесь с этой сессией`
-          : `Пункт ведёт ${prevBy}. Если это вы — передайте session (имя своей сессии)`)
+      // Без времени записи агента (импорт выгрузки, документы до agentAt) захвата нет: иначе пункт держался бы вечно.
+      const held = !!prevBy && !!before && before.agentStatus !== undefined && before.agentStatus !== 'done' && !Number.isNaN(since) && !(ctx.now - since > CLAIM_TTL_MS)
+      // Защита от случайного перехвата, а не от враждебной сессии: имя называет сама сессия, токен общий.
+      // Отпустить — только своё: и занятый, и уже не удерживаемый пункт (подпись agentBy — кто вёл пункт, её не стирают).
+      if (ctx.release && prevBy && by !== prevBy) throw apiError(409, `Отпустить захват может только ${prevBy} — пункт вела эта сессия`)
+      const heir = held && by !== prevBy && heirOf(by, prevBy)
+      if (held && by !== prevBy && !(heir && ctx.takeover === prevBy)) {
+        throw apiError(409, !by
+          ? `Пункт ведёт ${prevBy}. Если это вы — передайте session (имя своей сессии)`
+          : heir
+            ? `Пункт ведёт ${prevBy} — ваша линия его наследник: передайте takeover: «${prevBy}» (старый MCP поле не знает — переподключите /mcp)`
+            : `Пункт уже ведёт ${prevBy} — возьмите другой или договоритесь с этой сессией. Если это вы под прежним именем — передайте session: «${prevBy}» как есть`)
       }
       if (!by && CLAIMED.includes(String(incoming.agentStatus))) {
         throw apiError(422, 'Входящее берут с session — имя своей сессии (oq_agent_status). Старый MCP без session: переподключите /mcp')
@@ -249,10 +266,18 @@ export interface WriteOptions {
    * 409, чтобы повтор старой правки (вкладка бота, заснувший телефон) не перезаписал новый (ревью #324, п. 1).
    */
   ifAnswerAt?: string
+  /** Входящее: линия держателя захвата, у которого его перехватывает наследник по линии (heirOf). */
+  takeover?: string
+  /** Входящее: держатель отпускает свой захват — agentBy снимается, пункт может взять названная им живая сессия. */
+  release?: boolean
 }
 
 export async function writeDoc(actor: Actor, collection: Collection, id: string, data: Record<string, unknown>, opts: WriteOptions): Promise<Doc> {
   if (!DOC_ID.test(id)) throw apiError(422, 'Недопустимый id документа')
+  // Имя сессии — не пустое; проверяется присланное, а не сохранённое: старый документ с пустым именем не блокирует ответ.
+  if (collection === 'checks' && 'agentBy' in data && !(typeof data.agentBy === 'string' && /\S/.test(data.agentBy))) {
+    throw apiError(422, 'agentBy — имя сессии (линия), не пустое')
+  }
   const db = getDb()
   // Справочник продуктов — до транзакции: внутри неё все чтения только через tx (см. productForNew).
   const all = await listProducts()
@@ -293,13 +318,16 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
     for (const [k, v] of Object.entries(merged)) if (v === null && collection !== 'checks') delete merged[k]
     const at = new Date()
     if (collection === 'checks') stampCheck(merged, before, data, { owner, merge: opts.merge, at: at.toISOString() })
+    // Отпуск снимает только держателя: статус и заметка («передано <сессия>») остаются — страница и бот показывают, кому
+    // передано; пункт берёт названная живая сессия. Автопередача сама его не предложит: у него есть статус.
+    if (collection === 'checks' && opts.release) delete merged.agentBy
     // Входящее ли это — по пункту items/<id>: захват сессией действует только на входящие.
     const inbox = !owner && !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
     const parsed = SCHEMAS[collection].safeParse(merged)
     if (!parsed.success) throw apiError(422, `Неверный документ: ${parsed.error.issues.map((i) => `${i.path.join('.') || '—'}: ${i.message}`).join('; ').slice(0, 400)}`)
     const json = JSON.stringify(parsed.data)
     if (Buffer.byteLength(json) > MAX_DOC_BYTES) throw apiError(422, 'Документ больше 48 КБ')
-    authorize(actor, collection, before, parsed.data as Record<string, unknown>, data, { inbox, now: at.getTime() })
+    authorize(actor, collection, before, parsed.data as Record<string, unknown>, data, { inbox, now: at.getTime(), takeover: opts.takeover, release: opts.release })
     const version = (row?.version ?? 0) + 1
     if (row) {
       await tx.update(oqDocs).set({ dataJson: json, version, updatedAt: at, updatedBy: actor.name }).where(and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)))
