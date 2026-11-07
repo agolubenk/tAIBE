@@ -4,7 +4,7 @@
 Канон: docs/specs/ai-council.md §3, §12.
 
     python3 infra/ai-council/supervisor.py {start|stop|restart|status|doctor}
-    python3 infra/ai-council/supervisor.py run  --card <id|next|all> [--profile fast|deep]
+    python3 infra/ai-council/supervisor.py run  --card <OPS-26|id t-boards|id черновика> [--profile fast|deep]
     python3 infra/ai-council/supervisor.py plan [--date … --from … --to …]
     python3 infra/ai-council/supervisor.py verdict --run <id> --accept|--reject|--edit
 
@@ -41,7 +41,6 @@ SUPERVISOR_PID = STATE_DIR / "supervisor.pid"
 # service -> модуль, который его реализует. Появление файла = сервис становится живым.
 SERVICE_MODULES = {
     "gateway": "gateway.py",
-    "notion-sync": "notion_sync.py",
     "context": "context_service.py",
     "council": "council_worker.py",
     "planner": "planner_service.py",
@@ -304,7 +303,7 @@ def cmd_status(cfg, _args) -> int:
     print(f"\nконфиг:     {cfg.path.name} · hash {cfg.config_hash()} · "
           f"профиль {cfg.get('models.profile')}"
           + (f" · ⚠ {len(problems)} проблем" if problems else ""))
-    print(f"Notion:     {'подключён' if cfg.notion_enabled() else 'ОФЛАЙН (нет ключа)'}")
+    print(f"t-boards:   {_tboards_line()}")
 
     client = ollama_mod.build(cfg)
     if client.alive():
@@ -316,9 +315,9 @@ def cmd_status(cfg, _args) -> int:
     try:
         with Store() as store:
             depth = store.queue_depth()
-            cards = store.q1("SELECT COUNT(*) n FROM cards")["n"]
+            cards = store.q1("SELECT COUNT(*) n FROM cards WHERE origin = 'tboards'")["n"]
             lock = store.current_model_lock()
-            print(f"БД:         {cards} карточек · очередь: "
+            print(f"БД:         {cards} карточек t-boards · очередь: "
                   f"{', '.join(f'{k}={v}' for k, v in depth.items()) if depth else 'пусто'}")
             print(f"модельный лок: {lock['model'] + ' (' + lock['holder'] + ')' if lock else 'свободен'}")
     except Exception as exc:                                  # noqa: BLE001
@@ -363,14 +362,12 @@ def cmd_doctor(cfg, _args) -> int:
                     detail += " (облако ВЫКЛЮЧЕНО — AI_COUNCIL_CLOUD=1)"
             checks.append((f"модели профиля {profile}", not missing, detail))
 
-    key = cfg.notion_key()
-    checks.append(("Notion-ключ", bool(key), "найден" if key else
-                   f"нет — {cfg.get('sources.notion.key_file')} или env NOTION_API_KEY"))
-    if key:
-        keyfile = cfg.path_of("sources.notion.key_file")
-        if keyfile.is_file():
-            mode = oct(keyfile.stat().st_mode & 0o777)
-            checks.append(("права на ключ", mode == "0o600", f"{mode} (нужно 0o600)"))
+    import tboards
+    try:
+        key = tboards.load_key()
+        checks.append(("ключ t-boards продукта", True, f"«{key['name'] or key['slug']}» · {key['url']} · 0600"))
+    except tboards.TBoardsError as exc:
+        checks.append(("ключ t-boards продукта", False, str(exc)))
 
     rag = cfg.path_of("sources.rag.db")
     checks.append(("DAMS RAG-индекс", rag.is_file(),
@@ -429,6 +426,15 @@ def cmd_doctor(cfg, _args) -> int:
     return 0
 
 
+def _tboards_line() -> str:
+    import tboards
+    try:
+        key = tboards.load_key()
+        return f"ключ продукта «{key['name'] or key['slug']}» · {key['url']} (карточки — по запросу)"
+    except tboards.TBoardsError as exc:
+        return f"НЕТ КЛЮЧА — {exc}"
+
+
 def cmd_run(cfg, args) -> int:
     """Поставить карточки в очередь. Исполняет их council-воркер (фаза P2)."""
     profile = args.profile or ("fast" if cfg.get("models.profile") == "adaptive"
@@ -465,21 +471,23 @@ def cmd_run(cfg, args) -> int:
               f"  Либо разобрать очередь вручную, в этом же окружении: "
               f"AI_COUNCIL_CLOUD=1 python3 infra/ai-council/council_worker.py --once",
               file=sys.stderr)
+    if args.card in ("all", "next"):
+        # Снимка доски нет (Р0 б, OPS-26): карточку называет вызывающий, список — council_cards.
+        print("next/all больше нет: снимка доски нет, карточка читается из t-boards в момент вызова. "
+              "Укажите ключ карточки (--card OPS-26); список — npm run ai-council:cards -- --q <текст>",
+              file=sys.stderr)
+        return 1
+    import tboards
     with Store() as store:
-        if args.card == "all":
-            cards = store.open_cards()
-        elif args.card == "next":
-            cards = store.open_cards()[:1]
-        else:
-            card = store.get_card(args.card)
-            cards = [card] if card else []
-            if not card:
-                print(f"Карточка {args.card} не найдена в снапшоте. "
-                      "Сначала синхронизация: npm run ai-council:sync", file=sys.stderr)
-                return 1
-        if not cards:
-            print("Снапшот карточек пуст — сначала npm run ai-council:sync")
+        local = store.get_card(args.card)
+        try:
+            card = local if local and local.get("db") == "draft" else \
+                tboards.fetch_into_store(cfg, store, args.card)
+        except tboards.TBoardsError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
             return 1
+        cards = [card]
+        print(f"карточка: {tboards.card_line(card)}")
 
         queued = 0
         for card in cards:
@@ -549,7 +557,7 @@ def main() -> int:
     sub.add_parser("doctor")
 
     p_run = sub.add_parser("run")
-    p_run.add_argument("--card", default="next")
+    p_run.add_argument("--card", required=True, help="ключ t-boards (OPS-26), id t-boards или id черновика")
     p_run.add_argument("--profile", choices=["fast", "deep", "hybrid", "cloud"])
     p_run.add_argument("--glm", action="store_true",
                        help="все роли на GLM 5.x (Coding Plan), локально только embed (§17.6)")

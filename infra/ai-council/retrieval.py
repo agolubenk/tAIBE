@@ -812,11 +812,10 @@ if __name__ == "__main__":
         if len(sys.argv) > 1:
             card = store.get_card(sys.argv[1])
         else:
-            card = store.q1("SELECT * FROM cards WHERE db='bugs' AND severity='high' "
-                            "AND status='открыто' LIMIT 1") or \
-                   store.q1("SELECT * FROM cards LIMIT 1")
+            card = store.q1("SELECT * FROM cards WHERE origin = 'tboards' ORDER BY fetched_at DESC LIMIT 1") \
+                or store.q1("SELECT * FROM cards LIMIT 1")
         if not card:
-            print("Снапшот пуст — сначала npm run ai-council:sync")
+            print("Карточек нет — прочитать из t-boards: python3 infra/ai-council/tboards.py card <ключ>")
             sys.exit(1)
 
         retriever = Retriever(cfg, store, ollama_mod.build(cfg, store))

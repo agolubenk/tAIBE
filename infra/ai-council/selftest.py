@@ -819,17 +819,17 @@ def test_config_guards(tmp: Path) -> None:
     check("шлюз: арбитр не на модели автора предложения",
           gw_roles.get("arbiter") not in (gw_roles.get("proposer.code"), gw_roles.get("proposer.arch")), str(gw_roles))
 
-    bad_status = base.replace("status_changes = false", "status_changes = true")
-    check("конфиг: смена Status запрещена (rules/17 §6, C4)",
-          any("status_changes" in p for p in problems_with(bad_status)))
-
-    bad_hb = base.replace("unset_half_baked = false", "unset_half_baked = true")
-    check("конфиг: снятие Half-baked запрещено (§7а)",
-          any("unset_half_baked" in p for p in problems_with(bad_hb)))
-
-    bad_archive = base.replace("archive = false", "archive = true")
-    check("конфиг: архивация запрещена",
-          any("archive" in p for p in problems_with(bad_archive)))
+    import tomllib
+    parsed = tomllib.loads(base)
+    check("конфиг: секции Notion нет — источник t-boards, записи наружу нет",
+          "notion" not in parsed.get("sources", {}) and "notion_writeback" not in parsed.get("outputs", {})
+          and "tboards" in parsed.get("sources", {}))
+    bad_notion = base + "\n[outputs.notion_writeback]\ncomments = true\n"
+    check("конфиг: возврат [outputs.notion_writeback] — ошибка (R-084, OPS-26)",
+          any("outputs.notion_writeback" in p for p in problems_with(bad_notion)))
+    bad_budget = base.replace("call_budget = 40", "call_budget = 500")
+    check("конфиг: бюджет запросов t-boards выше лимита ключа — ошибка",
+          any("call_budget" in p for p in problems_with(bad_budget)))
 
     bad_mem = base.replace("max_resident_large = 1", "max_resident_large = 2")
     check("конфиг: >1 резидентной L-модели ловится (24 GB, C1)",
@@ -1157,13 +1157,12 @@ def test_knowledge(tmp: Path) -> None:
 
 
 def test_home_form(tmp: Path) -> None:
-    """v2-Ф1/P2: главная форма — @-упоминания, черновик+enqueue, emit-skip для draft.
+    """v2-Ф1/P2: главная форма — @-упоминания, черновик+enqueue.
 
-    Черновик — ЛОКАЛЬНАЯ карточка (db='draft'), в Notion никогда не попадает; поэтому
-    здесь достаточно Api.create_task на временной БД, без реального NotionClient.
+    Черновик — ЛОКАЛЬНАЯ карточка (db='draft'), на доску не попадает; поэтому здесь достаточно
+    Api.create_task на временной БД, без сети.
     """
     import gateway as gw
-    from emit import Emitter, EmitResult
 
     db = tmp / "h.db"
     store = Store(db)
@@ -1271,13 +1270,9 @@ def test_home_form(tmp: Path) -> None:
               cards_after == cards_before and runs_after == runs_before,
               (cards_before, cards_after, runs_before, runs_after))
 
-        # emit.py пропускает черновики — писать в Notion нечем (нет page_id)
-        draft_card = store.get_card(r["card_id"])
-        emitter = Emitter(cfg, store, client=None)
-        result = emitter.emit({"payload": ""}, draft_card)
-        check("emit: черновик пропускается, а не падает на отсутствующем page_id",
-              isinstance(result, EmitResult) and bool(result.skipped) and not result.wrote,
-              result.skipped)
+        check("черновик: в работе (open_cards) и без источника доски",
+              any(c["card_id"] == r["card_id"] for c in store.open_cards())
+              and not (store.get_card(r["card_id"]) or {}).get("origin"))
 
         # планировщик: черновик не занимает окно и не всплывает как «зависший» в needs_human
         from planner_service import collect as planner_collect
@@ -1368,6 +1363,7 @@ def test_planner(tmp: Path) -> None:
             "subtask_ids": json.dumps(list(subtasks)), "report": None, "body": "",
             "comments": "[]", "content_hash": sha16(card_id),
             "notion_edited_at": "2026-08-01T00:00:00.000Z", "fetched_at": int(time.time()),
+            "origin": "tboards", "ticket": None, "board_task_id": card_id, "is_final": 0,
         })
         if not with_run:
             return
@@ -2066,13 +2062,6 @@ def test_drift_part2(tmp: Path) -> None:
     council.close()
     store.close()
 
-    import emit
-    footer = emit.render_block({"title": "t", "card_id": "c"}, {
-        "provenance": {"models": ["m"], "extra_round_kind": "сверка", "extra_round": {"p1": "сверка"},
-                       "language_retry_failed": ["arbiter"]}}, {"id": "run-x"})
-    text = "\n".join(footer)
-    check("запись наружу: доп. раунд и неудачный языковой повтор видны владельцу",
-          "доп. раунд: сверка (p1)" in text and "чужой язык остался у: arbiter" in text, text[-300:])
 
 
 def test_adversarial_spiral(tmp: Path) -> None:
@@ -2486,9 +2475,8 @@ def test_mcp_server_registers_p4_tools() -> None:
 
 
 def test_review(tmp: Path) -> None:
-    """Ревью-оркестрация: валидация настроек, политика вердикта (код, не модель), узкий
-    канал записи Status и атомарный захват очереди ревью."""
-    import notion as notion_mod
+    """Ревью-оркестрация: валидация настроек, политика вердикта (код, не модель), переход без записи на доску
+    и атомарный захват очереди ревью."""
     import review_catalog as cat
     from review_engine import _RunState, decide
     from review_store import ReviewStore
@@ -2533,54 +2521,6 @@ def test_review(tmp: Path) -> None:
     selftest_review.team_checks(check, tmp, Store)
     selftest_review.e2e_checks(check, tmp, Store)
 
-    client = notion_mod.NotionClient(api_key="x", allowed_writes={"priority": True})
-    calls: list = []
-
-    def fake_call(path, method="GET", body=None, retries=3):
-        calls.append((method, path, body))
-        return {"properties": {"Status": {"type": "select", "select": {"name": "в работе"}}}}
-    client.call = fake_call
-    try:
-        client.update_properties("p", {"Status": {}}, op="priority")
-        guard_ok = False
-    except notion_mod.NotionForbidden:
-        guard_ok = True
-    check("ревью: общий update_properties по-прежнему не пишет Status", guard_ok)
-    try:
-        client.review_transition("p", "на ревью", "закрыто", {"в работе"})
-        allowed_ok = False
-    except notion_mod.NotionForbidden:
-        allowed_ok = True
-    check("ревью: цель вне политики доски не пишется", allowed_ok and not calls)
-    try:
-        client.review_transition("p", "на ревью", "закрыто", {"закрыто"})
-        moved_ok = False
-    except notion_mod.NotionError:
-        moved_ok = True
-    check("ревью: статус уже сдвинут человеком — переход не применяется",
-          moved_ok and all(m == "GET" for m, _p, _b in calls), calls)
-
-    frozen = notion_mod.NotionClient(api_key="x", read_only=True)
-    try:
-        frozen.call("/pages/p", "PATCH", {"properties": {}})
-        frozen_ok = False
-    except notion_mod.NotionForbidden:
-        frozen_ok = True
-    check("notion: read_only отклоняет запись до сети (PATCH страницы)", frozen_ok)
-    try:
-        frozen.review_transition("p", "на ревью", "закрыто", {"закрыто"})
-        frozen_tr = False
-    except notion_mod.NotionForbidden:
-        frozen_tr = True
-    check("notion: read_only закрывает и переход ревью", frozen_tr)
-    check("notion: чтение под read_only разрешено (GET, POST query/search)",
-          notion_mod.is_read_request("GET", "/pages/p")
-          and notion_mod.is_read_request("POST", "/databases/d/query")
-          and notion_mod.is_read_request("post", "/search")
-          and not notion_mod.is_read_request("POST", "/comments")
-          and not notion_mod.is_read_request("PATCH", "/blocks/b/children")
-          and not notion_mod.is_read_request("DELETE", "/blocks/b"))
-
     import review_service as review_svc
     card0 = {"card_id": "c0", "board": "bugs", "title": "t0", "review_hash": "h", "comments": "[]"}
     rs.upsert_card(card0)
@@ -2590,6 +2530,20 @@ def test_review(tmp: Path) -> None:
     refused = review_svc.decide_transition(None, rs, rid0, True, "ui")
     check("ревью: перевод выключен политикой — применить нельзя даже из UI",
           refused.get("ok") is False and rs.run(rid0)["transition_state"] == "none", refused)
+    rs.save_board("bugs", {**rs.boards()["bugs"], "allow_transition": True, "require_human_approval": False})
+    rid_a = rs.enqueue(card0, rs.profile(None), "selftest", {})
+    rs.finish(rid_a, "done", "ACCEPT", 0.9, "ok", {})
+    review_svc.after_run(None, rs, rid_a, log=lambda *_: None)
+    proposed = rs.run(rid_a)
+    check("ревью: на доску не пишет — даже без подтверждения по политике переход только предлагается",
+          proposed["transition_state"] == "proposed" and proposed["comment_state"] == "skipped", proposed)
+    approved = review_svc.decide_transition(None, rs, rid_a, True, "mcp")
+    check("ревью: «подтвердить» — состояние approved в базе и подсказка перенести карточку на доске",
+          approved.get("state") == "approved" and rs.run(rid_a)["transition_state"] == "approved"
+          and "перенесите" in str(approved.get("next")), approved)
+    import review_stats
+    check("ревью: approved — «согласен» для калибровки", review_stats.owner_label(rs.run(rid_a)) == "agree")
+    rs.save_board("bugs", {**rs.boards()["bugs"], "allow_transition": False, "require_human_approval": True})
     card = {"card_id": "c1", "board": "bugs", "title": "t", "review_hash": "h", "comments": "[]"}
     rs.upsert_card(card)
     run_id = rs.enqueue(card, rs.profile(None), "selftest", {})
@@ -2737,6 +2691,8 @@ def main() -> int:
         print("\n29. ревью PR на GLM: потолок попыток, деление диффа, квота и сбои подряд (§17.7)")
         import selftest_pr_review
         selftest_pr_review.run(tmp, check)
+        import selftest_tboards              # источник карточек t-boards по запросу (OPS-26)
+        selftest_tboards.run(tmp, check)
 
     failed = [name for name, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} проверок пройдено")

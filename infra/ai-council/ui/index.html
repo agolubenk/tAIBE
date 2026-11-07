@@ -640,9 +640,8 @@ async function openGuide() {
       <div class="card"><b>Только владелец</b>
         <ul class="sub" style="margin:8px 0 0; padding-left:18px">
           ${(g.owner_only || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
-        ${(g.forbidden_writeback || []).length ? `<div class="sub" style="margin-top:8px">
-          запрещено коду в Notion: <span class="mono">${(g.forbidden_writeback || [])
-            .map(esc).join(", ")}</span></div>` : ""}</div>
+        <div class="sub" style="margin-top:8px">На доску t-boards консилиум не пишет: карточки читает
+          по запросу, итог — здесь.</div></div>
       <div class="card"><b>Словарь</b>
         <div class="kv" style="margin-top:8px">${(g.glossary || []).map((t) => `
           <div><b>${esc(t.term)}</b></div><div class="sub">${esc(t.text)}</div>`).join("")}</div></div>
@@ -907,10 +906,6 @@ async function renderOverview(s) {
         ${opBtn("selftest", "Самопроверки")}
         ${opBtn("doctor", "Предполётная проверка")}
       </div>
-      <div class="row" style="margin-top:8px">
-        ${opBtn("emit", "Что уйдёт в Notion (черновик)")}
-        ${opBtn("emit_apply", "Записать в Notion", "bad")}
-      </div>
     </div>
 
     <div class="card" style="margin-top:12px">
@@ -1055,10 +1050,9 @@ async function renderSetup(force = false) {
             s.level === "warn" ? "частично" : "нет"})</span>`).join(" · ")
         : "Всё готово."}</div>
     <div id="setup-list" ${expanded ? "" : "hidden"} style="margin-top:8px">
-      <div class="sub" style="margin-bottom:6px">Порядок работы: борд синхронизируется сам →
-        прогон карточки (вкладка «Карточки») → ревью результата и вердикт («лента» справа
-        в шапке — это единственный сигнал обучения) → план на день собирается автоматически →
-        выгрузка в Notion — только явной операцией на вкладке «Обзор».
+      <div class="sub" style="margin-bottom:6px">Порядок работы: карточка читается из t-boards по
+        ключу (OPS-26) → прогон карточки (вкладка «Карточки») → ревью результата и вердикт («лента»
+        справа в шапке — это единственный сигнал обучения) → план на день. На доску консилиум не пишет.
         Подробно, с ценой каждого шага и словарём — кнопка «Как это работает».</div>
       ${d.steps.map(row).join("")}</div>`;
 
@@ -1721,7 +1715,7 @@ async function openRun(runId) {
      <span class="tag">${esc(r.track || "")}</span>
      готовность <span class="mono">${num(r.readiness)}</span> ·
      уверенность <span class="mono">${num(r.confidence)}</span> · ${dur(r.wall_ms)}
-     ${r.url ? ` · <a href="${esc(r.url)}" target="_blank">Notion ↗</a>` : ""}`;
+     ${r.url ? ` · <a href="${esc(r.url)}" target="_blank" rel="noopener">карточка ↗</a>` : ""}`;
 
   const parts = [];
   if (r.outcome) parts.push(`<div class="card" style="border-color:var(--warn-bd)">
@@ -1946,7 +1940,7 @@ function cardRow(c) {
       <div>${esc(c.title)}</div>
       <div class="sub chip-row" style="margin-top:4px">
         <span class="tag${c.db === "draft" ? " warn" : ""}">${c.db === "draft"
-          ? "черновик — нет в Notion" : esc(c.db)}</span>
+          ? "черновик — нет на доске" : esc(c.db)}</span>
         ${c.backlog_id ? `<span class="tag mono" title="${esc(c.backlog_id)}">${
           esc(c.backlog_id.length > 40 ? c.backlog_id.slice(0, 38) + "…" : c.backlog_id)}</span>` : ""}
         ${c.half_baked ? '<span class="tag warn">HALF-BAKED — не брать в работу</span>' : ""}
@@ -2122,9 +2116,9 @@ async function openCard(cardId) {
     <span class="tag">${esc(c.status || "—")}</span>
     ${c.half_baked ? '<span class="tag warn">HALF-BAKED</span>' : ""}
     ${c.backlog_id ? `<span class="tag mono">${esc(c.backlog_id)}</span>` : ""}
-    ${c.url ? ` · <a href="${esc(c.url)}" target="_blank">Notion ↗</a>` : ""}`;
+    ${c.url ? ` · <a href="${esc(c.url)}" target="_blank" rel="noopener">${c.origin === "tboards"
+      ? "t-boards ↗" : "архив Notion ↗"}</a>` : ""}`;
 
-  const allowed = STATUSES[c.db] || [];
   const profileRows = renderProfileRadios(models, "prof", cardProfile,
     "Профили с облачными моделями выключены: облако выключено в настройках.");
 
@@ -2151,15 +2145,9 @@ async function openCard(cardId) {
     </div>
 
     <div class="card">
-      <h3>Статус в Notion</h3>
-      <div class="row">
-        <select id="st-select">${allowed.map((s) =>
-          `<option value="${esc(s)}"${s === c.status ? " selected" : ""}>${esc(s)}</option>`).join("")}</select>
-        <button class="act" id="st-save">Перевести</button>
-      </div>
-      <div class="sub" style="margin-top:8px">Из UI доступны статусы до «на ревью». Финальный
-        (<span class="mono">завершённые</span>/<span class="mono">закрыто</span>) ставится вручную
-        в Notion — консилиум карточки не закрывает.</div>
+      <h3>Статус на доске</h3>
+      <div class="sub">«${esc(c.status || "—")}». Консилиум карточку не переносит: это делает агент под арендой
+        t-boards или владелец на доске.</div>
     </div>
 
     <div class="card">
@@ -2177,13 +2165,6 @@ async function openCard(cardId) {
       openCard(cardId);
     } catch (e) { toast(e.message, true); }
   };
-  $("#st-save").onclick = async () => {
-    try {
-      const r = await post("/api/status", { card_id: cardId, status: $("#st-select").value });
-      toast("статус в Notion: " + r.status);
-      $("#modal").close(); renderCards();
-    } catch (e) { toast(e.message, true); }
-  };
   $("#run-btn").onclick = async () => {
     const chosen = document.querySelector('input[name="prof"]:checked');
     try {
@@ -2198,7 +2179,7 @@ async function openCard(cardId) {
 }
 
 /* ── главная: новая задача с @-упоминаниями (Ф1/P2) ──────────────────────
-   Черновик — ЛОКАЛЬНАЯ карточка (db='draft'), в Notion не попадает. Связи — явные
+   Черновик — ЛОКАЛЬНАЯ карточка (db='draft'), на доску не попадает. Связи — явные
    @[упоминания], резолвит их сервер (POST /api/tasks), а не клиент: чип мог быть
    отредактирован после выбора из дропдауна. */
 let homeLinks = [], homeProfile = "fast";
@@ -3201,13 +3182,12 @@ async function renderSettings() {
             <td class="sub">включается при ${esc((p.fallback.when || []).join(", "))};
               не более ${p.fallback.max_calls_per_day} вызовов и
               $${p.fallback.max_usd_per_day} в сутки</td></tr>` : ""}`).join("")}
-          <tr><td><b>Notion</b><div class="sub">борд Задач и Ошибок</div></td>
-            <td class="mono wrap">${esc(a.notion?.key_file || "")}</td>
-            <td>${a.notion?.has_key ? '<span class="tag ok">есть</span>'
-              : '<span class="tag bad">нет</span>'}
-              <div class="sub mono">${esc(a.notion?.key_file_mode || "")}</div></td>
-            <td>${a.notion?.key_file_exists ? '<span class="tag ok">файл на месте</span>'
-              : '<span class="tag warn">файла нет</span>'}</td></tr>
+          <tr><td><b>t-boards</b><div class="sub">карточки продукта, только чтение</div></td>
+            <td class="mono wrap">${esc(a.tboards?.key_file || "")}</td>
+            <td>${a.tboards?.ok ? '<span class="tag ok">есть</span>'
+              : '<span class="tag bad">нет</span>'}</td>
+            <td class="sub">${a.tboards?.ok ? esc("продукт «" + (a.tboards.product || "") + "»")
+              : esc(a.tboards?.error || "")}</td></tr>
         </tbody></table></div>
     </div>
     <div class="card" style="margin-top:12px">

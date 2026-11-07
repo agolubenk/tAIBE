@@ -252,7 +252,7 @@ class ReviewStore:
     # ── очередь карточек ─────────────────────────────────────────────────────
     CARD_COLS = ("card_id", "board", "title", "url", "status", "priority", "severity",
                  "task_type", "backlog_id", "modules", "tags", "half_baked", "report", "body",
-                 "comments", "review_hash", "notion_edited_at")
+                 "comments", "review_hash", "notion_edited_at", "origin", "ticket", "board_task_id")
 
     def upsert_card(self, card: dict) -> None:
         ts = now()
@@ -281,23 +281,20 @@ class ReviewStore:
     def card(self, card_id: str) -> dict | None:
         return self.s.q1("SELECT * FROM review_cards WHERE card_id = ?", (card_id,))
 
+    def card_by_task(self, task_id: str) -> dict | None:
+        return self.s.q1("SELECT * FROM review_cards WHERE board_task_id = ?", (task_id,))
+
     def find_card(self, ref: str) -> dict | None:
+        """По card_id, ключу t-boards (OPS-26), id t-boards, Backlog ID, затем по части названия. Снимок Notion
+        (origin IS NULL) ищется только по точному card_id: по ключу и названию — карточки t-boards."""
         ref = (ref or "").strip()
         if not ref:
             return None
-        found = self.card(ref) or self.s.q1(
-            "SELECT * FROM review_cards WHERE backlog_id = ? COLLATE NOCASE "
-            "ORDER BY in_queue DESC LIMIT 1", (ref,))
-        if found:
-            return found
-        # id из URL Notion: последние 32 hex без дефисов
-        compact = ref.replace("-", "")[-32:]
-        if len(compact) == 32:
-            for row in self.s.q("SELECT * FROM review_cards"):
-                if row["card_id"].replace("-", "") == compact:
-                    return row
-        return self.s.q1("SELECT * FROM review_cards WHERE title LIKE ? ORDER BY in_queue DESC LIMIT 1",
-                         (f"%{ref}%",))
+        return self.card(ref) or self.s.q1(
+            "SELECT * FROM review_cards WHERE origin = 'tboards' AND (ticket = ? OR board_task_id = ? "
+            "OR backlog_id = ? COLLATE NOCASE) ORDER BY in_queue DESC LIMIT 1", (ref.upper(), ref, ref)) \
+            or self.s.q1("SELECT * FROM review_cards WHERE origin = 'tboards' AND title LIKE ? "
+                         "ORDER BY in_queue DESC LIMIT 1", (f"%{ref}%",))
 
     def queue(self, board: str = "", include_left: bool = False) -> list[dict]:
         sql, params = "SELECT * FROM review_cards WHERE 1=1", []

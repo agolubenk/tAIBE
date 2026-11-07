@@ -9,32 +9,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Что откуда брать
 # ─────────────────────────────────────────────────────────────────────────────
-[sources.notion]
-enabled = true
-# Заморожен (R-084, 30.10): канон открытого — t-boards. Клиент отклоняет любую запись до сети,
-# включая переходы ревью и статус из UI, которые белый список writeback не покрывает.
-read_only = true
-api_version = "2022-06-28"
-key_file = ".claude/council/.notion-key"   # fallback: env NOTION_API_KEY
-poll_interval_min = 15
-rate_limit_rps = 3
-# Half-baked карточки: elaborate_only — прорабатываем, но НЕ планируем в рабочее окно (§7а).
-# Значения: elaborate_only | skip | full
-half_baked = "elaborate_only"
-
-[sources.notion.databases.bugs]
-id = "714f2a2f-5274-485e-84ca-ee701ed5df19"
-weight = 2.0                                # «Ошибки» обгоняют «Задачи» (rules/17 §2)
-statuses = ["открыто", "в работе"]
-
-[sources.notion.databases.tasks]
-id = "256853cd-b4ae-4394-a768-a2a2ebd3c5fe"
-weight = 1.0
-statuses = ["задача от пользователя", "прожаренные явные задачи", "в работе"]
-
-[sources.notion.exclude]
-modules = []
-backlog_ids = []
+# Карточки — t-boards по запросу (OPS-26, tboards.py): фона и синка нет (d-ops23-forks-0511, Р0 б), карточку
+# читает вызов (`council_cards`, `run --card OPS-26`). Только GET. Ключ — свой на продукт (d-tb-product-key-0411)
+# в файле хоста `.claude/council/tboards.json` (0600), его пишет `tboards.py set-key`; адрес — boards.url слоя,
+# только хосты KNOWN_HOSTS. Notion заморожен (R-084): секций [sources.notion] и [outputs.notion_writeback] нет,
+# их появление — ошибка конфига. Снимок Notion в базе — архив: прогоны и корпус его помнят, в работу он не идёт.
+[sources.tboards]
+call_budget = 40                             # запросов на один вызов; лимит ключа — 100, сброс после 60 с тишины
+bug_weight = 2.0                             # ошибки обгоняют задачи в плане (rules/17 §2)
+review_slugs = ["in-review", "на-ревью"]     # колонки ревью; «на-ревью» — колонки, перенесённые из Notion
+final_slugs = ["done", "closed", "выполненные", "завершённые", "закрыто"]   # плюс колонки с isFinal
 
 [sources.rag]
 db = ".claude/rag/index.db"
@@ -296,7 +280,7 @@ half_baked = false
 # либо выдал результат с низкой подтверждённостью по критичной карточке.
 #
 # Выключено по умолчанию. Включение: `enabled = true` либо AI_COUNCIL_CLOUD=1 на прогон.
-# Права: только чтение и текстовый вердикт. Записи в Notion/файлы у облака нет нигде.
+# Права: только чтение и текстовый вердикт. Записи на доску и в файлы у облака нет нигде.
 # ─────────────────────────────────────────────────────────────────────────────
 [models.cloud]
 enabled = true
@@ -780,23 +764,8 @@ plan_file = "docs/plans/BACKLOG.md"
 plan_marker = "ai-council:plan"
 plan_json = ".claude/council/plan-latest.json"
 
-# Белый список записи в Notion (решение D2, §10). false = операция физически не выполняется.
-# Заморожено решением R-084 / d-tb-canon-3010 (30.10): канон открытого — t-boards, все операции false.
-# Включить любую — только новым решением владельца; транспорт всё равно отклонит запись при sources.notion.read_only.
-[outputs.notion_writeback]
-elaboration_block = false
-comments = false
-priority = false               # Priority (Задачи) / Severity (Ошибки)
-module_augment = false         # только из 16 канонических опций, новых не создаём
-task_type = false
-backlog_id_if_empty = false
-tags = false                   # требует свойства Tags — шаг S1
-council_readiness = false      # поле консилиума (S1); после заморозки не пишется никем
-relations = false              # требует Related / Related bugs — шаг S1
-child_pages = false
-status_changes = false        # C4 — потолок агента «на ревью», решает человек
-unset_half_baked = false      # §7а — снимает владелец
-archive = false               # API умеет, консилиуму не выдаётся
+# Записи на доску у консилиума нет: итог живёт в базе (вкладки шлюза, MCP council_run_detail). Итог комментарием
+# на карточке t-boards по белому списку — отдельная карточка (AUTO-70 ч. 2), по умолчанию выключено.
 
 [outputs.limits]
 max_new_tags_per_run = 5
@@ -851,7 +820,7 @@ host = "127.0.0.1"
 port = 8790
 
 [supervisor]
-services = ["gateway", "notion-sync", "context", "council", "council-cloud-1", "planner", "learning"]
+services = ["gateway", "context", "council", "council-cloud-1", "planner", "learning"]
 # Одна облачная полоса `council-cloud-1` (2026-10-15): GLM-работу (ревью по тумблеру, отмеченные задачи) берёт
 # она, а основной воркер в это время ведёт локальные модели строго по одной — консилиум не простаивает ни
 # в ожидании квоты, ни пока GLM 20 минут делает ревью. Локального инференса в полосе нет, кроме эмбеддингов

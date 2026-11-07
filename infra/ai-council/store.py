@@ -4,7 +4,7 @@
 Канон схемы: schema.sql + docs/specs/ai-council.md §13.
 
 БД — единственный канал связи между процессами консилиума (supervisor / council /
-notion-sync / planner / gateway). Отсюда два инварианта, которые нельзя обходить:
+planner / gateway; карточки t-boards пишет tboards.py по запросу). Отсюда два инварианта, которые нельзя обходить:
 
 1. Захват работы — только через claim_run(): BEGIN IMMEDIATE + UPDATE по status='queued'.
    Схема "SELECT ... WHERE status='queued'" затем "UPDATE" — гонка, несколько воркеров
@@ -118,6 +118,22 @@ class Store:
         ("runs", "cloud_mode", "TEXT"),
         # Дрейф M4 (council_infra.py): сколько раз прогон уже отложен из-за сбоя инфраструктуры локальных моделей.
         ("runs", "infra_deferrals", "INTEGER"),
+        # Источник карточек — t-boards по запросу (OPS-26, tboards.py). origin='tboards' — строка прочитана из
+        # t-boards; NULL — снимок Notion (архив) или локальный черновик. ticket — ключ карточки (OPS-26),
+        # board_task_id — id t-boards (card_id перенесённой карточки — её Notion-id), is_final — финальная колонка.
+        ("cards", "origin", "TEXT"),
+        ("cards", "ticket", "TEXT"),
+        ("cards", "board_task_id", "TEXT"),
+        ("cards", "is_final", "INTEGER"),
+        ("review_cards", "origin", "TEXT"),
+        ("review_cards", "ticket", "TEXT"),
+        ("review_cards", "board_task_id", "TEXT"),
+    )
+
+    # Однократные правки данных после ADDED_COLUMNS: (ключ отметки в council_state, SQL).
+    # 80 карточек ревью из снимка Notion висели в очереди (in_queue=1) — `next` брал бы архив.
+    ONE_TIME_UPDATES = (
+        ("migrate:review_notion_dequeued", "UPDATE review_cards SET in_queue = 0 WHERE origin IS NULL"),
     )
 
     def _migrate(self) -> None:
@@ -127,6 +143,11 @@ class Store:
                         self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        for mark, sql in self.ONE_TIME_UPDATES:
+            if not self.conn.execute("SELECT 1 FROM council_state WHERE key = ?", (mark,)).fetchone():
+                self.conn.execute(sql)
+                self.conn.execute("INSERT OR IGNORE INTO council_state (key, value, updated_at) VALUES (?, '1', ?)",
+                                  (mark, now()))
         cur = self.conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()
         if cur["v"] is None:
             self.conn.execute(
@@ -166,11 +187,14 @@ class Store:
             "card_id", "db", "title", "url", "status", "priority", "severity", "task_type",
             "source", "backlog_id", "modules", "tags", "half_baked", "parent_card_id",
             "subtask_ids", "report", "body", "comments", "content_hash", "notion_edited_at",
-            "fetched_at", "linked_card_ids",
+            "fetched_at", "linked_card_ids", "origin", "ticket", "board_task_id", "is_final",
         )
         vals = [card.get(c) for c in cols]
         placeholders = ", ".join("?" for _ in cols)
-        updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "card_id")
+        # @-связи черновика живут на карточке: перечитывание из t-boards их не стирает.
+        keep = {"linked_card_ids"}
+        updates = ", ".join(f"{c}=COALESCE(excluded.{c}, cards.{c})" if c in keep else f"{c}=excluded.{c}"
+                            for c in cols if c != "card_id")
         self.x(
             f"INSERT INTO cards ({', '.join(cols)}) VALUES ({placeholders}) "
             f"ON CONFLICT(card_id) DO UPDATE SET {updates}",
@@ -178,8 +202,18 @@ class Store:
         )
         return changed
 
+    def find_card(self, ref: str) -> dict | None:
+        """Карточка по card_id, id t-boards или ключу (OPS-26) — снимок Notion не ищется по ключу."""
+        ref = (ref or "").strip()
+        return self.get_card(ref) or self.q1(
+            "SELECT * FROM cards WHERE origin = 'tboards' AND (board_task_id = ? OR ticket = ?) "
+            "ORDER BY fetched_at DESC LIMIT 1", (ref, ref.upper()))
+
     def open_cards(self, db: str | None = None, statuses: list[str] | None = None) -> list[dict]:
-        sql, params = "SELECT * FROM cards WHERE 1=1", []
+        """Карточки в работе: прочитанные из t-boards и не в финальной колонке, плюс локальные черновики.
+        Снимок Notion (origin IS NULL, db tasks|bugs) — архив: прогоны и корпус его помнят, в новую работу он не идёт."""
+        sql, params = ("SELECT * FROM cards WHERE ((origin = 'tboards' AND COALESCE(is_final, 0) = 0) "
+                       "OR db = 'draft')"), []
         if db:
             sql, params = sql + " AND db = ?", params + [db]
         if statuses:
@@ -381,17 +415,6 @@ class Store:
         if row and row.get("expires_at") and row["expires_at"] <= now():
             return None
         return row
-
-    # ── аудит записи в Notion ────────────────────────────────────────────────
-    def log_notion_write(self, run_id: str, page_id: str, op: str, field: str = "",
-                         before: str = "", after: str = "", ok: bool = True,
-                         dry_run: bool = False, error: str = "") -> None:
-        self.x(
-            "INSERT INTO notion_writes (run_id, page_id, op, field, before, after, ok, "
-            "dry_run, error, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run_id, page_id, op, field, before, after, 1 if ok else 0,
-             1 if dry_run else 0, error, now()),
-        )
 
     def remember_created_page(self, child_key: str, page_id: str, parent_card_id: str,
                               db: str, title: str, run_id: str) -> None:

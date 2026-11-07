@@ -6,8 +6,8 @@
     python3 infra/ai-council/gateway.py            # сервис (под супервизором)
     python3 infra/ai-council/gateway.py --port 8790
 
-Зачем он есть. Результат прогона до сих пор жил в двух местах: в `council.db` (нужен
-sqlite3 и знание схемы) и в Notion (там уже итог, а не то, КАК он получен). Вердикт —
+Зачем он есть. Результат прогона живёт в `council.db` (нужен sqlite3 и знание схемы); на
+доску консилиум не пишет (OPS-26), поэтому шлюз — единственное место, где итог виден целиком. Вердикт —
 единственный сигнал обучения (§9) — ставился командой `supervisor.py verdict --run …`,
 для чего надо было сперва глазами найти run_id. Это и есть причина, по которой вердиктов
 в базе ноль: цена ревью была выше ценности.
@@ -19,9 +19,9 @@ sqlite3 и знание схемы) и в Notion (там уже итог, а н�
    на внешнем интерфейсе. Явная проверка host стоит в `serve()`.
 2. **Читатель, а не второй писатель.** Шлюз читает `council.db` и пишет ровно три вещи:
    вердикт (`verdicts`), постановку в очередь (`runs`) и — с Ф1/P2 — черновик задачи
-   с главной формы (`cards` с db='draft', заведён локально, никогда не существовал в
-   Notion). В Notion не пишет никогда — это работа `emit.py`, у которой свои гварды и
-   dry-run по умолчанию; `emit.py` черновики пропускает (нет page_id).
+   с главной формы (`cards` с db='draft', заведён локально, на доске его нет). На доску
+   t-boards не пишет: карточки читает `tboards.py` по запросу, только GET.
+   Без сокета: `gateway.py --get <путь>` печатает тот же ответ GET (MCP, когда шлюз не запущен).
 3. **Ноль внешних зависимостей и ноль сборки.** UI — один самодостаточный HTML-документ
    в этом же файле: ни npm, ни бандла, ни CDN. Подсистема должна подниматься на машине,
    где есть только Python — как и весь остальной консилиум.
@@ -293,11 +293,10 @@ class Api:
             clauses.append("r.status = ?")
             params.append(status)
         if card_id:
-            # MCP `council_card_runs` (план §P4) принимает и внутренний card_id, и
-            # человекочитаемый backlog_id (B-24/TAI-3) — внешний агент не обязан
-            # знать внутренний id, у него есть только то, что видно в Notion/чате.
-            clauses.append("(r.card_id = ? OR c.backlog_id = ?)")
-            params.extend([card_id, card_id])
+            # MCP `council_card_runs` (план §P4) принимает внутренний card_id, ключ t-boards (OPS-26), id t-boards
+            # и backlog_id (B-24) — внешний агент не обязан знать внутренний id, у него есть то, что видно на доске.
+            clauses.append("(r.card_id = ? OR c.backlog_id = ? OR c.ticket = ? OR c.board_task_id = ?)")
+            params.extend([card_id, card_id, card_id.upper(), card_id])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with self._store() as store:
             return store.q(
@@ -458,7 +457,7 @@ class Api:
 
     def _create_task(self, title: str, body: str, links: list[str], profile: str,
                      cloud_mode: str = "") -> dict:
-        """Главная форма (Ф1/P2): черновик — ЛОКАЛЬНАЯ карточка (db='draft'), Notion не
+        """Главная форма (Ф1/P2): черновик — ЛОКАЛЬНАЯ карточка (db='draft'), доску не
         трогает вообще (см. docstring модуля — третье, документированное исключение из
         «шлюз пишет ровно две вещи»). @-упоминания резолвит сервер (точное совпадение
         title → LIKE-фолбэк с эскейпом `%`/`_` → неразрешённые — явная ошибка), а не
@@ -656,25 +655,14 @@ class Api:
         "models.cloud.providers.gemini.base_url": ("api", "Gemini — base URL", "str", None),
         "models.cloud.request_timeout_seconds": ("api", "Облако — общий таймаут, с",
                                                  "int", None),
-        "sources.notion.poll_interval_min": ("api", "Notion — период опроса, мин", "int", None),
-        "sources.notion.rate_limit_rps": ("api", "Notion — запросов в секунду", "int", None),
+        "sources.tboards.call_budget": ("api", "t-boards — запросов на вызов", "int", None),
         "gateway.port": ("api", "Порт этого шлюза", "int", None),
-        # ── Что консилиум пишет обратно в борд ──────────────────────────────
-        "outputs.notion_writeback.elaboration_block": ("outputs", "Писать блок проработки",
-                                                       "bool", None),
-        "outputs.notion_writeback.comments": ("outputs", "Писать комментарии", "bool", None),
-        "outputs.notion_writeback.council_readiness": ("outputs", "Писать readiness",
-                                                       "bool", None),
-        "outputs.notion_writeback.priority": ("outputs", "Писать приоритет/severity",
-                                              "bool", None),
-        "outputs.notion_writeback.tags": ("outputs", "Писать теги", "bool", None),
     }
 
     GROUP_TITLES = {
         "council": "Консилиум — пороги качества",
         "cloud": "Облако и бюджет подписки",
         "api": "API — адреса, таймауты, ключи",
-        "outputs": "Запись в Notion",
     }
 
     def settings(self) -> dict:
@@ -693,7 +681,7 @@ class Api:
                 "api": self.api_status(),
                 "config_path": "infra/ai-council/config.toml",
                 "config_hash": self.cfg.config_hash(),
-                "writeback": self.cfg.get("outputs.notion_writeback", {}) or {}}
+                "writeback": {}}
 
     # ── «с чего начать» ──────────────────────────────────────────────────────
     def setup(self) -> dict:
@@ -707,10 +695,13 @@ class Api:
         import cloud as cloud_mod
         import ollama as ollama_mod
 
+        from review_api import _tboards_state
+
         services = {s["name"]: s["alive"] for s in self.services()}
         dead = [name for name, alive in services.items() if not alive]
+        tb = _tboards_state()
         with self._store() as store:
-            cards = (store.q1("SELECT COUNT(*) n FROM cards") or {}).get("n", 0)
+            cards = (store.q1("SELECT COUNT(*) n FROM cards WHERE origin = 'tboards'") or {}).get("n", 0)
             docs = (store.q1("SELECT COUNT(*) n FROM corpus_meta") or {}).get("n", 0)
             done = (store.q1("SELECT COUNT(*) n FROM runs WHERE status='done'") or {}).get("n", 0)
             awaiting = (store.q1(
@@ -739,10 +730,10 @@ class Api:
                  "работают: " + ", ".join(n for n, a in services.items() if a)
                  + (f"; стоят: {', '.join(dead)}" if dead else ""),
                  "запустить: npm run ai-council:start", op="council_start"),
-            item("notion", "Борд Notion синхронизирован", cards > 0,
-                 f"карточек в снимке: {cards}" if cards else "снимок борда пуст",
-                 "ключ Notion — .claude/council/.notion-key, затем «Синхронизировать борд»",
-                 op="sync"),
+            item("tboards", "Ключ t-boards продукта", tb["ok"],
+                 f"продукт «{tb.get('product')}», карточек t-boards в базе: {cards}" if tb["ok"]
+                 else tb.get("error", ""),
+                 "ключ, ограниченный продуктом: pbpaste | python3 infra/ai-council/tboards.py set-key"),
             item("ollama", "Локальные модели отвечают", ollama.alive(),
                  f"Ollama: {ollama.base_url}",
                  "поднять Ollama: ollama serve (модели — models.roles в config.toml)"),
@@ -797,21 +788,21 @@ class Api:
     # обзор+управление, качество+обучение, прогоны+лента, знания+граф; прежние
     # имена клиент резолвит алиасами, но канонические тексты — эти).
     TAB_DOC = {
-        "review": ("Ревью карточек Notion в статусе «на ревью» локальными моделями.",
+        "review": ("Ревью карточек колонок ревью t-boards локальными моделями.",
                    "Очередь → профиль (метод, состав, лимиты) → «Проверить» (dry-run) → "
                    "«Запустить». Исполняет council_worker раньше проработок, строго "
-                   "последовательно. Итог — комментарий на карточке; перевод статуса — "
-                   "только если разрешён политикой доски, по умолчанию с подтверждением."),
-        "home": ("Новая задача с нуля — без карточки в Notion.",
+                   "последовательно. Итог — здесь, на доску консилиум не пишет; переход по "
+                   "политике доски — предложение, карточку переносит агент или владелец."),
+        "home": ("Новая задача с нуля — без карточки на доске.",
                  "Заголовок + текст, при желании — до 5 связей с другими карточками "
                  "(выбор из дропдауна автокомплита по «@», не произвольный текст @[...] — "
                  "чипом становится и попадает консилиуму как контекст только выбранное). "
-                 "Создаёт ЛОКАЛЬНЫЙ черновик и сразу ставит его в очередь; в Notion "
+                 "Создаёт ЛОКАЛЬНЫЙ черновик и сразу ставит его в очередь; на доску "
                  "ничего не пишется. Сюда ведёт название «AI Council» в шапке."),
         "overview": ("Состояние системы и ручное управление — одним экраном.",
                      "Начните здесь: чек-лист «с чего начать» и статистика, а ниже — "
-                     "операции: синхронизация борда, индексация, сборка графа, план на "
-                     "рабочее окно, серии запусков и запись результатов в Notion. "
+                     "операции: индексация, сборка графа, план на рабочее окно и серии "
+                     "запусков. "
                      "Перезапуск консилиума — тоже здесь, после правки настроек."),
         "quality": ("Отдаёт ли консилиум пользу — и во что превращаются ваши вердикты.",
                     "Классы причин воздержаний и надёжность каждой модели; здесь же "
@@ -821,9 +812,9 @@ class Api:
                  "Счётчики показывают, сколько идёт сейчас и сколько прошло. Ваша "
                  "основная работа: открыть прогон и поставить вердикт — это "
                  "единственный сигнал обучения, без него качество не растёт."),
-        "cards": ("Борд Notion как он виден консилиуму.",
-                  "Отсюда карточка ставится в очередь с выбором профиля; карточки "
-                  "с «Half-baked idea» не берутся, пока владелец не даст ОК."),
+        "cards": ("Карточки t-boards, которые консилиум уже прочитал (и черновики).",
+                  "Свежая карточка — по ключу (OPS-26) в поиске: она читается из t-boards "
+                  "в момент запроса. Сырые идеи (halfBaked) не берутся, пока владелец не даст ОК."),
         "knowledge": ("Собственная база знаний и карта проекта по связям.",
                       "Проверьте поиском, находится ли то, на чём консилиум должен "
                       "опираться: пустой ответ здесь = слепой консилиум. Граф ниже "
@@ -846,8 +837,6 @@ class Api:
         в спеке, интерфейсом нельзя было пользоваться, не читая спеку.
         """
         budget = self.cfg.get("models.cloud.budget", {}) or {}
-        writeback = self.cfg.get("outputs.notion_writeback", {}) or {}
-        forbidden = sorted(k for k, v in writeback.items() if not v)
         profiles = []
         cloud_models = {m for node in (self.cfg.get("models.cloud.providers", {}) or {}).values()
                         for m in (node.get("models") or [])}
@@ -868,12 +857,11 @@ class Api:
                 "cloud_calls_per_card": per_run if uses_cloud else 0,
             })
         steps = [
-            {"n": 1, "title": "Борд синхронизируется сам",
-             "what": "Сервис notion-sync снимает карточки «Задач» и «Ошибок» каждые "
-                     f"{self.cfg.get('sources.notion.poll_interval_min', 15)} мин. "
-                     "Постановка живёт в Notion, здесь её копия.",
-             "who": "сервис", "tab": "cards", "cost": "бесплатно",
-             "op": "sync"},
+            {"n": 1, "title": "Карточка читается из t-boards по запросу",
+             "what": "Синка нет: ключ карточки (OPS-26) в поиске, council_cards или "
+                     "`run --card` читают её из t-boards в момент вызова. Постановка "
+                     "живёт на доске, здесь её копия на момент чтения.",
+             "who": "владелец или агент", "tab": "cards", "cost": "4–5 запросов к t-boards"},
             {"n": 2, "title": "База знаний и граф — перед первым прогоном",
              "what": "Без индекса консилиум работает без улик: капсула собирается из "
                      "кода, правил и спек, а граф отвечает на «куда ведёт задача».",
@@ -897,11 +885,11 @@ class Api:
                      "обучения: без вердиктов система не отличает удачный прогон от "
                      "бесполезного.",
              "who": "владелец", "tab": "feed", "cost": "бесплатно"},
-            {"n": 6, "title": "Результат уходит в Notion",
-             "what": "Сначала «Показать, что уйдёт» (dry-run), потом «Записать». "
-                     "Статус карточки и снятие Half-baked консилиуму не отданы — "
-                     "это решает человек.",
-             "who": "владелец", "tab": "overview", "cost": "бесплатно", "op": "emit"},
+            {"n": 6, "title": "Результат — здесь, не на доске",
+             "what": "На доску консилиум не пишет: итог и предложенный переход видны в "
+                     "прогоне. Перенос карточки и снятие halfBaked — человек или агент "
+                     "под арендой t-boards.",
+             "who": "владелец", "tab": "feed", "cost": "бесплатно"},
             {"n": 7, "title": "План на рабочее окно",
              "what": f"Планировщик пересобирает план каждые "
                      f"{self.cfg.get('planner.rebuild_minutes', 30)} мин: жёсткие "
@@ -918,14 +906,14 @@ class Api:
         ]
         glossary = [
             ("проработка", "разбор одной карточки консилиумом: предложения, рецензии, "
-                           "арбитраж, проверка. Результат — блок в карточке Notion, а не "
-                           "изменение кода."),
+                           "арбитраж, проверка. Результат — прогон в базе консилиума, а не "
+                           "изменение кода и не запись на доску."),
             ("вердикт", "решение владельца по прогону. Единственный источник обучения — "
                         "прогон без вердикта для системы не существует."),
             ("воздержание", "консилиум отказался отвечать: не хватило улик, участники не "
                             "сошлись или ответ не прошёл проверку. Это штатный исход, а не "
                             "сбой — цена ошибки выше цены молчания."),
-            ("Half-baked idea", "пометка владельца на карточке: постановка сырая. Такие "
+            ("halfBaked", "пометка владельца на карточке: постановка сырая. Такие "
                                 "карточки идут отдельным треком и в работу без явного «да» "
                                 "не берутся."),
             ("окно подписки", f"скользящие {budget.get('window_hours', 0)} ч, за которые "
@@ -954,13 +942,12 @@ class Api:
             "profiles": profiles,
             "glossary": [{"term": t, "text": x} for t, x in glossary],
             "owner_only": [
-                "менять статус карточки в Notion (консилиум предлагает, решает человек)",
-                "снимать «Half-baked idea»",
+                "переносить карточку на доске t-boards (консилиум предлагает, решает человек)",
+                "снимать halfBaked",
                 "ставить вердикт по прогону",
-                "разрешать запись в Notion (по умолчанию dry-run)",
                 "включать облако и платный контур: оба открываются явным числом в конфиге",
             ],
-            "forbidden_writeback": forbidden,
+            "forbidden_writeback": [],
             "tabs": {name: {"what": what, "do": todo}
                      for name, (what, todo) in self.TAB_DOC.items()},
         }
@@ -1005,8 +992,8 @@ class Api:
             providers.append(entry)
 
         ollama = ollama_mod.build(self.cfg)
-        notion_key = self.cfg.notion_key()
-        keyfile = self.cfg.path_of("sources.notion.key_file")
+        from review_api import _tboards_state
+        import tboards
 
         headroom_url = str(self.cfg.get("models.cloud.headroom.url",
                                         "http://127.0.0.1:8787")).rstrip("/")
@@ -1029,15 +1016,8 @@ class Api:
                 "providers": list(self.cfg.get("models.cloud.headroom.providers", []) or []),
                 "dashboard": headroom_url + "/dashboard",
             },
-            "notion": {
-                "has_key": bool(notion_key),
-                "key_file": str(self.cfg.get("sources.notion.key_file")),
-                "key_file_exists": keyfile.is_file(),
-                "key_file_mode": (oct(keyfile.stat().st_mode & 0o777)
-                                  if keyfile.is_file() else None),
-                "databases": {k: v.get("id") for k, v in
-                              (self.cfg.get("sources.notion.databases", {}) or {}).items()},
-            },
+            # Ключ не отдаётся ни целиком, ни хвостом: только есть ли он, продукт и почему нет.
+            "tboards": {**_tboards_state(), "key_file": tboards.KEY_FILE_REL},
             "local_sources": {
                 "rag_index": {"path": str(rag.relative_to(REPO_ROOT)) if rag.is_file()
                               else str(rag), "exists": rag.is_file()},
@@ -1541,17 +1521,10 @@ class Api:
         with self._store() as store:
             return learning_mod.decide_suggestion(store, int(suggestion_id), status)
 
-    # ── статусы Notion ───────────────────────────────────────────────────────
-    # Консилиум статусы не двигает (C4, rules/17 §6) — их двигает человек. Отсюда две
-    # разные операции: автоматический writeback (`status_changes`, выключен) и явное
-    # действие владельца из UI. Второе разрешено, но с потолком «на ревью»: перевод в
-    # финальный статус остаётся ручным действием в самом Notion, чтобы UI консилиума
-    # не стал способом закрыть карточку мимо правила.
-    STATUSES = {
-        "tasks": ["задача от пользователя", "прожаренные явные задачи", "в работе",
-                  "на ревью"],
-        "bugs": ["открыто", "в работе", "на ревью"],
-    }
+    # ── статусы ──────────────────────────────────────────────────────────────
+    # Статус карточки консилиум не меняет (OPS-26): на доску t-boards он не пишет, карточку переносит агент
+    # под арендой или владелец. Пустые списки — UI не показывает выбор статуса.
+    STATUSES: dict[str, list[str]] = {"tasks": [], "bugs": []}
 
     # ── Настройки → «Модели и промпты» (bindings.py) ────────────────────────
     def _available_models(self) -> tuple[list[str], list[str]]:
@@ -1615,55 +1588,26 @@ class Api:
         log(f"промпт {res['name']} сохранён ({res['sha']})")
         return {"ok": True, **res}
 
-    def set_status(self, card_id: str, status: str) -> dict:
-        with self._store() as store:
-            card = store.get_card(card_id)
-            if not card:
-                return {"ok": False, "error": f"карточка {card_id} не в снапшоте"}
-            allowed = self.STATUSES.get(card["db"], [])
-            if status not in allowed:
-                return {"ok": False,
-                        "error": f"из UI доступны только: {', '.join(allowed)}. "
-                                 f"Финальный статус ставится вручную в Notion "
-                                 f"(.claude/rules/17-notion-board.md §6)"}
-            import notion as notion_mod
-            try:
-                client = notion_mod.build(self.cfg, dry_run=False)
-                # Имя свойства одинаково в обеих базах — Status (select).
-                client.call(f"/pages/{card_id}", "PATCH",
-                            {"properties": {"Status": {"select": {"name": status}}}})
-            except Exception as exc:                            # noqa: BLE001
-                return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-            store.x("UPDATE cards SET status = ? WHERE card_id = ?", (status, card_id))
-            store.log_notion_write("", card_id, "status", "Status",
-                                   card.get("status") or "", status, True)
-            store.event("status.changed", card_id, f"{card.get('status')} → {status}")
-        log(f"статус {card_id}: {card.get('status')} → {status}")
-        return {"ok": True, "status": status}
-
     # ── операции ─────────────────────────────────────────────────────────────
     # Шлюз умеет запускать ТОЛЬКО перечисленное здесь и ровно с этими аргументами.
     # Произвольной команды из UI нет и не будет: у шлюза нет авторизации (он живёт на
     # петле), и «выполни строку» превратило бы вкладку браузера в удалённый шелл.
     # Аргументы, которые UI всё же передаёт (окно плана), валидируются как даты/время.
     OPS = {
-        "sync":     ("Синхронизировать борд Notion", ["notion_sync.py", "--once"]),
         "reindex":  ("Переиндексировать базу знаний", ["context_service.py", "--once"]),
         "graph":    ("Собрать граф проекта", ["graph_build.py"]),
         "learning": ("Учесть вердикты и поискать дрейф рубрики", ["learning.py", "--once"]),
         "plan":     ("Собрать план (черновик)", ["planner_service.py", "--once"]),
         "plan_apply": ("Собрать план и записать", ["planner_service.py", "--once", "--apply"]),
-        "emit":     ("Показать, что уйдёт в Notion", ["emit.py", "--pending"]),
-        "emit_apply": ("Записать результаты в Notion", ["emit.py", "--pending", "--apply"]),
         "selftest": ("Самопроверки", ["selftest.py"]),
         "doctor":   ("Предполётная проверка", ["supervisor.py", "doctor"]),
         "council_start":   ("Запустить консилиум", ["supervisor.py", "start"]),
         "council_stop":    ("Остановить консилиум", ["supervisor.py", "stop"]),
         "council_restart": ("Перезапустить консилиум", ["supervisor.py", "restart"]),
     }
-    # Операции, которые меняют состояние снаружи (Notion) или процессное дерево.
+    # Операции, которые меняют файлы репозитория (план) или процессное дерево.
     # UI обязан спрашивать подтверждение — здесь это только пометка для интерфейса.
-    OPS_DESTRUCTIVE = {"emit_apply", "plan_apply", "council_stop", "council_restart"}
+    OPS_DESTRUCTIVE = {"plan_apply", "council_stop", "council_restart"}
 
     _jobs: dict = {}
     _jobs_lock = threading.Lock()
@@ -2086,9 +2030,6 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/settings":
                 return self._json(self.api.update_setting(
                     str(body.get("key") or ""), body.get("value")))
-            if route == "/api/status":
-                return self._json(self.api.set_status(
-                    str(body.get("card_id") or ""), str(body.get("status") or "")))
             if route == "/api/ops":
                 return self._json(self.api.run_op(str(body.get("name") or ""),
                                                   body.get("params") or {}))
@@ -2207,13 +2148,38 @@ def serve(cfg, host: str, port: int) -> int:
     return 0
 
 
+def get_once(cfg, path: str) -> int:
+    """Один GET без сокета: тот же `Handler.do_GET`, ответ — в stdout. Для MCP, когда шлюз не запущен (фона нет,
+    Р0 б): чтение прогонов, плана и знаний не должно зависеть от живого демона. Только `/api/…`."""
+    if not path.startswith("/api/"):
+        print(json.dumps({"error": "--get: только пути /api/…"}, ensure_ascii=False))
+        return 2
+
+    class _Once(Handler):
+        def __init__(self, request_path: str):              # без сокета: BaseHTTPRequestHandler не зовём
+            self.path, self.status, self.body = request_path, 0, b""
+
+        def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
+            self.status, self.body = code, body
+
+    Handler.api = Api(cfg)
+    Handler.review = ReviewApi(cfg)
+    once = _Once(path)
+    once.do_GET()
+    sys.stdout.write(once.body.decode("utf-8", "replace"))
+    return 0 if 200 <= once.status < 300 else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AI Council — HTTP-шлюз и UI ревью")
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
+    parser.add_argument("--get", metavar="PATH", help="один GET /api/… без сокета, ответ в stdout")
     args = parser.parse_args()
 
     cfg = config_mod.load(strict=False)
+    if args.get:
+        return get_once(cfg, args.get)
     host = args.host or cfg.get("gateway.host", "127.0.0.1")
     port = args.port or int(cfg.get("gateway.port", 8790))
     mimetypes.init()
