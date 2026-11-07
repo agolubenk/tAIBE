@@ -147,13 +147,6 @@
     "memory": ""
   },
   {
-    "id": "notion-comment",
-    "tool": "mcp__hub__notion_1mcp_notion-create-comment",
-    "pattern": ".",
-    "lesson": "Комментарий Notion не правится (нет entitlement). Время бери из `date` в том же вызове, ошибку исправляй новым комментарием.",
-    "memory": "reference_notion_mcp_entitlements.md"
-  },
-  {
     "id": "stale-binary",
     "tool": "Bash",
     "field": "command",
@@ -168,6 +161,21 @@
     "field": "command",
     "pattern": "{CMD}gh\\s+(?:-R\\s+\\S{1,200}\\s+|--repo[ =]\\S{1,200}\\s+)?pr\\s+merge\\b",
     "lesson": "Мёрж в main = деплой прода. Вливает только Контроль (роль release), по одному, `--match-head-commit <sha>` после кворума линз; если в PR только .md — `[skip ci]` в заголовке merge.",
+    "memory": ""
+  },
+  {
+    "id": "toolsearch-big-context",
+    "tool": "ToolSearch",
+    "pattern": "\\S",
+    "min_context": 100000,
+    "lesson": "Контекст больше 100K: ToolSearch меняет набор инструментов и часто переписывает в кэш всё окно по цене 2× входа — при 800K около $6 (07.11: 12 % денег, при окне больше 300K — каждый второй вызов). Норма d-f63b-economy-0711: инструменты — в начале сессии, пока окно меньше 100K, одним select:a,b,c; дальше — только если без инструмента задачу не сделать, и все такие инструменты одним вызовом.",
+    "memory": ""
+  },
+  {
+    "id": "long-wait",
+    "tool": "Monitor|ScheduleWakeup",
+    "pattern": "\"timeout_ms\":\\s{0,3}\"?(?:330000[1-9]|33000[1-9]\\d|3300[1-9]\\d{2}|330[1-9]\\d{3}|33[1-9]\\d{4}|3[4-9]\\d{5}|[4-9]\\d{6}|[1-9]\\d{7})|\"persistent\":\\s{0,3}true|\"delaySeconds\":\\s{0,3}\"?(?:330[1-9]|33[1-9]\\d|3[4-9]\\d{2}|[4-9]\\d{3}|[1-9]\\d{4})",
+    "lesson": "Ожидание дольше 55 минут: кэш живёт час, и ход после паузы перепишет всё окно по цене 2× входа (замер 07.11: паузы больше часа — 4,1 % денег). Норма d-f63b-economy-0711: Monitor — timeout_ms не больше 3300000 и без persistent, ScheduleWakeup — не больше 3300 с; по таймауту — один голый перевзвод, без oq_list, work_state и текста.",
     "memory": ""
   }
 ]

@@ -25,6 +25,13 @@ def dry_run(env_extra):
 
 
 failed = 0
+# CLAUDE_BIN reaches the launcher (a Terminal window starts with a clean environment); unset -> no export line.
+for env_extra, want in [({"CLAUDE_BIN": "/opt/x y/claude-nongene"}, "export CLAUDE_BIN='/opt/x y/claude-nongene'"),
+                        ({"CLAUDE_BIN": ""}, None)]:
+    got = [ln for ln in dry_run(env_extra).stdout.splitlines() if ln.startswith("export CLAUDE_BIN=")]
+    if got != ([want] if want else []):
+        failed += 1
+        print("FAIL: CLAUDE_BIN in launcher", env_extra, "->", got)
 proc = dry_run({"CLAUDE_CODE_CHILD_SESSION": "1", "CLAUDECODE": "1", "TAIBE_LINEAGE": "r.ab12"})
 lines = proc.stdout.splitlines()
 unset_at = next((i for i, ln in enumerate(lines) if ln.startswith("unset ") and "CLAUDE_CODE_CHILD_SESSION" in ln), None)

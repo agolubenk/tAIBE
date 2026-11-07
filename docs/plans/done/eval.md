@@ -11,5 +11,6 @@
 ### 2026-11
 
 - **V1–V6 — эволюция слоя без повторов** (2026-11-01 · `bee0d89` · без карточки, задача владельца в чате 01.11) — версии скиллов, правил и промптов — из git; бюджет L1 по ролям в CI; дубли в слое и handoff (`dupes.py`); слепой A/B версий (`ab.py`); «спросить один раз» (`ask_once.py`); фокус очереди с WIP по своей линии; линия потомков `TAIBE_LINEAGE`. `eval/evolve/README.md`. #decision
+- **F63B — нормы кэша окна и ночной замер** (2026-11-07 · `43da4d4f` (#105) · без карточки, решение `d-f63b-economy-0711`) — антигены `toolsearch-big-context` (ToolSearch при окне ≥ 100K) и `long-wait` (> 55 мин), тап нерва с `timeout_ms`; `context_audit.py --all`: причина холодного вызова, цена поколения по окну, строка в SE-49 каждую ночь. #perf #decision
 
 История механизмов П1–П11 до переноса — [`eval/pipeline/PIPELINE.md`](../../../eval/pipeline/PIPELINE.md) и [`eval/pipeline/R4-PLAN-2026-10-30.md`](../../../eval/pipeline/R4-PLAN-2026-10-30.md).

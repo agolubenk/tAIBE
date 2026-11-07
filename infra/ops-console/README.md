@@ -506,7 +506,7 @@ CLI — на сервере `docker compose … exec ops-console node server-dis
 
 | Команда | Что делает |
 |---|---|
-| `token-create <имя> <read,agent,owner>` | выпустить токен; показывается один раз |
+| `token-create <имя> <read,agent,owner> [продукты]` | выпустить токен; показывается один раз. Продукты через запятую, по умолчанию `hr-helper`; у `owner` не указывать — он видит все. Имя — подпись в журнале: разным клиентам — разные имена |
 | `token-list` · `token-revoke <id>` | токены без секретов · отозвать |
 | `merge-token` | токен GitHub для мёржей из stdin: fine-grained, только этот репозиторий, contents/pull_requests/actions на запись |
 | `import <папка>` | история артефакта (`checks/ items/ work/ *.json`); существующие документы не перезаписываются |

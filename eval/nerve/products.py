@@ -40,8 +40,8 @@ PRODUCT = ("slug", "title", "active", "repo_root", "product_tree", "team.project
            "github", "queue.source_roles", "queue.match")
 SHARED = ("default_product", "layer_home", "interval_seconds", "sources", "team.projects_root", "queue.url",
           "queue.secret_cmd", "queue.owner_items", "system", "budget", "circadian", "tap", "boards")
-REQUIRED = ("slug", "repo_root", "product_tree", "team.project_dir", "team.roles", "github.repo", "github.path_roles",
-            "github.lens_roles", "queue.source_roles")
+REQUIRED = ("slug", "repo_root", "product_tree", "team.project_dir", "team.roles", "team.active_hours", "github.repo",
+            "github.path_roles", "github.lens_roles", "queue.source_roles")
 # R-2 спеки M1: значение, похожее на ключ, в публичном git не живёт — только secret_cmd.
 # Длинный base64 — без «/» в начале: абсолютный путь из одних букв и «/» тоже длинный.
 SECRET_RE = re.compile(r"^(sk-|ghp_|github_pat_|xox[a-z]-|AKIA)|-----BEGIN|^eyJ[\w-]+\.[\w-]+\.[\w-]+$|^[A-Za-z0-9+][A-Za-z0-9+/]{39,}={0,2}$")

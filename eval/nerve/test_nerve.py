@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """Тесты Нерва на синтетике: python3 -I -m unittest discover -s supertick-eval/nerve -p 'test_*.py'"""
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,32 +32,137 @@ def wj(path, data):
         json.dump(data, f)
 
 
+LR, TEAM = CFG["github"]["lens_roles"], CFG["team"]["roles"]
+
+
+def pv(body):
+    return quorum.parse_verdict(body, LR, TEAM)
+
+
 class QuorumTest(unittest.TestCase):
     def test_parses_t3_verdict_styles(self):
-        self.assertEqual(quorum.parse_verdict("**Бэкенд: approve на 46b9f87e1.** План реализуем"),
-                         {"lens": "бэкенд", "verdict": "approve", "sha": "46b9f87e1"})
-        v = quorum.parse_verdict("**Линза DevOps (память, деплой, health), голова b55b246ec — approve.**")
-        self.assertEqual((v["lens"], v["verdict"], v["sha"]), ("devops", "approve", "b55b246ec"))
-        v = quorum.parse_verdict("\n\nQA: changes на 901feb3e5 — тест падает")
-        self.assertEqual((v["lens"], v["verdict"]), ("qa", "changes"))
-        self.assertIsNone(quorum.parse_verdict("Спасибо, посмотрю позже"))
+        self.assertEqual(pv("**Бэкенд: approve на 46b9f87e1.** План реализуем"),
+                         {"lens": "backend", "verdict": "approve", "sha": "46b9f87e1"})
+        v = pv("\n\nQA: changes на 901feb3e5 — тест падает")
+        self.assertEqual((v["lens"], v["verdict"]), ("coord", "changes"))
+        self.assertIsNone(pv("Спасибо, посмотрю позже"))
+
+    def test_old_approve_sha_still_counts(self):
+        """Прежний формат: «approve <sha>», «approve на <sha>», «approve @<sha>», «changes at <sha>»."""
+        self.assertEqual(pv("**Бэкенд: approve 46b9f87e1**"),
+                         {"lens": "backend", "verdict": "approve", "sha": "46b9f87e1"})
+        self.assertEqual(pv("Контроль: approve @46B9F87E1")["sha"], "46b9f87e1")
+        self.assertEqual(pv("Линза QA: changes at 901feb3e5")["verdict"], "changes")
+        self.assertEqual(pv("Линза QA: APPROVED на 901feb3e5")["verdict"], "approve")
+
+    def test_accept_on_sha_counts_as_approve(self):
+        """TB-84 ч. 2: вердикты линз Т3 — «ACCEPT на <sha>» (HR #481, #478, #477)."""
+        self.assertEqual(pv("**Линза «корректность и отказы» (роль 4) — ACCEPT на 1d66762204**"),
+                         {"lens": "backend", "verdict": "approve", "sha": "1d66762204"})
+        self.assertEqual(pv("## Линза «корректность и отказы»: **ACCEPT** на `2bc2b66ff`"),
+                         {"lens": "корректность и отказы", "verdict": "approve", "sha": "2bc2b66ff"})
+        cases = {
+            "**Линза «продукт и простота» — ACCEPT на голове `479bcdaf9`.**": "479bcdaf9",
+            "Линза «продукт и простота» (роль 2): **ACCEPT перенесён на `c6d61b7dd`**. Дельта сверена": "c6d61b7dd",
+            "**«Correctness and failures» lens (role 4): ACCEPT holds on a481926a2** (05.11)": "a481926a2",
+            "**HR #477 (#660), линза «продукт и простота» (роль 2, план): ACCEPT на 9e9b77ce9**": "9e9b77ce9",
+            "**Контроль (роль 5: безопасность · отказы · поставка) — ACCEPT на голове `479bcdaf9`**": "479bcdaf9",
+            "**Линза «дизайн» — ACCEPT с условиями на 1d66762204**: два нита": "1d66762204",
+            "**Линза «дизайн» — **ACCEPT** с оговорками на 1d66762204": "1d66762204",
+            "Линза корректности: approve with changes на 1d66762204": "1d66762204",
+            "Линза корректности, ACCEPT на 1d66762204": "1d66762204",
+            "Линза корректности — вердикт ACCEPT на 1d66762204": "1d66762204",
+        }
+        for body, sha in cases.items():
+            v = pv(body)
+            self.assertEqual((v["verdict"], v["sha"]), ("approve", sha), body)
+
+    def test_reject_counts_as_changes(self):
+        for body in ("**Линза «корректность и отказы» (роль 6) — REJECT на 54c85848b**",
+                     "Линза QA: reject на 54c85848b", "**Линза роли 1 (QA): CHANGES на 54c85848b**",
+                     "Линза QA — REJECTED на 54c85848b", "Линза QA — CHANGES REQUESTED на 54c85848b",
+                     "Линза QA — CHANGES_REQUESTED @54c85848b", "Линза QA — REQUEST CHANGES на 54c85848b",
+                     "Линза QA — REJECT (на 54c85848b)", "Линза QA — REJECT, голова 54c85848b",
+                     "Линза QA — REJECT на [54c85848b](https://github.com/x/y/commit/54c85848b)",
+                     "Линза QA — REJECT по голове 54c85848b", "Линза QA — REJECT на коммит 54c85848b"):
+            v = pv(body)
+            self.assertEqual((v["verdict"], v["sha"]), ("changes", "54c85848b"), body)
+
+    def test_non_lens_author_does_not_count(self):
+        """TB-84 ч. 1, повтор HR #478: строка автора PR со словом CHANGES и SHA головы — не вердикт."""
+        self.assertIsNone(pv("Голова **2bc2b66ff** — правка по линзе ресурсов Контроля 8c (CHANGES на 3b34254e2): "
+                             "таймауты шлюза 504 и 524 больше не повторяются"))
+        for body in ("Голова 2bc2b66ff — линза Контроля: CHANGES на 3b34254e2",
+                     "**Автор (роль 3, t3-frontend): ACCEPT на 2bc2b66ff**",
+                     "Авторская правка по линзе корректности: changes на 2bc2b66ff",
+                     "Ответ линзе «корректность и отказы»: changes на 2bc2b66ff учтены",
+                     "Ответ линзе «корректность и отказы»: changes на 2bc2b66ff",
+                     "Сводка линз: ACCEPT на 2bc2b66ff (3/3)", "Итог по линзам: ACCEPT на 2bc2b66ff",
+                     "Итог Контроля: ACCEPT на 2bc2b66ff", "Проверено автором: approve на 2bc2b66ff",
+                     "Спасибо: ACCEPT на 2bc2b66ff", "ACCEPT на 2bc2b66ff"):
+            self.assertIsNone(pv(body), body)
+
+    def test_hex_elsewhere_on_the_line_is_not_the_sha(self):
+        """SHA — только токен за словом вердикта; SHA до слова или дальше по строке не берётся."""
+        for body in ("**Линза «продукт и простота» (роль 1), голова 19fda2dc7: **ACCEPT**.",
+                     "**Линза DevOps (память, деплой, health), голова b55b246ec — approve.**",
+                     "Линза QA — ACCEPT, дельта 9e9b77ce9..1fd7daab0 сверена",
+                     "Линза 4 (ревью 1fd7daab0) — ACCEPT"):
+            self.assertIsNone(pv(body), body)
+        self.assertIsNone(pv("Линза QA: ACCEPT на 9e9b77ce9abcxyz"), "SHA — целый токен")
+
+    def test_retraction_and_negative_verdict_win(self):
+        """Отзыв и changes в одной строке с ACCEPT не дают approve (HR #471: «мой ACCEPT выше отменяю»)."""
+        v = pv("**Поправка к линзе корректности (роль 4) — CHANGES на 76183ab0d, мой ACCEPT выше отменяю**")
+        self.assertEqual((v["lens"], v["verdict"], v["sha"]), ("backend", "changes", "76183ab0d"))
+        v = pv("Линза «корректность и отказы» (роль 4): ACCEPT на 76183ab0d отменяю — CHANGES на 76183ab0d")
+        self.assertEqual((v["verdict"], v["sha"]), ("changes", "76183ab0d"))
+        v = pv("Поправка к линзе корректности (роль 4) — мой ACCEPT на 76183ab0d отменяю")
+        self.assertEqual((v["verdict"], v["sha"]), ("withdrawn", "76183ab0d"))
+        v = pv("Линза корректности (роль 4): CHANGES на 1111111 закрыты — ACCEPT на 76183ab0d")
+        self.assertEqual((v["verdict"], v["sha"]), ("approve", "76183ab0d"))
+        head = "76183ab0d" + "0" * 31
+        vs = [pv(f"Линза «{l}» (роль {n}) — ACCEPT на 76183ab0d") for l, n in (("qa", 1), ("продукт", 2), ("к", 4))]
+        self.assertTrue(quorum.quorum(vs, head, [])[0])
+        vs.append(pv("Поправка к линзе корректности (роль 4) — мой ACCEPT на 76183ab0d отменяю"))
+        self.assertFalse(quorum.quorum(vs, head, [])[0], "отозванный ACCEPT не считается")
+
+    def test_quoted_line_is_skipped(self):
+        """Ответ с цитатой: вердикт — первая строка вне «>»."""
+        body = "> **Линза «продукт и простота» — ACCEPT на 76183ab0d**\n\n**Линза «корректность» — CHANGES на 76183ab0d**"
+        self.assertEqual(pv(body)["verdict"], "changes")
+        self.assertIsNone(pv("> Линза QA: ACCEPT на 76183ab0d\n\nСогласен"))
+
+    def test_one_lens_under_two_labels_is_one_key(self):
+        """Подпись линзы меняется (HR #477, #471): номер роли и lens_roles дают один ключ."""
+        head = "76183ab0d" + "0" * 31
+        vs = [pv(x) for x in ("Линза корректности (роль 4): ACCEPT на 76183ab0d",
+                              "**Линза «корректность и отказы» (роль 4) — ACCEPT на 76183ab0d**",
+                              "## Продуктовая линза (роль 2) — ACCEPT на 76183ab0d",
+                              "**Линза «продукт и простота» — ACCEPT на 76183ab0d**")]
+        ok, approved, _, _ = quorum.quorum(vs, head, [])
+        self.assertEqual((ok, approved), (False, ["backend", "plan"]))
+
+    def test_odd_unicode_does_not_raise(self):
+        self.assertEqual(pv("Линза QA: changeſ на 76183ab0d")["verdict"], "changes")
+        self.assertIsNone(pv("Линза QA: approve на " + " *_`" * 20000 + "76183ab0d"), "строка режется до 500 знаков")
 
     def test_quorum_needs_three_lenses_on_head_and_no_changes(self):
         head = "46b9f87e1aaaabbbbcccc"
-        vs = [quorum.parse_verdict(f"{l}: approve на 46b9f87e1") for l in ("QA", "Бэкенд", "Контроль")]
+        vs = [pv(f"{l}: approve на 46b9f87e1") for l in ("QA", "Бэкенд", "Контроль")]
         self.assertTrue(quorum.quorum(vs, head, ["SUCCESS"])[0])
         self.assertFalse(quorum.quorum(vs[:2], head, [])[0])
-        old = [quorum.parse_verdict(f"{l}: approve на 1111111") for l in ("QA", "Бэкенд", "Контроль")]
+        old = [pv(f"{l}: approve на 1111111") for l in ("QA", "Бэкенд", "Контроль")]
         self.assertFalse(quorum.quorum(old, head, [])[0], "вердикт на старую голову не считается")
-        ch = vs + [quorum.parse_verdict("Безопасность: changes на 46b9f87e1 — секрет в логе")]
+        ch = vs + [pv("Линза «корректность и отказы»: changes на 46b9f87e1 — секрет в логе")]
         ok, _, changes, _ = quorum.quorum(ch, head, [])
         self.assertFalse(ok)
-        self.assertEqual(changes, ["безопасность"])
+        self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
 
     def test_later_verdict_of_a_lens_overrides(self):
         head = "abcdef1234"
-        vs = [quorum.parse_verdict(x) for x in (
+        vs = [pv(x) for x in (
             "QA: changes на abcdef1", "QA: approve на abcdef1", "Бэкенд: approve на abcdef1",
             "Контроль: approve на abcdef1")]
         self.assertTrue(quorum.quorum(vs, head, [])[0])
@@ -64,6 +173,7 @@ class QuorumTest(unittest.TestCase):
                          "frontend")
         self.assertEqual(quorum.author_role(["README.md"], pr), "coord")
         self.assertEqual(quorum.role_of_lens("линза devops", CFG["github"]["lens_roles"]), "release")
+        self.assertEqual(quorum.role_of_lens("backend", LR, TEAM), "backend", "ключ-роль — сама роль")
 
 
 class BudgetTest(unittest.TestCase):
@@ -170,13 +280,20 @@ class FakeCtx:
     def emit(self, key, kind, cls, to, text, src=""):
         return self.journal.emit(key, kind, cls, to, text, src)
 
+    peers = None
+    emit_account = emit
+
+    def for_item(self, _id, _product=None):
+        return self
+
 
 class FakeGh:
     """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
     REPO = CFG["github"]["repo"]
 
-    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"'):
+    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None):
         self.open_prs, self.merged, self.broken, self.etag = open_prs, set(merged), set(broken), etag
+        self.comments = comments or {}
         self.calls = []
 
     def __call__(self, cmd, stdin=None, timeout=30):
@@ -186,7 +303,8 @@ class FakeGh:
                 return 1, "HTTP/2.0 304 Not Modified\r\n\r\n", ""
             return 0, f"HTTP/2.0 200 OK\r\nEtag: {self.etag}\r\n\r\n" + json.dumps(self.open_prs), ""
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
-            return 0, "[]", ""
+            n = int(cmd[-1].split("/")[4])
+            return 0, json.dumps([{"id": i, "body": b} for i, b in enumerate(self.comments.get(n, []))]), ""
         if cmd[:3] == ["gh", "pr", "view"]:
             n = int(cmd[3])
             if "--repo" not in cmd or cmd[cmd.index("--repo") + 1] != self.REPO:
@@ -231,6 +349,30 @@ class GithubPollTest(unittest.TestCase):
         p = self.ctx.state["github"]["prs"]["458"]
         self.assertEqual((p["checks"], p["head"]), (["SUCCESS"], "a" * 40))
         self.assertIn("author", p)
+
+    def test_lens_accepts_reach_quorum_and_author_line_is_not_changes(self):
+        """TB-84, повтор HR #478: строка автора «Голова <sha> — … (CHANGES на <старая>)» раньше давала changes на голову."""
+        head = "2bc2b66ff" + "0" * 31
+        fake = FakeGh([_pr(478, head)], comments={478: [
+            "Голова **2bc2b66ff** — правка по линзе ресурсов Контроля 8c (CHANGES на 3b34254e2): таймауты",
+            "## Линза «продукт и простота»: **ACCEPT** на `2bc2b66ff`",
+            "**Линза «корректность и отказы» (роль 4) — ACCEPT на 2bc2b66ff**",
+            "**Контроль (роль 5: безопасность · отказы · поставка) — ACCEPT на голове `2bc2b66ff`**"]})
+        sources.run = fake
+        sources.poll_github(self.ctx)
+        kinds = [k for k, _ in self.kinds()]
+        self.assertNotIn("pr.changes", kinds)
+        self.assertIn("pr.quorum", kinds)
+        self.assertEqual(self.ctx.state["github"]["prs"]["478"]["changes_by"], [])
+
+    def test_new_head_after_changes_goes_to_the_lens_role(self):
+        sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
+        sources.poll_github(self.ctx)
+        self.assertEqual(self.ctx.state["github"]["prs"]["479"]["changes_by"], ["backend"])
+        sources.run = FakeGh([_pr(479, "b" * 40, "2026-11-04T11:00:00Z")], etag='W/"e2"')
+        sources.poll_github(self.ctx)
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.newhead"]
+        self.assertEqual([e["to"] for e in rec], [["backend"]])
 
     def test_stuck_merged_pr_is_reported_once_after_upgrade(self):
         # Состояние rev 1: #457 влит, но остался в prs; etag живой — без сброса 304 спрятал бы его навсегда.
@@ -479,6 +621,280 @@ class EmitTest(unittest.TestCase):
             for n in ("0", "7", "99"):
                 self.assertEqual(self.nerve(d, "tap", n, "--once").returncode, 2, f"emit не запишет «{n}»")
                 self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
+
+
+class ProductsTest(unittest.TestCase):
+    """OPS-25 Ф2a: один процесс, журнал и курсоры у каждого продукта, режим и пульс — общие."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = self.tmp.name
+        self.taibe = dict(CFG, active=True, github=dict(CFG["github"], repo="o/taibe"))
+        self.cfgs = {"hr-helper": CFG, "taibe": self.taibe}
+        self.keys = []
+        self.patches = [mock.patch.object(nerve, "STATE_DIR", self.d),
+                        mock.patch.object(nerve, "load_products", return_value=("hr-helper", self.cfgs)),
+                        mock.patch.object(nerve, "PRODUCT_POLLS", [("github", self.fake_github)])]
+        for p in self.patches:
+            p.start()
+        wj(os.path.join(self.d, "mode.json"), {"phase": "day"})
+        with open(os.path.join(self.d, "heartbeat"), "w") as f:
+            f.write(datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def fake_github(self, ctx):
+        for k in self.keys:
+            ctx.emit(k, "pr.new", NERVOUS, ["boards"], f"{ctx.cfg['github']['repo']} {k}", "github")
+
+    def tdir(self):
+        return os.path.join(self.d, "products", "taibe")
+
+    def tap(self, product, env_product=None):
+        out, err = io.StringIO(), io.StringIO()
+        env = {"TAIBE_PRODUCT": env_product} if env_product is not None else {"TAIBE_PRODUCT": ""}
+        with mock.patch.dict(os.environ, env), redirect_stdout(out), redirect_stderr(err):
+            nerve.cmd_tap(CFG, Namespace(role="boards", once=True, product=product))
+        return out.getvalue(), err.getvalue()
+
+    def test_seed_then_delivery_only_to_own_product(self):
+        open(os.path.join(self.d, "journal.jsonl"), "w").close()
+        self.tap("taibe")                       # курсоры с конца журнала
+        self.tap("hr-helper")
+        self.keys = ["k1"]
+        nerve.other_product_passes(True)       # первый проход нового продукта — seed: журнал есть, никого не будит
+        self.assertTrue(os.path.exists(os.path.join(self.tdir(), "journal.jsonl")))
+        self.assertEqual(self.tap("taibe")[0], "")
+        self.keys = ["k1", "k2"]
+        nerve.other_product_passes(True)       # следующий проход доставляет
+        out, _ = self.tap("taibe")
+        self.assertIn("o/taibe k2", out)
+        self.assertNotIn("k1", out)
+        self.assertEqual(self.tap("hr-helper")[0], "", "событие tAIBE не приходит в tap HR")
+
+    def test_seed_survives_emit_before_first_pass_and_failed_github(self):
+        """Ни ранний emit, ни сбой gh в первом проходе не отменяют seed: открытые PR не уходят будилками."""
+        with redirect_stdout(io.StringIO()):
+            nerve.cmd_emit(CFG, Namespace(role="coord", text="рано", kind="assign", product="taibe"))
+        self.tap("taibe")
+        calls = []
+
+        def flaky(ctx):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("gh недоступен")
+            self.fake_github(ctx)
+
+        self.keys = ["pr1", "pr2"]
+        with mock.patch.object(nerve, "PRODUCT_POLLS", [("github", flaky)]):
+            nerve.other_product_passes(True)   # сбой gh — seed остаётся
+            nerve.other_product_passes(True)   # первый удачный проход — seed
+        self.assertEqual(self.tap("taibe")[0], "")
+        self.keys = ["pr1", "pr2", "pr3"]
+        nerve.other_product_passes(True)
+        out, _ = self.tap("taibe")
+        self.assertIn("pr3", out)
+        self.assertNotIn("pr1", out)
+
+    def test_taibe_tap_sees_shared_pause(self):
+        """tap другого продукта видит паузу общего mode.json: нервное событие придержано."""
+        wj(os.path.join(self.d, "mode.json"), {"phase": "day", "pause": True})
+        self.tap("taibe")
+        nerve.other_product_passes(True)
+        self.keys = ["k9"]
+        nerve.other_product_passes(True)
+        self.assertEqual(self.tap("taibe")[0], "", "в паузе нервное событие придержано")
+        wj(os.path.join(self.d, "mode.json"), {"phase": "day"})
+        self.assertIn("k9 (придержано на время лимита)", self.tap("taibe")[0])
+
+    # ---------- Ф2b: события аккаунта, ответы владельца, транскрипты worktree ----------
+
+    def peered(self, seeded=True):
+        os.makedirs(self.tdir(), exist_ok=True)
+        if seeded:
+            wj(os.path.join(self.tdir(), "state.json"), {"seeded": "2026-11-07T10:00:00+00:00"})
+        ctx = nerve.Ctx(CFG, self.d)
+        nerve.attach_peers(ctx, True)
+        return ctx
+
+    def records(self, product=None):
+        path = os.path.join(self.tdir() if product == "taibe" else self.d, "journal.jsonl")
+        return read_from(path, 0)[0] if os.path.exists(path) else []
+
+    def test_account_events_reach_every_product(self):
+        """R-5: одно событие — в оба журнала с тем же ключом; у tAIBE budget.warn и limit.hit — только coord,
+        limit.resume — живые роли tAIBE; роли HR — как раньше."""
+        ctx = self.peered()
+        with mock.patch.object(sources, "active_roles", return_value=["boards", "coord"]):
+            ctx.emit_account("budget:warn:x", "budget.warn", NERVOUS, ["coord", "backend"], "окно 80 %", "budget")
+            ctx.emit_account("limit:hit:y", "limit.hit", NERVOUS, ["coord"], "лимит", "budget")
+            ctx.emit_account("limit:resume:y", "limit.resume", NERVOUS, ["coord", "frontend"], "лимит снят", "budget")
+        hr = {r["kind"]: r["to"] for r in self.records()}
+        tb = {r["kind"]: (r["to"], r["key"]) for r in self.records("taibe")}
+        self.assertEqual(hr["budget.warn"], ["backend", "coord"])
+        self.assertEqual(hr["limit.resume"], ["coord", "frontend"])
+        self.assertEqual(tb["budget.warn"], (["coord"], "budget:warn:x"))
+        self.assertEqual(tb["limit.hit"][0], ["coord"])
+        self.assertEqual(tb["limit.resume"][0], ["boards", "coord"])
+
+    def test_account_event_to_unseeded_product_wakes_nobody(self):
+        ctx = self.peered(seeded=False)
+        ctx.emit_account("budget:warn:z", "budget.warn", NERVOUS, ["coord"], "окно 80 %", "budget")
+        self.assertEqual([r["to"] for r in self.records("taibe")], [[]], "до seed продукт никого не будит")
+
+    def test_poll_budget_fans_out_through_emit_account(self):
+        """Бюджет считает аккаунт один раз (проход по умолчанию) и раздаёт событие продуктам."""
+        ctx = self.peered()
+        st = {"waves": [], "limit": None}
+        ts = datetime(2026, 10, 28, 10, 52, tzinfo=MSK)
+        ctx.tz = MSK
+        actions._on_limit(ctx, st, budget.Meter({}), ts, "You've hit your session limit · resets 2:40pm (Europe/Minsk)")
+        self.assertEqual([r["kind"] for r in self.records("taibe")], ["limit.hit"])
+        self.assertEqual([r["kind"] for r in self.records()], ["limit.hit"])
+
+    def test_owner_answer_routed_by_item_id(self):
+        """R-6: ответ на пункт с `-taibe-` — в журнал tAIBE по его правилам ролей; без метки — продукту по умолчанию;
+        стоп владельца — во все журналы."""
+        self.taibe["queue"] = dict(CFG["queue"], match="-taibe-", source_roles=[["boards-x", "boards"]])
+        ctx = self.peered()
+        self.assertIs(ctx.for_item("m-taibe-79"), ctx.peers["taibe"])
+        self.assertIs(ctx.for_item("m-465"), ctx)
+        items = [{"id": "m-taibe-79", "data": {"kind": "merge", "source": "boards-x"}},
+                 {"id": "m-465", "data": {"kind": "merge", "source": "Координатор"}},
+                 {"id": "i-1", "data": {"kind": "inbox", "inbox": {"text": "СТОП, откатить", "urgency": "now"}}}]
+        checks = [{"id": "m-taibe-79", "data": {"done": True, "at": "2026-11-07T10:00:00Z"}},
+                  {"id": "m-465", "data": {"done": True, "at": "2026-11-07T10:01:00Z"}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            sources.poll_queue(ctx)
+        tb = [(r["kind"], r["to"]) for r in self.records("taibe")]
+        hr = [(r["kind"], r["to"]) for r in self.records()]
+        self.assertIn(("owner.answer", ["boards"]), tb)
+        self.assertNotIn("m-465", " ".join(r["text"] for r in self.records("taibe")))
+        self.assertIn(("owner.answer", ["coord"]), hr)
+        self.assertNotIn("m-taibe-79", " ".join(r["text"] for r in self.records()))
+        self.assertIn("owner.stop", [k for k, _ in tb])
+        self.assertIn("owner.stop", [k for k, _ in hr])
+        self.assertNotIn("owner.inbox", [k for k, _ in tb], "R-7: входящее — одному coord продукта по умолчанию")
+
+    def test_failing_peer_does_not_break_default_events(self):
+        """Линза 1: сбой журнала продукта — в его errors; событие и состояние продукта по умолчанию — как без продуктов."""
+        ctx = self.peered()
+        broken = ctx.peers["taibe"]
+        broken.emit = mock.Mock(side_effect=OSError("диск"))
+        self.assertTrue(ctx.emit_account("limit:hit:q", "limit.hit", NERVOUS, ["coord"], "лимит", "budget"))
+        self.assertEqual([r["kind"] for r in self.records()], ["limit.hit"])
+        self.assertIn("route", broken.state["errors"])
+        items = [{"id": "m-taibe-1", "data": {"kind": "merge", "source": "x"}},
+                 {"id": "m-2", "data": {"kind": "merge", "source": "Координатор"}}]
+        checks = [{"id": "m-taibe-1", "data": {"done": True, "at": "2026-11-07T10:00:00Z"}},
+                  {"id": "m-2", "data": {"done": True, "at": "2026-11-07T10:01:00Z"}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            sources.poll_queue(ctx)
+        self.assertIn("m-2", " ".join(r["text"] for r in self.records()), "обход очереди не остановился")
+
+    def test_reactivation_is_a_new_seed(self):
+        """Линза 1: выключенный продукт теряет отметку seed — включение заново не отдаёт накопленное будилками."""
+        self.peered()
+        self.taibe["active"] = False
+        ctx = nerve.Ctx(CFG, self.d)
+        nerve.attach_peers(ctx, True)
+        self.assertEqual(ctx.peers, {})
+        self.taibe["active"] = True
+        ctx = nerve.Ctx(CFG, self.d)
+        nerve.attach_peers(ctx, True)
+        self.assertFalse(ctx.peers["taibe"].deliver, "после простоя — снова seed")
+
+    def test_item_product_field_wins_over_id(self):
+        """Мост: продукт пункта выбирает владелец (поле `product` документа, v2-lite) — оно важнее метки в id;
+        входящее с продуктом — coord этого продукта и стоп только туда."""
+        ctx = self.peered()
+        self.assertIs(ctx.for_item("s-set-control-b1-0711", "taibe"), ctx.peers["taibe"])
+        self.assertIs(ctx.for_item("d-taibe-m1m2-0411", "hr-helper"), ctx)
+        items = [{"id": "i-2", "product": "taibe",
+                  "data": {"kind": "inbox", "inbox": {"text": "стоп", "urgency": "now"}}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else [], {})):
+            sources.poll_queue(ctx)
+        self.assertEqual(sorted(r["kind"] for r in self.records("taibe")), ["owner.inbox", "owner.stop"])
+        self.assertEqual(self.records(), [], "входящее tAIBE не будит coord HR")
+
+    def test_broken_instances_keeps_last_good_products(self):
+        """Линза 1: сбой instances/ на проходе — событие release и продукты последней удачной загрузки."""
+        self.peered()
+        with mock.patch.object(nerve, "load_products", side_effect=ValueError("taibe.json: не JSON")):
+            ctx = nerve.Ctx(CFG, self.d)
+            with redirect_stderr(io.StringIO()):
+                nerve.attach_peers(ctx, True)
+        self.assertIn("taibe", ctx.peers)
+        self.assertTrue(any(r["kind"] == "nerve.error" for r in self.records()))
+
+    def test_map_roles_reads_worktree_transcripts(self):
+        """R-9: сессия в worktree пишет транскрипт в `<project_dir>-worktrees-*`."""
+        base = os.path.join(self.d, "proj")
+        wt = base + "-worktrees-fix-x"
+        for d, role in ((base, "coord"), (wt, "backend")):
+            os.makedirs(d)
+            with open(os.path.join(d, f"{role}.jsonl"), "w", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "user", "message": {"content": f"сборка Т3, ключ реестра {role}"}}) + "\n")
+        ctx = nerve.Ctx(dict(CFG, team=dict(CFG["team"], project_dir=base, roles=["coord", "backend"])), self.d)
+        self.assertEqual(sources.active_roles(ctx), ["backend", "coord"])
+
+    def test_broken_instances_keeps_default_tap_alive(self):
+        with mock.patch.object(nerve, "load_products", side_effect=ValueError("taibe.json: не JSON")):
+            open(os.path.join(self.d, "journal.jsonl"), "w").close()
+            _, err = self.tap(None)
+            self.assertIn("instances/ не читается", err)
+            with self.assertRaises(SystemExit):
+                self.tap("taibe")
+            ctx = nerve.Ctx(CFG, self.d)
+            nerve.run_products(ctx, True)
+        recs, _ = read_from(os.path.join(self.d, "journal.jsonl"), 0)
+        self.assertTrue(any(r["kind"] == "nerve.error" and "instances/" in r["text"] for r in recs))
+
+    def test_emit_to_inactive_product_refused(self):
+        self.taibe["active"] = False
+        with redirect_stderr(io.StringIO()):
+            rc = nerve.cmd_emit(CFG, Namespace(role="coord", text="x", kind="assign", product="taibe"))
+        self.assertEqual(rc, 2)
+        self.assertFalse(os.path.exists(os.path.join(self.tdir(), "journal.jsonl")))
+
+    def test_inactive_product_is_not_polled(self):
+        self.taibe["active"] = False
+        self.keys = ["k1"]
+        nerve.other_product_passes(True)
+        self.assertFalse(os.path.exists(self.tdir()))
+
+    def test_product_from_env_and_fallback_line(self):
+        os.makedirs(self.tdir())
+        open(os.path.join(self.tdir(), "journal.jsonl"), "w").close()
+        open(os.path.join(self.d, "journal.jsonl"), "w").close()
+        _, err = self.tap(None, env_product="taibe")
+        self.assertEqual(err, "")
+        self.assertTrue(os.path.exists(os.path.join(self.tdir(), "tap-boards.json")))
+        _, err = self.tap(None)
+        self.assertIn("продукт по умолчанию hr-helper", err)
+        self.assertTrue(os.path.exists(os.path.join(self.d, "tap-boards.json")))
+
+    def test_emit_writes_to_product_journal(self):
+        with redirect_stdout(io.StringIO()):
+            nerve.cmd_emit(CFG, Namespace(role="coord", text="первая карточка", kind="assign", product="taibe"))
+        recs, _ = read_from(os.path.join(self.tdir(), "journal.jsonl"), 0)
+        self.assertEqual([r["text"] for r in recs], ["первая карточка"])
+        self.assertFalse(os.path.exists(os.path.join(self.d, "journal.jsonl")))
+
+    def test_unknown_product_refused(self):
+        with self.assertRaises(SystemExit):
+            nerve.resolve_product(CFG, Namespace(product="nope"))
+
+    def test_heartbeat_from_file(self):
+        with open(os.path.join(self.d, "heartbeat"), "w") as f:
+            f.write("2026-11-07T00:00:00+00:00")
+        wj(os.path.join(self.d, "state.json"), {"heartbeat": "old"})
+        self.assertEqual(nerve.read_heartbeat(), "2026-11-07T00:00:00+00:00")
+        os.remove(os.path.join(self.d, "heartbeat"))
+        self.assertEqual(nerve.read_heartbeat(), "old", "демон старее — пульс из state.json")
 
 
 class RoleNumberingTest(unittest.TestCase):

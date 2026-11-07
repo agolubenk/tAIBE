@@ -49,7 +49,7 @@ def _done_runs(store, limit: int = 0) -> list[dict]:
 
 def owner_label(run: dict) -> str:
     """Согласие владельца: applied — согласен с переходом, rejected — нет, иначе неизвестно."""
-    return {"applied": "agree", "rejected": "disagree"}.get(run.get("transition_state") or "", "")
+    return {"applied": "agree", "approved": "agree", "rejected": "disagree"}.get(run.get("transition_state") or "", "")
 
 
 def agent_stats(store, limit: int = 0) -> dict:

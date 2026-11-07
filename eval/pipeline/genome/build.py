@@ -65,7 +65,7 @@ def hooks(python, reflex=None):
         'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': now}]}],
         'PreToolUse': [
             {'matcher': 'Write|SendMessage|mcp__owner-queue__.*', 'hooks': [{'type': 'command', 'command': now}]},
-            {'matcher': 'Bash|Monitor|mcp__owner-queue__.*|mcp__hub__notion_1mcp_notion-create-comment',
+            {'matcher': 'Bash|Monitor|ToolSearch|ScheduleWakeup|mcp__owner-queue__.*',
              'hooks': [{'type': 'command', 'command': antigen}]},
         ],
     }

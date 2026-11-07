@@ -54,6 +54,10 @@ describe('отметка автопередачи: PUT/GET /relay', () => {
   it('читатель отмечаться не может; имя сессии и id проверяются (400 — как у всех тел parseBody)', async () => {
     expect((await call(reader, 'PUT', '/relay', { session: 'hr-helper-v2-43' })).status).toBe(403)
     expect((await call(agent, 'PUT', '/relay', { session: 'имя с пробелом' })).status).toBe(400)
+    // Линия поколения 30 (152 символа) — проходит; длиннее предела (1000) — нет.
+    const line = 'r' + Array.from({ length: 30 }, (_, i) => '.' + String(i).padStart(4, 'a')).join('')
+    expect((await call(agent, 'PUT', '/relay', { session: line })).status).toBe(200)
+    expect((await call(agent, 'PUT', '/relay', { session: 'r.' + 'a'.repeat(1001) })).status).toBe(400)
     expect((await call(agent, 'PUT', '/relay', { session: 'hr-helper-v2-43', relayed: ['__proto__'] })).status).toBe(400)
     expect((await call(agent, 'PUT', '/relay', { session: 'hr-helper-v2-43', relayed: ['a b'] })).status).toBe(400)
     // Имя сессии — ключ объекта настройки: служебное имя не проходит (ревью #324, п. 7).
@@ -85,7 +89,7 @@ describe('отметка автопередачи: PUT/GET /relay', () => {
   })
 })
 
-describe('проход автопередачи (relayPass в owner-queue-mcp/server.mjs)', () => {
+describe('проход автопередачи (relayPass в owner-queue-mcp/relay.mjs, реэкспорт из server.mjs)', () => {
   type Doc = { id: string; data: Record<string, unknown> }
   let relayPass: (items: Doc[], checks: Doc[], relayed: Record<string, string>, now: number, first: boolean) => { lines: string[]; sent: string[]; old: number }
 

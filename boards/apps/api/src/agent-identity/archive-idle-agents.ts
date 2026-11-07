@@ -13,11 +13,11 @@ import db, { schema } from "../database";
 import { revokeUserConnections } from "../ws";
 import { AGENT_IDLE_ARCHIVE_MS } from "./agent-limits";
 
-// The most one run archives; about eight agents appear a day, so an hourly
-// run stays far below it and a backlog drains over the next runs.
+// The most one run archives; about eight agents appear an hour (TB-100), so an
+// hourly run stays far below it and a backlog drains over the next runs.
 const BATCH = 200;
 
-// TB-74: an agent nobody has used for a day goes to the archive, so finished
+// TB-74: an agent nobody has used for 5 hours goes to the archive, so finished
 // sessions stop holding places under the owner's cap. Its cards, comments and
 // journal stay under its name, as when the owner disables it; its keys and
 // sessions go. It comes back by itself when its session asks for a key again.

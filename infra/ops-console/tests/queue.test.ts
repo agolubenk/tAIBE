@@ -197,6 +197,83 @@ describe('входящие из Telegram (kind: inbox)', () => {
     expect((await bearer(agent).patch('/db/checks/i-stale', { data: { agentStatus: 'taken', agentBy: 'hr-helper-v2-44' } })).status).toBe(200)
   })
 
+  it('уход без наследника: держатель отпускает захват — снимается имя, статус и заметка остаются; чужая сессия отпустить не может', async () => {
+    await bearer(owner).put('/db/items/i-release', { data: inbox() })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-release', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentNote: 'начал', agentBy: 'r.ab12' })).status).toBe(200)
+    expect((await st({ agentBy: 'r.zz99' }, { release: true })).status).toBe(409)
+    const rel = await st({ agentNote: 'ухожу без наследника', agentBy: 'r.ab12' }, { release: true })
+    expect(rel.status).toBe(200)
+    expect(rel.json.data.agentBy).toBeUndefined()
+    expect(rel.json.data.agentStatus).toBe('doing')
+    expect(rel.json.data.agentNote).toBe('ухожу без наследника')
+    expect((await st({ agentStatus: 'taken', agentBy: 'r.zz99' })).status).toBe(200)
+    // Чужая сессия не стирает подпись и у пункта, который уже не держится (сделано).
+    expect((await st({ agentStatus: 'done', agentBy: 'r.zz99' })).status).toBe(200)
+    expect((await st({ agentBy: 'r.other' }, { release: true })).status).toBe(409)
+  })
+
+  it('release — только у входящих: у обычного пункта захвата нет, подпись agentBy не стирается (линза безопасности HR #521)', async () => {
+    await bearer(owner).put('/db/items/d-release', { data: decision })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/d-release', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentNote: 'начал', agentBy: 'r.ab12' })).status).toBe(200)
+    const rel = await st({ agentBy: 'r.zz99' }, { release: true })
+    expect(rel.status).toBe(422)
+    expect(rel.json.error).toContain('только у входящих')
+    expect((await bearer(owner).patch('/db/checks/d-release', { data: {}, release: true })).status).toBe(422)
+    expect((await bearer(agent).get('/db/checks/d-release')).json.data.agentBy).toBe('r.ab12')
+    // Ответ без пункта (опечатка в id, пункт удалён) — 404, а не «только у входящих».
+    expect((await bearer(agent).patch('/db/checks/nope-release', { data: { agentBy: 'r.ab12' }, release: true })).status).toBe(404)
+  })
+
+  it('линия длиннее 120 символов (поколение 30): захват и перехват наследником работают', async () => {
+    const line = 'r' + Array.from({ length: 30 }, (_, i) => '.' + String(i).padStart(4, 'a')).join('')
+    expect(line.length).toBeGreaterThan(120)
+    await bearer(owner).put('/db/items/i-long-line', { data: inbox() })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-long-line', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentBy: line })).status).toBe(200)
+    expect((await st({ agentStatus: 'doing', agentBy: `${line}.zz99` }, { takeover: line })).status).toBe(200)
+    expect((await bearer(agent).get('/db/checks/i-long-line')).json.data.agentBy).toBe(`${line}.zz99`)
+  })
+
+  it('передача линии: наследник по линии берёт пункт сразу, назвав держателя; не наследник — нет, как бы ни назвался', async () => {
+    await bearer(owner).put('/db/items/i-takeover', { data: inbox() })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-takeover', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentBy: 'r.ab12' })).status).toBe(200)
+    // Наследнику без takeover — подсказка; не наследнику — без подсказки, и takeover ему не помогает.
+    expect(String((await st({ agentStatus: 'taken', agentBy: 'r.ab12.cd34' })).json.error)).toMatch(/takeover: «r\.ab12»/)
+    const stranger = await st({ agentStatus: 'taken', agentBy: 'r.zz99' }, { takeover: 'r.ab12' })
+    expect(stranger.status).toBe(409)
+    expect(String(stranger.json.error)).not.toMatch(/takeover/)
+    // Любая длина сегмента (PID в spawn_session.sh), но граница сегмента — точка.
+    for (const by of ['r.ab12x.cd34', 'r.ab1.cd34', 'hr-helper-v2-70', 'r.AB12.cd34']) expect((await st({ agentStatus: 'taken', agentBy: by }, { takeover: 'r.ab12' })).status, by).toBe(409)
+    expect((await st({ agentStatus: 'taken', agentBy: 'r.ab12.cd34' }, { takeover: 'r.wrong' })).status).toBe(409)
+    const took = await st({ agentStatus: 'taken', agentBy: 'r.ab12.cd34' }, { takeover: 'r.ab12' })
+    expect((await bearer(owner).put('/db/items/i-pid', { data: inbox() })).status).toBe(200)
+    expect((await bearer(agent).patch('/db/checks/i-pid', { data: { agentStatus: 'doing', agentBy: 'r.12345' } })).status).toBe(200)
+    expect((await bearer(agent).patch('/db/checks/i-pid', { data: { agentStatus: 'taken', agentBy: 'r.12345.ab12' }, takeover: 'r.12345' })).status).toBe(200)
+    expect(took.status).toBe(200)
+    expect(took.json.data.agentBy).toBe('r.ab12.cd34')
+    // Теперь держит наследник: предок — уже чужая сессия, и сам его не перехватит (линия не продолжает наследника).
+    expect((await st({ agentStatus: 'doing', agentBy: 'r.ab12' }, { takeover: 'r.ab12.cd34' })).status).toBe(409)
+  })
+
+  it('держатель с именем вместо линии не наследуется: 12 ч или его собственный отпуск; захват без времени записи — не захват', async () => {
+    await bearer(owner).put('/db/items/i-legacy', { data: inbox() })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-legacy', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentBy: 'hr-helper-v2-70' })).status).toBe(200)
+    expect((await st({ agentStatus: 'taken', agentBy: 'hr-helper-v2-70.ab12' }, { takeover: 'hr-helper-v2-70' })).status).toBe(409)
+    // Ответ из импорта выгрузки — без agentAt: такой пункт больше не держится вечно.
+    await bearer(owner).put('/db/items/i-imported', { data: inbox() })
+    expect(await importDoc('checks', 'i-imported', { agentStatus: 'doing', agentBy: 'hr-helper-v2-70' }, 'import:test')).toBe('added')
+    expect((await bearer(agent).patch('/db/checks/i-imported', { data: { agentStatus: 'taken', agentBy: 'r.zz99' } })).status).toBe(200)
+    expect((await st({ agentStatus: 'doing', agentBy: '   ' })).status).toBe(422)
+    // Сохранённое пустое имя (старый MCP) не блокирует ответ владельца: проверяется присланное.
+    await bearer(owner).put('/db/items/i-blank', { data: inbox() })
+    expect(await importDoc('checks', 'i-blank', { agentStatus: 'doing', agentBy: ' ' }, 'import:test')).toBe('added')
+    expect((await bearer(owner).patch('/db/checks/i-blank', { data: { done: true, at: new Date().toISOString() } })).status).toBe(200)
+  })
+
   it('недопустимые значения — 422: неизвестный тип, важность у идеи, длинный текст, пустой текст, лишнее поле', async () => {
     expect((await bearer(owner).put('/db/items/i-bad-1', { data: inbox({ type: 'spam' }) })).status).toBe(422)
     expect((await bearer(owner).put('/db/items/i-bad-2', { data: inbox({ type: 'idea' }) })).status).toBe(422)
@@ -322,12 +399,12 @@ describe('открытые пункты: GET /db/items?open=1 — правило
 describe('области проверяются в каждом слое отдельно', () => {
   // Каждый слой должен держать свойство «читатель не пишет» сам: снятие проверки на маршруте или в хранилище
   // по отдельности должно ронять тест (мутационная проверка «Контроля», 19.10).
-  const reader0 = { name: 'reader', scopes: ['read' as const] }
+  const reader0 = { name: 'reader', scopes: ['read' as const], products: ['hr-helper'] }
 
   it('хранилище: запись и удаление без области agent/owner — 403 без HTTP', async () => {
     await expect(writeDoc(reader0, 'checks', 'x-store', {}, { merge: true })).rejects.toMatchObject({ status: 403 })
     await expect(writeDoc(reader0, 'items', 'x-store', decision, { merge: false })).rejects.toMatchObject({ status: 403 })
-    await expect(deleteDoc({ name: 'agent', scopes: ['agent'] }, 'items', 'd-test')).rejects.toMatchObject({ status: 403 })
+    await expect(deleteDoc({ name: 'agent', scopes: ['agent'], products: ['hr-helper'] }, 'items', 'd-test')).rejects.toMatchObject({ status: 403 })
   })
 
   it('маршрут: отказ по области раньше разбора тела и коллекции', async () => {

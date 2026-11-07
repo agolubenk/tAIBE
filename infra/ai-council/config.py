@@ -3,8 +3,8 @@
 
 Канон значений: config.toml + docs/specs/ai-council.md §11.
 
-Валидация не косметическая: часть инвариантов подсистемы (потолок 24 GB, запрет менять
-Status на борде, наличие Notion-ключа) выражается именно тут. Плохой конфиг должен падать
+Валидация не косметическая: часть инвариантов подсистемы (потолок 24 GB, нет записи наружу,
+источник карточек — t-boards) выражается именно тут. Плохой конфиг должен падать
 на старте с внятным текстом, а не проявляться галлюцинацией в проработанной карточке.
 """
 from __future__ import annotations
@@ -28,18 +28,14 @@ COUNCIL_DB_REL = ".claude/council/council.db"
 REPO_ROOT = host_root(require=COUNCIL_DB_REL)
 CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
-# Канонический словарь Module (docs/plans/notion-board.md). Новых опций не создаём.
+# Канонический словарь модулей (метки карточки t-boards ∩ этот список → cards.modules, корни кода в retrieval).
 CANONICAL_MODULES = {
     "backend", "frontend", "telegram", "extension", "mobile", "ai-tooling/mcp",
     "security/auth", "db/queues", "realtime", "ops/ci", "recruiting/ats",
     "huntflow", "hh.ru", "i18n", "ux", "docs",
 }
 
-# Статусы, которые консилиум обязан уметь читать, но не имеет права выставлять (C4).
-FORBIDDEN_WRITE_FIELDS = {"Status", "Half-baked idea"}
-
 VALID_PROFILES = {"adaptive", "fast", "deep"}
-VALID_HALF_BAKED = {"elaborate_only", "skip", "full"}
 
 # Провайдеры, для которых в cloud.py есть реализация транспорта. Список закрытый:
 # «просто добавь base_url» не работает — у Gemini другой протокол, не OpenAI-совместимый.
@@ -82,22 +78,6 @@ class Config:
         p = Path(raw)
         return p if p.is_absolute() else REPO_ROOT / p
 
-    # ── секреты ──────────────────────────────────────────────────────────────
-    def notion_key(self) -> str:
-        """env NOTION_API_KEY > key_file. Пустая строка = офлайн-режим, не исключение:
-        консилиум обязан подниматься без токена (мягкая деградация, как у GLM-клиента)."""
-        env = os.environ.get("NOTION_API_KEY", "").strip()
-        if env:
-            return env
-        key_file = self.path_of("sources.notion.key_file")
-        try:
-            return key_file.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-
-    def notion_enabled(self) -> bool:
-        return bool(self.get("sources.notion.enabled", False)) and bool(self.notion_key())
-
     # ── профили моделей ──────────────────────────────────────────────────────
     def roles(self, profile: str) -> dict:
         roles = self.get(f"models.roles.{profile}")
@@ -110,9 +90,6 @@ class Config:
 
     def is_large(self, model: str) -> bool:
         return model in self.large_models()
-
-    def writeback(self, op: str) -> bool:
-        return bool(self.get(f"outputs.notion_writeback.{op}", False))
 
     # ── облачный ярус ────────────────────────────────────────────────────────
     def cloud_enabled(self) -> bool:
@@ -391,6 +368,26 @@ def _validate_glm(cfg: Config) -> list[str]:
     return problems
 
 
+def _validate_tboards(cfg: Config) -> list[str]:
+    """Источник карточек t-boards (tboards.py). Записи наружу у консилиума нет: секции Notion удалены (R-084, OPS-26),
+    а их появление в конфиге — ошибка, а не молчаливо игнорируемая настройка."""
+    problems: list[str] = []
+    for gone in ("sources.notion", "outputs.notion_writeback"):
+        if cfg.get(gone) is not None:
+            problems.append(f"{gone}: Notion заморожен (R-084), источник карточек — t-boards ([sources.tboards])")
+    for key in ("review_slugs", "final_slugs"):
+        value = cfg.get(f"sources.tboards.{key}", [])
+        if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+            problems.append(f"sources.tboards.{key} — список slug колонок t-boards")
+    budget = cfg.get("sources.tboards.call_budget", 40)
+    if not isinstance(budget, int) or isinstance(budget, bool) or not 1 <= budget <= 95:
+        problems.append("sources.tboards.call_budget — целое 1..95 (лимит ключа t-boards — 100 запросов)")
+    weight = cfg.get("sources.tboards.bug_weight", 2.0)
+    if not isinstance(weight, (int, float)) or isinstance(weight, bool) or weight <= 0:
+        problems.append("sources.tboards.bug_weight — число > 0")
+    return problems
+
+
 def _validate(cfg: Config) -> list[str]:
     """Возвращает список проблем. Пустой список = конфиг пригоден."""
     problems: list[str] = []
@@ -446,35 +443,7 @@ def _validate(cfg: Config) -> list[str]:
     from knowledge_sources import validate as _validate_knowledge
     problems += _validate_knowledge(cfg)
 
-    hb = cfg.get("sources.notion.half_baked", "elaborate_only")
-    if hb not in VALID_HALF_BAKED:
-        problems.append(f"sources.notion.half_baked=`{hb}` — допустимо: {sorted(VALID_HALF_BAKED)}")
-
-    # C4: смена статуса и снятие half-baked запрещены правилами борда, не вкусом.
-    if cfg.writeback("status_changes"):
-        problems.append(
-            "outputs.notion_writeback.status_changes=true запрещено: .claude/rules/17-notion-board.md "
-            "§6 — потолок агента `на ревью`, финальный статус ставит человек"
-        )
-    if cfg.writeback("unset_half_baked"):
-        problems.append(
-            "outputs.notion_writeback.unset_half_baked=true запрещено: флаг снимает владелец "
-            "(docs/specs/ai-council.md §7а)"
-        )
-    if cfg.writeback("archive"):
-        problems.append(
-            "outputs.notion_writeback.archive=true запрещено: архивация необратима для "
-            "консилиума (нет обратной операции в его белом списке)"
-        )
-
-    for db in ("bugs", "tasks"):
-        if not cfg.get(f"sources.notion.databases.{db}.id"):
-            problems.append(f"sources.notion.databases.{db}.id не задан")
-
-    excluded = set(cfg.get("sources.notion.exclude.modules", []) or [])
-    unknown = excluded - CANONICAL_MODULES
-    if unknown:
-        problems.append(f"sources.notion.exclude.modules: неизвестные модули {sorted(unknown)}")
+    problems += _validate_tboards(cfg)
 
     ratio = cfg.get("planner.window.focus_ratio", 0.7)
     if not isinstance(ratio, (int, float)) or not 0 < ratio <= 1:
@@ -535,7 +504,7 @@ if __name__ == "__main__":
     print(f"конфиг:   {cfg.path}")
     print(f"hash:     {cfg.config_hash()}")
     print(f"профиль:  {cfg.get('models.profile')}")
-    print(f"Notion:   {'подключён' if cfg.notion_enabled() else 'офлайн (нет ключа)'}")
+    print("карточки: t-boards по запросу (ключ продукта — python3 infra/ai-council/tboards.py status)")
     if cfg.cloud_enabled():
         budget = cfg.get("models.cloud.budget", {}) or {}
         print(f"облако:   ВКЛЮЧЕНО — judge={cfg.cloud_role('judge')}, "
@@ -546,8 +515,7 @@ if __name__ == "__main__":
         print("облако:   выключено (models.cloud.enabled=false)")
     print(f"план:     {cfg.get('outputs.plan_file')} "
           f"[{cfg.get('outputs.plan_marker')}]")
-    allowed = [k for k, v in (cfg.get("outputs.notion_writeback") or {}).items() if v]
-    print(f"запись:   {', '.join(allowed) or '— всё выключено'}")
+    print("запись:   наружу — нет (итог в базе консилиума)")
     if problems:
         print("\nпроблемы:")
         for m in problems:

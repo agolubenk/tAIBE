@@ -277,7 +277,7 @@ function rvAgentModal(key) {
       <label class="field"><span>Доски</span><span class="row">${["bugs", "tasks"].map((b) => `<label><input type="checkbox" data-raboard="${b}" ${rvChecked((t.boards || []).includes(b))}> ${BOARD_RU[b]}</label>`).join("")}</span></label>
       <div class="sub">Ключевые слова (через запятую, подстрока в тексте карточки)</div>
       <textarea id="ra-kw" rows="2">${esc((t.keywords || []).join(", "))}</textarea>
-      <div class="sub">Модули Notion (через запятую)</div>
+      <div class="sub">Модули карточки (через запятую)</div>
       <input type="text" id="ra-mod" value="${esc((t.modules || []).join(", "))}" style="width:100%">
     </div>
     <div class="card"><h3>Тонкая настройка модели (локальная, Ollama) — пусто = наследовать</h3>${params}
@@ -327,12 +327,12 @@ async function rvBoards() {
       const p = s.boards[b];
       return `<div class="card" data-board="${b}"><h3>${BOARD_RU[b]} <span class="faint">статусы: ${esc(statuses[b].source)}</span></h3>
         <label class="field"><span>Ревьюить эту доску</span><input type="checkbox" data-bf="enabled" ${rvChecked(p.enabled)}></label>
-        <label class="field"><span>Статус «на ревью» (откуда берём)</span>${sel(b, "review_status", p.review_status, false)}</label>
+        <label class="field"><span>Статус «на ревью» (подпись; очередь — колонки ревью t-boards, sources.tboards.review_slugs)</span>${sel(b, "review_status", p.review_status, false)}</label>
         <label class="field"><span>Профиль доски</span><select data-bf="profile_id"><option value="">профиль по умолчанию</option>
           ${s.profiles.map((x) => `<option value="${esc(x.id)}" ${x.id === p.profile_id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Автозапуск<div class="faint">новые карточки в статусе ревью и изменённые исполнителем — сами в очередь (при синхронизации Notion)</div></span>
+        <label class="field"><span>Автозапуск<div class="faint">не действует: фона нет (Р0 б) — очередь обновляется кнопкой «Обновить из t-boards»</div></span>
           <input type="checkbox" data-bf="auto_run" ${rvChecked(p.auto_run)}></label>
-        <label class="field"><span>Комментарий с итогом на карточке</span><input type="checkbox" data-bf="post_comment" ${rvChecked(p.post_comment)}></label>
+        <label class="field"><span>Комментарий с итогом на карточке<div class="faint">не действует: на доску консилиум не пишет (AUTO-70 ч. 2)</div></span><input type="checkbox" data-bf="post_comment" ${rvChecked(p.post_comment)}></label>
         <label class="field"><span><b>Разрешить перевод статуса</b></span><input type="checkbox" data-bf="allow_transition" ${rvChecked(p.allow_transition)}></label>
         <label class="field"><span>Требовать подтверждение человека</span><input type="checkbox" data-bf="require_human_approval" ${rvChecked(p.require_human_approval)}></label>
         <label class="field"><span>ACCEPT →</span>${sel(b, "on_accept", p.on_accept)}</label>

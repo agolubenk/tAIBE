@@ -7,6 +7,11 @@
   python3 -I nerve.py tap <роль> [--once]     для Monitor роли: строка — только когда роли нужно действовать
   python3 -I nerve.py emit <роль> <текст>     нервное событие вручную (назначение от Координатора)
   python3 -I nerve.py status                  режим, окно 5 ч, лимит, пульс, ошибки источников
+  tap, emit, status: --product <slug> (иначе env TAIBE_PRODUCT, иначе продукт по умолчанию из instances/)
+
+Продукты (OPS-25, docs/plans/roadmap/nerve-per-product.md): один процесс. Проход продукта по умолчанию — как раньше,
+в state/; другие активные продукты (instances/<slug>.json, active: true) — GitHub своего репо, журнал и курсоры в
+state/products/<slug>/. Режим, пульс, cycle.json, бюджет и замок — общие, в state/.
 
 Журнал — state/journal.jsonl (append-only, ключ идемпотентности, запись до доставки). Режим — state/mode.json.
 Откат: launchctl bootout gui/$(id -u)/space.hrhelper.nerve; сессии возвращаются к правилу 3 TEAM-0.
@@ -14,7 +19,6 @@
 import argparse
 import fcntl
 import json
-import math
 import os
 import subprocess
 import sys
@@ -29,13 +33,10 @@ import sources  # noqa: E402
 from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
 
 STATE_DIR = os.environ.get("NERVE_STATE_DIR", os.path.join(HERE, "state"))
-# Awake time since boot, one count for every process: CLOCK_UPTIME_RAW on macOS, CLOCK_MONOTONIC on Linux.
-# Neither runs while the system sleeps — and neither does the daemon's time.sleep.
-AWAKE_CLOCK = getattr(time, "CLOCK_UPTIME_RAW", time.CLOCK_MONOTONIC)
-
-
-def awake_seconds():
-    return time.clock_gettime(AWAKE_CLOCK)
+from heartbeat import (AWAKE_CLOCK, MAX_CYCLE_SECONDS, as_obj, awake_seconds, awake_since_sleep,  # noqa: E402,F401
+                       cycle_seconds, finite_number, heartbeat_silent, heartbeat_stale_after, slept_cycle)
+import state_io  # noqa: E402
+from state_io import load_json, save_json  # noqa: E402,F401
 
 
 def wakes_on():
@@ -47,21 +48,6 @@ def wakes_on():
         return pipeline_settings.enabled("nerveWakes")
     except Exception:  # noqa: BLE001 — the watchdog never dies on settings
         return True
-
-
-def load_json(path, default):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
-
-
-def save_json(path, data):
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
 
 
 def local_tz():
@@ -80,10 +66,33 @@ class Ctx:
         self.journal = Journal(os.path.join(state_dir, "journal.jsonl"))
         self._token = None
         self.emitted = 0
+        self.peers = None              # {slug: Ctx} других активных продуктов (attach_peers), None — не собраны
 
     def emit(self, key, kind, cls, to, text, src=""):
         ok = self.journal.emit(key, kind, cls, to if self.deliver else [], text, src)
         self.emitted += ok
+        return ok
+
+    def for_item(self, item_id, product=None):
+        """R-6: продукт пункта очереди. Сначала поле `product` документа (владелец выбирает продукт пункта, v2-lite
+        #95): продукт из peers — он, иной — продукт по умолчанию. Поля нет — по `queue.match` (id содержит `-taibe-`)."""
+        peers = self.peers or {}
+        if product:
+            return peers.get(product, self)
+        for peer in peers.values():
+            match = (peer.cfg.get("queue") or {}).get("match")
+            if match and match in str(item_id):
+                return peer
+        return self
+
+    def emit_account(self, key, kind, cls, to, text, src=""):
+        """R-5: событие аккаунта — в журнал каждого активного продукта с тем же ключом. Роли продукта по умолчанию —
+        как раньше (плюс сессии в worktree, R-9); у другого продукта `limit.resume` — его живые роли, остальное —
+        только coord (будилка стоит денег). Сбой продукта не мешает ни продукту по умолчанию, ни остальным."""
+        ok = self.emit(key, kind, cls, to, text, src)
+        for peer in (self.peers or {}).values():
+            peer_emit(peer, lambda p: p.emit(key, kind, cls, (sources.active_roles(p) or ["coord"])
+                                             if kind == "limit.resume" else ["coord"], text, src))
         return ok
 
     def oq_token(self):
@@ -102,13 +111,24 @@ class Ctx:
         save_json(os.path.join(self.state_dir, "state.json"), self.state)
 
 
+def peer_emit(peer, write):
+    """Запись в журнал другого продукта: сбой — в его errors (`route`), исключение наружу не идёт (Ф2b, линза 1)."""
+    try:
+        return write(peer)
+    except Exception as e:  # noqa: BLE001
+        peer.state.setdefault("errors", {}).setdefault("route", {"since": now_iso()})["msg"] = \
+            f"{type(e).__name__}: {e}"[:200]
+        return False
+
+
 POLLS = [("github", sources.poll_github), ("queue", sources.poll_queue), ("system", sources.poll_system),
          ("budget", actions.poll_budget)]
 
 
-def one_pass(ctx):
+def one_pass(ctx, polls=None, finish=True):
+    """finish=False — пульс и запись state.json оставить run_products (одна запись ≈1 МБ за проход, а не две)."""
     errs = ctx.state.setdefault("errors", {})
-    for name, fn in POLLS:
+    for name, fn in (POLLS if polls is None else polls):
         if not ctx.cfg["sources"].get(name, True):
             continue
         try:
@@ -124,10 +144,144 @@ def one_pass(ctx):
                 ctx.emit(f"err:{name}:{errs[name]['since']}", "nerve.error", DIGEST, ["release"],
                          f"источник {name} не отвечает: {msg}", "nerve")
             errs[name]["msg"] = msg
+    if polls is not None:          # проход другого продукта: пульс и режим пишет только проход по умолчанию
+        ctx.save()
+        return
+    if not finish:
+        return
     ctx.state["heartbeat"] = now_iso()
     ctx.save()
     with open(os.path.join(ctx.state_dir, "heartbeat"), "w") as f:
         f.write(ctx.state["heartbeat"])
+
+
+# ---------- Продукты (OPS-25) ----------
+
+# Свой репо продукта. Очередь и бюджет аккаунта общие — их обходит проход по умолчанию и раздаёт продуктам (Ф2b).
+PRODUCT_POLLS = [("github", sources.poll_github)]
+
+
+def load_products():
+    """(default_slug, {slug: cfg}) из instances/; без instances/ — (None, {}) и один продукт из config.json."""
+    if not os.path.isdir(os.path.join(HERE, "..", "..", "instances")):
+        return None, {}
+    import products as P
+    shared, items = P.load()
+    return shared["default_product"], {slug: P.config_for(slug, shared, items) for slug in items}
+
+
+def product_state(slug, default):
+    import products as P
+    return P.product_dir(slug, STATE_DIR, default)
+
+
+_LAST_PRODUCTS = []      # последняя удачная загрузка instances/: сбой файла не отрезает продукты от событий (линза 1)
+
+
+def peer_contexts(deliver, loaded=None):
+    """{slug: Ctx} активных продуктов, кроме продукта по умолчанию; сбой загрузки instances/ — исключение вызывающему.
+    R-4: seed — пока нет отметки «seeded», а не пока нет файла журнала: emit до первого прохода или сбой gh в первом
+    проходе иначе отдали бы все открытые PR будилками. Отметка — только после прохода без сбоя GitHub. Выключенный
+    продукт отметку теряет: повторное включение — снова seed, накопленное за простой будилками не уходит."""
+    default, cfgs = loaded or load_products()
+    _LAST_PRODUCTS[:] = [(default, cfgs)]
+    peers = {}
+    for slug, pcfg in cfgs.items():
+        if slug == default:
+            continue
+        pdir = product_state(slug, default)
+        if pcfg.get("active") is not True:
+            _unseed(pdir)
+            continue
+        os.makedirs(pdir, exist_ok=True)
+        open(os.path.join(pdir, "journal.jsonl"), "a").close()
+        ctx = Ctx(pcfg, pdir)
+        ctx.deliver = deliver and bool(ctx.state.get("seeded"))
+        peers[slug] = ctx
+    return peers
+
+
+def _unseed(pdir):
+    path = os.path.join(pdir, "state.json")
+    if os.path.exists(path):
+        st = load_json(path, {})
+        if st.pop("seeded", None):
+            save_json(path, st)
+
+
+def attach_peers(ctx, deliver):
+    """Контексты других продуктов — до прохода по умолчанию: ему писать в их журналы события аккаунта и ответы (Ф2b).
+    Сбой instances/ — событие release в журнале по умолчанию (один раз на текст ошибки), проход идёт с продуктами
+    последней удачной загрузки (без неё — без продуктов)."""
+    try:
+        ctx.peers = peer_contexts(deliver)
+    except Exception as e:  # noqa: BLE001
+        _products_error(ctx, e)
+        try:
+            ctx.peers = peer_contexts(deliver, _LAST_PRODUCTS[0]) if _LAST_PRODUCTS else {}
+        except Exception:  # noqa: BLE001
+            ctx.peers = {}
+
+
+def _products_error(ctx, e):
+    msg = f"{type(e).__name__}: {e}"[:200]
+    print(f"продукты: {msg}", file=sys.stderr, flush=True)
+    ctx.emit(f"err:products:{msg}", "nerve.error", DIGEST, ["release"], f"instances/ не читается: {msg}", "nerve")
+
+
+def other_product_passes(deliver, peers=None):
+    """Проход каждого активного продукта, кроме продукта по умолчанию. Сбой продукта — в его errors, остальным не
+    мешает; сбой загрузки instances/ — исключение вызывающему (run_products пишет его в журнал по умолчанию)."""
+    for ctx in (peer_contexts(deliver) if peers is None else peers).values():
+        seeded = bool(ctx.state.get("seeded"))
+        one_pass(ctx, PRODUCT_POLLS)
+        if not seeded and "github" not in ctx.state.get("errors", {}):
+            ctx.state["seeded"] = now_iso()
+            ctx.save()
+
+
+def run_products(ctx, deliver):
+    """Проходы других продуктов после прохода по умолчанию; сбой загрузки instances/ — событие release в журнале по
+    умолчанию (один раз на текст ошибки) и stderr, демон продукта по умолчанию живёт дальше."""
+    try:
+        other_product_passes(deliver, ctx.peers)
+    except Exception as e:  # noqa: BLE001
+        _products_error(ctx, e)
+    # Пульс — после всех продуктов: долгий проход другого продукта не даёт ложное «НЕРВ МОЛЧИТ» ролям по умолчанию.
+    hb = now_iso()
+    ctx.state["heartbeat"] = hb
+    ctx.save()
+    with open(os.path.join(STATE_DIR, "heartbeat"), "w") as f:
+        f.write(hb)
+
+
+def resolve_product(cfg, a):
+    """(cfg, папка журнала и курсоров, slug) для tap/emit/status: --product → TAIBE_PRODUCT → продукт по умолчанию.
+    Фолбэк без флага и env — одна строка в stderr: ошибка видна, а живые Monitor ролей продукта по умолчанию не
+    падают — даже если instances/ сломан."""
+    want = getattr(a, "product", None) or os.environ.get("TAIBE_PRODUCT", "")
+    try:
+        default, cfgs = load_products()
+    except Exception as e:  # noqa: BLE001 — сломанный instances/ (в том числе файл неактивного продукта)
+        if want:
+            raise SystemExit(f"--product {want}: instances/ не читается: {e}") from None
+        print(f"instances/ не читается ({type(e).__name__}: {str(e)[:120]}) — продукт по умолчанию из config.json; "
+              "проверка: python3 -I eval/nerve/products.py render --check", file=sys.stderr)
+        return cfg, STATE_DIR, ""
+    if default is None:
+        if want:
+            raise SystemExit(f"--product {want}: нет instances/ — продукт один")
+        return cfg, STATE_DIR, ""
+    if not want:
+        # Строка — только когда есть другой включённый продукт: иначе она будила бы Monitor каждой роли (2>&1) зря.
+        if any(c.get("active") is True for s, c in cfgs.items() if s != default):
+            print(f"продукт не задан (--product, TAIBE_PRODUCT) — продукт по умолчанию {default}", file=sys.stderr)
+        want = default
+    if want not in cfgs:
+        raise SystemExit(f"нет продукта {want}: {', '.join(sorted(cfgs))}")
+    if want == default:
+        return cfg, STATE_DIR, want
+    return cfgs[want], product_state(want, default), want
 
 
 def cmd_run(cfg, a):
@@ -140,80 +294,15 @@ def cmd_run(cfg, a):
         return 0
     seed = not os.path.exists(os.path.join(STATE_DIR, "journal.jsonl"))
     while True:
-        ctx = Ctx(cfg, STATE_DIR, deliver=not seed and wakes_on())
-        one_pass(ctx)
+        deliver = wakes_on()
+        ctx = Ctx(cfg, STATE_DIR, deliver=not seed and deliver)
+        attach_peers(ctx, not seed and deliver)
+        one_pass(ctx, finish=False)
         seed = False
+        run_products(ctx, deliver)
         pause = cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval)
         save_json(os.path.join(STATE_DIR, "cycle.json"), {"seconds": pause, "at": now_iso(), "awake": awake_seconds()})
         time.sleep(pause)
-
-
-def cycle_seconds(cfg, mode, interval=None):
-    """Pause of the daemon after a pass: night_interval_factor times longer at night. The phase comes from mode.json,
-    which only the daemon's own pass writes (budget.py), so a tap reading it sees the phase the daemon slept on."""
-    base = cfg["interval_seconds"] if interval is None else interval
-    return base * (cfg.get("night_interval_factor", 5) if mode.get("phase") == "night" else 1)
-
-
-MAX_CYCLE_SECONDS = 24 * 3600
-
-
-def as_obj(x):
-    """A state file that is valid JSON but not an object ([1], "x", 5) reads as empty — the tap must not die on it."""
-    return x if isinstance(x, dict) else {}
-
-
-def finite_number(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
-
-
-def slept_cycle(cfg, mode, cycle):
-    """The pause the daemon really went to sleep on: state/cycle.json, which cmd_run writes right before time.sleep.
-    It carries a manual «run --interval N» the config does not know. A missing, malformed or implausible file (a
-    daemon from before it; Infinity; over a day — 1e12 would silence the watchdog for good) falls back to the config."""
-    s = as_obj(cycle).get("seconds")
-    if finite_number(s) and 0 < s <= MAX_CYCLE_SECONDS:
-        return s
-    return cycle_seconds(cfg, mode)
-
-
-def heartbeat_stale_after(cfg, mode, cycle=None):
-    """The heartbeat is stale once the daemon missed a cycle: at least two cycles, never under heartbeat_stale_min.
-    Night cycle 60 s × 5 = 300 s equalled the 5-minute threshold, so any pass a second late raised a false
-    «НЕРВ МОЛЧИТ» (04.11 22:22 and 22:37, heartbeat 5 s old). Day stays 5 minutes, night becomes 10."""
-    return max(timedelta(minutes=cfg["tap"]["heartbeat_stale_min"]),
-               timedelta(seconds=2 * slept_cycle(cfg, mode, cycle)))
-
-
-def awake_since_sleep(cycle, hb, awake_now):
-    """Awake seconds since the daemon went to sleep after the heartbeat `hb`, or None when that is unknown: no
-    «awake» in cycle.json (a daemon from before it), a cycle of an older pass than the heartbeat, or a count that
-    went back (a reboot)."""
-    c = as_obj(cycle)
-    a, at = c.get("awake"), c.get("at")
-    if not finite_number(a) or not isinstance(at, str):
-        return None
-    try:
-        if datetime.fromisoformat(at) < datetime.fromisoformat(hb):
-            return None
-    except (TypeError, ValueError):  # not a date, or a date without a time zone against an aware heartbeat
-        return None
-    return awake_now - a if awake_now >= a else None
-
-
-def heartbeat_silent(cfg, mode, cycle, hb, now, awake_now):
-    """The daemon missed its cycle — only when both clocks say so. time.sleep counts awake time only, so on a
-    sleeping Mac a night pause stretches over the whole system sleep. Night 05.11: heartbeat 02:48:29, four
-    «НЕРВ МОЛЧИТ» at 03:40, 03:56, 04:00 and 04:17 (DarkWake), and by 04:17 the Mac had been awake 272 s of
-    88 min — less than the 300 s pause. Without a trusted awake count — the wall clock, as before."""
-    limit = heartbeat_stale_after(cfg, mode, cycle)
-    try:
-        if now - datetime.fromisoformat(hb) <= limit:
-            return False
-    except (TypeError, ValueError):  # no pulse, or a broken one
-        return True
-    slept = awake_since_sleep(cycle, hb, awake_now)
-    return slept is None or slept > limit.total_seconds()
 
 
 def resolve_roles(cfg, spec, strict=True):
@@ -241,7 +330,9 @@ def resolve_roles(cfg, spec, strict=True):
 def cmd_once(cfg, a):
     os.makedirs(STATE_DIR, exist_ok=True)
     ctx = Ctx(cfg, STATE_DIR, deliver=not a.seed and wakes_on())
-    one_pass(ctx)
+    attach_peers(ctx, not a.seed and wakes_on())
+    one_pass(ctx, finish=False)
+    run_products(ctx, not a.seed and wakes_on())
     print(f"проход: событий {ctx.emitted}, ошибки {list(ctx.state.get('errors', {}))}")
     return 0
 
@@ -252,6 +343,9 @@ def fmt(rec, tz):
 
 
 def cmd_tap(cfg, a):
+    cfg, pdir, slug = resolve_product(cfg, a)
+    if cfg.get("active") is False:
+        print(f"продукт {slug} не включён (active: false) — событий нет до active: true в checkout демона", file=sys.stderr)
     try:
         roles = resolve_roles(cfg, a.role, strict=False)
     except ValueError:
@@ -262,8 +356,9 @@ def cmd_tap(cfg, a):
         return 2
     role = roles[0]
     tc = cfg["tap"]
-    jpath = os.path.join(STATE_DIR, "journal.jsonl")
-    cpath = os.path.join(STATE_DIR, f"tap-{role}.json")
+    os.makedirs(pdir, exist_ok=True)                 # tap нового продукта может стартовать раньше его первого прохода
+    jpath = os.path.join(pdir, "journal.jsonl")      # журнал и курсор — продукта
+    cpath = os.path.join(pdir, f"tap-{role}.json")
     cur = load_json(cpath, None)
     if cur is None:
         cur = {"offset": os.path.getsize(jpath) if os.path.exists(jpath) else 0, "pending": [], "held": [],
@@ -300,7 +395,7 @@ def cmd_tap(cfg, a):
         elif not cur["pending"]:
             cur["last_flush"] = now_iso() if due else cur["last_flush"]
         if role in tc["heartbeat_watchers"]:
-            hb = as_obj(load_json(os.path.join(STATE_DIR, "state.json"), {})).get("heartbeat")
+            hb = read_heartbeat()
             cycle = load_json(os.path.join(STATE_DIR, "cycle.json"), None)
             stale = heartbeat_silent(cfg, mode, cycle, hb, now, awake_seconds())
             if stale and not cur["dead_warned"]:
@@ -313,14 +408,22 @@ def cmd_tap(cfg, a):
         time.sleep(tc["poll_seconds"])
 
 
+def read_heartbeat():
+    return state_io.read_heartbeat(STATE_DIR)
+
+
 def cmd_emit(cfg, a):
+    cfg, pdir, slug = resolve_product(cfg, a)
+    if cfg.get("active") is False:   # журнал невключённого продукта никто не обходит и не читает
+        print(f"продукт {slug} не включён (active: false) — ничего не записано", file=sys.stderr)
+        return 2
     try:
         to = resolve_roles(cfg, a.role)
     except ValueError as e:
         print(f"неизвестная роль «{e}» — ничего не записано. Роли: {', '.join(cfg['team']['roles'])}, {ALL}, "
               f"номер 1–{len(cfg['team']['roles'])} или список через запятую", file=sys.stderr)
         return 2
-    j = Journal(os.path.join(STATE_DIR, "journal.jsonl"))
+    j = Journal(os.path.join(pdir, "journal.jsonl"))
     key = f"manual:{now_iso()}:{','.join(to)}:{abs(hash(a.text)) % 10**8}"
     j.emit(key, a.kind, NERVOUS, to, a.text, "manual")
     print(f"записано: {key} → {', '.join(to)}")
@@ -328,7 +431,9 @@ def cmd_emit(cfg, a):
 
 
 def cmd_status(cfg, a):
+    _cfg, pdir, slug = resolve_product(cfg, a)
     st = load_json(os.path.join(STATE_DIR, "state.json"), {})
+    pst = st if pdir == STATE_DIR else load_json(os.path.join(pdir, "state.json"), {})
     mode = load_json(os.path.join(STATE_DIR, "mode.json"), {})
     b = st.get("budget", {})
     print(f"пульс: {st.get('heartbeat', '—')}")
@@ -337,8 +442,12 @@ def cmd_status(cfg, a):
     waves = b.get("waves", [])
     print(f"волн лимита окна: {len(waves)}; последние: " +
           ", ".join(f"{w['hit'][5:16]} ${w['usd']}" for w in waves[-6:]))
-    print(f"ошибки источников: {json.dumps(st.get('errors', {}), ensure_ascii=False)}")
-    recs, _ = read_from(os.path.join(STATE_DIR, "journal.jsonl"), 0)
+    if slug:
+        print(f"продукт: {slug}")
+    print(f"ошибки источников (общие и продукта по умолчанию): {json.dumps(st.get('errors', {}), ensure_ascii=False)}")
+    if pst is not st:
+        print(f"ошибки источников {slug}: {json.dumps(pst.get('errors', {}), ensure_ascii=False)}")
+    recs, _ = read_from(os.path.join(pdir, "journal.jsonl"), 0)
     live = [r for r in recs if r.get("to")]
     print(f"журнал: записей {len(recs)}, адресных {len(live)}")
     for r in live[-a.last:]:
@@ -366,6 +475,8 @@ def main():
     e.add_argument("--kind", default="assign")
     s = sub.add_parser("status")
     s.add_argument("--last", type=int, default=10)
+    for q in (t, e, s):
+        q.add_argument("--product", help="slug продукта из instances/ (OPS-25)")
     a = p.parse_args()
     return {"run": cmd_run, "once": cmd_once, "tap": cmd_tap, "emit": cmd_emit, "status": cmd_status}[a.cmd](cfg, a)
 
