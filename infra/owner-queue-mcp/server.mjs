@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { FILE_ID, ITEM_ID, alreadySaved, ensureDir, extOf, fileRoots, filesState, safeDir, saveStream } from './files.mjs';
-import { briefDoc, filterDocs, fitList, pageList, snapshots } from './list.mjs';
+import { briefDoc, filterDocs, fitEvents, fitList, pageList, replyText, snapshots } from './list.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BASE = `${(process.env.OQ_URL || 'https://ops.admin.hrhelper.space').replace(/\/$/, '')}/api/oq/v1`;
@@ -354,9 +354,13 @@ const TOOLS = [
   },
   {
     name: 'oq_history',
-    description: 'Журнал изменений документа: кто, когда, что.',
-    inputSchema: { type: 'object', properties: { collection: COLL, id: { type: 'string' } }, required: ['collection', 'id'] },
-    run: ({ collection, id }) => api('GET', `/history/${collection}/${encodeURIComponent(id)}`),
+    description: 'Журнал изменений документа: кто, когда, что — до 50 событий, новые первыми. {total, events, shown + truncated? — '
+      + 'старые события не влезли в потолок ответа}; не влезли — тот же вызов с brief: true (длинные строки — начало и длина).',
+    inputSchema: { type: 'object', properties: { collection: COLL, id: { type: 'string' }, brief: { type: 'boolean', description: 'строки длиннее 200 символов в after — начало и длина' } }, required: ['collection', 'id'] },
+    run: async ({ collection, id, brief }) => {
+      const r = await api('GET', `/history/${collection}/${encodeURIComponent(id)}`);
+      return fitEvents(Array.isArray(r?.events) ? r.events : [], { brief: brief === true });
+    },
   },
 ];
 
@@ -377,8 +381,8 @@ async function handle(msg) {
     const tool = TOOLS.find((t) => t.name === params?.name);
     if (!tool) return reply(id, null, { code: -32602, message: `Нет инструмента ${params?.name}` });
     try {
-      const out = await tool.run(params.arguments || {});
-      return reply(id, { content: [{ type: 'text', text: JSON.stringify(out, null, 1).slice(0, 100_000) }] });
+      const { text, isError } = replyText(await tool.run(params.arguments || {}));
+      return reply(id, { content: [{ type: 'text', text }], ...(isError ? { isError } : {}) });
     } catch (e) {
       return reply(id, { content: [{ type: 'text', text: `Ошибка: ${e.message}` }], isError: true });
     }

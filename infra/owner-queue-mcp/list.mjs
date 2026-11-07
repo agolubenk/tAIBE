@@ -124,3 +124,26 @@ export function fitList(total, docs, from = 0, extra = {}) {
   while (n > 0 && JSON.stringify(shape(n), null, 1).length > OUT_MAX) n = Math.floor(n * 0.8);
   return shape(n);
 }
+
+/**
+ * Ответ oq_history: события новыми первыми и только целиком — не влезли старые, их нет в events, а shown и truncated
+ * это говорят (раньше ответ резался по символам посреди JSON). Одно событие больше потолка — shown: 0, нужен brief.
+ */
+export function fitEvents(events, { brief = false } = {}) {
+  const list = brief ? events.map((e) => (e && e.after && typeof e.after === 'object' ? { ...e, after: briefDoc(e.after) } : e)) : events;
+  const shape = (k) => ({
+    total: list.length,
+    ...(k < list.length ? { shown: k, truncated: true, hint: brief ? 'старые события — в консоли, /history' : 'не влезли — brief: true (длинные строки — начало и длина)' } : {}),
+    events: list.slice(0, k),
+  });
+  let n = list.length;
+  while (n > 0 && JSON.stringify(shape(n), null, 1).length > OUT_MAX) n = Math.floor(n * 0.8);
+  return shape(n);
+}
+
+/** Текст ответа инструмента: JSON целиком или ошибка с размером — обрезанный JSON агент не разберёт. */
+export function replyText(out, max = 100_000) {
+  const text = JSON.stringify(out, null, 1);
+  if (text === undefined || text.length <= max) return { text: text ?? 'null' };
+  return { text: `Ответ ${text.length} символов больше потолка ${max} — сузьте запрос (фильтры, limit, brief).`, isError: true };
+}
