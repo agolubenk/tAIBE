@@ -12,6 +12,13 @@ import { gateClient } from './write-gate'
 
 export type OpsDb = LibSQLDatabase<typeof schema>
 
+/**
+ * Сколько запись ждёт блокировку чужого процесса (бэкап, CLI), мс. Внутри процесса записи идут по одной (write-gate.ts),
+ * поэтому синхронное ожидание libsql ждёт только чужую блокировку — копия бэкапа держит её миллисекунды. Без ожидания
+ * упавший оператор libsql не сбрасывает, и следующая «успешная» запись на том же соединении терялась.
+ */
+export const BUSY_TIMEOUT_MS = 2000
+
 let client: Client | null = null
 let db: OpsDb | null = null
 
@@ -25,8 +32,8 @@ export function getDb(): OpsDb {
   if (db) return db
   const env = getEnv()
   ensureLocalDir(env.databaseUrl)
-  // Запись процесса — по одной, занятая чужим процессом база — асинхронным повтором (write-gate.ts), без busy_timeout.
-  client = gateClient(createClient({ url: env.databaseUrl, authToken: env.databaseAuthToken }))
+  // Запись процесса — по одной (write-gate.ts); timeout — ожидание только чужой блокировки (у Turso игнорируется).
+  client = gateClient(createClient({ url: env.databaseUrl, authToken: env.databaseAuthToken, timeout: BUSY_TIMEOUT_MS }))
   db = drizzle(client, { schema })
   return db
 }

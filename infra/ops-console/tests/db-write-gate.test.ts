@@ -1,7 +1,8 @@
 /**
- * Запись консоли и занятая база (server/db/write-gate.ts): одновременные записи процесса не падают с SQLITE_BUSY.
- * Чужая блокировка (ночной бэкап, infra/scripts/prod/backup_ops_console.py в HR) — остаточный риск: запись падает сразу,
- * без синхронного ожидания. Читатель — python3, как у бэкапа: mode=ro, явная транзакция чтения.
+ * Запись консоли и занятая база (server/db/write-gate.ts, client.ts): одновременные записи процесса идут по одной без
+ * SQLITE_BUSY и без синхронного ожидания; чужая блокировка (ночной бэкап — infra/scripts/prod/backup_ops_console.py в HR,
+ * CLI) дожидается таймаутом libsql, и запись, названная успешной, на диске. Чужие процессы — python3: читатель как у
+ * бэкапа (mode=ro, явная транзакция чтения), писатель — BEGIN IMMEDIATE.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { sql } from 'drizzle-orm'
@@ -40,19 +41,6 @@ function holdReadLock(): Promise<void> {
   })
 }
 
-/** Сколько раз за время fn сработал таймер 20 мс: стоящий цикл событий даёт около нуля. */
-async function ticksDuring<T>(fn: () => Promise<T>): Promise<{ value: T; ticks: number; ms: number }> {
-  let ticks = 0
-  const timer = setInterval(() => ticks++, 20)
-  const t0 = Date.now()
-  try {
-    const value = await fn()
-    return { value, ticks, ms: Date.now() - t0 }
-  } finally {
-    clearInterval(timer)
-  }
-}
-
 const decision = (title: string) => ({ kind: 'decision', title, options: [{ id: 'yes', label: 'Да' }], source: 'test' })
 
 describe('шлюз записи', () => {
@@ -65,8 +53,11 @@ describe('шлюз записи', () => {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ data: decision(id) }),
       })
-    const first = await Promise.all(['d-g-1', 'd-g-2', 'd-g-3', 'd-g-4'].map(put))
+    const timed = async (id: string) => { const t0 = Date.now(); const r = await put(id); return { status: r.status, ms: Date.now() - t0 } }
+    const first = await Promise.all(['d-g-1', 'd-g-2', 'd-g-3', 'd-g-4'].map(timed))
     expect(first.map((r) => r.status)).toEqual([200, 200, 200, 200])
+    // Внутри процесса синхронного ожидания нет: каждая запись — без таймаута libsql (2 с).
+    for (const r of first) expect(r.ms).toBeLessThan(1000)
     expect((await put('d-g-5')).status).toBe(200)
   })
 
@@ -81,15 +72,51 @@ describe('шлюз записи', () => {
   })
 })
 
-describe.skipIf(!hasPython)('чужая блокировка чтения (бэкап) — остаточный риск', () => {
-  it('запись под чужой блокировкой падает сразу с SQLITE_BUSY, без синхронного ожидания — цикл событий не стоит', async () => {
+const WRITER = `
+import sqlite3, sys, time
+c = sqlite3.connect(sys.argv[1], isolation_level=None)
+c.execute('BEGIN IMMEDIATE')
+c.execute('INSERT INTO probe (x) VALUES (100)')
+print('locked', flush=True)
+time.sleep(float(sys.argv[2]))
+c.execute('COMMIT')
+`
+
+/** Что видит другой процесс: запись, которую консоль назвала успешной, обязана быть на диске. */
+const onDisk = () =>
+  spawnSync('python3', ['-I', '-c', 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1], timeout=0).execute("select group_concat(x) from probe").fetchone()[0])', getEnv().databaseUrl.slice('file:'.length)])
+    .stdout.toString()
+    .trim()
+
+describe.skipIf(!hasPython)('чужая блокировка (бэкап, CLI)', () => {
+  it('под блокировкой чтения бэкапа при идущих чтениях транзакция дожидается, следующие записи не падают, всё на диске', async () => {
     await freshApp()
+    await getDb().run(sql`CREATE TABLE probe (x INTEGER)`)
+    let stop = false
+    const reads = (async () => {
+      while (!stop) {
+        await Promise.all([1, 2].map(() => getDb().all(sql`SELECT count(*) FROM probe`)))
+        await new Promise((r) => setTimeout(r, 5))
+      }
+    })()
     await holdReadLock()
-    const { value, ms } = await ticksDuring(() => getDb().run(sql`CREATE TABLE busy_probe (x INTEGER)`).then(() => null, (e: unknown) => e))
-    // drizzle оборачивает ошибку драйвера: код — в cause.
-    const err = value as { message?: string; cause?: { code?: string } } | null
-    expect(`${err?.cause?.code ?? ''} ${err?.message ?? ''}`).toMatch(/SQLITE_BUSY|locked/i)
-    expect(ms).toBeLessThan(HOLD_SEC * 1000 * 0.5)
+    await getDb().transaction(async (tx) => { await tx.run(sql`INSERT INTO probe (x) VALUES (1)`) })
+    for (let i = 2; i <= 6; i++) await getDb().run(sql`INSERT INTO probe (x) VALUES (${i})`)
+    stop = true
+    await reads
+    expect(onDisk()).toBe('1,2,3,4,5,6')
+  })
+
+  it('под блокировкой записи чужого процесса запись дожидается, а не «проходит» мимо диска', async () => {
+    await freshApp()
+    await getDb().run(sql`CREATE TABLE probe (x INTEGER)`)
+    const writer = spawn('python3', ['-I', '-c', WRITER, getEnv().databaseUrl.slice('file:'.length), '0.3'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const exited = new Promise((r) => writer.on('exit', r))
+    await new Promise<void>((r) => writer.stdout?.on('data', (d) => String(d).includes('locked') && r()))
+    await getDb().run(sql`INSERT INTO probe (x) VALUES (5)`)
+    await exited
+    await getDb().run(sql`INSERT INTO probe (x) VALUES (6)`)
+    expect(onDisk()).toBe('100,5,6')
   })
 })
 
