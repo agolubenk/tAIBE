@@ -152,10 +152,12 @@ CASES = {
     },
     'long-wait': {
         'fire': [('Monitor', {'command': 'nerve tap', 'timeout_ms': 3600000}),
-                 ('Monitor', {'command': 'tail -f x', 'timeout_ms': 3400000}),
+                 ('Monitor', {'command': 'tail -f x', 'timeout_ms': 3300001}),
+                 ('Monitor', {'command': 'tail -f x', 'timeout_ms': 3350000}),
                  ('Monitor', {'command': 'tail -f x', 'timeout_ms': 86400000}),
                  ('Monitor', {'command': 'tail -f x', 'persistent': True}),
                  ('ScheduleWakeup', {'delaySeconds': 3600, 'reason': 'x', 'prompt': 'x'}),
+                 ('ScheduleWakeup', {'delaySeconds': 3301, 'reason': 'x', 'prompt': 'x'}),
                  ('ScheduleWakeup', {'delaySeconds': 3400.5, 'reason': 'x', 'prompt': 'x'})],
         'quiet': [('Monitor', {'command': 'nerve tap', 'timeout_ms': 1800000}),
                   ('Monitor', {'command': 'tail -f x', 'timeout_ms': 3300000}),
@@ -234,6 +236,12 @@ class AntigenCasesTest(unittest.TestCase):
                         self.assertIsNone(antigen.respond(event, state_dir=tmp))  # once per session
             self.assertIsNone(antigen.respond({'tool_name': TS, 'tool_input': {'query': 'x'}, 'session_id': 'none'},
                                               state_dir=tmp))
+            # a subagent's event with the parent's transcript: quiet, and the parent keeps its own lesson
+            big = os.path.join(tmp, 'big.jsonl')
+            sub = {'tool_name': TS, 'tool_input': {'query': 'x'}, 'session_id': 'p', 'transcript_path': big,
+                   'agent_id': 'a1'}
+            self.assertIsNone(antigen.respond(sub, state_dir=tmp))
+            self.assertTrue(antigen.respond(dict(sub, agent_id=None), state_dir=tmp))
 
     def test_long_or_hostile_commands_stay_fast(self):
         """Review of #82: `A="x y z" ` × 8000 took 9.6 s (hook timeout 10 s). Whole table, 100 KB each, < 0.2 s."""

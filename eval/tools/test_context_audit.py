@@ -97,7 +97,8 @@ class ContextAuditAllTest(unittest.TestCase):
         self.assertIn('8. Поколение по окну', self.res.stdout)
 
     def test_every_instance_dir_and_subagents_once_per_request(self):
-        self.assertEqual(self.data['sessions'], 3)          # main, fork, subagent; the stranger's dir is not read
+        self.assertEqual((self.data['sessions'], self.data['subagents']), (2, 1))  # the stranger's dir is not read
+        self.assertEqual(sorted(self.data['base']), [60_000, 100_000])  # section 6: main sessions only (fork: f1)
         self.assertEqual(self.data['calls'], 8 + 1 + 1)     # r1 of the fork is the same request
 
     def test_cold_causes(self):
@@ -119,6 +120,54 @@ class ContextAuditAllTest(unittest.TestCase):
         self.assertEqual(big['life_min'], 79.0)
         self.assertEqual(bands['≤ 250K']['with_handoff'], 0)   # the fork has no ack and no handoff write
 
+
+class HandoffMarkersTest(unittest.TestCase):
+    """Review of #105: live sessions had a commit message with «lineage.py ack» (intake 80 %) and a grep or a dry run
+    of spawn_session.sh (outtake 57–79 %); lowercase handoff files were missed."""
+
+    def marks(self, *tools):
+        gen = cg.new_generation()
+        for name, inp in tools:
+            gen['calls'].append(1.0)
+            cg.note_tool(gen, name, inp)
+        gen['t0'] = gen['t1'] = T0
+        return cg.finish(gen)
+
+    def test_intake_is_a_command_not_a_mention(self):
+        for cmd in ('python3 -I /a/eval/tools/lineage.py ack', 'cd /a && python3 eval/tools/lineage.py ack',
+                    'TAIBE_LINEAGE=x python3 -I lineage.py ack'):
+            with self.subTest(cmd):
+                self.assertEqual(self.marks(('Bash', {'command': 'ls'}), ('Bash', {'command': cmd}))['intake'], 1)
+        for cmd in ('git commit -m "accept handoff; then lineage.py ack"', 'grep -n "lineage.py ack" SKILL.md',
+                    'echo run lineage.py ack'):
+            with self.subTest(cmd):
+                self.assertIsNone(self.marks(('Bash', {'command': cmd}))['intake'])
+
+    def test_outtake_markers(self):
+        spawn = ('Bash', {'command': 'bash eval/tools/spawn_session.sh --handoff /h/handoff/x.md'})
+        quiet = [('Bash', {'command': 'bash eval/tools/spawn_session.sh --handoff /h/x.md --dry-run'}),
+                 ('Bash', {'command': "sed -n 1,9p spawn_session.sh | grep -E 'x|--handoff'"}),
+                 ('Write', {'file_path': '/a/.claude/skills/successor-handoff/SKILL.md'}),
+                 ('Write', {'file_path': '/a/docs/notes.md'})]
+        for tool in quiet:
+            with self.subTest(tool):
+                self.assertIsNone(self.marks(tool)['out_from'])
+        for path in ('/p/handoff/2026-11-07/boards/HANDOFF-r.md', '/p/handoff/hl8l/handoff-hl8l-21.md',
+                     '/p/state/coord-r.ab-handoff.md'):
+            with self.subTest(path):
+                self.assertEqual(self.marks(('Bash', {'command': 'ls'}), ('Write', {'file_path': path}))['out_from'], 1)
+        self.assertEqual(self.marks(spawn)['out_from'], 0)
+
+    def test_outtake_starts_after_the_last_unit_of_work(self):
+        write = ('Write', {'file_path': '/p/handoff/HANDOFF-a.md'})
+        gen = self.marks(write, ('Bash', {'command': 'cd /w && git commit -qm fix'}), write,
+                         ('Bash', {'command': 'bash spawn_session.sh --handoff /p/handoff/HANDOFF-a.md'}))
+        self.assertEqual(gen['out_from'], 2)
+        self.assertEqual(self.marks(write, ('Bash', {'command': 'git push -q origin x'}))['out_from'], 0)
+
+
+sys.path.insert(0, HERE)
+import context_gen as cg  # noqa: E402
 
 if __name__ == '__main__':
     unittest.main()

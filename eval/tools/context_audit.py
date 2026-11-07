@@ -20,8 +20,7 @@ usage: python3 -I context_audit.py "<с YYYY-MM-DD HH:MM>" "<по YYYY-MM-DD HH:
 5. Инструменты по семействам и скиллы. 6. Первый вызов сессии — базовый контекст.
 7. Наблюдатель claude-mem: его собственные сессии и их расход.
 8. Поколение по размеру окна (основа решения о размере окна): сессии без субагентов по наибольшему контексту —
-   жизнь, цена хода, доля передачи. Приём — вызовы до `lineage.py ack` включительно, выдача — от первой записи
-   handoff (Write в …/handoff/…HANDOFF…, `spawn_session.sh --handoff`) до конца. Считаются вызовы внутри окна.
+   жизнь, цена хода, доля передачи (приём и выдача — `context_gen.py`). Считаются вызовы внутри окна.
 
 Токены вставок и результатов — оценка по символам (латиница ~3,5 символа на токен, кириллица ~2,2). Деньги — по
 прайсу API; на подписке это мерило расхода лимита."""
@@ -30,7 +29,6 @@ import glob
 import json
 import os
 import re
-import statistics
 import sys
 from datetime import datetime, timedelta
 
@@ -42,10 +40,6 @@ PRICES = {'fable': (10, 50, 0.25), 'opus-5-5': (4, 20, 0.2), 'opus-5': (5, 25, 0
 COMPACTED = 'This session is being continued'
 
 TOOLSET_DELTA = {'deferred_tools_delta', 'mcp_instructions_delta', 'agent_listing_delta', 'skill_listing'}
-HANDOFF_FILE = re.compile(r'/handoff/.{0,300}HANDOFF[^/]*$')
-HANDOFF_SPAWN = re.compile(r'spawn_session\.sh[^\n]{0,300}--handoff')
-BANDS = (('≤ 250K', 250_000), ('250–500K', 500_000), ('> 500K', float('inf')))
-
 pos = [a for a in sys.argv[1:] if not a.startswith('--')]
 out_json = sys.argv[sys.argv.index('--json') + 1] if '--json' in sys.argv else None
 match = sys.argv[sys.argv.index('--match') + 1] if '--match' in sys.argv else 'ключ реестра'
@@ -84,7 +78,10 @@ def transcripts():
             out += [(p, True) for p in glob.glob(os.path.join(d, '*', 'subagents', '*.jsonl'))]
 
     def born(item):
-        st = os.stat(item[0])
+        try:
+            st = os.stat(item[0])
+        except OSError:  # deleted between the glob and the sort; the scan skips it
+            return 0
         return getattr(st, 'st_birthtime', st.st_mtime)
     return sorted(out, key=born)   # the original before its fork: a copied request counts where it was made
 
@@ -107,33 +104,6 @@ def cold_cause(first, was_compact, gap, marks):
     return 'прочее'
 
 
-def handoff_usd(gen):
-    """$ of the intake (calls up to the ack) and of the outtake (from the handoff write), each call once."""
-    calls = gen['calls']
-    upto = gen['intake'] + 1 if gen['intake'] is not None else 0
-    start = max(gen['out_from'], upto) if gen['out_from'] is not None else len(calls)
-    return sum(calls[:upto]) + sum(calls[start:])
-
-
-def generation_bands(gens):
-    """Per band of the largest context: sessions, median life and $ per call, $ in total, handoff share."""
-    out = {}
-    for name, top in BANDS:
-        low = max([b for _, b in BANDS if b < top], default=0)
-        rows = [g for g in gens if low < g['max'] <= top and g['usd']]
-        if not rows:
-            continue
-        per_call = [c for g in rows for c in g['calls']]
-        handed = [g for g in rows if g['intake'] is not None or g['out_from'] is not None]
-        hand_usd = sum(handoff_usd(g) for g in handed)
-        handed_usd = sum(g['usd'] for g in handed)
-        out[name] = {'sessions': len(rows), 'with_handoff': len(handed), 'usd': round(sum(g['usd'] for g in rows), 2),
-                     'life_min': round(statistics.median(g['life'] for g in rows), 1),
-                     'call_usd': round(statistics.median(per_call), 3),
-                     'handoff_share': round(hand_usd / handed_usd, 3) if handed_usd else None}
-    return out
-
-
 def price(model):
     for k in PRICES:
         if k in (model or ''):
@@ -144,6 +114,8 @@ def price(model):
 # one estimate for the whole eval: the evolution toolkit prices artifacts with the same function
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'evolve'))
 from tokens import est_tokens  # noqa: E402,F401
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import context_gen as cg  # noqa: E402 — section 8
 
 
 def text_of(content):
@@ -218,6 +190,8 @@ def first_prompt(path):
             o = json.loads(line)
         except Exception:
             continue
+        if not isinstance(o, dict):  # a valid JSON line of another shape must not stop the night's audit
+            continue
         if o.get('type') != 'user':
             continue
         t = text_of((o.get('message') or {}).get('content'))
@@ -247,13 +221,19 @@ def settle(pending, upto):
         held[key]['tail_tok'] += tok * (upto - at)
 
 
-seen_all, gens = set(), []
+seen_all, gens, subagent_files = set(), [], 0
 for path, is_sub in transcripts():
-    if datetime.fromtimestamp(os.path.getmtime(path)) < since:
+    try:
+        if datetime.fromtimestamp(os.path.getmtime(path)) < since:
+            continue
+    except OSError:
         continue
     if not all_dirs and match not in first_prompt(path)[:400]:
         continue
-    sessions += 1
+    if is_sub:
+        subagent_files += 1
+    else:
+        sessions += 1
     pending, seg_calls, file_calls = [], 0, 0
     prev_call, after_compact = None, False
     last_wake = 'человек/прочее'
@@ -261,7 +241,7 @@ for path, is_sub in transcripts():
     tu_family = {}
     nested_seg = collections.Counter()
     marks = set()                                 # what happened since the previous call — the cause of a cold one
-    gen = {'max': 0, 'usd': 0.0, 'calls': [], 'intake': None, 'out_from': None, 't0': None, 't1': None}
+    gen = cg.new_generation()
 
     def hold(key, tok):
         held[key]['n'] += 1
@@ -273,6 +253,8 @@ for path, is_sub in transcripts():
             o = json.loads(line)
         except Exception:
             continue
+        if not isinstance(o, dict):  # a valid JSON line of another shape must not stop the night's audit
+            continue
         ts = o.get('timestamp')
         if not ts:
             continue
@@ -281,7 +263,7 @@ for path, is_sub in transcripts():
         typ = o.get('type')
         m = o.get('message') if isinstance(o.get('message'), dict) else {}
         if typ == 'attachment':
-            kind = (o.get('attachment') or {}).get('type')
+            kind = o['attachment'].get('type') if isinstance(o.get('attachment'), dict) else None
             if kind == 'deferred_tools_record':
                 marks.add('record')
             elif kind in TOOLSET_DELTA:
@@ -305,7 +287,7 @@ for path, is_sub in transcripts():
             elif in_window:
                 hold('сообщение:' + last_wake, est_tokens(txt))
         elif typ == 'attachment' and in_window:
-            a = o.get('attachment') or {}
+            a = o['attachment'] if isinstance(o.get('attachment'), dict) else {}
             at = a.get('type')
             if at == 'hook_additional_context':
                 ev = (a.get('hookEvent') or a.get('hookName') or '?').split(':')[0]
@@ -364,7 +346,7 @@ for path, is_sub in transcripts():
                         why = cold_cause(file_calls == 1, was_compact, gap, call_marks)
                         cold[why]['n'] += 1
                         cold[why]['usd'] += cc['запись кэша 5 мин'] + cc['запись кэша 1 ч']
-                    if file_calls == 1:
+                    if file_calls == 1 and not is_sub:
                         base.append(ctx)
                     gen['calls'].append(sum(cc.values()))
                     gen['max'] = max(gen['max'], ctx)
@@ -381,19 +363,10 @@ for path, is_sub in transcripts():
                 tools[tool_family(name)] += 1
                 if name == 'Skill':
                     skills[inp.get('skill', '?')] += 1
-                if not gen['calls']:
-                    continue
-                cmd = str(inp.get('command', ''))[:2000] if name == 'Bash' else ''
-                if gen['intake'] is None and 'lineage.py ack' in cmd:
-                    gen['intake'] = len(gen['calls']) - 1
-                if gen['out_from'] is None and (HANDOFF_SPAWN.search(cmd) or name == 'Write' and HANDOFF_FILE.search(
-                        str(inp.get('file_path', '')))):
-                    gen['out_from'] = len(gen['calls']) - 1
+                cg.note_tool(gen, name, inp)
     settle(pending, seg_calls)
     if not is_sub and gen['calls']:
-        gen['usd'] = sum(gen['calls'])
-        gen['life'] = (gen['t1'] - gen['t0']).total_seconds() / 60
-        gens.append(gen)
+        gens.append(cg.finish(gen))
 
 obs_money, obs_models, obs_calls, obs_files = collections.Counter(), collections.Counter(), 0, 0
 for path in glob.glob(OBSERVER_GLOB):
@@ -406,6 +379,8 @@ for path in glob.glob(OBSERVER_GLOB):
         try:
             o = json.loads(line)
         except Exception:
+            continue
+        if not isinstance(o, dict):  # a valid JSON line of another shape must not stop the night's audit
             continue
         m = o.get('message') if isinstance(o.get('message'), dict) else {}
         if o.get('type') != 'assistant' or not m.get('usage') or not o.get('timestamp'):
@@ -425,7 +400,7 @@ for path in glob.glob(OBSERVER_GLOB):
 
 total = sum(money.values())
 pct = (lambda v: f'{v / total:5.1%}') if total else (lambda _v: '-')
-print(f'Окно {since:%d.%m %H:%M} – {until:%d.%m %H:%M}: сессий {sessions}, вызовов {calls_total}, ${total:,.1f}, '
+print(f'Окно {since:%d.%m %H:%M} – {until:%d.%m %H:%M}: сессий {sessions} (+ субагентов {subagent_files}), вызовов {calls_total}, ${total:,.1f}, '
       f'средний контекст {ctx_sum // max(calls_total, 1):,}; модели: ' + ', '.join(f'{k} {v}' for k, v in models.most_common(4)))
 print('1. Деньги: ' + ' · '.join(f'{k} ${v:,.1f} ({pct(v).strip()})' for k, v in money.most_common()))
 print('   Холодные вызовы по причине: ' + ' · '.join(
@@ -451,7 +426,7 @@ if base:
 obs_total = sum(obs_money.values())
 print(f'7. Наблюдатель claude-mem: сессий {obs_files}, вызовов {obs_calls}, ${obs_total:,.1f} по прайсу; модели: '
       + (', '.join(f'{k} {v}' for k, v in obs_models.most_common(3)) or '—'))
-bands = generation_bands(gens)
+bands = cg.generation_bands(gens)
 print('8. Поколение по окну (наибольший контекст сессии без субагентов): ' + (' · '.join(
     f'{k}: сессий {v["sessions"]} (с передачей {v["with_handoff"]}), ${v["usd"]:,.1f}, жизнь {v["life_min"]} мин, '
     f'ход ${v["call_usd"]}, передача ' + (f'{v["handoff_share"]:.0%}' if v['handoff_share'] is not None else '—')
@@ -461,7 +436,7 @@ if out_json:
                'total': round(total, 2), 'generations': bands,
                'money': money, 'cold': cold, 'held': held, 'ups_by_wake': ups_by_wake,
                'hook_src': {f'{e}/{tag}': v for (e, tag), v in hook_src.items()}, 'nested': nested, 'instr': instr,
-               'tools': tools, 'skills': skills, 'models': models, 'base': base, 'sessions': sessions,
+               'tools': tools, 'skills': skills, 'models': models, 'base': base, 'sessions': sessions, 'subagents': subagent_files,
                'calls': calls_total, 'ctx_avg': ctx_sum // max(calls_total, 1),
                'observer': {'files': obs_files, 'calls': obs_calls, 'money': obs_money, 'models': obs_models}},
               open(out_json, 'w'), ensure_ascii=False, indent=1)

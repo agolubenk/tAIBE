@@ -56,9 +56,11 @@ def subject(row, tool_input):
 
 
 def context_tokens(event):
-    """Context of the last main-chain answer in tokens; None when unknown — a `min_context` row then stays quiet."""
+    """Context of the last main-chain answer in tokens; None when unknown — a `min_context` row then stays quiet.
+    A subagent's event (`agent_id`) is unknown too: its transcript path may be the parent's, and a lesson given there
+    would silence the parent's own (review of #105)."""
     path = event.get('transcript_path')
-    if not path:
+    if not path or event.get('agent_id'):
         return None
     tools = os.path.normpath(os.path.join(HERE, '..', '..', 'tools'))
     if tools not in sys.path:

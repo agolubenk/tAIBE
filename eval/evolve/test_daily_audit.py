@@ -57,6 +57,17 @@ class NightlyContextAuditTest(unittest.TestCase):
         self.assertEqual(len(left), steps.AUDIT_KEEP)
         self.assertNotIn('context-audit-20260101.json', left)
 
+    def test_a_failed_second_run_does_not_report_the_first(self):
+        tools = os.path.join(self.wt, 'eval', 'tools', 'context_audit.py')
+        with open(tools, 'w') as f:
+            f.write(STUB)
+        self.assertEqual(steps.context_audit(self.wt)['usd'], 12.5)
+        with open(tools, 'w') as f:
+            f.write('import sys; sys.exit("boom")')
+        out = steps.context_audit(self.wt)
+        self.assertNotIn('usd', out)
+        self.assertEqual(steps.audit_line(out, 'd'), '')
+
     def test_timeout_does_not_break_the_night(self):
         with open(os.path.join(self.wt, 'eval', 'tools', 'context_audit.py'), 'w') as f:
             f.write(STUB)

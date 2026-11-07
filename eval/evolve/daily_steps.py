@@ -143,6 +143,8 @@ def context_audit(wt):
     path = os.path.join(STATE_DIR, 'runs', 'context-audit-%s.json' % now().strftime('%Y%m%d'))
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path):  # a second run of the day must not report the first one's numbers
+            os.remove(path)
         res = subprocess.run([sys.executable, '-I', tool, '--hours', '24', '--all', '--json', path],
                              capture_output=True, text=True, timeout=600)
         for old in sorted(glob.glob(os.path.join(STATE_DIR, 'runs', 'context-audit-*.json')))[:-AUDIT_KEEP]:
@@ -150,6 +152,8 @@ def context_audit(wt):
     except (OSError, subprocess.TimeoutExpired) as e:  # the night's other metrics and the A/B run go on
         return {'exit': None, 'error': str(e)[-300:]}
     try:
+        if res.returncode != 0:
+            raise ValueError('exit %d' % res.returncode)
         with open(path, encoding='utf-8') as f:
             data = json.load(f)
     except (OSError, ValueError):
