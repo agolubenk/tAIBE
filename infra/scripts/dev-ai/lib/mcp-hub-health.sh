@@ -3,11 +3,24 @@
 # не берут под управление. Подключается через source из infra/scripts/dev-ai/mcp-hub.sh и пользуется
 # его переменными (ROOT, SERVE_ROOT, HOST_ROOT, HOST_FROM, SERENA_TAIBE_PROJECT, CONFIG_DIR, SERENA_PORT,
 # SERENA_TAIBE_PORT, HUB_PORT, SERENA_LOG, SERENA_TAIBE_LOG, HUB_LOG, SERENA_KINDS) и функциями (pidfile_pid,
-# our_roots, is_ours, project_problem, render_config, port_of).
+# our_roots, is_ours, project_problem, render_config, port_of, serena_taibe_enabled, serena_taibe_off_line).
 
-# Отвечают ли обе serena (initialize по MCP) и хаб (/health/mcp). Код 1 — если хоть один не ответил.
-probe_http() {
-  python3 - "$HUB_PORT" "serena=$SERENA_PORT" "serena-taibe=$SERENA_TAIBE_PORT" <<'PY'
+# Какие serena ведут status и check: serena — всегда, serena-taibe — с меткой (`serena-taibe on`); с `running` —
+# и работающую без метки (status её показывает, check — нет: выключенная по решению не ошибка).
+serena_kinds_on() { # [running]
+  echo serena
+  if serena_taibe_enabled; then
+    echo serena-taibe
+  elif [ "${1:-}" = running ] && { pidfile_pid serena-taibe >/dev/null || [ -n "$(our_roots serena-taibe)" ]; }; then
+    echo serena-taibe
+  fi
+}
+
+# Отвечают ли эти serena (initialize по MCP) и хаб (/health/mcp). Код 1 — если хоть один не ответил.
+probe_http() { # <serena|serena-taibe>…
+  local kind specs=()
+  for kind in "$@"; do specs+=("$kind=$(port_of "$kind")"); done
+  python3 - "$HUB_PORT" "${specs[@]}" <<'PY'
 import json, sys, urllib.request
 hub_port = sys.argv[1]
 ok = True
@@ -43,10 +56,12 @@ PY
 }
 
 cmd_status() {
-  local kind pid port tty root listener problem
+  local kind pid port tty root listener problem kinds
   if [ "$ROOT" != "$SERVE_ROOT" ]; then echo "  (общие хаб и serena обслуживают основную папку $SERVE_ROOT)"; fi
   echo "  (serena :$SERENA_PORT индексирует хост $HOST_ROOT — $HOST_FROM; serena-taibe :$SERENA_TAIBE_PORT — $SERENA_TAIBE_PROJECT)"
+  kinds="$(serena_kinds_on running | paste -sd' ' -)"
   for kind in $SERENA_KINDS hub; do
+    case "$kind: $kinds " in serena-taibe:*" serena-taibe "*) ;; serena-taibe:*) serena_taibe_off_line && continue ;; esac
     port="$(port_of "$kind")"
     listener="$(port_listener "$port")"
     if pid="$(pidfile_pid "$kind")"; then
@@ -57,6 +72,9 @@ cmd_status() {
       fi
       problem="$(project_problem "$kind" "$pid")"
       if [ -n "$problem" ]; then echo "    ⚠ $problem — перезапуск из основной папки: npm run mcp-hub:restart"; fi
+      if [ "$kind" = serena-taibe ] && ! serena_taibe_enabled; then
+        echo "    ⚠ выключена (метки нет), но работает — остановить: npm run mcp-hub:serena-taibe -- off"
+      fi
     else
       pid=""
       echo "  ✗ $kind: не запущен (npm run mcp-hub:start)"
@@ -73,7 +91,8 @@ cmd_status() {
       fi
     done
   done
-  probe_http || true
+  # shellcheck disable=SC2086 # список экземпляров
+  probe_http $kinds || true
   # По серверам, а не текстом: хост расходится — подсказка с TAIBE_HOST_ROOT, иначе — что sync перепишет.
   if [ -f "$CONFIG_DIR/mcp.json" ]; then
     render_config drift --live "$CONFIG_DIR/mcp.json" 2>&1 | sed 's/^/  /' \
@@ -81,11 +100,16 @@ cmd_status() {
   fi
 }
 
-# Для ai-restart-all.sh и людей: код 0, только если все три сервиса живы, держат порты, обслуживают
-# свои папки (serena — `--project`: хост и tAIBE, хаб — рабочий каталог) и отвечают.
+# Для ai-restart-all.sh и людей: код 0, только если serena, хаб и (с меткой) serena-taibe живы, держат порты,
+# обслуживают свои папки (serena — `--project`: хост и tAIBE, хаб — рабочий каталог) и отвечают. serena-taibe без
+# метки — выключена по решению, не ошибка; с меткой и без :9122 — код 1.
 cmd_check() {
   local kind pid port listener problem rc=0
   for kind in $SERENA_KINDS hub; do
+    if [ "$kind" = serena-taibe ] && ! serena_taibe_enabled; then
+      serena_taibe_off_line
+      continue
+    fi
     port="$(port_of "$kind")"
     if ! pid="$(pidfile_pid "$kind")"; then
       echo "  ✗ $kind: не запущен"
@@ -106,14 +130,17 @@ cmd_check() {
     fi
     echo "  ✓ $kind: pid $pid держит :$port"
   done
-  probe_http || rc=1
+  # shellcheck disable=SC2046 # список экземпляров
+  probe_http $(serena_kinds_on) || rc=1
   return "$rc"
 }
 
 cmd_logs() {
   local f files=""
   for f in "$SERENA_LOG" "$SERENA_TAIBE_LOG" "$HUB_LOG"; do
-    if [ -f "$f" ]; then files="$files $f"; else echo "(нет $f — ещё не запускался)"; fi
+    if [ -f "$f" ]; then files="$files $f"
+    elif [ "$f" = "$SERENA_TAIBE_LOG" ] && ! serena_taibe_enabled; then echo "(serena-taibe выключена — лога нет)"
+    else echo "(нет $f — ещё не запускался)"; fi
   done
   # shellcheck disable=SC2086 # пути без пробелов: ~/Library/Logs/…
   [ -z "$files" ] || tail -n "${1:-40}" $files

@@ -25,6 +25,7 @@
     "mcp-hub:connect": "bash infra/scripts/dev-ai/mcp-hub.sh connect",
     "mcp-hub:disconnect": "bash infra/scripts/dev-ai/mcp-hub.sh disconnect",
     "mcp-hub:autostart": "bash infra/scripts/dev-ai/mcp-hub.sh autostart",
+    "mcp-hub:serena-taibe": "bash infra/scripts/dev-ai/mcp-hub.sh serena-taibe",
     "llm-gateway:start": "bash infra/llm-gateway/bin/llm-gateway.sh start",
     "llm-gateway:stop": "bash infra/llm-gateway/bin/llm-gateway.sh stop",
     "llm-gateway:restart": "bash infra/llm-gateway/bin/llm-gateway.sh restart",

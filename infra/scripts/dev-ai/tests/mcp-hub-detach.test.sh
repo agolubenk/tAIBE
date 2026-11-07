@@ -30,8 +30,11 @@
 #      задвоена; serena-taibe — из бинаря, без дашборда; свой project.yml и свой контекст не перезаписаны;
 #   м) TAIBE_HOST_ROOT не задан: хост — из живого конфига хаба (serena хоста не «чужая»); конфиг битый —
 #      start отказывает и ничего не трогает; без живого конфига — обслуживаемая копия;
-#   н) serena без read_only: true в проекте, с activation_command и serena хоста на папке serena-taibe не запускаются.
-# Две serena на каждом шаге: serena (хост) и serena-taibe (tAIBE, SERENA_TAIBE_PROJECT — каталог теста).
+#   н) serena без read_only: true в проекте, с activation_command и serena хоста на папке serena-taibe не запускаются;
+#   о) serena-taibe по требованию: без метки start её не поднимает, check — 0; `serena-taibe on` поднимает, и она
+#      переживает restart; `off` гасит, restart её не возвращает; метка есть, а :9122 нет — check 1.
+# Две serena на шагах а–н: serena (хост) и serena-taibe (tAIBE, SERENA_TAIBE_PROJECT — каталог теста) — метка
+# включения serena-taibe стоит с начала теста; шаг о снимает её.
 # Serena подставная (tests/fixtures): обёртка, как uv, + python, который игнорирует SIGTERM (настоящая
 # на SIGTERM не выходила 10+ с), + «LSP»-внук в своей сессии. Боевые порты 3050/9121/9122,
 # ~/.config/hr-helper-mcp-hub, ~/Library/Logs/hr-helper-mcp-hub, ~/.serena и ~/.local/bin/serena тест не
@@ -188,6 +191,7 @@ TAIBE_PORT="$(free_port)"
 # Порты нестандартные — у скрипта свои pid-файлы: <сервис>-<порт>.pid.
 SER_PIDF="$TMP/config/serena-$SERENA_PORT.pid"
 TAI_PIDF="$TMP/config/serena-taibe-$TAIBE_PORT.pid"
+TAI_MARK="$TMP/config/serena-taibe-$TAIBE_PORT.enabled"
 HUB_PIDF="$TMP/config/hub-$HUB_PORT.pid"
 TAIBE_DIR="$TMP/taibe"
 # Хост serena — свой каталог теста с read_only, как .serena/project.local.yml у HR: без него serena не стартует.
@@ -213,6 +217,7 @@ printf '{\n  "mcpServers": {}\n}\n' >"$TMP/config/mcp.json"
 cp "$HERE/fixtures/fake-uvx.sh" "$TMP/bin/uvx"
 cp "$HERE/fixtures/fake-serena.py" "$TMP/bin/serena"
 chmod +x "$TMP/bin/uvx" "$TMP/bin/serena"
+touch "$TAI_MARK" # serena-taibe включена (`serena-taibe on`) — шаги а–н ведут обе serena
 
 # MCP_HUB_ALLOW_WORKTREE: тест обслуживает свою копию репо, даже если она — worktree (шаг к — без него).
 export MCP_HUB_CONFIG_DIR="$TMP/config" MCP_HUB_RUNTIME_DIR="$TMP/runtime" MCP_HUB_LOG_DIR="$TMP/logs"
@@ -644,6 +649,63 @@ ok "без read_only: true (project.local.yml главнее), с activation_com
 run_hub n-stop stop
 [ "$RC" = 0 ] || fail "stop: код $RC"
 assert_clean "stop после предохранителей"
+
+# ── о) serena-taibe по требованию ───────────────────────────────────────────────────────────
+step "о) serena-taibe по требованию: без метки не стартует; on — стартует и переживает restart; off — гасит навсегда"
+rm -f "$TAI_MARK"
+run_hub o-start start
+[ "$RC" = 0 ] || fail "start без метки serena-taibe: код $RC"
+port_busy "$SERENA_PORT" && port_busy "$HUB_PORT" || fail "start без метки не поднял serena и хаб"
+port_busy "$TAIBE_PORT" && fail "start без метки поднял serena-taibe"
+[ ! -f "$TAI_PIDF" ] || fail "start без метки записал pid-файл serena-taibe"
+grep -q "· serena-taibe: выключена (по требованию) — включить: npm run mcp-hub:serena-taibe -- on" "$TMP/o-start.out" \
+  || fail "status не сказал, что serena-taibe выключена"
+run_hub o-check check
+[ "$RC" = 0 ] || fail "check при выключенной serena-taibe: код $RC, нужен 0"
+grep -q "serena-taibe :$TAIBE_PORT" "$TMP/o-check.out" && fail "check опрашивал выключенную serena-taibe"
+O_SER="$(cat "$SER_PIDF")"
+O_HUB="$(cat "$HUB_PIDF")"
+ok "без метки: start поднял serena $O_SER и хаб $O_HUB, serena-taibe — нет; status «выключена (по требованию)»; check — 0"
+run_hub o-on serena-taibe on
+[ "$RC" = 0 ] || fail "serena-taibe on: код $RC"
+[ -f "$TAI_MARK" ] || fail "serena-taibe on: метки нет"
+O_TAI="$(cat "$TAI_PIDF")"
+[ -n "$(listener "$TAIBE_PORT")" ] && alive "$O_TAI" || fail "serena-taibe on: :$TAIBE_PORT не слушается"
+[ "$(cat "$SER_PIDF")" = "$O_SER" ] && [ "$(cat "$HUB_PIDF")" = "$O_HUB" ] || fail "serena-taibe on перезапустил serena или хаб"
+run_hub o-restart restart
+[ "$RC" = 0 ] || fail "restart с меткой: код $RC"
+wait_until 5 dead "$O_TAI" || fail "restart не остановил прежнюю serena-taibe $O_TAI"
+O_TAI2="$(cat "$TAI_PIDF" 2>/dev/null || true)"
+[ -n "$O_TAI2" ] && alive "$O_TAI2" && [ -n "$(listener "$TAIBE_PORT")" ] || fail "serena-taibe не вернулась после restart"
+run_hub o-check2 check
+[ "$RC" = 0 ] || fail "check с меткой и работающей serena-taibe: код $RC"
+grep -q "✓ serena-taibe: pid $O_TAI2 держит :$TAIBE_PORT" "$TMP/o-check2.out" || fail "check не проверил serena-taibe"
+ok "serena-taibe on: метка и процесс $O_TAI (serena и хаб не тронуты); restart — снова поднята ($O_TAI2); check — 0"
+O_SER="$(cat "$SER_PIDF")"
+run_hub o-off serena-taibe off
+[ "$RC" = 0 ] || fail "serena-taibe off: код $RC"
+[ ! -f "$TAI_MARK" ] || fail "serena-taibe off: метка осталась"
+wait_until 5 dead "$O_TAI2" || fail "serena-taibe off: процесс $O_TAI2 жив"
+port_busy "$TAIBE_PORT" && fail "serena-taibe off: :$TAIBE_PORT слушается"
+alive "$O_SER" || fail "serena-taibe off остановил serena хоста"
+run_hub o-restart2 restart
+[ "$RC" = 0 ] || fail "restart без метки: код $RC"
+port_busy "$TAIBE_PORT" && fail "restart после off вернул serena-taibe"
+run_hub o-check3 check
+[ "$RC" = 0 ] || fail "check после off: код $RC, нужен 0"
+run_hub o-status serena-taibe status
+grep -q "выключена (по требованию)" "$TMP/o-status.out" && grep -q "не запущена" "$TMP/o-status.out" \
+  || fail "serena-taibe status после off: $(cat "$TMP/o-status.out")"
+ok "serena-taibe off: метка снята, процесс остановлен, serena хоста жива; restart её не вернул; check — 0"
+touch "$TAI_MARK"
+run_hub o-check4 check
+[ "$RC" = 1 ] || fail "check: метка есть, а serena-taibe не запущена — код $RC, нужен 1"
+grep -q "✗ serena-taibe: не запущен" "$TMP/o-check4.out" || fail "check не назвал serena-taibe"
+ok "метка есть, а :$TAIBE_PORT не слушается — check 1 «serena-taibe: не запущен»"
+rm -f "$TAI_MARK"
+run_hub o-stop stop
+[ "$RC" = 0 ] || fail "stop: код $RC"
+assert_clean "stop после «по требованию»"
 
 # ── боевые не тронуты ───────────────────────────────────────────────────────────────────────
 step "боевые процессы на месте"

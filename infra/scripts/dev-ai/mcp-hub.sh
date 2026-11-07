@@ -5,8 +5,8 @@
 # Три фоновых процесса, запускаются этой командой (при входе в систему — LaunchAgent, `autostart on`):
 #   serena       — по streamable HTTP, :9121, код продукта-хоста (HOST_ROOT, HR). Одна LSP-индексация на всех
 #                  клиентов вместо копии на каждого (копии мешали друг другу стартовать);
-#   serena-taibe — :9122, сам tAIBE (основная папка), без дашборда. Обе только на чтение, версия закреплена
-#                  (lib/mcp-hub-serena.sh, README хаба — «Две serena»);
+#   serena-taibe — :9122, сам tAIBE (основная папка), без дашборда; по требованию (`serena-taibe on`, владелец 08.11 —
+#                  память). Обе только на чтение, версия закреплена (lib/mcp-hub-serena.sh, README — «Две serena»);
 #   хаб          — агрегатор 1mcp, :3050/mcp. Список серверов — infra/mcp-hub/mcp.json (копируется в
 #                  ~/.config/hr-helper-mcp-hub/: рядом с конфигом 1mcp пишет своё состояние, в репо
 #                  ему не место).
@@ -15,16 +15,18 @@
 # :9121, а `serena` из .mcp.json tAIBE (:9122) перекрывает её в сессиях tAIBE.
 # Подключение клиентов, OAuth, добавление сервера — infra/mcp-hub/README.md.
 #
-#   bash infra/scripts/dev-ai/mcp-hub.sh {init|auth|admin|start|stop|restart [hub]|status|check|logs [N]|sync|connectors|connect <имя>|disconnect <имя>|autostart on|off|status}
+#   bash infra/scripts/dev-ai/mcp-hub.sh {init|auth|admin|start|stop|restart [hub]|status|check|logs [N]|sync|connectors|connect <имя>|disconnect <имя>|autostart on|off|status|serena-taibe on|off|status}
 #   npm run mcp-hub:init | mcp-hub:auth | mcp-hub:start | mcp-hub:stop | mcp-hub:restart | mcp-hub:status | mcp-hub:logs | mcp-hub:sync
 #   npm run mcp-hub:connectors | mcp-hub:connect -- <имя> | mcp-hub:disconnect -- <имя>
 #   npm run mcp-hub:autostart -- on|off|status
+#   npm run mcp-hub:serena-taibe -- on|off|status
 #
 # init  — то, что запускает задача VS Code при открытии папки (.vscode/tasks.json): start + auth.
 # auth  — открыть авторизацию всем, кто её ждёт (lib/mcp-hub-admin.sh); коннекторы — там же.
 # autostart — LaunchAgent macOS, который при входе в систему зовёт start (lib/mcp-hub-autostart.sh).
-# check — код 0, только если обе serena и хаб живы, держат свои порты, обслуживают свои папки и
-#         отвечают (lib/mcp-hub-health.sh; его зовёт ai-restart-all.sh).
+# check — код 0, только если serena и хаб (и serena-taibe, когда включена) живы, держат свои порты, обслуживают
+#         свои папки и отвечают (lib/mcp-hub-health.sh; его зовёт ai-restart-all.sh).
+# serena-taibe — включить/выключить вторую serena: метка в каталоге конфига, start/restart/init/автозапуск её читают.
 #
 # Процессы стартуют в своей сессии (конец задачи VS Code их не гасит), stop гасит всё дерево,
 # start/stop/restart — под замком, сироты прошлых запусков берутся под управление или
@@ -55,7 +57,6 @@ if [ "${MCP_HUB_ALLOW_WORKTREE:-}" = 1 ]; then SERVE_ROOT="$ROOT"; fi
 HUB_PORT="${MCP_HUB_PORT:-3050}"
 SERENA_PORT="${SERENA_HTTP_PORT:-9121}"
 SERENA_TAIBE_PORT="${SERENA_TAIBE_PORT:-9122}"
-[ "$SERENA_PORT" != "$SERENA_TAIBE_PORT" ] || { echo "✗ serena и serena-taibe на одном порту :$SERENA_PORT" >&2; exit 1; }
 ONE_MCP_VERSION="0.39.3"
 CONFIG_SRC="$ROOT/infra/mcp-hub/mcp.json"
 CONFIG_DIR="${MCP_HUB_CONFIG_DIR:-$HOME/.config/hr-helper-mcp-hub}"
@@ -86,7 +87,6 @@ CONNECTORS_FILE="$CONFIG_DIR/connectors.enabled"
 
 # Ожидания, секунды. Первый старт serena (uvx + LSP на монорепо) — до минуты.
 SERENA_START_WAIT=120
-SERENA_TAIBE_START_WAIT=120
 HUB_START_WAIT=60
 SETTLE_WAIT="${MCP_HUB_SETTLE_WAIT:-3}"
 STOP_WAIT="${MCP_HUB_STOP_WAIT:-10}"
@@ -403,7 +403,7 @@ cmd_sync() {
 }
 
 # Сбой одного сервиса не обрывает старт другого: код 1 в конце, если упал хоть один. Хаб — до serena-taibe: от неё
-# он не зависит, а её первый старт (LSP на tAIBE) — до двух минут, и `restart hub` ждал бы их.
+# он не зависит, а её первый старт (LSP на tAIBE) — до двух минут. serena-taibe — только с меткой (`serena-taibe on`).
 cmd_start() {
   local rc=0
   mkdir -p "$LOG_DIR"
@@ -412,7 +412,7 @@ cmd_start() {
     || echo "⚠ python3 ($(command -v python3)) без пакета mcp — ai-council в хабе не стартует" >&2
   ensure_service serena || rc=1
   ensure_service hub || rc=1
-  ensure_service serena-taibe || rc=1
+  if serena_taibe_enabled; then ensure_service serena-taibe || rc=1; fi
   cmd_status
   return "$rc"
 }
@@ -420,9 +420,9 @@ cmd_start() {
 cmd_stop() {
   local rc=0
   stop_service hub || rc=1
-  stop_service serena-taibe || rc=1
+  stop_service serena-taibe || rc=1 # и без метки: работающая выключенная тоже гасится
   stop_service serena || rc=1
-  if [ "$rc" = 0 ]; then echo "Хаб и обе serena остановлены."; else echo "✗ остановлено не всё — npm run mcp-hub:status" >&2; fi
+  if [ "$rc" = 0 ]; then echo "Хаб и serena остановлены."; else echo "✗ остановлено не всё — npm run mcp-hub:status" >&2; fi
   return "$rc"
 }
 
@@ -475,13 +475,14 @@ main() {
     connectors) cmd_connectors ;;
     connect) cmd_connect "${2:-}" ;;
     disconnect) cmd_disconnect "${2:-}" ;;
+    serena-taibe) cmd_serena_taibe "${2:-status}" ;; # on/off — под замком, on — из основной папки
     autostart)
       # plist записывает путь к репо: из worktree он вёл бы в копию, которую потом удалят.
       if [ "${2:-status}" = on ]; then { from_main_only autostart && host_known autostart; } || return 1; fi
       cmd_autostart "${2:-status}"
       ;;
     *)
-      echo "usage: $0 {init|auth|admin|start|stop|restart [hub]|status|check|logs [N]|sync|connectors|connect <имя>|disconnect <имя>|autostart on|off|status}" >&2
+      echo "usage: $0 {init|auth|admin|start|stop|restart [hub]|status|check|logs [N]|sync|connectors|connect <имя>|disconnect <имя>|autostart on|off|status|serena-taibe on|off|status}" >&2
       return 2
       ;;
   esac

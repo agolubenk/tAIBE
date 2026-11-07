@@ -17,6 +17,11 @@ SERENA_GIT="git+https://github.com/oraios/serena@$SERENA_PIN"
 SERENA_BIN="${SERENA_BIN-$HOME/.local/bin/serena}"
 SERENA_HOME_DIR="${SERENA_HOME:-$HOME/.serena}"
 SERENA_TEMPLATES="$ROOT/infra/mcp-hub/serena"
+SERENA_TAIBE_START_WAIT=120
+# serena-taibe — по требованию (решение владельца 08.11: память машины). Метка включения — файл рядом с конфигом,
+# как connectors.enabled; у нестандартного порта своя (serena-taibe-<порт>.enabled), как у pid-файла.
+SERENA_TAIBE_MARK="$CONFIG_DIR/serena-taibe$SERENA_TAIBE_SFX.enabled"
+[ "$SERENA_PORT" != "$SERENA_TAIBE_PORT" ] || { echo "✗ serena и serena-taibe на одном порту :$SERENA_PORT" >&2; exit 1; }
 
 abs_dir() { # <имя переменной> <путь>: печатает абсолютный существующий каталог (через cd && pwd); иначе код 1
   case "$2" in
@@ -159,4 +164,39 @@ spawn_serena() { # <serena|serena-taibe>
     --transport streamable-http --host 127.0.0.1 --port "$(port_of "$kind")" "${dashboard[@]}"
   echo "$SPAWNED_PID" >"$pid_file"
   await_service "$kind" "$SPAWNED_PID" "$(start_wait_of "$kind")"
+}
+
+serena_taibe_enabled() { [ -f "$SERENA_TAIBE_MARK" ]; }
+serena_taibe_off_line() { echo "  · serena-taibe: выключена (по требованию) — включить: npm run mcp-hub:serena-taibe -- on"; }
+
+# on — метка и старт сейчас (из основной папки); off — снять метку и остановить; status — что включено и что работает.
+# start, restart, init и автозапуск поднимают serena-taibe только с меткой; stop гасит её всегда.
+cmd_serena_taibe() { # <on|off|status>
+  local pid
+  case "$1" in
+    on)
+      from_main_only "serena-taibe -- on" || return 1
+      lock_acquire "$CONFIG_DIR/lifecycle.lock"
+      mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+      touch "$SERENA_TAIBE_MARK"
+      echo "→ serena-taibe включена ($SERENA_TAIBE_MARK): start, restart и автозапуск её поднимают"
+      ensure_service serena-taibe && return 0
+      echo "✗ serena-taibe не поднялась — метка осталась, check вернёт 1; логи: npm run mcp-hub:logs" >&2
+      return 1
+      ;;
+    off)
+      lock_acquire "$CONFIG_DIR/lifecycle.lock"
+      rm -f "$SERENA_TAIBE_MARK"
+      echo "→ serena-taibe выключена: метки $SERENA_TAIBE_MARK нет, start и restart её не поднимают"
+      stop_service serena-taibe
+      ;;
+    status)
+      if serena_taibe_enabled; then echo "  ✓ serena-taibe: включена ($SERENA_TAIBE_MARK)"; else serena_taibe_off_line; fi
+      if pid="$(pidfile_pid serena-taibe)"; then echo "    работает: pid $pid, :$SERENA_TAIBE_PORT"; else echo "    не запущена"; fi
+      ;;
+    *)
+      echo "usage: $0 serena-taibe on|off|status" >&2
+      return 2
+      ;;
+  esac
 }
