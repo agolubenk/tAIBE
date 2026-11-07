@@ -1,0 +1,195 @@
+{
+  "slug": "taibe",
+  "title": "aiBoards&eval (tAIBE)",
+  "active": false,
+  "repo_root": "/Users/agolubenko/Desktop/Development/tAIBE",
+  "product_tree": "eval",
+  "team": {
+    "project_dir": "/Users/agolubenko/.claude/projects/-Users-agolubenko-Desktop-Development-tAIBE",
+    "roles": [
+      "coord",
+      "plan",
+      "frontend",
+      "backend",
+      "release",
+      "boards"
+    ],
+    "active_hours": 8
+  },
+  "github": {
+    "repo": "agolubenk/tAIBE",
+    "min_lenses": 3,
+    "quorum_to": [
+      "release"
+    ],
+    "path_roles": [
+      [
+        "boards/apps/web/",
+        "frontend"
+      ],
+      [
+        "boards/apps/site/",
+        "frontend"
+      ],
+      [
+        "boards/apps/docs/",
+        "frontend"
+      ],
+      [
+        "boards/apps/api/",
+        "backend"
+      ],
+      [
+        "boards/packages/",
+        "backend"
+      ],
+      [
+        "boards/deploy/",
+        "release"
+      ],
+      [
+        "infra/",
+        "release"
+      ],
+      [
+        ".github/",
+        "release"
+      ],
+      [
+        "eval/",
+        "boards"
+      ],
+      [
+        "docs/",
+        "plan"
+      ],
+      [
+        "process/",
+        "plan"
+      ],
+      [
+        ".claude/",
+        "coord"
+      ]
+    ],
+    "lens_roles": [
+      [
+        "бэкенд",
+        "backend"
+      ],
+      [
+        "backend",
+        "backend"
+      ],
+      [
+        "данные",
+        "backend"
+      ],
+      [
+        "фронтенд",
+        "frontend"
+      ],
+      [
+        "frontend",
+        "frontend"
+      ],
+      [
+        "дизайн",
+        "frontend"
+      ],
+      [
+        "qa",
+        "coord"
+      ],
+      [
+        "тестир",
+        "coord"
+      ],
+      [
+        "провер",
+        "coord"
+      ],
+      [
+        "безопасн",
+        "release"
+      ],
+      [
+        "security",
+        "release"
+      ],
+      [
+        "контрол",
+        "release"
+      ],
+      [
+        "devops",
+        "release"
+      ],
+      [
+        "выпуск",
+        "release"
+      ],
+      [
+        "glm",
+        "release"
+      ],
+      [
+        "модель",
+        "release"
+      ],
+      [
+        "t-boards",
+        "boards"
+      ],
+      [
+        "доск",
+        "boards"
+      ],
+      [
+        "продукт",
+        "plan"
+      ],
+      [
+        "архитект",
+        "plan"
+      ],
+      [
+        "аналит",
+        "plan"
+      ],
+      [
+        "проектир",
+        "plan"
+      ]
+    ]
+  },
+  "queue": {
+    "source_roles": [
+      [
+        "supertick|t-boards|aiBoards|d4dev|админ-хост",
+        "boards"
+      ],
+      [
+        "Связь|Координатор|Менеджер|Ноушен|QA|Тестировщик|Проверка|coord",
+        "coord"
+      ],
+      [
+        "Контроль|DevOps|Выпуск|Безопасность|release",
+        "release"
+      ],
+      [
+        "Бэкенд|backend|Данные",
+        "backend"
+      ],
+      [
+        "Фронтенд|frontend|Дизайнер",
+        "frontend"
+      ],
+      [
+        "Проектировщик|Аналитик|Архитектор|Исследователь|plan",
+        "plan"
+      ]
+    ],
+    "match": "-taibe-"
+  }
+}
