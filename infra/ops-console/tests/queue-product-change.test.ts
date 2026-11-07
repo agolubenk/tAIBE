@@ -1,7 +1,7 @@
 /**
  * Смена продукта пункта (v2-lite, часть 3, server/queue/product-change.ts) и фильтр списка ?product=: владелец
- * переносит пункт вместе с ответом, сессии прежнего продукта его больше не видят, захват входящего снимается, вердикт
- * мёржа не переезжает; фильтр — только видимые продукты.
+ * переносит пункт вместе с ответом, сессии прежнего продукта его больше не видят; входящее и вердикт мёржа не
+ * переезжают; фильтр — только видимые продукты.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
 import { freshApp } from './helpers'
@@ -50,6 +50,9 @@ describe('смена продукта пункта', () => {
     const hist = (r: Awaited<ReturnType<typeof call>>) => (r.json?.events as { action: string }[]).map((e) => e.action)
     expect(hist(await call(hr, 'GET', '/history/items/d-move-1'))).toContain('product')
     expect(hist(await call(taibe, 'GET', '/history/items/d-move-1'))).toEqual(['product'])
+    // Владелец видит оба продукта — событие одно; у ответа — своё событие.
+    expect(hist(await call(owner, 'GET', '/history/items/d-move-1')).filter((a) => a === 'product')).toHaveLength(1)
+    expect(hist(await call(taibe, 'GET', '/history/checks/d-move-1'))).toEqual(['product'])
     // Сессия нового продукта отвечает в перенесённый пункт, прежнего — нет.
     expect((await call(taibe, 'PATCH', '/db/checks/d-move-1', { data: { agentNote: 'продолжаю' } })).status).toBe(200)
     expect((await call(hr, 'PATCH', '/db/checks/d-move-1', { data: { agentNote: 'я тоже' } })).status).toBe(404)
@@ -70,14 +73,12 @@ describe('смена продукта пункта', () => {
     expect((await call(owner, 'POST', '/items/m-move-8/product', { to: 'taibe' })).json).toMatchObject({ changed: true })
   })
 
-  it('захват входящего сессией прежнего продукта снимается', async () => {
+  it('входящее не уходит из HR, пока автопередача одна: 409, пункт и захват на месте', async () => {
     const inbox = { kind: 'inbox', title: 'Входящее', inbox: { type: 'task', urgency: 'queue', text: 'текст', originKind: 'self', forwarded: false, receivedAt: '2026-11-07T00:00:00Z' } }
     expect((await call(owner, 'PUT', '/db/items/i-move-1', { data: inbox })).status).toBe(200)
     expect((await call(hr, 'PATCH', '/db/checks/i-move-1', { data: { agentStatus: 'taken', agentBy: 'hr-sess' } })).status).toBe(200)
-    expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'taibe' })).json).toMatchObject({ changed: true })
-    const check = await call(taibe, 'GET', '/db/checks/i-move-1')
-    expect((check.json?.data as Record<string, unknown>).agentBy).toBeUndefined()
-    expect((await call(taibe, 'PATCH', '/db/checks/i-move-1', { data: { agentStatus: 'taken', agentBy: 'taibe-sess' } })).status).toBe(200)
+    expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'taibe' })).status).toBe(409)
+    expect((await call(hr, 'GET', '/db/checks/i-move-1')).json).toMatchObject({ product: 'hr-helper', data: { agentBy: 'hr-sess' } })
   })
 })
 
@@ -85,9 +86,9 @@ describe('фильтр списка ?product=', () => {
   it('владелец — один продукт; токен — только из видимых, невидимый — пусто', async () => {
     await getDb().insert(oqDocs).values({ collection: 'items', id: 'lavaeon-d-1', dataJson: JSON.stringify(decision('Lavaeon')), product: 'lavaeon' })
     expect(ids(await call(owner, 'GET', '/db/items?product=lavaeon'))).toEqual(['lavaeon-d-1'])
-    expect(ids(await call(owner, 'GET', '/db/items?product=taibe'))).toEqual(['d-move-1', 'i-move-1', 'm-move-8'])
+    expect(ids(await call(owner, 'GET', '/db/items?product=taibe'))).toEqual(['d-move-1', 'm-move-8'])
     expect(ids(await call(taibe, 'GET', '/db/items?product=hr-helper'))).toEqual([])
-    expect(ids(await call(hr, 'GET', '/db/items?product=hr-helper'))).toEqual(['m-move-7'])
+    expect(ids(await call(hr, 'GET', '/db/items?product=hr-helper'))).toEqual(['i-move-1', 'm-move-7'])
     expect(ids(await call(owner, 'GET', '/db/items?open=1&product=lavaeon'))).toEqual(['lavaeon-d-1'])
     expect((await call(owner, 'GET', '/db/items?product=BAD!')).json?.docs).toEqual([])
   })

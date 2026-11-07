@@ -15,14 +15,16 @@ export const PRODUCTS_JS = String.raw`(function () {
     '.oq-product-filter { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; margin-left: 8px; }' +
     '.oq-product-hint { color: var(--muted); font-size: 12px; }';
   document.head.appendChild(css);
-  var products = [], names = {}, filter = '', busy = {};
+  var products = [], names = Object.create(null), filter = '', busy = Object.create(null), byId = Object.create(null);
   function readFilter() { try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } }
   function saveFilter(v) { try { if (v) localStorage.setItem(KEY, v); else localStorage.removeItem(KEY); } catch (e) { /* приватное окно */ } }
-  function productOf(id) {
+  // Продукты пунктов — индексом на проход decorate, а не поиском по снимку на каждый пункт.
+  function indexProducts() {
     var docs = window.__oqDocs ? window.__oqDocs('items') : [];
-    for (var i = 0; i < docs.length; i++) if (docs[i].id === id) return docs[i].product || DEFAULT;
-    return DEFAULT;
+    byId = Object.create(null);
+    for (var i = 0; i < docs.length; i++) byId[docs[i].id] = docs[i].product || DEFAULT;
   }
+  function productOf(id) { return byId[id] || DEFAULT; }
   function option(slug, label, selected) {
     var o = document.createElement('option');
     o.value = slug;
@@ -76,13 +78,14 @@ export const PRODUCTS_JS = String.raw`(function () {
       head.appendChild(box);
     }
     var s = box.querySelector('select');
-    if (s.dataset.product !== p && !busy[id]) {
+    if (!busy[id] && (s.dataset.product !== p || !s.children.length)) {
       s.dataset.product = p;
       s.textContent = '';
       products.forEach(function (x) { s.appendChild(option(x.slug, x.name, x.slug === p)); });
       if (!names[p]) s.appendChild(option(p, p, true));
     }
-    el.classList.toggle('oq-off', !!filter && p !== filter);
+    // Пункт из ссылки «#item=<id>» виден при любом фильтре.
+    el.classList.toggle('oq-off', !!filter && p !== filter && !el.classList.contains('is-target'));
   }
   function decorateBar() {
     var bar = document.querySelector('header .toolbar');
@@ -102,6 +105,7 @@ export const PRODUCTS_JS = String.raw`(function () {
     bar.appendChild(box);
   }
   function decorate() {
+    indexProducts();
     decorateBar();
     var hint = document.querySelector('.oq-product-hint');
     if (hint) hint.hidden = !filter;
@@ -116,6 +120,8 @@ export const PRODUCTS_JS = String.raw`(function () {
   fetch('/api/oq/v1/products', { credentials: 'same-origin' }).then(function (res) { return res.ok ? res.json() : { products: [] }; })
     .then(function (j) {
       products = Array.isArray(j.products) ? j.products.filter(function (x) { return x && typeof x.slug === 'string' && typeof x.name === 'string'; }) : [];
+      // Без справочника — страница как до v2-lite: ни меток, ни фильтра.
+      if (!products.length) return;
       products.forEach(function (x) { names[x.slug] = x.name; });
       filter = readFilter();
       if (filter && !names[filter]) { filter = ''; saveFilter(''); }

@@ -1,13 +1,13 @@
 /**
  * Смена продукта у пункта (v2-lite, часть 3): только владелец — страница /queue и бот. Пункт и ответ на него меняются
- * одной транзакцией; вложения следуют за пунктом сами (их видимость — по продукту пункта). Версии растут: тег списка
- * меняется и у владельца, страница и сессии видят новый продукт на следующем опросе.
+ * одной транзакцией. Версии растут: тег списка меняется и у владельца, страница и сессии видят новый продукт на
+ * следующем опросе. Ответ без пункта (пункт удалили после переноса) остаётся в новом продукте и держит его id.
  */
 import { and, eq } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
-import { listProducts } from './products'
+import { DEFAULT_PRODUCT, listProducts } from './products'
 import type { Actor } from './store'
 
 export interface ProductChange {
@@ -30,27 +30,31 @@ export async function changeItemProduct(actor: Actor, id: string, to: string, re
     if (data.kind === 'merge' && (data.sha || data.base)) {
       throw apiError(409, 'У пункта мёржа есть вердикт «Контроля» для его продукта — сначала уберите вердикт или заведите пункт заново')
     }
+    // Входящее — только в HR, пока автопередача одна (relay HR, фаза 4a плана): у другого продукта его никто не возьмёт,
+    // а страница и бот показывали бы «передаётся сессии» без срока.
+    if (data.kind === 'inbox' && to !== DEFAULT_PRODUCT) {
+      throw apiError(409, 'Входящее пока живёт только в hr-helper: автопередача по продуктам ещё не подключена')
+    }
     const at = new Date()
     const check = await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)) })
-    // Захват входящего сессией прежнего продукта снимается: та сессия пункт больше не видит.
-    const checkData = check ? (JSON.parse(check.dataJson) as Record<string, unknown>) : null
-    const released = data.kind === 'inbox' && checkData && typeof checkData.agentBy === 'string'
-    if (check && checkData) {
-      if (released) delete checkData.agentBy
+    if (check) {
       await tx
         .update(oqDocs)
-        .set({ product: to, version: check.version + 1, updatedAt: at, updatedBy: actor.name, ...(released ? { dataJson: JSON.stringify(checkData) } : {}) })
+        .set({ product: to, version: check.version + 1, updatedAt: at, updatedBy: actor.name })
         .where(and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)))
     }
     await tx
       .update(oqDocs)
       .set({ product: to, version: item.version + 1, updatedAt: at, updatedBy: actor.name })
       .where(and(eq(oqDocs.collection, 'items'), eq(oqDocs.id, id)))
-    const after = JSON.stringify({ from: item.product, to, reason: reason.slice(0, 500), ...(released ? { releasedClaim: true } : {}) })
-    // Событие — в обоих продуктах: история пункта видна и прежнему продукту (что пункт ушёл), и новому.
+    const after = JSON.stringify({ from: item.product, to, reason: reason.slice(0, 500) })
+    // Событие — в обоих продуктах: история видна и прежнему продукту (что пункт ушёл), и новому; владелец видит одно
+    // (docHistory схлопывает одинаковые). У ответа — своё событие: каждое изменение — строка журнала.
+    const event = (collection: 'items' | 'checks', product: string) => ({ at, actor: actor.name, collection, docId: id, action: 'product', afterJson: after, product })
     await tx.insert(oqEvents).values([
-      { at, actor: actor.name, collection: 'items', docId: id, action: 'product', afterJson: after, product: item.product },
-      { at, actor: actor.name, collection: 'items', docId: id, action: 'product', afterJson: after, product: to },
+      event('items', item.product),
+      event('items', to),
+      ...(check ? [event('checks', item.product), event('checks', to)] : []),
     ])
     return { id, from: item.product, to, changed: true }
   })
