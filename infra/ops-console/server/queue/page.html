@@ -377,7 +377,7 @@ details.agent-howto { background: var(--surface); border: 1px dashed var(--line)
 details.agent-howto summary { cursor: pointer; font-weight: 600; }
 details.agent-howto pre { background: var(--code-bg); border-radius: 6px; padding: 10px; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; }
 .empty { font-size: 13px; color: var(--muted); }
-/* Карточки Notion у строки плана: кнопка в заметке отчёта и окно со списком (вне #report — его читает бот) */
+/* Карточки t-boards у строки плана: кнопка в заметке отчёта и окно со списком (вне #report — его читает бот) */
 .cards-btn { font: inherit; font-size: 12px; line-height: 1.4; color: var(--accent); background: var(--accent-soft); border: 0; border-radius: 4px; padding: 2px 7px; margin-left: 4px; cursor: pointer; white-space: nowrap; }
 dialog.cards-dlg { width: min(720px, calc(100vw - 32px)); max-height: min(80vh, 900px); border: 1px solid var(--line); border-radius: 10px; padding: 0; background: var(--surface); color: var(--ink); }
 dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
@@ -458,7 +458,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
           <li><a href="#card-owner" data-dash="owner">Ваша очередь по дням <span class="jump-c"></span></a></li>
           <li><a href="#card-plan" data-dash="plan">Задачи агентов: план и факт <span class="jump-c"></span></a></li>
           <li><a href="#card-status" data-dash="status">Готовность по разделам <span class="jump-c"></span></a></li>
-          <li><a href="#notion-card" data-dash="notion">Карточки Notion в плане <span class="jump-c"></span></a></li>
+          <li><a href="#plan-cards" data-dash="cards">Карточки t-boards в плане <span class="jump-c"></span></a></li>
           <li><a href="#card-lag" data-dash="lag">Отставание от плана <span class="jump-c"></span></a></li>
           <li><a href="#card-pr" data-dash="pr">Сколько PR ждали мёржа <span class="jump-c"></span></a></li>
           <li><a href="#card-gantt" data-dash="gantt">Диаграмма Ганта <span class="jump-c"></span></a></li>
@@ -531,7 +531,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   <div class="col-reports" id="reports-col" role="region" aria-label="Ход работ: отчёты и графики" tabindex="0">
   <section id="agents" class="dash">
     <div class="sec-head"><h2 class="sec">Ход работ</h2><span class="sec-count" id="dash-asof"></span></div>
-    <p class="sec-note">Задачи агентов и ваша очередь — в цифрах и на шкале времени. Агенты обновляют статусы сами. Отставание — дни после плановой даты. План от 15.10 предварительный: это оценка агента, сроки уточняются по мере работы. С 20.10 к строкам плана прикреплены карточки Notion — кнопка «N карточек» в отчёте открывает список.</p>
+    <p class="sec-note">Задачи агентов и ваша очередь — в цифрах и на шкале времени. Агенты обновляют статусы сами. Отставание — дни после плановой даты. План от 15.10 предварительный: это оценка агента, сроки уточняются по мере работы. К строкам плана прикреплены карточки t-boards — кнопка «N карточек» в отчёте открывает список.</p>
     <div class="kpis" id="kpis"></div>
     <div class="card" id="card-owner">
       <h3>Ваша очередь по дням</h3>
@@ -550,15 +550,15 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
       <div class="lg" id="lg-status"></div>
       <div class="hbars" id="ch-status"></div>
     </div>
-    <div class="card" id="notion-card" hidden>
-      <h3>Карточки Notion в плане</h3>
+    <div class="card" id="plan-cards" hidden>
+      <h3>Карточки t-boards в плане</h3>
       <p class="sub">Сколько карточек «Задач» и «Ошибок» прикреплено к строкам каждого направления и сколько из них уже закрыто («закрыто», «выполненные», «завершённые»).</p>
-      <div class="lg" id="lg-notion"></div>
-      <div class="hbars" id="ch-notion"></div>
-      <div id="notion-trend" hidden>
-        <p class="sub">Незакрытые карточки Notion (включая «на ревью») в дни сверок — из сводки, которую агенты обновляют при каждой сверке с Notion.</p>
-        <div class="lg" id="lg-notion-trend"></div>
-        <div class="chart" id="ch-notion-trend"></div>
+      <div class="lg" id="lg-plan-cards"></div>
+      <div class="hbars" id="ch-plan-cards"></div>
+      <div id="plan-cards-trend" hidden>
+        <p class="sub">Незакрытые карточки t-boards (включая «на ревью») в дни сверок — из сводки, которую агенты обновляют при каждой сверке с досками.</p>
+        <div class="lg" id="lg-plan-cards-trend"></div>
+        <div class="chart" id="ch-plan-cards-trend"></div>
       </div>
     </div>
     <div class="card" id="card-lag">
@@ -658,7 +658,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 
   <section data-section="inbox" id="sec-inbox">
     <div class="sec-head"><h2 class="sec">Входящие</h2><span class="sec-count" data-count></span></div>
-    <p class="sec-note">Что вы переслали боту в Telegram. Ведёт агент-сессия: карточка в Notion или фикс. Статус агента виден в пункте и приходит в Telegram. «Принято» — когда результат вас устраивает.</p>
+    <p class="sec-note">Что вы переслали боту в Telegram. Ведёт агент-сессия: карточка t-boards или фикс. Статус агента виден в пункте и приходит в Telegram. «Принято» — когда результат вас устраивает.</p>
     <p class="relay-note" id="relay-note" aria-live="polite" hidden></p>
     <p class="oqf-usage" id="oqf-usage" hidden></p>
     <div class="list"></div>
@@ -670,6 +670,8 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     <summary>Для агентов: как добавить пункт владельцу и отметить свою работу</summary>
     <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd без basePlanEnd — 409.</p>
     <pre>items/&lt;id&gt;  пункт владельцу (id: d-… решение, m-… мёрж, s-… сервер, c-… ручная проверка)
+  Продукт — hr-helper, taibe, lavaeon: у продукта не hr-helper id начинается с его slug (taibe-m-93).
+  Продукт пункта меняет только владелец (выбор «Продукт:» у пункта).
   {kind: 'decision'|'merge'|'server'|'check', title, body, cmd, after, cmd2,
    options: [{id, label, hint}]   // только decision; рекомендуемый первым, hint: 'рекомендую'
    chips: [['деплой','deploy'] | ['ssh','ssh'] | ['после #N','wait'] | ['текст','']],
@@ -682,7 +684,8 @@ checks/&lt;id&gt;  ответ владельца {done, choice, note, at} — ч
 work/&lt;id&gt;  задача агента для отчёта, Ганта и роадмапа
   {title, track: 'tails'|'providers'|'council'|'secfront'|'ops'|&lt;id направления из базы&gt;, status, who: 'agent'|'owner',
    session, planStart, planEnd, start, end ('YYYY-MM-DD'), milestone: bool, note, link, linkText, order,
-   cards: [{id: '&lt;32 hex страницы Notion&gt;', t: заголовок, k: 'bug'|'task', s: severity|priority, st: статус, c: код}]}
+   cards: [{key: '&lt;ключ карточки t-boards, OPS-34&gt;', ws: '&lt;slug пространства, aiboards-eval&gt;', t: заголовок, k: 'bug'|'task',
+            s: severity|priority, st: статус (колонка), c: код}]}
   planEnd не переписывать: от него считается отставание. Сдвиг плана — новый planEnd
   и basePlanEnd = прежняя дата, причина — в note. В строку коллеги — только своё поле (oq_patch, ifVersion).
 
@@ -690,10 +693,10 @@ work/track-&lt;id&gt;  направление «Хода работ» {kind: 'tr
   Пять базовых направлений вшиты в страницу, документ с их id меняет имя и порядок.
   Новое направление без цвета получает общий цвет продуктовых блоков (--c6).
 
-work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs: {critical, high, medium, low, none},
+work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs: {critical, high, medium, low, none},
   tasks: {P0, P1, P2, P3, none}, inPlan, notInPlan, halfBaked, history: [{d: 'YYYY-MM-DD', bugs, tasks, inPlan}]}
-  Пишет агент при сверке с Notion (история — точка на каждый день сверки). У карточки Notion поле «Очередь» =
-  id строки плана: по нему видно, что карточка уже в плане; новая карточка без него — кандидат в строку блока.</pre>
+  Пишет агент при сверке с досками (история — точка на каждый день сверки). Карточка в плане — та, чей ключ есть
+  в cards какой-либо строки; новая карточка без строки — кандидат в строку блока.</pre>
   </details>
 
   <footer>PR #122 (мажорные обновления зависимостей) — трекер, не вливать. Ребрендинг lavaeon отложен.</footer>
@@ -706,6 +709,8 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
   var REPO = 'https://github.com/agolubenk/HR_Helper-v2/pull/';
   // Вложения входящих (page-files.ts, ставится раньше): блок в карточке и «📎» в форме. Нет — страница без файлов.
   var FILES = window.__oqFiles || null;
+  // Архив: пункты, вшитые в страницу артефакта 15–16.10, — тексты как были (ссылки на прежний трекер задач в них —
+  // история; канон открытого — t-boards). Новые пункты приходят из базы (DB_ITEMS).
   var ITEMS = [
     // ── 15.10: хвосты после сверки ────────────────────────────────────────
     { id: 'd-close-onreview', added: '2026-10-15', kind: 'decision', title: 'Закрыть в Notion то, что уже влито, но висит «на ревью» или «открыто»',
@@ -1272,27 +1277,37 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     });
     return list.filter(function (t) { return !t.archived; }).sort(function (a, b) { return a.order - b.order; });
   }
-  var CARD_DONE = { 'закрыто': 1, 'выполненные': 1, 'завершённые': 1 };
+  // Закрывающие колонки досок: русские названия (пространство Lavaeon) и slug (aiBoards&eval).
+  var CARD_DONE = { 'закрыто': 1, 'выполненные': 1, 'завершённые': 1, done: 1, closed: 1 };
+  var CARD_REVIEW = { 'на ревью': 1, 'in-review': 1 };
+  var T_BOARDS = 'https://d4dev.admin.hrhelper.space';
+  var CARD_KEY = /^[A-Z][A-Z0-9]{0,15}-\d{1,7}$/, CARD_WS = /^[a-z0-9][a-z0-9-]{0,59}$/;
   var CARD_RANK = { critical: 0, high: 1, medium: 2, low: 3, P0: 0, P1: 1, P2: 2, P3: 3 };
   function rankOf(c) { return CARD_RANK[c.s] == null ? 9 : CARD_RANK[c.s]; }
-  // Карточки Notion строки: открытые раньше закрытых, ошибки раньше задач, внутри — по severity/priority.
+  // Карточки t-boards строки (ключ и пространство): открытые раньше закрытых, ошибки раньше задач, внутри — по
+  // severity/priority. Строки до перехода на доски несут id страницы прежнего трекера (32 hex) — архив: без ссылки.
   function cleanCards(list) {
     if (!Array.isArray(list)) return [];
     var seen = {};
     return list.slice(0, 150).map(function (c) {
-      if (!c || typeof c.id !== 'string' || !/^[0-9a-f]{32}$/.test(c.id) || seen[c.id]) return null;
-      seen[c.id] = 1;
+      if (!c) return null;
+      var board = typeof c.key === 'string' && CARD_KEY.test(c.key) && typeof c.ws === 'string' && CARD_WS.test(c.ws);
+      var old = !board && typeof c.id === 'string' && /^[0-9a-f]{32}$/.test(c.id);
+      var uid = board ? c.ws + '/' + c.key : old ? c.id : '';
+      if (!uid || seen[uid]) return null;
+      seen[uid] = 1;
       var st = typeof c.st === 'string' ? c.st.slice(0, 40) : '';
       return {
-        id: c.id, t: typeof c.t === 'string' ? c.t.slice(0, 160) : '', k: c.k === 'bug' ? 'bug' : 'task',
+        key: board ? c.key : '', ws: board ? c.ws : '', archived: old,
+        t: typeof c.t === 'string' ? c.t.slice(0, 160) : '', k: c.k === 'bug' ? 'bug' : 'task',
         s: typeof c.s === 'string' ? c.s.slice(0, 12) : '', st: st, c: typeof c.c === 'string' ? c.c.slice(0, 24) : '',
-        closed: !!CARD_DONE[st], review: st === 'на ревью',
+        closed: !!CARD_DONE[st], review: !!CARD_REVIEW[st],
       };
     }).filter(Boolean).sort(function (a, b) {
       return (a.closed - b.closed) || ((a.k === 'bug' ? 0 : 1) - (b.k === 'bug' ? 0 : 1)) || (rankOf(a) - rankOf(b));
     });
   }
-  function cardUrl(id) { return 'https://app.notion.com/p/' + id; }
+  function cardUrl(c) { return c.key ? T_BOARDS + '/' + c.ws + '/task/' + c.key : ''; }
   // Подпись ссылки не выдаёт себя за другой адрес — правило бота (infra/owner-queue-bot/tg-html.mjs, linkHostNote).
   // Регулярки и списки ниже тест ops-console сверяет с ботом на точное равенство, ответы — на всех сочетаниях.
   // Без пометки — только подпись буква в букву равная хосту или адресу ссылки; « (⚠️ ведёт на хост)» — подпись
@@ -1360,7 +1375,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     var r = { dated: 0, undated: 0, owner: 0 };
     rows.forEach(function (w) {
       (w.cards || []).forEach(function (c) {
-        if (c.closed) return;
+        if (c.closed || c.archived) return;
         if (w.who === 'owner') r.owner++;
         else if (w.planEnd) r.dated++;
         else r.undated++;
@@ -1625,7 +1640,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     { id: 'secfront', name: 'Безопасность и фронтенд', c: 'var(--c4)' },
     { id: 'ops', name: 'Ops-консоль и прод', c: 'var(--c5)' },
   ];
-  var TRACKS = [], TRACK = {}, DB_TRACKS = [], NOTION_STATS = null;
+  var TRACKS = [], TRACK = {}, DB_TRACKS = [], CARD_STATS = null;
   function rebuildTracks() {
     TRACKS = mergeTracks(SEED_TRACKS, DB_TRACKS);
     TRACK = {};
@@ -1634,6 +1649,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
   rebuildTracks();
   var PR = function (n) { return 'https://github.com/agolubenk/HR_Helper-v2/pull/' + n; };
   // Базовый план от 15.10. Прошлые даты — факты (открытие и мёрж PR, ответы владельца), будущие — оценка агента.
+  // Архив, как ITEMS: тексты и ссылки строк — как были 15.10.
   var WORK_SEED = [
     { id: 'w-disk', track: 'tails', order: 1, title: 'Диск на проде: причина и потолок кэша сборки', who: 'agent', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', note: 'Диск занимал кэш сборки образов. Потолок 20 ГБ — #141. По логу деплоя 15.10 занято 23 % (было 68 %).', link: PR(141), linkText: '#141' },
     { id: 'w-styles', track: 'tails', order: 2, title: 'Закрыть P0 «сайт без стилей» после мёржа #130', who: 'agent', status: 'doing', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-15', note: 'После мёржа закрытие пропустили. Запись о закрытии — #162, её вливаете вы. Статус в Notion — после вашего входа в хаб.', link: PR(162), linkText: '#162' },
@@ -1698,7 +1714,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
       if (!/^[A-Za-z0-9_.~:@+-]{1,80}$/.test(r.id)) return;
       var d = r.data, w = {};
       if (d.kind === 'track') { tracks.push(trackFromDb(r.id, d)); return; }
-      if (d.kind === 'stats') { if (r.id === 'notion-stats') stats = statsFromDb(d); return; }
+      if (d.kind === 'stats') { if (r.id === 'cards-stats') stats = statsFromDb(d); return; }
       WORK_FIELDS.forEach(function (k) { if (typeof d[k] === 'string') w[k] = d[k].slice(0, k === 'note' ? 600 : 200); });
       if (typeof d.order === 'number') w.order = d.order;
       if (typeof d.milestone === 'boolean') w.milestone = d.milestone;
@@ -1710,7 +1726,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     DB_WORK = next;
     DB_WORK_LOADED = true;
     DB_TRACKS = tracks;
-    NOTION_STATS = stats;
+    CARD_STATS = stats;
     rebuildTracks();
     scheduleDash();
   }
@@ -1941,21 +1957,22 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     }).join('');
   }
 
-  // Карточки Notion по направлениям (из списков строк) и открытые карточки по дням (из сводки сверки).
-  function notionChart(ws) {
-    var card = document.getElementById('notion-card'), st = NOTION_STATS;
+  // Карточки t-boards по направлениям (из списков строк) и открытые карточки по дням (из сводки сверки).
+  function cardsChart(ws) {
+    var card = document.getElementById('plan-cards'), st = CARD_STATS;
     var KS = [['closed', 'закрыто', 'var(--st-good)'], ['review', 'на ревью — ждёт вашего «да»', 'var(--st-warn)'], ['open', 'открыто', 'var(--st-none)']];
     var rows = TRACKS.map(function (tr) {
       var c = { closed: 0, review: 0, open: 0 };
-      ws.forEach(function (w) { if (w.track === tr.id && w.cards) w.cards.forEach(function (x) { c[x.closed ? 'closed' : x.review ? 'review' : 'open']++; }); });
+      // Карточки прежнего трекера (архив) — не карточки досок: в счёт не идут.
+      ws.forEach(function (w) { if (w.track === tr.id && w.cards) w.cards.forEach(function (x) { if (!x.archived) c[x.closed ? 'closed' : x.review ? 'review' : 'open']++; }); });
       return { name: tr.name, c: c, total: c.closed + c.review + c.open };
     }).filter(function (r) { return r.total; });
     card.hidden = !rows.length && !st;
     if (card.hidden) return;
     var max = 1;
     rows.forEach(function (r) { if (r.total > max) max = r.total; });
-    legend('lg-notion', KS.map(function (k) { return { t: k[1], c: k[2] }; }));
-    document.getElementById('ch-notion').innerHTML = rows.map(function (r) {
+    legend('lg-plan-cards', KS.map(function (k) { return { t: k[1], c: k[2] }; }));
+    document.getElementById('ch-plan-cards').innerHTML = rows.map(function (r) {
       var segs = KS.filter(function (k) { return r.c[k[0]]; }).map(function (k) {
         return '<span style="flex:' + r.c[k[0]] + ' 1 0;background:' + k[2] + '"' + tipAttr([r.name, k[1] + ': ' + r.c[k[0]] + ' из ' + r.total]) + '></span>';
       }).join('');
@@ -1963,13 +1980,13 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
         '<div class="hb-bar"><div style="display:flex;gap:2px;width:' + Math.max(4, r.total * 100 / max) + '%">' + segs + '</div></div>' +
         '<span class="hb-val">' + r.c.closed + ' из ' + r.total + '</span></div>';
     }).join('') || '<p class="empty">К строкам плана карточки ещё не прикреплены.</p>';
-    var trend = document.getElementById('notion-trend'), h = st ? st.history.slice().sort(function (a, b) { return a.d < b.d ? -1 : 1; }) : [];
+    var trend = document.getElementById('plan-cards-trend'), h = st ? st.history.slice().sort(function (a, b) { return a.d < b.d ? -1 : 1; }) : [];
     trend.hidden = h.length < 2;
     if (trend.hidden) return;
     // Точки — дни сверок (подписи дат на оси), без выдуманных значений между ними.
-    legend('lg-notion-trend', [{ t: 'Ошибки открыты', c: 'var(--c2)', cls: 'ln' }, { t: 'Задачи открыты', c: 'var(--c1)', cls: 'ln' }]);
-    lineChart(document.getElementById('ch-notion-trend'), {
-      label: 'Открытые карточки Notion по дням сверок', days: h.map(function (x) { return dParse(x.d); }), todayIdx: -1,
+    legend('lg-plan-cards-trend', [{ t: 'Ошибки открыты', c: 'var(--c2)', cls: 'ln' }, { t: 'Задачи открыты', c: 'var(--c1)', cls: 'ln' }]);
+    lineChart(document.getElementById('ch-plan-cards-trend'), {
+      label: 'Открытые карточки t-boards по дням сверок', days: h.map(function (x) { return dParse(x.d); }), todayIdx: -1,
       series: [{ name: 'Ошибки', color: 'var(--c2)', vals: h.map(function (x) { return x.bugs; }) }, { name: 'Задачи', color: 'var(--c1)', vals: h.map(function (x) { return x.tasks; }) }],
       extra: function (j) { return h[j].inPlan ? 'в плане: ' + h[j].inPlan : ''; },
     });
@@ -2038,7 +2055,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     document.getElementById('cards-dlg-list').innerHTML = w.cards.map(function (c) {
       var kind = c.k === 'bug' ? 'ошибка' : 'задача';
       return '<li' + (c.closed ? ' class="is-closed"' : '') + '><span class="sev sev-' + esc(c.s || 'none') + '">' + esc(c.s || kind) + '</span>' +
-        '<a href="' + cardUrl(c.id) + '" target="_blank" rel="noopener">' + esc(c.t || c.id) + '</a>' +
+        (cardUrl(c) ? '<a href="' + cardUrl(c) + '" target="_blank" rel="noopener">' + esc((c.key + ' ' + c.t).trim()) + '</a>' : '<span>' + esc(c.t || 'карточка') + ' (архив)</span>') +
         '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + '</small></li>';
     }).join('');
     if (typeof cardsDlg.showModal === 'function') cardsDlg.showModal(); else cardsDlg.setAttribute('open', '');
@@ -2161,14 +2178,14 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
       [nf(pr.median, 1) + ' ч', 'медиана ожидания мёржа · PR за 7 дней: ' + pr.merged7],
       [msDone + ' из ' + ms.length, 'вех достигнуто'],
     ];
-    var st = NOTION_STATS, cp = cardsInPlan(ws);
+    var st = CARD_STATS, cp = cardsInPlan(ws);
     if (st) {
       var b = st.bugs, k = st.tasks;
-      tiles.push([String(b.critical + b.high + b.medium + b.low + b.none), 'ошибок открыто в Notion · critical ' + b.critical + ' · high ' + b.high + ' · medium ' + b.medium + ' · low ' + b.low]);
-      tiles.push([String(k.P0 + k.P1 + k.P2 + k.P3 + k.none), 'задач открыто в Notion · P0 ' + k.P0 + ' · P1 ' + k.P1 + ' · P2 ' + k.P2 + ' · P3 ' + k.P3]);
+      tiles.push([String(b.critical + b.high + b.medium + b.low + b.none), 'ошибок открыто на досках · critical ' + b.critical + ' · high ' + b.high + ' · medium ' + b.medium + ' · low ' + b.low]);
+      tiles.push([String(k.P0 + k.P1 + k.P2 + k.P3 + k.none), 'задач открыто на досках · P0 ' + k.P0 + ' · P1 ' + k.P1 + ' · P2 ' + k.P2 + ' · P3 ' + k.P3]);
     }
     if (cp.dated + cp.undated + cp.owner) {
-      tiles.push([cp.dated + ' из ' + (cp.dated + cp.undated + cp.owner), 'открытых карточек Notion со сроком · без срока ' + cp.undated + ' · ждут вашего решения ' + cp.owner + (st ? ' · вне плана ' + st.notInPlan : '')]);
+      tiles.push([cp.dated + ' из ' + (cp.dated + cp.undated + cp.owner), 'открытых карточек со сроком · без срока ' + cp.undated + ' · ждут вашего решения ' + cp.owner + (st ? ' · вне плана ' + st.notInPlan : '')]);
     }
     var ready = dashReady();
     document.getElementById('kpis').innerHTML = tiles.map(function (x) { return '<div class="kpi"><b>' + esc(ready ? x[0] : '…') + '</b><span>' + esc(x[1]) + '</span></div>'; }).join('');
@@ -2187,7 +2204,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     lastW = widthOf(document.getElementById('ch-owner'));
     try { r.owner = ownerChart(t); } catch (e) { document.getElementById('ch-owner').textContent = 'График не построился: ' + e.message; }
     try { planChart(ws, t); } catch (e) { document.getElementById('ch-plan').textContent = 'График не построился: ' + e.message; }
-    try { notionChart(ws); } catch (e) { document.getElementById('ch-notion').textContent = 'График не построился: ' + e.message; }
+    try { cardsChart(ws); } catch (e) { document.getElementById('ch-plan-cards').textContent = 'График не построился: ' + e.message; }
     try { r.pr = prChart(); } catch (e) { document.getElementById('ch-pr').textContent = 'График не построился: ' + e.message; }
     return r;
   }
@@ -2280,7 +2297,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     var done = ws.filter(function (w) { return w.status === 'done'; }).length, cp = cardsInPlan(ws), cards = cp.dated + cp.undated + cp.owner;
     var v = {
       plan: [done + ' из ' + ws.length + ' готово'],
-      notion: [cards ? 'карточек: ' + cards : ''],
+      cards: [cards ? 'карточек: ' + cards : ''],
       lag: [lag.late ? 'просрочено: ' + lag.late : 'в срок', lag.late > 0],
       pr: [c.pr.merged7 ? 'медиана ' + nf(c.pr.median, 1) + ' ч' : ''],
       report: [ws.length + ' ' + plural(ws.length, 'задача', 'задачи', 'задач')],
@@ -2288,7 +2305,7 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
     jumpD.querySelectorAll('a[data-dash]').forEach(function (a) {
       var x = v[a.dataset.dash] || [''], cnt = a.querySelector('.jump-c');
       cnt.textContent = dashReady() ? x[0] : '…'; cnt.classList.toggle('hot', dashReady() && !!x[1]);
-      if (a.dataset.dash === 'notion') a.parentElement.hidden = document.getElementById('notion-card').hidden;
+      if (a.dataset.dash === 'cards') a.parentElement.hidden = document.getElementById('plan-cards').hidden;
     });
   }
   function closeJumps(except) { document.querySelectorAll('details.jump[open]').forEach(function (d) { if (d !== except) d.open = false; }); }
@@ -2358,7 +2375,8 @@ work/notion-stats  сводка сверки с Notion {kind: 'stats', at, bugs:
   function paintRelayItem(el, it, e, d) {
     var rl = el.querySelector('.relay-st');
     if (!rl) return;
-    var html = !d && !e.agentStatus ? relayHtml(it.id) : '';
+    var other = window.__oqProductOf && window.__oqProductOf(it.id) !== 'hr-helper';
+    var html = d || e.agentStatus ? '' : other ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id);
     if (rl.innerHTML !== html) rl.innerHTML = html;
     rl.hidden = !html;
   }

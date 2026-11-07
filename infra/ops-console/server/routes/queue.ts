@@ -14,7 +14,8 @@ import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
-import { canSee, DEFAULT_PRODUCT, listProducts, visibilityKey } from '../queue/products'
+import { changeItemProduct } from '../queue/product-change'
+import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_SLUG, visibilityKey, type Visibility } from '../queue/products'
 import { SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
 const writeSchema = z.object({
@@ -26,6 +27,12 @@ const writeSchema = z.object({
   release: z.boolean().optional(),
 })
 const mergeSchema = z.object({ sha: z.string() })
+const productChangeSchema = z.object({ to: z.string().regex(PRODUCT_SLUG), reason: z.string().max(500).optional() })
+
+function withProductFilter(products: Visibility, slug: string | undefined): Visibility {
+  if (slug === undefined || slug === '') return products
+  return PRODUCT_SLUG.test(slug) && canSee(products, slug) ? [slug] : []
+}
 
 
 function collectionOf(raw: string): Collection {
@@ -57,13 +64,21 @@ queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {
   const col = collectionOf(c.req.param('col'))
   // ?open=1 — только открытые владельцу пункты, по тому же правилу, что на странице (MCP oq_list open_only). Ответ
   // зависит и от checks — ETag по обеим коллекциям; open: true — сервер фильтр применил (старый сервер параметр не знает).
-  // Ключ кэша сжатого тела — с видимостью: у токенов разных продуктов разные списки.
-  const products = c.get('oqActor').products
+  // Ключ кэша сжатого тела — с видимостью: у токенов разных продуктов разные списки. ?product=<slug> — только этот
+  // продукт из видимых (фильтр владельца, параметр product у MCP); невидимый — пустой список, как несуществующий.
+  const products = withProductFilter(c.get('oqActor').products, c.req.query('product'))
   const vis = visibilityKey(products)
   if (col === 'items' && c.req.query('open') === '1') {
     return listResponse(c, `items?open=1|${vis}`, await openItemsTag(products), async () => ({ ...listBody(await listOpenItems(products)), open: true }))
   }
   return listResponse(c, `${col}|${vis}`, await collectionTag(col, products), async () => listBody(await listDocs(col, products)))
+})
+
+/** Продукт пункта меняет владелец (страница, бот): пункт и ответ — одной транзакцией (queue/product-change.ts). */
+queueRoutes.post('/items/:id/product', requireScope('owner'), async (c) => {
+  throttleWrite(c.get('oqActor').name)
+  const body = await parseBody(c, productChangeSchema)
+  return c.json(await changeItemProduct(c.get('oqActor'), c.req.param('id'), body.to, body.reason ?? ''))
 })
 
 /** Продукты, которые видит актор: метка и фильтр страницы, параметр product у MCP. */

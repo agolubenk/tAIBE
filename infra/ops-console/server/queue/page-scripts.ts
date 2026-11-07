@@ -33,7 +33,8 @@ export const SHIM_JS = String.raw`(function () {
         s.fail = 0;
         if (!j) return;
         // version — чтобы страница отличала снимок, снятый до своего сохранения (ревью #324, minor).
-        s.last = j.docs.map(function (d) { return { id: d.id, data: d.data, version: d.version }; });
+        // product — продукт документа (v2-lite): метка и фильтр страницы (page-products.ts), рядом с data.
+        s.last = j.docs.map(function (d) { return { id: d.id, data: d.data, version: d.version, product: d.product }; });
         s.cbs.forEach(function (cb) { try { cb.ok(s.last); } catch (e) { console.error(e); } });
       })
       .catch(function (e) {
@@ -87,6 +88,8 @@ export const SHIM_JS = String.raw`(function () {
   window.claude = { use: function (cap) { return Promise.resolve(cap === 'db' ? db : null); } };
   // Последний снимок коллекции — для кнопок ENHANCE (одобрена ли голова PR), без лишнего запроса.
   window.__oqDocs = function (col) { var s = subs[col]; return s && s.last ? s.last : []; };
+  // Перечитать коллекцию сейчас — после записи мимо db (смена продукта, page-products.ts).
+  window.__oqRefresh = function (col) { if (subs[col]) poll(col); };
 })();`
 
 export const ENHANCE_JS = String.raw`(function () {

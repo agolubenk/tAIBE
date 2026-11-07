@@ -45,7 +45,7 @@ const httpsLink = z.object({ href: z.string().regex(/^https:\/\/[^\s"<>]+$/).max
 export const SESSION_MAX = 1000
 
 // Входящее из Telegram (kind: 'inbox'): владелец переслал боту сообщение, бот уточнил тип и срочность кнопками.
-// Ведёт агент-сессия: карточка Notion или фикс; протокол — docs/specs/owner-queue.md «Входящие из Telegram».
+// Ведёт агент-сессия: карточка t-boards или фикс; протокол — docs/specs/owner-queue.md «Входящие из Telegram».
 export const INBOX_TYPES = ['bug', 'idea', 'task', 'alert'] as const
 export const INBOX_URGENCIES = ['now', 'queue'] as const
 export const INBOX_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
@@ -395,7 +395,18 @@ export async function docHistory(collection: Collection, id: string, products: V
     .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own))
     .orderBy(desc(oqEvents.at))
     .limit(Math.min(limit, 100))
-  return rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: r.afterJson ? JSON.parse(r.afterJson) : null }))
+  const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: r.afterJson ? JSON.parse(r.afterJson) : null, raw: r.afterJson }))
+  // Смена продукта пишет событие в оба продукта; кто видит оба (владелец), получает одно.
+  const seen = new Set<string>()
+  return events
+    .filter((e) => {
+      if (e.action !== 'product') return true
+      const k = `${e.at}|${e.actor}|${e.raw}`
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    })
+    .map(({ raw: _raw, ...e }) => e)
 }
 
 /**
