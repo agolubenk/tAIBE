@@ -198,9 +198,12 @@ async function mergeConfirm(chatId, key, ver) {
   const approval = m.approval ?? 'ok';
   const what = m.skipCi ? 'без деплоя ([skip ci])' : m.deploys && m.baseRef === 'main' ? '<b>запустит деплой прода</b> (~3 минуты 502)' : 'деплой не ожидается';
   const lines = [
-    `🚀 <b>Влить PR #${m.pr}?</b>`,
+    `🚀 <b>Влить ${m.repo ? esc(m.repo) : 'PR '}#${m.pr}?</b>`,
     esc(m.title),
     `Коммит: <code>${esc(m.headSha.slice(0, 7))}</code> (${esc(m.headRef)} → ${esc(m.baseRef)})`,
+    // Консоль до Q-30 способа не отдаёт — тогда это merge.
+    `Способ: ${m.method === 'squash' ? 'squash — одним коммитом' : 'merge — коммитом слияния'}`,
+    ...(m.subject ? [`Заголовок: <code>${esc(m.subject)}</code>`] : []),
     `Последствие: ${what}`,
   ];
   if (approval === 'missing') lines.push('⛔ Нет вердикта «Контроля» (поля sha и base в пункте) — вливать нельзя');

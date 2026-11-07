@@ -4,7 +4,9 @@
  *    Вердикта нет — кнопка неактивна, сервер отказывает; голова или база PR сменились после вердикта — отказ до
  *    нового вердикта (одна и та же голова в PR на склейку и в PR на main — разные вливания);
  *  - вливается ровно тот head SHA, который показали владельцу (GitHub сам откажет, если ветку допушили);
- *  - [skip ci] — из пункта (deploy: 'skip' или команда с [skip ci]); иначе мёрж в main запускает деплой прода;
+ *  - [skip ci] — из пункта (deploy: 'skip', команда или subject с [skip ci]); иначе мёрж в main запускает деплой прода;
+ *  - способ (merge|squash) и заголовок коммита — из пункта (mergeMethod, subject) или его команды (--squash, --subject);
+ *  - PR другого репозитория (поле repo или -R в команде) — честный отказ 409 до запроса к GitHub (Q-29);
  *  - пока идёт деплой, мёрж с деплоем запрещён: влитые подряд схлопнулись бы в один деплой;
  *  - не чаще одного мёржа за 30 с на консоль; каждое действие — в журнал очереди.
  * Токен — отдельный от токена опроса деплоев (Настройки → GitHub): fine-grained, только этот репозиторий,
@@ -68,24 +70,60 @@ export interface MergePlan {
   approvedSha: string | null
   /** База PR, для которой дан вердикт (поле `base` пункта); null — вердикта нет. */
   approvedBase: string | null
+  /** Репозиторий PR (`owner/name`) из поля `repo` или `-R` команды; null — репозиторий из настроек консоли. */
+  repo: string | null
+  /** Способ мёржа: поле `mergeMethod` или `--squash` команды; по умолчанию merge. */
+  method: 'merge' | 'squash'
+  /** Заголовок коммита: поле `subject` или `--subject` команды; null — заголовок GitHub по способу. */
+  subject: string | null
 }
 
 const FULL_SHA = /^[0-9a-f]{40}$/
 export const BRANCH_NAME = /^[A-Za-z0-9._/-]{1,200}$/
+const SUBJECT = /^[^\r\n]{1,300}$/
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null)
+/** Значение флага из `gh pr merge …`: `-R x`, `--repo=x`, `--subject "x"`, `-t 'x'`. */
+function cmdFlag(merge: string, flags: string): string | null {
+  const m = merge.match(new RegExp(`\\s(?:${flags})(?:=|\\s+)(?:"([^"]*)"|'([^']*)'|([^\\s"']+))`))
+  return m ? (m[1] ?? m[2] ?? m[3] ?? null) : null
+}
 
 /** Номер PR и последствия мёржа — из полей пункта или (для пунктов из артефакта) из его команды и меток. */
 export function mergePlan(item: Record<string, unknown>): MergePlan {
   const cmd = typeof item.cmd === 'string' ? item.cmd : ''
-  const pr = typeof item.pr === 'number' ? item.pr : Number(cmd.match(/gh pr merge\s+(\d+)/)?.[1]) || null
+  // Флаги — только из самой команды мёржа: `curl -s` или `git log -t` после && не должны менять способ.
+  const merge = cmd.match(/gh pr merge(?:[^\n;&|"']|"[^"]*"|'[^']*')*/)?.[0] ?? ''
+  const pr = typeof item.pr === 'number' ? item.pr : Number(merge.match(/^gh pr merge\s+(\d+)/)?.[1]) || null
   const approvedSha = typeof item.sha === 'string' && FULL_SHA.test(item.sha) ? item.sha : null
   const approvedBase = typeof item.base === 'string' && BRANCH_NAME.test(item.base) ? item.base : null
-  const skipCi = item.deploy === 'skip' || /\[skip ci\]/i.test(cmd)
+  // Не проверяем формат здесь: кривое имя не совпадёт с репозиторием консоли, и mergeInfo откажет (fail-closed).
+  const repo = str(item.repo) ?? cmdFlag(merge, '-R|--repo')
+  const method = item.mergeMethod === 'squash' || (item.mergeMethod === undefined && /\s(?:--squash|-s)(?=\s|$)/.test(merge)) ? 'squash' : 'merge'
+  const subjectRaw = str(item.subject) ?? cmdFlag(merge, '--subject|-t')
+  const subject = subjectRaw && SUBJECT.test(subjectRaw.trim()) ? subjectRaw.trim() : null
+  const skipCi = item.deploy === 'skip' || /\[skip ci\]/i.test(cmd) || /\[skip ci\]/i.test(subject ?? '')
   // Мёрж в main с кодом деплоит прод — поэтому деплой ожидается, если пункт не говорит обратное:
   // [skip ci], deploy: 'none' (только docs/md — paths-ignore) или метка «без деплоя».
   const chips = Array.isArray(item.chips) ? (item.chips as unknown[][]) : []
   const saysNoDeploy = chips.some((c) => Array.isArray(c) && typeof c[0] === 'string' && /без деплоя/i.test(c[0]))
   const deploys = item.deploy ? item.deploy === 'deploy' : !skipCi && !saysNoDeploy
-  return { pr, skipCi, deploys, approvedSha, approvedBase }
+  return { pr, skipCi, deploys, approvedSha, approvedBase, repo, method, subject }
+}
+
+/** Тело PUT /pulls/N/merge: способ из пункта, заголовок — свой или GitHub по способу, с [skip ci] если нужно. */
+export function mergeRequestBody(
+  info: Pick<MergeInfo, 'pr' | 'title' | 'headRef' | 'skipCi' | 'method' | 'subject' | 'repo'>,
+  sha: string,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { sha, merge_method: info.method }
+  let title = info.subject
+  if (!title && info.skipCi) {
+    title = info.method === 'squash' ? `${info.title} (#${info.pr})` : `Merge pull request #${info.pr} from ${info.repo.split('/')[0]}/${info.headRef}`
+  }
+  if (title && info.skipCi && !/\[skip ci\]/i.test(title)) title = `${title} [skip ci]`
+  if (title) body.commit_title = title
+  return body
 }
 
 /** Вердикт против PR на GitHub: нет вердикта (нужны оба поля), сменилась голова, сменилась база — или всё совпало. */
@@ -114,8 +152,10 @@ async function deployRunning(repo: string, workflow: string, token: string): Pro
   return runsSchema.parse(JSON.parse(res.text)).workflow_runs.some((r) => r.status !== 'completed')
 }
 
-export interface MergeInfo extends MergePlan {
+export interface MergeInfo extends Omit<MergePlan, 'repo'> {
   itemId: string
+  /** Репозиторий, где лежит PR (всегда репозиторий консоли: чужой mergeInfo отклоняет до запроса). */
+  repo: string
   title: string
   url: string
   headSha: string
@@ -142,12 +182,17 @@ export async function mergeInfo(itemId: string): Promise<MergeInfo> {
   const plan = mergePlan(item.data)
   if (!plan.pr) throw apiError(422, 'В пункте нет номера PR (поле pr или команда gh pr merge N)')
   const { repo, workflow, token } = await settings()
+  // Номер PR без репозитория читался из репозитория консоли: tAIBE #41 показывался как влитый HR #41 (Q-29).
+  if (plan.repo && plan.repo.toLowerCase() !== repo.toLowerCase()) {
+    throw apiError(409, `PR #${plan.pr} — в репозитории ${plan.repo}, а мёрж из очереди подключён только к ${repo}: влейте командой из пункта в терминале`)
+  }
   const res = await call('GET', `/repos/${repo}/pulls/${plan.pr}`, token)
   if (res.status === 404) throw apiError(404, `PR #${plan.pr} не найден`)
   if (res.status !== 200) throw apiError(503, `GitHub: HTTP ${res.status}`)
   const pr = prSchema.parse(JSON.parse(res.text))
   return {
     ...plan,
+    repo,
     itemId,
     title: pr.title,
     url: pr.html_url,
@@ -182,9 +227,7 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string): Prom
   if (info.deploys && !info.skipCi && info.deployRunning && info.baseRef === 'main') throw apiError(409, 'Сейчас идёт деплой — дождитесь его окончания, затем вливайте')
   const { repo, token } = await settings()
   lastMergeAt = Date.now()
-  const owner = repo.split('/')[0]
-  const body: Record<string, unknown> = { sha, merge_method: 'merge' }
-  if (info.skipCi) body.commit_title = `Merge pull request #${info.pr} from ${owner}/${info.headRef} [skip ci]`
+  const body = mergeRequestBody(info, sha)
   const res = await call('PUT', `/repos/${repo}/pulls/${info.pr}/merge`, token, body)
   if (res.status !== 200) {
     lastMergeAt = 0
@@ -193,11 +236,11 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string): Prom
   }
   const merged = JSON.parse(res.text) as { sha?: string }
   const consequence = info.skipCi ? 'без деплоя ([skip ci])' : info.deploys && info.baseRef === 'main' ? 'запущен деплой прода' : 'деплой не ожидается'
-  const message = `Влит PR #${info.pr} (${sha.slice(0, 7)}), ${consequence}`
+  const message = `Влит PR #${info.pr} (${sha.slice(0, 7)}, ${info.method}), ${consequence}`
   const prevNote = (await getDoc('checks', itemId, '*'))?.data.note
   const note = typeof prevNote === 'string' && prevNote.trim() ? `${prevNote}\n${message}` : message
   await writeDoc({ name: actor.name, scopes: ['owner'], products: '*' }, 'checks', itemId, { done: true, note: note.slice(-20_000), at: new Date().toISOString() }, { merge: true })
-  await logEvent(actor.name, 'items', itemId, 'merge', { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi }, DEFAULT_PRODUCT)
+  await logEvent(actor.name, 'items', itemId, 'merge', { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi, method: info.method, repo }, DEFAULT_PRODUCT)
   return { sha: merged.sha ?? '', message }
 }
 

@@ -10,7 +10,7 @@ import { api, freshApp, login } from './helpers'
 import { OPEN_RULE_JS } from '../server/queue/open-rule'
 import { SHIM_JS } from '../server/queue/page-scripts'
 import { createToken, revokeToken } from '../server/queue/auth'
-import { mergePlan, setGithubTransportForTests, type GithubResponse } from '../server/queue/github'
+import { mergePlan, mergeRequestBody, setGithubTransportForTests, type GithubResponse } from '../server/queue/github'
 import { deleteDoc, importDoc, writeDoc } from '../server/queue/store'
 import { getGithubSettings, writeSetting } from '../server/settings/store'
 import { encryptSecret } from '../server/lib/crypto'
@@ -584,7 +584,9 @@ describe('мёрж из очереди', () => {
   const SHA = 'a'.repeat(40)
   let deployRunning = false
   let lastPut: { path: string; body: any } | null = null
+  const calls: string[] = []
   const github = async (method: string, path: string, _token: string, body?: unknown): Promise<GithubResponse> => {
+    calls.push(`${method} ${path}`)
     if (method === 'GET' && path.endsWith('/pulls/162')) {
       return { status: 200, text: JSON.stringify({ number: 162, title: 'Запись о закрытии', state: 'open', mergeable: true, html_url: 'https://github.com/x/pull/162', head: { sha: SHA, ref: 'docs/close-p0' }, base: { ref: 'main' } }) }
     }
@@ -602,6 +604,48 @@ describe('мёрж из очереди', () => {
     await bearer(agent).put('/db/items/m-172', { data: { kind: 'merge', title: '#162 — одобрена другая голова', pr: 162, sha: 'd'.repeat(40), base: 'main' } })
     await bearer(agent).put('/db/items/m-174', { data: { kind: 'merge', title: '#162 — одобрен для склейки', pr: 162, sha: SHA, base: 'review/ai-bundle' } })
     await bearer(agent).put('/db/items/m-175', { data: { kind: 'merge', title: '#162 — голова без базы', pr: 162, sha: SHA } })
+    // Q-29: tAIBE #162 с вердиктом — в команде (как писали до поля repo) и в поле.
+    await bearer(agent).put('/db/items/m-taibe-162', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: `gh pr merge 162 -R agolubenk/tAIBE --squash --match-head-commit ${SHA}` } })
+    await bearer(agent).put('/db/items/m-taibe-163', { data: { kind: 'merge', title: 'tAIBE #162', pr: 162, repo: 'agolubenk/tAIBE', sha: SHA, base: 'board-agents' } })
+    // Свой репозиторий в другом регистре — не чужой; Q-30: squash и свой заголовок.
+    await bearer(agent).put('/db/items/m-177', { data: { kind: 'merge', title: '#162 — squash', pr: 162, repo: 'AGOLUBENK/hr_helper-v2', mergeMethod: 'squash', subject: 'feat(oq): пункт мёржа (#162)', sha: SHA, base: 'main' } })
+  })
+
+  it('PR другого репозитория (-R в команде или поле repo) — 409 до запроса к GitHub, а не одноимённый PR консоли (Q-29)', async () => {
+    setGithubTransportForTests(github)
+    calls.length = 0
+    for (const id of ['m-taibe-162', 'm-taibe-163']) {
+      const info = await bearer(owner).get(`/merge/${id}`)
+      expect(info.status).toBe(409)
+      expect(info.json.error).toContain('в репозитории agolubenk/tAIBE')
+      expect(info.json.error).toContain('в терминале')
+      expect((await bearer(owner).post(`/merge/${id}`, { sha: SHA })).status).toBe(409)
+    }
+    expect(calls).toEqual([])
+    expect(lastPut).toBeNull()
+    const own = await bearer(owner).get('/merge/m-177')
+    expect(own.status).toBe(200)
+    expect(own.json).toMatchObject({ repo: 'agolubenk/HR_Helper-v2', method: 'squash', subject: 'feat(oq): пункт мёржа (#162)', approval: 'ok' })
+  })
+
+  it('способ, заголовок и репозиторий: поля пункта и флаги только самой команды gh pr merge (Q-30)', async () => {
+    expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --squash --subject "fix: a; b | c" && curl -s https://x' })).toMatchObject({ pr: 5, method: 'squash', subject: 'fix: a; b | c', repo: null })
+    expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --merge && curl -s https://x -t 1' })).toMatchObject({ method: 'merge', subject: null })
+    expect(mergePlan({ kind: 'merge', cmd: "gh pr merge 5 -s -t 'docs: x [skip ci]' --repo=agolubenk/tAIBE" })).toMatchObject({ method: 'squash', subject: 'docs: x [skip ci]', skipCi: true, repo: 'agolubenk/tAIBE' })
+    // Поле пункта главнее команды.
+    expect(mergePlan({ kind: 'merge', mergeMethod: 'merge', subject: 'x', cmd: 'gh pr merge 5 --squash --subject "y"' })).toMatchObject({ method: 'merge', subject: 'x' })
+    for (const data of [{ subject: 'a\nb' }, { mergeMethod: 'rebase' }, { repo: 'tAIBE' }]) {
+      expect((await bearer(agent).put('/db/items/m-178', { data: { kind: 'merge', title: '#5', pr: 5, ...data } })).status).toBe(422)
+    }
+  })
+
+  it('тело мёржа: squash со своим заголовком, [skip ci] дописывается, без заголовка — как у GitHub', () => {
+    const base = { pr: 7, title: 'feat: x', headRef: 'feat/x', repo: 'agolubenk/HR_Helper-v2', skipCi: false, method: 'merge' as const, subject: null }
+    expect(mergeRequestBody(base, SHA)).toEqual({ sha: SHA, merge_method: 'merge' })
+    expect(mergeRequestBody({ ...base, method: 'squash', subject: 'feat: x (#7)' }, SHA)).toEqual({ sha: SHA, merge_method: 'squash', commit_title: 'feat: x (#7)' })
+    expect(mergeRequestBody({ ...base, method: 'squash', skipCi: true }, SHA)).toMatchObject({ merge_method: 'squash', commit_title: 'feat: x (#7) [skip ci]' })
+    expect(mergeRequestBody({ ...base, skipCi: true }, SHA)).toMatchObject({ commit_title: 'Merge pull request #7 from agolubenk/feat/x [skip ci]' })
+    expect(mergeRequestBody({ ...base, skipCi: true, subject: 'docs: y [SKIP CI]' }, SHA)).toMatchObject({ commit_title: 'docs: y [SKIP CI]' })
   })
 
   it('вердикт «Контроля»: экран подтверждения говорит ok / missing / mismatch / base', async () => {
@@ -670,7 +714,9 @@ describe('мёрж из очереди', () => {
     const res = await bearer(owner).post('/merge/m-162', { sha: SHA })
     expect(res.status).toBe(200)
     expect(lastPut!.body).toMatchObject({ sha: SHA, merge_method: 'merge' })
-    expect(lastPut!.body.commit_title).toContain('[skip ci]')
+    // Заголовок из --subject команды — как есть, без второго [skip ci].
+    expect(lastPut!.body.commit_title).toBe('Merge pull request #162 from agolubenk/docs/close-p0 [skip ci]')
+    expect(res.json.message).toContain('merge')
     const check = await bearer(agent).get('/db/checks/m-162')
     expect(check.json.data.done).toBe(true)
     expect((await bearer(owner).post('/merge/m-162', { sha: SHA })).status).toBe(429)
