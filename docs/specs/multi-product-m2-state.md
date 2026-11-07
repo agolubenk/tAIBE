@@ -7,6 +7,9 @@
 > ([`multi-product-m1-instances.md`](multi-product-m1-instances.md)). Сверено с `board-agents@25d73636` и Mac
 > владельца 03.11 (роль 2). v1.1 — 6 находок линзы корректности (GLM, 04.11), сверено с `board-agents@3f77c84c` и
 > Mac 04.11. v1.2 — линзы ресурсов, продукта и краёв (GLM, 04.11 17:10): замок, полусостояние переноса, замеры.
+>
+> **OPS-25 (07.11, `d-ops25-plan-0711`):** для двух команд действует сужение — [`nerve-per-product.md`](../plans/roadmap/nerve-per-product.md):
+> состояние продукта по умолчанию остаётся в `eval/nerve/state/`, другие продукты — в `eval/nerve/state/products/<slug>/`; переноса `state_migrate.py` нет.
 
 ## Проблема
 

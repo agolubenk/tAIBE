@@ -22,7 +22,7 @@
 
 1. Скопировать в корень host-проекта: `.claude/`, `.agents/`, `.continue/`, `.windsurf/`, `.ai/`, `claude-plugins-official/`, `process/`, `eval/` (можно под другим именем папки — например, `supertick-eval/`), нужные сервисы `infra/` и `docs/plans/DONE.md` с `done/` — или только нужные части. Код, которому важно место дерева (`spawn_session.sh`, хук `context-threshold`, `mcp-t-boards.sh`, `wt-deps.sh`), находит его сам.
 2. Поправить пути инстанса: в `.claude/rules/*` секции `paths:` сейчас указывают на дерево первого хоста (`apps/backend/`, …) — заменить на пути host-проекта; правила предметной области (02–16) и доменные скиллы заменить своими.
-3. Настроить инстанс: `.claude/settings.json` (хуки), `eval/nerve/config.json` (`repo_root`, `product_tree` — имя папки eval в хосте, репозиторий GitHub, роли, `project_dir`, очередь владельца, бюджеты), затем пересобрать геномы ролей: `python3 -I eval/pipeline/genome/build.py`. Консилиум — `infra/ai-council/config.toml`; секреты — `infra/scripts/dev-ai/mcp-secret.sh` (env → Keychain).
+3. Настроить инстанс: `.claude/settings.json` (хуки), `instances/<slug>.json` продукта (`repo_root`, `product_tree` — имя папки eval в хосте, репозиторий GitHub, роли, `project_dir`) и `instances/_shared.json` (очередь владельца, бюджеты, `default_product`), затем собрать `eval/nerve/config.json` и геномы ролей: `python3 -I eval/nerve/products.py render && python3 -I eval/pipeline/genome/build.py`. Консилиум — `infra/ai-council/config.toml`; секреты — `infra/scripts/dev-ai/mcp-secret.sh` (env → Keychain).
 4. Прогнать проверки слоя — все должны быть зелёными:
    ```bash
    for t in .claude/hooks/test_*.py .claude/scripts/test_*.py; do python3 "$t"; done
