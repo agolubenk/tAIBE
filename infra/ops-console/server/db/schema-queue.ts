@@ -95,11 +95,10 @@ export const oqTokens = sqliteTable(
 
 /**
  * Продукты очереди (v2-lite): метка пункта, фильтр владельца, видимость токена. Строки — миграцией (0015); правки
- * через API нет. default — продукт id без префикса продукта.
+ * через API нет. Продукт id без префикса — hr-helper (DEFAULT_PRODUCT, queue/products.ts), не строка таблицы.
  */
 export const oqProducts = sqliteTable('oq_products', {
   slug: text('slug').primaryKey(),
   name: text('name').notNull(),
-  isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   createdAt: ts('created_at').notNull().default(now),
 })

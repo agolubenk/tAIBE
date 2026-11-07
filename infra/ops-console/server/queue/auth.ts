@@ -5,7 +5,7 @@
  */
 import type { MiddlewareHandler } from 'hono'
 import { getCookie } from 'hono/cookie'
-import { and, eq, gt, isNull, or } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { oqTokens } from '../db/schema'
 import { apiError, type AppEnv } from '../http-types'
@@ -24,11 +24,7 @@ export type QueueEnv = AppEnv & { Variables: AppEnv['Variables'] & { oqActor: Ac
 export interface TokenOptions {
   /** Продукты токена (slug); по умолчанию — HR, как у токенов до v2-lite. У owner — только «*» (он видит всё). */
   products?: string[]
-  /** Срок действия в днях, целое 1…3650; без него — бессрочный. */
-  expiresDays?: number
 }
-
-const EXPIRES_DAYS_MAX = 3650
 
 export async function createToken(name: string, scopes: Scope[], opts: TokenOptions = {}): Promise<{ id: number; token: string }> {
   const clean = [...new Set(scopes)].filter((s) => SCOPES.includes(s))
@@ -44,19 +40,12 @@ export async function createToken(name: string, scopes: Scope[], opts: TokenOpti
     const bad = products.filter((p) => !PRODUCT_SLUG.test(p) || !known.has(p))
     if (!products.length || bad.length) throw new Error(`Нет продуктов: ${bad.join(', ') || '(пусто)'}`)
   }
-  const days = opts.expiresDays
-  if (days !== undefined && !(Number.isInteger(days) && days >= 1 && days <= EXPIRES_DAYS_MAX)) {
-    throw new Error(`Срок — целое число дней от 1 до ${EXPIRES_DAYS_MAX}`)
-  }
-  // Имя — ключ тормоза записи и подпись в журнале: два действующих токена с одним именем делили бы лимит.
-  const live = and(eq(oqTokens.name, name.slice(0, 80)), isNull(oqTokens.revokedAt), or(isNull(oqTokens.expiresAt), gt(oqTokens.expiresAt, new Date())))
-  const taken = await getDb().select({ id: oqTokens.id }).from(oqTokens).where(live).limit(1)
-  if (taken.length) throw new Error(`Действующий токен «${name}» уже есть — отзовите его или выберите другое имя`)
-  const expiresAt = days ? new Date(Date.now() + days * 86_400_000) : null
+  // Срок (expires_at) проверяет actorFromToken, но токены его пока не получают: истечение без предупреждения — тихий
+  // 401 у бота и сессий. Выпуск со сроком — вместе с предупреждением.
   const token = TOKEN_PREFIX + randomToken(32)
   const [row] = await getDb()
     .insert(oqTokens)
-    .values({ name: name.slice(0, 80), hash: sha256Hex(token), scopes: clean.join(','), products: JSON.stringify(products), expiresAt })
+    .values({ name: name.slice(0, 80), hash: sha256Hex(token), scopes: clean.join(','), products: JSON.stringify(products) })
     .returning({ id: oqTokens.id })
   return { id: row!.id, token }
 }

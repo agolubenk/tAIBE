@@ -14,15 +14,13 @@ import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
-import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_SLUG, visibilityKey } from '../queue/products'
+import { canSee, DEFAULT_PRODUCT, listProducts, visibilityKey } from '../queue/products'
 import { deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
 const writeSchema = z.object({
   data: z.record(z.unknown()),
   ifVersion: z.number().int().nonnegative().optional(),
   ifAnswerAt: z.string().max(40).optional(),
-  /** Подтверждение продукта (v2-lite): сам продукт — пространство id; другой — 422 у нового, 409 у существующего. */
-  product: z.string().regex(PRODUCT_SLUG).optional(),
 })
 const mergeSchema = z.object({ sha: z.string() })
 
@@ -86,7 +84,6 @@ for (const [method, merge] of [['put', false], ['patch', true]] as const) {
       merge,
       ifVersion: body.ifVersion,
       ifAnswerAt: body.ifAnswerAt,
-      product: body.product,
     })
     return c.json(doc)
   })

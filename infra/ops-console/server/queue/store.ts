@@ -12,7 +12,7 @@ import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
 import { removeItemFiles } from './files/remove'
-import { canSee, DEFAULT_PRODUCT, listProducts, namespaceOf, NOT_FOUND, productForNew, type Product, type Visibility } from './products'
+import { canSee, DEFAULT_PRODUCT, listProducts, namespaceOf, notFound, productForNew, type Product, type Visibility } from './products'
 
 export const COLLECTIONS = ['checks', 'items', 'work'] as const
 export type Collection = (typeof COLLECTIONS)[number]
@@ -249,32 +249,34 @@ export interface WriteOptions {
    * 409, чтобы повтор старой правки (вкладка бота, заснувший телефон) не перезаписал новый (ревью #324, п. 1).
    */
   ifAnswerAt?: string
-  /** Подтверждение продукта нового документа (поле запроса, не data): сам продукт — пространство id. */
-  product?: string
 }
 
 export async function writeDoc(actor: Actor, collection: Collection, id: string, data: Record<string, unknown>, opts: WriteOptions): Promise<Doc> {
   if (!DOC_ID.test(id)) throw apiError(422, 'Недопустимый id документа')
-  if ('product' in data) throw apiError(422, 'product — не поле документа: продукт нового пункта — пространство его id, смена — отдельным запросом')
   const db = getDb()
   // Справочник продуктов — до транзакции: внутри неё все чтения только через tx (см. productForNew).
   const all = await listProducts()
   return db.transaction(async (tx) => {
     const row = await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
     // Чужой продукт — 404 до любых других проверок: ни версия, ни права по полям не раскрывают, что документ есть.
-    if (row && !canSee(actor.products, row.product)) throw apiError(404, NOT_FOUND)
+    if (row && !canSee(actor.products, row.product)) notFound(actor.products, all)
     // Пункт items/<id> для checks: продукт ответа — продукт пункта; входящее ли это — для захвата сессией.
     const itemRow = collection === 'checks'
       ? await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'items'), eq(oqDocs.id, id)) })
       : undefined
-    if (itemRow && !canSee(actor.products, itemRow.product)) throw apiError(404, NOT_FOUND)
+    if (itemRow && !canSee(actor.products, itemRow.product)) notFound(actor.products, all)
     // Новый пункт при уже существующем ответе (пункт удалили и создают заново) — продукт ответа: пара не расходится.
     const checkRow = collection === 'items' && !row
       ? await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)) })
       : undefined
-    if (checkRow && !canSee(actor.products, checkRow.product)) throw apiError(404, NOT_FOUND)
-    const product = productOf(actor, id, row, itemRow ?? checkRow, opts.product, all)
+    if (checkRow && !canSee(actor.products, checkRow.product)) notFound(actor.products, all)
+    const product = productOf(actor, id, row, itemRow ?? checkRow, all)
     const before = row ? (JSON.parse(row.dataJson) as Record<string, unknown>) : null
+    // Продукт — столбец, не поле data. Документ, где поле осталось с прежних времён (passthrough), полный PUT его копией
+    // не ломает: отказ — только новому или изменённому полю.
+    if ('product' in data && JSON.stringify(data.product) !== JSON.stringify(before?.product)) {
+      throw apiError(422, 'product — не поле документа: продукт нового пункта — пространство его id')
+    }
     if (opts.ifVersion !== undefined && (row?.version ?? 0) !== opts.ifVersion) {
       throw apiError(409, `Документ изменился (версия ${row?.version ?? 0}, у вас ${opts.ifVersion}) — перечитайте и повторите`)
     }
@@ -312,28 +314,22 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
 type Row = typeof oqDocs.$inferSelect
 
 /**
- * Продукт записи: у существующего документа — его строки (product в запросе другой — 409, смена — отдельным запросом);
- * у нового документа пары пункт–ответ — продукт второй половины пары (`pair`); иначе — пространство id
- * (queue/products.ts), product запроса — только подтверждение.
+ * Продукт записи: у существующего документа — его строки; у нового документа пары пункт–ответ — продукт второй половины
+ * пары (`pair`); иначе — пространство id (queue/products.ts).
  */
-function productOf(actor: Actor, id: string, row: Row | undefined, pair: Row | undefined, requested: string | undefined, all: readonly Product[]): string {
+function productOf(actor: Actor, id: string, row: Row | undefined, pair: Row | undefined, all: readonly Product[]): string {
   if (row) {
-    if (requested && requested !== row.product) throw apiError(409, `Документ продукта «${row.product}»: продукт меняется отдельным запросом`)
     if (pair && pair.product !== row.product) throw apiError(409, `Ответ и пункт в разных продуктах (${row.product}, ${pair.product})`)
     return row.product
   }
-  if (pair) {
-    if (requested && requested !== pair.product) throw apiError(409, `Пункт и ответ — продукта «${pair.product}»`)
-    return pair.product
-  }
-  return productForNew(actor.products, id, requested, all)
+  return pair ? pair.product : productForNew(actor.products, id, all)
 }
 
 export async function deleteDoc(actor: Actor, collection: Collection, id: string): Promise<void> {
   if (!actor.scopes.includes('owner')) throw apiError(403, 'Удаляет только владелец; агенту — archived: true')
   const db = getDb()
   const row = await db.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
-  if (!row || !canSee(actor.products, row.product)) throw apiError(404, NOT_FOUND)
+  if (!row || !canSee(actor.products, row.product)) throw apiError(404, 'Нет такого документа')
   await db.delete(oqDocs).where(and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)))
   await db.insert(oqEvents).values({ actor: actor.name, collection, docId: id, action: 'delete', beforeJson: row.dataJson, product: row.product })
   // Вложения удалённого пункта: строки — сразу, файлы — следом (уборщик — только подстраховка). Сбой диска здесь

@@ -111,7 +111,7 @@ export async function listAllFiles(products: Visibility, limit = 300): Promise<F
   const db = getDb()
   // Файлы только пунктов видимых продуктов: подзапрос по items, у владельца — без условия.
   // EXISTS по первичному ключу пункта — стоимость от числа файлов, а не пунктов продукта (IN-подзапрос строил список
-  // всех пунктов трижды на сводку: 34 мс на 10 000 против 1,4).
+  // всех пунктов трижды на сводку).
   const own = products === '*' ? undefined : exists(db.select({ x: sql`1` }).from(oqDocs).where(and(eq(oqDocs.collection, 'items'), eq(oqDocs.id, oqFiles.itemId), productWhere(products))))
   const rows = await db.select().from(oqFiles).where(and(isNull(oqFiles.deletedAt), own)).orderBy(desc(oqFiles.createdAt), sql`rowid desc`).limit(limit + 1)
   const groups = (where: SQL) =>

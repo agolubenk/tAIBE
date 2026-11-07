@@ -17,7 +17,7 @@ const cache = new Map<string, Entry>()
 const CACHE_MAX = 16
 
 // Сборки — по одной на процесс, по всем ключам: после записи владелец и токен HR пересобирают один и тот же список
-// каждый под своим ключом, и на потолке две сборки разом — 140 МБ против 81 (замер линзы ресурсов v2-lite.1).
+// каждый под своим ключом, и на потолке две сборки разом удвоили бы пик памяти.
 let buildChain: Promise<unknown> = Promise.resolve()
 function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
   const run = buildChain.then(fn, fn)

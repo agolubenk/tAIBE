@@ -18,7 +18,6 @@ export type Visibility = '*' | readonly string[]
 export interface Product {
   slug: string
   name: string
-  isDefault: boolean
 }
 
 /** Видимость токена по столбцу products: владелец видит всё; «*» без owner не принимается — запрет по умолчанию. */
@@ -57,7 +56,7 @@ export function listProducts(): Promise<Product[]> {
     .select()
     .from(oqProducts)
     .orderBy(asc(oqProducts.slug))
-    .then((rows) => rows.map((r) => ({ slug: r.slug, name: r.name, isDefault: r.isDefault })))
+    .then((rows) => rows.map((r) => ({ slug: r.slug, name: r.name })))
   productsCache = { db, list }
   list.catch(() => {
     if (productsCache?.list === list) productsCache = null
@@ -65,28 +64,32 @@ export function listProducts(): Promise<Product[]> {
   return list
 }
 
-/** Ответ на документ чужого продукта и на id чужого пространства — один, как на несуществующий. */
-export const NOT_FOUND = 'Нет такого документа (id пункта продукта — с префиксом «<slug>-», у продукта по умолчанию — без префикса)'
-
 /**
- * Пространство id: продукт, чей slug с «-» — самое длинное начало id (`taibe-m-93` → taibe); без префикса — продукт по
- * умолчанию. Продукт нового документа выводится из id: пункты разных продуктов не делят id (`c-backup-<дата>` у
- * каждого свой), а запрет следует из id, а не из базы — ответ не раскрывает, есть ли документ.
+ * Ответ на документ чужого продукта и на id чужого пространства — один и тот же, как на несуществующий. Называет
+ * только продукты самого актора и их префиксы: сессия узнаёт, какой id ей писать, а о чужих не узнаёт ничего.
  */
-export function namespaceOf(id: string, all: readonly Product[]): string {
-  const prefixed = all.filter((p) => !p.isDefault && id.startsWith(`${p.slug}-`)).sort((a, b) => b.slug.length - a.slug.length)[0]
-  return prefixed?.slug ?? all.find((p) => p.isDefault)?.slug ?? DEFAULT_PRODUCT
+export function notFound(products: Visibility, all: readonly Product[]): never {
+  const own = products === '*' ? [] : all.filter((p) => products.includes(p.slug))
+  const hint = own.map((p) => (p.slug === DEFAULT_PRODUCT ? `${p.slug} — id без префикса` : `${p.slug} — id «${p.slug}-…»`)).join('; ')
+  throw apiError(404, hint ? `Нет такого документа. Ваши продукты: ${hint}` : 'Нет такого документа')
 }
 
 /**
- * Продукт нового документа — пространство его id; невидимое актору — 404, как чужой документ. Поле запроса product —
- * подтверждение: другое — 422 (оба продукта актору видимы или названы им самим). `all` — справочник, прочитанный до
- * транзакции записи: чтение другим соединением пула libsql внутри транзакции оставляет блокировку, и после двух
- * одновременных созданий падает каждая следующая запись процесса (линза корректности v2-lite.1, F1).
+ * Пространство id: продукт, чей slug с «-» — самое длинное начало id (`taibe-m-93` → taibe); без префикса — HR.
+ * Продукт нового документа выводится из id: пункты разных продуктов не делят id (`c-backup-<дата>` у каждого свой), а
+ * запрет следует из id, а не из базы — ответ не раскрывает, есть ли документ.
  */
-export function productForNew(products: Visibility, id: string, requested: string | undefined, all: readonly Product[]): string {
+export function namespaceOf(id: string, all: readonly Product[]): string {
+  const prefixed = all.filter((p) => p.slug !== DEFAULT_PRODUCT && id.startsWith(`${p.slug}-`)).sort((a, b) => b.slug.length - a.slug.length)[0]
+  return prefixed?.slug ?? DEFAULT_PRODUCT
+}
+
+/**
+ * Продукт нового документа — пространство его id; невидимое актору — 404, как чужой документ. `all` — справочник,
+ * прочитанный до транзакции записи: чтение другим соединением пула libsql внутри транзакции оставляет блокировку.
+ */
+export function productForNew(products: Visibility, id: string, all: readonly Product[]): string {
   const ns = namespaceOf(id, all)
-  if (!canSee(products, ns)) throw apiError(404, NOT_FOUND)
-  if (requested && requested !== ns) throw apiError(422, `id «${id}» — продукта «${ns}», а в запросе product «${requested}»`)
+  if (!canSee(products, ns)) notFound(products, all)
   return ns
 }

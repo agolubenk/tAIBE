@@ -1,7 +1,7 @@
 /**
  * Управление очередью владельца на сервере консоли (`npm run oq -- <команда>`):
- *   token-create <имя> <области через запятую: read,agent,owner> [продукты через запятую, по умолчанию hr-helper; * — все,
- *                только с owner] [срок в днях]                    — выпустить токен (показывается один раз)
+ *   token-create <имя> <области через запятую: read,agent,owner> [продукты через запятую, по умолчанию hr-helper;
+ *                у owner не указывать — он видит все]            — выпустить токен (показывается один раз)
  *   token-list                                                   — токены без секретов
  *   token-revoke <id>                                            — отозвать
  *   merge-token                                                  — токен GitHub для мёржей: читается из stdin
@@ -27,14 +27,12 @@ async function main(): Promise<void> {
   await runMigrations()
   switch (cmd) {
     case 'token-create': {
-      const [name, scopes, products, days] = args
-      if (!name || !scopes) throw new Error('token-create <имя> <read,agent,owner> [продукты] [срок в днях]')
+      const [name, scopes, products] = args
+      if (!name || !scopes) throw new Error('token-create <имя> <read,agent,owner> [продукты]')
       const t = await createToken(name, scopes.split(',').map((s) => s.trim()) as Scope[], {
         products: products ? products.split(',').map((s) => s.trim()) : undefined,
-        expiresDays: days ? Number(days) : undefined,
       })
-      const until = days ? `до ${new Date(Date.now() + Number(days) * 86_400_000).toISOString().slice(0, 10)}` : 'бессрочный'
-      console.log(`Токен #${t.id} «${name}» (${scopes}; ${products ?? 'по умолчанию'}; ${until}) — сохраните сейчас, повторно не показывается:\n${t.token}`)
+      console.log(`Токен #${t.id} «${name}» (${scopes}; ${products ?? 'по умолчанию'}) — сохраните сейчас, повторно не показывается:\n${t.token}`)
       return
     }
     case 'token-list':
