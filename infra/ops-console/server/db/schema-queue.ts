@@ -16,8 +16,15 @@ export const oqDocs = sqliteTable(
     createdAt: ts('created_at').notNull().default(now),
     updatedAt: ts('updated_at').notNull().default(now),
     updatedBy: text('updated_by').notNull().default(''),
+    /** Продукт документа (oq_products.slug). Старый образ консоли пишет без него — DEFAULT даёт продукт HR. */
+    product: text('product').notNull().default('hr-helper'),
   },
-  (t) => [primaryKey({ columns: [t.collection, t.id] }), index('idx_oq_docs_updated').on(t.collection, t.updatedAt)],
+  (t) => [
+    primaryKey({ columns: [t.collection, t.id] }),
+    index('idx_oq_docs_updated').on(t.collection, t.updatedAt),
+    // version — чтобы ETag списка (count, max(updated_at), sum(version)) читался из индекса, без строк документов.
+    index('idx_oq_docs_product').on(t.collection, t.product, t.updatedAt, t.version),
+  ],
 )
 
 /** Журнал изменений: кто, когда и что поменял (история пункта, разбор «кто нажал»). */
@@ -32,6 +39,8 @@ export const oqEvents = sqliteTable(
     action: text('action').notNull(),
     beforeJson: text('before_json'),
     afterJson: text('after_json'),
+    /** Продукт документа на момент события; NULL — событие старого образа, это продукт HR. */
+    product: text('product'),
   },
   (t) => [index('idx_oq_events_doc').on(t.collection, t.docId, t.at), index('idx_oq_events_at').on(t.at)],
 )
@@ -73,9 +82,23 @@ export const oqTokens = sqliteTable(
     hash: text('hash').notNull(),
     /** Через запятую: read · agent · owner. */
     scopes: text('scopes').notNull(),
+    /** JSON-массив slug продуктов, которые видит токен; ["*"] — все (только с owner). */
+    products: text('products').notNull().default('["hr-helper"]'),
     createdAt: ts('created_at').notNull().default(now),
     lastUsedAt: ts('last_used_at'),
     revokedAt: ts('revoked_at'),
+    /** Срок действия; NULL — бессрочный (токены до v2-lite). */
+    expiresAt: ts('expires_at'),
   },
   (t) => [uniqueIndex('idx_oq_tokens_hash').on(t.hash)],
 )
+
+/**
+ * Продукты очереди (v2-lite): метка пункта, фильтр владельца, видимость токена. Строки — миграцией (0015); правки
+ * через API нет. Продукт id без префикса — hr-helper (DEFAULT_PRODUCT, queue/products.ts), не строка таблицы.
+ */
+export const oqProducts = sqliteTable('oq_products', {
+  slug: text('slug').primaryKey(),
+  name: text('name').notNull(),
+  createdAt: ts('created_at').notNull().default(now),
+})
