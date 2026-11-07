@@ -54,8 +54,16 @@ class NightlyContextAuditTest(unittest.TestCase):
                               'context-audit-202602%02d.json' % (day - 31)), 'w').close()
         steps.context_audit(self.wt)
         left = [n for n in os.listdir(runs) if n.startswith('context-audit-')]
-        self.assertLessEqual(len(left), steps.AUDIT_KEEP + 1)
+        self.assertEqual(len(left), steps.AUDIT_KEEP)
         self.assertNotIn('context-audit-20260101.json', left)
+
+    def test_timeout_does_not_break_the_night(self):
+        with open(os.path.join(self.wt, 'eval', 'tools', 'context_audit.py'), 'w') as f:
+            f.write(STUB)
+        with mock.patch.object(steps.subprocess, 'run', side_effect=steps.subprocess.TimeoutExpired('x', 600)):
+            out = steps.context_audit(self.wt)
+        self.assertIsNone(out['exit'])
+        self.assertIn('600', out['error'])
 
     def test_audit_line_for_the_card(self):
         audit = {'usd': 597.0, 'cold': {'ToolSearch': {'n': 42, 'usd': 73.0}, 'старт': {'n': 78, 'usd': 17.7}},
@@ -72,7 +80,7 @@ class NightlyContextAuditTest(unittest.TestCase):
             self.assertEqual(steps.audit_line(empty, 'd'), '')
 
     def test_old_revision_and_failure(self):
-        self.assertTrue(steps.context_audit(self.wt).startswith('skipped'))
+        self.assertIn('skipped', steps.context_audit(self.wt))
         with open(os.path.join(self.wt, 'eval', 'tools', 'context_audit.py'), 'w') as f:
             f.write('import sys; sys.exit("boom")')
         out = steps.context_audit(self.wt)

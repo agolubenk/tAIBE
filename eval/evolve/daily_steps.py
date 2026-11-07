@@ -139,13 +139,16 @@ def context_audit(wt):
     call and the generation cost by window size. Read-only over transcripts; the full JSON stays in the run dir."""
     tool = os.path.join(wt, 'eval/tools/context_audit.py')
     if not os.path.isfile(tool):
-        return 'skipped: eval/tools/context_audit.py is not in this revision'
+        return {'skipped': 'eval/tools/context_audit.py is not in this revision'}
     path = os.path.join(STATE_DIR, 'runs', 'context-audit-%s.json' % now().strftime('%Y%m%d'))
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    for old in sorted(glob.glob(os.path.join(STATE_DIR, 'runs', 'context-audit-*.json')))[:-AUDIT_KEEP]:
-        os.remove(old)
-    res = subprocess.run([sys.executable, '-I', tool, '--hours', '24', '--all', '--json', path],
-                         capture_output=True, text=True, timeout=600)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        res = subprocess.run([sys.executable, '-I', tool, '--hours', '24', '--all', '--json', path],
+                             capture_output=True, text=True, timeout=600)
+        for old in sorted(glob.glob(os.path.join(STATE_DIR, 'runs', 'context-audit-*.json')))[:-AUDIT_KEEP]:
+            os.remove(old)
+    except (OSError, subprocess.TimeoutExpired) as e:  # the night's other metrics and the A/B run go on
+        return {'exit': None, 'error': str(e)[-300:]}
     try:
         with open(path, encoding='utf-8') as f:
             data = json.load(f)

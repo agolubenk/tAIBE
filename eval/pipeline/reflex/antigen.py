@@ -97,11 +97,15 @@ def state_file(session_id, state_dir=None):
     return os.path.join(root, safe)
 
 
+def given_lessons(path):
+    if not os.path.exists(path):
+        return set()
+    with open(path, encoding='utf-8') as f:
+        return {line.strip() for line in f}
+
+
 def fresh_lessons(hits, path):
-    seen = set()
-    if os.path.exists(path):
-        with open(path, encoding='utf-8') as f:
-            seen = {line.strip() for line in f}
+    seen = given_lessons(path)
     new = [row for row in hits if row['id'] not in seen]
     if new:
         with open(path, 'a', encoding='utf-8') as f:
@@ -110,11 +114,13 @@ def fresh_lessons(hits, path):
 
 
 def respond(event, state_dir=None, table=None):
-    hits = matches(table or load_table(), event.get('tool_name', ''), event.get('tool_input', {}),
-                   lambda: context_tokens(event))
+    path = state_file(event.get('session_id', ''), state_dir)
+    seen = given_lessons(path)  # a lesson already given is not matched again: no context read for it
+    rows = [row for row in (table or load_table()) if row['id'] not in seen]
+    hits = matches(rows, event.get('tool_name', ''), event.get('tool_input', {}), lambda: context_tokens(event))
     if not hits:
         return None
-    new = fresh_lessons(hits, state_file(event.get('session_id', ''), state_dir))
+    new = fresh_lessons(hits, path)
     if not new:
         return None
     text = ' '.join(f"Урок «{row['id']}»: {row['lesson']}" for row in new)

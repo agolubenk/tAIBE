@@ -145,10 +145,10 @@ CASES = {
     },
     # a third element is the context in tokens for `min_context` rows (no third element — unknown context)
     'toolsearch-big-context': {
-        'fire': [(TS, {'query': 'select:Monitor', 'max_results': 1}, 300000),
+        'fire': [(TS, {'query': 'select:Monitor', 'max_results': 1}, 100000),
                  (TS, {'query': 'notebook jupyter'}, 812000)],
-        'quiet': [(TS, {'query': 'select:Monitor', 'max_results': 1}, 99000), (TS, {'query': 'select:Monitor'}),
-                  (TS, {'query': 'select:Monitor'}, 299999), bash('echo ToolSearch')],
+        'quiet': [(TS, {'query': 'select:Monitor', 'max_results': 1}, 60000), (TS, {'query': 'select:Monitor'}),
+                  (TS, {'query': 'select:Monitor'}, 99999), bash('echo ToolSearch')],
     },
     'long-wait': {
         'fire': [('Monitor', {'command': 'nerve tap', 'timeout_ms': 3600000}),
