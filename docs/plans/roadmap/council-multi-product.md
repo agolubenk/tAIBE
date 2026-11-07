@@ -48,7 +48,7 @@
   лежат у хоста. Если env нет, хост — та папка tAIBE, откуда запущен код. Базы там нет, и `store.py` отказывает
   (`CouncilDbMissing`, с 04.11, b2c928a9): новая база — только явно, `AI_COUNCIL_INIT_DB=1`. В `.mcp.json` tAIBE
   путь `ai-council` относительный и env хоста нет, поэтому из сессий tAIBE консилиум сейчас не работает.
-- У хоста лежат: база, логи `.claude/council/*.log`, замок Ollama `.claude/council/ollama-local.lock`, ключи
+- У хоста лежат: база, логи `.claude/council/*.log`, замок Ollama `.claude/council/ollama-local.lock` (снят OPS-30 — замок только машинный), ключи
   облака (`.continue/.env` хоста) и ключ Notion.
 
 **База HR** (`.claude/council/council.db`).

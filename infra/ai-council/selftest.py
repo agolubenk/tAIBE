@@ -141,12 +141,12 @@ def test_local_inference_slot(tmp: Path) -> None:
           rcs == [0, 0, 0] and len(events) == 6 and max_depth == 1, f"rc={rcs} depth={max_depth}")
 
     import ollama as ollama_mod
-    saved_lock, saved_legacy = ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK
+    saved_lock = ollama_mod.LOCAL_INFERENCE_LOCK
     holder = subprocess.Popen([_sys.executable, "-c", code.replace("time.sleep(0.6)", "time.sleep(3)")])
     time.sleep(1.0)
     os.environ["AI_COUNCIL_LOCAL_LOCK"] = str(lock)
     try:
-        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = str(lock), ""
+        ollama_mod.LOCAL_INFERENCE_LOCK = str(lock)
         started = time.time()
         try:
             with ollama_mod.local_inference_slot(0.5):
@@ -157,7 +157,7 @@ def test_local_inference_slot(tmp: Path) -> None:
               timed_out and time.time() - started < 2.0)
     finally:
         holder.wait(timeout=30)
-        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = saved_lock, saved_legacy
+        ollama_mod.LOCAL_INFERENCE_LOCK = saved_lock
         os.environ.pop("AI_COUNCIL_LOCAL_LOCK", None)
 
 
@@ -180,7 +180,7 @@ def test_local_lock_holder(tmp: Path) -> None:
         "    time.sleep(30)\n"
     )
     holder = subprocess.Popen([_sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
-    saved_lock, saved_legacy = ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK
+    saved_lock = ollama_mod.LOCAL_INFERENCE_LOCK
     try:
         holder.stdout.readline()
         os.kill(holder.pid, signal.SIGSTOP)
@@ -190,7 +190,7 @@ def test_local_lock_holder(tmp: Path) -> None:
               bool(h) and h["pid"] == holder.pid and h["state"].startswith("T") and h["who"] == "council",
               f"{h}")
         check("лок Ollama: описание подсказывает kill -CONT", f"kill -CONT {holder.pid}" in ollama_mod.describe_holder(h))
-        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = str(lock), ""
+        ollama_mod.LOCAL_INFERENCE_LOCK = str(lock)
         try:
             with ollama_mod.local_inference_slot(0.3):
                 msg = ""
@@ -199,7 +199,7 @@ def test_local_lock_holder(tmp: Path) -> None:
         check("лок Ollama: таймаут называет держателя и команду status",
               str(holder.pid) in msg and "supervisor.py status" in msg, msg[:160])
     finally:
-        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = saved_lock, saved_legacy
+        ollama_mod.LOCAL_INFERENCE_LOCK = saved_lock
         os.kill(holder.pid, signal.SIGCONT)
         holder.kill()
         holder.wait(timeout=10)

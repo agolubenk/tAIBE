@@ -81,7 +81,7 @@ print(json.dumps({
     "config_path": str(config.CONFIG_PATH), "schema": str(store.SCHEMA_PATH),
     "db": str(store.DB_PATH), "verifier": str(verifier.REPO_ROOT), "cloud": str(cloud.REPO_ROOT),
     "dotenv": str(cloud.DOTENV_PATH), "graph": str(graph_build.OUT_DIR), "retrieval": str(retrieval.REPO_ROOT),
-    "lock": str(ollama.LOCAL_INFERENCE_LOCK), "legacy_lock": ollama.LEGACY_HOST_LOCK, "dams_db": str(dams_common.DB_PATH), "glm_key": str(glm_client.KEY_PATH),
+    "lock": str(ollama.LOCAL_INFERENCE_LOCK), "dams_db": str(dams_common.DB_PATH), "glm_key": str(glm_client.KEY_PATH),
     "zai": cloud.read_key("zai"),
 }))
 """
@@ -136,8 +136,11 @@ def host_roots(tmp: Path) -> None:
     check("с TAIBE_HOST_ROOT все корни данных — у хоста (база, ключи, граф, DAMS, GLM)", data_ok, r)
     check("с TAIBE_HOST_ROOT замок Ollama — машинный (домашняя папка), не у хоста",
           r.get("lock") == str(home / MACHINE_LOCK_REL), r.get("lock", r))
-    check("с TAIBE_HOST_ROOT второй, переходный лок — прежний путь у хоста (его держат старые копии слоя)",
-          r.get("legacy_lock") == str(host / ".claude/council/ollama-local.lock"), r.get("legacy_lock", r))
+    s = last_json(py("import ollama\nwith ollama.local_inference_slot(5):\n    pass\n"
+                     "print(json.dumps({'legacy': hasattr(ollama, 'LEGACY_HOST_LOCK')}))", host=host, HOME=str(home)))
+    check("с TAIBE_HOST_ROOT слот берёт только машинный замок: файла замка у хоста нет (OPS-30)",
+          s.get("legacy") is False and (home / MACHINE_LOCK_REL).exists()
+          and not (host / ".claude/council/ollama-local.lock").exists(), s)
     check("ключ провайдера читается из .continue/.env хоста, а не слоя",
           r.get("zai") == "key-from-host-dotenv", r.get("zai", r))
     check("код остаётся в слое: config.toml и schema.sql",
@@ -245,15 +248,12 @@ def machine_lock(tmp: Path) -> None:
         deadline = time.time() + 30
         while not ready.exists() and old.poll() is None and time.time() < deadline:
             time.sleep(0.05)
-        busy = last_json(py(PROBE, host=hosts[0], HOME=str(home), T_WAIT="0.5"))
-        other = last_json(py(PROBE, host=hosts[1], HOME=str(home), T_WAIT="0.5"))
-        check("замок Ollama: старая копия слоя держит лок у хоста — новый код этого хоста ждёт, другой хост — нет",
-              ready.exists() and busy.get("got") is False and other.get("got") is True, (busy, other))
+        same = last_json(py(PROBE, host=hosts[0], HOME=str(home), T_WAIT="0.5"))
+        check("замок Ollama: прежний файл у хоста занят — код слоя его не берёт и не ждёт (OPS-30)",
+              ready.exists() and same.get("got") is True, same)
     finally:
         os.kill(old.pid, signal.SIGKILL)
         old.wait(timeout=10)
-    held = last_json(py(PROBE, host=hosts[0], HOME=str(home), T_WAIT="2"))
-    check("замок Ollama: старая копия завершилась — новый код хоста берёт оба лока", held.get("got") is True, held)
 
 
 DB_GUARD = """

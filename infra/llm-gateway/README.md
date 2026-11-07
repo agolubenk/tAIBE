@@ -78,8 +78,8 @@
   следующая модель. Ждёт шлюз блокирующим flock, консилиум — опросом раз в 0,25 с, поэтому вызов шлюза получает
   следующий свободный слот. Мимо замка в Ollama идут: роли Continue напрямую (`.continue/agents/config.yaml` —
   chat, edit, apply, автокомплит, эмбеддинги), прогрев `infra/scripts/dev-ai/ollama-warmup.sh` (OPS-33), backend продукта в
-  docker (OPS-28) и старые копии консилиума в папке продукта, которые берут только прежний замок хоста
-  (`LEGACY_HOST_LOCK` в `ollama.py`). Модели без `thinking` в возможностях
+  docker (OPS-28). Прежнего замка хоста `<хост>/.claude/council/ollama-local.lock` больше нет: старая копия
+  консилиума в HR удалена, консилиум берёт только машинный файл (OPS-30). Модели без `thinking` в возможностях
   Ollama поля рассуждений (`reasoning_effort`, `reasoning`, `include_reasoning`) не передаются: Ollama отвечает на них
   400 «does not support thinking», а расширение OpenRouter for Copilot шлёт `reasoning_effort: max` в каждом запросе.
 - **Каскад.** Провайдер (OpenRouter или GLM) с `GW_PROVIDER_SKIP_AFTER` отказами подряд в рамках
