@@ -8,7 +8,7 @@ import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
 import { listProducts } from './products'
-import type { Actor } from './store'
+import { AGENT_FIELDS, type Actor } from './store'
 
 export interface ProductChange {
   id: string
@@ -59,8 +59,6 @@ export async function changeItemProduct(actor: Actor, id: string, to: string, re
     return { id, from: item.product, to, changed: true }
   })
 }
-
-const AGENT_FIELDS = ['agentStatus', 'agentNote', 'agentBy', 'agentAt'] as const
 
 function withoutAgent(json: string): string {
   const d = JSON.parse(json) as Record<string, unknown>
