@@ -5,6 +5,7 @@ import {
   errorResponse,
   jsonResponse,
 } from "../openapi";
+import { MAX_AGENTS_PER_OWNER } from "./agent-limits";
 import { normalizeHarness, normalizeSession } from "./agent-naming";
 import { agentKeyIssuer } from "./issuer";
 import { issueAgentKey } from "./issue-agent-key";
@@ -39,7 +40,7 @@ const issueAgentKeyRoute = createRoute({
     200: jsonResponse("The agent and its new key", issuedAgentKeySchema),
     400: errorResponse("Harness or session label not accepted"),
     403: errorResponse(
-      "The caller is an agent or a one-workspace key, the agent is disabled, or the caller already has 50 active agents",
+      `The caller is an agent or a one-workspace key, the agent is disabled, or the caller already has ${MAX_AGENTS_PER_OWNER} active agents`,
     ),
   },
 });
