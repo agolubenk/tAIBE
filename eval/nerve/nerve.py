@@ -35,6 +35,8 @@ from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from
 STATE_DIR = os.environ.get("NERVE_STATE_DIR", os.path.join(HERE, "state"))
 from heartbeat import (AWAKE_CLOCK, MAX_CYCLE_SECONDS, as_obj, awake_seconds, awake_since_sleep,  # noqa: E402,F401
                        cycle_seconds, finite_number, heartbeat_silent, heartbeat_stale_after, slept_cycle)
+import state_io  # noqa: E402
+from state_io import load_json, save_json  # noqa: E402,F401
 
 
 def wakes_on():
@@ -46,21 +48,6 @@ def wakes_on():
         return pipeline_settings.enabled("nerveWakes")
     except Exception:  # noqa: BLE001 — the watchdog never dies on settings
         return True
-
-
-def load_json(path, default):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
-
-
-def save_json(path, data):
-    tmp = f"{path}.tmp{os.getpid()}"   # свой tmp у процесса: два tap одной роли не рвут файл друг другу
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
 
 
 def local_tz():
@@ -422,16 +409,7 @@ def cmd_tap(cfg, a):
 
 
 def read_heartbeat():
-    """Пульс — из файла state/heartbeat (25 Б, пишется каждым проходом), а не из state.json (≈1 МБ каждые 15 с);
-    нет файла (демон старее) — из state.json, как раньше."""
-    try:
-        with open(os.path.join(STATE_DIR, "heartbeat"), encoding="utf-8") as f:
-            hb = f.read().strip()
-        if hb:
-            return hb
-    except OSError:
-        pass
-    return as_obj(load_json(os.path.join(STATE_DIR, "state.json"), {})).get("heartbeat")
+    return state_io.read_heartbeat(STATE_DIR)
 
 
 def cmd_emit(cfg, a):
