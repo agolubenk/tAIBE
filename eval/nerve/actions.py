@@ -66,7 +66,7 @@ def poll_budget(ctx):
             why = "запросы снова проходят — похоже, сменили аккаунт" if early and now_l < _dt(lim["resume"]) \
                 else f"сброс {lim['reset'][11:16]}"
             roles = sources.active_roles(ctx) or ["coord"]
-            ctx.emit(f"limit:resume:{lim['reset']}", "limit.resume", NERVOUS, roles,
+            ctx.emit_account(f"limit:resume:{lim['reset']}", "limit.resume", NERVOUS, roles,
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
             lim = None
@@ -82,7 +82,7 @@ def poll_budget(ctx):
     if (share5 is not None and share5 >= b["warn_at"] and not lim
             and (not warned or now_l - warned >= timedelta(hours=5))):
         roles = sources.active_roles(ctx) or ["coord"]
-        if ctx.emit(f"budget:warn:{_iso(now_l)}", "budget.warn", NERVOUS, roles,
+        if ctx.emit_account(f"budget:warn:{_iso(now_l)}", "budget.warn", NERVOUS, roles,
                     f"окно 5 ч израсходовано на {round(share5 * 100)}% (${used:.0f} из ~${q:.0f} до прошлых "
                     f"сбоев): допиши шаг, запиши work_state, тяжёлое не начинай", "budget"):
             st["warned"] = _iso(now_l)
@@ -110,7 +110,7 @@ def _on_limit(ctx, st, meter, ts, text):
     key = f"limit:{kind}:{_iso(reset)}"
     if key in ctx.journal.keys:
         return
-    ctx.emit(key, "limit.hit", NERVOUS, ["coord"],
+    ctx.emit_account(key, "limit.hit", NERVOUS, ["coord"],
              f"лимит аккаунта ({'неделя' if kind == 'weekly' else 'окно 5 ч'}) в {ts_l:%H:%M}: команда стоит до "
              f"{reset:%d.%m %H:%M}, Нерв разбудит роли сам", "budget")
     if kind == "session" and all(w.get("reset") != _iso(reset) for w in st["waves"]):

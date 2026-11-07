@@ -176,8 +176,12 @@
 «ждёт вас снова» и красная рамка, у проверок галочка снята: одно нажатие «Сделано» — новый ответ. `doing`, `done` и
 `planned` после ответа пункт не переоткрывают: на 22.10 из 14 пунктов «ответ, потом doing» повторной просьбой были 3,
 остальные 11 — «принято, в работе». Сессии об этом говорит описание `oq_agent_status`. Правило одно —
-`oqItemState` (`server/queue/open-rule.ts`): страница, `GET /db/items?open=1` (ответ `{ docs, open: true }`, без ETag:
-зависит и от `checks`) и MCP `oq_list open_only` (консоль без параметра `open` — прежний фильтр в MCP).
+`oqItemState` (`server/queue/open-rule.ts`): страница, `GET /db/items?open=1` (ответ `{ docs, open: true }`, ETag — по
+`items` и `checks`) и MCP `oq_list open_only` (консоль без параметра `open` — прежний фильтр в MCP).
+
+**Список коллекции** (`GET /db/:col`, с 07.11 — фаза 0 плана мультипродуктовой очереди): потолок 10 000 самых свежих
+документов; обрезка видна — `truncated: true, total, limit` рядом с `docs` (без обрезки ответ — только `{ docs }`).
+Тег слабый (`W/`), 304 по `If-None-Match`; с `Accept-Encoding: gzip` — сжатый JSON, одна сборка на тег.
 
 ## Входящие из Telegram (с 2026-10-21)
 

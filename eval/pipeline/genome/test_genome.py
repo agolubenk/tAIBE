@@ -16,10 +16,8 @@ GENOMES = build.build(TABLE)
 
 # Tools without which a role cannot do its job (or the transition to t-boards stalls).
 NEEDED = {
-    'coord': ['mcp__owner-queue__oq_put', 'mcp__hub__t-boards_1mcp_forest_list_work_state',
-              'mcp__hub__notion_1mcp_notion-fetch', 'CronCreate'],
-    'plan': ['mcp__hub__t-boards_1mcp_create_task', 'mcp__hub__notion_1mcp_notion-fetch',
-             'mcp__ai-council__council_plan'],
+    'coord': ['mcp__owner-queue__oq_put', 'mcp__hub__t-boards_1mcp_forest_list_work_state', 'CronCreate'],
+    'plan': ['mcp__hub__t-boards_1mcp_create_task', 'mcp__ai-council__council_plan'],
     'frontend': ['mcp__plugin_playwright_playwright__browser_navigate', 'mcp__serena__find_symbol'],
     'backend': ['mcp__postgres-readonly__execute_sql', 'mcp__serena__find_symbol'],
     'release': ['mcp__github__pull_request_read', 'mcp__docker__list_containers', 'mcp__hub__sentry_1mcp_search_issues'],

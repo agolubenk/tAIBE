@@ -117,7 +117,7 @@ async function itemIndex(repo: string): Promise<ItemRefs[]> {
   const done = (async () => {
     // Тот же список, что у страницы очереди (порядок и лимит): ссылка не ведёт на пункт, которого она не покажет.
     // Все неархивные, а не только с номерами: мёрж из очереди находится и по событию «Влить» (mergedFromQueue).
-    const refs = (await listDocs('items')).filter((doc) => doc.data.archived !== true).map((doc) => itemRefs(doc.id, doc.data, repo))
+    const refs = (await listDocs('items')).docs.filter((doc) => doc.data.archived !== true).map((doc) => itemRefs(doc.id, doc.data, repo))
     indexCache = { db, key, refs }
     return refs
   })()
