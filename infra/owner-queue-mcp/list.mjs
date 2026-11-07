@@ -130,20 +130,55 @@ export function fitList(total, docs, from = 0, extra = {}) {
  * это говорят (раньше ответ резался по символам посреди JSON). Одно событие больше потолка — shown: 0, нужен brief.
  */
 export function fitEvents(events, { brief = false } = {}) {
-  const list = brief ? events.map((e) => (e && e.after && typeof e.after === 'object' ? { ...e, after: briefDoc(e.after) } : e)) : events;
+  const list = brief ? events.map((e) => (e && e.after && typeof e.after === 'object' ? { ...e, after: briefDeep(e.after) } : e)) : events;
   const shape = (k) => ({
     total: list.length,
-    ...(k < list.length ? { shown: k, truncated: true, hint: brief ? 'старые события — в консоли, /history' : 'не влезли — brief: true (длинные строки — начало и длина)' } : {}),
+    ...(k < list.length ? { shown: k, truncated: true, hint: brief ? 'старые события — в консоли, /history' : 'не влезли — brief: true (длинные строки — начало и длина, большие массивы — их длина)' } : {}),
     events: list.slice(0, k),
   });
-  let n = list.length;
-  while (n > 0 && JSON.stringify(shape(n), null, 1).length > OUT_MAX) n = Math.floor(n * 0.8);
+  const all = shape(list.length);
+  if (JSON.stringify(all, null, 1).length <= OUT_MAX) return all;
+  // Сколько влезает — один проход по длинам событий (линзы #111: шаг ×0,8 показывал 40 из 48 влезающих и
+  // сериализовал до 11 МБ на 50 событий). Событие внутри ответа — свой JSON, 2 пробела отступа на строку и «,\n»;
+  // запас 8 — скобки массива и цифры shown. Оценка сверху, проверка ниже — страховка.
+  let size = JSON.stringify(shape(0), null, 1).length + 8;
+  let n = 0;
+  for (const e of list) {
+    const s = JSON.stringify(e, null, 1) ?? 'null';
+    size += s.length + 2 * s.split('\n').length + 2;
+    if (size > OUT_MAX) break;
+    n += 1;
+  }
+  while (n > 0 && JSON.stringify(shape(n), null, 1).length > OUT_MAX) n -= 1;
   return shape(n);
+}
+
+/**
+ * brief для события истории: строки длиннее BRIEF_TEXT — начало и <поле>Len; массив, чей JSON длиннее BRIEF_TEXT
+ * (cards строки плана), — его длина <поле>Count, как cardsCount в oq_list; вложенный объект (inbox) — то же правило,
+ * глубже двух уровней — число ключей <поле>Keys. Линзы #111: briefDoc не трогал вложенное, и строка плана со 150
+ * карточками давала shown 0–1 и в brief.
+ */
+export function briefDeep(doc, depth = 2) {
+  const out = {};
+  for (const [k, v] of Object.entries(doc)) {
+    if (typeof v === 'string' && v.length > BRIEF_TEXT) {
+      out[k] = `${v.slice(0, BRIEF_TEXT)}…`;
+      out[`${k}Len`] = v.length;
+    } else if (Array.isArray(v)) {
+      if (JSON.stringify(v).length > BRIEF_TEXT) out[`${k}Count`] = v.length;
+      else out[k] = v;
+    } else if (v && typeof v === 'object') {
+      if (depth > 0) out[k] = briefDeep(v, depth - 1);
+      else out[`${k}Keys`] = Object.keys(v).length;
+    } else out[k] = v;
+  }
+  return out;
 }
 
 /** Текст ответа инструмента: JSON целиком или ошибка с размером — обрезанный JSON агент не разберёт. */
 export function replyText(out, max = 100_000) {
   const text = JSON.stringify(out, null, 1);
   if (text === undefined || text.length <= max) return { text: text ?? 'null' };
-  return { text: `Ответ ${text.length} символов больше потолка ${max} — сузьте запрос (фильтры, limit, brief).`, isError: true };
+  return { text: `Ответ ${text.length} символов больше потолка ${max} — сузьте запрос (oq_list — фильтры, limit, brief; oq_history — brief).`, isError: true };
 }

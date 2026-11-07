@@ -181,6 +181,8 @@ describe('карточки t-boards в строке плана', () => {
     const archived = cardRowHtml({ id: hex(2), k: 'task', closed: true, t: '<b>y</b>' })
     expect(archived).toMatch(/^<li class="is-closed"><span class="sev sev-none">задача<\/span><span>&lt;b&gt;y&lt;\/b&gt; \(архив\)<\/span>/)
     expect(archived).not.toContain('<a ')
+    // Ключ в обход cleanCards — ссылка и подпись тоже текстом: без esc(url) тест падает (линза #111).
+    expect(cardRowHtml({ id: hex(3), key: '"><img src=y>', ws: 'w', k: 'task' })).not.toContain('"><img')
   })
 })
 

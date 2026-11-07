@@ -1,7 +1,7 @@
 // Отбор и страницы oq_list (list.mjs): фильтры, окно offset/limit, next_offset и потолок размера ответа.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OUT_MAX, briefDoc, filterDocs, fitEvents, fitList, ownerAnswerUnread, pageList, replyText, snapshots } from '../list.mjs';
+import { OUT_MAX, briefDeep, briefDoc, filterDocs, fitEvents, fitList, ownerAnswerUnread, pageList, replyText, snapshots } from '../list.mjs';
 
 const check = (id, data) => ({ id, version: 1, data });
 
@@ -128,6 +128,28 @@ test('fitEvents: одно событие больше потолка — shown 0
   assert.deepEqual(fitEvents(huge).events, []);
   assert.equal(fitEvents(huge).shown, 0);
   assert.equal(fitEvents(huge, { brief: true }).events.length, 1);
+});
+
+test('fitEvents: влезает столько событий, сколько позволяет потолок — следующее уже не влезло бы (линзы #111)', () => {
+  const big = Array.from({ length: 50 }, (_, i) => ({ at: 50 - i, actor: 's', action: 'patch', after: { body: 'я'.repeat(1_900) } }));
+  const r = fitEvents(big);
+  assert.equal(r.truncated, true);
+  assert.ok(JSON.stringify(r, null, 1).length <= OUT_MAX);
+  const plus = { total: 50, shown: r.shown + 1, truncated: true, hint: r.hint, events: big.slice(0, r.shown + 1) };
+  assert.ok(JSON.stringify(plus, null, 1).length > OUT_MAX);
+});
+
+test('fitEvents brief: строка плана со 150 карточками — cardsCount, все 50 событий влезают (линзы #111)', () => {
+  const cards = Array.from({ length: 150 }, (_, i) => ({ id: 'a'.repeat(32), t: `карточка ${i} `.repeat(10), k: 'task', s: 'P2', st: 'В работе' }));
+  const ev = Array.from({ length: 50 }, (_, i) => ({ at: 50 - i, actor: 's', action: 'patch', after: { kind: 'row', title: 'w', cards, inbox: { text: 'я'.repeat(500) } } }));
+  assert.equal(fitEvents(ev).truncated, true);
+  const b = fitEvents(ev, { brief: true });
+  assert.equal(b.truncated, undefined);
+  assert.equal(b.events.length, 50);
+  assert.equal(b.events[0].after.cardsCount, 150);
+  assert.equal(b.events[0].after.cards, undefined);
+  assert.equal(b.events[0].after.inbox.textLen, 500);
+  assert.deepEqual(briefDeep({ a: { b: { c: { d: 1 } } }, s: [1, 2] }), { a: { b: { cKeys: 1 } }, s: [1, 2] });
 });
 
 test('replyText: JSON целиком или ошибка с размером — никогда не обрезанный JSON', () => {
