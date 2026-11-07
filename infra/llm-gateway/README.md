@@ -70,7 +70,16 @@
   по таймауту.
 - **Локальная модель.** Получает запрос только если он помещается в её окно. Окно — загруженное (`/api/ps`),
   иначе `num_ctx` из Modelfile (`/api/show`, только метаданные), иначе тег `:24k`, иначе обученное, но не больше
-  `GW_LOCAL_MAX_CONTEXT` (32 768). Запросы к Ollama идут строго по одному. Модели без `thinking` в возможностях
+  `GW_LOCAL_MAX_CONTEXT` (32 768). Запросы шлюза к Ollama идут строго по одному на весь Mac: семафор процесса и
+  машинный flock, общий с консилиумом (`~/.local/state/taibe/council/ollama-local.lock`, `GW_LOCAL_LOCK`; `off` —
+  только семафор). Замок держит дочерний `python3 -I -S` на время вызова: +13 мс на вызов, RSS 14 МБ. Интерпретатор —
+  `GW_PYTHON`, иначе первый существующий из Python.framework, Homebrew, `/usr/local/bin`, `/usr/bin` (путь — в
+  строке старта). Ожидание семафора и замка — один дедлайн `GW_LOCAL_MAX_WAIT_MS` (180 с); не дождались — 503 и
+  следующая модель. Ждёт шлюз блокирующим flock, консилиум — опросом раз в 0,25 с, поэтому вызов шлюза получает
+  следующий свободный слот. Мимо замка в Ollama идут: роли Continue напрямую (`.continue/agents/config.yaml` —
+  chat, edit, apply, автокомплит, эмбеддинги), прогрев `infra/scripts/dev-ai/ollama-warmup.sh` (OPS-33), backend продукта в
+  docker (OPS-28) и старые копии консилиума в папке продукта, которые берут только прежний замок хоста
+  (`LEGACY_HOST_LOCK` в `ollama.py`). Модели без `thinking` в возможностях
   Ollama поля рассуждений (`reasoning_effort`, `reasoning`, `include_reasoning`) не передаются: Ollama отвечает на них
   400 «does not support thinking», а расширение OpenRouter for Copilot шлёт `reasoning_effort: max` в каждом запросе.
 - **Каскад.** Провайдер (OpenRouter или GLM) с `GW_PROVIDER_SKIP_AFTER` отказами подряд в рамках

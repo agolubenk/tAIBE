@@ -30,12 +30,23 @@ async function consoleFake(files, state) {
   const srv = createServer((req, res) => {
     const { pathname } = new URL(req.url, 'http://x');
     const json = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    // Свой статус агента: тело запроса — как есть, для проверки полей takeover и release.
+    if (req.method === 'PATCH' && pathname.startsWith('/api/oq/v1/db/checks/')) {
+      let raw = '';
+      req.on('data', (c) => { raw += c; });
+      req.on('end', () => { state.patches = [...(state.patches ?? []), JSON.parse(raw)]; json(200, { id: 'x', version: 2, data: {} }); });
+      return;
+    }
     if (pathname === `/api/oq/v1/db/items/${ITEM}`) {
       return json(200, { id: ITEM, version: 1, data: { kind: 'inbox', title: 'лог', inbox: { type: 'bug', filesExpected: 3, receivedAt: new Date().toISOString() } } });
     }
     if (pathname === '/api/oq/v1/db/checks') {
       state.checksReads += 1;
       return json(200, { docs: state.checks });
+    }
+    // Консоль с потолком списка: отдала 2 самых свежих из 7 (поля обрезки — рядом с docs).
+    if (pathname === '/api/oq/v1/db/work') {
+      return json(200, { docs: [1, 2].map((n) => ({ id: `w-cap-${n}`, version: 1, data: { title: `строка ${n}`, track: 'ops', status: 'todo' } })), truncated: true, total: 7, limit: 2 });
     }
     if (pathname === '/api/oq/v1/files') {
       if (files === 'old') return json(404, { error: 'Not Found' });
@@ -158,4 +169,30 @@ test('oq_list: список больше потолка ответа — next_of
   assert.equal(brief.docs.length, m.state.checks.length);
   assert.equal(brief.next_offset, undefined);
   assert.equal(brief.docs[1].noteLen, 2_000);
+});
+
+test('oq_agent_status: takeover и release уходят полями запроса, не в data', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  await m.call('oq_agent_status', { id: 'i-1', status: 'taken', session: ' r.ab12.cd34 ', takeover: ' r.ab12 ' });
+  await m.call('oq_agent_status', { id: 'i-1', session: 'r.ab12', note: 'передано r.zz99', release: true });
+  await m.call('oq_agent_status', { id: 'i-1', status: 'doing', session: 'r.x', note: 'работаю', release: false });
+  // Новый статус без note — заметка пустая, как раньше; отпуск без статуса заметку не трогает; без status и без
+  // release — понятный отказ, без запроса.
+  assert.deepEqual(m.state.patches, [
+    { data: { agentStatus: 'taken', agentNote: '', agentBy: 'r.ab12.cd34' }, takeover: 'r.ab12' },
+    { data: { agentNote: 'передано r.zz99', agentBy: 'r.ab12' }, release: true },
+    { data: { agentStatus: 'doing', agentNote: 'работаю', agentBy: 'r.x' } },
+  ]);
+  const bad = await m.call('oq_agent_status', { id: 'i-1', session: 'r.x' });
+  assert.match(JSON.stringify(bad), /Нужен status/);
+  assert.equal(m.state.patches.length, 3);
+});
+
+test('oq_list: серверный потолок списка — serverCapped с числами, не путается с truncated окна', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  const capped = body(await m.call('oq_list', { collection: 'work' }));
+  assert.equal(capped.serverCapped, 'консоль отдала 2 самых свежих из 7 документов коллекции; старые — oq_get по id');
+  assert.equal(capped.truncated, undefined, 'окно ответа не урезано');
+  assert.deepEqual(capped.docs.map((d) => d.id), ['w-cap-1', 'w-cap-2']);
+  assert.equal(body(await m.call('oq_list', { collection: 'checks', limit: 1 })).serverCapped, undefined, 'без обрезки консоли — поля нет');
 });

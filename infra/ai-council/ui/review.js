@@ -1,4 +1,4 @@
-/* Вкладка «Ревью» — ревью карточек Notion в статусе «на ревью» консилиумом моделей.
+/* Вкладка «Ревью» — ревью карточек колонок ревью t-boards консилиумом моделей.
    Канон: docs/specs/ai-council.md §17. Подключается из index.html (тег <script src>),
    пользуется его утилитами ($, esc, api, post, toast, ago, dur, emptyRow) — они
    объявлены там на верхнем уровне и видны здесь на момент вызова.
@@ -129,7 +129,7 @@ async function rvQueue(soft = false) {
         <option value="bugs" ${RV.board === "bugs" ? "selected" : ""}>Ошибки</option>
         <option value="tasks" ${RV.board === "tasks" ? "selected" : ""}>Задачи</option></select>
       <input type="text" id="rv-search" placeholder="поиск по названию / ID" value="${esc(RV.search)}">
-      <button class="act" id="rv-sync" title="Перечитать карточки в статусе ревью из Notion">⟳ Обновить из Notion</button>
+      <button class="act" id="rv-sync" title="Перечитать карточки колонок ревью из t-boards">⟳ Обновить из t-boards</button>
       <span class="spacer"></span>
       <span class="sub">профиль запуска</span>
       <select id="rv-profile">${profiles.map((p) => `<option value="${esc(p.id)}" ${p.id === RV.profileId ? "selected" : ""}>${
@@ -140,7 +140,7 @@ async function rvQueue(soft = false) {
     <div class="card"><div class="tablewrap"><table>
       <thead><tr><th><input type="checkbox" id="rv-all"></th><th>Доска</th><th>Карточка</th><th>Вес</th>
         <th>На ревью</th><th>Последнее ревью</th><th></th></tr></thead>
-      <tbody>${rows || emptyRow(7, data.cards.length ? "ничего не найдено" : "очередь пуста — «Обновить из Notion»")}</tbody>
+      <tbody>${rows || emptyRow(7, data.cards.length ? "ничего не найдено" : "очередь пуста — «Обновить из t-boards»")}</tbody>
     </table></div></div>`;
   const body = $("#rv-body");
   $("#rv-board").onchange = (e) => { RV.board = e.target.value; rvQueue(); };
@@ -151,8 +151,8 @@ async function rvQueue(soft = false) {
     e.target.disabled = true; e.target.textContent = "синхронизация…";
     try {
       const r = await post("/api/review/sync", {});
-      toast(`Notion: в статусе ревью ${r.stats.seen}, обновлено ${r.stats.fetched}, ушло ${r.stats.left}` +
-            (r.auto_queued ? `, автозапуск ${r.auto_queued}` : ""));
+      toast(`t-boards: в колонках ревью ${r.stats.seen}, перечитано ${r.stats.fetched}, ушло ${r.stats.left}` +
+            (r.stats.partial ? ` — неполный проход: ${r.stats.error || "повторите"}` : ""), !!r.stats.partial);
       await renderReview();
     } catch (err) { toast(err.message, true); e.target.disabled = false; }
   };
@@ -206,7 +206,7 @@ async function rvDecide(runId, approve) {
   try {
     const r = await post(`/api/review/runs/${runId}/transition`, { approve, comment });
     if (r.ok === false) throw new Error(r.error);
-    toast(approve ? (r.ok ? "статус переведён в Notion" : `не применён: ${r.error}`) : "переход отклонён");
+    toast(approve ? (r.ok ? (r.next || "переход подтверждён") : `не подтверждён: ${r.error}`) : "переход отклонён");
     renderReview();
     if ($("#modal").open) rvOpenRun(runId);
   } catch (err) { toast(err.message, true); }
@@ -216,7 +216,7 @@ async function rvDecide(runId, approve) {
 async function rvPrepare(cardId, request = {}) {
   const modal = $("#modal");
   $("#m-title").textContent = "Проверка запуска ревью";
-  $("#m-sub").textContent = "dry-run: ничего не ставится в очередь и не пишется в Notion";
+  $("#m-sub").textContent = "dry-run: ничего не ставится в очередь и не пишется на доску";
   $("#m-body").innerHTML = `<div class="empty">собираю план…</div>`;
   $("#m-foot").innerHTML = "";
   if (!modal.open) modal.showModal();
@@ -297,7 +297,7 @@ async function rvOpenRun(runId) {
   $("#m-title").textContent = run.card_title || run.card_id;
   $("#m-sub").innerHTML = `${esc(run.id)} · ${esc(run.profile_name || "")} · ${esc(snap.method || run.method || "")} ·
     ${rvStatusTag(run.status)} ${rvVerdictTag(run.verdict)} · ${dur(run.wall_ms)} ·
-    ${d.card?.url ? `<a href="${esc(d.card.url)}" target="_blank" rel="noopener">открыть в Notion</a>` : ""}`;
+    ${d.card?.url ? `<a href="${esc(d.card.url)}" target="_blank" rel="noopener">открыть карточку</a>` : ""}`;
   const votes = Object.entries(res.votes || {}).map(([k, v]) => `<tr><td>${esc(rvAgentLabel(k))}</td>
     <td><span class="tag ${v.vote === "accept" ? "ok" : v.vote === "fail" ? "bad" : "warn"}">${esc(v.vote)}</span></td>
     <td class="mono">${num(v.confidence)}</td><td class="wrap">${esc(v.summary || "")}
@@ -341,7 +341,7 @@ async function rvOpenRun(runId) {
         ${Math.round((snap.escalation.waited_s || 0) / 60)} мин → ${esc(snap.escalation.provider)}:
         ${esc(Object.entries(snap.escalation.models || {}).map(([k, v]) => `${k} ${v.from} → ${v.to}`).join("; "))}</div>` : ""}
       <div class="sub">Переход: ${esc(RV_TSTATE[tstate] || "—")} ${run.transition_target ? `→ «${esc(run.transition_target)}»` : ""}
-        ${esc(run.transition_note || "")} · комментарий в Notion: ${esc(run.comment_state)}</div>
+        ${esc(run.transition_note || "")} · комментарий на доске: ${esc(run.comment_state)}</div>
     </div>
     <div class="card" style="margin-bottom:10px"><h3>Голоса</h3><div class="tablewrap"><table>
       <thead><tr><th>Агент</th><th>Голос</th><th>Увер.</th><th>Вывод</th></tr></thead><tbody>${votes || emptyRow(4, "нет")}</tbody></table></div></div>
@@ -366,7 +366,7 @@ async function rvOpenRun(runId) {
     <button class="act" id="rv-rerun">Перезапустить</button><span class="spacer"></span>
     ${canDecide ? `<span class="sub">${tstate === "proposed" ? "политика предлагает" : "рекомендация"}: «${esc(run.transition_target)}»</span>
       <button class="act bad" data-rvreject="${esc(run.id)}">Отклонить</button>
-      <button class="act ok" data-rvapprove="${esc(run.id)}">Применить переход в Notion</button>` : ""}`;
+      <button class="act ok" data-rvapprove="${esc(run.id)}">Подтвердить переход</button>` : ""}`;
   rvBindRunButtons($("#m-foot"));
   if ($("#rv-cancel")) $("#rv-cancel").onclick = async () => {
     try { const r = await post(`/api/review/runs/${run.id}/cancel`, {}); toast(r.state); rvOpenRun(run.id); }

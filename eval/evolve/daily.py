@@ -258,6 +258,9 @@ def cmd_run(args):
         if target == 'taibe':
             head = g.refresh_worktree(trepo, args.worktree, cfg['base'])
             report['metrics'] = steps.layer_metrics(os.path.join(trepo, args.worktree))
+            line = steps.audit_line(report['metrics'].get('context_audit'), report['date'])
+            if line and not args.dry_run and not args.no_card:  # d-f63b-economy-0711: the owner sees the measure
+                report['audit_card'] = steps.post_card(line)
         else:
             head = g.fetch(trepo, cfg['base'])
         old = state.get(target) or {}

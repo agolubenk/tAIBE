@@ -17,8 +17,8 @@
 # AI Council (`infra/ai-council/`, спека docs/specs/ai-council.md) — исключение из
 # правила выше и входит сюда законно: это НЕ эфемерный MCP-сервер, а настоящее дерево
 # долгоживущих процессов (супервизор + воркеры), у которого есть свой жизненный цикл.
-# Notion он дёргает не через OAuth-MCP, а по REST с internal integration token
-# (.claude/council/.notion-key) — поэтому работает headless, без интерактивного approve.
+# Карточки t-boards он читает по запросу по REST ключом продукта (.claude/council/tboards.json,
+# tboards.py; Notion заморожен) — поэтому работает headless, без интерактивного approve.
 # Нет ключа/Ollama — поднимается в вырожденном режиме и говорит об этом, не роняя пайплайн.
 #
 # Strix — тоже сознательно не входит, но по другой причине: это не сервер, а
@@ -613,9 +613,9 @@ cmd_doctor() {
 
   echo
   echo "--- OPTIONAL ---"
-  if [ -n "${NOTION_TOKEN:-}${NOTION_API_KEY:-}" ] || [ -f "$HOST_ROOT/.claude/council/.notion-key" ]; then
-    echo "  ✓ Notion access (council REST/internal-integration)"
-  else echo "  ! Notion: OAuth запрашивается MCP-клиентом в сессии"; fi
+  if [ -f "$HOST_ROOT/.claude/council/tboards.json" ]; then
+    echo "  ✓ t-boards: ключ продукта консилиума (проверка — python3 infra/ai-council/tboards.py status --check)"
+  else echo "  ! t-boards: нет ключа продукта у консилиума — из корня продукта: pbpaste | TAIBE_HOST_ROOT=\"\$PWD\" python3 $ROOT/infra/ai-council/tboards.py set-key"; fi
   if [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then echo "  ✓ GitHub token"
   else echo "  ! GitHub OAuth не инициализирован"; fi
   if command -v strix >/dev/null 2>&1; then echo "  ✓ strix CLI (on-demand pentest)"
@@ -678,7 +678,7 @@ case "${1:-status}" in
     echo "Использование: $0 {start|stop|restart|status|dashboard|doctor|logs [lines] [service]|headroom-apply}" >&2
     echo "  headroom-apply — пересоздать dev-прокси Headroom с каноническим конфигом (infra/headroom/developer/README.md)" >&2
     echo "  doctor — readiness CORE/REQUIRED/SESSION/OPTIONAL; exit 0=READY 1=CORE_FAIL 2=DEGRADED 3=INVALID_CONFIG" >&2
-    echo "  logs — хвост логов pipeline-owned процессов: dashboard + council (gateway/council/context/planner/notion-sync/learning)" >&2
+    echo "  logs — хвост логов pipeline-owned процессов: dashboard + council (gateway/council/context/planner/learning)" >&2
     exit 1
     ;;
 esac

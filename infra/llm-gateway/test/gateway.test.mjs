@@ -2,6 +2,9 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { loadConfig } from '../src/config.mjs'
 import { createApp } from '../src/server.mjs'
 
@@ -95,6 +98,8 @@ before(async () => {
       GW_STRATEGY: 'priority',
       GW_MAX_WAIT_MS: '2000',
       GW_OPENROUTER_FREE_ONLY: '0',
+      // Машинный замок — во временной папке: тест не ждёт живой консилиум владельца и не пишет в ~/.local/state.
+      GW_LOCAL_LOCK: join(mkdtempSync(join(tmpdir(), 'gw-test-')), 'ollama-local.lock'),
     },
   })
   gw = createApp(cfg, { persist: false })

@@ -19,7 +19,7 @@
 ## Первые шаги
 
 1. `forest_set_work_state`: `session: "t3-<ключ>"`, `harness: "claude-code"`, `step: "принимаю дела от <имя>"`.
-2. Нерв: один Monitor (persistent) `python3 -I eval/nerve/nerve.py tap <ключ>`.
+2. Нерв: один Monitor с `timeout_ms` 3300000 `python3 -I eval/nerve/nerve.py tap <ключ>`; по таймауту — голый перевзвод.
 3. Фоновые задачи и Monitor предыдущей сессии закроются вместе с её вкладкой. Задачу, которая в work_state значится
    запущенной, но без результата, запусти заново сам, по одной тяжёлой за раз.
 4. Пункты очереди, где в `checks` agentBy — имя предыдущей вкладки, перехвати через `oq_agent_status` с `session`.

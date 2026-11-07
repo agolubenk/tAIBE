@@ -60,7 +60,9 @@ python3 -I eval/evolve/daily.py cases eval/evolve/cases/*.jsonl   # cases fit fo
 > «А/В сравнения должна запускать отдельная автоматическая сессия 1 раз в сутки и вносить корректировки также
 > автоматически. Ложноположительные результаты должны помечаться как брак и не приниматься.»
 
-`daily.sh run` (launchd, 05:00 local, after the notebook sync of 04:17) runs `daily.py nightly`: it takes the run's one lock (`flock`, shared with `daily.py cycle --force`), refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
+launchd (05:00 local, after the notebook sync of 04:17) runs `caffeinate -i python3 -I daily.py nightly` — not
+`/bin/bash daily.sh`: macOS privacy control (TCC) refuses /bin/bash a script in ~/Desktop (exit 126, SE-52); by hand —
+`daily.sh run`. `nightly` it takes the run's one lock (`flock`, shared with `daily.py cycle --force`), refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
 `origin/board-agents`; no person's checkout is touched) and starts its fresh `daily.py cycle`:
 
 | Step | Who | What |

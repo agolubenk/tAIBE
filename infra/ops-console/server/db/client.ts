@@ -8,8 +8,16 @@ import { createClient, type Client } from '@libsql/client'
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql'
 import { getEnv } from '../env'
 import * as schema from './schema'
+import { gateClient } from './write-gate'
 
 export type OpsDb = LibSQLDatabase<typeof schema>
+
+/**
+ * Сколько запись ждёт блокировку чужого процесса (бэкап, CLI), мс. Внутри процесса записи идут по одной (write-gate.ts),
+ * поэтому синхронное ожидание libsql ждёт только чужую блокировку — копия бэкапа держит её миллисекунды. Без ожидания
+ * упавший оператор libsql не сбрасывает, и следующая «успешная» запись на том же соединении терялась.
+ */
+export const BUSY_TIMEOUT_MS = 2000
 
 let client: Client | null = null
 let db: OpsDb | null = null
@@ -24,7 +32,10 @@ export function getDb(): OpsDb {
   if (db) return db
   const env = getEnv()
   ensureLocalDir(env.databaseUrl)
-  client = createClient({ url: env.databaseUrl, authToken: env.databaseAuthToken })
+  // Локальный файл: запись процесса — по одной (write-gate.ts), timeout — ожидание только чужой блокировки. Удалённый
+  // libSQL (Turso) шлюз не берёт: блокировок файла там нет, а шлюз сериализовал бы сетевые запросы (5 RTT на запись).
+  const raw = createClient({ url: env.databaseUrl, authToken: env.databaseAuthToken, timeout: BUSY_TIMEOUT_MS })
+  client = env.databaseUrl.startsWith('file:') ? gateClient(raw) : raw
   db = drizzle(client, { schema })
   return db
 }

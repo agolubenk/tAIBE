@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import unittest
 
@@ -21,8 +22,8 @@ import build  # noqa: E402
 B = 'Bash'
 PUT = 'mcp__owner-queue__oq_put'
 GET = 'mcp__owner-queue__oq_get'
-NOTION = 'mcp__hub__notion_1mcp_notion-create-comment'
 EXT = '~/.vscode/extensions/anthropic.claude-code-2.1.311-darwin-arm64/claude -p x'
+TS = 'ToolSearch'
 
 
 def bash(command):
@@ -124,10 +125,6 @@ CASES = {
                  bash('git push -f origin fix/a'), bash("bash -c 'git commit --amend --no-edit'")],
         'quiet': [bash('git commit -m x && git push origin fix/a'), bash('echo "git push --force"')],
     },
-    'notion-comment': {
-        'fire': [(NOTION, {'page_id': 'x', 'rich_text': []})],
-        'quiet': [('mcp__hub__notion_1mcp_notion-fetch', {'id': 'x'})],
-    },
     'stale-binary': {
         'fire': [bash(EXT)],
         'quiet': [bash('claude -p x')],
@@ -146,6 +143,30 @@ CASES = {
                   bash("git log --grep='gh pr merge'"), bash("cat <<'MD' > b.md\nМёрж: `gh pr merge 1` — только Контроль\nMD"),
                   bash("printf '| `gh pr merge 1` | 25 |\\n'")],
     },
+    # a third element is the context in tokens for `min_context` rows (no third element — unknown context)
+    'toolsearch-big-context': {
+        'fire': [(TS, {'query': 'select:Monitor', 'max_results': 1}, 100000),
+                 (TS, {'query': 'notebook jupyter'}, 812000)],
+        'quiet': [(TS, {'query': 'select:Monitor', 'max_results': 1}, 60000), (TS, {'query': 'select:Monitor'}),
+                  (TS, {'query': 'select:Monitor'}, 99999), bash('echo ToolSearch')],
+    },
+    'long-wait': {
+        'fire': [('Monitor', {'command': 'nerve tap', 'timeout_ms': 3600000}),
+                 ('Monitor', {'command': 'tail -f x', 'timeout_ms': 3300001}),
+                 ('Monitor', {'command': 'tail -f x', 'timeout_ms': 3350000}),
+                 ('Monitor', {'command': 'tail -f x', 'timeout_ms': 86400000}),
+                 ('Monitor', {'command': 'tail -f x', 'persistent': True}),
+                 ('ScheduleWakeup', {'delaySeconds': 3600, 'reason': 'x', 'prompt': 'x'}),
+                 ('ScheduleWakeup', {'delaySeconds': 3301, 'reason': 'x', 'prompt': 'x'}),
+                 ('ScheduleWakeup', {'delaySeconds': 3400.5, 'reason': 'x', 'prompt': 'x'})],
+        'quiet': [('Monitor', {'command': 'nerve tap', 'timeout_ms': 1800000}),
+                  ('Monitor', {'command': 'tail -f x', 'timeout_ms': 3300000}),
+                  ('Monitor', {'command': 'tail -f x', 'timeout_ms': 340000}),
+                  ('Monitor', {'command': 'tail -f x', 'persistent': False, 'timeout_ms': 60000}),
+                  ('ScheduleWakeup', {'delaySeconds': 1800, 'reason': 'x', 'prompt': 'x'}),
+                  ('ScheduleWakeup', {'delaySeconds': 3300, 'reason': 'x', 'prompt': 'x'}),
+                  ('ScheduleWakeup', {'stop': True}), bash('sleep 3600; echo "timeout_ms": 3600000')],
+    },
 }
 
 
@@ -161,8 +182,8 @@ class AntigenCasesTest(unittest.TestCase):
         cls.table = antigen.load_table()
         cls.rows = {row['id']: row for row in cls.table}
 
-    def ids(self, tool, payload):
-        return [row['id'] for row in antigen.matches(self.table, tool, payload)]
+    def ids(self, tool, payload, context=None):
+        return [row['id'] for row in antigen.matches(self.table, tool, payload, context)]
 
     def test_every_row_has_cases(self):
         self.assertEqual(sorted(self.rows), sorted(CASES))
@@ -172,15 +193,55 @@ class AntigenCasesTest(unittest.TestCase):
 
     def test_fires(self):
         for aid, case in CASES.items():
-            for tool, payload in case['fire']:
-                with self.subTest(aid, payload=payload):
-                    self.assertIn(aid, self.ids(tool, payload))
+            for tool, payload, *ctx in case['fire']:
+                with self.subTest(aid, payload=payload, context=ctx):
+                    self.assertIn(aid, self.ids(tool, payload, *ctx))
 
     def test_stays_quiet(self):
         for aid, case in CASES.items():
-            for tool, payload in case['quiet']:
-                with self.subTest(aid, payload=payload):
-                    self.assertNotIn(aid, self.ids(tool, payload))
+            for tool, payload, *ctx in case['quiet']:
+                with self.subTest(aid, payload=payload, context=ctx):
+                    self.assertNotIn(aid, self.ids(tool, payload, *ctx))
+
+    def test_context_is_read_once_and_only_for_a_min_context_row(self):
+        calls = []
+
+        def ctx():
+            calls.append(1)
+            return 500000
+        self.ids(B, {'command': 'gh pr merge 1'}, ctx)
+        self.assertEqual(calls, [])
+        self.assertIn('toolsearch-big-context', self.ids(TS, {'query': 'select:a'}, ctx))
+        self.assertEqual(calls, [1])
+
+    def test_respond_reads_the_context_from_the_transcript_tail(self):
+        def answer(ctx, sidechain=False):
+            return json.dumps({'type': 'assistant', 'isSidechain': sidechain, 'uuid': 'u', 'message': {
+                'model': 'claude-opus-5-5', 'usage': {'input_tokens': 1, 'cache_read_input_tokens': ctx - 1,
+                                                      'cache_creation_input_tokens': 0, 'output_tokens': 0}}})
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, lines, fires in (('big', [answer(50000), answer(420000)], True),
+                                       ('small', [answer(420000), answer(80000)], False),
+                                       ('side', [answer(80000), answer(900000, sidechain=True)], False)):
+                with self.subTest(name):
+                    path = os.path.join(tmp, name + '.jsonl')
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(lines) + '\n')
+                    event = {'tool_name': TS, 'tool_input': {'query': 'select:a'}, 'session_id': name,
+                             'transcript_path': path}
+                    out = antigen.respond(event, state_dir=tmp)
+                    self.assertEqual(bool(out), fires)
+                    if fires:
+                        self.assertIn('toolsearch-big-context', out['hookSpecificOutput']['additionalContext'])
+                        self.assertIsNone(antigen.respond(event, state_dir=tmp))  # once per session
+            self.assertIsNone(antigen.respond({'tool_name': TS, 'tool_input': {'query': 'x'}, 'session_id': 'none'},
+                                              state_dir=tmp))
+            # a subagent's event with the parent's transcript: quiet, and the parent keeps its own lesson
+            big = os.path.join(tmp, 'big.jsonl')
+            sub = {'tool_name': TS, 'tool_input': {'query': 'x'}, 'session_id': 'p', 'transcript_path': big,
+                   'agent_id': 'a1'}
+            self.assertIsNone(antigen.respond(sub, state_dir=tmp))
+            self.assertTrue(antigen.respond(dict(sub, agent_id=None), state_dir=tmp))
 
     def test_long_or_hostile_commands_stay_fast(self):
         """Review of #82: `A="x y z" ` × 8000 took 9.6 s (hook timeout 10 s). Whole table, 100 KB each, < 0.2 s."""
@@ -207,7 +268,7 @@ class AntigenCasesTest(unittest.TestCase):
         matchers = list(hook_matchers())
         self.assertTrue(matchers)
         for aid, case in CASES.items():
-            for tool, _ in case['fire']:
+            for tool, *_ in case['fire']:
                 with self.subTest(aid, tool=tool):
                     self.assertTrue(any(m.fullmatch(tool) for m in matchers))
 

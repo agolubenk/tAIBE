@@ -50,7 +50,7 @@
 ```bash
 N=eval/nerve
 python3 -I $N/nerve.py status              # пульс, режим, лимит, волны, ошибки источников, последние адресные события
-python3 -I $N/nerve.py tap <роль>          # ← это ставит Monitor роли (persistent); --once — один проход
+python3 -I $N/nerve.py tap <роль>          # ← Monitor роли, timeout_ms 3300000, по таймауту — перевзвод; --once — один проход
 python3 -I $N/nerve.py tap <роль> --product taibe   # роль другого продукта (OPS-25); иначе TAIBE_PRODUCT, иначе по умолчанию
 python3 -I $N/nerve.py emit <роль> "текст" # назначение вручную (Координатор), класс nervous; роль — ключ, номер 1–6
                                           # (1 coord … 6 boards, порядок team.roles), all или список через запятую;
