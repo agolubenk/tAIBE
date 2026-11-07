@@ -79,8 +79,13 @@ describe('смена продукта пункта', () => {
     expect((await call(hr, 'PATCH', '/db/checks/i-move-1', { data: { agentStatus: 'taken', agentBy: 'hr-sess' } })).status).toBe(200)
     expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'taibe' })).status).toBe(200)
     expect((await call(hr, 'GET', '/db/checks/i-move-1')).status).toBe(404)
-    expect((await call(owner, 'GET', '/db/checks/i-move-1')).json).toMatchObject({ product: 'taibe', data: { agentBy: 'hr-sess' } })
+    // Захват сессии прежнего продукта снят: иначе новый держатель получал бы 409 до 12 ч.
+    const moved = (await call(owner, 'GET', '/db/checks/i-move-1')).json as { product: string, data: Record<string, unknown> }
+    expect(moved).toMatchObject({ product: 'taibe' })
+    expect(moved.data.agentBy).toBeUndefined()
+    expect(moved.data.agentStatus).toBeUndefined()
     expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'hr-helper' })).status).toBe(200)
+    expect((await call(hr, 'PATCH', '/db/checks/i-move-1', { data: { agentStatus: 'taken', agentBy: 'hr-sess-2' } })).status).toBe(200)
   })
 })
 

@@ -2375,7 +2375,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function paintRelayItem(el, it, e, d) {
     var rl = el.querySelector('.relay-st');
     if (!rl) return;
-    var html = !d && !e.agentStatus ? relayHtml(it.id) : '';
+    var other = window.__oqProductOf && window.__oqProductOf(it.id) !== 'hr-helper';
+    var html = d || e.agentStatus ? '' : other ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id);
     if (rl.innerHTML !== html) rl.innerHTML = html;
     rl.hidden = !html;
   }
