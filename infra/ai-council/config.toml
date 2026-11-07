@@ -18,7 +18,7 @@
 call_budget = 40                             # запросов на один вызов; лимит ключа — 100, сброс после 60 с тишины
 bug_weight = 2.0                             # ошибки обгоняют задачи в плане (rules/17 §2)
 review_slugs = ["in-review", "на-ревью"]     # колонки ревью; «на-ревью» — колонки, перенесённые из Notion
-final_slugs = ["done", "closed", "выполненные", "завершённые", "закрыто"]   # плюс колонки с isFinal
+final_slugs = ["done", "closed", "выполненные", "завершённые", "закрыто"]   # плюс completedAt (колонка с isFinal)
 
 [sources.rag]
 db = ".claude/rag/index.db"

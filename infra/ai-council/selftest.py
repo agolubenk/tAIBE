@@ -1362,7 +1362,7 @@ def test_planner(tmp: Path) -> None:
             "half_baked": half_baked, "parent_card_id": parent,
             "subtask_ids": json.dumps(list(subtasks)), "report": None, "body": "",
             "comments": "[]", "content_hash": sha16(card_id),
-            "notion_edited_at": "2026-08-01T00:00:00.000Z", "fetched_at": int(time.time()),
+            "notion_edited_at": None, "fetched_at": int(time.time()),
             "origin": "tboards", "ticket": None, "board_task_id": card_id, "is_final": 0,
         })
         if not with_run:

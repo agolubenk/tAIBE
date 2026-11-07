@@ -99,9 +99,13 @@ def sync_queue(cfg, rs: ReviewStore, client=None, boards: list[str] | None = Non
             for task in tasks:
                 stats["seen"] += 1
                 card = _review_card(cfg, rs, client, task, project, stats)
+                # Кэшируем и карточки других досок: иначе `--board tasks` перечитывал бы мету ошибок на каждом
+                # проходе. С очереди ушедших снимаем только у выбранных досок; выключенная политикой — не в очереди.
+                rs.upsert_card(card)
+                if not rs.boards().get(card["board"], {}).get("enabled"):
+                    rs.s.x("UPDATE review_cards SET in_queue = 0 WHERE card_id = ?", (card["card_id"],))
                 if card["board"] in wanted:
                     seen[card["board"]].add(card["card_id"])
-                    rs.upsert_card(card)
     except tboards.TBoardsError as exc:
         stats["errors"] += 1
         stats["partial"] = True
@@ -121,6 +125,32 @@ def sync_queue(cfg, rs: ReviewStore, client=None, boards: list[str] | None = Non
     return stats
 
 
+def refresh_card(cfg, rs: ReviewStore, card: dict, client=None) -> dict:
+    """Карточка очереди на сейчас: деталь, мета, метки, комментарии (5 запросов). Исполнитель мог обновить отчёт или
+    ответить в комментарии, не меняя описания, — ревью по старым данным было бы ревью не того. Ушла из колонки ревью —
+    снимается с очереди. Снимок Notion (без board_task_id) не перечитывается."""
+    if not card.get("board_task_id"):
+        return card
+    own = client is None
+    client = client or tboards.build(cfg, budget=8)
+    try:
+        task = client.task(card["board_task_id"])
+        meta, labels = client.meta(task["id"]), client.labels(task["id"])
+        comments = client.comments(task["id"])
+        project = client.projects().get(task.get("projectId")) or {}
+    finally:
+        if own:
+            client.close()
+    finals = tuple(cfg.get("sources.tboards.final_slugs", tboards.FINAL_SLUGS))
+    base = tboards.task_to_card(task, meta, labels, comments, project, client, finals)
+    fresh = {**base, "board": base["db"]}
+    fresh["review_hash"] = review_hash(fresh)
+    rs.upsert_card(fresh)
+    if fresh["status"] not in review_slugs(cfg):
+        rs.s.x("UPDATE review_cards SET in_queue = 0 WHERE card_id = ?", (fresh["card_id"],))
+    return rs.card(fresh["card_id"]) or fresh
+
+
 def resolve_cards(rs: ReviewStore, ref: str, board: str = "") -> list[dict]:
     ref = (ref or "next").strip()
     if ref in ("all", "next"):
@@ -135,15 +165,28 @@ def resolve_cards(rs: ReviewStore, ref: str, board: str = "") -> list[dict]:
 
 def enqueue(cfg, rs: ReviewStore, ref: str, profile_ref: str = "", requested_by: str = "ui",
             request: dict | None = None, board: str = "", priority: int = 5,
-            force: bool = False) -> dict:
+            force: bool = False, client=None) -> dict:
     request = {k: v for k, v in (request or {}).items() if v not in (None, "", [], {})}
     cards = resolve_cards(rs, ref, board)
     if not cards:
         return {"ok": False, "error": f"карточка «{ref}» не найдена в очереди ревью — "
                                       "обновите очередь из t-boards (council_review_queue refresh=True) или "
                                       "укажите ключ карточки в колонке ревью", "queued": []}
-    queued, skipped = [], []
+    queued, skipped, warnings = [], [], []
     policies = rs.boards()
+    if len(cards) <= 3:                            # «all» идёт по данным очереди: 5 запросов на карточку не по карману
+        fresh = []
+        for card in cards:
+            try:
+                card = refresh_card(cfg, rs, card, client)
+            except tboards.TBoardsError as exc:
+                warnings.append(f"{card.get('ticket') or card['card_id']}: данные очереди, не перечитаны ({exc})")
+            if card.get("status") in review_slugs(cfg) or not card.get("board_task_id"):
+                fresh.append(card)
+            else:
+                skipped.append({"card_id": card["card_id"], "title": card.get("title"),
+                                "why": f"ушла из колонки ревью: «{card.get('status')}»"})
+        cards = fresh
     for card in cards:
         active = rs.active_run(card["card_id"])
         if active and not force:
@@ -158,7 +201,7 @@ def enqueue(cfg, rs: ReviewStore, ref: str, profile_ref: str = "", requested_by:
                             priority + (1 if card["board"] == "bugs" else 0))
         queued.append({"run_id": run_id, "card_id": card["card_id"], "title": card.get("title"),
                        "profile": prof["name"]})
-    return {"ok": True, "queued": queued, "skipped": skipped}
+    return {"ok": True, "queued": queued, "skipped": skipped, **({"warnings": warnings} if warnings else {})}
 
 
 # ── dry-run ─────────────────────────────────────────────────────────────────
@@ -189,13 +232,12 @@ def prepare(cfg, rs: ReviewStore, ref: str, profile_ref: str = "", request: dict
     status_ok = card.get("status") in slugs
     if live and card.get("board_task_id"):
         try:
-            with tboards.build(cfg, budget=2) as client:
-                live_status = str(client.task(card["board_task_id"]).get("status") or "")
-            status_ok = live_status in slugs
-            add(status_ok, f"статус в t-boards сейчас: «{live_status}»"
+            card = refresh_card(cfg, rs, card)
+            status_ok = card.get("status") in slugs
+            add(status_ok, f"карточка перечитана из t-boards, колонка «{card.get('status')}»"
                 + ("" if status_ok else f" — ожидалась колонка ревью ({', '.join(slugs)})"))
         except tboards.TBoardsError as exc:
-            add(True, f"живой статус не прочитан ({exc}) — по очереди «{card.get('status')}»", "warn")
+            add(True, f"карточка не перечитана ({exc}) — по очереди «{card.get('status')}»", "warn")
     else:
         add(status_ok, f"статус по очереди: «{card.get('status')}»"
             + ("" if card.get("board_task_id") else " (карточка из снимка Notion — архив)"))

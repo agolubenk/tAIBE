@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import mimetypes
 import os
@@ -67,6 +68,18 @@ _stopping = threading.Event()
 
 def log(message: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+def _not_workable(card: dict | None) -> str:
+    """Почему карточку нельзя ставить в очередь: её нет, это архив Notion или она в финальной колонке (спека §10).
+    Пусто — можно. Свежая карточка — по ключу: поиск «Карточки» или `tboards.py card OPS-26`."""
+    if not card:
+        return "не найдена — прочитайте её из t-boards по ключу (поиск «Карточки»)"
+    if card.get("db") != "draft" and card.get("origin") != "tboards":
+        return "архив Notion — прочитайте карточку из t-boards по ключу (поиск «Карточки»)"
+    if card.get("is_final"):
+        return "в финальной колонке доски — в работу не идёт"
+    return ""
 
 
 def _escape_like(text: str) -> str:
@@ -372,7 +385,7 @@ class Api:
         with self._store() as store:
             return store.q(
                 "SELECT card_id, db, title, url, status, priority, severity, modules, "
-                "half_baked, backlog_id, "
+                "half_baked, backlog_id, origin, ticket, is_final, "
                 "(SELECT COUNT(*) FROM runs r WHERE r.card_id = cards.card_id) runs, "
                 "(SELECT r.readiness FROM runs r WHERE r.card_id = cards.card_id "
                 " AND r.status='done' ORDER BY r.finished_at DESC LIMIT 1) readiness, "
@@ -437,8 +450,9 @@ class Api:
                              f"или models.cloud.enabled=true"}
         with self._store() as store:
             card = store.get_card(card_id)
-            if not card:
-                return {"ok": False, "error": f"карточка {card_id} не в снапшоте"}
+            why = _not_workable(card)
+            if why:
+                return {"ok": False, "error": f"карточка {card_id}: {why}"}
             run_id = store.enqueue(
                 card_id, track="half_baked" if card["half_baked"] else "elaborate",
                 profile=profile, priority=priority, config_hash=self.cfg.config_hash(),
@@ -1739,7 +1753,7 @@ class Api:
         with self._store() as store:
             for card_id in card_ids:
                 card = store.get_card(card_id)
-                if not card:
+                if _not_workable(card):
                     skipped.append(card_id)
                     continue
                 # Комментарий к запуску сохраняется как указание владельца по каждой
@@ -2165,7 +2179,8 @@ def get_once(cfg, path: str) -> int:
     Handler.api = Api(cfg)
     Handler.review = ReviewApi(cfg)
     once = _Once(path)
-    once.do_GET()
+    with contextlib.redirect_stdout(sys.stderr):        # log() обработчиков — в stderr: stdout только JSON
+        once.do_GET()
     sys.stdout.write(once.body.decode("utf-8", "replace"))
     return 0 if 200 <= once.status < 300 else 1
 

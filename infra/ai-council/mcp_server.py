@@ -63,26 +63,39 @@ def _gateway_base() -> str:
     return f"http://{host}:{port}"
 
 
-def _run(argv: list[str], timeout: int) -> str:
-    """Подпроцесс инструмента: stdout+stderr или понятный отказ по таймауту (а не исключение в клиент MCP)."""
+def _run(argv: list[str], timeout: int, json_out: bool = False) -> str:
+    """Подпроцесс инструмента: stdout+stderr или понятный отказ по таймауту (а не исключение в клиент MCP).
+    json_out — ответ JSON: при коде 0 только stdout, чтобы диагностика в stderr не ломала разбор."""
     try:
         proc = subprocess.run(argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return json.dumps({"error": f"{Path(argv[1]).name}: не уложился в {timeout} с — сузьте запрос"},
                           ensure_ascii=False)
+    if json_out and proc.returncode == 0 and (proc.stdout or "").strip():
+        return proc.stdout.strip()
     out = (proc.stdout or "") + (proc.stderr or "")
     return out.strip() or f"(нет вывода, exit={proc.returncode})"
 
 
 def _gateway_get(path: str) -> str:
     """GET на gateway.py — тот же READ API, что у дашборда. Никогда не пишет. Шлюз не запущен (фона нет с 01.11,
-    Р0 б) — тот же обработчик подпроцессом `gateway.py --get <путь>`, без сокета."""
+    Р0 б) — тот же обработчик подпроцессом `gateway.py --get <путь>`, без сокета. Шлюз запущен, но ответил ошибкой
+    или не уложился — это ответ, второй раз тот же запрос подпроцессом не повторяется."""
     url = _gateway_base() + path
     try:
         with urllib.request.urlopen(url, timeout=10) as resp:
             return resp.read().decode("utf-8")
-    except (urllib.error.URLError, ConnectionRefusedError, OSError):
-        return _run([sys.executable, str(HERE / "gateway.py"), "--get", path], timeout=60)
+    except urllib.error.HTTPError as exc:
+        return json.dumps({"error": f"AI Council gateway: HTTP {exc.code}"}, ensure_ascii=False)
+    except urllib.error.URLError as exc:
+        if not isinstance(exc.reason, ConnectionRefusedError):
+            return json.dumps({"error": f"AI Council gateway недоступен: {type(exc.reason).__name__}"},
+                              ensure_ascii=False)
+    except ConnectionRefusedError:
+        pass
+    except OSError as exc:
+        return json.dumps({"error": f"AI Council gateway: {type(exc).__name__}"}, ensure_ascii=False)
+    return _run([sys.executable, str(HERE / "gateway.py"), "--get", path], timeout=60, json_out=True)
 
 
 def _run_pipeline(*args: str, timeout: int = 120) -> str:
@@ -193,7 +206,7 @@ def council_cards(db: str = "", query: str = "", limit: int = 20) -> str:
     (без сети). db: bugs|tasks — для прочитанных. limit: до 50 (по умолчанию 20), ответ ≤ 6 КБ."""
     args = ["cards", "--limit", str(max(1, min(int(limit or 20), 50)))]
     if query:
-        args += ["--q", query]
+        args.append(f"--q={query}")              # запрос, начинающийся с «-», argparse иначе принял бы за флаг
     if db in ("bugs", "tasks"):
         args += ["--db", db]
     return _run([sys.executable, str(HERE / "tboards.py"), *args], timeout=60)

@@ -480,9 +480,11 @@ def cmd_run(cfg, args) -> int:
     import tboards
     with Store() as store:
         local = store.get_card(args.card)
+        # card_id перенесённой карточки — Notion-id: перечитываем её по id t-boards, если он уже известен.
+        ref = (local or {}).get("board_task_id") or args.card
         try:
             card = local if local and local.get("db") == "draft" else \
-                tboards.fetch_into_store(cfg, store, args.card)
+                tboards.fetch_into_store(cfg, store, ref)
         except tboards.TBoardsError as exc:
             print(f"✗ {exc}", file=sys.stderr)
             return 1

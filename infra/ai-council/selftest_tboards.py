@@ -94,8 +94,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(200, FakeBoard.task(FOREIGN, workspaceId=OTHER_WS), gz=gz)
         if path == f"/api/forest/{WS}/cards/{TASK}/meta":
             return self._reply(200, {"kind": "bug", "severity": "high", "backlogId": None, "halfBaked": False,
-                                     "report": "отчёт: token=sk-abcdefghijklmnopqrstuvwx", "notionPageId": NOTION_ID},
-                               gz=gz)
+                                     "report": mode.get("report", "отчёт: token=sk-abcdefghijklmnopqrstuvwx"),
+                                     "notionPageId": NOTION_ID}, gz=gz)
         if path == f"/api/forest/{WS}/cards/{BUG}/meta":
             return self._reply(200, {"kind": "task", "halfBaked": True}, gz=gz)
         if path.startswith("/api/label/task/"):
@@ -104,12 +104,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(200, [{"id": "c1", "content": "звоните +7 916 123-45-67", "createdAt": "2026-11-07",
                                       "userId": "u1", "user": {"name": "Иван Петров"}}], gz=gz)
         if path == f"/api/task/tasks/{PROJECT}":
-            status = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("status")
-            tasks = [FakeBoard.task(TASK), FakeBoard.task(BUG, number=27, title="вторая")] if status == "in-review" \
-                else []
+            q = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+            both = [FakeBoard.task(TASK), FakeBoard.task(BUG, number=27, title="вторая")]
+            tasks = both if q.get("status") == "in-review" else []
+            pages = 1
+            if mode.get("paged") and tasks:            # по одной карточке на страницу: сотая+1 не теряется
+                pages, tasks = 2, both[int(q.get("page", "1")) - 1:int(q.get("page", "1"))]
             columns = [{"slug": "in-review", "isFinal": False, "tasks": tasks}, {"slug": "done", "isFinal": True,
                                                                                "tasks": []}]
-            return self._reply(200, {"data": {"columns": columns}, "pagination": {"total": len(tasks)}}, gz=gz)
+            return self._reply(200, {"data": {"columns": columns},
+                                     "pagination": {"total": len(both), "totalPages": pages}}, gz=gz)
         if path == "/api/search":
             return self._reply(200, {"results": [{"id": TASK, "type": "task", "title": "Консилиум без Notion",
                                                   "projectSlug": "OPS", "taskNumber": 26, "status": "in-review"}],
@@ -177,6 +181,10 @@ def _key_and_url(check, tb, tmp: Path, url: str) -> None:
         check(f"t-boards: адрес {bad[:42]} — отказ ({code})", ok, why)
     check("t-boards: доверенный хост по https собирается заново",
           tb.trusted_url("https://D4DEV.admin.hrhelper.space/") == "https://d4dev.admin.hrhelper.space")
+    ok, why = _raises(lambda: tb.trusted_url("http://127.0.0.1:99999"), "bad_url")
+    check("t-boards: неверный порт — bad_url, а не ValueError", ok, why)
+    check("t-boards: Retry-After inf или мусор — нет паузы", tb._retry_after({"retry-after": "inf"}) is None
+          and tb._retry_after({"retry-after": "x"}) is None and tb._retry_after({"retry-after": "2"}) == 2.0)
     ok, why = _raises(lambda: tb.Client(url, "ab\ncd" + "e" * 20, WS), "bad_key")
     check("t-boards: клиент с битым ключом не создаётся, ключа в тексте нет", ok and "ab\ncd" not in why, why)
 
@@ -233,7 +241,8 @@ def _card(check, tb, url: str, tmp: Path) -> None:
           and "916 123" not in comments[0]["text"] and "sk-abcdef" not in (card["report"] or "")
           and set(comments[0]) == {"id", "text", "at"}, (card["body"], comments, card["report"]))
     done = tb.task_to_card(FakeBoard.task(TASK, status="выполненные"), {}, [], [], {"slug": "OPS"}, client)
-    final = tb.task_to_card(FakeBoard.task(TASK, completedAt="2026-11-07"), {}, [], [], {"slug": "OPS"}, client)
+    final = tb.task_to_card(FakeBoard.task(TASK, completedAt="2026-11-07"), {}, [], [], {"slug": "ops"}, client)
+    check("t-boards: ключ карточки — в верхнем регистре, как ищут", final["ticket"] == "OPS-26", final["ticket"])
     check("t-boards: финальная колонка — по slug и по completedAt", done["is_final"] == 1 and final["is_final"] == 1
           and done["card_id"] == TASK)
 
@@ -254,6 +263,11 @@ def _card(check, tb, url: str, tmp: Path) -> None:
           open_ids == {"3b9dd207-a825-81df-b95a-df2a95472dbf", "draft_1"}, open_ids)
     check("t-boards: поиск карточки по ключу и id t-boards",
           (store.find_card("ops-26") or {}).get("board_task_id") == TASK and store.find_card(TASK) is not None)
+    old = store.get_card("3b9dd207-a825-81df-b95a-df2a95472dbf")
+    store.x("UPDATE cards SET notion_edited_at = '2026-08-01T00:00:00.000Z' WHERE card_id = ?", (old["card_id"],))
+    check("t-boards: строку перезаписал старый синк Notion (HR до #484) — в работу не идёт",
+          old["card_id"] not in {c["card_id"] for c in store.open_cards()})
+    store.x("UPDATE cards SET notion_edited_at = NULL WHERE card_id = ?", (old["card_id"],))
     store.upsert_card({**store.get_card("draft_1"), "linked_card_ids": None})
     check("t-boards: перечитывание не стирает @-связи черновика",
           store.get_card("draft_1")["linked_card_ids"] == '["x"]')
@@ -298,7 +312,28 @@ def _review(check, tb, url: str, tmp: Path) -> None:
     found = rs.find_card("OPS-26")
     check("ревью: карточка очереди находится по ключу t-boards", found is not None and found["ticket"] == "OPS-26")
     check("ревью: по названию снимок Notion не находится", rs.find_card("архив") is None)
+    store.x("UPDATE review_cards SET in_queue = 1 WHERE card_id = 'notion-1'")
+    check("ревью: строка снимка, которую старая копия вернула в очередь, в очередь не попадает",
+          "notion-1" not in {c["card_id"] for c in rs.queue()})
+    FakeBoard.mode = {"report": "исполнитель обновил отчёт"}
+    with tb.Client(url, KEY, WS, "aiboards-eval", "aiBoards&eval") as client:
+        res = svc.enqueue(cfg, rs, "OPS-26", requested_by="selftest", client=client)
+    FakeBoard.mode = {}
+    check("ревью: постановка перечитывает мету карточки — ревью по свежему отчёту",
+          res.get("ok") and (rs.find_card("OPS-26") or {}).get("report") == "исполнитель обновил отчёт", res)
     store.close()
+
+    paged = Store(tmp / "tb-paged.db")
+    prs = ReviewStore(paged)
+    FakeBoard.mode = {"paged": True}
+    with tb.Client(url, KEY, WS, "aiboards-eval", "aiBoards&eval") as client:
+        pstats = svc.sync_queue(cfg, prs, client=client, boards=["tasks"])
+    FakeBoard.mode = {}
+    check("ревью: колонка на 2 страницах — читаются все страницы",
+          pstats["seen"] == 2 and not pstats["partial"], pstats)
+    check("ревью: карточка другой доски (--board tasks) закэширована — второй проход её не перечитывает",
+          prs.card("3b9dd207-a825-81df-b95a-df2a95472dbf") is not None)
+    paged.close()
 
 
 def _cli(check, tmp: Path) -> None:
@@ -324,6 +359,10 @@ def _cli(check, tmp: Path) -> None:
         gw.Api = real_api
     check("MCP без шлюза: gateway.py --get отдаёт тот же JSON, только /api/…",
           code == 0 and isinstance(json.loads(out.getvalue()), list) and bad == 2, out.getvalue()[:200])
+    check("шлюз: в очередь не идут архив Notion, финальная колонка и пустота; черновик и t-boards — идут",
+          bool(gw._not_workable(None)) and "архив" in gw._not_workable({"db": "tasks"})
+          and bool(gw._not_workable({"db": "bugs", "origin": "tboards", "is_final": 1}))
+          and gw._not_workable({"db": "draft"}) == "" and gw._not_workable({"db": "tasks", "origin": "tboards"}) == "")
 
 
 def run(tmp: Path, check) -> None:

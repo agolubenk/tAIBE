@@ -18,6 +18,7 @@ import gzip
 import http.client
 import io
 import json
+import math
 import os
 import re
 import ssl
@@ -64,6 +65,10 @@ def trusted_url(raw: str) -> str:
     raw = (raw or "").strip()
     parts = urllib.parse.urlsplit(raw)
     host = (parts.hostname or "").lower()
+    try:
+        port = parts.port
+    except ValueError:
+        raise TBoardsError("bad_url", "адрес доски: неверный порт") from None
     if (not host or "\\" in raw or parts.username or parts.password or parts.query or parts.fragment
             or parts.path not in ("", "/")):
         raise TBoardsError("bad_url", "адрес доски: только схема и хост, без пути, логина и параметров")
@@ -71,7 +76,7 @@ def trusted_url(raw: str) -> str:
             or (parts.scheme == "http" and host in LOCAL_HOSTS)):
         raise TBoardsError("untrusted_url", f"хост {host!r} не в списке доверенных (KNOWN_HOSTS слоя) — "
                                             "ключ туда не уходит")
-    return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
+    return f"{parts.scheme}://{host}" + (f":{port}" if port else "")
 
 
 def key_path(root: Path | None = None) -> Path:
@@ -123,9 +128,10 @@ def load_key(root: Path | None = None) -> dict:
 def _retry_after(headers: dict) -> float | None:
     for name in ("retry-after", "x-retry-after"):
         try:
-            return max(0.0, float(headers.get(name, "")))
+            value = float(headers.get(name, ""))
         except ValueError:
             continue
+        return max(0.0, value) if math.isfinite(value) else None
     return None
 
 
@@ -278,11 +284,23 @@ class Client:
         return data if isinstance(data, list) else []
 
     def board(self, project_id: str, status: str) -> tuple[list, list]:
-        """(задачи колонки `status`, все колонки доски) — список проекта с фильтром статуса, до 100 задач."""
-        data = self.get("/api/task/tasks/{}", project_id, query={"status": status, "limit": 100})
-        board = (data or {}).get("data") or {} if isinstance(data, dict) else {}
-        columns = [c for c in board.get("columns") or [] if isinstance(c, dict)]
-        tasks = [t for c in columns for t in c.get("tasks") or [] if isinstance(t, dict) and t.get("status") == status]
+        """(задачи колонки `status`, все колонки доски) — список проекта с фильтром статуса, все страницы по 100
+        (`pagination.totalPages`): иначе карточки после сотой выпали бы из очереди ревью."""
+        tasks: list = []
+        columns: list = []
+        page, pages = 1, 1
+        while page <= pages:
+            data = self.get("/api/task/tasks/{}", project_id, query={"status": status, "limit": 100, "page": page})
+            data = data if isinstance(data, dict) else {}
+            board = data.get("data") or {}
+            columns = [c for c in board.get("columns") or [] if isinstance(c, dict)] or columns
+            tasks += [t for c in board.get("columns") or [] if isinstance(c, dict)
+                      for t in c.get("tasks") or [] if isinstance(t, dict) and t.get("status") == status]
+            try:
+                pages = max(1, min(int((data.get("pagination") or {}).get("totalPages") or 1), 50))
+            except (TypeError, ValueError):
+                pages = 1
+            page += 1
         return tasks, columns
 
     def search(self, q: str, limit: int) -> list:
@@ -308,7 +326,7 @@ def _uuid(value) -> str:
 
 
 def ticket_of(task: dict, project: dict) -> str:
-    slug, number = str(project.get("slug") or ""), task.get("number")
+    slug, number = str(project.get("slug") or "").upper(), task.get("number")
     return f"{slug}-{number}" if slug and number is not None else ""
 
 
@@ -352,13 +370,12 @@ def task_to_card(task: dict, meta: dict, labels: list, comments: list, project: 
 def check_pin(store, workspace: str) -> None:
     """База хоста закреплена за продуктом первого ключа: подменённый файл ключа другого продукта не нальёт в неё
     чужие карточки."""
+    store.x("INSERT OR IGNORE INTO council_state (key, value, updated_at) VALUES (?, ?, ?)",
+            (PIN_KEY, workspace, int(time.time())))
     row = store.q1("SELECT value FROM council_state WHERE key = ?", (PIN_KEY,))
     if row and row["value"] and row["value"] != workspace:
         raise TBoardsError("wrong_product", "база консилиума этого хоста закреплена за другим продуктом — "
                                             "ключ не того продукта? Проверьте файл ключа: `tboards.py status`")
-    if not row:
-        store.x("INSERT INTO council_state (key, value, updated_at) VALUES (?, ?, ?)",
-                (PIN_KEY, workspace, int(time.time())))
 
 
 def fetch_card(cfg, ref: str, client: Client) -> dict:
@@ -405,11 +422,15 @@ def cmd_cards(cfg, args) -> int:
     q = (args.q or "").strip()
     with Store() as store:
         if q and (TICKET_RE.fullmatch(q) or ID_RE.fullmatch(q)):
-            with build(cfg) as client:
-                card = fetch_into_store(cfg, store, q, client)
-            _out([f"t-boards · {client.name or client.slug}: карточка (данные на сейчас)", card_line(card),
-                  f"  {card.get('url')}", "", (card.get("body") or "")[:3000]])
-            return 0
+            try:
+                with build(cfg) as client:
+                    card = fetch_into_store(cfg, store, q, client)
+                _out([f"t-boards · {client.name or client.slug}: карточка (данные на сейчас)", card_line(card),
+                      f"  {card.get('url')}", "", (card.get("body") or "")[:3000]])
+                return 0
+            except TBoardsError as exc:
+                if TICKET_RE.fullmatch(q) or exc.code != "http_404":
+                    raise                               # похожее на id слово без карточки — дальше поиском
         if q:
             with build(cfg) as client:
                 rows, projects = client.search(q, limit), client.projects()

@@ -297,7 +297,8 @@ class ReviewStore:
                          "ORDER BY in_queue DESC LIMIT 1", (f"%{ref}%",))
 
     def queue(self, board: str = "", include_left: bool = False) -> list[dict]:
-        sql, params = "SELECT * FROM review_cards WHERE 1=1", []
+        # Только карточки t-boards: снимок Notion — архив, старая копия кода в HR (до HR #484) могла вернуть его в очередь.
+        sql, params = "SELECT * FROM review_cards WHERE origin = 'tboards'", []
         if not include_left:
             sql += " AND in_queue = 1"
         if board:

@@ -211,9 +211,11 @@ class Store:
 
     def open_cards(self, db: str | None = None, statuses: list[str] | None = None) -> list[dict]:
         """Карточки в работе: прочитанные из t-boards и не в финальной колонке, плюс локальные черновики.
-        Снимок Notion (origin IS NULL, db tasks|bugs) — архив: прогоны и корпус его помнят, в новую работу он не идёт."""
-        sql, params = ("SELECT * FROM cards WHERE ((origin = 'tboards' AND COALESCE(is_final, 0) = 0) "
-                       "OR db = 'draft')"), []
+        Снимок Notion (origin IS NULL, db tasks|bugs) — архив: прогоны и корпус его помнят, в новую работу он не идёт.
+        `notion_edited_at IS NULL`: строку t-boards перезаписала старая копия синка Notion (код HR до HR #484) — её
+        содержимое снова из Notion, такая строка не идёт в работу, пока её не перечитают из t-boards."""
+        sql, params = ("SELECT * FROM cards WHERE ((origin = 'tboards' AND COALESCE(is_final, 0) = 0 "
+                       "AND notion_edited_at IS NULL) OR db = 'draft')"), []
         if db:
             sql, params = sql + " AND db = ?", params + [db]
         if statuses:
