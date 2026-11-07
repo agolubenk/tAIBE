@@ -85,7 +85,7 @@ describe('отметка автопередачи: PUT/GET /relay', () => {
   })
 })
 
-describe('проход автопередачи (relayPass в owner-queue-mcp/server.mjs)', () => {
+describe('проход автопередачи (relayPass в owner-queue-mcp/relay.mjs, реэкспорт из server.mjs)', () => {
   type Doc = { id: string; data: Record<string, unknown> }
   let relayPass: (items: Doc[], checks: Doc[], relayed: Record<string, string>, now: number, first: boolean) => { lines: string[]; sent: string[]; old: number }
 

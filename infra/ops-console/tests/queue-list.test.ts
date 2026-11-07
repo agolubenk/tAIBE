@@ -7,7 +7,7 @@ import { freshApp } from './helpers'
 import { createToken } from '../server/queue/auth'
 import { etagMatches } from '../server/queue/etag'
 import { gzipListOnce } from '../server/queue/list-gzip'
-import { setListLimitsForTests } from '../server/queue/store'
+import { setListLimitsForTests } from '../server/queue/list'
 
 type App = Awaited<ReturnType<typeof freshApp>>
 let app: App
@@ -151,6 +151,8 @@ describe('сжатый список — одна сборка на тег', () =
     const slow = () => new Promise<unknown>((r) => { builds++; release = () => r({ docs: [] }) })
     const first = gzipListOnce('t-slow', 'W/"3"', slow)
     const second = gzipListOnce('t-slow', 'W/"4"', slow)
+    // Сборки идут по одной на процесс (цепочка), первая стартует на следующем такте.
+    await new Promise((r) => setTimeout(r, 0))
     expect(builds).toBe(1)
     expect(second.tag).toBe('W/"3"')
     release()

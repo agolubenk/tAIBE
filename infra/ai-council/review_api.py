@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """AI Council — HTTP-маршруты вкладки «Ревью» (`/api/review/*`) для gateway.py.
 
-Шлюз живёт только на петле и без авторизации (gateway.serve) — поэтому всё, что меняет
-внешний мир (переход статуса в Notion), требует отдельного явного действия владельца:
-кнопки «Применить переход» на конкретном прогоне. Настройки доски сами по себе
-статусы не двигают.
+Шлюз живёт только на петле и без авторизации (gateway.serve). На доску консилиум не пишет
+(OPS-26): «Подтвердить переход» на прогоне отмечает решение владельца в базе, карточку на
+доске t-boards переносит агент под арендой или владелец. Очередь — колонки ревью t-boards,
+обновляется только по запросу (POST /api/review/sync).
 
 GET  /api/review/state                       — всё для вкладки одним запросом
 GET  /api/review/queue?board=&left=1
 GET  /api/review/runs?card_id=&status=&limit=
 GET  /api/review/runs/<id>                   — прогон + шаги (без текстов)
 GET  /api/review/steps/<id>                  — один вызов модели полностью
-GET  /api/review/statuses?board=             — опции Status доски (живьём из Notion)
+GET  /api/review/statuses?board=             — статусы для политики доски (каталог slug t-boards)
 GET  /api/review/profiles/<id>/versions
 GET  /api/review/models                      — локальные модели + окна контекста
 GET  /api/review/audit?run_id=
@@ -33,8 +33,18 @@ from __future__ import annotations
 
 import review_catalog as cat
 import review_service as svc
+import tboards
 from review_store import ReviewStore
 from store import Store
+
+
+def _tboards_state() -> dict:
+    """Ключ продукта без сети и без самого ключа: есть ли, какой продукт, почему нет."""
+    try:
+        key = tboards.load_key()
+        return {"ok": True, "product": key["name"] or key["slug"], "url": key["url"]}
+    except tboards.TBoardsError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def _int(value, default: int) -> int:
@@ -113,7 +123,7 @@ class ReviewApi:
                 "default_verdict": cat.DEFAULT_VERDICT, "verdicts": cat.VERDICTS,
                 "default_consult": cat.DEFAULT_CONSULT, "consult_limits": cat.CONSULT_LIMITS,
             },
-            "notion": self.cfg.notion_enabled(),
+            "tboards": _tboards_state(),
         }
 
     def models(self) -> dict:
@@ -142,8 +152,7 @@ class ReviewApi:
         if route == "/api/review/sync":
             board = body.get("board") or None
             stats = svc.sync_queue(self.cfg, rs, boards=[board] if board else None)
-            queued = svc.autorun(self.cfg, rs)
-            return {"ok": True, "stats": stats, "auto_queued": queued}
+            return {"ok": not stats.get("partial"), "stats": stats, "error": stats.get("error")}
         if route == "/api/review/prepare":
             return svc.prepare(self.cfg, rs, str(body.get("card") or ""), str(body.get("profile") or ""),
                                body.get("request") or {}, live=body.get("live", True) is not False)

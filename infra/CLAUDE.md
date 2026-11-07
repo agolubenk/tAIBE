@@ -30,9 +30,9 @@ MCP-хаб, шлюз моделей, сжатие контекста, ops-кон
   мёрж, а молча не теряет пункт владельца (идемпотентность `ifVersion`, повтор — 409, а не дубль).
 - **Секреты — только по цепочке env → Keychain** (`scripts/dev-ai/mcp-secret.sh`, service `hr-helper-mcp`); в git —
   только `*.env.example`. MCP- и API-ключи наружу — хэшем, ключ показывается один раз.
-- **Локальные модели — строго последовательно** (у консилиума — лок `ollama.local_inference_slot`; шлюз моделей и
-  backend продукта идут мимо него — OPS-27, OPS-28), облачные полосы — по квоте
-  5-часового окна, а не по числу потоков.
+- **Локальные модели — строго последовательно** (машинный flock `~/.local/state/taibe/council/ollama-local.lock`:
+  консилиум — `ollama.local_inference_slot`, шлюз моделей — `llm-gateway/src/machine-lock.mjs`; мимо него идут
+  backend продукта — OPS-28, роли Continue напрямую и прогрев — OPS-33), облачные полосы — по квоте 5-часового окна, а не по числу потоков.
 - **Инстанс-зависимое — в конфиге, не в коде:** адрес очереди и роли — `eval/nerve/config.json`, модели и источники
   консилиума — `ai-council/config.toml`, домены и туннель досок — `scripts/dev-ai/mcp-t-boards.sh` (`T_BOARDS_URL`).
 - **Рантайм-состояние не коммитится:** `.claude/council/` (SQLite консилиума), `llm-gateway/.state/`,

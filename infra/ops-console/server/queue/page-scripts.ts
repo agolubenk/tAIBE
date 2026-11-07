@@ -120,8 +120,11 @@ export const ENHANCE_JS = String.raw`(function () {
     if (btn.dataset.busy) return;
     var ok = hasVerdict(id);
     btn.disabled = !ok;
-    btn.textContent = ok ? 'Влить сейчас…' : 'Ждёт вердикта «Контроля»';
-    btn.title = ok ? '' : 'В пункте нет вердикта «Контроля» (поля sha и base) — вливать нельзя';
+    // Только при изменении: запись textContent — мутация childList, и наблюдатель ниже будил бы себя каждый кадр.
+    var label = ok ? 'Влить сейчас…' : 'Ждёт вердикта «Контроля»';
+    var title = ok ? '' : 'В пункте нет вердикта «Контроля» (поля sha и base) — вливать нельзя';
+    if (btn.textContent !== label) btn.textContent = label;
+    if (btn.title !== title) btn.title = title;
   }
   function mergeFlow(el, id, btn) {
     btn.dataset.busy = '1';

@@ -6,14 +6,13 @@
  *  - ifVersion — защита от одновременной правки (409 вместо молчаливой перезаписи).
  * Каждое изменение — строка журнала oq_events.
  */
-import { createHash } from 'node:crypto'
-import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
 import { removeItemFiles } from './files/remove'
-import { oqItemState } from './open-rule'
+import { canSee, DEFAULT_PRODUCT, listProducts, namespaceOf, notFound, productForNew, type Product, type Visibility } from './products'
 
 export const COLLECTIONS = ['checks', 'items', 'work'] as const
 export type Collection = (typeof COLLECTIONS)[number]
@@ -22,6 +21,8 @@ export type Scope = 'read' | 'agent' | 'owner'
 export interface Actor {
   name: string
   scopes: Scope[]
+  /** Какие продукты видит (queue/products.ts): запрос документов строится только с ней. */
+  products: Visibility
 }
 
 export interface Doc {
@@ -29,6 +30,8 @@ export interface Doc {
   data: Record<string, unknown>
   version: number
   updatedAt: number
+  /** Продукт документа — рядом с data, не в ней: продукт в data запрещён, меняется только отдельным запросом. */
+  product: string
 }
 
 export const DOC_ID = /^[A-Za-z0-9_.~:@+-]{1,80}$/
@@ -146,98 +149,14 @@ export function isCollection(v: string): v is Collection {
 
 const has = (a: Actor, s: Scope) => a.scopes.includes('owner') || a.scopes.includes(s)
 
-function parseDoc(row: typeof oqDocs.$inferSelect): Doc {
-  return { id: row.id, data: JSON.parse(row.dataJson) as Record<string, unknown>, version: row.version, updatedAt: row.updatedAt.getTime() }
+export function parseDoc(row: typeof oqDocs.$inferSelect): Doc {
+  return { id: row.id, data: JSON.parse(row.dataJson) as Record<string, unknown>, version: row.version, updatedAt: row.updatedAt.getTime(), product: row.product }
 }
 
-/**
- * Потолок списка коллекции — по числу документов и по объёму, видимый: `capped` → в ответе API `truncated`, `total`,
- * `limit` (прежний limit(2000) обрезал молча, и обрезанные checks сделали бы отвеченные пункты снова открытыми).
- * Объём — сумма data_json самых свежих: документ до 48 КБ, и 10 000 таких — около 470 МБ JSON на сборку, а сборка
- * занимает в памяти ещё в несколько раз больше (лимит консоли 512 МБ). Убирает потолок /changes (v2-lite).
- */
-const LIST_LIMITS_DEFAULT = { max: 10_000, bytes: 16 * 1024 * 1024 }
-let listLimits = LIST_LIMITS_DEFAULT
-
-/** Только для тестов: маленький потолок вместо 10 000 документов в фикстуре. null — вернуть обычный. */
-export function setListLimitsForTests(v: Partial<typeof LIST_LIMITS_DEFAULT> | null): void {
-  listLimits = { ...LIST_LIMITS_DEFAULT, ...v }
-}
-
-/**
- * capped — список обрезан потолком: total — сколько документов в коллекции, limit — сколько самых свежих прочитано.
- * У listOpenItems docs — открытые среди этих limit, поэтому docs.length может быть меньше limit.
- */
-export type DocList = { docs: Doc[]; capped?: { total: number; limit: number } }
-
-export async function listDocs(collection: Collection): Promise<DocList> {
-  const { max, bytes } = listLimits
-  // Накопленный объём от самых свежих и размер коллекции — окном по узкому подзапросу (id и числа, без тел), одним
-  // запросом: тела читаются только у документов в пределах потолка, total согласован с выборкой.
-  const w = getDb()
-    .select({
-      id: oqDocs.id,
-      run: sql<number>`sum(length(cast(${oqDocs.dataJson} as blob))) over (order by ${oqDocs.updatedAt} desc rows unbounded preceding)`.as('run'),
-      total: sql<number>`count(*) over ()`.as('total'),
-    })
-    .from(oqDocs)
-    .where(eq(oqDocs.collection, collection))
-    .as('w')
-  const rows = await getDb()
-    .select({ doc: oqDocs, total: w.total })
-    .from(oqDocs)
-    .innerJoin(w, and(eq(oqDocs.collection, collection), eq(oqDocs.id, w.id)))
-    .where(lte(w.run, bytes))
-    .orderBy(desc(oqDocs.updatedAt))
-    .limit(max)
-  const docs = rows.map((r) => parseDoc(r.doc))
-  // Пусто, а коллекция нет — самый свежий документ больше потолка объёма: total — отдельным count.
-  const total = rows.length ? Number(rows[0]!.total) : Number((await collectionStats(collection)).n)
-  return total > docs.length ? { docs, capped: { total, limit: docs.length } } : { docs }
-}
-
-async function collectionStats(collection: Collection) {
-  const [row] = await getDb()
-    .select({ n: sql<number>`count(*)`, last: sql<number>`coalesce(max(${oqDocs.updatedAt}), 0)`, v: sql<number>`coalesce(sum(${oqDocs.version}), 0)` })
-    .from(oqDocs)
-    .where(eq(oqDocs.collection, collection))
-  return { n: row?.n ?? 0, last: row?.last ?? 0, v: row?.v ?? 0 }
-}
-
-/**
- * ETag коллекции: меняется при любой записи. Слабый — один у gzip и несжатого ответа. Потолок — в теге: после его
- * смены клиент со списком, обрезанным прежним потолком, получит 200, а не 304.
- */
-export async function collectionTag(collection: Collection): Promise<string> {
-  const { n, last, v } = await collectionStats(collection)
-  return `W/"${createHash('sha1').update(`${collection}:${listLimits.max}:${listLimits.bytes}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
-}
-
-export async function getDoc(collection: Collection, id: string): Promise<Doc | null> {
+/** Документ в видимости актора; чужого продукта — null, как несуществующий. */
+export async function getDoc(collection: Collection, id: string, products: Visibility): Promise<Doc | null> {
   const row = await getDb().query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
-  return row ? parseDoc(row) : null
-}
-
-/** ETag ответа ?open=1: открытость пункта зависит от items и checks — тег меняется при записи в любую из них. */
-export async function openItemsTag(): Promise<string> {
-  const [items, checks] = await Promise.all([collectionTag('items'), collectionTag('checks')])
-  return `W/"${createHash('sha1').update(`open:${items}:${checks}`).digest('hex').slice(0, 20)}"`
-}
-
-/** Пункты, открытые владельцу, — не archived и не закрытые по правилу страницы (open-rule.ts, «ждёт вас снова» — открыт). */
-export async function listOpenItems(): Promise<DocList> {
-  const { docs, capped } = await listDocs('items')
-  const items = docs.filter((d) => d.data.archived !== true)
-  // Ответы — по id этих пунктов, а не последние 2000 checks: при большем числе ответов старые выпадали, и отвеченный
-  // пункт снова считался открытым (ревью «Контроля» #324, п. 9). Порциями по 500 id.
-  const answers = new Map<string, Record<string, unknown>>()
-  for (let i = 0; i < items.length; i += 500) {
-    const ids = items.slice(i, i + 500).map((d) => d.id)
-    const rows = await getDb().select().from(oqDocs).where(and(eq(oqDocs.collection, 'checks'), inArray(oqDocs.id, ids)))
-    for (const r of rows) answers.set(r.id, JSON.parse(r.dataJson) as Record<string, unknown>)
-  }
-  const open = items.filter((d) => oqItemState(d.data.kind, answers.get(d.id)) !== 'done')
-  return capped ? { docs: open, capped } : { docs: open }
+  return row && canSee(products, row.product) ? parseDoc(row) : null
 }
 
 /**
@@ -274,11 +193,21 @@ function changedKeys(before: Record<string, unknown>, after: Record<string, unkn
 const CLAIMED = ['taken', 'doing']
 // Захват входящего, у которого сессия не писала 12 ч, снимается: сессия могла закончиться, не отпустив пункт.
 export const CLAIM_TTL_MS = 12 * 3600_000
+// Линия сессии (метка session из первого сообщения, eval/tools/spawn_session.sh, eval/tools/lineage.py): r и сегменты.
+// Наследник — линия держателя плюс сегмент (r.62u1 → r.62u1.ab12): только он перехватывает захват, назвав держателя
+// (takeover), и без ожидания — передача линии идёт минутами, а 12 ч блокировали входящие после каждой смены (OPS-35).
+// Тишина держателя наследства не доказывает: живая сессия часами ждёт мёржа.
+const LINE = /^r(\.[a-z0-9]+)+$/
+const heirOf = (by: string, prevBy: string) => LINE.test(prevBy) && LINE.test(by) && by.startsWith(`${prevBy}.`)
 
 interface WriteContext {
   /** checks/<id> относится к входящему (items/<id> с kind: inbox) — на него действует захват сессией. */
   inbox: boolean
   now: number
+  /** Имя держателя, у которого сессия перехватывает захват (наследник линии). */
+  takeover?: string
+  /** Держатель отпускает свой захват (уходя без наследника): пункт может взять названная им живая сессия. */
+  release?: boolean
 }
 
 function authorize(actor: Actor, collection: Collection, before: Record<string, unknown> | null, after: Record<string, unknown>, incoming: Record<string, unknown>, ctx: WriteContext): void {
@@ -297,11 +226,18 @@ function authorize(actor: Actor, collection: Collection, before: Record<string, 
       const by = typeof incoming.agentBy === 'string' ? incoming.agentBy : ''
       const prevBy = typeof before?.agentBy === 'string' ? before.agentBy : ''
       const since = typeof before?.agentAt === 'string' ? Date.parse(before.agentAt) : Number.NaN
-      const held = !!prevBy && !!before && before.agentStatus !== undefined && before.agentStatus !== 'done' && !(ctx.now - since > CLAIM_TTL_MS)
-      if (held && by !== prevBy) {
-        throw apiError(409, by
-          ? `Пункт уже ведёт ${prevBy} — возьмите другой или договоритесь с этой сессией`
-          : `Пункт ведёт ${prevBy}. Если это вы — передайте session (имя своей сессии)`)
+      // Без времени записи агента (импорт выгрузки, документы до agentAt) захвата нет: иначе пункт держался бы вечно.
+      const held = !!prevBy && !!before && before.agentStatus !== undefined && before.agentStatus !== 'done' && !Number.isNaN(since) && !(ctx.now - since > CLAIM_TTL_MS)
+      // Защита от случайного перехвата, а не от враждебной сессии: имя называет сама сессия, токен общий.
+      // Отпустить — только своё: и занятый, и уже не удерживаемый пункт (подпись agentBy — кто вёл пункт, её не стирают).
+      if (ctx.release && prevBy && by !== prevBy) throw apiError(409, `Отпустить захват может только ${prevBy} — пункт вела эта сессия`)
+      const heir = held && by !== prevBy && heirOf(by, prevBy)
+      if (held && by !== prevBy && !(heir && ctx.takeover === prevBy)) {
+        throw apiError(409, !by
+          ? `Пункт ведёт ${prevBy}. Если это вы — передайте session (имя своей сессии)`
+          : heir
+            ? `Пункт ведёт ${prevBy} — ваша линия его наследник: передайте takeover: «${prevBy}» (старый MCP поле не знает — переподключите /mcp)`
+            : `Пункт уже ведёт ${prevBy} — возьмите другой или договоритесь с этой сессией. Если это вы под прежним именем — передайте session: «${prevBy}» как есть`)
       }
       if (!by && CLAIMED.includes(String(incoming.agentStatus))) {
         throw apiError(422, 'Входящее берут с session — имя своей сессии (oq_agent_status). Старый MCP без session: переподключите /mcp')
@@ -330,14 +266,42 @@ export interface WriteOptions {
    * 409, чтобы повтор старой правки (вкладка бота, заснувший телефон) не перезаписал новый (ревью #324, п. 1).
    */
   ifAnswerAt?: string
+  /** Входящее: линия держателя захвата, у которого его перехватывает наследник по линии (heirOf). */
+  takeover?: string
+  /** Входящее: держатель отпускает свой захват — agentBy снимается, пункт может взять названная им живая сессия. */
+  release?: boolean
 }
 
 export async function writeDoc(actor: Actor, collection: Collection, id: string, data: Record<string, unknown>, opts: WriteOptions): Promise<Doc> {
   if (!DOC_ID.test(id)) throw apiError(422, 'Недопустимый id документа')
+  // Имя сессии — не пустое; проверяется присланное, а не сохранённое: старый документ с пустым именем не блокирует ответ.
+  if (collection === 'checks' && 'agentBy' in data && !(typeof data.agentBy === 'string' && /\S/.test(data.agentBy))) {
+    throw apiError(422, 'agentBy — имя сессии (линия), не пустое')
+  }
   const db = getDb()
+  // Справочник продуктов — до транзакции: внутри неё все чтения только через tx (см. productForNew).
+  const all = await listProducts()
   return db.transaction(async (tx) => {
     const row = await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
+    // Чужой продукт — 404 до любых других проверок: ни версия, ни права по полям не раскрывают, что документ есть.
+    if (row && !canSee(actor.products, row.product)) notFound(actor.products, all)
+    // Пункт items/<id> для checks: продукт ответа — продукт пункта; входящее ли это — для захвата сессией.
+    const itemRow = collection === 'checks'
+      ? await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'items'), eq(oqDocs.id, id)) })
+      : undefined
+    if (itemRow && !canSee(actor.products, itemRow.product)) notFound(actor.products, all)
+    // Новый пункт при уже существующем ответе (пункт удалили и создают заново) — продукт ответа: пара не расходится.
+    const checkRow = collection === 'items' && !row
+      ? await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)) })
+      : undefined
+    if (checkRow && !canSee(actor.products, checkRow.product)) notFound(actor.products, all)
+    const product = productOf(actor, id, row, itemRow ?? checkRow, all)
     const before = row ? (JSON.parse(row.dataJson) as Record<string, unknown>) : null
+    // Продукт — столбец, не поле data. Документ, где поле осталось с прежних времён (passthrough), полный PUT его копией
+    // не ломает: отказ — только новому или изменённому полю.
+    if ('product' in data && JSON.stringify(data.product) !== JSON.stringify(before?.product)) {
+      throw apiError(422, 'product — не поле документа: продукт нового пункта — пространство его id')
+    }
     if (opts.ifVersion !== undefined && (row?.version ?? 0) !== opts.ifVersion) {
       throw apiError(409, `Документ изменился (версия ${row?.version ?? 0}, у вас ${opts.ifVersion}) — перечитайте и повторите`)
     }
@@ -354,34 +318,48 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
     for (const [k, v] of Object.entries(merged)) if (v === null && collection !== 'checks') delete merged[k]
     const at = new Date()
     if (collection === 'checks') stampCheck(merged, before, data, { owner, merge: opts.merge, at: at.toISOString() })
+    // Отпуск снимает только держателя: статус и заметка («передано <сессия>») остаются — страница и бот показывают, кому
+    // передано; пункт берёт названная живая сессия. Автопередача сама его не предложит: у него есть статус.
+    if (collection === 'checks' && opts.release) delete merged.agentBy
     // Входящее ли это — по пункту items/<id>: захват сессией действует только на входящие.
-    const itemRow = collection === 'checks' && !owner
-      ? await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'items'), eq(oqDocs.id, id)) })
-      : undefined
-    const inbox = !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
+    const inbox = !owner && !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
     const parsed = SCHEMAS[collection].safeParse(merged)
     if (!parsed.success) throw apiError(422, `Неверный документ: ${parsed.error.issues.map((i) => `${i.path.join('.') || '—'}: ${i.message}`).join('; ').slice(0, 400)}`)
     const json = JSON.stringify(parsed.data)
     if (Buffer.byteLength(json) > MAX_DOC_BYTES) throw apiError(422, 'Документ больше 48 КБ')
-    authorize(actor, collection, before, parsed.data as Record<string, unknown>, data, { inbox, now: at.getTime() })
+    authorize(actor, collection, before, parsed.data as Record<string, unknown>, data, { inbox, now: at.getTime(), takeover: opts.takeover, release: opts.release })
     const version = (row?.version ?? 0) + 1
     if (row) {
       await tx.update(oqDocs).set({ dataJson: json, version, updatedAt: at, updatedBy: actor.name }).where(and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)))
     } else {
-      await tx.insert(oqDocs).values({ collection, id, dataJson: json, version, createdAt: at, updatedAt: at, updatedBy: actor.name })
+      await tx.insert(oqDocs).values({ collection, id, dataJson: json, version, createdAt: at, updatedAt: at, updatedBy: actor.name, product })
     }
-    await tx.insert(oqEvents).values({ at, actor: actor.name, collection, docId: id, action: opts.merge ? 'update' : 'set', beforeJson: row?.dataJson ?? null, afterJson: json })
-    return { id, data: parsed.data as Record<string, unknown>, version, updatedAt: at.getTime() }
+    await tx.insert(oqEvents).values({ at, actor: actor.name, collection, docId: id, action: opts.merge ? 'update' : 'set', beforeJson: row?.dataJson ?? null, afterJson: json, product })
+    return { id, data: parsed.data as Record<string, unknown>, version, updatedAt: at.getTime(), product }
   })
+}
+
+type Row = typeof oqDocs.$inferSelect
+
+/**
+ * Продукт записи: у существующего документа — его строки; у нового документа пары пункт–ответ — продукт второй половины
+ * пары (`pair`); иначе — пространство id (queue/products.ts).
+ */
+function productOf(actor: Actor, id: string, row: Row | undefined, pair: Row | undefined, all: readonly Product[]): string {
+  if (row) {
+    if (pair && pair.product !== row.product) throw apiError(409, `Ответ и пункт в разных продуктах (${row.product}, ${pair.product})`)
+    return row.product
+  }
+  return pair ? pair.product : productForNew(actor.products, id, all)
 }
 
 export async function deleteDoc(actor: Actor, collection: Collection, id: string): Promise<void> {
   if (!actor.scopes.includes('owner')) throw apiError(403, 'Удаляет только владелец; агенту — archived: true')
   const db = getDb()
   const row = await db.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
-  if (!row) throw apiError(404, 'Нет такого документа')
+  if (!row || !canSee(actor.products, row.product)) throw apiError(404, 'Нет такого документа')
   await db.delete(oqDocs).where(and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)))
-  await db.insert(oqEvents).values({ actor: actor.name, collection, docId: id, action: 'delete', beforeJson: row.dataJson })
+  await db.insert(oqEvents).values({ actor: actor.name, collection, docId: id, action: 'delete', beforeJson: row.dataJson, product: row.product })
   // Вложения удалённого пункта: строки — сразу, файлы — следом (уборщик — только подстраховка). Сбой диска здесь
   // не превращает уже выполненное удаление в 500: файлы подберёт уборка (линза GLM #313).
   if (collection === 'items') {
@@ -389,22 +367,31 @@ export async function deleteDoc(actor: Actor, collection: Collection, id: string
   }
 }
 
-export async function logEvent(actor: string, collection: string, docId: string, action: string, after?: unknown): Promise<void> {
-  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: after === undefined ? null : JSON.stringify(after).slice(0, 20_000) })
+/**
+ * product — продукт документа события; null — событие не документа (деплой: коллекция deploy, /history её не отдаёт).
+ * История читает NULL как продукт по умолчанию — так помечены и события образа до v2-lite.
+ */
+export async function logEvent(actor: string, collection: string, docId: string, action: string, after: unknown, product: string | null): Promise<void> {
+  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: after === undefined ? null : JSON.stringify(after).slice(0, 20_000), product })
 }
 
-export async function docHistory(collection: Collection, id: string, limit = 50) {
+/** История документа — события видимых продуктов (у событий старого образа продукта нет — это HR). */
+export async function docHistory(collection: Collection, id: string, products: Visibility, limit = 50) {
+  const own = products === '*' ? undefined : inArray(sql`coalesce(${oqEvents.product}, ${DEFAULT_PRODUCT})`, [...products])
   const rows = await getDb()
     .select()
     .from(oqEvents)
-    .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id)))
+    .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own))
     .orderBy(desc(oqEvents.at))
     .limit(Math.min(limit, 100))
   return rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: r.afterJson ? JSON.parse(r.afterJson) : null }))
 }
 
-/** Импорт выгрузки артефакта: документ кладётся как есть (версия 1), существующий не перезаписывается. */
-export async function importDoc(collection: Collection, id: string, data: Record<string, unknown>, source: string): Promise<'added' | 'kept' | 'invalid'> {
+/**
+ * Импорт выгрузки артефакта: документ кладётся как есть (версия 1), существующий не перезаписывается. Продукт — как у
+ * записи: ответ — продукта пункта, иначе пространство id. `all` — справочник продуктов один раз на весь импорт.
+ */
+export async function importDoc(collection: Collection, id: string, data: Record<string, unknown>, source: string, all?: readonly Product[]): Promise<'added' | 'kept' | 'invalid'> {
   if (!DOC_ID.test(id)) return 'invalid'
   const parsed = SCHEMAS[collection].safeParse(data)
   if (!parsed.success) return 'invalid'
@@ -412,7 +399,10 @@ export async function importDoc(collection: Collection, id: string, data: Record
   const exists = await db.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
   if (exists) return 'kept'
   const json = JSON.stringify(parsed.data)
-  await db.insert(oqDocs).values({ collection, id, dataJson: json, version: 1, updatedBy: source })
-  await db.insert(oqEvents).values({ actor: source, collection, docId: id, action: 'import', afterJson: json })
+  const pairCol = collection === 'checks' ? 'items' : collection === 'items' ? 'checks' : null
+  const pair = pairCol ? await db.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, pairCol), eq(oqDocs.id, id)) }) : undefined
+  const product = pair?.product ?? namespaceOf(id, all ?? (await listProducts()))
+  await db.insert(oqDocs).values({ collection, id, dataJson: json, version: 1, updatedBy: source, product })
+  await db.insert(oqEvents).values({ actor: source, collection, docId: id, action: 'import', afterJson: json, product })
   return 'added'
 }
