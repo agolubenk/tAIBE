@@ -57,6 +57,20 @@ class NightlyContextAuditTest(unittest.TestCase):
         self.assertLessEqual(len(left), steps.AUDIT_KEEP + 1)
         self.assertNotIn('context-audit-20260101.json', left)
 
+    def test_audit_line_for_the_card(self):
+        audit = {'usd': 597.0, 'cold': {'ToolSearch': {'n': 42, 'usd': 73.0}, 'старт': {'n': 78, 'usd': 17.7}},
+                 'generations': {'≤ 250K': {'handoff_share': 0.22, 'call_usd': 0.05, 'life_min': 21.0},
+                                 '> 500K': {'handoff_share': None, 'call_usd': 0.139, 'life_min': 706.8}}}
+        line = steps.audit_line(audit, '2026-11-08')
+        self.assertEqual(line, 'контекст 2026-11-08, 24 ч: $597; холодные вызовы $91 (15 %), больше всего — '
+                               'ToolSearch $73; окна: ≤ 250K — передача 22 %, ход $0.05, жизнь 21 мин; '
+                               '> 500K — передача —, ход $0.14, жизнь 707 мин')
+        import guard
+        self.assertEqual(guard.scan(line), [])
+        self.assertEqual(steps.audit_line({'usd': 3.0}, 'd'), 'контекст d, 24 ч: $3; холодные вызовы $0 (0 %); окна: —')
+        for empty in (None, 'skipped: old revision', {'exit': 1, 'error': 'x'}, {'usd': 0}):
+            self.assertEqual(steps.audit_line(empty, 'd'), '')
+
     def test_old_revision_and_failure(self):
         self.assertTrue(steps.context_audit(self.wt).startswith('skipped'))
         with open(os.path.join(self.wt, 'eval', 'tools', 'context_audit.py'), 'w') as f:

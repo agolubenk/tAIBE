@@ -154,3 +154,19 @@ def context_audit(wt):
     return {'exit': res.returncode, 'file': path, 'usd': data.get('total'),
             'cold': {k: {'n': v['n'], 'usd': round(v['usd'], 2)} for k, v in (data.get('cold') or {}).items()},
             'generations': data.get('generations')}
+
+
+def audit_line(audit, date):
+    """The night's one line for the owner (card SE-49): money of 24 h, cold calls with the top cause, and per window
+    band the handoff share, the call price and the life; '' when the audit gave no money."""
+    if not isinstance(audit, dict) or not audit.get('usd'):
+        return ''
+    usd, cold = audit['usd'], audit.get('cold') or {}
+    cold_usd = sum(v['usd'] for v in cold.values())
+    top = max(cold.items(), key=lambda kv: kv[1]['usd'], default=(None, None))
+    bands = '; '.join('%s — передача %s, ход $%.2f, жизнь %.0f мин' % (
+        k, '—' if v.get('handoff_share') is None else '%.0f %%' % (v['handoff_share'] * 100), v['call_usd'],
+        v['life_min']) for k, v in (audit.get('generations') or {}).items())
+    return 'контекст %s, 24 ч: $%.0f; холодные вызовы $%.0f (%.0f %%)%s; окна: %s' % (
+        date, usd, cold_usd, cold_usd / usd * 100,
+        ', больше всего — %s $%.0f' % (top[0], top[1]['usd']) if top[0] else '', bands or '—')
