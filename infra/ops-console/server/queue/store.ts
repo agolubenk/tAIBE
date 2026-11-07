@@ -93,6 +93,10 @@ const itemSchema = z
     // полный SHA — короткий молча не засчитался бы.
     sha: z.string().regex(/^[0-9a-f]{40}$/, 'sha — полный SHA головы PR (40 символов hex), одобренной «Контролем»').optional(),
     base: z.string().regex(/^[A-Za-z0-9._/-]{1,200}$/, 'base — ветка-база PR, для которой дан вердикт (например main)').optional(),
+    // Мёрж: репозиторий PR (чужой консоли — честный отказ, а не одноимённый PR), способ и заголовок коммита.
+    repo: z.string().regex(/^[\w.-]{1,100}\/[\w.-]{1,100}$/, 'repo — репозиторий PR, owner/name').optional(),
+    mergeMethod: z.enum(['merge', 'squash']).optional(),
+    subject: z.string().min(1).max(300).regex(/^[^\r\n]+$/, 'subject — заголовок коммита одной строкой').optional(),
     inbox: inboxSchema.optional(),
   })
   .passthrough()
