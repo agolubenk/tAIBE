@@ -8,9 +8,12 @@ import {
 } from "./agent-limits";
 
 describe("agent limits", () => {
-  it("archives an agent once its last key has run out", () => {
-    expect(AGENT_IDLE_ARCHIVE_MS).toBe(AGENT_KEY_TTL_SECONDS * 1000);
-    expect(AGENT_IDLE_ARCHIVE_MS).toBe(24 * 60 * 60 * 1000);
+  // TB-100 (owner, 07.11): 5 hours idle, cap 200 — eight new labels an hour
+  // filled the cap of 50 within a day of a 24-hour wait.
+  it("archives an agent idle for 5 hours, well before its key runs out", () => {
+    expect(AGENT_IDLE_ARCHIVE_MS).toBe(5 * 60 * 60 * 1000);
+    expect(AGENT_IDLE_ARCHIVE_MS).toBeLessThan(AGENT_KEY_TTL_SECONDS * 1000);
+    expect(MAX_AGENTS_PER_OWNER).toBe(200);
   });
 
   // TB-72, TB-74: the agent cannot free a place; the text says what frees one
@@ -20,7 +23,7 @@ describe("agent limits", () => {
       `${MAX_AGENTS_PER_OWNER} active agents`,
     );
     expect(AGENT_CAP_MESSAGE).toContain(
-      "an agent idle for 24 hours goes to the archive by itself",
+      "an agent idle for 5 hours goes to the archive by itself",
     );
     expect(AGENT_CAP_MESSAGE).toContain(
       "an archived agent comes back on its own when its session asks again",
