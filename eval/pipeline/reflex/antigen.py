@@ -6,7 +6,9 @@ the bio. Table: genome/antigens.json. Silent when nothing matches. It is a hint,
 Row keys: id, tool (fullmatch on the tool name), pattern, lesson, memory; optional `field` — the pattern sees only
 that string of the input (Bash: the command itself, with real newlines, not its description), otherwise the whole
 input as JSON (owner-queue rows look for keys like "cmd"); optional `unless` — a match is dropped when this regex
-matches the same text; optional `dormant` — why a row that has not fired lately is kept.
+matches the same text; optional `dormant` — why a row that has not fired lately is kept; optional `min_context` — the
+row fires only when the last answer's context (transcript tail, `ctx_budget.last_context_tokens`) is at least this many
+tokens, read only when such a row matched (d-f63b-economy-0711: ToolSearch in a big window rewrites the whole cache).
 `{CMD}` in a pattern is the start of a command: line start, `;` `&&` `|` `(` `$(` backtick, then/do/else, the
 string after `bash -c` / `ssh host` / `eval`, then prefixes time/sudo/env/command/nohup/exec/xargs and VAR=x.
 Only the first MAX_TEXT characters are matched: the hook has a 10 s timeout, a 100 KB heredoc must not reach it
@@ -53,14 +55,38 @@ def subject(row, tool_input):
     return value if isinstance(value, str) else ''
 
 
-def matches(table, tool_name, tool_input):
+def context_tokens(event):
+    """Context of the last main-chain answer in tokens; None when unknown — a `min_context` row then stays quiet."""
+    path = event.get('transcript_path')
+    if not path:
+        return None
+    tools = os.path.normpath(os.path.join(HERE, '..', '..', 'tools'))
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    try:
+        from pathlib import Path
+        from ctx_budget import last_context_tokens
+        return last_context_tokens(Path(path))
+    except Exception:  # the hook never breaks a call: no reading — no lesson
+        return None
+
+
+def matches(table, tool_name, tool_input, context=None):
+    """Rows that fire. `context` — tokens, or a function returning them, called at most once and only for a
+    `min_context` row whose pattern matched."""
     hits = []
     for row in table:
         if not row['tool_re'].fullmatch(tool_name):
             continue
         text = subject(row, tool_input)[:MAX_TEXT]
-        if row['input_re'].search(text) and not (row['unless_re'] and row['unless_re'].search(text)):
-            hits.append(row)
+        if not row['input_re'].search(text) or (row['unless_re'] and row['unless_re'].search(text)):
+            continue
+        if 'min_context' in row:
+            if callable(context):
+                context = context()
+            if (context or 0) < row['min_context']:
+                continue
+        hits.append(row)
     return hits
 
 
@@ -84,7 +110,8 @@ def fresh_lessons(hits, path):
 
 
 def respond(event, state_dir=None, table=None):
-    hits = matches(table or load_table(), event.get('tool_name', ''), event.get('tool_input', {}))
+    hits = matches(table or load_table(), event.get('tool_name', ''), event.get('tool_input', {}),
+                   lambda: context_tokens(event))
     if not hits:
         return None
     new = fresh_lessons(hits, state_file(event.get('session_id', ''), state_dir))
