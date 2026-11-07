@@ -704,6 +704,86 @@ class ProductsTest(unittest.TestCase):
         wj(os.path.join(self.d, "mode.json"), {"phase": "day"})
         self.assertIn("k9 (придержано на время лимита)", self.tap("taibe")[0])
 
+    # ---------- Ф2b: события аккаунта, ответы владельца, транскрипты worktree ----------
+
+    def peered(self, seeded=True):
+        os.makedirs(self.tdir(), exist_ok=True)
+        if seeded:
+            wj(os.path.join(self.tdir(), "state.json"), {"seeded": "2026-11-07T10:00:00+00:00"})
+        ctx = nerve.Ctx(CFG, self.d)
+        nerve.attach_peers(ctx, True)
+        return ctx
+
+    def records(self, product=None):
+        path = os.path.join(self.tdir() if product == "taibe" else self.d, "journal.jsonl")
+        return read_from(path, 0)[0] if os.path.exists(path) else []
+
+    def test_account_events_reach_every_product(self):
+        """R-5: одно событие — в оба журнала с тем же ключом; у tAIBE budget.warn и limit.hit — только coord,
+        limit.resume — живые роли tAIBE; роли HR — как раньше."""
+        ctx = self.peered()
+        with mock.patch.object(sources, "active_roles", return_value=["boards", "coord"]):
+            ctx.emit_account("budget:warn:x", "budget.warn", NERVOUS, ["coord", "backend"], "окно 80 %", "budget")
+            ctx.emit_account("limit:hit:y", "limit.hit", NERVOUS, ["coord"], "лимит", "budget")
+            ctx.emit_account("limit:resume:y", "limit.resume", NERVOUS, ["coord", "frontend"], "лимит снят", "budget")
+        hr = {r["kind"]: r["to"] for r in self.records()}
+        tb = {r["kind"]: (r["to"], r["key"]) for r in self.records("taibe")}
+        self.assertEqual(hr["budget.warn"], ["backend", "coord"])
+        self.assertEqual(hr["limit.resume"], ["coord", "frontend"])
+        self.assertEqual(tb["budget.warn"], (["coord"], "budget:warn:x"))
+        self.assertEqual(tb["limit.hit"][0], ["coord"])
+        self.assertEqual(tb["limit.resume"][0], ["boards", "coord"])
+
+    def test_account_event_to_unseeded_product_wakes_nobody(self):
+        ctx = self.peered(seeded=False)
+        ctx.emit_account("budget:warn:z", "budget.warn", NERVOUS, ["coord"], "окно 80 %", "budget")
+        self.assertEqual([r["to"] for r in self.records("taibe")], [[]], "до seed продукт никого не будит")
+
+    def test_poll_budget_fans_out_through_emit_account(self):
+        """Бюджет считает аккаунт один раз (проход по умолчанию) и раздаёт событие продуктам."""
+        ctx = self.peered()
+        st = {"waves": [], "limit": None}
+        ts = datetime(2026, 10, 28, 10, 52, tzinfo=MSK)
+        ctx.tz = MSK
+        actions._on_limit(ctx, st, budget.Meter({}), ts, "You've hit your session limit · resets 2:40pm (Europe/Minsk)")
+        self.assertEqual([r["kind"] for r in self.records("taibe")], ["limit.hit"])
+        self.assertEqual([r["kind"] for r in self.records()], ["limit.hit"])
+
+    def test_owner_answer_routed_by_item_id(self):
+        """R-6: ответ на пункт с `-taibe-` — в журнал tAIBE по его правилам ролей; без метки — продукту по умолчанию;
+        стоп владельца — во все журналы."""
+        self.taibe["queue"] = dict(CFG["queue"], match="-taibe-", source_roles=[["boards-x", "boards"]])
+        ctx = self.peered()
+        self.assertIs(ctx.for_item("m-taibe-79"), ctx.peers["taibe"])
+        self.assertIs(ctx.for_item("m-465"), ctx)
+        items = [{"id": "m-taibe-79", "data": {"kind": "merge", "source": "boards-x"}},
+                 {"id": "m-465", "data": {"kind": "merge", "source": "Координатор"}},
+                 {"id": "i-1", "data": {"kind": "inbox", "inbox": {"text": "СТОП, откатить", "urgency": "now"}}}]
+        checks = [{"id": "m-taibe-79", "data": {"done": True, "at": "2026-11-07T10:00:00Z"}},
+                  {"id": "m-465", "data": {"done": True, "at": "2026-11-07T10:01:00Z"}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            sources.poll_queue(ctx)
+        tb = [(r["kind"], r["to"]) for r in self.records("taibe")]
+        hr = [(r["kind"], r["to"]) for r in self.records()]
+        self.assertIn(("owner.answer", ["boards"]), tb)
+        self.assertNotIn("m-465", " ".join(r["text"] for r in self.records("taibe")))
+        self.assertIn(("owner.answer", ["coord"]), hr)
+        self.assertNotIn("m-taibe-79", " ".join(r["text"] for r in self.records()))
+        self.assertIn("owner.stop", [k for k, _ in tb])
+        self.assertIn("owner.stop", [k for k, _ in hr])
+        self.assertNotIn("owner.inbox", [k for k, _ in tb], "R-7: входящее — одному coord продукта по умолчанию")
+
+    def test_map_roles_reads_worktree_transcripts(self):
+        """R-9: сессия в worktree пишет транскрипт в `<project_dir>-worktrees-*`."""
+        base = os.path.join(self.d, "proj")
+        wt = base + "-worktrees-fix-x"
+        for d, role in ((base, "coord"), (wt, "backend")):
+            os.makedirs(d)
+            with open(os.path.join(d, f"{role}.jsonl"), "w", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "user", "message": {"content": f"сборка Т3, ключ реестра {role}"}}) + "\n")
+        ctx = nerve.Ctx(dict(CFG, team=dict(CFG["team"], project_dir=base, roles=["coord", "backend"])), self.d)
+        self.assertEqual(sources.active_roles(ctx), ["backend", "coord"])
+
     def test_broken_instances_keeps_default_tap_alive(self):
         with mock.patch.object(nerve, "load_products", side_effect=ValueError("taibe.json: не JSON")):
             open(os.path.join(self.d, "journal.jsonl"), "w").close()

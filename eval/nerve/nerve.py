@@ -85,10 +85,28 @@ class Ctx:
         self.journal = Journal(os.path.join(state_dir, "journal.jsonl"))
         self._token = None
         self.emitted = 0
+        self.peers = None              # {slug: Ctx} других активных продуктов (attach_peers), None — не собраны
 
     def emit(self, key, kind, cls, to, text, src=""):
         ok = self.journal.emit(key, kind, cls, to if self.deliver else [], text, src)
         self.emitted += ok
+        return ok
+
+    def for_item(self, item_id):
+        """R-6: продукт пункта очереди — по `queue.match` продукта (id содержит `-taibe-`), иначе продукт по умолчанию."""
+        for peer in (self.peers or {}).values():
+            match = (peer.cfg.get("queue") or {}).get("match")
+            if match and match in str(item_id):
+                return peer
+        return self
+
+    def emit_account(self, key, kind, cls, to, text, src=""):
+        """R-5: событие аккаунта — в журнал каждого активного продукта с тем же ключом. Роли продукта по умолчанию —
+        как раньше; у другого продукта `limit.resume` — его живые роли, остальное — только coord (будилка стоит денег)."""
+        ok = self.emit(key, kind, cls, to, text, src)
+        for peer in (self.peers or {}).values():
+            roles = (sources.active_roles(peer) or ["coord"]) if kind == "limit.resume" else ["coord"]
+            peer.emit(key, kind, cls, roles, text, src)
         return ok
 
     def oq_token(self):
@@ -143,7 +161,8 @@ def one_pass(ctx, polls=None, finish=True):
 
 # ---------- Продукты (OPS-25) ----------
 
-PRODUCT_POLLS = [("github", sources.poll_github)]   # Ф2a: свой репо; очередь и события аккаунта — Ф2b
+# Свой репо продукта. Очередь и бюджет аккаунта общие — их обходит проход по умолчанию и раздаёт продуктам (Ф2b).
+PRODUCT_POLLS = [("github", sources.poll_github)]
 
 
 def load_products():
@@ -160,10 +179,12 @@ def product_state(slug, default):
     return P.product_dir(slug, STATE_DIR, default)
 
 
-def other_product_passes(deliver):
-    """Проход каждого активного продукта, кроме продукта по умолчанию. Сбой продукта — в его errors, остальным не
-    мешает; сбой загрузки instances/ — исключение вызывающему (run_products пишет его в журнал по умолчанию)."""
+def peer_contexts(deliver):
+    """{slug: Ctx} активных продуктов, кроме продукта по умолчанию; сбой загрузки instances/ — исключение вызывающему.
+    R-4: seed — пока нет отметки «seeded», а не пока нет файла журнала: emit до первого прохода или сбой gh в первом
+    проходе иначе отдали бы все открытые PR будилками. Отметка — только после прохода без сбоя GitHub."""
     default, cfgs = load_products()
+    peers = {}
     for slug, pcfg in cfgs.items():
         if slug == default or pcfg.get("active") is not True:
             continue
@@ -171,10 +192,32 @@ def other_product_passes(deliver):
         os.makedirs(pdir, exist_ok=True)
         open(os.path.join(pdir, "journal.jsonl"), "a").close()
         ctx = Ctx(pcfg, pdir)
-        # R-4: seed — пока нет отметки «seeded», а не пока нет файла журнала: emit до первого прохода или сбой gh в
-        # первом проходе иначе отдали бы все открытые PR будилками. Отметка — только после прохода без сбоя GitHub.
+        ctx.deliver = deliver and bool(ctx.state.get("seeded"))
+        peers[slug] = ctx
+    return peers
+
+
+def attach_peers(ctx, deliver):
+    """Контексты других продуктов — до прохода по умолчанию: ему писать в их журналы события аккаунта и ответы (Ф2b).
+    Сбой instances/ — событие release в журнале по умолчанию (один раз на текст ошибки), проход идёт без продуктов."""
+    try:
+        ctx.peers = peer_contexts(deliver)
+    except Exception as e:  # noqa: BLE001
+        ctx.peers = {}
+        _products_error(ctx, e)
+
+
+def _products_error(ctx, e):
+    msg = f"{type(e).__name__}: {e}"[:200]
+    print(f"продукты: {msg}", file=sys.stderr, flush=True)
+    ctx.emit(f"err:products:{msg}", "nerve.error", DIGEST, ["release"], f"instances/ не читается: {msg}", "nerve")
+
+
+def other_product_passes(deliver, peers=None):
+    """Проход каждого активного продукта, кроме продукта по умолчанию. Сбой продукта — в его errors, остальным не
+    мешает; сбой загрузки instances/ — исключение вызывающему (run_products пишет его в журнал по умолчанию)."""
+    for ctx in (peer_contexts(deliver) if peers is None else peers).values():
         seeded = bool(ctx.state.get("seeded"))
-        ctx.deliver = deliver and seeded
         one_pass(ctx, PRODUCT_POLLS)
         if not seeded and "github" not in ctx.state.get("errors", {}):
             ctx.state["seeded"] = now_iso()
@@ -185,11 +228,9 @@ def run_products(ctx, deliver):
     """Проходы других продуктов после прохода по умолчанию; сбой загрузки instances/ — событие release в журнале по
     умолчанию (один раз на текст ошибки) и stderr, демон продукта по умолчанию живёт дальше."""
     try:
-        other_product_passes(deliver)
+        other_product_passes(deliver, ctx.peers)
     except Exception as e:  # noqa: BLE001
-        msg = f"{type(e).__name__}: {e}"[:200]
-        print(f"продукты: {msg}", file=sys.stderr, flush=True)
-        ctx.emit(f"err:products:{msg}", "nerve.error", DIGEST, ["release"], f"instances/ не читается: {msg}", "nerve")
+        _products_error(ctx, e)
     # Пульс — после всех продуктов: долгий проход другого продукта не даёт ложное «НЕРВ МОЛЧИТ» ролям по умолчанию.
     hb = now_iso()
     ctx.state["heartbeat"] = hb
@@ -239,6 +280,7 @@ def cmd_run(cfg, a):
     while True:
         deliver = wakes_on()
         ctx = Ctx(cfg, STATE_DIR, deliver=not seed and deliver)
+        attach_peers(ctx, deliver)
         one_pass(ctx, finish=False)
         seed = False
         run_products(ctx, deliver)
@@ -340,6 +382,7 @@ def resolve_roles(cfg, spec, strict=True):
 def cmd_once(cfg, a):
     os.makedirs(STATE_DIR, exist_ok=True)
     ctx = Ctx(cfg, STATE_DIR, deliver=not a.seed and wakes_on())
+    attach_peers(ctx, not a.seed and wakes_on())
     one_pass(ctx, finish=False)
     run_products(ctx, not a.seed and wakes_on())
     print(f"проход: событий {ctx.emitted}, ошибки {list(ctx.state.get('errors', {}))}")
