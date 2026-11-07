@@ -32,8 +32,10 @@ export function getDb(): OpsDb {
   if (db) return db
   const env = getEnv()
   ensureLocalDir(env.databaseUrl)
-  // Запись процесса — по одной (write-gate.ts); timeout — ожидание только чужой блокировки (у Turso игнорируется).
-  client = gateClient(createClient({ url: env.databaseUrl, authToken: env.databaseAuthToken, timeout: BUSY_TIMEOUT_MS }))
+  // Локальный файл: запись процесса — по одной (write-gate.ts), timeout — ожидание только чужой блокировки. Удалённый
+  // libSQL (Turso) шлюз не берёт: блокировок файла там нет, а шлюз сериализовал бы сетевые запросы (5 RTT на запись).
+  const raw = createClient({ url: env.databaseUrl, authToken: env.databaseAuthToken, timeout: BUSY_TIMEOUT_MS })
+  client = env.databaseUrl.startsWith('file:') ? gateClient(raw) : raw
   db = drizzle(client, { schema })
   return db
 }
