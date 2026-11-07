@@ -3,9 +3,9 @@ name: eval CI
 on:
   push:
     branches: [board-agents, main]
-    paths: ["eval/**", ".github/workflows/eval-ci.yml"]
+    paths: ["eval/**", "instances/**", ".github/workflows/eval-ci.yml"]
   pull_request:
-    paths: ["eval/**", ".github/workflows/eval-ci.yml"]
+    paths: ["eval/**", "instances/**", ".github/workflows/eval-ci.yml"]
   workflow_dispatch:
 
 concurrency:
@@ -30,6 +30,8 @@ jobs:
         run: python3 -I -m unittest discover -s eval/pipeline -p 'test_*.py'
       - name: reflex tests
         run: python3 -I -m unittest discover -s eval/pipeline/reflex -p 'test_*.py'
+      - name: config.json rendered from instances/ (OPS-25)
+        run: python3 -I eval/nerve/products.py render --check
       - name: genome tests and freshness (rendered for the instance in eval/nerve/config.json)
         run: |
           python3 -I -m unittest discover -s eval/pipeline/genome -p 'test_*.py'

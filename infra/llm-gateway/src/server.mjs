@@ -180,7 +180,7 @@ export async function start(cfg = loadConfig()) {
   }, 10 * 60_000)
   timer.unref()
   const ids = cfg.keys.map((k) => `${k.id}(${k.models.length || 'любые'} мод., ${k.rpm} rpm)`).join(', ') || 'нет'
-  console.log(`[llm-gateway] http://${cfg.host}:${cfg.port}/v1 · ключи: ${ids} · пулы: ${['auto', 'free', ...Object.keys(cfg.aliases)].join(', ')} · Ollama: ${cfg.localEnabled ? cfg.ollamaUrl : 'выкл'}`)
+  console.log(`[llm-gateway] http://${cfg.host}:${cfg.port}/v1 · ключи: ${ids} · пулы: ${['auto', 'free', ...Object.keys(cfg.aliases)].join(', ')} · Ollama: ${cfg.localEnabled ? cfg.ollamaUrl : 'выкл'} · замок: ${cfg.localLock ? `${cfg.localLock} (${cfg.python})` : 'выкл'}`)
   return app
 }
 

@@ -6,6 +6,9 @@
 > [`multi-product.md`](../plans/roadmap/multi-product.md). Сверено с кодом `board-agents@25d73636` и Mac владельца
 > 03.11 (роль 2). v1.1 — 6 находок линзы корректности (GLM, 04.11) и линза M0/M1 к tAIBE #39, сверено с
 > `board-agents@3f77c84c`. v1.2 — линзы ресурсов, продукта и краёв (GLM, 04.11 17:10).
+>
+> **OPS-25 (07.11, `d-ops25-plan-0711`):** для двух команд действует сужение — [`nerve-per-product.md`](../plans/roadmap/nerve-per-product.md):
+> `instances/` и `eval/nerve/products.py render` есть (Ф1), команды `taibe products add/check` нет до третьего продукта; Нерв читает `instances/` сам (Ф2a).
 
 ## Проблема
 
