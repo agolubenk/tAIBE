@@ -157,6 +157,16 @@ test('держатель замка шлюза умер посреди вызо�
   lock.release() // после потери — без эффекта
 })
 
+test('держатель шлюза записывает «pid gateway ppid» в файл замка — status консилиума его называет (OPS-31)', async () => {
+  const { readFileSync } = await import('node:fs')
+  const lock = await acquireMachineLock({ path: LOCK, waitMs: 1_000 })
+  try {
+    assert.match(readFileSync(LOCK, 'utf8'), new RegExp(`^\\d+ gateway ${process.pid}\\n$`))
+  } finally {
+    lock.release()
+  }
+})
+
 test('штатный release — не потеря, замок свободен для следующего', async () => {
   const lock = await acquireMachineLock({ path: LOCK, waitMs: 1_000 })
   let lost = false

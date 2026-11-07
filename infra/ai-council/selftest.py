@@ -161,6 +161,114 @@ def test_local_inference_slot(tmp: Path) -> None:
         os.environ.pop("AI_COUNCIL_LOCAL_LOCK", None)
 
 
+def test_local_lock_holder(tmp: Path) -> None:
+    """OPS-31: держатель замка, остановленный Ctrl+Z или SIGSTOP, виден в status по pid и состоянию T, а текст
+    таймаута ожидающего называет его и команду status."""
+    import signal
+    import subprocess
+    import sys as _sys
+    import ollama as ollama_mod
+    lock = tmp / "holder.lock"
+    check("лок Ollama: свободный замок — «свободен»", ollama_mod.local_lock_holder(str(lock)) is None)
+    code = (
+        "import os, sys, time\n"
+        f"os.environ['AI_COUNCIL_LOCAL_LOCK'] = {str(lock)!r}\n"
+        f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+        "import ollama\n"
+        "with ollama.local_inference_slot(30):\n"
+        "    print('in', flush=True)\n"
+        "    time.sleep(30)\n"
+    )
+    holder = subprocess.Popen([_sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    saved_lock, saved_legacy = ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK
+    try:
+        holder.stdout.readline()
+        os.kill(holder.pid, signal.SIGSTOP)
+        os.waitpid(holder.pid, os.WUNTRACED)   # на Linux kill возвращается раньше, чем процесс встал
+        h = ollama_mod.local_lock_holder(str(lock))
+        check("лок Ollama: держатель под SIGSTOP — его pid и состояние T",
+              bool(h) and h["pid"] == holder.pid and h["state"].startswith("T") and h["who"] == "council",
+              f"{h}")
+        check("лок Ollama: описание подсказывает kill -CONT", f"kill -CONT {holder.pid}" in ollama_mod.describe_holder(h))
+        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = str(lock), ""
+        try:
+            with ollama_mod.local_inference_slot(0.3):
+                msg = ""
+        except TimeoutError as exc:
+            msg = str(exc)
+        check("лок Ollama: таймаут называет держателя и команду status",
+              str(holder.pid) in msg and "supervisor.py status" in msg, msg[:160])
+    finally:
+        ollama_mod.LOCAL_INFERENCE_LOCK, ollama_mod.LEGACY_HOST_LOCK = saved_lock, saved_legacy
+        os.kill(holder.pid, signal.SIGCONT)
+        holder.kill()
+        holder.wait(timeout=10)
+    check("лок Ollama: держатель завершён — снова «свободен»", ollama_mod.local_lock_holder(str(lock)) is None)
+
+    # Штатный выход стирает отметку: следующий держатель без отметки (старая копия кода) не выглядит прежним.
+    done = subprocess.run([_sys.executable, "-c", code.replace("time.sleep(30)", "pass")], capture_output=True,
+                          text=True, timeout=30)
+    raw = subprocess.Popen([_sys.executable, "-c",
+                            f"import fcntl, time\nf = open({str(lock)!r}, 'a+')\nfcntl.flock(f.fileno(), fcntl.LOCK_EX)\n"
+                            "print('in', flush=True)\ntime.sleep(30)\n"], stdout=subprocess.PIPE, text=True)
+    try:
+        raw.stdout.readline()
+        h = ollama_mod.local_lock_holder(str(lock))
+        check("лок Ollama: после штатного выхода отметка стёрта — держатель без отметки не выдаётся за прежнего",
+              done.returncode == 0 and bool(h) and h["pid"] is None
+              and "не записал pid" in ollama_mod.describe_holder(h), f"{h}")
+    finally:
+        raw.kill()
+        raw.wait(timeout=10)
+
+
+def test_machine_model_lock(tmp: Path) -> None:
+    """OPS-29: два хоста (у каждого своя council.db) требуют разные L-модели одновременно — L-блоки идут по
+    одному на машину: чужая модель посреди блока не выгружается, пик резидентных L-моделей 1."""
+    import subprocess
+    import sys as _sys
+    lock = tmp / "ollama-local.lock"
+    log = tmp / "large.log"
+    code = (
+        "import os, sys, time\n"
+        f"os.environ['AI_COUNCIL_LOCAL_LOCK'] = {str(lock)!r}\n"
+        f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+        "import ollama, store\n"
+        "model, db = sys.argv[1], sys.argv[2]\n"
+        "c = ollama.OllamaClient(store=store.Store(db), holder='host-' + model, large={model: 17.0},\n"
+        "                        memory_guard=False)\n"
+        "c.loaded_models = lambda: []\n"
+        "c.unload = lambda name: None\n"
+        "with c.large_model(model):\n"
+        f"    with open({str(log)!r}, 'a') as f: f.write(f'in {{time.time()}}\\n')\n"
+        "    time.sleep(0.6)\n"
+        f"    with open({str(log)!r}, 'a') as f: f.write(f'out {{time.time()}}\\n')\n"
+    )
+    procs = [subprocess.Popen([_sys.executable, "-c", code, m, str(tmp / f"host-{i}.db")])
+             for i, m in enumerate(["big:27b", "other:30b", "big:27b"])]
+    rcs = [p.wait(timeout=60) for p in procs]
+    events = [line.split() for line in log.read_text().splitlines()]
+    depth, peak = 0, 0
+    for kind, _ts in sorted(events, key=lambda e: float(e[1])):
+        depth += 1 if kind == "in" else -1
+        peak = max(peak, depth)
+    check("модельный лок: три «хоста» со своими базами — L-блоки по одному на машину",
+          rcs == [0, 0, 0] and len(events) == 6 and peak == 1, f"rc={rcs} peak={peak}")
+    check("модельный лок: машинный файл рядом с локом инференса",
+          os.path.exists(tmp / "large-model.lock"))
+
+    import ollama as ollama_mod
+    c = ollama_mod.OllamaClient(store=None, large={"big:27b": 17.0}, memory_guard=False)
+    c.loaded_models = lambda: []
+    c.unload = lambda name: None
+    started = time.time()
+    with c.large_model("big:27b"):
+        with c.large_model("big:27b"):
+            nested = True
+    check("модельный лок: вложенный large_model в том же процессе не ждёт сам себя",
+          nested and time.time() - started < 1.0 and ollama_mod._model_lock["depth"] == 0)
+
+
 def test_cloud_lane(tmp: Path) -> None:
     """Облачная полоса воркера: пульс долгого прогона и отказ брать задачу без режима GLM 5.x."""
     import council_worker as worker_mod
@@ -2616,11 +2724,16 @@ def main() -> int:
     print("AI Council — самопроверка\n")
     with tempfile.TemporaryDirectory(prefix="council-selftest-") as raw:
         tmp = Path(raw)
+        # Машинный модельный лок — во временной папке: selftest не ждёт живой консилиум с L-моделью (OPS-29).
+        import ollama as _ollama
+        _ollama.MACHINE_MODEL_LOCK = str(tmp / "machine-large-model.lock")
         print("1. очередь: атомарность захвата (6 конкурентных процессов)")
         test_claim_atomicity(tmp)
         print("\n2. модельный лок (инвариант 24 GB)")
         test_model_lock(tmp)
         test_local_inference_slot(tmp)
+        test_local_lock_holder(tmp)
+        test_machine_model_lock(tmp)
         test_cloud_lane(tmp)
         print("\n3. возврат зависших прогонов")
         test_reap(tmp)
