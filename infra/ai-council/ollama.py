@@ -36,16 +36,12 @@ DOWN_TTL = 120  # сек: после сетевого сбоя не долбим
 # Лок — у машины, а не у хоста и не у копии кода: консилиумы всех продуктов-хостов на одном Mac делят
 # один файл, иначе два хоста дадут два инференса параллельно. Путь — в домашней папке пользователя вне
 # продуктов. Не $TMPDIR и не $XDG_STATE_HOME: у launchd и у терминала они разные, а HOME один.
-# Переходный второй лок — прежний путь у хоста: им пользуются старые копии слоя в папке продукта, пока
-# они не удалены. Порядок взятия постоянный (машинный, потом хостовый), поэтому взаимной блокировки нет.
-# AI_COUNCIL_LOCAL_LOCK — только для тестов: один заданный файл, без машинного и хостового.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import REPO_ROOT as _HOST_ROOT  # noqa: E402
-
+# Переходного второго лока у хоста (`<хост>/.claude/council/ollama-local.lock`) больше нет (OPS-30): старая копия
+# слоя в HR удалена (HR #482, #484), все процессы консилиума исполняют код tAIBE и берут машинный файл.
+# AI_COUNCIL_LOCAL_LOCK — только для тестов: один заданный файл вместо машинного.
 MACHINE_LOCK_REL = os.path.join(".local", "state", "taibe", "council", "ollama-local.lock")
 _LOCK_OVERRIDE = os.environ.get("AI_COUNCIL_LOCAL_LOCK", "").strip()
 LOCAL_INFERENCE_LOCK = _LOCK_OVERRIDE or os.path.join(os.path.expanduser("~"), MACHINE_LOCK_REL)
-LEGACY_HOST_LOCK = "" if _LOCK_OVERRIDE else str(_HOST_ROOT / ".claude" / "council" / "ollama-local.lock")
 # Модельный лок L-моделей — тоже у машины (OPS-29). Лок в council.db держал «одну L-модель» только внутри хоста:
 # у каждого хоста своя база, и два хоста выгружали модели друг друга (пинг-понг 17–18 GB, в окне — две L-модели на
 # 24 GB). Порядок постоянный: модельный лок — внешний, на весь блок large_model; лок инференса — внутренний, на
@@ -196,19 +192,15 @@ def local_inference_slot(wait_seconds: float):
     консилиума всех хостов и со шлюзом моделей (машинный файл, OPS-27), но не с backend продукта (OPS-28) и не с
     ролями Continue напрямую (OPS-33). Лок файловый (flock):
     снимается и при падении процесса. Не дождались — TimeoutError, вызов не делается."""
-    paths = [LOCAL_INFERENCE_LOCK]
-    if LEGACY_HOST_LOCK and LEGACY_HOST_LOCK != LOCAL_INFERENCE_LOCK:
-        paths.append(LEGACY_HOST_LOCK)
+    path = LOCAL_INFERENCE_LOCK
     deadline = time.time() + wait_seconds
     with ExitStack() as held:
-        for path in paths:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            handle = held.enter_context(open(path, "a+"))
-            _flock_by(handle, deadline, wait_seconds, path)
-            held.callback(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
-            if path == LOCAL_INFERENCE_LOCK:
-                mark_holder(handle, "council")
-                held.callback(clear_mark, handle)    # LIFO: отметка стирается до снятия замка
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        handle = held.enter_context(open(path, "a+"))
+        _flock_by(handle, deadline, wait_seconds, path)
+        held.callback(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+        mark_holder(handle, "council")
+        held.callback(clear_mark, handle)    # LIFO: отметка стирается до снятия замка
         yield
 PRESSURE_CRITICAL = 4   # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
 

@@ -18,8 +18,7 @@ Python-сервис вне npm workspaces: `supervisor.py` (оркестраци
 - **Локальные модели (Ollama) — строго последовательно:** никаких параллельных или пакетных local-инференсов —
   железо разработчика этого не выдерживает (memory-guard откладывает прогон, а не грузит модель в своп). Между
   процессами — файловый лок `ollama.local_inference_slot` на каждый вызов, один на машину для всех хостов
-  (`~/.local/state/taibe/council/ollama-local.lock`; переходный второй — прежний `<хост>/.claude/council/`, его держат
-  старые копии слоя в продукте). Тот же машинный файл берёт шлюз моделей (`infra/llm-gateway/src/machine-lock.mjs`,
+  (`~/.local/state/taibe/council/ollama-local.lock`; переходного второго у хоста нет с OPS-30). Тот же машинный файл берёт шлюз моделей (`infra/llm-gateway/src/machine-lock.mjs`,
   OPS-27). Мимо замка в Ollama хоста ходят backend продукта в docker (OPS-28), роли Continue напрямую и прогрев
   (OPS-33), поэтому вместе с ними два инференса параллельно ещё возможны. Кто держит замок — строка «лок Ollama» в
   `supervisor.py status`: держатель пишет «pid кто» в файл замка (flock на macOS не виден в lsof), состояние `T` —
