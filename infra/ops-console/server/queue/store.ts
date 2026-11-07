@@ -318,11 +318,15 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
     for (const [k, v] of Object.entries(merged)) if (v === null && collection !== 'checks') delete merged[k]
     const at = new Date()
     if (collection === 'checks') stampCheck(merged, before, data, { owner, merge: opts.merge, at: at.toISOString() })
+    // Входящее ли это — по пункту items/<id>: захват сессией действует только на входящие.
+    const inboxItem = !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
+    const inbox = !owner && inboxItem
+    // Отпуск — только у входящих: у обычных пунктов захвата нет, а agentBy — подпись, кто вёл пункт; без проверки
+    // держателя (она — только у входящих) любая сессия стирала бы чужую подпись.
+    if (collection === 'checks' && opts.release && !inboxItem) throw apiError(422, 'release — только у входящих (kind: inbox): у других пунктов захвата нет')
     // Отпуск снимает только держателя: статус и заметка («передано <сессия>») остаются — страница и бот показывают, кому
     // передано; пункт берёт названная живая сессия. Автопередача сама его не предложит: у него есть статус.
     if (collection === 'checks' && opts.release) delete merged.agentBy
-    // Входящее ли это — по пункту items/<id>: захват сессией действует только на входящие.
-    const inbox = !owner && !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
     const parsed = SCHEMAS[collection].safeParse(merged)
     if (!parsed.success) throw apiError(422, `Неверный документ: ${parsed.error.issues.map((i) => `${i.path.join('.') || '—'}: ${i.message}`).join('; ').slice(0, 400)}`)
     const json = JSON.stringify(parsed.data)
