@@ -159,7 +159,7 @@ describe('запись — надёжность и пары', () => {
       call(hr, 'PUT', '/db/items/d-race-1', { data: decision('гонка 1') }),
       call(hr, 'PUT', '/db/items/d-race-2', { data: decision('гонка 2') }),
     ])
-    expect([x.status, y.status]).toContain(200)
+    expect([x.status, y.status]).toEqual([200, 200])
     for (let i = 3; i <= 5; i++) expect((await call(hr, 'PUT', `/db/items/d-race-${i}`, { data: decision('после') })).status).toBe(200)
   })
 
