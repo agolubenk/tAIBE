@@ -146,7 +146,7 @@ export const ENHANCE_JS = String.raw`(function () {
         (m.mergeable === false ? '\n\n⚠️ GitHub: ' + (m.mergeableState || 'есть конфликт') : ''));
       if (!ok) { say(el, ''); return null; }
       say(el, 'Вливаю…');
-      return api('POST', '/merge/' + encodeURIComponent(id), { sha: m.headSha });
+      return api('POST', '/merge/' + encodeURIComponent(id), { sha: m.headSha, version: m.version });
     }).then(function (r) { if (r) say(el, '✓ ' + r.message); })
       .catch(function (e) { say(el, e.message, true); })
       .then(function () { delete btn.dataset.busy; syncButton(btn, id); });

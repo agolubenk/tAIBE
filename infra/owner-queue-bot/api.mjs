@@ -22,7 +22,8 @@ export class QueueApi {
   }
 
   mergeInfo(itemId) { return this.call('GET', `/merge/${encodeURIComponent(itemId)}`); }
-  merge(itemId, sha) { return this.call('POST', `/merge/${encodeURIComponent(itemId)}`, { sha }); }
+  /** version — версия пункта с экрана подтверждения: пункт меняли после показа — консоль ответит 409. */
+  merge(itemId, sha, version) { return this.call('POST', `/merge/${encodeURIComponent(itemId)}`, { sha, version }); }
   redeploy() { return this.call('POST', '/redeploy', {}); }
   /** Входящее из Telegram: пункт kind inbox (схема — server/queue/store.ts консоли). ifVersion 0 — только создание. */
   putItem(id, data, ifVersion) { return this.call('PUT', `/db/items/${encodeURIComponent(id)}`, { data, ...(ifVersion !== undefined ? { ifVersion } : {}) }); }

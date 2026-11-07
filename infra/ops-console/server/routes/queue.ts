@@ -26,7 +26,7 @@ const writeSchema = z.object({
   takeover: z.string().min(1).max(SESSION_MAX).optional(),
   release: z.boolean().optional(),
 })
-const mergeSchema = z.object({ sha: z.string() })
+const mergeSchema = z.object({ sha: z.string(), version: z.number().int().nonnegative().optional() })
 const productChangeSchema = z.object({ to: z.string().regex(PRODUCT_SLUG), reason: z.string().max(500).optional() })
 
 function withProductFilter(products: Visibility, slug: string | undefined): Visibility {
@@ -134,7 +134,7 @@ queueRoutes.get('/merge/:itemId', requireScope('owner'), async (c) => c.json(awa
 
 queueRoutes.post('/merge/:itemId', requireScope('owner'), async (c) => {
   const body = await parseBody(c, mergeSchema)
-  return c.json(await mergeItem(c.get('oqActor'), c.req.param('itemId'), body.sha))
+  return c.json(await mergeItem(c.get('oqActor'), c.req.param('itemId'), body.sha, body.version))
 })
 
 queueRoutes.post('/redeploy', requireScope('owner'), async (c) => c.json({ message: await redeploy(c.get('oqActor')) }))

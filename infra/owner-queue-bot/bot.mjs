@@ -217,17 +217,18 @@ async function mergeConfirm(chatId, key, ver) {
   return send(chatId, {
     text: lines.join('\n'),
     keyboard: [
-      [...(blocked ? [] : [btn(`✅ Да, влить ${m.headSha.slice(0, 7)}`, `MY:${key}:${m.headSha}`)]), btn('✖️ Отмена', 'MN')],
+      [...(blocked ? [] : [btn(`✅ Да, влить ${m.headSha.slice(0, 7)}`, `MY:${key}:${m.headSha}:${m.version}`)]), btn('✖️ Отмена', 'MN')],
       ...(/^https:\/\/github\.com\//.test(m.url) ? [[{ text: 'PR на GitHub', url: m.url }]] : []),
     ],
   });
 }
 
-async function mergeRun(chatId, key, sha) {
+/** ver — версия пункта с экрана подтверждения (callback «MY:<ключ 10>:<sha 40>:<версия>» — до 64 байт при версии до 9 цифр). */
+async function mergeRun(chatId, key, sha, ver) {
   const it = byKey(last || (await snap()), key) || byKey(await snap(), key);
   if (!it) return send(chatId, { text: 'Пункт не найден.' });
   try {
-    const r = await queueApi.merge(it.id, sha);
+    const r = await queueApi.merge(it.id, sha, /^\d+$/.test(ver || '') ? Number(ver) : undefined);
     log(`мёрж из Telegram: ${it.id} ${sha.slice(0, 7)}`);
     await send(chatId, { text: `✅ ${esc(r.message)}` });
   } catch (e) {
@@ -351,7 +352,7 @@ async function onCallback(q) {
       case 'h': await ack(); return await sendAll(chatId, sshMessages(await snap()));
       case 'v': await ack(); return await sendAll(chatId, guideMessages(await snap()));
       case 'M': await ack('Спрашиваю GitHub…'); return await mergeConfirm(chatId, a, b);
-      case 'MY': await ack('Вливаю…'); return await mergeRun(chatId, a, b);
+      case 'MY': await ack('Вливаю…'); return await mergeRun(chatId, a, b, c);
       case 'MN': case 'RN': await ack('Отменено'); return await show(chatId, { text: 'Отменено.' }, msgId);
       case 'RD':
         await ack();

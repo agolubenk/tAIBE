@@ -4,9 +4,12 @@
  *    Вердикта нет — кнопка неактивна, сервер отказывает; голова или база PR сменились после вердикта — отказ до
  *    нового вердикта (одна и та же голова в PR на склейку и в PR на main — разные вливания);
  *  - вливается ровно тот head SHA, который показали владельцу (GitHub сам откажет, если ветку допушили);
- *  - [skip ci] — из пункта (deploy: 'skip', команда или subject с [skip ci]); иначе мёрж в main запускает деплой прода;
+ *  - [skip ci] — из пункта (deploy: 'skip', команда мёржа или subject с [skip ci], [ci skip], [no ci], [skip actions],
+ *    [actions skip]); иначе мёрж в main запускает деплой прода, и заголовок с текстом коммита уходят явно, без этих меток;
  *  - способ (merge|squash) и заголовок коммита — из пункта (mergeMethod, subject) или его команды (--squash, --subject);
- *  - PR другого репозитория (поле repo или -R в команде) — честный отказ 409 до запроса к GitHub (Q-29);
+ *  - PR другого репозитория (поле repo, -R, URL PR или GH_REPO в команде) — честный отказ 409 до запроса к GitHub (Q-29);
+ *    команду, которую консоль не повторит как терминал (cd, $(…), rebase, флаг без значения), — тоже 409;
+ *  - POST /merge несёт версию пункта с экрана подтверждения: пункт меняли после показа — 409;
  *  - пока идёт деплой, мёрж с деплоем запрещён: влитые подряд схлопнулись бы в один деплой;
  *  - не чаще одного мёржа за 30 с на консоль; каждое действие — в журнал очереди.
  * Токен — отдельный от токена опроса деплоев (Настройки → GitHub): fine-grained, только этот репозиторий,
@@ -42,12 +45,14 @@ const realTransport: Transport = async (method, path, token, body) => {
   return { status: res.status, text: res.text }
 }
 let transport: Transport = realTransport
-export function setGithubTransportForTests(t: Transport | null): void {
-  transport = t ?? realTransport
-}
-
 const MERGE_GAP_MS = 30_000
 let lastMergeAt = 0
+
+/** Подмена транспорта в тестах; заодно сбрасывает паузу между мёржами, чтобы тесты не зависели от порядка. */
+export function setGithubTransportForTests(t: Transport | null): void {
+  transport = t ?? realTransport
+  lastMergeAt = 0
+}
 
 const prSchema = z.object({
   number: z.number(),
@@ -76,32 +81,106 @@ export interface MergePlan {
   method: 'merge' | 'squash'
   /** Заголовок коммита: поле `subject` или `--subject` команды; null — заголовок GitHub по способу. */
   subject: string | null
+  /** Почему консоль не повторит команду пункта (cd, $(…), rebase, флаг без значения, два репозитория); null — повторит. */
+  problem: string | null
 }
 
 const FULL_SHA = /^[0-9a-f]{40}$/
 export const BRANCH_NAME = /^[A-Za-z0-9._/-]{1,200}$/
 const SUBJECT = /^[^\r\n]{1,300}$/
+/** Метки, по которым GitHub Actions не запускает workflow на push (docs: «Skipping workflow runs»). */
+const SKIP_MARKER = /\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i
+const SKIP_MARKERS = / ?\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/gi
+const unskip = (s: string): string => s.replace(SKIP_MARKERS, '')
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null)
+/** `[HOST/]OWNER/REPO`, как принимает `gh -R`, и URL репозитория → `owner/name`. */
+const repoName = (v: string): string => v.replace(/^(?:https?:\/\/)?(?:www\.)?github\.com\//i, '').replace(/\.git$/i, '').replace(/\/+$/, '')
+
+/** Флаги gh со значением; остальные — булевы. Короткие: -R -t -b -F -A. */
+const VALUE_LONG = new Set(['--repo', '--subject', '--body', '--body-file', '--match-head-commit', '--author-email'])
+const VALUE_SHORT: Record<string, string> = { R: '--repo', t: '--subject', b: '--body', F: '--body-file', A: '--author-email' }
+const SHORT_BOOL: Record<string, string> = { s: '--squash', m: '--merge', r: '--rebase', d: '--delete-branch' }
+
+interface MergeFlags {
+  pr: number | null
+  /** Репозиторий из -R/--repo, из URL PR в аргументе или из GH_REPO= перед командой. */
+  repo: string | null
+  method: 'merge' | 'squash' | null
+  subject: string | null
+  /** Только сама команда мёржа (без того, что после && ; |) — по ней ищем метки пропуска CI. */
+  segment: string
+  /** Что делает команду неоднозначной для консоли, по полю, которое из неё берётся; поле пункта снимает отказ. */
+  problems: { repo?: string; method?: string; subject?: string }
+}
 
 /**
- * Флаги `gh pr merge …` по словам shell, а не по сырому тексту: `--subject "fix -s flag"` — заголовок, а не squash.
- * Только сама команда мёржа: `curl -s` или `git log -t` после && способ не меняют.
+ * Флаги `gh pr merge …` по словам shell, как их разбирает gh (pflag), а не по сырому тексту: `--subject "fix -s flag"` —
+ * заголовок, а не squash; `-ds` — delete-branch и squash; `-Rowner/name` — репозиторий. Только сама команда мёржа:
+ * `curl -s` или `git log -t` после && способ не меняют. Всё, что консоль не повторит как терминал (cd в другую папку,
+ * подстановка $(…), rebase, флаг без значения), — в problems: mergeInfo откажет 409, а не вольёт другое.
  */
-function mergeFlags(cmd: string): { pr: number | null; repo: string | null; squash: boolean; subject: string | null } {
-  const segment = cmd.match(/gh pr merge(?:[^\n;&|"']|"[^"]*"|'[^']*')*/)?.[0] ?? ''
-  const words = (segment.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []).map((w) => w.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
-  const out = { pr: Number(words[3]) || null, repo: null as string | null, squash: false, subject: null as string | null }
+function mergeFlags(cmd: string): MergeFlags {
+  const found = /gh pr merge(?:[^\n;&|"']|"[^"]*"|'[^']*')*/.exec(cmd)
+  const segment = found?.[0] ?? ''
+  const before = found ? cmd.slice(0, found.index) : ''
+  const raw = segment.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
+  const words = raw.map((w) => w.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
+  // $ и ` вне одинарных кавычек shell подставит — консоль увидела бы буквальный текст.
+  const expands = (i: number) => /[$`]/.test((raw[i] ?? '').replace(/'[^']*'/g, ''))
+  const out: MergeFlags = { pr: null, repo: null, method: null, subject: null, segment, problems: {} }
+  const repos: string[] = []
+  const methods = new Set<string>()
+  const field = (flag: string): keyof MergeFlags['problems'] | null => (flag === '--repo' ? 'repo' : flag === '--subject' ? 'subject' : null)
+  const take = (flag: string, value: string | null, i: number) => {
+    const f = field(flag)
+    if (!f) return
+    // gh взял бы и «--squash» как значение -t — это опечатка в пункте, а не заголовок.
+    if (value === null || value === '' || value.startsWith('-')) out.problems[f] = `в команде у флага ${flag} нет значения`
+    else if (expands(i)) out.problems[f] = `в значении ${flag} подстановка shell ($ или \`) — консоль её не выполнит`
+    else if (f === 'repo') repos.push(repoName(value))
+    else out.subject = value
+  }
+  const flagOn = (flag: string) => {
+    if (flag === '--squash' || flag === '--merge' || flag === '--rebase') methods.add(flag.slice(2))
+  }
   for (let i = 3; i < words.length; i++) {
     const word = words[i] ?? ''
-    const eq = word.startsWith('--') ? word.indexOf('=') : -1
-    const [flag, inline] = eq > 0 ? [word.slice(0, eq), word.slice(eq + 1)] : [word, null]
-    const value = () => inline ?? words[++i] ?? null
-    if (flag === '-R' || flag === '--repo') out.repo = value()
-    else if (flag === '--subject' || flag === '-t') out.subject = value()
-    else if (flag === '--body' || flag === '-b' || flag === '--body-file' || flag === '-F' || flag === '--match-head-commit' || flag === '--author-email' || flag === '-A') value()
-    else if (flag === '--squash' || flag === '-s') out.squash = true
+    if (word.startsWith('--')) {
+      const eq = word.indexOf('=')
+      const flag = eq > 0 ? word.slice(0, eq) : word
+      if (VALUE_LONG.has(flag)) {
+        // Аргументы вычисляются слева направо: третий — индекс слова со значением (после ++i — следующее слово).
+        take(flag, eq > 0 ? word.slice(eq + 1) : (words[++i] ?? null), i)
+      } else flagOn(flag)
+    } else if (word.length > 1 && word.startsWith('-')) {
+      // Связка коротких: -ds = -d -s; у флага со значением остаток слова — значение (-Rowner/name, -R=owner/name).
+      for (let j = 1; j < word.length; j++) {
+        const long = VALUE_SHORT[word[j] ?? '']
+        if (long) {
+          const rest = word.slice(j + 1).replace(/^=/, '')
+          take(long, rest || (words[++i] ?? null), i)
+          break
+        }
+        const bool = SHORT_BOOL[word[j] ?? '']
+        if (bool) flagOn(bool)
+      }
+    } else if (out.pr === null) {
+      // Аргумент: номер, #номер или URL PR (репозиторий — из URL); ветку консоль не разрешает — нужен номер в поле pr.
+      const url = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/i.exec(word)
+      if (url) { repos.push(repoName(url[1] ?? '')); out.pr = Number(url[2]) || null }
+      else if (/^#?\d+$/.test(word)) out.pr = Number(word.replace('#', '')) || null
+    }
   }
+  const env = [...before.matchAll(/\bGH_REPO=("[^"]*"|'[^']*'|[^\s;&|]+)/g)].pop()?.[1]
+  if (env) repos.push(repoName(env.replace(/^["']|["']$/g, '')))
+  const distinct = [...new Set(repos.map((r) => r.toLowerCase()))]
+  if (distinct.length > 1) out.problems.repo = `команда называет разные репозитории: ${[...new Set(repos)].join(', ')}`
+  else if (repos[0]) out.repo = repos[0]
+  else if (/(?:^|[\s;&|(])(?:cd|pushd)\s/.test(before)) out.problems.repo ??= 'команда сначала переходит в другую папку (cd), репозиторий PR из неё не ясен'
+  if (methods.has('rebase')) out.problems.method = 'rebase из очереди не поддерживается (только merge и squash)'
+  else if (methods.size > 1) out.problems.method = 'в команде несколько способов мёржа сразу'
+  else out.method = methods.has('squash') ? 'squash' : methods.has('merge') ? 'merge' : null
   return out
 }
 
@@ -112,33 +191,59 @@ export function mergePlan(item: Record<string, unknown>): MergePlan {
   const pr = typeof item.pr === 'number' ? item.pr : flags.pr
   const approvedSha = typeof item.sha === 'string' && FULL_SHA.test(item.sha) ? item.sha : null
   const approvedBase = typeof item.base === 'string' && BRANCH_NAME.test(item.base) ? item.base : null
+  // Поле пункта главнее команды; противоречие команде — отказ, а не выбор одного из двух.
+  const itemRepo = str(item.repo)
   // Не проверяем формат здесь: кривое имя не совпадёт с репозиторием консоли, и mergeInfo откажет (fail-closed).
-  const repo = str(item.repo) ?? str(flags.repo)
-  const method = item.mergeMethod === 'squash' || (item.mergeMethod === undefined && flags.squash) ? 'squash' : 'merge'
+  const repo = itemRepo ?? flags.repo
+  const problems = [
+    itemRepo && flags.repo && itemRepo.toLowerCase() !== flags.repo.toLowerCase()
+      ? `поле repo (${itemRepo}) и команда (${flags.repo}) называют разные репозитории`
+      : itemRepo ? null : flags.problems.repo,
+    item.mergeMethod === undefined ? flags.problems.method : null,
+    str(item.subject) ? null : flags.problems.subject,
+  ].filter((p): p is string => !!p)
+  const method = item.mergeMethod === 'squash' || (item.mergeMethod === undefined && flags.method === 'squash') ? 'squash' : 'merge'
   const subjectRaw = str(item.subject) ?? flags.subject
   const subject = subjectRaw && SUBJECT.test(subjectRaw.trim()) ? subjectRaw.trim() : null
-  const skipCi = item.deploy === 'skip' || /\[skip ci\]/i.test(cmd) || /\[skip ci\]/i.test(subject ?? '')
+  const skipCi = item.deploy === 'skip' || SKIP_MARKER.test(flags.segment) || SKIP_MARKER.test(subject ?? '')
   // Мёрж в main с кодом деплоит прод — поэтому деплой ожидается, если пункт не говорит обратное:
   // [skip ci], deploy: 'none' (только docs/md — paths-ignore) или метка «без деплоя».
   const chips = Array.isArray(item.chips) ? (item.chips as unknown[][]) : []
   const saysNoDeploy = chips.some((c) => Array.isArray(c) && typeof c[0] === 'string' && /без деплоя/i.test(c[0]))
   const deploys = item.deploy ? item.deploy === 'deploy' : !skipCi && !saysNoDeploy
-  return { pr, skipCi, deploys, approvedSha, approvedBase, repo, method, subject }
+  return { pr, skipCi, deploys, approvedSha, approvedBase, repo, method, subject, problem: problems.length ? problems.join('; ') : null }
 }
 
-/** Тело PUT /pulls/N/merge: способ из пункта, заголовок — свой или GitHub по способу, с [skip ci] если нужно. */
+/**
+ * Тело PUT /pulls/N/merge. Заголовок и текст коммита — всегда явно: иначе GitHub собрал бы их сам (у squash — из
+ * сообщений коммитов ветки, у HR так настроено), и `[skip ci]` из любого коммита ветки молча отменил бы деплой, который
+ * консоль обещает. Без деплоя — метка в заголовке; с деплоем — метки вычищены и из заголовка, и из текста.
+ */
 export function mergeRequestBody(
   info: Pick<MergeInfo, 'pr' | 'title' | 'headRef' | 'skipCi' | 'method' | 'subject' | 'repo'>,
   sha: string,
+  commits: string[] | null = null,
 ): Record<string, unknown> {
-  const body: Record<string, unknown> = { sha, merge_method: info.method }
-  let title = info.subject
-  if (!title && info.skipCi) {
-    title = info.method === 'squash' ? `${info.title} (#${info.pr})` : `Merge pull request #${info.pr} from ${info.repo.split('/')[0]}/${info.headRef}`
+  const squash = info.method === 'squash'
+  let title = info.subject ?? (squash ? `${info.title} (#${info.pr})` : `Merge pull request #${info.pr} from ${info.repo.split('/')[0]}/${info.headRef}`)
+  title = info.skipCi ? (SKIP_MARKER.test(title) ? title : `${title} [skip ci]`) : unskip(title).trim()
+  // Текст: у squash — сообщения коммитов ветки (как GitHub по умолчанию), у merge — заголовок PR (тоже как GitHub).
+  const message = squash && commits?.length ? commits.map((m) => `* ${m.trim()}`).join('\n\n') : info.title
+  return { sha, merge_method: info.method, commit_title: title, commit_message: unskip(message) }
+}
+
+const commitsSchema = z.array(z.object({ commit: z.object({ message: z.string() }) }))
+
+/** Сообщения коммитов PR (до 100 — одна страница) для текста squash; не прочитались — null, текст будет заголовком PR. */
+async function prCommits(repo: string, pr: number, token: string): Promise<string[] | null> {
+  const res = await call('GET', `/repos/${repo}/pulls/${pr}/commits?per_page=100`, token)
+  if (res.status !== 200) return null
+  try {
+    const parsed = commitsSchema.safeParse(JSON.parse(res.text))
+    return parsed.success ? parsed.data.map((c) => c.commit.message) : null
+  } catch {
+    return null
   }
-  if (title && info.skipCi && !/\[skip ci\]/i.test(title)) title = `${title} [skip ci]`
-  if (title) body.commit_title = title
-  return body
 }
 
 /** Вердикт против PR на GitHub: нет вердикта (нужны оба поля), сменилась голова, сменилась база — или всё совпало. */
@@ -169,6 +274,8 @@ async function deployRunning(repo: string, workflow: string, token: string): Pro
 
 export interface MergeInfo extends Omit<MergePlan, 'repo'> {
   itemId: string
+  /** Версия пункта, по которой построен экран: POST /merge с другой версией — 409 (пункт меняли после показа). */
+  version: number
   /** Репозиторий, где лежит PR (всегда репозиторий консоли: чужой mergeInfo отклоняет до запроса). */
   repo: string
   title: string
@@ -196,6 +303,7 @@ export async function mergeInfo(itemId: string): Promise<MergeInfo> {
   if (item.product !== DEFAULT_PRODUCT) throw apiError(409, `Мёрж из очереди для продукта «${item.product}» ещё не подключён`)
   const plan = mergePlan(item.data)
   if (!plan.pr) throw apiError(422, 'В пункте нет номера PR (поле pr или команда gh pr merge N)')
+  if (plan.problem) throw apiError(409, `PR #${plan.pr}: ${plan.problem} — влейте командой из пункта в терминале или задайте поля пункта (repo, mergeMethod, subject)`)
   const { repo, workflow, token } = await settings()
   // Номер PR без репозитория читался из репозитория консоли: tAIBE #41 показывался как влитый HR #41 (Q-29).
   if (plan.repo && plan.repo.toLowerCase() !== repo.toLowerCase()) {
@@ -209,6 +317,7 @@ export async function mergeInfo(itemId: string): Promise<MergeInfo> {
     ...plan,
     repo,
     itemId,
+    version: item.version,
     title: pr.title,
     url: pr.html_url,
     headSha: pr.head.sha,
@@ -222,11 +331,14 @@ export async function mergeInfo(itemId: string): Promise<MergeInfo> {
   }
 }
 
-export async function mergeItem(actor: Actor, itemId: string, sha: string): Promise<{ sha: string; message: string }> {
+export async function mergeItem(actor: Actor, itemId: string, sha: string, version?: number): Promise<{ sha: string; message: string }> {
   if (!actor.scopes.includes('owner')) throw apiError(403, 'Вливает только владелец')
   if (!/^[0-9a-f]{40}$/.test(sha)) throw apiError(422, 'Нужен полный SHA, показанный на экране подтверждения')
+  // Способ, заголовок и деплой берутся из пункта заново: без версии экрана агент мог бы поменять их между показом и кликом.
+  if (version === undefined) throw apiError(422, 'Нужна версия пункта с экрана подтверждения — откройте мёрж заново (на странице — после обновления)')
   if (Date.now() - lastMergeAt < MERGE_GAP_MS) throw apiError(429, 'Мёржи не чаще раза в 30 секунд — подождите')
   const info = await mergeInfo(itemId)
+  if (info.version !== version) throw apiError(409, 'Пункт изменился после показа (способ, заголовок или деплой могли стать другими) — откройте мёрж заново')
   if (info.state !== 'open') throw apiError(409, info.state === 'merged' ? `PR #${info.pr} уже влит` : `PR #${info.pr} закрыт`)
   if (info.approval === 'missing') {
     throw apiError(409, `В пункте нет вердикта «Контроля» по PR #${info.pr} (поля sha и base) — вливать нельзя до вердикта`)
@@ -241,8 +353,9 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string): Prom
   if (info.mergeable === false) throw apiError(409, `GitHub не даёт влить: ${info.mergeableState || 'конфликт'}`)
   if (info.deploys && !info.skipCi && info.deployRunning && info.baseRef === 'main') throw apiError(409, 'Сейчас идёт деплой — дождитесь его окончания, затем вливайте')
   const { repo, token } = await settings()
+  const commits = info.method === 'squash' ? await prCommits(repo, info.pr as number, token) : null
   lastMergeAt = Date.now()
-  const body = mergeRequestBody(info, sha)
+  const body = mergeRequestBody(info, sha, commits)
   const res = await call('PUT', `/repos/${repo}/pulls/${info.pr}/merge`, token, body)
   if (res.status !== 200) {
     lastMergeAt = 0
