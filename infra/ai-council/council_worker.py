@@ -544,11 +544,14 @@ def main() -> int:
             return 1
 
         if args.card:
-            card = store.get_card(args.card) or store.q1(
-                "SELECT * FROM cards WHERE backlog_id = ? OR title LIKE ? LIMIT 1",
+            # Только карточки t-boards и черновики: снимок Notion — архив, по названию его не ищем.
+            card = store.find_card(args.card) or store.q1(
+                "SELECT * FROM cards WHERE (origin = 'tboards' OR db = 'draft') "
+                "AND (backlog_id = ? OR title LIKE ?) ORDER BY fetched_at DESC LIMIT 1",
                 (args.card, f"%{args.card}%"))
             if not card:
-                log(f"карточка {args.card} не найдена в снапшоте")
+                log(f"карточка {args.card} не найдена — сначала прочитать её из t-boards: "
+                    f"python3 infra/ai-council/tboards.py card <ключ>")
                 return 1
             run_id = store.enqueue(
                 card["card_id"],
