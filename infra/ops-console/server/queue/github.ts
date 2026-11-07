@@ -88,13 +88,18 @@ export interface MergePlan {
 const FULL_SHA = /^[0-9a-f]{40}$/
 export const BRANCH_NAME = /^[A-Za-z0-9._/-]{1,200}$/
 const SUBJECT = /^[^\r\n]{1,300}$/
-/** Метки, по которым GitHub Actions не запускает workflow на push (docs: «Skipping workflow runs»). */
+/**
+ * Метки, по которым GitHub Actions не запускает workflow на push (docs: «Skipping workflow runs»): пять в скобках и
+ * трейлер `skip-checks: true` в конце сообщения. SKIP_MARKER — в заголовке (там трейлера не бывает), SKIP_ANY — в команде.
+ */
 const SKIP_MARKER = /\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i
+const SKIP_ANY = /\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]|skip-checks:\s*true/i
 const SKIP_MARKERS = / ?\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/gi
+const SKIP_TRAILER = /^[ \t]*skip-checks:[ \t]*true[ \t]*$/gim
 /** До неподвижной точки: из «[sk[skip ci]ip ci]» один проход оставил бы «[skip ci]» (ревью безопасности). */
 const unskip = (s: string): string => {
   let prev: string
-  do { prev = s; s = s.replace(SKIP_MARKERS, '') } while (s !== prev)
+  do { prev = s; s = s.replace(SKIP_MARKERS, '').replace(SKIP_TRAILER, '') } while (s !== prev)
   return s
 }
 
@@ -115,9 +120,17 @@ interface MergeFlags {
   subject: string | null
   /** Только сама команда мёржа (без того, что после && ; |) — по ней ищем метки пропуска CI. */
   segment: string
-  /** Что делает команду неоднозначной для консоли, по полю, которое из неё берётся; поле пункта снимает отказ. */
-  problems: { repo?: string; method?: string; subject?: string }
+  /** Что делает команду неоднозначной для консоли, по полю, которое из неё берётся; поле пункта снимает отказ. other — не снимает ничто. */
+  problems: { repo?: string; method?: string; subject?: string; other?: string }
 }
+
+/** Части команды до разделителя (\n ; & |): кавычки и экранирование `\x` — часть слова, разделитель в них не режет. */
+const GH_PR = /\bgh[ \t]+pr\b(?:\\[\s\S]|[^\n;&|"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')*/g
+const SHELL_WORD = /(?:\\[\s\S]|[^\s"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+/g
+/** Слово shell → значение: кавычки сняты, `\x` → x (в двойных кавычках — только для $ ` " \ и перевода строки). */
+const unquote = (w: string): string =>
+  w.replace(/\\([\s\S])|"((?:\\[\s\S]|[^"\\])*)"|'([^']*)'/g, (_m, esc?: string, dq?: string, sq?: string) =>
+    esc ?? (dq !== undefined ? dq.replace(/\\([$`"\\\n])/g, '$1') : sq ?? ''))
 
 /**
  * Флаги `gh pr merge …` по словам shell, как их разбирает gh (pflag), а не по сырому тексту: `--subject "fix -s flag"` —
@@ -126,14 +139,29 @@ interface MergeFlags {
  * подстановка $(…), rebase, флаг без значения), — в problems: mergeInfo откажет 409, а не вольёт другое.
  */
 function mergeFlags(cmd: string): MergeFlags {
-  const found = /gh pr merge(?:[^\n;&|"']|"[^"]*"|'[^']*')*/.exec(cmd)
+  // Все `gh pr …` команды; мёрж — та, где первое слово после pr и его флагов (`gh pr -R x merge`) — merge.
+  const merges = [...cmd.matchAll(GH_PR)].filter((m) => {
+    const ws = (m[0].match(SHELL_WORD) ?? []).slice(2).map(unquote)
+    for (let i = 0; i < ws.length; i++) {
+      const w = ws[i] ?? ''
+      if (w === '-R' || w === '--repo') { i++; continue }
+      if (!w.startsWith('-')) return w === 'merge'
+    }
+    return false
+  })
+  const found = merges[0]
   const segment = found?.[0] ?? ''
   const before = found ? cmd.slice(0, found.index) : ''
-  const raw = segment.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
-  const words = raw.map((w) => w.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
-  // $ и ` вне одинарных кавычек shell подставит — консоль увидела бы буквальный текст.
-  const expands = (i: number) => /[$`]/.test((raw[i] ?? '').replace(/'[^']*'/g, ''))
+  const raw = segment.match(SHELL_WORD) ?? []
+  const words = raw.map(unquote)
+  // $ и ` вне одинарных кавычек и без \ перед ними shell подставит — консоль увидела бы буквальный текст.
+  const expands = (i: number) => /[$`]/.test((raw[i] ?? '').replace(/'[^']*'|\\[\s\S]/g, ''))
   const out: MergeFlags = { pr: null, repo: null, method: null, subject: null, segment, problems: {} }
+  if (merges.length > 1) out.problems.other = `в команде ${merges.length} мёржа — консоль вливает один PR за пункт`
+  // Кавычка без пары обрезала разбор: флаги после неё консоль не увидела бы.
+  if (found && /["']/.test(cmd[(found.index ?? 0) + segment.length] ?? '')) out.problems.other ??= 'в команде кавычка без пары'
+  if (!found && /\bgh\b/.test(cmd) && /\bmerge\b/.test(cmd)) out.problems.repo = 'команду мёржа консоль не разобрала — PR и репозиторий из неё не ясны'
+  let sub = false
   const repos: string[] = []
   const methods = new Set<string>()
   const field = (flag: string): keyof MergeFlags['problems'] | null => (flag === '--repo' ? 'repo' : flag === '--subject' ? 'subject' : null)
@@ -149,7 +177,7 @@ function mergeFlags(cmd: string): MergeFlags {
   const flagOn = (flag: string) => {
     if (flag === '--squash' || flag === '--merge' || flag === '--rebase') methods.add(flag.slice(2))
   }
-  for (let i = 3; i < words.length; i++) {
+  for (let i = 2; i < words.length; i++) {
     const word = words[i] ?? ''
     if (word.startsWith('--')) {
       const eq = word.indexOf('=')
@@ -170,19 +198,24 @@ function mergeFlags(cmd: string): MergeFlags {
         const bool = SHORT_BOOL[word[j] ?? '']
         if (bool) flagOn(bool)
       }
+    } else if (!sub) {
+      sub = word === 'merge' // слово команды gh: до него — флаги `gh pr`, после — аргумент мёржа
     } else if (out.pr === null) {
-      // Аргумент: номер, #номер или URL PR (репозиторий — из URL); ветку консоль не разрешает — нужен номер в поле pr.
-      const url = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/i.exec(word)
+      // Аргумент: номер, #номер или URL PR (репозиторий — из URL, хвост /files, ?…, #… не мешает).
+      const url = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#]\S*)?$/i.exec(word)
       if (url) { repos.push(repoName(url[1] ?? '')); out.pr = Number(url[2]) || null }
       else if (/^#?\d+$/.test(word)) out.pr = Number(word.replace('#', '')) || null
-    }
+      // Ветку или чужой URL gh разрешит сам, консоль — нет: какой PR и в каком репозитории, не ясно.
+      else out.problems.repo ??= `аргумент «${word.slice(0, 80)}» консоль не разбирает — нужен номер PR`
+    } else out.problems.repo ??= 'в команде мёржа больше одного аргумента'
   }
   const env = [...before.matchAll(/\bGH_REPO=("[^"]*"|'[^']*'|[^\s;&|]+)/g)].pop()?.[1]
   if (env) repos.push(repoName(env.replace(/^["']|["']$/g, '')))
   const distinct = [...new Set(repos.map((r) => r.toLowerCase()))]
   if (distinct.length > 1) out.problems.repo = `команда называет разные репозитории: ${[...new Set(repos)].join(', ')}`
   else if (repos[0]) out.repo = repos[0]
-  else if (/(?:^|[\s;&|(])(?:cd|pushd)\s/.test(before)) out.problems.repo ??= 'команда сначала переходит в другую папку (cd), репозиторий PR из неё не ясен'
+  // cd и внутри кавычек: `bash -c "cd … && gh pr merge"`, `ssh host 'cd …'` — gh тоже в другой папке.
+  else if (/(?:^|[\s;&|("'`])(?:cd|pushd)\s/.test(before)) out.problems.repo ??= 'команда сначала переходит в другую папку (cd), репозиторий PR из неё не ясен'
   if (methods.has('rebase')) out.problems.method = 'rebase из очереди не поддерживается (только merge и squash)'
   else if (methods.size > 1) out.problems.method = 'в команде несколько способов мёржа сразу'
   else out.method = methods.has('squash') ? 'squash' : methods.has('merge') ? 'merge' : null
@@ -206,11 +239,13 @@ export function mergePlan(item: Record<string, unknown>): MergePlan {
       : itemRepo ? null : flags.problems.repo,
     item.mergeMethod === undefined ? flags.problems.method : null,
     str(item.subject) ? null : flags.problems.subject,
+    flags.problems.other,
+    typeof item.pr === 'number' && flags.pr !== null && flags.pr !== item.pr ? `поле pr (#${item.pr}) и команда (#${flags.pr}) называют разные PR` : null,
   ].filter((p): p is string => !!p)
   const method = item.mergeMethod === 'squash' || (item.mergeMethod === undefined && flags.method === 'squash') ? 'squash' : 'merge'
   const subjectRaw = str(item.subject) ?? flags.subject
   const subject = subjectRaw && SUBJECT.test(subjectRaw.trim()) ? subjectRaw.trim() : null
-  const skipCi = item.deploy === 'skip' || SKIP_MARKER.test(flags.segment) || SKIP_MARKER.test(subject ?? '')
+  const skipCi = item.deploy === 'skip' || SKIP_ANY.test(flags.segment) || SKIP_MARKER.test(subject ?? '')
   // Мёрж в main с кодом деплоит прод — поэтому деплой ожидается, если пункт не говорит обратное:
   // [skip ci], deploy: 'none' (только docs/md — paths-ignore) или метка «без деплоя».
   const chips = Array.isArray(item.chips) ? (item.chips as unknown[][]) : []
@@ -358,8 +393,11 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
   if (info.mergeable === false) throw apiError(409, `GitHub не даёт влить: ${info.mergeableState || 'конфликт'}`)
   if (info.deploys && !info.skipCi && info.deployRunning && info.baseRef === 'main') throw apiError(409, 'Сейчас идёт деплой — дождитесь его окончания, затем вливайте')
   const { repo, token } = await settings()
-  const commits = info.method === 'squash' ? await prCommits(repo, info.pr as number, token) : null
+  // До чтения коммитов: окно, в котором второй POST проходит интервал, не шире прежнего (гонка целиком — карточка Q-35).
   lastMergeAt = Date.now()
+  const commits = info.method === 'squash'
+    ? await prCommits(repo, info.pr as number, token).catch((e: unknown) => { lastMergeAt = 0; throw e })
+    : null
   const body = mergeRequestBody(info, sha, commits)
   const res = await call('PUT', `/repos/${repo}/pulls/${info.pr}/merge`, token, body)
   if (res.status !== 200) {

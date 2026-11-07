@@ -686,12 +686,44 @@ describe('мёрж из очереди', () => {
     expect(plan('gh pr merge 41 -b "see -R other/repo" --squash')).toMatchObject({ repo: null, method: 'squash', problem: null })
   })
 
+  it('разбор не пропускает то, что gh поймёт иначе: хвост URL, флаги до merge, cd в кавычках, два мёржа, \\\' (ревью Q-29/Q-30, проход 2)', () => {
+    const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
+    // (a) URL PR с хвостом — репозиторий из URL, как у gh.
+    expect(plan('gh pr merge https://github.com/agolubenk/tAIBE/pull/41/files --squash')).toMatchObject({ pr: 41, repo: 'agolubenk/tAIBE' })
+    expect(plan('gh pr merge https://github.com/agolubenk/tAIBE/pull/41#issuecomment-1')).toMatchObject({ pr: 41, repo: 'agolubenk/tAIBE' })
+    // Аргумент, который консоль не разбирает (ветка, чужой URL), — отказ; поле repo снимает его.
+    expect(plan('gh pr merge feat/x', { pr: 41 }).problem).toContain('не разбирает')
+    expect(plan('gh pr merge https://gitlab.com/a/b/-/merge_requests/41', { pr: 41 }).problem).toContain('не разбирает')
+    expect(plan('gh pr merge feat/x', { pr: 41, repo: 'agolubenk/HR_Helper-v2' }).problem).toBeNull()
+    expect(plan('gh pr merge 41 42').problem).toContain('больше одного аргумента')
+    // (b) флаги `gh pr` до merge и лишние пробелы.
+    expect(plan('gh pr -R agolubenk/tAIBE merge 41')).toMatchObject({ pr: 41, repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr  merge 41 -R agolubenk/tAIBE')).toMatchObject({ pr: 41, repo: 'agolubenk/tAIBE' })
+    expect(plan('gh pr view 41 && gh pr merge 41 --squash')).toMatchObject({ pr: 41, method: 'squash', problem: null })
+    // Не разобрали мёрж вовсе — отказ, пока поле repo не скажет, куда.
+    expect(plan('gh api -X PUT repos/agolubenk/tAIBE/pulls/41/merge', { pr: 41 }).problem).toContain('не разобрала')
+    // (c) cd внутри кавычек: gh тоже выполнится в другой папке.
+    expect(plan('bash -c "cd ~/tAIBE && gh pr merge 41"').problem).toContain('(cd)')
+    expect(plan("ssh vps 'cd /srv/tAIBE && gh pr merge 41'").problem).toContain('(cd)')
+    // (d) экранированная кавычка не обрывает разбор; кавычка без пары — отказ.
+    expect(plan("gh pr merge 41 --subject it\\'s -R agolubenk/tAIBE")).toMatchObject({ subject: "it's", repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr merge 41 --subject "a \\"b\\" c" --squash')).toMatchObject({ subject: 'a "b" c', method: 'squash' })
+    expect(plan("gh pr merge 41 --subject it's -R agolubenk/tAIBE").problem).toContain('без пары')
+    expect(plan('gh pr merge 41 --subject "\\$HOME"')).toMatchObject({ subject: '$HOME', problem: null })
+    // Два мёржа в одной команде — консоль вольёт один, пункт выглядел бы законченным: отказ, поля его не снимают.
+    expect(plan('gh pr merge 480 --squash && gh pr merge 481 --squash', { pr: 480, repo: 'agolubenk/HR_Helper-v2', mergeMethod: 'squash' }).problem).toContain('2 мёржа')
+    // Поле pr и команда называют разные PR.
+    expect(plan('gh pr merge 42', { pr: 41 }).problem).toContain('разные PR')
+  })
+
   it('все метки пропуска CI GitHub — без деплоя; метка только в поле subject; метка вне самой команды мёржа не в счёт (ревью Q-29/Q-30)', () => {
     for (const m of ['[skip ci]', '[ci skip]', '[no ci]', '[skip actions]', '[actions skip]']) {
       expect(mergePlan({ kind: 'merge', cmd: `gh pr merge 5 --squash --subject "docs: x ${m}"` }), m).toMatchObject({ skipCi: true, deploys: false })
       expect(mergePlan({ kind: 'merge', pr: 5, subject: `docs: y ${m}` }), m).toMatchObject({ skipCi: true, deploys: false })
     }
     expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --squash && git commit -m "x [skip ci]"' })).toMatchObject({ skipCi: false, deploys: true })
+    // Шестой способ GitHub — трейлер skip-checks: true в теле.
+    expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --squash --body "x\n\n\nskip-checks: true"' })).toMatchObject({ skipCi: true, deploys: false })
   })
 
   it('тело мёржа: заголовок и текст всегда явно, [skip ci] дописывается, с деплоем метки вычищены (ревью Q-29/Q-30)', () => {
@@ -711,6 +743,9 @@ describe('мёрж из очереди', () => {
     expect(nested).toMatchObject({ commit_title: 'x', commit_message: '* fix: a' })
     expect(String(nested.commit_title) + String(nested.commit_message)).not.toMatch(/\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i)
     expect(mergeRequestBody({ ...base, title: 'feat: x [skip [skip ci] actions]' }, SHA)).toMatchObject({ commit_message: 'feat: x' })
+    // Трейлер skip-checks: true в коммите ветки отменил бы деплой так же, как метка в скобках.
+    const trailer = mergeRequestBody({ ...base, method: 'squash' }, SHA, ['fix: a\n\n\nskip-checks: true', 'fix: b\n\nSkip-Checks:true'])
+    expect(String(trailer.commit_message)).not.toMatch(/skip-checks/i)
   })
 
   it('вердикт «Контроля»: экран подтверждения говорит ok / missing / mismatch / base', async () => {
