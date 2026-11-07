@@ -1,6 +1,7 @@
 // Ядро шлюза: один запрос клиента → перебор кандидатов (модель × ключ) с паузами и ожиданием,
 // без потери данных: клиент получает байты апстрима как есть, ротация возможна только до первого `data:`.
 import { once } from 'node:events'
+import { acquireMachineLock } from './machine-lock.mjs'
 import { requestNeeds } from './router.mjs'
 import { Semaphore, buildRequest, describeError, embeddedError, firstDataError, localBody, readUntilFirstData } from './upstream.mjs'
 
@@ -49,7 +50,9 @@ export class Proxy {
   constructor({ cfg, pool, router, discovery, log = () => {}, fetchImpl = fetch }) {
     Object.assign(this, { cfg, pool, router, discovery, log, fetchImpl })
     this.remote = new Semaphore(cfg.maxConcurrency)
-    this.local = new Semaphore(1) // локальные модели — строго по одной (политика машины владельца)
+    // Локальные модели — строго по одной (политика машины владельца): семафор — внутри процесса, машинный замок
+    // (cfg.localLock) — с консилиумом и другими процессами на этом Mac.
+    this.local = new Semaphore(1)
     this.stats = { requests: 0, ok: 0, failed: 0, aborted: 0, attempts: 0, localFallbacks: 0, byStatus: {} }
   }
 
@@ -189,20 +192,42 @@ export class Proxy {
     return this.fail(ctx, { ...err, message: `gateway: ${ctx.tried.map((t) => `${t.key}→${t.model}:${t.status}`).join(', ') || 'нет попыток'} | ${err.message}`, raw: undefined })
   }
 
+  // Слот локального инференса: семафор процесса, затем машинный замок с остатком того же дедлайна localMaxWaitMs.
+  // → { release, lock } или { error } (503: занято или замок недоступен — ротация на другие модели).
+  async localSlot(clientSignal) {
+    const t0 = Date.now()
+    const release = await this.local.acquire(this.cfg.localMaxWaitMs, clientSignal)
+    if (!release) return { error: 'локальная модель занята другим запросом' }
+    if (!this.cfg.localLock) return { release }
+    let lock
+    try {
+      lock = await acquireMachineLock({ path: this.cfg.localLock, waitMs: this.cfg.localMaxWaitMs - (Date.now() - t0), signal: clientSignal, python: this.cfg.python })
+    } catch (e) {
+      lock = { failed: e.message } // семафор не должен утечь ни при каком сбое замка
+    }
+    if (lock.held) return { release, lock }
+    release()
+    if (lock.failed) this.log({ level: 'warn', msg: 'machine-lock', error: lock.failed })
+    return { error: lock.busy ? 'локальная модель занята другим процессом на этом Mac (консилиум)' : `машинный замок локальной модели недоступен: ${lock.failed}` }
+  }
+
   async attempt(ctx, cand, key, path, body, clientSignal) {
     const isLocal = cand.provider === 'local'
-    const release = await (isLocal ? this.local : this.remote).acquire(isLocal ? this.cfg.localMaxWaitMs : this.cfg.maxWaitMs, clientSignal)
+    const slot = isLocal ? await this.localSlot(clientSignal) : { release: await this.remote.acquire(this.cfg.maxWaitMs, clientSignal) }
+    const { release, lock } = slot
     const note = (status) => ctx.tried.push({ key: key?.id || 'local', model: cand.model, status })
     if (!release) {
       note(503)
       // Очередь к облаку переполнена — ротация не поможет, отвечаем сразу. Локальная занята — пробуем других.
-      return { error: { status: 503, message: isLocal ? 'локальная модель занята другим запросом' : 'очередь шлюза переполнена', overloaded: !isLocal }, overloaded: !isLocal }
+      return { error: { status: 503, message: isLocal ? slot.error : 'очередь шлюза переполнена', overloaded: !isLocal }, overloaded: !isLocal }
     }
     ctx.attempts++
     this.stats.attempts++
     const ac = new AbortController()
     const onAbort = () => ac.abort()
     clientSignal.addEventListener('abort', onAbort, { once: true })
+    // Держатель машинного замка умер посреди вызова — замок уже не наш: инференс обрывается, параллели нет.
+    lock?.onLost(() => ac.abort())
     // До заголовков — короткий таймаут (апстрим молчит → ротация), после — общий потолок на тело.
     let timer = setTimeout(() => ac.abort(), this.cfg.firstByteTimeoutMs)
     try {
@@ -227,6 +252,7 @@ export class Proxy {
     } finally {
       clearTimeout(timer)
       clientSignal.removeEventListener('abort', onAbort)
+      lock?.release()
       release()
     }
   }
