@@ -371,7 +371,7 @@ describe('страница /queue', () => {
     // вложения (форма и карточки берут window.__oqFiles при запуске), код страницы, кнопки мёржа.
     const srcs = srcsOf(html)
     expect(srcs.map((s) => s.replace(/^\/queue\/assets\/([a-z-]+)\.[0-9a-f]{16}\.js$/, '$1'))).toEqual([
-      'shim', 'open-rule', 'files', 'page', 'enhance',
+      'shim', 'open-rule', 'files', 'page', 'enhance', 'products',
     ])
     expect(html.indexOf(srcs[0] ?? '<нет>')).toBeGreaterThan(html.indexOf('</main>'))
     const bodies = await Promise.all(srcs.map(async (s) => (await app.request(s, { headers: { Cookie: cookie } })).text()))

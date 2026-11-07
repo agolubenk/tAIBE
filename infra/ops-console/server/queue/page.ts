@@ -20,6 +20,7 @@ import { SESSION_COOKIE } from '../auth/session'
 import { resolveActor } from './auth'
 import { ENHANCE_JS, SHIM_JS } from './page-scripts'
 import { FILES_JS } from './page-files'
+import { PRODUCTS_JS } from './page-products'
 import { OPEN_RULE_JS } from './open-rule'
 
 export const QUEUE_ASSETS = '/queue/assets/'
@@ -65,6 +66,7 @@ export function queuePageBuild(): Built {
     scriptTag(assets, 'page', html.slice(first + '<script>'.length, firstClose)) +
     html.slice(firstClose + '</script>'.length, end) +
     scriptTag(assets, 'enhance', ENHANCE_JS) + '\n' +
+    scriptTag(assets, 'products', PRODUCTS_JS) + '\n' +
     html.slice(end)
   built = { html: page, assets, themeHash: sha256(html.slice(themeOpen + '<script>'.length, themeClose), 'base64') }
   return built

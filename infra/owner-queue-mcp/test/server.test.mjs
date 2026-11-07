@@ -28,8 +28,18 @@ const CHECKS = Array.from({ length: 120 }, (_, i) => ({
  */
 async function consoleFake(files, state) {
   const srv = createServer((req, res) => {
-    const { pathname } = new URL(req.url, 'http://x');
+    const { pathname, searchParams } = new URL(req.url, 'http://x');
     const json = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    // Список пунктов с продуктом рядом с data; ?product= фильтрует консоль, MCP передаёт его как есть.
+    if (pathname === '/api/oq/v1/db/items') {
+      state.itemsQueries = [...(state.itemsQueries ?? []), searchParams.toString()];
+      const all = [
+        { id: 'd-hr-1', version: 1, product: 'hr-helper', data: { kind: 'decision', title: 'HR', options: [{ id: 'y', label: 'Да' }] } },
+        { id: 'taibe-d-1', version: 1, product: 'taibe', data: { kind: 'decision', title: 'tAIBE', options: [{ id: 'y', label: 'Да' }] } },
+      ];
+      const p = searchParams.get('product');
+      return json(200, { docs: p && !state.ignoreProduct ? all.filter((d) => d.product === p) : all });
+    }
     if (pathname === `/api/oq/v1/db/items/${ITEM}`) {
       return json(200, { id: ITEM, version: 1, data: { kind: 'inbox', title: 'лог', inbox: { type: 'bug', filesExpected: 3, receivedAt: new Date().toISOString() } } });
     }
@@ -162,6 +172,19 @@ test('oq_list: список больше потолка ответа — next_of
   assert.equal(brief.docs.length, m.state.checks.length);
   assert.equal(brief.next_offset, undefined);
   assert.equal(brief.docs[1].noteLen, 2_000);
+});
+
+test('oq_list: продукт пункта в строке, параметр product уходит консоли', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  const all = body(await m.call('oq_list', { collection: 'items' }));
+  assert.deepEqual(all.docs.map((d) => [d.id, d.product]), [['d-hr-1', 'hr-helper'], ['taibe-d-1', 'taibe']]);
+  const one = body(await m.call('oq_list', { collection: 'items', product: 'taibe', open_only: true }));
+  assert.deepEqual(one.docs.map((d) => d.id), ['taibe-d-1']);
+  assert.ok(m.state.itemsQueries.includes('open=1&product=taibe'), m.state.itemsQueries.join(' | '));
+  // Консоль до v2-lite.3 product не знает и отдаёт всё — MCP фильтрует сам.
+  m.state.ignoreProduct = true;
+  const old = body(await m.call('oq_list', { collection: 'items', product: 'hr-helper' }));
+  assert.deepEqual(old.docs.map((d) => d.id), ['d-hr-1']);
 });
 
 test('oq_list: серверный потолок списка — serverCapped с числами, не путается с truncated окна', { timeout: 30_000 }, async (t) => {
