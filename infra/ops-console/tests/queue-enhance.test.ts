@@ -10,8 +10,24 @@ import { ENHANCE_JS } from '../server/queue/page-scripts'
 class FakeEl {
   dataset: Record<string, string> = {}
   children: FakeEl[] = []
-  textContent = ''
-  title = ''
+  /** Записи textContent и title: каждая — мутация, на которую просыпается MutationObserver страницы. */
+  static writes = 0
+  #text = ''
+  #title = ''
+  get textContent(): string {
+    return this.#text
+  }
+  set textContent(v: string) {
+    FakeEl.writes++
+    this.#text = v
+  }
+  get title(): string {
+    return this.#title
+  }
+  set title(v: string) {
+    FakeEl.writes++
+    this.#title = v
+  }
   disabled = false
   type = ''
   listeners: Record<string, Array<() => void>> = {}
@@ -103,6 +119,14 @@ const info = (over: Record<string, unknown>) => ({
 })
 
 describe('кнопка «Влить» на странице очереди', () => {
+  it('повторный проход без изменений ничего не пишет — наблюдатель не будит себя каждый кадр', () => {
+    const page = mountPage([{ id: 'm-1', data: { kind: 'merge', pr: 1 } }], info({}))
+    const before = FakeEl.writes
+    page.mutate()
+    page.mutate()
+    expect(FakeEl.writes).toBe(before)
+  })
+
   it('без головы, одобренной «Контролем», — неактивна; появилось поле sha — активна', () => {
     const docs = [
       { id: 'm-1', data: { kind: 'merge', pr: 1 } },
