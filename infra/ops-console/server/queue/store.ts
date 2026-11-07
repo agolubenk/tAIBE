@@ -7,7 +7,7 @@
  * Каждое изменение — строка журнала oq_events.
  */
 import { createHash } from 'node:crypto'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
@@ -150,18 +150,67 @@ function parseDoc(row: typeof oqDocs.$inferSelect): Doc {
   return { id: row.id, data: JSON.parse(row.dataJson) as Record<string, unknown>, version: row.version, updatedAt: row.updatedAt.getTime() }
 }
 
-export async function listDocs(collection: Collection): Promise<Doc[]> {
-  const rows = await getDb().select().from(oqDocs).where(eq(oqDocs.collection, collection)).orderBy(desc(oqDocs.updatedAt)).limit(2000)
-  return rows.map(parseDoc)
+/**
+ * Потолок списка коллекции — по числу документов и по объёму, видимый: `capped` → в ответе API `truncated`, `total`,
+ * `limit` (прежний limit(2000) обрезал молча, и обрезанные checks сделали бы отвеченные пункты снова открытыми).
+ * Объём — сумма data_json самых свежих: документ до 48 КБ, и 10 000 таких — около 470 МБ JSON на сборку, а сборка
+ * занимает в памяти ещё в несколько раз больше (лимит консоли 512 МБ). Убирает потолок /changes (v2-lite).
+ */
+const LIST_LIMITS_DEFAULT = { max: 10_000, bytes: 16 * 1024 * 1024 }
+let listLimits = LIST_LIMITS_DEFAULT
+
+/** Только для тестов: маленький потолок вместо 10 000 документов в фикстуре. null — вернуть обычный. */
+export function setListLimitsForTests(v: Partial<typeof LIST_LIMITS_DEFAULT> | null): void {
+  listLimits = { ...LIST_LIMITS_DEFAULT, ...v }
 }
 
-/** ETag коллекции: меняется при любой записи — опрос страницы раз в несколько секунд стоит один дешёвый запрос. */
-export async function collectionTag(collection: Collection): Promise<string> {
+/**
+ * capped — список обрезан потолком: total — сколько документов в коллекции, limit — сколько самых свежих прочитано.
+ * У listOpenItems docs — открытые среди этих limit, поэтому docs.length может быть меньше limit.
+ */
+export type DocList = { docs: Doc[]; capped?: { total: number; limit: number } }
+
+export async function listDocs(collection: Collection): Promise<DocList> {
+  const { max, bytes } = listLimits
+  // Накопленный объём от самых свежих и размер коллекции — окном по узкому подзапросу (id и числа, без тел), одним
+  // запросом: тела читаются только у документов в пределах потолка, total согласован с выборкой.
+  const w = getDb()
+    .select({
+      id: oqDocs.id,
+      run: sql<number>`sum(length(cast(${oqDocs.dataJson} as blob))) over (order by ${oqDocs.updatedAt} desc rows unbounded preceding)`.as('run'),
+      total: sql<number>`count(*) over ()`.as('total'),
+    })
+    .from(oqDocs)
+    .where(eq(oqDocs.collection, collection))
+    .as('w')
+  const rows = await getDb()
+    .select({ doc: oqDocs, total: w.total })
+    .from(oqDocs)
+    .innerJoin(w, and(eq(oqDocs.collection, collection), eq(oqDocs.id, w.id)))
+    .where(lte(w.run, bytes))
+    .orderBy(desc(oqDocs.updatedAt))
+    .limit(max)
+  const docs = rows.map((r) => parseDoc(r.doc))
+  // Пусто, а коллекция нет — самый свежий документ больше потолка объёма: total — отдельным count.
+  const total = rows.length ? Number(rows[0]!.total) : Number((await collectionStats(collection)).n)
+  return total > docs.length ? { docs, capped: { total, limit: docs.length } } : { docs }
+}
+
+async function collectionStats(collection: Collection) {
   const [row] = await getDb()
     .select({ n: sql<number>`count(*)`, last: sql<number>`coalesce(max(${oqDocs.updatedAt}), 0)`, v: sql<number>`coalesce(sum(${oqDocs.version}), 0)` })
     .from(oqDocs)
     .where(eq(oqDocs.collection, collection))
-  return `"${createHash('sha1').update(`${collection}:${row?.n}:${row?.last}:${row?.v}`).digest('hex').slice(0, 20)}"`
+  return { n: row?.n ?? 0, last: row?.last ?? 0, v: row?.v ?? 0 }
+}
+
+/**
+ * ETag коллекции: меняется при любой записи. Слабый — один у gzip и несжатого ответа. Потолок — в теге: после его
+ * смены клиент со списком, обрезанным прежним потолком, получит 200, а не 304.
+ */
+export async function collectionTag(collection: Collection): Promise<string> {
+  const { n, last, v } = await collectionStats(collection)
+  return `W/"${createHash('sha1').update(`${collection}:${listLimits.max}:${listLimits.bytes}:${n}:${last}:${v}`).digest('hex').slice(0, 20)}"`
 }
 
 export async function getDoc(collection: Collection, id: string): Promise<Doc | null> {
@@ -172,12 +221,13 @@ export async function getDoc(collection: Collection, id: string): Promise<Doc | 
 /** ETag ответа ?open=1: открытость пункта зависит от items и checks — тег меняется при записи в любую из них. */
 export async function openItemsTag(): Promise<string> {
   const [items, checks] = await Promise.all([collectionTag('items'), collectionTag('checks')])
-  return `"${createHash('sha1').update(`open:${items}:${checks}`).digest('hex').slice(0, 20)}"`
+  return `W/"${createHash('sha1').update(`open:${items}:${checks}`).digest('hex').slice(0, 20)}"`
 }
 
 /** Пункты, открытые владельцу, — не archived и не закрытые по правилу страницы (open-rule.ts, «ждёт вас снова» — открыт). */
-export async function listOpenItems(): Promise<Doc[]> {
-  const items = (await listDocs('items')).filter((d) => d.data.archived !== true)
+export async function listOpenItems(): Promise<DocList> {
+  const { docs, capped } = await listDocs('items')
+  const items = docs.filter((d) => d.data.archived !== true)
   // Ответы — по id этих пунктов, а не последние 2000 checks: при большем числе ответов старые выпадали, и отвеченный
   // пункт снова считался открытым (ревью «Контроля» #324, п. 9). Порциями по 500 id.
   const answers = new Map<string, Record<string, unknown>>()
@@ -186,7 +236,8 @@ export async function listOpenItems(): Promise<Doc[]> {
     const rows = await getDb().select().from(oqDocs).where(and(eq(oqDocs.collection, 'checks'), inArray(oqDocs.id, ids)))
     for (const r of rows) answers.set(r.id, JSON.parse(r.dataJson) as Record<string, unknown>)
   }
-  return items.filter((d) => oqItemState(d.data.kind, answers.get(d.id)) !== 'done')
+  const open = items.filter((d) => oqItemState(d.data.kind, answers.get(d.id)) !== 'done')
+  return capped ? { docs: open, capped } : { docs: open }
 }
 
 /**

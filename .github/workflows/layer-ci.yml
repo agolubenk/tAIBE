@@ -3,9 +3,9 @@ name: layer CI
 on:
   push:
     branches: [board-agents, main]
-    paths: [".claude/**", "eval/tools/**", "eval/evolve/**", "eval/prompts/**", "eval/pipeline/genome/roles.json", "process/prompts/**", "**/CLAUDE.md", ".github/workflows/layer-ci.yml"]
+    paths: [".claude/**", "eval/tools/**", "eval/nerve/quorum.py", "eval/evolve/**", "eval/prompts/**", "eval/pipeline/genome/roles.json", "process/prompts/**", "**/CLAUDE.md", ".github/workflows/layer-ci.yml"]
   pull_request:
-    paths: [".claude/**", "eval/tools/**", "eval/evolve/**", "eval/prompts/**", "eval/pipeline/genome/roles.json", "process/prompts/**", "**/CLAUDE.md", ".github/workflows/layer-ci.yml"]
+    paths: [".claude/**", "eval/tools/**", "eval/nerve/quorum.py", "eval/evolve/**", "eval/prompts/**", "eval/pipeline/genome/roles.json", "process/prompts/**", "**/CLAUDE.md", ".github/workflows/layer-ci.yml"]
   workflow_dispatch:
 
 concurrency:
