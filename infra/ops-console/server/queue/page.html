@@ -670,6 +670,8 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     <summary>Для агентов: как добавить пункт владельцу и отметить свою работу</summary>
     <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd без basePlanEnd — 409.</p>
     <pre>items/&lt;id&gt;  пункт владельцу (id: d-… решение, m-… мёрж, s-… сервер, c-… ручная проверка)
+  Продукт — hr-helper, taibe, lavaeon: у продукта не hr-helper id начинается с его slug (taibe-m-93).
+  Продукт пункта меняет только владелец (выбор «Продукт:» у пункта).
   {kind: 'decision'|'merge'|'server'|'check', title, body, cmd, after, cmd2,
    options: [{id, label, hint}]   // только decision; рекомендуемый первым, hint: 'рекомендую'
    chips: [['деплой','deploy'] | ['ssh','ssh'] | ['после #N','wait'] | ['текст','']],
@@ -1373,7 +1375,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var r = { dated: 0, undated: 0, owner: 0 };
     rows.forEach(function (w) {
       (w.cards || []).forEach(function (c) {
-        if (c.closed) return;
+        if (c.closed || c.archived) return;
         if (w.who === 'owner') r.owner++;
         else if (w.planEnd) r.dated++;
         else r.undated++;
@@ -1961,7 +1963,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var KS = [['closed', 'закрыто', 'var(--st-good)'], ['review', 'на ревью — ждёт вашего «да»', 'var(--st-warn)'], ['open', 'открыто', 'var(--st-none)']];
     var rows = TRACKS.map(function (tr) {
       var c = { closed: 0, review: 0, open: 0 };
-      ws.forEach(function (w) { if (w.track === tr.id && w.cards) w.cards.forEach(function (x) { c[x.closed ? 'closed' : x.review ? 'review' : 'open']++; }); });
+      // Карточки прежнего трекера (архив) — не карточки досок: в счёт не идут.
+      ws.forEach(function (w) { if (w.track === tr.id && w.cards) w.cards.forEach(function (x) { if (!x.archived) c[x.closed ? 'closed' : x.review ? 'review' : 'open']++; }); });
       return { name: tr.name, c: c, total: c.closed + c.review + c.open };
     }).filter(function (r) { return r.total; });
     card.hidden = !rows.length && !st;

@@ -28,12 +28,12 @@ export async function changeItemProduct(actor: Actor, id: string, to: string, re
     const data = JSON.parse(item.dataJson) as Record<string, unknown>
     // Вердикт «Контроля» дан для репозитория продукта: в другом продукте он вёл бы мёрж не туда.
     if (data.kind === 'merge' && (data.sha || data.base)) {
-      throw apiError(409, 'У пункта мёржа есть вердикт «Контроля» для его продукта — сначала уберите вердикт или заведите пункт заново')
+      throw apiError(409, 'Пункт мёржа с вердиктом «Контроля» не переносится: вердикт дан для репозитория его продукта. Нужен другой продукт — попросите «Контроль» завести пункт там')
     }
     // Входящее — только в HR, пока автопередача одна (relay HR, фаза 4a плана): у другого продукта его никто не возьмёт,
     // а страница и бот показывали бы «передаётся сессии» без срока.
     if (data.kind === 'inbox' && to !== DEFAULT_PRODUCT) {
-      throw apiError(409, 'Входящее пока живёт только в hr-helper: автопередача по продуктам ещё не подключена')
+      throw apiError(409, 'Входящее пока только в «HR Helper»: автопередачи для других продуктов ещё нет')
     }
     const at = new Date()
     const check = await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)) })
