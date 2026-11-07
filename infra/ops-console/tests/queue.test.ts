@@ -632,6 +632,10 @@ describe('мёрж из очереди', () => {
     expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --squash --subject "fix: a; b | c" && curl -s https://x' })).toMatchObject({ pr: 5, method: 'squash', subject: 'fix: a; b | c', repo: null })
     expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --merge && curl -s https://x -t 1' })).toMatchObject({ method: 'merge', subject: null })
     expect(mergePlan({ kind: 'merge', cmd: "gh pr merge 5 -s -t 'docs: x [skip ci]' --repo=agolubenk/tAIBE" })).toMatchObject({ method: 'squash', subject: 'docs: x [skip ci]', skipCi: true, repo: 'agolubenk/tAIBE' })
+    // Флаг внутри значения в кавычках — часть значения, не флаг (ревью линзы ресурсов).
+    expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --merge --subject "fix -s flag"' })).toMatchObject({ method: 'merge', subject: 'fix -s flag' })
+    expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --body "use -t x, see -R other/repo" --subject "real"' })).toMatchObject({ subject: 'real', repo: null })
+    expect(mergePlan({ kind: 'merge', cmd: 'gh pr merge 5 --repo' })).toMatchObject({ repo: null })
     // Поле пункта главнее команды.
     expect(mergePlan({ kind: 'merge', mergeMethod: 'merge', subject: 'x', cmd: 'gh pr merge 5 --squash --subject "y"' })).toMatchObject({ method: 'merge', subject: 'x' })
     for (const data of [{ subject: 'a\nb' }, { mergeMethod: 'rebase' }, { repo: 'tAIBE' }]) {

@@ -83,24 +83,39 @@ export const BRANCH_NAME = /^[A-Za-z0-9._/-]{1,200}$/
 const SUBJECT = /^[^\r\n]{1,300}$/
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null)
-/** Значение флага из `gh pr merge …`: `-R x`, `--repo=x`, `--subject "x"`, `-t 'x'`. */
-function cmdFlag(merge: string, flags: string): string | null {
-  const m = merge.match(new RegExp(`\\s(?:${flags})(?:=|\\s+)(?:"([^"]*)"|'([^']*)'|([^\\s"']+))`))
-  return m ? (m[1] ?? m[2] ?? m[3] ?? null) : null
+
+/**
+ * Флаги `gh pr merge …` по словам shell, а не по сырому тексту: `--subject "fix -s flag"` — заголовок, а не squash.
+ * Только сама команда мёржа: `curl -s` или `git log -t` после && способ не меняют.
+ */
+function mergeFlags(cmd: string): { pr: number | null; repo: string | null; squash: boolean; subject: string | null } {
+  const segment = cmd.match(/gh pr merge(?:[^\n;&|"']|"[^"]*"|'[^']*')*/)?.[0] ?? ''
+  const words = (segment.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []).map((w) => w.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
+  const out = { pr: Number(words[3]) || null, repo: null as string | null, squash: false, subject: null as string | null }
+  for (let i = 3; i < words.length; i++) {
+    const word = words[i] ?? ''
+    const eq = word.startsWith('--') ? word.indexOf('=') : -1
+    const [flag, inline] = eq > 0 ? [word.slice(0, eq), word.slice(eq + 1)] : [word, null]
+    const value = () => inline ?? words[++i] ?? null
+    if (flag === '-R' || flag === '--repo') out.repo = value()
+    else if (flag === '--subject' || flag === '-t') out.subject = value()
+    else if (flag === '--body' || flag === '-b' || flag === '--body-file' || flag === '-F' || flag === '--match-head-commit' || flag === '--author-email' || flag === '-A') value()
+    else if (flag === '--squash' || flag === '-s') out.squash = true
+  }
+  return out
 }
 
 /** Номер PR и последствия мёржа — из полей пункта или (для пунктов из артефакта) из его команды и меток. */
 export function mergePlan(item: Record<string, unknown>): MergePlan {
   const cmd = typeof item.cmd === 'string' ? item.cmd : ''
-  // Флаги — только из самой команды мёржа: `curl -s` или `git log -t` после && не должны менять способ.
-  const merge = cmd.match(/gh pr merge(?:[^\n;&|"']|"[^"]*"|'[^']*')*/)?.[0] ?? ''
-  const pr = typeof item.pr === 'number' ? item.pr : Number(merge.match(/^gh pr merge\s+(\d+)/)?.[1]) || null
+  const flags = mergeFlags(cmd)
+  const pr = typeof item.pr === 'number' ? item.pr : flags.pr
   const approvedSha = typeof item.sha === 'string' && FULL_SHA.test(item.sha) ? item.sha : null
   const approvedBase = typeof item.base === 'string' && BRANCH_NAME.test(item.base) ? item.base : null
   // Не проверяем формат здесь: кривое имя не совпадёт с репозиторием консоли, и mergeInfo откажет (fail-closed).
-  const repo = str(item.repo) ?? cmdFlag(merge, '-R|--repo')
-  const method = item.mergeMethod === 'squash' || (item.mergeMethod === undefined && /\s(?:--squash|-s)(?=\s|$)/.test(merge)) ? 'squash' : 'merge'
-  const subjectRaw = str(item.subject) ?? cmdFlag(merge, '--subject|-t')
+  const repo = str(item.repo) ?? str(flags.repo)
+  const method = item.mergeMethod === 'squash' || (item.mergeMethod === undefined && flags.squash) ? 'squash' : 'merge'
+  const subjectRaw = str(item.subject) ?? flags.subject
   const subject = subjectRaw && SUBJECT.test(subjectRaw.trim()) ? subjectRaw.trim() : null
   const skipCi = item.deploy === 'skip' || /\[skip ci\]/i.test(cmd) || /\[skip ci\]/i.test(subject ?? '')
   // Мёрж в main с кодом деплоит прод — поэтому деплой ожидается, если пункт не говорит обратное:

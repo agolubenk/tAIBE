@@ -140,7 +140,7 @@ export const ENHANCE_JS = String.raw`(function () {
       if (m.approval === 'mismatch') throw new Error('Голова PR ' + m.headSha.slice(0, 7) + ' — не та, что одобрил «Контроль» (' + m.approvedSha.slice(0, 7) + '): нужен новый вердикт');
       if (m.approval === 'base') throw new Error('«Контроль» одобрил PR для базы «' + m.approvedBase + '», а сейчас база «' + m.baseRef + '»: нужен новый вердикт');
       if (m.deployRunning && m.deploys && !m.skipCi) throw new Error('Сейчас идёт деплой — дождитесь окончания');
-      var ok = window.confirm('Влить ' + (m.repo || 'PR ') + '#' + m.pr + ' «' + m.title + '»?\n\nКоммит: ' + m.headSha.slice(0, 7) + ' (' + m.headRef + ' → ' + m.baseRef + '), одобрен «Контролем»\nСпособ: ' + (m.method === 'squash' ? 'squash — одним коммитом' : 'merge — коммитом слияния') +
+      var ok = window.confirm('Влить ' + m.repo + '#' + m.pr + ' «' + m.title + '»?\n\nКоммит: ' + m.headSha.slice(0, 7) + ' (' + m.headRef + ' → ' + m.baseRef + '), одобрен «Контролем»\nСпособ: ' + (m.method === 'squash' ? 'squash — одним коммитом' : 'merge — коммитом слияния') +
         (m.subject ? '\nЗаголовок: ' + m.subject : '') + '\nПоследствие: ' + what +
         (m.baseRef !== 'main' ? '\n\n⚠️ База PR — «' + m.baseRef + '», не main: прод не изменится, меняется ветка «' + m.baseRef + '»' : '') +
         (m.mergeable === false ? '\n\n⚠️ GitHub: ' + (m.mergeableState || 'есть конфликт') : ''));
