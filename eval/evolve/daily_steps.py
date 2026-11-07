@@ -4,6 +4,7 @@ the ones that spend the owner's tokens or merge), the card comment and the layer
 or Ollama is started here (owner rule `memory/no-local-ollama.md`; the judges are Claude, `judges.py`). Stdlib
 only."""
 import datetime
+import glob
 import json
 import os
 import re
@@ -26,6 +27,7 @@ HUB = os.path.expanduser(os.environ.get('EVOLVE_HUB') or
                          '~/Desktop/Development/handoff/2026-11-06-restart/tools/hub.mjs')
 CARD, WORKSPACE = 'SE-49', 'lth89qy6f8j1greiy4c5cn23'
 STATE_DIR = os.path.expanduser(os.environ.get('EVOLVE_STATE_DIR') or '~/.claude/evolve')
+AUDIT_KEEP = 30  # nightly context-audit files kept in runs/ (one a night)
 CLAUDE_OVERRIDE = 'abJudgeClaude.on'  # in STATE_DIR: the owner's local «on» for nightly Claude judges
 BASE = 'board-agents'  # tAIBE's default branch: where the run's PRs go
 
@@ -128,4 +130,27 @@ def layer_metrics(wt):
         out['ctx_budget'] = {'exit': res.returncode, 'tail': (res.stdout + res.stderr).strip()[-300:]}
     else:
         out['ctx_budget'] = 'skipped: eval/tools/ctx_budget.py is not in this revision'
+    out['context_audit'] = context_audit(wt)
     return out
+
+
+def context_audit(wt):
+    """The last 24 h of every session of the instance (d-f63b-economy-0711, item 4): money, the cause of each cold
+    call and the generation cost by window size. Read-only over transcripts; the full JSON stays in the run dir."""
+    tool = os.path.join(wt, 'eval/tools/context_audit.py')
+    if not os.path.isfile(tool):
+        return 'skipped: eval/tools/context_audit.py is not in this revision'
+    path = os.path.join(STATE_DIR, 'runs', 'context-audit-%s.json' % now().strftime('%Y%m%d'))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    for old in sorted(glob.glob(os.path.join(STATE_DIR, 'runs', 'context-audit-*.json')))[:-AUDIT_KEEP]:
+        os.remove(old)
+    res = subprocess.run([sys.executable, '-I', tool, '--hours', '24', '--all', '--json', path],
+                         capture_output=True, text=True, timeout=600)
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {'exit': res.returncode, 'error': (res.stderr or res.stdout).strip()[-300:]}
+    return {'exit': res.returncode, 'file': path, 'usd': data.get('total'),
+            'cold': {k: {'n': v['n'], 'usd': round(v['usd'], 2)} for k, v in (data.get('cold') or {}).items()},
+            'generations': data.get('generations')}
