@@ -245,25 +245,30 @@ const TOOLS = [
       + 'только с session: без неё «взял» — 422, а пункт, который ведёт другая сессия, — 409. Обычные пункты — как раньше, session не обязательна. '
       + 'Владелец ответил, но нужен снова (вопрос в ответ, вывод с ошибкой, «повторите проверку») — status blocked и просьба в note: пункт вернётся '
       + 'к нему в открытые с меткой «ждёт вас снова». doing после ответа — «работаю», пункт не переоткрывается; done и planned — тоже. '
-      + 'Передача линии: уходя, держатель отпускает свои входящие (release: true) — наследник берёт их сразу; иначе наследник '
-      + 'перехватывает, назвав держателя (takeover: <его session>), если тот не писал в пункт 30 мин.',
+      + 'Передача линии: session — своя линия из первого сообщения (r.…); наследник берёт входящее предка, назвав его '
+      + '(takeover: <линия предка>) — только если его линия продолжает линию держателя. Уходя без наследника — release: true '
+      + '(захват и «взял / в работе» снимаются, пункт снова уйдёт в автопередачу).',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
         status: { type: 'string', enum: ['taken', 'doing', 'blocked', 'done', 'planned'] },
         note: { type: 'string' },
-        session: { type: 'string', description: 'имя своей сессии (например hr-helper-v2-70): по нему входящее, которое вы ведёте, не перехватит другая сессия (409); для входящих обязательно, для обычных пунктов — нет' },
-        takeover: { type: 'string', description: 'входящее: session держателя, у которого вы, наследник его линии, перехватываете пункт (после 30 мин его тишины)' },
-        release: { type: 'boolean', description: 'входящее: отпустить свой захват перед уходом — наследник возьмёт пункт сразу' },
+        session: { type: 'string', description: 'своя линия из первого сообщения (например r.62u1.ab12): по ней входящее, которое вы ведёте, не перехватит другая сессия (409); для входящих обязательно, для обычных пунктов — нет' },
+        takeover: { type: 'string', description: 'входящее: линия держателя, у которого вы, наследник его линии, берёте пункт' },
+        release: { type: 'boolean', description: 'входящее: отпустить свой захват, уходя без наследника; status можно не передавать' },
       },
-      required: ['id', 'status'],
+      required: ['id'],
     },
-    run: ({ id, status, note = '', session, takeover, release }) => api('PATCH', `/db/checks/${encodeURIComponent(id)}`, {
-      data: { agentStatus: status, agentNote: note, ...(session ? { agentBy: String(session).slice(0, 120) } : {}) },
+    run: ({ id, status, note, session, takeover, release }) => {
+      if (!status && release !== true) throw new Error('Нужен status (или release: true — отпустить свой захват)');
+      const by = typeof session === 'string' ? session.trim().slice(0, 120) : '';
+      return api('PATCH', `/db/checks/${encodeURIComponent(id)}`, {
+      data: { ...(status ? { agentStatus: status } : {}), ...(note !== undefined ? { agentNote: String(note) } : {}), ...(by ? { agentBy: by } : {}) },
       ...(takeover ? { takeover: String(takeover).slice(0, 120) } : {}),
       ...(release === true ? { release: true } : {}),
-    }),
+      });
+    },
   },
   {
     name: 'oq_files',

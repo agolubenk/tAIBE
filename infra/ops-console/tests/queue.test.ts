@@ -197,36 +197,47 @@ describe('входящие из Telegram (kind: inbox)', () => {
     expect((await bearer(agent).patch('/db/checks/i-stale', { data: { agentStatus: 'taken', agentBy: 'hr-helper-v2-44' } })).status).toBe(200)
   })
 
-  it('передача линии: держатель отпускает захват — наследник берёт сразу; чужая сессия отпустить не может', async () => {
+  it('уход без наследника: держатель отпускает захват — снимаются и имя, и «в работе»; чужая сессия отпустить не может', async () => {
     await bearer(owner).put('/db/items/i-release', { data: inbox() })
     const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-release', { data, ...extra })
-    expect((await st({ agentStatus: 'doing', agentBy: 'pred-1' })).status).toBe(200)
-    expect((await st({ agentStatus: 'doing', agentBy: 'other-9' }, { release: true })).status).toBe(409)
-    const rel = await st({ agentStatus: 'doing', agentNote: 'передаю наследнику', agentBy: 'pred-1' }, { release: true })
+    expect((await st({ agentStatus: 'doing', agentNote: 'начал', agentBy: 'r.ab12' })).status).toBe(200)
+    expect((await st({ agentBy: 'r.zz99' }, { release: true })).status).toBe(409)
+    const rel = await st({ agentNote: 'ухожу без наследника', agentBy: 'r.ab12' }, { release: true })
     expect(rel.status).toBe(200)
     expect(rel.json.data.agentBy).toBeUndefined()
-    expect((await st({ agentStatus: 'taken', agentBy: 'succ-2' })).status).toBe(200)
+    expect(rel.json.data.agentStatus).toBeUndefined()
+    expect(rel.json.data.agentNote).toBe('ухожу без наследника')
+    expect((await st({ agentStatus: 'taken', agentBy: 'r.zz99' })).status).toBe(200)
   })
 
-  it('передача линии: наследник перехватывает, назвав держателя, после 30 мин его тишины; без имени или раньше — 409 с подсказкой', async () => {
+  it('передача линии: наследник по линии берёт пункт сразу, назвав держателя; не наследник — нет, как бы ни назвался', async () => {
     await bearer(owner).put('/db/items/i-takeover', { data: inbox() })
     const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-takeover', { data, ...extra })
-    expect((await st({ agentStatus: 'doing', agentBy: 'pred-1' })).status).toBe(200)
-    // Держатель писал только что — перехват ещё нельзя, подсказка называет держателя и паузу.
-    const early = await st({ agentStatus: 'taken', agentBy: 'succ-2' }, { takeover: 'pred-1' })
-    expect(early.status).toBe(409)
-    expect(String(early.json.error)).toMatch(/pred-1 писал\(а\) 0 мин назад/)
-    const hint = await st({ agentStatus: 'taken', agentBy: 'succ-2' })
-    expect(String(hint.json.error)).toMatch(/takeover: «pred-1»/)
-    // 40 мин тишины держателя (время ставит владелец).
-    expect((await bearer(owner).patch('/db/checks/i-takeover', { data: { agentAt: new Date(Date.now() - 40 * 60_000).toISOString() } })).status).toBe(200)
-    expect((await st({ agentStatus: 'taken', agentBy: 'succ-2' }, { takeover: 'wrong-name' })).status).toBe(409)
-    expect((await st({ agentStatus: 'taken', agentBy: 'succ-2' })).status).toBe(409)
-    const took = await st({ agentStatus: 'taken', agentBy: 'succ-2' }, { takeover: 'pred-1' })
+    expect((await st({ agentStatus: 'doing', agentBy: 'r.ab12' })).status).toBe(200)
+    // Наследнику без takeover — подсказка; не наследнику — без подсказки, и takeover ему не помогает.
+    expect(String((await st({ agentStatus: 'taken', agentBy: 'r.ab12.cd34' })).json.error)).toMatch(/takeover: «r\.ab12»/)
+    const stranger = await st({ agentStatus: 'taken', agentBy: 'r.zz99' }, { takeover: 'r.ab12' })
+    expect(stranger.status).toBe(409)
+    expect(String(stranger.json.error)).not.toMatch(/takeover/)
+    for (const by of ['r.ab12x.cd34', 'r.ab1.cd34', 'hr-helper-v2-70']) expect((await st({ agentStatus: 'taken', agentBy: by }, { takeover: 'r.ab12' })).status, by).toBe(409)
+    expect((await st({ agentStatus: 'taken', agentBy: 'r.ab12.cd34' }, { takeover: 'r.wrong' })).status).toBe(409)
+    const took = await st({ agentStatus: 'taken', agentBy: 'r.ab12.cd34' }, { takeover: 'r.ab12' })
     expect(took.status).toBe(200)
-    expect(took.json.data.agentBy).toBe('succ-2')
-    // Теперь держит наследник: прежний держатель — уже чужая сессия.
-    expect((await st({ agentStatus: 'doing', agentBy: 'pred-1' })).status).toBe(409)
+    expect(took.json.data.agentBy).toBe('r.ab12.cd34')
+    // Теперь держит наследник: предок — уже чужая сессия, и сам его не перехватит (линия не продолжает наследника).
+    expect((await st({ agentStatus: 'doing', agentBy: 'r.ab12' }, { takeover: 'r.ab12.cd34' })).status).toBe(409)
+  })
+
+  it('держатель с именем вместо линии не наследуется: 12 ч или его собственный отпуск; захват без времени записи — не захват', async () => {
+    await bearer(owner).put('/db/items/i-legacy', { data: inbox() })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-legacy', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentBy: 'hr-helper-v2-70' })).status).toBe(200)
+    expect((await st({ agentStatus: 'taken', agentBy: 'hr-helper-v2-70.ab12' }, { takeover: 'hr-helper-v2-70' })).status).toBe(409)
+    // Ответ из импорта выгрузки — без agentAt: такой пункт больше не держится вечно.
+    await bearer(owner).put('/db/items/i-imported', { data: inbox() })
+    expect(await importDoc('checks', 'i-imported', { agentStatus: 'doing', agentBy: 'hr-helper-v2-70' }, 'import:test')).toBe('added')
+    expect((await bearer(agent).patch('/db/checks/i-imported', { data: { agentStatus: 'taken', agentBy: 'r.zz99' } })).status).toBe(200)
+    expect((await st({ agentStatus: 'doing', agentBy: '   ' })).status).toBe(422)
   })
 
   it('недопустимые значения — 422: неизвестный тип, важность у идеи, длинный текст, пустой текст, лишнее поле', async () => {

@@ -173,14 +173,18 @@ test('oq_list: список больше потолка ответа — next_of
 
 test('oq_agent_status: takeover и release уходят полями запроса, не в data', { timeout: 30_000 }, async (t) => {
   const m = await rig(t, 'ok');
-  await m.call('oq_agent_status', { id: 'i-1', status: 'taken', session: 'succ-2', takeover: 'pred-1' });
-  await m.call('oq_agent_status', { id: 'i-1', status: 'doing', session: 'pred-1', note: 'ухожу', release: true });
-  await m.call('oq_agent_status', { id: 'i-1', status: 'doing', session: 'x', release: false });
+  await m.call('oq_agent_status', { id: 'i-1', status: 'taken', session: ' r.ab12.cd34 ', takeover: 'r.ab12' });
+  await m.call('oq_agent_status', { id: 'i-1', session: 'r.ab12', note: 'ухожу без наследника', release: true });
+  await m.call('oq_agent_status', { id: 'i-1', status: 'doing', session: 'r.x', note: 'работаю', release: false });
+  // Заметку без note не стирает; без status и без release — понятный отказ, без запроса.
   assert.deepEqual(m.state.patches, [
-    { data: { agentStatus: 'taken', agentNote: '', agentBy: 'succ-2' }, takeover: 'pred-1' },
-    { data: { agentStatus: 'doing', agentNote: 'ухожу', agentBy: 'pred-1' }, release: true },
-    { data: { agentStatus: 'doing', agentNote: '', agentBy: 'x' } },
+    { data: { agentStatus: 'taken', agentBy: 'r.ab12.cd34' }, takeover: 'r.ab12' },
+    { data: { agentNote: 'ухожу без наследника', agentBy: 'r.ab12' }, release: true },
+    { data: { agentStatus: 'doing', agentNote: 'работаю', agentBy: 'r.x' } },
   ]);
+  const bad = await m.call('oq_agent_status', { id: 'i-1', session: 'r.x' });
+  assert.match(JSON.stringify(bad), /Нужен status/);
+  assert.equal(m.state.patches.length, 3);
 });
 
 test('oq_list: серверный потолок списка — serverCapped с числами, не путается с truncated окна', { timeout: 30_000 }, async (t) => {
