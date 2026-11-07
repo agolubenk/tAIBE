@@ -1,5 +1,5 @@
 /**
- * «Ход работ» страницы очереди: направления из базы, карточки Notion в строках плана, сводка сверки.
+ * «Ход работ» страницы очереди: направления из базы, карточки t-boards в строках плана, сводка сверки.
  * Страница — один HTML с встроенным скриптом, поэтому чистые функции выделены маркерами oq-pure и проверяются
  * здесь отдельно от DOM.
  */
@@ -13,7 +13,7 @@ import { SHIM_JS } from '../server/queue/page-scripts'
 const html = readFileSync(join(__dirname, '../server/queue/page.html'), 'utf8')
 
 type Track = { id: string; name: string; c: string; order: number | null; archived?: boolean }
-type Card = { id: string; t: string; k: string; s: string; st: string; c: string; closed: boolean }
+type Card = { key: string; ws: string; archived: boolean; t: string; k: string; s: string; st: string; c: string; closed: boolean; review: boolean }
 type Pure = {
   trackFromDb: (id: string, d: unknown) => Track | null
   mergeTracks: (seed: { id: string; name: string; c: string }[], extra: (Track | null)[]) => Track[]
@@ -116,20 +116,33 @@ describe('направления «Хода работ» из базы', () => {
   })
 })
 
-describe('карточки Notion в строке плана', () => {
-  it('принимает только id страницы Notion (32 hex), без дублей, с обрезкой полей', () => {
+describe('карточки t-boards в строке плана', () => {
+  it('принимает ключ карточки и пространство, без дублей, с обрезкой полей; id прежнего трекера — архив без ссылки', () => {
     const { cleanCards } = pure()
     const out = cleanCards([
-      { id: hex(1), t: 'x'.repeat(400), k: 'bug', s: 'high', st: 'открыто' },
-      { id: hex(1), t: 'дубль', k: 'bug', s: 'high', st: 'открыто' },
-      { id: 'javascript:alert(1)', t: 'плохой id', k: 'bug' },
-      { id: '3F8DD207A82581609DF5C8F5C3556815', t: 'верхний регистр', k: 'bug' },
+      { key: 'OPS-34', ws: 'aiboards-eval', t: 'x'.repeat(400), k: 'bug', s: 'high', st: 'new' },
+      { key: 'OPS-34', ws: 'aiboards-eval', t: 'дубль', k: 'bug' },
+      { key: 'OPS-34', ws: 'hr-helper-lavaeon', t: 'тот же ключ в другом пространстве', k: 'task' },
+      { key: 'javascript:alert(1)', ws: 'aiboards-eval', t: 'плохой ключ', k: 'bug' },
+      { key: 'OPS-1', ws: 'Evil Space', t: 'плохое пространство', k: 'bug' },
+      { id: hex(7), t: 'строка до досок', k: 'task' },
       null,
       'строка',
     ])
-    expect(out).toHaveLength(1)
+    expect(out.map((c) => [c.key, c.ws, c.archived])).toEqual([
+      ['OPS-34', 'aiboards-eval', false],
+      ['OPS-34', 'hr-helper-lavaeon', false],
+      ['', '', true],
+    ])
     expect(out[0]?.t).toHaveLength(160)
     expect(cleanCards('не массив')).toEqual([])
+  })
+
+  it('закрывающие колонки — и русские названия, и slug досок; «на ревью» — и in-review', () => {
+    const { cleanCards } = pure()
+    const out = cleanCards(['закрыто', 'done', 'closed', 'in-review', 'на ревью', 'new'].map((st, i) => ({ key: `OPS-${i + 1}`, ws: 'aiboards-eval', st })))
+    expect(out.filter((c) => c.closed)).toHaveLength(3)
+    expect(out.filter((c) => c.review)).toHaveLength(2)
   })
 
   it('порядок: открытые раньше закрытых, ошибки раньше задач, внутри — по severity/priority', () => {
@@ -169,7 +182,7 @@ describe('карточки в плане: со сроком, без срока, 
   })
 })
 
-describe('сводка сверки с Notion', () => {
+describe('сводка сверки с досками', () => {
   it('только kind=stats; числа неотрицательные и целые; история — по датам', () => {
     const { statsFromDb } = pure()
     expect(statsFromDb({ kind: 'track' })).toBeNull()
@@ -360,7 +373,7 @@ describe('снимок опроса не откатывает несохранё
     expect(html).toContain('if (snapshotIsStale(r.version, savedVersion[r.id])) return;')
     expect(html).toContain("if (res && typeof res.version === 'number') savedVersion[id] = res.version;")
     // Версию до страницы доносит подмена базы: без неё проверка молча не работала бы.
-    expect(SHIM_JS).toContain('return { id: d.id, data: d.data, version: d.version };')
+    expect(SHIM_JS).toContain('return { id: d.id, data: d.data, version: d.version, product: d.product };')
     expect(html).toContain('Object.keys(state).forEach(function (id) { if (state[id] && state[id].pending) persist(id); });')
   })
 
