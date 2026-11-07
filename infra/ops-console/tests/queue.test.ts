@@ -197,7 +197,7 @@ describe('входящие из Telegram (kind: inbox)', () => {
     expect((await bearer(agent).patch('/db/checks/i-stale', { data: { agentStatus: 'taken', agentBy: 'hr-helper-v2-44' } })).status).toBe(200)
   })
 
-  it('уход без наследника: держатель отпускает захват — снимаются и имя, и «в работе»; чужая сессия отпустить не может', async () => {
+  it('уход без наследника: держатель отпускает захват — снимается имя, статус и заметка остаются; чужая сессия отпустить не может', async () => {
     await bearer(owner).put('/db/items/i-release', { data: inbox() })
     const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-release', { data, ...extra })
     expect((await st({ agentStatus: 'doing', agentNote: 'начал', agentBy: 'r.ab12' })).status).toBe(200)
@@ -205,9 +205,12 @@ describe('входящие из Telegram (kind: inbox)', () => {
     const rel = await st({ agentNote: 'ухожу без наследника', agentBy: 'r.ab12' }, { release: true })
     expect(rel.status).toBe(200)
     expect(rel.json.data.agentBy).toBeUndefined()
-    expect(rel.json.data.agentStatus).toBeUndefined()
+    expect(rel.json.data.agentStatus).toBe('doing')
     expect(rel.json.data.agentNote).toBe('ухожу без наследника')
     expect((await st({ agentStatus: 'taken', agentBy: 'r.zz99' })).status).toBe(200)
+    // Чужая сессия не стирает подпись и у пункта, который уже не держится (сделано).
+    expect((await st({ agentStatus: 'done', agentBy: 'r.zz99' })).status).toBe(200)
+    expect((await st({ agentBy: 'r.other' }, { release: true })).status).toBe(409)
   })
 
   it('передача линии: наследник по линии берёт пункт сразу, назвав держателя; не наследник — нет, как бы ни назвался', async () => {
@@ -219,9 +222,13 @@ describe('входящие из Telegram (kind: inbox)', () => {
     const stranger = await st({ agentStatus: 'taken', agentBy: 'r.zz99' }, { takeover: 'r.ab12' })
     expect(stranger.status).toBe(409)
     expect(String(stranger.json.error)).not.toMatch(/takeover/)
-    for (const by of ['r.ab12x.cd34', 'r.ab1.cd34', 'hr-helper-v2-70']) expect((await st({ agentStatus: 'taken', agentBy: by }, { takeover: 'r.ab12' })).status, by).toBe(409)
+    // Любая длина сегмента (PID в spawn_session.sh), но граница сегмента — точка.
+    for (const by of ['r.ab12x.cd34', 'r.ab1.cd34', 'hr-helper-v2-70', 'r.AB12.cd34']) expect((await st({ agentStatus: 'taken', agentBy: by }, { takeover: 'r.ab12' })).status, by).toBe(409)
     expect((await st({ agentStatus: 'taken', agentBy: 'r.ab12.cd34' }, { takeover: 'r.wrong' })).status).toBe(409)
     const took = await st({ agentStatus: 'taken', agentBy: 'r.ab12.cd34' }, { takeover: 'r.ab12' })
+    expect((await bearer(owner).put('/db/items/i-pid', { data: inbox() })).status).toBe(200)
+    expect((await bearer(agent).patch('/db/checks/i-pid', { data: { agentStatus: 'doing', agentBy: 'r.12345' } })).status).toBe(200)
+    expect((await bearer(agent).patch('/db/checks/i-pid', { data: { agentStatus: 'taken', agentBy: 'r.12345.ab12' }, takeover: 'r.12345' })).status).toBe(200)
     expect(took.status).toBe(200)
     expect(took.json.data.agentBy).toBe('r.ab12.cd34')
     // Теперь держит наследник: предок — уже чужая сессия, и сам его не перехватит (линия не продолжает наследника).
@@ -238,6 +245,10 @@ describe('входящие из Telegram (kind: inbox)', () => {
     expect(await importDoc('checks', 'i-imported', { agentStatus: 'doing', agentBy: 'hr-helper-v2-70' }, 'import:test')).toBe('added')
     expect((await bearer(agent).patch('/db/checks/i-imported', { data: { agentStatus: 'taken', agentBy: 'r.zz99' } })).status).toBe(200)
     expect((await st({ agentStatus: 'doing', agentBy: '   ' })).status).toBe(422)
+    // Сохранённое пустое имя (старый MCP) не блокирует ответ владельца: проверяется присланное.
+    await bearer(owner).put('/db/items/i-blank', { data: inbox() })
+    expect(await importDoc('checks', 'i-blank', { agentStatus: 'doing', agentBy: ' ' }, 'import:test')).toBe('added')
+    expect((await bearer(owner).patch('/db/checks/i-blank', { data: { done: true, at: new Date().toISOString() } })).status).toBe(200)
   })
 
   it('недопустимые значения — 422: неизвестный тип, важность у идеи, длинный текст, пустой текст, лишнее поле', async () => {

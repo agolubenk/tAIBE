@@ -173,13 +173,14 @@ test('oq_list: список больше потолка ответа — next_of
 
 test('oq_agent_status: takeover и release уходят полями запроса, не в data', { timeout: 30_000 }, async (t) => {
   const m = await rig(t, 'ok');
-  await m.call('oq_agent_status', { id: 'i-1', status: 'taken', session: ' r.ab12.cd34 ', takeover: 'r.ab12' });
-  await m.call('oq_agent_status', { id: 'i-1', session: 'r.ab12', note: 'ухожу без наследника', release: true });
+  await m.call('oq_agent_status', { id: 'i-1', status: 'taken', session: ' r.ab12.cd34 ', takeover: ' r.ab12 ' });
+  await m.call('oq_agent_status', { id: 'i-1', session: 'r.ab12', note: 'передано r.zz99', release: true });
   await m.call('oq_agent_status', { id: 'i-1', status: 'doing', session: 'r.x', note: 'работаю', release: false });
-  // Заметку без note не стирает; без status и без release — понятный отказ, без запроса.
+  // Новый статус без note — заметка пустая, как раньше; отпуск без статуса заметку не трогает; без status и без
+  // release — понятный отказ, без запроса.
   assert.deepEqual(m.state.patches, [
-    { data: { agentStatus: 'taken', agentBy: 'r.ab12.cd34' }, takeover: 'r.ab12' },
-    { data: { agentNote: 'ухожу без наследника', agentBy: 'r.ab12' }, release: true },
+    { data: { agentStatus: 'taken', agentNote: '', agentBy: 'r.ab12.cd34' }, takeover: 'r.ab12' },
+    { data: { agentNote: 'передано r.zz99', agentBy: 'r.ab12' }, release: true },
     { data: { agentStatus: 'doing', agentNote: 'работаю', agentBy: 'r.x' } },
   ]);
   const bad = await m.call('oq_agent_status', { id: 'i-1', session: 'r.x' });
