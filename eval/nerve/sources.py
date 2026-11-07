@@ -96,7 +96,8 @@ def poll_github(ctx):
         if not p["head"]:
             ctx.emit(f"gh:new:{n}", "pr.new", DIGEST, ["coord"], f"#{n} открыт: {pr['title'][:80]}", "github")
         elif p["head"] != pr["head"]["sha"] and p.get("changes_by"):
-            roles = sorted({r for r in (quorum.role_of_lens(l, g["lens_roles"]) for l in p["changes_by"]) if r})
+            team = ctx.cfg["team"]["roles"]
+            roles = sorted({r for r in (quorum.role_of_lens(l, g["lens_roles"], team) for l in p["changes_by"]) if r})
             ctx.emit(f"gh:newhead:{n}:{pr['head']['sha']}", "pr.newhead", DIGEST, roles or ["coord"],
                      f"#{n}: новая голова {pr['head']['sha'][:9]} после changes ({', '.join(p['changes_by'])})",
                      "github")
@@ -136,7 +137,7 @@ def _check_pr(ctx, n, p, head, refresh=False):
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
     verdicts = []
     for c in comments:
-        v = quorum.parse_verdict(c.get("body"))
+        v = quorum.parse_verdict(c.get("body"), g["lens_roles"], ctx.cfg["team"]["roles"])
         if not v:
             continue
         verdicts.append(v)
@@ -153,13 +154,80 @@ def _check_pr(ctx, n, p, head, refresh=False):
 
 # ---------- Очередь владельца ----------
 
+# ETag и последний список — в памяти процесса: демон `nerve.py run` живёт весь процесс, Ctx — один проход. Тег на
+# диске без документов после рестарта дал бы 304 без данных; рестарт стоит один полный запрос. url → (etag, docs, meta).
+_OQ_CACHE = {}
+# RFC 9110 etagc: без пробелов и управляющих символов — тег уходит обратно строкой заголовка в stdin curl.
+_OQ_TAG_RE = re.compile(r'^(W/)?"[\x21\x23-\x7e]*"$')
+
+
 def _oq_get(ctx, collection):
+    """Список коллекции условным сжатым запросом: 304 — прежние docs из памяти, без тела. Возвращает (docs, meta);
+    meta — {"total", "limit"}, когда консоль обрезала список потолком (поле truncated ответа), иначе {}."""
     url = f"{ctx.cfg['queue']['url'].rstrip('/')}/api/oq/v1/db/{collection}"
-    code, out, err = run(["curl", "-sS", "-f", "-m", "20", "-H", "@-", url],
-                         stdin=f"Authorization: Bearer {ctx.oq_token()}\n")
+    cached = _OQ_CACHE.get(url)
+    headers = f"Authorization: Bearer {ctx.oq_token()}\n" + (f"If-None-Match: {cached[0]}\n" if cached else "")
+    code, out, err = run(["curl", "-sS", "-f", "--compressed", "-m", "20", "-H", "@-",
+                          "-w", "\n%{http_code} %{size_download} %{size_header} %{size_request} %header{etag}", url],
+                         stdin=headers)
     if code != 0:
         raise RuntimeError(f"очередь {collection}: {err.strip()[:120]}")
-    return json.loads(out)["docs"]
+    body, _, tail = out.rpartition("\n")
+    status, down, head, req, etag = (tail.split(" ", 4) + [""] * 5)[:5]
+    _oq_count(ctx, sum(int(x or 0) for x in (down, head, req)))
+    if status == "304":
+        if not cached:
+            raise RuntimeError(f"очередь {collection}: 304 без запомненного списка")
+        return cached[1], cached[2]
+    j = json.loads(body)
+    meta = {k: j.get(k) for k in ("total", "limit")} if j.get("truncated") is True else {}
+    etag = etag.strip()
+    # curl < 7.84 не знает %header{} и печатает его как есть — такой «тег» не шлём, просто опрашиваем без 304.
+    if _OQ_TAG_RE.match(etag):
+        _OQ_CACHE[url] = (etag, j["docs"], meta)
+    else:
+        _OQ_CACHE.pop(url, None)
+    return j["docs"], meta
+
+
+def _oq_count(ctx, n):
+    """Байты опроса очереди по дням (сжатое тело, заголовки ответа и запрос — как по сети; TLS-рукопожатие нового
+    процесса curl, около 4 КБ на вызов по оценке, curl не сообщает) — приёмка фазы 0 «Нерв ≤ 50 МБ в сутки».
+    prev — итог прошлого дня: его видно в state.json без журнала."""
+    b = ctx.state.setdefault("queue", {}).setdefault("bytes", {})
+    day = ctx.now.astimezone(ctx.tz).strftime("%Y-%m-%d")
+    if b.get("day") != day:
+        if b.get("day"):
+            b["prev"] = {"day": b["day"], "n": b.get("n", 0), "calls": b.get("calls", 0)}
+            _oq_bytes_watch(ctx, b["prev"])
+        b.update(day=day, n=0, calls=0)
+    b["n"] += n
+    b["calls"] += 1
+
+
+# Байт на вызов curl сверх счётчика: новое TLS-соединение на каждый процесс; curl его не сообщает — оценка фазы 0.
+_OQ_TLS_EST = 4096
+
+
+def _oq_bytes_watch(ctx, prev):
+    """Итог прошлых суток с оценкой TLS выше порога (по умолчанию 40 МБ при цели 50) — в сводку release, раз в неделю:
+    /changes уже следующая фаза, ежедневный повтор — шум."""
+    warn = ctx.cfg["queue"].get("bytes_warn", 40_000_000)
+    tls = prev["calls"] * _OQ_TLS_EST
+    if prev["n"] + tls > warn:
+        year, week, _ = datetime.strptime(prev["day"], "%Y-%m-%d").isocalendar()
+        ctx.emit(f"oq:bytes:{year}-W{week:02d}", "queue.bytes", DIGEST, ["release"],
+                 f"Нерв: {(prev['n'] + tls) / 1e6:.1f} МБ опроса очереди за {prev['day']} (из них TLS ≈ {tls / 1e6:.1f}, "
+                 f"оценка; порог {warn / 1e6:.0f}, цель ≤ 50) — полный список на каждой правке дорог, нужен /changes",
+                 "queue")
+
+
+def _oq_watch(ctx, collection, meta):
+    """Обрезка потолком — сразу роли release: ответы владельца на выпавшие пункты Нерв не видит."""
+    if meta:
+        ctx.emit(f"oq:capped:{collection}:{ctx.now.astimezone(ctx.tz):%Y-%m-%d}", "queue.capped", NERVOUS, ["release"],
+                 f"очередь {collection}: консоль отдала {meta.get('limit')} из {meta.get('total')} — ответы владельца "
+                 f"на старые пункты Нерв не видит, нужен /changes", "queue")
 
 
 def route_source(source, rules, default="coord"):
@@ -171,8 +239,12 @@ def route_source(source, rules, default="coord"):
 
 def poll_queue(ctx):
     q = ctx.cfg["queue"]
-    items = {d["id"]: d.get("data") or {} for d in _oq_get(ctx, "items")}
-    for c in _oq_get(ctx, "checks"):
+    item_docs, item_meta = _oq_get(ctx, "items")
+    checks, check_meta = _oq_get(ctx, "checks")
+    _oq_watch(ctx, "items", item_meta)
+    _oq_watch(ctx, "checks", check_meta)
+    items = {d["id"]: d.get("data") or {} for d in item_docs}
+    for c in checks:
         it = items.get(c["id"])
         a = c.get("data") or {}
         if not it or it.get("kind") == "inbox" or not a.get("at"):
