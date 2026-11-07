@@ -2,7 +2,7 @@
  * API очереди владельца: /api/oq/v1. Документы в формате базы артефакта (страница /queue, агенты, бот),
  * журнал, мёрж и деплой. Доступ — токен очереди или сессия владельца консоли (server/queue/auth.ts).
  */
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { z } from 'zod'
 import { apiError } from '../http-types'
 import { parseBody } from '../lib/validate'
@@ -11,7 +11,9 @@ import { mergeInfo, mergeItem, redeploy } from '../queue/github'
 import { beatRelay, readRelay, relayBeatSchema } from '../queue/relay'
 import { throttleWrite } from '../queue/throttle'
 import { filesRoutes } from './queue-files'
-import { collectionTag, deleteDoc, docHistory, getDoc, isCollection, listDocs, listOpenItems, openItemsTag, writeDoc, type Collection } from '../queue/store'
+import { etagMatches } from '../queue/etag'
+import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
+import { collectionTag, deleteDoc, docHistory, getDoc, isCollection, listDocs, listOpenItems, openItemsTag, writeDoc, type Collection, type DocList } from '../queue/store'
 
 const writeSchema = z.object({
   data: z.record(z.unknown()),
@@ -30,20 +32,30 @@ export const queueRoutes = new Hono<QueueEnv>()
 queueRoutes.use('*', requireQueueActor)
 
 // Области — и на маршруте, и в хранилище (server/queue/store.ts): одна проверка не держится на другой.
+/** Обрезка потолком — полями рядом с docs и только когда она была: без обрезки JSON прежний, только { docs }. */
+const listBody = ({ docs, capped }: DocList) => (capped ? { docs, truncated: true, total: capped.total, limit: capped.limit } : { docs })
+
+/**
+ * Список с тегом: совпал If-None-Match — 304; иначе JSON, сжатый один раз на тег (queue/list-gzip.ts), если клиент
+ * принимает gzip. 304 и 200 несут одни ETag и Vary (RFC 9110 §15.4.5).
+ * BREACH: в теле списка нет секретов, CSRF — заголовок, а не токен в теле.
+ */
+async function listResponse(c: Context<QueueEnv>, key: string, tag: string, build: () => Promise<unknown>) {
+  const headers = { ETag: tag, Vary: 'Accept-Encoding' }
+  if (etagMatches(c.req.header('if-none-match'), tag)) return c.body(null, 304, headers)
+  if (!acceptsGzip(c.req.header('accept-encoding'))) return c.json(await build(), 200, headers)
+  const gz = gzipListOnce(key, tag, build)
+  return c.body(await gz.body, 200, { ETag: gz.tag, Vary: 'Accept-Encoding', 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' })
+}
+
 queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {
   const col = collectionOf(c.req.param('col'))
   // ?open=1 — только открытые владельцу пункты, по тому же правилу, что на странице (MCP oq_list open_only). Ответ
   // зависит и от checks — ETag по обеим коллекциям; open: true — сервер фильтр применил (старый сервер параметр не знает).
   if (col === 'items' && c.req.query('open') === '1') {
-    const openTag = await openItemsTag()
-    if (c.req.header('if-none-match') === openTag) return c.body(null, 304, { ETag: openTag })
-    c.header('ETag', openTag)
-    return c.json({ docs: await listOpenItems(), open: true })
+    return listResponse(c, 'items?open=1', await openItemsTag(), async () => ({ ...listBody(await listOpenItems()), open: true }))
   }
-  const tag = await collectionTag(col)
-  if (c.req.header('if-none-match') === tag) return c.body(null, 304, { ETag: tag })
-  c.header('ETag', tag)
-  return c.json({ docs: await listDocs(col) })
+  return listResponse(c, col, await collectionTag(col), async () => listBody(await listDocs(col)))
 })
 
 queueRoutes.get('/db/:col/:id', requireScope('read', 'agent'), async (c) => {
