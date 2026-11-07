@@ -615,7 +615,7 @@ cmd_doctor() {
   echo "--- OPTIONAL ---"
   if [ -f "$HOST_ROOT/.claude/council/tboards.json" ]; then
     echo "  ✓ t-boards: ключ продукта консилиума (проверка — python3 infra/ai-council/tboards.py status --check)"
-  else echo "  ! t-boards: нет ключа продукта у консилиума — pbpaste | python3 infra/ai-council/tboards.py set-key"; fi
+  else echo "  ! t-boards: нет ключа продукта у консилиума — из корня продукта: pbpaste | TAIBE_HOST_ROOT=\"\$PWD\" python3 $ROOT/infra/ai-council/tboards.py set-key"; fi
   if [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then echo "  ✓ GitHub token"
   else echo "  ! GitHub OAuth не инициализирован"; fi
   if command -v strix >/dev/null 2>&1; then echo "  ✓ strix CLI (on-demand pentest)"

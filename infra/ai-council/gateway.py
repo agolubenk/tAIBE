@@ -747,7 +747,8 @@ class Api:
             item("tboards", "Ключ t-boards продукта", tb["ok"],
                  f"продукт «{tb.get('product')}», карточек t-boards в базе: {cards}" if tb["ok"]
                  else tb.get("error", ""),
-                 "ключ, ограниченный продуктом: pbpaste | python3 infra/ai-council/tboards.py set-key"),
+                 "ключ, ограниченный продуктом, из корня продукта: pbpaste | TAIBE_HOST_ROOT=\"$PWD\" "
+                 "python3 <tAIBE>/infra/ai-council/tboards.py set-key"),
             item("ollama", "Локальные модели отвечают", ollama.alive(),
                  f"Ollama: {ollama.base_url}",
                  "поднять Ollama: ollama serve (модели — models.roles в config.toml)"),

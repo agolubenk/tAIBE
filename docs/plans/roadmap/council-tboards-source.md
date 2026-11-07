@@ -42,7 +42,8 @@
    Пути — только шаблоны выше; ключ карточки `^[A-ZА-Я][A-ZА-Я0-9]{0,9}-\d{1,7}$`, id `^[a-z0-9]{20,32}$`,
    сегменты через `quote(…, safe='')`.
 2. **Ключ привязан к адресу и продукту.** Файл хоста `.claude/council/tboards.json` = `{url, key, workspace, slug,
-   name}`. Пишет его только `printf %s '<ключ>' | python3 infra/ai-council/tboards.py set-key` (ключ из stdin): адрес —
+   name}`. Пишет его только `pbpaste | TAIBE_HOST_ROOT="$PWD" python3 <tAIBE>/infra/ai-council/tboards.py set-key` из корня
+   продукта (ключ из stdin): адрес —
    `boards.url` слоя, только из `KNOWN_HOSTS`; один `GET /api/workspace` — ключ должен видеть ровно один воркспейс;
    файл `0600`. Чтение: `O_NOFOLLOW`, обычный файл, владелец — текущий пользователь, нет прав группы и мира, путь под
    `<хост>/.claude/council/`, ключ по регулярке. Env с ключом нет; `T_BOARDS_URL` из env — только localhost (тесты).
@@ -89,7 +90,8 @@
 1. t-boards → Настройки → API-ключи → ключ, ограниченный продуктом HR Helper (у ключа полные права продукта;
    консилиум делает только GET).
 2. Скопировать ключ и в терминале: `cd ~/Desktop/Development/HR_Helper-v2 && pbpaste | python3
-   ~/Desktop/Development/tAIBE/infra/ai-council/tboards.py set-key` — печатает продукт и путь файла.
+   ~/Desktop/Development/tAIBE/infra/ai-council/tboards.py set-key` с `TAIBE_HOST_ROOT="$PWD"` перед `python3` —
+   печатает продукт и путь файла (пункт `s-council-tboards-key-0711`).
 
 ## Проверка
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """AI Council — карточки t-boards по запросу, только чтение (OPS-26). Канон: docs/specs/ai-council.md §10.
 
-    pbpaste | python3 infra/ai-council/tboards.py set-key      # ключ продукта → <хост>/.claude/council/tboards.json
+    pbpaste | TAIBE_HOST_ROOT="$PWD" python3 <tAIBE>/infra/ai-council/tboards.py set-key   # из корня продукта →
+                                                               # <хост>/.claude/council/tboards.json
     python3 infra/ai-council/tboards.py status [--check]       # продукт, адрес, файл; --check — один GET
     python3 infra/ai-council/tboards.py card OPS-26            # карточка из t-boards → база консилиума
     python3 infra/ai-council/tboards.py cards [--q текст] [--db bugs|tasks] [--limit 20]
@@ -84,8 +85,9 @@ def key_path(root: Path | None = None) -> Path:
 
 
 def _set_key_hint() -> str:
+    # Хост задаёт TAIBE_HOST_ROOT: без него хост — сама папка tAIBE, и ключ лёг бы не к тому продукту.
     return (f"выпустите в t-boards ключ, ограниченный продуктом (Настройки → API-ключи), и из корня продукта: "
-            f"`pbpaste | python3 {HERE / 'tboards.py'} set-key`")
+            f"`pbpaste | TAIBE_HOST_ROOT=\"$PWD\" python3 {HERE / 'tboards.py'} set-key`")
 
 
 def load_key(root: Path | None = None) -> dict:

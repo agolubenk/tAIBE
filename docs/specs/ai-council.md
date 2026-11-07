@@ -993,7 +993,8 @@ L-моделей не меняются, поэтому бюджет памяти
 `--refresh`. Синка по расписанию и снимка доски нет; `run --card next|all` — отказ с подсказкой.
 
 **Ключ.** Свой на продукт (`d-tb-product-key-0411`): файл хоста `.claude/council/tboards.json` = `{url, key, workspace,
-slug, name}`, `0600`. Пишет его только `pbpaste | python3 infra/ai-council/tboards.py set-key` из корня продукта:
+slug, name}`, `0600`. Пишет его только `pbpaste | TAIBE_HOST_ROOT="$PWD" python3 <tAIBE>/infra/ai-council/tboards.py set-key` из корня
+продукта (без `TAIBE_HOST_ROOT` хост — сама папка tAIBE):
 адрес — `boards.url` слоя и только хосты `KNOWN_HOSTS` (`.claude/scripts/pipeline_settings.py`), ключ должен видеть
 ровно один воркспейс. Чтение файла — без симлинков, владелец — текущий пользователь, без прав группы и мира, путь под
 `<хост>/.claude/council/`. Ключа в env нет; адрес из env — только localhost (тесты). Ключ хаба `T_BOARDS_API_KEY`
