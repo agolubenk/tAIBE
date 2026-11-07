@@ -244,7 +244,9 @@ const TOOLS = [
     description: 'Свой статус по пункту владельца (checks/<id>: agentStatus, agentNote, agentBy). Ответ владельца не трогает. Для входящих (kind inbox) — '
       + 'только с session: без неё «взял» — 422, а пункт, который ведёт другая сессия, — 409. Обычные пункты — как раньше, session не обязательна. '
       + 'Владелец ответил, но нужен снова (вопрос в ответ, вывод с ошибкой, «повторите проверку») — status blocked и просьба в note: пункт вернётся '
-      + 'к нему в открытые с меткой «ждёт вас снова». doing после ответа — «работаю», пункт не переоткрывается; done и planned — тоже.',
+      + 'к нему в открытые с меткой «ждёт вас снова». doing после ответа — «работаю», пункт не переоткрывается; done и planned — тоже. '
+      + 'Передача линии: уходя, держатель отпускает свои входящие (release: true) — наследник берёт их сразу; иначе наследник '
+      + 'перехватывает, назвав держателя (takeover: <его session>), если тот не писал в пункт 30 мин.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -252,10 +254,16 @@ const TOOLS = [
         status: { type: 'string', enum: ['taken', 'doing', 'blocked', 'done', 'planned'] },
         note: { type: 'string' },
         session: { type: 'string', description: 'имя своей сессии (например hr-helper-v2-70): по нему входящее, которое вы ведёте, не перехватит другая сессия (409); для входящих обязательно, для обычных пунктов — нет' },
+        takeover: { type: 'string', description: 'входящее: session держателя, у которого вы, наследник его линии, перехватываете пункт (после 30 мин его тишины)' },
+        release: { type: 'boolean', description: 'входящее: отпустить свой захват перед уходом — наследник возьмёт пункт сразу' },
       },
       required: ['id', 'status'],
     },
-    run: ({ id, status, note = '', session }) => api('PATCH', `/db/checks/${encodeURIComponent(id)}`, { data: { agentStatus: status, agentNote: note, ...(session ? { agentBy: String(session).slice(0, 120) } : {}) } }),
+    run: ({ id, status, note = '', session, takeover, release }) => api('PATCH', `/db/checks/${encodeURIComponent(id)}`, {
+      data: { agentStatus: status, agentNote: note, ...(session ? { agentBy: String(session).slice(0, 120) } : {}) },
+      ...(takeover ? { takeover: String(takeover).slice(0, 120) } : {}),
+      ...(release === true ? { release: true } : {}),
+    }),
   },
   {
     name: 'oq_files',
