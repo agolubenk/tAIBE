@@ -76,7 +76,10 @@ describe('смена продукта пункта', () => {
   it('входящее переносится (решение владельца now-warn): сессия HR его больше не видит', async () => {
     const inbox = { kind: 'inbox', title: 'Входящее', inbox: { type: 'task', urgency: 'queue', text: 'текст', originKind: 'self', forwarded: false, receivedAt: '2026-11-07T00:00:00Z' } }
     expect((await call(owner, 'PUT', '/db/items/i-move-1', { data: inbox })).status).toBe(200)
-    expect((await call(hr, 'PATCH', '/db/checks/i-move-1', { data: { agentStatus: 'taken', agentBy: 'hr-sess' } })).status).toBe(200)
+    // «Жду» ставит и blockedAt: перенос снимает и его — иначе пункт в новом продукте считался бы ждущим (open-rule.ts).
+    const held = await call(hr, 'PATCH', '/db/checks/i-move-1', { data: { agentStatus: 'blocked', agentBy: 'hr-sess' } })
+    expect(held.status).toBe(200)
+    expect((held.json as { data: Record<string, unknown> }).data.blockedAt).toBeDefined()
     expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'taibe' })).status).toBe(200)
     expect((await call(hr, 'GET', '/db/checks/i-move-1')).status).toBe(404)
     // Захват сессии прежнего продукта снят: иначе новый держатель получал бы 409 до 12 ч.
@@ -84,6 +87,7 @@ describe('смена продукта пункта', () => {
     expect(moved).toMatchObject({ product: 'taibe' })
     expect(moved.data.agentBy).toBeUndefined()
     expect(moved.data.agentStatus).toBeUndefined()
+    expect(moved.data.blockedAt).toBeUndefined()
     expect((await call(owner, 'POST', '/items/i-move-1/product', { to: 'hr-helper' })).status).toBe(200)
     expect((await call(hr, 'PATCH', '/db/checks/i-move-1', { data: { agentStatus: 'taken', agentBy: 'hr-sess-2' } })).status).toBe(200)
   })

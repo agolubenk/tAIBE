@@ -143,7 +143,7 @@ const checkSchema = z
   .strict()
 
 /** Поля агента в checks: замена документа владельцем (PUT) их не стирает (ревью #324, п. 5). */
-const AGENT_FIELDS = ['agentStatus', 'agentNote', 'agentBy', 'agentAt', 'blockedAt'] as const
+export const AGENT_FIELDS = ['agentStatus', 'agentNote', 'agentBy', 'agentAt', 'blockedAt'] as const
 
 const SCHEMAS: Record<Collection, z.ZodTypeAny> = { checks: checkSchema, items: itemSchema, work: workSchema }
 
