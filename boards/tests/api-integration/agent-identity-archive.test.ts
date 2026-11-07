@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-import { MAX_AGENTS_PER_OWNER } from "../../apps/api/src/agent-identity/agent-limits";
+import {
+  AGENT_IDLE_ARCHIVE_MS,
+  MAX_AGENTS_PER_OWNER,
+} from "../../apps/api/src/agent-identity/agent-limits";
 import { archiveIdleAgents } from "../../apps/api/src/agent-identity/archive-idle-agents";
 import { auth } from "../../apps/api/src/auth";
 import db, { schema } from "../../apps/api/src/database";
@@ -18,6 +21,10 @@ type Issued = {
 
 const HOUR = 60 * 60 * 1000;
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * HOUR);
+// Relative to the archive threshold (TB-100: 5 h), so the tests follow it.
+const IDLE_H = AGENT_IDLE_ARCHIVE_MS / HOUR;
+const idleAgo = () => hoursAgo(IDLE_H + 1);
+const activeAgo = () => hoursAgo(IDLE_H - 1);
 
 async function call(method: string, path: string, key: string, body?: unknown) {
   const { app } = createApp();
@@ -111,7 +118,7 @@ async function addAgents(
 describe("API integration: idle agents go to the archive (TB-74)", () => {
   beforeEach(resetTestDatabase);
 
-  it("archives only enabled agents idle for a day and drops their keys", async () => {
+  it("archives only enabled agents idle past the threshold and drops their keys", async () => {
     const { user, workspace } = await createWorkspaceMember({ role: "owner" });
     const key = await ownerKey(user.id);
     const idle = await issued(key, "idle");
@@ -120,10 +127,10 @@ describe("API integration: idle agents go to the archive (TB-74)", () => {
     const off = await issued(key, "off");
     const before = await issued(key, "archived before");
 
-    await lastActive(idle.agent.id, hoursAgo(25));
-    await lastActive(recent.agent.id, hoursAgo(23));
-    // Its last key went out a day ago, but the session used one an hour ago.
-    await lastActive(used.agent.id, hoursAgo(25));
+    await lastActive(idle.agent.id, idleAgo());
+    await lastActive(recent.agent.id, activeAgo());
+    // Its last key went out long ago, but the session used one an hour ago.
+    await lastActive(used.agent.id, idleAgo());
     await db
       .update(schema.apikeyTable)
       .set({ lastRequest: hoursAgo(1) })
@@ -188,21 +195,21 @@ describe("API integration: idle agents go to the archive (TB-74)", () => {
     const key = await ownerKey(user.id);
     const returning = await issued(key, "comes back");
     const waiting = await issued(key, "waits");
-    await lastActive(returning.agent.id, hoursAgo(25));
-    await lastActive(waiting.agent.id, hoursAgo(25));
+    await lastActive(returning.agent.id, idleAgo());
+    await lastActive(waiting.agent.id, idleAgo());
     expect(await archiveIdleAgents()).toEqual({ archived: 2 });
 
     await addAgents(user.id, MAX_AGENTS_PER_OWNER - 2);
     await addAgents(user.id, 10, { archivedAt: hoursAgo(30) });
     await addAgents(user.id, 5, { disabledAt: hoursAgo(30) });
 
-    // 48 active of 65 agents: archived and disabled ones hold no place.
+    // cap − 2 active, plus 10 archived and 5 disabled: those hold no place.
     expect((await issue(key, "fresh")).status).toBe(200);
     const back = await issued(key, "comes back");
     expect(back.agent).toEqual(returning.agent);
     expect((await profile(returning.agent.id))?.archivedAt).toBeNull();
 
-    // 50 active now: the archived agent waits for a place, still archived.
+    // At the cap now: the archived agent waits for a place, still archived.
     const refused = await issue(key, "waits");
     expect(refused.status).toBe(403);
     expect((refused.body as unknown as { message: string }).message).toContain(
@@ -216,7 +223,7 @@ describe("API integration: idle agents go to the archive (TB-74)", () => {
     const { user } = await createWorkspaceMember({ role: "owner" });
     const key = await ownerKey(user.id);
     const agent = await issued(key, "switched");
-    await lastActive(agent.agent.id, hoursAgo(25));
+    await lastActive(agent.agent.id, idleAgo());
     await archiveIdleAgents();
 
     // Disabled wins over the archive.
@@ -257,7 +264,7 @@ describe("API integration: idle agents go to the archive (TB-74)", () => {
     await call("PATCH", `/agent-identity/${off.agent.id}`, key, {
       enabled: false,
     });
-    await lastActive(archived.agent.id, hoursAgo(25));
+    await lastActive(archived.agent.id, idleAgo());
     await archiveIdleAgents();
 
     const list = await call("GET", "/agent-identity", key);
