@@ -147,6 +147,27 @@ class CliTest(unittest.TestCase):
         self.assertEqual(json.loads(out)["mcpServers"]["postgres-readonly"]["cwd"], HOST)
         self.assertEqual(self.run_cli("drift", "--host-root", HOST)[:2], (0, ""))
 
+    def test_host_of_live_config(self):
+        """mcp-hub.sh без TAIBE_HOST_ROOT берёт хост отсюда: одна строка, без --host-root."""
+        self.assertEqual(self.run_cli("host", "--live", str(self.live))[:2], (0, HOST + "\n"))
+
+    def test_host_without_live_or_without_host_is_empty(self):
+        self.assertEqual(self.run_cli("host", "--live", "")[:2], (0, ""))
+        self.live.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+        self.assertEqual(self.run_cli("host", "--live", str(self.live))[:2], (0, ""))
+
+    def test_host_several_hosts_one_per_line(self):
+        live = live_for(HOST)
+        live["mcpServers"]["postgres-readonly"]["cwd"] = "/opt/other"
+        self.live.write_text(json.dumps(live), encoding="utf-8")
+        self.assertEqual(self.run_cli("host", "--live", str(self.live))[:2], (0, "/opt/host\n/opt/other\n"))
+
+    def test_render_and_drift_need_host_root(self):
+        for mode in ("render", "drift"):
+            with self.assertRaises(SystemExit) as exit_info, contextlib.redirect_stderr(io.StringIO()):
+                self.run_cli(mode, "--live", str(self.live))
+            self.assertEqual(exit_info.exception.code, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,27 +1,29 @@
 # shellcheck shell=bash
 # MCP-хаб: команды только на чтение — status, check, logs. Ничего не запускают, не останавливают и
 # не берут под управление. Подключается через source из infra/scripts/dev-ai/mcp-hub.sh и пользуется
-# его переменными (ROOT, SERVE_ROOT, HOST_ROOT, CONFIG_DIR, SERENA_PORT, HUB_PORT, SERENA_LOG, HUB_LOG) и
-# функциями (pidfile_pid, our_roots, is_ours, project_problem, render_config, port_of).
+# его переменными (ROOT, SERVE_ROOT, HOST_ROOT, HOST_FROM, SERENA_TAIBE_PROJECT, CONFIG_DIR, SERENA_PORT,
+# SERENA_TAIBE_PORT, HUB_PORT, SERENA_LOG, SERENA_TAIBE_LOG, HUB_LOG, SERENA_KINDS) и функциями (pidfile_pid,
+# our_roots, is_ours, project_problem, render_config, port_of).
 
-# Отвечают ли serena (initialize по MCP) и хаб (/health/mcp). Код 1 — если хоть один не ответил.
+# Отвечают ли обе serena (initialize по MCP) и хаб (/health/mcp). Код 1 — если хоть один не ответил.
 probe_http() {
-  python3 - "$SERENA_PORT" "$HUB_PORT" <<'PY'
+  python3 - "$HUB_PORT" "serena=$SERENA_PORT" "serena-taibe=$SERENA_TAIBE_PORT" <<'PY'
 import json, sys, urllib.request
-serena_port, hub_port = sys.argv[1], sys.argv[2]
+hub_port = sys.argv[1]
 ok = True
-try:
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{serena_port}/mcp", method="POST",
-        data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "protocolVersion": "2025-06-18", "capabilities": {},
-            "clientInfo": {"name": "mcp-hub-status", "version": "1"}}}).encode(),
-        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        print(f"  ✓ serena отвечает: http://127.0.0.1:{serena_port}/mcp")
-except Exception as e:
-    ok = False
-    print(f"  ✗ serena :{serena_port}: {e}")
+for name, serena_port in (spec.split("=", 1) for spec in sys.argv[2:]):
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{serena_port}/mcp", method="POST",
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": {"name": "mcp-hub-status", "version": "1"}}}).encode(),
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            print(f"  ✓ {name} отвечает: http://127.0.0.1:{serena_port}/mcp")
+    except Exception as e:
+        ok = False
+        print(f"  ✗ {name} :{serena_port}: {e}")
 try:
     with urllib.request.urlopen(f"http://127.0.0.1:{hub_port}/health/mcp", timeout=10) as r:
         by_state = json.load(r)["servers"]["byState"]
@@ -43,8 +45,8 @@ PY
 cmd_status() {
   local kind pid port tty root listener problem
   if [ "$ROOT" != "$SERVE_ROOT" ]; then echo "  (общие хаб и serena обслуживают основную папку $SERVE_ROOT)"; fi
-  if [ "$HOST_ROOT" != "$SERVE_ROOT" ]; then echo "  (serena индексирует продукт-хост $HOST_ROOT — TAIBE_HOST_ROOT)"; fi
-  for kind in serena hub; do
+  echo "  (serena :$SERENA_PORT индексирует хост $HOST_ROOT — $HOST_FROM; serena-taibe :$SERENA_TAIBE_PORT — $SERENA_TAIBE_PROJECT)"
+  for kind in $SERENA_KINDS hub; do
     port="$(port_of "$kind")"
     listener="$(port_listener "$port")"
     if pid="$(pidfile_pid "$kind")"; then
@@ -79,11 +81,11 @@ cmd_status() {
   fi
 }
 
-# Для ai-restart-all.sh и людей: код 0, только если оба сервиса живы, держат порты, обслуживают
-# основную папку репо (serena — `--project`, хаб — рабочий каталог) и отвечают.
+# Для ai-restart-all.sh и людей: код 0, только если все три сервиса живы, держат порты, обслуживают
+# свои папки (serena — `--project`: хост и tAIBE, хаб — рабочий каталог) и отвечают.
 cmd_check() {
   local kind pid port listener problem rc=0
-  for kind in serena hub; do
+  for kind in $SERENA_KINDS hub; do
     port="$(port_of "$kind")"
     if ! pid="$(pidfile_pid "$kind")"; then
       echo "  ✗ $kind: не запущен"
@@ -110,12 +112,12 @@ cmd_check() {
 
 cmd_logs() {
   local f files=""
-  for f in "$SERENA_LOG" "$HUB_LOG"; do
+  for f in "$SERENA_LOG" "$SERENA_TAIBE_LOG" "$HUB_LOG"; do
     if [ -f "$f" ]; then files="$files $f"; else echo "(нет $f — ещё не запускался)"; fi
   done
   # shellcheck disable=SC2086 # пути без пробелов: ~/Library/Logs/…
   [ -z "$files" ] || tail -n "${1:-40}" $files
-  for f in "$SERENA_LOG.prev" "$HUB_LOG.prev"; do
+  for f in "$SERENA_LOG.prev" "$SERENA_TAIBE_LOG.prev" "$HUB_LOG.prev"; do
     if [ -f "$f" ]; then echo "(прошлый запуск — $f)"; fi
   done
 }
