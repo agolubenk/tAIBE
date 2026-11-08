@@ -198,9 +198,12 @@ async function mergeConfirm(chatId, key, ver) {
   const approval = m.approval ?? 'ok';
   const what = m.skipCi ? 'без деплоя ([skip ci])' : m.deploys && m.baseRef === 'main' ? '<b>запустит деплой прода</b> (~3 минуты 502)' : 'деплой не ожидается';
   const lines = [
-    `🚀 <b>Влить PR #${m.pr}?</b>`,
+    `🚀 <b>Влить ${m.repo ? esc(m.repo) : 'PR '}#${m.pr}?</b>`,
     esc(m.title),
     `Коммит: <code>${esc(m.headSha.slice(0, 7))}</code> (${esc(m.headRef)} → ${esc(m.baseRef)})`,
+    // Консоль до Q-30 способа не отдаёт — тогда это merge.
+    `Способ: ${m.method === 'squash' ? 'squash — одним коммитом' : 'merge — коммитом слияния'}`,
+    ...(m.subject ? [`Заголовок: <code>${esc(m.subject)}</code>`] : []),
     `Последствие: ${what}`,
   ];
   if (approval === 'missing') lines.push('⛔ Нет вердикта «Контроля» (поля sha и base в пункте) — вливать нельзя');
@@ -214,17 +217,18 @@ async function mergeConfirm(chatId, key, ver) {
   return send(chatId, {
     text: lines.join('\n'),
     keyboard: [
-      [...(blocked ? [] : [btn(`✅ Да, влить ${m.headSha.slice(0, 7)}`, `MY:${key}:${m.headSha}`)]), btn('✖️ Отмена', 'MN')],
+      [...(blocked ? [] : [btn(`✅ Да, влить ${m.headSha.slice(0, 7)}`, `MY:${key}:${m.headSha}:${m.version}`)]), btn('✖️ Отмена', 'MN')],
       ...(/^https:\/\/github\.com\//.test(m.url) ? [[{ text: 'PR на GitHub', url: m.url }]] : []),
     ],
   });
 }
 
-async function mergeRun(chatId, key, sha) {
+/** ver — версия пункта с экрана подтверждения (callback «MY:<ключ 10>:<sha 40>:<версия>» — до 64 байт при версии до 9 цифр). */
+async function mergeRun(chatId, key, sha, ver) {
   const it = byKey(last || (await snap()), key) || byKey(await snap(), key);
   if (!it) return send(chatId, { text: 'Пункт не найден.' });
   try {
-    const r = await queueApi.merge(it.id, sha);
+    const r = await queueApi.merge(it.id, sha, /^\d+$/.test(ver || '') ? Number(ver) : undefined);
     log(`мёрж из Telegram: ${it.id} ${sha.slice(0, 7)}`);
     await send(chatId, { text: `✅ ${esc(r.message)}` });
   } catch (e) {
@@ -348,7 +352,7 @@ async function onCallback(q) {
       case 'h': await ack(); return await sendAll(chatId, sshMessages(await snap()));
       case 'v': await ack(); return await sendAll(chatId, guideMessages(await snap()));
       case 'M': await ack('Спрашиваю GitHub…'); return await mergeConfirm(chatId, a, b);
-      case 'MY': await ack('Вливаю…'); return await mergeRun(chatId, a, b);
+      case 'MY': await ack('Вливаю…'); return await mergeRun(chatId, a, b, c);
       case 'MN': case 'RN': await ack('Отменено'); return await show(chatId, { text: 'Отменено.' }, msgId);
       case 'RD':
         await ack();
