@@ -1,12 +1,8 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { HTTPException } from "hono/http-exception";
 import db from "../../database";
-import {
-  ssrBlobTable,
-  ssrConflictTable,
-  ssrEntityTable,
-} from "../../database/ssr-schema";
+import { ssrEntityTable } from "../../database/ssr-schema";
 import {
   apiRouter,
   type BaseVariables,
@@ -18,6 +14,8 @@ import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { approveDraft, rejectDraft, rollbackToVersion } from "../approve";
+import { listConflicts, resolveConflict } from "../conflicts";
+import { knownShas } from "../known-shas";
 import { pushChangeset } from "../pushback";
 import {
   diffVersions,
@@ -75,7 +73,9 @@ const syncRoute = createRoute({
   responses: {
     200: jsonResponse("What the sync changed", syncResultSchema),
     403: errorResponse("Missing workspace:manage_settings permission"),
-    409: errorResponse("Corpus allowlist or secret scan rejection"),
+    409: errorResponse(
+      "Corpus allowlist, secret scan or missing content rejection",
+    ),
     413: errorResponse("Request body is too large"),
   },
 });
@@ -291,6 +291,7 @@ const resolveConflictRoute = createRoute({
   responses: {
     200: jsonResponse("Resolved", z.object({ resolved: z.boolean() })),
     403: errorResponse("Not the owner's browser session"),
+    404: errorResponse("Conflict not found in this workspace"),
   },
 });
 
@@ -323,9 +324,9 @@ const knownShasRoute = createRoute({
   operationId: "knownSsrShas",
   path: "/{workspaceId}/known-shas",
   tags: ["SSR"],
-  summary: "Which blob shas the server already stores",
+  summary: "Which blob shas the server already stores for this workspace",
   description:
-    "The Mac sync agent sends candidate shas and uploads content only for the rest.",
+    "The Mac sync agent sends candidate shas and uploads content only for the rest. A sha counts only when a version of this workspace references it.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ workspace: ["manage_settings"] }),
@@ -351,20 +352,9 @@ const knownShasRoute = createRoute({
 
 export const ssrRoutes = apiRouter<SsrVariables>()
   .openapi(knownShasRoute, async (c) => {
+    const { workspaceId } = c.req.valid("param");
     const { shas } = c.req.valid("json");
-    const rows = await db
-      .select({ sha256: ssrBlobTable.sha256 })
-      .from(ssrBlobTable)
-      .where(inArray(ssrBlobTable.sha256, shas));
-    return c.json({ shas: rows.map((row) => row.sha256) }, 200);
-  })
-  .openapi(knownShasRoute, async (c) => {
-    const { shas } = c.req.valid("json");
-    const rows = await db
-      .select({ sha256: ssrBlobTable.sha256 })
-      .from(ssrBlobTable)
-      .where(inArray(ssrBlobTable.sha256, shas));
-    return c.json({ shas: rows.map((row) => row.sha256) }, 200);
+    return c.json({ shas: await knownShas(workspaceId, shas) }, 200);
   })
   .openapi(contentByNameRoute, async (c) => {
     const { workspaceId, name } = c.req.valid("param");
@@ -473,7 +463,12 @@ export const ssrRoutes = apiRouter<SsrVariables>()
     const [entity] = await db
       .select()
       .from(ssrEntityTable)
-      .where(eq(ssrEntityTable.id, entityId));
+      .where(
+        and(
+          eq(ssrEntityTable.id, entityId),
+          eq(ssrEntityTable.workspaceId, workspaceId),
+        ),
+      );
     const push = await pushChangeset(
       workspaceId,
       `tAI-Boards SSR: restore ${entity?.name ?? entityId} from v${toVersion}`,
@@ -487,32 +482,13 @@ export const ssrRoutes = apiRouter<SsrVariables>()
   })
   .openapi(conflictsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
-    const rows = await db
-      .select()
-      .from(ssrConflictTable)
-      .where(eq(ssrConflictTable.workspaceId, workspaceId))
-      .orderBy(desc(ssrConflictTable.detectedAt))
-      .limit(100);
-    return c.json(
-      {
-        conflicts: rows.map((row) => ({
-          id: row.id,
-          path: row.path,
-          baselineSha: row.baselineSha,
-          repoSha: row.repoSha,
-          detectedAt: row.detectedAt.toISOString(),
-          resolvedAt: row.resolvedAt ? row.resolvedAt.toISOString() : null,
-        })),
-      },
-      200,
-    );
+    return c.json({ conflicts: await listConflicts(workspaceId) }, 200);
   })
   .openapi(resolveConflictRoute, async (c) => {
     assertOwnerUi(c.req.raw.headers);
-    const { conflictId } = c.req.valid("param");
-    await db
-      .update(ssrConflictTable)
-      .set({ status: "resolved", resolvedAt: new Date() })
-      .where(eq(ssrConflictTable.id, conflictId));
+    const { workspaceId, conflictId } = c.req.valid("param");
+    if (!(await resolveConflict(workspaceId, conflictId))) {
+      throw new HTTPException(404, { message: "Conflict not found" });
+    }
     return c.json({ resolved: true }, 200);
   });

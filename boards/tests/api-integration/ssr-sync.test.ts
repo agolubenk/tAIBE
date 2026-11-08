@@ -48,9 +48,14 @@ describe("API integration: SSR corpus sync", () => {
     expect(second.body.unchanged).toBe(2);
 
     // A changed file replaces the waiting draft in place instead of
-    // stacking version numbers (ssr_version_entity_number_key).
+    // stacking version numbers (ssr_version_entity_number_key). New bytes
+    // come with their content; a sha the workspace holds goes without.
     const changed = [
-      { path: ".claude/skills/alpha/NOTE.md", sha256: sha256("new text") },
+      {
+        path: ".claude/skills/alpha/NOTE.md",
+        sha256: sha256("new text"),
+        content: "new text",
+      },
       { path: ".claude/skills/beta/NOTE.md", sha256: empty },
     ];
     const third = await forest.ownerApi(
