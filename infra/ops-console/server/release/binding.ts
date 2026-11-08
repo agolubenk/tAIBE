@@ -21,6 +21,8 @@ const runKeyNum = (r: DeployRow) => {
   const n = Number(r.runKey)
   return Number.isFinite(n) ? n : -1
 }
+/** Старт последней попытки: перезапуск (Re-run) сохраняет номер запуска, но выкатывает его старый коммит заново. */
+const startMs = (r: DeployRow) => (r.startedAt ?? r.createdAt).getTime()
 
 const isGood = (r: DeployRow) => r.status === 'completed' && r.conclusion === 'success' && r.title !== MANUAL_RUN_TITLE
 
@@ -42,9 +44,9 @@ const toRun = (r: DeployRow): BindingRun => ({
   at: (r.finishedAt ?? r.startedAt ?? r.createdAt).getTime(),
 })
 
-/** Чистая логика привязки: строки в любом порядке, новизна — по номеру запуска GitHub. */
+/** Чистая логика привязки: строки в любом порядке, новизна — по старту последней попытки, затем по номеру запуска. */
 export function computeBinding(rows: readonly DeployRow[]): ReleaseBinding {
-  const sorted = [...rows].sort((a, b) => runKeyNum(b) - runKeyNum(a))
+  const sorted = [...rows].sort((a, b) => startMs(b) - startMs(a) || runKeyNum(b) - runKeyNum(a))
   const goodAt = sorted.findIndex(isGood)
   const good = goodAt === -1 ? null : (sorted[goodAt] ?? null)
   const newer = goodAt === -1 ? sorted : sorted.slice(0, goodAt)
@@ -56,12 +58,12 @@ export function computeBinding(rows: readonly DeployRow[]): ReleaseBinding {
   return { mode: 'auto', sha: good.headSha, run: toRun(good) }
 }
 
-/** Последние запуски настроенного workflow (опрос пишет только ветку main). */
+/** Последние по старту запуски настроенного workflow (опрос пишет только ветку main). */
 export async function loadDeployRows(): Promise<DeployRow[]> {
   const gh = await getGithubSettings()
   return getDb().query.deploys.findMany({
     where: eq(deploys.workflow, gh.workflow),
-    orderBy: desc(sql`cast(${deploys.runKey} as integer)`),
+    orderBy: [desc(sql`coalesce(${deploys.startedAt}, ${deploys.createdAt})`), desc(sql`cast(${deploys.runKey} as integer)`)],
     limit: ROWS,
   })
 }
@@ -70,8 +72,9 @@ export async function loadDeployRows(): Promise<DeployRow[]> {
 export async function deployStartedAt(sha: string): Promise<number | null> {
   const prefix = sha.slice(0, 12)
   if (!/^[0-9a-f]{7,12}$/.test(prefix)) return null
+  // Опрос хранит 12 знаков SHA: полный ключ — точное равенство, короткий вставленный — по префиксу.
   const row = await getDb().query.deploys.findFirst({
-    where: sql`${deploys.headSha} like ${`${prefix}%`}`,
+    where: prefix.length === 12 ? eq(deploys.headSha, prefix) : sql`${deploys.headSha} like ${`${prefix}%`}`,
     orderBy: deploys.startedAt,
   })
   return row ? (row.startedAt ?? row.createdAt).getTime() : null

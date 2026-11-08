@@ -88,11 +88,17 @@ export interface ReleaseResponse {
   /** Прежние версии, новые сверху, до 50. */
   history: ReleaseEntry[]
   binding: ReleaseBinding
-  /** Только владельцу. */
-  suggestion: ReleaseSuggestion | null
-  suggestionError: string | null
   syncError: string | null
 }
+
+/** GET /api/release/suggestion — только владельцу, отдельно от основного чтения: GitHub может отвечать секунды. */
+export interface ReleaseSuggestionResponse {
+  suggestion: ReleaseSuggestion | null
+  suggestionError: string | null
+}
+
+/** GET /api/release?view=nav — строка в подвале меню: без опроса GitHub, предложения и истории. */
+export type ReleaseNav = { version: string; sha: string } | { version: null; sha: null }
 
 /** GET /api/public/release: без sha, автора и заметки. */
 export type PublicRelease = { version: string; setAt: number } | { version: null }

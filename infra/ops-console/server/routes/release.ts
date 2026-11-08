@@ -1,15 +1,16 @@
 /**
- * Версия продукта (APP-558): чтение — любой сессии, запись — владельцу. Подвалы продукта читают публичный
- * `/api/public/release` (только версия и время): единственный источник версии — эта панель.
+ * Версия продукта (APP-558): чтение — любой сессии, предложение и запись — владельцу. Подвалы продукта читают
+ * публичный `/api/public/release` (только версия и время): единственный источник версии — эта панель.
  */
 import { Hono, type Context } from 'hono'
 import { z } from 'zod'
 import { requireRole } from '../auth/middleware'
-import { apiError, type AppEnv } from '../http-types'
+import { apiError, roleAtLeast, type AppEnv, type Role } from '../http-types'
 import { parseBody } from '../lib/validate'
 import { logActivity } from '../activity'
 import { readSetting } from '../settings/store'
-import { deploySyncSchema, syncGithubDeploys } from '../deploys/github'
+import { deploySyncSchema } from '../deploys/github'
+import { syncGithubDeploysOnce } from '../deploys/sync-once'
 import { computeBinding, deployStartedAt, loadDeployRows } from '../release/binding'
 import { nextReleaseState, readRelease, writeRelease, type ReleaseState } from '../release/store'
 import { suggestRelease } from '../release/suggest'
@@ -21,18 +22,21 @@ import {
   RELEASE_VERSION_RE,
   type PublicRelease,
   type ReleaseBinding,
+  type ReleaseNav,
   type ReleaseResponse,
-  type ReleaseSuggestion,
+  type ReleaseSuggestionResponse,
 } from '../../shared/release'
 
-/** Чтение синхронизирует деплои, только если прошлый опрос старше минуты (отметка общая для всех сессий). */
-const SYNC_FRESH_MS = 60_000
+/** Тик опрашивает GitHub раз в 2 минуты: чтение добирает опрос, только если прошлый старше 150 с. */
+const SYNC_FRESH_MS = 150_000
 
 const putSchema = z.object({
   version: z.string().trim().regex(RELEASE_VERSION_RE, 'версия в формате v.A.B.C.D, сегменты 0–9999 без ведущих нулей'),
   note: z.string().trim().max(RELEASE_NOTE_MAX).default(''),
   expectedRev: z.number().int().min(0),
-  /** SHA привязки, который видел владелец (`binding.sha`, пусто — его не было). */
+  /** Привязка, которую видел владелец: режим, запуск (`binding.run?.runKey`, пусто — нет) и SHA (пусто — нет). */
+  expectedMode: z.enum(['auto', 'confirm']),
+  expectedRunKey: z.string().max(40),
   expectedSha: z.string().max(40),
   /** Вставленный SHA — только когда привязка требует подтверждения. */
   sha: z.string().trim().toLowerCase().regex(RELEASE_SHA_RE, 'SHA — 7–40 шестнадцатеричных знаков').optional(),
@@ -40,25 +44,24 @@ const putSchema = z.object({
 })
 type PutBody = z.infer<typeof putSchema>
 
-/** Опрос GitHub; его сбой не блокирует ни чтение, ни запись — возвращается текстом. */
+/** Опрос GitHub (один на все запросы и тик); его сбой не блокирует ни чтение, ни запись — возвращается текстом. */
 async function syncNow(): Promise<string | null> {
   try {
-    const r = await syncGithubDeploys()
+    const r = await syncGithubDeploysOnce()
     return r === 'not_configured' ? 'GitHub не настроен: Настройки → Интеграции' : null
   } catch (err) {
     return `GitHub: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300)
   }
 }
 
-async function syncIfStale(): Promise<string | null> {
+/** Опрашивает только оператор и выше: наблюдатель видит деплои, которые принёс тик. */
+async function syncIfStale(role: Role): Promise<string | null> {
   const last = await readSetting('deploy_sync', deploySyncSchema)
-  if (Date.now() - last.at > SYNC_FRESH_MS) return syncNow()
+  if (roleAtLeast(role, 'operator') && Date.now() - last.at > SYNC_FRESH_MS) return syncNow()
   return last.ok ? null : last.error || null
 }
 
-type SuggestionPart = { suggestion: ReleaseSuggestion | null; suggestionError: string | null }
-
-async function suggestionFor(state: ReleaseState, binding: ReleaseBinding): Promise<SuggestionPart> {
+async function suggestionFor(state: ReleaseState, binding: ReleaseBinding): Promise<ReleaseSuggestionResponse> {
   const cur = state.current
   if (!cur) return { suggestion: null, suggestionError: 'Первую версию задают вручную' }
   if (binding.mode !== 'auto') {
@@ -74,14 +77,18 @@ async function suggestionFor(state: ReleaseState, binding: ReleaseBinding): Prom
   }
 }
 
-/** Какой SHA привязать: привязка пересчитана после опроса GitHub; разошлась с тем, что видел владелец, — 409. */
+/**
+ * Какой SHA привязать: привязка пересчитана после опроса GitHub. Режим, запуск или SHA разошлись с тем, что видел
+ * владелец (новый деплой, ещё один ручной запуск), — 409.
+ */
 function boundSha(binding: ReleaseBinding, body: PutBody): string {
-  if ((binding.sha ?? '') !== body.expectedSha) throw apiError(409, 'Новый деплой — проверьте ещё раз')
+  const seen = binding.mode === body.expectedMode && (binding.run?.runKey ?? '') === body.expectedRunKey && (binding.sha ?? '') === body.expectedSha
+  if (!seen) throw apiError(409, 'Новый деплой — проверьте ещё раз')
   if (binding.mode === 'auto') {
-    if (body.sha) throw apiError(409, 'Деплои изменились: SHA теперь берётся сам — проверьте ещё раз')
+    if (body.sha) throw apiError(400, 'SHA вставляют, только когда привязка требует подтверждения')
     return binding.sha
   }
-  if (!body.sha) throw apiError(409, 'Последний запуск не подтверждён — проверьте ещё раз и вставьте SHA выкаченного коммита')
+  if (!body.sha) throw apiError(400, 'Последний запуск не подтверждён — вставьте SHA выкаченного коммита')
   return body.sha
 }
 
@@ -97,13 +104,21 @@ function assertRaises(state: ReleaseState, body: PutBody): void {
 
 export const releaseRoutes = new Hono<AppEnv>()
   .get('/', async (c) => {
-    const syncError = await syncIfStale()
+    if (c.req.query('view') === 'nav') {
+      const cur = (await readRelease()).state.current
+      const nav: ReleaseNav = cur ? { version: cur.version, sha: cur.sha } : { version: null, sha: null }
+      return c.json(nav)
+    }
+    const syncError = await syncIfStale(c.get('user').role)
     const [snap, rows] = await Promise.all([readRelease(), loadDeployRows()])
-    const binding = computeBinding(rows)
-    const owner = c.get('user').role === 'owner'
-    const part: SuggestionPart = owner ? await suggestionFor(snap.state, binding) : { suggestion: null, suggestionError: null }
-    const body: ReleaseResponse = { rev: snap.state.rev, current: snap.state.current, history: snap.state.history, binding, ...part, syncError }
+    const { rev, current, history } = snap.state
+    const body: ReleaseResponse = { rev, current, history, binding: computeBinding(rows), syncError }
     return c.json(body)
+  })
+  /** Без опроса GitHub: деплои уже принесло основное чтение панели. */
+  .get('/suggestion', requireRole('owner'), async (c) => {
+    const [snap, rows] = await Promise.all([readRelease(), loadDeployRows()])
+    return c.json(await suggestionFor(snap.state, computeBinding(rows)))
   })
   .put('/', requireRole('owner'), async (c) => {
     const body = await parseBody(c, putSchema)

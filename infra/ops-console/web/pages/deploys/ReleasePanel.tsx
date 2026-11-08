@@ -8,7 +8,7 @@ import { api } from '../../lib/api'
 import { useAction } from '../../lib/hooks'
 import { useSession } from '../../lib/session'
 import { dateTime } from '../../lib/format'
-import { releaseQuery } from '../../lib/release'
+import { releaseNavQuery, releaseQuery, releaseSuggestionQuery } from '../../lib/release'
 import { plural } from '../../../shared/plural'
 import {
   compareReleaseVersions,
@@ -19,6 +19,7 @@ import {
   type BindingRun,
   type ReleaseEntry,
   type ReleaseResponse,
+  type ReleaseSuggestionResponse,
 } from '../../../shared/release'
 import { Button, Check, Field, FormError, Input, Textarea } from '../../ui/Controls'
 import { LoadError, Panel, Skeleton, cx } from '../../ui/Glass'
@@ -92,8 +93,11 @@ function BindingView({ data }: { data: ReleaseResponse }) {
 }
 
 function SuggestionView({ data, onAccept }: { data: ReleaseResponse; onAccept: (v: string) => void }) {
-  const sg = data.suggestion
-  if (!sg) return data.suggestionError ? <p className={cx(ui.small, ui.faint)}>Предложения нет: {data.suggestionError}</p> : null
+  const q = useQuery(releaseSuggestionQuery(data.rev, data.binding.sha))
+  if (q.isPending) return <p className={cx(ui.small, ui.faint)}>Считаю предложение по коммитам main…</p>
+  if (q.isError) return <p className={cx(ui.small, ui.faint)}>Предложение не загрузилось — введите версию вручную.</p>
+  const { suggestion: sg, suggestionError }: ReleaseSuggestionResponse = q.data
+  if (!sg) return suggestionError ? <p className={cx(ui.small, ui.faint)}>Предложения нет: {suggestionError}</p> : null
   return (
     <div className={ui.row}>
       <span>
@@ -127,11 +131,13 @@ function ReleaseForm({ data }: { data: ReleaseResponse }) {
         version: version.trim(),
         note: note.trim(),
         expectedRev: data.rev,
+        expectedMode: data.binding.mode,
+        expectedRunKey: data.binding.run?.runKey ?? '',
         expectedSha: data.binding.sha ?? '',
         ...(needSha ? { sha: shaValue } : {}),
         confirmLower: notHigher && confirmLower,
       }),
-    { success: (r) => `Версия ${r.current.version} сохранена`, invalidate: [releaseQuery.queryKey] },
+    { success: (r) => `Версия ${r.current.version} сохранена`, invalidate: [releaseQuery.queryKey, releaseNavQuery.queryKey] },
   )
   const submit = () =>
     save.mutate(undefined, {
@@ -149,7 +155,7 @@ function ReleaseForm({ data }: { data: ReleaseResponse }) {
       <SuggestionView data={data} onAccept={setVersion} />
       <div className={cx(ui.formGrid, ui.formGrid2)}>
         <Field label="Новая версия" hint="v.A.B.C.D, сегменты 0–9999. A — номер Лаваэона, меняется только вручную.">
-          <Input value={version} onChange={(e) => setVersion(e.target.value)} placeholder={data.suggestion?.version ?? 'v.0.1.0.0'} spellCheck={false} />
+          <Input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="v.0.1.0.0" spellCheck={false} />
         </Field>
         {needSha ? (
           <Field label="SHA выкаченного коммита" hint="7–40 шестнадцатеричных знаков из лога запуска">
@@ -211,7 +217,8 @@ function ReleaseHistory({ history }: { history: ReleaseEntry[] }) {
 
 export function ReleasePanel() {
   const { can } = useSession()
-  const q = useQuery(releaseQuery)
+  // Минута: панель не дёргает сервер при каждом возврате на вкладку, «Проверить ещё раз» читает сразу.
+  const q = useQuery({ ...releaseQuery, staleTime: 60_000 })
   if (q.isError) return <LoadError error={q.error} onRetry={() => void q.refetch()} />
   const data = q.data
   return (

@@ -1,18 +1,22 @@
 /**
  * Версия продукта (APP-558): формат, сравнение и шаг версии; класс коммита (merge PR, форма с двоеточием, squash,
- * свой merge); привязка к SHA деплоя (успех, новее ручной, упавший, идущий, not_started не в счёт, деплоев нет);
- * PUT — только владелец, 409 на чужую ревизию и новый деплой, 400 на понижение без подтверждения; предложение по
- * коммитам main; публичный ответ без sha, автора и заметки, кэш 60 с.
+ * свой merge); привязка к SHA деплоя (успех, новее ручной, упавший, идущий, перезапуск, not_started не в счёт, деплоев
+ * нет); PUT — только владелец, 409 на чужую ревизию, новый деплой и новый ручной запуск, 400 на понижение без
+ * подтверждения; хранилище (длинный автор, копия битой строки); один опрос GitHub; подвал; предложение отдельно и
+ * пошаговым обходом; публичный ответ без sha, автора и заметки, кэш 60 с.
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { api, freshApp, login } from './helpers'
 import { getDb } from '../server/db/client'
-import { users } from '../server/db/schema'
+import { settings, users } from '../server/db/schema'
 import { hashPassword } from '../server/lib/crypto'
 import * as http from '../server/lib/http'
 import { writeSetting } from '../server/settings/store'
+import { tryAcquireLease } from '../server/scheduler/lease'
 import { MANUAL_RUN_TITLE, NOT_STARTED } from '../server/deploys/github'
+import { syncGithubDeploysOnce } from '../server/deploys/sync-once'
 import { computeBinding, type DeployRow } from '../server/release/binding'
+import { nextReleaseState, readRelease, RELEASE_BACKUP_KEY, RELEASE_KEY, writeRelease } from '../server/release/store'
 import { classifyCommit } from '../server/release/suggest'
 import {
   bumpReleaseVersion,
@@ -146,6 +150,19 @@ describe('привязка к SHA деплоя', () => {
     expect(b).toMatchObject({ mode: 'auto', sha: row('5').headSha })
   })
 
+  it('перезапуск старого запуска после более нового успешного — новее него', () => {
+    const late = { startedAt: new Date(2_000_000), createdAt: new Date(900_000) }
+    expect(computeBinding([row('5', { ...late, status: 'in_progress', conclusion: null }), row('6')])).toMatchObject({
+      mode: 'confirm',
+      reason: 'in_progress',
+      sha: row('6').headSha,
+      run: { runKey: '5' },
+    })
+    expect(computeBinding([row('5', { ...late, conclusion: 'failure' }), row('6')])).toMatchObject({ mode: 'confirm', reason: 'failed_run', run: { runKey: '5' } })
+    // Успешный перезапуск выкатил старый коммит заново: на проде он.
+    expect(computeBinding([row('5', late), row('6')])).toMatchObject({ mode: 'auto', sha: row('5').headSha, run: { runKey: '5' } })
+  })
+
   it('деплоев нет — no_deploy; ручной успех — не база', () => {
     expect(computeBinding([])).toEqual({ mode: 'confirm', reason: 'no_deploy', sha: null, run: null })
     expect(computeBinding([row('3', { conclusion: NOT_STARTED })])).toMatchObject({ mode: 'confirm', reason: 'no_deploy', sha: null })
@@ -214,9 +231,19 @@ async function asRole(role: 'operator' | 'viewer') {
   return api(app, await login(app, email, `${role}-password-1`))
 }
 
-const put = (o: ReturnType<typeof api>, body: Record<string, unknown>) => o.put('/release', { note: '', ...body })
-/** Отметка опроса старше минуты: следующее чтение снова спросит GitHub (иначе GET берёт деплои из таблицы). */
+type Api = ReturnType<typeof api>
+const SHA1 = sha40(1).slice(0, 12)
+/** Привязка к запуску 1 — то, что видел владелец, когда деплой один. */
+const AUTO1 = { expectedMode: 'auto', expectedRunKey: '1', expectedSha: SHA1 }
+const put = (o: Api, body: Record<string, unknown>) => o.put('/release', { note: '', ...body })
+/** То, что панель шлёт из своего чтения. */
+async function seenBy(o: Api) {
+  const b = (await o.get('/release')).json
+  return { expectedRev: b.rev, expectedMode: b.binding.mode, expectedRunKey: b.binding.run?.runKey ?? '', expectedSha: b.binding.sha ?? '' }
+}
+/** Отметка опроса старше 150 с: следующее чтение оператора снова спросит GitHub. */
 const staleSync = () => writeSetting('deploy_sync', { at: 0, ok: true, error: '' })
+const polls = () => spy.mock.calls.filter(([url]) => url.includes('/actions/workflows/')).length
 
 describe('PUT /api/release', () => {
   it('первая версия привязывается к последнему успешному деплою; запись в ленте', async () => {
@@ -224,21 +251,22 @@ describe('PUT /api/release', () => {
     const owner = api(app, await login(app))
     const g = await owner.get('/release')
     expect(g.status).toBe(200)
-    expect(g.json).toMatchObject({ rev: 0, current: null, history: [], binding: { mode: 'auto', sha: sha40(1).slice(0, 12) } })
-    expect(g.json.suggestionError).toBe('Первую версию задают вручную')
-    const r = await put(owner, { version: 'v.0.1.0.0', note: 'первая', expectedRev: 0, expectedSha: g.json.binding.sha })
+    expect(g.json).toMatchObject({ rev: 0, current: null, history: [], binding: { mode: 'auto', sha: SHA1, run: { runKey: '1' } } })
+    expect(g.json).not.toHaveProperty('suggestion')
+    const r = await put(owner, { version: 'v.0.1.0.0', note: 'первая', expectedRev: 0, ...AUTO1 })
     expect(r.status).toBe(200)
-    expect(r.json).toMatchObject({ rev: 1, current: { version: 'v.0.1.0.0', sha: sha40(1).slice(0, 12), setBy: 'owner@ops.test', note: 'первая' } })
+    expect(r.json).toMatchObject({ rev: 1, current: { version: 'v.0.1.0.0', sha: SHA1, setBy: 'owner@ops.test', note: 'первая' } })
     const log = await getDb().query.activity.findMany()
     expect(log.some((a) => a.kind === 'config' && a.route === '/deploys' && a.message.includes('v.0.1.0.0'))).toBe(true)
   })
 
-  it('не владельцу — 403', async () => {
+  it('не владельцу — 403 на запись и на предложение', async () => {
     runs = [ghRun(1)]
     for (const role of ['operator', 'viewer'] as const) {
       const other = await asRole(role)
       expect((await other.get('/release')).status).toBe(200)
-      expect((await put(other, { version: 'v.0.1.0.0', expectedRev: 0, expectedSha: sha40(1).slice(0, 12) })).status).toBe(403)
+      expect((await other.get('/release/suggestion')).status).toBe(403)
+      expect((await put(other, { version: 'v.0.1.0.0', expectedRev: 0, ...AUTO1 })).status).toBe(403)
     }
     expect(await getDb().query.activity.findMany({ where: (a, { eq }) => eq(a.kind, 'config') })).toEqual([])
   })
@@ -246,24 +274,21 @@ describe('PUT /api/release', () => {
   it('чужая ревизия — 409; история — прежние версии, новые сверху', async () => {
     runs = [ghRun(1)]
     const owner = api(app, await login(app))
-    const sha = sha40(1).slice(0, 12)
-    expect((await put(owner, { version: 'v.0.1.0.0', expectedRev: 0, expectedSha: sha })).status).toBe(200)
-    const stale = await put(owner, { version: 'v.0.2.0.0', expectedRev: 0, expectedSha: sha })
-    expect(stale.status).toBe(409)
-    expect((await put(owner, { version: 'v.0.2.0.0', expectedRev: 1, expectedSha: sha })).status).toBe(200)
-    expect((await put(owner, { version: 'v.0.3.0.0', expectedRev: 2, expectedSha: sha })).status).toBe(200)
+    expect((await put(owner, { version: 'v.0.1.0.0', expectedRev: 0, ...AUTO1 })).status).toBe(200)
+    expect((await put(owner, { version: 'v.0.2.0.0', expectedRev: 0, ...AUTO1 })).status).toBe(409)
+    expect((await put(owner, { version: 'v.0.2.0.0', expectedRev: 1, ...AUTO1 })).status).toBe(200)
+    expect((await put(owner, { version: 'v.0.3.0.0', expectedRev: 2, ...AUTO1 })).status).toBe(200)
     const g = await owner.get('/release')
-    expect(g.json.rev).toBe(3)
-    expect(g.json.current.version).toBe('v.0.3.0.0')
+    expect(g.json).toMatchObject({ rev: 3, current: { version: 'v.0.3.0.0' } })
     expect(g.json.history.map((h: { version: string }) => h.version)).toEqual(['v.0.2.0.0', 'v.0.1.0.0'])
   })
 
   it('новый деплой между чтением и сохранением — 409, версия не записана', async () => {
     runs = [ghRun(1)]
     const owner = api(app, await login(app))
-    const seen = (await owner.get('/release')).json.binding.sha as string
+    const seen = await seenBy(owner)
     runs = [ghRun(1), ghRun(2)]
-    const r = await put(owner, { version: 'v.0.1.0.0', expectedRev: 0, expectedSha: seen })
+    const r = await put(owner, { version: 'v.0.1.0.0', ...seen })
     expect(r.status).toBe(409)
     expect(r.json.error).toMatch(/Новый деплой/)
     const g = await owner.get('/release')
@@ -274,26 +299,90 @@ describe('PUT /api/release', () => {
   it('та же или ниже — 400 без подтверждения, с подтверждением — сохраняется', async () => {
     runs = [ghRun(1)]
     const owner = api(app, await login(app))
-    const sha = sha40(1).slice(0, 12)
-    expect((await put(owner, { version: 'v.0.2.0.0', expectedRev: 0, expectedSha: sha })).status).toBe(200)
-    expect((await put(owner, { version: 'v.0.1.9.9', expectedRev: 1, expectedSha: sha })).status).toBe(400)
-    expect((await put(owner, { version: 'v.0.2.0.0', expectedRev: 1, expectedSha: sha })).status).toBe(400)
-    expect((await put(owner, { version: 'v.0.1.9.9', expectedRev: 1, expectedSha: sha, confirmLower: true })).status).toBe(200)
-    expect((await put(owner, { version: 'v.0.02.0.0', expectedRev: 2, expectedSha: sha })).status).toBe(400)
-    expect((await put(owner, { version: 'v.0.3.0.0', expectedRev: 2, expectedSha: sha, note: 'x'.repeat(501) })).status).toBe(400)
+    expect((await put(owner, { version: 'v.0.2.0.0', expectedRev: 0, ...AUTO1 })).status).toBe(200)
+    expect((await put(owner, { version: 'v.0.1.9.9', expectedRev: 1, ...AUTO1 })).status).toBe(400)
+    expect((await put(owner, { version: 'v.0.2.0.0', expectedRev: 1, ...AUTO1 })).status).toBe(400)
+    expect((await put(owner, { version: 'v.0.1.9.9', expectedRev: 1, ...AUTO1, confirmLower: true })).status).toBe(200)
+    expect((await put(owner, { version: 'v.0.02.0.0', expectedRev: 2, ...AUTO1 })).status).toBe(400)
+    expect((await put(owner, { version: 'v.0.3.0.0', expectedRev: 2, ...AUTO1, note: 'x'.repeat(501) })).status).toBe(400)
   })
 
-  it('новее успешного — ручной запуск: без SHA — 409, вставленный SHA сохраняется', async () => {
+  it('новее успешного — ручной запуск: без SHA — 400, вставленный SHA сохраняется', async () => {
     runs = [ghRun(1), ghRun(2, { event: 'workflow_dispatch' })]
     const owner = api(app, await login(app))
-    const g = await owner.get('/release')
-    expect(g.json.binding).toMatchObject({ mode: 'confirm', reason: 'manual_run', sha: sha40(1).slice(0, 12), run: { runKey: '2' } })
-    const base = { version: 'v.0.1.0.0', expectedRev: 0, expectedSha: g.json.binding.sha }
-    expect((await put(owner, base)).status).toBe(409)
+    const seen = await seenBy(owner)
+    expect(seen).toEqual({ expectedRev: 0, expectedMode: 'confirm', expectedRunKey: '2', expectedSha: SHA1 })
+    const base = { version: 'v.0.1.0.0', ...seen }
+    expect((await put(owner, base)).status).toBe(400)
     expect((await put(owner, { ...base, sha: 'xyz1234' })).status).toBe(400)
     const r = await put(owner, { ...base, sha: 'ABCDEF1234' })
     expect(r.status).toBe(200)
     expect(r.json.current.sha).toBe('abcdef1234')
+  })
+
+  it('подтверждение: ещё один ручной запуск до сохранения — 409 (SHA последнего успешного тот же)', async () => {
+    runs = [ghRun(1), ghRun(2, { event: 'workflow_dispatch' })]
+    const owner = api(app, await login(app))
+    const seen = await seenBy(owner)
+    runs = [ghRun(1), ghRun(2, { event: 'workflow_dispatch' }), ghRun(3, { event: 'workflow_dispatch' })]
+    const r = await put(owner, { version: 'v.0.1.0.0', ...seen, sha: 'abcdef1' })
+    expect(r.status).toBe(409)
+    expect((await owner.get('/release')).json).toMatchObject({ current: null, binding: { mode: 'confirm', sha: SHA1, run: { runKey: '3' } } })
+  })
+
+  it('битая строка версии: копия в release:hr-helper:backup и запись в ленте, затем новая версия', async () => {
+    const raw = '{"rev": 3, "current": "битая'
+    await getDb().insert(settings).values({ key: RELEASE_KEY, value: raw, updatedAt: new Date() })
+    runs = [ghRun(1)]
+    const owner = api(app, await login(app))
+    expect((await owner.get('/release')).json).toMatchObject({ rev: 0, current: null })
+    expect((await put(owner, { version: 'v.0.1.0.0', expectedRev: 0, ...AUTO1 })).status).toBe(200)
+    const backup = await getDb().query.settings.findFirst({ where: (st, { eq }) => eq(st.key, RELEASE_BACKUP_KEY) })
+    expect(backup?.value).toBe(raw)
+    const log = await getDb().query.activity.findMany({ where: (a, { eq }) => eq(a.kind, 'config') })
+    expect(log.map((a) => a.message)).toContain(`Повреждённая запись версии сохранена в ${RELEASE_BACKUP_KEY}`)
+    expect((await readRelease()).state.current?.version).toBe('v.0.1.0.0')
+  })
+})
+
+describe('хранилище версии', () => {
+  it('автор до 320 знаков сохраняется и читается; длиннее — запись не уходит', async () => {
+    const entry = { version: 'v.0.1.0.0', sha: SHA1, setAt: 1, note: '' }
+    const setBy = `${'a'.repeat(191)}@ops.test`
+    expect(setBy).toHaveLength(200)
+    const snap = await readRelease()
+    expect(await writeRelease(snap, nextReleaseState(snap.state, { ...entry, setBy }))).toBe(true)
+    const back = await readRelease()
+    expect(back.state.current?.setBy).toBe(setBy)
+    await expect(writeRelease(back, nextReleaseState(back.state, { ...entry, setBy: 'a'.repeat(321) }))).rejects.toThrow(/не прошла проверку/)
+    expect((await readRelease()).state.rev).toBe(1)
+  })
+})
+
+describe('опрос GitHub при чтении', () => {
+  it('параллельные вызовы — один опрос; аренда занята — пропуск без ошибки', async () => {
+    runs = [ghRun(1)]
+    expect(await Promise.all([syncGithubDeploysOnce(), syncGithubDeploysOnce()])).toEqual(['ok', 'ok'])
+    expect(polls()).toBe(1)
+    expect(await tryAcquireLease('github-sync', 60_000)).toBe(true)
+    expect(await syncGithubDeploysOnce()).toBe('busy')
+    expect(polls()).toBe(1)
+  })
+
+  it('опрашивает оператор и выше, наблюдатель — нет; подвал — без опроса, только версия и SHA', async () => {
+    runs = [ghRun(1)]
+    const viewer = await asRole('viewer')
+    expect((await viewer.get('/release')).json.binding).toMatchObject({ mode: 'confirm', reason: 'no_deploy' })
+    expect(polls()).toBe(0)
+    const owner = api(app, await login(app))
+    expect((await owner.get('/release')).json.binding).toMatchObject({ mode: 'auto', sha: SHA1 })
+    expect(polls()).toBe(1)
+    await staleSync()
+    expect((await owner.get('/release?view=nav')).json).toEqual({ version: null, sha: null })
+    expect((await put(owner, { version: 'v.0.1.0.0', note: 'n', expectedRev: 0, ...AUTO1 })).status).toBe(200)
+    expect(polls()).toBe(2)
+    expect((await viewer.get('/release?view=nav')).json).toEqual({ version: 'v.0.1.0.0', sha: SHA1 })
+    expect(polls()).toBe(2)
   })
 })
 
@@ -301,57 +390,65 @@ describe('предложение версии', () => {
   async function withCurrent() {
     runs = [ghRun(1)]
     const owner = api(app, await login(app))
-    expect((await put(owner, { version: 'v.0.1.2.3', expectedRev: 0, expectedSha: sha40(1).slice(0, 12) })).status).toBe(200)
-    runs = [ghRun(1), ghRun(2)]
-    await staleSync()
+    expect((await put(owner, { version: 'v.0.1.2.3', expectedRev: 0, ...AUTO1 })).status).toBe(200)
+    await deploy(owner, 2)
     return owner
   }
+  /** Новый успешный деплой: чтение панели приносит его из GitHub. */
+  async function deploy(owner: Api, id: number) {
+    runs = [...runs, ghRun(id)]
+    await staleSync()
+    expect((await owner.get('/release')).json.binding).toMatchObject({ mode: 'auto', sha: sha40(id).slice(0, 12) })
+  }
+  const suggest = async (o: Api) => (await o.get('/release/suggestion')).json
 
-  it('по первой родительской линии от деплоя до текущей версии: feature и fix → B+1', async () => {
+  it('по первой родительской линии от деплоя до текущей версии: feature и fix → B+1; кэш', async () => {
     const owner = await withCurrent()
-    const side = sha40(99)
     commitPages = [
       [
         commit(sha40(2), 'Merge pull request #12 from agolubenk/feature/x', sha40(20)),
-        commit(side, 'feat: коммит ветки PR — не первая родительская линия', sha40(1)),
+        commit(sha40(99), 'feat: коммит ветки PR — не первая родительская линия', sha40(1)),
         commit(sha40(20), 'fix(api): squash (#11)', sha40(1)),
         commit(sha40(1), 'Merge pull request #10 from agolubenk/fix/y', sha40(0)),
       ],
     ]
-    const g = await owner.get('/release')
-    expect(g.json.suggestionError).toBeNull()
-    expect(g.json.suggestion).toEqual({
-      version: 'v.0.2.0.0',
-      base: sha40(1).slice(0, 12),
-      head: sha40(2).slice(0, 12),
-      commits: 2,
-      counts: { feature: 1, fix: 1, other: 0 },
+    expect(await suggest(owner)).toEqual({
+      suggestion: { version: 'v.0.2.0.0', base: SHA1, head: sha40(2).slice(0, 12), commits: 2, counts: { feature: 1, fix: 1, other: 0 } },
+      suggestionError: null,
     })
     expect(commitCalls[0]).toContain(`sha=${sha40(2).slice(0, 12)}`)
     expect(commitCalls[0]).toContain('per_page=100')
-    // Кэш по base...head: повторное чтение GitHub не спрашивает; не владельцу предложение не считается.
-    await owner.get('/release')
+    await suggest(owner)
     expect(commitCalls).toHaveLength(1)
-    const viewer = await asRole('viewer')
-    expect((await viewer.get('/release')).json).toMatchObject({ suggestion: null, suggestionError: null })
+  })
+
+  it('пошаговый обход: новый head — одна страница до прошлого head; прошлого head нет на линии — полный обход', async () => {
+    const owner = await withCurrent()
+    commitPages = [[commit(sha40(2), 'feat: a', sha40(20)), commit(sha40(20), 'chore: b', sha40(1)), commit(sha40(1), 'x', null)]]
+    expect((await suggest(owner)).suggestion).toMatchObject({ commits: 2, counts: { feature: 1, fix: 0, other: 1 } })
+    await deploy(owner, 3)
+    // Без пошагового обхода эта страница не дошла бы до base: у коммита 2 нет родителя на ней.
+    commitPages = [[commit(sha40(3), 'fix: c', sha40(2)), commit(sha40(2), 'feat: a', sha40(20))]]
+    expect((await suggest(owner)).suggestion).toMatchObject({ head: sha40(3).slice(0, 12), commits: 3, counts: { feature: 1, fix: 1, other: 1 } })
+    expect(commitCalls).toHaveLength(2)
+    expect(commitCalls[1]).toContain(`sha=${sha40(3).slice(0, 12)}`)
+    await deploy(owner, 4)
+    commitPages = [[commit(sha40(4), 'fix: d', sha40(21)), commit(sha40(21), 'chore: e', sha40(1)), commit(sha40(1), 'x', null)]]
+    expect((await suggest(owner)).suggestion).toMatchObject({ version: 'v.0.1.3.0', commits: 2, counts: { feature: 0, fix: 1, other: 1 } })
+    expect(commitCalls).toHaveLength(4)
   })
 
   it('base не найден — предложения нет, ручной ввод работает', async () => {
     const owner = await withCurrent()
     commitPages = [[commit(sha40(2), 'fix: a', sha40(30)), commit(sha40(30), 'chore: b', null)]]
-    const g = await owner.get('/release')
-    expect(g.json.suggestion).toBeNull()
-    expect(g.json.suggestionError).toMatch(/не найден/)
-    expect((await put(owner, { version: 'v.0.1.2.4', expectedRev: 1, expectedSha: g.json.binding.sha })).status).toBe(200)
+    expect(await suggest(owner)).toMatchObject({ suggestion: null, suggestionError: expect.stringMatching(/не найден/) })
+    expect((await put(owner, { version: 'v.0.1.2.4', ...(await seenBy(owner)) })).status).toBe(200)
   })
 
   it('GitHub 403 или 429 — предложения нет с причиной', async () => {
     const owner = await withCurrent()
     commitsStatus = 429
-    const g = await owner.get('/release')
-    expect(g.status).toBe(200)
-    expect(g.json.suggestion).toBeNull()
-    expect(g.json.suggestionError).toMatch(/HTTP 429/)
+    expect(await suggest(owner)).toMatchObject({ suggestion: null, suggestionError: expect.stringMatching(/HTTP 429/) })
   })
 })
 
@@ -364,7 +461,7 @@ describe('GET /api/public/release', () => {
 
     runs = [ghRun(1)]
     const owner = api(app, await login(app))
-    expect((await put(owner, { version: 'v.0.1.0.0', note: 'секрет', expectedRev: 0, expectedSha: sha40(1).slice(0, 12) })).status).toBe(200)
+    expect((await put(owner, { version: 'v.0.1.0.0', note: 'секрет', expectedRev: 0, ...AUTO1 })).status).toBe(200)
     const res = await app.request('/api/public/release')
     expect(res.headers.get('cache-control')).toBe('public, max-age=60')
     const text = await res.text()
@@ -372,7 +469,7 @@ describe('GET /api/public/release', () => {
     expect(Object.keys(body).sort()).toEqual(['setAt', 'version'])
     expect(body.version).toBe('v.0.1.0.0')
     expect(typeof body.setAt).toBe('number')
-    for (const leak of [sha40(1).slice(0, 7), 'owner@ops.test', 'секрет']) expect(text).not.toContain(leak)
+    for (const leak of [SHA1.slice(0, 7), 'owner@ops.test', 'секрет']) expect(text).not.toContain(leak)
     // Сессионный ответ — no-store, как остальное API.
     const session = await app.request('/api/release', { headers: { Cookie: await login(app) } })
     expect(session.headers.get('cache-control')).toBe('no-store')

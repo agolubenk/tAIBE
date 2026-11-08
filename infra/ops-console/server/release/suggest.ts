@@ -2,12 +2,14 @@
  * Предложение следующей версии по коммитам main между текущей версией (base) и привязываемым деплоем (head).
  * Источник — список коммитов GitHub (`/commits?sha=head`, 100 на страницу ≈ 772 КБ), а не compare: compare всегда
  * несёт файлы с патчами (1,75 МБ на 88 коммитов). Идём по первой родительской линии от head до base: на main это
- * merge-коммиты PR и squash-коммиты. Результат кэшируется по `base...head` — коммиты по SHA не меняются.
+ * merge-коммиты PR и squash-коммиты. Результат кэшируется по `base...head` — коммиты по SHA не меняются; классы
+ * последнего обхода хранятся, и следующий деплой (новый head при той же base) дочитывает только новые коммиты.
  */
 import { z } from 'zod'
 import { decryptSecret } from '../lib/crypto'
 import { httpRequest } from '../lib/http'
 import { getGithubSettings, readSetting, writeSetting } from '../settings/store'
+import { deployStartedAt } from './binding'
 import { bumpReleaseVersion, formatReleaseVersion, parseReleaseVersion, type ChangeKind, type ReleaseSuggestion } from '../../shared/release'
 
 export const SUGGESTION_KEY = 'release:hr-helper:suggestion'
@@ -49,9 +51,11 @@ interface Commit {
 
 export type SuggestOutcome = { ok: true; suggestion: ReleaseSuggestion } | { ok: false; error: string; transient: boolean }
 
-const fail = (error: string, transient = false): SuggestOutcome => ({ ok: false, error, transient })
+type WalkFailure = Extract<SuggestOutcome, { ok: false }>
 
-function httpFailure(status: number): SuggestOutcome {
+const fail = (error: string, transient = false): WalkFailure => ({ ok: false, error, transient })
+
+function httpFailure(status: number): WalkFailure {
   if (status === 403 || status === 429) return fail(`GitHub ограничил запросы (HTTP ${status}) — введите версию вручную`, true)
   if (status === 404) return fail('GitHub не отдал коммиты (HTTP 404): токену нужен доступ Contents: read — введите версию вручную', true)
   return fail(`GitHub API: HTTP ${status} — введите версию вручную`, true)
@@ -66,7 +70,7 @@ interface WalkInput {
 }
 
 /** Страница списка коммитов или отказ с текстом для человека. */
-async function fetchPage(input: WalkInput, page: number): Promise<z.infer<typeof pageSchema> | SuggestOutcome> {
+async function fetchPage(input: WalkInput, page: number): Promise<z.infer<typeof pageSchema> | WalkFailure> {
   const url =
     `https://api.github.com/repos/${input.repo}/commits?sha=${input.head}` +
     `&since=${new Date(input.since).toISOString()}&per_page=${PER_PAGE}&page=${page}`
@@ -89,7 +93,7 @@ async function fetchPage(input: WalkInput, page: number): Promise<z.infer<typeof
 }
 
 /** Классы коммитов первой родительской линии от head (включая) до base (не включая). */
-export async function walkFirstParents(input: WalkInput): Promise<ChangeKind[] | SuggestOutcome> {
+export async function walkFirstParents(input: WalkInput): Promise<ChangeKind[] | WalkFailure> {
   const commits = new Map<string, Commit>()
   const baseKey = input.base.slice(0, 12)
   const kinds: ChangeKind[] = []
@@ -127,9 +131,19 @@ function suggestionFrom(currentVersion: string, base: string, head: string, kind
   return { ok: true, suggestion: { version: formatReleaseVersion(next), base, head, commits: kinds.length, counts } }
 }
 
+/** Последний законченный обход: классы коммитов base...head для текущей версии. */
+const walkSchema = z.object({
+  base: z.string(),
+  version: z.string(),
+  head: z.string(),
+  kinds: z.array(z.enum(['feature', 'fix', 'other'])),
+})
+type WalkCache = z.infer<typeof walkSchema>
+
 const cacheSchema = z.object({
   key: z.string().default(''),
   at: z.number().default(0),
+  walk: walkSchema.nullable().default(null),
   outcome: z
     .union([
       z.object({
@@ -156,6 +170,26 @@ export interface SuggestInput {
   baseAt: number
 }
 
+interface RepoAccess {
+  repo: string
+  auth: Record<string, string>
+}
+
+/**
+ * Классы коммитов base...head. Есть обход той же base и версии — читаем только коммиты от нового head до его head
+ * (окно — от деплоя того head) и добавляем к сохранённым. Его head не на линии нового (откат, force-push) — полный обход.
+ */
+async function walkKinds(access: RepoAccess, input: SuggestInput, prior: WalkCache | null): Promise<ChangeKind[] | WalkFailure> {
+  if (prior?.head === input.head) return prior.kinds
+  const priorAt = prior ? await deployStartedAt(prior.head) : null
+  if (prior && priorAt !== null) {
+    const fresh = await walkFirstParents({ ...access, base: prior.head, head: input.head, since: priorAt - DAY_MS })
+    if (Array.isArray(fresh)) return [...fresh, ...prior.kinds]
+    if (fresh.transient) return fresh
+  }
+  return walkFirstParents({ ...access, base: input.base, head: input.head, since: input.baseAt - DAY_MS })
+}
+
 /** Предложение (только для владельца — вызывает маршрут). Кэш по base...head; сбой GitHub — на 5 минут. */
 export async function suggestRelease(input: SuggestInput, now = Date.now()): Promise<SuggestOutcome> {
   if (input.head.startsWith(input.base.slice(0, 12)) || input.base.startsWith(input.head)) {
@@ -174,8 +208,11 @@ export async function suggestRelease(input: SuggestInput, now = Date.now()): Pro
   } catch {
     return fail('Токен GitHub не расшифровывается — перевыпустите его в Настройки → Интеграции')
   }
-  const walked = await walkFirstParents({ repo: gh.repo, auth, base: input.base, head: input.head, since: input.baseAt - DAY_MS })
-  const outcome = Array.isArray(walked) ? suggestionFrom(input.currentVersion, input.base, input.head, walked) : walked
-  await writeSetting(SUGGESTION_KEY, { key, at: now, outcome })
+  const prior = cached.walk?.base === input.base && cached.walk.version === input.currentVersion ? cached.walk : null
+  const kinds = await walkKinds({ repo: gh.repo, auth }, input, prior)
+  const walked = Array.isArray(kinds)
+  const outcome = walked ? suggestionFrom(input.currentVersion, input.base, input.head, kinds) : kinds
+  const walk: WalkCache | null = walked ? { base: input.base, version: input.currentVersion, head: input.head, kinds } : prior
+  await writeSetting(SUGGESTION_KEY, { key, at: now, outcome, walk })
   return outcome
 }
