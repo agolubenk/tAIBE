@@ -387,7 +387,26 @@ export async function deleteDoc(actor: Actor, collection: Collection, id: string
  * История читает NULL как продукт по умолчанию — так помечены и события образа до v2-lite.
  */
 export async function logEvent(actor: string, collection: string, docId: string, action: string, after: unknown, product: string | null): Promise<void> {
-  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: after === undefined ? null : JSON.stringify(after).slice(0, 20_000), product })
+  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: eventJson(after), product })
+}
+
+export const EVENT_JSON_MAX = 20_000
+
+/** Событие журнала — JSON целиком до EVENT_JSON_MAX символов; длиннее — валидный маркер, а не JSON, обрезанный посередине (Q-36). */
+export function eventJson(after: unknown): string | null {
+  if (after === undefined) return null
+  const s = JSON.stringify(after)
+  return s.length <= EVENT_JSON_MAX ? s : JSON.stringify({ truncated: true, len: s.length })
+}
+
+/** Чтение события: битая строка журнала (старый срез посередине JSON) — маркер, а не 500 всей истории (Q-36). */
+export function eventAfter(raw: string | null): unknown {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return { truncated: true, len: raw.length }
+  }
 }
 
 /** История документа — события видимых продуктов (у событий старого образа продукта нет — это HR). */
@@ -399,7 +418,7 @@ export async function docHistory(collection: Collection, id: string, products: V
     .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own))
     .orderBy(desc(oqEvents.at))
     .limit(Math.min(limit, 100))
-  const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: r.afterJson ? JSON.parse(r.afterJson) : null, raw: r.afterJson }))
+  const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: eventAfter(r.afterJson), raw: r.afterJson }))
   // Смена продукта пишет событие в оба продукта; кто видит оба (владелец), получает одно.
   const seen = new Set<string>()
   return events
