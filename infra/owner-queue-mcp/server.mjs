@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { FILE_ID, ITEM_ID, alreadySaved, ensureDir, extOf, fileRoots, filesState, safeDir, saveStream } from './files.mjs';
-import { briefDoc, filterDocs, fitEvents, fitList, pageList, replyText, snapshots } from './list.mjs';
+import { briefDoc, filterDocs, fitList, historyReply, pageList, replyText, snapshots } from './list.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BASE = `${(process.env.OQ_URL || 'https://ops.admin.hrhelper.space').replace(/\/$/, '')}/api/oq/v1`;
@@ -356,11 +356,12 @@ const TOOLS = [
     name: 'oq_history',
     description: 'Журнал изменений документа: кто, когда, что — до 50 последних событий, новые первыми. Ответ — до 95 тыс. '
       + 'символов (дорого для контекста): обзор — сначала brief: true. {total — событий в этом окне, events, shown + truncated? — '
-      + 'старые события не влезли в потолок ответа}; не влезли — тот же вызов с brief: true.',
+      + 'старые события не влезли в потолок ответа, briefAuto? — полные события не влезли все, ответ сам дан в brief; '
+      + 'одно событие целиком — oq_get}.',
     inputSchema: { type: 'object', properties: { collection: COLL, id: { type: 'string' }, brief: { type: 'boolean', description: 'в after строки длиннее 200 символов — начало и длина (<поле>Len), большие массивы (cards) — их длина (<поле>Count)' } }, required: ['collection', 'id'] },
     run: async ({ collection, id, brief }) => {
       const r = await api('GET', `/history/${collection}/${encodeURIComponent(id)}`);
-      return fitEvents(Array.isArray(r?.events) ? r.events : [], { brief: brief === true });
+      return historyReply(Array.isArray(r?.events) ? r.events : [], { brief: brief === true });
     },
   },
 ];

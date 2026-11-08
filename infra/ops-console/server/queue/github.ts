@@ -170,7 +170,9 @@ function mergeFlags(cmd: string): MergeFlags {
   const raw = commandWords(segment)
   const words = raw.map(unquote)
   // $ и ` вне одинарных кавычек и без \ перед ними shell подставит — консоль увидела бы буквальный текст.
-  const expands = (i: number) => /[$`]/.test((raw[i] ?? '').replace(/'[^']*'|\\[\s\S]/g, ''))
+  // <( и >( — подстановка процесса: REDIRECT пропускает её как аргумент, а заголовком стал бы текст «<(cat)»
+  // (линза корректности #543, F2). В двойных кавычках это буквальный текст — тогда отказ лишний, но безопасный.
+  const expands = (i: number) => /[$`]|[<>]\(/.test((raw[i] ?? '').replace(/'[^']*'|\\[\s\S]/g, ''))
   const out: MergeFlags = { pr: null, repo: null, method: null, subject: null, segment, problems: {} }
   if (merges.length > 1) out.problems.other = `в команде ${merges.length} мёржа — консоль вливает один PR за пункт`
   // Кавычка без пары обрезала разбор: флаги после неё консоль не увидела бы.
@@ -185,7 +187,7 @@ function mergeFlags(cmd: string): MergeFlags {
     if (!f) return
     // gh взял бы и «--squash» как значение -t — это опечатка в пункте, а не заголовок.
     if (value === null || value === '' || value.startsWith('-')) out.problems[f] = `в команде у флага ${flag} нет значения`
-    else if (expands(i)) out.problems[f] = `в значении ${flag} подстановка shell ($ или \`) — консоль её не выполнит`
+    else if (expands(i)) out.problems[f] = `в значении ${flag} подстановка shell ($, \` или <(…)) — консоль её не выполнит`
     else if (f === 'repo') repos.push(repoName(value))
     else out.subject = value
   }
@@ -260,6 +262,8 @@ export function mergePlan(item: Record<string, unknown>): MergePlan {
   const method = item.mergeMethod === 'squash' || (item.mergeMethod === undefined && flags.method === 'squash') ? 'squash' : 'merge'
   const subjectRaw = str(item.subject) ?? flags.subject
   const subject = subjectRaw && SUBJECT.test(subjectRaw.trim()) ? subjectRaw.trim() : null
+  // Заголовок задан, но не годится — отказ, а не тихий заголовок по умолчанию (линза корректности #543, F3).
+  if (subjectRaw && !subject) problems.push(`заголовок коммита (${str(item.subject) ? 'поле subject' : 'флаг --subject'}) — нужна одна строка до 300 символов`)
   const skipCi = item.deploy === 'skip' || SKIP_ANY.test(flags.segment) || SKIP_MARKER.test(subject ?? '')
   // Мёрж в main с кодом деплоит прод — поэтому деплой ожидается, если пункт не говорит обратное:
   // [skip ci], deploy: 'none' (только docs/md — paths-ignore) или метка «без деплоя».
@@ -350,9 +354,13 @@ export interface MergeInfo extends Omit<MergePlan, 'repo'> {
 }
 
 /** Всё для экрана подтверждения: что вливаем, какой SHA, будет ли деплой и не идёт ли он сейчас. */
-export async function mergeInfo(itemId: string): Promise<MergeInfo> {
+export async function mergeInfo(itemId: string, shownVersion?: number): Promise<MergeInfo> {
   const item = await getDoc('items', itemId, '*')
   if (!item || item.data.kind !== 'merge') throw apiError(404, 'Нет такого пункта мёржа')
+  // Версия экрана — до запросов к GitHub: устаревший клик не тратит два вызова API (линза ресурсов #543).
+  if (shownVersion !== undefined && item.version !== shownVersion) {
+    throw apiError(409, 'Пункт изменился после показа (способ, заголовок или деплой могли стать другими) — откройте мёрж заново')
+  }
   // Репозиторий и токен мёржа — пока только HR (настройки консоли): пункт другого продукта влил бы PR не в тот
   // репозиторий. Мёрж по продукту — после точки невозврата PNR-1 (план, фаза 7), отдельным «да».
   if (item.product !== DEFAULT_PRODUCT) throw apiError(409, `Мёрж из очереди для продукта «${item.product}» ещё не подключён`)
@@ -390,10 +398,11 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
   if (!actor.scopes.includes('owner')) throw apiError(403, 'Вливает только владелец')
   if (!/^[0-9a-f]{40}$/.test(sha)) throw apiError(422, 'Нужен полный SHA, показанный на экране подтверждения')
   // Способ, заголовок и деплой берутся из пункта заново: без версии экрана агент мог бы поменять их между показом и кликом.
-  if (version === undefined) throw apiError(422, 'Нужна версия пункта с экрана подтверждения — откройте мёрж заново (на странице — после обновления)')
+  if (version === undefined) {
+    throw apiError(422, 'Нужна версия пункта с экрана подтверждения — откройте мёрж заново (на странице — после обновления; в Telegram — после обновления бота очереди)')
+  }
   if (Date.now() - lastMergeAt < MERGE_GAP_MS) throw apiError(429, 'Мёржи не чаще раза в 30 секунд — подождите')
-  const info = await mergeInfo(itemId)
-  if (info.version !== version) throw apiError(409, 'Пункт изменился после показа (способ, заголовок или деплой могли стать другими) — откройте мёрж заново')
+  const info = await mergeInfo(itemId, version)
   if (info.state !== 'open') throw apiError(409, info.state === 'merged' ? `PR #${info.pr} уже влит` : `PR #${info.pr} закрыт`)
   if (info.approval === 'missing') {
     throw apiError(409, `В пункте нет вердикта «Контроля» по PR #${info.pr} (поля sha и base) — вливать нельзя до вердикта`)

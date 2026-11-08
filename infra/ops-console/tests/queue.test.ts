@@ -705,6 +705,18 @@ describe('мёрж из очереди', () => {
     expect(plan('gh pr merge 5 ">x"').problem).toContain('больше одного аргумента')
   })
 
+  it('заголовок из подстановки процесса или негодный — 409, а не буквальный или заголовок по умолчанию (линза корректности #543, F2/F3)', () => {
+    const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
+    expect(plan('gh pr merge 5 --squash --subject <(cat)')).toMatchObject({ subject: null, problem: expect.stringContaining('подстановка shell') })
+    expect(plan('gh pr merge 5 --squash -t x<(cat)').problem).toContain('подстановка shell')
+    // В одинарных кавычках — буквальный текст.
+    expect(plan("gh pr merge 5 --squash -t '<(cat)'")).toMatchObject({ subject: '<(cat)', problem: null })
+    expect(plan(`gh pr merge 5 --squash -t "${'я'.repeat(301)}"`)).toMatchObject({ subject: null, problem: expect.stringContaining('флаг --subject') })
+    expect(plan('gh pr merge 5 --squash -t "a\nb"').problem).toContain('одна строка до 300')
+    expect(plan('gh pr merge 5 --squash', { subject: 'a\nb' }).problem).toContain('поле subject')
+    expect(plan('gh pr merge 5 --squash -t "ok"')).toMatchObject({ subject: 'ok', problem: null })
+  })
+
   it('разбор не пропускает то, что gh поймёт иначе: хвост URL, флаги до merge, cd в кавычках, два мёржа, \\\' (ревью Q-29/Q-30, проход 2)', () => {
     const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
     // (a) URL PR с хвостом — репозиторий из URL, как у gh.
@@ -847,10 +859,13 @@ describe('мёрж из очереди', () => {
     expect((await bearer(owner).post('/merge/m-170', { sha: SHA })).status).toBe(422)
     const shown = (await bearer(owner).get('/merge/m-170')).json.version as number
     await bearer(agent).put('/db/items/m-170', { data: { kind: 'merge', title: '#170 — код', pr: 162, sha: SHA, base: 'main', deploy: 'skip' } })
+    calls.length = 0
     const stale = await bearer(owner).post('/merge/m-170', { sha: SHA, version: shown })
     expect(stale.status).toBe(409)
     expect(stale.json.error).toContain('изменился после показа')
     expect(lastPut).toBeNull()
+    // Версия сверяется до GitHub: устаревший клик не тратит вызовы API (линза ресурсов #543).
+    expect(calls).toEqual([])
   })
 
   it('squash через мёрж: заголовок из пункта, текст из коммитов ветки без меток пропуска CI, деплой (ревью Q-29/Q-30)', async () => {
