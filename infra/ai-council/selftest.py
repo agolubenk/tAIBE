@@ -2806,6 +2806,8 @@ def main() -> int:
         selftest_pr_review.run(tmp, check)
         import selftest_tboards              # источник карточек t-boards по запросу (OPS-26)
         selftest_tboards.run(tmp, check)
+        import selftest_cards_stats          # сводка карточек для очереди владельца (OPS-38)
+        selftest_cards_stats.run(tmp, check)
 
     failed = [name for name, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} проверок пройдено")
