@@ -64,7 +64,7 @@ export const NAV: NavSection[] = [
     ],
   },
   { to: '/incidents', label: 'Инциденты', icon: 'flame', keywords: 'аварии сбои постмортем', count: (c) => [c.incidents, false] },
-  { to: '/deploys', label: 'Деплои', icon: 'rocket', keywords: 'github actions релизы выкат ci' },
+  { to: '/deploys', label: 'Деплои', icon: 'rocket', keywords: 'github actions релизы выкат ci версия продукта' },
   { to: '/events', label: 'События', icon: 'list', keywords: 'журнал лента активность аудит' },
   { to: '/reports', label: 'Отчёты ИИ-совету', icon: 'report', keywords: 'ии-совет совет директоров приёмник расписание дайджест' },
   {

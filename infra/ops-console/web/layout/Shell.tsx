@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { releaseQuery } from '../lib/release'
 import { ROLE_LABEL, useSession } from '../lib/session'
 import { applyAppearance, effectiveDark, readAppearance, type Appearance } from '../lib/theme'
 import { Icon } from '../ui/Icon'
@@ -45,11 +46,22 @@ function NavFoot() {
   // Тот же запрос и ключ, что у «Настроек» и «Отчётов»: флаг страницы статуса без лишнего запроса.
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<SettingsResponse>('/settings'), staleTime: 60_000 })
   const publicStatus = settings.data?.general.publicStatusEnabled
+  // Тот же ключ, что у панели «Версия продукта» на «Деплоях»: там запрос свежий, здесь хватит раза в 5 минут.
+  const release = useQuery({ ...releaseQuery, staleTime: 5 * 60_000, refetchOnWindowFocus: false })
+  const version = release.data?.current
   return (
     <div className={s.navFoot}>
       Наблюдение за продуктом: серверы, контейнеры, проверки, алерты.
       {ssoEnabled ? ' Вход — аккаунтом платформы, роли задаёт её суперадмин.' : ''}
       <br />
+      {version ? (
+        <>
+          <Link to="/deploys">
+            Версия {version.version} · {version.sha.slice(0, 7)}
+          </Link>
+          <br />
+        </>
+      ) : null}
       {publicStatus ? (
         <a href="/status" target="_blank" rel="noreferrer">
           Публичный статус →
