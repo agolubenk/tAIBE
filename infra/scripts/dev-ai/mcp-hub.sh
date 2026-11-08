@@ -2,26 +2,31 @@
 # Единый локальный MCP-хаб для всех ИИ-клиентов (Copilot Chat, Continue, Roo, Kimi Code, Codex,
 # Claude Code): один набор серверов, один набор секретов, одна OAuth-авторизация на всех.
 #
-# Два фоновых процесса, запускаются этой командой (при входе в систему — LaunchAgent, `autostart on`):
-#   serena — по streamable HTTP, :9121. Одна LSP-индексация монорепо на всех клиентов вместо
-#            копии на каждого (~2 ГБ RAM каждая, и копии мешали друг другу стартовать);
-#   хаб    — агрегатор 1mcp, :3050/mcp. Список серверов — infra/mcp-hub/mcp.json (копируется в
-#            ~/.config/hr-helper-mcp-hub/: рядом с конфигом 1mcp пишет своё состояние, в репо
-#            ему не место).
+# Три фоновых процесса, запускаются этой командой (при входе в систему — LaunchAgent, `autostart on`):
+#   serena       — по streamable HTTP, :9121, код продукта-хоста (HOST_ROOT, HR). Одна LSP-индексация на всех
+#                  клиентов вместо копии на каждого (копии мешали друг другу стартовать);
+#   serena-taibe — :9122, сам tAIBE (основная папка), без дашборда; по требованию (`serena-taibe on`, владелец 08.11 —
+#                  память). Обе только на чтение, версия закреплена (lib/mcp-hub-serena.sh, README — «Две serena»);
+#   хаб          — агрегатор 1mcp, :3050/mcp. Список серверов — infra/mcp-hub/mcp.json (копируется в
+#                  ~/.config/hr-helper-mcp-hub/: рядом с конфигом 1mcp пишет своё состояние, в репо
+#                  ему не место).
 # Claude Code ходит в serena напрямую — имена инструментов mcp__serena__* не меняются (хаб
-# добавляет префикс `<сервер>_1mcp_`, а на эти имена завязаны агенты и permissions).
+# добавляет префикс `<сервер>_1mcp_`, а на эти имена завязаны агенты и permissions): user-scope `serena` —
+# :9121, а `serena` из .mcp.json tAIBE (:9122) перекрывает её в сессиях tAIBE.
 # Подключение клиентов, OAuth, добавление сервера — infra/mcp-hub/README.md.
 #
-#   bash infra/scripts/dev-ai/mcp-hub.sh {init|auth|admin|start|stop|restart [hub]|status|check|logs [N]|sync|connectors|connect <имя>|disconnect <имя>|autostart on|off|status}
+#   bash infra/scripts/dev-ai/mcp-hub.sh {init|auth|admin|start|stop|restart [hub]|status|check|logs [N]|sync|connectors|connect <имя>|disconnect <имя>|autostart on|off|status|serena-taibe on|off|status}
 #   npm run mcp-hub:init | mcp-hub:auth | mcp-hub:start | mcp-hub:stop | mcp-hub:restart | mcp-hub:status | mcp-hub:logs | mcp-hub:sync
 #   npm run mcp-hub:connectors | mcp-hub:connect -- <имя> | mcp-hub:disconnect -- <имя>
 #   npm run mcp-hub:autostart -- on|off|status
+#   npm run mcp-hub:serena-taibe -- on|off|status
 #
 # init  — то, что запускает задача VS Code при открытии папки (.vscode/tasks.json): start + auth.
 # auth  — открыть авторизацию всем, кто её ждёт (lib/mcp-hub-admin.sh); коннекторы — там же.
 # autostart — LaunchAgent macOS, который при входе в систему зовёт start (lib/mcp-hub-autostart.sh).
-# check — код 0, только если serena и хаб живы, держат свои порты, обслуживают основную папку и
-#         отвечают (lib/mcp-hub-health.sh; его зовёт ai-restart-all.sh).
+# check — код 0, только если serena и хаб (и serena-taibe, когда включена) живы, держат свои порты, обслуживают
+#         свои папки и отвечают (lib/mcp-hub-health.sh; его зовёт ai-restart-all.sh).
+# serena-taibe — включить/выключить вторую serena: метка в каталоге конфига, start/restart/init/автозапуск её читают.
 #
 # Процессы стартуют в своей сессии (конец задачи VS Code их не гасит), stop гасит всё дерево,
 # start/stop/restart — под замком, сироты прошлых запусков берутся под управление или
@@ -30,7 +35,9 @@
 # (MCP_HUB_ALLOW_WORKTREE=1 — осознанно обслуживать его копию). Для теста
 # (tests/mcp-hub-detach.test.sh) каталоги и uvx переопределяются: MCP_HUB_CONFIG_DIR,
 # MCP_HUB_RUNTIME_DIR, MCP_HUB_LOG_DIR, MCP_HUB_UVX, MCP_HUB_STOP_WAIT, MCP_HUB_SETTLE_WAIT, порты —
-# MCP_HUB_PORT, SERENA_HTTP_PORT (у нестандартного порта свои pid-файлы и логи: serena-<порт>.pid).
+# MCP_HUB_PORT, SERENA_HTTP_PORT, SERENA_TAIBE_PORT (у нестандартного порта свои pid-файлы и логи:
+# serena-<порт>.pid, serena-taibe-<порт>.pid); serena — SERENA_BIN (пусто — через uvx), SERENA_HOME,
+# SERENA_TAIBE_PROJECT.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,17 +53,10 @@ if [ -f "$ROOT/.git" ]; then
 fi
 SERVE_ROOT="$MAIN_ROOT"
 if [ "${MCP_HUB_ALLOW_WORKTREE:-}" = 1 ]; then SERVE_ROOT="$ROOT"; fi
-# Что индексирует serena: код продукта. Хаб слоя tAIBE обслуживает продукт-хост — TAIBE_HOST_ROOT
-# (абсолютный путь, тот же, что у ai-council и dams-rag); без него — обслуживаемая копия, как раньше.
-HOST_ROOT="${TAIBE_HOST_ROOT:-$SERVE_ROOT}"
-case "$HOST_ROOT" in
-  /*) [ -d "$HOST_ROOT" ] || { echo "✗ TAIBE_HOST_ROOT=$HOST_ROOT: каталога нет" >&2; exit 1; } ;;
-  *) echo "✗ TAIBE_HOST_ROOT=$HOST_ROOT: нужен абсолютный путь" >&2; exit 1 ;;
-esac
-HOST_ROOT="$(cd "$HOST_ROOT" && pwd)"
 
 HUB_PORT="${MCP_HUB_PORT:-3050}"
 SERENA_PORT="${SERENA_HTTP_PORT:-9121}"
+SERENA_TAIBE_PORT="${SERENA_TAIBE_PORT:-9122}"
 ONE_MCP_VERSION="0.39.3"
 CONFIG_SRC="$ROOT/infra/mcp-hub/mcp.json"
 CONFIG_DIR="${MCP_HUB_CONFIG_DIR:-$HOME/.config/hr-helper-mcp-hub}"
@@ -66,16 +66,21 @@ RUNTIME_DIR="${MCP_HUB_RUNTIME_DIR:-$CONFIG_DIR/runtime}"
 ONE_MCP_PKG_DIR="$RUNTIME_DIR/node_modules/@1mcp/agent"
 ONE_MCP_BIN="$RUNTIME_DIR/node_modules/.bin/1mcp"
 LOG_DIR="${MCP_HUB_LOG_DIR:-$HOME/Library/Logs/hr-helper-mcp-hub}"
+# shellcheck disable=SC2034 # запасной запуск serena — serena_launcher в lib/mcp-hub-serena.sh
 UVX="${MCP_HUB_UVX:-uvx}"
 # У нестандартного порта свои pid-файлы и логи (serena-<порт>.pid, hub-<порт>.log): иначе запуск с
 # одним переопределённым портом перезаписал бы и удалил pid-файлы боевых сервисов и ротировал их логи.
 SERENA_SFX=""
+SERENA_TAIBE_SFX=""
 HUB_SFX=""
 if [ "$SERENA_PORT" != 9121 ]; then SERENA_SFX="-$SERENA_PORT"; fi
+if [ "$SERENA_TAIBE_PORT" != 9122 ]; then SERENA_TAIBE_SFX="-$SERENA_TAIBE_PORT"; fi
 if [ "$HUB_PORT" != 3050 ]; then HUB_SFX="-$HUB_PORT"; fi
 SERENA_PID_FILE="$CONFIG_DIR/serena$SERENA_SFX.pid"
+SERENA_TAIBE_PID_FILE="$CONFIG_DIR/serena-taibe$SERENA_TAIBE_SFX.pid"
 HUB_PID_FILE="$CONFIG_DIR/hub$HUB_SFX.pid"
 SERENA_LOG="$LOG_DIR/serena$SERENA_SFX.log"
+SERENA_TAIBE_LOG="$LOG_DIR/serena-taibe$SERENA_TAIBE_SFX.log"
 HUB_LOG="$LOG_DIR/hub$HUB_SFX.log"
 AUTH_MARK_DIR="$CONFIG_DIR/auth-prompted"
 CONNECTORS_FILE="$CONFIG_DIR/connectors.enabled"
@@ -93,6 +98,11 @@ PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/CommandLineTools/' | paste
 PATH="$HOME/.local/bin:$PATH:/opt/homebrew/bin:/usr/local/bin"
 export PATH
 
+# HOST_ROOT (что индексирует serena) и SERENA_TAIBE_PROJECT (что индексирует serena-taibe) — lib/mcp-hub-serena.sh.
+# shellcheck source=lib/mcp-hub-serena.sh
+source "$SCRIPT_DIR/lib/mcp-hub-serena.sh"
+resolve_roots
+
 # shellcheck source=lib/proc-lifecycle.sh
 source "$SCRIPT_DIR/lib/proc-lifecycle.sh"
 # shellcheck source=lib/mcp-hub-admin.sh
@@ -105,19 +115,21 @@ source "$SCRIPT_DIR/lib/mcp-hub-autostart.sh"
 # ── «наши» процессы ─────────────────────────────────────────────────────────────────────────
 # Узнаём по командной строке, а не только по pid-файлу: сироты прошлых запусков pid-файла не
 # имеют, а pid из файла после смерти процесса может достаться чужому.
-#   serena — программа uv/uvx (обёртка) или serena (python), `serena start-mcp-server … --port <порт>`;
-#            строго (усыновить сироту, остановить лишнюю) — ещё `--project <HOST_ROOT>` и
-#            HTTP-транспорт: stdio-serena клиентов и serena других проектов не трогаем никогда;
+#   serena, serena-taibe — программа uv/uvx (обёртка) или serena (python), `serena start-mcp-server … --port
+#            <порт экземпляра>`: старая строка uvx (`--from git+…/serena`), закреплённая (`…/serena@<sha>`) и бинарь
+#            uv tool (`python …/bin/serena`); строго (усыновить сироту, остановить лишнюю) — ещё `--project <папка
+#            экземпляра>` и HTTP-транспорт: stdio-serena клиентов и serena других проектов не трогаем никогда;
 #   hub    — программа 1mcp, `1mcp serve --config <наш mcp.json> … --port <порт>`.
 # Программа — argv[0], а у интерпретатора (sh/bash/node/python) — его скрипт, argv[1]. Без этого
 # «своим» был бы любой процесс, в аргументах которого просто есть такая строка (цикл ожидания с
 # pgrep, монитор агента), и stop/start его убили бы.
-cmd_matches() { # <serena|hub> <strict|loose> <командная строка>
-  local cmd=" $3 " prog
+cmd_matches() { # <serena|serena-taibe|hub> <strict|loose> <командная строка>
+  local cmd=" $3 " prog port="$SERENA_PORT" project="$HOST_ROOT"
   case "$1" in
-    serena)
+    serena | serena-taibe)
       case "$cmd" in *"serena start-mcp-server "*) ;; *) return 1 ;; esac
-      case "$cmd" in *" --port $SERENA_PORT "*) ;; *) return 1 ;; esac
+      if [ "$1" = serena-taibe ]; then port="$SERENA_TAIBE_PORT" project="$SERENA_TAIBE_PROJECT"; fi
+      case "$cmd" in *" --port $port "*) ;; *) return 1 ;; esac
       ;;
     hub)
       case "$cmd" in *"1mcp serve "*) ;; *) return 1 ;; esac
@@ -134,33 +146,38 @@ cmd_matches() { # <serena|hub> <strict|loose> <командная строка>
       prog="${prog%% *}"
       ;;
   esac
-  case "$1:${prog##*/}" in serena:uv | serena:uvx | serena:serena | hub:1mcp) ;; *) return 1 ;; esac
+  case "$1:${prog##*/}" in
+    serena:uv | serena:uvx | serena:serena | serena-taibe:uv | serena-taibe:uvx | serena-taibe:serena | hub:1mcp) ;;
+    *) return 1 ;;
+  esac
   if [ "$1" = hub ] || [ "$2" = loose ]; then return 0; fi
-  case "$cmd" in *" --project $HOST_ROOT "*) ;; *) return 1 ;; esac
+  case "$cmd" in *" --project $project "*) ;; *) return 1 ;; esac
   case "$cmd" in *" --transport streamable-http "*) return 0 ;; esac
   return 1
 }
 
 is_ours() { cmd_matches "$1" "$2" "$(proc_cmd "$3")"; } # <kind> <strict|loose> <pid>
 
-port_of() { if [ "$1" = serena ]; then echo "$SERENA_PORT"; else echo "$HUB_PORT"; fi; }
-pid_file_of() { if [ "$1" = serena ]; then echo "$SERENA_PID_FILE"; else echo "$HUB_PID_FILE"; fi; }
-log_of() { if [ "$1" = serena ]; then echo "$SERENA_LOG"; else echo "$HUB_LOG"; fi; }
-start_wait_of() { if [ "$1" = serena ]; then echo "$SERENA_START_WAIT"; else echo "$HUB_START_WAIT"; fi; }
+# Таблица экземпляров: порт, pid-файл, лог, ожидание старта, папка (у хаба — рабочий каталог).
+port_of() { case "$1" in serena) echo "$SERENA_PORT" ;; serena-taibe) echo "$SERENA_TAIBE_PORT" ;; *) echo "$HUB_PORT" ;; esac; }
+pid_file_of() { case "$1" in serena) echo "$SERENA_PID_FILE" ;; serena-taibe) echo "$SERENA_TAIBE_PID_FILE" ;; *) echo "$HUB_PID_FILE" ;; esac; }
+log_of() { case "$1" in serena) echo "$SERENA_LOG" ;; serena-taibe) echo "$SERENA_TAIBE_LOG" ;; *) echo "$HUB_LOG" ;; esac; }
+start_wait_of() { case "$1" in serena) echo "$SERENA_START_WAIT" ;; serena-taibe) echo "$SERENA_TAIBE_START_WAIT" ;; *) echo "$HUB_START_WAIT" ;; esac; }
+project_of() { case "$1" in serena) echo "$HOST_ROOT" ;; serena-taibe) echo "$SERENA_TAIBE_PROJECT" ;; *) echo "$SERVE_ROOT" ;; esac; }
 
 # Какую копию репо обслуживает процесс: serena — `--project`, хаб — рабочий каталог (spawn_hub
 # запускает его из SERVE_ROOT, там же HR_HELPER_ROOT его stdio-серверов). Пусто — та, что нужна.
 project_problem() { # <kind> <pid>
-  local p want="$SERVE_ROOT"
-  if [ "$1" = serena ]; then
-    want="$HOST_ROOT"
+  local p want
+  want="$(project_of "$1")"
+  if [ "$1" != hub ]; then
     p=" $(proc_cmd "$2") "
     case "$p" in *" --project "*) p="${p#* --project }" && p="${p%% *}" ;; *) p="" ;; esac
   else
     p="$(lsof -a -p "$2" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n 1p || true)"
   fi
   if [ -z "$p" ] || [ "$p" = "$want" ]; then return 0; fi
-  if [ "$1" = serena ]; then printf 'индексирует %s, а не %s' "$p" "$want"; else printf 'запущен из %s, а не из %s' "$p" "$SERVE_ROOT"; fi
+  if [ "$1" != hub ]; then printf 'индексирует %s, а не %s' "$p" "$want"; else printf 'запущен из %s, а не из %s' "$p" "$SERVE_ROOT"; fi
   if [ ! -d "$p" ]; then printf ' (этого каталога уже нет)'; fi
   echo
 }
@@ -275,17 +292,6 @@ await_service() { # <kind> <pid> <секунд>
   echo "→ $kind запущен: pid $pid, :$port"
 }
 
-spawn_serena() {
-  rotate_log "$SERENA_LOG"
-  cd "$SERVE_ROOT"
-  spawn_detached "$SERENA_LOG" "$UVX" --from git+https://github.com/oraios/serena serena start-mcp-server \
-    --project "$HOST_ROOT" --context claude-code \
-    --transport streamable-http --host 127.0.0.1 --port "$SERENA_PORT" \
-    --open-web-dashboard False
-  echo "$SPAWNED_PID" >"$SERENA_PID_FILE"
-  await_service serena "$SPAWNED_PID" "$SERENA_START_WAIT"
-}
-
 ensure_runtime() {
   local installed=""
   [ -f "$ONE_MCP_PKG_DIR/package.json" ] \
@@ -368,7 +374,7 @@ ensure_service() { # <kind>
     echo "✗ $kind (pid $active) $problem — перезапуск из основной папки: npm run mcp-hub:restart" >&2
     return 1
   fi
-  if [ "$kind" = serena ]; then spawn_serena; else spawn_hub; fi
+  if [ "$kind" = hub ]; then spawn_hub; else spawn_serena "$kind"; fi
 }
 
 # ── команды ─────────────────────────────────────────────────────────────────────────────────
@@ -396,7 +402,8 @@ cmd_sync() {
   return 0
 }
 
-# Сбой одного сервиса не обрывает старт другого: код 1 в конце, если упал хоть один.
+# Сбой одного сервиса не обрывает старт другого: код 1 в конце, если упал хоть один. Хаб — до serena-taibe: от неё
+# он не зависит, а её первый старт (LSP на tAIBE) — до двух минут. serena-taibe — только с меткой (`serena-taibe on`).
 cmd_start() {
   local rc=0
   mkdir -p "$LOG_DIR"
@@ -405,6 +412,7 @@ cmd_start() {
     || echo "⚠ python3 ($(command -v python3)) без пакета mcp — ai-council в хабе не стартует" >&2
   ensure_service serena || rc=1
   ensure_service hub || rc=1
+  if serena_taibe_enabled; then ensure_service serena-taibe || rc=1; fi
   cmd_status
   return "$rc"
 }
@@ -412,6 +420,7 @@ cmd_start() {
 cmd_stop() {
   local rc=0
   stop_service hub || rc=1
+  stop_service serena-taibe || rc=1 # и без метки: работающая выключенная тоже гасится
   stop_service serena || rc=1
   if [ "$rc" = 0 ]; then echo "Хаб и serena остановлены."; else echo "✗ остановлено не всё — npm run mcp-hub:status" >&2; fi
   return "$rc"
@@ -431,7 +440,7 @@ main() {
   local rc=0 lock="$CONFIG_DIR/lifecycle.lock"
   case "${1:-status}" in
     init)
-      from_main_only init || return 1
+      { from_main_only init && host_known init; } || return 1
       # Замок — только на старт: auth может ждать браузер минутами, второе окно ждать его не должно.
       lock_acquire "$lock"
       cmd_start || rc=1
@@ -443,7 +452,7 @@ main() {
     auth) cmd_auth force ;;
     admin) cmd_admin ;;
     start)
-      from_main_only start || return 1
+      { from_main_only start && host_known start; } || return 1
       lock_acquire "$lock"
       cmd_start
       ;;
@@ -452,7 +461,7 @@ main() {
       cmd_stop
       ;;
     restart)
-      from_main_only restart || return 1
+      { from_main_only restart && host_known restart; } || return 1
       lock_acquire "$lock"
       # restart hub — только агрегатор (секунды), без переиндексации serena (минута и 2 ГБ).
       if [ "${2:-}" = "hub" ]; then stop_service hub || rc=1; else cmd_stop || rc=1; fi
@@ -466,13 +475,14 @@ main() {
     connectors) cmd_connectors ;;
     connect) cmd_connect "${2:-}" ;;
     disconnect) cmd_disconnect "${2:-}" ;;
+    serena-taibe) cmd_serena_taibe "${2:-status}" ;; # on/off — под замком, on — из основной папки
     autostart)
       # plist записывает путь к репо: из worktree он вёл бы в копию, которую потом удалят.
-      if [ "${2:-status}" = on ]; then from_main_only autostart || return 1; fi
+      if [ "${2:-status}" = on ]; then { from_main_only autostart && host_known autostart; } || return 1; fi
       cmd_autostart "${2:-status}"
       ;;
     *)
-      echo "usage: $0 {init|auth|admin|start|stop|restart [hub]|status|check|logs [N]|sync|connectors|connect <имя>|disconnect <имя>|autostart on|off|status}" >&2
+      echo "usage: $0 {init|auth|admin|start|stop|restart [hub]|status|check|logs [N]|sync|connectors|connect <имя>|disconnect <имя>|autostart on|off|status|serena-taibe on|off|status}" >&2
       return 2
       ;;
   esac

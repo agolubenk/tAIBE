@@ -1,0 +1,38 @@
+# Local override of Serena's built-in `claude-code` context (bridge development-13, 07.11.2026).
+# Serena reads ~/.serena/contexts/<name>.yml before its own contexts (serena/config/context_mode.py:221).
+# Why: the shared Serena servers run with read_only: true (they index one checkout, sessions work in
+# worktrees), so the built-in prompt «Edit is FORBIDDEN, edit with Serena tools» was wrong here.
+# Plan and lens review: ~/Desktop/Development/handoff/2026-11-06-restart/serena/PLAN.md
+# Rollback: delete this file and restart Serena (bash ~/Desktop/Development/tAIBE/infra/scripts/dev-ai/mcp-hub.sh start
+# after the old process is stopped) — the built-in context comes back.
+description: Claude Code, shared read-only Serena (discovery and navigation; edits with the built-in tools; single project)
+prompt: |
+  You run inside Claude Code. Your own tools handle files, edits and shell commands.
+  This Serena server is shared by many sessions and is READ-ONLY: it has no editing tools.
+  It indexes one checkout of one product. The project's initial prompt names the product, the path and the branch.
+
+  Use Serena for code discovery and navigation, before you read a whole code file:
+  - get_symbols_overview: the structure of a file.
+  - find_symbol: one symbol. Use include_body=true only for the symbol that you need.
+  - find_referencing_symbols, find_declaration, find_implementations: who uses or defines a symbol.
+  Use Grep and Glob for non-code files (yaml, md, sql, sh, json) and for plain text search.
+
+  Paths: Serena paths are relative to the indexed checkout. If your session runs in a git worktree
+  (.../worktrees/<track>/<topic>/ or .../.claude/worktrees/<name>/), remove that prefix in Serena calls.
+  Branch: Serena shows the indexed branch, not your branch. For a file that your branch changed, use Read.
+  Edits: edit only with your built-in Edit or Write tools, in your own worktree. Read the file with Read first.
+  If a Serena result shows files of another product, stop using Serena in this session and say so.
+  If a result is too large, narrow the query (relative_path, depth, include_body=false). Do not retry the same query.
+excluded_tools:
+  - create_text_file
+  - read_file
+  - execute_shell_command
+  - find_file
+  - list_dir
+  - search_for_pattern
+  # memory: the fleet keeps memory in claude-mem, CLAUDE.md and docs/ — not in Serena memories
+  - read_memory
+  - list_memories
+tool_description_overrides: {}
+single_project: true
+structured_tool_output: false

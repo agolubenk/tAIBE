@@ -20,6 +20,10 @@
     "owner-queue": {
       "command": "node",
       "args": ["infra/owner-queue-mcp/server.mjs"]
+    },
+    "serena": {
+      "type": "http",
+      "url": "http://127.0.0.1:9122/mcp"
     }
   }
 }

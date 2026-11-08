@@ -8,6 +8,9 @@
            выход с кодом 3, ничего не печатается. Обычно так бывает, когда в окружении забыли TAIBE_HOST_ROOT,
            а sync молча перевёл бы git, postgres и council на папку слоя.
   drift  — для `status`: что sync поменял бы в `--live`. Без вывода — расхождений нет.
+  host   — хост, который обслуживает `--live`: путь одной строкой; несколько разных — по строке на каждый;
+           пусто — живого конфига нет или хоста в нём не видно. `--host-root` не нужен. Его зовёт `mcp-hub.sh`,
+           когда TAIBE_HOST_ROOT не задан: хост берётся из живого конфига, а не молча становится папкой слоя.
 
 Хост живого конфига читается там, где в шаблоне стоит `${TAIBE_HOST_ROOT}`. `${HR_HELPER_ROOT}` в обоих
 конфигах перед сравнением заменяется на `--serve-root`: в живом конфиге он бывает и литералом.
@@ -120,13 +123,15 @@ def drift(template: dict, enabled: set[str], live: dict, host_root: str, serve_r
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("mode", choices=("render", "drift"))
+    parser.add_argument("mode", choices=("render", "drift", "host"))
     parser.add_argument("--template", required=True)
     parser.add_argument("--connectors", default="")
-    parser.add_argument("--host-root", required=True)
+    parser.add_argument("--host-root", default="", help="обязателен для render и drift")
     parser.add_argument("--serve-root", required=True)
     parser.add_argument("--live", default="", help="живой mcp.json; пусто — нет")
     args = parser.parse_args(argv)
+    if args.mode != "host" and not args.host_root:
+        parser.error(f"{args.mode}: нужен --host-root")
 
     try:
         template = load_json(args.template)
@@ -135,6 +140,12 @@ def main(argv: list[str]) -> int:
     except (OSError, ValueError) as exc:  # битый JSON или нет доступа — одной строкой, без трейсбека
         print(f"✗ render_config.py {args.mode}: {exc}", file=sys.stderr)
         return EXIT_BAD_INPUT
+
+    if args.mode == "host":
+        if live is not None:
+            for host in sorted(set(live_hosts(template, live, args.serve_root).values())):
+                print(host)
+        return 0
 
     if args.mode == "drift":
         if live is not None:

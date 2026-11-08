@@ -13,7 +13,8 @@ Continue ─────┼──────► │ postgres-readonly (схем
 Roo · Kimi ───┤        │ github (gh-токен) · notion/sentry/cloudflare (OAuth)               │
 Codex ────────┘        │ t-boards → d4dev через туннель (ключ API)                          │
                        └────────────────────────────────────────────────────────────────────┘
-Claude Code ──────────────► 127.0.0.1:9121/mcp  (serena напрямую; остальное — из .mcp.json)
+Claude Code ──────────────► 127.0.0.1:9121/mcp  (serena хоста напрямую; остальное — из .mcp.json)
+Claude Code в tAIBE ──────► 127.0.0.1:9122/mcp  (serena-taibe по требованию: `serena` из .mcp.json tAIBE, см. «Две serena»)
 ```
 
 Хаб даёт инструментам префикс `<сервер>_1mcp_<tool>`, например `serena_1mcp_find_symbol`. Claude Code
@@ -40,13 +41,14 @@ Terminal → Run Task. Из терминала то же самое:
 ```bash
 npm run mcp-hub:init      # start + auth (то, что делает задача при открытии папки)
 npm run mcp-hub:auth      # открыть авторизацию заново, без суточного ограничения
-npm run mcp-hub:start     # serena (до минуты на первый старт LSP) + хаб; печатает статус, код 1 — если что-то не поднялось
+npm run mcp-hub:start     # serena хоста (+ serena-taibe, если включена; до минуты на первый старт LSP) + хаб; печатает статус, код 1 — если что-то не поднялось
 npm run mcp-hub:status    # кто готов / ждёт OAuth / упал; сироты, чужой процесс на порту, привязка к терминалу
-npm run mcp-hub:logs      # хвосты ~/Library/Logs/hr-helper-mcp-hub/{serena,hub}.log (прошлый запуск — *.log.prev)
+npm run mcp-hub:logs      # хвосты ~/Library/Logs/hr-helper-mcp-hub/{serena,serena-taibe,hub}.log (прошлый запуск — *.log.prev)
 npm run mcp-hub:restart   # после обновления serena или если хаб потерял сессию к ней
 bash infra/scripts/dev-ai/mcp-hub.sh restart hub   # только агрегатор, за секунды, без переиндексации serena
-bash infra/scripts/dev-ai/mcp-hub.sh check         # код 0, только если оба живы, держат порты, обслуживают основную папку и отвечают
-npm run mcp-hub:stop      # освободить память (~2 ГБ serena)
+bash infra/scripts/dev-ai/mcp-hub.sh check         # код 0, только если serena, хаб (и serena-taibe, если включена) живы, держат порты, обслуживают свои папки и отвечают
+npm run mcp-hub:serena-taibe -- on|off|status      # вторая serena (tAIBE, :9122) — по требованию, см. «Две serena»
+npm run mcp-hub:stop      # освободить память (хаб и обе serena)
 npm run ai:restart-all    # хаб + serena + AI Council разом (кнопка «⟳ ИИ: всё» в строке состояния VS Code)
 npm run ai:status-all     # сводный статус хаба, консилиума и его очереди (пауза — кто, когда, зачем)
 ```
@@ -128,14 +130,132 @@ VS Code хаб и serena больше не останавливает (см. «�
 которой упал прошлый запуск. `npm run ai:restart-all` заканчивается `mcp-hub.sh check` и возвращает 1, если
 хаб или serena не работают.
 
-Тест — `bash infra/scripts/dev-ai/tests/mcp-hub-detach.test.sh` (~2 мин): pty и SIGHUP, настоящий 1mcp на
-свободном порту с временным конфигом, подставная serena (`tests/fixtures/`), сироты, «наблюдатели» с той же
+Тест — `bash infra/scripts/dev-ai/tests/mcp-hub-detach.test.sh` (~4 мин): pty и SIGHUP, настоящий 1mcp на
+свободном порту с временным конфигом, две подставные serena (`tests/fixtures/`), сироты, «наблюдатели» с той же
 командной строкой, осиротевший член группы, чужой порт, запуск по-старому, протухший замок, замок под разными
-локалями и TZ, serena удалённого worktree, отказ из worktree. Боевые порты и каталоги не трогает: каталоги и
-`uvx` переопределяются переменными `MCP_HUB_CONFIG_DIR`, `MCP_HUB_RUNTIME_DIR`, `MCP_HUB_LOG_DIR`,
-`MCP_HUB_UVX`, ожидания — `MCP_HUB_STOP_WAIT`, `MCP_HUB_SETTLE_WAIT`, порты — `MCP_HUB_PORT`,
-`SERENA_HTTP_PORT`. У нестандартного порта свои pid-файлы и логи (`serena-<порт>.pid`, `hub-<порт>.log`):
-переопределённый порт без своего каталога не трогает учёт боевых сервисов.
+локалями и TZ, serena удалённого worktree, отказ из worktree, бинарь serena и усыновление serena, запущенной
+старой строкой uvx, шаблоны без перезаписи, хост из живого конфига и отказ при битом, предохранители read_only и
+одной папки, serena-taibe по требованию (без метки не стартует, on/off, restart, check). Боевые порты и каталоги не трогает: каталоги
+и `uvx` переопределяются переменными `MCP_HUB_CONFIG_DIR`, `MCP_HUB_RUNTIME_DIR`, `MCP_HUB_LOG_DIR`,
+`MCP_HUB_UVX`, serena — `SERENA_BIN`, `SERENA_HOME`, `SERENA_TAIBE_PROJECT`, ожидания — `MCP_HUB_STOP_WAIT`,
+`MCP_HUB_SETTLE_WAIT`, порты — `MCP_HUB_PORT`, `SERENA_HTTP_PORT`, `SERENA_TAIBE_PORT`. У нестандартного порта
+свои pid-файлы и логи (`serena-<порт>.pid`, `serena-taibe-<порт>.pid`, `hub-<порт>.log`): переопределённый порт
+без своего каталога не трогает учёт боевых сервисов. Вариант `host` у `render_config.py` —
+`python3 -I -m unittest discover -s infra/mcp-hub -p 'test_*.py'` (`make check-infra`).
+
+## Две serena
+
+| Экземпляр | Порт | Индексирует | Дашборд | pid · лог |
+|---|---|---|---|---|
+| `serena` | `:9121` (`SERENA_HTTP_PORT`) | продукт-хост `HOST_ROOT` (HR) | есть — ссылка в админке хаба | `serena.pid` · `serena.log` |
+| `serena-taibe` | `:9122` (`SERENA_TAIBE_PORT`) | сам tAIBE — основная папка (с `MCP_HUB_ALLOW_WORKTREE=1` — копия worktree) | нет (`--enable-web-dashboard False`) | `serena-taibe.pid` · `serena-taibe.log`; метка `serena-taibe.enabled` |
+
+Обе — только на чтение: индекс один на все сессии, а сессии работают в своих worktree, поэтому правка через
+serena попала бы в основную папку владельца. Код: `lib/mcp-hub-serena.sh`, узнавание «своих» — `cmd_matches` в
+`mcp-hub.sh`.
+
+**serena-taibe — по требованию** (решение владельца 08.11, пункт очереди `d-serena-taibe-ram-0811`: память машины).
+По умолчанию она выключена. Включает её метка `~/.config/hr-helper-mcp-hub/serena-taibe.enabled` — личный выбор
+рядом с конфигом, как `connectors.enabled` (у нестандартного порта своя, `serena-taibe-<порт>.enabled`):
+
+```bash
+npm run mcp-hub:serena-taibe -- on       # метка + старт сейчас (из основной папки, под замком); serena и хаб не трогает
+npm run mcp-hub:serena-taibe -- off      # снять метку и остановить
+npm run mcp-hub:serena-taibe             # status: включена ли и работает ли
+```
+
+`start`, `restart`, `init`, `ai:restart-all` и автозапуск поднимают serena-taibe только с меткой; `stop` гасит её
+всегда (метка остаётся — следующий `start` вернёт); `restart hub` — по-прежнему только агрегатор. `status` без метки
+пишет «serena-taibe: выключена (по требованию) — включить: …», а работающую без метки — с предупреждением. `check`
+без метки serena-taibe не проверяет (выключена по решению — не ошибка); с меткой и без `:9122` — код 1.
+
+**Память.** Замер 08.11 (vmmap по всему дереву процессов): serena HR ≈ 3,0 ГБ, из них tsserver 2,7 ГБ; своп 27,5 из
+28,7 ГБ. По `footprint` 07.11 (через час после старта): python 173 МБ, typescript-language-server 22 МБ, tsserver
+partialSemantic 86 МБ, tsserver semantic 2 765 МБ (без `--max-old-space-size`). serena-taibe — оценка 1–1,5 ГБ, не
+измерена: ~5 000 файлов (ts 3 479, tsx 1 137, mjs/js 175 — `boards/`; py 224 — `eval/`, `infra/`). Python LS
+(pyright) не видит `ignored_paths` serena: без `pyrightconfig.json` в корне tAIBE он перебрал бы ~8 300 файлов .py,
+из них ~8 100 — в `worktrees/`; корневой `pyrightconfig.json` их исключает. Замер после включения (через час работы
+сессий, по всему дереву — python, typescript-language-server, оба tsserver, pyright):
+
+```bash
+root=$(cat ~/.config/hr-helper-mcp-hub/serena-taibe.pid)
+all() { echo "$1"; for c in $(pgrep -P "$1"); do all "$c"; done; }
+for p in $(all "$root"); do footprint "$p" 2>/dev/null | sed -n 1p; done   # «Footprint: N MB» по процессам
+sysctl vm.swapusage
+```
+
+**Версия закреплена** — `SERENA_PIN` (2.1.1.dev0, `ede329aaf0c824bea75455a2926f01420d7aa620`). Порядок запуска:
+бинарь `SERENA_BIN` (по умолчанию `~/.local/bin/serena`, если исполняемый) → `serena start-mcp-server …`; без него —
+`uvx --from git+https://github.com/oraios/serena@<SERENA_PIN> serena …`, но uvx на старте нужна сеть (при входе в
+систему её может не быть). Бинарь другой ревизии — `start` предупреждает по квитанции uv рядом с ним. Поставить или
+обновить бинарь:
+
+```bash
+uv tool install --force "git+https://github.com/oraios/serena@ede329aaf0c824bea75455a2926f01420d7aa620"
+uv tool install -p 3.13 pyright==1.1.403   # Python LS serena: без него uvx тянет pyright из кэша и сети при старте
+npm run mcp-hub:restart   # serena перезапустятся на нём (HR переиндексируется, около минуты; serena-taibe — если включена)
+```
+
+Работающие serena, поднятые раньше старой строкой (`uvx --from git+https://github.com/oraios/serena`, без `@`),
+`start` усыновляет, а не убивает и не задваивает: «свою» узнаёт по `serena start-mcp-server`, порту, `--project` и
+транспорту, а не по версии. На закреплённую версию они переходят при следующем `restart`.
+
+**Шаблоны** (`infra/mcp-hub/serena/`) — перед запуском serena, если файла нет; есть и отличается — остаётся как есть,
+`start` предупреждает и печатает `diff -u`:
+
+- `claude-code.context.yml` → `~/.serena/contexts/claude-code.yml` (`SERENA_HOME`): контекст обеих — только чтение,
+  без инструментов правки, оболочки и памяти serena, подсказка про пути worktree. Serena берёт его раньше встроенного
+  — для любой serena этой машины с `--context claude-code`, в том числе stdio-serena продукта terminal
+  (`terminal/.mcp.json`). Файл положен 07.11 вручную; скрипт кладёт его, только если файла нет.
+- `taibe.project.yml` → `<tAIBE>/.serena/project.yml` (каталог в `.gitignore`): `read_only: true`, TypeScript и
+  Python, без `worktrees/`, `node_modules`, `dist`, состояния `eval/*/state` и `.ai/task`. В файле все ключи
+  закреплённой версии: неполный serena пересохраняет при каждой загрузке, и копия всегда отличалась бы от шаблона.
+  У HR свой `.serena/project.local.yml` в его checkout (не в git, `read_only: true`). Первый старт `serena-taibe`
+  дописывает tAIBE в `projects:` файла `~/.serena/serena_config.yml` — это делает сама serena.
+
+**Предохранители запуска** (`spawn_serena`, `serena_project_check`): serena не стартует, если в
+`.serena/project.local.yml` (он главнее) или `project.yml` её проекта нет `read_only: true` — без файла serena создала
+бы свой с `read_only: false`, и все сессии правили бы основную папку; и если в них задан `activation_command` — его
+serena выполняет оболочкой при каждом старте (путь доверенный), а хаб стартует при входе в систему. `serena` хоста не
+стартует и на папке `serena-taibe`: это была бы вторая копия того же индекса. Остальные сервисы при этом
+поднимаются, код `start` — 1. Файлы `.serena/` не в git: предохранитель проверяет их на каждом запуске.
+
+**Хост** (`HOST_ROOT` у `serena`, `resolve_roots`): `TAIBE_HOST_ROOT`, если задан; иначе — хост, который обслуживает
+живой конфиг хаба (`render_config.py host`, тот же источник, что у `status` и предохранителя `sync`); и только без
+живого конфига (или хоста в нём) — обслуживаемая копия. Живой конфиг есть, а хост из него не взят (битый JSON,
+несколько хостов, каталога нет) — `start`, `restart`, `init` и `autostart on` отказывают с причиной и подсказкой
+`TAIBE_HOST_ROOT=<хост>`; `status`, `check`, `stop` работают. Без `TAIBE_HOST_ROOT` любая команда печатает, какой
+хост выбран и почему. 07.11 `start` без `TAIBE_HOST_ROOT` взял папку tAIBE, счёл serena HR «чужой копией» и оставил
+`:9121` пустой — теперь он берёт HR из живого конфига. Автозапуск по-прежнему передаёт `TAIBE_HOST_ROOT` явно.
+
+**Маршрут Claude Code.** User-scope `serena` — `:9121` (HR, `~/.claude.json`). В `.mcp.json` tAIBE — `serena` на
+`:9122`: одобренная, она в сессиях tAIBE перекрывает user-scope, имена `mcp__serena__*` те же. Неодобренная
+пропускается, и сессия остаётся на serena HR (предположение, не проверено). **Включить для сессий tAIBE — два шага:**
+`npm run mcp-hub:serena-taibe -- on` и владелец добавляет `"serena"` в `enabledMcpjsonServers` (действует в новых
+сессиях; в открытой — `/mcp`). Выключить — оба в обратную сторону: одобренная, но выключенная serena-taibe не
+ломает сессию (сервер, который не подключился, Claude Code показывает в `/mcp` как упавший, а сессия работает —
+так в этой сессии упал сервер `ide`), но и на serena HR она не откатывается: одноимённый проектный сервер её
+перекрывает, и у сессии нет `mcp__serena__*` вовсе (предположение) — агенты, которые на них завязаны (`scout`),
+работают через Grep и Read. Отказ соединения на `127.0.0.1` мгновенный, ожидания `MCP_TIMEOUT` нет (предположение).
+Одобрение — `enabledMcpjsonServers` в `.claude/settings.local.json`
+папки сессии (файл не в git и защищён merge-guard — правит владелец). Сейчас (07.11) в основной папке там
+`github, notion, docker, ai-council, owner-queue` — `serena` надо добавить. Worktree Claude Code (`.claude/worktrees/*`)
+получает копию этого файла из основной папки при создании (`.worktreeinclude`), уже созданные — нет. У worktree
+`worktrees/<трек>/<тема>` (`git worktree add`, `make wt-*`) этого файла нет совсем: серверы `.mcp.json` там не
+одобрены. Ключ `enabledMcpjsonServers` в `~/.claude/settings.json` закрыл бы все папки разом, но одобрил бы и
+stdio-`serena` из `terminal/.mcp.json` (по копии serena на сессию). Проверка в сессии: `/mcp` — `serena` с адресом
+`:9122`, начальный промпт serena называет продукт tAIBE. Плагин `serena@claude-plugins-official` (`.claude/settings.json`)
+— отдельный сервер с другими именами (`mcp__plugin_serena_serena__*`), его это не касается.
+
+**Откат:**
+1. `npm run mcp-hub:serena-taibe -- off` и `npm run mcp-hub:stop` — новым скриптом, пока он на месте: старый
+   `serena-taibe` (`:9122`) своей не считает и оставил бы её работать; метку `serena-taibe.enabled` он не читает. Уже откатили — `lsof -nP -iTCP:9122 -sTCP:LISTEN` покажет pid, его группу —
+   `kill -TERM -<pid>`.
+2. Revert этого изменения в основной папке; `"serena"` из `.mcp.json` уходит вместе с ним (из
+   `enabledMcpjsonServers` убрать вручную).
+3. `npm run mcp-hub:start` (с `TAIBE_HOST_ROOT=<HR>` — старый скрипт без него снова возьмёт папку tAIBE).
+4. По желанию: `rm <tAIBE>/.serena/project.yml`; контекст `~/.serena/contexts/claude-code.yml` — удалить и
+   перезапустить serena, если нужен встроенный.
 
 ## Админка: ссылки на серверы
 
@@ -191,7 +311,7 @@ dams-rag), `context` (headroom), `docs` (markitdown, context7), `git` (git), `db
 
 | Сервер | Что | Заметки |
 |---|---|---|
-| `serena` | Навигация и правка по символам (LSP) | Одна на всех, проект — корень репо |
+| `serena` | Навигация по символам (LSP), только чтение | Две на всех: `:9121` — хост (HR), `:9122` — tAIBE («Две serena»); через хаб — `:9121` |
 | `dams-rag` | `project_search` по индексу DAMS: Prisma, REST, Connect RPC, rules, specs, OpenAPI | `infra/mcp-hub/dams_rag_server.py`; индекс пересобирает `.claude/scripts/index_rebuild.py` |
 | `ai-council` | Консилиум по карточкам Notion, его база знаний, граф зависимостей (`council_graph_neighbors`), пайплайн | Читает через gateway `:8790`, он должен быть поднят (`npm run ai-pipeline:start`). Граф — `graphify-out/graph.json`, освежать `npm run graph:update` (только AST, без LLM, ~2 мин холодный старт) |
 | `owner-queue` | Очередь владельца в ops-консоли: `oq_list`, `oq_get`, `oq_put`, `oq_patch`, `oq_agent_status`, `oq_history` | Токен `OQ_TOKEN` в Keychain (`security add-generic-password -U -s hr-helper-mcp -a OQ_TOKEN -w` — токен спросит сам), выпуск — `token-create <имя> agent` в консоли. Адрес — `OQ_URL`, по умолчанию прод |
@@ -246,8 +366,8 @@ OAuth-приложение в кабинете разработчика серв
    `type: http` + `url`/`headers`. Подстановки `${HR_HELPER_ROOT}` (код слоя — обслуживаемая копия),
    `${SERENA_HTTP_PORT}` и `${GITHUB_PAT}` делает 1mcp на запуске из окружения хаба.
    `${TAIBE_HOST_ROOT}` — корень продукта-хоста. Его на sync подставляет `infra/mcp-hub/render_config.py`:
-   берёт `TAIBE_HOST_ROOT` из окружения, а без него — обслуживаемую копию. В живом конфиге хост лежит
-   литералом, поэтому `restart` без env его не сменит. Хост получают `git --repository`,
+   берёт `TAIBE_HOST_ROOT` из окружения, а без него — хост живого конфига, без живого конфига — обслуживаемую
+   копию («Две serena» → «Хост»). В живом конфиге хост лежит литералом, поэтому `restart` без env его не сменит. Хост получают `git --repository`,
    `cwd` у `postgres-readonly` и `env.TAIBE_HOST_ROOT` у серверов слоя с данными в хосте (`ai-council`,
    `dams-rag`): код из этого репозитория, `council.db` и индекс DAMS — из хоста. Если путь неверный или
    данных там нет, сервер не стартует.
@@ -326,5 +446,5 @@ OAuth-приложение в кабинете разработчика серв
   включая docker и github с правами `gh`-токена. Это та же модель доверия, что у stdio-серверов
   каждого клиента. Хаб не открывать на `0.0.0.0`.
 - Serena общая: активация другого проекта переключила бы её для всех клиентов. В контексте
-  `claude-code` инструмента `activate_project` нет. Для работы в worktree нужна своя serena
+  `claude-code` инструмента `activate_project` нет. Обе serena — только на чтение (`read_only: true` в проекте). Для работы в worktree нужна своя serena
   (stdio, `--project <worktree>`), а не переключение общей.
