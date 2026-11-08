@@ -10,6 +10,10 @@
 # продукта пропускает («жива: …»), после открытия ждёт сессию новой линии до SPAWN_WAIT с (90), затем следующую роль;
 # в конце печатает итог. --force — открыть и при живой роли. Продукт — основной checkout папки --cwd (team_status.py).
 # (в инстансе HR_Helper-v2 скрипт лежит в supertick-eval/tools/ — работает так же; корень дерева берётся из его места)
+# Продукт (OPS-25): --product SLUG, иначе $TAIBE_PRODUCT (его ставит геном роли — наследник берёт продукт
+# предшественника), иначе продукт по умолчанию из instances/. У продукта не по умолчанию — геном
+# genome/<slug>/<роль>.json, пусковые файлы eval/prompts/<slug>/roles/, а --launch без --cwd открывается в его repo_root.
+# Пусковой скрипт экспортирует TAIBE_PRODUCT.
 # Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|print (print — только напечатать
 # команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
 # · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам
@@ -29,6 +33,7 @@ CWD="$PWD"
 TERMINAL="${SPAWN_TERMINAL:-terminal}"
 PROMPT_DIR=""
 HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO=""
+PRODUCT="" CWD_SET=0
 CLOSE="${SPAWN_AUTOCLOSE:-on}"
 DELAY="${SPAWN_CLOSE_DELAY:-10}"  # с отсчёта перед закрытием окна (Enter — оставить)
 case "$DELAY" in ''|*[!0-9]*) DELAY=10 ;; esac
@@ -44,7 +49,8 @@ while [ $# -gt 0 ]; do
     --role) ROLE="${2:?}"; shift 2 ;;
     --roles) ROLES="${2:?}"; shift 2 ;;
     --launch) LAUNCH=1; shift ;;
-    --cwd) CWD="${2:?}"; shift 2 ;;
+    --cwd) CWD="${2:?}"; CWD_SET=1; shift 2 ;;
+    --product) PRODUCT="${2:?}"; shift 2 ;;
     --terminal) TERMINAL="${2:?}"; shift 2 ;;
     --prompt-dir) PROMPT_DIR="${2:?}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
@@ -57,6 +63,34 @@ while [ $# -gt 0 ]; do
     *) die "неизвестный аргумент: $1" ;;
   esac
 done
+
+# Продукт и его поля — из instances/ через products.py; без них (копия слоя в хосте) — как до OPS-25.
+PRODUCTS_PY="$TOOLS/../nerve/products.py"
+DEFAULT_PRODUCT=""
+if [ -f "$PRODUCTS_PY" ] && [ -d "$TOOLS/../../instances" ]; then
+  # instances/ есть, но не читается — стоп с причиной: иначе наследник tAIBE молча получил бы геном HR.
+  DEFAULT_PRODUCT="$(python3 -I "$PRODUCTS_PY" get default slug)" || die "instances/ не читается (см. ошибку выше)"
+  INHERITED="${TAIBE_PRODUCT:-$DEFAULT_PRODUCT}"
+  [ -n "$PRODUCT" ] || PRODUCT="$INHERITED"
+  python3 -I "$PRODUCTS_PY" get "$PRODUCT" slug >/dev/null 2>&1 || die "нет продукта $PRODUCT в instances/"
+  # Наследник — того же продукта, что и сессия: иначе сторож снял бы живую роль другого продукта.
+  if [ -n "$HANDOFF" ] && [ "$PRODUCT" != "$INHERITED" ]; then
+    die "--handoff наследует продукт сессии ($INHERITED); роль продукта $PRODUCT — через --launch --product $PRODUCT"
+  fi
+  # Продукт не включён (instances/<slug>.json active: false) — роли не открываются: Нерв ещё не ведёт его журнал.
+  if [ "$LAUNCH" = 1 ] && [ "$DRY" = 0 ] && [ "$(python3 -I "$PRODUCTS_PY" get "$PRODUCT" active)" != true ]; then
+    die "продукт $PRODUCT не включён (active: false в instances/$PRODUCT.json) — роли не открываю; проверка — --dry-run"
+  fi
+  # --launch и --status без --cwd — в папке продукта (из tAIBE открылись бы роли HR в папке tAIBE).
+  if [ "$CWD_SET" = 0 ] && { [ "$LAUNCH" = 1 ] || [ -n "$INFO" ]; }; then
+    CWD="$(python3 -I "$PRODUCTS_PY" get "$PRODUCT" repo_root)" || die "у продукта $PRODUCT нет repo_root"
+  fi
+else
+  [ -z "$PRODUCT" ] || die "--product: нет instances/ и eval/nerve/products.py рядом со скриптом"
+fi
+# Своё у продукта не по умолчанию: папка генома и пусковых файлов.
+PRODUCT_SUB=""
+[ -n "$PRODUCT" ] && [ "$PRODUCT" != "$DEFAULT_PRODUCT" ] && PRODUCT_SUB="$PRODUCT/"
 
 [ -d "$CWD" ] || die "нет папки $CWD"
 CWD="$(cd "$CWD" && pwd)"
@@ -72,7 +106,11 @@ LAYER="$(cd "$TOOLS/.." && pwd -P)"
 in_tree_product() {
   if [ -d "$CWD/$TREE_REL" ] && [ ! -L "$CWD/$TREE_REL" ]; then in_tree "$TREE_REL/$1"; else echo "$LAYER/$1"; fi
 }
-PROMPT_DIR="${PROMPT_DIR:-$(in_tree_product prompts/launch-3010/roles)}"
+if [ -n "$PRODUCT_SUB" ]; then
+  PROMPT_DIR="${PROMPT_DIR:-$(in_tree_product "prompts/${PRODUCT_SUB}roles")}"
+else
+  PROMPT_DIR="${PROMPT_DIR:-$(in_tree_product prompts/launch-3010/roles)}"
+fi
 case "$TERMINAL" in terminal|iterm|print) ;; *) die "--terminal: terminal, iterm или print" ;; esac
 
 role_num() {
@@ -125,7 +163,7 @@ spawn_one() {
   SPAWNED_LINE="$lineage"
   msg="$(first_message "$role" "$lineage")"
   if [ -n "$role" ]; then
-    genome="$(in_tree_product "pipeline/genome/$role.json")"
+    genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$role.json")"
     [ -f "$genome" ] || die "нет генома $genome (build.py собирает его из roles.json)"
   fi
   if [ "$TERMINAL" != print ] && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
@@ -145,6 +183,7 @@ spawn_one() {
     # не работают хук context-threshold, Stop-typecheck, замеры eval (wake_anatomy, context_audit) и claude-mem.
     echo "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE"
     echo "export TAIBE_LINEAGE=$(sq "$lineage")"
+    [ -z "$PRODUCT" ] || echo "export TAIBE_PRODUCT=$(sq "$PRODUCT")"
     # Свой claude (обёртка с --settings, например антигены для сессии без генома) — в лаунчер: окно Terminal
     # стартует с чистым окружением, и CLAUDE_BIN из вызывающего скрипта туда не доходит (06.11).
     if [ -n "${CLAUDE_BIN:-}" ]; then echo "export CLAUDE_BIN=$(sq "$CLAUDE_BIN")"; fi
@@ -215,7 +254,7 @@ launch_role() {
   local r="$1" live rc got
   role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
   if [ "$FORCE" = 0 ]; then
-    rc=0; live="$(python3 -I "$TOOLS/team_status.py" live --role "$r" --cwd "$CWD" 2>&1)" || rc=$?
+    rc=0; live="$(python3 -I "$TOOLS/team_status.py" live --role "$r" --cwd "$CWD" ${PRODUCT:+--product "$PRODUCT"} 2>&1)" || rc=$?
     if [ "$rc" = 0 ]; then echo "жива: $r · $live"; note "$r — жива, не открывал: $live"; return; fi
     # Открывать только по явному «роли нет» (rc 3). Любой другой rc (1 — трейсбек Python, 2 — ошибка) — проверка
     # сломалась: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
@@ -232,7 +271,7 @@ case "${TMPDIR:-}$CWD" in *\"*|*\\*) die "кавычка или обратный
 
 if [ -n "$INFO" ]; then
   [ -z "$HANDOFF" ] && [ "$LAUNCH" = 0 ] || die "--status/--stop не сочетаются с --handoff/--launch"
-  exec python3 -I "$TOOLS/team_status.py" "$INFO" --cwd "$CWD"
+  exec python3 -I "$TOOLS/team_status.py" "$INFO" --cwd "$CWD" ${PRODUCT:+--product "$PRODUCT"}
 elif [ -n "$HANDOFF" ]; then
   [ "$LAUNCH" = 0 ] && [ -z "$ROLES" ] || die "--handoff не сочетается с --launch/--roles"
   [ -f "$HANDOFF" ] || die "нет файла handoff: $HANDOFF"

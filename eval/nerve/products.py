@@ -3,6 +3,7 @@
 
   python3 -I eval/nerve/products.py list              продукты: slug, active, папка, репо, * — по умолчанию
   python3 -I eval/nerve/products.py render [--check]  собрать eval/nerve/config.json; --check — только сравнить
+  python3 -I eval/nerve/products.py get <slug|default> <поле.через.точку>   значение поля (для sh-скриптов)
 
 Файлы — `instances/` в корне tAIBE: `_shared.json` (Mac и установка: бюджет, режимы, опрос очереди, доски установки,
 `default_product`) и `<slug>.json` (поля продукта: папка, репо, роли, раскладка путей, транскрипты, маршрут очереди).
@@ -212,9 +213,20 @@ def main(argv=None):
     sub.add_parser("list")
     r = sub.add_parser("render")
     r.add_argument("--check", action="store_true")
+    g = sub.add_parser("get")
+    g.add_argument("slug")
+    g.add_argument("field")
     a = p.parse_args(argv)
     try:
         shared, products = load()
+        if a.cmd == "get":
+            slug = shared["default_product"] if a.slug == "default" else a.slug
+            cfg = config_for(slug, shared, products)   # нет продукта — ошибка, а не эхо slug
+            value = slug if a.field == "slug" else _get(cfg, a.field)
+            if value is None:
+                raise ProductError(f"{slug}: нет поля {a.field}")
+            print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
+            return 0
         if a.cmd == "list":
             for slug, d in products.items():
                 mark = "*" if slug == shared["default_product"] else " "

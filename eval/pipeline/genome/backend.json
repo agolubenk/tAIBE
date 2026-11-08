@@ -58,7 +58,8 @@
     ]
   },
   "env": {
-    "CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH": "600"
+    "CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH": "600",
+    "TAIBE_PRODUCT": "hr-helper"
   },
   "claudeMdExcludes": [
     "/Users/agolubenko/Desktop/Development/HR_Helper-v2/worktrees/**/CLAUDE.md",

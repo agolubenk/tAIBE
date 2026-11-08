@@ -99,5 +99,25 @@ class GenomeTest(unittest.TestCase):
                 self.assertEqual(g['env'].get('CLAUDE_CODE_EFFORT_LEVEL') == 'medium', role == 'coord')
 
 
+class ProductGenomeTest(unittest.TestCase):
+    """OPS-25 Ф3: геном каждого продукта несёт TAIBE_PRODUCT и пути своего checkout."""
+
+    def test_every_product_has_six_roles_with_its_env_and_root(self):
+        for slug, out, root, _reflex in build.products():
+            with self.subTest(product=slug):
+                for role in NEEDED:
+                    with open(os.path.join(out, f'{role}.json'), encoding='utf-8') as f:
+                        g = json.load(f)
+                    self.assertEqual(g['env'].get('TAIBE_PRODUCT'), slug)
+                    rooted = [x for x in g['claudeMdExcludes'] if not x.startswith('/private/tmp/')]  # scratchpad — общий
+                    self.assertTrue(rooted and all(x.startswith(root + '/') for x in rooted), rooted)
+
+    def test_non_default_products_live_in_their_subfolder(self):
+        rest = build.products()[1:]
+        self.assertTrue(rest, 'instances/ has a second product')
+        for slug, out, _root, _reflex in rest:
+            self.assertEqual(out, os.path.join(build.HERE, slug))
+
+
 if __name__ == '__main__':
     unittest.main()
