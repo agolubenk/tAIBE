@@ -13,6 +13,7 @@ import { alerts, incidents, monitors } from '../db/schema'
 import { apiError, type AppEnv } from '../http-types'
 import { getGeneralSettings } from '../settings/store'
 import { monitorUptime } from './overview'
+import { publicRelease } from './release'
 
 const DAY = 86_400_000
 const HISTORY_DAYS = 90
@@ -83,3 +84,5 @@ export const publicRoutes = new Hono<AppEnv>().get('/status', async (c) => {
     history,
   })
 })
+  /** Версия продукта для подвалов (edge nginx `/release.json`): только `{version, setAt}`. */
+  .get('/release', publicRelease)

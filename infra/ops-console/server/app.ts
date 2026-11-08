@@ -20,6 +20,7 @@ import { adminRoutes } from './routes/admin'
 import { settingsRoutes } from './routes/settings'
 import { reportRoutes } from './routes/reports'
 import { eventRoutes } from './routes/events'
+import { releaseRoutes } from './routes/release'
 import { publicRoutes } from './routes/public'
 import { telegramPublicRoutes, telegramRoutes } from './routes/telegram'
 import { maintenanceRoutes } from './routes/maintenance'
@@ -80,6 +81,7 @@ export function createApp() {
   api.route('/settings', settingsRoutes)
   api.route('/reports', reportRoutes)
   api.route('/events', eventRoutes)
+  api.route('/release', releaseRoutes)
   api.route('/telegram', telegramRoutes)
   api.route('/maintenance', maintenanceRoutes)
   app.route('/api', api)

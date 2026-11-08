@@ -12,6 +12,7 @@ import ui from '../ui/styles'
 import s from './pages.module.css'
 import { LiveDeploy } from './deploys/LiveDeploy'
 import { QueueLinks } from './deploys/QueueLinks'
+import { ReleasePanel } from './deploys/ReleasePanel'
 import ds from './deploys/deploys.module.css'
 
 export function deployStatus(d: Deploy): [UiStatus, string] {
@@ -57,6 +58,7 @@ export function DeploysPage() {
         }
       />
       <LiveDeploy />
+      <ReleasePanel />
       <div className={s.grid3}>
         <StatTile
           label="Источник — GitHub Actions"
