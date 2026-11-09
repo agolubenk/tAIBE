@@ -70,6 +70,10 @@ def queue_call(method: str, path: str, token: str, body: dict | None = None) -> 
         if exc.code == 404 and method == "GET":
             return {}
         raise SystemExit(f"очередь: {method} {path} → HTTP {exc.code} {exc.read()[:200]!r}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # Сеть или DNS: одна строка с причиной и код 1, без трассировки — запуск по расписанию читает журнал.
+        reason = getattr(exc, "reason", exc)
+        raise SystemExit(f"очередь недоступна: {method} {path} — {reason}") from None
 
 
 def board_cards(client: tboards.Client, final_slugs: set[str]) -> list[dict]:
@@ -142,12 +146,16 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     cfg = config_mod.load(strict=False)
     final_slugs = set(cfg.get("sources.tboards.final_slugs", []) if cfg else []) or {"done", "closed"}
-    with tboards.build(cfg, budget=95) as client:
-        cards = board_cards(client, final_slugs)
+    try:
+        with tboards.build(cfg, budget=95) as client:
+            cards = board_cards(client, final_slugs)
+    except tboards.TBoardsError as exc:
+        raise SystemExit(f"доски: {exc}") from None
     token = queue_token()
     work = queue_call("GET", "/db/work", token)
     docs = work.get("docs", work) if isinstance(work, dict) else work
-    prev_doc = next((d for d in docs or [] if d.get("id") == DOC_ID), None) or {}
+    # Прошлая сводка — отдельным чтением по id: в длинном списке work её может не оказаться, и история начнётся заново.
+    prev_doc = queue_call("GET", f"/db/work/{DOC_ID}", token) or {}
     stats = build_stats(cards, plan_keys(docs or []), prev_doc.get("data") or {}, dt.datetime.now(dt.timezone.utc))
     print(json.dumps({k: stats[k] for k in ("at", "bugs", "tasks", "inPlan", "notInPlan")}, ensure_ascii=False))
     if not args.write:

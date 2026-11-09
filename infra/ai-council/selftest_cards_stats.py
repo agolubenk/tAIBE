@@ -70,3 +70,51 @@ def run(tmp: Path, check) -> None:
                             {"d": "2026-11-08", "bugs": 2, "tasks": 2, "inPlan": 1}], str(st["history"]))
     check("cards_stats: формат страницы — kind stats и время UTC", st["kind"] == "stats" and st["at"].endswith("Z"),
           st["at"])
+    run_failures(check)
+
+
+def run_failures(check) -> None:
+    """Сбой сети — одна строка и код 1; прошлая сводка — отдельным чтением по id (история не теряется)."""
+    import os
+    import cards_stats as cs
+    saved = cs.OQ_URL
+    cs.OQ_URL = "https://127.0.0.1:9/api/oq/v1"
+    try:
+        cs.queue_call("GET", "/db/work", "x")
+        check("cards_stats: сбой сети — SystemExit с причиной", False, "нет исключения")
+    except SystemExit as exc:
+        check("cards_stats: сбой сети — SystemExit с причиной", str(exc).startswith("очередь недоступна"), str(exc))
+    finally:
+        cs.OQ_URL = saved
+    calls: list[tuple] = []
+    real = cs.queue_call
+
+    def fake(method, path, token, body=None):
+        calls.append((method, path, (body or {}).get("ifVersion")))
+        if method == "PUT":
+            return {"version": 8}
+        if path == "/db/work":
+            return {"docs": [{"id": "w-open", "data": {"status": "doing", "cards": []}}]}
+        if path == f"/db/work/{cs.DOC_ID}":
+            return {"id": cs.DOC_ID, "version": 7, "data": {"history": [{"d": "2026-11-01", "bugs": 1, "tasks": 1,
+                                                                            "inPlan": 0}]}}
+        return {}
+
+    class Client(FakeClient):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    saved_build, saved_token = cs.tboards.build, cs.queue_token
+    cs.queue_call, cs.tboards.build, cs.queue_token = fake, (lambda *a, **k: Client()), (lambda: "x")
+    os.environ.setdefault("TAIBE_HOST_ROOT", str(cs.config_mod.REPO_ROOT))
+    try:
+        rc = cs.main(["--write"])
+    finally:
+        cs.queue_call, cs.tboards.build, cs.queue_token = real, saved_build, saved_token
+    put = [c for c in calls if c[0] == "PUT"]
+    check("cards_stats: прошлая сводка читается по id, запись с её ifVersion",
+          rc == 0 and ("GET", f"/db/work/{cs.DOC_ID}", None) in calls and put == [("PUT", f"/db/work/{cs.DOC_ID}", 7)],
+          str(calls))
