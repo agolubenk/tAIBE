@@ -48,6 +48,8 @@ export const PRODUCTS_JS = String.raw`(function () {
     return !(data.kind === 'merge' && (data.sha || data.base));
   }
   function label(slug) { return names[slug] || slug; }
+  // Имя продукта для разрезов «Хода работ» (page-lanes.ts: «Готовность по разделам», «Карточки t-boards в плане»).
+  window.__oqProductName = label;
   function option(slug, text, selected) {
     var o = document.createElement('option');
     o.value = slug;
@@ -151,6 +153,8 @@ export const PRODUCTS_JS = String.raw`(function () {
       if (!products.length) { setView(''); return; }
       products.forEach(function (x) { names[x.slug] = x.name; });
       if (window.__oqBoards) window.__oqBoards(products);
+      // Имена пришли — разрезы по продуктам перерисовываются с ними, а не со slug.
+      if (window.__oqLanes && window.__oqLanes.refresh) window.__oqLanes.refresh();
       // Сохранён продукт, которого больше нет (lavaeon до 0016) или не видно, — выбор стирается: иначе подмена базы при
       // каждой загрузке сначала показывала бы пустую очередь.
       var saved = readFilter();
