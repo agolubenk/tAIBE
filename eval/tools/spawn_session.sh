@@ -292,8 +292,10 @@ elif [ -n "$HANDOFF" ]; then
   # Предшественник уходит сам: сторож ждёт квитанцию наследника и проверяет его, модель в этом не участвует.
   if [ "$DRY" = 0 ] && [ "$RETIRE" != off ]; then
     # --guard: если предшественник — Контроль, сторож впишет наследника в список Контроля этих папок (IS-233).
+    # Пустую папку не передаём: cd не вышел — пустой --guard стал бы текущей папкой.
+    GUARD_TAIBE=$(cd "$TOOLS/../.." 2>/dev/null && pwd) || GUARD_TAIBE=
     python3 -I "$TOOLS/lineage.py" retire --child "$SPAWNED_LINE" ${ROLE:+--role "$ROLE"} \
-      --guard "$CWD" --guard "$(cd "$TOOLS/../.." && pwd)" \
+      ${CWD:+--guard "$CWD"} ${GUARD_TAIBE:+--guard "$GUARD_TAIBE"} \
       || echo "# spawn_session: сторож не запущен — предшественник останется, уберёт reap_sessions.sh" >&2
   fi
 elif [ "$LAUNCH" = 1 ]; then

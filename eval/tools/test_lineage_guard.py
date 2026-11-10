@@ -51,7 +51,8 @@ class HandoverTest(Base):
     def assert_untouched(self):
         for d in (self.hr, self.tb):
             self.assertEqual(self.get(d)["control"], [PRED])
-            self.assertFalse((d / ".claude" / "merge-guard.local.json.before-cd34").exists())
+            self.assertFalse((d / ".claude" / G.BACKUP).exists())
+        self.assertFalse((L.ldir() / G.INTENT).exists())
         self.assertIn(300, self.sx.p, "Контроль не передан — предшественник должен остаться")
 
     def test_control_moves_to_successor_then_predecessor_goes(self):
@@ -59,8 +60,10 @@ class HandoverTest(Base):
         self.assertEqual(self.run_watch(), 0, self.lines)
         self.assertEqual(self.get(self.hr), {"control": [OTHER, SUCC], "protected": ["release"]})
         self.assertEqual(self.get(self.tb)["control"], [SUCC])
-        backup = self.hr / ".claude" / "merge-guard.local.json.before-cd34"
+        backup = self.hr / ".claude" / G.BACKUP
         self.assertEqual(json.loads(backup.read_text())["control"], [OTHER, PRED])
+        self.assertFalse((L.ldir() / G.INTENT).exists())
+        self.assertEqual(sorted(x.name for x in (self.hr / ".claude").iterdir()), [G.GUARD.name, G.BACKUP])
         self.assertEqual(oct((self.hr / G.GUARD).stat().st_mode & 0o777), oct(0o644))
         self.assertNotIn(300, self.sx.p)
         self.assertIn(400, self.sx.p)
@@ -75,7 +78,7 @@ class HandoverTest(Base):
             self.put(d, [OTHER])
         self.assertEqual(self.run_watch(), 0, self.lines)
         self.assertEqual(self.get(self.hr)["control"], [OTHER])
-        self.assertFalse((self.hr / ".claude" / "merge-guard.local.json.before-cd34").exists())
+        self.assertFalse((self.hr / ".claude" / G.BACKUP).exists())
         self.assertNotIn(300, self.sx.p)
 
     def test_write_failure_rolls_back_and_keeps_predecessor(self):
@@ -92,6 +95,7 @@ class HandoverTest(Base):
         self.assertEqual(self.get(self.tb)["control"], [PRED])
         self.assertIn(300, self.sx.p)
         self.assertIn("сбой записи", " ".join(self.lines))
+        self.assertFalse((L.ldir() / G.INTENT).exists(), "откат удался — журнал не нужен")
 
     def test_successor_not_in_spawned_window_keeps_everything(self):
         L.write_json(L.ldir() / f"{CHILD}.json", {"terminal": "terminal", "tty": "/dev/ttys099"})
@@ -143,9 +147,116 @@ class HandoverTest(Base):
         self.assertEqual(self.get(self.hr)["control"], [SUCC])
         self.assertIn("нет в списке", self.lines[-1])
 
-    def test_unknown_predecessor_sid_changes_nothing(self):
-        self.assertTrue(G.hand_control([self.hr], None, (SUCC, None), "cd34", self.log))
+    def test_unknown_predecessor_sid_keeps_everything(self):
+        # sessionId предшественника не известен — не проверить, Контроль ли он: не снимать (fail-closed).
+        self.assertFalse(G.hand_control([self.hr], None, (SUCC, None), "cd34", self.log))
         self.assertEqual(self.get(self.hr)["control"], [PRED])
+        self.assertEqual(self.run_watch(sid=None), 3, self.lines)
+        self.assert_untouched()
+
+    def test_unknown_predecessor_sid_without_lists_retires(self):
+        bare = self.dir / "bare"
+        bare.mkdir()
+        self.assertTrue(G.hand_control([bare], None, (SUCC, None), "cd34", self.log))
+
+    def test_reparented_successor_keeps_everything(self):
+        # Вложенный claude, чей Bash умер: ppid 1 (launchd), ancestor_claude его уже не видит.
+        sx = FakeSys(tree(successor_parent=1), env={400: CHILD, 300: PARENT})
+        self.assertEqual(self.run_watch(sx), 3, self.lines)
+        self.assert_untouched()
+        self.assertIn("не пусковой скрипт или shell", " ".join(self.lines))
+
+    def test_successor_under_spawn_launcher_hands_over(self):
+        procs = [x for x in tree(successor_parent=212)] + [
+            P(212, 211, 212, "ttys006", "/bin/bash /var/folders/x/T//claude-spawn.AbC123/backend.sh")]
+        sx = FakeSys(procs, env={400: CHILD, 300: PARENT})
+        self.assertEqual(self.run_watch(sx), 0, self.lines)
+        self.assertEqual(self.get(self.tb)["control"], [SUCC])
+
+    def test_symlinked_list_keeps_everything(self):
+        real = self.dir / "elsewhere.json"
+        real.write_text(json.dumps({"control": [PRED]}), encoding="utf-8")
+        (self.tb / G.GUARD).unlink()
+        (self.tb / G.GUARD).symlink_to(real)
+        self.assertEqual(self.run_watch(), 3, self.lines)
+        self.assertEqual(json.loads(real.read_text())["control"], [PRED])
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+        self.assertIn(300, self.sx.p)
+
+    def test_hardlinked_list_keeps_everything(self):
+        os.link(self.tb / G.GUARD, self.dir / "twin.json")
+        self.assertEqual(self.run_watch(), 3, self.lines)
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+
+    def test_planted_links_at_backup_and_tmp_are_not_followed(self):
+        victim = self.dir / "victim.txt"
+        victim.write_text("keep", encoding="utf-8")
+        claude = self.tb / ".claude"
+        (claude / G.BACKUP).symlink_to(victim)
+        (claude / (G.GUARD.name + ".tmp-handover")).symlink_to(victim)
+        self.assertEqual(self.run_watch(), 0, self.lines)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep")
+        self.assertFalse((claude / G.BACKUP).is_symlink())
+        self.assertEqual(self.get(self.tb)["control"], [SUCC])
+        self.assertEqual([x.name for x in claude.iterdir() if x.name.endswith(".tmp-handover") and not x.is_symlink()], [])
+
+    def test_busy_lock_gives_up_and_keeps_everything(self):
+        import fcntl
+        L.ldir().mkdir(parents=True, exist_ok=True)
+        with open(L.ldir() / "guard.lock", "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, lock_wait=0.3))
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+        self.assertIn("guard.lock занят", self.lines[-1])
+
+    def test_interrupted_handover_blocks_next_until_checked(self):
+        real, calls = G.write_atomic, []
+
+        def killed(f, text, mode):
+            if Path(f).name == G.GUARD.name and SUCC in text:
+                calls.append(f)
+                if len(calls) == 2:
+                    raise KeyboardInterrupt("сторож убит между папками")
+            return real(f, text, mode)
+
+        with mock.patch.object(G, "write_atomic", killed):
+            with self.assertRaises(KeyboardInterrupt):
+                G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log)
+        self.assertEqual(self.get(self.hr)["control"], [SUCC])
+        self.assertEqual(self.get(self.tb)["control"], [PRED])
+        intent = json.loads((L.ldir() / G.INTENT).read_text())
+        self.assertEqual((intent["from"], intent["to"], len(intent["files"])), (PRED[:8], SUCC[:8], 2))
+        self.assertFalse(G.hand_control([self.tb], PRED, (SUCC, None), "ef56", self.log))
+        self.assertIn("прерванной передачи", self.lines[-1])
+        self.assertEqual(self.get(self.tb)["control"], [PRED])
+
+    def test_failed_rollback_leaves_intent(self):
+        real = G.write_atomic
+        hr, tb = (self.hr / G.GUARD).resolve(), (self.tb / G.GUARD).resolve()
+
+        def broken(f, text, mode):
+            target = Path(f).resolve() if Path(f).name == G.GUARD.name else None
+            if target == tb and SUCC in text:
+                raise OSError("disk full")
+            if target == hr and SUCC not in text:
+                raise OSError("откат тоже не пишется")
+            return real(f, text, mode)
+
+        with mock.patch.object(G, "write_atomic", broken):
+            self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertTrue((L.ldir() / G.INTENT).exists(), "расхождение осталось — журнал сигналит следующей передаче")
+        self.assertIn("откат", " ".join(self.lines))
+        self.assertEqual(json.loads((self.hr / ".claude" / G.BACKUP).read_text())["control"], [PRED])
+
+    def test_successor_already_listed_is_not_doubled(self):
+        self.put(self.hr, [SUCC, PRED])
+        self.put(self.tb, [OTHER, OTHER, PRED])
+        self.assertEqual(self.run_watch(), 0, self.lines)
+        self.assertEqual(self.get(self.hr)["control"], [SUCC])
+        self.assertEqual(self.get(self.tb)["control"], [OTHER, OTHER, SUCC])
+
+    def test_empty_guard_dir_is_skipped(self):
+        self.assertEqual(G.guard_dirs(["", str(self.hr)]), [self.hr.resolve()])
 
     def test_worktree_maps_to_main_root(self):
         wt = self.hr / "worktrees" / "feature" / "x"

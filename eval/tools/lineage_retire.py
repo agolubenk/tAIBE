@@ -177,10 +177,13 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0, ctl=None):
     ctl — {"dirs": папки списка Контроля, "sid": sessionId p}: если p — Контроль, он переходит проверенному наследнику
     до снятия p; не перешёл — p не снимается (lineage_guard)."""
     def handover(s):
+        # Свежая сверка наследника перед записью списка: за ожидание он мог упасть (и в ветках «ушёл сам»).
         if not ctl:
             return True
-        return hand_control(ctl["dirs"], ctl.get("sid"), successor_sid(sx.procs(), s, child), child.rsplit(".", 1)[-1],
-                            log)
+        procs = sx.procs()
+        why = successor_problem(sx, procs, p, procs.get(s.pid), a, child)
+        succ = (None, why) if why else successor_sid(procs, procs.get(s.pid), child)
+        return hand_control(ctl["dirs"], ctl.get("sid"), succ, child.rsplit(".", 1)[-1], log)
 
     ack = ldir() / f"{child}.ack"
     deadline = sx.now() + timeout
