@@ -367,6 +367,8 @@ def main(argv=None, sx=None):
     t.add_argument("--timeout", type=float, default=float(os.environ.get("SPAWN_RETIRE_TIMEOUT") or 5400))
     t.add_argument("--poll", type=float, default=5.0)
     t.add_argument("--foreground", action="store_true", help="без отцепления (тесты, отладка)")
+    t.add_argument("--guard", action="append", default=[], metavar="DIR",
+                   help="папка со списком Контроля: если предшественник — Контроль, он переходит наследнику (IS-233)")
     from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
     from lineage_close import add_autoclose_args, add_exited_args, cmd_autoclose, cmd_exited  # noqa: E402
