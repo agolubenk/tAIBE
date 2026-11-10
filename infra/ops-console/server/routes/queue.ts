@@ -3,18 +3,21 @@
  * журнал, мёрж и деплой. Доступ — токен очереди или сессия владельца консоли (server/queue/auth.ts).
  */
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { z } from 'zod'
 import { apiError } from '../http-types'
 import { parseBody } from '../lib/validate'
 import { requireQueueActor, requireScope, type QueueEnv } from '../queue/auth'
 import { mergeInfo, mergeItem, redeploy } from '../queue/github'
 import { beatRelay, readRelay, relayBeatSchema } from '../queue/relay'
-import { throttleWrite } from '../queue/throttle'
+import { acceptNotify, notifySchema } from '../queue/notify'
+import { throttleNotify, throttleWrite } from '../queue/throttle'
 import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
 import { changeItemProduct } from '../queue/product-change'
+import { recentPrs } from '../queue/prs'
 import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_SLUG, visibilityKey, type Visibility } from '../queue/products'
 import { SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
@@ -130,6 +133,14 @@ queueRoutes.put('/relay', requireScope('agent'), relayHr, async (c) => {
   return c.json(await beatRelay(await parseBody(c, relayBeatSchema)))
 })
 
+// PR репозитория консоли для графика «Сколько PR ждали мёржа» (queue/prs.ts). Репозиторий — HR: токен без HR — 404.
+// Тег — время сборки кэша: повторный опрос страницы до новой сборки — 304 без тела.
+queueRoutes.get('/prs', requireScope('read', 'agent'), async (c) => {
+  const list = await recentPrs(c.get('oqActor').products)
+  if (!list) throw apiError(404, 'Нет PR для продуктов токена: репозиторий консоли — HR')
+  return listResponse(c, 'prs', `W/"prs-${Date.parse(list.at).toString(36)}"`, async () => list)
+})
+
 queueRoutes.get('/merge/:itemId', requireScope('owner'), async (c) => c.json(await mergeInfo(c.req.param('itemId'))))
 
 queueRoutes.post('/merge/:itemId', requireScope('owner'), async (c) => {
@@ -138,6 +149,28 @@ queueRoutes.post('/merge/:itemId', requireScope('owner'), async (c) => {
 })
 
 queueRoutes.post('/redeploy', requireScope('owner'), async (c) => c.json({ message: await redeploy(c.get('oqActor')) }))
+
+// События 2FA от backend продукта (queue/notify.ts): токен notify (или owner), 30 в час на токен — до разбора
+// тела, ответ 202 до доставки. Повтор login + event + минута — тоже 202, но без второго сообщения.
+queueRoutes.post(
+  '/notify',
+  requireScope('notify'),
+  async (c, next) => {
+    throttleNotify(c.get('oqActor').name)
+    await next()
+  },
+  bodyLimit({
+    maxSize: 4096,
+    onError: () => {
+      throw apiError(413, 'Слишком большой запрос')
+    },
+  }),
+  async (c) => {
+    const body = await parseBody(c, notifySchema)
+    const fresh = acceptNotify(body, c.get('oqActor').name)
+    return c.json({ accepted: true, duplicate: !fresh }, 202)
+  },
+)
 
 // Вложения входящих: загрузка — владелец, список — read/agent, содержимое — agent/owner (routes/queue-files.ts).
 queueRoutes.route('/files', filesRoutes)

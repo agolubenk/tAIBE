@@ -264,17 +264,19 @@ async function refreshCard(t: Target, messageId: number, m: AlertMessage): Promi
 
 /**
  * Рассылка вне алертов (дайджест, тест, служебное). subscriptions — каким личным подпискам
- * слать (по умолчанию никаким: служебные сообщения о самом боте в бот не идут).
+ * слать (по умолчанию никаким: служебные сообщения о самом боте в бот не идут). Итог — сколько получателей,
+ * сколько доставлено и ошибки: вызывающий пишет его в журнал, если отказ доставки должен быть виден.
+ * filter null — каналы не нужны, их строки не читаются.
  */
 export async function broadcast(
   kind: 'digest' | 'test' | 'alert',
   msg: OutgoingMessage,
-  filter: (ch: ChannelRow) => boolean,
+  filter: ((ch: ChannelRow) => boolean) | null,
   subscriptions?: (sub: Subscription) => boolean,
-): Promise<void> {
-  const all = await getDb().query.channels.findMany({ where: eq(channels.enabled, true), limit: 50 })
+): Promise<{ targets: number; delivered: number; errors: string[] }> {
+  const picked = filter ? (await getDb().query.channels.findMany({ where: eq(channels.enabled, true), limit: 50 })).filter(filter) : []
   const token = await consoleBotToken()
-  const targets = [...all.filter(filter).map((ch) => channelTarget(ch, token)), ...(subscriptions ? await subscriptionTargets(subscriptions) : [])]
+  const targets = [...picked.map((ch) => channelTarget(ch, token)), ...(subscriptions ? await subscriptionTargets(subscriptions) : [])]
   // Кнопки с callback — только туда, где их нажатие дойдёт до консоли.
   const markupFor = (t: Target) => {
     if (!msg.replyMarkup || t.callbacks) return msg.replyMarkup
@@ -282,7 +284,12 @@ export async function broadcast(
     const kept = rows.map((r) => r.filter((b) => !b.callback_data)).filter((r) => r.length)
     return kept.length ? { inline_keyboard: kept } : undefined
   }
-  await Promise.all(targets.map((t) => deliverToTarget(t, { ...msg, replyMarkup: markupFor(t) }, kind)))
+  const results = await Promise.all(targets.map((t) => deliverToTarget(t, { ...msg, replyMarkup: markupFor(t) }, kind)))
+  return {
+    targets: targets.length,
+    delivered: results.filter((r) => r.ok).length,
+    errors: results.flatMap((r) => (r.error ? [r.error] : [])),
+  }
 }
 
 export function consoleLink(route: string): string {

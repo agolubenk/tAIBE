@@ -40,12 +40,11 @@ beforeAll(async () => {
 })
 
 describe('продукты — схема и справочник', () => {
-  it('три продукта из миграции, HR — по умолчанию; токен видит только свои', async () => {
+  it('два продукта после миграций (0016: Lavaeon и HR Helper — один), HR — по умолчанию; токен видит только свои', async () => {
     const all = await call(owner, 'GET', '/products')
     expect(all.json?.products).toEqual([
-      { slug: 'hr-helper', name: 'HR Helper' },
-      { slug: 'lavaeon', name: 'Lavaeon' },
-      { slug: 'taibe', name: 'aiBoards&eval' },
+      { slug: 'hr-helper', name: 'Lavaeon (HR Helper)' },
+      { slug: 'taibe', name: 'tAIBE' },
     ])
     expect(((await call(taibe, 'GET', '/products')).json?.products as { slug: string }[]).map((p) => p.slug)).toEqual(['taibe'])
   })
@@ -113,7 +112,7 @@ describe('продукт нового документа и id', () => {
     expect(absent.json).toEqual(foreign.json)
     // Ответ называет только свои продукты и их префикс — сессия знает, какой id писать.
     expect(String(absent.json?.error)).toMatch(/taibe — id «taibe-…»/)
-    expect(String(absent.json?.error)).not.toMatch(/hr-helper|lavaeon/)
+    expect(String(absent.json?.error)).not.toMatch(/hr-helper/)
     expect((await call(hr, 'PUT', '/db/items/taibe-d-9', { data: decision('x') })).status).toBe(404)
     expect((await call(taibe, 'PATCH', '/db/checks/d-none', { data: { agentStatus: 'doing' } })).status).toBe(404)
   })
@@ -123,7 +122,9 @@ describe('продукт нового документа и id', () => {
     expect((await call(owner, 'PUT', '/db/items/d-owner-1', { data: decision('без префикса') })).json).toMatchObject({ product: 'hr-helper' })
     expect((await call(both, 'PUT', '/db/items/d-both-1', { data: decision('без префикса') })).json).toMatchObject({ product: 'hr-helper' })
     expect((await call(both, 'PUT', '/db/items/taibe-d-4', { data: decision('с префиксом') })).json).toMatchObject({ product: 'taibe' })
+    // Продукта lavaeon больше нет (0016): id «lavaeon-…» — снова пространство HR.
     expect((await call(taibe, 'PUT', '/db/items/lavaeon-d-1', { data: decision('x') })).status).toBe(404)
+    expect((await call(hr, 'PUT', '/db/items/lavaeon-d-1', { data: decision('x') })).json).toMatchObject({ product: 'hr-helper' })
   })
 })
 

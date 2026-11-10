@@ -5,8 +5,6 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest'
 import { freshApp } from './helpers'
-import { getDb } from '../server/db/client'
-import { oqDocs } from '../server/db/schema'
 import { createToken } from '../server/queue/auth'
 
 type App = Awaited<ReturnType<typeof freshApp>>
@@ -95,12 +93,13 @@ describe('смена продукта пункта', () => {
 
 describe('фильтр списка ?product=', () => {
   it('владелец — один продукт; токен — только из видимых, невидимый — пусто', async () => {
-    await getDb().insert(oqDocs).values({ collection: 'items', id: 'lavaeon-d-1', dataJson: JSON.stringify(decision('Lavaeon')), product: 'lavaeon' })
-    expect(ids(await call(owner, 'GET', '/db/items?product=lavaeon'))).toEqual(['lavaeon-d-1'])
     expect(ids(await call(owner, 'GET', '/db/items?product=taibe'))).toEqual(['d-move-1', 'm-move-8'])
+    expect(ids(await call(owner, 'GET', '/db/items?product=hr-helper'))).toEqual(['i-move-1', 'm-move-7'])
     expect(ids(await call(taibe, 'GET', '/db/items?product=hr-helper'))).toEqual([])
     expect(ids(await call(hr, 'GET', '/db/items?product=hr-helper'))).toEqual(['i-move-1', 'm-move-7'])
-    expect(ids(await call(owner, 'GET', '/db/items?open=1&product=lavaeon'))).toEqual(['lavaeon-d-1'])
+    expect(ids(await call(owner, 'GET', '/db/items?open=1&product=taibe'))).toEqual(['d-move-1', 'm-move-8'])
+    // Продукта lavaeon больше нет (0016, Lavaeon и HR Helper — один продукт hr-helper): отбор по нему пуст.
+    expect(ids(await call(owner, 'GET', '/db/items?product=lavaeon'))).toEqual([])
     expect((await call(owner, 'GET', '/db/items?product=BAD!')).json?.docs).toEqual([])
   })
 })

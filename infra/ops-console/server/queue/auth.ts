@@ -15,11 +15,17 @@ import { resolveActiveSession } from '../auth/sso'
 import { listProducts, PRODUCT_SLUG, tokenVisibility } from './products'
 import type { Actor, Scope } from './store'
 
-export const SCOPES: readonly Scope[] = ['read', 'agent', 'owner']
+export const SCOPES: readonly Scope[] = ['read', 'agent', 'owner', 'notify']
 const TOKEN_PREFIX = 'oq_'
 const TOUCH_MS = 5 * 60_000
 
 export type QueueEnv = AppEnv & { Variables: AppEnv['Variables'] & { oqActor: Actor } }
+
+/**
+ * Токен только с notify (события 2FA от backend продукта) — ни страницы /queue, ни чтения, ни записи. Такой токен
+ * живёт в процессе, который принимает интернет: утечка не должна открывать очередь.
+ */
+export const notifyOnly = (a: Actor): boolean => a.scopes.length > 0 && a.scopes.every((s) => s === 'notify')
 
 export interface TokenOptions {
   /** Продукты токена (slug); по умолчанию — HR, как у токенов до v2-lite. У owner — только «*» (он видит всё). */
@@ -28,7 +34,9 @@ export interface TokenOptions {
 
 export async function createToken(name: string, scopes: Scope[], opts: TokenOptions = {}): Promise<{ id: number; token: string }> {
   const clean = [...new Set(scopes)].filter((s) => SCOPES.includes(s))
-  if (!clean.length) throw new Error('Нужна хотя бы одна область: read, agent, owner')
+  if (!clean.length) throw new Error('Нужна хотя бы одна область: read, agent, owner, notify')
+  // notify не смешивается с другими: иначе токен backend продукта смог бы читать или писать очередь.
+  if (clean.includes('notify') && clean.length > 1) throw new Error('Область notify выпускается отдельным токеном, без других областей')
   const owner = clean.includes('owner')
   // owner видит все продукты (tokenVisibility): другой список в строке обещал бы ограничение, которого нет.
   const products = [...new Set(opts.products ?? [owner ? '*' : 'hr-helper'])]

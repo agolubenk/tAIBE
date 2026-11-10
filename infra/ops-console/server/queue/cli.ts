@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   switch (cmd) {
     case 'token-create': {
       const [name, scopes, products] = args
-      if (!name || !scopes) throw new Error('token-create <имя> <read,agent,owner> [продукты]')
+      if (!name || !scopes) throw new Error('token-create <имя> <read,agent,owner | notify> [продукты]')
       const t = await createToken(name, scopes.split(',').map((s) => s.trim()) as Scope[], {
         products: products ? products.split(',').map((s) => s.trim()) : undefined,
       })

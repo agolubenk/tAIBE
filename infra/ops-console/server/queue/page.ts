@@ -17,10 +17,11 @@ import { createHash } from 'node:crypto'
 import type { Context } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { SESSION_COOKIE } from '../auth/session'
-import { resolveActor } from './auth'
+import { notifyOnly, resolveActor } from './auth'
 import { ENHANCE_JS, SHIM_JS } from './page-scripts'
 import { FILES_JS } from './page-files'
 import { PRODUCTS_JS } from './page-products'
+import { REPORTS_JS } from './page-reports'
 import { OPEN_RULE_JS } from './open-rule'
 
 export const QUEUE_ASSETS = '/queue/assets/'
@@ -56,13 +57,14 @@ export function queuePageBuild(): Built {
   }
   if ((html.match(/<script/g) ?? []).length !== 2) throw new Error('page.html: ожидалось ровно два <script> (тема и код страницы)')
   const assets = new Map<string, string>()
-  // Подмена базы, правило «открыт ли пункт» (oqItemState — то же, что у GET /db/items?open=1) и вложения — до кода
-  // страницы (форма и карточки берут window.__oqFiles), кнопки мёржа — после.
+  // Подмена базы, правило «открыт ли пункт» (oqItemState — то же, что у GET /db/items?open=1), вложения и данные «Хода
+  // работ» — до кода страницы (она берёт window.__oqFiles и window.__oqReports), кнопки мёржа — после.
   const page =
     html.slice(0, first) +
     scriptTag(assets, 'shim', SHIM_JS) + '\n' +
     scriptTag(assets, 'open-rule', OPEN_RULE_JS) + '\n' +
     scriptTag(assets, 'files', FILES_JS) + '\n' +
+    scriptTag(assets, 'reports', REPORTS_JS) + '\n' +
     scriptTag(assets, 'page', html.slice(first + '<script>'.length, firstClose)) +
     html.slice(firstClose + '</script>'.length, end) +
     scriptTag(assets, 'enhance', ENHANCE_JS) + '\n' +
@@ -98,7 +100,7 @@ export function queueCsp(host: string, themeHash: string): string {
 
 export async function queuePage(c: Context) {
   const actor = await resolveActor(c.req.header('authorization'), getCookie(c, SESSION_COOKIE))
-  if (!actor) return c.redirect('/login?next=%2Fqueue', 302)
+  if (!actor || notifyOnly(actor)) return c.redirect('/login?next=%2Fqueue', 302)
   const { html, themeHash } = queuePageBuild()
   c.header('Content-Security-Policy', queueCsp(cspHost(c), themeHash))
   c.header('Cache-Control', 'no-store')
@@ -109,7 +111,7 @@ export async function queuePage(c: Context) {
 
 export async function queueAsset(c: Context) {
   const actor = await resolveActor(c.req.header('authorization'), getCookie(c, SESSION_COOKIE))
-  if (!actor) return c.text('Unauthorized', 401, { 'Cache-Control': 'no-store' })
+  if (!actor || notifyOnly(actor)) return c.text('Unauthorized', 401, { 'Cache-Control': 'no-store' })
   const body = queuePageBuild().assets.get(c.req.param('name') ?? '')
   if (body === undefined) return c.text('Not Found', 404, { 'Cache-Control': 'no-store' })
   return c.body(body, 200, {

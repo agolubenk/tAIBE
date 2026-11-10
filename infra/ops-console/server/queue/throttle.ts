@@ -3,11 +3,11 @@ import { apiError } from '../http-types'
 
 const WINDOW_MS = 60_000
 
-function limiter(max: number, message: string) {
+function limiter(max: number, message: string, windowMs = WINDOW_MS) {
   const hits = new Map<string, number[]>()
   return (actor: string): void => {
     const now = Date.now()
-    const recent = (hits.get(actor) ?? []).filter((t) => now - t < WINDOW_MS)
+    const recent = (hits.get(actor) ?? []).filter((t) => now - t < windowMs)
     if (recent.length >= max) throw apiError(429, message)
     recent.push(now)
     hits.set(actor, recent)
@@ -23,3 +23,8 @@ export const throttleFileRead = limiter(60, 'Слишком много скач�
  * актора. Страница спрашивает её раз в 4 с, пока ждёт файлы, и на смену входящих: с запасом на две вкладки.
  */
 export const throttleSummary = limiter(120, 'Слишком частые запросы сводки — не больше 120 в минуту')
+/**
+ * События 2FA от backend продукта (POST /notify): 30 в час на токен — живых событий единицы в сутки, а утёкший
+ * токен не превратит бот владельца в спам. Считаются все запросы, и повторы, и отказы схемы.
+ */
+export const throttleNotify = limiter(30, 'Слишком много уведомлений — не больше 30 в час на токен', 3_600_000)

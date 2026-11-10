@@ -531,7 +531,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   <div class="col-reports" id="reports-col" role="region" aria-label="Ход работ: отчёты и графики" tabindex="0">
   <section id="agents" class="dash">
     <div class="sec-head"><h2 class="sec">Ход работ</h2><span class="sec-count" id="dash-asof"></span></div>
-    <p class="sec-note">Задачи агентов и ваша очередь — в цифрах и на шкале времени. Агенты обновляют статусы сами. Отставание — дни после плановой даты. План от 15.10 предварительный: это оценка агента, сроки уточняются по мере работы. К строкам плана прикреплены карточки t-boards — кнопка «N карточек» в отчёте открывает список.</p>
+    <p class="sec-note">Задачи агентов и ваша очередь — в цифрах и на шкале времени. Агенты обновляют статусы сами. Отставание — дни после плановой даты. План предварительный: это оценка агента, сроки уточняются по мере работы. К строкам плана прикреплены карточки t-boards — кнопка «N карточек» в отчёте открывает список.</p>
     <div class="kpis" id="kpis"></div>
     <div class="card" id="card-owner">
       <h3>Ваша очередь по дням</h3>
@@ -605,7 +605,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
         <li><b>Команды на сервере</b> — подключитесь по ssh (<a href="#ssh-howto">как подключиться</a>), выполните блок, вставьте вывод в поле под ним и поставьте галочку.</li>
         <li>Всё сохраняется само, писать мне в чат не нужно. Передумали — «Изменить ответ» под пунктом.</li>
         <li><b>«Ждёт вас снова»</b> — вы уже ответили, но агенту снова нужны вы (вопрос в ответ, вывод с ошибкой, «повторите проверку»): что именно — в строке «Агент» под пунктом. Ответьте ещё раз — пункт закроется.</li>
-        <li><b>Шапка</b> — «Поставить задачу» открывает форму (горячие клавиши — под её кнопками), «Очередь» и «Ход работ» ведут к разделам и показывают, сколько открыто, справа — тема: авто, светлая или тёмная.</li>
+        <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и «Ход работ» — только по нему, «Все продукты» — по всем. «Поставить задачу» открывает форму (горячие клавиши — под её кнопками), «Очередь» и «Ход работ» ведут к разделам и показывают, сколько открыто, справа — тема: авто, светлая или тёмная.</li>
       </ol>
       <div class="legend"><span><span class="chip chip-decision">решение</span> выбрать вариант</span><span><span class="chip chip-deploy">деплой</span> мёрж выкатит прод</span><span><span class="chip chip-ssh">ssh</span> команда на сервере</span><span><span class="chip chip-wait">после …</span> сначала другой пункт</span></div>
       </details>
@@ -670,7 +670,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     <summary>Для агентов: как добавить пункт владельцу и отметить свою работу</summary>
     <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd без basePlanEnd — 409.</p>
     <pre>items/&lt;id&gt;  пункт владельцу (id: d-… решение, m-… мёрж, s-… сервер, c-… ручная проверка)
-  Продукт — hr-helper, taibe, lavaeon: у продукта не hr-helper id начинается с его slug (taibe-m-93).
+  Продукт — hr-helper (Lavaeon (HR Helper): id без префикса) или taibe (tAIBE: id начинается с «taibe-», taibe-m-93).
   Продукт пункта меняет только владелец (выбор «Продукт:» у пункта).
   {kind: 'decision'|'merge'|'server'|'check', title, body, cmd, after, cmd2,
    options: [{id, label, hint}]   // только decision; рекомендуемый первым, hint: 'рекомендую'
@@ -713,18 +713,12 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // история; канон открытого — t-boards). Новые пункты приходят из базы (DB_ITEMS).
   var ITEMS = [
     // ── 15.10: хвосты после сверки ────────────────────────────────────────
-    { id: 'd-close-onreview', added: '2026-10-15', kind: 'decision', title: 'Закрыть в Notion то, что уже влито, но висит «на ревью» или «открыто»',
-      body: '<p>Код уже в main и на проде, а карточки не закрыты. Закрываю только по вашему «да».</p><ul><li><a href="https://app.notion.com/p/3f6dd207a825818f8a2fee2c46845022">Размытие панелей админки</a> — PR #142, влит 11.10.</li><li><a href="https://app.notion.com/p/3f6dd207a825816b97abf47d2649dbce">Приёмник отчётов ops-консоли</a> — PR #137, влит 11.10. Ваши три проверки после деплоя отмечены 12.10.</li><li>Пять ошибок, исправленных в PR-1 провайдеров (#143, влит 11.10): <a href="https://app.notion.com/p/3f6dd207a82581b89ff2dd2cce7ed28f">«Проверить ключ» отвечал 400</a>, <a href="https://app.notion.com/p/3f6dd207a825816a8f51c4bc265855a6">стрим и картинки шли мимо своего адреса</a>, <a href="https://app.notion.com/p/3f6dd207a825812b8e1bc265915a1f8b">коды Z.ai применялись ко всем провайдерам</a>, <a href="https://app.notion.com/p/3f6dd207a82581c88340efa382f23ee3">флаг своего адреса проверялся только при сохранении</a>, <a href="https://app.notion.com/p/3f6dd207a8258179b226dc07af09b1a3">новый undici-агент на каждый вызов</a>.</li></ul><p>После «да» агент добавит записи о закрытии (отдельный PR без деплоя) и сменит статусы, когда вы снова войдёте в Notion в MCP-хабе (пункт ниже). PR-1 влит без ревью: проверяющие Claude упёрлись в недельный лимит. Ревью на GLM агент сделает 16.10. Если ошибки PR-1 хотите закрыть только после ревью — второй вариант.</p>',
-      options: [{ id: 'yes', label: 'Да, закрыть все', hint: 'рекомендую' }, { id: 'after-review', label: 'Да, но ошибки PR-1 — после ревью GLM' }, { id: 'no', label: 'Пока не закрывать' }] },
     { id: 'm-162', added: '2026-10-15', kind: 'merge', title: '#162 — запись о закрытии P0 «публичный сайт без стилей»', chips: [['без деплоя']],
       body: '<p>Только документация: изменения в <code>docs/**</code> деплой не запускают. Закрытие вы одобрили 11.10 («после мёржа #130»). #130 влит в тот же день, а запись тогда пропустили.</p>',
       cmd: 'gh pr merge 162 --merge' },
     { id: 's-baseurl', added: '2026-10-15', kind: 'server', title: 'Свои адреса ИИ-подключений после PR-1 (только чтение)', chips: [['ssh', 'ssh'], ['1 минута']],
       body: '<p>С PR-1 (#143, на проде с 11.10) флаг <code>AI_ROUTING_CUSTOM_BASE_URL</code> проверяется при каждом вызове. Если флаг выключен, а у подключения сохранён свой адрес, эта цель пропускается и маршрут уходит на резервную. Ожидаемо: строка «флаг не задан», в колонке <code>with_custom_url</code> — нули. Тогда риска нет.</p>',
       cmd: 'grep -E \'^AI_ROUTING_CUSTOM_BASE_URL=\' /opt/hr-helper/infra/docker/.env.contabo || echo "флаг не задан (выключен)"\nC=/opt/hr-helper/infra/scripts/prod/contabo-compose.sh\n$C exec -T postgres sh -c \'PGOPTIONS="-c default_transaction_read_only=on" psql -U "$POSTGRES_USER" -d "${POSTGRES_DB:-$POSTGRES_USER}"\' <<\'SQL\'\nSELECT provider, count(*) AS connections, count(*) FILTER (WHERE base_url IS NOT NULL) AS with_custom_url\nFROM company_ai_provider_connections GROUP BY 1 ORDER BY 1;\nSQL' },
-    { id: 'c-notion-auth', added: '2026-10-15', kind: 'check', title: 'Снова войти в Notion в общем MCP-хабе', chips: [['этот Mac'], ['1 минута']],
-      body: '<p>Хаб на порту 3050 работает, но вход в Notion и Cloudflare у него истёк. Пока так, агенты не могут менять статусы и писать комментарии в Notion. Записи сложены в очередь и применятся сразу после входа.</p><ol><li>На этом Mac откройте <a href="http://127.0.0.1:3050/oauth">http://127.0.0.1:3050/oauth</a>.</li><li>В строках <b>notion</b> и <b>cloudflare</b> нажмите «Authorize» и войдите.</li><li>Либо выполните в Терминале из корня репозитория команды ниже.</li></ol>',
-      cmd: 'npm run mcp-hub:auth\nnpm run mcp-hub:status   # notion и cloudflare должны попасть в «готовы»' },
     { id: 'c-watchdog', added: '2026-10-15', kind: 'check', title: 'Внешний мониторинг: три монитора в UptimeRobot (вы выбрали внешний пинг)', chips: [['браузер'], ['10 минут']],
       body: '<p>Нужен на случай, когда падает весь VPS: ops-консоль живёт там же и молчит вместе с ним. Аккаунт может завести только владелец. Все три адреса 15.10 отвечали 200.</p><ol><li>Зарегистрируйтесь на <a href="https://uptimerobot.com">uptimerobot.com</a> — хватит бесплатного тарифа.</li><li>«Add New Monitor» → тип HTTP(s), интервал 5 минут. Заведите три монитора с адресами ниже.</li><li>В «Integrations» подключите Telegram или e-mail и включите уведомления у всех трёх мониторов.</li><li>Проверка: все три мониторы в статусе «Up».</li></ol>',
       cmd: 'https://app.hrhelper.space/api/v1/health/ready\nhttps://hrhelper.space/\nhttps://ops.admin.hrhelper.space/api/health',
@@ -741,7 +735,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       body: '<p>Исправление (PR #80) на проде с 04.10, проверено браузером на <code>/</code>, <code>/legal</code>, <code>/roadmap</code>. Тест на общем каркасе всех четырёх публичных страниц — PR #130 (7/7). Улики для консилиума — в карточке.</p>' },
     { id: 'd-reject-transitions', kind: 'decision', title: 'Предложенный консилиумом переход у карточки стилей',
       options: [{ id: 'reject', label: 'Отклони его сам', hint: 'рекомендую' }, { id: 'ui', label: 'Отклоню в интерфейсе консилиума' }, { id: 'keep', label: 'Оставить' }],
-      body: '<p>Консилиум предлагал вернуть на доработку карточки TLS, дампа и стилей: в Notion не было улик. TLS и дамп уже закрыты — их переходы больше не применятся. Остался переход у карточки стилей; улики в неё добавлены 11.10. Интерфейс консилиума: <code>http://127.0.0.1:8790</code> → «Ревью».</p>' },
+      body: '<p>Консилиум предлагал вернуть на доработку карточки TLS, дампа и стилей: в карточках не было улик. TLS и дамп уже закрыты — их переходы больше не применятся. Остался переход у карточки стилей; улики в неё добавлены 11.10. Интерфейс консилиума: <code>http://127.0.0.1:8790</code> → «Ревью».</p>' },
     { id: 'd-close-alertcolors', kind: 'decision', title: 'Закрыть карточку «Telegram-алерты выглядят всё зелёное»',
       options: [{ id: 'yes', label: 'Да, закрыть', hint: 'рекомендую' }, { id: 'no', label: 'Нет, ещё проверю' }],
       body: '<p>Исправление на проде с 10.10 (PR #108 в составе #109), запись о закрытии уже в main. Карточка в «на ревью».</p>' },
@@ -780,13 +774,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       options: [{ id: 'yes', label: 'Нужен — с причиной и подтверждением для сервисов с данными' }, { id: 'no', label: 'Не нужен' }],
       body: '<p>Как в консоли: обязательная причина, для stateful-сервисов — ввод имени контейнера.</p>' },
     { id: 'd-ops-deploy-vis-2', kind: 'decision', title: 'Ops-консоль: что делать с планом OPS-DEPLOY-VIS (исправление)',
-      body: '<p><b>Я ошибся:</b> писал, что <a href="https://app.notion.com/p/3f4dd207a82581968d76f09b7f4a0cc4">карточка</a> пустая. На самом деле план лежит в поле «Report», а не в тексте страницы. Поэтому ваш ответ «закрыть» я не выполнил.</p><p>Что в плане:</p><ul><li><b>Фаза 1 (~M).</b> Деплой шлёт в консоль события по шагам: сборка, миграции, запуск, nginx, проверки, откат. В консоли появляется живая карточка деплоя с длительностью и таблицей проверок.</li><li><b>Фаза 2 (~S).</b> Алерты: деплой идёт дольше 35 минут; проверка покраснела после «зелёного» деплоя; не закрепился образ для отката. Мониторы адресов и сертификата в консоли уже есть.</li><li><b>Фаза 3.</b> Деплои на одной оси с метриками и в отчёте совету.</li></ul><p>Событий деплоя и алертов по ним пока нет.</p>',
+      body: '<p><b>Я ошибся:</b> писал, что карточка пустая. На самом деле план лежит в поле «Report», а не в тексте страницы. Поэтому ваш ответ «закрыть» я не выполнил.</p><p>Что в плане:</p><ul><li><b>Фаза 1 (~M).</b> Деплой шлёт в консоль события по шагам: сборка, миграции, запуск, nginx, проверки, откат. В консоли появляется живая карточка деплоя с длительностью и таблицей проверок.</li><li><b>Фаза 2 (~S).</b> Алерты: деплой идёт дольше 35 минут; проверка покраснела после «зелёного» деплоя; не закрепился образ для отката. Мониторы адресов и сертификата в консоли уже есть.</li><li><b>Фаза 3.</b> Деплои на одной оси с метриками и в отчёте совету.</li></ul><p>Событий деплоя и алертов по ним пока нет.</p>',
       options: [{ id: 'queue', label: 'Оставить в очереди', hint: 'рекомендую' }, { id: 'now', label: 'Делать сейчас' }, { id: 'close', label: 'Закрыть — не нужно' }] },
     { id: 'd-ops-render', kind: 'decision', title: 'Ops-консоль: перенос с VPS на Render + Turso',
       options: [{ id: 'now', label: 'Сейчас' }, { id: 'later', label: 'Позже' }, { id: 'never', label: 'Не переносить' }] },
     { id: 'd-bundle', kind: 'decision', title: 'Бюджет бандла фронтенда: браться ли за сокращение сейчас',
       options: [{ id: 'do', label: 'Делать' }, { id: 'later', label: 'Позже' }],
-      body: '<p>Циклы madge исправлены (PR #139). Размер: стартовый файл 266,5 КиБ при потолке 260, критический путь Telegram 321 КиБ при потолке 273 (+47 % с 27.08). Это отдельная задача производительности, от половины дня. Карточка: <a href="https://app.notion.com/p/3f3dd207a82581b8a2a7fac2c14409fe">«Бюджет бандла превышен…»</a>.</p>' },
+      body: '<p>Циклы madge исправлены (PR #139). Размер: стартовый файл 266,5 КиБ при потолке 260, критический путь Telegram 321 КиБ при потолке 273 (+47 % с 27.08). Это отдельная задача производительности, от половины дня. Карточка: «Бюджет бандла превышен…».</p>' },
     { id: 'd-main-checkout', kind: 'decision', title: 'Основной checkout: сохранить уникальное и обновить до main',
       options: [{ id: 'yes', label: 'Да, обнови', hint: 'рекомендую' }, { id: 'no', label: 'Пока нет' }],
       body: '<p>Ветка <code>feature/council-phase3</code> отстаёт от main на 226 коммитов, 275 изменённых путей. 196 из них уже есть в main (дубли правок коллеги после #81). 79 уникальных: 19 файлов отличаются от main (12 — <code>apps/backend/src</code>, среди них незаконченный fail-open бюджета шлюза), 12 только локальные (<code>council.db</code>, видео в <code>examples/</code>), 48 удалены локально. Сохраню эти 79 путей в <code>~/HR_Helper-backups/2026-10-11-main-checkout/</code>, проверю архив и переключу checkout на main. В этот момент в нём не должно идти других сессий.</p>' },
@@ -922,7 +916,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
 
   var DB_ITEMS = [], dbItemsKey = '';
-  function allItems() { return ITEMS.concat(DB_ITEMS); }
+  // Выбран продукт не HR (выбор вверху, page-scripts.ts __oqView): вшитые пункты — HR, их нет в числах.
+  function otherProduct() { var v = window.__oqViewOf ? window.__oqViewOf() : ''; return !!v && v !== 'hr-helper'; }
+  function allItems() { return (otherProduct() ? [] : ITEMS).concat(DB_ITEMS); }
   // До ответов и пунктов очереди — «…», не числа вшитого снимка 16.10 (QA, 23.10); без связи — снимок с пометкой.
   var LIVE = { checks: false, items: false }, OFFLINE = false;
   function queueLive() { return LIVE.checks && LIVE.items; }
@@ -1233,7 +1229,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     LIVE.items = true;
     var list = rowsOf(snap).map(function (r) { return itemFromDb(r.id, r.data); }).filter(Boolean)
       .filter(function (it) { return !ITEMS.some(function (b) { return b.id === it.id; }); });
-    var key = JSON.stringify(list);
+    var key = JSON.stringify(list) + (otherProduct() ? '|other' : '');
     if (key === dbItemsKey) return;
     dbItemsKey = key;
     document.querySelectorAll('.item[data-src="db"]').forEach(function (el) { el.remove(); });
@@ -1657,14 +1653,14 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   rebuildTracks();
   var PR = function (n) { return 'https://github.com/agolubenk/HR_Helper-v2/pull/' + n; };
-  // Базовый план от 15.10. Прошлые даты — факты (открытие и мёрж PR, ответы владельца), будущие — оценка агента.
-  // Архив, как ITEMS: тексты и ссылки строк — как были 15.10.
+  // План 15.10 — только значения по умолчанию под строками базы с тем же id (page-reports.ts, planRows): своих строк
+  // в «Ходе работ» не даёт. Архив, как ITEMS: тексты и ссылки — как были 15.10.
   var WORK_SEED = [
     { id: 'w-disk', track: 'tails', order: 1, title: 'Диск на проде: причина и потолок кэша сборки', who: 'agent', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', note: 'Диск занимал кэш сборки образов. Потолок 20 ГБ — #141. По логу деплоя 15.10 занято 23 % (было 68 %).', link: PR(141), linkText: '#141' },
-    { id: 'w-styles', track: 'tails', order: 2, title: 'Закрыть P0 «сайт без стилей» после мёржа #130', who: 'agent', status: 'doing', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-15', note: 'После мёржа закрытие пропустили. Запись о закрытии — #162, её вливаете вы. Статус в Notion — после вашего входа в хаб.', link: PR(162), linkText: '#162' },
+    { id: 'w-styles', track: 'tails', order: 2, title: 'Закрыть P0 «сайт без стилей» после мёржа #130', who: 'agent', status: 'doing', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-15', note: 'После мёржа закрытие пропустили. Запись о закрытии — #162, её вливаете вы.', link: PR(162), linkText: '#162' },
     { id: 'w-glm-143', track: 'tails', order: 3, title: 'Ревью GLM для PR-1 (#143), влитого без ревью', who: 'agent', status: 'taken', planStart: '2026-10-11', planEnd: '2026-10-11', note: '11.10 проверяющие Claude упёрлись в недельный лимит, PR влили без ревью. Ревью на GLM — 16.10, находки — в PR и карточку.', link: PR(143), linkText: '#143' },
     { id: 'w-glm-138', track: 'tails', order: 4, title: 'Ревью #138: в описании PR нет блока ревью', who: 'agent', status: 'taken', planStart: '2026-10-11', planEnd: '2026-10-11', note: 'Вы выбрали ревью тремя проверяющими Claude. В PR следов ревью нет. Проверю 16.10 и, если ревью не было, проведу его на GLM.', link: PR(138), linkText: '#138' },
-    { id: 'w-close-merged', track: 'tails', order: 5, title: 'Закрыть влитое: размытие (#142), приёмник (#137), 5 ошибок PR-1', who: 'agent', status: 'blocked', planStart: '2026-10-12', planEnd: '2026-10-12', note: 'Спросил только 15.10. Ждёт вашего решения и входа в Notion.' },
+    { id: 'w-close-merged', track: 'tails', order: 5, title: 'Закрыть влитое: размытие (#142), приёмник (#137), 5 ошибок PR-1', who: 'agent', status: 'blocked', planStart: '2026-10-12', planEnd: '2026-10-12', note: 'Спросил только 15.10. Ждёт вашего решения.' },
     { id: 'w-watchdog', track: 'tails', order: 6, title: 'Внешний мониторинг (вы выбрали пинг)', who: 'owner', status: 'blocked', planStart: '2026-10-12', planEnd: '2026-10-12', note: 'Инструкция появилась только 15.10 — пункт «Проверить руками». Аккаунт заводите вы.' },
     { id: 'w-main-checkout', track: 'tails', order: 7, title: 'Основной checkout → main', who: 'agent', status: 'blocked', note: 'Папкой пользуются другие сессии: 15.10 там ветка feature/council-phase3 и 18 изменённых файлов. Переключу, когда освободится.' },
     { id: 'w-prov-spec', track: 'providers', order: 1, title: 'Исследование и спека каталога: 20 провайдеров и свой шлюз', who: 'agent', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', note: 'docs/specs/ai-providers-catalog.md, ваши решения от 11.10 внесены.' },
@@ -1688,33 +1684,12 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     { id: 'w-csp2', track: 'secfront', order: 7, milestone: true, title: 'CSP в применяемый режим и порядок заявок на разрешение', who: 'agent', status: 'planned', planStart: '2026-10-21', planEnd: '2026-10-22' },
     { id: 'w-137', track: 'ops', order: 1, milestone: true, title: 'Приёмник отчётов совету (миграция)', who: 'agent', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', link: PR(137), linkText: '#137' },
     { id: 'w-agent', track: 'ops', order: 2, title: 'Агент хоста 1.2.1 и бизнес-метрики', who: 'owner', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', note: 'Выполнили вы на сервере 11.10.' },
-    { id: 'w-bot', track: 'ops', order: 3, title: 'Перезапуск контейнеров из Telegram-бота (P2)', who: 'agent', status: 'planned', planStart: '2026-10-23', planEnd: '2026-10-24', link: 'https://app.notion.com/p/3f6dd207a8258126902afad40fff5d15', linkText: 'карточка' },
+    { id: 'w-bot', track: 'ops', order: 3, title: 'Перезапуск контейнеров из Telegram-бота (P2)', who: 'agent', status: 'planned', planStart: '2026-10-23', planEnd: '2026-10-24' },
     { id: 'w-deploy-vis', track: 'ops', order: 4, title: 'OPS-DEPLOY-VIS: живой деплой в консоли (вы: в очереди)', who: 'agent', status: 'planned', planStart: '2026-10-27', planEnd: '2026-10-29' },
   ];
-  // PR с 10.10: [номер, открыт (UTC), влит (UTC) или null, заголовок]. Снимок GitHub на 15.10, 23:45.
-  var PRS = [
-    [123, '2026-10-10T02:05Z', '2026-10-10T02:05Z', 'Записи о закрытии P1/P2'], [124, '2026-10-10T09:59Z', '2026-10-10T09:59Z', 'Запись о переносе сорсинга'],
-    [125, '2026-10-10T10:30Z', '2026-10-10T10:31Z', 'rollback-prev: образы закрепляются до сборки'], [126, '2026-10-10T10:30Z', '2026-10-10T10:50Z', 'Ops-консоль: сжатие JS и чанки'],
-    [127, '2026-10-10T11:02Z', '2026-10-10T11:10Z', 'Проверка загрузок после multer'], [128, '2026-10-10T14:18Z', '2026-10-10T14:18Z', 'rollback-prev без «No such image»'],
-    [129, '2026-10-10T18:23Z', '2026-10-10T18:23Z', 'Записи о закрытии ops и CI'], [130, '2026-10-10T18:36Z', '2026-10-11T18:09Z', 'Тест каркаса публичных страниц'],
-    [131, '2026-10-10T18:41Z', '2026-10-11T15:15Z', 'Пин сайдбара админки'], [132, '2026-10-11T07:35Z', '2026-10-11T11:57Z', 'Записи о закрытии 10.10'],
-    [133, '2026-10-11T07:41Z', '2026-10-11T14:01Z', 'Агент 1.2.1: окно логов nginx'], [134, '2026-10-11T07:43Z', '2026-10-11T15:17Z', 'Дедлайн DAMS-хука'],
-    [135, '2026-10-11T07:46Z', '2026-10-11T18:52Z', 'Сборка Android в CI'], [136, '2026-10-11T07:47Z', '2026-10-11T17:31Z', 'Таймаут облачного GLM'],
-    [137, '2026-10-11T08:00Z', '2026-10-11T15:52Z', 'Приёмник отчётов ops-консоли'], [138, '2026-10-11T08:08Z', '2026-10-11T19:02Z', 'Режим рассуждения цели маршрута'],
-    [139, '2026-10-11T08:14Z', '2026-10-12T05:24Z', 'Циклы madge'], [140, '2026-10-11T12:31Z', '2026-10-11T13:56Z', 'Шапка админки'],
-    [141, '2026-10-11T12:32Z', '2026-10-11T13:59Z', 'Потолок кэша сборки'], [142, '2026-10-11T12:59Z', '2026-10-11T14:00Z', 'Размытие панелей админки'],
-    [143, '2026-10-11T13:57Z', '2026-10-11T13:57Z', 'ИИ-провайдеры, PR-1'], [144, '2026-10-13T05:50Z', '2026-10-13T07:07Z', 'Healthcheck Kafka'],
-    [145, '2026-10-13T11:39Z', '2026-10-13T16:42Z', 'Холодная сборка деплоя'], [146, '2026-10-13T11:48Z', '2026-10-13T16:42Z', 'Connect: процесс чужой компании'],
-    [147, '2026-10-13T15:41Z', '2026-10-13T16:42Z', 'Распознавание речи дольше 5 минут'], [148, '2026-10-14T06:02Z', '2026-10-14T06:02Z', 'Документация деплоя'],
-    [149, '2026-10-14T06:59Z', '2026-10-14T09:04Z', 'Правка перевода не теряется'], [150, '2026-10-14T07:08Z', '2026-10-14T09:00Z', 'Облачные полосы воркера совета'],
-    [151, '2026-10-14T12:12Z', '2026-10-14T12:37Z', 'Квота GLM: прогон ждёт сброса'], [152, '2026-10-14T12:16Z', '2026-10-14T13:31Z', 'Чистка старых образов на проде'],
-    [153, '2026-10-14T13:34Z', '2026-10-14T13:47Z', 'Квота не стирает голос «fail»'], [154, '2026-10-14T19:55Z', '2026-10-14T19:55Z', 'Токены Huntflow обновляются сами'],
-    [155, '2026-10-15T06:44Z', '2026-10-15T07:15Z', 'Совет: «Качество» и дрейф, ч. 1'], [156, '2026-10-15T07:21Z', '2026-10-15T12:34Z', 'Совет работает локально без GLM'],
-    [157, '2026-10-15T12:56Z', '2026-10-15T13:16Z', 'Ошибки Huntflow в воркфлоу-чате'], [158, '2026-10-15T13:36Z', '2026-10-15T13:56Z', 'Совет: «Качество» и роли'],
-    [159, '2026-10-15T13:52Z', '2026-10-15T16:39Z', 'Совет: дрейф, ч. 2'], [160, '2026-10-15T19:37Z', '2026-10-15T20:19Z', 'Headroom 0.41 и DAMS через GLM'],
-    [161, '2026-10-15T20:28Z', null, 'CI: отмена устаревших прогонов'], [162, '2026-10-15T20:55Z', null, 'Запись о закрытии P0 (стили)'],
-  ];
-  var OURS = { 130: 1, 131: 1, 132: 1, 133: 1, 134: 1, 135: 1, 136: 1, 137: 1, 138: 1, 139: 1, 140: 1, 141: 1, 142: 1, 143: 1, 162: 1 };
+  // Строки плана из базы и PR из GitHub — page-reports.ts (page.ts ставит его до кода страницы).
+  var REP = window.__oqReports;
+  REP.onPrs(scheduleDash);
   var DB_WORK = {}, DB_WORK_LOADED = false;
   var WORK_FIELDS = ['title', 'track', 'status', 'who', 'session', 'planStart', 'planEnd', 'basePlanEnd', 'start', 'end', 'note', 'linkText'];
   function applyDbWork(snap) {
@@ -1739,20 +1714,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     rebuildTracks();
     scheduleDash();
   }
-  // Строка вшитого плана без строки в базе — снимок страницы 16.10: её статус и даты никто не обновляет, поэтому в
-  // отчёте, Ганте и роадмапе она подписана (линза GLM #214); пока база не ответила — без подписи, чтобы не мигало.
-  var SEED_MARK = ' (снимок 16.10)';
-  function workList() {
-    var by = {};
-    WORK_SEED.forEach(function (w) { by[w.id] = DB_WORK_LOADED ? Object.assign({}, w, { title: w.title + SEED_MARK, seedOnly: true }) : w; });
-    Object.keys(DB_WORK).forEach(function (id) {
-      var seed = WORK_SEED.filter(function (w) { return w.id === id; })[0];
-      by[id] = Object.assign({ id: id }, seed || {}, DB_WORK[id]);
-    });
-    return Object.keys(by).map(function (id) { return by[id]; })
-      .filter(function (w) { return !w.archived && typeof w.title === 'string' && TRACK[w.track]; })
-      .sort(function (a, b) { return TRACK[a.track].i - TRACK[b.track].i || (a.order || 99) - (b.order || 99); });
-  }
+  // Строки — из снимка work выбранного продукта (SHIM); до ответа базы и без связи — пусто, с подписью в графиках.
+  function workList() { return REP.planRows(DB_WORK, WORK_SEED, TRACK); }
+  function noRows(text) { return DB_WORK_LOADED ? text : OFFLINE ? 'Нет связи с базой — данных нет.' : 'Загружаю…'; }
 
   // ── Ход работ: даты (dParse, diffD, planEndOf, lagOf, stateOf — в блоке oq-pure) ─
   function dayOf(iso) { var t = new Date(iso); return isNaN(t) ? null : new Date(t.getFullYear(), t.getMonth(), t.getDate()); }
@@ -1851,8 +1815,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
 
   function ownerChart(t) {
-    var items = allItems(), start = dParse('2026-10-11');
-    items.forEach(function (it) { var a = dParse(it.added); if (a && a < start) start = a; });
+    var items = allItems(), start = REP.earliestDay(items.map(function (it) { return it.added; }), t);
     var days = [];
     for (var d = start; d <= t; d = addD(d, 1)) days.push(d);
     var added = days.map(function () { return 0; }), done = days.map(function () { return 0; });
@@ -1877,7 +1840,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function planChart(ws, t) {
     var host = document.getElementById('ch-plan');
     var wp = ws.filter(function (w) { return planEndOf(w); });
-    if (!wp.length) { host.innerHTML = '<p class="empty">Нет задач с планом.</p>'; return; }
+    if (!wp.length) { host.innerHTML = '<p class="empty">' + noRows('Нет задач с планом.') + '</p>'; return; }
     var start = null, end = t;
     wp.forEach(function (w) {
       var ps = dParse(w.planStart) || planEndOf(w), pe = planEndOf(w), s = dParse(w.start);
@@ -1901,11 +1864,17 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
 
   function prChart() {
-    var host = document.getElementById('ch-pr'), now = new Date();
-    var pts = PRS.map(function (p) {
-      var c = new Date(p[1]), mm = p[2] ? new Date(p[2]) : now;
-      return { n: p[0], c: c, h: Math.max(0, (mm - c) / 36e5), open: !p[2], t: p[3], ours: !!OURS[p[0]] };
-    });
+    var host = document.getElementById('ch-pr'), now = new Date(), src = REP.prs();
+    // Репозиторий консоли — HR: у другого продукта своего источника PR нет, карточка спрятана.
+    var card = document.getElementById('card-pr');
+    card.hidden = otherProduct() || !!(src && src.none);
+    if (card.hidden) return null;
+    var pr = REP.prPoints(src && Array.isArray(src.prs) ? src.prs : [], now), pts = pr.pts;
+    if (!pts.length) {
+      document.getElementById('lg-pr').innerHTML = '';
+      host.innerHTML = '<p class="empty">' + esc(!src ? 'Загружаю PR из GitHub…' : src.error ? 'Нет данных GitHub: ' + src.error : 'За 7 дней PR не было.') + '</p>';
+      return pr;
+    }
     var W = widthOf(host), H = 230, m = { l: 34, r: 16, t: 14, b: 28 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
     var d0 = dayOf(pts[0].c.toISOString()), t0 = +d0, t1 = +addD(today0(), 1), hmax = 4;
     pts.forEach(function (p) { if (+p.c < t0) t0 = +dayOf(p.c.toISOString()); if (p.h > hmax) hmax = p.h; });
@@ -1937,9 +1906,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     });
     hit.addEventListener('pointerleave', hideTip);
     legend('lg-pr', [{ t: 'PR из этой очереди', c: 'var(--c2)', cls: 'dot' }, { t: 'PR других сессий', c: 'var(--c1)', cls: 'dot' }]);
-    var recent = pts.filter(function (p) { return !p.open && now - p.c < 7 * DAYMS; }).map(function (p) { return p.h; }).sort(function (a, b) { return a - b; });
-    var med = recent.length ? (recent.length % 2 ? recent[(recent.length - 1) / 2] : (recent[recent.length / 2 - 1] + recent[recent.length / 2]) / 2) : 0;
-    return { merged7: recent.length, median: med };
+    return pr;
   }
 
   function statusChart(ws) {
@@ -1948,7 +1915,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       var d = its.filter(function (it) { return isDone(it, state[it.id] || {}); }).length;
       return { name: k[1], c: { done: d, doing: 0, blocked: its.length - d, planned: 0 }, owner: true };
     });
-    TRACKS.forEach(function (tr) {
+    REP.tracksIn(TRACKS, ws).forEach(function (tr) {
       var c = { done: 0, doing: 0, blocked: 0, planned: 0 };
       ws.forEach(function (w) { if (w.track === tr.id) c[stateOf(w)]++; });
       rows.push({ name: 'Агенты: ' + tr.name, c: c });
@@ -2003,7 +1970,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
 
   function lagChart(ws, t) {
     var g = lagGroups(ws, t), all = g.open.concat(g.closed), host = document.getElementById('ch-lag');
-    if (!all.length) { host.innerHTML = '<p class="empty">Все задачи с планом идут в срок (' + g.onTime + ').</p>'; return { late: 0, days: 0, closedLate: 0 }; }
+    if (!all.length) { host.innerHTML = '<p class="empty">' + (ws.length ? 'Все задачи с планом идут в срок (' + g.onTime + ').' : noRows('Нет задач с планом.')) + '</p>'; return { late: 0, days: 0, closedLate: 0 }; }
     // Одна шкала на оба списка — полосы сравнимы между собой.
     var max = 1, days = 0, closedLate = 0;
     all.forEach(function (r) { if (Math.abs(r.lag) > max) max = Math.abs(r.lag); });
@@ -2080,7 +2047,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
 
   function gantt(ws, t) {
     var host = document.getElementById('gantt'), dated = ws.filter(function (w) { return dParse(w.planStart) || dParse(w.planEnd) || dParse(w.start); });
-    if (!dated.length) { host.innerHTML = '<p class="empty" style="padding:10px">Нет задач с датами.</p>'; return; }
+    if (!dated.length) { host.innerHTML = '<p class="empty" style="padding:10px">' + noRows('Нет задач с датами.') + '</p>'; return; }
     var a = t, b = t;
     dated.forEach(function (w) { ['planStart', 'planEnd', 'start', 'end', 'basePlanEnd'].forEach(function (k) { var d = dParse(w[k]); if (d && d < a) a = d; if (d && d > b) b = d; }); });
     a = addD(a, -1); b = addD(b, 2);
@@ -2141,7 +2108,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     }
     var now = '<span class="rm-now" style="left:' + P(t, true) + '"' + tipAttr(['Сегодня', fmtD(t)]) + '></span>';
     var o = '<div class="rm-row rm-head"><div class="rm-name">Неделя</div><div class="rm-lane">' + heads + '</div></div>';
-    TRACKS.forEach(function (tr) {
+    REP.tracksIn(TRACKS, ws).forEach(function (tr) {
       var list = ws.filter(function (w) { return w.track === tr.id; }), lo = null, hi = null;
       list.forEach(function (w) { ['planStart', 'start'].forEach(function (k) { var d = dParse(w[k]); if (d && (!lo || d < lo)) lo = d; }); ['planEnd', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && (!hi || d > hi)) hi = d; }); });
       var done = list.filter(function (w) { return w.status === 'done'; }).length;
@@ -2168,7 +2135,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
       o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small></span></div><div class="rm-lane">' + lane + now + '</div></div>';
     });
-    host.innerHTML = o;
+    host.innerHTML = ws.length ? o : '<p class="empty" style="padding:10px">' + noRows('Нет задач.') + '</p>';
   }
 
   function kpis(owner, ws, lag, pr) {
@@ -2179,9 +2146,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       [owner.done + ' из ' + owner.total, 'ваша очередь: закрыто · ждут вас ' + (owner.total - owner.done)],
       [c.done + ' из ' + ws.length, 'задачи агентов: сделано · в работе ' + c.doing + ' · ждут ' + c.blocked + ' · в плане ' + c.planned],
       [String(lag.late), 'просрочено сейчас · в сумме +' + lag.days + ' дн. · ещё ' + lag.closedLate + ' закрыто с опозданием'],
-      [nf(pr.median, 1) + ' ч', 'медиана ожидания мёржа · PR за 7 дней: ' + pr.merged7],
+      pr ? [nf(pr.median, 1) + ' ч', 'медиана ожидания мёржа · PR за 7 дней: ' + pr.merged7] : null,
       [msDone + ' из ' + ms.length, 'вех достигнуто'],
-    ];
+    ].filter(Boolean);
     var st = CARD_STATS, cp = cardsInPlan(ws);
     if (st) {
       var b = st.bugs, k = st.tasks;
@@ -2209,6 +2176,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { r.owner = ownerChart(t); } catch (e) { document.getElementById('ch-owner').textContent = 'График не построился: ' + e.message; }
     try { planChart(ws, t); } catch (e) { document.getElementById('ch-plan').textContent = 'График не построился: ' + e.message; }
     try { cardsChart(ws); } catch (e) { document.getElementById('ch-plan-cards').textContent = 'График не построился: ' + e.message; }
+    REP.loadPrs();
     try { r.pr = prChart(); } catch (e) { document.getElementById('ch-pr').textContent = 'График не построился: ' + e.message; }
     return r;
   }
@@ -2222,7 +2190,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { roadmap(ws, t); } catch (e) { document.getElementById('roadmap').textContent = 'Роадмап не построился: ' + e.message; }
     try { kpis(c.owner, ws, lag, c.pr); } catch (e) { /* плитки необязательны */ }
     try { jumpDash(c, ws, lag); } catch (e) { /* числа в шапке необязательны */ }
-    document.getElementById('dash-asof').textContent = dashStale() ? 'снимок 16.10 — нет связи'
+    document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
       : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
   }
   if (window.ResizeObserver) {
@@ -2303,13 +2271,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       plan: [done + ' из ' + ws.length + ' готово'],
       cards: [cards ? 'карточек: ' + cards : ''],
       lag: [lag.late ? 'просрочено: ' + lag.late : 'в срок', lag.late > 0],
-      pr: [c.pr.merged7 ? 'медиана ' + nf(c.pr.median, 1) + ' ч' : ''],
+      pr: [c.pr && c.pr.merged7 ? 'медиана ' + nf(c.pr.median, 1) + ' ч' : ''],
       report: [ws.length + ' ' + plural(ws.length, 'задача', 'задачи', 'задач')],
     };
     jumpD.querySelectorAll('a[data-dash]').forEach(function (a) {
       var x = v[a.dataset.dash] || [''], cnt = a.querySelector('.jump-c');
       cnt.textContent = dashReady() ? x[0] : '…'; cnt.classList.toggle('hot', dashReady() && !!x[1]);
-      if (a.dataset.dash === 'cards') a.parentElement.hidden = document.getElementById('plan-cards').hidden;
+      if (a.dataset.dash === 'cards' || a.dataset.dash === 'pr') a.parentElement.hidden = document.getElementById(a.dataset.dash === 'pr' ? 'card-pr' : 'plan-cards').hidden;
     });
   }
   function closeJumps(except) { document.querySelectorAll('details.jump[open]').forEach(function (d) { if (d !== except) d.open = false; }); }
