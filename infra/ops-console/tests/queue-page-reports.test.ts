@@ -17,6 +17,10 @@ type Reports = {
   tracksIn: (tracks: { id: string }[], ws: { track: string }[]) => { id: string }[]
   earliestDay: (dates: unknown[], t: Date) => Date
   prPoints: (prs: Pr[], now: Date) => { pts: { n: number; h: number; open: boolean; ours: boolean }[]; merged7: number; median: number }
+  dailyCounts: (dates: unknown[], start: Date, n: number) => number[]
+  medianForecast: (counts: number[], win: number, ahead: number) => number[]
+  prCap: (pts: { h: number }[], niceMax: (v: number) => number) => { ymax: number; cap: number; over: number }
+  splitByProduct: <T>(rows: T[], productOf: (r: T) => string | undefined) => Record<string, number>
   loadPrs: () => void
   prs: () => null | { prs: Pr[]; none?: boolean; error?: string }
   onPrs: (cb: () => void) => void
@@ -163,5 +167,41 @@ describe('страница без вшитых снимков отчётов', (
     const at = (name: string) => page.indexOf(`/queue/assets/${name}.`)
     expect(at('reports')).toBeGreaterThan(0)
     expect(at('reports')).toBeLessThan(at('page'))
+  })
+})
+
+describe('правая ось очереди: пунктов за день и медиана с прогнозом', () => {
+  const { r } = load()
+  const start = new Date(2026, 10, 1)
+  it('счёт по дням; раньше начала — в первый день; без даты (вшитые пункты) и позже шкалы — не в счёт', () => {
+    const c = r.dailyCounts(['2026-11-01T10:00:00Z', '2026-11-03', '2026-11-03T23:00:00', 'нет даты', '', '2026-10-20', '2026-12-01'], start, 4)
+    expect(c).toEqual([2, 0, 2, 0])
+    expect(r.dailyCounts([], start, 0)).toEqual([])
+  })
+  it('скользящая медиана за окно с текущим днём, дальше — последнее значение ahead дней', () => {
+    expect(r.medianForecast([1, 3, 2, 8], 3, 2)).toEqual([1, 2, 2, 3, 3, 3])
+    expect(r.medianForecast([0, 0, 4, 4], 4, 1)).toEqual([0, 0, 0, 2, 2])
+    expect(r.medianForecast([], 14, 3)).toEqual([0, 0, 0])
+  })
+})
+
+describe('шкала PR — до 36 ч, выше — на верхней линии', () => {
+  const { r } = load()
+  const nice = (v: number) => (v <= 4 ? 4 : v <= 5 ? 5 : v <= 10 ? 10 : v <= 20 ? 20 : v <= 25 ? 25 : 50)
+  it('без выбросов — своя шкала, но не выше 36', () => {
+    expect(r.prCap([{ h: 1 }, { h: 3 }], nice)).toEqual({ ymax: 4, cap: 36, over: 0 })
+    expect(r.prCap([{ h: 18 }], nice)).toEqual({ ymax: 20, cap: 36, over: 0 })
+    expect(r.prCap([{ h: 30 }], nice)).toEqual({ ymax: 36, cap: 36, over: 0 })
+  })
+  it('PR дольше 36 ч (CI #456, 170 ч) — шкала 36 и счёт выбросов, остальные точки не сжимаются', () => {
+    expect(r.prCap([{ h: 2 }, { h: 170 }, { h: 36 }], nice)).toEqual({ ymax: 36, cap: 36, over: 1 })
+  })
+})
+
+describe('разбивка по продуктам', () => {
+  const { r } = load()
+  it('пустой продукт — hr-helper, как в подмене базы', () => {
+    const rows = [{ p: 'taibe' }, { p: '' }, { p: undefined }, { p: 'taibe' }]
+    expect(r.splitByProduct(rows, (x) => x.p)).toEqual({ taibe: 2, 'hr-helper': 2 })
   })
 })

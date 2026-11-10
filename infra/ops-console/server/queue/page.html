@@ -111,7 +111,8 @@ html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + var(--bar-h, 0px
 .hb-compose[data-draft="1"]::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 #reports-dlg .card, #reports-dlg #kpis { scroll-margin-top: 64px; }
 .hb-theme { margin-left: auto; }
-.hb-short, .hb-reports, .hb-to-dec { display: none; }
+.hb-ico, .hb-reports, .hb-to-dec { display: none; }
+.hb-ico { flex: none; }
 .jump { position: relative; }
 .jump > summary { list-style: none; }
 .jump > summary::-webkit-details-marker { display: none; }
@@ -295,10 +296,14 @@ footer { font-size: 13px; color: var(--muted); }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; min-width: 0; }
 .card h3 { margin: 0; font-size: 15px; }
 .card .sub { margin: 0; font-size: 13px; color: var(--muted); max-width: 74ch; }
+/* Какой продукт показывает карточка (paintScope) — когда продуктов два и больше. */
+.scope { justify-self: start; font-size: 12px; line-height: 1.4; color: var(--muted); padding: 1px 8px; border: 1px solid var(--line); border-radius: 10px; max-width: 100%; }
+summary > .scope { margin-left: auto; }
 .chart { position: relative; width: 100%; min-width: 0; }
 .chart svg { display: block; overflow: visible; }
 .ax { fill: var(--muted); font-size: 11px; font-family: var(--font-body); }
-.lbl { fill: var(--ink); font-size: 12px; font-family: var(--font-body); }
+/* Обводка цветом карточки — подпись читается и поверх линии (подписи у «сегодня» в графике очереди, выбросы PR). */
+.lbl { fill: var(--ink); font-size: 12px; font-family: var(--font-body); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
 .gl { stroke: var(--line); stroke-width: 1; }
 .lg { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
 .lg i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
@@ -339,8 +344,11 @@ table.rep td.when { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .is-late { color: var(--warn); font-weight: 600; }
 .trk { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .trk i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
-.gantt { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
-.g-row { display: flex; min-height: 26px; border-bottom: 1px solid var(--line); }
+/* Строка — во всю ширину шкалы, а не окна прокрутки: иначе при прокрутке вбок липкое название уезжало вместе со
+   строкой (липкий элемент не выходит за свою строку), а линии строк и фон групп обрывались (просьба владельца 10.11).
+   overscroll-behavior — прокрутка до края не листает историю браузера жестом. */
+.gantt { overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--line); border-radius: 6px; }
+.g-row { display: flex; width: max-content; min-width: 100%; min-height: 26px; border-bottom: 1px solid var(--line); }
 .g-row:last-child { border-bottom: 0; }
 .g-label { position: sticky; left: 0; z-index: 2; flex: 0 0 220px; width: 220px; background: var(--surface); padding: 4px 8px; font-size: 12px; line-height: 1.3; border-right: 1px solid var(--line); }
 .g-grp .g-label, .g-head .g-label { font-weight: 700; }
@@ -400,15 +408,20 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 /* До 1400 px окна шапка липнет всегда; с 641 до 1400 — ещё и «К решениям ↓» (решение владельца d-queue-jump-link). */
 @media (max-width: 1399.98px) { .head-bar { position: sticky; top: env(safe-area-inset-top, 0px); } }
 @media (min-width: 641px) and (max-width: 1399.98px) { .hb-to-dec { display: inline-flex; } }
-/* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди; в шапке — короткие подписи. */
+/* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди. Шапка — одна строка (просьба владельца
+   10.11): у кнопок вместо названий значки (название — в aria-label и title), выбор продукта забирает оставшееся место. */
 @media (max-width: 640px) {
   .col-reports { display: none; }
   .hb-reports { display: inline-flex; }
   .hb-long, #jump-dash { display: none; }
-  .hb-short { display: inline; }
-  .head-bar { gap: 6px; }
+  .hb-ico { display: block; }
+  .head-bar, .hb-nav { flex-wrap: nowrap; gap: 6px; }
+  .head-bar { min-width: 0; }
   .hb-btn { padding: 0 9px; gap: 4px; }
-  .hb-theme { width: 40px; padding: 0; justify-content: center; }
+  .hb-compose, .hb-reports, .hb-theme { flex: none; width: 40px; padding: 0; justify-content: center; }
+  .hb-compose[data-draft="1"] { width: auto; padding: 0 8px; }
+  /* width: 0 — иначе ширина текста выбора («Все продукты») раздвигает сетку страницы шире экрана; место даёт flex-grow. */
+  #head-bar .oq-product-pick { flex: 1 1 0; width: 0; min-width: 0; max-width: none; }
   .jump-n { padding: 1px 6px; }
   .jump { position: static; }
   .jump-list { left: 16px; right: 16px; min-width: 0; }
@@ -439,10 +452,10 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   </header>
 
   <div class="head-bar" id="head-bar">
-    <button type="button" class="hb-btn hb-compose" id="compose-open" aria-haspopup="dialog" aria-controls="compose"><span aria-hidden="true">＋</span><span class="hb-long">Поставить задачу</span><span class="hb-short">Задача</span></button>
+    <button type="button" class="hb-btn hb-compose" id="compose-open" aria-haspopup="dialog" aria-controls="compose" aria-label="Поставить задачу" title="Поставить задачу"><span aria-hidden="true">＋</span><span class="hb-long">Поставить задачу</span></button>
     <nav class="hb-nav" aria-label="Переходы по странице">
       <details class="jump" id="jump-queue">
-        <summary class="hb-btn" aria-label="Разделы очереди">Очередь <b class="jump-n" id="jump-queue-n" title="Открытых пунктов: решения, мёржи, сервер, проверки"></b></summary>
+        <summary class="hb-btn" aria-label="Очередь: разделы" title="Очередь: разделы"><svg class="hb-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="hb-long">Очередь</span> <b class="jump-n" id="jump-queue-n" title="Открытых пунктов: решения, мёржи, сервер, проверки"></b></summary>
         <ul class="jump-list">
           <li><a href="#sec-decision" data-kind="decision">Решения <span class="jump-c"></span></a></li>
           <li><a href="#sec-merge" data-kind="merge">Мёржи <span class="jump-c"></span></a></li>
@@ -468,7 +481,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
       </details>
       <a class="hb-btn hb-to-dec" href="#sec-decision">К решениям ↓</a>
     </nav>
-    <button type="button" class="hb-btn hb-reports" id="reports-open" aria-haspopup="dialog" aria-controls="reports-dlg">Отчёты</button>
+    <button type="button" class="hb-btn hb-reports" id="reports-open" aria-haspopup="dialog" aria-controls="reports-dlg" aria-label="Отчёты" title="Отчёты: «Ход работ»"><svg class="hb-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 20h16M7 16v-5M12 16V6M17 16v-8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
     <button type="button" class="hb-btn hb-theme" id="theme-btn"><span aria-hidden="true" id="theme-icon">◐</span><span class="hb-long" id="theme-text">Тема: авто</span></button>
   </div>
 
@@ -533,9 +546,10 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     <div class="sec-head"><h2 class="sec">Ход работ</h2><span class="sec-count" id="dash-asof"></span></div>
     <p class="sec-note">Задачи агентов и ваша очередь — в цифрах и на шкале времени. Агенты обновляют статусы сами. Отставание — дни после плановой даты. План предварительный: это оценка агента, сроки уточняются по мере работы. К строкам плана прикреплены карточки t-boards — кнопка «N карточек» в отчёте открывает список.</p>
     <div class="kpis" id="kpis"></div>
+    <p class="sec-note" id="dash-split" hidden></p>
     <div class="card" id="card-owner">
       <h3>Ваша очередь по дням</h3>
-      <p class="sub">Сколько пунктов поставлено вам и сколько вы закрыли к концу каждого дня. Разрыв между линиями — то, что ждёт вас.</p>
+      <p class="sub">Левая ось — сколько пунктов поставлено вам и сколько вы закрыли к концу каждого дня, нарастающим итогом; разрыв между линиями — то, что ждёт вас. Правая ось — сколько пунктов пришло за день; пунктир — медиана за 14 дней, правее «сегодня» — прогноз на 30 дней вперёд.</p>
       <div class="lg" id="lg-owner"></div>
       <div class="chart" id="ch-owner"></div>
     </div>
@@ -568,13 +582,13 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     </div>
     <div class="card" id="card-pr">
       <h3>Сколько PR ждали мёржа</h3>
-      <p class="sub">Каждая точка — PR: когда открыт и сколько часов прошло до мёржа. Пустой кружок — ещё открыт. Высоко стоящие точки — рассинхрон между готовым кодом и мёржем.</p>
+      <p class="sub">Каждая точка — PR: когда открыт и сколько часов прошло до мёржа. Пустой кружок — ещё открыт. Высоко стоящие точки — рассинхрон между готовым кодом и мёржем. Шкала — до 36 часов: PR, ждавший дольше, — треугольник на верхней линии, в подписи — номер и сколько часов на деле.</p>
       <div class="lg" id="lg-pr"></div>
       <div class="chart" id="ch-pr"></div>
     </div>
     <div class="card" id="card-gantt">
       <h3>Диаграмма Ганта (предварительная)</h3>
-      <p class="sub">Рамка — план, заливка — факт, красный хвост — отставание, красная вертикаль — сегодня. Названия задач не прокручиваются вместе с полосами.</p>
+      <p class="sub">Рамка — план, заливка — факт, красный хвост — отставание, красная вертикаль — сегодня. Шкала прокручивается вбок, названия задач остаются на месте.</p>
       <div class="gantt" id="gantt"></div>
     </div>
     <div class="card" id="card-roadmap">
@@ -600,12 +614,22 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
       <details class="howto-d" id="howto-d" open>
       <summary><h2>Как пользоваться</h2></summary>
       <ol>
-        <li><b>Решения</b> — нажмите кнопку с нужным вариантом. Этого достаточно: пункт считается решённым, я увижу выбор. Комментарий — по желанию.</li>
-        <li><b>Мёржи и ручные проверки</b> — выполните команду или шаги, поставьте галочку «Сделано». Если что-то пошло не так — напишите в поле.</li>
-        <li><b>Команды на сервере</b> — подключитесь по ssh (<a href="#ssh-howto">как подключиться</a>), выполните блок, вставьте вывод в поле под ним и поставьте галочку.</li>
-        <li>Всё сохраняется само, писать мне в чат не нужно. Передумали — «Изменить ответ» под пунктом.</li>
+        <li><b>Решения</b> — нажмите кнопку с нужным вариантом. Этого достаточно: пункт считается решённым, я увижу выбор. Мелкая строка под вариантом — подсказка, рекомендация — в тексте пункта. Комментарий — по желанию.</li>
+        <li><b>Мёржи</b> — «Влить» вливает PR из пункта: кнопка доступна, когда у пункта есть вердикт «Контроля», в подтверждении видны PR, SHA, база и будет ли деплой. Можно и командой из пункта — тогда поставьте галочку «Влил». «Перезапустить деплой» в заголовке раздела запускает деплой main заново (около 3 минут сайт отвечает 502).</li>
+        <li><b>Команды на сервере</b> — подключитесь по ssh (<a href="#ssh-howto">как подключиться</a>), нажмите «Копировать» у блока, выполните его, вставьте вывод в поле под ним и поставьте галочку «Выполнил».</li>
+        <li><b>Проверить руками</b> — пройдите шаги из пункта и поставьте «Проверил»; что не сработало — в поле под галочкой, пусто — значит, всё в порядке.</li>
+        <li><b>Входящие</b> — то, что вы переслали боту в Telegram или поставили кнопкой «Поставить задачу». Ведёт агент-сессия: её статус — в строке «Агент» под пунктом, строка автопередачи показывает, взята ли задача (если нет — команда «Возьми входящее …» с кнопкой «Копировать»). «📎 Добавить файл» прикладывает файлы, «Уточнение для агента» — дописать задачу, «Принято» — результат вас устраивает.</li>
+        <li><b>Продукт у пункта</b> — список «Продукт:» в шапке пункта переносит его в другой продукт (кроме мёржа с вердиктом «Контроля»); сессии прежнего продукта его больше не увидят — страница спросит подтверждение.</li>
+        <li>Всё сохраняется само, писать мне в чат не нужно; под пунктом видно «сохранено» или ошибку — при ошибке страница повторит сама. Передумали — «Изменить ответ» под пунктом.</li>
         <li><b>«Ждёт вас снова»</b> — вы уже ответили, но агенту снова нужны вы (вопрос в ответ, вывод с ошибкой, «повторите проверку»): что именно — в строке «Агент» под пунктом. Ответьте ещё раз — пункт закроется.</li>
-        <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и «Ход работ» — только по нему, «Все продукты» — по всем. «Поставить задачу» открывает форму (горячие клавиши — под её кнопками), «Очередь» и «Ход работ» ведут к разделам и показывают, сколько открыто, справа — тема: авто, светлая или тёмная.</li>
+        <li><b>Над списком</b> — строка связи (подключено ли хранилище ответов; «нет связи» — показан последний снимок), полоса и число — сколько пунктов закрыто, «Показать выполненные» / «Скрыть выполненные» — закрытые пункты в списке. Ссылка вида <code>#item=&lt;id&gt;</code> открывает и подсвечивает один пункт, даже закрытый или из другого продукта.</li>
+        <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и все отчёты «Хода работ» — только по нему, «Все продукты» — по всем, с разбивкой по продуктам под показателями. «＋ Поставить задачу» открывает форму (горячие клавиши — под её кнопками; черновик помнится, точка на кнопке — в форме остался текст). «Очередь» — переходы к разделам с числом открытых; «ждут · снова» — сколько ждут вас и сколько вернулось. «Ход работ» — переходы к отчётам с их главными числами. «К решениям ↓» — к первому разделу очереди (на средних экранах). Справа — тема: авто, светлая или тёмная.</li>
+        <li><b>Шапка на телефоне</b> — одна строка значков: ＋ — поставить задачу, список с числом — разделы очереди, столбики — «Отчёты» (весь «Ход работ» в отдельном окне, ✕ или Esc закрывают), ◐ / ☀ / ☾ — тема. Название каждого значка — в его подписи для экранного чтения и во всплывающей подсказке.</li>
+        <li><b>Ход работ: показатели</b> — плитки сверху: ваша очередь, задачи агентов, просрочки, медиана ожидания мёржа, вехи, открытые карточки t-boards. У каждой карточки отчёта, когда продуктов больше одного, подписано, какой продукт она показывает.</li>
+        <li><b>Ваша очередь по дням</b> — левая ось: сколько пунктов поставлено вам и сколько закрыто, нарастающим итогом (разрыв — то, что ждёт вас). Правая ось: сколько пунктов пришло за день; пунктир — медиана за 14 дней, правее красной линии «сегодня» — прогноз на 30 дней. Наведите на график — подсказка с числами дня.</li>
+        <li><b>Задачи агентов: план и факт</b> — пунктир — сколько задач должно быть готово по плану, сплошная — сколько готово на деле; сплошная ниже — агенты отстают. <b>Готовность по разделам</b> — ваши пункты по типам и задачи агентов по направлениям: сделано, в работе, ждёт, в плане. <b>Карточки t-boards в плане</b> — сколько карточек прикреплено к направлениям и сколько закрыто, ниже — открытые карточки по дням сверок.</li>
+        <li><b>Отставание от плана</b> — сверху открытые задачи позже плана, свёрнуто ниже — закрытые со сдвигом срока. <b>Сколько PR ждали мёржа</b> — точка на PR (пустая — ещё открыт), шкала до 36 часов: дольше — треугольник на верхней линии с номером и настоящим числом часов; только PR репозитория HR.</li>
+        <li><b>Диаграмма Ганта</b> — рамка — план, заливка — факт, красный хвост — отставание; шкала прокручивается вбок, названия задач остаются слева, наведите на строку — даты и статус. <b>Роадмап</b> — вехи по неделям: залитый ромб — достигнута, пустой — по плану, красная обводка — просрочена. <b>Отчёт по задачам</b> — таблица всех задач (раскрытая помнится); кнопка «N карточек» открывает список карточек t-boards строки.</li>
       </ol>
       <div class="legend"><span><span class="chip chip-decision">решение</span> выбрать вариант</span><span><span class="chip chip-deploy">деплой</span> мёрж выкатит прод</span><span><span class="chip chip-ssh">ssh</span> команда на сервере</span><span><span class="chip chip-wait">после …</span> сначала другой пункт</span></div>
       </details>
@@ -1762,19 +1786,26 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function widthOf(host) { return Math.max(300, Math.floor(host.clientWidth || 720)); }
 
+  // cfg.right — вторая шкала справа ({ title, series }): свои значения, своя ось, те же дни и подсказка.
   function lineChart(host, cfg) {
-    var W = widthOf(host), H = 230, m = { l: 34, r: 112, t: 14, b: 28 };
-    var n = cfg.days.length, iw = W - m.l - m.r, ih = H - m.t - m.b, vmax = 1;
+    var R = cfg.right, W = widthOf(host), H = 230, m = { l: 34, r: R ? 40 : 112, t: R ? 24 : 14, b: 28 };
+    var n = cfg.days.length, iw = W - m.l - m.r, ih = H - m.t - m.b, vmax = 1, rmax = 1;
     cfg.series.forEach(function (s) { s.vals.forEach(function (v) { if (v != null && v > vmax) vmax = v; }); });
+    if (R) R.series.forEach(function (s) { s.vals.forEach(function (v) { if (v != null && v > rmax) rmax = v; }); });
     var ymax = niceMax(vmax);
+    rmax = niceMax(rmax);
     function X(i) { return m.l + (n > 1 ? i * iw / (n - 1) : iw / 2); }
     function Y(v) { return m.t + ih - v * ih / ymax; }
+    function YR(v) { return m.t + ih - v * ih / rmax; }
     var o = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(cfg.label) + '">';
     for (var k = 0; k <= 4; k++) {
       var y = Y(ymax * k / 4);
       o += '<line class="gl" x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + y + '" y2="' + y + '"/>' +
-        '<text class="ax" x="' + (m.l - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + nf(ymax * k / 4) + '</text>';
+        '<text class="ax" x="' + (m.l - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + nf(ymax * k / 4) + '</text>' +
+        (R ? '<text class="ax" x="' + (W - m.r + 6) + '" y="' + (y + 4) + '">' + nf(rmax * k / 4, 1) + '</text>' : '');
     }
+    if (R) o += '<text class="ax" x="' + (m.l - 6) + '" y="' + (m.t - 10) + '" text-anchor="end">' + esc(cfg.title || '') + '</text>' +
+      '<text class="ax" x="' + (W - 2) + '" y="' + (m.t - 10) + '" text-anchor="end">' + esc(R.title) + '</text>';
     var step = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(iw / 60))));
     for (var i = 0; i < n; i += step) o += '<text class="ax" x="' + X(i) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(fmtD(cfg.days[i])) + '</text>';
     if (cfg.todayIdx >= 0 && cfg.todayIdx < n) {
@@ -1782,21 +1813,32 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         '<text class="ax" x="' + (X(cfg.todayIdx) + 4) + '" y="' + (m.t + 10) + '">сегодня</text>';
     }
     var ends = [];
-    cfg.series.forEach(function (s) {
+    function draw(s, Yf, dec) {
       var d = '', pen = false, last = -1;
       s.vals.forEach(function (v, j) {
         if (v == null) { pen = false; return; }
-        d += (pen ? 'L' : 'M') + X(j).toFixed(1) + ' ' + Y(v).toFixed(1); pen = true; last = j;
+        d += (pen ? 'L' : 'M') + X(j).toFixed(1) + ' ' + Yf(v).toFixed(1); pen = true; last = j;
       });
       o += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"' + (s.dash ? ' stroke-dasharray="6 4"' : '') + '/>';
       if (last >= 0) {
-        o += '<circle cx="' + X(last) + '" cy="' + Y(s.vals[last]) + '" r="4" fill="' + s.color + '" stroke="var(--surface)" stroke-width="2"/>';
-        ends.push({ x: X(last) + 8, y: Y(s.vals[last]) + 4, t: s.name + ': ' + nf(s.vals[last]) });
+        o += '<circle cx="' + X(last) + '" cy="' + Yf(s.vals[last]) + '" r="4" fill="' + s.color + '" stroke="var(--surface)" stroke-width="2"/>';
+        ends.push({ x: X(last), y: Yf(s.vals[last]) + 4, t: s.name + ': ' + nf(s.vals[last], dec) });
       }
-    });
+    }
+    cfg.series.forEach(function (s) { draw(s, Y, 0); });
+    if (R) R.series.forEach(function (s) { draw(s, YR, 1); });
     ends.sort(function (a, b) { return a.y - b.y; });
     for (var e = 1; e < ends.length; e++) if (ends[e].y - ends[e - 1].y < 15) ends[e].y = ends[e - 1].y + 15;
-    ends.forEach(function (x) { o += '<text class="lbl" x="' + x.x + '" y="' + x.y + '">' + esc(x.t) + '</text>'; });
+    // Ниже оси подписи не уходят (там даты): нижняя прижимается к оси, остальные — вверх с тем же шагом.
+    for (var u = ends.length - 1; u >= 0; u--) {
+      var lim = u === ends.length - 1 ? m.t + ih + 2 : ends[u + 1].y - 15;
+      if (ends[u].y > lim) ends[u].y = lim;
+    }
+    // Подпись у конца линии; у правого края, где ей не хватает места, — слева от точки.
+    ends.forEach(function (x) {
+      var left = x.x + 8 + x.t.length * 6.6 > W;
+      o += '<text class="lbl" x="' + (left ? x.x - 8 : x.x + 8) + '" y="' + x.y + '"' + (left ? ' text-anchor="end"' : '') + '>' + esc(x.t) + '</text>';
+    });
     o += '<line class="xh" x1="0" x2="0" y1="' + m.t + '" y2="' + (m.t + ih) + '" stroke="var(--muted)" stroke-width="1" visibility="hidden"/>' +
       '<rect class="hit" x="' + m.l + '" y="' + m.t + '" width="' + iw + '" height="' + ih + '" fill="transparent"/></svg>';
     host.innerHTML = o;
@@ -1808,33 +1850,46 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       xh.setAttribute('x1', X(j)); xh.setAttribute('x2', X(j)); xh.setAttribute('visibility', 'visible');
       var lines = [fmtD(cfg.days[j])];
       cfg.series.forEach(function (s) { if (s.vals[j] != null) lines.push(s.name + ': ' + nf(s.vals[j])); });
+      if (R) R.series.forEach(function (s) { if (s.vals[j] != null) lines.push(s.name + ': ' + nf(s.vals[j], 1)); });
       if (cfg.extra) lines.push(cfg.extra(j));
       showTip(tipHtml(lines.filter(Boolean).join('\n')), ev.clientX, ev.clientY);
     });
     hit.addEventListener('pointerleave', function () { xh.setAttribute('visibility', 'hidden'); hideTip(); });
   }
 
+  // Правая ось: пунктов за день и скользящая медиана за OWNER_MED_DAYS дней — с прогнозом на OWNER_AHEAD дней вперёд.
+  var OWNER_MED_DAYS = 14, OWNER_AHEAD = 30;
   function ownerChart(t) {
     var items = allItems(), start = REP.earliestDay(items.map(function (it) { return it.added; }), t);
     var days = [];
     for (var d = start; d <= t; d = addD(d, 1)) days.push(d);
-    var added = days.map(function () { return 0; }), done = days.map(function () { return 0; });
+    var past = days.length, added = days.map(function () { return 0; }), done = days.map(function () { return 0; });
     items.forEach(function (it) {
       var ai = Math.max(0, diffD(dParse(it.added) || start, start));
-      for (var i = ai; i < days.length; i++) added[i]++;
+      for (var i = ai; i < past; i++) added[i]++;
       var e = state[it.id] || {};
       if (!isDone(it, e)) return;
-      var di = Math.max(ai, Math.min(days.length - 1, diffD((e.at && dayOf(e.at)) || t, start)));
-      for (var j = di; j < days.length; j++) done[j]++;
+      var di = Math.max(ai, Math.min(past - 1, diffD((e.at && dayOf(e.at)) || t, start)));
+      for (var j = di; j < past; j++) done[j]++;
     });
-    legend('lg-owner', [{ t: 'Поставлено вам', c: 'var(--c1)', cls: 'ln' }, { t: 'Закрыто вами', c: 'var(--c3)', cls: 'ln' }]);
+    var res = { total: added[past - 1] || 0, done: done[past - 1] || 0 };
+    var perDay = REP.dailyCounts(items.map(function (it) { return it.added; }), start, past);
+    var med = REP.medianForecast(perDay, OWNER_MED_DAYS, OWNER_AHEAD);
+    for (var k = 1; k <= OWNER_AHEAD; k++) { days.push(addD(t, k)); added.push(null); done.push(null); perDay.push(null); }
+    legend('lg-owner', [{ t: 'Поставлено вам', c: 'var(--c1)', cls: 'ln' }, { t: 'Закрыто вами', c: 'var(--c3)', cls: 'ln' },
+      { t: 'Поставлено за день (правая ось)', c: 'var(--c5)', cls: 'ln' },
+      { t: 'Медиана за ' + OWNER_MED_DAYS + ' дн. и прогноз на ' + OWNER_AHEAD + ' дн. (правая ось)', c: 'var(--c5)', cls: 'ln dash' }]);
     lineChart(document.getElementById('ch-owner'), {
-      label: 'Очередь владельца по дням: поставлено и закрыто нарастающим итогом',
-      days: days, todayIdx: -1,
+      label: 'Очередь владельца по дням: поставлено и закрыто нарастающим итогом; справа — пунктов за день и медиана с прогнозом на месяц',
+      days: days, todayIdx: past - 1, title: 'всего',
       series: [{ name: 'Поставлено', color: 'var(--c1)', vals: added }, { name: 'Закрыто', color: 'var(--c3)', vals: done }],
-      extra: function (j) { var w = added[j] - done[j]; return w ? 'ждали вас: ' + w : 'очередь пуста'; },
+      right: { title: 'в день', series: [{ name: 'За день', color: 'var(--c5)', vals: perDay }, { name: 'Медиана', color: 'var(--c5)', vals: med, dash: true }] },
+      extra: function (j) {
+        if (j >= past) return 'прогноз: медиана последних ' + OWNER_MED_DAYS + ' дн.';
+        var w = added[j] - done[j]; return w ? 'ждали вас: ' + w : 'очередь пуста';
+      },
     });
-    return { total: added[added.length - 1] || 0, done: done[done.length - 1] || 0 };
+    return res;
   }
 
   function planChart(ws, t) {
@@ -1875,25 +1930,41 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       host.innerHTML = '<p class="empty">' + esc(!src ? 'Загружаю PR из GitHub…' : src.error ? 'Нет данных GitHub: ' + src.error : 'За 7 дней PR не было.') + '</p>';
       return pr;
     }
-    var W = widthOf(host), H = 230, m = { l: 34, r: 16, t: 14, b: 28 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
-    var d0 = dayOf(pts[0].c.toISOString()), t0 = +d0, t1 = +addD(today0(), 1), hmax = 4;
-    pts.forEach(function (p) { if (+p.c < t0) t0 = +dayOf(p.c.toISOString()); if (p.h > hmax) hmax = p.h; });
-    var ymax = niceMax(hmax);
+    // Шкала — до 36 ч (просьба владельца 10.11): PR дольше (например, ci #456 на неделю) не сжимает остальные точки в пол,
+    // а стоит треугольником на верхней линии с подписью «#N · X ч»; подсказка — с настоящим числом.
+    var sc = REP.prCap(pts, niceMax), ymax = sc.ymax;
+    var W = widthOf(host), H = 230, m = { l: 34, r: 16, t: sc.over ? 36 : 14, b: 28 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+    var d0 = dayOf(pts[0].c.toISOString()), t0 = +d0, t1 = +addD(today0(), 1);
+    pts.forEach(function (p) { if (+p.c < t0) t0 = +dayOf(p.c.toISOString()); });
     function X(t) { return m.l + (t - t0) * iw / (t1 - t0); }
-    function Y(h) { return m.t + ih - h * ih / ymax; }
-    var o = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Время от открытия PR до мёржа, часы">';
+    function Y(h) { return m.t + ih - Math.min(h, ymax) * ih / ymax; }
+    var o = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Время от открытия PR до мёржа, часы; шкала до ' + sc.cap + ' ч, дольше — на верхней линии">';
     for (var k = 0; k <= 4; k++) {
       var y = Y(ymax * k / 4);
       o += '<line class="gl" x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + y + '" y2="' + y + '"/><text class="ax" x="' + (m.l - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + nf(ymax * k / 4) + '</text>';
     }
-    o += '<text class="ax" x="' + m.l + '" y="' + (m.t - 3) + '">часы</text>';
+    o += '<text class="ax" x="2" y="' + (sc.over ? 10 : m.t - 3) + '">часы</text>';
+    if (sc.over) o += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + m.t + '" y2="' + m.t + '" stroke="var(--late)" stroke-width="1.5"/>';
     var nd = Math.round((t1 - t0) / DAYMS), stepD = Math.max(1, Math.ceil(nd / Math.max(2, Math.floor(iw / 60))));
     for (var i = 0; i <= nd; i += stepD) { var dd = addD(new Date(t0), i); o += '<text class="ax" x="' + X(+dd) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(fmtD(dd)) + '</text>'; }
     if (ymax >= 24) o += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + Y(24) + '" y2="' + Y(24) + '" stroke="var(--late)" stroke-dasharray="4 4"/><text class="ax" x="' + (W - m.r) + '" y="' + (Y(24) - 4) + '" text-anchor="end">сутки</text>';
-    pts.forEach(function (p) {
+    // Подписи выбросов — в два ряда над верхней линией; не влезла — без подписи, число остаётся в подсказке.
+    var rows = [[], []];
+    pts.slice().sort(function (a, b) { return a.c - b.c; }).forEach(function (p) {
       p.x = X(+p.c); p.y = Y(p.h);
-      var col = p.ours ? 'var(--c2)' : 'var(--c1)';
-      o += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="5" fill="' + (p.open ? 'var(--surface)' : col) + '" stroke="' + (p.open ? col : 'var(--surface)') + '" stroke-width="2"/>';
+      var col = p.ours ? 'var(--c2)' : 'var(--c1)', fill = p.open ? 'var(--surface)' : col, stroke = p.open ? col : 'var(--surface)';
+      if (p.h <= ymax) {
+        o += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="5" fill="' + fill + '" stroke="' + stroke + '" stroke-width="2"/>';
+        return;
+      }
+      o += '<path d="M' + p.x.toFixed(1) + ' ' + (p.y - 6).toFixed(1) + 'l6 10h-12z" fill="' + fill + '" stroke="' + (p.open ? col : 'var(--surface)') + '" stroke-width="2" stroke-linejoin="round"/>';
+      var t = '#' + p.n + ' · ' + nf(p.h, 0) + ' ч', w = t.length * 6.2, cx = Math.min(Math.max(p.x, m.l + w / 2), W - m.r - w / 2);
+      [0, 1].some(function (r) {
+        if (!rows[r].every(function (x) { return Math.abs(x - cx) >= w + 6; })) return false;
+        rows[r].push(cx);
+        o += '<text class="lbl" x="' + cx.toFixed(1) + '" y="' + (m.t - 9 - r * 13) + '" text-anchor="middle">' + esc(t) + '</text>';
+        return true;
+      });
     });
     o += '<rect class="hit" x="' + m.l + '" y="' + m.t + '" width="' + iw + '" height="' + ih + '" fill="transparent"/></svg>';
     host.innerHTML = o;
@@ -1905,7 +1976,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       showTip(tipHtml(['#' + best.n + ' — ' + best.t, 'открыт ' + fmtDT(best.c), (best.open ? 'ещё открыт, ждёт ' : 'ждал мёржа ') + nf(best.h, 1) + ' ч', best.ours ? 'из этой очереди' : 'другая сессия'].join('\n')), ev.clientX, ev.clientY);
     });
     hit.addEventListener('pointerleave', hideTip);
-    legend('lg-pr', [{ t: 'PR из этой очереди', c: 'var(--c2)', cls: 'dot' }, { t: 'PR других сессий', c: 'var(--c1)', cls: 'dot' }]);
+    legend('lg-pr', [{ t: 'PR из этой очереди', c: 'var(--c2)', cls: 'dot' }, { t: 'PR других сессий', c: 'var(--c1)', cls: 'dot' }]
+      .concat(sc.over ? [{ t: '▲ дольше ' + sc.cap + ' ч — на верхней линии, в подписи — сколько на деле: ' + sc.over, c: 'var(--late)', cls: 'ln' }] : []));
     return pr;
   }
 
@@ -2162,6 +2234,39 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     document.getElementById('kpis').innerHTML = tiles.map(function (x) { return '<div class="kpi"><b>' + esc(ready ? x[0] : '…') + '</b><span>' + esc(x[1]) + '</span></div>'; }).join('');
   }
 
+  // ── Ход работ: продукт ──────────────────────────────────────────────────────
+  // Выбор продукта вверху (page-products.ts, когда продуктов два и больше) отбирает строки всех отчётов в подмене базы.
+  // Здесь — подпись у каждой карточки, какой продукт она показывает, и при «Все продукты» — разбивка по продуктам.
+  // Один продукт или нет справочника — ни подписей, ни разбивки (страница как раньше). PR — только репозиторий HR.
+  var HR_ONLY = { 'card-pr': 1 };
+  function productNames() {
+    var sel = document.querySelector('#head-bar .oq-product-pick'), by = null;
+    if (sel) Array.prototype.forEach.call(sel.options, function (o) { if (o.value) (by = by || {})[o.value] = o.textContent; });
+    return by;
+  }
+  function itemProduct(it) { return window.__oqProductOf ? window.__oqProductOf(it.id) : 'hr-helper'; }
+  function paintScope(ws) {
+    var names = productNames(), view = window.__oqViewOf ? window.__oqViewOf() : '', hr = names && (names['hr-helper'] || 'HR Helper');
+    document.querySelectorAll('#agents .card').forEach(function (card) {
+      var chip = card.querySelector('.scope'), h = card.querySelector('h3');
+      if (!names) { if (chip) chip.remove(); return; }
+      if (!chip) { chip = document.createElement('span'); chip.className = 'scope'; h.parentNode.insertBefore(chip, h.nextSibling); }
+      chip.textContent = HR_ONLY[card.id] ? 'Продукт: ' + hr + ' (PR — только его репозиторий)' : 'Продукт: ' + (view ? names[view] || view : 'все');
+    });
+    var split = document.getElementById('dash-split');
+    split.hidden = !names || !!view;
+    if (split.hidden) return;
+    var docs = window.__oqDocs ? window.__oqDocs('work') : [], wp = {};
+    docs.forEach(function (d) { wp[d.id] = d.product; });
+    var its = allItems(), all = REP.splitByProduct(its, itemProduct);
+    var open = REP.splitByProduct(its.filter(function (it) { return !isDone(it, state[it.id] || {}); }), itemProduct);
+    var work = REP.splitByProduct(ws, function (w) { return wp[w.id]; });
+    var slugs = Object.keys(names).concat(Object.keys(all), Object.keys(work)).filter(function (s, i, a) { return a.indexOf(s) === i && (all[s] || work[s]); });
+    split.textContent = 'По продуктам: ' + (slugs.length ? slugs.map(function (s) {
+      return (names[s] || s) + ' — вам ' + (all[s] || 0) + ', ждут ' + (open[s] || 0) + '; задач агентов ' + (work[s] || 0);
+    }).join(' · ') : 'пока пусто') + '. Один продукт — выбор вверху страницы.';
+  }
+
   var dashQueued = false, chartsQueued = false, lastW = 0;
   function scheduleDash() {
     if (dashQueued) return;
@@ -2189,6 +2294,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { gantt(ws, t); } catch (e) { document.getElementById('gantt').textContent = 'Диаграмма не построилась: ' + e.message; }
     try { roadmap(ws, t); } catch (e) { document.getElementById('roadmap').textContent = 'Роадмап не построился: ' + e.message; }
     try { kpis(c.owner, ws, lag, c.pr); } catch (e) { /* плитки необязательны */ }
+    try { paintScope(ws); } catch (e) { /* подписи продукта необязательны */ }
     try { jumpDash(c, ws, lag); } catch (e) { /* числа в шапке необязательны */ }
     document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
       : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
@@ -2243,6 +2349,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function syncBar() { rootEl.style.setProperty('--bar-h', Math.round(headBar.getBoundingClientRect().height) + 'px'); queueCols(); }
   if (window.ResizeObserver) new ResizeObserver(syncBar).observe(headBar);
   syncBar();
+  // Выбор продукта встаёт в шапку после ответа /products (page-products.ts): «Ход работ» перерисуется с подписями продукта.
+  if (window.MutationObserver) new MutationObserver(scheduleDash).observe(headBar, { childList: true });
   // «Как пользоваться» на телефоне свёрнута: первым экраном — данные очереди (раскрывается касанием).
   if (isPhone()) document.getElementById('howto-d').open = false;
 
