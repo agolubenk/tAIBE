@@ -294,6 +294,8 @@ elif [ -n "$HANDOFF" ]; then
     # --guard: если предшественник — Контроль, сторож впишет наследника в список Контроля этих папок (IS-233).
     # Пустую папку не передаём: cd не вышел — пустой --guard стал бы текущей папкой.
     GUARD_TAIBE=$(cd "$TOOLS/../.." 2>/dev/null && pwd) || GUARD_TAIBE=
+    [ -n "$GUARD_TAIBE" ] || echo "# spawn_session: папка tAIBE ($TOOLS/../..) не найдена — Контроль в tAIBE сторож не передаст" >&2
+    [ -n "$CWD" ] || echo "# spawn_session: рабочая папка не задана — Контроль в ней сторож не передаст" >&2
     python3 -I "$TOOLS/lineage.py" retire --child "$SPAWNED_LINE" ${ROLE:+--role "$ROLE"} \
       ${CWD:+--guard "$CWD"} ${GUARD_TAIBE:+--guard "$GUARD_TAIBE"} \
       || echo "# spawn_session: сторож не запущен — предшественник останется, уберёт reap_sessions.sh" >&2

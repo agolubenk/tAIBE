@@ -255,6 +255,56 @@ class HandoverTest(Base):
         self.assertEqual(self.get(self.hr)["control"], [SUCC])
         self.assertEqual(self.get(self.tb)["control"], [OTHER, OTHER, SUCC])
 
+    def test_lock_file_recreated_on_every_try_gives_up_in_time(self):
+        import time
+        from types import SimpleNamespace
+        L.ldir().mkdir(parents=True, exist_ok=True)
+        t0 = time.monotonic()
+        with mock.patch.object(G.os, "stat", lambda *a, **k: SimpleNamespace(st_ino=-1)):
+            self.assertIsNone(G.lock(0.3))
+        self.assertLess(time.monotonic() - t0, 2.0)
+
+    def test_lock_path_is_a_symlink_gives_up(self):
+        L.ldir().mkdir(parents=True, exist_ok=True)
+        os.symlink(self.dir / "elsewhere", L.ldir() / "guard.lock")
+        self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, lock_wait=0.3))
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+        self.assertIn("guard.lock занят", self.lines[-1])
+
+    def test_successor_dies_while_lock_is_awaited(self):
+        sx = FakeSys(tree(), env={400: CHILD, 300: PARENT})
+        real = G.lock
+
+        def slow(wait):
+            fd = real(wait)
+            for pid in (400, 401, 402):  # наследник упал, пока сторож ждал guard.lock
+                sx.p.pop(pid, None)
+            return fd
+
+        with mock.patch.object(G, "lock", slow):
+            self.assertEqual(self.run_watch(sx), 3, self.lines)
+        self.assert_untouched()
+        self.assertIn("не жив", self.lines[-1])
+
+    def test_intent_not_removed_after_handover_still_retires(self):
+        real = os.unlink
+
+        def stuck(path, *a, **k):
+            if Path(path).name == G.INTENT:
+                raise PermissionError("operation not permitted")
+            return real(path, *a, **k)
+
+        with mock.patch.object(G.os, "unlink", stuck):
+            self.assertTrue(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([SUCC], [SUCC]))
+        self.assertTrue((L.ldir() / G.INTENT).exists())
+        self.assertTrue(any("не удалён" in x for x in self.lines), self.lines)
+
+    def test_only_empty_guard_dirs_keep_predecessor(self):
+        self.assertFalse(G.hand_control(["", ""], PRED, (SUCC, None), "cd34", self.log))
+        self.assertIn("нет папок guard", self.lines[-1])
+        self.assertTrue(G.hand_control([], PRED, (SUCC, None), "cd34", self.log))
+
     def test_empty_guard_dir_is_skipped(self):
         self.assertEqual(G.guard_dirs(["", str(self.hr)]), [self.hr.resolve()])
 

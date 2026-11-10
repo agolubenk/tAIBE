@@ -121,25 +121,26 @@ def write_atomic(f, text, mode):
 
 def lock(wait):
     """fd взятой guard.lock или None за wait с. Файл блокировки удалили и создали заново, пока ждали, — наш flock
-    на старом inode ничего не исключает: берём заново."""
+    на старом inode ничего не исключает: берём заново. Каждая неудача — занято, другой inode, ссылка вместо файла —
+    ждёт и сверяется со сроком: файл, который пересоздают на каждой попытке, не крутит цикл вечно (fail-closed)."""
     path = ldir() / "guard.lock"
     deadline = time.monotonic() + wait
     while True:
-        fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            os.close(fd)
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(0.2)
-            continue
-        try:
-            if os.stat(path).st_ino == os.fstat(fd).st_ino:
-                return fd
+            fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         except OSError:
-            pass
-        os.close(fd)
+            fd = None
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if os.stat(path).st_ino == os.fstat(fd).st_ino:
+                    return fd
+            except OSError:  # BlockingIOError — занято; FileNotFoundError — файл удалили после open
+                pass
+            os.close(fd)
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.2)
 
 
 def plan(dirs, pred_sid, log):
@@ -192,10 +193,17 @@ def new_control(ctl, pred_sid, succ_sid):
 
 
 def hand_control(dirs, pred_sid, succ, suffix, log, lock_wait=LOCK_WAIT):
-    """succ — (sessionId наследника, причина отказа). True — передано или передавать нечего; False — сбой, сомнение
-    или наследник не подтверждён: все файлы как были, предшественника не снимать (Контроль не теряется)."""
+    """succ — (sessionId наследника, причина отказа) или функция без аргументов, которая его возвращает: она
+    вызывается под guard.lock прямо перед первой записью — наследник, упавший за ожидание блокировки, Контроль не
+    получит. True — передано или передавать нечего; False — сбой, сомнение или наследник не подтверждён: все файлы как
+    были, предшественника не снимать (Контроль не теряется)."""
+    asked = bool(dirs)
     dirs = guard_dirs(dirs)
     if not dirs:
+        if asked:
+            log("Контроль: нет папок guard (все --guard пустые) — не проверить, Контроль ли предшественник; "
+                "предшественника не снимаю")
+            return False
         return True
     if not pred_sid:
         if any(os.path.lexists(d / GUARD) for d in dirs):
@@ -227,7 +235,7 @@ def locked_handover(dirs, pred_sid, succ, suffix, log):
     if not todo:
         log(f"Контроль: предшественника ({pred_sid[:8]}) нет в списке — передавать нечего")
         return True
-    succ_sid, why = succ
+    succ_sid, why = succ() if callable(succ) else succ
     if not succ_sid:
         log(f"Контроль: {why} — guard не трогаю, предшественника не снимаю")
         return False
@@ -256,10 +264,23 @@ def locked_handover(dirs, pred_sid, succ, suffix, log):
                 lost.append(f)
                 log(f"Контроль: откат {f} не удался ({e2}) — прежний текст в {BACKUP}")
         if not lost:
-            os.unlink(intent)
+            drop_intent(intent, log)
         log(f"Контроль: сбой записи ({e}) — файлы возвращены, предшественника не снимаю")
         return False
-    os.unlink(intent)
-    fsync_dir(intent.parent)
+    drop_intent(intent, log)
     log(f"Контроль: {pred_sid[:8]} → {succ_sid[:8]} в {len(done)} папк. (линия {suffix}, копия {BACKUP})")
     return True
+
+
+def drop_intent(intent, log):
+    """Журнал удаляется после согласованной записи. Не удалился — передача уже сделана (или откачена), исход не
+    меняется; следующая передача откажет на журнале, пока человек не удалит его, — об этом строка журнала сторожа."""
+    try:
+        os.unlink(intent)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log(f"Контроль: журнал {intent} не удалён ({e}) — списки согласованы; удалить его руками, иначе следующая "
+            "передача откажет")
+        return
+    fsync_dir(intent.parent)
