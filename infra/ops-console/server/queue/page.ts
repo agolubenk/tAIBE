@@ -20,6 +20,7 @@ import { SESSION_COOKIE } from '../auth/session'
 import { notifyOnly, resolveActor } from './auth'
 import { ENHANCE_JS, SHIM_JS } from './page-scripts'
 import { FILES_JS } from './page-files'
+import { LANES_JS } from './page-lanes'
 import { PRODUCTS_JS } from './page-products'
 import { REPORTS_JS } from './page-reports'
 import { OPEN_RULE_JS } from './open-rule'
@@ -57,14 +58,15 @@ export function queuePageBuild(): Built {
   }
   if ((html.match(/<script/g) ?? []).length !== 2) throw new Error('page.html: ожидалось ровно два <script> (тема и код страницы)')
   const assets = new Map<string, string>()
-  // Подмена базы, правило «открыт ли пункт» (oqItemState — то же, что у GET /db/items?open=1), вложения и данные «Хода
-  // работ» — до кода страницы (она берёт window.__oqFiles и window.__oqReports), кнопки мёржа — после.
+  // Подмена базы, правило «открыт ли пункт» (oqItemState — то же, что у GET /db/items?open=1), вложения, данные и
+  // группировка «Хода работ» — до кода страницы (она берёт window.__oqFiles, __oqReports и __oqLanes), кнопки мёржа — после.
   const page =
     html.slice(0, first) +
     scriptTag(assets, 'shim', SHIM_JS) + '\n' +
     scriptTag(assets, 'open-rule', OPEN_RULE_JS) + '\n' +
     scriptTag(assets, 'files', FILES_JS) + '\n' +
     scriptTag(assets, 'reports', REPORTS_JS) + '\n' +
+    scriptTag(assets, 'lanes', LANES_JS) + '\n' +
     scriptTag(assets, 'page', html.slice(first + '<script>'.length, firstClose)) +
     html.slice(firstClose + '</script>'.length, end) +
     scriptTag(assets, 'enhance', ENHANCE_JS) + '\n' +

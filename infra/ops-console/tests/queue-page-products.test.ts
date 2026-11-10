@@ -128,6 +128,7 @@ function mountPage(opts: PageOpts = {}) {
     __oqView: vi.fn((slug: string) => { view = slug }),
     __oqViewOf: () => view,
     __oqKeep: vi.fn(),
+    __oqBoards: vi.fn(),
     claude: { use: () => Promise.resolve({ collection: () => ({ onSnapshot: (fn: () => void) => { onSnapshot = fn } }) }) },
   }
   const ctx = {
@@ -150,7 +151,8 @@ function mountPage(opts: PageOpts = {}) {
   const select = (el: FakeEl) => box(el)!.querySelector('select')!
   const picker = () => headBar.querySelector('oq-product-pick')
   const off = () => items.map((el) => el.classes.has('oq-off'))
-  return { items, headBar, store, calls, refresh, window, flush, box, select, picker, off, view: () => view, snapshot: () => onSnapshot(), docs }
+  const title = () => (document as { title?: string }).title
+  return { items, headBar, store, calls, refresh, window, flush, box, select, picker, off, view: () => view, snapshot: () => onSnapshot(), docs, title }
 }
 
 describe('продукт пункта на странице', () => {
@@ -192,6 +194,17 @@ describe('продукт пункта на странице', () => {
     expect(p.calls.at(-1)).toEqual({ path: '/api/oq/v1/items/d-1/product', method: 'POST', body: { to: 'taibe' } })
     expect(p.refresh.mock.calls.map((c) => c[0])).toEqual(['items', 'checks'])
     expect(p.items[0]!.querySelector('saved')!.textContent).toBe('✓ Продукт: tAIBE')
+  })
+
+  it('заголовок вкладки — выбранный продукт; доски продуктов — в подмену базы', async () => {
+    const p = mountPage({ filter: 'taibe' })
+    await p.flush()
+    expect(p.title()).toBe('Очередь владельца · tAIBE')
+    expect(p.window.__oqBoards).toHaveBeenCalledWith(PRODUCTS)
+    const pick = p.picker()!
+    pick.value = ''
+    pick.fire('change')
+    expect(p.title()).toBe('Очередь владельца')
   })
 
   it('вернуть прежний продукт можно сразу, до нового снимка', async () => {
@@ -327,6 +340,10 @@ describe('отбор снимков по продукту в подмене ба
       { id: 'w-hr', data: { title: 'HR', track: 'core' }, version: 1, product: 'hr-helper' },
       { id: 'taibe-w-1', data: { title: 'tAIBE', track: 'core' }, version: 1, product: 'taibe' },
       { id: 'track-core', data: { kind: 'track', title: 'Ядро' }, version: 1, product: 'hr-helper' },
+      // Задача и сводка tAIBE, записанные токеном HR: продукт — по доске карточек и data.ws, когда карта известна.
+      { id: 'w-tb', data: { title: 'tAIBE через HR', track: 'core', cards: [{ key: 'OPS-34', ws: 'aiboards-eval' }, { id: 'q' }] }, version: 1, product: 'hr-helper' },
+      { id: 'w-mixed', data: { title: 'обе доски', track: 'core', cards: [{ key: 'OPS-1', ws: 'aiboards-eval' }, { key: 'APP-1', ws: 'hr-helper-lavaeon' }] }, version: 1, product: 'hr-helper' },
+      { id: 'cards-stats-aiboards-eval', data: { kind: 'stats', ws: 'aiboards-eval' }, version: 1, product: 'hr-helper' },
     ],
     checks: [
       { id: 'd-hr', data: { done: true }, version: 1, product: 'hr-helper' },
@@ -344,6 +361,8 @@ describe('отбор снимков по продукту в подмене ба
       __oqView: (slug: string) => void
       __oqViewOf: () => string
       __oqKeep: (id: string) => void
+      __oqBoards: (products: unknown[]) => void
+      __oqDefaultProduct: string
     }
     const win = { addEventListener: (ev: string, fn: () => void) => { ;(listeners[ev] ??= []).push(fn) } } as unknown as Win
     runInNewContext(SHIM_JS, {
@@ -373,6 +392,7 @@ describe('отбор снимков по продукту в подмене ба
     const s = shim('taibe')
     await s.subscribe()
     expect(s.got.items).toEqual([['taibe-d-1', 'taibe-d-link']])
+    // Без карты досок (до ответа /products) — по столбцу product.
     expect(s.last('work')).toEqual(['taibe-w-1', 'track-core'])
     expect(s.last('checks')).toEqual(['d-hr', 'taibe-d-1'])
     // Полный снимок — у кнопок мёржа и меток продукта.
@@ -386,7 +406,7 @@ describe('отбор снимков по продукту в подмене ба
     expect(s.last('items')).toEqual(['d-hr', 'taibe-d-1', 'd-old', 'taibe-d-link'])
     s.win.__oqView('hr-helper')
     expect(s.last('items')).toEqual(['d-hr', 'd-old'])
-    expect(s.last('work')).toEqual(['w-hr', 'track-core'])
+    expect(s.last('work')).toEqual(['w-hr', 'track-core', 'w-tb', 'w-mixed', 'cards-stats-aiboards-eval'])
     s.win.__oqView('')
     expect(s.last('items')).toEqual(['d-hr', 'taibe-d-1', 'd-old', 'taibe-d-link'])
     // Ответы при смене выбора не перевыдаются: их отбор не меняется.
@@ -406,6 +426,18 @@ describe('отбор снимков по продукту в подмене ба
     expect(s.last('items')).toEqual(['d-hr', 'd-old', 'taibe-d-link'])
     // Смена выбора сбрасывает перенесённые.
     s.win.__oqView('hr-helper')
+    expect(s.last('items')).toEqual(['d-hr', 'd-old'])
+  })
+
+  it('задачи «Хода работ» — в продукте своих досок по карте GET /products; смешанные — по столбцу product', async () => {
+    const s = shim('taibe')
+    await s.subscribe()
+    expect(s.win.__oqDefaultProduct).toBe('hr-helper')
+    s.win.__oqBoards([{ slug: 'hr-helper', boards: ['hr-helper-lavaeon'] }, { slug: 'taibe', boards: ['aiboards-eval'] }])
+    expect(s.last('work')).toEqual(['taibe-w-1', 'track-core', 'w-tb', 'cards-stats-aiboards-eval'])
+    s.win.__oqView('hr-helper')
+    expect(s.last('work')).toEqual(['w-hr', 'track-core', 'w-mixed'])
+    // Пункты очереди — только по столбцу product.
     expect(s.last('items')).toEqual(['d-hr', 'd-old'])
   })
 

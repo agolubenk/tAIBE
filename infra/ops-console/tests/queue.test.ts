@@ -445,11 +445,11 @@ describe('страница /queue', () => {
     expect(html.indexOf('<script>')).toBeLessThan(html.indexOf('<main'))
     expect(scriptSrc(res)).toContain(`'sha256-${sha256(theme, 'base64')}'`)
     // Внешние — после </main>, порядок прежний: подмена базы, правило «открыт ли пункт» (то же, что у ?open=1),
-    // вложения (форма и карточки берут window.__oqFiles при запуске), данные «Хода работ» (window.__oqReports), код
-    // страницы, кнопки мёржа.
+    // вложения (форма и карточки берут window.__oqFiles при запуске), данные «Хода работ» (window.__oqReports), его
+    // группировка (window.__oqLanes), код страницы, кнопки мёржа.
     const srcs = srcsOf(html)
     expect(srcs.map((s) => s.replace(/^\/queue\/assets\/([a-z-]+)\.[0-9a-f]{16}\.js$/, '$1'))).toEqual([
-      'shim', 'open-rule', 'files', 'reports', 'page', 'enhance', 'products',
+      'shim', 'open-rule', 'files', 'reports', 'lanes', 'page', 'enhance', 'products',
     ])
     expect(html.indexOf(srcs[0] ?? '<нет>')).toBeGreaterThan(html.indexOf('</main>'))
     const bodies = await Promise.all(srcs.map(async (s) => (await app.request(s, { headers: { Cookie: cookie } })).text()))
@@ -457,8 +457,9 @@ describe('страница /queue', () => {
     expect(bodies[1]).toContain('function oqItemState(')
     expect(bodies[2]).toContain('window.__oqFiles = {')
     expect(bodies[3]).toContain('window.__oqReports = {')
-    expect(bodies[4]).toContain('var ITEMS')
-    expect(bodies[5]).toContain('oq-merge')
+    expect(bodies[4]).toContain('window.__oqLanes = {')
+    expect(bodies[5]).toContain('var ITEMS')
+    expect(bodies[6]).toContain('oq-merge')
   })
 
   it('файл скрипта — с той же авторизацией, кэшируется надолго, имя несёт хэш содержимого', async () => {
