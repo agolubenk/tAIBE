@@ -8,8 +8,9 @@ import { asc, inArray, type SQL } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { oqDocs, oqProducts } from '../db/schema'
 import { apiError } from '../http-types'
+import { DEFAULT_PRODUCT } from './product-boards'
 
-export const DEFAULT_PRODUCT = 'hr-helper'
+export { DEFAULT_PRODUCT, PRODUCT_BOARDS } from './product-boards'
 export const PRODUCT_SLUG = /^[a-z][a-z0-9-]{1,30}$/
 
 /** '*' — все продукты (владелец), иначе slug продуктов. Пустой список — не видит ничего. */

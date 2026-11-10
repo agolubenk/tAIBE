@@ -71,6 +71,7 @@ def run(tmp: Path, check) -> None:
     check("cards_stats: формат страницы — kind stats и время UTC", st["kind"] == "stats" and st["at"].endswith("Z"),
           st["at"])
     run_failures(check)
+    run_boards(check)
 
 
 def run_failures(check) -> None:
@@ -118,3 +119,94 @@ def run_failures(check) -> None:
     check("cards_stats: прошлая сводка читается по id, запись с её ifVersion",
           rc == 0 and ("GET", f"/db/work/{cs.DOC_ID}", None) in calls and put == [("PUT", f"/db/work/{cs.DOC_ID}", 7)],
           str(calls))
+
+
+class BoardsClient:
+    """Доска с двумя проектами, деревом из корня и ветки и двумя секторами; бюджет — на два дерева."""
+
+    workspace, slug, name = "ws-id", "aiboards-eval", "aiBoards&eval"
+
+    def __init__(self, budget=95):
+        self.calls, self.budget = 0, budget
+
+    def projects(self):
+        return {"p-ops": {"slug": "OPS", "name": "Инфраструктура"}, "p-tb": {"slug": "TB", "name": "t-boards"}}
+
+    def get(self, template, *segments, query=None):
+        self.calls += 1
+        if template == "/api/forest/{}/trees":
+            return {"trees": [{"id": "r1", "number": 34, "projectSlug": "OPS"},
+                              {"id": "r2", "number": 7, "projectSlug": "TB"}], "truncated": False}
+        if template == "/api/forest/{}/sectors":
+            assert query == {"status": "active"}
+            return [{"id": "s1", "name": "Sector: Очередь владельца: короткие ответы +1", "treeIds": ["r1"]},
+                    {"id": "s2", "name": "Sector: Доски", "treeIds": ["r2"]}]
+        if template == "/api/forest/{}/trees/{}" and segments[1] == "r1":
+            return {"rootId": "r1", "branches": [{"id": "r1", "number": 34, "projectId": "p-ops"},
+                                                 {"id": "b1", "number": 40, "projectId": "p-tb"}], "truncated": False}
+        return {"rootId": segments[-1], "branches": [{"id": "r2", "number": 7, "projectId": "p-tb"}]}
+
+
+def run_boards(check) -> None:
+    """Доска продукта по GET /products и карта доски для группировки «Хода работ» по проектам и секторам."""
+    import cards_stats as cs
+    meta = {"default": "hr-helper", "products": [{"slug": "hr-helper", "boards": ["hr-helper-lavaeon"]},
+                                                 {"slug": "taibe", "boards": ["aiboards-eval"]}]}
+    check("cards_stats: доска продукта по умолчанию — прежний cards-stats, другая — свой id",
+          (cs.board_target(meta, "hr-helper-lavaeon"), cs.board_target(meta, "aiboards-eval"))
+          == (("cards-stats", True), ("cards-stats-aiboards-eval", True)), "")
+    check("cards_stats: консоль без boards — как раньше, один cards-stats без карты",
+          cs.board_target({"products": [{"slug": "hr-helper", "name": "x"}]}, "aiboards-eval") == ("cards-stats", False), "")
+    check("cards_stats: имя сектора без «Sector:» и «+N»",
+          cs.sector_name("Sector: Миграция считается применённой +15") == "Миграция считается применённой", "")
+    now = dt.datetime(2026, 11, 10, 20, 0, tzinfo=dt.timezone.utc)
+    m = cs.board_map(BoardsClient(), now)
+    check("cards_stats: карта доски — проекты, секторы с ключами корня и веток",
+          m["projects"] == [{"slug": "OPS", "name": "Инфраструктура"}, {"slug": "TB", "name": "t-boards"}]
+          and m["sectors"] == [{"id": "s1", "name": "Очередь владельца: короткие ответы", "keys": ["OPS-34", "TB-40"]},
+                               {"id": "s2", "name": "Доски", "keys": ["TB-7"]}]
+          and (m["kind"], m["ws"], m["partial"]) == ("boards", "aiboards-eval", False), str(m))
+    tight = cs.board_map(BoardsClient(budget=5), now)
+    check("cards_stats: бюджет ключа кончился — у сектора только корень, partial",
+          tight["sectors"][1]["keys"] == ["TB-7"] and tight["sectors"][0]["keys"] == ["OPS-34", "TB-40"]
+          and tight["partial"] is True, str(tight["sectors"]))
+    calls: list[tuple] = []
+    real = cs.queue_call
+
+    def fake(method, path, token, body=None):
+        calls.append((method, path, (body or {}).get("data", {}).get("kind"), (body or {}).get("data", {}).get("ws")))
+        if path == "/products":
+            return meta
+        if method == "PUT":
+            return {"version": 1}
+        return {"docs": []} if path == "/db/work" else {}
+
+    class Client(BoardsClient):
+        """Карточки — как у FakeClient, деревья и секторы — как у BoardsClient; calls — число запросов."""
+
+        def __init__(self):
+            super().__init__()
+            self.cards = FakeClient()
+
+        def get(self, template, *segments, query=None):
+            if template.startswith("/api/forest/{}/trees") or template == "/api/forest/{}/sectors":
+                return super().get(template, *segments, query=query)
+            self.calls += 1
+            return self.cards.get(template, *segments, query=query)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    saved_build, saved_token = cs.tboards.build, cs.queue_token
+    cs.queue_call, cs.tboards.build, cs.queue_token = fake, (lambda *a, **k: Client()), (lambda: "x")
+    try:
+        rc = cs.main(["--write"])
+    finally:
+        cs.queue_call, cs.tboards.build, cs.queue_token = real, saved_build, saved_token
+    puts = [c for c in calls if c[0] == "PUT"]
+    check("cards_stats: доска tAIBE — своя сводка с ws и карта доски",
+          rc == 0 and puts == [("PUT", "/db/work/cards-stats-aiboards-eval", "stats", "aiboards-eval"),
+                               ("PUT", "/db/work/boards-aiboards-eval", "boards", "aiboards-eval")], str(puts))

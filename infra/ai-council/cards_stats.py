@@ -17,6 +17,14 @@ halfBaked, history: [{d, bugs, tasks, inPlan}]}`. Прежнюю `work/notion-st
 Запуск (Mac, хост продукта): `TAIBE_HOST_ROOT=<папка продукта> python3 infra/ai-council/cards_stats.py [--write]`.
 Без `--write` — только печать. Токен очереди — env `OQ_TOKEN` или связка ключей macOS (`hr-helper-mcp`/`OQ_TOKEN`),
 адрес — env `OQ_URL` (по умолчанию ops-консоль HR). История — одна точка на день (UTC), не больше 400.
+
+Доска продукта (GET `/products` очереди: `default` и `boards` продуктов). Сводка несёт `ws` — slug пространства ключа:
+по нему страница относит её к продукту. Доска продукта по умолчанию пишет `work/cards-stats` (история та же), другая
+доска — `work/cards-stats-<ws>`. Без `boards` в ответе (консоль до этой версии) — прежний `work/cards-stats` без `ws`.
+С ним же — карта доски `work/boards-<ws>` для группировки «Хода работ» (`page-lanes.ts`): `{kind: 'boards', ws, name,
+at, projects: [{slug, name}], sectors: [{id, name, keys}], partial}`. Секторы — активные `GET /api/forest/{ws}/sectors`;
+ключи — корни и ветки их деревьев (`GET /api/forest/{ws}/trees/{root}`) в пределах бюджета ключа; что не влезло —
+только корень из `GET /api/forest/{ws}/trees`, и `partial: true`.
 """
 from __future__ import annotations
 
@@ -43,6 +51,8 @@ SEVERITIES = ("critical", "high", "medium", "low")
 PRIORITIES = ("P0", "P1", "P2", "P3")
 HISTORY_MAX = 400
 FINAL_DONE_STATUSES = ("done", "dropped", "cancelled")
+BOARDS_PREFIX = "boards-"
+SECTORS_MAX, SECTOR_KEYS_MAX, BUDGET_RESERVE = 60, 300, 2
 
 
 def queue_token() -> str:
@@ -110,6 +120,68 @@ def project_tasks(client: tboards.Client, project_id: str, final_slugs: set[str]
     return open_tasks
 
 
+def board_target(meta: dict, ws: str) -> tuple[str, bool]:
+    """Id сводки и есть ли у консоли доски продуктов. Доска продукта по умолчанию — `cards-stats`, другая — свой id."""
+    products = meta.get("products") if isinstance(meta, dict) else None
+    if not isinstance(products, list) or not any(isinstance(p, dict) and "boards" in p for p in products):
+        return DOC_ID, False
+    home = [b for p in products if isinstance(p, dict) and p.get("slug") == meta.get("default") for b in p.get("boards") or []]
+    return (DOC_ID if ws in home else f"{DOC_ID}-{ws}"), True
+
+
+def sector_name(raw) -> str:
+    """«Sector: <заголовок корня> +15» → заголовок: префикс и число деревьев сверх первого — шум на дорожке Ганта."""
+    name = str(raw or "").strip()
+    if name.lower().startswith("sector:"):
+        name = name[len("sector:"):].strip()
+    name = name.rsplit(" +", 1)[0] if name.rsplit(" +", 1)[-1].isdigit() else name
+    return name[:120] or "сектор"
+
+
+def board_map(client: tboards.Client, now: dt.datetime) -> dict:
+    """Карта доски для группировки «Хода работ»: проекты и активные секторы с ключами карточек их деревьев."""
+    projects = client.projects()
+    slug_of = {str(pid): str(p.get("slug") or "") for pid, p in projects.items()}
+    trees = client.get("/api/forest/{}/trees", client.workspace)
+    trees = trees if isinstance(trees, dict) else {}
+    root_key = {str(t.get("id")): f"{t.get('projectSlug')}-{t.get('number')}" for t in trees.get("trees") or []
+                if isinstance(t, dict) and t.get("projectSlug") and isinstance(t.get("number"), int)}
+    partial = bool(trees.get("truncated"))
+    sectors = []
+    for s in (client.get("/api/forest/{}/sectors", client.workspace, query={"status": "active"}) or [])[:SECTORS_MAX]:
+        if not isinstance(s, dict) or not s.get("id"):
+            continue
+        keys: set[str] = set()
+        for rid in s.get("treeIds") or []:
+            rid = str(rid)
+            if client.calls >= client.budget - BUDGET_RESERVE:
+                partial = True
+                if rid in root_key:
+                    keys.add(root_key[rid])
+                continue
+            tree = client.get("/api/forest/{}/trees/{}", client.workspace, rid)
+            tree = tree if isinstance(tree, dict) else {}
+            partial = partial or bool(tree.get("truncated"))
+            for b in tree.get("branches") or []:
+                slug = slug_of.get(str(b.get("projectId"))) if isinstance(b, dict) else ""
+                if slug and isinstance(b.get("number"), int):
+                    keys.add(f"{slug}-{b['number']}")
+        sectors.append({"id": str(s["id"]), "name": sector_name(s.get("name")), "keys": sorted(keys)[:SECTOR_KEYS_MAX]})
+    return {"kind": "boards", "ws": client.slug, "name": client.name, "at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "projects": sorted(({"slug": slug, "name": str(p.get("name") or "")} for p in projects.values()
+                                if (slug := str(p.get("slug") or ""))), key=lambda p: p["slug"]),
+            "sectors": sectors, "partial": partial}
+
+
+def put_doc(token: str, doc_id: str, data: dict) -> int | None:
+    """Запись документа work с ifVersion прошлой версии (если она есть): параллельная запись не теряется молча."""
+    prev = queue_call("GET", f"/db/work/{doc_id}", token) or {}
+    body = {"data": data}
+    if prev.get("version") is not None:
+        body["ifVersion"] = prev["version"]
+    return queue_call("PUT", f"/db/work/{doc_id}", token, body).get("version")
+
+
 def plan_keys(work_docs: list[dict]) -> set[str]:
     keys: set[str] = set()
     for doc in work_docs:
@@ -146,26 +218,44 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     cfg = config_mod.load(strict=False)
     final_slugs = set(cfg.get("sources.tboards.final_slugs", []) if cfg else []) or {"done", "closed"}
+    token = queue_token()
+    meta = queue_call("GET", "/products", token)
+    now = dt.datetime.now(dt.timezone.utc)
+    boards = None
     try:
         with tboards.build(cfg, budget=95) as client:
             cards = board_cards(client, final_slugs)
+            ws = str(getattr(client, "slug", "") or "")
+            doc_id, with_boards = board_target(meta, ws) if ws else (DOC_ID, False)
+            if with_boards:
+                try:
+                    boards = board_map(client, now)
+                except tboards.TBoardsError as exc:
+                    # Карта — для группировки; без неё сводка всё равно пишется.
+                    print(f"карта доски не собрана: {exc}", file=sys.stderr)
     except tboards.TBoardsError as exc:
         raise SystemExit(f"доски: {exc}") from None
-    token = queue_token()
     work = queue_call("GET", "/db/work", token)
     docs = work.get("docs", work) if isinstance(work, dict) else work
     # Прошлая сводка — отдельным чтением по id: в длинном списке work её может не оказаться, и история начнётся заново.
-    prev_doc = queue_call("GET", f"/db/work/{DOC_ID}", token) or {}
-    stats = build_stats(cards, plan_keys(docs or []), prev_doc.get("data") or {}, dt.datetime.now(dt.timezone.utc))
+    prev_doc = queue_call("GET", f"/db/work/{doc_id}", token) or {}
+    stats = build_stats(cards, plan_keys(docs or []), prev_doc.get("data") or {}, now)
+    if with_boards:
+        stats["ws"] = ws
     print(json.dumps({k: stats[k] for k in ("at", "bugs", "tasks", "inPlan", "notInPlan")}, ensure_ascii=False))
+    if boards:
+        print(f"карта доски {ws}: проектов {len(boards['projects'])}, секторов {len(boards['sectors'])}"
+              + (" (не полностью: бюджет ключа)" if boards["partial"] else ""))
     if not args.write:
         print("пробный прогон: в очередь не записано (--write записывает)")
         return 0
     body = {"data": stats}
     if prev_doc.get("version") is not None:
         body["ifVersion"] = prev_doc["version"]
-    res = queue_call("PUT", f"/db/work/{DOC_ID}", token, body)
-    print(f"записано: work/{DOC_ID} v{res.get('version')}")
+    res = queue_call("PUT", f"/db/work/{doc_id}", token, body)
+    print(f"записано: work/{doc_id} v{res.get('version')}")
+    if boards:
+        print(f"записано: work/{BOARDS_PREFIX}{ws} v{put_doc(token, BOARDS_PREFIX + ws, boards)}")
     return 0
 
 
