@@ -111,7 +111,8 @@ html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + var(--bar-h, 0px
 .hb-compose[data-draft="1"]::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 #reports-dlg .card, #reports-dlg #kpis { scroll-margin-top: 64px; }
 .hb-theme { margin-left: auto; }
-.hb-short, .hb-reports, .hb-to-dec { display: none; }
+.hb-ico, .hb-reports, .hb-to-dec { display: none; }
+.hb-ico { flex: none; }
 .jump { position: relative; }
 .jump > summary { list-style: none; }
 .jump > summary::-webkit-details-marker { display: none; }
@@ -295,10 +296,14 @@ footer { font-size: 13px; color: var(--muted); }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; min-width: 0; }
 .card h3 { margin: 0; font-size: 15px; }
 .card .sub { margin: 0; font-size: 13px; color: var(--muted); max-width: 74ch; }
+/* Какой продукт показывает карточка (paintScope) — когда продуктов два и больше. */
+.scope { justify-self: start; font-size: 12px; line-height: 1.4; color: var(--muted); padding: 1px 8px; border: 1px solid var(--line); border-radius: 10px; max-width: 100%; }
+summary > .scope { margin-left: auto; }
 .chart { position: relative; width: 100%; min-width: 0; }
 .chart svg { display: block; overflow: visible; }
 .ax { fill: var(--muted); font-size: 11px; font-family: var(--font-body); }
-.lbl { fill: var(--ink); font-size: 12px; font-family: var(--font-body); }
+/* Обводка цветом карточки — подпись читается и поверх линии (подписи у «сегодня» в графике очереди, выбросы PR). */
+.lbl { fill: var(--ink); font-size: 12px; font-family: var(--font-body); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
 .gl { stroke: var(--line); stroke-width: 1; }
 .lg { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
 .lg i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
@@ -339,8 +344,11 @@ table.rep td.when { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .is-late { color: var(--warn); font-weight: 600; }
 .trk { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .trk i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
-.gantt { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
-.g-row { display: flex; min-height: 26px; border-bottom: 1px solid var(--line); }
+/* Строка — во всю ширину шкалы, а не окна прокрутки: иначе при прокрутке вбок липкое название уезжало вместе со
+   строкой (липкий элемент не выходит за свою строку), а линии строк и фон групп обрывались (просьба владельца 10.11).
+   overscroll-behavior — прокрутка до края не листает историю браузера жестом. */
+.gantt { overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--line); border-radius: 6px; }
+.g-row { display: flex; width: max-content; min-width: 100%; min-height: 26px; border-bottom: 1px solid var(--line); }
 .g-row:last-child { border-bottom: 0; }
 .g-label { position: sticky; left: 0; z-index: 2; flex: 0 0 220px; width: 220px; background: var(--surface); padding: 4px 8px; font-size: 12px; line-height: 1.3; border-right: 1px solid var(--line); }
 .g-grp .g-label, .g-head .g-label { font-weight: 700; }
@@ -400,15 +408,20 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 /* До 1400 px окна шапка липнет всегда; с 641 до 1400 — ещё и «К решениям ↓» (решение владельца d-queue-jump-link). */
 @media (max-width: 1399.98px) { .head-bar { position: sticky; top: env(safe-area-inset-top, 0px); } }
 @media (min-width: 641px) and (max-width: 1399.98px) { .hb-to-dec { display: inline-flex; } }
-/* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди; в шапке — короткие подписи. */
+/* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди. Шапка — одна строка (просьба владельца
+   10.11): у кнопок вместо названий значки (название — в aria-label и title), выбор продукта забирает оставшееся место. */
 @media (max-width: 640px) {
   .col-reports { display: none; }
   .hb-reports { display: inline-flex; }
   .hb-long, #jump-dash { display: none; }
-  .hb-short { display: inline; }
-  .head-bar { gap: 6px; }
+  .hb-ico { display: block; }
+  .head-bar, .hb-nav { flex-wrap: nowrap; gap: 6px; }
+  .head-bar { min-width: 0; }
   .hb-btn { padding: 0 9px; gap: 4px; }
-  .hb-theme { width: 40px; padding: 0; justify-content: center; }
+  .hb-compose, .hb-reports, .hb-theme { flex: none; width: 40px; padding: 0; justify-content: center; }
+  .hb-compose[data-draft="1"] { width: auto; padding: 0 8px; }
+  /* width: 0 — иначе ширина текста выбора («Все продукты») раздвигает сетку страницы шире экрана; место даёт flex-grow. */
+  #head-bar .oq-product-pick { flex: 1 1 0; width: 0; min-width: 0; max-width: none; }
   .jump-n { padding: 1px 6px; }
   .jump { position: static; }
   .jump-list { left: 16px; right: 16px; min-width: 0; }
@@ -439,10 +452,10 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   </header>
 
   <div class="head-bar" id="head-bar">
-    <button type="button" class="hb-btn hb-compose" id="compose-open" aria-haspopup="dialog" aria-controls="compose"><span aria-hidden="true">＋</span><span class="hb-long">Поставить задачу</span><span class="hb-short">Задача</span></button>
+    <button type="button" class="hb-btn hb-compose" id="compose-open" aria-haspopup="dialog" aria-controls="compose" aria-label="Поставить задачу" title="Поставить задачу"><span aria-hidden="true">＋</span><span class="hb-long">Поставить задачу</span></button>
     <nav class="hb-nav" aria-label="Переходы по странице">
       <details class="jump" id="jump-queue">
-        <summary class="hb-btn" aria-label="Разделы очереди">Очередь <b class="jump-n" id="jump-queue-n" title="Открытых пунктов: решения, мёржи, сервер, проверки"></b></summary>
+        <summary class="hb-btn" aria-label="Очередь: разделы" title="Очередь: разделы"><svg class="hb-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="hb-long">Очередь</span> <b class="jump-n" id="jump-queue-n" title="Открытых пунктов: решения, мёржи, сервер, проверки"></b></summary>
         <ul class="jump-list">
           <li><a href="#sec-decision" data-kind="decision">Решения <span class="jump-c"></span></a></li>
           <li><a href="#sec-merge" data-kind="merge">Мёржи <span class="jump-c"></span></a></li>
@@ -468,7 +481,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
       </details>
       <a class="hb-btn hb-to-dec" href="#sec-decision">К решениям ↓</a>
     </nav>
-    <button type="button" class="hb-btn hb-reports" id="reports-open" aria-haspopup="dialog" aria-controls="reports-dlg">Отчёты</button>
+    <button type="button" class="hb-btn hb-reports" id="reports-open" aria-haspopup="dialog" aria-controls="reports-dlg" aria-label="Отчёты" title="Отчёты: «Ход работ»"><svg class="hb-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 20h16M7 16v-5M12 16V6M17 16v-8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
     <button type="button" class="hb-btn hb-theme" id="theme-btn"><span aria-hidden="true" id="theme-icon">◐</span><span class="hb-long" id="theme-text">Тема: авто</span></button>
   </div>
 
@@ -531,11 +544,12 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   <div class="col-reports" id="reports-col" role="region" aria-label="Ход работ: отчёты и графики" tabindex="0">
   <section id="agents" class="dash">
     <div class="sec-head"><h2 class="sec">Ход работ</h2><span class="sec-count" id="dash-asof"></span></div>
-    <p class="sec-note">Задачи агентов и ваша очередь — в цифрах и на шкале времени. Агенты обновляют статусы сами. Отставание — дни после плановой даты. План от 15.10 предварительный: это оценка агента, сроки уточняются по мере работы. К строкам плана прикреплены карточки t-boards — кнопка «N карточек» в отчёте открывает список.</p>
+    <p class="sec-note">Задачи агентов и ваша очередь — в цифрах и на шкале времени. Агенты обновляют статусы сами. Отставание — дни после плановой даты. План предварительный: это оценка агента, сроки уточняются по мере работы. К строкам плана прикреплены карточки t-boards — кнопка «N карточек» в отчёте открывает список.</p>
     <div class="kpis" id="kpis"></div>
+    <p class="sec-note" id="dash-split" hidden></p>
     <div class="card" id="card-owner">
       <h3>Ваша очередь по дням</h3>
-      <p class="sub">Сколько пунктов поставлено вам и сколько вы закрыли к концу каждого дня. Разрыв между линиями — то, что ждёт вас.</p>
+      <p class="sub">Левая ось — сколько пунктов поставлено вам и сколько вы закрыли к концу каждого дня, нарастающим итогом; разрыв между линиями — то, что ждёт вас. Правая ось — сколько пунктов пришло за день; пунктир — медиана за 14 дней, правее «сегодня» — прогноз на 30 дней вперёд.</p>
       <div class="lg" id="lg-owner"></div>
       <div class="chart" id="ch-owner"></div>
     </div>
@@ -568,13 +582,13 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     </div>
     <div class="card" id="card-pr">
       <h3>Сколько PR ждали мёржа</h3>
-      <p class="sub">Каждая точка — PR: когда открыт и сколько часов прошло до мёржа. Пустой кружок — ещё открыт. Высоко стоящие точки — рассинхрон между готовым кодом и мёржем.</p>
+      <p class="sub">Каждая точка — PR: когда открыт и сколько часов прошло до мёржа. Пустой кружок — ещё открыт. Высоко стоящие точки — рассинхрон между готовым кодом и мёржем. Шкала — до 36 часов: PR, ждавший дольше, — треугольник на верхней линии, в подписи — номер и сколько часов на деле.</p>
       <div class="lg" id="lg-pr"></div>
       <div class="chart" id="ch-pr"></div>
     </div>
     <div class="card" id="card-gantt">
       <h3>Диаграмма Ганта (предварительная)</h3>
-      <p class="sub">Рамка — план, заливка — факт, красный хвост — отставание, красная вертикаль — сегодня. Названия задач не прокручиваются вместе с полосами.</p>
+      <p class="sub">Рамка — план, заливка — факт, красный хвост — отставание, красная вертикаль — сегодня. Шкала прокручивается вбок, названия задач остаются на месте.</p>
       <div class="gantt" id="gantt"></div>
     </div>
     <div class="card" id="card-roadmap">
@@ -600,12 +614,22 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
       <details class="howto-d" id="howto-d" open>
       <summary><h2>Как пользоваться</h2></summary>
       <ol>
-        <li><b>Решения</b> — нажмите кнопку с нужным вариантом. Этого достаточно: пункт считается решённым, я увижу выбор. Комментарий — по желанию.</li>
-        <li><b>Мёржи и ручные проверки</b> — выполните команду или шаги, поставьте галочку «Сделано». Если что-то пошло не так — напишите в поле.</li>
-        <li><b>Команды на сервере</b> — подключитесь по ssh (<a href="#ssh-howto">как подключиться</a>), выполните блок, вставьте вывод в поле под ним и поставьте галочку.</li>
-        <li>Всё сохраняется само, писать мне в чат не нужно. Передумали — «Изменить ответ» под пунктом.</li>
+        <li><b>Решения</b> — нажмите кнопку с нужным вариантом. Этого достаточно: пункт считается решённым, я увижу выбор. Мелкая строка под вариантом — подсказка, рекомендация — в тексте пункта. Комментарий — по желанию.</li>
+        <li><b>Мёржи</b> — «Влить» вливает PR из пункта: кнопка доступна, когда у пункта есть вердикт «Контроля», в подтверждении видны PR, SHA, база и будет ли деплой. Можно и командой из пункта — тогда поставьте галочку «Влил». «Перезапустить деплой» в заголовке раздела запускает деплой main заново (около 3 минут сайт отвечает 502).</li>
+        <li><b>Команды на сервере</b> — подключитесь по ssh (<a href="#ssh-howto">как подключиться</a>), нажмите «Копировать» у блока, выполните его, вставьте вывод в поле под ним и поставьте галочку «Выполнил».</li>
+        <li><b>Проверить руками</b> — пройдите шаги из пункта и поставьте «Проверил»; что не сработало — в поле под галочкой, пусто — значит, всё в порядке.</li>
+        <li><b>Входящие</b> — то, что вы переслали боту в Telegram или поставили кнопкой «Поставить задачу». Ведёт агент-сессия: её статус — в строке «Агент» под пунктом, строка автопередачи показывает, взята ли задача (если нет — команда «Возьми входящее …» с кнопкой «Копировать»). «📎 Добавить файл» прикладывает файлы, «Уточнение для агента» — дописать задачу, «Принято» — результат вас устраивает.</li>
+        <li><b>Продукт у пункта</b> — список «Продукт:» в шапке пункта переносит его в другой продукт (кроме мёржа с вердиктом «Контроля»); сессии прежнего продукта его больше не увидят — страница спросит подтверждение.</li>
+        <li>Всё сохраняется само, писать мне в чат не нужно; под пунктом видно «сохранено» или ошибку — при ошибке страница повторит сама. Передумали — «Изменить ответ» под пунктом.</li>
         <li><b>«Ждёт вас снова»</b> — вы уже ответили, но агенту снова нужны вы (вопрос в ответ, вывод с ошибкой, «повторите проверку»): что именно — в строке «Агент» под пунктом. Ответьте ещё раз — пункт закроется.</li>
-        <li><b>Шапка</b> — «Поставить задачу» открывает форму (горячие клавиши — под её кнопками), «Очередь» и «Ход работ» ведут к разделам и показывают, сколько открыто, справа — тема: авто, светлая или тёмная.</li>
+        <li><b>Над списком</b> — строка связи (подключено ли хранилище ответов; «нет связи» — показан последний снимок), полоса и число — сколько пунктов закрыто, «Показать выполненные» / «Скрыть выполненные» — закрытые пункты в списке. Ссылка вида <code>#item=&lt;id&gt;</code> открывает и подсвечивает один пункт, даже закрытый или из другого продукта.</li>
+        <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и все отчёты «Хода работ» — только по нему, «Все продукты» — по всем, с разбивкой по продуктам под показателями. «＋ Поставить задачу» открывает форму (горячие клавиши — под её кнопками; черновик помнится, точка на кнопке — в форме остался текст). «Очередь» — переходы к разделам с числом открытых; «ждут · снова» — сколько ждут вас и сколько вернулось. «Ход работ» — переходы к отчётам с их главными числами. «К решениям ↓» — к первому разделу очереди (на средних экранах). Справа — тема: авто, светлая или тёмная.</li>
+        <li><b>Шапка на телефоне</b> — одна строка значков: ＋ — поставить задачу, список с числом — разделы очереди, столбики — «Отчёты» (весь «Ход работ» в отдельном окне, ✕ или Esc закрывают), ◐ / ☀ / ☾ — тема. Название каждого значка — в его подписи для экранного чтения и во всплывающей подсказке.</li>
+        <li><b>Ход работ: показатели</b> — плитки сверху: ваша очередь, задачи агентов, просрочки, медиана ожидания мёржа, вехи, открытые карточки t-boards. У каждой карточки отчёта, когда продуктов больше одного, подписано, какой продукт она показывает.</li>
+        <li><b>Ваша очередь по дням</b> — левая ось: сколько пунктов поставлено вам и сколько закрыто, нарастающим итогом (разрыв — то, что ждёт вас). Правая ось: сколько пунктов пришло за день; пунктир — медиана за 14 дней, правее красной линии «сегодня» — прогноз на 30 дней. Наведите на график — подсказка с числами дня.</li>
+        <li><b>Задачи агентов: план и факт</b> — пунктир — сколько задач должно быть готово по плану, сплошная — сколько готово на деле; сплошная ниже — агенты отстают. <b>Готовность по разделам</b> — ваши пункты по типам и задачи агентов по направлениям: сделано, в работе, ждёт, в плане. <b>Карточки t-boards в плане</b> — сколько карточек прикреплено к направлениям и сколько закрыто, ниже — открытые карточки по дням сверок.</li>
+        <li><b>Отставание от плана</b> — сверху открытые задачи позже плана, свёрнуто ниже — закрытые со сдвигом срока. <b>Сколько PR ждали мёржа</b> — точка на PR (пустая — ещё открыт), шкала до 36 часов: дольше — треугольник на верхней линии с номером и настоящим числом часов; только PR репозитория HR.</li>
+        <li><b>Диаграмма Ганта</b> — рамка — план, заливка — факт, красный хвост — отставание; шкала прокручивается вбок, названия задач остаются слева, наведите на строку — даты и статус. <b>Роадмап</b> — вехи по неделям: залитый ромб — достигнута, пустой — по плану, красная обводка — просрочена. <b>Отчёт по задачам</b> — таблица всех задач (раскрытая помнится); кнопка «N карточек» открывает список карточек t-boards строки.</li>
       </ol>
       <div class="legend"><span><span class="chip chip-decision">решение</span> выбрать вариант</span><span><span class="chip chip-deploy">деплой</span> мёрж выкатит прод</span><span><span class="chip chip-ssh">ssh</span> команда на сервере</span><span><span class="chip chip-wait">после …</span> сначала другой пункт</span></div>
       </details>
@@ -670,7 +694,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     <summary>Для агентов: как добавить пункт владельцу и отметить свою работу</summary>
     <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd без basePlanEnd — 409.</p>
     <pre>items/&lt;id&gt;  пункт владельцу (id: d-… решение, m-… мёрж, s-… сервер, c-… ручная проверка)
-  Продукт — hr-helper, taibe, lavaeon: у продукта не hr-helper id начинается с его slug (taibe-m-93).
+  Продукт — hr-helper (Lavaeon (HR Helper): id без префикса) или taibe (tAIBE: id начинается с «taibe-», taibe-m-93).
   Продукт пункта меняет только владелец (выбор «Продукт:» у пункта).
   {kind: 'decision'|'merge'|'server'|'check', title, body, cmd, after, cmd2,
    options: [{id, label, hint}]   // только decision; рекомендуемый первым, hint: 'рекомендую'
@@ -713,18 +737,12 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // история; канон открытого — t-boards). Новые пункты приходят из базы (DB_ITEMS).
   var ITEMS = [
     // ── 15.10: хвосты после сверки ────────────────────────────────────────
-    { id: 'd-close-onreview', added: '2026-10-15', kind: 'decision', title: 'Закрыть в Notion то, что уже влито, но висит «на ревью» или «открыто»',
-      body: '<p>Код уже в main и на проде, а карточки не закрыты. Закрываю только по вашему «да».</p><ul><li><a href="https://app.notion.com/p/3f6dd207a825818f8a2fee2c46845022">Размытие панелей админки</a> — PR #142, влит 11.10.</li><li><a href="https://app.notion.com/p/3f6dd207a825816b97abf47d2649dbce">Приёмник отчётов ops-консоли</a> — PR #137, влит 11.10. Ваши три проверки после деплоя отмечены 12.10.</li><li>Пять ошибок, исправленных в PR-1 провайдеров (#143, влит 11.10): <a href="https://app.notion.com/p/3f6dd207a82581b89ff2dd2cce7ed28f">«Проверить ключ» отвечал 400</a>, <a href="https://app.notion.com/p/3f6dd207a825816a8f51c4bc265855a6">стрим и картинки шли мимо своего адреса</a>, <a href="https://app.notion.com/p/3f6dd207a825812b8e1bc265915a1f8b">коды Z.ai применялись ко всем провайдерам</a>, <a href="https://app.notion.com/p/3f6dd207a82581c88340efa382f23ee3">флаг своего адреса проверялся только при сохранении</a>, <a href="https://app.notion.com/p/3f6dd207a8258179b226dc07af09b1a3">новый undici-агент на каждый вызов</a>.</li></ul><p>После «да» агент добавит записи о закрытии (отдельный PR без деплоя) и сменит статусы, когда вы снова войдёте в Notion в MCP-хабе (пункт ниже). PR-1 влит без ревью: проверяющие Claude упёрлись в недельный лимит. Ревью на GLM агент сделает 16.10. Если ошибки PR-1 хотите закрыть только после ревью — второй вариант.</p>',
-      options: [{ id: 'yes', label: 'Да, закрыть все', hint: 'рекомендую' }, { id: 'after-review', label: 'Да, но ошибки PR-1 — после ревью GLM' }, { id: 'no', label: 'Пока не закрывать' }] },
     { id: 'm-162', added: '2026-10-15', kind: 'merge', title: '#162 — запись о закрытии P0 «публичный сайт без стилей»', chips: [['без деплоя']],
       body: '<p>Только документация: изменения в <code>docs/**</code> деплой не запускают. Закрытие вы одобрили 11.10 («после мёржа #130»). #130 влит в тот же день, а запись тогда пропустили.</p>',
       cmd: 'gh pr merge 162 --merge' },
     { id: 's-baseurl', added: '2026-10-15', kind: 'server', title: 'Свои адреса ИИ-подключений после PR-1 (только чтение)', chips: [['ssh', 'ssh'], ['1 минута']],
       body: '<p>С PR-1 (#143, на проде с 11.10) флаг <code>AI_ROUTING_CUSTOM_BASE_URL</code> проверяется при каждом вызове. Если флаг выключен, а у подключения сохранён свой адрес, эта цель пропускается и маршрут уходит на резервную. Ожидаемо: строка «флаг не задан», в колонке <code>with_custom_url</code> — нули. Тогда риска нет.</p>',
       cmd: 'grep -E \'^AI_ROUTING_CUSTOM_BASE_URL=\' /opt/hr-helper/infra/docker/.env.contabo || echo "флаг не задан (выключен)"\nC=/opt/hr-helper/infra/scripts/prod/contabo-compose.sh\n$C exec -T postgres sh -c \'PGOPTIONS="-c default_transaction_read_only=on" psql -U "$POSTGRES_USER" -d "${POSTGRES_DB:-$POSTGRES_USER}"\' <<\'SQL\'\nSELECT provider, count(*) AS connections, count(*) FILTER (WHERE base_url IS NOT NULL) AS with_custom_url\nFROM company_ai_provider_connections GROUP BY 1 ORDER BY 1;\nSQL' },
-    { id: 'c-notion-auth', added: '2026-10-15', kind: 'check', title: 'Снова войти в Notion в общем MCP-хабе', chips: [['этот Mac'], ['1 минута']],
-      body: '<p>Хаб на порту 3050 работает, но вход в Notion и Cloudflare у него истёк. Пока так, агенты не могут менять статусы и писать комментарии в Notion. Записи сложены в очередь и применятся сразу после входа.</p><ol><li>На этом Mac откройте <a href="http://127.0.0.1:3050/oauth">http://127.0.0.1:3050/oauth</a>.</li><li>В строках <b>notion</b> и <b>cloudflare</b> нажмите «Authorize» и войдите.</li><li>Либо выполните в Терминале из корня репозитория команды ниже.</li></ol>',
-      cmd: 'npm run mcp-hub:auth\nnpm run mcp-hub:status   # notion и cloudflare должны попасть в «готовы»' },
     { id: 'c-watchdog', added: '2026-10-15', kind: 'check', title: 'Внешний мониторинг: три монитора в UptimeRobot (вы выбрали внешний пинг)', chips: [['браузер'], ['10 минут']],
       body: '<p>Нужен на случай, когда падает весь VPS: ops-консоль живёт там же и молчит вместе с ним. Аккаунт может завести только владелец. Все три адреса 15.10 отвечали 200.</p><ol><li>Зарегистрируйтесь на <a href="https://uptimerobot.com">uptimerobot.com</a> — хватит бесплатного тарифа.</li><li>«Add New Monitor» → тип HTTP(s), интервал 5 минут. Заведите три монитора с адресами ниже.</li><li>В «Integrations» подключите Telegram или e-mail и включите уведомления у всех трёх мониторов.</li><li>Проверка: все три мониторы в статусе «Up».</li></ol>',
       cmd: 'https://app.hrhelper.space/api/v1/health/ready\nhttps://hrhelper.space/\nhttps://ops.admin.hrhelper.space/api/health',
@@ -741,7 +759,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       body: '<p>Исправление (PR #80) на проде с 04.10, проверено браузером на <code>/</code>, <code>/legal</code>, <code>/roadmap</code>. Тест на общем каркасе всех четырёх публичных страниц — PR #130 (7/7). Улики для консилиума — в карточке.</p>' },
     { id: 'd-reject-transitions', kind: 'decision', title: 'Предложенный консилиумом переход у карточки стилей',
       options: [{ id: 'reject', label: 'Отклони его сам', hint: 'рекомендую' }, { id: 'ui', label: 'Отклоню в интерфейсе консилиума' }, { id: 'keep', label: 'Оставить' }],
-      body: '<p>Консилиум предлагал вернуть на доработку карточки TLS, дампа и стилей: в Notion не было улик. TLS и дамп уже закрыты — их переходы больше не применятся. Остался переход у карточки стилей; улики в неё добавлены 11.10. Интерфейс консилиума: <code>http://127.0.0.1:8790</code> → «Ревью».</p>' },
+      body: '<p>Консилиум предлагал вернуть на доработку карточки TLS, дампа и стилей: в карточках не было улик. TLS и дамп уже закрыты — их переходы больше не применятся. Остался переход у карточки стилей; улики в неё добавлены 11.10. Интерфейс консилиума: <code>http://127.0.0.1:8790</code> → «Ревью».</p>' },
     { id: 'd-close-alertcolors', kind: 'decision', title: 'Закрыть карточку «Telegram-алерты выглядят всё зелёное»',
       options: [{ id: 'yes', label: 'Да, закрыть', hint: 'рекомендую' }, { id: 'no', label: 'Нет, ещё проверю' }],
       body: '<p>Исправление на проде с 10.10 (PR #108 в составе #109), запись о закрытии уже в main. Карточка в «на ревью».</p>' },
@@ -780,13 +798,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       options: [{ id: 'yes', label: 'Нужен — с причиной и подтверждением для сервисов с данными' }, { id: 'no', label: 'Не нужен' }],
       body: '<p>Как в консоли: обязательная причина, для stateful-сервисов — ввод имени контейнера.</p>' },
     { id: 'd-ops-deploy-vis-2', kind: 'decision', title: 'Ops-консоль: что делать с планом OPS-DEPLOY-VIS (исправление)',
-      body: '<p><b>Я ошибся:</b> писал, что <a href="https://app.notion.com/p/3f4dd207a82581968d76f09b7f4a0cc4">карточка</a> пустая. На самом деле план лежит в поле «Report», а не в тексте страницы. Поэтому ваш ответ «закрыть» я не выполнил.</p><p>Что в плане:</p><ul><li><b>Фаза 1 (~M).</b> Деплой шлёт в консоль события по шагам: сборка, миграции, запуск, nginx, проверки, откат. В консоли появляется живая карточка деплоя с длительностью и таблицей проверок.</li><li><b>Фаза 2 (~S).</b> Алерты: деплой идёт дольше 35 минут; проверка покраснела после «зелёного» деплоя; не закрепился образ для отката. Мониторы адресов и сертификата в консоли уже есть.</li><li><b>Фаза 3.</b> Деплои на одной оси с метриками и в отчёте совету.</li></ul><p>Событий деплоя и алертов по ним пока нет.</p>',
+      body: '<p><b>Я ошибся:</b> писал, что карточка пустая. На самом деле план лежит в поле «Report», а не в тексте страницы. Поэтому ваш ответ «закрыть» я не выполнил.</p><p>Что в плане:</p><ul><li><b>Фаза 1 (~M).</b> Деплой шлёт в консоль события по шагам: сборка, миграции, запуск, nginx, проверки, откат. В консоли появляется живая карточка деплоя с длительностью и таблицей проверок.</li><li><b>Фаза 2 (~S).</b> Алерты: деплой идёт дольше 35 минут; проверка покраснела после «зелёного» деплоя; не закрепился образ для отката. Мониторы адресов и сертификата в консоли уже есть.</li><li><b>Фаза 3.</b> Деплои на одной оси с метриками и в отчёте совету.</li></ul><p>Событий деплоя и алертов по ним пока нет.</p>',
       options: [{ id: 'queue', label: 'Оставить в очереди', hint: 'рекомендую' }, { id: 'now', label: 'Делать сейчас' }, { id: 'close', label: 'Закрыть — не нужно' }] },
     { id: 'd-ops-render', kind: 'decision', title: 'Ops-консоль: перенос с VPS на Render + Turso',
       options: [{ id: 'now', label: 'Сейчас' }, { id: 'later', label: 'Позже' }, { id: 'never', label: 'Не переносить' }] },
     { id: 'd-bundle', kind: 'decision', title: 'Бюджет бандла фронтенда: браться ли за сокращение сейчас',
       options: [{ id: 'do', label: 'Делать' }, { id: 'later', label: 'Позже' }],
-      body: '<p>Циклы madge исправлены (PR #139). Размер: стартовый файл 266,5 КиБ при потолке 260, критический путь Telegram 321 КиБ при потолке 273 (+47 % с 27.08). Это отдельная задача производительности, от половины дня. Карточка: <a href="https://app.notion.com/p/3f3dd207a82581b8a2a7fac2c14409fe">«Бюджет бандла превышен…»</a>.</p>' },
+      body: '<p>Циклы madge исправлены (PR #139). Размер: стартовый файл 266,5 КиБ при потолке 260, критический путь Telegram 321 КиБ при потолке 273 (+47 % с 27.08). Это отдельная задача производительности, от половины дня. Карточка: «Бюджет бандла превышен…».</p>' },
     { id: 'd-main-checkout', kind: 'decision', title: 'Основной checkout: сохранить уникальное и обновить до main',
       options: [{ id: 'yes', label: 'Да, обнови', hint: 'рекомендую' }, { id: 'no', label: 'Пока нет' }],
       body: '<p>Ветка <code>feature/council-phase3</code> отстаёт от main на 226 коммитов, 275 изменённых путей. 196 из них уже есть в main (дубли правок коллеги после #81). 79 уникальных: 19 файлов отличаются от main (12 — <code>apps/backend/src</code>, среди них незаконченный fail-open бюджета шлюза), 12 только локальные (<code>council.db</code>, видео в <code>examples/</code>), 48 удалены локально. Сохраню эти 79 путей в <code>~/HR_Helper-backups/2026-10-11-main-checkout/</code>, проверю архив и переключу checkout на main. В этот момент в нём не должно идти других сессий.</p>' },
@@ -922,7 +940,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
 
   var DB_ITEMS = [], dbItemsKey = '';
-  function allItems() { return ITEMS.concat(DB_ITEMS); }
+  // Выбран продукт не HR (выбор вверху, page-scripts.ts __oqView): вшитые пункты — HR, их нет в числах.
+  function otherProduct() { var v = window.__oqViewOf ? window.__oqViewOf() : ''; return !!v && v !== 'hr-helper'; }
+  function allItems() { return (otherProduct() ? [] : ITEMS).concat(DB_ITEMS); }
   // До ответов и пунктов очереди — «…», не числа вшитого снимка 16.10 (QA, 23.10); без связи — снимок с пометкой.
   var LIVE = { checks: false, items: false }, OFFLINE = false;
   function queueLive() { return LIVE.checks && LIVE.items; }
@@ -1233,7 +1253,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     LIVE.items = true;
     var list = rowsOf(snap).map(function (r) { return itemFromDb(r.id, r.data); }).filter(Boolean)
       .filter(function (it) { return !ITEMS.some(function (b) { return b.id === it.id; }); });
-    var key = JSON.stringify(list);
+    var key = JSON.stringify(list) + (otherProduct() ? '|other' : '');
     if (key === dbItemsKey) return;
     dbItemsKey = key;
     document.querySelectorAll('.item[data-src="db"]').forEach(function (el) { el.remove(); });
@@ -1657,14 +1677,14 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   rebuildTracks();
   var PR = function (n) { return 'https://github.com/agolubenk/HR_Helper-v2/pull/' + n; };
-  // Базовый план от 15.10. Прошлые даты — факты (открытие и мёрж PR, ответы владельца), будущие — оценка агента.
-  // Архив, как ITEMS: тексты и ссылки строк — как были 15.10.
+  // План 15.10 — только значения по умолчанию под строками базы с тем же id (page-reports.ts, planRows): своих строк
+  // в «Ходе работ» не даёт. Архив, как ITEMS: тексты и ссылки — как были 15.10.
   var WORK_SEED = [
     { id: 'w-disk', track: 'tails', order: 1, title: 'Диск на проде: причина и потолок кэша сборки', who: 'agent', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', note: 'Диск занимал кэш сборки образов. Потолок 20 ГБ — #141. По логу деплоя 15.10 занято 23 % (было 68 %).', link: PR(141), linkText: '#141' },
-    { id: 'w-styles', track: 'tails', order: 2, title: 'Закрыть P0 «сайт без стилей» после мёржа #130', who: 'agent', status: 'doing', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-15', note: 'После мёржа закрытие пропустили. Запись о закрытии — #162, её вливаете вы. Статус в Notion — после вашего входа в хаб.', link: PR(162), linkText: '#162' },
+    { id: 'w-styles', track: 'tails', order: 2, title: 'Закрыть P0 «сайт без стилей» после мёржа #130', who: 'agent', status: 'doing', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-15', note: 'После мёржа закрытие пропустили. Запись о закрытии — #162, её вливаете вы.', link: PR(162), linkText: '#162' },
     { id: 'w-glm-143', track: 'tails', order: 3, title: 'Ревью GLM для PR-1 (#143), влитого без ревью', who: 'agent', status: 'taken', planStart: '2026-10-11', planEnd: '2026-10-11', note: '11.10 проверяющие Claude упёрлись в недельный лимит, PR влили без ревью. Ревью на GLM — 16.10, находки — в PR и карточку.', link: PR(143), linkText: '#143' },
     { id: 'w-glm-138', track: 'tails', order: 4, title: 'Ревью #138: в описании PR нет блока ревью', who: 'agent', status: 'taken', planStart: '2026-10-11', planEnd: '2026-10-11', note: 'Вы выбрали ревью тремя проверяющими Claude. В PR следов ревью нет. Проверю 16.10 и, если ревью не было, проведу его на GLM.', link: PR(138), linkText: '#138' },
-    { id: 'w-close-merged', track: 'tails', order: 5, title: 'Закрыть влитое: размытие (#142), приёмник (#137), 5 ошибок PR-1', who: 'agent', status: 'blocked', planStart: '2026-10-12', planEnd: '2026-10-12', note: 'Спросил только 15.10. Ждёт вашего решения и входа в Notion.' },
+    { id: 'w-close-merged', track: 'tails', order: 5, title: 'Закрыть влитое: размытие (#142), приёмник (#137), 5 ошибок PR-1', who: 'agent', status: 'blocked', planStart: '2026-10-12', planEnd: '2026-10-12', note: 'Спросил только 15.10. Ждёт вашего решения.' },
     { id: 'w-watchdog', track: 'tails', order: 6, title: 'Внешний мониторинг (вы выбрали пинг)', who: 'owner', status: 'blocked', planStart: '2026-10-12', planEnd: '2026-10-12', note: 'Инструкция появилась только 15.10 — пункт «Проверить руками». Аккаунт заводите вы.' },
     { id: 'w-main-checkout', track: 'tails', order: 7, title: 'Основной checkout → main', who: 'agent', status: 'blocked', note: 'Папкой пользуются другие сессии: 15.10 там ветка feature/council-phase3 и 18 изменённых файлов. Переключу, когда освободится.' },
     { id: 'w-prov-spec', track: 'providers', order: 1, title: 'Исследование и спека каталога: 20 провайдеров и свой шлюз', who: 'agent', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', note: 'docs/specs/ai-providers-catalog.md, ваши решения от 11.10 внесены.' },
@@ -1688,33 +1708,12 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     { id: 'w-csp2', track: 'secfront', order: 7, milestone: true, title: 'CSP в применяемый режим и порядок заявок на разрешение', who: 'agent', status: 'planned', planStart: '2026-10-21', planEnd: '2026-10-22' },
     { id: 'w-137', track: 'ops', order: 1, milestone: true, title: 'Приёмник отчётов совету (миграция)', who: 'agent', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', link: PR(137), linkText: '#137' },
     { id: 'w-agent', track: 'ops', order: 2, title: 'Агент хоста 1.2.1 и бизнес-метрики', who: 'owner', status: 'done', planStart: '2026-10-11', planEnd: '2026-10-11', start: '2026-10-11', end: '2026-10-11', note: 'Выполнили вы на сервере 11.10.' },
-    { id: 'w-bot', track: 'ops', order: 3, title: 'Перезапуск контейнеров из Telegram-бота (P2)', who: 'agent', status: 'planned', planStart: '2026-10-23', planEnd: '2026-10-24', link: 'https://app.notion.com/p/3f6dd207a8258126902afad40fff5d15', linkText: 'карточка' },
+    { id: 'w-bot', track: 'ops', order: 3, title: 'Перезапуск контейнеров из Telegram-бота (P2)', who: 'agent', status: 'planned', planStart: '2026-10-23', planEnd: '2026-10-24' },
     { id: 'w-deploy-vis', track: 'ops', order: 4, title: 'OPS-DEPLOY-VIS: живой деплой в консоли (вы: в очереди)', who: 'agent', status: 'planned', planStart: '2026-10-27', planEnd: '2026-10-29' },
   ];
-  // PR с 10.10: [номер, открыт (UTC), влит (UTC) или null, заголовок]. Снимок GitHub на 15.10, 23:45.
-  var PRS = [
-    [123, '2026-10-10T02:05Z', '2026-10-10T02:05Z', 'Записи о закрытии P1/P2'], [124, '2026-10-10T09:59Z', '2026-10-10T09:59Z', 'Запись о переносе сорсинга'],
-    [125, '2026-10-10T10:30Z', '2026-10-10T10:31Z', 'rollback-prev: образы закрепляются до сборки'], [126, '2026-10-10T10:30Z', '2026-10-10T10:50Z', 'Ops-консоль: сжатие JS и чанки'],
-    [127, '2026-10-10T11:02Z', '2026-10-10T11:10Z', 'Проверка загрузок после multer'], [128, '2026-10-10T14:18Z', '2026-10-10T14:18Z', 'rollback-prev без «No such image»'],
-    [129, '2026-10-10T18:23Z', '2026-10-10T18:23Z', 'Записи о закрытии ops и CI'], [130, '2026-10-10T18:36Z', '2026-10-11T18:09Z', 'Тест каркаса публичных страниц'],
-    [131, '2026-10-10T18:41Z', '2026-10-11T15:15Z', 'Пин сайдбара админки'], [132, '2026-10-11T07:35Z', '2026-10-11T11:57Z', 'Записи о закрытии 10.10'],
-    [133, '2026-10-11T07:41Z', '2026-10-11T14:01Z', 'Агент 1.2.1: окно логов nginx'], [134, '2026-10-11T07:43Z', '2026-10-11T15:17Z', 'Дедлайн DAMS-хука'],
-    [135, '2026-10-11T07:46Z', '2026-10-11T18:52Z', 'Сборка Android в CI'], [136, '2026-10-11T07:47Z', '2026-10-11T17:31Z', 'Таймаут облачного GLM'],
-    [137, '2026-10-11T08:00Z', '2026-10-11T15:52Z', 'Приёмник отчётов ops-консоли'], [138, '2026-10-11T08:08Z', '2026-10-11T19:02Z', 'Режим рассуждения цели маршрута'],
-    [139, '2026-10-11T08:14Z', '2026-10-12T05:24Z', 'Циклы madge'], [140, '2026-10-11T12:31Z', '2026-10-11T13:56Z', 'Шапка админки'],
-    [141, '2026-10-11T12:32Z', '2026-10-11T13:59Z', 'Потолок кэша сборки'], [142, '2026-10-11T12:59Z', '2026-10-11T14:00Z', 'Размытие панелей админки'],
-    [143, '2026-10-11T13:57Z', '2026-10-11T13:57Z', 'ИИ-провайдеры, PR-1'], [144, '2026-10-13T05:50Z', '2026-10-13T07:07Z', 'Healthcheck Kafka'],
-    [145, '2026-10-13T11:39Z', '2026-10-13T16:42Z', 'Холодная сборка деплоя'], [146, '2026-10-13T11:48Z', '2026-10-13T16:42Z', 'Connect: процесс чужой компании'],
-    [147, '2026-10-13T15:41Z', '2026-10-13T16:42Z', 'Распознавание речи дольше 5 минут'], [148, '2026-10-14T06:02Z', '2026-10-14T06:02Z', 'Документация деплоя'],
-    [149, '2026-10-14T06:59Z', '2026-10-14T09:04Z', 'Правка перевода не теряется'], [150, '2026-10-14T07:08Z', '2026-10-14T09:00Z', 'Облачные полосы воркера совета'],
-    [151, '2026-10-14T12:12Z', '2026-10-14T12:37Z', 'Квота GLM: прогон ждёт сброса'], [152, '2026-10-14T12:16Z', '2026-10-14T13:31Z', 'Чистка старых образов на проде'],
-    [153, '2026-10-14T13:34Z', '2026-10-14T13:47Z', 'Квота не стирает голос «fail»'], [154, '2026-10-14T19:55Z', '2026-10-14T19:55Z', 'Токены Huntflow обновляются сами'],
-    [155, '2026-10-15T06:44Z', '2026-10-15T07:15Z', 'Совет: «Качество» и дрейф, ч. 1'], [156, '2026-10-15T07:21Z', '2026-10-15T12:34Z', 'Совет работает локально без GLM'],
-    [157, '2026-10-15T12:56Z', '2026-10-15T13:16Z', 'Ошибки Huntflow в воркфлоу-чате'], [158, '2026-10-15T13:36Z', '2026-10-15T13:56Z', 'Совет: «Качество» и роли'],
-    [159, '2026-10-15T13:52Z', '2026-10-15T16:39Z', 'Совет: дрейф, ч. 2'], [160, '2026-10-15T19:37Z', '2026-10-15T20:19Z', 'Headroom 0.41 и DAMS через GLM'],
-    [161, '2026-10-15T20:28Z', null, 'CI: отмена устаревших прогонов'], [162, '2026-10-15T20:55Z', null, 'Запись о закрытии P0 (стили)'],
-  ];
-  var OURS = { 130: 1, 131: 1, 132: 1, 133: 1, 134: 1, 135: 1, 136: 1, 137: 1, 138: 1, 139: 1, 140: 1, 141: 1, 142: 1, 143: 1, 162: 1 };
+  // Строки плана из базы и PR из GitHub — page-reports.ts (page.ts ставит его до кода страницы).
+  var REP = window.__oqReports;
+  REP.onPrs(scheduleDash);
   var DB_WORK = {}, DB_WORK_LOADED = false;
   var WORK_FIELDS = ['title', 'track', 'status', 'who', 'session', 'planStart', 'planEnd', 'basePlanEnd', 'start', 'end', 'note', 'linkText'];
   function applyDbWork(snap) {
@@ -1739,20 +1738,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     rebuildTracks();
     scheduleDash();
   }
-  // Строка вшитого плана без строки в базе — снимок страницы 16.10: её статус и даты никто не обновляет, поэтому в
-  // отчёте, Ганте и роадмапе она подписана (линза GLM #214); пока база не ответила — без подписи, чтобы не мигало.
-  var SEED_MARK = ' (снимок 16.10)';
-  function workList() {
-    var by = {};
-    WORK_SEED.forEach(function (w) { by[w.id] = DB_WORK_LOADED ? Object.assign({}, w, { title: w.title + SEED_MARK, seedOnly: true }) : w; });
-    Object.keys(DB_WORK).forEach(function (id) {
-      var seed = WORK_SEED.filter(function (w) { return w.id === id; })[0];
-      by[id] = Object.assign({ id: id }, seed || {}, DB_WORK[id]);
-    });
-    return Object.keys(by).map(function (id) { return by[id]; })
-      .filter(function (w) { return !w.archived && typeof w.title === 'string' && TRACK[w.track]; })
-      .sort(function (a, b) { return TRACK[a.track].i - TRACK[b.track].i || (a.order || 99) - (b.order || 99); });
-  }
+  // Строки — из снимка work выбранного продукта (SHIM); до ответа базы и без связи — пусто, с подписью в графиках.
+  function workList() { return REP.planRows(DB_WORK, WORK_SEED, TRACK); }
+  function noRows(text) { return DB_WORK_LOADED ? text : OFFLINE ? 'Нет связи с базой — данных нет.' : 'Загружаю…'; }
 
   // ── Ход работ: даты (dParse, diffD, planEndOf, lagOf, stateOf — в блоке oq-pure) ─
   function dayOf(iso) { var t = new Date(iso); return isNaN(t) ? null : new Date(t.getFullYear(), t.getMonth(), t.getDate()); }
@@ -1798,19 +1786,26 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function widthOf(host) { return Math.max(300, Math.floor(host.clientWidth || 720)); }
 
+  // cfg.right — вторая шкала справа ({ title, series }): свои значения, своя ось, те же дни и подсказка.
   function lineChart(host, cfg) {
-    var W = widthOf(host), H = 230, m = { l: 34, r: 112, t: 14, b: 28 };
-    var n = cfg.days.length, iw = W - m.l - m.r, ih = H - m.t - m.b, vmax = 1;
+    var R = cfg.right, W = widthOf(host), H = 230, m = { l: 34, r: R ? 40 : 112, t: R ? 24 : 14, b: 28 };
+    var n = cfg.days.length, iw = W - m.l - m.r, ih = H - m.t - m.b, vmax = 1, rmax = 1;
     cfg.series.forEach(function (s) { s.vals.forEach(function (v) { if (v != null && v > vmax) vmax = v; }); });
+    if (R) R.series.forEach(function (s) { s.vals.forEach(function (v) { if (v != null && v > rmax) rmax = v; }); });
     var ymax = niceMax(vmax);
+    rmax = niceMax(rmax);
     function X(i) { return m.l + (n > 1 ? i * iw / (n - 1) : iw / 2); }
     function Y(v) { return m.t + ih - v * ih / ymax; }
+    function YR(v) { return m.t + ih - v * ih / rmax; }
     var o = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(cfg.label) + '">';
     for (var k = 0; k <= 4; k++) {
       var y = Y(ymax * k / 4);
       o += '<line class="gl" x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + y + '" y2="' + y + '"/>' +
-        '<text class="ax" x="' + (m.l - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + nf(ymax * k / 4) + '</text>';
+        '<text class="ax" x="' + (m.l - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + nf(ymax * k / 4) + '</text>' +
+        (R ? '<text class="ax" x="' + (W - m.r + 6) + '" y="' + (y + 4) + '">' + nf(rmax * k / 4, 1) + '</text>' : '');
     }
+    if (R) o += '<text class="ax" x="' + (m.l - 6) + '" y="' + (m.t - 10) + '" text-anchor="end">' + esc(cfg.title || '') + '</text>' +
+      '<text class="ax" x="' + (W - 2) + '" y="' + (m.t - 10) + '" text-anchor="end">' + esc(R.title) + '</text>';
     var step = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(iw / 60))));
     for (var i = 0; i < n; i += step) o += '<text class="ax" x="' + X(i) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(fmtD(cfg.days[i])) + '</text>';
     if (cfg.todayIdx >= 0 && cfg.todayIdx < n) {
@@ -1818,21 +1813,32 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         '<text class="ax" x="' + (X(cfg.todayIdx) + 4) + '" y="' + (m.t + 10) + '">сегодня</text>';
     }
     var ends = [];
-    cfg.series.forEach(function (s) {
+    function draw(s, Yf, dec) {
       var d = '', pen = false, last = -1;
       s.vals.forEach(function (v, j) {
         if (v == null) { pen = false; return; }
-        d += (pen ? 'L' : 'M') + X(j).toFixed(1) + ' ' + Y(v).toFixed(1); pen = true; last = j;
+        d += (pen ? 'L' : 'M') + X(j).toFixed(1) + ' ' + Yf(v).toFixed(1); pen = true; last = j;
       });
       o += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"' + (s.dash ? ' stroke-dasharray="6 4"' : '') + '/>';
       if (last >= 0) {
-        o += '<circle cx="' + X(last) + '" cy="' + Y(s.vals[last]) + '" r="4" fill="' + s.color + '" stroke="var(--surface)" stroke-width="2"/>';
-        ends.push({ x: X(last) + 8, y: Y(s.vals[last]) + 4, t: s.name + ': ' + nf(s.vals[last]) });
+        o += '<circle cx="' + X(last) + '" cy="' + Yf(s.vals[last]) + '" r="4" fill="' + s.color + '" stroke="var(--surface)" stroke-width="2"/>';
+        ends.push({ x: X(last), y: Yf(s.vals[last]) + 4, t: s.name + ': ' + nf(s.vals[last], dec) });
       }
-    });
+    }
+    cfg.series.forEach(function (s) { draw(s, Y, 0); });
+    if (R) R.series.forEach(function (s) { draw(s, YR, 1); });
     ends.sort(function (a, b) { return a.y - b.y; });
     for (var e = 1; e < ends.length; e++) if (ends[e].y - ends[e - 1].y < 15) ends[e].y = ends[e - 1].y + 15;
-    ends.forEach(function (x) { o += '<text class="lbl" x="' + x.x + '" y="' + x.y + '">' + esc(x.t) + '</text>'; });
+    // Ниже оси подписи не уходят (там даты): нижняя прижимается к оси, остальные — вверх с тем же шагом.
+    for (var u = ends.length - 1; u >= 0; u--) {
+      var lim = u === ends.length - 1 ? m.t + ih + 2 : ends[u + 1].y - 15;
+      if (ends[u].y > lim) ends[u].y = lim;
+    }
+    // Подпись у конца линии; у правого края, где ей не хватает места, — слева от точки.
+    ends.forEach(function (x) {
+      var left = x.x + 8 + x.t.length * 6.6 > W;
+      o += '<text class="lbl" x="' + (left ? x.x - 8 : x.x + 8) + '" y="' + x.y + '"' + (left ? ' text-anchor="end"' : '') + '>' + esc(x.t) + '</text>';
+    });
     o += '<line class="xh" x1="0" x2="0" y1="' + m.t + '" y2="' + (m.t + ih) + '" stroke="var(--muted)" stroke-width="1" visibility="hidden"/>' +
       '<rect class="hit" x="' + m.l + '" y="' + m.t + '" width="' + iw + '" height="' + ih + '" fill="transparent"/></svg>';
     host.innerHTML = o;
@@ -1844,40 +1850,52 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       xh.setAttribute('x1', X(j)); xh.setAttribute('x2', X(j)); xh.setAttribute('visibility', 'visible');
       var lines = [fmtD(cfg.days[j])];
       cfg.series.forEach(function (s) { if (s.vals[j] != null) lines.push(s.name + ': ' + nf(s.vals[j])); });
+      if (R) R.series.forEach(function (s) { if (s.vals[j] != null) lines.push(s.name + ': ' + nf(s.vals[j], 1)); });
       if (cfg.extra) lines.push(cfg.extra(j));
       showTip(tipHtml(lines.filter(Boolean).join('\n')), ev.clientX, ev.clientY);
     });
     hit.addEventListener('pointerleave', function () { xh.setAttribute('visibility', 'hidden'); hideTip(); });
   }
 
+  // Правая ось: пунктов за день и скользящая медиана за OWNER_MED_DAYS дней — с прогнозом на OWNER_AHEAD дней вперёд.
+  var OWNER_MED_DAYS = 14, OWNER_AHEAD = 30;
   function ownerChart(t) {
-    var items = allItems(), start = dParse('2026-10-11');
-    items.forEach(function (it) { var a = dParse(it.added); if (a && a < start) start = a; });
+    var items = allItems(), start = REP.earliestDay(items.map(function (it) { return it.added; }), t);
     var days = [];
     for (var d = start; d <= t; d = addD(d, 1)) days.push(d);
-    var added = days.map(function () { return 0; }), done = days.map(function () { return 0; });
+    var past = days.length, added = days.map(function () { return 0; }), done = days.map(function () { return 0; });
     items.forEach(function (it) {
       var ai = Math.max(0, diffD(dParse(it.added) || start, start));
-      for (var i = ai; i < days.length; i++) added[i]++;
+      for (var i = ai; i < past; i++) added[i]++;
       var e = state[it.id] || {};
       if (!isDone(it, e)) return;
-      var di = Math.max(ai, Math.min(days.length - 1, diffD((e.at && dayOf(e.at)) || t, start)));
-      for (var j = di; j < days.length; j++) done[j]++;
+      var di = Math.max(ai, Math.min(past - 1, diffD((e.at && dayOf(e.at)) || t, start)));
+      for (var j = di; j < past; j++) done[j]++;
     });
-    legend('lg-owner', [{ t: 'Поставлено вам', c: 'var(--c1)', cls: 'ln' }, { t: 'Закрыто вами', c: 'var(--c3)', cls: 'ln' }]);
+    var res = { total: added[past - 1] || 0, done: done[past - 1] || 0 };
+    var perDay = REP.dailyCounts(items.map(function (it) { return it.added; }), start, past);
+    var med = REP.medianForecast(perDay, OWNER_MED_DAYS, OWNER_AHEAD);
+    for (var k = 1; k <= OWNER_AHEAD; k++) { days.push(addD(t, k)); added.push(null); done.push(null); perDay.push(null); }
+    legend('lg-owner', [{ t: 'Поставлено вам', c: 'var(--c1)', cls: 'ln' }, { t: 'Закрыто вами', c: 'var(--c3)', cls: 'ln' },
+      { t: 'Поставлено за день (правая ось)', c: 'var(--c5)', cls: 'ln' },
+      { t: 'Медиана за ' + OWNER_MED_DAYS + ' дн. и прогноз на ' + OWNER_AHEAD + ' дн. (правая ось)', c: 'var(--c5)', cls: 'ln dash' }]);
     lineChart(document.getElementById('ch-owner'), {
-      label: 'Очередь владельца по дням: поставлено и закрыто нарастающим итогом',
-      days: days, todayIdx: -1,
+      label: 'Очередь владельца по дням: поставлено и закрыто нарастающим итогом; справа — пунктов за день и медиана с прогнозом на месяц',
+      days: days, todayIdx: past - 1, title: 'всего',
       series: [{ name: 'Поставлено', color: 'var(--c1)', vals: added }, { name: 'Закрыто', color: 'var(--c3)', vals: done }],
-      extra: function (j) { var w = added[j] - done[j]; return w ? 'ждали вас: ' + w : 'очередь пуста'; },
+      right: { title: 'в день', series: [{ name: 'За день', color: 'var(--c5)', vals: perDay }, { name: 'Медиана', color: 'var(--c5)', vals: med, dash: true }] },
+      extra: function (j) {
+        if (j >= past) return 'прогноз: медиана последних ' + OWNER_MED_DAYS + ' дн.';
+        var w = added[j] - done[j]; return w ? 'ждали вас: ' + w : 'очередь пуста';
+      },
     });
-    return { total: added[added.length - 1] || 0, done: done[done.length - 1] || 0 };
+    return res;
   }
 
   function planChart(ws, t) {
     var host = document.getElementById('ch-plan');
     var wp = ws.filter(function (w) { return planEndOf(w); });
-    if (!wp.length) { host.innerHTML = '<p class="empty">Нет задач с планом.</p>'; return; }
+    if (!wp.length) { host.innerHTML = '<p class="empty">' + noRows('Нет задач с планом.') + '</p>'; return; }
     var start = null, end = t;
     wp.forEach(function (w) {
       var ps = dParse(w.planStart) || planEndOf(w), pe = planEndOf(w), s = dParse(w.start);
@@ -1901,30 +1919,52 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
 
   function prChart() {
-    var host = document.getElementById('ch-pr'), now = new Date();
-    var pts = PRS.map(function (p) {
-      var c = new Date(p[1]), mm = p[2] ? new Date(p[2]) : now;
-      return { n: p[0], c: c, h: Math.max(0, (mm - c) / 36e5), open: !p[2], t: p[3], ours: !!OURS[p[0]] };
-    });
-    var W = widthOf(host), H = 230, m = { l: 34, r: 16, t: 14, b: 28 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
-    var d0 = dayOf(pts[0].c.toISOString()), t0 = +d0, t1 = +addD(today0(), 1), hmax = 4;
-    pts.forEach(function (p) { if (+p.c < t0) t0 = +dayOf(p.c.toISOString()); if (p.h > hmax) hmax = p.h; });
-    var ymax = niceMax(hmax);
+    var host = document.getElementById('ch-pr'), now = new Date(), src = REP.prs();
+    // Репозиторий консоли — HR: у другого продукта своего источника PR нет, карточка спрятана.
+    var card = document.getElementById('card-pr');
+    card.hidden = otherProduct() || !!(src && src.none);
+    if (card.hidden) return null;
+    var pr = REP.prPoints(src && Array.isArray(src.prs) ? src.prs : [], now), pts = pr.pts;
+    if (!pts.length) {
+      document.getElementById('lg-pr').innerHTML = '';
+      host.innerHTML = '<p class="empty">' + esc(!src ? 'Загружаю PR из GitHub…' : src.error ? 'Нет данных GitHub: ' + src.error : 'За 7 дней PR не было.') + '</p>';
+      return pr;
+    }
+    // Шкала — до 36 ч (просьба владельца 10.11): PR дольше (например, ci #456 на неделю) не сжимает остальные точки в пол,
+    // а стоит треугольником на верхней линии с подписью «#N · X ч»; подсказка — с настоящим числом.
+    var sc = REP.prCap(pts, niceMax), ymax = sc.ymax;
+    var W = widthOf(host), H = 230, m = { l: 34, r: 16, t: sc.over ? 36 : 14, b: 28 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+    var d0 = dayOf(pts[0].c.toISOString()), t0 = +d0, t1 = +addD(today0(), 1);
+    pts.forEach(function (p) { if (+p.c < t0) t0 = +dayOf(p.c.toISOString()); });
     function X(t) { return m.l + (t - t0) * iw / (t1 - t0); }
-    function Y(h) { return m.t + ih - h * ih / ymax; }
-    var o = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Время от открытия PR до мёржа, часы">';
+    function Y(h) { return m.t + ih - Math.min(h, ymax) * ih / ymax; }
+    var o = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Время от открытия PR до мёржа, часы; шкала до ' + sc.cap + ' ч, дольше — на верхней линии">';
     for (var k = 0; k <= 4; k++) {
       var y = Y(ymax * k / 4);
       o += '<line class="gl" x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + y + '" y2="' + y + '"/><text class="ax" x="' + (m.l - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + nf(ymax * k / 4) + '</text>';
     }
-    o += '<text class="ax" x="' + m.l + '" y="' + (m.t - 3) + '">часы</text>';
+    o += '<text class="ax" x="2" y="' + (sc.over ? 10 : m.t - 3) + '">часы</text>';
+    if (sc.over) o += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + m.t + '" y2="' + m.t + '" stroke="var(--late)" stroke-width="1.5"/>';
     var nd = Math.round((t1 - t0) / DAYMS), stepD = Math.max(1, Math.ceil(nd / Math.max(2, Math.floor(iw / 60))));
     for (var i = 0; i <= nd; i += stepD) { var dd = addD(new Date(t0), i); o += '<text class="ax" x="' + X(+dd) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(fmtD(dd)) + '</text>'; }
     if (ymax >= 24) o += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + Y(24) + '" y2="' + Y(24) + '" stroke="var(--late)" stroke-dasharray="4 4"/><text class="ax" x="' + (W - m.r) + '" y="' + (Y(24) - 4) + '" text-anchor="end">сутки</text>';
-    pts.forEach(function (p) {
+    // Подписи выбросов — в два ряда над верхней линией; не влезла — без подписи, число остаётся в подсказке.
+    var rows = [[], []];
+    pts.slice().sort(function (a, b) { return a.c - b.c; }).forEach(function (p) {
       p.x = X(+p.c); p.y = Y(p.h);
-      var col = p.ours ? 'var(--c2)' : 'var(--c1)';
-      o += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="5" fill="' + (p.open ? 'var(--surface)' : col) + '" stroke="' + (p.open ? col : 'var(--surface)') + '" stroke-width="2"/>';
+      var col = p.ours ? 'var(--c2)' : 'var(--c1)', fill = p.open ? 'var(--surface)' : col, stroke = p.open ? col : 'var(--surface)';
+      if (p.h <= ymax) {
+        o += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="5" fill="' + fill + '" stroke="' + stroke + '" stroke-width="2"/>';
+        return;
+      }
+      o += '<path d="M' + p.x.toFixed(1) + ' ' + (p.y - 6).toFixed(1) + 'l6 10h-12z" fill="' + fill + '" stroke="' + (p.open ? col : 'var(--surface)') + '" stroke-width="2" stroke-linejoin="round"/>';
+      var t = '#' + p.n + ' · ' + nf(p.h, 0) + ' ч', w = t.length * 6.2, cx = Math.min(Math.max(p.x, m.l + w / 2), W - m.r - w / 2);
+      [0, 1].some(function (r) {
+        if (!rows[r].every(function (x) { return Math.abs(x - cx) >= w + 6; })) return false;
+        rows[r].push(cx);
+        o += '<text class="lbl" x="' + cx.toFixed(1) + '" y="' + (m.t - 9 - r * 13) + '" text-anchor="middle">' + esc(t) + '</text>';
+        return true;
+      });
     });
     o += '<rect class="hit" x="' + m.l + '" y="' + m.t + '" width="' + iw + '" height="' + ih + '" fill="transparent"/></svg>';
     host.innerHTML = o;
@@ -1936,10 +1976,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       showTip(tipHtml(['#' + best.n + ' — ' + best.t, 'открыт ' + fmtDT(best.c), (best.open ? 'ещё открыт, ждёт ' : 'ждал мёржа ') + nf(best.h, 1) + ' ч', best.ours ? 'из этой очереди' : 'другая сессия'].join('\n')), ev.clientX, ev.clientY);
     });
     hit.addEventListener('pointerleave', hideTip);
-    legend('lg-pr', [{ t: 'PR из этой очереди', c: 'var(--c2)', cls: 'dot' }, { t: 'PR других сессий', c: 'var(--c1)', cls: 'dot' }]);
-    var recent = pts.filter(function (p) { return !p.open && now - p.c < 7 * DAYMS; }).map(function (p) { return p.h; }).sort(function (a, b) { return a - b; });
-    var med = recent.length ? (recent.length % 2 ? recent[(recent.length - 1) / 2] : (recent[recent.length / 2 - 1] + recent[recent.length / 2]) / 2) : 0;
-    return { merged7: recent.length, median: med };
+    legend('lg-pr', [{ t: 'PR из этой очереди', c: 'var(--c2)', cls: 'dot' }, { t: 'PR других сессий', c: 'var(--c1)', cls: 'dot' }]
+      .concat(sc.over ? [{ t: '▲ дольше ' + sc.cap + ' ч — на верхней линии, в подписи — сколько на деле: ' + sc.over, c: 'var(--late)', cls: 'ln' }] : []));
+    return pr;
   }
 
   function statusChart(ws) {
@@ -1948,7 +1987,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       var d = its.filter(function (it) { return isDone(it, state[it.id] || {}); }).length;
       return { name: k[1], c: { done: d, doing: 0, blocked: its.length - d, planned: 0 }, owner: true };
     });
-    TRACKS.forEach(function (tr) {
+    REP.tracksIn(TRACKS, ws).forEach(function (tr) {
       var c = { done: 0, doing: 0, blocked: 0, planned: 0 };
       ws.forEach(function (w) { if (w.track === tr.id) c[stateOf(w)]++; });
       rows.push({ name: 'Агенты: ' + tr.name, c: c });
@@ -2003,7 +2042,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
 
   function lagChart(ws, t) {
     var g = lagGroups(ws, t), all = g.open.concat(g.closed), host = document.getElementById('ch-lag');
-    if (!all.length) { host.innerHTML = '<p class="empty">Все задачи с планом идут в срок (' + g.onTime + ').</p>'; return { late: 0, days: 0, closedLate: 0 }; }
+    if (!all.length) { host.innerHTML = '<p class="empty">' + (ws.length ? 'Все задачи с планом идут в срок (' + g.onTime + ').' : noRows('Нет задач с планом.')) + '</p>'; return { late: 0, days: 0, closedLate: 0 }; }
     // Одна шкала на оба списка — полосы сравнимы между собой.
     var max = 1, days = 0, closedLate = 0;
     all.forEach(function (r) { if (Math.abs(r.lag) > max) max = Math.abs(r.lag); });
@@ -2080,7 +2119,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
 
   function gantt(ws, t) {
     var host = document.getElementById('gantt'), dated = ws.filter(function (w) { return dParse(w.planStart) || dParse(w.planEnd) || dParse(w.start); });
-    if (!dated.length) { host.innerHTML = '<p class="empty" style="padding:10px">Нет задач с датами.</p>'; return; }
+    if (!dated.length) { host.innerHTML = '<p class="empty" style="padding:10px">' + noRows('Нет задач с датами.') + '</p>'; return; }
     var a = t, b = t;
     dated.forEach(function (w) { ['planStart', 'planEnd', 'start', 'end', 'basePlanEnd'].forEach(function (k) { var d = dParse(w[k]); if (d && d < a) a = d; if (d && d > b) b = d; }); });
     a = addD(a, -1); b = addD(b, 2);
@@ -2141,7 +2180,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     }
     var now = '<span class="rm-now" style="left:' + P(t, true) + '"' + tipAttr(['Сегодня', fmtD(t)]) + '></span>';
     var o = '<div class="rm-row rm-head"><div class="rm-name">Неделя</div><div class="rm-lane">' + heads + '</div></div>';
-    TRACKS.forEach(function (tr) {
+    REP.tracksIn(TRACKS, ws).forEach(function (tr) {
       var list = ws.filter(function (w) { return w.track === tr.id; }), lo = null, hi = null;
       list.forEach(function (w) { ['planStart', 'start'].forEach(function (k) { var d = dParse(w[k]); if (d && (!lo || d < lo)) lo = d; }); ['planEnd', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && (!hi || d > hi)) hi = d; }); });
       var done = list.filter(function (w) { return w.status === 'done'; }).length;
@@ -2168,7 +2207,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
       o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small></span></div><div class="rm-lane">' + lane + now + '</div></div>';
     });
-    host.innerHTML = o;
+    host.innerHTML = ws.length ? o : '<p class="empty" style="padding:10px">' + noRows('Нет задач.') + '</p>';
   }
 
   function kpis(owner, ws, lag, pr) {
@@ -2179,9 +2218,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       [owner.done + ' из ' + owner.total, 'ваша очередь: закрыто · ждут вас ' + (owner.total - owner.done)],
       [c.done + ' из ' + ws.length, 'задачи агентов: сделано · в работе ' + c.doing + ' · ждут ' + c.blocked + ' · в плане ' + c.planned],
       [String(lag.late), 'просрочено сейчас · в сумме +' + lag.days + ' дн. · ещё ' + lag.closedLate + ' закрыто с опозданием'],
-      [nf(pr.median, 1) + ' ч', 'медиана ожидания мёржа · PR за 7 дней: ' + pr.merged7],
+      pr ? [nf(pr.median, 1) + ' ч', 'медиана ожидания мёржа · PR за 7 дней: ' + pr.merged7] : null,
       [msDone + ' из ' + ms.length, 'вех достигнуто'],
-    ];
+    ].filter(Boolean);
     var st = CARD_STATS, cp = cardsInPlan(ws);
     if (st) {
       var b = st.bugs, k = st.tasks;
@@ -2193,6 +2232,39 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     }
     var ready = dashReady();
     document.getElementById('kpis').innerHTML = tiles.map(function (x) { return '<div class="kpi"><b>' + esc(ready ? x[0] : '…') + '</b><span>' + esc(x[1]) + '</span></div>'; }).join('');
+  }
+
+  // ── Ход работ: продукт ──────────────────────────────────────────────────────
+  // Выбор продукта вверху (page-products.ts, когда продуктов два и больше) отбирает строки всех отчётов в подмене базы.
+  // Здесь — подпись у каждой карточки, какой продукт она показывает, и при «Все продукты» — разбивка по продуктам.
+  // Один продукт или нет справочника — ни подписей, ни разбивки (страница как раньше). PR — только репозиторий HR.
+  var HR_ONLY = { 'card-pr': 1 };
+  function productNames() {
+    var sel = document.querySelector('#head-bar .oq-product-pick'), by = null;
+    if (sel) Array.prototype.forEach.call(sel.options, function (o) { if (o.value) (by = by || {})[o.value] = o.textContent; });
+    return by;
+  }
+  function itemProduct(it) { return window.__oqProductOf ? window.__oqProductOf(it.id) : 'hr-helper'; }
+  function paintScope(ws) {
+    var names = productNames(), view = window.__oqViewOf ? window.__oqViewOf() : '', hr = names && (names['hr-helper'] || 'HR Helper');
+    document.querySelectorAll('#agents .card').forEach(function (card) {
+      var chip = card.querySelector('.scope'), h = card.querySelector('h3');
+      if (!names) { if (chip) chip.remove(); return; }
+      if (!chip) { chip = document.createElement('span'); chip.className = 'scope'; h.parentNode.insertBefore(chip, h.nextSibling); }
+      chip.textContent = HR_ONLY[card.id] ? 'Продукт: ' + hr + ' (PR — только его репозиторий)' : 'Продукт: ' + (view ? names[view] || view : 'все');
+    });
+    var split = document.getElementById('dash-split');
+    split.hidden = !names || !!view;
+    if (split.hidden) return;
+    var docs = window.__oqDocs ? window.__oqDocs('work') : [], wp = {};
+    docs.forEach(function (d) { wp[d.id] = d.product; });
+    var its = allItems(), all = REP.splitByProduct(its, itemProduct);
+    var open = REP.splitByProduct(its.filter(function (it) { return !isDone(it, state[it.id] || {}); }), itemProduct);
+    var work = REP.splitByProduct(ws, function (w) { return wp[w.id]; });
+    var slugs = Object.keys(names).concat(Object.keys(all), Object.keys(work)).filter(function (s, i, a) { return a.indexOf(s) === i && (all[s] || work[s]); });
+    split.textContent = 'По продуктам: ' + (slugs.length ? slugs.map(function (s) {
+      return (names[s] || s) + ' — вам ' + (all[s] || 0) + ', ждут ' + (open[s] || 0) + '; задач агентов ' + (work[s] || 0);
+    }).join(' · ') : 'пока пусто') + '. Один продукт — выбор вверху страницы.';
   }
 
   var dashQueued = false, chartsQueued = false, lastW = 0;
@@ -2209,6 +2281,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { r.owner = ownerChart(t); } catch (e) { document.getElementById('ch-owner').textContent = 'График не построился: ' + e.message; }
     try { planChart(ws, t); } catch (e) { document.getElementById('ch-plan').textContent = 'График не построился: ' + e.message; }
     try { cardsChart(ws); } catch (e) { document.getElementById('ch-plan-cards').textContent = 'График не построился: ' + e.message; }
+    REP.loadPrs();
     try { r.pr = prChart(); } catch (e) { document.getElementById('ch-pr').textContent = 'График не построился: ' + e.message; }
     return r;
   }
@@ -2221,8 +2294,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { gantt(ws, t); } catch (e) { document.getElementById('gantt').textContent = 'Диаграмма не построилась: ' + e.message; }
     try { roadmap(ws, t); } catch (e) { document.getElementById('roadmap').textContent = 'Роадмап не построился: ' + e.message; }
     try { kpis(c.owner, ws, lag, c.pr); } catch (e) { /* плитки необязательны */ }
+    try { paintScope(ws); } catch (e) { /* подписи продукта необязательны */ }
     try { jumpDash(c, ws, lag); } catch (e) { /* числа в шапке необязательны */ }
-    document.getElementById('dash-asof').textContent = dashStale() ? 'снимок 16.10 — нет связи'
+    document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
       : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
   }
   if (window.ResizeObserver) {
@@ -2275,6 +2349,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function syncBar() { rootEl.style.setProperty('--bar-h', Math.round(headBar.getBoundingClientRect().height) + 'px'); queueCols(); }
   if (window.ResizeObserver) new ResizeObserver(syncBar).observe(headBar);
   syncBar();
+  // Выбор продукта встаёт в шапку после ответа /products (page-products.ts): «Ход работ» перерисуется с подписями продукта.
+  if (window.MutationObserver) new MutationObserver(scheduleDash).observe(headBar, { childList: true });
   // «Как пользоваться» на телефоне свёрнута: первым экраном — данные очереди (раскрывается касанием).
   if (isPhone()) document.getElementById('howto-d').open = false;
 
@@ -2303,13 +2379,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       plan: [done + ' из ' + ws.length + ' готово'],
       cards: [cards ? 'карточек: ' + cards : ''],
       lag: [lag.late ? 'просрочено: ' + lag.late : 'в срок', lag.late > 0],
-      pr: [c.pr.merged7 ? 'медиана ' + nf(c.pr.median, 1) + ' ч' : ''],
+      pr: [c.pr && c.pr.merged7 ? 'медиана ' + nf(c.pr.median, 1) + ' ч' : ''],
       report: [ws.length + ' ' + plural(ws.length, 'задача', 'задачи', 'задач')],
     };
     jumpD.querySelectorAll('a[data-dash]').forEach(function (a) {
       var x = v[a.dataset.dash] || [''], cnt = a.querySelector('.jump-c');
       cnt.textContent = dashReady() ? x[0] : '…'; cnt.classList.toggle('hot', dashReady() && !!x[1]);
-      if (a.dataset.dash === 'cards') a.parentElement.hidden = document.getElementById('plan-cards').hidden;
+      if (a.dataset.dash === 'cards' || a.dataset.dash === 'pr') a.parentElement.hidden = document.getElementById(a.dataset.dash === 'pr' ? 'card-pr' : 'plan-cards').hidden;
     });
   }
   function closeJumps(except) { document.querySelectorAll('details.jump[open]').forEach(function (d) { if (d !== except) d.open = false; }); }

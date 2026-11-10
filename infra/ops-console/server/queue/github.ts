@@ -321,6 +321,21 @@ async function call(method: 'GET' | 'POST' | 'PUT', path: string, token: string,
   return res
 }
 
+/**
+ * Чтение GraphQL репозитория консоли токеном мёржей — для графика PR на /queue (queue/prs.ts). REST /pulls несёт
+ * описания и объекты репозиториев (~20 КБ на PR, сотня — за потолком 1 МБ), GraphQL — только запрошенные поля.
+ * Переменные owner и name — из настроек консоли.
+ */
+export async function githubGraphql(query: string, variables: Record<string, unknown>): Promise<{ repo: string; data: unknown }> {
+  const { repo, token } = await settings()
+  const [owner, name] = repo.split('/')
+  const res = await call('POST', '/graphql', token, { query, variables: { ...variables, owner, name } })
+  if (res.status !== 200) throw apiError(503, `GitHub GraphQL ответил ${res.status}`)
+  const j = JSON.parse(res.text) as { data?: unknown; errors?: Array<{ message?: string }> }
+  if (j.errors?.length) throw apiError(503, `GitHub GraphQL: ${String(j.errors[0]?.message ?? 'ошибка').slice(0, 200)}`)
+  return { repo, data: j.data }
+}
+
 async function deployRunning(repo: string, workflow: string, token: string): Promise<boolean> {
   const res = await call('GET', `/repos/${repo}/actions/workflows/${workflow}/runs?branch=main&per_page=5`, token)
   if (res.status !== 200) return false
