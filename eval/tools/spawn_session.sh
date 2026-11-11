@@ -42,6 +42,7 @@ CLOSE="${SPAWN_AUTOCLOSE:-on}"
 DELAY="${SPAWN_CLOSE_DELAY:-10}"  # с отсчёта перед закрытием окна (Enter — оставить)
 case "$DELAY" in ''|*[!0-9]*) DELAY=10 ;; esac
 SPAWNED_LINE=""  # линия последней открытой сессии (bash 3.2: из функции — только через глобальную)
+SPAWNED_TTY=""   # tty её окна Terminal — сторожу аргументом, не из записи линии (папку линий могут править агенты)
 ORDER="coord release backend frontend plan boards"
 
 die() { echo "spawn_session: $*" >&2; exit 2; }
@@ -165,6 +166,7 @@ spawn_one() {
   local role="$1" msg genome="" dir launcher cmd lineage out wid tty
   lineage="$(child_lineage)"
   SPAWNED_LINE="$lineage"
+  SPAWNED_TTY=""
   msg="$(first_message "$role" "$lineage")"
   if [ -n "$role" ]; then
     genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$role.json")"
@@ -241,6 +243,7 @@ spawn_one() {
     case "$wid" in *[!0-9]*|"") wid="" ;; esac
     case "$tty" in /dev/tty*) ;; *) tty="" ;; esac
     record "$lineage" terminal "$wid" "$tty" "$role"
+    SPAWNED_TTY="$tty"
   fi
   echo "открыто: ${role:-наследник} → $launcher"
 }
@@ -302,7 +305,7 @@ elif [ -n "$HANDOFF" ]; then
         "предшественник останется, уберёт reap_sessions.sh" >&2
     else
       python3 -I "$TOOLS/lineage.py" retire --child "$SPAWNED_LINE" ${ROLE:+--role "$ROLE"} \
-        --guard "$CWD" --guard "$GUARD_TAIBE" \
+        --guard "$CWD" --guard "$GUARD_TAIBE" --succ-tty "$SPAWNED_TTY" \
         || echo "# spawn_session: сторож не запущен — предшественник останется, уберёт reap_sessions.sh" >&2
     fi
   fi

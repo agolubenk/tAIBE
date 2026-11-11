@@ -185,7 +185,7 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0, ctl=None):
             # он мог упасть (и в ветках «ушёл сам»).
             procs = sx.procs()
             why = successor_problem(sx, procs, p, procs.get(s.pid), a, child)
-            return (None, why) if why else successor_sid(procs, procs.get(s.pid), child)
+            return (None, why) if why else successor_sid(procs, procs.get(s.pid), ctl.get("tty"))
 
         return hand_control(ctl["dirs"], ctl.get("sid"), succ, child.rsplit(".", 1)[-1], log)
 
@@ -277,8 +277,10 @@ def cmd_retire(sx, a):
         print("retire: запуск не из сессии claude — снимать некого")
         return 0
     logpath = ldir() / f"{a.child}.retire.log"
-    # sessionId — сейчас, пока предшественник жив: после его ухода запись реестра исчезает.
-    ctl = {"dirs": a.guard, "sid": session_id(p)} if getattr(a, "guard", None) else None
+    # sessionId — сейчас, пока предшественник жив: после его ухода запись реестра исчезает. tty окна наследника —
+    # из аргумента spawn_session.sh, не из записи линии: папку линий правят агенты (GLM #120, находка 1).
+    ctl = ({"dirs": a.guard, "sid": session_id(p), "tty": getattr(a, "succ_tty", "") or ""}
+           if getattr(a, "guard", None) else None)
     if a.foreground:
         return watch(sx, p, parent, a.child, a.role, a.timeout, make_log(sys.stdout), a.poll, ctl)
     if not detach(logpath):
