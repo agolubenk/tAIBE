@@ -9,23 +9,29 @@ merge-guard закрывает от записи агентами. Наслед�
 окна (вложенный claude, переподвешенный к launchd, не пройдёт). Папка списка — корень репозитория по .git (worktree —
 через commondir), и только если хук, режущий путь по «/worktrees/», прочтёт ту же.
 
-Все папки или ни одной, и при любом сомнении — ни одной (fail-closed): предшественник не снимается, Контроль не
-теряется, владельцу остаётся прежний путь — s-пункт. Сомнение — список испорчен, это ссылка или файл с жёсткими
-ссылками, папку не свести к корню репозитория, sessionId предшественника не известен, tty окна не передан, блокировка
-не взята за LOCK_WAIT, остался журнал прерванной передачи, наследник не подтвердился после записи. Сбой записи в любой
-папке — уже записанные возвращаются к прежнему тексту. Сторож убит между записями — журнал `guard-handover.intent.json`
-остаётся, и следующая передача отказывает, пока человек не сверит списки и не удалит его. Блокировка и журнал — в
-`~/.claude/sessions/lineage-guard/` (state_dir): реестр сессий хук закрывает от агентов, подложить журнал и заблокировать
-передачу агент не может. Журнал только сигнал: содержимого для записи в нём нет.
-Прежний текст каждой папки — в `merge-guard.local.json.before-handover` (одна копия, перезаписывается).
+Два прохода (GLM #120 104b29f96, F1/S2): сначала предшественник снимается со всех списков (`mid`), потом наследник
+вписывается во все (`new`); откат — в обратном порядке. Сторож, убитый на любой записи, оставляет Контроль не больше
+чем у одной из двух сессий: в худшем случае в одной папке Контроля нет ни у кого (хук отказывает громко), а не у обеих
+молча. Каждая запись требует ровно ожидаемый прежний текст: правку владельца между проходами не затираем.
+
+При любом сомнении — ни одной записи (fail-closed): предшественник не снимается, владельцу остаётся s-пункт. Сомнение —
+список испорчен, ссылка или файл с жёсткими ссылками, папку не свести к корню репозитория, папка `.claude` или список
+не те, что при старте сторожа (пины: dev, inode, время рождения — подмена `mv .claude …; mkdir .claude`, удаление или
+появление списка), наследник уже в списке рядом с предшественником, sessionId предшественника не известен, tty окна не
+передан, блокировка не взята за LOCK_WAIT, остался несогласованный журнал прерванной передачи, наследник не
+подтвердился после записи. Папка `.claude` удерживается открытой от чтения до конца: временный файл, rename и fsync —
+через её fd. Журнал `guard-handover.intent.json` пишется до первой записи списка и снимается после полной передачи или
+полного отката; сторож убит — журнал остаётся, и следующая передача идёт, только если все списки в одном конце (все
+`old` или все `new`). Блокировка и журнал — в `~/.claude/sessions/lineage-guard/` (state_dir): реестр сессий хук
+закрывает от агентов. Прежний текст каждой папки — в `merge-guard.local.json.before-handover` (одна копия).
 """
 import errno
 import fcntl
 import json
 import os
 import re
+import secrets
 import stat
-import tempfile
 import time
 from pathlib import Path
 
@@ -119,6 +125,50 @@ def guard_dirs(dirs):
 
 
 MISSING = object()  # списка нет (нет файла или папки .claude) — папку пропускаем
+ABSENT = "absent"  # пин: при старте сторожа этого не было
+TMP = ".tmp-handover"
+
+
+def pin_of(st):
+    """Пин файла или папки: (dev, inode, время рождения). Время рождения ловит inode, выданный заново после удаления,
+    и не меняется от записи других файлов папки (ctime менялся бы). Нет st_birthtime (не macOS) — ctime в нс."""
+    born = getattr(st, "st_birthtime", None)
+    return (st.st_dev, st.st_ino, born if born is not None else st.st_ctime_ns)
+
+
+def pins_now(root):
+    """(пин .claude, пин списка) папки root сейчас; ABSENT — нет; None — сомнение (ссылка, нет прав)."""
+    try:
+        dfd = open_dir(Path(root) / ".claude")
+    except FileNotFoundError:
+        return ABSENT, ABSENT
+    except OSError:
+        return None
+    try:
+        try:
+            st = os.stat(GUARD.name, dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            return pin_of(os.fstat(dfd)), ABSENT
+        except OSError:
+            return None
+        return pin_of(os.fstat(dfd)), pin_of(st)
+    finally:
+        os.close(dfd)
+
+
+def take_pins(dirs):
+    """Снимок папок списка в доверенный момент — при старте сторожа (cmd_retire), до ожидания квитанции (GLM #120
+    104b29f96, S1): {корень: (пин .claude, пин списка)}; None — папку не свести к корню или она уже сомнительна."""
+    roots = guard_dirs(dirs)
+    if roots is None:
+        return None
+    out = {}
+    for r in roots:
+        p = pins_now(r)
+        if p is None:
+            return None
+        out[str(r)] = p
+    return out
 
 
 def open_dir(path):
@@ -138,9 +188,8 @@ def open_dir(path):
 
 
 def read_control(f):
-    """(текст, документ, список control, права) — одним чтением; путь пройден без перехода по ссылкам, и сам файл —
-    не ссылка. MISSING — файла нет; None — сомнение: испорчен, ссылка на любом звене пути или несколько жёстких ссылок
-    (rename заменил бы не тот файл, что читает хук). Предел MAX_LIST — самим чтением: файл мог вырасти после fstat."""
+    """read_list по пути: путь пройден без перехода по ссылкам; к ответу добавлен пин папки. MISSING — нет файла или
+    папки; None — сомнение."""
     try:
         dfd = open_dir(Path(f).parent)
     except FileNotFoundError:
@@ -148,13 +197,22 @@ def read_control(f):
     except OSError:
         return None
     try:
-        fd = os.open(Path(f).name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+        got = read_list(dfd, Path(f).name)
+        return got + (pin_of(os.fstat(dfd)),) if isinstance(got, tuple) else got
+    finally:
+        os.close(dfd)
+
+
+def read_list(dfd, name=GUARD.name):
+    """(текст, документ, список control, права, пин файла) — одним чтением в открытой папке dfd; сам файл — не
+    ссылка. MISSING — файла нет; None — сомнение: испорчен, ссылка или несколько жёстких ссылок (rename заменил бы не
+    тот файл, что читает хук). Предел MAX_LIST — самим чтением: файл мог вырасти после fstat."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
     except FileNotFoundError:
         return MISSING
     except OSError:
         return None
-    finally:
-        os.close(dfd)
     try:
         with os.fdopen(fd, "rb") as fh:
             st = os.fstat(fh.fileno())
