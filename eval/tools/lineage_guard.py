@@ -267,8 +267,11 @@ def locked_handover(dirs, pred_sid, succ, suffix, log, pins):
     intent = state_dir() / INTENT
     if os.path.lexists(intent):
         if not settled(intent, pins):
-            log(f"Контроль: остался журнал прерванной передачи {intent}: списки не в одном конце или папки не те — "
-                "концы и что делать — в строке «передача застряла» журнала сторожа; " + KEEP)
+            # Сторож, убитый на записи, строку «передача застряла» не оставил — её пишет следующий, по журналу.
+            j = read_journal(intent)
+            why = stuck({"from": j[0], "to": j[1], "files": j[2]}, j[4]) if j else "журнал не прочесть"
+            log(f"Контроль: остался журнал прерванной передачи {intent}: списки не в одном конце или папки не те; "
+                f"{why}; {KEEP}")
             return False
         log(f"Контроль: журнал прерванной передачи {intent} — списки согласованы, снимаю его")
         drop_intent(intent, log)  # не удалился — не беда: новый журнал ляжет поверх (GLM #120 104b29f96, minor 5)
@@ -373,23 +376,31 @@ def stuck(j, phase):
             "держат передачу закрытой")
 
 
-def settled(intent, pins):
-    """Журнал прерванной передачи можно снять (GLM #120 104b29f96, M7): все его списки в одном конце — у всех
-    предшественник без наследника (old) или у всех наследник без предшественника (new), — и папка каждого та же, что в
-    журнале и при старте этого сторожа (журнал с чужими пинами не согласован). mid — не конец. Журнал в state_dir:
-    агенты его не пишут."""
+def read_journal(intent):
+    """(from, to, files, dirpins, phase) журнала передачи; None — не прочесть или не того вида."""
     try:
         with open(intent, encoding="utf-8") as fh:
             j = json.loads(fh.read(MAX_LIST))
         frm, to, files, dps = str(j["from"]), str(j["to"]), j["files"], j["dirpins"]
     except (OSError, ValueError, KeyError, TypeError):
-        return False
+        return None
     if len(frm) < 8 or len(to) < 8 or not isinstance(files, list) or not files or not isinstance(dps, list) \
             or len(dps) != len(files):
+        return None
+    return frm, to, [str(f) for f in files], dps, str(j.get("phase") or "")
+
+
+def settled(intent, pins):
+    """Журнал прерванной передачи можно снять (GLM #120 104b29f96, M7): все его списки в одном конце — у всех
+    предшественник без наследника (old) или у всех наследник без предшественника (new), — и папка каждого та же, что в
+    журнале и при старте этого сторожа (журнал с чужими пинами не согласован). mid — не конец. Журнал в state_dir:
+    агенты его не пишут."""
+    j = read_journal(intent)
+    if j is None:
         return False
+    frm, to, files, dps, _ = j
     ends = set()
     for f, dp in zip(files, dps):
-        f = str(f)
         pin = (pins or {}).get(os.path.dirname(os.path.dirname(f)))
         got = read_control(f)
         if not isinstance(got, tuple) or not isinstance(dp, list) or pin is None or tuple(dp) != got[5] \

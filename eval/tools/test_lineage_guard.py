@@ -599,6 +599,9 @@ class HandoverTest(Base):
                     ends = {tuple(self.get(d)["control"]) for d in (self.hr, self.tb)}
                     nxt = self.hc([self.hr, self.tb], PRED, (SUCC, None), "ef56", self.log)
                     self.assertEqual(nxt, len(ends) == 1 and ends != {()}, (ends, self.lines[-1]))
+                    if not nxt:  # убитый сторож строку о концах не оставил — её пишет следующий, по журналу
+                        self.assertIn("Допустимые концы", self.lines[-1])
+                        self.assertIn(PRED[:8], self.lines[-1])
 
     def test_owner_edit_between_passes_is_kept(self):
         real = G.write_atomic
