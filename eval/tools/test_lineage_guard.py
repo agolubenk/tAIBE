@@ -1,4 +1,5 @@
 """Тесты передачи Контроля сторожем retire (lineage_guard.py, IS-233). Запуск: python3 eval/tools/test_lineage_guard.py"""
+import io
 import json
 import os
 import sys
@@ -313,6 +314,44 @@ class HandoverTest(Base):
         self.assertTrue((G.state_dir() / G.INTENT).exists(), "расхождение осталось — журнал сигналит следующей передаче")
         self.assertIn("откат не полон", self.lines[-1])
         self.assertEqual(json.loads((self.hr / ".claude" / G.BACKUP).read_text())["control"], [PRED])
+
+    def test_failed_rollback_through_watch_keeps_predecessor(self):
+        # GLM #120 7fb2287d2, находка 9b: неполный откат на пути сторожа — rc 3, предшественник жив, журнал остался.
+        real = G.write_atomic
+        hr, tb = (self.hr / G.GUARD).resolve(), (self.tb / G.GUARD).resolve()
+
+        def broken(f, text, mode):
+            target = Path(f).resolve() if Path(f).name == G.GUARD.name else None
+            if target == tb and SUCC in text:
+                raise OSError("disk full")
+            if target == hr and SUCC not in text:
+                raise OSError("откат тоже не пишется")
+            return real(f, text, mode)
+
+        with mock.patch.object(G, "write_atomic", broken):
+            self.assertEqual(self.run_watch(), 3, self.lines)
+        self.assertIn(300, self.sx.p, "Контроль не передан — предшественник должен остаться")
+        self.assertNotIn((300, 15), self.sx.sent)
+        self.assertTrue((G.state_dir() / G.INTENT).exists(), "расхождение осталось — журнал сигналит следующей передаче")
+        self.assertTrue(any("откат не полон" in m for m in self.lines), self.lines)
+        self.assertEqual(self.get(self.tb)["control"], [PRED])
+
+    @mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT})
+    def test_cli_retire_with_foreign_registry_start_keeps_predecessor(self):
+        # GLM #120 7fb2287d2, находка 9a: настоящий session_id(p) = None (запись реестра 300 — другого старта
+        # процесса) через cmd_retire, без подмены sid в ctl: Контроль не передаётся, предшественник жив.
+        self.sess(300, PRED, start="Thu Nov  5 09:00:00 2026")
+        sx = FakeSys(tree(), env={400: CHILD, 300: PARENT})
+        self.sx = sx
+        self.assertIsNone(G.session_id(sx.p[300]))
+        self.ack()
+        args = ["retire", "--child", CHILD, "--guard", str(self.hr), "--guard", str(self.tb),
+                "--succ-tty", "/dev/ttys006", "--foreground"]
+        with mock.patch.object(LR.os, "getpid", return_value=302), mock.patch("sys.stdout", io.StringIO()) as out:
+            rc = L.main(args, sx=sx)
+        self.assertEqual(rc, 3, out.getvalue())
+        self.assert_untouched()
+        self.assertNotIn((300, 15), sx.sent)
 
     def test_successor_already_listed_is_not_doubled(self):
         self.put(self.hr, [SUCC, PRED])
