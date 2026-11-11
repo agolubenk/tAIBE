@@ -7,7 +7,7 @@ import sys
 
 from lineage import (IDLE_WAIT, SHELLS, TAP_WAIT, TERM_WAIT, ancestor_claude, argv0, descendants, die, doomed,
                      group_of, host, ldir, make_log, norm, read_json, same, session_line, stamp, valid_line)
-from lineage_guard import hand_control, session_id, successor_sid
+from lineage_guard import hand_control, session_id, successor_sid, take_pins
 
 
 # Окно Terminal: сначала по id из record (если в нём вкладка с этим tty), иначе перебором по tty. Окно с несколькими
@@ -187,7 +187,7 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0, ctl=None):
             why = successor_problem(sx, procs, p, procs.get(s.pid), a, child)
             return (None, why) if why else successor_sid(procs, procs.get(s.pid), ctl.get("tty"))
 
-        return hand_control(ctl["dirs"], ctl.get("sid"), succ, child.rsplit(".", 1)[-1], log)
+        return hand_control(ctl["dirs"], ctl.get("sid"), succ, child.rsplit(".", 1)[-1], log, pins=ctl.get("pins"))
 
     ack = ldir() / f"{child}.ack"
     deadline = sx.now() + timeout
@@ -285,7 +285,9 @@ def cmd_retire(sx, a):
     logpath = ldir() / f"{a.child}.retire.log"
     # sessionId — сейчас, пока предшественник жив: после его ухода запись реестра исчезает. tty окна наследника —
     # из аргумента spawn_session.sh, не из записи линии: папку линий правят агенты (GLM #120, находка 1).
-    ctl = ({"dirs": a.guard, "sid": session_id(p), "tty": getattr(a, "succ_tty", "") or ""}
+    # Пины папок списка — тоже сейчас, до ожидания квитанции: подмену .claude или списка за ожидание сторож заметит
+    # (GLM #120 104b29f96, S1).
+    ctl = ({"dirs": a.guard, "sid": session_id(p), "tty": getattr(a, "succ_tty", "") or "", "pins": take_pins(a.guard)}
            if getattr(a, "guard", None) else None)
     if a.foreground:
         return watch(sx, p, parent, a.child, a.role, a.timeout, make_log(sys.stdout), a.poll, ctl)

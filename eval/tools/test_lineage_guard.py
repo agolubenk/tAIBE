@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import lineage as L  # noqa: E402
 import lineage_guard as G  # noqa: E402
+import lineage_guard_fs as GF  # noqa: E402
 import lineage_retire as LR  # noqa: E402
 from test_lineage import CHILD, PARENT, ST, Base, FakeSys, P, tree  # noqa: E402
 
@@ -47,8 +48,13 @@ class HandoverTest(Base):
         sx = sx or FakeSys(tree(), env={400: CHILD, 300: PARENT})
         self.sx = sx
         self.ack()
-        ctl = {"dirs": [str(x) for x in (dirs or (self.hr, self.tb))], "sid": sid, "tty": tty}
+        ds = [str(x) for x in (dirs or (self.hr, self.tb))]
+        ctl = {"dirs": ds, "sid": sid, "tty": tty, "pins": G.take_pins(ds)}
         return LR.watch(sx, pred or sx.p[300], PARENT, CHILD, "backend", 600, self.log, poll=1, ctl=ctl)
+
+    def hc(self, dirs, *a, **k):
+        k.setdefault("pins", G.take_pins(dirs))
+        return G.hand_control(dirs, *a, **k)
 
     def assert_untouched(self):
         for d in (self.hr, self.tb):
@@ -86,10 +92,10 @@ class HandoverTest(Base):
     def test_write_failure_rolls_back_and_keeps_predecessor(self):
         real = G.write_atomic
 
-        def flaky(f, text, mode):
+        def flaky(f, text, mode, **k):
             if Path(f).resolve() == (self.tb / G.GUARD).resolve() and SUCC in text:
                 raise OSError("disk full")
-            return real(f, text, mode)
+            return real(f, text, mode, **k)
 
         with mock.patch.object(G, "write_atomic", flaky):
             self.assertEqual(self.run_watch(), 3, self.lines)
@@ -124,7 +130,7 @@ class HandoverTest(Base):
         elsewhere.mkdir()
         L.sessions_dir().mkdir(parents=True, exist_ok=True)
         G.state_dir().symlink_to(elsewhere)
-        self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
         self.assertEqual(self.get(self.hr)["control"], [PRED])
         self.assertIn("ссылка", self.lines[-1])
         self.assertEqual(list(elsewhere.iterdir()), [])
@@ -146,7 +152,7 @@ class HandoverTest(Base):
         (bare / ".claude").mkdir(parents=True)
         self.put(bare, [PRED])
         self.assertIsNone(G.main_root(bare))
-        self.assertFalse(G.hand_control([self.hr, bare], PRED, (SUCC, None), "cd34", self.log))
+        self.assertFalse(self.hc([self.hr, bare], PRED, (SUCC, None), "cd34", self.log))
         self.assertEqual(self.get(self.hr)["control"], [PRED])
 
     def test_successor_dies_after_writes_rolls_back(self):
@@ -154,8 +160,8 @@ class HandoverTest(Base):
         sx = FakeSys(tree(), env={400: CHILD, 300: PARENT})
         real = G.write_atomic
 
-        def then_die(f, text, mode):
-            out = real(f, text, mode)
+        def then_die(f, text, mode, **k):
+            out = real(f, text, mode, **k)
             if Path(f).resolve() == (self.tb / G.GUARD).resolve() and SUCC in text:
                 for pid in (400, 401, 402):
                     sx.p.pop(pid, None)
@@ -209,14 +215,14 @@ class HandoverTest(Base):
     def test_second_successor_gets_nothing(self):
         self.assertEqual(self.run_watch(), 0, self.lines)
         third = "44444444-aaaa-4bbb-8ccc-000000000500"
-        ok = G.hand_control([self.hr, self.tb], PRED, (third, None), "zz99", self.log)
+        ok = self.hc([self.hr, self.tb], PRED, (third, None), "zz99", self.log)
         self.assertTrue(ok)
         self.assertEqual(self.get(self.hr)["control"], [SUCC])
         self.assertIn("нет в списке", self.lines[-1])
 
     def test_unknown_predecessor_sid_keeps_everything(self):
         # sessionId предшественника не известен — не проверить, Контроль ли он: не снимать (fail-closed).
-        self.assertFalse(G.hand_control([self.hr], None, (SUCC, None), "cd34", self.log))
+        self.assertFalse(self.hc([self.hr], None, (SUCC, None), "cd34", self.log))
         self.assertEqual(self.get(self.hr)["control"], [PRED])
         self.assertEqual(self.run_watch(sid=None), 3, self.lines)
         self.assert_untouched()
@@ -224,7 +230,7 @@ class HandoverTest(Base):
     def test_unknown_predecessor_sid_without_lists_retires(self):
         bare = self.dir / "bare"
         (bare / ".git").mkdir(parents=True)
-        self.assertTrue(G.hand_control([bare], None, (SUCC, None), "cd34", self.log))
+        self.assertTrue(self.hc([bare], None, (SUCC, None), "cd34", self.log))
 
     def test_reparented_successor_keeps_everything(self):
         # Вложенный claude, чей Bash умер: ppid 1 (launchd), ancestor_claude его уже не видит.
@@ -272,45 +278,50 @@ class HandoverTest(Base):
         G.state_dir().mkdir(parents=True, exist_ok=True)
         with open(G.state_dir() / "guard.lock", "a") as held:
             fcntl.flock(held, fcntl.LOCK_EX)
-            self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, lock_wait=0.3))
+            self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, lock_wait=0.3))
         self.assertEqual(self.get(self.hr)["control"], [PRED])
         self.assertIn("guard.lock занят", self.lines[-1])
 
     def test_interrupted_handover_blocks_next_until_checked(self):
         real, calls = G.write_atomic, []
 
-        def killed(f, text, mode):
+        def killed(f, text, mode, **k):
             if Path(f).name == G.GUARD.name and SUCC in text:
                 calls.append(f)
                 if len(calls) == 2:
                     raise KeyboardInterrupt("сторож убит между папками")
-            return real(f, text, mode)
+            return real(f, text, mode, **k)
 
         with mock.patch.object(G, "write_atomic", killed):
             with self.assertRaises(KeyboardInterrupt):
-                G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log)
+                self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log)
+        # Два прохода (GLM #120 104b29f96, F1): hr уже у наследника, tb — без предшественника (mid), а не у обоих.
         self.assertEqual(self.get(self.hr)["control"], [SUCC])
-        self.assertEqual(self.get(self.tb)["control"], [PRED])
+        self.assertEqual(self.get(self.tb)["control"], [])
         intent = json.loads((G.state_dir() / G.INTENT).read_text())
-        self.assertEqual((intent["from"], intent["to"], len(intent["files"])), (PRED[:8], SUCC[:8], 2))
-        self.assertFalse(G.hand_control([self.tb], PRED, (SUCC, None), "ef56", self.log))
+        self.assertEqual((intent["from"], intent["to"], len(intent["files"]), intent["phase"]),
+                         (PRED[:8], SUCC[:8], 2, "grant"))
+        self.assertFalse(self.hc([self.tb], PRED, (SUCC, None), "ef56", self.log))
         self.assertIn("прерванной передачи", self.lines[-1])
-        self.assertEqual(self.get(self.tb)["control"], [PRED])
+        self.assertEqual(self.get(self.tb)["control"], [])
 
     def test_failed_rollback_leaves_intent(self):
         real = G.write_atomic
         hr, tb = (self.hr / G.GUARD).resolve(), (self.tb / G.GUARD).resolve()
+        seen = []
 
-        def broken(f, text, mode):
+        def broken(f, text, mode, **k):
             target = Path(f).resolve() if Path(f).name == G.GUARD.name else None
             if target == tb and SUCC in text:
                 raise OSError("disk full")
-            if target == hr and SUCC not in text:
+            if target == hr and SUCC not in text and seen:  # откат hr после его записи наследника
                 raise OSError("откат тоже не пишется")
-            return real(f, text, mode)
+            out = real(f, text, mode, **k)
+            seen.extend([1] if target == hr and SUCC in text else [])
+            return out
 
         with mock.patch.object(G, "write_atomic", broken):
-            self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+            self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
         self.assertTrue((G.state_dir() / G.INTENT).exists(), "расхождение осталось — журнал сигналит следующей передаче")
         self.assertIn("откат не полон", self.lines[-1])
         self.assertEqual(json.loads((self.hr / ".claude" / G.BACKUP).read_text())["control"], [PRED])
@@ -319,14 +330,17 @@ class HandoverTest(Base):
         # GLM #120 7fb2287d2, находка 9b: неполный откат на пути сторожа — rc 3, предшественник жив, журнал остался.
         real = G.write_atomic
         hr, tb = (self.hr / G.GUARD).resolve(), (self.tb / G.GUARD).resolve()
+        seen = []
 
-        def broken(f, text, mode):
+        def broken(f, text, mode, **k):
             target = Path(f).resolve() if Path(f).name == G.GUARD.name else None
             if target == tb and SUCC in text:
                 raise OSError("disk full")
-            if target == hr and SUCC not in text:
+            if target == hr and SUCC not in text and seen:  # откат hr после его записи наследника
                 raise OSError("откат тоже не пишется")
-            return real(f, text, mode)
+            out = real(f, text, mode, **k)
+            seen.extend([1] if target == hr and SUCC in text else [])
+            return out
 
         with mock.patch.object(G, "write_atomic", broken):
             self.assertEqual(self.run_watch(), 3, self.lines)
@@ -334,7 +348,7 @@ class HandoverTest(Base):
         self.assertNotIn((300, 15), self.sx.sent)
         self.assertTrue((G.state_dir() / G.INTENT).exists(), "расхождение осталось — журнал сигналит следующей передаче")
         self.assertTrue(any("откат не полон" in m for m in self.lines), self.lines)
-        self.assertEqual(self.get(self.tb)["control"], [PRED])
+        self.assertEqual(self.get(self.tb)["control"], [])  # mid: Контроля в tb нет ни у кого, а не у обоих
 
     @mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT})
     def test_cli_retire_with_foreign_registry_start_keeps_predecessor(self):
@@ -353,12 +367,16 @@ class HandoverTest(Base):
         self.assert_untouched()
         self.assertNotIn((300, 15), sx.sent)
 
-    def test_successor_already_listed_is_not_doubled(self):
+    def test_successor_listed_next_to_predecessor_refuses(self):
+        # GLM #120 104b29f96, M1: наследник рядом с предшественником — mid == new, два прохода не разводят их; решает
+        # владелец.
         self.put(self.hr, [SUCC, PRED])
         self.put(self.tb, [OTHER, OTHER, PRED])
-        self.assertEqual(self.run_watch(), 0, self.lines)
-        self.assertEqual(self.get(self.hr)["control"], [SUCC])
-        self.assertEqual(self.get(self.tb)["control"], [OTHER, OTHER, SUCC])
+        self.assertEqual(self.run_watch(), 3, self.lines)
+        self.assertEqual(self.get(self.hr)["control"], [SUCC, PRED])
+        self.assertEqual(self.get(self.tb)["control"], [OTHER, OTHER, PRED])
+        self.assertFalse((G.state_dir() / G.INTENT).exists())
+        self.assertIn("решает владелец", " ".join(self.lines))
 
     def test_lock_file_recreated_on_every_try_gives_up_in_time(self):
         import time
@@ -374,27 +392,27 @@ class HandoverTest(Base):
         G.state_dir().mkdir(parents=True, exist_ok=True)
         os.symlink(self.dir / "elsewhere", G.state_dir() / "guard.lock")
         t0 = time.monotonic()
-        self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, lock_wait=5))
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, lock_wait=5))
         self.assertLess(time.monotonic() - t0, 1.0, "ELOOP повтор не исправит — ждать срок незачем")
         self.assertEqual(self.get(self.hr)["control"], [PRED])
         self.assertIn("guard.lock", self.lines[-1])
 
     def test_oversized_list_keeps_everything(self):
         (self.tb / G.GUARD).write_text(json.dumps({"control": [PRED], "pad": "x" * (G.MAX_LIST + 1)}))
-        self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
         self.assertEqual(self.get(self.hr)["control"], [PRED])
         self.assertIn("испорчен", self.lines[-1])
 
     def test_list_edited_after_plan_is_not_overwritten(self):
         real = G.plan
 
-        def edited(dirs, pred_sid, log):
-            todo = real(dirs, pred_sid, log)
+        def edited(*a, **k):
+            todo = real(*a, **k)
             self.put(self.tb, [PRED, OTHER])  # владелец правит список без guard.lock
             return todo
 
         with mock.patch.object(G, "plan", edited):
-            self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+            self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
         self.assertEqual(self.get(self.hr)["control"], [PRED])
         self.assertEqual(self.get(self.tb)["control"], [PRED, OTHER])
         self.assertFalse((G.state_dir() / G.INTENT).exists())
@@ -402,7 +420,8 @@ class HandoverTest(Base):
 
     def test_no_ack_until_timeout_keeps_everything(self):
         self.sx = sx = FakeSys(tree(), env={400: CHILD, 300: PARENT})
-        ctl = {"dirs": [str(self.hr), str(self.tb)], "sid": PRED, "tty": "/dev/ttys006"}
+        ctl = {"dirs": [str(self.hr), str(self.tb)], "sid": PRED, "tty": "/dev/ttys006",
+               "pins": G.take_pins([self.hr, self.tb])}
         self.assertEqual(LR.watch(sx, sx.p[300], PARENT, CHILD, "backend", 0, self.log, poll=1, ctl=ctl), 3)
         self.assert_untouched()
         self.assertIn("квитанции нет", self.lines[-1])
@@ -431,7 +450,7 @@ class HandoverTest(Base):
             return real(path, *a, **k)
 
         with mock.patch.object(G.os, "unlink", stuck):
-            self.assertTrue(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+            self.assertTrue(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
         self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([SUCC], [SUCC]))
         self.assertTrue((G.state_dir() / G.INTENT).exists())
         self.assertTrue(any("не удалён" in x for x in self.lines), self.lines)
@@ -439,9 +458,9 @@ class HandoverTest(Base):
     def test_settled_intent_is_dropped_and_next_handover_goes(self):
         # Журнал остался, а списки согласованы (GLM #120 7fb2287d2, находки 7, 14): следующая передача снимает его сама.
         with mock.patch.object(G.os, "unlink", side_effect=PermissionError("eperm")):
-            self.assertTrue(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+            self.assertTrue(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
         self.assertTrue((G.state_dir() / G.INTENT).exists())
-        self.assertTrue(G.hand_control([self.hr, self.tb], SUCC, (OTHER, None), "ef56", self.log))
+        self.assertTrue(self.hc([self.hr, self.tb], SUCC, (OTHER, None), "ef56", self.log))
         self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([OTHER], [OTHER]))
         self.assertFalse((G.state_dir() / G.INTENT).exists())
         self.assertTrue(any("согласованы, снимаю" in x for x in self.lines), self.lines)
@@ -473,11 +492,11 @@ class HandoverTest(Base):
     def test_rollback_does_not_overwrite_later_edit(self):
         real = G.write_atomic
 
-        def edit_then_fail(f, text, mode):
+        def edit_then_fail(f, text, mode, **k):
             if Path(f).resolve() == (self.tb / G.GUARD).resolve() and SUCC in text:
                 self.put(self.hr, [SUCC, OTHER])  # владелец правит hr после нашей записи
                 raise OSError("disk full")
-            return real(f, text, mode)
+            return real(f, text, mode, **k)
 
         with mock.patch.object(G, "write_atomic", edit_then_fail):
             self.assertEqual(self.run_watch(), 3, self.lines)
@@ -486,9 +505,9 @@ class HandoverTest(Base):
         self.assertIn(300, self.sx.p)
 
     def test_only_empty_guard_dirs_keep_predecessor(self):
-        self.assertFalse(G.hand_control(["", ""], PRED, (SUCC, None), "cd34", self.log))
+        self.assertFalse(self.hc(["", ""], PRED, (SUCC, None), "cd34", self.log))
         self.assertIn("нет папок guard", self.lines[-1])
-        self.assertTrue(G.hand_control([], PRED, (SUCC, None), "cd34", self.log))
+        self.assertTrue(self.hc([], PRED, (SUCC, None), "cd34", self.log))
 
     def test_empty_guard_dir_is_skipped(self):
         self.assertEqual(G.guard_dirs(["", str(self.hr)]), [self.hr.resolve()])
@@ -523,21 +542,128 @@ class HandoverTest(Base):
         self.assertIsNone(G.main_root(wt))
 
     def test_write_atomic_closes_fd_when_chmod_fails(self):
-        got = {}
-        real = G.tempfile.mkstemp
+        got, real = [], os.open
 
-        def spy(*a, **k):
-            got["fd"], got["tmp"] = real(*a, **k)
-            return got["fd"], got["tmp"]
+        def spy(path, *a, **k):
+            fd = real(path, *a, **k)
+            if str(path).endswith(GF.TMP):
+                got.append(fd)
+            return fd
 
-        with mock.patch.object(G.tempfile, "mkstemp", spy), \
-                mock.patch.object(G.os, "fchmod", side_effect=OSError("EPERM")):
+        with mock.patch.object(G.os, "open", spy), mock.patch.object(G.os, "fchmod", side_effect=OSError("EPERM")):
             with self.assertRaises(OSError):
                 G.write_atomic(self.hr / G.GUARD, "{}\n", 0o600)
+        self.assertEqual(len(got), 1)
         with self.assertRaises(OSError):
-            os.fstat(got["fd"])
-        self.assertFalse(Path(got["tmp"]).exists())
+            os.fstat(got[0])
+        self.assertEqual([x.name for x in (self.hr / ".claude").iterdir()], [G.GUARD.name])
         self.assertEqual(self.get(self.hr)["control"], [PRED])
+
+    def holders(self):
+        lists = [self.get(d)["control"] for d in (self.hr, self.tb)]
+        return {x for c in lists for x in c} & {PRED, SUCC}
+
+    def test_kill_matrix_never_gives_control_to_both(self):
+        # GLM #120 104b29f96, F1/S2 и M2: сбой записи (fail_at) × убийство сторожа после записи (kill_at) — на любом
+        # шаге Контроль не больше чем у одной сессии; убит — журнал остался; следующая передача идёт только из конца.
+        real = G.write_atomic
+        for fail_at in (None, 1, 2, 3, 4):
+            for kill_at in range(1, 9):
+                with self.subTest(fail_at=fail_at, kill_at=kill_at):
+                    for d in (self.hr, self.tb):
+                        self.put(d, [PRED])
+                    for x in G.state_dir().glob("*.json"):
+                        x.unlink()
+                    n = [0]
+
+                    def hit(f, text, mode, **k):
+                        if Path(f).name != G.GUARD.name:
+                            return real(f, text, mode, **k)
+                        n[0] += 1
+                        if n[0] == fail_at:
+                            raise OSError("disk full")
+                        out = real(f, text, mode, **k)
+                        if n[0] == kill_at:
+                            raise KeyboardInterrupt("сторож убит")
+                        return out
+
+                    killed = False
+                    with mock.patch.object(G, "write_atomic", hit):
+                        try:
+                            self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log)
+                        except KeyboardInterrupt:
+                            killed = True
+                    self.assertLessEqual(len(self.holders()), 1, (self.get(self.hr), self.get(self.tb)))
+                    if killed:
+                        self.assertTrue((G.state_dir() / G.INTENT).exists())
+                    ends = {tuple(self.get(d)["control"]) for d in (self.hr, self.tb)}
+                    nxt = self.hc([self.hr, self.tb], PRED, (SUCC, None), "ef56", self.log)
+                    self.assertEqual(nxt, len(ends) == 1 and ends != {()}, (ends, self.lines[-1]))
+
+    def test_owner_edit_between_passes_is_kept(self):
+        real = G.write_atomic
+
+        def edit(f, text, mode, **k):
+            out = real(f, text, mode, **k)
+            if Path(f).name == G.INTENT and '"grant"' in text:
+                self.put(self.tb, [OTHER])  # владелец правит tb между проходами
+            return out
+
+        with mock.patch.object(G, "write_atomic", edit):
+            self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([PRED], [OTHER]))
+        self.assertTrue((G.state_dir() / G.INTENT).exists())
+        self.assertIn("передача застряла", self.lines[-1])
+
+    def test_claude_dir_swapped_after_pin_refuses(self):
+        # GLM #120 104b29f96, M4–M6: `mv .claude …; mkdir .claude` после старта сторожа — ни одной записи.
+        pins = G.take_pins([self.hr, self.tb])
+        (self.tb / ".claude").rename(self.tb / ".claude.old")
+        (self.tb / ".claude").mkdir()
+        self.put(self.tb, [PRED])
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, pins=pins))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([PRED], [PRED]))
+        self.assertIn("после старта сторожа", " ".join(self.lines))
+
+    def test_pinned_list_deleted_or_created_refuses(self):
+        pins = G.take_pins([self.hr, self.tb])
+        (self.tb / G.GUARD).unlink()
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, pins=pins))
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+        pins = G.take_pins([self.hr, self.tb])
+        self.put(self.tb, [PRED])
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, pins=pins))
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+
+    def test_claude_dir_swapped_after_own_write_rolls_back_held_dirs(self):
+        real = G.write_atomic
+
+        def swap(f, text, mode, **k):
+            out = real(f, text, mode, **k)
+            if Path(f).resolve() == (self.tb / G.GUARD).resolve() and not (self.tb / ".claude.moved").exists():
+                (self.tb / ".claude").rename(self.tb / ".claude.moved")
+                (self.tb / ".claude").mkdir()
+                self.put(self.tb, [OTHER])
+            return out
+
+        with mock.patch.object(G, "write_atomic", swap):
+            self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        moved = json.loads((self.tb / ".claude.moved" / G.GUARD.name).read_text())["control"]
+        self.assertEqual((self.get(self.hr)["control"], moved, self.get(self.tb)["control"]), ([PRED], [PRED], [OTHER]))
+        self.assertIn("файлы возвращены", self.lines[-1])
+
+    def test_journal_with_forged_dir_pin_is_not_settled(self):
+        files = [str((d / G.GUARD).resolve()) for d in (self.hr, self.tb)]
+        G.state_dir().mkdir(parents=True, exist_ok=True)
+        j = {"from": PRED[:8], "to": SUCC[:8], "files": files, "dirpins": [[1, 2, 3], [1, 2, 3]]}
+        (G.state_dir() / G.INTENT).write_text(json.dumps(j))
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertIn("прерванной передачи", self.lines[-1])
+        pins = G.take_pins([self.hr, self.tb])
+        j["dirpins"] = [list(pins[str(Path(f).parent.parent)][0]) for f in files]
+        (G.state_dir() / G.INTENT).write_text(json.dumps(j))  # все old, пины верные — согласован
+        self.assertTrue(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertEqual(self.get(self.tb)["control"], [SUCC])
 
     @mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT})
     def test_cli_accepts_guard(self):
