@@ -216,9 +216,16 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0, ctl=None):
     if why:
         log("проверка не прошла: " + why + " — предшественника не трогаю")
         return 3
-    if not same(procs, p):
+    def gone():
         log("предшественник уже завершился сам")
-        return 0 if handover(s) else 3
+        if handover(s):
+            return 0
+        log("Контроль наследнику не передан, а предшественник ушёл — его sessionId остался в списке; нужен s-пункт "
+            "владельцу (s-set-control)")  # GLM #120 7fb2287d2, находка 8: rc 3 здесь — не «сессию оставили»
+        return 3
+
+    if not same(procs, p):
+        return gone()
     if tap:
         until = sx.now() + TAP_WAIT
         while not tapped(procs, s, tap, want):
@@ -233,8 +240,7 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0, ctl=None):
         sx.sleep(poll)
     procs = sx.procs()
     if not same(procs, p):
-        log("предшественник уже завершился сам")
-        return 0 if handover(s) else 3
+        return gone()
     # За IDLE_WAIT мир мог смениться: ход не кончился — не рвём его; наследник упал или снял tap — роль без сессии.
     why = (sx.status(p.pid) == "busy" and f"предшественник {p.pid} занят дольше {IDLE_WAIT} с") or \
         successor_problem(sx, procs, p, procs.get(s.pid), a, child) or \

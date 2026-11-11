@@ -118,19 +118,52 @@ def guard_dirs(dirs):
     return out
 
 
-def read_control(f):
-    """(текст, документ, список control, права) — одним чтением, без перехода по ссылке; None — файл испорчен, его
-    нет, это ссылка или у него несколько жёстких ссылок (rename заменил бы не тот файл, что читает хук)."""
+MISSING = object()  # списка нет (нет файла или папки .claude) — папку пропускаем
+
+
+def open_dir(path):
+    """fd папки path, пройденной от «/» без перехода по ссылкам на каждом звене (GLM #120 7fb2287d2, находка 2):
+    папку, подменённую ссылкой (.claude → /tmp/fake), не открыть — ELOOP или ENOTDIR, а не чужой список. path — уже
+    без ссылок (корень из main_root — после resolve)."""
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
-        fd = os.open(str(f), os.O_RDONLY | os.O_NOFOLLOW)
+        for part in Path(path).parts[1:]:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def read_control(f):
+    """(текст, документ, список control, права) — одним чтением; путь пройден без перехода по ссылкам, и сам файл —
+    не ссылка. MISSING — файла нет; None — сомнение: испорчен, ссылка на любом звене пути или несколько жёстких ссылок
+    (rename заменил бы не тот файл, что читает хук). Предел MAX_LIST — самим чтением: файл мог вырасти после fstat."""
+    try:
+        dfd = open_dir(Path(f).parent)
+    except FileNotFoundError:
+        return MISSING
     except OSError:
         return None
     try:
-        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+        fd = os.open(Path(f).name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    except FileNotFoundError:
+        return MISSING
+    except OSError:
+        return None
+    finally:
+        os.close(dfd)
+    try:
+        with os.fdopen(fd, "rb") as fh:
             st = os.fstat(fh.fileno())
-            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size > MAX_LIST:
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
                 return None
-            text = fh.read()
+            data = fh.read(MAX_LIST + 1)
+        if len(data) > MAX_LIST:
+            return None
+        text = data.decode("utf-8")
         doc = json.loads(text)
     except (OSError, ValueError):
         return None
@@ -206,10 +239,10 @@ def plan(dirs, pred_sid, log):
     todo = []
     for d in dirs:
         f = d / GUARD
-        if not os.path.lexists(f):
+        got = read_control(f)
+        if got is MISSING:
             log(f"Контроль: в {d} списка нет — эту папку пропускаю")
             continue
-        got = read_control(f)
         if got is None:
             return None
         text, doc, ctl, mode = got
@@ -237,6 +270,16 @@ def successor_sid(procs, s, tty):
     if par is None or s.ppid <= 1 or par.tty != s.tty or not (
             LAUNCHER_RE.search(par.command) or argv0(par).lstrip("-") in SHELLS):
         return None, f"родитель наследника {s.pid} ({s.ppid}) — не пусковой скрипт или shell окна"
+    # Вся цепочка окна (лаунчер/shell → login) не переподвешена к launchd (GLM #120 7fb2287d2, находка 1): потомок Bash
+    # наследника, умершего без квитанции, висит под осиротевшим shell (ppid 1). Выше окна — приложение терминала без tty.
+    a, seen = par, set()
+    while a is not None and a.tty == s.tty:
+        if a.ppid <= 1 or a.pid in seen:
+            return None, f"цепочка наследника {s.pid} оборвана у {a.pid} (переподвешен к launchd) — не окно spawn_session"
+        seen.add(a.pid)
+        a = procs.get(a.ppid)
+    if a is None:
+        return None, f"над окном наследника {s.pid} нет приложения терминала"
     sid = session_id(s)
     return (sid, None) if sid else (None, f"наследника {s.pid} нет в реестре сессий")
 
@@ -270,7 +313,7 @@ def hand_control(dirs, pred_sid, succ, suffix, log, lock_wait=LOCK_WAIT):
             return False
         return True
     if not pred_sid:
-        if any(os.path.lexists(d / GUARD) for d in dirs):
+        if any(read_control(d / GUARD) is not MISSING for d in dirs):
             log("Контроль: sessionId предшественника не известен — не проверить, Контроль ли он; предшественника не снимаю")
             return False
         return True
@@ -297,9 +340,14 @@ def hand_control(dirs, pred_sid, succ, suffix, log, lock_wait=LOCK_WAIT):
 def locked_handover(dirs, pred_sid, succ, suffix, log):
     intent = state_dir() / INTENT
     if os.path.lexists(intent):
-        log(f"Контроль: остался журнал прерванной передачи {intent} — сверить списки руками и удалить его; "
-            "guard не трогаю, предшественника не снимаю")
-        return False
+        if not settled(intent):
+            log(f"Контроль: остался журнал прерванной передачи {intent}, списки расходятся — сверить списки руками и "
+                "удалить его; guard не трогаю, предшественника не снимаю")
+            return False
+        log(f"Контроль: журнал прерванной передачи {intent} — списки согласованы, снимаю его")
+        drop_intent(intent, log)
+        if os.path.lexists(intent):
+            return False
     todo = plan(dirs, pred_sid, log)
     if todo is None:
         log("Контроль: список в одной из папок испорчен или это ссылка — guard не трогаю, предшественника не снимаю")
@@ -319,16 +367,21 @@ def locked_handover(dirs, pred_sid, succ, suffix, log):
         return False
     done = []
     try:
+        # Сначала все сверки и копии, потом списки подряд, сверка после (GLM #120 7fb2287d2, находка 3): окно, в
+        # котором убитый сторож оставит списки разными, — одна запись, а не цикл с копиями и сверками.
         for f, old, doc, mode in todo:
             now = read_control(f)  # список правили после plan() (владелец без guard.lock) — не затираем его правку
-            if now is None or now[0] != old:
+            if not isinstance(now, tuple) or now[0] != old:
                 raise OSError(f"{f} изменился после чтения")
             write_atomic(f.with_name(BACKUP), old, 0o600)
+        for f, old, doc, mode in todo:
             doc["control"] = new_control(doc["control"], pred_sid, succ_sid)
-            write_atomic(f, json.dumps(doc, ensure_ascii=False) + "\n", mode)
-            done.append((f, old, mode))
+            new = json.dumps(doc, ensure_ascii=False) + "\n"
+            write_atomic(f, new, mode)
+            done.append((f, old, mode, new))
+        for f, *_ in done:
             back = read_control(f)
-            if back is None or succ_sid not in back[2] or any(entry_is(e, pred_sid) for e in back[2]):
+            if not isinstance(back, tuple) or succ_sid not in back[2] or any(entry_is(e, pred_sid) for e in back[2]):
                 raise OSError(f"сверка {f} не прошла")
         if callable(succ):  # наследник мог упасть за время записи — Контроль не должен остаться за мёртвой сессией
             again, why = succ()
@@ -336,7 +389,12 @@ def locked_handover(dirs, pred_sid, succ, suffix, log):
                 raise OSError(f"наследник после записи не подтверждён ({why or 'другой sessionId'})")
     except OSError as e:
         lost = []
-        for f, old, mode in done:
+        for f, old, mode, new in done:
+            cur = read_control(f)  # после нашей записи список правили — не затираем правку откатом (находка 6)
+            if not isinstance(cur, tuple) or cur[0] != new:
+                lost.append(f)
+                log(f"Контроль: {f} изменён после записи — не откатываю, прежний текст в {BACKUP}")
+                continue
             try:
                 write_atomic(f, old, mode)
             except OSError as e2:
@@ -352,6 +410,27 @@ def locked_handover(dirs, pred_sid, succ, suffix, log):
     drop_intent(intent, log)
     log(f"Контроль: {pred_sid[:8]} → {succ_sid[:8]} в {len(done)} папк. (линия {suffix}, копия {BACKUP})")
     return True
+
+
+def settled(intent):
+    """Журнал прерванной передачи можно снять (GLM #120 7fb2287d2, находки 7 и 14): во всех его списках
+    предшественника нет (передача дошла или владелец уже сверил), или во всех он есть, а наследника нет (откат дошёл).
+    Иначе — расхождение, его сверяет человек. Журнал в state_dir: агенты его не пишут."""
+    try:
+        with open(intent, encoding="utf-8") as fh:
+            j = json.loads(fh.read(MAX_LIST))
+        frm, to, files = str(j["from"]), str(j["to"]), j["files"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if len(frm) < 8 or len(to) < 8 or not isinstance(files, list) or not files:
+        return False
+    marks = []
+    for f in files:
+        got = read_control(Path(str(f)))
+        if not isinstance(got, tuple):
+            return False
+        marks.append((any(e[:8] == frm for e in got[2]), any(e[:8] == to for e in got[2])))
+    return all(not a for a, _ in marks) or all(a and not b for a, b in marks)
 
 
 def drop_intent(intent, log):

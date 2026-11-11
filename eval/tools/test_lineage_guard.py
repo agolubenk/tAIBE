@@ -397,6 +397,55 @@ class HandoverTest(Base):
         self.assertTrue((G.state_dir() / G.INTENT).exists())
         self.assertTrue(any("не удалён" in x for x in self.lines), self.lines)
 
+    def test_settled_intent_is_dropped_and_next_handover_goes(self):
+        # Журнал остался, а списки согласованы (GLM #120 7fb2287d2, находки 7, 14): следующая передача снимает его сама.
+        with mock.patch.object(G.os, "unlink", side_effect=PermissionError("eperm")):
+            self.assertTrue(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertTrue((G.state_dir() / G.INTENT).exists())
+        self.assertTrue(G.hand_control([self.hr, self.tb], SUCC, (OTHER, None), "ef56", self.log))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([OTHER], [OTHER]))
+        self.assertFalse((G.state_dir() / G.INTENT).exists())
+        self.assertTrue(any("согласованы, снимаю" in x for x in self.lines), self.lines)
+
+    def test_impostor_under_orphaned_shell_keeps_everything(self):
+        # Потомок Bash наследника, умершего без квитанции (GLM #120 7fb2287d2, находка 1): shell переподвешен к launchd.
+        procs = tree(successor_parent=600) + [P(600, 601, 600, "ttys006", "zsh -c claude"),
+                                               P(601, 1, 601, "ttys006", "/bin/zsh -c source snap")]
+        self.assertEqual(self.run_watch(FakeSys(procs, env={400: CHILD, 300: PARENT})), 3, self.lines)
+        self.assert_untouched()
+        self.assertIn("оборвана", " ".join(self.lines))
+
+    def test_symlinked_claude_dir_keeps_everything(self):
+        # Папка .claude подменена ссылкой на подложный список (GLM #120 7fb2287d2, находка 2).
+        fake = self.dir / "fake"
+        fake.mkdir()
+        (fake / G.GUARD.name).write_text(json.dumps({"control": [PRED]}), encoding="utf-8")
+        (self.tb / ".claude").rename(self.tb / ".claude.real")
+        (self.tb / ".claude").symlink_to(fake)
+        self.assertEqual(self.run_watch(), 3, self.lines)
+        self.assertEqual(json.loads((fake / G.GUARD.name).read_text())["control"], [PRED])
+        self.assertEqual(json.loads((self.tb / ".claude.real" / G.GUARD.name).read_text())["control"], [PRED])
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+        self.assertIn(300, self.sx.p)
+        (fake / G.GUARD.name).unlink()  # и ссылка на папку без списка — сомнение, а не «списка нет»
+        self.assertEqual(self.run_watch(), 3, self.lines)
+        self.assertIn(300, self.sx.p)
+
+    def test_rollback_does_not_overwrite_later_edit(self):
+        real = G.write_atomic
+
+        def edit_then_fail(f, text, mode):
+            if Path(f).resolve() == (self.tb / G.GUARD).resolve() and SUCC in text:
+                self.put(self.hr, [SUCC, OTHER])  # владелец правит hr после нашей записи
+                raise OSError("disk full")
+            return real(f, text, mode)
+
+        with mock.patch.object(G, "write_atomic", edit_then_fail):
+            self.assertEqual(self.run_watch(), 3, self.lines)
+        self.assertEqual(self.get(self.hr)["control"], [SUCC, OTHER])
+        self.assertTrue((G.state_dir() / G.INTENT).exists())
+        self.assertIn(300, self.sx.p)
+
     def test_only_empty_guard_dirs_keep_predecessor(self):
         self.assertFalse(G.hand_control(["", ""], PRED, (SUCC, None), "cd34", self.log))
         self.assertIn("нет папок guard", self.lines[-1])
