@@ -510,6 +510,35 @@ class HandoverTest(Base):
         (wt / ".git").write_text(f"gitdir: {self.hr / '.git' / 'worktrees' / 'y'}\n", encoding="utf-8")
         self.assertIsNone(G.main_root(wt))
 
+    def test_gitdir_line_over_4k_is_doubt(self):
+        # Граница чтения head — контракт (GLM #120 89dcafeb9, minor failures): верный gitdir длиннее 4 КБ (путь,
+        # раздутый «./») — сомнение, а не корень; без границы он бы разрешился в настоящую папку.
+        wt = self.hr / "worktrees" / "feature" / "z"
+        wt.mkdir(parents=True)
+        gd = self.hr / ".git" / "worktrees" / "z"
+        gd.mkdir(parents=True)
+        (gd / "commondir").write_text("../..\n", encoding="utf-8")
+        (wt / ".git").write_text(f"gitdir: {self.hr}/{'./' * 2100}.git/worktrees/z\n", encoding="utf-8")
+        self.assertGreater(len((wt / ".git").read_bytes()), 4096)
+        self.assertIsNone(G.main_root(wt))
+
+    def test_write_atomic_closes_fd_when_chmod_fails(self):
+        got = {}
+        real = G.tempfile.mkstemp
+
+        def spy(*a, **k):
+            got["fd"], got["tmp"] = real(*a, **k)
+            return got["fd"], got["tmp"]
+
+        with mock.patch.object(G.tempfile, "mkstemp", spy), \
+                mock.patch.object(G.os, "fchmod", side_effect=OSError("EPERM")):
+            with self.assertRaises(OSError):
+                G.write_atomic(self.hr / G.GUARD, "{}\n", 0o600)
+        with self.assertRaises(OSError):
+            os.fstat(got["fd"])
+        self.assertFalse(Path(got["tmp"]).exists())
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+
     @mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT})
     def test_cli_accepts_guard(self):
         out = L.main(["retire", "--child", CHILD, "--guard", str(self.hr), "--guard", str(self.tb),

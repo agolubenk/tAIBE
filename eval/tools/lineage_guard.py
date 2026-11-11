@@ -188,12 +188,18 @@ def fsync_dir(d):
 
 def write_atomic(f, text, mode):
     """Временный файл со случайным именем (mkstemp: O_EXCL, подложенная заранее ссылка не сработает) → fsync →
-    rename поверх f (rename не идёт по ссылке) → fsync папки. Сбой — временный файл удаляется."""
+    rename поверх f (rename не идёт по ссылке) → fsync папки. Сбой — временный файл удаляется, fd закрыт (GLM #120
+    89dcafeb9, minor resources: fchmod до with оставлял fd открытым на всю жизнь сторожа)."""
     f = Path(f)
     fd, tmp = tempfile.mkstemp(prefix=f.name + ".", suffix=".tmp-handover", dir=str(f.parent))
     try:
-        os.fchmod(fd, mode)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        try:
+            fh = os.fdopen(fd, "w", encoding="utf-8")
+        except BaseException:
+            os.close(fd)
+            raise
+        with fh:
+            os.fchmod(fh.fileno(), mode)
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
