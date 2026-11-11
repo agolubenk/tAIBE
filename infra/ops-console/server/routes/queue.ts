@@ -18,7 +18,7 @@ import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
 import { changeItemProduct } from '../queue/product-change'
 import { recentPrs } from '../queue/prs'
-import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_SLUG, visibilityKey, type Visibility } from '../queue/products'
+import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_BOARDS, PRODUCT_SLUG, visibilityKey, type Visibility } from '../queue/products'
 import { SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
 const writeSchema = z.object({
@@ -84,10 +84,19 @@ queueRoutes.post('/items/:id/product', requireScope('owner'), async (c) => {
   return c.json(await changeItemProduct(c.get('oqActor'), c.req.param('id'), body.to, body.reason ?? ''))
 })
 
-/** Продукты, которые видит актор: метка и фильтр страницы, параметр product у MCP. */
+/**
+ * Продукты, которые видит актор: метка и фильтр страницы, параметр product у MCP. boards — пространства t-boards продукта:
+ * по ним страница относит строки «Хода работ» к продукту (product-boards.ts); default — продукт строк без столбца product,
+ * его доска пишет сводку карточек в прежний work/cards-stats (infra/ai-council/cards_stats.py).
+ */
 queueRoutes.get('/products', requireScope('read', 'agent'), async (c) => {
   const products = c.get('oqActor').products
-  return c.json({ products: (await listProducts()).filter((p) => canSee(products, p.slug)) })
+  return c.json({
+    default: DEFAULT_PRODUCT,
+    products: (await listProducts())
+      .filter((p) => canSee(products, p.slug))
+      .map((p) => ({ ...p, boards: [...(PRODUCT_BOARDS[p.slug] ?? [])] })),
+  })
 })
 
 queueRoutes.get('/db/:col/:id', requireScope('read', 'agent'), async (c) => {

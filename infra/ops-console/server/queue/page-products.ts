@@ -8,10 +8,14 @@
  * страницы (не из базы) — HR: при другом продукте они спрятаны здесь же классом oq-off.
  * Переносятся пункты из базы, кроме мёржа с вердиктом «Контроля»; входящее — с предупреждением, что его никто не возьмёт.
  * Проход — на изменение снимка items (подписка db) и разметки списков, без периодической работы.
+ * Заголовок вкладки называет выбранный продукт; доски продуктов (boards) уходят в подмену базы (__oqBoards): по ним
+ * задачи «Хода работ» tAIBE, записанные токеном HR, видны в tAIBE.
  */
+import { DEFAULT_PRODUCT } from './product-boards'
+
 export const PRODUCTS_JS = String.raw`(function () {
   'use strict';
-  var DEFAULT = 'hr-helper', KEY = 'oq-product-filter';
+  var DEFAULT = ${JSON.stringify(DEFAULT_PRODUCT)}, KEY = 'oq-product-filter', TITLE = 'Очередь владельца';
   var css = document.createElement('style');
   css.textContent = '.item.oq-off { display: none !important; }' +
     '.item-product { justify-self: start; display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }' +
@@ -27,6 +31,7 @@ export const PRODUCTS_JS = String.raw`(function () {
   function setView(v) {
     filter = v;
     moved = Object.create(null);
+    document.title = TITLE + (v && names[v] ? ' · ' + names[v] : '');
     if (window.__oqView && (window.__oqViewOf ? window.__oqViewOf() : '') !== v) window.__oqView(v);
   }
   function indexDocs() {
@@ -145,6 +150,7 @@ export const PRODUCTS_JS = String.raw`(function () {
       // Без справочника — страница как до v2-lite: ни подписей, ни выбора; сохранённый выбор не действует.
       if (!products.length) { setView(''); return; }
       products.forEach(function (x) { names[x.slug] = x.name; });
+      if (window.__oqBoards) window.__oqBoards(products);
       // Сохранён продукт, которого больше нет (lavaeon до 0016) или не видно, — выбор стирается: иначе подмена базы при
       // каждой загрузке сначала показывала бы пустую очередь.
       var saved = readFilter();

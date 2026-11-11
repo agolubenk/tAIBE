@@ -3,7 +3,7 @@
 /* Тема до первой отрисовки: выбор владельца (кнопка в шапке) лежит в localStorage, «авто» — системная. DOM не трогает. */
 try { var oqTheme = localStorage.getItem('owner-queue-theme'); if (oqTheme === 'light' || oqTheme === 'dark') document.documentElement.setAttribute('data-theme', oqTheme); } catch (e) { /* приватное окно */ }
 </script>
-<title>Очередь владельца HR Helper</title>
+<title>Очередь владельца</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@600&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -447,7 +447,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 <main class="wrap">
   <header class="page-head">
     <a class="skip" href="#queue-data">К пунктам очереди: решения, мёржи, сервер, проверки</a>
-    <h1>Очередь владельца HR Helper</h1>
+    <h1>Очередь владельца</h1>
     <p class="lede">Здесь только то, что требует вас: решения, мёржи (агентам автоматика не даёт вливать код в main), команды на сервере и ручные проверки.</p>
   </header>
 
@@ -941,7 +941,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
 
   var DB_ITEMS = [], dbItemsKey = '';
   // Выбран продукт не HR (выбор вверху, page-scripts.ts __oqView): вшитые пункты — HR, их нет в числах.
-  function otherProduct() { var v = window.__oqViewOf ? window.__oqViewOf() : ''; return !!v && v !== 'hr-helper'; }
+  function otherProduct() { var v = window.__oqViewOf ? window.__oqViewOf() : ''; return !!v && v !== window.__oqDefaultProduct; }
   function allItems() { return (otherProduct() ? [] : ITEMS).concat(DB_ITEMS); }
   // До ответов и пунктов очереди — «…», не числа вшитого снимка 16.10 (QA, 23.10); без связи — снимок с пометкой.
   var LIVE = { checks: false, items: false }, OFFLINE = false;
@@ -1669,11 +1669,16 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     { id: 'secfront', name: 'Безопасность и фронтенд', c: 'var(--c4)' },
     { id: 'ops', name: 'Ops-консоль и прод', c: 'var(--c5)' },
   ];
-  var TRACKS = [], TRACK = {}, DB_TRACKS = [], CARD_STATS = null;
-  function rebuildTracks() {
-    TRACKS = mergeTracks(SEED_TRACKS, DB_TRACKS);
+  // TRACKS — дорожки графиков: направления (BASE_TRACKS) или проекты и секторы t-boards (page-lanes.ts, workList).
+  var TRACKS = [], TRACK = {}, BASE_TRACKS = [], BASE_TRACK = {}, DB_TRACKS = [], CARD_STATS = null;
+  function setTracks(list) {
+    TRACKS = list;
     TRACK = {};
     TRACKS.forEach(function (t, i) { t.i = i; TRACK[t.id] = t; });
+  }
+  function rebuildTracks() {
+    setTracks(BASE_TRACKS = mergeTracks(SEED_TRACKS, DB_TRACKS));
+    BASE_TRACK = TRACK;
   }
   rebuildTracks();
   var PR = function (n) { return 'https://github.com/agolubenk/HR_Helper-v2/pull/' + n; };
@@ -1722,7 +1727,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       if (!/^[A-Za-z0-9_.~:@+-]{1,80}$/.test(r.id)) return;
       var d = r.data, w = {};
       if (d.kind === 'track') { tracks.push(trackFromDb(r.id, d)); return; }
-      if (d.kind === 'stats') { if (r.id === 'cards-stats') stats = statsFromDb(d); return; }
+      // Сводка доски выбранного продукта (SHIM относит её к продукту по data.ws); при всех продуктах — cards-stats (HR).
+      if (d.kind === 'stats') { if (!stats || r.id === 'cards-stats') stats = statsFromDb(d); return; }
+      if (d.kind === 'boards') return; // карта доски — для группировки (page-lanes.ts), не строка плана
       WORK_FIELDS.forEach(function (k) { if (typeof d[k] === 'string') w[k] = d[k].slice(0, k === 'note' ? 600 : 200); });
       if (typeof d.order === 'number') w.order = d.order;
       if (typeof d.milestone === 'boolean') w.milestone = d.milestone;
@@ -1739,7 +1746,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     scheduleDash();
   }
   // Строки — из снимка work выбранного продукта (SHIM); до ответа базы и без связи — пусто, с подписью в графиках.
-  function workList() { return REP.planRows(DB_WORK, WORK_SEED, TRACK); }
+  // Строки отбираются по направлениям базы; группировка (page-lanes.ts) меняет дорожки и track у копий строк.
+  function workList() {
+    var rows = REP.planRows(DB_WORK, WORK_SEED, BASE_TRACK), L = window.__oqLanes ? window.__oqLanes.apply(rows) : null;
+    setTracks(L ? L.tracks : BASE_TRACKS);
+    return L ? L.rows : rows;
+  }
+  if (window.__oqLanes) window.__oqLanes.onChange(scheduleDash);
   function noRows(text) { return DB_WORK_LOADED ? text : OFFLINE ? 'Нет связи с базой — данных нет.' : 'Загружаю…'; }
 
   // ── Ход работ: даты (dParse, diffD, planEndOf, lagOf, stateOf — в блоке oq-pure) ─
@@ -2455,7 +2468,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function paintRelayItem(el, it, e, d) {
     var rl = el.querySelector('.relay-st');
     if (!rl) return;
-    var other = window.__oqProductOf && window.__oqProductOf(it.id) !== 'hr-helper';
+    var other = window.__oqProductOf && window.__oqProductOf(it.id) !== window.__oqDefaultProduct;
     var html = d || e.agentStatus ? '' : other ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id);
     if (rl.innerHTML !== html) rl.innerHTML = html;
     rl.hidden = !html;

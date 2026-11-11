@@ -42,9 +42,11 @@ beforeAll(async () => {
 describe('продукты — схема и справочник', () => {
   it('два продукта после миграций (0016: Lavaeon и HR Helper — один), HR — по умолчанию; токен видит только свои', async () => {
     const all = await call(owner, 'GET', '/products')
+    expect(all.json?.default).toBe('hr-helper')
+    // boards — пространства t-boards продукта (product-boards.ts): по ним страница относит задачи «Хода работ» к продукту.
     expect(all.json?.products).toEqual([
-      { slug: 'hr-helper', name: 'Lavaeon (HR Helper)' },
-      { slug: 'taibe', name: 'tAIBE' },
+      { slug: 'hr-helper', name: 'Lavaeon (HR Helper)', boards: ['hr-helper-lavaeon'] },
+      { slug: 'taibe', name: 'tAIBE', boards: ['aiboards-eval'] },
     ])
     expect(((await call(taibe, 'GET', '/products')).json?.products as { slug: string }[]).map((p) => p.slug)).toEqual(['taibe'])
   })

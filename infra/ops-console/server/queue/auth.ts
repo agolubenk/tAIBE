@@ -12,7 +12,7 @@ import { apiError, type AppEnv } from '../http-types'
 import { randomToken, sha256Hex } from '../lib/crypto'
 import { SESSION_COOKIE } from '../auth/session'
 import { resolveActiveSession } from '../auth/sso'
-import { listProducts, PRODUCT_SLUG, tokenVisibility } from './products'
+import { DEFAULT_PRODUCT, listProducts, PRODUCT_SLUG, tokenVisibility } from './products'
 import type { Actor, Scope } from './store'
 
 export const SCOPES: readonly Scope[] = ['read', 'agent', 'owner', 'notify']
@@ -39,7 +39,7 @@ export async function createToken(name: string, scopes: Scope[], opts: TokenOpti
   if (clean.includes('notify') && clean.length > 1) throw new Error('Область notify выпускается отдельным токеном, без других областей')
   const owner = clean.includes('owner')
   // owner видит все продукты (tokenVisibility): другой список в строке обещал бы ограничение, которого нет.
-  const products = [...new Set(opts.products ?? [owner ? '*' : 'hr-helper'])]
+  const products = [...new Set(opts.products ?? [owner ? '*' : DEFAULT_PRODUCT])]
   if (owner && (products.length !== 1 || products[0] !== '*')) throw new Error('Токен owner видит все продукты: продукты — только «*» или не указывать')
   if (products.includes('*')) {
     if (!owner) throw new Error('Продукты «*» — только у токена с областью owner')
