@@ -19,6 +19,10 @@ type Reports = {
   prPoints: (prs: Pr[], now: Date) => { pts: { n: number; h: number; open: boolean; ours: boolean }[]; merged7: number; median: number }
   dailyCounts: (dates: unknown[], start: Date, n: number) => number[]
   medianForecast: (counts: number[], win: number, ahead: number) => number[]
+  datedCount: (dates: unknown[]) => number
+  meanForecast: (counts: number[], win: number, ahead: number) => number[]
+  replan: (done: number, total: number, rate: number, maxDays: number) => { days: number | null; vals: number[] }
+  FORECAST_MIN: number
   prCap: (pts: { h: number }[], niceMax: (v: number) => number) => { ymax: number; cap: number; over: number }
   splitByProduct: <T>(rows: T[], productOf: (r: T) => string | undefined) => Record<string, number>
   loadPrs: () => void
@@ -182,6 +186,35 @@ describe('правая ось очереди: пунктов за день и м
     expect(r.medianForecast([1, 3, 2, 8], 3, 2)).toEqual([1, 2, 2, 3, 3, 3])
     expect(r.medianForecast([0, 0, 4, 4], 4, 1)).toEqual([0, 0, 0, 2, 2])
     expect(r.medianForecast([], 14, 3)).toEqual([0, 0, 0])
+  })
+})
+
+describe('«Задачи агентов: план и факт» — темп, прогноз и пересчитанный план', () => {
+  const { r } = load()
+  it('прогноз — от 7 дат; без даты — не в счёт', () => {
+    expect(r.FORECAST_MIN).toBe(7)
+    expect(r.datedCount(['2026-11-01', '2026-11-02T10:00:00Z', '', null, 'нет даты', undefined])).toBe(2)
+  })
+  it('скользящее среднее за окно с текущим днём, дальше — последнее значение ahead дней; редкие закрытия — не ноль', () => {
+    expect(r.meanForecast([2, 0, 4], 2, 2)).toEqual([2, 1, 2, 2, 2])
+    // Медиана такого ряда — 0 (закрытия пачками), среднее — 3/7.
+    const sparse = [0, 0, 3, 0, 0, 0, 0]
+    expect(r.medianForecast(sparse, 7, 0).at(-1)).toBe(0)
+    expect(r.meanForecast(sparse, 7, 0).at(-1)).toBeCloseTo(3 / 7)
+    expect(r.meanForecast([], 14, 2)).toEqual([0, 0])
+  })
+  it('пересчитанный план: от сделанного до всего объёма с темпом; срок — дней до конца', () => {
+    expect(r.replan(4, 10, 2, 180)).toEqual({ days: 3, vals: [4, 6, 8, 10] })
+    // Последний шаг не перескакивает объём.
+    expect(r.replan(0, 5, 2, 180)).toEqual({ days: 3, vals: [0, 2, 4, 5] })
+  })
+  it('всё готово — срок 0; темпа нет — срока нет и линии нет; дольше потолка — линия до потолка без срока', () => {
+    expect(r.replan(10, 10, 1, 180)).toEqual({ days: 0, vals: [10] })
+    expect(r.replan(3, 10, 0, 180)).toEqual({ days: null, vals: [3] })
+    const far = r.replan(0, 100, 0.1, 30)
+    expect(far.days).toBeNull()
+    expect(far.vals).toHaveLength(31)
+    expect(far.vals.at(-1)).toBeCloseTo(3)
   })
 })
 

@@ -323,6 +323,18 @@ summary > .scope { margin-left: auto; }
 .dv::before { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; border-left: 1px solid var(--muted); }
 .dv > span { position: absolute; top: 0; height: 100%; }
 .hb-h { margin: 0; font-size: 13px; font-weight: 600; }
+/* Разрез графика «Хода работ» (page-lanes.ts: #pick-plan, #pick-status, #pick-cards) и строки «продукт → раздел». */
+.pick { justify-self: start; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); max-width: 100%; min-width: 0; }
+.oq-pick { font: inherit; font-size: 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; min-width: 0; max-width: 100%; }
+@media (pointer: coarse) { .oq-pick { font-size: 16px; min-height: 36px; } }
+.hb-prod .hb-name { font-weight: 600; }
+.hb-sub .hb-name { padding-left: 14px; color: var(--muted); }
+/* Готовность: полоса — все карточки раздела (фон — открытые), заливка — закрытые и на ревью, чёрточка — план к сегодня. */
+.hb-bar.rd { position: relative; gap: 0; border-radius: 4px; background: var(--st-none); }
+.hb-bar.rd > span { border-radius: 0; }
+.hb-bar.rd > span:first-of-type { border-radius: 4px 0 0 4px; }
+.rd-plan { position: absolute; top: -3px; bottom: -3px; width: 0; margin-left: -1px; border-left: 2px solid var(--ink); }
+.lg i.tick { width: 2px; height: 12px; border-radius: 0; vertical-align: -2px; }
 details.hb-closed > summary:focus-visible { outline: 2px solid var(--c1); outline-offset: 2px; border-radius: 4px; }
 details.hb-closed > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 details.hb-closed > .hbars { margin-top: 6px; }
@@ -555,18 +567,23 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     </div>
     <div class="card" id="card-plan">
       <h3>Задачи агентов: план и факт</h3>
-      <p class="sub">Пунктир — сколько задач должно быть готово к дате по плану, сплошная — сколько готово на деле. Если сплошная ниже пунктира, агенты отстают.</p>
+      <p class="sub">Левая ось — нарастающим итогом: пунктир — сколько задач должно быть готово по плану, сплошная — сколько готово на деле (ниже пунктира — агенты отстают); пунктир от «сегодня» — пересчитанный план: оставшиеся задачи при среднем темпе за 14 дней. Правая ось — сколько задач готово за день; пунктир — среднее за 14 дней и прогноз на 30 дней вперёд.</p>
+      <label class="pick">Срез <select class="oq-pick" id="pick-plan"><option value="">Все задачи</option></select></label>
+      <p class="sub" id="plan-forecast" hidden></p>
       <div class="lg" id="lg-plan"></div>
       <div class="chart" id="ch-plan"></div>
     </div>
     <div class="card" id="card-status">
       <h3>Готовность по разделам</h3>
+      <p class="sub">Карточки t-boards задач агентов — по продуктам, внутри продукта — по выбранному разрезу. Полоса — все карточки раздела: закрытые, на ревью и открытые; чёрточка — сколько из них по плану закрыто к сегодня (карточки задач со сроком не позже сегодня). Выделенное число «план» — раздел отстаёт.</p>
+      <label class="pick">Разрез <select class="oq-pick" id="pick-status"><option value="project">по проектам t-boards</option><option value="sector">по секторам t-boards</option><option value="track">по блокам (направлениям)</option><option value="product">только продукты</option></select></label>
       <div class="lg" id="lg-status"></div>
       <div class="hbars" id="ch-status"></div>
     </div>
     <div class="card" id="plan-cards" hidden>
       <h3>Карточки t-boards в плане</h3>
-      <p class="sub">Сколько карточек «Задач» и «Ошибок» прикреплено к строкам каждого направления и сколько из них уже закрыто («закрыто», «выполненные», «завершённые»).</p>
+      <p class="sub">Сколько карточек «Задач» и «Ошибок» прикреплено к задачам агентов — по продуктам, внутри продукта — по выбранному разрезу, и сколько из них уже закрыто («закрыто», «выполненные», «завершённые»).</p>
+      <label class="pick">Разрез <select class="oq-pick" id="pick-cards"><option value="project">по проектам t-boards</option><option value="sector">по секторам t-boards</option><option value="track">по блокам (направлениям)</option><option value="product">только продукты</option></select></label>
       <div class="lg" id="lg-plan-cards"></div>
       <div class="hbars" id="ch-plan-cards"></div>
       <div id="plan-cards-trend" hidden>
@@ -625,9 +642,9 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
         <li><b>Над списком</b> — строка связи (подключено ли хранилище ответов; «нет связи» — показан последний снимок), полоса и число — сколько пунктов закрыто, «Показать выполненные» / «Скрыть выполненные» — закрытые пункты в списке. Ссылка вида <code>#item=&lt;id&gt;</code> открывает и подсвечивает один пункт, даже закрытый или из другого продукта.</li>
         <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и все отчёты «Хода работ» — только по нему, «Все продукты» — по всем, с разбивкой по продуктам под показателями. «＋ Поставить задачу» открывает форму (горячие клавиши — под её кнопками; черновик помнится, точка на кнопке — в форме остался текст). «Очередь» — переходы к разделам с числом открытых; «ждут · снова» — сколько ждут вас и сколько вернулось. «Ход работ» — переходы к отчётам с их главными числами. «К решениям ↓» — к первому разделу очереди (на средних экранах). Справа — тема: авто, светлая или тёмная.</li>
         <li><b>Шапка на телефоне</b> — одна строка значков: ＋ — поставить задачу, список с числом — разделы очереди, столбики — «Отчёты» (весь «Ход работ» в отдельном окне, ✕ или Esc закрывают), ◐ / ☀ / ☾ — тема. Название каждого значка — в его подписи для экранного чтения и во всплывающей подсказке.</li>
-        <li><b>Ход работ: показатели</b> — плитки сверху: ваша очередь, задачи агентов, просрочки, медиана ожидания мёржа, вехи, открытые карточки t-boards. У каждой карточки отчёта, когда продуктов больше одного, подписано, какой продукт она показывает.</li>
+        <li><b>Ход работ: показатели</b> — плитки сверху: ваша очередь, задачи агентов, просрочки, медиана ожидания мёржа, вехи, открытые карточки t-boards. У каждой карточки отчёта, когда продуктов больше одного, подписано, какой продукт она показывает. Список рядом с заголовком «Ход работ» группирует Гант, роадмап, отчёт и отставание: по блокам (направлениям), проектам или секторам t-boards, по продуктам.</li>
         <li><b>Ваша очередь по дням</b> — левая ось: сколько пунктов поставлено вам и сколько закрыто, нарастающим итогом (разрыв — то, что ждёт вас). Правая ось: сколько пунктов пришло за день; пунктир — медиана за 14 дней, правее красной линии «сегодня» — прогноз на 30 дней. Наведите на график — подсказка с числами дня.</li>
-        <li><b>Задачи агентов: план и факт</b> — пунктир — сколько задач должно быть готово по плану, сплошная — сколько готово на деле; сплошная ниже — агенты отстают. <b>Готовность по разделам</b> — ваши пункты по типам и задачи агентов по направлениям: сделано, в работе, ждёт, в плане. <b>Карточки t-boards в плане</b> — сколько карточек прикреплено к направлениям и сколько закрыто, ниже — открытые карточки по дням сверок.</li>
+        <li><b>Задачи агентов: план и факт</b> — левая ось, нарастающим итогом: пунктир — сколько задач должно быть готово по плану, сплошная — сколько готово на деле (ниже пунктира — агенты отстают); пунктир от «сегодня» — пересчитанный план: оставшиеся задачи при среднем темпе за 14 дней, над графиком — новый срок и сдвиг от плана. Правая ось — сколько задач готово за день; пунктир — среднее за 14 дней и прогноз на 30 дней. Меньше 7 дат — прогноз не рисуется, подпись «мало данных». Список «Срез» — все задачи или один продукт, проект, сектор или блок. <b>Готовность по разделам</b> — карточки t-boards задач агентов по продуктам, внутри — по проектам, секторам или блокам (список «Разрез»): закрыто, на ревью, открыто и чёрточка — сколько должно быть закрыто по плану к сегодня. <b>Карточки t-boards в плане</b> — сколько карточек прикреплено по продуктам и своему разрезу и сколько закрыто, ниже — открытые карточки по дням сверок.</li>
         <li><b>Отставание от плана</b> — сверху открытые задачи позже плана, свёрнуто ниже — закрытые со сдвигом срока. <b>Сколько PR ждали мёржа</b> — точка на PR (пустая — ещё открыт), шкала до 36 часов: дольше — треугольник на верхней линии с номером и настоящим числом часов; только PR репозитория HR.</li>
         <li><b>Диаграмма Ганта</b> — рамка — план, заливка — факт, красный хвост — отставание; шкала прокручивается вбок, названия задач остаются слева, наведите на строку — даты и статус. <b>Роадмап</b> — вехи по неделям: залитый ромб — достигнута, пустой — по плану, красная обводка — просрочена. <b>Отчёт по задачам</b> — таблица всех задач (раскрытая помнится); кнопка «N карточек» открывает список карточек t-boards строки.</li>
       </ol>
@@ -1794,12 +1811,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function legend(id, list) {
     document.getElementById(id).innerHTML = list.map(function (x) {
-      return '<span><i class="' + (x.cls || '') + '" style="background-color:' + x.c + '"></i>' + esc(x.t) + '</span>';
+      return '<span>' + (x.c ? '<i class="' + (x.cls || '') + '" style="background-color:' + x.c + '"></i>' : '') + esc(x.t) + '</span>';
     }).join('');
   }
   function widthOf(host) { return Math.max(300, Math.floor(host.clientWidth || 720)); }
 
   // cfg.right — вторая шкала справа ({ title, series }): свои значения, своя ось, те же дни и подсказка.
+  // s.end — своя подпись у конца линии вместо «имя: число»; '' — без подписи.
   function lineChart(host, cfg) {
     var R = cfg.right, W = widthOf(host), H = 230, m = { l: 34, r: R ? 40 : 112, t: R ? 24 : 14, b: 28 };
     var n = cfg.days.length, iw = W - m.l - m.r, ih = H - m.t - m.b, vmax = 1, rmax = 1;
@@ -1835,7 +1853,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       o += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"' + (s.dash ? ' stroke-dasharray="6 4"' : '') + '/>';
       if (last >= 0) {
         o += '<circle cx="' + X(last) + '" cy="' + Yf(s.vals[last]) + '" r="4" fill="' + s.color + '" stroke="var(--surface)" stroke-width="2"/>';
-        ends.push({ x: X(last), y: Yf(s.vals[last]) + 4, t: s.name + ': ' + nf(s.vals[last], dec) });
+        if (s.end !== '') ends.push({ x: X(last), y: Yf(s.vals[last]) + 4, t: s.end || s.name + ': ' + nf(s.vals[last], dec) });
       }
     }
     cfg.series.forEach(function (s) { draw(s, Y, 0); });
@@ -1887,16 +1905,18 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     });
     var res = { total: added[past - 1] || 0, done: done[past - 1] || 0 };
     var perDay = REP.dailyCounts(items.map(function (it) { return it.added; }), start, past);
-    var med = REP.medianForecast(perDay, OWNER_MED_DAYS, OWNER_AHEAD);
-    for (var k = 1; k <= OWNER_AHEAD; k++) { days.push(addD(t, k)); added.push(null); done.push(null); perDay.push(null); }
+    // Меньше FORECAST_MIN пунктов с датой — медиана и прогноз не рисуются: по паре точек это шум, а не прогноз.
+    var dated = REP.datedCount(items.map(function (it) { return it.added; })), med = dated >= REP.FORECAST_MIN ? REP.medianForecast(perDay, OWNER_MED_DAYS, OWNER_AHEAD) : null;
+    if (med) for (var k = 1; k <= OWNER_AHEAD; k++) { days.push(addD(t, k)); added.push(null); done.push(null); perDay.push(null); }
     legend('lg-owner', [{ t: 'Поставлено вам', c: 'var(--c1)', cls: 'ln' }, { t: 'Закрыто вами', c: 'var(--c3)', cls: 'ln' },
       { t: 'Поставлено за день (правая ось)', c: 'var(--c5)', cls: 'ln' },
-      { t: 'Медиана за ' + OWNER_MED_DAYS + ' дн. и прогноз на ' + OWNER_AHEAD + ' дн. (правая ось)', c: 'var(--c5)', cls: 'ln dash' }]);
+      med ? { t: 'Медиана за ' + OWNER_MED_DAYS + ' дн. и прогноз на ' + OWNER_AHEAD + ' дн. (правая ось)', c: 'var(--c5)', cls: 'ln dash' }
+        : { t: 'Медиана и прогноз: мало данных — дата есть у ' + dated + ' ' + plural(dated, 'пункта', 'пунктов', 'пунктов') + ', нужно хотя бы ' + REP.FORECAST_MIN }]);
     lineChart(document.getElementById('ch-owner'), {
       label: 'Очередь владельца по дням: поставлено и закрыто нарастающим итогом; справа — пунктов за день и медиана с прогнозом на месяц',
       days: days, todayIdx: past - 1, title: 'всего',
       series: [{ name: 'Поставлено', color: 'var(--c1)', vals: added }, { name: 'Закрыто', color: 'var(--c3)', vals: done }],
-      right: { title: 'в день', series: [{ name: 'За день', color: 'var(--c5)', vals: perDay }, { name: 'Медиана', color: 'var(--c5)', vals: med, dash: true }] },
+      right: { title: 'в день', series: [{ name: 'За день', color: 'var(--c5)', vals: perDay }].concat(med ? [{ name: 'Медиана', color: 'var(--c5)', vals: med, dash: true }] : []) },
       extra: function (j) {
         if (j >= past) return 'прогноз: медиана последних ' + OWNER_MED_DAYS + ' дн.';
         var w = added[j] - done[j]; return w ? 'ждали вас: ' + w : 'очередь пуста';
@@ -1905,29 +1925,74 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return res;
   }
 
+  // Темп — среднее готовых за день за PLAN_WIN дней (закрытия редкие и пачками: медиана — ноль), прогноз темпа — на
+  // PLAN_AHEAD дней. Пересчитанный план — оставшиеся задачи среза при этом темпе; срок дальше PLAN_MAX дней не считается.
+  var PLAN_WIN = 14, PLAN_AHEAD = 30, PLAN_MAX = 180;
+  function baseTrackName(id) { var tr = BASE_TRACK[id]; return tr ? tr.name : id; }
   function planChart(ws, t) {
-    var host = document.getElementById('ch-plan');
-    var wp = ws.filter(function (w) { return planEndOf(w); });
-    if (!wp.length) { host.innerHTML = '<p class="empty">' + noRows('Нет задач с планом.') + '</p>'; return; }
-    var start = null, end = t;
+    var host = document.getElementById('ch-plan'), note = document.getElementById('plan-forecast');
+    var part = window.__oqLanes ? window.__oqLanes.sliceRows(ws, baseTrackName) : { rows: ws, name: '' };
+    var wp = part.rows.filter(function (w) { return planEndOf(w); });
+    note.hidden = true;
+    if (!wp.length) {
+      legend('lg-plan', []);
+      host.innerHTML = '<p class="empty">' + esc(noRows(part.name ? 'В срезе «' + part.name + '» нет задач с планом.' : 'Нет задач с планом.')) + '</p>';
+      return;
+    }
+    var start = t, planFin = null;
     wp.forEach(function (w) {
-      var ps = dParse(w.planStart) || planEndOf(w), pe = planEndOf(w), s = dParse(w.start);
-      if (!start || ps < start) start = ps;
-      if (s && s < start) start = s;
-      if (pe > end) end = pe;
+      var pe = planEndOf(w);
+      [dParse(w.planStart), pe, dParse(w.start), dParse(w.end)].forEach(function (d) { if (d && d < start) start = d; });
+      if (!planFin || pe > planFin) planFin = pe;
     });
+    // Даты строк разбираются один раз, а не на каждый день шкалы: график перестраивается и при каждой смене ширины.
+    var past = diffD(t, start) + 1, pes = wp.map(planEndOf), ens = wp.map(function (w) { return dParse(w.end); });
+    var endIso = wp.map(function (w) { return w.end; }), dated = REP.datedCount(endIso), enough = dated >= REP.FORECAST_MIN;
+    var perDay = REP.dailyCounts(endIso, start, past), total = wp.length;
+    var done = ens.filter(function (e) { return e && e <= t; }).length, left = total - done;
+    var rate = enough ? REP.meanForecast(perDay, PLAN_WIN, 0)[past - 1] : 0;
+    var rp = enough ? REP.replan(done, total, rate, PLAN_MAX) : null, finish = rp && rp.days != null ? addD(t, rp.days) : null;
+    var end = planFin > t ? planFin : t;
+    if (enough && addD(t, PLAN_AHEAD) > end) end = addD(t, PLAN_AHEAD);
+    if (finish && finish > end) end = finish;
     var days = [];
     for (var d = start; d <= end; d = addD(d, 1)) days.push(d);
-    // Даты строк разбираются один раз, а не на каждый день шкалы: график перестраивается и при каждой смене ширины.
-    var pes = wp.map(planEndOf), ens = wp.map(function (w) { return dParse(w.end); });
+    var n = days.length;
     var plan = days.map(function (dd) { return pes.filter(function (pe) { return pe <= dd; }).length; });
+    var planDay = days.map(function (dd) { return pes.filter(function (pe) { return +pe === +dd; }).length; });
     var fact = days.map(function (dd) { return dd > t ? null : ens.filter(function (e) { return e && e <= dd; }).length; });
-    legend('lg-plan', [{ t: 'По плану', c: 'var(--c2)', cls: 'ln dash' }, { t: 'Готово на деле', c: 'var(--c3)', cls: 'ln' }]);
+    var re = days.map(function (_, j) { var k = j - past + 1; return rp && k >= 0 && k < rp.vals.length ? rp.vals[k] : null; });
+    var pd = perDay.concat(days.slice(past).map(function () { return null; }));
+    var avg = enough ? REP.meanForecast(perDay, PLAN_WIN, Math.min(PLAN_AHEAD, n - past)) : null;
+    while (avg && avg.length < n) avg.push(null);
+    var series = [{ name: 'План', color: 'var(--c2)', vals: plan, dash: true }, { name: 'Факт', color: 'var(--c3)', vals: fact }];
+    if (rp && rp.vals.length > 1) series.push({ name: 'Пересчитанный план', color: 'var(--c3)', vals: re, dash: true, end: finish ? 'всё к ' + fmtD(finish) : 'дольше ' + PLAN_MAX + ' дн.' });
+    var right = [{ name: 'Готово за день', color: 'var(--c5)', vals: pd, end: '' }];
+    if (avg) right.push({ name: 'Темп', color: 'var(--c5)', vals: avg, dash: true });
+    legend('lg-plan', [{ t: 'По плану', c: 'var(--c2)', cls: 'ln dash' }, { t: 'Готово на деле', c: 'var(--c3)', cls: 'ln' }]
+      .concat(series.length > 2 ? [{ t: 'Пересчитанный план — по темпу', c: 'var(--c3)', cls: 'ln dash' }] : [])
+      .concat([{ t: 'Готово за день (правая ось)', c: 'var(--c5)', cls: 'ln' }])
+      .concat(avg ? [{ t: 'Темп: среднее за ' + PLAN_WIN + ' дн. и прогноз на ' + PLAN_AHEAD + ' дн. (правая ось)', c: 'var(--c5)', cls: 'ln dash' }] : []));
+    var shift = finish ? diffD(finish, planFin) : 0, gap = plan[past - 1] - fact[past - 1];
+    note.textContent = (part.name ? 'Срез «' + part.name + '». ' : '') + (gap > 0 ? 'Сегодня отстаём от плана на ' + gap + ' ' + plural(gap, 'задачу', 'задачи', 'задач') + '. ' : '') + (!enough
+      ? 'Прогноз и пересчитанный план не строятся: мало данных — дата готовности есть у ' + dated + ' ' + plural(dated, 'задачи', 'задач', 'задач') + ', нужно хотя бы ' + REP.FORECAST_MIN + '.'
+      : !left ? 'Все ' + total + ' ' + plural(total, 'задача', 'задачи', 'задач') + ' с планом готовы.'
+      : !(rate > 0) ? 'За последние ' + PLAN_WIN + ' дн. задачи не закрывались — срок по темпу не считается; осталось ' + left + ' из ' + total + '.'
+      : 'Пересчитанный план: осталось ' + left + ' из ' + total + ', темп — ' + nf(rate, 1) + ' в день (среднее за ' + PLAN_WIN + ' дн.) → ' +
+        (finish ? 'всё к ' + fmtD(finish) + ' (через ' + rp.days + ' дн.)' : 'дольше ' + PLAN_MAX + ' дн.') + '; по плану — к ' + fmtD(planFin) +
+        (finish ? (shift > 0 ? ', позже плана на ' + shift + ' дн.' : ', в срок') : '') + '.');
+    note.hidden = false;
     lineChart(host, {
-      label: 'Задачи агентов: план и факт нарастающим итогом',
-      days: days, todayIdx: diffD(t, start),
-      series: [{ name: 'План', color: 'var(--c2)', vals: plan, dash: true }, { name: 'Факт', color: 'var(--c3)', vals: fact }],
-      extra: function (j) { if (fact[j] == null) return ''; var g = plan[j] - fact[j]; return g > 0 ? 'отстаём на ' + g + ' задач' : 'в графике'; },
+      label: 'Задачи агентов: план и факт нарастающим итогом, пересчитанный план; справа — готово за день и средний темп с прогнозом',
+      days: days, todayIdx: past - 1, title: 'всего',
+      series: series,
+      right: { title: 'в день', series: right },
+      extra: function (j) {
+        var p = planDay[j] ? 'по плану за день: ' + planDay[j] : '';
+        if (fact[j] == null) return p;
+        var g = plan[j] - fact[j];
+        return [p, g > 0 ? 'отстаём на ' + g + ' задач' : 'в графике'].filter(Boolean).join('\n');
+      },
     });
   }
 
@@ -1994,53 +2059,69 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return pr;
   }
 
-  function statusChart(ws) {
-    var rows = [['decision', 'Вам: решения'], ['merge', 'Вам: мёржи'], ['server', 'Вам: на сервере'], ['check', 'Вам: проверки']].map(function (k) {
-      var its = allItems().filter(function (it) { return it.kind === k[0]; });
-      var d = its.filter(function (it) { return isDone(it, state[it.id] || {}); }).length;
-      return { name: k[1], c: { done: d, doing: 0, blocked: its.length - d, planned: 0 }, owner: true };
+  // «Готовность по разделам» (просьба владельца 11.11): карточки t-boards задач агентов по продуктам, внутри — по разрезу
+  // #pick-status (page-lanes.ts cardsBy). Факт — закрыто и на ревью, план — карточки задач со сроком не позже сегодня.
+  var GROUP_CAP = 12;
+  function ymdOf(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function cardsOf(id, ws, t) {
+    return window.__oqLanes ? window.__oqLanes.cards(id, ws, ymdOf(t), baseTrackName) : { how: 'product', products: [] };
+  }
+  // Разделов продукта больше GROUP_CAP — последние сводятся в «Остальные (N)».
+  function capGroups(gs) {
+    if (gs.length <= GROUP_CAP) return gs;
+    var rest = { name: 'Остальные (' + (gs.length - GROUP_CAP + 1) + ')', c: { closed: 0, review: 0, open: 0 }, total: 0, due: 0 };
+    gs.slice(GROUP_CAP - 1).forEach(function (g) {
+      rest.total += g.total; rest.due += g.due;
+      ['closed', 'review', 'open'].forEach(function (k) { rest.c[k] += g.c[k]; });
     });
-    REP.tracksIn(TRACKS, ws).forEach(function (tr) {
-      var c = { done: 0, doing: 0, blocked: 0, planned: 0 };
-      ws.forEach(function (w) { if (w.track === tr.id) c[stateOf(w)]++; });
-      rows.push({ name: 'Агенты: ' + tr.name, c: c });
-    });
-    var max = 1;
-    rows.forEach(function (r) { r.total = r.c.done + r.c.doing + r.c.blocked + r.c.planned; if (r.total > max) max = r.total; });
-    legend('lg-status', ['done', 'doing', 'blocked', 'planned'].map(function (s) { return { t: s === 'blocked' ? 'ждёт (вас или блокер)' : ST_NAME[s], c: ST_COLOR[s] }; }));
-    document.getElementById('ch-status').innerHTML = rows.map(function (r) {
-      var segs = ['done', 'doing', 'blocked', 'planned'].filter(function (s) { return r.c[s]; }).map(function (s) {
-        return '<span style="flex:' + r.c[s] + ' 1 0;background:' + ST_COLOR[s] + '"' + tipAttr([r.name, (r.owner && s === 'blocked' ? 'ждёт вас' : ST_NAME[s]) + ': ' + r.c[s] + ' из ' + r.total]) + '></span>';
-      }).join('');
-      return '<div class="hb"><span class="hb-name" title="' + esc(r.name) + '">' + esc(r.name) + '</span>' +
-        '<div class="hb-bar"><div style="display:flex;gap:2px;width:' + (r.total ? Math.max(4, r.total * 100 / max) : 0) + '%">' + segs + '</div></div>' +
-        '<span class="hb-val">' + r.c.done + ' из ' + r.total + '</span></div>';
+    return gs.slice(0, GROUP_CAP - 1).concat([rest]);
+  }
+  // Строки «продукт → разделы»: row(x, sub) — html одной строки; при разрезе «только продукты» — без разделов.
+  function productRows(r, row) {
+    return r.products.map(function (p) {
+      return row(p, false) + (r.how === 'product' ? [] : capGroups(p.groups)).map(function (g) { return row(g, true); }).join('');
     }).join('');
   }
+  function statusChart(ws, t) {
+    var host = document.getElementById('ch-status'), r = cardsOf('pick-status', ws, t), sum = { closed: 0, total: 0, due: 0 };
+    r.products.forEach(function (p) { sum.closed += p.c.closed; sum.total += p.total; sum.due += p.due; });
+    legend('lg-status', [{ t: 'закрыто', c: 'var(--st-good)' }, { t: 'на ревью — ждёт вашего «да»', c: 'var(--st-warn)' }, { t: 'открыто', c: 'var(--st-none)' },
+      { t: 'по плану закрыто к сегодня', c: 'var(--ink)', cls: 'tick' }]);
+    if (!sum.total) { host.innerHTML = '<p class="empty">' + esc(noRows('К задачам агентов карточки t-boards ещё не прикреплены.')) + '</p>'; return sum; }
+    var bare = ws.filter(function (w) { return !(w.cards || []).some(function (c) { return c.ws && !c.archived; }); }).length;
+    host.innerHTML = productRows(r, function (x, sub) {
+      var c = x.c, late = c.closed < x.due;
+      function pct(v) { return (v * 100 / x.total).toFixed(1) + '%'; }
+      return '<div class="hb ' + (sub ? 'hb-sub' : 'hb-prod') + '"' + tipAttr([x.name, 'закрыто: ' + c.closed + ' из ' + x.total, c.review ? 'на ревью: ' + c.review : '',
+        'открыто: ' + c.open, 'по плану к сегодня: ' + x.due + (late ? ' — отстаём на ' + (x.due - c.closed) : '')]) + '>' +
+        '<span class="hb-name" title="' + esc(x.name) + '">' + esc(x.name) + '</span>' +
+        '<div class="hb-bar rd">' + (c.closed ? '<span style="width:' + pct(c.closed) + ';background:var(--st-good)"></span>' : '') +
+        (c.review ? '<span style="width:' + pct(c.review) + ';background:var(--st-warn)"></span>' : '') +
+        (x.due ? '<i class="rd-plan" style="left:' + pct(x.due) + '"></i>' : '') + '</div>' +
+        '<span class="hb-val' + (late ? ' is-late' : '') + '">' + c.closed + ' из ' + x.total + ' · план ' + x.due + '</span></div>';
+    }) + (bare ? '<p class="empty">Без карточек t-boards: ' + bare + ' ' + plural(bare, 'задача', 'задачи', 'задач') + ' — в готовность не входят.</p>' : '');
+    return sum;
+  }
 
-  // Карточки t-boards по направлениям (из списков строк) и открытые карточки по дням (из сводки сверки).
-  function cardsChart(ws) {
+  // Карточки t-boards задач агентов — по продуктам, внутри — по разрезу #pick-cards; открытые карточки по дням — из сводки сверки.
+  function cardsChart(ws, t) {
     var card = document.getElementById('plan-cards'), st = CARD_STATS;
     var KS = [['closed', 'закрыто', 'var(--st-good)'], ['review', 'на ревью — ждёт вашего «да»', 'var(--st-warn)'], ['open', 'открыто', 'var(--st-none)']];
-    var rows = TRACKS.map(function (tr) {
-      var c = { closed: 0, review: 0, open: 0 };
-      // Карточки прежнего трекера (архив) — не карточки досок: в счёт не идут.
-      ws.forEach(function (w) { if (w.track === tr.id && w.cards) w.cards.forEach(function (x) { if (!x.archived) c[x.closed ? 'closed' : x.review ? 'review' : 'open']++; }); });
-      return { name: tr.name, c: c, total: c.closed + c.review + c.open };
-    }).filter(function (r) { return r.total; });
-    card.hidden = !rows.length && !st;
+    var r = cardsOf('pick-cards', ws, t);
+    card.hidden = !r.products.length && !st;
     if (card.hidden) return;
+    // Одна шкала на продукты и разделы — полосы сравнимы между собой.
     var max = 1;
-    rows.forEach(function (r) { if (r.total > max) max = r.total; });
+    r.products.forEach(function (p) { if (p.total > max) max = p.total; });
     legend('lg-plan-cards', KS.map(function (k) { return { t: k[1], c: k[2] }; }));
-    document.getElementById('ch-plan-cards').innerHTML = rows.map(function (r) {
-      var segs = KS.filter(function (k) { return r.c[k[0]]; }).map(function (k) {
-        return '<span style="flex:' + r.c[k[0]] + ' 1 0;background:' + k[2] + '"' + tipAttr([r.name, k[1] + ': ' + r.c[k[0]] + ' из ' + r.total]) + '></span>';
+    document.getElementById('ch-plan-cards').innerHTML = productRows(r, function (x, sub) {
+      var segs = KS.filter(function (k) { return x.c[k[0]]; }).map(function (k) {
+        return '<span style="flex:' + x.c[k[0]] + ' 1 0;background:' + k[2] + '"' + tipAttr([x.name, k[1] + ': ' + x.c[k[0]] + ' из ' + x.total]) + '></span>';
       }).join('');
-      return '<div class="hb"><span class="hb-name" title="' + esc(r.name) + '">' + esc(r.name) + '</span>' +
-        '<div class="hb-bar"><div style="display:flex;gap:2px;width:' + Math.max(4, r.total * 100 / max) + '%">' + segs + '</div></div>' +
-        '<span class="hb-val">' + r.c.closed + ' из ' + r.total + '</span></div>';
-    }).join('') || '<p class="empty">К строкам плана карточки ещё не прикреплены.</p>';
+      return '<div class="hb ' + (sub ? 'hb-sub' : 'hb-prod') + '"><span class="hb-name" title="' + esc(x.name) + '">' + esc(x.name) + '</span>' +
+        '<div class="hb-bar"><div style="display:flex;gap:2px;width:' + Math.max(4, x.total * 100 / max) + '%">' + segs + '</div></div>' +
+        '<span class="hb-val">' + x.c.closed + ' из ' + x.total + '</span></div>';
+    }) || '<p class="empty">К строкам плана карточки ещё не прикреплены.</p>';
     var trend = document.getElementById('plan-cards-trend'), h = st ? st.history.slice().sort(function (a, b) { return a.d < b.d ? -1 : 1; }) : [];
     trend.hidden = h.length < 2;
     if (trend.hidden) return;
@@ -2257,9 +2338,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (sel) Array.prototype.forEach.call(sel.options, function (o) { if (o.value) (by = by || {})[o.value] = o.textContent; });
     return by;
   }
-  function itemProduct(it) { return window.__oqProductOf ? window.__oqProductOf(it.id) : 'hr-helper'; }
+  function itemProduct(it) { return window.__oqProductOf ? window.__oqProductOf(it.id) : window.__oqDefaultProduct; }
   function paintScope(ws) {
-    var names = productNames(), view = window.__oqViewOf ? window.__oqViewOf() : '', hr = names && (names['hr-helper'] || 'HR Helper');
+    var names = productNames(), view = window.__oqViewOf ? window.__oqViewOf() : '', hr = names && (names[window.__oqDefaultProduct] || 'HR Helper');
     document.querySelectorAll('#agents .card').forEach(function (card) {
       var chip = card.querySelector('.scope'), h = card.querySelector('h3');
       if (!names) { if (chip) chip.remove(); return; }
@@ -2270,7 +2351,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     split.hidden = !names || !!view;
     if (split.hidden) return;
     var docs = window.__oqDocs ? window.__oqDocs('work') : [], wp = {};
-    docs.forEach(function (d) { wp[d.id] = d.product; });
+    // Продукт задачи — как в подмене базы: по доскам карточек (задачи tAIBE пишет токен HR), иначе столбец product.
+    docs.forEach(function (d) { wp[d.id] = window.__oqProductOfDoc ? window.__oqProductOfDoc('work', d) : d.product; });
     var its = allItems(), all = REP.splitByProduct(its, itemProduct);
     var open = REP.splitByProduct(its.filter(function (it) { return !isDone(it, state[it.id] || {}); }), itemProduct);
     var work = REP.splitByProduct(ws, function (w) { return wp[w.id]; });
@@ -2293,22 +2375,22 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     lastW = widthOf(document.getElementById('ch-owner'));
     try { r.owner = ownerChart(t); } catch (e) { document.getElementById('ch-owner').textContent = 'График не построился: ' + e.message; }
     try { planChart(ws, t); } catch (e) { document.getElementById('ch-plan').textContent = 'График не построился: ' + e.message; }
-    try { cardsChart(ws); } catch (e) { document.getElementById('ch-plan-cards').textContent = 'График не построился: ' + e.message; }
+    try { cardsChart(ws, t); } catch (e) { document.getElementById('ch-plan-cards').textContent = 'График не построился: ' + e.message; }
     REP.loadPrs();
     try { r.pr = prChart(); } catch (e) { document.getElementById('ch-pr').textContent = 'График не построился: ' + e.message; }
     return r;
   }
   function widthChanged() { return widthOf(document.getElementById('ch-owner')) !== lastW; }
   function renderDash() {
-    var t = today0(), ws = workList(), c = drawCharts(t, ws), lag = { late: 0, days: 0, closedLate: 0 };
-    try { statusChart(ws); } catch (e) { document.getElementById('ch-status').textContent = 'График не построился: ' + e.message; }
+    var t = today0(), ws = workList(), c = drawCharts(t, ws), lag = { late: 0, days: 0, closedLate: 0 }, st = null;
+    try { st = statusChart(ws, t); } catch (e) { document.getElementById('ch-status').textContent = 'График не построился: ' + e.message; }
     try { lag = lagChart(ws, t); } catch (e) { document.getElementById('ch-lag').textContent = 'График не построился: ' + e.message; }
     try { reportTable(ws, t); } catch (e) { document.getElementById('report').textContent = 'Таблица не построилась: ' + e.message; }
     try { gantt(ws, t); } catch (e) { document.getElementById('gantt').textContent = 'Диаграмма не построилась: ' + e.message; }
     try { roadmap(ws, t); } catch (e) { document.getElementById('roadmap').textContent = 'Роадмап не построился: ' + e.message; }
     try { kpis(c.owner, ws, lag, c.pr); } catch (e) { /* плитки необязательны */ }
     try { paintScope(ws); } catch (e) { /* подписи продукта необязательны */ }
-    try { jumpDash(c, ws, lag); } catch (e) { /* числа в шапке необязательны */ }
+    try { jumpDash(c, ws, lag, st); } catch (e) { /* числа в шапке необязательны */ }
     document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
       : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
   }
@@ -2386,10 +2468,11 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // «Ход работ» — те же числа, что в плитках показателей. У графика очереди по дням своего числа здесь нет: он считает
   // и входящие, а «Очередь» рядом — только ваши пункты, два разных «ждут вас» в одной шапке путали бы.
   var jumpD = document.getElementById('jump-dash');
-  function jumpDash(c, ws, lag) {
+  function jumpDash(c, ws, lag, st) {
     var done = ws.filter(function (w) { return w.status === 'done'; }).length, cp = cardsInPlan(ws), cards = cp.dated + cp.undated + cp.owner;
     var v = {
       plan: [done + ' из ' + ws.length + ' готово'],
+      status: [st && st.total ? 'закрыто ' + st.closed + ' из ' + st.total : '', !!st && st.closed < st.due],
       cards: [cards ? 'карточек: ' + cards : ''],
       lag: [lag.late ? 'просрочено: ' + lag.late : 'в срок', lag.late > 0],
       pr: [c.pr && c.pr.merged7 ? 'медиана ' + nf(c.pr.median, 1) + ' ч' : ''],
