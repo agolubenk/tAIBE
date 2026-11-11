@@ -625,6 +625,16 @@ class HandoverTest(Base):
         self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([PRED], [PRED]))
         self.assertIn("после старта сторожа", " ".join(self.lines))
 
+    def test_claude_dir_swapped_with_same_list_file_refuses(self):
+        # Тот же файл списка (inode и время рождения те же) перенесён в новую .claude: решает пин папки (M6).
+        pins = G.take_pins([self.hr, self.tb])
+        (self.tb / ".claude").rename(self.tb / ".claude.old")
+        (self.tb / ".claude").mkdir()
+        (self.tb / ".claude.old" / G.GUARD.name).rename(self.tb / G.GUARD)
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, pins=pins))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([PRED], [PRED]))
+        self.assertIn("после старта сторожа", " ".join(self.lines))
+
     def test_pinned_list_deleted_or_created_refuses(self):
         pins = G.take_pins([self.hr, self.tb])
         (self.tb / G.GUARD).unlink()
@@ -664,6 +674,40 @@ class HandoverTest(Base):
         (G.state_dir() / G.INTENT).write_text(json.dumps(j))  # все old, пины верные — согласован
         self.assertTrue(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
         self.assertEqual(self.get(self.tb)["control"], [SUCC])
+
+    def test_journal_dir_pin_not_matching_start_pin_is_not_settled(self):
+        # Журнал совпадает с папками сейчас, но пин старта этого сторожа — другой: журнал не снимается (M7).
+        files = [str((d / G.GUARD).resolve()) for d in (self.hr, self.tb)]
+        pins = G.take_pins([self.hr, self.tb])
+        G.state_dir().mkdir(parents=True, exist_ok=True)
+        j = {"from": PRED[:8], "to": SUCC[:8], "files": files,
+             "dirpins": [list(pins[str(Path(f).parent.parent)][0]) for f in files]}
+        (G.state_dir() / G.INTENT).write_text(json.dumps(j))
+        forged, tb = dict(pins), str(Path(files[1]).parent.parent)
+        forged[tb] = ((1, 2, 3), pins[tb][1])
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, pins=forged))
+        self.assertIn("прерванной передачи", self.lines[-1])
+        self.assertTrue((G.state_dir() / G.INTENT).exists())
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([PRED], [PRED]))
+
+    def test_list_replaced_with_same_text_after_plan_is_not_overwritten(self):
+        # Тот же текст, но другой файл (новый inode): запись идёт только поверх того файла, что прочитан (M3).
+        real = G.plan
+
+        def swapped(*a, **k):
+            todo = real(*a, **k)
+            f = self.tb / G.GUARD
+            tmp = f.with_name("swap.json")
+            tmp.write_bytes(f.read_bytes())
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, f)
+            return todo
+
+        with mock.patch.object(G, "plan", swapped):
+            self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([PRED], [PRED]))
+        self.assertFalse((G.state_dir() / G.INTENT).exists())
+        self.assertIn("изменился", " ".join(self.lines))
 
     @mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT})
     def test_cli_accepts_guard(self):
