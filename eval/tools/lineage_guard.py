@@ -15,6 +15,7 @@ merge-guard закрывает от записи агентами. Наслед�
 Журнал только сигнал: содержимого для записи в нём нет (папка линий открыта агентам — подделка не должна ничего вписать).
 Прежний текст каждой папки — в `merge-guard.local.json.before-handover` (одна копия, перезаписывается).
 """
+import errno
 import fcntl
 import json
 import os
@@ -30,6 +31,8 @@ GUARD = Path(".claude") / "merge-guard.local.json"
 BACKUP = GUARD.name + ".before-handover"
 INTENT = "guard-handover.intent.json"
 LOCK_WAIT = 60.0  # с на чужую передачу под guard.lock; дольше — отказ, а не вечное ожидание
+FATAL_ERRNO = {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM, errno.EROFS}  # повтор open их не исправит
+MAX_LIST = 1 << 20  # список Контроля — килобайты; больше 1 МБ — испорчен (лог, дамп), не читаем
 SID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -73,7 +76,7 @@ def read_control(f):
     try:
         with os.fdopen(fd, "r", encoding="utf-8") as fh:
             st = os.fstat(fh.fileno())
-            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size > MAX_LIST:
                 return None
             text = fh.read()
         doc = json.loads(text)
@@ -121,14 +124,17 @@ def write_atomic(f, text, mode):
 
 def lock(wait):
     """fd взятой guard.lock или None за wait с. Файл блокировки удалили и создали заново, пока ждали, — наш flock
-    на старом inode ничего не исключает: берём заново. Каждая неудача — занято, другой inode, ссылка вместо файла —
-    ждёт и сверяется со сроком: файл, который пересоздают на каждой попытке, не крутит цикл вечно (fail-closed)."""
+    на старом inode ничего не исключает: берём заново. Занято или другой inode — ждём и сверяемся со сроком: файл,
+    который пересоздают на каждой попытке, не крутит цикл вечно. Ошибка, которую повтор не исправит (ссылка вместо
+    файла, нет прав, не папка), — отказ сразу (fail-closed)."""
     path = ldir() / "guard.lock"
     deadline = time.monotonic() + wait
     while True:
         try:
             fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        except OSError:
+        except OSError as e:
+            if e.errno in FATAL_ERRNO:
+                return None
             fd = None
         if fd is not None:
             try:
@@ -248,6 +254,9 @@ def locked_handover(dirs, pred_sid, succ, suffix, log):
     done = []
     try:
         for f, old, doc, mode in todo:
+            now = read_control(f)  # список правили после plan() (владелец без guard.lock) — не затираем его правку
+            if now is None or now[0] != old:
+                raise OSError(f"{f} изменился после чтения")
             write_atomic(f.with_name(BACKUP), old, 0o600)
             doc["control"] = new_control(doc["control"], pred_sid, succ_sid)
             write_atomic(f, json.dumps(doc, ensure_ascii=False) + "\n", mode)
@@ -263,8 +272,11 @@ def locked_handover(dirs, pred_sid, succ, suffix, log):
             except OSError as e2:
                 lost.append(f)
                 log(f"Контроль: откат {f} не удался ({e2}) — прежний текст в {BACKUP}")
-        if not lost:
-            drop_intent(intent, log)
+        if lost:
+            log(f"Контроль: сбой записи ({e}), откат не полон: {', '.join(str(f) for f in lost)} — сверить по "
+                f"{BACKUP} и журналу {intent}; предшественника не снимаю")
+            return False
+        drop_intent(intent, log)
         log(f"Контроль: сбой записи ({e}) — файлы возвращены, предшественника не снимаю")
         return False
     drop_intent(intent, log)

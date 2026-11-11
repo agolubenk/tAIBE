@@ -24,7 +24,8 @@
 # Handoff: наследник после приёма пишет квитанцию (lineage.py ack), сторож lineage.py retire проверяет его и снимает
 # предшественника — процессы и окно Terminal (id окна записан при открытии). Уборка остальных — reap_sessions.sh.
 # Предшественник — Контроль (его sessionId в .claude/merge-guard.local.json основной папки $CWD или tAIBE): до снятия
-# сторож заменяет эту запись sessionId наследника из окна, которое открыл этот скрипт (копия .before-<суффикс линии>).
+# сторож заменяет эту запись sessionId наследника из окна, которое открыл этот скрипт (копия
+# merge-guard.local.json.before-handover — одна на папку, перезаписывается).
 # Не вышло — Контроль и предшественник остаются как были, владельцу — прежний s-пункт (lineage_guard.py, IS-233).
 # Роль Т3 получает свой геном (--settings genome/<ключ>.json) и первое сообщение «Сборка Т3, ключ реестра <ключ>…» —
 # по нему включается правило 90 и Нерв узнаёт роль. Окно открывает osascript: первый раз macOS спросит разрешение
@@ -293,12 +294,17 @@ elif [ -n "$HANDOFF" ]; then
   if [ "$DRY" = 0 ] && [ "$RETIRE" != off ]; then
     # --guard: если предшественник — Контроль, сторож впишет наследника в список Контроля этих папок (IS-233).
     # Пустую папку не передаём: cd не вышел — пустой --guard стал бы текущей папкой.
+    # Папка не нашлась — сторож не запускается вовсе (fail-closed): с неполным набором папок он снял бы
+    # предшественника-Контроля, не передав Контроль в пропущенной папке.
     GUARD_TAIBE=$(cd "$TOOLS/../.." 2>/dev/null && pwd) || GUARD_TAIBE=
-    [ -n "$GUARD_TAIBE" ] || echo "# spawn_session: папка tAIBE ($TOOLS/../..) не найдена — Контроль в tAIBE сторож не передаст" >&2
-    [ -n "$CWD" ] || echo "# spawn_session: рабочая папка не задана — Контроль в ней сторож не передаст" >&2
-    python3 -I "$TOOLS/lineage.py" retire --child "$SPAWNED_LINE" ${ROLE:+--role "$ROLE"} \
-      ${CWD:+--guard "$CWD"} ${GUARD_TAIBE:+--guard "$GUARD_TAIBE"} \
-      || echo "# spawn_session: сторож не запущен — предшественник останется, уберёт reap_sessions.sh" >&2
+    if [ -z "$GUARD_TAIBE" ] || [ -z "$CWD" ]; then
+      echo "# spawn_session: папка guard не найдена (tAIBE '${GUARD_TAIBE}', рабочая '${CWD}') — сторож не запущен," \
+        "предшественник останется, уберёт reap_sessions.sh" >&2
+    else
+      python3 -I "$TOOLS/lineage.py" retire --child "$SPAWNED_LINE" ${ROLE:+--role "$ROLE"} \
+        --guard "$CWD" --guard "$GUARD_TAIBE" \
+        || echo "# spawn_session: сторож не запущен — предшественник останется, уберёт reap_sessions.sh" >&2
+    fi
   fi
 elif [ "$LAUNCH" = 1 ]; then
   if [ -n "$ROLES" ]; then

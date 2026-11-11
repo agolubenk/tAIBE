@@ -245,7 +245,7 @@ class HandoverTest(Base):
         with mock.patch.object(G, "write_atomic", broken):
             self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
         self.assertTrue((L.ldir() / G.INTENT).exists(), "расхождение осталось — журнал сигналит следующей передаче")
-        self.assertIn("откат", " ".join(self.lines))
+        self.assertIn("откат не полон", self.lines[-1])
         self.assertEqual(json.loads((self.hr / ".claude" / G.BACKUP).read_text())["control"], [PRED])
 
     def test_successor_already_listed_is_not_doubled(self):
@@ -264,12 +264,43 @@ class HandoverTest(Base):
             self.assertIsNone(G.lock(0.3))
         self.assertLess(time.monotonic() - t0, 2.0)
 
-    def test_lock_path_is_a_symlink_gives_up(self):
+    def test_lock_path_is_a_symlink_gives_up_at_once(self):
+        import time
         L.ldir().mkdir(parents=True, exist_ok=True)
         os.symlink(self.dir / "elsewhere", L.ldir() / "guard.lock")
-        self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, lock_wait=0.3))
+        t0 = time.monotonic()
+        self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, lock_wait=5))
+        self.assertLess(time.monotonic() - t0, 1.0, "ELOOP повтор не исправит — ждать срок незачем")
         self.assertEqual(self.get(self.hr)["control"], [PRED])
-        self.assertIn("guard.lock занят", self.lines[-1])
+        self.assertIn("guard.lock", self.lines[-1])
+
+    def test_oversized_list_keeps_everything(self):
+        (self.tb / G.GUARD).write_text(json.dumps({"control": [PRED], "pad": "x" * (G.MAX_LIST + 1)}))
+        self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+        self.assertIn("испорчен", self.lines[-1])
+
+    def test_list_edited_after_plan_is_not_overwritten(self):
+        real = G.plan
+
+        def edited(dirs, pred_sid, log):
+            todo = real(dirs, pred_sid, log)
+            self.put(self.tb, [PRED, OTHER])  # владелец правит список без guard.lock
+            return todo
+
+        with mock.patch.object(G, "plan", edited):
+            self.assertFalse(G.hand_control([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertEqual(self.get(self.hr)["control"], [PRED])
+        self.assertEqual(self.get(self.tb)["control"], [PRED, OTHER])
+        self.assertFalse((L.ldir() / G.INTENT).exists())
+        self.assertIn("изменился", " ".join(self.lines))
+
+    def test_no_ack_until_timeout_keeps_everything(self):
+        self.sx = sx = FakeSys(tree(), env={400: CHILD, 300: PARENT})
+        ctl = {"dirs": [str(self.hr), str(self.tb)], "sid": PRED}
+        self.assertEqual(LR.watch(sx, sx.p[300], PARENT, CHILD, "backend", 0, self.log, poll=1, ctl=ctl), 3)
+        self.assert_untouched()
+        self.assertIn("квитанции нет", self.lines[-1])
 
     def test_successor_dies_while_lock_is_awaited(self):
         sx = FakeSys(tree(), env={400: CHILD, 300: PARENT})
