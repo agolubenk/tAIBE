@@ -85,8 +85,10 @@ export async function expiryPass(
     .orderBy(asc(ownerApprovalTable.expiresAt))
     .limit(PASS_TAKE);
   for (const row of due) {
-    const synced = queue?.config.products.has(row.workspaceId) ?? false;
-    if (row.queueItemId && queue && synced) {
+    // An item is read whenever the queue is on, also for a workspace taken
+    // out of OQ_WORKSPACE_PRODUCTS since (correctness r2). With the queue off
+    // the term alone decides: the operator turned the channel off.
+    if (row.queueItemId && queue) {
       await expireWithItem(row, now, queue.client);
     } else {
       await expire(row, now, `no answer by ${row.expiresAt.toISOString()}`);

@@ -40,8 +40,10 @@ async function main() {
   );
   if (args.includes("--dry-run")) return;
   const runId = randomUUID().slice(0, 8);
-  await runStuck(plans, runId);
-  console.log(`applied run=${runId}`);
+  const errors = await runStuck(plans, runId);
+  for (const line of errors) console.log(line);
+  console.log(`applied run=${runId}, errors ${errors.length}`);
+  if (errors.length > 0) process.exitCode = 2;
 }
 
 main()

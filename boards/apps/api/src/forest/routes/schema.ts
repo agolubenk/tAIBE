@@ -101,7 +101,6 @@ export const approvalSchema = z
     failReason: z.string().nullable(),
     doneRef: z.string().nullable(),
     doneReason: z.string().nullable(),
-    queueItemId: z.string().nullable(),
     decidedVia: z.string().nullable(),
     decidedAt: nullableResponseTimestamp,
     consumedAt: nullableResponseTimestamp,

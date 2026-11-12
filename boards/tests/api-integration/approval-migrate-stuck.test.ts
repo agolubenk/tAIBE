@@ -97,7 +97,7 @@ describe("API integration: R-11 stuck approvals (TB-102 AC-11)", () => {
       reason: "fell_needs_new_yes",
     });
 
-    await runStuck(plans, "run1");
+    expect(await runStuck(plans, "run1")).toEqual([]);
     expect((await task(toClose?.id as string))?.status).toBe("done");
     expect((await task(toBump?.id as string))?.priority).toBe("urgent");
     // R-8: two steps, to-do → done → closed.

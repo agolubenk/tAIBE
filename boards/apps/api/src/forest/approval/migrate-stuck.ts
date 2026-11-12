@@ -164,12 +164,25 @@ async function apply(item: StuckPlan, runId: string) {
   });
 }
 
+// One request failing for a non-domain reason (database, constraint) does
+// not stop the run: it stays «approved», is named in the report, and the
+// next run takes it again (correctness r2).
 export async function runStuck(plans: StuckPlan[], runId: string) {
+  const errors: string[] = [];
   for (const item of plans) {
-    if (item.outcome === "apply") await apply(item, runId);
-    else await close(item, item.outcome, item.reason, runId);
+    try {
+      if (item.outcome === "apply") await apply(item, runId);
+      else await close(item, item.outcome, item.reason, runId);
+    } catch (error) {
+      errors.push(
+        `error ${item.approvalId} ${item.action} ${item.targetId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
+  return errors;
 }
+
+class RevertSkip extends Error {}
 
 const APPLIED =
   /^approval (\S+) (\S+) (status|priority): (.+) → (.+) run=(\S+) migration$/;
@@ -226,34 +239,45 @@ export async function revertRun(runId: string) {
       );
       continue;
     }
-    await db.transaction(async (tx) => {
-      await setHistoryActor(tx, `owner-migration:${runId}:revert`);
-      if (field === "status") {
-        const [column] = await tx
-          .select({ id: columnTable.id })
-          .from(columnTable)
-          .where(
-            and(
-              eq(columnTable.projectId, task.projectId),
-              eq(columnTable.slug, from as string),
-            ),
-          );
+    try {
+      await db.transaction(async (tx) => {
+        await setHistoryActor(tx, `owner-migration:${runId}:revert`);
+        if (field === "status") {
+          const [column] = await tx
+            .select({ id: columnTable.id })
+            .from(columnTable)
+            .where(
+              and(
+                eq(columnTable.projectId, task.projectId),
+                eq(columnTable.slug, from as string),
+              ),
+            );
+          // The column is gone: a card without a column would drop off the
+          // board, so this step is skipped (correctness r2).
+          if (!column) throw new RevertSkip("column gone");
+          await tx
+            .update(taskTable)
+            .set({ status: from as string, columnId: column.id })
+            .where(eq(taskTable.id, task.id));
+        } else {
+          await tx
+            .update(taskTable)
+            .set({ priority: from as string })
+            .where(eq(taskTable.id, task.id));
+        }
+        // The request no longer stands for a change on the card.
         await tx
-          .update(taskTable)
-          .set({ status: from as string, columnId: column?.id ?? null })
-          .where(eq(taskTable.id, task.id));
-      } else {
-        await tx
-          .update(taskTable)
-          .set({ priority: from as string })
-          .where(eq(taskTable.id, task.id));
-      }
-      // The request no longer stands for a change on the card.
-      await tx
-        .update(ownerApprovalTable)
-        .set({ status: "failed", failReason: `reverted:${runId}` })
-        .where(eq(ownerApprovalTable.id, approvalId as string));
-    });
+          .update(ownerApprovalTable)
+          .set({ status: "failed", failReason: `reverted:${runId}` })
+          .where(eq(ownerApprovalTable.id, approvalId as string));
+      });
+    } catch (error) {
+      if (!(error instanceof RevertSkip)) throw error;
+      report.push(
+        `skip ${approvalId} ${entry.targetId} ${field}: ${error.message}`,
+      );
+      continue;
+    }
     report.push(
       `reverted ${approvalId} ${entry.targetId} ${field}: ${to} → ${from}`,
     );

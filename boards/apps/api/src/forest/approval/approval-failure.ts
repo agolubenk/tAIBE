@@ -20,7 +20,9 @@ export function failureReason(error: unknown): string | null {
     error.status !== 408 &&
     error.status !== 429
   ) {
-    return error.message.slice(0, 500) || `http_${error.status}`;
+    // A code first, so the queue can say it in words; the API's message
+    // after it for the journal and the t-boards UI.
+    return `http_${error.status}: ${error.message}`.slice(0, 500);
   }
   return null;
 }

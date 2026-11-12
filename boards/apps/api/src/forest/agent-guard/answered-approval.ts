@@ -53,6 +53,15 @@ export async function answeredApproval(input: {
   if (row.status === "consumed") {
     return { kind: "applied", approvalId: row.id, appliedAt: row.consumedAt };
   }
+  if (row.status === "approved") {
+    return {
+      kind: "refused",
+      error: new ForestError(
+        "approval_pending",
+        "a «да» from before TB-102: the server applies it in the R-11 migration; do not retry",
+      ),
+    };
+  }
   if (row.status === "pending") {
     return {
       kind: "refused",

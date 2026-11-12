@@ -61,8 +61,11 @@ async function createItem(deps: SyncDeps, row: ApprovalRow) {
       synced: "pending",
     });
   } catch (error) {
-    await releaseClaim(row.id, itemId);
+    // A timeout or 5xx may still have written the item: the claim stays
+    // without a version, and the next pass adopts the item or, once it is
+    // missing for CLAIM_GRACE_MS, frees the claim (correctness r2).
     if (!(error instanceof QueueConflict)) throw error;
+    await releaseClaim(row.id, itemId);
     // Someone planted an item under this id (AC-17): never ours, so it is
     // archived and flagged; the next pass makes a new nonce.
     await deps.client
@@ -181,19 +184,20 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
     }
     return;
   }
-  const itemEvents = await deps.client.history("items", itemId);
   // Written, but the version not saved (the writer crashed or is a parallel
   // instance): an item whose only writer is t-boards is adopted as it is.
-  if (
-    row.queueItemVersion === null &&
-    itemEvents.length > 0 &&
-    itemEvents.every((event) => event.actor === deps.config.tokenName)
-  ) {
-    await saveItemState(row.id, itemId, {
-      version: item.version,
-      synced: "pending",
-    });
-    return;
+  if (row.queueItemVersion === null) {
+    const events = await deps.client.history("items", itemId);
+    if (
+      events.length > 0 &&
+      events.every((event) => event.actor === deps.config.tokenName)
+    ) {
+      await saveItemState(row.id, itemId, {
+        version: item.version,
+        synced: "pending",
+      });
+      return;
+    }
   }
   const changed = item.version !== row.queueItemVersion;
   const check = await deps.client.get("checks", itemId);
@@ -234,7 +238,11 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
     queueItemVersion: item.version,
   };
   // R-4: the version decides; the last writer is only the second check.
-  if (changed || lastWriter(itemEvents) !== deps.config.tokenName) {
+  if (
+    changed ||
+    lastWriter(await deps.client.history("items", itemId)) !==
+      deps.config.tokenName
+  ) {
     await markFailed(
       row.id,
       row.workspaceId,
@@ -251,6 +259,39 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
     actor,
     answer: decided,
   });
+}
+
+// One pass ends early, without an error, once it spent its share of the
+// queue's write limit or its time (resources r2); the rest goes next pass.
+export const WRITES_PER_PASS = 50;
+export const PASS_DEADLINE_MS = 25_000;
+
+class PassBudgetSpent extends Error {}
+
+// Counts writes; refuses one more once the pass spent its share.
+function budgeted(client: QueueClient, deadline: number): QueueClient {
+  let writes = 0;
+  const spend = () => {
+    writes += 1;
+    if (writes > WRITES_PER_PASS || Date.now() > deadline) {
+      throw new PassBudgetSpent();
+    }
+  };
+  return {
+    get: (collection, id) => {
+      if (Date.now() > deadline) throw new PassBudgetSpent();
+      return client.get(collection, id);
+    },
+    history: (collection, id) => client.history(collection, id),
+    put: (collection, id, data, ifVersion) => {
+      spend();
+      return client.put(collection, id, data, ifVersion);
+    },
+    patch: (collection, id, data, ifVersion) => {
+      spend();
+      return client.patch(collection, id, data, ifVersion);
+    },
+  };
 }
 
 // A version race on one item skips that item until the next pass; it does
@@ -270,16 +311,24 @@ async function eachRow(
 }
 
 // One pass over the queue (spec «Синхронизация»).
-export async function syncPass(deps: SyncDeps) {
+export async function syncPass(input: SyncDeps) {
+  const deps = {
+    ...input,
+    client: budgeted(input.client, Date.now() + PASS_DEADLINE_MS),
+  };
   const workspaceIds = [...deps.config.products.keys()];
-  const fresh = await pendingWithoutItem(workspaceIds, deps.now());
-  await eachRow(fresh.slice(0, CREATE_PER_PASS), (row) =>
-    createItem(deps, row),
-  );
-  await eachRow(await pendingWithItem(workspaceIds), (row) =>
-    readPending(deps, row),
-  );
-  await eachRow(await outcomeToShow(workspaceIds), (row) =>
-    showOutcome(deps.client, row),
-  );
+  try {
+    const fresh = await pendingWithoutItem(workspaceIds, deps.now());
+    await eachRow(fresh.slice(0, CREATE_PER_PASS), (row) =>
+      createItem(deps, row),
+    );
+    await eachRow(await pendingWithItem(workspaceIds), (row) =>
+      readPending(deps, row),
+    );
+    await eachRow(await outcomeToShow(workspaceIds), (row) =>
+      showOutcome(deps.client, row),
+    );
+  } catch (error) {
+    if (!(error instanceof PassBudgetSpent)) throw error;
+  }
 }

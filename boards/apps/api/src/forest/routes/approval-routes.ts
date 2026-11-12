@@ -133,13 +133,17 @@ function toPublicApproval<
   T extends {
     paramsHash: string;
     decidedByUserId: string | null;
+    queueItemId: string | null;
     queueItemVersion: number | null;
     queueSyncedStatus: string | null;
   },
 >(approval: T) {
+  // The queue item id stays server-side: an agent that knew it could edit
+  // the item (security r2); queue_* fields are sync state, not API.
   const {
     paramsHash: _hash,
     decidedByUserId: _decider,
+    queueItemId: _item,
     queueItemVersion: _version,
     queueSyncedStatus: _synced,
     ...rest

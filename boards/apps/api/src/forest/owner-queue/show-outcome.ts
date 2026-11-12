@@ -26,11 +26,20 @@ const FAIL_TEXT: Record<string, string> = {
   label_gone: "метки больше нет",
   label_deleting: "метка удаляется",
   unknown_action: "неизвестное действие",
+  http_400: "параметры не подошли карточке",
+  http_403: "у владельца пространства нет прав на это действие",
+  http_404: "карточки, метки или исполнителя больше нет",
+  http_409: "карточка не приняла изменение (конфликт статуса или метки)",
+  http_410: "карточка срублена",
+  reverted: "изменение откатили миграцией",
 };
 
 export function failText(reason: string | null): string {
   if (!reason) return "причина не указана";
-  return FAIL_TEXT[reason] ?? reason;
+  const code = reason.split(":")[0] ?? reason;
+  return (
+    FAIL_TEXT[code] ?? FAIL_TEXT[reason] ?? "карточка не приняла изменение"
+  );
 }
 
 const WHERE: Record<string, string> = {

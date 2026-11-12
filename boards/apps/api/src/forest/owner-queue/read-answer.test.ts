@@ -31,6 +31,17 @@ describe("readAnswer (TB-102 R-2, R-3)", () => {
     });
   });
 
+  // The queue journal keeps the whole document after each write
+  // (ops-console store.ts:353): a later note edit keeps the choice in «after».
+  it("keeps the time of the choice when the owner edits the note later", () => {
+    const answer = readAnswer(check({ choice: "yes", note: "позже" }), [
+      event(500, "owner", { choice: "yes", note: "позже" }),
+      event(200, "owner", { choice: "yes" }),
+      event(100, "t-boards", {}),
+    ]);
+    expect(answer.kind === "yes" && answer.answeredAt.getTime()).toBe(200);
+  });
+
   it("ignores the browser «at» field", () => {
     const answer = readAnswer(check({ choice: "no", at: 999_999 }), [
       event(50, "owner", { choice: "no" }),

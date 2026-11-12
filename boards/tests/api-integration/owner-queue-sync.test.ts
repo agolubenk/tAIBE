@@ -7,6 +7,7 @@ import {
 } from "../../apps/api/src/database/forest-schema";
 import type { OwnerQueueConfig } from "../../apps/api/src/forest/owner-queue/queue-config";
 import {
+  CREATE_PER_PASS,
   type SyncDeps,
   syncPass,
 } from "../../apps/api/src/forest/owner-queue/sync-pass";
@@ -353,5 +354,30 @@ describe("API integration: owner-queue sync (TB-102)", () => {
     const note = String(queue.doc("checks", itemId)?.data.agentNote);
     expect(note).toContain("правил не t-boards");
     expect(note).not.toContain("queue_item_changed");
+  });
+
+  // resources r2: new items per pass are capped; the rest go next pass.
+  it("puts at most CREATE_PER_PASS new items in one pass", async () => {
+    const forest = await createForest();
+    const { queue, deps } = setup(forest);
+    for (let i = 0; i <= CREATE_PER_PASS; i += 1) {
+      const task = await addTask(forest.project.id, `Card ${i}`);
+      await requestClose(forest, task.id);
+    }
+    await syncPass(deps);
+    expect(queue.itemIds()).toHaveLength(CREATE_PER_PASS);
+    await syncPass(deps);
+    expect(queue.itemIds()).toHaveLength(CREATE_PER_PASS + 1);
+  });
+
+  it("hides the queue item id from the approval API (security r2)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { deps } = setup(forest);
+    await requestClose(forest, task.id);
+    await syncPass(deps);
+    const list = await forest.agent("/approvals");
+    expect(list.status).toBe(200);
+    expect(list.body.items[0]).not.toHaveProperty("queueItemId");
   });
 });
