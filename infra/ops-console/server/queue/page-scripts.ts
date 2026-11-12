@@ -10,11 +10,53 @@
  * /api/oq/v1/redeploy) с подтверждением, где видно PR, SHA, базу и последствие — деплой или нет. «Влить»
  * неактивна, пока в пункте нет вердикта «Контроля» (поля sha и base); снимок пунктов — window.__oqDocs.
  */
+import { DEFAULT_PRODUCT } from './product-boards'
 
 export const SHIM_JS = String.raw`(function () {
   'use strict';
   var BASE = '/api/oq/v1/db/';
   var subs = {};
+  // Выбор продукта вверху страницы (page-products.ts): код страницы получает пункты и задачи «Хода работ» только этого
+  // продукта — список, счётчики, графики и отчёт по одному продукту. Полный снимок — у __oqDocs (метки продукта, кнопки
+  // мёржа). Ответы (checks) и направления (kind track) — без отбора. Пункт из ссылки «#item=<id>» и перенесённый на
+  // странице (__oqKeep) видны при любом выборе. Сохранённый выбор действует сразу: без мигания чужими пунктами.
+  var VIEWED = { items: 1, work: 1 }, view = '', keep = Object.create(null);
+  var DEFAULT = ${JSON.stringify(DEFAULT_PRODUCT)}, BOARD_OF = Object.create(null);
+  try { view = localStorage.getItem('oq-product-filter') || ''; } catch (e) { view = ''; }
+  if (!/^[a-z][a-z0-9-]{1,30}$/.test(view)) view = '';
+  // Продукт документа. Задача «Хода работ», сводка и карта доски — в продукте своих досок (ws карточек или data.ws,
+  // карта пространств — GET /products, page-products.ts), когда все известные доски одного продукта: документы tAIBE
+  // пишет токен HR. Иначе — столбец product.
+  function productOfDoc(col, d) {
+    var home = d.product || DEFAULT, x = d.data, ws = [], p = '';
+    if (col !== 'work' || !x) return home;
+    if (typeof x.ws === 'string') ws = [x.ws];
+    else if (Array.isArray(x.cards)) ws = x.cards.map(function (c) { return c && c.ws; });
+    for (var i = 0; i < ws.length; i++) {
+      var q = typeof ws[i] === 'string' ? BOARD_OF[ws[i]] : '';
+      if (!q) continue;
+      if (p && q !== p) return home;
+      p = q;
+    }
+    return p || home;
+  }
+  function hashTarget() {
+    var m = /^#item=(.+)$/.exec((typeof location !== 'undefined' && location.hash) || '');
+    try { return m ? decodeURIComponent(m[1]) : ''; } catch (e) { return ''; }
+  }
+  function inView(col, docs) {
+    if (!view || !VIEWED[col]) return docs;
+    var target = col === 'items' ? hashTarget() : '';
+    return docs.filter(function (d) {
+      return productOfDoc(col, d) === view || (d.data && d.data.kind === 'track') || d.id === target || !!keep[d.id];
+    });
+  }
+  function deliver(col) {
+    var s = subs[col];
+    if (!s || !s.last) return;
+    var docs = inView(col, s.last);
+    s.cbs.forEach(function (cb) { try { cb.ok(docs); } catch (e) { console.error(e); } });
+  }
   function json(res) {
     if (!res.ok) return res.text().then(function (t) { var m = ''; try { m = JSON.parse(t).error || ''; } catch (e) {} var err = new Error(m || ('HTTP ' + res.status)); err.status = res.status; throw err; });
     return res.status === 204 ? null : res.json();
@@ -35,7 +77,7 @@ export const SHIM_JS = String.raw`(function () {
         // version — чтобы страница отличала снимок, снятый до своего сохранения (ревью #324, minor).
         // product — продукт документа (v2-lite): метка и фильтр страницы (page-products.ts), рядом с data.
         s.last = j.docs.map(function (d) { return { id: d.id, data: d.data, version: d.version, product: d.product }; });
-        s.cbs.forEach(function (cb) { try { cb.ok(s.last); } catch (e) { console.error(e); } });
+        deliver(col);
       })
       .catch(function (e) {
         s.fail = (s.fail || 0) + 1;
@@ -52,7 +94,7 @@ export const SHIM_JS = String.raw`(function () {
         onSnapshot: function (ok, err) {
           var s = subs[col] || (subs[col] = { cbs: [] });
           s.cbs.push({ ok: ok, err: err });
-          if (s.cbs.length === 1) poll(col); else if (s.last) ok(s.last);
+          if (s.cbs.length === 1) poll(col); else if (s.last) ok(inView(col, s.last));
           return function () {};
         },
         get: function () {
@@ -90,6 +132,24 @@ export const SHIM_JS = String.raw`(function () {
   window.__oqDocs = function (col) { var s = subs[col]; return s && s.last ? s.last : []; };
   // Перечитать коллекцию сейчас — после записи мимо db (смена продукта, page-products.ts).
   window.__oqRefresh = function (col) { if (subs[col]) poll(col); };
+  // Выбор продукта: '' — все. Смена отдаёт коду страницы последние снимки заново, без запроса к серверу.
+  window.__oqView = function (slug) {
+    view = slug || '';
+    keep = Object.create(null);
+    Object.keys(VIEWED).forEach(deliver);
+  };
+  window.__oqViewOf = function () { return view; };
+  window.__oqDefaultProduct = DEFAULT;
+  window.__oqProductOfDoc = productOfDoc;
+  // Пространства t-boards продуктов из GET /products ({slug, boards}); задачи «Хода работ» перевыдаются по новой карте.
+  window.__oqBoards = function (products) {
+    BOARD_OF = Object.create(null);
+    (products || []).forEach(function (p) { (p && Array.isArray(p.boards) ? p.boards : []).forEach(function (w) { if (typeof w === 'string') BOARD_OF[w] = p.slug; }); });
+    if (view) deliver('work');
+  };
+  window.__oqKeep = function (id) { keep[id] = 1; };
+  // Ссылка «#item=<id>» на пункт другого продукта: отдать его странице до её обработчика (он — следующий в очереди).
+  if (window.addEventListener) window.addEventListener('hashchange', function () { if (view) deliver('items'); });
 })();`
 
 export const ENHANCE_JS = String.raw`(function () {

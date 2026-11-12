@@ -16,7 +16,8 @@ import { canSee, DEFAULT_PRODUCT, listProducts, namespaceOf, notFound, productFo
 
 export const COLLECTIONS = ['checks', 'items', 'work'] as const
 export type Collection = (typeof COLLECTIONS)[number]
-export type Scope = 'read' | 'agent' | 'owner'
+/** notify — только POST /notify (события 2FA от backend продукта): ни чтения, ни записи очереди. */
+export type Scope = 'read' | 'agent' | 'owner' | 'notify'
 
 export interface Actor {
   name: string

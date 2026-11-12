@@ -17,7 +17,8 @@ import time
 import lineage as L
 import lineage_retire as LR
 
-ROLE_RE = re.compile(r"/genome/([a-z]+)\.json")
+# genome/<роль>.json — продукт по умолчанию, genome/<slug>/<роль>.json — другие продукты (OPS-25).
+ROLE_RE = re.compile(r"/genome/(?:([a-z][a-z0-9-]*[a-z0-9])/)?([a-z]+)\.json")
 
 
 def add_reap_args(p):
@@ -47,7 +48,10 @@ def add_reap_args(p):
 
 
 def prune_lineage_dir(days, now=None):
-    """Старые <линия>.json/.ack/.log — по mtime файла (реальные часы ФС, не часы sx). reap-list.json не трогаем."""
+    """Старые <линия>.json/.ack/.log — по mtime файла (реальные часы ФС, не часы sx). reap-list.json не трогаем.
+    Сначала — старые имена линий длиннее 200 символов на новые (SE-57, L.migrate_names): этот проход идёт и из
+    reap_sessions.sh, и из launchd-автоуборки раз в 30 мин."""
+    L.migrate_names()
     if days <= 0:
         return 0
     cutoff = (now if now is not None else time.time()) - days * 86400
@@ -96,13 +100,8 @@ def ancestors(procs, pid):
 
 def ack_state(procs, line):
     """«ack» — наследник этой линии принял и жив; «ack†» — квитанция есть, наследника уже нет; "" — нет."""
-    if not L.valid_line(line or ""):
-        return ""
-    one = re.compile("^" + re.escape(line) + r"\.[a-z0-9]+\.ack$")
     state = ""
-    for f in sorted(L.ldir().glob(line + ".*.ack")) if L.ldir().is_dir() else []:
-        if not one.match(f.name):
-            continue
+    for _child, f in L.child_acks(line or ""):
         a = L.read_json(f) or {}
         s = procs.get(a.get("pid") if isinstance(a.get("pid"), int) else -1)
         if s is not None and L.argv0(s) == "claude" and L.norm(s.start) == L.norm(a.get("start")):
@@ -118,7 +117,8 @@ def successor_gen(rows, r):
         return 0
     pre = r["line"] + "."
     return max((s["line"].count(".") for s in rows
-                if s is not r and s["role"] == r["role"] and (s["line"] or "").startswith(pre)), default=0)
+                if s is not r and s["role"] == r["role"] and s.get("product", "") == r.get("product", "")
+                and (s["line"] or "").startswith(pre)), default=0)
 
 
 def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
@@ -138,18 +138,19 @@ def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
         last = max(d.get("updatedAt") or 0, d.get("statusUpdatedAt") or 0) / 1000.0
         status = d.get("status") or "?"
         rows.append({"pid": p.pid, "start": p.start, "proc": p, "name": d.get("name") or "", "status": status,
-                     "cwd": d.get("cwd") or "", "line": line, "role": m.group(1) if m else None,
+                     "cwd": d.get("cwd") or "", "line": line, "role": m.group(2) if m else None, "product": (m.group(1) or "") if m else "",
                      "age_h": max(0.0, now - (d.get("startedAt") or 0) / 1000.0) / 3600,
                      "idle_h": 0.0 if status == "busy" else max(0.0, now - last) / 3600})
-    current = {}
+    current = {}   # (продукт, роль) → текущая сессия: роль одного продукта не делает чужую «вытесненной»
     for r in rows:
         if r["role"]:
             key = (r["line"].count(".") if r["line"] else -1, -r["age_h"])  # длиннее линия, при равенстве — моложе
-            if r["role"] not in current or key > current[r["role"]][0]:
-                current[r["role"]] = (key, r["pid"])
+            pr = (r["product"], r["role"])
+            if pr not in current or key > current[pr][0]:
+                current[pr] = (key, r["pid"])
     for r in rows:
         r["ack"] = ack_state(procs, r["line"])
-        is_current = r["role"] is not None and current[r["role"]][1] == r["pid"]
+        is_current = r["role"] is not None and current[(r["product"], r["role"])][1] == r["pid"]
         gen = successor_gen(rows, r)
         r["cand"] = False
         if me is not None and r["pid"] == me.pid:

@@ -24,6 +24,7 @@ record, иначе по tty; окно с другими вкладками, iTer
 Каталог — TAIBE_LINEAGE_DIR (по умолчанию ~/.claude/lineage). Только stdlib, запуск python3 -I.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -71,6 +72,76 @@ def argv0(p):
 
 def valid_line(line):
     return bool(line) and LINE_RE.match(line) is not None
+
+
+# SE-57: имя файла — не больше 255 байт (APFS, ext4). Поколение добавляет к линии 5 символов, к основе имени —
+# расширение до 14 (.autoclose.log) и .tmp при записи. Линия длиннее KEY_MAX живёт под коротким именем, см. line_key.
+KEY_MAX = 200
+EXTS = (".autoclose.log", ".retire.log", ".json", ".ack", ".log")  # длинные первыми: «x.retire.log» — не линия «x.retire»
+
+
+def line_hash(line):
+    return "h" + hashlib.sha256(line.encode("ascii")).hexdigest()[:12]
+
+
+def line_key(line):
+    """Основа имени файла линии в ldir(). Линия до KEY_MAX символов — сама линия: имена живых линий не меняются.
+    Длиннее — «h<хэш родителя>.<последний сегмент>» (~20 символов): квитанции наследников линии P ищутся маской
+    h<хэш P>.*.ack так же, как короткие — P.*.ack. Полная линия — в поле line записи. Основу «h…» LINE_RE не
+    принимает — за линию её не примут."""
+    if len(line) <= KEY_MAX:
+        return line
+    parent, _, last = line.rpartition(".")
+    return f"{line_hash(parent)}.{last}"
+
+
+def lfile(line, ext):
+    """Файл линии: lfile(L, ".ack") — квитанция, ".json" — запись, ".retire.log" — журнал сторожа."""
+    return ldir() / (line_key(line) + ext)
+
+
+def child_acks(line):
+    """Квитанции прямых наследников линии: [(линия наследника, путь)]. Короткий наследник — по имени (L.x.ack),
+    длинный — по маске h<хэш L>.x.ack и полю line квитанции, сверенному с её именем."""
+    if not valid_line(line) or not ldir().is_dir():
+        return []
+    one = re.compile("^" + re.escape(line) + r"\.[a-z0-9]+$")
+    out = [(f.name[:-len(".ack")], f) for f in sorted(ldir().glob(line + ".*.ack"))
+           if one.match(f.name[:-len(".ack")]) and len(f.name) - len(".ack") <= KEY_MAX]
+    for f in sorted(ldir().glob(line_hash(line) + ".*.ack")):
+        child = (read_json(f) or {}).get("line")
+        if isinstance(child, str) and one.match(child) and lfile(child, ".ack") == f:
+            out.append((child, f))
+    return out
+
+
+def line_records():
+    """Линии с записью в ldir(): [(линия, путь к .json)] — короткие по имени файла, длинные (h…) по полю line."""
+    out = []
+    for f in sorted(ldir().glob("*.json")) if ldir().is_dir() else []:
+        line = f.stem if valid_line(f.stem) else (read_json(f) or {}).get("line") if f.name.startswith("h") else None
+        if isinstance(line, str) and valid_line(line) and lfile(line, ".json") == f:
+            out.append((line, f))
+    return out
+
+
+def migrate_names():
+    """SE-57, один раз: файлы линий длиннее KEY_MAX со старым именем <линия><расширение> → lfile(). Повторный вызов
+    ничего не делает; файл, у которого новое имя уже занято, остаётся до чистки по возрасту. Возвращает число."""
+    n = 0
+    for f in sorted(ldir().glob("r.*")) if ldir().is_dir() else []:
+        ext = next((e for e in EXTS if f.name.endswith(e)), "")
+        line = f.name[:-len(ext)] if ext else ""
+        if len(line) <= KEY_MAX or not valid_line(line):
+            continue
+        new = lfile(line, ext)
+        try:
+            if not new.exists():
+                os.rename(f, new)
+                n += 1
+        except OSError:
+            continue  # файл убрал или переименовал другой процесс
+    return n
 
 
 def write_json(path, data):
@@ -316,7 +387,7 @@ def make_log(stream):
 def cmd_record(sx, a):
     if not valid_line(a.line):
         return die(f"плохая линия: {a.line!r}")
-    write_json(ldir() / f"{a.line}.json", {"line": a.line, "terminal": a.terminal, "window_id": a.window_id or None,
+    write_json(lfile(a.line, ".json"), {"line": a.line, "terminal": a.terminal, "window_id": a.window_id or None,
                                             "tty": a.tty or None, "role": a.role or None, "at": stamp()})
     return 0
 
@@ -338,7 +409,7 @@ def cmd_ack(sx, a):
     line = os.environ.get("TAIBE_LINEAGE", "") or session_line(sx, me) or ""
     if not valid_line(line):
         return die("нет линии (TAIBE_LINEAGE, первый промпт) — сессию открыл не spawn_session.sh, квитанция не нужна")
-    write_json(ldir() / f"{line}.ack", {"line": line, "pid": me.pid, "start": me.start, "at": stamp()})
+    write_json(lfile(line, ".ack"), {"line": line, "pid": me.pid, "start": me.start, "at": stamp()})
     print(f"ack: линия {line}, claude {me.pid} — предшественника снимет его сторож")
     return 0
 
@@ -367,6 +438,10 @@ def main(argv=None, sx=None):
     t.add_argument("--timeout", type=float, default=float(os.environ.get("SPAWN_RETIRE_TIMEOUT") or 5400))
     t.add_argument("--poll", type=float, default=5.0)
     t.add_argument("--foreground", action="store_true", help="без отцепления (тесты, отладка)")
+    t.add_argument("--guard", action="append", default=[], metavar="DIR",
+                   help="папка со списком Контроля: если предшественник — Контроль, он переходит наследнику (IS-233)")
+    t.add_argument("--succ-tty", default="", metavar="TTY",
+                   help="tty окна наследника от spawn_session.sh (/dev/ttysNNN); пусто — Контроль не передаётся")
     from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
     from lineage_close import add_autoclose_args, add_exited_args, cmd_autoclose, cmd_exited  # noqa: E402

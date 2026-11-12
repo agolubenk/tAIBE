@@ -37,6 +37,7 @@
     "ai-council:status": "python3 infra/ai-council/supervisor.py status",
     "ai-council:doctor": "python3 infra/ai-council/supervisor.py doctor",
     "ai-council:cards": "python3 infra/ai-council/tboards.py cards",
+    "ai-council:cards-stats": "python3 infra/ai-council/cards_stats.py",
     "ai-council:selftest": "python3 infra/ai-council/selftest.py",
     "ai-council:review": "python3 infra/ai-council/review_cli.py",
     "ai-council:cloud": "python3 infra/ai-council/cloud.py",

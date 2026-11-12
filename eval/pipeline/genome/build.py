@@ -4,7 +4,11 @@ The three hand-made genomes (author, coord, control) were copies of one another,
 excluded rule 90 — the law of the very team they belong to. Now the base lives once and every role
 adds only its own deny list, skills and env. Generated files are for `claude --settings <file>`.
 
-Run: python3 -I build.py [--check]   (--check: exit 1 if a generated file is stale, write nothing)
+Run: python3 -I build.py [--check] [--product SLUG]   (--check: exit 1 if a generated file is stale, write nothing)
+
+Products (OPS-25): the default product of `instances/` keeps its genomes in genome/<role>.json, every other
+product gets genome/<slug>/<role>.json with its own repo_root. Every genome sets env TAIBE_PRODUCT=<slug>: the
+session's Bash and Monitor inherit it, so `nerve.py tap <role>` and spawn_session.sh know the product.
 """
 
 import argparse
@@ -53,9 +57,10 @@ REFLEX = os.path.join(LAYER_HOME, 'pipeline', 'reflex')
 LOCAL_REFLEX = os.path.normpath(os.path.join(HERE, '..', 'reflex'))
 
 
-def hooks(python):
-    now = f"/bin/sh {os.path.join(REFLEX, 'now.sh')}"
-    antigen = f"{python} -I {os.path.join(REFLEX, 'antigen.py')}"
+def hooks(python, reflex=None):
+    reflex = reflex or REFLEX
+    now = f"/bin/sh {os.path.join(reflex, 'now.sh')}"
+    antigen = f"{python} -I {os.path.join(reflex, 'antigen.py')}"
     return {
         'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': now}]}],
         'PreToolUse': [
@@ -66,36 +71,67 @@ def hooks(python):
     }
 
 
-def genome(base, role):
+def genome(base, role, root=None, reflex=None, product=None):
+    root = root or ROOT
     on = set(role.get('skills_on', []))
     overrides = {name: 'off' for name in base['skills_off'] if name not in on}
     overrides.update({name: 'name-only' for name in base['skills_name_only']})
+    # SE-62: model and window travel with the genome (`claude --settings`), not with a CLAUDE_BIN wrapper outside git.
+    window = {key: role.get(key, base.get(key)) for key in ('model', 'autoCompactWindow') if key in role or key in base}
     return {
+        **window,
         'enabledPlugins': dict(base['enabledPlugins']),
         'skillOverrides': overrides,
         'disableBundledSkills': True,
         'permissions': {'deny': base['deny'] + [d for d in role.get('deny', []) if d not in base['deny']]},
-        'env': {**base['env'], **role.get('env', {})},
-        'claudeMdExcludes': [x.replace('{root}', ROOT) for x in base['claudeMdExcludes']],
-        'hooks': hooks(base['python']),
+        'env': {**base['env'], **role.get('env', {}), **({'TAIBE_PRODUCT': product} if product else {})},
+        'claudeMdExcludes': [x.replace('{root}', root) for x in base['claudeMdExcludes']],
+        'hooks': hooks(base['python'], reflex),
         'syncClaudeAiSkills': False,
         'skillListingMaxDescChars': 100,
     }
 
 
-def build(table):
-    return {name: genome(table['base'], role) for name, role in table['roles'].items()}
+def build(table, root=None, reflex=None, product=None):
+    return {name: genome(table['base'], role, root, reflex, product) for name, role in table['roles'].items()}
+
+
+def products():
+    """[(slug, out_dir, repo_root, reflex)] from instances/: the default product first, in genome/; others in
+    genome/<slug>/. Without instances/ (a layer copy in a host) — one product from config.json, as before."""
+    sys.path.insert(0, os.path.join(HERE, '..', '..', 'nerve'))
+    if not os.path.isdir(os.path.join(HERE, '..', '..', '..', 'instances')):
+        return [(None, HERE, ROOT, REFLEX)]   # a layer copy without instances/: the old single-product build
+    import products as P                      # instances/ is there but broken — fail loudly, do not drop the env
+    shared, items = P.load()
+    default = shared['default_product']
+    out = [(default, HERE, ROOT, REFLEX)]
+    for slug in sorted(items):
+        if slug == default:
+            continue
+        cfg = P.config_for(slug, shared, items)
+        layer = cfg.get('layer_home') or os.path.join(cfg['repo_root'], cfg['product_tree'])
+        out.append((slug, os.path.join(HERE, slug), cfg['repo_root'], os.path.join(layer, 'pipeline', 'reflex')))
+    return out
 
 
 def main(argv):
     ap = argparse.ArgumentParser(prog='build')
     ap.add_argument('--check', action='store_true')
+    ap.add_argument('--product', help='only this product (slug from instances/)')
     args = ap.parse_args(argv)
     with open(TABLE, encoding='utf-8') as f:
         table = json.load(f)
     stale = []
-    for name, data in build(table).items():
-        path = os.path.join(HERE, f'{name}.json')
+    todo = [p for p in products() if not args.product or p[0] == args.product]
+    if args.product and not todo:
+        print(f'no product {args.product} in instances/', file=sys.stderr)
+        return 2
+    built = [(out, name, data) for slug, out, root, reflex in todo
+             for name, data in build(table, root, reflex, slug).items()]
+    for out, name, data in built:
+        os.makedirs(out, exist_ok=True)
+        path = os.path.join(out, f'{name}.json')
         text = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
         old = open(path, encoding='utf-8').read() if os.path.exists(path) else None
         if old == text:

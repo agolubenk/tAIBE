@@ -66,7 +66,7 @@ const INBOX_PROTOCOL = 'ВХОДЯЩИЕ: items/i-<дата>-<время>-<4> ki
   + 'АВТОПЕРЕДАЧА: сессия, которая ведёт входящие, держит Monitor на `node infra/owner-queue-mcp/server.mjs --relay <имя своей сессии>` (timeout 30 мин, '
   + 'по истечении — перевзвести): каждое новое входящее приходит строкой «Возьми входящее <id>», один раз; пока процесс жив, /queue и бот говорят '
   + 'владельцу, что вставлять ничего не нужно, а три минуты без него — что автопередача не работает.';
-const PROTOCOL ='Очередь владельца (ops-консоль), продукты hr-helper, taibe, lavaeon. items/<id> — пункт владельцу: id d-… решение, m-… мёрж, s-… сервер, '
+const PROTOCOL ='Очередь владельца (ops-консоль), продукты hr-helper (Lavaeon и HR Helper — один продукт) и taibe. items/<id> — пункт владельцу: id d-… решение, m-… мёрж, s-… сервер, '
   + 'c-… ручная проверка; у продукта не hr-helper id начинается с его slug (taibe-m-93) — продукт нового пункта берётся из id, у документа — поле product; '
   + 'сменить продукт пункта может только владелец (страница /queue); '
   + 'поля {kind, title, body (простой текст: абзацы через пустую строку, «- » список, «1. » нумерованный), cmd, cmd2, after, options[{id,label,hint}] (только decision, рекомендуемый первым, hint «рекомендую»), '
@@ -155,7 +155,7 @@ const TOOLS = [
         since: { type: 'string', description: 'YYYY-MM-DD или ISO: последняя отметка не раньше (checks — at, ownerAt, agentAt, blockedAt; items — added; work — start, end); документ без отметок не проходит' },
         unread: { type: 'boolean', description: 'checks: владелец ответил (done или choice), а агент после ответа ничего не записал' },
         brief: { type: 'boolean', description: 'строки длиннее 200 символов — начало и длина рядом (<поле>Len); целиком — oq_get' },
-        product: { type: 'string', description: 'только этот продукт (slug: hr-helper, taibe, lavaeon) из видимых токену; невидимый — пустой список' },
+        product: { type: 'string', description: 'только этот продукт (slug: hr-helper или taibe) из видимых токену; невидимый — пустой список' },
       },
       required: ['collection'],
     },

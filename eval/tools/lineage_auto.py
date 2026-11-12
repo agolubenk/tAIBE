@@ -19,7 +19,6 @@
 """
 import json
 import os
-import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -65,22 +64,16 @@ def line_record(line):
     """Запись линии, которую spawn_session.sh сделал при открытии окна Terminal; иначе None."""
     if not L.valid_line(line or ""):
         return None
-    rec = L.read_json(L.ldir() / f"{line}.json")
+    rec = L.read_json(L.lfile(line, ".json"))
     return rec if isinstance(rec, dict) and rec.get("terminal") == "terminal" and rec.get("line") == line else None
 
 
 def verified_ack(sx, procs, r):
     """(линия наследника, минут с квитанции) — если квитанции можно верить, как сторожу retire; иначе None."""
     line = r["line"]
-    if not L.valid_line(line or "") or not L.ldir().is_dir():
-        return None
-    one = re.compile("^" + re.escape(line) + r"\.[a-z0-9]+\.ack$")
-    for f in sorted(L.ldir().glob(line + ".*.ack")):
-        if not one.match(f.name):
-            continue
+    for child, f in L.child_acks(line or ""):
         a = L.read_json(f) or {}
         s = procs.get(a.get("pid") if isinstance(a.get("pid"), int) else -1)
-        child = f.name[:-len(".ack")]
         if LR.successor_problem(sx, procs, r["proc"], s, a, child):
             continue
         at = parse_stamp(a.get("at"))
@@ -96,10 +89,11 @@ def verified_ack(sx, procs, r):
 def role_holders(rows):
     """pid держателей ролей — как team_status.py live, отдельно по каждому продукту (основной checkout папки)."""
     import team_status as T  # noqa: E402 — team_status сам импортирует lineage_reap
-    by_root = {}
+    by_root = {}   # (основной checkout, продукт генома): роль HR в worktree tAIBE не держит роль tAIBE (OPS-25)
     for r in rows:
         if r["role"]:
-            by_root.setdefault(R.git_root(r["cwd"]) or os.path.realpath(r["cwd"] or "/"), []).append(r)
+            root = R.git_root(r["cwd"]) or os.path.realpath(r["cwd"] or "/")
+            by_root.setdefault((root, r.get("product", "")), []).append(r)
     return {r["pid"] for group in by_root.values() for r in T.live_roles(group).values()}
 
 
@@ -179,8 +173,8 @@ def window_why(sx, rec, w, tstart, claude_ttys, a):
 def window_plan(sx, procs, rows, a):
     """Окна линий, у которых claude уже нет. Записи без id окна или tty не рассматриваются: по одному tty можно
     закрыть чужую новую вкладку, получившую тот же tty. Окна без записи линии не видны вовсе."""
-    recs = [rec for f in (sorted(L.ldir().glob("r*.json")) if L.ldir().is_dir() else [])
-            for rec in [line_record(f.stem)]
+    recs = [rec for line, _f in L.line_records()
+            for rec in [line_record(line)]
             if rec and str(rec.get("window_id") or "").isdigit() and str(rec.get("tty") or "").startswith("/dev/tty")]
     tstart = terminal_start(procs)
     if not recs or tstart is None:

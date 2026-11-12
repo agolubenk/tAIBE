@@ -93,7 +93,7 @@ def own_record():
     line = os.environ.get("TAIBE_LINEAGE", "")
     if not L.valid_line(line):
         return line, None
-    rec = L.read_json(L.ldir() / f"{line}.json")
+    rec = L.read_json(L.lfile(line, ".json"))
     return line, rec if isinstance(rec, dict) and rec.get("terminal") == "terminal" else None
 
 
@@ -119,7 +119,7 @@ def cmd_exited(sx, a):
     if rec is None:
         return 0  # не окно spawn_session.sh в Terminal — записывать некуда
     rec = {**rec, "exit": a.rc, "exited_at": L.stamp(), **({"keep": True} if a.keep else {})}
-    L.write_json(L.ldir() / f"{line}.json", rec)
+    L.write_json(L.lfile(line, ".json"), rec)
     return 0
 
 
@@ -150,7 +150,7 @@ def close_own(sx, a, line, log):
             log(f"на {a.tty} идут процессы ({', '.join(busy)}) — окно не закрываю")
             return 3
         sx.sleep(max(a.poll, 1.0))
-    rec = L.read_json(L.ldir() / f"{line}.json") or {}
+    rec = L.read_json(L.lfile(line, ".json")) or {}
     why = closable_exit(rec)
     if why:
         log(f"окно {a.tty}: {why} — не закрываю")
@@ -176,7 +176,7 @@ def cmd_autoclose(sx, a):
         return 0
     if a.foreground:
         return close_own(sx, a, line, L.make_log(sys.stdout))
-    if not LR.detach(L.ldir() / f"{line}.autoclose.log"):
+    if not LR.detach(L.lfile(line, ".autoclose.log")):
         return 0
     rc = 3
     try:

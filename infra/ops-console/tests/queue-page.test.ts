@@ -832,3 +832,49 @@ describe('переход к пункту по ссылке «#item=<id>» (ко�
     expect(html).toMatch(/\.item\.is-target\.is-done \.item-body \{ display: grid; \}/)
   })
 })
+
+describe('шапка, Гант и справка (просьба владельца 10.11)', () => {
+  const phone = (() => {
+    const at = html.indexOf('@media (max-width: 640px) {')
+    return html.slice(at, html.indexOf('\n}\n', at))
+  })()
+
+  it('телефон: шапка в одну строку, у кнопок значки, выбор продукта не раздвигает страницу', () => {
+    expect(phone).toMatch(/\.head-bar, \.hb-nav \{ flex-wrap: nowrap;/)
+    expect(phone).toContain('.hb-ico { display: block; }')
+    expect(phone).toMatch(/\.hb-long, #jump-dash \{ display: none; \}/)
+    expect(phone).toMatch(/#head-bar \.oq-product-pick \{[^}]*width: 0;[^}]*min-width: 0;/)
+    expect(html).not.toContain('hb-short')
+  })
+
+  it('кнопки-значки названы для экранного чтения и подсказкой', () => {
+    const bar = html.slice(html.indexOf('<div class="head-bar" id="head-bar">'), html.indexOf('<!-- Форма «Поставить задачу»'))
+    expect(bar).toMatch(/id="compose-open"[^>]*aria-label="Поставить задачу" title="Поставить задачу"/)
+    expect(bar).toMatch(/<summary class="hb-btn" aria-label="Очередь: разделы" title="[^"]+">/)
+    expect(bar).toMatch(/id="reports-open"[^>]*aria-label="Отчёты" title="[^"]+">/)
+    // Значки — украшение: экранный диктор читает подпись кнопки, а не svg.
+    expect(bar.match(/<svg class="hb-ico"[^>]*aria-hidden="true"/g)?.length).toBe(2)
+  })
+
+  it('Гант: строка шириной со шкалу — липкое название не уезжает при прокрутке вбок', () => {
+    expect(html).toMatch(/\.g-row \{ display: flex; width: max-content; min-width: 100%;/)
+    expect(html).toMatch(/\.g-label \{ position: sticky; left: 0;/)
+  })
+
+  it('«Как пользоваться» описывает каждый раздел, отчёт и элемент шапки', () => {
+    const howto = html.slice(html.indexOf('<details class="howto-d" id="howto-d"'), html.indexOf('</details>', html.indexOf('id="howto-d"')))
+    for (const w of ['Решения', 'Мёржи', '«Влить»', '«Перезапустить деплой»', 'Команды на сервере', 'Проверить руками', 'Входящие',
+      '«📎 Добавить файл»', 'Продукт у пункта', '«Изменить ответ»', '«Ждёт вас снова»', '«Показать выполненные»', '#item=',
+      'выбор продукта', '«＋ Поставить задачу»', '«Очередь»', '«Ход работ»', '«К решениям ↓»', 'тема', 'Шапка на телефоне',
+      'Ваша очередь по дням', 'правая ось', 'прогноз на 30 дней', 'план и факт', 'Готовность по разделам', 'Карточки t-boards в плане',
+      'Отставание от плана', 'Сколько PR ждали мёржа', '36 часов', 'Диаграмма Ганта', 'Роадмап', 'Отчёт по задачам']) {
+      expect(howto.toLowerCase()).toContain(w.toLowerCase())
+    }
+  })
+
+  it('«Ход работ»: подпись продукта у карточек и разбивка при «Все продукты»; PR — только репозиторий HR', () => {
+    expect(html).toContain('<p class="sec-note" id="dash-split" hidden></p>')
+    expect(html).toContain("try { paintScope(ws); } catch (e)")
+    expect(html).toMatch(/var HR_ONLY = \{ 'card-pr': 1 \};/)
+  })
+})

@@ -207,3 +207,14 @@
 table.top td {
   vertical-align: top;
 }
+/* Версия продукта: SHA не берётся сам — почему и где его найти. */
+.releaseWarn {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--st-warning-soft);
+  color: var(--st-warning-text);
+  font-size: 13.5px;
+}
+.releaseWarn p {
+  margin: 0 0 6px;
+}

@@ -10,7 +10,7 @@ import { activity, alerts, checkResults, checkRollups, containers, deliveries, m
 import { expireStaleCommands } from '../containers/commands'
 import { runDueChecks } from '../monitors/checks'
 import { checkTlsCertificates } from '../monitors/tls'
-import { syncGithubDeploys } from '../deploys/github'
+import { syncGithubDeploysOnce } from '../deploys/sync-once'
 import { pruneDeployProgress } from '../deploys/progress'
 import { evaluateDeploySlow } from '../deploys/alerts'
 import { evaluateAgentSilence } from '../agents/silence'
@@ -162,7 +162,7 @@ export async function runTick(opts: { light?: boolean } = {}): Promise<TickSumma
     )
     tasks.heartbeat = await every('heartbeat', 55_000, now, pingHeartbeat)
     if (!opts.light) {
-      tasks.github = await every('github', 120_000, now, syncGithubDeploys)
+      tasks.github = await every('github', 120_000, now, syncGithubDeploysOnce)
       tasks.tls = await every('tls', 6 * 3_600_000, now, checkTlsCertificates)
       tasks.cleanup = await every('cleanup', DAY, now, cleanup)
       tasks.oqFiles = await every('oq-files', DAY, now, () => sweepFiles(now))
