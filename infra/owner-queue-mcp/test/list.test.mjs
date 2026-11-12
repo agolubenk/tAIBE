@@ -1,7 +1,7 @@
 // Отбор и страницы oq_list (list.mjs): фильтры, окно offset/limit, next_offset и потолок размера ответа.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OUT_MAX, briefDeep, briefDoc, filterDocs, fitEvents, fitList, ownerAnswerUnread, pageList, replyText, snapshots } from '../list.mjs';
+import { OUT_MAX, briefDeep, briefDoc, filterDocs, fitEvents, fitList, historyReply, ownerAnswerUnread, pageList, replyText, snapshots } from '../list.mjs';
 
 const check = (id, data) => ({ id, version: 1, data });
 
@@ -137,6 +137,28 @@ test('fitEvents: влезает столько событий, сколько п
   assert.ok(JSON.stringify(r, null, 1).length <= OUT_MAX);
   const plus = { total: 50, shown: r.shown + 1, truncated: true, hint: r.hint, events: big.slice(0, r.shown + 1) };
   assert.ok(JSON.stringify(plus, null, 1).length > OUT_MAX);
+});
+
+test('historyReply: полные события влезли — как fitEvents; не влезли — сразу brief с briefAuto (линза ресурсов #543)', () => {
+  const small = [{ at: 1, actor: 'a', action: 'put', after: { note: 'x' } }];
+  assert.deepEqual(historyReply(small), fitEvents(small));
+  const big = Array.from({ length: 50 }, (_, i) => ({ at: 50 - i, actor: 's', action: 'patch', after: { body: 'я'.repeat(48_000) } }));
+  const r = historyReply(big);
+  assert.equal(r.briefAuto, true);
+  assert.equal(r.truncated, undefined);
+  assert.equal(r.events.length, 50);
+  assert.equal(r.events[0].after.bodyLen, 48_000);
+  assert.ok(JSON.stringify(r, null, 1).length <= OUT_MAX);
+  // brief: true запрошен явно — briefAuto не ставится, обрезка — как у fitEvents.
+  assert.deepEqual(historyReply(big, { brief: true }), fitEvents(big, { brief: true }));
+  // Даже brief не влез — briefAuto и shown/truncated вместе, JSON валиден и в потолке.
+  const wide = Object.fromEntries(Array.from({ length: 20 }, (_, j) => [`f${j}`, 'я'.repeat(1_000)]));
+  const huge = Array.from({ length: 50 }, (_, i) => ({ at: 50 - i, actor: 's', action: 'patch', after: wide }));
+  const h = historyReply(huge);
+  assert.equal(h.briefAuto, true);
+  assert.equal(h.truncated, true);
+  assert.ok(h.shown >= 1 && h.shown < 50);
+  assert.ok(JSON.stringify(h, null, 1).length <= OUT_MAX);
 });
 
 test('fitEvents brief: строка плана со 150 карточками — cardsCount, все 50 событий влезают (линзы #111)', () => {

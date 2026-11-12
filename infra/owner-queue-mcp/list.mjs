@@ -129,10 +129,11 @@ export function fitList(total, docs, from = 0, extra = {}) {
  * Ответ oq_history: события новыми первыми и только целиком — не влезли старые, их нет в events, а shown и truncated
  * это говорят (раньше ответ резался по символам посреди JSON). Одно событие больше потолка — shown: 0, нужен brief.
  */
-export function fitEvents(events, { brief = false } = {}) {
+export function fitEvents(events, { brief = false, briefAuto = false } = {}) {
   const list = brief ? events.map((e) => (e && e.after && typeof e.after === 'object' ? { ...e, after: briefDeep(e.after) } : e)) : events;
   const shape = (k) => ({
     total: list.length,
+    ...(briefAuto ? { briefAuto: true } : {}),
     ...(k < list.length ? { shown: k, truncated: true, hint: brief ? 'старые события — в консоли, /history' : 'не влезли — brief: true (длинные строки — начало и длина, большие массивы — их длина)' } : {}),
     events: list.slice(0, k),
   });
@@ -151,6 +152,15 @@ export function fitEvents(events, { brief = false } = {}) {
   }
   while (n > 0 && JSON.stringify(shape(n), null, 1).length > OUT_MAX) n -= 1;
   return shape(n);
+}
+
+/**
+ * Ответ oq_history: полные события не влезли все — сразу brief с briefAuto: true. Линза ресурсов #543: агент на
+ * 3 из 50 событий (84 тыс. символов) повторял вызов с brief — 121 тыс. символов вместо 37 тыс.
+ */
+export function historyReply(events, { brief = false } = {}) {
+  const r = fitEvents(events, { brief });
+  return brief || !r.truncated ? r : fitEvents(events, { brief: true, briefAuto: true });
 }
 
 /**
