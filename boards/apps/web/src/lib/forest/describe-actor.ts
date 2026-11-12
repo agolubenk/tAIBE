@@ -12,7 +12,9 @@ export function describeActor(actorId: string | null): ActorView {
   if (!actorId) return { kind: "person" };
   if (actorId.startsWith("session:")) return { kind: "owner-session" };
   // The owner's «да» from the owner queue, applied by the server (TB-102).
-  if (actorId === "owner-queue") return { kind: "owner-queue" };
+  if (actorId === "owner-queue" || actorId.startsWith("owner-migration:")) {
+    return { kind: "owner-queue" };
+  }
   const parts = actorId.split(":");
   return {
     kind: "agent",
