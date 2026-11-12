@@ -25,7 +25,10 @@
       "Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck", "DesignSync", "Workflow", "NotebookEdit",
       "RemoteTrigger", "mcp__hub__cloudflare*", "mcp__claude_ai_Claude_Docs", "mcp__notion"
     ],
-    "env": {"CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH": "600"},
+    "_window_doc": "SE-62, d-t3-window-churn-1111: роли Т3 на окне 1M. Геном идёт в claude --settings — он сильнее settings.local.json хоста (там лимит 250K). Окно — в двух ключах: autoCompactWindow и env.CLAUDE_CODE_AUTO_COMPACT_WINDOW (env из settings.local иначе оставил бы 250K).",
+    "model": "opus[1m]",
+    "autoCompactWindow": 1000000,
+    "env": {"CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH": "600", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"},
     "claudeMdExcludes": [
       "{root}/worktrees/**/CLAUDE.md",
       "{root}/worktrees/**/.claude/rules/00-*.md",

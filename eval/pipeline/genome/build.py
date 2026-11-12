@@ -76,7 +76,10 @@ def genome(base, role, root=None, reflex=None, product=None):
     on = set(role.get('skills_on', []))
     overrides = {name: 'off' for name in base['skills_off'] if name not in on}
     overrides.update({name: 'name-only' for name in base['skills_name_only']})
+    # SE-62: model and window travel with the genome (`claude --settings`), not with a CLAUDE_BIN wrapper outside git.
+    window = {key: role.get(key, base.get(key)) for key in ('model', 'autoCompactWindow') if key in role or key in base}
     return {
+        **window,
         'enabledPlugins': dict(base['enabledPlugins']),
         'skillOverrides': overrides,
         'disableBundledSkills': True,
