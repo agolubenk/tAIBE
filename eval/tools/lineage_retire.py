@@ -7,6 +7,7 @@ import sys
 
 from lineage import (IDLE_WAIT, SHELLS, TAP_WAIT, TERM_WAIT, ancestor_claude, argv0, descendants, die, doomed,
                      group_of, host, ldir, make_log, norm, read_json, same, session_line, stamp, valid_line)
+from lineage_guard import hand_control, session_id, successor_sid, take_pins
 
 
 # Окно Terminal: сначала по id из record (если в нём вкладка с этим tty), иначе перебором по tty. Окно с несколькими
@@ -171,8 +172,23 @@ def successor_problem(sx, procs, p, s, a, child):
     return None
 
 
-def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
-    """Сторож предшественника p. Код возврата: 0 — снят или уже ушёл сам, 3 — проверка не прошла, p не тронут."""
+def watch(sx, p, parent, child, role, timeout, log, poll=5.0, ctl=None):
+    """Сторож предшественника p. Код возврата: 0 — снят или уже ушёл сам, 3 — проверка не прошла, p не тронут.
+    ctl — {"dirs": папки списка Контроля, "sid": sessionId p}: если p — Контроль, он переходит проверенному наследнику
+    до снятия p; не перешёл — p не снимается (lineage_guard)."""
+    def handover(s):
+        if not ctl:
+            return True
+
+        def succ():
+            # Свежая сверка наследника под guard.lock, прямо перед записью списка: за ожидание квитанции и блокировки
+            # он мог упасть (и в ветках «ушёл сам»).
+            procs = sx.procs()
+            why = successor_problem(sx, procs, p, procs.get(s.pid), a, child)
+            return (None, why) if why else successor_sid(procs, procs.get(s.pid), ctl.get("tty"))
+
+        return hand_control(ctl["dirs"], ctl.get("sid"), succ, child.rsplit(".", 1)[-1], log, pins=ctl.get("pins"))
+
     ack = ldir() / f"{child}.ack"
     deadline = sx.now() + timeout
     # Паритет: tap требуем от наследника, только если он был у предшественника (ночью мониторов нет — TEAM-0 §10.6).
@@ -200,9 +216,16 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
     if why:
         log("проверка не прошла: " + why + " — предшественника не трогаю")
         return 3
-    if not same(procs, p):
+    def gone():
         log("предшественник уже завершился сам")
-        return 0
+        if handover(s):
+            return 0
+        log("Контроль наследнику не передан, а предшественник ушёл — его sessionId остался в списке; нужен s-пункт "
+            "владельцу (s-set-control)")  # GLM #120 7fb2287d2, находка 8: rc 3 здесь — не «сессию оставили»
+        return 3
+
+    if not same(procs, p):
+        return gone()
     if tap:
         until = sx.now() + TAP_WAIT
         while not tapped(procs, s, tap, want):
@@ -217,14 +240,15 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0):
         sx.sleep(poll)
     procs = sx.procs()
     if not same(procs, p):
-        log("предшественник уже завершился сам")
-        return 0
+        return gone()
     # За IDLE_WAIT мир мог смениться: ход не кончился — не рвём его; наследник упал или снял tap — роль без сессии.
     why = (sx.status(p.pid) == "busy" and f"предшественник {p.pid} занят дольше {IDLE_WAIT} с") or \
         successor_problem(sx, procs, p, procs.get(s.pid), a, child) or \
         (tap and not tapped(procs, s, tap, want) and f"у наследника {s.pid} пропал nerve.py tap {role}")
     if why:
         log("перед снятием: " + why + " — предшественника не трогаю")
+        return 3
+    if not handover(s):
         return 3
     protect = {s.pid} | descendants(procs, s.pid)
     return 0 if take_down(sx, p, parent, protect, log) else 3
@@ -259,14 +283,20 @@ def cmd_retire(sx, a):
         print("retire: запуск не из сессии claude — снимать некого")
         return 0
     logpath = ldir() / f"{a.child}.retire.log"
+    # sessionId — сейчас, пока предшественник жив: после его ухода запись реестра исчезает. tty окна наследника —
+    # из аргумента spawn_session.sh, не из записи линии: папку линий правят агенты (GLM #120, находка 1).
+    # Пины папок списка — тоже сейчас, до ожидания квитанции: подмену .claude или списка за ожидание сторож заметит
+    # (GLM #120 104b29f96, S1).
+    ctl = ({"dirs": a.guard, "sid": session_id(p), "tty": getattr(a, "succ_tty", "") or "", "pins": take_pins(a.guard)}
+           if getattr(a, "guard", None) else None)
     if a.foreground:
-        return watch(sx, p, parent, a.child, a.role, a.timeout, make_log(sys.stdout), a.poll)
+        return watch(sx, p, parent, a.child, a.role, a.timeout, make_log(sys.stdout), a.poll, ctl)
     if not detach(logpath):
         print(f"retire: сессия {p.pid} уйдёт сама после квитанции {a.child} (до {a.timeout:.0f} с); журнал {logpath}")
         return 0
     rc = 3
     try:
-        rc = watch(sx, p, parent, a.child, a.role, a.timeout, make_log(sys.stdout), a.poll)
+        rc = watch(sx, p, parent, a.child, a.role, a.timeout, make_log(sys.stdout), a.poll, ctl)
     except Exception as e:  # сторож без терминала: причина — только в журнале
         print(f"{stamp()} сбой сторожа: {e!r}", flush=True)
     os._exit(rc)

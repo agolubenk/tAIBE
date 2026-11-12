@@ -23,6 +23,10 @@
 # не важна. Код ≠ 0 — окно остаётся. Код выхода пишется в запись линии (lineage.py exited) для автоуборки.
 # Handoff: наследник после приёма пишет квитанцию (lineage.py ack), сторож lineage.py retire проверяет его и снимает
 # предшественника — процессы и окно Terminal (id окна записан при открытии). Уборка остальных — reap_sessions.sh.
+# Предшественник — Контроль (его sessionId в .claude/merge-guard.local.json основной папки $CWD или tAIBE): до снятия
+# сторож заменяет эту запись sessionId наследника из окна, которое открыл этот скрипт (копия
+# merge-guard.local.json.before-handover — одна на папку, перезаписывается).
+# Не вышло — Контроль и предшественник остаются как были, владельцу — прежний s-пункт (lineage_guard.py, IS-233).
 # Роль Т3 получает свой геном (--settings genome/<ключ>.json) и первое сообщение «Сборка Т3, ключ реестра <ключ>…» —
 # по нему включается правило 90 и Нерв узнаёт роль. Окно открывает osascript: первый раз macOS спросит разрешение
 # на управление Terminal. Только bash 3.2 (системный на macOS): без ассоциативных массивов.
@@ -38,6 +42,7 @@ CLOSE="${SPAWN_AUTOCLOSE:-on}"
 DELAY="${SPAWN_CLOSE_DELAY:-10}"  # с отсчёта перед закрытием окна (Enter — оставить)
 case "$DELAY" in ''|*[!0-9]*) DELAY=10 ;; esac
 SPAWNED_LINE=""  # линия последней открытой сессии (bash 3.2: из функции — только через глобальную)
+SPAWNED_TTY=""   # tty её окна Terminal — сторожу аргументом, не из записи линии (папку линий могут править агенты)
 ORDER="coord release backend frontend plan boards"
 
 die() { echo "spawn_session: $*" >&2; exit 2; }
@@ -161,6 +166,7 @@ spawn_one() {
   local role="$1" msg genome="" dir launcher cmd lineage out wid tty
   lineage="$(child_lineage)"
   SPAWNED_LINE="$lineage"
+  SPAWNED_TTY=""
   msg="$(first_message "$role" "$lineage")"
   if [ -n "$role" ]; then
     genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$role.json")"
@@ -237,6 +243,7 @@ spawn_one() {
     case "$wid" in *[!0-9]*|"") wid="" ;; esac
     case "$tty" in /dev/tty*) ;; *) tty="" ;; esac
     record "$lineage" terminal "$wid" "$tty" "$role"
+    SPAWNED_TTY="$tty"
   fi
   echo "открыто: ${role:-наследник} → $launcher"
 }
@@ -288,8 +295,19 @@ elif [ -n "$HANDOFF" ]; then
   spawn_one "$ROLE"
   # Предшественник уходит сам: сторож ждёт квитанцию наследника и проверяет его, модель в этом не участвует.
   if [ "$DRY" = 0 ] && [ "$RETIRE" != off ]; then
-    python3 -I "$TOOLS/lineage.py" retire --child "$SPAWNED_LINE" ${ROLE:+--role "$ROLE"} \
-      || echo "# spawn_session: сторож не запущен — предшественник останется, уберёт reap_sessions.sh" >&2
+    # --guard: если предшественник — Контроль, сторож впишет наследника в список Контроля этих папок (IS-233).
+    # Пустую папку не передаём: cd не вышел — пустой --guard стал бы текущей папкой.
+    # Папка не нашлась — сторож не запускается вовсе (fail-closed): с неполным набором папок он снял бы
+    # предшественника-Контроля, не передав Контроль в пропущенной папке.
+    GUARD_TAIBE=$(cd "$TOOLS/../.." 2>/dev/null && pwd) || GUARD_TAIBE=
+    if [ -z "$GUARD_TAIBE" ] || [ -z "$CWD" ]; then
+      echo "# spawn_session: папка guard не найдена (tAIBE '${GUARD_TAIBE}', рабочая '${CWD}') — сторож не запущен," \
+        "предшественник останется, уберёт reap_sessions.sh" >&2
+    else
+      python3 -I "$TOOLS/lineage.py" retire --child "$SPAWNED_LINE" ${ROLE:+--role "$ROLE"} \
+        --guard "$CWD" --guard "$GUARD_TAIBE" --succ-tty "$SPAWNED_TTY" \
+        || echo "# spawn_session: сторож не запущен — предшественник останется, уберёт reap_sessions.sh" >&2
+    fi
   fi
 elif [ "$LAUNCH" = 1 ]; then
   if [ -n "$ROLES" ]; then
