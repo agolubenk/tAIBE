@@ -106,7 +106,7 @@ async function journalApplied(
   }
 }
 
-async function markFailed(
+export async function markFailed(
   approvalId: string,
   workspaceId: string,
   actor: ForestActor,

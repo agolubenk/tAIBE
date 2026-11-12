@@ -1,0 +1,122 @@
+import { randomBytes } from "node:crypto";
+import { itemIdPrefix } from "./queue-config";
+
+export type ItemApproval = {
+  id: string;
+  action: string;
+  params: Record<string, string> | null;
+  reason: string | null;
+  requestedByName: string;
+  expiresAt: Date;
+  doneRef: string | null;
+  doneReason: string | null;
+};
+
+export type ItemCard = {
+  key: string;
+  title: string;
+  current: string | null;
+} | null;
+
+const NONCE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+// Six server-made characters (F18): an agent cannot know the item id ahead
+// and plant its own item under it.
+export function itemNonce(): string {
+  const bytes = randomBytes(6);
+  return [...bytes]
+    .map((byte) => NONCE_ALPHABET[byte % NONCE_ALPHABET.length])
+    .join("");
+}
+
+export function approvalItemId(
+  product: string,
+  approvalId: string,
+  nonce: string,
+): string {
+  return `${itemIdPrefix(product)}d-tba-${approvalId}-${nonce}`;
+}
+
+function actionLine(approval: ItemApproval): string {
+  const p = approval.params ?? {};
+  switch (approval.action) {
+    case "close_task":
+      return `закрыть карточку → «${p.status ?? "?"}»`;
+    case "reopen_task":
+      return `вернуть карточку в работу → «${p.status ?? "?"}»`;
+    case "set_priority":
+      return `приоритет → «${p.priority ?? "?"}»`;
+    case "set_assignee":
+      return `исполнитель → ${p.userName ?? p.userId ?? "?"}`;
+    case "create_label":
+      return `создать метку «${p.name ?? "?"}» (${p.color ?? "?"}) на карточках: ${(p.taskIds ?? "").split(",").filter(Boolean).length}`;
+    case "attach_label":
+      return `поставить метку «${p.labelName ?? "?"}» на карточки: ${(p.taskIds ?? "").split(",").filter(Boolean).length}`;
+    case "fell_tree":
+      return "срубить дерево (карточки уйдут в журнал и семена)";
+    case "fell_sector":
+      return "срубить сектор (карточки уйдут в журнал и семена)";
+    default:
+      return approval.action;
+  }
+}
+
+function moscowTime(date: Date): string {
+  return `${date.toLocaleString("ru-RU", {
+    timeZone: "Europe/Moscow",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })} МСК`;
+}
+
+// The server writes the whole text (spec «Пункт очереди»): workspace, card,
+// action with current → target value, term and done-log ref. The agent's
+// reason is a separate paragraph marked as the agent's text.
+export function approvalItemData({
+  approval,
+  workspaceName,
+  card,
+  now,
+}: {
+  approval: ItemApproval;
+  workspaceName: string;
+  card: ItemCard;
+  now: Date;
+}): Record<string, unknown> {
+  const action = actionLine(approval);
+  const cardLine = card ? `${card.key} «${card.title}»` : "—";
+  const title = `t-boards: ${action}${card ? ` — ${card.key}` : ""}`.slice(
+    0,
+    300,
+  );
+  const paragraphs = [
+    `Пространство: ${workspaceName}`,
+    `Карточка: ${cardLine}`,
+    `Действие: ${action}${card?.current ? ` (сейчас: «${card.current}»)` : ""}`,
+    `Срок ответа: до ${moscowTime(approval.expiresAt)}. Просит: ${approval.requestedByName}.`,
+  ];
+  if (approval.doneRef) paragraphs.push(`Журнал закрытых: ${approval.doneRef}`);
+  if (approval.doneReason) {
+    paragraphs.push(`Без записи в журнале закрытых: ${approval.doneReason}`);
+  }
+  if (approval.reason) {
+    paragraphs.push(`Текст агента:\n${approval.reason.slice(0, 4000)}`);
+  }
+  paragraphs.push(
+    "«Да» — t-boards применит действие сам. Статус этого пункта ведёт только t-boards.",
+  );
+  return {
+    kind: "decision",
+    title,
+    body: paragraphs.join("\n\n"),
+    options: [
+      { id: "yes", label: "Да" },
+      { id: "no", label: "Нет" },
+    ],
+    added: now.toISOString().slice(0, 10),
+    source: "t-boards",
+    ...(approval.doneRef ? { links: [approval.doneRef] } : {}),
+  };
+}
