@@ -7,19 +7,22 @@ that its watchdog closes anyway (lineage.py ack).
 
 Rules, in order (the first that applies decides):
 1. `to` is "main" (a subagent to its parent) or the message is empty (a pure notify_when_idle subscription) — pass.
-2. The first line starts with URGENT: / BLOCKER: / СРОЧНО: — pass, max URGENT_CAP per hour per session.
+2. The first non-empty line starts with URGENT: / BLOCKER: / СРОЧНО: — pass, max URGENT_CAP per hour per session
+   (one limit for all three prefixes).
 3. Only an acknowledgement (≤ 200 chars, nothing but «принял», «ок», «ack», «thanks» … and punctuation) — deny,
    except an answer to a question: the last message from the recipient (after this session last wrote to it) has «?».
 4. A reply — the recipient wrote to this session after this session last wrote to it, less than REPLY_WINDOW ago —
    pass. One message from the peer allows one reply, so the window can be long (a GLM wait is 2 h and more).
-5. Only a handoff receipt (≤ 200 chars, the receipt in the first line, no «?», no #N) — deny: the receipt is
+5. Only a handoff receipt (≤ 200 chars, the receipt in the first non-empty line, no «?», no #N) — deny: the receipt is
    `lineage.py ack`, the watchdog closes the predecessor.
 6. The same recipient got a message from this session less than COOLDOWN ago — deny: merge it into the next one.
 7. The session sent CAP new messages in the last hour, CAP by the nerve's share5 (mode.json) — deny. Replies and
    urgent lines do not count here.
-Otherwise pass. Any error — pass (the hook never breaks a call). PEER_GATE=off — pass; PEER_GATE=log — log, never deny.
+Otherwise pass. Any error — pass (the hook never breaks a call). PEER_GATE=off — pass; PEER_GATE=log — log, never deny
+(a send that the gate would deny is kept as kind «soft»: it starts a cooldown, the recipient woke, but not the cap).
 
-State: PEER_GATE_DIR or ~/.local/state/taibe/peer-gate: session-<id>.jsonl (this session's sends, kept REPLY_WINDOW + 1 h)
+State: PEER_GATE_DIR or ~/.local/state/taibe/peer-gate: session-<id>.jsonl (this session's sends: the last hour in full,
+older — the last send per recipient within REPLY_WINDOW)
 and journal-<YYYY-MM-DD>.jsonl (every verdict, kept 30 days). A broken line is skipped and counted in `report`.
 Run: python3 -I peer_gate.py  (hook JSON on stdin) · python3 -I peer_gate.py report [--hours N]
 """
@@ -43,6 +46,7 @@ URGENT_CAP = 3
 CAPS = ((0.85, 3), (0.6, 6))
 # Transcript tails to search for the peer's last message, smallest first. A busy session writes ~5 MB/h (12.11:
 # 0.7 MB in 8 min), so 64 MB covers REPLY_WINDOW; the search stops early when the tail is older than the window.
+# Each step reads only the bytes before the previous tail: the worst case reads the largest tail once.
 TAILS = (2 * 1024 * 1024, 16 * 1024 * 1024, 64 * 1024 * 1024)
 SESSION_MAX_BYTES = 64 * 1024
 JOURNAL_DAYS = 30
@@ -55,7 +59,6 @@ ACK_ONLY = re.compile(r'[\W_]*' + ACK_WORD + r'(?:[\W_]+' + ACK_WORD + r')*[\W_]
 HANDOFF = re.compile(r'accepts? (the )?handoff|handoff\b[^.\n]{0,60}\baccepted|accepted by [\w-]+ \(gen'
                      r'|(приём|принял[аи]?) handoff|подтверждаю приём', re.I)
 REF = re.compile(r'#\d')
-TS = re.compile(rb'"timestamp"\s*:\s*"([^"]+)"')
 
 
 def deny(reason):
@@ -124,17 +127,46 @@ def cap_for(s5):
     return None
 
 
-def stamp(raw):
-    return datetime.fromisoformat(raw.decode('utf-8').replace('Z', '+00:00')).timestamp()
+def oldest_stamp(data, lines=50):
+    """Time of the first full transcript line with a `timestamp` field (the tail starts mid-line); None when the first
+    `lines` full lines have none."""
+    pos = data.find(b'\n') + 1
+    for _ in range(lines):
+        if not pos or pos >= len(data):
+            return None
+        end = data.find(b'\n', pos)
+        line = data[pos:end if end >= 0 else len(data)]
+        pos = end + 1 if end >= 0 else 0
+        try:
+            row = json.loads(line)
+            if isinstance(row, dict) and isinstance(row.get('timestamp'), str):
+                return datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00')).timestamp()
+        except ValueError:
+            continue
+    return None
 
 
-def oldest_stamp(data):
-    """Time of the first full transcript line in a tail (the tail starts mid-line); None when no line has one."""
-    m = TS.search(data, data.find(b'\n') + 1)
-    try:
-        return stamp(m.group(1)) if m else None
-    except ValueError:
-        return None
+def find_heard(data, mark, limit, since, width):
+    """(time, asked) of the last marked cross-session message whose mark starts before `limit` in `data`; False when
+    the newest such message is not newer than `since`; None when there is none. `width` — the longest mark in bytes:
+    a mark that starts before `limit` may end after it."""
+    for m in reversed(list(mark.finditer(data, 0, min(len(data), limit + width)))):
+        if m.start() >= limit:
+            continue
+        start = data.rfind(b'\n', 0, m.start()) + 1
+        end = data.find(b'\n', m.end())
+        line = data[start:end if end >= 0 else len(data)]
+        if b'<cross-session-message' not in line:
+            continue
+        try:
+            at = datetime.fromisoformat(json.loads(line)['timestamp'].replace('Z', '+00:00')).timestamp()
+        except (ValueError, KeyError, TypeError):
+            continue
+        if at <= since:
+            return False
+        close = data.find(b'</cross-session-message>', m.end(), start + len(line))
+        return at, b'?' in data[m.end():close if close >= 0 else start + len(line)]
+    return None
 
 
 def last_heard(transcript, peer, since=0, tails=TAILS):
@@ -142,30 +174,28 @@ def last_heard(transcript, peer, since=0, tails=TAILS):
     or None. `asked` — the message has «?». Reads the smallest tail that holds it or that is older than `since`."""
     if not transcript or not peer:
         return None
-    mark = re.compile(rb'from(?:-name)?=\\"' + re.escape(peer.encode('utf-8')) + rb'\\"')
+    name = peer.encode('utf-8')
+    mark = re.compile(rb'from(?:-name)?=\\"' + re.escape(name) + rb'\\"')
+    width = len(name) + 16
     try:
         with open(transcript, 'rb') as f:
             f.seek(0, 2)
             size = f.tell()
+            data, done = b'', size
             for tail in tails:
-                f.seek(max(0, size - tail))
-                data = f.read()
-                for m in reversed(list(mark.finditer(data))):
-                    start = data.rfind(b'\n', 0, m.start()) + 1
-                    end = data.find(b'\n', m.end())
-                    line = data[start:end if end >= 0 else len(data)]
-                    if b'<cross-session-message' not in line:
-                        continue
-                    try:
-                        at = datetime.fromisoformat(json.loads(line)['timestamp'].replace('Z', '+00:00')).timestamp()
-                    except (ValueError, KeyError, TypeError):
-                        continue
-                    if at <= since:
-                        return None
-                    close = data.find(b'</cross-session-message>', m.end(), start + len(line))
-                    return at, b'?' in data[m.end():close if close >= 0 else start + len(line)]
+                start = max(0, size - tail)
+                if start >= done:
+                    continue
+                f.seek(start)
+                chunk = f.read(done - start)
+                done = start
+                # Marks that start in the new chunk; their lines may run into the bytes already read.
+                data = chunk + data
+                found = find_heard(data, mark, len(chunk), since, width)
+                if found is not None:
+                    return found or None
                 oldest = oldest_stamp(data)
-                if tail >= size or (oldest is not None and oldest <= since):
+                if start == 0 or (oldest is not None and oldest <= since):
                     return None
     except OSError:
         return None
@@ -189,8 +219,7 @@ def decide(event, now=None, state_dir=None, mode_path=MODE):
         free = hhmm(min(s['ts'] for s in urgent) + 3600)
         return 'deny-urgent', '', deny(
             f'Not sent: you sent {len(urgent)} urgent messages in the last hour, and the limit is {URGENT_CAP} (SE-41). '
-            f'Use URGENT:, BLOCKER: or СРОЧНО: only when the recipient must act at once. Remove the prefix and send '
-            f'a usual message, or send it after {free}.')
+            f'Remove the urgent prefix and send a usual message, or send it after {free}.')
     last_to = max((s.get('ts', 0) for s in sends if s.get('to') == to), default=0)
     since = max(last_to, now - REPLY_WINDOW)
     heard = last_heard(event.get('transcript_path'), to, since)
@@ -238,16 +267,24 @@ def prune(root, now):
 
 
 def keep_recent(path, now):
-    """Rewrite a session file over SESSION_MAX_BYTES with the rows that the rules still read."""
+    """Compact a session file over SESSION_MAX_BYTES: the last hour in full (cap, urgent), older rows — only the last
+    send per recipient within REPLY_WINDOW (cooldown, reply). The result is far below the threshold, so the file is
+    not rewritten again on the next call."""
     try:
         if os.path.getsize(path) <= SESSION_MAX_BYTES:
             return
     except OSError:
         return
-    rows = [r for r in read_jsonl(path) if now - r.get('ts', 0) < REPLY_WINDOW + 3600]
+    rows = read_jsonl(path)
+    recent = [r for r in rows if now - r.get('ts', 0) < 3600]
+    last = {}
+    for r in rows:
+        if 3600 <= now - r.get('ts', 0) < REPLY_WINDOW and r.get('ts', 0) >= last.get(r.get('to'), {}).get('ts', 0):
+            last[r.get('to')] = r
+    keep = sorted(last.values(), key=lambda r: r.get('ts', 0)) + recent
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
-        f.writelines(json.dumps(r, ensure_ascii=False) + '\n' for r in rows)
+        f.writelines(json.dumps(r, ensure_ascii=False) + '\n' for r in keep)
     os.replace(tmp, path)
 
 
@@ -267,7 +304,7 @@ def respond(event, now=None, state_dir=None, mode_path=MODE):
     if out and not soft:
         return out
     if verdict != 'pass-trivial':
-        kind = {'pass-reply': 'reply', 'pass-urgent': 'urgent'}.get(verdict, 'pass')
+        kind = 'soft' if out else {'pass-reply': 'reply', 'pass-urgent': 'urgent'}.get(verdict, 'pass')
         path = session_file(root, event)
         append(path, {'ts': round(now), 'to': to, 'kind': kind})
         keep_recent(path, now)
@@ -283,7 +320,13 @@ def report(hours=24, state_dir=None, now=None):
         if name.startswith('journal-') and name[8:18] >= first:
             rows += [r for r in read_jsonl(os.path.join(root, name), broken) if now - r.get('ts', 0) < hours * 3600]
         elif name.startswith('session-'):
-            read_jsonl(os.path.join(root, name), broken)
+            path = os.path.join(root, name)
+            try:
+                fresh = now - os.path.getmtime(path) < hours * 3600
+            except OSError:
+                fresh = False
+            if fresh:
+                read_jsonl(path, broken)
     count = {}
     for r in rows:
         count[r.get('verdict', '?')] = count.get(r.get('verdict', '?'), 0) + 1

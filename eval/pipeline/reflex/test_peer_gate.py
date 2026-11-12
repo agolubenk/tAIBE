@@ -212,10 +212,14 @@ class PeerGateTest(unittest.TestCase):
     def test_broken_line_keeps_the_rest_of_the_state(self):
         """M2 (GLM run 1): one broken line does not reset the cooldown, and report shows it."""
         self.assertEqual(self.send('peer-a', at=NOW)[0], 'pass')
-        with open(os.path.join(self.dir, 'session-s1.jsonl'), 'a') as f:
+        path = os.path.join(self.dir, 'session-s1.jsonl')
+        with open(path, 'a') as f:
             f.write('{broken\n')
         self.assertEqual(self.send('peer-a', at=NOW + 60)[0], 'deny-cooldown')
+        os.utime(path, (NOW + 60, NOW + 60))
         self.assertIn('broken lines skipped: 1', peer_gate.report(24, self.dir, NOW + 61))
+        # Minor 6 (GLM run 2): report reads only session files that changed within the window.
+        self.assertNotIn('broken lines', peer_gate.report(24, self.dir, NOW + 2 * 86400))
 
     def test_old_state_is_pruned(self):
         """M3 (GLM run 1): journals older than JOURNAL_DAYS and idle session files go; a big session file shrinks."""
@@ -235,6 +239,86 @@ class PeerGateTest(unittest.TestCase):
         self.send('peer-b', at=NOW + 1)
         rows = peer_gate.read_jsonl(path)
         self.assertEqual([r['to'] for r in rows], ['peer-a', 'peer-b'])
+
+    def test_log_mode_keeps_would_be_denied_sends_out_of_the_cap(self):
+        """Minor 1 (GLM run 2): in PEER_GATE=log a send that the gate would deny is kind «soft» — it is not a «pass»,
+        so turning the gate on later does not start with a cap that the log mode filled."""
+        self.set_mode(0.9)
+        with mock.patch.dict(os.environ, {'PEER_GATE': 'log'}):
+            for i in range(3):
+                self.send(f'p{i}', at=NOW + i)
+            verdict, out = self.send('p9', at=NOW + 10)
+        self.assertEqual(verdict, 'deny-cap')
+        self.assertIsNone(out)
+        kinds = [r['kind'] for r in peer_gate.read_jsonl(os.path.join(self.dir, 'session-s1.jsonl'))]
+        self.assertEqual(kinds, ['pass', 'pass', 'pass', 'soft'])
+        self.assertEqual(self.send('p9', at=NOW + 20)[0], 'deny-cooldown')
+        self.assertEqual(self.send('p8', at=NOW + 3601)[0], 'pass')
+
+    def test_tails_are_read_once(self):
+        """Minor 2 (GLM run 2): each tail step reads only the bytes before the previous tail."""
+        self.heard('peer-a', ago=600)
+        self.filler(300, ago=60)
+        reads = []
+        real_open = open
+
+        def counting_open(*a, **k):
+            f = real_open(*a, **k)
+            real_read = f.read
+            f.read = lambda n=-1: reads.append(n) or real_read(n)
+            return f
+        size = os.path.getsize(self.transcript)
+        with mock.patch('builtins.open', counting_open):
+            self.assertIsNotNone(peer_gate.last_heard(self.transcript, 'peer-a', 0, (50_000, 200_000, 10_000_000)))
+        self.assertEqual(sum(reads), size)
+
+    def test_mark_on_a_tail_boundary_is_found(self):
+        """The first tail starts inside the mark: the next step reads the rest of it and finds the message."""
+        self.heard('peer-a', ago=600, body='Can I merge #132?')
+        self.filler(100, ago=60)
+        size = os.path.getsize(self.transcript)
+        with open(self.transcript, 'rb') as f:
+            cut = f.read().index(b'from-name=\\"peer-a') + 3
+        heard = peer_gate.last_heard(self.transcript, 'peer-a', 0, (size - cut, size))
+        self.assertIsNotNone(heard)
+        self.assertTrue(heard[1])
+
+    def test_oldest_stamp_reads_the_json_field(self):
+        """Minor 4 (GLM run 2): a nested «timestamp» (a tool result) does not stop the search early."""
+        no_field = json.dumps({'type': 'summary', 'message': {'content': 'x'}})
+        nested = json.dumps({'toolUseResult': {'timestamp': '2000-01-01T00:00:00Z'}, 'type': 'user',
+                             'timestamp': '2027-01-15T08:00:00Z'})
+        data = b'tail of a line\n' + no_field.encode() + b'\n' + nested.encode() + b'\n'
+        self.assertEqual(peer_gate.oldest_stamp(data), datetime(2027, 1, 15, 8, tzinfo=timezone.utc).timestamp())
+        self.assertIsNone(peer_gate.oldest_stamp(b'no newline at all'))
+
+    def test_urgent_after_blank_lines_and_wording(self):
+        """Minor 5 and 7 (GLM run 2): the first non-empty line counts; deny-urgent does not list the prefixes."""
+        self.assertEqual(self.send('p0', message='\n\nURGENT: stop the deploy.')[0], 'pass-urgent')
+        for i in range(1, peer_gate.URGENT_CAP):
+            self.send(f'p{i}', at=NOW + i, message='BLOCKER: x')
+        verdict, out = self.send('p9', at=NOW + 10, message='СРОЧНО: x')
+        self.assertEqual(verdict, 'deny-urgent')
+        for prefix in ('URGENT', 'BLOCKER', 'СРОЧНО'):
+            self.assertNotIn(prefix, self.reason(out))
+
+    def test_compaction_keeps_what_the_rules_read(self):
+        """Minor 3 (GLM run 2): after compaction the file is far below the threshold — no rewrite on the next call."""
+        path = os.path.join(self.dir, 'session-s1.jsonl')
+        with open(path, 'w') as f:
+            for i in range(1500):
+                f.write(json.dumps({'ts': NOW - 5 * 3600 + i, 'to': f'old{i % 3}', 'kind': 'pass'}) + '\n')
+            f.write(json.dumps({'ts': NOW - 300, 'to': 'peer-a', 'kind': 'pass'}) + '\n')
+        os.utime(path, (NOW, NOW))
+        open(os.path.join(self.dir, datetime.fromtimestamp(NOW).strftime('journal-%Y-%m-%d.jsonl')), 'w').close()
+        self.send('peer-b', at=NOW)
+        rows = peer_gate.read_jsonl(path)
+        self.assertEqual(sorted(r['to'] for r in rows), ['old0', 'old1', 'old2', 'peer-a', 'peer-b'])
+        self.assertLess(os.path.getsize(path), peer_gate.SESSION_MAX_BYTES // 10)
+        self.assertEqual(self.send('peer-a', at=NOW + 1)[0], 'deny-cooldown')
+        before = os.stat(path).st_ino
+        self.send('peer-c', at=NOW + 2)
+        self.assertEqual(os.stat(path).st_ino, before)
 
     def test_log_mode_never_denies_but_records(self):
         with mock.patch.dict(os.environ, {'PEER_GATE': 'log'}):
