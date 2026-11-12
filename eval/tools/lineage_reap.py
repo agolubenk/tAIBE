@@ -48,7 +48,10 @@ def add_reap_args(p):
 
 
 def prune_lineage_dir(days, now=None):
-    """Старые <линия>.json/.ack/.log — по mtime файла (реальные часы ФС, не часы sx). reap-list.json не трогаем."""
+    """Старые <линия>.json/.ack/.log — по mtime файла (реальные часы ФС, не часы sx). reap-list.json не трогаем.
+    Сначала — старые имена линий длиннее 200 символов на новые (SE-57, L.migrate_names): этот проход идёт и из
+    reap_sessions.sh, и из launchd-автоуборки раз в 30 мин."""
+    L.migrate_names()
     if days <= 0:
         return 0
     cutoff = (now if now is not None else time.time()) - days * 86400
@@ -97,13 +100,8 @@ def ancestors(procs, pid):
 
 def ack_state(procs, line):
     """«ack» — наследник этой линии принял и жив; «ack†» — квитанция есть, наследника уже нет; "" — нет."""
-    if not L.valid_line(line or ""):
-        return ""
-    one = re.compile("^" + re.escape(line) + r"\.[a-z0-9]+\.ack$")
     state = ""
-    for f in sorted(L.ldir().glob(line + ".*.ack")) if L.ldir().is_dir() else []:
-        if not one.match(f.name):
-            continue
+    for _child, f in L.child_acks(line or ""):
         a = L.read_json(f) or {}
         s = procs.get(a.get("pid") if isinstance(a.get("pid"), int) else -1)
         if s is not None and L.argv0(s) == "claude" and L.norm(s.start) == L.norm(a.get("start")):

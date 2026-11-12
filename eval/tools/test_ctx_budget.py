@@ -141,6 +141,16 @@ class WindowTest(unittest.TestCase):
             self.assertFalse(cp.is_1m(name), name)
 
 
+class SessionRoleTest(unittest.TestCase):
+    def test_long_line_role_from_short_record(self):
+        """SE-57: роль линии длиннее 200 символов — из записи под коротким именем (lineage.line_key)."""
+        line = "r" + "".join(f".{i:04d}" for i in range(59))
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"TAIBE_LINEAGE_DIR": d, "TAIBE_LINEAGE": line, "T3_ROLE_KEY": ""}):
+            (Path(d) / (cb.line_key(line) + ".json")).write_text(json.dumps({"line": line, "role": "plan"}))
+            self.assertEqual(cb.session_role(), "plan")
+
+
 class Sandbox(unittest.TestCase):
     """Хук и CLI на временном каталоге: окно 250K из env, без params.json → W_eff 213K, H 4 %, T 10 %."""
 
