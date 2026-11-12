@@ -34,7 +34,7 @@ import re
 import time
 
 from lineage import LAUNCHER_RE, SHELLS, ancestor_claude, argv0, norm, read_json, sessions_dir
-from lineage_guard_fs import (ABSENT, GUARD, MAX_LIST, MISSING, fsync_dir, guard_dirs, open_dir, pin_of, read_control,
+from lineage_guard_fs import (ABSENT, GUARD, MAX_LIST, MISSING, dir_pin, fsync_dir, guard_dirs, open_dir, read_control,
                               read_list, same_dir, sweep_tmp, write_atomic)
 from lineage_guard_fs import main_root, take_pins  # noqa: F401 — API модуля: cmd_retire, тесты
 
@@ -137,7 +137,7 @@ def plan_dir(d, pred_sid, log, pin):
         return None
     keep = False
     try:
-        dpin = pin_of(os.fstat(dfd))
+        dpin = dir_pin(os.fstat(dfd))
         if dpin != dpin0:
             return replaced(log, f.parent)
         sweep_tmp(dfd)
@@ -266,12 +266,13 @@ def hand_control(dirs, pred_sid, succ, suffix, log, lock_wait=LOCK_WAIT, *, pins
 def locked_handover(dirs, pred_sid, succ, suffix, log, pins):
     intent = state_dir() / INTENT
     if os.path.lexists(intent):
-        if not settled(intent, pins):
+        if not settled(intent):
             # Сторож, убитый на записи, строку «передача застряла» не оставил — её пишет следующий, по журналу.
             j = read_journal(intent)
-            why = stuck({"from": j[0], "to": j[1], "files": j[2]}, j[4]) if j else "журнал не прочесть"
-            log(f"Контроль: остался журнал прерванной передачи {intent}: списки не в одном конце или папки не те; "
-                f"{why}; {KEEP}")
+            why = stuck({"from": j[0], "to": j[1], "files": j[2]}, j[3]) if j else (
+                f"журнал не прочесть — сверить каждый список с {BACKUP} рядом с ним, выбрать конец и удалить журнал "
+                "руками")
+            log(f"Контроль: остался журнал прерванной передачи {intent}: списки не в одном конце; {why}; {KEEP}")
             return False
         log(f"Контроль: журнал прерванной передачи {intent} — списки согласованы, снимаю его")
         drop_intent(intent, log)  # не удалился — не беда: новый журнал ляжет поверх (GLM #120 104b29f96, minor 5)
@@ -300,8 +301,7 @@ def handover(todo, pred_sid, succ, suffix, log, intent):
         return False
     for t in todo:
         t.texts(pred_sid, succ_sid)
-    j = {"from": pred_sid[:8], "to": succ_sid[:8], "line": suffix, "files": [str(t.f) for t in todo],
-         "dirpins": [list(t.dpin) for t in todo]}
+    j = {"from": pred_sid[:8], "to": succ_sid[:8], "line": suffix, "files": [str(t.f) for t in todo]}
     try:
         journal(intent, j, "revoke")  # до первой записи списка (M2)
     except OSError as e:
@@ -371,40 +371,38 @@ def stuck(j, phase):
     what = "снятие предшественника" if phase == "revoke" else "вписывание наследника"
     return (f"передача застряла на этапе «{what}» (предшественник {j['from']} → наследник {j['to']}). Списки: "
             f"{', '.join(j['files'])}. Допустимые концы: (a) вернуть предшественника {j['from']} в каждый список — "
-            f"прежний текст в {BACKUP} рядом со списком; (b) наследник {j['to']} в каждом списке. Журнал "
-            f"{INTENT} не удалять: следующая передача снимет его сама, когда все списки в одном конце; смешанные концы "
-            "держат передачу закрытой")
+            f"прежний текст в {BACKUP} рядом со списком; (b) наследник {j['to']} в каждом списке. В этих концах журнал "
+            f"{INTENT} не удалять: следующая передача снимет его сама; смешанные концы держат передачу закрытой. "
+            "(c) Контроль уже выдан руками другой сессии — удалить журнал руками")
 
 
 def read_journal(intent):
-    """(from, to, files, dirpins, phase) журнала передачи; None — не прочесть или не того вида."""
+    """(from, to, files, phase) журнала передачи; None — не прочесть или не того вида."""
     try:
         with open(intent, encoding="utf-8") as fh:
             j = json.loads(fh.read(MAX_LIST))
-        frm, to, files, dps = str(j["from"]), str(j["to"]), j["files"], j["dirpins"]
+        frm, to, files = str(j["from"]), str(j["to"]), j["files"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    if len(frm) < 8 or len(to) < 8 or not isinstance(files, list) or not files or not isinstance(dps, list) \
-            or len(dps) != len(files):
+    if len(frm) < 8 or len(to) < 8 or not isinstance(files, list) or not files:
         return None
-    return frm, to, [str(f) for f in files], dps, str(j.get("phase") or "")
+    return frm, to, [str(f) for f in files], str(j.get("phase") or "")
 
 
-def settled(intent, pins):
+def settled(intent):
     """Журнал прерванной передачи можно снять (GLM #120 104b29f96, M7): все его списки в одном конце — у всех
-    предшественник без наследника (old) или у всех наследник без предшественника (new), — и папка каждого та же, что в
-    журнале и при старте этого сторожа (журнал с чужими пинами не согласован). mid — не конец. Журнал в state_dir:
-    агенты его не пишут."""
+    предшественник без наследника (old) или у всех наследник без предшественника (new). mid — не конец. Решают только
+    файлы журнала (путь — без ссылок), не пины этого сторожа: сторож с другим набором --guard или папка, воссозданная
+    при восстановлении, иначе держали бы передачу закрытой навсегда (GLM #120 9c5ed72bb, major 2). Подменённую папку
+    ловит plan_dir по пинам перед любой записью. Журнал в state_dir: агенты его не пишут."""
     j = read_journal(intent)
     if j is None:
         return False
-    frm, to, files, dps, _ = j
+    frm, to, files, _ = j
     ends = set()
-    for f, dp in zip(files, dps):
-        pin = (pins or {}).get(os.path.dirname(os.path.dirname(f)))
+    for f in files:
         got = read_control(f)
-        if not isinstance(got, tuple) or not isinstance(dp, list) or pin is None or tuple(dp) != got[5] \
-                or got[5] != pin[0]:
+        if not isinstance(got, tuple):
             return False
         has_from, has_to = any(e[:8] == frm for e in got[2]), any(e[:8] == to for e in got[2])
         if has_from == has_to:  # mid (ни того, ни другого) или оба сразу

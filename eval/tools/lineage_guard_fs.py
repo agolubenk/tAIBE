@@ -79,11 +79,23 @@ def guard_dirs(dirs):
     return out
 
 
+def birth(st):
+    """Время рождения; None — ФС его не даёт (Linux, часть сетевых монтирований)."""
+    return getattr(st, "st_birthtime", None)
+
+
 def pin_of(st):
-    """Пин файла или папки: (dev, inode, время рождения). Время рождения ловит inode, выданный заново после удаления,
-    и не меняется от записи других файлов папки (ctime менялся бы). Нет st_birthtime (не macOS) — ctime в нс."""
-    born = getattr(st, "st_birthtime", None)
+    """Пин файла: (dev, inode, время рождения; нет его — ctime в нс). Время рождения ловит inode, выданный заново после
+    удаления. ctime меняет и наш rename, поэтому write_at снимает пин уже после rename."""
+    born = birth(st)
     return (st.st_dev, st.st_ino, born if born is not None else st.st_ctime_ns)
+
+
+def dir_pin(st):
+    """Пин папки: (dev, inode, время рождения или None). ctime папки не берём: его меняет любая запись в папку, и наша
+    тоже (tmp + rename), — на ФС без времени рождения каждая передача откатывалась бы (GLM #120 9c5ed72bb, major 1).
+    Новую папку на освобождённом inode там ловит пин списка: новый файл — новый ctime."""
+    return (st.st_dev, st.st_ino, birth(st))
 
 
 def open_dir(path):
@@ -114,10 +126,10 @@ def pins_now(root):
         try:
             st = os.stat(GUARD.name, dir_fd=dfd, follow_symlinks=False)
         except FileNotFoundError:
-            return pin_of(os.fstat(dfd)), ABSENT
+            return dir_pin(os.fstat(dfd)), ABSENT
         except OSError:
             return None
-        return pin_of(os.fstat(dfd)), pin_of(st)
+        return dir_pin(os.fstat(dfd)), pin_of(st)
     finally:
         os.close(dfd)
 
@@ -144,7 +156,7 @@ def same_dir(path, dpin):
     except OSError:
         return False
     try:
-        return pin_of(os.fstat(fd)) == dpin
+        return dir_pin(os.fstat(fd)) == dpin
     finally:
         os.close(fd)
 
@@ -188,7 +200,7 @@ def read_control(f):
         return None
     try:
         got = read_list(dfd, Path(f).name)
-        return got + (pin_of(os.fstat(dfd)),) if isinstance(got, tuple) else got
+        return got + (dir_pin(os.fstat(dfd)),) if isinstance(got, tuple) else got
     finally:
         os.close(dfd)
 
@@ -224,7 +236,8 @@ def fsync_dir(d):
 def write_at(dfd, name, text, mode):
     """Атомарная запись name в папке dfd: временный файл со случайным именем (O_EXCL|O_NOFOLLOW — подложенная заранее
     ссылка не сработает) → fsync → rename поверх name через тот же fd (rename не идёт по ссылке) → fsync папки.
-    Возвращает пин нового файла. Сбой — временный файл удаляется, fd закрыт (GLM #120 89dcafeb9, minor resources)."""
+    Возвращает пин нового файла, снятый после rename: rename меняет ctime, а на ФС без времени рождения пин — ctime
+    (GLM #120 9c5ed72bb, major 1). Сбой — временный файл удаляется, fd закрыт (GLM #120 89dcafeb9, minor resources)."""
     tmp = f"{name}.{secrets.token_hex(6)}{TMP}"
     fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
     try:
@@ -238,8 +251,8 @@ def write_at(dfd, name, text, mode):
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
+            os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
             st = os.fstat(fh.fileno())
-        os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
     except BaseException:
         try:
             os.unlink(tmp, dir_fd=dfd)
@@ -254,11 +267,12 @@ def write_at(dfd, name, text, mode):
 
 
 def write_atomic(f, text, mode, dfd=None):
-    """write_at для файла f: в удерживаемой папке dfd (списки, копии) или в папке f.parent (журнал в state_dir)."""
+    """write_at для файла f: в удерживаемой папке dfd (списки, копии) или в папке f.parent (журнал в state_dir; папка,
+    подменённая ссылкой после проверки в hand_control, не откроется — GLM #120 9c5ed72bb, minor security)."""
     f = Path(f)
     if dfd is not None:
         return write_at(dfd, f.name, text, mode)
-    d = os.open(str(f.parent), os.O_RDONLY | os.O_DIRECTORY)
+    d = os.open(str(f.parent), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         return write_at(d, f.name, text, mode)
     finally:

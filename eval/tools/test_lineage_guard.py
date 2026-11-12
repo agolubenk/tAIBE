@@ -566,6 +566,13 @@ class HandoverTest(Base):
     def test_kill_matrix_never_gives_control_to_both(self):
         # GLM #120 104b29f96, F1/S2 и M2: сбой записи (fail_at) × убийство сторожа после записи (kill_at) — на любом
         # шаге Контроль не больше чем у одной сессии; убит — журнал остался; следующая передача идёт только из конца.
+        self.kill_matrix()
+
+    def test_kill_matrix_without_birth_time(self):
+        with mock.patch.object(GF, "birth", return_value=None):  # GLM #120 9c5ed72bb, major 1
+            self.kill_matrix()
+
+    def kill_matrix(self):
         real = G.write_atomic
         for fail_at in (None, 1, 2, 3, 4):
             for kill_at in range(1, 9):
@@ -665,33 +672,78 @@ class HandoverTest(Base):
         self.assertEqual((self.get(self.hr)["control"], moved, self.get(self.tb)["control"]), ([PRED], [PRED], [OTHER]))
         self.assertIn("файлы возвращены", self.lines[-1])
 
-    def test_journal_with_forged_dir_pin_is_not_settled(self):
+    def journal(self, frm=PRED, to=SUCC, **extra):
         files = [str((d / G.GUARD).resolve()) for d in (self.hr, self.tb)]
         G.state_dir().mkdir(parents=True, exist_ok=True)
-        j = {"from": PRED[:8], "to": SUCC[:8], "files": files, "dirpins": [[1, 2, 3], [1, 2, 3]]}
-        (G.state_dir() / G.INTENT).write_text(json.dumps(j))
-        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
-        self.assertIn("прерванной передачи", self.lines[-1])
-        pins = G.take_pins([self.hr, self.tb])
-        j["dirpins"] = [list(pins[str(Path(f).parent.parent)][0]) for f in files]
-        (G.state_dir() / G.INTENT).write_text(json.dumps(j))  # все old, пины верные — согласован
-        self.assertTrue(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
-        self.assertEqual(self.get(self.tb)["control"], [SUCC])
+        (G.state_dir() / G.INTENT).write_text(json.dumps({"from": frm[:8], "to": to[:8], "files": files, **extra}))
 
-    def test_journal_dir_pin_not_matching_start_pin_is_not_settled(self):
-        # Журнал совпадает с папками сейчас, но пин старта этого сторожа — другой: журнал не снимается (M7).
-        files = [str((d / G.GUARD).resolve()) for d in (self.hr, self.tb)]
-        pins = G.take_pins([self.hr, self.tb])
-        G.state_dir().mkdir(parents=True, exist_ok=True)
-        j = {"from": PRED[:8], "to": SUCC[:8], "files": files,
-             "dirpins": [list(pins[str(Path(f).parent.parent)][0]) for f in files]}
-        (G.state_dir() / G.INTENT).write_text(json.dumps(j))
-        forged, tb = dict(pins), str(Path(files[1]).parent.parent)
-        forged[tb] = ((1, 2, 3), pins[tb][1])
-        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, pins=forged))
-        self.assertIn("прерванной передачи", self.lines[-1])
+    def test_journal_settles_by_its_lists_not_by_pins(self):
+        # GLM #120 9c5ed72bb, major 2: журнал прежнего вида (dirpins любые) и папка, воссозданная при восстановлении
+        # (новый inode), — решают только концы списков.
+        self.journal(dirpins=[[1, 2, 3], [1, 2, 3]])
+        (self.tb / ".claude").rename(self.tb / ".claude.old")
+        (self.tb / ".claude").mkdir()
+        self.put(self.tb, [PRED])
+        self.assertTrue(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([SUCC], [SUCC]))
+        self.assertTrue(any("согласованы, снимаю" in x for x in self.lines), self.lines)
+
+    def test_journal_of_other_guard_set_settles(self):
+        # Сторож {hr, tb} убит, владелец довёл оба списка до наследника; следующий сторож следит только за tb — журнал
+        # снимается, передача идёт (GLM #120 9c5ed72bb, major 2).
+        self.journal()
+        for d in (self.hr, self.tb):
+            self.put(d, [SUCC])
+        self.assertTrue(self.hc([self.tb], SUCC, (OTHER, None), "ef56", self.log))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([SUCC], [OTHER]))
+        self.assertFalse((G.state_dir() / G.INTENT).exists())
+
+    def test_journal_of_other_guard_set_in_mid_still_refuses(self):
+        self.journal()
+        self.put(self.hr, [SUCC])
+        self.put(self.tb, [])
+        self.assertFalse(self.hc([self.hr], SUCC, (OTHER, None), "ef56", self.log))
+        self.assertEqual(self.get(self.hr)["control"], [SUCC])
+        self.assertIn("Допустимые концы", self.lines[-1])
+        self.assertIn("удалить журнал руками", self.lines[-1])
         self.assertTrue((G.state_dir() / G.INTENT).exists())
+
+    def test_broken_journal_refuses_with_owner_action(self):
+        # GLM #120 9c5ed72bb, minor failures/product: битый журнал — отказ и одно действие владельцу.
+        G.state_dir().mkdir(parents=True, exist_ok=True)
+        (G.state_dir() / G.INTENT).write_text('{"from": "1111')
+        self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log))
+        self.assertIn("журнал не прочесть", self.lines[-1])
+        self.assertIn(G.BACKUP, self.lines[-1])
         self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([PRED], [PRED]))
+
+    def test_handover_without_birth_time(self):
+        # GLM #120 9c5ed72bb, major 1: ФС без времени рождения (Linux) — пин папки без ctime, пин файла после rename.
+        # Чужая запись в .claude после старта сторожа и наши tmp + rename передачу не откатывают.
+        with mock.patch.object(GF, "birth", return_value=None):
+            pins = G.take_pins([self.hr, self.tb])
+            (self.tb / ".claude" / "other.json").write_text("{}")  # любой чужой файл в папке
+            self.assertTrue(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, pins=pins), self.lines)
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([SUCC], [SUCC]))
+
+    def test_claude_dir_swapped_without_birth_time_refuses(self):
+        with mock.patch.object(GF, "birth", return_value=None):
+            pins = G.take_pins([self.hr, self.tb])
+            (self.tb / ".claude").rename(self.tb / ".claude.old")
+            (self.tb / ".claude").mkdir()
+            (self.tb / ".claude.old" / G.GUARD.name).rename(self.tb / G.GUARD)
+            self.assertFalse(self.hc([self.hr, self.tb], PRED, (SUCC, None), "cd34", self.log, pins=pins))
+        self.assertEqual((self.get(self.hr)["control"], self.get(self.tb)["control"]), ([PRED], [PRED]))
+
+    def test_journal_dir_swapped_to_symlink_is_not_followed(self):
+        # GLM #120 9c5ed72bb, minor security: журнал не пишется в папку, подменённую ссылкой после проверки.
+        elsewhere = self.dir / "elsewhere"
+        elsewhere.mkdir()
+        link = self.dir / "state-link"
+        link.symlink_to(elsewhere)
+        with self.assertRaises(OSError):
+            GF.write_atomic(link / G.INTENT, "{}\n", 0o600)
+        self.assertEqual(list(elsewhere.iterdir()), [])
 
     def test_list_replaced_with_same_text_after_plan_is_not_overwritten(self):
         # Тот же текст, но другой файл (новый inode): запись идёт только поверх того файла, что прочитан (M3).
