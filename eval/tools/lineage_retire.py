@@ -6,7 +6,8 @@ import signal
 import sys
 
 from lineage import (IDLE_WAIT, SHELLS, TAP_WAIT, TERM_WAIT, ancestor_claude, argv0, descendants, die, doomed,
-                     group_of, host, ldir, make_log, norm, read_json, same, session_line, stamp, valid_line)
+                     group_of, host, lfile, make_log, norm, read_json, same, session_line, stamp,
+                     valid_line)
 from lineage_guard import hand_control, session_id, successor_sid, take_pins
 
 
@@ -114,7 +115,7 @@ def take_down(sx, p, line, protect, log):
         return True
     if not terminate(sx, p, protect, log):
         return False
-    rec = read_json(ldir() / f"{line}.json") if valid_line(line or "") else None
+    rec = read_json(lfile(line, ".json")) if valid_line(line or "") else None
     if close_window(sx, procs, p, rec, log):
         hup_tty(sx, p.tty, log)
     return True
@@ -189,7 +190,7 @@ def watch(sx, p, parent, child, role, timeout, log, poll=5.0, ctl=None):
 
         return hand_control(ctl["dirs"], ctl.get("sid"), succ, child.rsplit(".", 1)[-1], log, pins=ctl.get("pins"))
 
-    ack = ldir() / f"{child}.ack"
+    ack = lfile(child, ".ack")
     deadline = sx.now() + timeout
     # Паритет: tap требуем от наследника, только если он был у предшественника (ночью мониторов нет — TEAM-0 §10.6).
     tap = re.compile(TAP.format(re.escape(role))) if role else None
@@ -282,7 +283,7 @@ def cmd_retire(sx, a):
     if p is None:
         print("retire: запуск не из сессии claude — снимать некого")
         return 0
-    logpath = ldir() / f"{a.child}.retire.log"
+    logpath = lfile(a.child, ".retire.log")
     # sessionId — сейчас, пока предшественник жив: после его ухода запись реестра исчезает. tty окна наследника —
     # из аргумента spawn_session.sh, не из записи линии: папку линий правят агенты (GLM #120, находка 1).
     # Пины папок списка — тоже сейчас, до ожидания квитанции: подмену .claude или списка за ожидание сторож заметит

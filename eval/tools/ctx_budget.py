@@ -50,6 +50,7 @@ sys.path.insert(0, str(HERE))
 from ctx_budget_params import (  # noqa: E402 — пути, окно сессии и выученные параметры
     ONE_M, T_RANGE, budget_dir, calibration, clamp, handoff_cost, lineage_dir, load_params, pct, private_dir,
     projects_dir, session_window, task_estimate, w_eff)
+from lineage import line_key  # noqa: E402 — имя записи линии длиннее 200 символов (SE-57)
 
 FLOOR, CEIL = 0.85, 0.985          # решение владельца 06.11
 REM_MIN = 0.02                      # остаток текущей задачи не меньше 2 %
@@ -229,12 +230,13 @@ def journal(event):
 
 
 def session_role():
-    """T3_ROLE_KEY → роль линии (TAIBE_LINEAGE → ~/.claude/lineage/<линия>.json) → «-»."""
+    """T3_ROLE_KEY → роль линии (TAIBE_LINEAGE → запись линии в ~/.claude/lineage, lineage.line_key) → «-»."""
     role = os.environ.get("T3_ROLE_KEY", "").strip()
     lineage = os.environ.get("TAIBE_LINEAGE", "").strip()
-    if not role and re.fullmatch(r"[A-Za-z0-9._-]{1,200}", lineage):
+    if not role and re.fullmatch(r"r(\.[a-z0-9]+)+", lineage):
         try:
-            role = str(json.loads((lineage_dir() / (lineage + ".json")).read_text(encoding="utf-8")).get("role") or "")
+            rec = json.loads((lineage_dir() / (line_key(lineage) + ".json")).read_text(encoding="utf-8"))
+            role = str(rec.get("role") or "")
         except (OSError, ValueError, AttributeError):
             role = ""
     return re.sub(r"[^A-Za-z0-9_-]", "", role)[:40] or "-"

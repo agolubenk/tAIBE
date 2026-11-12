@@ -27,6 +27,9 @@ import lineage_retire as LR  # noqa: E402
 TERMINAL = "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
 ST = "Wed Nov  4 20:00:00 2026"
 CHILD, PARENT = "r.ab12.cd34", "r.ab12"
+# SE-57: линия из 60 сегментов — 302 символа; файл с таким именем macOS не создаст (Errno 63, предел 255)
+LONG_PARENT = "r" + "".join(f".{i:04d}" for i in range(59))
+LONG_CHILD = LONG_PARENT + ".zz99"
 
 
 def P(pid, ppid, pgid, tty, cmd, start=ST):
@@ -126,7 +129,7 @@ class Base(unittest.TestCase):
         self.lines.append(m)
 
     def ack(self, pid=400, start=ST, line=CHILD):
-        L.write_json(L.ldir() / f"{line}.ack", {"line": line, "pid": pid, "start": start})
+        L.write_json(L.lfile(line, ".ack"), {"line": line, "pid": pid, "start": start})
 
 
 class WatchTest(Base):
@@ -149,6 +152,18 @@ class WatchTest(Base):
         self.assertIn((-300, signal.SIGTERM), sx.sent)
         self.assertEqual(sx.osa_calls, [("/dev/ttys005", "19220")])
         self.assertIn((201, signal.SIGHUP), sx.sent)
+
+    def test_long_line_ack_retires_predecessor(self):
+        """SE-57: линия из 60 сегментов — сторож находит квитанцию наследника и снимает предшественника."""
+        sx = FakeSys(tree(), env={400: LONG_CHILD, 300: LONG_PARENT})
+        L.write_json(L.lfile(LONG_PARENT, ".json"), {"line": LONG_PARENT, "terminal": "terminal",
+                                                     "window_id": "19220", "tty": "/dev/ttys005"})
+        sx.at(10, lambda: self.ack(line=LONG_CHILD))
+        self.assertEqual(LR.watch(sx, sx.p[300], LONG_PARENT, LONG_CHILD, "backend", 600, self.log, poll=1), 0,
+                         self.lines)
+        self.assertNotIn(300, sx.p)
+        self.assertIn(400, sx.p)
+        self.assertEqual(sx.osa_calls, [("/dev/ttys005", "19220")])
 
     def test_successor_died_after_ack(self):
         sx = self.fake()
@@ -339,6 +354,32 @@ class CommandsTest(Base):
         with mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT}), mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(L.main(["retire", "--child", "r.other.x1y2", "--foreground"], FakeSys([])), 2)
 
+    def test_long_line_record_and_ack(self):
+        """SE-57: линия из 60 сегментов — record и ack пишут файлы с именем ≤ 255, полная линия — в поле line."""
+        me = os.getpid()
+        sx = FakeSys([P(700, 1, 700, "ttys001", "claude"), P(me, 700, me, "??", "python3 lineage.py ack")])
+        self.assertGreater(len(LONG_CHILD), 255)
+        self.assertEqual(L.main(["record", "--line", LONG_CHILD, "--terminal", "terminal", "--window-id", "5",
+                                 "--tty", "/dev/ttys001", "--role", "plan"], sx), 0)
+        with mock.patch.dict(os.environ, {"TAIBE_LINEAGE": LONG_CHILD}), mock.patch("sys.stdout", io.StringIO()):
+            self.assertEqual(L.main(["ack"], sx), 0)
+        self.assertEqual(L.read_json(L.lfile(LONG_CHILD, ".json"))["line"], LONG_CHILD)
+        self.assertEqual(L.read_json(L.lfile(LONG_CHILD, ".ack"))["pid"], 700)
+        self.assertTrue(all(len(f.name) <= 40 for f in L.ldir().iterdir()), list(L.ldir().iterdir()))
+        self.assertEqual(L.line_records(), [(LONG_CHILD, L.lfile(LONG_CHILD, ".json"))])
+        self.assertEqual(L.child_acks(LONG_PARENT), [(LONG_CHILD, L.lfile(LONG_CHILD, ".ack"))])
+
+    def test_line_key_keeps_short_names(self):
+        """Линия до 200 символов — имя прежнее; длиннее — h<хэш родителя>.<сегмент>, LINE_RE его не принимает."""
+        mid = "r" + "".join(f".{i:04d}" for i in range(39))   # 197 символов
+        self.assertEqual(L.line_key(mid), mid)
+        self.assertEqual(L.line_key(mid + ".ab12"), L.line_hash(mid) + ".ab12")
+        self.assertFalse(L.valid_line(L.line_key(LONG_CHILD)))
+        self.ack(line=mid + ".ab12")                              # длинный наследник короткого родителя
+        self.ack(line=mid + ".ab12.cd34")                         # внук — не наследник mid
+        self.ack(line=mid + "1.ab12")                             # другая линия с тем же началом
+        self.assertEqual([c for c, _ in L.child_acks(mid)], [mid + ".ab12"])
+
     def test_retire_outside_claude_is_noop(self):
         with mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT}), mock.patch("sys.stdout", io.StringIO()) as out:
             self.assertEqual(L.main(["retire", "--child", CHILD, "--foreground"], FakeSys([])), 0)
@@ -493,6 +534,29 @@ class ReapTest(Base):
         _, out, _ = self.reap("--prune-days", "0")
         self.assertNotIn("удалено", out)
         self.assertTrue((L.ldir() / "r.old2.json").exists())
+
+    def test_long_line_ack_seen_by_reap(self):
+        """SE-57: квитанция наследника с линией из 60 сегментов — reap видит приём."""
+        self.sess(701, line=LONG_PARENT, idle_h=2)
+        self.sess(702, line=LONG_CHILD, idle_h=0.1)
+        L.write_json(L.lfile(LONG_CHILD, ".ack"), {"line": LONG_CHILD, "pid": 702, "start": ST})
+        rc, out, _ = self.reap()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("наследник принял", self.verdicts(out)[701])
+
+    def test_prune_migrates_old_long_names(self):
+        """SE-57: старые имена линий длиннее 200 символов один раз переходят на короткие; короткие не трогаются."""
+        old = "r" + "".join(f".{i:04d}" for i in range(45))   # 227 символов: старое имя ещё помещалось
+        L.ldir().mkdir(parents=True, exist_ok=True)
+        for ext in (".json", ".ack", ".retire.log"):
+            (L.ldir() / (old + ext)).write_text(json.dumps({"line": old}))
+        (L.ldir() / "r.a1.json").write_text("{}")
+        self.reap()
+        left = sorted(f.name for f in L.ldir().iterdir())
+        self.assertEqual(left, sorted([L.lfile(old, e).name for e in (".json", ".ack", ".retire.log")]
+                                      + ["r.a1.json", "reap-list.json"]))
+        self.assertEqual(L.line_records(), [(old, L.lfile(old, ".json")), ("r.a1", L.ldir() / "r.a1.json")])
+        self.assertEqual(L.migrate_names(), 0)
 
     def test_line_subcommand(self):
         sx = FakeSys([P(700, 1, 700, "ttys001", "claude --resume x"), P(self.me, 700, self.me, "??", "python3")])
