@@ -61,12 +61,15 @@ def hooks(python, reflex=None):
     reflex = reflex or REFLEX
     now = f"/bin/sh {os.path.join(reflex, 'now.sh')}"
     antigen = f"{python} -I {os.path.join(reflex, 'antigen.py')}"
+    peer_gate = f"{python} -I {os.path.join(reflex, 'peer_gate.py')}"
     return {
         'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': now}]}],
         'PreToolUse': [
             {'matcher': 'Write|SendMessage|mcp__owner-queue__.*', 'hooks': [{'type': 'command', 'command': now}]},
             {'matcher': 'Bash|Monitor|ToolSearch|ScheduleWakeup|mcp__owner-queue__.*',
              'hooks': [{'type': 'command', 'command': antigen}]},
+            # SE-41: every peer message wakes the recipient for a full turn — budget by the nerve's share5.
+            {'matcher': 'SendMessage', 'hooks': [{'type': 'command', 'command': peer_gate}]},
         ],
     }
 

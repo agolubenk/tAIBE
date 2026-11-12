@@ -78,6 +78,15 @@ class GenomeTest(unittest.TestCase):
                             local = os.path.join(build.LOCAL_REFLEX, os.path.relpath(part, build.REFLEX))
                             self.assertTrue(os.path.exists(local), local)
 
+    def test_peer_messages_pass_the_gate(self):
+        """SE-41: every role sends SendMessage through peer_gate.py (a budget of peer wakes by the nerve's share5)."""
+        for role, g in GENOMES.items():
+            with self.subTest(role=role):
+                gates = [hook['command'] for entry in g['hooks']['PreToolUse'] if entry.get('matcher') == 'SendMessage'
+                         for hook in entry['hooks']]
+                self.assertEqual(len(gates), 1)
+                self.assertTrue(gates[0].endswith(os.path.join(build.REFLEX, 'peer_gate.py')), gates[0])
+
     def test_hooks_point_to_main_checkout(self):
         for role, g in GENOMES.items():
             for group in g['hooks'].values():
