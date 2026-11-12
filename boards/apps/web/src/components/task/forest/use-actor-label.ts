@@ -8,6 +8,7 @@ export function useActorLabel() {
     if (actor.kind === "person") return t("tasks:card.actor.person");
     if (actor.kind === "owner-session")
       return t("tasks:card.actor.ownerSession");
+    if (actor.kind === "owner-queue") return t("tasks:card.actor.ownerQueue");
     return actor.label ?? t("tasks:card.actor.agent");
   };
 }

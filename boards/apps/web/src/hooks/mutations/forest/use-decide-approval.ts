@@ -10,12 +10,22 @@ function useDecideApproval(workspaceId: string) {
 
   return useMutation({
     mutationFn: decideApproval,
+    // «Да» is applied at once (TB-102 R-12): the answer is consumed, or
+    // failed with the reason the card refused.
     onSuccess: (approval) => {
-      toast.success(
-        approval.status === "approved"
-          ? t("workspace:forest.approvals.toast.approved")
-          : t("workspace:forest.approvals.toast.rejected"),
-      );
+      if (approval.status === "failed") {
+        toast.error(
+          t("workspace:forest.approvals.toast.failed", {
+            reason: approval.failReason ?? "",
+          }),
+        );
+      } else {
+        toast.success(
+          approval.status === "rejected"
+            ? t("workspace:forest.approvals.toast.rejected")
+            : t("workspace:forest.approvals.toast.applied"),
+        );
+      }
       return queryClient.invalidateQueries({
         queryKey: forestKeys.all(workspaceId),
       });

@@ -20,7 +20,6 @@ import {
   type ApprovalAction,
   approvalParamsHash,
 } from "../approval/approval-params";
-import { consumeApproval } from "../approval/consume-approval";
 import { ForestError } from "../forest-error";
 import { writeJournal } from "../journal";
 import type { Tx } from "../tx";
@@ -34,8 +33,13 @@ export type FellInput = {
   reason: string;
   // Required unless the actor is the owner in their own browser session.
   approvalId?: string;
+  // The owner's «да» being applied by the server in this same transaction
+  // (TB-102): its hash must still match the trees; nothing is spent here.
+  appliedApproval?: { id: string; paramsHash: string };
   sanitize?: (text: string) => string;
 } & ({ kind: "tree"; rootId: string } | { kind: "sector"; sectorId: string });
+
+export type FellOutcome = Awaited<ReturnType<typeof fellInTx>>;
 
 export type FellResult = {
   fellingId: string;
@@ -74,22 +78,28 @@ async function authorize(
   targetId: string,
   rootIds: string[],
 ) {
-  if (input.actor.kind === "owner-ui") return null;
-  if (!input.approvalId) {
-    throw new ForestError(
-      "approval_required",
-      "felling needs the owner's «да»: request an approval first",
-    );
+  if (input.appliedApproval) {
+    const hash = approvalParamsHash(action, targetId, rootIds);
+    if (hash !== input.appliedApproval.paramsHash) {
+      throw new ForestError(
+        "approval_mismatch",
+        "the trees changed since the request; a fresh «да» is needed",
+      );
+    }
+    return input.appliedApproval.id;
   }
-  return consumeApproval(tx, {
-    approvalId: input.approvalId,
-    workspaceId: input.workspaceId,
-    action,
-    paramsHash: approvalParamsHash(action, targetId, rootIds),
-  });
+  if (input.actor.kind === "owner-ui") return null;
+  // TB-102 R-5: the server fells on the owner's «да» itself; an approvalId
+  // from an agent gives no right any more.
+  throw new ForestError(
+    "approval_required",
+    input.approvalId
+      ? "the server fells on the owner's «да» itself; this call changes nothing"
+      : "felling needs the owner's «да»: request an approval first",
+  );
 }
 
-async function fellInTx(
+export async function fellInTx(
   tx: Tx,
   input: FellInput,
   action: ApprovalAction,
@@ -275,7 +285,7 @@ export async function fellTrees(input: FellInput): Promise<FellResult> {
     input.kind === "tree" ? "fell_tree" : "fell_sector";
   const targetId = input.kind === "tree" ? input.rootId : input.sectorId;
 
-  let outcome: Awaited<ReturnType<typeof fellInTx>>;
+  let outcome: FellOutcome;
   try {
     outcome = await db.transaction((tx) =>
       fellInTx(tx, input, action, targetId),
@@ -297,12 +307,21 @@ export async function fellTrees(input: FellInput): Promise<FellResult> {
     throw error;
   }
 
+  await publishFelling(outcome, input.actor.userId);
+  return outcome.result;
+}
+
+// Events go out only after the felling transaction commits.
+export async function publishFelling(
+  outcome: Pick<FellOutcome, "tasks" | "relations">,
+  userId: string,
+) {
   const felled = new Set(outcome.tasks.map((task) => task.id));
   for (const task of outcome.tasks) {
     await publishEvent("task.deleted", {
       taskId: task.id,
       projectId: task.projectId,
-      userId: input.actor.userId,
+      userId,
       title: task.title,
     });
   }
@@ -315,12 +334,10 @@ export async function fellTrees(input: FellInput): Promise<FellResult> {
       : relation.targetTaskId;
     await publishEvent("task-relation.deleted", {
       projectId: projectOf.get(felledEnd),
-      userId: input.actor.userId,
+      userId,
       taskId: felledEnd,
       sourceTaskId: relation.sourceTaskId,
       targetTaskId: relation.targetTaskId,
     });
   }
-
-  return outcome.result;
 }

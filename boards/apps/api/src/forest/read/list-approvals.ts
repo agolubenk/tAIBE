@@ -1,14 +1,8 @@
 import { and, desc, eq, gt, lt, or } from "drizzle-orm";
 import db from "../../database";
 import { ownerApprovalTable } from "../../database/forest-schema";
+import type { ApprovalStatus } from "../approval/approval-params";
 import { decodeCursor, encodeCursor, pageSize } from "./page-cursor";
-
-export const APPROVAL_STATUSES = [
-  "pending",
-  "approved",
-  "rejected",
-  "consumed",
-] as const;
 
 // Pending means still answerable: an expired request drops out of the list.
 export async function listApprovals({
@@ -18,7 +12,7 @@ export async function listApprovals({
   take,
 }: {
   workspaceId: string;
-  status?: (typeof APPROVAL_STATUSES)[number];
+  status?: ApprovalStatus;
   cursor?: string;
   take?: number;
 }) {

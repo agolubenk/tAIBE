@@ -3522,7 +3522,8 @@
 			"actor": {
 				"agent": "Agent",
 				"person": "Person",
-				"ownerSession": "Owner"
+				"ownerSession": "Owner",
+				"ownerQueue": "Owner (queue)"
 			},
 			"fields": {
 				"kind": "Kind",
@@ -3907,7 +3908,10 @@
 					"reopenTask": "Reopen the card as «{{status}}»",
 					"setPriority": "Set priority «{{priority}}»",
 					"fellTree": "Fell the tree",
-					"fellSector": "Fell the sector"
+					"fellSector": "Fell the sector",
+					"createLabel": "Create label «{{name}}» on {{count}} cards",
+					"attachLabel": "Add label «{{name}}» to {{count}} cards",
+					"setAssignee": "Assign to {{name}}"
 				},
 				"status": {
 					"pending": "Waiting",
@@ -3915,13 +3919,18 @@
 					"rejected": "Rejected",
 					"consumed": "Done",
 					"expired": "Expired",
-					"all": "All"
+					"all": "All",
+					"failed": "Failed"
 				},
 				"toast": {
 					"approved": "Approved",
 					"rejected": "Rejected",
-					"decideError": "Could not answer the request"
-				}
+					"decideError": "Could not answer the request",
+					"applied": "Applied",
+					"failed": "Not applied: {{reason}}"
+				},
+				"failReason": "Not applied: {{reason}}",
+				"doneReason": "No done entry: {{reason}}"
 			},
 			"leases": {
 				"empty": "Nobody holds a card right now.",

@@ -3614,7 +3614,8 @@
 			"actor": {
 				"agent": "Agent",
 				"ownerSession": "Owner",
-				"person": "Person"
+				"person": "Person",
+				"ownerQueue": "Owner (queue)"
 			},
 			"agent": {
 				"empty": "No agent has reported on this card yet."
@@ -3897,7 +3898,10 @@
 					"fellSector": "Fell the sector",
 					"fellTree": "Fell the tree",
 					"setPriority": "Set priority «{{priority}}»",
-					"reopenTask": "Reopen the card as «{{status}}»"
+					"reopenTask": "Reopen the card as «{{status}}»",
+					"createLabel": "Create label «{{name}}» on {{count}} cards",
+					"attachLabel": "Add label «{{name}}» to {{count}} cards",
+					"setAssignee": "Assign to {{name}}"
 				},
 				"approve": "Approve",
 				"empty": "No requests here.",
@@ -3911,14 +3915,19 @@
 					"consumed": "Done",
 					"expired": "Expired",
 					"pending": "Waiting",
-					"rejected": "Rejected"
+					"rejected": "Rejected",
+					"failed": "Failed"
 				},
 				"targetUnknown": "The card is gone or you cannot open its project.",
 				"toast": {
 					"approved": "Approved",
 					"decideError": "Could not answer the request",
-					"rejected": "Rejected"
-				}
+					"rejected": "Rejected",
+					"applied": "Applied",
+					"failed": "Not applied: {{reason}}"
+				},
+				"failReason": "Not applied: {{reason}}",
+				"doneReason": "No done entry: {{reason}}"
 			},
 			"fell": {
 				"description": "Its tasks leave the board and are kept as logs with seeds. This cannot be undone from the board.",

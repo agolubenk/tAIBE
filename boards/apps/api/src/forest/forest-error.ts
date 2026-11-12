@@ -7,6 +7,9 @@ export type ForestErrorCode =
   | "revision_conflict"
   | "felled"
   | "approval_required"
+  | "approval_mismatch"
+  | "approval_pending"
+  | "approval_closed"
   | "agent_forbidden"
   | "owner_session_required"
   | "not_a_tree"
@@ -26,6 +29,9 @@ const STATUS: Record<ForestErrorCode, 400 | 403 | 409 | 410 | 413> = {
   revision_conflict: 409,
   felled: 410,
   approval_required: 403,
+  approval_mismatch: 409,
+  approval_pending: 409,
+  approval_closed: 409,
   agent_forbidden: 403,
   owner_session_required: 403,
   not_a_tree: 400,

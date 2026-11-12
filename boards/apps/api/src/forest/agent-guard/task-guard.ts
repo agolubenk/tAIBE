@@ -9,7 +9,7 @@ import { ForestError } from "../forest-error";
 import { attributeAgentEdit } from "../history/attribute-agent-edit";
 import { writeJournal } from "../journal";
 import { AGENT_CREATE_ACTION, isAgentAuthored } from "./agent-authored";
-import { APPROVAL_HEADER, readAgentHeaders } from "./agent-headers";
+import { readAgentHeaders } from "./agent-headers";
 import { assertAgentLease } from "./assert-agent-lease";
 import {
   classifyTaskRequest,
@@ -18,7 +18,7 @@ import {
 } from "./classify-task-request";
 import { isClosingStatus } from "./closing-status";
 import { changesText, decideTaskWrite } from "./decide-task-write";
-import { holdApproval, releaseApproval } from "./hold-approval";
+import { answeredApproval } from "./answered-approval";
 import { isPlainJson } from "./json-media-type";
 import { loadGuardedTask, projectWorkspace } from "./load-task";
 
@@ -173,47 +173,45 @@ async function guardEdit(
     if (c.res.ok) await attribute();
     return;
   }
-  const approvalId = headers.approvalId
-    ? await holdApproval({
-        approvalId: headers.approvalId,
-        workspaceId: task.workspaceId,
-        action: approval.action,
-        taskId: task.id,
-        value: approval.value,
-      }).catch((error: unknown) => {
-        if (error instanceof ForestError) return null;
-        throw error;
-      })
-    : null;
-  if (!approvalId) {
+  if (!headers.approvalId) {
     await deny(
       at,
       new ForestError(
         "approval_required",
-        `ask the owner: POST /api/forest/${task.workspaceId}/approvals {action: "${approval.action}", targetId: "${task.id}", value: "${approval.value}"}, then send its id in ${APPROVAL_HEADER}`,
+        `ask the owner: POST /api/forest/${task.workspaceId}/approvals {action: "${approval.action}", targetId: "${task.id}", value: "${approval.value}"}; the server applies the owner's «да» itself`,
       ),
     );
     return;
   }
-
-  try {
-    await next();
-  } catch (error) {
-    await releaseApproval(approvalId);
-    throw error;
-  }
-  if (!c.res.ok) {
-    await releaseApproval(approvalId);
+  const answered = await answeredApproval({
+    approvalId: headers.approvalId,
+    workspaceId: task.workspaceId,
+    action: approval.action,
+    taskId: task.id,
+    value: approval.value,
+  });
+  if (answered.kind === "refused") {
+    await deny(at, answered.error);
     return;
   }
-  await attribute();
+  // R-5: already applied by the server — answer 200 and write nothing.
+  const appliedAt = answered.appliedAt?.toISOString() ?? null;
   await writeJournal({
     ...at,
     action: `${request.action}:${approval.action}`,
     targetType: "task",
     outcome: "allowed",
-    detail: `approval ${approvalId}: ${approval.value}`,
+    detail: `approval ${answered.approvalId} already applied by the server at ${appliedAt ?? "?"}; nothing written`,
   });
+  return c.json(
+    {
+      alreadyApplied: true,
+      approvalId: answered.approvalId,
+      appliedAt,
+      message: `уже применено сервером в ${appliedAt ?? "?"}`,
+    },
+    200,
+  );
 }
 
 // R-022, N-004 and AC-010 for agents on the kaneo task routes. People in the

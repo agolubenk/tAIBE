@@ -24,7 +24,14 @@ export function registerForestReadTools(
       inputSchema: z.object({
         workspaceId: id,
         status: z
-          .enum(["pending", "approved", "rejected", "consumed"])
+          .enum([
+            "pending",
+            "approved",
+            "rejected",
+            "consumed",
+            "failed",
+            "expired",
+          ])
           .optional(),
         ...page,
       }),
