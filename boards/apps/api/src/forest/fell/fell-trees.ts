@@ -71,8 +71,8 @@ async function sectorRoots(tx: Tx, workspaceId: string, sectorId: string) {
   return rows.map((row) => row.taskId);
 }
 
-async function authorize(
-  tx: Tx,
+// No database work left here: the «да» is spent by decideAndApply (TB-102).
+function authorize(
   input: FellInput,
   action: ApprovalAction,
   targetId: string,
@@ -109,7 +109,7 @@ export async function fellInTx(
     input.kind === "tree"
       ? [input.rootId]
       : await sectorRoots(tx, input.workspaceId, input.sectorId);
-  const approvalId = await authorize(tx, input, action, targetId, rootIds);
+  const approvalId = authorize(input, action, targetId, rootIds);
   const { materials, taskIds } = await collectTreeMaterial(
     tx,
     input.workspaceId,
