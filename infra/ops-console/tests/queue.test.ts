@@ -708,6 +708,15 @@ describe('мёрж из очереди', () => {
     expect(plan('gh pr merge 5 ">x"').problem).toContain('больше одного аргумента')
   })
 
+  it('подстановка процесса <(…) / >(…) — аргумент gh, а не перенаправление (LOW «Контроля» c1, #114)', () => {
+    const plan = (cmd: string) => mergePlan({ kind: 'merge', cmd })
+    // Без пробела внутри — одно слово, значение флага: команда разбирается как есть.
+    expect(plan('gh pr merge 5 --squash --body-file <(cat) -t "x"')).toMatchObject({ pr: 5, method: 'squash', subject: 'x', problem: null })
+    // С пробелом внутри разбор по словам не восстановит подстановку: честный отказ, а не мёрж с другим телом.
+    expect(plan('gh pr merge 5 --squash --body-file <(echo x)').problem).toContain('больше одного аргумента')
+    expect(plan('gh pr merge 5 --squash -F >(tee log)').problem).toContain('больше одного аргумента')
+  })
+
   it('заголовок из подстановки процесса или негодный — 409, а не буквальный или заголовок по умолчанию (линза корректности #543, F2/F3)', () => {
     const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
     expect(plan('gh pr merge 5 --squash --subject <(cat)')).toMatchObject({ subject: null, problem: expect.stringContaining('подстановка shell') })
