@@ -30,10 +30,15 @@ def pr_list(*prs):
     return json.dumps([{'number': n, 'headRefName': b, 'files': [{'path': p} for p in paths]} for n, b, paths in prs])
 
 
-def fake_gh(answer):
+def fake_gh(*answers, calls=None):
+    """A fake `gh`: one answer per call, the last one repeats; an exception answer is raised."""
+    seen = calls if calls is not None else []
+
     def call(repo, *args, check=True):
         if args[:2] != ('pr', 'list'):
             raise AssertionError('only `gh pr list` is expected, got %s' % (args,))
+        seen.append(args)
+        answer = answers[min(len(seen), len(answers)) - 1]
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -54,10 +59,24 @@ class OpenDataCasesTest(unittest.TestCase):
         # the oldest PR names the file; verdicts, nested paths, antigen and foreign branches do not count
         self.assertEqual(found, {'card-infra.jsonl': 124, 'prompt-lens-2.jsonl': 124})
 
-    def test_github_that_does_not_answer_is_none(self):
+    def test_github_that_does_not_answer_is_none_after_the_retries(self):
         for answer in (RuntimeError('gh pr list: HTTP 502'), OSError('no gh'), 'not json'):
-            with mock.patch.object(g, 'gh', fake_gh(answer)):
-                self.assertIsNone(g.open_data_cases('/repo', 'board-agents'), answer)
+            calls, pauses = [], []
+            with mock.patch.object(g, 'gh', fake_gh(answer, calls=calls)):
+                self.assertIsNone(g.open_data_cases('/repo', 'board-agents', sleep=pauses.append), answer)
+            self.assertEqual((len(calls), pauses), (g.OPEN_PRS_TRIES, [g.OPEN_PRS_PAUSE_S] * (g.OPEN_PRS_TRIES - 1)))
+
+    def test_one_failure_then_an_answer(self):
+        calls, pauses = [], []
+        answer = pr_list((124, 'evolve/data-2026-11-11', ['eval/evolve/cases/card-infra.jsonl']))
+        with mock.patch.object(g, 'gh', fake_gh(RuntimeError('gh pr list: HTTP 502'), answer, calls=calls)):
+            found = g.open_data_cases('/repo', 'board-agents', sleep=pauses.append)
+        self.assertEqual((found, len(calls), len(pauses)), ({'card-infra.jsonl': 124}, 2, 1))
+
+    def test_a_full_list_may_hide_a_pr(self):
+        full = pr_list(*[(n, 'fix/x-%d' % n, []) for n in range(g.OPEN_PRS_LIMIT)])
+        with mock.patch.object(g, 'gh', fake_gh(full)):
+            self.assertIsNone(g.open_data_cases('/repo', 'board-agents', sleep=lambda s: None))
 
 
 class RepoTest(unittest.TestCase):
@@ -75,7 +94,8 @@ class RepoTest(unittest.TestCase):
                         mock.patch.object(g, 'main_repo', lambda p: self.root),
                         mock.patch.object(steps, 'layer_metrics', lambda wt: {}),
                         mock.patch.object(steps, 'post_card', lambda line: 'not posted (test)'),
-                        mock.patch.object(session.guard, 'incident_cut', lambda *a, **k: {})]
+                        mock.patch.object(session.guard, 'incident_cut', lambda *a, **k: {}),
+                        mock.patch.object(g, 'OPEN_PRS_PAUSE_S', 0)]
         for p in self.patches:
             p.start()
 
