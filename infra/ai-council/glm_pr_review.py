@@ -243,6 +243,26 @@ def parse_answer(res) -> dict:
     return parsed if isinstance(parsed, dict) else {"raw": (res.text or "")[:3000]}
 
 
+# Синонимы вердикта: файлы линз пишут «accept|changes» (как ревью команды), SYSTEM просит accept|fail. 12.11 линза
+# корректности ответила валидным JSON с verdict «changes» — и трижды ушла в брак с пустым raw (OPS-47).
+VERDICT_SYNONYMS = {"changes": "fail", "request_changes": "fail", "changes_requested": "fail", "reject": "fail",
+                    "rejected": "fail", "approve": "accept", "approved": "accept", "pass": "accept"}
+
+
+def norm_verdict(value) -> str:
+    v = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return VERDICT_SYNONYMS.get(v, v)
+
+
+def no_verdict(parsed: dict) -> str:
+    """Почему ответ — не вердикт: не JSON, JSON без verdict или verdict не accept/fail (OPS-47)."""
+    if "raw" in parsed and len(parsed) == 1:
+        return "ответ не JSON — см. raw"
+    if "verdict" not in parsed:
+        return f"в JSON нет verdict (ключи: {', '.join(sorted(map(str, parsed)))[:150]}) — см. raw"
+    return f"verdict «{str(parsed.get('verdict'))[:40]}» — не accept/fail — см. raw"
+
+
 def _lens_record() -> dict:
     return {"status": "skipped", "verdict": None, "ok": False, "seconds": 0, "error": "",
             "findings": [], "checked": [], "parts": []}
@@ -286,7 +306,7 @@ def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_token
                           temperature=0.2, max_tokens=max_tokens)
         part["seconds"] = round(clock() - t0)
         parsed = parse_answer(res) if res.ok else {}
-        verdict = str(parsed.get("verdict") or "").lower()
+        verdict = norm_verdict(parsed.get("verdict"))
         if res.ok and verdict in ("accept", "fail"):
             in_row[call.lens] = 0
             part.update(ok=True, verdict=verdict)
@@ -296,9 +316,10 @@ def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_token
             rec["checked"].extend(c for c in (parsed.get("checked") or []) if c not in rec["checked"])
         else:
             kind = "other" if res.ok else classify_failure(res.error)
-            part.update(kind=kind, error=(res.error or "ответ не JSON с verdict — см. raw")[:300])
+            part.update(kind=kind, error=(res.error or no_verdict(parsed))[:300])
             if res.ok:
-                part["raw"] = parsed.get("raw", "")[:3000]
+                # Исходный текст, а не parsed["raw"]: у JSON без verdict поля raw нет — ответ терялся (OPS-47).
+                part["raw"] = (res.text or "")[:3000]
             in_row[call.lens] = in_row.get(call.lens, 0) + 1 if kind == "provider" else 0
             if kind in STOPPING:
                 stop, stop_kind = f"{kind}: {res.error[:200]}", kind

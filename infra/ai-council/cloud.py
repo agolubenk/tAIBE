@@ -872,18 +872,13 @@ class CloudClient:
         tokens_in = int(usage.get("prompt_tokens") or 0)
         tokens_out = int(usage.get("completion_tokens") or 0)
 
-        # GLM-4.x/5.x — reasoning-модели: «мысли» тарифицируются как completion и съедают
-        # max_tokens ДО того, как появится ответ. При тесном лимите приходит пустой content
-        # при непустом reasoning_content — молча принимать это за пустой ответ нельзя,
-        # иначе платный вызов выглядит успешным и ничего не даёт.
-        if not text and message.get("reasoning_content"):
-            reasoning = int((usage.get("completion_tokens_details") or {})
-                            .get("reasoning_tokens") or tokens_out)
-            return Completion(
-                False, "", None, model, 0, tokens_in, tokens_out,
-                f"модель израсходовала весь лимит на reasoning ({reasoning} токенов) и не "
-                f"успела ответить — поднять models.cloud.budget.max_tokens_out "
-                f"(сейчас {self.budget.max_tokens_out})")
+        # Пустой content — не ответ (OPS-47): раньше без reasoning_content он проходил как ok=True с пустым текстом,
+        # и ревью видело «не JSON» с пустым raw. Теперь — отказ с finish_reason, ключами message и
+        # completion_tokens_details: по ним видна причина (лимит, фильтр, сбой инференса).
+        if not text:
+            return Completion(False, "", None, model, 0, tokens_in, tokens_out,
+                              empty_answer_error(choices[0] if choices else {}, message, usage,
+                                                 tokens_out, self.budget.max_tokens_out))
         return self._finish(model, text, schema, tokens_in, tokens_out)
 
     def _gemini(self, model: str, messages: list[dict], schema: dict | None,
@@ -946,6 +941,25 @@ class CloudClient:
                 return Completion(False, text, None, model, 0, tokens_in, tokens_out,
                                   "ответ не распарсился как JSON")
         return Completion(True, text, parsed, model, 0, tokens_in, tokens_out)
+
+
+REASONING_FIELDS = ("reasoning_content", "reasoning", "thinking")
+
+
+def empty_answer_error(choice: dict, message: dict, usage: dict, tokens_out: int, limit: int) -> str:
+    """Текст отказа для пустого content (OPS-47). GLM-4.x/5.x — reasoning-модели: «мысли» тарифицируются как
+    completion и съедают max_tokens до ответа; рассуждение приходит в reasoning_content (Z.AI) или в поле с другим
+    именем. finish_reason=length или рассуждение без finish_reason — лимит; иначе — диагностика без догадок."""
+    finish = choice.get("finish_reason")
+    details = usage.get("completion_tokens_details") or {}
+    reasoning = next((str(message[k]) for k in REASONING_FIELDS if message.get(k)), "")
+    if finish == "length" or (reasoning and finish is None):
+        spent = int(details.get("reasoning_tokens") or tokens_out)
+        return (f"модель израсходовала весь лимит на reasoning ({spent} токенов) и не успела ответить — поднять "
+                f"models.cloud.budget.max_tokens_out (сейчас {limit}); finish_reason={finish}")
+    keys = ",".join(sorted(message)) or "—"
+    return (f"пустой ответ модели: finish_reason={finish}, message: {keys}, reasoning {len(reasoning)} симв., "
+            f"completion_tokens={tokens_out}, completion_tokens_details={json.dumps(details, ensure_ascii=False)}")
 
 
 def _parse_json_loose(text: str) -> dict | None:
