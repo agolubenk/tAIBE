@@ -3692,7 +3692,8 @@
 			"actor": {
 				"agent": "Агент",
 				"person": "Человек",
-				"ownerSession": "Владелец"
+				"ownerSession": "Владелец",
+				"ownerQueue": "Владелец (очередь)"
 			},
 			"fields": {
 				"kind": "Тип",
@@ -4087,7 +4088,10 @@
 					"reopenTask": "Вернуть карточку в работу как «{{status}}»",
 					"setPriority": "Поставить приоритет «{{priority}}»",
 					"fellTree": "Срубить дерево",
-					"fellSector": "Срубить сектор"
+					"fellSector": "Срубить сектор",
+					"createLabel": "Создать метку «{{name}}» на карточках: {{count}}",
+					"attachLabel": "Поставить метку «{{name}}» на карточки: {{count}}",
+					"setAssignee": "Назначить исполнителем {{name}}"
 				},
 				"status": {
 					"pending": "Ждут",
@@ -4095,13 +4099,18 @@
 					"rejected": "Отклонены",
 					"consumed": "Исполнены",
 					"expired": "Истёк",
-					"all": "Все"
+					"all": "Все",
+					"failed": "Не применены"
 				},
 				"toast": {
 					"approved": "Одобрено",
 					"rejected": "Отклонено",
-					"decideError": "Не удалось ответить на запрос"
-				}
+					"decideError": "Не удалось ответить на запрос",
+					"applied": "Применено",
+					"failed": "Не применено: {{reason}}"
+				},
+				"failReason": "Не применено: {{reason}}",
+				"doneReason": "Без записи в журнале закрытых: {{reason}}"
 			},
 			"leases": {
 				"empty": "Сейчас никто не держит карточки.",

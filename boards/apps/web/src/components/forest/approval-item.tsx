@@ -12,6 +12,7 @@ const STATUS_VARIANT: Record<string, "success" | "error" | "secondary"> = {
   approved: "success",
   rejected: "error",
   consumed: "secondary",
+  failed: "error",
 };
 
 type ApprovalItemProps = {
@@ -24,6 +25,9 @@ type ApprovalItemProps = {
     requestedByName: string;
     expiresAt: string;
     status?: string;
+    failReason?: string | null;
+    doneRef?: string | null;
+    doneReason?: string | null;
   };
   target?: ReactNode;
 };
@@ -62,6 +66,29 @@ export function ApprovalItem({
         )}
       </div>
       {target}
+      {approval.doneRef ? (
+        <a
+          href={approval.doneRef}
+          target="_blank"
+          rel="noreferrer"
+          className="break-all text-primary text-xs underline-offset-2 hover:underline"
+        >
+          {approval.doneRef}
+        </a>
+      ) : approval.doneReason ? (
+        <p className="text-muted-foreground text-xs">
+          {t("workspace:forest.approvals.doneReason", {
+            reason: approval.doneReason,
+          })}
+        </p>
+      ) : null}
+      {shownStatus === "failed" && approval.failReason ? (
+        <p className="break-words text-destructive text-xs">
+          {t("workspace:forest.approvals.failReason", {
+            reason: approval.failReason,
+          })}
+        </p>
+      ) : null}
       {approval.reason ? (
         <p className="line-clamp-4 whitespace-pre-wrap break-words text-muted-foreground text-xs">
           {approval.reason}

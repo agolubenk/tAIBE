@@ -583,6 +583,13 @@
       "when": 1793867402128,
       "tag": "0082_t_boards_agent_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1794490295629,
+      "tag": "0083_t_boards_approval_queue",
+      "breakpoints": true
     }
   ]
 }

@@ -24,6 +24,7 @@ describe("API integration: card context pack (R-031)", () => {
       targetId: card.id,
       value: "done",
       reason: "finished",
+      doneRef: "https://github.com/agolubenk/tAIBE/pull/1",
     });
     expect(asked.status).toBe(200);
     const comment = await forest.ownerApi("POST", `/comment/${card.id}`, {

@@ -74,7 +74,20 @@ export const ownerApprovalTable = pgTable(
     requestedByKind: text("requested_by_kind").notNull(),
     requestedById: text("requested_by_id").notNull(),
     requestedByName: text("requested_by_name").notNull(),
+    // pending → consumed | rejected | failed | expired (TB-102). «approved»
+    // stays only on rows decided before the server applied «да» itself.
     status: text("status").notNull().default("pending"),
+    failReason: text("fail_reason"),
+    // A closing request names its done-log entry (R-9): a commit or PR link,
+    // or why there is none (duplicate | obsolete | import).
+    doneRef: text("done_ref"),
+    doneReason: text("done_reason"),
+    // The owner-queue item that asks for this «да» (R-1): its id, the item
+    // version after the server's last own write (R-4) and the outcome the
+    // item already shows.
+    queueItemId: text("queue_item_id"),
+    queueItemVersion: integer("queue_item_version"),
+    queueSyncedStatus: text("queue_synced_status"),
     decidedByUserId: text("decided_by_user_id").references(() => userTable.id, {
       onDelete: "set null",
       onUpdate: "cascade",
@@ -95,6 +108,11 @@ export const ownerApprovalTable = pgTable(
       table.status,
     ),
     index("owner_approval_target_idx").on(table.targetType, table.targetId),
+    index("owner_approval_status_expires_idx").on(
+      table.status,
+      table.expiresAt,
+    ),
+    uniqueIndex("owner_approval_queue_item_idx").on(table.queueItemId),
   ],
 );
 

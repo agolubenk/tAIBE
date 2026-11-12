@@ -19,6 +19,13 @@ export async function taskApprovalTarget(
     });
   }
   const task = await assertTaskInWorkspace(taskId, workspaceId, userId);
+  // «Брёвна» are terminal (R-8): no request can move a card out of them, so
+  // the owner never gets one that is sure to fail.
+  if (task.status === "closed") {
+    throw new HTTPException(400, {
+      message: `the card is in «Брёвна» (closed): ${action} cannot change it`,
+    });
+  }
   if (action === "close_task") {
     if (!(await isClosingStatus(task.projectId, value))) {
       throw new HTTPException(400, {

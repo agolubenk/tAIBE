@@ -2,7 +2,13 @@ import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { BaseVariables } from "../openapi";
 
-export type ForestActorKind = "owner-ui" | "member-ui" | "agent";
+// owner-queue is internal: the owner's answer read from the owner queue
+// (TB-102 R-3). No HTTP route and no token resolves to it.
+export type ForestActorKind =
+  | "owner-ui"
+  | "member-ui"
+  | "agent"
+  | "owner-queue";
 
 export type ForestActor = {
   kind: ForestActorKind;

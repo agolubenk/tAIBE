@@ -12,10 +12,13 @@ import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import {
   type FellAction,
+  isGrantApprovalAction,
   isTaskApprovalAction,
 } from "../approval/approval-params";
 import { decideApproval } from "../approval/decide-approval";
+import { closingDoneRef } from "../approval/done-ref";
 import { fellTargets } from "../approval/fell-targets";
+import { grantApprovalTarget } from "../approval/grant-target";
 import { requestApproval } from "../approval/request-approval";
 import { taskApprovalTarget } from "../approval/task-approval-target";
 import { loadApprovalTargets } from "../read/approval-targets";
@@ -37,7 +40,7 @@ const requestApprovalRoute = createRoute({
   tags: ["Forest"],
   summary: "Ask the owner for a «да»",
   description:
-    "Records a pending approval for felling a tree or a sector, or for an agent to close a card or change its priority (R-022). The server fixes what it covers: the trees of a felling, the value of a task action. Felling needs task:delete.",
+    "Records a pending approval for felling a tree or a sector, for an agent to close, reopen or reprioritise a card (R-022), or for a one-time grant: create_label, attach_label, set_assignee (TB-102 R-10). The server fixes what it covers and applies it itself on the owner's «да» — in t-boards or in the owner queue; the agent does not repeat the write. close_task needs doneRef or doneReason (R-9). Felling needs task:delete.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["update"] }),
@@ -51,7 +54,9 @@ const requestApprovalRoute = createRoute({
   },
   responses: {
     200: jsonResponse("The pending approval", approvalSchema),
-    400: errorResponse("A task action without a valid value"),
+    400: errorResponse(
+      "A task action without a valid value, a grant without its parts, or close_task without doneRef/doneReason",
+    ),
     403: errorResponse("Missing permission or project access"),
     404: errorResponse("Task, tree or sector not found"),
     410: errorResponse("The tree or sector was already felled"),
@@ -97,7 +102,10 @@ const decideApprovalRoute = createRoute({
     },
   },
   responses: {
-    200: jsonResponse("The answered approval", approvalSchema),
+    200: jsonResponse(
+      "The answered approval: consumed (applied), rejected, or failed with failReason",
+      approvalSchema,
+    ),
     403: errorResponse("Not the owner's session"),
     409: errorResponse("Approval is not pending"),
   },
@@ -122,9 +130,24 @@ async function fellApprovalTarget(
 }
 
 function toPublicApproval<
-  T extends { paramsHash: string; decidedByUserId: string | null },
+  T extends {
+    paramsHash: string;
+    decidedByUserId: string | null;
+    queueItemId: string | null;
+    queueItemVersion: number | null;
+    queueSyncedStatus: string | null;
+  },
 >(approval: T) {
-  const { paramsHash: _hash, decidedByUserId: _decider, ...rest } = approval;
+  // The queue item id stays server-side: an agent that knew it could edit
+  // the item (security r2); queue_* fields are sync state, not API.
+  const {
+    paramsHash: _hash,
+    decidedByUserId: _decider,
+    queueItemId: _item,
+    queueItemVersion: _version,
+    queueSyncedStatus: _synced,
+    ...rest
+  } = approval;
   return rest;
 }
 
@@ -135,6 +158,7 @@ export const approvalRoutes = apiRouter<
     const { workspaceId } = c.req.valid("param");
     const body = c.req.valid("json");
     const userId = c.get("userId");
+    const done = closingDoneRef(body.action, body.doneRef, body.doneReason);
     const target = isTaskApprovalAction(body.action)
       ? {
           targetType: "task" as const,
@@ -146,14 +170,17 @@ export const approvalRoutes = apiRouter<
             body.value,
           )),
         }
-      : await fellApprovalTarget(
-          c,
-          workspaceId,
-          userId,
-          body.action,
-          body.targetId,
-        );
+      : isGrantApprovalAction(body.action)
+        ? await grantApprovalTarget(workspaceId, userId, body.action, body)
+        : await fellApprovalTarget(
+            c,
+            workspaceId,
+            userId,
+            body.action,
+            body.targetId,
+          );
     const approval = await requestApproval({
+      ...done,
       workspaceId,
       action: body.action,
       targetType: target.targetType,

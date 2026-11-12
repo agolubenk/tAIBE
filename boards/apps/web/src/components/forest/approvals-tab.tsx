@@ -7,7 +7,16 @@ import { ApprovalItem } from "./approval-item";
 import { ApprovalTarget } from "./approval-target";
 import { ForestListState } from "./forest-list-state";
 
-const FILTERS = ["pending", "approved", "rejected", "consumed", "all"] as const;
+const FILTERS = [
+  "pending",
+  "consumed",
+  "rejected",
+  "failed",
+  "expired",
+  // Legacy: requests decided before TB-102 and not yet migrated (R-11).
+  "approved",
+  "all",
+] as const;
 type Filter = (typeof FILTERS)[number];
 
 const isFilter = (value: unknown): value is Filter =>

@@ -4,6 +4,10 @@ import { cleanupDraftUploads } from "./draft-upload-cleanup";
 import { replayDeferredIssueEdits } from "../plugins/github/services/deferred-issue-edits";
 import * as Sentry from "@sentry/node";
 import { Cron } from "croner";
+import {
+  ownerQueueExpiry,
+  ownerQueueTick,
+} from "../forest/owner-queue/owner-queue-sync";
 import { readMirrorConfig } from "../import/notion-mirror/mirror-config";
 import { runScheduledNotionMirror } from "../import/notion-mirror/run-notion-mirror";
 import { checkDueDateReminders } from "./due-date-reminders";
@@ -53,6 +57,22 @@ function withCheckIn<T>(name: string, fn: () => Promise<T>) {
 }
 
 export function initializeScheduler(): void {
+  // TB-102: the owner's «да» from the owner queue. Every 30 s without a Sentry
+  // check-in per tick (the pass backs off on its own); expiry every 5 min.
+  jobs.push(
+    new Cron("*/30 * * * * *", { protect: true }, () =>
+      ownerQueueTick().catch((error: unknown) => {
+        console.error("Cron job owner-queue-sync failed", error);
+      }),
+    ),
+  );
+  jobs.push(
+    new Cron(
+      "*/5 * * * *",
+      { protect: true },
+      withCheckIn("owner-queue-expiry", ownerQueueExpiry),
+    ),
+  );
   jobs.push(
     new Cron(
       "* * * * *",

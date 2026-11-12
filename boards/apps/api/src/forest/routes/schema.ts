@@ -4,9 +4,12 @@ import {
   responseTimestamp,
   z,
 } from "../../openapi";
-import { APPROVAL_ACTIONS } from "../approval/approval-params";
+import {
+  APPROVAL_ACTIONS,
+  APPROVAL_STATUSES,
+  DONE_REASONS,
+} from "../approval/approval-params";
 import { LEASE_MAX_SECONDS } from "../lease/acquire-lease";
-import { APPROVAL_STATUSES } from "../read/list-approvals";
 import { PAGE_MAX } from "../read/page-cursor";
 
 export const workspaceParam = z.object({ workspaceId: z.string() });
@@ -45,9 +48,31 @@ export const requestApprovalBody = z.object({
   targetId: z.string(),
   value: z.string().min(1).max(64).optional().openapi({
     description:
-      "close_task: the closing status; reopen_task: the open status a closed card returns to; set_priority: the new priority. Part of what the owner approves.",
+      "close_task: the closing status; reopen_task: the open status a closed card returns to; set_priority: the new priority; set_assignee: the user id. Part of what the owner approves.",
   }),
   reason: z.string().min(1).max(2000),
+  label: z
+    .object({
+      name: z.string().trim().min(1).max(64),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+    })
+    .optional()
+    .openapi({
+      description:
+        "create_label: the new workspace label (targetId is the workspace id).",
+    }),
+  taskIds: z.array(z.string().min(1)).min(1).max(20).optional().openapi({
+    description:
+      "create_label and attach_label (targetId is the workspace label id): the cards that get the label.",
+  }),
+  doneRef: z.string().max(200).optional().openapi({
+    description:
+      "close_task: the commit or PR (github.com/agolubenk/HR_Helper-v2|tAIBE) with the docs/plans/done entry (R-9).",
+  }),
+  doneReason: z.enum(DONE_REASONS).optional().openapi({
+    description:
+      "close_task without a done entry: duplicate, obsolete or import (R-9).",
+  }),
 });
 
 export const decideApprovalBody = z.object({
@@ -73,6 +98,9 @@ export const approvalSchema = z
     requestedById: z.string(),
     requestedByName: z.string(),
     status: z.string(),
+    failReason: z.string().nullable(),
+    doneRef: z.string().nullable(),
+    doneReason: z.string().nullable(),
     decidedVia: z.string().nullable(),
     decidedAt: nullableResponseTimestamp,
     consumedAt: nullableResponseTimestamp,

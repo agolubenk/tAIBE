@@ -66,6 +66,14 @@ services:
       # mac/memory-token-push.sh. Read on every request; without the file the
       # reader sends no header, which only the proxy's rollout mode accepts.
       CLAUDE_MEM_PROXY_TOKEN_FILE: /run/tb-secrets/claude_mem_proxy_token
+      # The owner queue (TB-102): requests go there as items and «да» there
+      # is applied here. Off until the URL, the token's name in the queue and
+      # the workspace → product pairs are set; the token file is read on
+      # every call, so a rotation needs no restart.
+      OQ_URL: ${OQ_URL:-}
+      OQ_TOKEN_NAME: ${OQ_TOKEN_NAME:-}
+      OQ_WORKSPACE_PRODUCTS: ${OQ_WORKSPACE_PRODUCTS:-}
+      OQ_TOKEN_FILE: /run/tb-secrets/oq_token
     volumes:
       - ./secrets:/run/tb-secrets:ro
     ports:

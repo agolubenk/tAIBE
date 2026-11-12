@@ -66,7 +66,7 @@ export const agentWriteShape = {
     .max(200)
     .optional()
     .describe(
-      "An approved forest_request_approval (close_task, reopen_task or set_priority) for this exact status or priority; spent on success.",
+      "Kept for one release: the server applies the owner's «да» itself. With the id of an applied request the write answers «already applied» and changes nothing; a pending one answers 409.",
     ),
   note: z
     .string()

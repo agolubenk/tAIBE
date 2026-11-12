@@ -17,16 +17,20 @@ export async function requestApproval({
   params,
   reason,
   actor,
+  doneRef = null,
+  doneReason = null,
 }: {
   workspaceId: string;
   action: ApprovalAction;
-  targetType: "task" | "sector";
+  targetType: "task" | "sector" | "workspace" | "label";
   targetId: string;
   // What the hash binds: tree ids for a felling, the value for a task action.
   items: string[];
   params?: Record<string, string>;
   reason: string;
   actor: ForestActor;
+  doneRef?: string | null;
+  doneReason?: string | null;
 }) {
   const expiresAt = new Date(Date.now() + APPROVAL_TTL_HOURS * 3600 * 1000);
   return db.transaction(async (tx) => {
@@ -40,6 +44,8 @@ export async function requestApproval({
         paramsHash: approvalParamsHash(action, targetId, items),
         params: params ?? null,
         reason,
+        doneRef,
+        doneReason,
         requestedByKind: actor.kind,
         requestedById: actor.id,
         requestedByName: actor.name,
@@ -51,11 +57,11 @@ export async function requestApproval({
       {
         workspaceId,
         actor,
-        action: `approval.request:${action}`,
+        action: "approval.requested",
         targetType,
         targetId,
         outcome: "allowed",
-        detail: `approval ${approval.id}`,
+        detail: `approval ${approval.id} ${action}`,
       },
       tx,
     );

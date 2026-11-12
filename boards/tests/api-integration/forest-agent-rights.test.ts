@@ -16,7 +16,7 @@ async function lease(forest: Forest, taskId: string, session = "dev-1") {
   return String(res.body.fencingToken);
 }
 
-async function approve(
+async function request(
   forest: Forest,
   action: "close_task" | "reopen_task" | "set_priority",
   targetId: string,
@@ -27,16 +27,31 @@ async function approve(
     targetId,
     value,
     reason: "agent asks",
+    ...(action === "close_task"
+      ? { doneRef: "https://github.com/agolubenk/tAIBE/pull/1" }
+      : {}),
   });
   expect(requested.status).toBe(200);
   expect(requested.body.params).toEqual(
     action === "set_priority" ? { priority: value } : { status: value },
   );
-  const decided = await forest.owner(`/approvals/${requested.body.id}/decide`, {
+  return String(requested.body.id);
+}
+
+// TB-102: «да» in t-boards applies the request at once (R-12).
+async function approve(
+  forest: Forest,
+  action: "close_task" | "reopen_task" | "set_priority",
+  targetId: string,
+  value: string,
+) {
+  const id = await request(forest, action, targetId, value);
+  const decided = await forest.owner(`/approvals/${id}/decide`, {
     decision: "approved",
   });
   expect(decided.status).toBe(200);
-  return String(requested.body.id);
+  expect(decided.body.status).toBe("consumed");
+  return id;
 }
 
 async function journal(action: string, targetId: string) {
@@ -202,18 +217,37 @@ describe("API integration: agent rights on kaneo routes", () => {
     expect(unapproved.body.message).toContain("close_task");
 
     const approvalId = await approve(forest, "close_task", task.id, "done");
-    const otherStatus = await close("archived", approvalId);
-    expect(otherStatus.status).toBe(403);
-
-    const closed = await close("done", approvalId);
-    expect(closed.status).toBe(200);
     expect((await taskRow(task.id))?.status).toBe("done");
+    expect(await journal("approval.applied", task.id)).toHaveLength(1);
+
+    // R-5: the spent id gives no right for another value or another card.
+    const otherStatus = await close("archived", approvalId);
+    expect(otherStatus.status).toBe(409);
+    expect(otherStatus.body.message).toContain("approval_mismatch");
+    const other = await addTask(forest.project.id, "Other");
+    const otherToken = await lease(forest, other.id);
+    const borrowed = await forest.agentApi(
+      "PUT",
+      `/task/status/${other.id}`,
+      { status: "done" },
+      {
+        "x-t-boards-fence": otherToken,
+        "x-t-boards-approval": approvalId,
+      },
+      "dev-1",
+    );
+    expect(borrowed.status).toBe(409);
+    expect(borrowed.body.message).toContain("approval_mismatch");
+    expect((await taskRow(other.id))?.status).toBe("to-do");
+
+    const again = await close("done", approvalId);
+    expect(again.status).toBe(200);
     const [spent] = await db
       .select()
       .from(ownerApprovalTable)
       .where(eq(ownerApprovalTable.id, approvalId));
     expect(spent?.status).toBe("consumed");
-    expect(await journal("task.status:close_task", task.id)).toHaveLength(1);
+    expect(await journal("approval.applied", task.id)).toHaveLength(1);
   });
 
   // d-tb-reopen, owner 28.10: reopening is approved like closing.
@@ -249,11 +283,9 @@ describe("API integration: agent rights on kaneo routes", () => {
     });
     expect(stillClosed.status).toBe(400);
 
-    const approvalId = await approve(forest, "reopen_task", task.id, "to-do");
-    const reopened = await move("to-do", approvalId);
-    expect(reopened.status).toBe(200);
+    await approve(forest, "reopen_task", task.id, "to-do");
     expect((await taskRow(task.id))?.status).toBe("to-do");
-    expect(await journal("task.status:reopen_task", task.id)).toHaveLength(1);
+    expect(await journal("approval.applied", task.id)).toHaveLength(1);
 
     const openAlready = await forest.agent("/approvals", {
       action: "reopen_task",
@@ -288,13 +320,7 @@ describe("API integration: agent rights on kaneo routes", () => {
     expect(unapproved.status).toBe(403);
     expect(unapproved.body.message).toContain("close_task");
 
-    const approvalId = await approve(
-      forest,
-      "close_task",
-      task.id,
-      "confirmation",
-    );
-    expect((await move("confirmation", approvalId)).status).toBe(200);
+    await approve(forest, "close_task", task.id, "confirmation");
     expect((await taskRow(task.id))?.status).toBe("confirmation");
 
     const back = await move("in-progress");
@@ -302,7 +328,7 @@ describe("API integration: agent rights on kaneo routes", () => {
     expect(back.body.message).toContain("reopen_task");
   });
 
-  it("changes priority only with a «да» and hands it back if the write fails", async () => {
+  it("changes priority only with a «да»; a pending request gives no right (R-5)", async () => {
     const forest = await createForest();
     const task = await addTask(forest.project.id, "Task");
     const token = await lease(forest, task.id);
@@ -317,29 +343,22 @@ describe("API integration: agent rights on kaneo routes", () => {
     );
     expect(unapproved.status).toBe(403);
 
-    const approvalId = await approve(forest, "set_priority", task.id, "urgent");
-    const broken = await forest.agentApi(
-      "PUT",
-      `/task/${task.id}`,
-      { priority: "urgent" },
-      { ...fence, "x-t-boards-approval": approvalId },
-      "dev-1",
-    );
-    expect(broken.status).toBe(400);
-    const [kept] = await db
-      .select()
-      .from(ownerApprovalTable)
-      .where(eq(ownerApprovalTable.id, approvalId));
-    expect(kept?.status).toBe("approved");
-
-    const done = await forest.agentApi(
+    const pendingId = await request(forest, "set_priority", task.id, "urgent");
+    const early = await forest.agentApi(
       "PUT",
       `/task/priority/${task.id}`,
       { priority: "urgent" },
-      { ...fence, "x-t-boards-approval": approvalId },
+      { ...fence, "x-t-boards-approval": pendingId },
       "dev-1",
     );
-    expect(done.status).toBe(200);
+    expect(early.status).toBe(409);
+    expect(early.body.message).toContain("approval_pending");
+    expect((await taskRow(task.id))?.priority).not.toBe("urgent");
+
+    const decided = await forest.owner(`/approvals/${pendingId}/decide`, {
+      decision: "approved",
+    });
+    expect(decided.body.status).toBe("consumed");
     expect((await taskRow(task.id))?.priority).toBe("urgent");
   });
 

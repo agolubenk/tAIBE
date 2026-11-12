@@ -33,6 +33,32 @@ export function ApprovalSummary({ action, params }: ApprovalSummaryProps) {
           })}
         </>
       );
+    case "create_label":
+      return (
+        <>
+          {t("workspace:forest.approvals.action.createLabel", {
+            name: params?.name ?? "—",
+            count: (params?.taskIds ?? "").split(",").filter(Boolean).length,
+          })}
+        </>
+      );
+    case "attach_label":
+      return (
+        <>
+          {t("workspace:forest.approvals.action.attachLabel", {
+            name: params?.labelName ?? "—",
+            count: (params?.taskIds ?? "").split(",").filter(Boolean).length,
+          })}
+        </>
+      );
+    case "set_assignee":
+      return (
+        <>
+          {t("workspace:forest.approvals.action.setAssignee", {
+            name: params?.userName ?? params?.userId ?? "—",
+          })}
+        </>
+      );
     case "fell_tree":
       return <>{t("workspace:forest.approvals.action.fellTree")}</>;
     case "fell_sector":
