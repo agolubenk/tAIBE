@@ -51,6 +51,8 @@ def run(tmp: Path, check) -> None:
         selftest_glm_runs.run(tmp, check, cfg)
         import selftest_glm_quota      # квота подписки (1308/1310): прогоны ждут сброса
         selftest_glm_quota.run(tmp, check, cfg)
+        import selftest_glm_empty      # пустой ответ GLM: отказ с finish_reason (OPS-47)
+        selftest_glm_empty.run(tmp, check, cfg)
     finally:
         if prev_env is None:
             os.environ.pop("AI_COUNCIL_CLOUD", None)
