@@ -48,7 +48,7 @@ export function registerForestWriteTools(
     "forest_request_approval",
     {
       description:
-        "Ask the owner for a «да»: fell a tree (root task with its subtasks) or a sector, close a task (move it to a final column or archived), reopen a closed one, change its priority, or a one-time grant: create_label, attach_label, set_assignee. Only the owner answers — in the t-boards UI or in the owner queue, where the server puts the request itself (never add a queue item for it). On «да» the server applies the action itself, the whole path to the target status included; do not repeat the write. Read the outcome with forest_list_approvals: consumed (applied), rejected, failed (failReason) or expired. close_task needs doneRef or doneReason.",
+        "Ask the owner for a «да»: fell a tree (root task with its subtasks) or a sector, close a task (move it to a final column or archived), reopen a done or archived one (a card in «Брёвна», status closed, is terminal), change its priority, or a one-time grant: create_label, attach_label, set_assignee. Only the owner answers — in the t-boards UI or in the owner queue, where the server puts the request itself (never add a queue item for it). On «да» the server applies the action itself, the whole path to the target status included; do not repeat the write. Read the outcome with forest_list_approvals: consumed (applied), rejected, failed (failReason) or expired. close_task needs doneRef or doneReason.",
       inputSchema: z.object({
         workspaceId: id,
         action: z.enum([
@@ -71,7 +71,7 @@ export function registerForestWriteTools(
           .max(64)
           .optional()
           .describe(
-            "close_task: the closing status; reopen_task: the open status the closed task returns to; set_priority: the new priority; set_assignee: the user id. The «да» covers only this value.",
+            "close_task: the closing status; reopen_task: the open status a done or archived task returns to; set_priority: the new priority; set_assignee: the user id. The «да» covers only this value.",
           ),
         label: z
           .object({

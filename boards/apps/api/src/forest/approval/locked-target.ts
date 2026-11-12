@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { projectTable, taskTable } from "../../database/schema";
+import { findFelledLog } from "../find-felled-log";
 import type { Tx } from "../tx";
 import { ApprovalFailure } from "./approval-failure";
 
@@ -20,6 +21,10 @@ export async function lockApprovalTask(
     .for("update", { of: taskTable });
   if (!row || row.workspaceId !== workspaceId) {
     throw new ApprovalFailure("target_gone");
+  }
+  // Felled cards stay readable in «Брёвна» but take no more writes.
+  if (await findFelledLog(taskId, tx, workspaceId)) {
+    throw new ApprovalFailure("target_felled");
   }
   return row.task;
 }

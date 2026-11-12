@@ -54,6 +54,7 @@ async function expireWithItem(
   } catch {
     return; // the queue is down: no read, no expiry
   }
+  if (answer.kind === "unconfirmed") return; // the journal lags: wait
   if (
     (answer.kind === "yes" || answer.kind === "no") &&
     answer.answeredAt <= row.expiresAt

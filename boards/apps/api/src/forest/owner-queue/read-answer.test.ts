@@ -45,7 +45,9 @@ describe("readAnswer (TB-102 R-2, R-3)", () => {
   });
 
   it("waits while the journal does not show the choice yet", () => {
-    expect(readAnswer(check({ choice: "yes" }), [])).toEqual({ kind: "none" });
+    expect(readAnswer(check({ choice: "yes" }), [])).toEqual({
+      kind: "unconfirmed",
+    });
   });
 
   it("reads no answer from a missing check", () => {

@@ -14,6 +14,7 @@ import {
   pendingWithoutItem,
   releaseClaim,
   saveItemState,
+  taskKeys,
   workspaceName,
 } from "./sync-store";
 
@@ -25,6 +26,9 @@ export type SyncDeps = {
 
 const RESTORED_STATUS = "planned";
 const CLAIM_GRACE_MS = 2 * 60 * 1000;
+// The queue takes 120 writes a minute per token and a pass runs every 30 s:
+// new items per pass stay well under half of that, the rest go next pass.
+export const CREATE_PER_PASS = 30;
 // itemId → first pass that found a claimed item missing (per process).
 const missingSince = new Map<string, number>();
 const OWN_STATUS_NOTE = "Статус этого пункта ведёт только t-boards.";
@@ -34,6 +38,7 @@ async function itemData(deps: SyncDeps, row: ApprovalRow) {
     approval: row,
     workspaceName: await workspaceName(row.workspaceId),
     card: await itemCard(row),
+    taskKeys: await taskKeys(row),
     now: deps.now(),
   });
 }
@@ -106,7 +111,8 @@ async function restoreItem(
 }
 
 // R-15 (AC-20): t-boards never takes a decision from the agent status; a
-// status it did not write is put back.
+// status it did not write is put back. t-boards itself writes no status on a
+// new item, «blocked» on a tick without a choice and «planned» on a restore.
 async function guardStatus(
   deps: SyncDeps,
   row: ApprovalRow,
@@ -130,32 +136,38 @@ async function guardStatus(
   );
 }
 
+// The item is not in the queue. Without a saved version another instance
+// may still be writing it (AC-23): only a claim missing for CLAIM_GRACE_MS is
+// a crash between the claim and the write, and the next pass puts a fresh
+// item. An item t-boards wrote can be deleted only by the owner (the queue
+// refuses agents): the request stays answerable in t-boards, no new item.
+async function itemMissing(deps: SyncDeps, row: ApprovalRow, itemId: string) {
+  if (row.queueItemVersion === null) {
+    const now = deps.now().getTime();
+    const since = missingSince.get(itemId) ?? now;
+    missingSince.set(itemId, since);
+    if (now - since < CLAIM_GRACE_MS) return;
+    missingSince.delete(itemId);
+    await releaseClaim(row.id, itemId);
+    return;
+  }
+  await saveItemState(row.id, itemId, { synced: "deleted" });
+  await journalQueue(
+    row.workspaceId,
+    "queue.item_deleted",
+    row.id,
+    `item ${itemId} deleted in the queue; the request waits in t-boards`,
+    "allowed",
+  );
+}
+
 // Steps 2 and 3 for one pending request with an item.
 async function readPending(deps: SyncDeps, row: ApprovalRow) {
   const itemId = row.queueItemId;
-  if (!itemId) return;
+  if (!itemId || row.queueSyncedStatus === "deleted") return;
   const item = await deps.client.get("items", itemId);
-  if (!item) {
-    // No version saved yet: another instance claimed the item and is still
-    // writing it (AC-23). Only a claim missing for CLAIM_GRACE_MS is a crash
-    // between the claim and the write.
-    if (row.queueItemVersion === null) {
-      const now = deps.now().getTime();
-      const since = missingSince.get(itemId) ?? now;
-      missingSince.set(itemId, since);
-      if (now - since < CLAIM_GRACE_MS) return;
-    }
-    missingSince.delete(itemId);
-    // Deleted by the owner, or never written: the next pass puts a fresh item.
-    await releaseClaim(row.id, itemId);
-    await journalQueue(
-      row.workspaceId,
-      "queue.foreign_edit",
-      row.id,
-      `item ${itemId} gone`,
-    );
-    return;
-  }
+  if (!item) return itemMissing(deps, row, itemId);
+  missingSince.delete(itemId);
   const product = deps.config.products.get(row.workspaceId);
   if (item.product && item.product !== product) {
     if (row.queueSyncedStatus !== "product_mismatch") {
@@ -167,6 +179,20 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
         `item ${itemId} product ${item.product}, workspace product ${product ?? "—"}`,
       );
     }
+    return;
+  }
+  const itemEvents = await deps.client.history("items", itemId);
+  // Written, but the version not saved (the writer crashed or is a parallel
+  // instance): an item whose only writer is t-boards is adopted as it is.
+  if (
+    row.queueItemVersion === null &&
+    itemEvents.length > 0 &&
+    itemEvents.every((event) => event.actor === deps.config.tokenName)
+  ) {
+    await saveItemState(row.id, itemId, {
+      version: item.version,
+      synced: "pending",
+    });
     return;
   }
   const changed = item.version !== row.queueItemVersion;
@@ -208,8 +234,7 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
     queueItemVersion: item.version,
   };
   // R-4: the version decides; the last writer is only the second check.
-  const writer = lastWriter(await deps.client.history("items", itemId));
-  if (changed || writer !== deps.config.tokenName) {
+  if (changed || lastWriter(itemEvents) !== deps.config.tokenName) {
     await markFailed(
       row.id,
       row.workspaceId,
@@ -228,17 +253,33 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
   });
 }
 
-// One pass over the queue (spec «Синхронизация»). A failure of the queue or
-// the database ends the pass; the caller backs off and tries again.
+// A version race on one item skips that item until the next pass; it does
+// not stop the others. Any other failure (queue down, 429, database) ends
+// the pass and the caller backs off.
+async function eachRow(
+  rows: ApprovalRow[],
+  step: (row: ApprovalRow) => Promise<unknown>,
+) {
+  for (const row of rows) {
+    try {
+      await step(row);
+    } catch (error) {
+      if (!(error instanceof QueueConflict)) throw error;
+    }
+  }
+}
+
+// One pass over the queue (spec «Синхронизация»).
 export async function syncPass(deps: SyncDeps) {
   const workspaceIds = [...deps.config.products.keys()];
-  for (const row of await pendingWithoutItem(workspaceIds, deps.now())) {
-    await createItem(deps, row);
-  }
-  for (const row of await pendingWithItem(workspaceIds)) {
-    await readPending(deps, row);
-  }
-  for (const row of await outcomeToShow(workspaceIds)) {
-    await showOutcome(deps.client, row);
-  }
+  const fresh = await pendingWithoutItem(workspaceIds, deps.now());
+  await eachRow(fresh.slice(0, CREATE_PER_PASS), (row) =>
+    createItem(deps, row),
+  );
+  await eachRow(await pendingWithItem(workspaceIds), (row) =>
+    readPending(deps, row),
+  );
+  await eachRow(await outcomeToShow(workspaceIds), (row) =>
+    showOutcome(deps.client, row),
+  );
 }

@@ -13,7 +13,13 @@ export class ApprovalFailure extends Error {
 // a bug) leaves it «pending» so the next pass tries again.
 export function failureReason(error: unknown): string | null {
   if (error instanceof ApprovalFailure) return error.reason;
-  if (error instanceof HTTPException && error.status < 500) {
+  // 408 and 429 are transient: the request stays pending for the next pass.
+  if (
+    error instanceof HTTPException &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
+  ) {
     return error.message.slice(0, 500) || `http_${error.status}`;
   }
   return null;

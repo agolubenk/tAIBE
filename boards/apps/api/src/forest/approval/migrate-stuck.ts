@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull, like, ne } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, like, notLike, or } from "drizzle-orm";
 import db from "../../database";
 import {
   agentJournalTable,
@@ -191,7 +191,11 @@ export async function revertRun(runId: string) {
   const report: string[] = [];
   for (const entry of rows.reverse()) {
     const match = APPLIED.exec(entry.detail ?? "");
-    if (!match) continue;
+    if (!match) {
+      // Grants (labels, assignee) are not undone here: name them.
+      report.push(`skip ${entry.targetId}: not revertible — ${entry.detail}`);
+      continue;
+    }
     const [, approvalId, , field, from, to] = match;
     const [task] = await db
       .select()
@@ -206,7 +210,12 @@ export async function revertRun(runId: string) {
             and(
               eq(cardHistoryTable.taskId, task.id),
               gt(cardHistoryTable.createdAt, entry.createdAt),
-              ne(cardHistoryTable.actorId, `owner-migration:${runId}`),
+              // Any server migration step (this run, its revert, another run)
+              // is not a person's change; a null actor (kaneo routes) is.
+              or(
+                isNull(cardHistoryTable.actorId),
+                notLike(cardHistoryTable.actorId, "owner-migration:%"),
+              ),
             ),
           )
           .limit(1)
@@ -239,6 +248,11 @@ export async function revertRun(runId: string) {
           .set({ priority: from as string })
           .where(eq(taskTable.id, task.id));
       }
+      // The request no longer stands for a change on the card.
+      await tx
+        .update(ownerApprovalTable)
+        .set({ status: "failed", failReason: `reverted:${runId}` })
+        .where(eq(ownerApprovalTable.id, approvalId as string));
     });
     report.push(
       `reverted ${approvalId} ${entry.targetId} ${field}: ${to} → ${from}`,

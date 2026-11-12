@@ -78,11 +78,14 @@ export function approvalItemData({
   approval,
   workspaceName,
   card,
+  taskKeys = [],
   now,
 }: {
   approval: ItemApproval;
   workspaceName: string;
   card: ItemCard;
+  // Label grants: the cards that get the label, as «KEY-12 «title»».
+  taskKeys?: string[];
   now: Date;
 }): Record<string, unknown> {
   const action = actionLine(approval);
@@ -97,6 +100,11 @@ export function approvalItemData({
     `Действие: ${action}${card?.current ? ` (сейчас: «${card.current}»)` : ""}`,
     `Срок ответа: до ${moscowTime(approval.expiresAt)}. Просит: ${approval.requestedByName}.`,
   ];
+  if (taskKeys.length > 0) {
+    paragraphs.push(
+      `Карточки:\n${taskKeys.map((key) => `- ${key}`).join("\n")}`,
+    );
+  }
   if (approval.doneRef) paragraphs.push(`Журнал закрытых: ${approval.doneRef}`);
   if (approval.doneReason) {
     paragraphs.push(`Без записи в журнале закрытых: ${approval.doneReason}`);

@@ -257,4 +257,101 @@ describe("API integration: owner-queue sync (TB-102)", () => {
     );
     expect(await journal("approval.late_answer", id)).toHaveLength(1);
   });
+
+  // r1 #10: a version race on one item skips it; the pass goes on.
+  it("keeps the pass going when one restore meets a version race", async () => {
+    const forest = await createForest();
+    const first = await addTask(forest.project.id, "First");
+    const second = await addTask(forest.project.id, "Second");
+    const { queue, deps } = setup(forest);
+    const idA = await requestClose(forest, first.id);
+    const idB = await requestClose(forest, second.id);
+    await syncPass(deps);
+    const itemA = (await approval(idA))?.queueItemId as string;
+    const itemB = (await approval(idB))?.queueItemId as string;
+
+    await queue.as("other-agent").patch("items", itemA, { title: "Подмена" });
+    const racing = queue.as(TOKEN);
+    const put = racing.put;
+    racing.put = async (collection, id, data, ifVersion) => {
+      if (id === itemA) {
+        await queue.as("other-agent").patch("items", itemA, { title: "Ещё" });
+      }
+      return put(collection, id, data, ifVersion);
+    };
+    await queue
+      .as("owner")
+      .patch("checks", itemB, { done: true, choice: "yes" });
+    await syncPass({ ...deps, client: racing });
+
+    expect((await approval(idA))?.status).toBe("pending");
+    expect((await approval(idB))?.status).toBe("consumed");
+  });
+
+  // r1 #5: an item written by t-boards whose version was not saved is
+  // adopted, not «restored» into a false «changed».
+  it("adopts its own item when the version was not saved", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+    await syncPass(deps);
+    const itemId = (await approval(id))?.queueItemId as string;
+    await db
+      .update(ownerApprovalTable)
+      .set({ queueItemVersion: null })
+      .where(eq(ownerApprovalTable.id, id));
+
+    await syncPass(deps);
+    expect((await approval(id))?.queueItemVersion).toBe(
+      queue.doc("items", itemId)?.version,
+    );
+    expect(await journal("queue.foreign_edit", id)).toHaveLength(0);
+    await queue
+      .as("owner")
+      .patch("checks", itemId, { done: true, choice: "yes" });
+    await syncPass(deps);
+    expect((await approval(id))?.status).toBe("consumed");
+  });
+
+  it("does not bring back an item the owner deleted; t-boards still answers", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+    await syncPass(deps);
+    const itemId = (await approval(id))?.queueItemId as string;
+    queue.docs.delete(`items/${itemId}`);
+
+    await syncPass(deps);
+    await syncPass(deps);
+    expect(queue.itemIds()).toHaveLength(0);
+    expect(await journal("queue.item_deleted", id)).toHaveLength(1);
+
+    const decided = await forest.owner(`/approvals/${id}/decide`, {
+      decision: "approved",
+    });
+    expect(decided.body.status).toBe("consumed");
+    await syncPass(deps);
+    expect(queue.itemIds()).toHaveLength(0);
+  });
+
+  it("explains a failed «Да» in words, not codes (product r1)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+    await syncPass(deps);
+    const itemId = (await approval(id))?.queueItemId as string;
+    await queue.as("other-agent").patch("items", itemId, { title: "Подмена" });
+    await queue
+      .as("owner")
+      .patch("checks", itemId, { done: true, choice: "yes" });
+    await syncPass(deps);
+    await syncPass(deps);
+
+    const note = String(queue.doc("checks", itemId)?.data.agentNote);
+    expect(note).toContain("правил не t-boards");
+    expect(note).not.toContain("queue_item_changed");
+  });
 });

@@ -65,7 +65,9 @@ describe("API integration: R-11 stuck approvals (TB-102 AC-11)", () => {
       .set({ status: "done" })
       .where(eq(schema.taskTable.id, done?.id as string));
     const tree = await addTask(forest.project.id, "Tree");
+    const toLog = await addTask(forest.project.id, "To «Брёвна»");
     const ids = {
+      log: await legacy(forest, "close_task", toLog?.id as string, "closed"),
       close: await legacy(forest, "close_task", toClose?.id as string, "done"),
       bump: await legacy(
         forest,
@@ -98,6 +100,8 @@ describe("API integration: R-11 stuck approvals (TB-102 AC-11)", () => {
     await runStuck(plans, "run1");
     expect((await task(toClose?.id as string))?.status).toBe("done");
     expect((await task(toBump?.id as string))?.priority).toBe("urgent");
+    // R-8: two steps, to-do → done → closed.
+    expect((await task(toLog?.id as string))?.status).toBe("closed");
     expect(await planStuck()).toHaveLength(0);
     await runStuck(await planStuck(), "run2");
 
@@ -111,5 +115,15 @@ describe("API integration: R-11 stuck approvals (TB-102 AC-11)", () => {
     expect(report.some((line) => line.startsWith("skip"))).toBe(true);
     expect((await task(toClose?.id as string))?.status).toBe("to-do");
     expect((await task(toBump?.id as string))?.priority).toBe("low");
+    // Both steps of the two-step path go back (r1 #3).
+    expect((await task(toLog?.id as string))?.status).toBe("to-do");
+    const [log] = await db
+      .select()
+      .from(ownerApprovalTable)
+      .where(eq(ownerApprovalTable.id, ids.log));
+    expect(log).toMatchObject({
+      status: "failed",
+      failReason: "reverted:run1",
+    });
   });
 });

@@ -82,10 +82,12 @@ export async function createLabelGrant(
       target: [labelTable.workspaceId, labelTable.name],
       where: sql`${labelTable.taskId} is null`,
     });
+  // A workspace label with this name already exists: cards get its own
+  // colour, so one name never shows in two colours (correctness r1).
   return attachToTasks(
     tx,
     workspaceId,
-    { name, color },
+    { name, color: existing?.color ?? color },
     splitIds(params.taskIds),
   );
 }

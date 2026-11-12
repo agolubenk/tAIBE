@@ -13,6 +13,26 @@ function moscow(date: Date | null): string {
   })} МСК`;
 }
 
+// The owner reads the reason, not the code (product lens r1).
+const FAIL_TEXT: Record<string, string> = {
+  queue_item_changed:
+    "пункт в очереди правил не t-boards, ответ на изменённый текст не принят",
+  target_gone: "карточки больше нет или она в другом пространстве",
+  target_felled: "карточка срублена",
+  card_is_closed: "карточка уже в «Брёвнах», оттуда пути нет",
+  card_not_closed: "карточка уже в работе",
+  params_mismatch: "параметры заявки не совпали с тем, что вы видели",
+  params_missing: "в заявке не хватает параметров",
+  label_gone: "метки больше нет",
+  label_deleting: "метка удаляется",
+  unknown_action: "неизвестное действие",
+};
+
+export function failText(reason: string | null): string {
+  if (!reason) return "причина не указана";
+  return FAIL_TEXT[reason] ?? reason;
+}
+
 const WHERE: Record<string, string> = {
   queue: "в очереди",
   ui: "в t-boards",
@@ -31,6 +51,12 @@ const STATUS_WORD: Record<string, string> = {
 export async function showOutcome(client: QueueClient, row: ApprovalRow) {
   const itemId = row.queueItemId;
   if (!itemId) return;
+  // The owner deleted the item: nothing to show, and a write would bring it
+  // back.
+  if (row.queueSyncedStatus === "deleted") {
+    await saveItemState(row.id, itemId, { synced: `deleted:${row.status}` });
+    return;
+  }
   const word = STATUS_WORD[row.status];
   if (!word) {
     // Legacy «approved»: R-11 decides it; nothing to show yet.
@@ -42,7 +68,7 @@ export async function showOutcome(client: QueueClient, row: ApprovalRow) {
   const answeredHere = row.decidedVia === "queue";
   let note =
     row.status === "failed"
-      ? `Не применено: ${row.failReason ?? "?"}. Заявку нужно подать заново.`
+      ? `Не применено: ${failText(row.failReason)}. Карточка не изменилась; агент подаст новую заявку, если действие ещё нужно.`
       : row.status === "expired"
         ? "Срок истёк."
         : `${word[0]?.toUpperCase()}${word.slice(1)} ${where} ${when}.`.replace(

@@ -6,7 +6,9 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   ne,
+  notLike,
   or,
 } from "drizzle-orm";
 import db from "../../database";
@@ -67,7 +69,10 @@ export function outcomeToShow(workspaceIds: string[]) {
         isNotNull(ownerApprovalTable.queueItemId),
         or(
           isNull(ownerApprovalTable.queueSyncedStatus),
-          ne(ownerApprovalTable.queueSyncedStatus, ownerApprovalTable.status),
+          and(
+            ne(ownerApprovalTable.queueSyncedStatus, ownerApprovalTable.status),
+            notLike(ownerApprovalTable.queueSyncedStatus, "deleted:%"),
+          ),
         ),
       ),
     )
@@ -104,27 +109,60 @@ export async function releaseClaim(approvalId: string, itemId: string) {
 }
 
 // The item version after t-boards' own last write (R-4), and what it shows.
+// The version only grows: a slow writer never puts back an older version
+// than a parallel pass already saved (R-4).
 export async function saveItemState(
   approvalId: string,
   itemId: string,
   state: { version?: number; synced?: string },
 ) {
-  await db
-    .update(ownerApprovalTable)
-    .set({
-      ...(state.version === undefined
-        ? {}
-        : { queueItemVersion: state.version }),
-      ...(state.synced === undefined
-        ? {}
-        : { queueSyncedStatus: state.synced }),
+  if (state.version !== undefined) {
+    await db
+      .update(ownerApprovalTable)
+      .set({ queueItemVersion: state.version })
+      .where(
+        and(
+          eq(ownerApprovalTable.id, approvalId),
+          eq(ownerApprovalTable.queueItemId, itemId),
+          or(
+            isNull(ownerApprovalTable.queueItemVersion),
+            lt(ownerApprovalTable.queueItemVersion, state.version),
+          ),
+        ),
+      );
+  }
+  if (state.synced !== undefined) {
+    await db
+      .update(ownerApprovalTable)
+      .set({ queueSyncedStatus: state.synced })
+      .where(
+        and(
+          eq(ownerApprovalTable.id, approvalId),
+          eq(ownerApprovalTable.queueItemId, itemId),
+        ),
+      );
+  }
+}
+
+// The cards a label grant names, as keys (KEY-12) for the queue item.
+export async function taskKeys(approval: ApprovalRow): Promise<string[]> {
+  const ids = (approval.params?.taskIds ?? "").split(",").filter(Boolean);
+  if (ids.length === 0) return [];
+  const rows = await db
+    .select({
+      id: taskTable.id,
+      slug: projectTable.slug,
+      number: taskTable.number,
+      title: taskTable.title,
     })
-    .where(
-      and(
-        eq(ownerApprovalTable.id, approvalId),
-        eq(ownerApprovalTable.queueItemId, itemId),
-      ),
-    );
+    .from(taskTable)
+    .innerJoin(projectTable, eq(taskTable.projectId, projectTable.id))
+    .where(inArray(taskTable.id, ids.slice(0, 20)));
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids.slice(0, 20).map((id) => {
+    const row = byId.get(id);
+    return row ? `${row.slug}-${row.number ?? "?"} «${row.title}»` : id;
+  });
 }
 
 export async function workspaceName(workspaceId: string) {

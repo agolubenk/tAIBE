@@ -4,6 +4,9 @@ export type QueueAnswer =
   | { kind: "none" }
   // «done» without a choice: a tick on /queue, not a decision (R-2).
   | { kind: "undecided" }
+  // A choice is set but the queue journal does not show its write yet: wait,
+  // never read it as «no answer» (R-7).
+  | { kind: "unconfirmed" }
   | {
       kind: "yes" | "no";
       answeredAt: Date;
@@ -36,10 +39,7 @@ export function readAnswer(
     typeof check?.data.note === "string" && check.data.note
       ? check.data.note
       : undefined;
-  if (!setter) {
-    // A choice with no journal row for it: wait for the journal to show it.
-    return { kind: "none" };
-  }
+  if (!setter) return { kind: "unconfirmed" };
   return {
     kind: choice,
     answeredAt: new Date(setter.at),

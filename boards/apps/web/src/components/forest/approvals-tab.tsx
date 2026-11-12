@@ -13,6 +13,8 @@ const FILTERS = [
   "rejected",
   "failed",
   "expired",
+  // Legacy: requests decided before TB-102 and not yet migrated (R-11).
+  "approved",
   "all",
 ] as const;
 type Filter = (typeof FILTERS)[number];
