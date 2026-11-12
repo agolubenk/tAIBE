@@ -149,9 +149,9 @@ first_message() {
     tag="$tag Последним шагом приёма (после Monitor, если ты его взводишь) выполни: python3 -I $TOOLS/lineage.py ack — по этой квитанции предшественник закроется сам."
     if [ -n "$role" ]; then
       num="$(role_num "$role")" || die "неизвестная роль: $role (coord plan frontend backend release boards)"
-      printf 'Сборка Т3, ключ реестра %s, роль %s, наследник. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику подтверди приём через SendMessage.%s' "$role" "$num" "$HANDOFF" "$tag"
+      printf 'Сборка Т3, ключ реестра %s, роль %s, наследник. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику не пиши: квитанция приёма — lineage.py ack (SE-41).%s' "$role" "$num" "$HANDOFF" "$tag"
     else
-      printf 'Наследник сессии. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику подтверди приём через SendMessage.%s' "$HANDOFF" "$tag"
+      printf 'Наследник сессии. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику не пиши: квитанция приёма — lineage.py ack (SE-41).%s' "$HANDOFF" "$tag"
     fi
     return
   fi

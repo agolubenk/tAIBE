@@ -95,6 +95,15 @@
             "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -I /Users/agolubenko/Desktop/Development/tAIBE/eval/pipeline/reflex/antigen.py"
           }
         ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -I /Users/agolubenko/Desktop/Development/tAIBE/eval/pipeline/reflex/peer_gate.py"
+          }
+        ]
       }
     ]
   },
