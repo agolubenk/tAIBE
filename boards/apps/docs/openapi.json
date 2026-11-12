@@ -4115,6 +4115,24 @@
           "status": {
             "type": "string"
           },
+          "failReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doneRef": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doneReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "decidedVia": {
             "type": [
               "string",
@@ -4156,6 +4174,9 @@
           "requestedById",
           "requestedByName",
           "status",
+          "failReason",
+          "doneRef",
+          "doneReason",
           "decidedVia",
           "decidedAt",
           "consumedAt",
@@ -24917,7 +24938,7 @@
           "Forest"
         ],
         "summary": "Ask the owner for a «да»",
-        "description": "Records a pending approval for felling a tree or a sector, or for an agent to close a card or change its priority (R-022). The server fixes what it covers: the trees of a felling, the value of a task action. Felling needs task:delete.",
+        "description": "Records a pending approval for felling a tree or a sector, for an agent to close, reopen or reprioritise a card (R-022), or for a one-time grant: create_label, attach_label, set_assignee (TB-102 R-10). The server fixes what it covers and applies it itself on the owner's «да» — in t-boards or in the owner queue; the agent does not repeat the write. close_task needs doneRef or doneReason (R-9). Felling needs task:delete.",
         "parameters": [
           {
             "schema": {
@@ -24942,7 +24963,10 @@
                       "fell_sector",
                       "close_task",
                       "reopen_task",
-                      "set_priority"
+                      "set_priority",
+                      "create_label",
+                      "attach_label",
+                      "set_assignee"
                     ]
                   },
                   "targetId": {
@@ -24952,12 +24976,55 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 64,
-                    "description": "close_task: the closing status; reopen_task: the open status a closed card returns to; set_priority: the new priority. Part of what the owner approves."
+                    "description": "close_task: the closing status; reopen_task: the open status a closed card returns to; set_priority: the new priority; set_assignee: the user id. Part of what the owner approves."
                   },
                   "reason": {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 2000
+                  },
+                  "label": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "color": {
+                        "type": "string",
+                        "pattern": "^#[0-9a-fA-F]{6}$"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "color"
+                    ],
+                    "description": "create_label: the new workspace label (targetId is the workspace id)."
+                  },
+                  "taskIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "description": "create_label and attach_label (targetId is the workspace label id): the cards that get the label."
+                  },
+                  "doneRef": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "close_task: the commit or PR (github.com/agolubenk/HR_Helper-v2|tAIBE) with the docs/plans/done entry (R-9)."
+                  },
+                  "doneReason": {
+                    "type": "string",
+                    "enum": [
+                      "duplicate",
+                      "obsolete",
+                      "import"
+                    ],
+                    "description": "close_task without a done entry: duplicate, obsolete or import (R-9)."
                   }
                 },
                 "required": [
@@ -24981,7 +25048,7 @@
             }
           },
           "400": {
-            "description": "A task action without a valid value",
+            "description": "A task action without a valid value, a grant without its parts, or close_task without doneRef/doneReason",
             "content": {
               "application/json": {
                 "schema": {
@@ -25077,7 +25144,9 @@
                 "pending",
                 "approved",
                 "rejected",
-                "consumed"
+                "consumed",
+                "failed",
+                "expired"
               ]
             },
             "required": false,
@@ -25190,7 +25259,7 @@
         },
         "responses": {
           "200": {
-            "description": "The answered approval",
+            "description": "The answered approval: consumed (applied), rejected, or failed with failReason",
             "content": {
               "application/json": {
                 "schema": {
