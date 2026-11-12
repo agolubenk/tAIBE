@@ -98,6 +98,15 @@ class GenomeTest(unittest.TestCase):
             with self.subTest(role=role):
                 self.assertEqual(g['env'].get('CLAUDE_CODE_EFFORT_LEVEL') == 'medium', role == 'coord')
 
+    def test_every_role_runs_on_1m_window(self):
+        """SE-62: without CLAUDE_BIN the genome alone gives 1M. env and autoCompactWindow must agree: the host
+        settings.local.json sets both to 250K, and --settings overrides each key on its own."""
+        for role, g in GENOMES.items():
+            with self.subTest(role=role):
+                self.assertIn('[1m]', g['model'])
+                self.assertEqual(g['autoCompactWindow'], 1_000_000)
+                self.assertEqual(g['env']['CLAUDE_CODE_AUTO_COMPACT_WINDOW'], str(g['autoCompactWindow']))
+
 
 class ProductGenomeTest(unittest.TestCase):
     """OPS-25 Ф3: геном каждого продукта несёт TAIBE_PRODUCT и пути своего checkout."""

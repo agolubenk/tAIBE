@@ -1,4 +1,6 @@
 {
+  "model": "opus[1m]",
+  "autoCompactWindow": 1000000,
   "enabledPlugins": {
     "typescript-lsp@claude-plugins-official": false,
     "pyright-lsp@claude-plugins-official": false,
@@ -59,6 +61,7 @@
   },
   "env": {
     "CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH": "600",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
     "TAIBE_PRODUCT": "hr-helper"
   },
   "claudeMdExcludes": [
