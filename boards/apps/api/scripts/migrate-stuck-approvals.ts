@@ -1,5 +1,6 @@
 // TB-102 R-11: «approved» requests that were never spent.
 //   tsx scripts/migrate-stuck-approvals.ts --dry-run      list, change nothing
+//   (in the image: node /app/apps/api/dist/migrate-stuck-approvals.js --dry-run)
 //   tsx scripts/migrate-stuck-approvals.ts                apply; prints the runId
 //   tsx scripts/migrate-stuck-approvals.ts --revert <id>  undo that run's steps
 // A second run takes only what is left and is safe.
