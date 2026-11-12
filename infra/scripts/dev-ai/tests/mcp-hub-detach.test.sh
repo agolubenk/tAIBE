@@ -518,22 +518,26 @@ run_hub i-stop stop
 assert_clean "stop serena чужой копии (по pid-файлу)"
 
 # ── к) worktree ─────────────────────────────────────────────────────────────────────────────
-step "к) из связанного worktree start/restart/init отказывают: общие сервисы — из основной папки"
+step "к) из связанного worktree start/restart/init и sync/connect/disconnect отказывают: общие сервисы — из основной папки"
 FAKE_WT="$TMP/wt"
 mkdir -p "$TMP/main/.git/worktrees/wt" "$FAKE_WT/infra/scripts/dev-ai"
 cp -R "$(dirname "$HUB_SH")/mcp-hub.sh" "$(dirname "$HUB_SH")/lib" "$FAKE_WT/infra/scripts/dev-ai/"
 echo "gitdir: $TMP/main/.git/worktrees/wt" >"$FAKE_WT/.git"
 guard
-for c in start restart init; do
+K_CFG_BEFORE="$(cksum "$MCP_HUB_CONFIG_DIR/mcp.json" 2>/dev/null || echo none)"
+for c in start restart init sync connect disconnect; do
   RC=0
   env -u MCP_HUB_ALLOW_WORKTREE bash "$FAKE_WT/infra/scripts/dev-ai/mcp-hub.sh" "$c" >"$TMP/k-$c.out" 2>&1 || RC=$?
   [ "$RC" = 1 ] || fail "$c из worktree: код $RC, нужен 1"
   grep -q "(cd $TMP/main && npm run mcp-hub:$c)" "$TMP/k-$c.out" || fail "$c из worktree: нет подсказки про основную папку"
 done
 none_running "$FAKE_WT" && ! port_busy "$SERENA_PORT" && ! port_busy "$HUB_PORT" || fail "из worktree что-то запустилось"
+[ "$(cksum "$MCP_HUB_CONFIG_DIR/mcp.json" 2>/dev/null || echo none)" = "$K_CFG_BEFORE" ] \
+  || fail "sync/connect/disconnect из worktree переписали живой конфиг"
+grep -q "живой конфиг хаба собрался бы из шаблона копии worktree" "$TMP/k-sync.out" || fail "sync из worktree не назвал причину"
 env -u MCP_HUB_ALLOW_WORKTREE bash "$FAKE_WT/infra/scripts/dev-ai/mcp-hub.sh" status >"$TMP/k-status.out" 2>&1 || true
 grep -q "обслуживают основную папку $TMP/main" "$TMP/k-status.out" || fail "status из worktree не сказал, какую папку обслуживают"
-ok "start, restart и init из worktree — код 1 и «(cd <основная> && npm run mcp-hub:…)»; ничего не запущено"
+ok "start, restart, init, sync, connect и disconnect из worktree — код 1 и «(cd <основная> && npm run mcp-hub:…)»; ничего не запущено, живой конфиг не тронут"
 
 # ── л) бинарь serena ────────────────────────────────────────────────────────────────────────
 step "л) SERENA_BIN: serena хоста старой строкой uvx — усыновлена; serena-taibe — из бинаря; свои файлы не перезаписаны"
