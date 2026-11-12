@@ -11,7 +11,8 @@ personal-data scan.
 `publish` runs nothing the model wrote: it checks the data with `quality.check_cases`, `guard.check_antigens` and
 `guard.scan`, refuses what fails, and opens at most two PRs — data (cases, verdicts: may merge by itself) and
 antigens (genome: manual merge). Every commit carries the run's trailer and is recorded in `prs.json`, so `merge`
-touches only what this run made. Stdlib only.
+touches only what this run made. A cases file that an open evolve data PR already adds waits for that PR: the
+session does not get its queue row, and `publish` refuses it (SE-63). Stdlib only.
 """
 import fnmatch
 import json
@@ -53,7 +54,7 @@ def session_command(prompt):
 def build_input(wt, report, base):
     """The session's whole view of the night, scrubbed."""
     judged = [v for t in report.get('targets', {}).values() for v in t.get('judged', [])]
-    queue = [q for q in report.get('queue', []) if q.get('target') == 'taibe'][:MAX_QUEUE]
+    queue = [q for q in report.get('queue', []) if q.get('target') == 'taibe' and not q.get('waits')][:MAX_QUEUE]
     for q in queue:
         q['text'] = guard.scrub(g.file_at(wt, 'HEAD', q['path']) or '')
         q['diff'] = guard.scrub(g.git(wt, 'diff', q['since'], q['head'], '--', q['path'], check=False) or '')[:20000]
@@ -158,12 +159,17 @@ def cmd_publish(args):
     dirty = [ln[3:] for ln in (g.git(wt, 'status', '--porcelain', '--untracked-files=all') or '').splitlines()]
     rows, files = [], {'data': {}, 'antigens': {}}
     run_ids = {v.get('id') for t in report.get('targets', {}).values() for v in t.get('judged', [])}
+    open_cases = g.open_data_cases(repo, steps.BASE) if any(fnmatch.fnmatchcase(p, CASES) for p in dirty) else {}
     for p in dirty:
         kind = 'data' if p == VERDICTS or fnmatch.fnmatchcase(p, CASES) else \
             'antigens' if p in (ANTIGENS, ANTIGEN_CASES) else None
         if kind is None:
             if not p.startswith('eval/evolve/.session/'):
                 rows.append({'not_published': p, 'why': 'outside what the run publishes'})
+            continue
+        waits = cases_wait(p, open_cases)
+        if waits:
+            rows.append({'refused': p, 'why': waits})
             continue
         with open(os.path.join(wt, p), encoding='utf-8') as f:
             text = f.read()
@@ -200,6 +206,18 @@ def cmd_publish(args):
         rows.append({'pr': url, 'kind': kind})
     print(json.dumps(rows, ensure_ascii=False, indent=1))
     return 0
+
+
+def cases_wait(path, open_cases):
+    """Why a cases file is not published now (SE-63), or ''. An open evolve data PR already adds this file: a second
+    PR would conflict with it, and merged together they would double the cases. `open_cases` None — GitHub did not
+    answer, closed on doubt."""
+    if not fnmatch.fnmatchcase(path, CASES):
+        return ''
+    if open_cases is None:
+        return 'GitHub did not list the open evolve PRs — cases are not published on doubt'
+    pr = open_cases.get(os.path.basename(path))
+    return 'its cases wait for the merge of PR #%s' % pr if pr else ''
 
 
 def antigen_problems(wt, head, changed):

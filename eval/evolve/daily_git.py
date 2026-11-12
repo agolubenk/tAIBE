@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 
 DATA_PATHS = ('eval/evolve/cases/*.jsonl', 'eval/evolve/verdicts.jsonl')
 REVERT_PATHS = ('.claude/skills/*/SKILL.md', 'eval/prompts/*.md', 'eval/prompts/*/*.md')
@@ -29,6 +30,9 @@ MANUAL_ONLY = ('eval/prompts/lens-*', '*.py', '*.sh', '.claude/rules/*', '*CLAUD
 BRANCH_PREFIX = 'evolve/'
 TRAILER = 'Evolve-Run: '
 MAX_MERGE_FILES = 12
+OPEN_PRS_LIMIT = 50       # SE-63: `gh pr list --limit`; a full list may hide an evolve PR — closed on doubt
+OPEN_PRS_TRIES = 3        # one call and two retries before «GitHub did not answer»
+OPEN_PRS_PAUSE_S = 5
 
 
 def git(repo, *args, env=None, check=True, data=None):
@@ -120,6 +124,33 @@ def gh(repo, *args, check=True):
     if check and out.returncode != 0:
         raise RuntimeError('gh %s: %s' % (' '.join(args[:3]), (out.stderr or out.stdout).strip()[:300]))
     return out.stdout
+
+
+def open_data_cases(repo, base, sleep=time.sleep):
+    """{cases file name: PR number} for the open evolve data PRs (SE-63). Their cases wait for the merge: a new run
+    that wrote them again would open a PR that conflicts with them. None when GitHub does not answer after
+    `OPEN_PRS_TRIES` calls, or the list is full (`OPEN_PRS_LIMIT` rows may hide one) — closed on doubt: the caller
+    writes and publishes no cases that night."""
+    prs = None
+    for attempt in range(OPEN_PRS_TRIES):
+        try:
+            prs = json.loads(gh(repo, 'pr', 'list', '--base', base, '--state', 'open', '--limit',
+                                str(OPEN_PRS_LIMIT), '--json', 'number,headRefName,files') or '[]')
+            break
+        except (RuntimeError, OSError, ValueError):
+            if attempt + 1 < OPEN_PRS_TRIES:
+                sleep(OPEN_PRS_PAUSE_S)
+    if prs is None or len(prs) >= OPEN_PRS_LIMIT:
+        return None
+    found = {}
+    for pr in sorted(prs, key=lambda p: p.get('number') or 0):
+        if not str(pr.get('headRefName') or '').startswith(BRANCH_PREFIX + 'data-'):
+            continue
+        for f in pr.get('files') or []:
+            path = str(f.get('path') or '')
+            if fnmatch.fnmatchcase(path, DATA_PATHS[0]) and path.count('/') == DATA_PATHS[0].count('/'):
+                found.setdefault(os.path.basename(path), pr['number'])
+    return found
 
 
 def blob_of(repo, rev, path):
