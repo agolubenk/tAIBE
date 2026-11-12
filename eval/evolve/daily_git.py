@@ -122,6 +122,26 @@ def gh(repo, *args, check=True):
     return out.stdout
 
 
+def open_data_cases(repo, base):
+    """{cases file name: PR number} for the open evolve data PRs (SE-63). Their cases wait for the merge: a new run
+    that wrote them again would open a PR that conflicts with them. None when GitHub does not answer (closed on
+    doubt: the caller writes no cases that night)."""
+    try:
+        prs = json.loads(gh(repo, 'pr', 'list', '--base', base, '--state', 'open', '--limit', '50',
+                            '--json', 'number,headRefName,files') or '[]')
+    except (RuntimeError, OSError, ValueError):
+        return None
+    found = {}
+    for pr in sorted(prs, key=lambda p: p.get('number') or 0):
+        if not str(pr.get('headRefName') or '').startswith(BRANCH_PREFIX + 'data-'):
+            continue
+        for f in pr.get('files') or []:
+            path = str(f.get('path') or '')
+            if fnmatch.fnmatchcase(path, DATA_PATHS[0]) and path.count('/') == DATA_PATHS[0].count('/'):
+                found.setdefault(os.path.basename(path), pr['number'])
+    return found
+
+
 def blob_of(repo, rev, path):
     out = git(repo, 'rev-parse', '--verify', '--quiet', '%s:%s' % (rev, path), check=False)
     return (out or '').strip() or None

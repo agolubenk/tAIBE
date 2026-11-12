@@ -57,6 +57,7 @@ TARGETS = {
 AB_KINDS = ('skill', 'rule', 'agent', 'command', 'prompt', 'card')  # text instructions; hooks and genome are code
 NIGHT = (3, 8)            # a scheduled run spends model time only between 03:00 and 08:00 local
 DEADLINE_MIN = 180        # judging stops after 3 hours; what is left waits for the next night
+UNKNOWN_PRS = 'open evolve PRs unknown'  # `waits` of a queue row when GitHub did not answer (SE-63)
 
 
 def cases_path(path, cases_dir=os.path.join(HERE, 'cases')):
@@ -327,6 +328,7 @@ def cmd_run(args):
                              'judged': done}
         report['targets'][target] = t
     report['budget'] = args.budget.report()
+    mark_waiting(queue, g.open_data_cases(repo, steps.BASE) if queue else {})
     report['queue'] = queue
     report['finished'] = now().isoformat(timespec='seconds')
     report['summary'] = summary(report)
@@ -339,13 +341,36 @@ def cmd_run(args):
     return 0
 
 
+def mark_waiting(queue, open_cases):
+    """SE-63: a queue row whose cases file an open evolve data PR already adds gets `waits` — the session skips it
+    until that PR is merged (its file then exists, and the row leaves the queue) or closed (the row is free again).
+    `open_cases` None (GitHub did not answer): every row waits, closed on doubt."""
+    for q in queue:
+        name = os.path.basename(q['cases'])
+        if open_cases is None:
+            q['waits'] = UNKNOWN_PRS
+        elif name in open_cases:
+            q['waits'] = 'PR #%s' % open_cases[name]
+        else:
+            q.pop('waits', None)
+
+
 def summary(report):
     counts = {}
     for t in report['targets'].values():
         for v in t.get('judged', []):
             counts[v['status']] = counts.get(v['status'], 0) + 1
     shown = ', '.join('%s %d' % kv for kv in sorted(counts.items())) or 'nothing changed with cases'
-    return 'evolve %s: A/B %s; cases needed for %d artifacts' % (report['date'], shown, len(report.get('queue', [])))
+    queue = report.get('queue', [])
+    waiting = [q['waits'] for q in queue if q.get('waits')]
+    if not waiting:
+        tail = ''
+    elif UNKNOWN_PRS in waiting:  # one run marks every row the same way (mark_waiting)
+        tail = '; cases of %d wait: GitHub did not list the open evolve PRs' % len(waiting)
+    else:
+        tail = '; cases of %d wait for the merge of %s' % (len(waiting), ', '.join(sorted(set(waiting))))
+    return 'evolve %s: A/B %s; cases needed for %d artifacts%s' % (report['date'], shown,
+                                                                    len(queue) - len(waiting), tail)
 
 
 def merge_switch(root):
