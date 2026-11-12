@@ -24,6 +24,9 @@ export type SyncDeps = {
 };
 
 const RESTORED_STATUS = "planned";
+const CLAIM_GRACE_MS = 2 * 60 * 1000;
+// itemId → first pass that found a claimed item missing (per process).
+const missingSince = new Map<string, number>();
 const OWN_STATUS_NOTE = "Статус этого пункта ведёт только t-boards.";
 
 async function itemData(deps: SyncDeps, row: ApprovalRow) {
@@ -133,7 +136,17 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
   if (!itemId) return;
   const item = await deps.client.get("items", itemId);
   if (!item) {
-    // Deleted by the owner: the next pass puts a fresh item.
+    // No version saved yet: another instance claimed the item and is still
+    // writing it (AC-23). Only a claim missing for CLAIM_GRACE_MS is a crash
+    // between the claim and the write.
+    if (row.queueItemVersion === null) {
+      const now = deps.now().getTime();
+      const since = missingSince.get(itemId) ?? now;
+      missingSince.set(itemId, since);
+      if (now - since < CLAIM_GRACE_MS) return;
+    }
+    missingSince.delete(itemId);
+    // Deleted by the owner, or never written: the next pass puts a fresh item.
     await releaseClaim(row.id, itemId);
     await journalQueue(
       row.workspaceId,

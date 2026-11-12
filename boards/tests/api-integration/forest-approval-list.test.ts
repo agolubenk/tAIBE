@@ -25,6 +25,7 @@ describe("API integration: approval list targets", () => {
       targetId: alphaChild.id,
       value: "done",
       reason: "finished",
+      doneRef: "https://github.com/agolubenk/tAIBE/pull/1",
     });
     const fellSector = await forest.agent("/approvals", {
       action: "fell_sector",

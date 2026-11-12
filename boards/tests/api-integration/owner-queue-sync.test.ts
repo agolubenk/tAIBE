@@ -1,0 +1,260 @@
+import { and, eq } from "drizzle-orm";
+import { beforeEach, describe, expect, it } from "vite-plus/test";
+import db, { schema } from "../../apps/api/src/database";
+import {
+  agentJournalTable,
+  ownerApprovalTable,
+} from "../../apps/api/src/database/forest-schema";
+import type { OwnerQueueConfig } from "../../apps/api/src/forest/owner-queue/queue-config";
+import {
+  type SyncDeps,
+  syncPass,
+} from "../../apps/api/src/forest/owner-queue/sync-pass";
+import { resetTestDatabase } from "./helpers/database";
+import { FakeQueue } from "./helpers/fake-queue";
+import { addTask, createForest } from "./helpers/forest";
+
+const TOKEN = "t-boards";
+type Forest = Awaited<ReturnType<typeof createForest>>;
+
+function setup(forest: Forest) {
+  const queue = new FakeQueue();
+  const config: OwnerQueueConfig = {
+    url: "http://queue.test",
+    tokenFile: "/dev/null",
+    tokenName: TOKEN,
+    products: new Map([[forest.workspace.id, "hr-helper"]]),
+  };
+  const deps: SyncDeps = {
+    client: queue.as(TOKEN),
+    config,
+    now: () => new Date(),
+  };
+  return { queue, deps };
+}
+
+async function requestClose(forest: Forest, taskId: string) {
+  const res = await forest.agent("/approvals", {
+    action: "close_task",
+    targetId: taskId,
+    value: "done",
+    reason: "агент: готово",
+    doneRef: "https://github.com/agolubenk/tAIBE/pull/132",
+  });
+  expect(res.status).toBe(200);
+  return String(res.body.id);
+}
+
+async function approval(id: string) {
+  const [row] = await db
+    .select()
+    .from(ownerApprovalTable)
+    .where(eq(ownerApprovalTable.id, id));
+  return row;
+}
+
+async function taskStatus(id: string) {
+  const [row] = await db
+    .select({ status: schema.taskTable.status })
+    .from(schema.taskTable)
+    .where(eq(schema.taskTable.id, id));
+  return row?.status;
+}
+
+async function journal(action: string, targetId: string) {
+  return db
+    .select()
+    .from(agentJournalTable)
+    .where(
+      and(
+        eq(agentJournalTable.action, action),
+        eq(agentJournalTable.targetId, targetId),
+      ),
+    );
+}
+
+describe("API integration: owner-queue sync (TB-102)", () => {
+  beforeEach(resetTestDatabase);
+
+  it("puts the item, applies «Да» from the queue once and shows the outcome (AC-1, AC-2, AC-4)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+
+    await syncPass(deps);
+    const [itemId] = queue.itemIds();
+    expect(itemId).toMatch(new RegExp(`^d-tba-${id}-[a-z0-9]{6}$`));
+    const item = queue.doc("items", itemId as string);
+    expect(item?.data).toMatchObject({ kind: "decision", source: "t-boards" });
+    expect(String(item?.data.body)).toContain("Текст агента:\nагент: готово");
+    expect(String(item?.data.body)).toContain("pull/132");
+
+    await queue
+      .as("owner")
+      .patch("checks", itemId as string, { done: true, choice: "yes" });
+    await syncPass(deps);
+    await syncPass(deps);
+
+    expect((await approval(id))?.status).toBe("consumed");
+    expect((await approval(id))?.decidedVia).toBe("queue");
+    expect(await taskStatus(task.id)).toBe("done");
+    expect(await journal("approval.applied", task.id)).toHaveLength(1);
+    const [approved] = await journal("approval.approved", task.id);
+    expect(approved?.detail).toContain("via=queue by=owner");
+    expect(queue.doc("checks", itemId as string)?.data).toMatchObject({
+      agentStatus: "done",
+    });
+  });
+
+  // Gate (3), AC-23: the creation is claimed by a conditional update.
+  it("puts exactly one item when two instances run the pass at once (AC-23)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+
+    await Promise.all([syncPass(deps), syncPass({ ...deps })]);
+
+    expect(queue.itemIds()).toHaveLength(1);
+    expect((await approval(id))?.queueItemId).toBe(queue.itemIds()[0]);
+  });
+
+  // Gate (2), AC-22: a foreign write to a pending item is undone.
+  it("restores its text after a foreign edit and keeps waiting (AC-22)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+    await syncPass(deps);
+    const itemId = queue.itemIds()[0] as string;
+    const original = queue.doc("items", itemId)?.data;
+
+    await queue
+      .as("other-agent")
+      .patch("items", itemId, { archived: true, title: "Закрыть всё" });
+    await syncPass(deps);
+
+    const restored = queue.doc("items", itemId);
+    expect(restored?.data.archived).toBe(false);
+    expect(restored?.data.title).toBe(original?.title);
+    expect((await approval(id))?.queueItemVersion).toBe(restored?.version);
+    expect((await approval(id))?.status).toBe("pending");
+    expect(await journal("queue.foreign_edit", id)).toHaveLength(1);
+
+    // After the restore the owner's «Да» counts again.
+    await queue
+      .as("owner")
+      .patch("checks", itemId, { done: true, choice: "yes" });
+    await syncPass(deps);
+    expect((await approval(id))?.status).toBe("consumed");
+  });
+
+  // Gate (1), AC-5 and AC-22: the version decides, the writer is the second check.
+  it("does not apply «Да» to an item someone else changed (AC-5)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+    await syncPass(deps);
+    const itemId = queue.itemIds()[0] as string;
+
+    await queue.as("other-agent").patch("items", itemId, { title: "Подмена" });
+    await queue
+      .as("owner")
+      .patch("checks", itemId, { done: true, choice: "yes" });
+    await syncPass(deps);
+
+    const row = await approval(id);
+    expect(row?.status).toBe("failed");
+    expect(row?.failReason).toBe("queue_item_changed");
+    expect(await taskStatus(task.id)).toBe("to-do");
+    expect(queue.doc("checks", itemId)?.data.agentStatus).toBe("blocked");
+  });
+
+  it("refuses «Да» when only the writer differs, with the same version (R-4)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+    await syncPass(deps);
+    const itemId = queue.itemIds()[0] as string;
+    // Same version as stored, but the journal names another writer.
+    const log = queue.events.get(`items/${itemId}`);
+    if (log?.[0]) log[0].actor = "other-agent";
+
+    await queue
+      .as("owner")
+      .patch("checks", itemId, { done: true, choice: "yes" });
+    await syncPass(deps);
+
+    expect((await approval(id))?.failReason).toBe("queue_item_changed");
+    expect(await taskStatus(task.id)).toBe("to-do");
+  });
+
+  it("puts back an agent status it did not write (AC-20)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+    await syncPass(deps);
+    const itemId = queue.itemIds()[0] as string;
+
+    await queue
+      .as("other-agent")
+      .patch("checks", itemId, { agentStatus: "done" });
+    await syncPass(deps);
+
+    expect(queue.doc("checks", itemId)?.data.agentStatus).toBe("planned");
+    expect(await journal("queue.foreign_status", id)).toHaveLength(1);
+    expect((await approval(id))?.status).toBe("pending");
+  });
+
+  it("refuses a close without doneRef or with a foreign link, before any item (AC-12, AC-21)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    for (const extra of [
+      {},
+      { doneRef: "https://github.com/someone/else/pull/1" },
+      { doneRef: "https://evil.test/agolubenk/tAIBE/pull/1" },
+    ]) {
+      const res = await forest.agent("/approvals", {
+        action: "close_task",
+        targetId: task.id,
+        value: "done",
+        reason: "x",
+        ...extra,
+      });
+      expect(res.status).toBe(400);
+    }
+    await syncPass(deps);
+    expect(queue.itemIds()).toHaveLength(0);
+  });
+
+  it("archives the item of a request decided in t-boards; a late «Да» changes nothing (AC-9, AC-15)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Card");
+    const { queue, deps } = setup(forest);
+    const id = await requestClose(forest, task.id);
+    await syncPass(deps);
+    const itemId = queue.itemIds()[0] as string;
+
+    const decided = await forest.owner(`/approvals/${id}/decide`, {
+      decision: "rejected",
+    });
+    expect(decided.body.status).toBe("rejected");
+    await queue
+      .as("owner")
+      .patch("checks", itemId, { done: true, choice: "yes" });
+    await syncPass(deps);
+
+    expect((await approval(id))?.status).toBe("rejected");
+    expect(await taskStatus(task.id)).toBe("to-do");
+    expect(queue.doc("items", itemId)?.data.archived).toBe(true);
+    expect(String(queue.doc("checks", itemId)?.data.agentNote)).toContain(
+      "Уже решено",
+    );
+    expect(await journal("approval.late_answer", id)).toHaveLength(1);
+  });
+});
