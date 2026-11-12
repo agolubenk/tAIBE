@@ -83,6 +83,7 @@ environment variables (N-007).
 | `settings_key` | 0400, owner 1001. Seals the notebook model key an instance admin saves in the settings |
 | `notion_token` | 0400, owner 1001. Optional: the owner puts it there |
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
+| `oq_token` | 0400, owner 1001. The owner-queue agent token of t-boards (TB-102, «Owner queue» below). The owner issues it in the ops-console; `install.sh` never makes it. Read on every call |
 | `claude_mem_proxy_token` | 0400, owner 1001. The Mac memory proxy token (OPS-19). The Mac owns it: `mac/memory-agent.sh token` makes it, `mac/memory-token-push.sh` delivers it. `install.sh` never makes it and warns while it is missing. The app reads it on every request |
 
 `install.sh` generates the first three once and never overwrites them. The database password only takes effect when the
@@ -132,6 +133,23 @@ the HR Helper / Lavaeon product, which `install.sh` creates. By default it lists
 database shared with the integration (… → Connections in Notion) is looked up on each run and mirrored after them.
 If the connect form refuses a database, it now names it: open that database in Notion → ⋯ → Connections and add the
 integration. A wrong token gets its own message.
+
+## Owner queue (TB-102)
+
+t-boards puts every pending «да» request into the owner queue (ops-console) as an item `d-tba-<id>-<nonce>` and
+applies the owner's answer itself. It is off until all four are set:
+
+1. In the ops-console, issue an agent token named `t-boards` (scope `agent`, products `hr-helper`). The name is
+   `OQ_TOKEN_NAME`: an item whose last writer has another name is treated as edited by someone else (R-4).
+2. Put the token into `/opt/t-boards/secrets/oq_token` (0400, owner 1001), never on the command line:
+   `install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/oq_token`, then paste and Ctrl-D.
+3. Add to `/opt/t-boards/.env`: `OQ_URL=https://ops.admin.hrhelper.space`, `OQ_TOKEN_NAME=t-boards`,
+   `OQ_WORKSPACE_PRODUCTS=<workspaceId>=hr-helper,<workspaceId>=hr-helper` (Lavaeon and aiBoards&eval; a workspace not
+   listed gets no items, only the t-boards UI).
+4. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
+
+`install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
+While it is off, the journal has one `queue.skip` row per start and «да» works in the t-boards UI.
 
 ## Products
 

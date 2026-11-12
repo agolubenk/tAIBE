@@ -165,6 +165,15 @@ export async function taskKeys(approval: ApprovalRow): Promise<string[]> {
   });
 }
 
+export async function stillPending(approvalId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ status: ownerApprovalTable.status })
+    .from(ownerApprovalTable)
+    .where(eq(ownerApprovalTable.id, approvalId))
+    .limit(1);
+  return row?.status === "pending";
+}
+
 export async function workspaceName(workspaceId: string) {
   const [row] = await db
     .select({ name: workspaceTable.name })

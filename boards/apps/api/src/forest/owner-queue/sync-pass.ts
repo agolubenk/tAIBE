@@ -14,6 +14,7 @@ import {
   pendingWithoutItem,
   releaseClaim,
   saveItemState,
+  stillPending,
   taskKeys,
   workspaceName,
 } from "./sync-store";
@@ -93,6 +94,9 @@ async function restoreItem(
   itemId: string,
   item: QueueDoc,
 ) {
+  // The request may have been decided in t-boards since this pass read it
+  // (Control r1, F2): a decided request's item is never put back.
+  if (!(await stillPending(row.id))) return;
   const doc = await deps.client.put(
     "items",
     itemId,

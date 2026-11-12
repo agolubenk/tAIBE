@@ -137,7 +137,7 @@ async function apply(item: StuckPlan, runId: string) {
       if (!row) return;
       await setHistoryActor(tx, actor.id);
       const outcome = await runApprovalAction(tx, row, actor);
-      for (const step of outcome.steps) {
+      for (const [index, step] of outcome.steps.entries()) {
         await writeJournal(
           {
             workspaceId: row.workspaceId,
@@ -146,7 +146,7 @@ async function apply(item: StuckPlan, runId: string) {
             targetType: step.targetType,
             targetId: step.targetId,
             outcome: "allowed",
-            detail: `approval ${row.id} ${row.action} ${step.field}: ${step.from ?? "∅"} → ${step.to ?? "∅"} run=${runId} migration`,
+            detail: `approval ${row.id} ${row.action} ${step.field}: ${step.from ?? "∅"} → ${step.to ?? "∅"} step=${index} run=${runId} migration`,
           },
           tx,
         );
@@ -184,8 +184,15 @@ export async function runStuck(plans: StuckPlan[], runId: string) {
 
 class RevertSkip extends Error {}
 
+// «step» orders the steps of one request: they share one transaction and so
+// one journal time (Control r1, F4).
 const APPLIED =
-  /^approval (\S+) (\S+) (status|priority): (.+) → (.+) run=(\S+) migration$/;
+  /^approval (\S+) (\S+) (status|priority): (.+) → (.+) step=(\d+) run=(\S+) migration$/;
+const STEP = / step=(\d+) run=/;
+
+function stepOf(detail: string | null): number {
+  return Number(STEP.exec(detail ?? "")?.[1] ?? 0);
+}
 
 // --revert <runId>: a step goes back only while the card still holds its
 // «стало» and nobody touched the card after the migration.
@@ -202,7 +209,13 @@ export async function revertRun(runId: string) {
     .orderBy(asc(agentJournalTable.createdAt))
     .limit(1000);
   const report: string[] = [];
-  for (const entry of rows.reverse()) {
+  // Newest first; within one request (one journal time) the later step first.
+  const ordered = [...rows].sort(
+    (a, b) =>
+      b.createdAt.getTime() - a.createdAt.getTime() ||
+      stepOf(b.detail) - stepOf(a.detail),
+  );
+  for (const entry of ordered) {
     const match = APPLIED.exec(entry.detail ?? "");
     if (!match) {
       // Grants (labels, assignee) are not undone here: name them.
