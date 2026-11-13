@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
-import { getMemoryReader } from "./memory-reader";
+import { getMemoryReader, memoryRoots } from "./memory-reader";
 
 const TOKEN = "synthetic-proxy-token-for-tests-only-111111";
 const KEYS = [
@@ -59,5 +59,29 @@ describe("getMemoryReader and the proxy token", () => {
 
     expect(fresh.stale).toBe(false);
     expect(seen).toEqual([TOKEN, undefined]);
+  });
+});
+
+// CLAUDE_MEM_PROJECTS (TB-58): the pair list of OQ_WORKSPACE_PRODUCTS; a
+// workspace that is not on it gets no roots, so its cards read nothing.
+describe("memoryRoots", () => {
+  const env = {
+    CLAUDE_MEM_PROJECTS:
+      " ws-a = tAIBE , ws-b=HR_Helper-v2| HR_Helper-v2-old ,broken, =tAIBE, ws-c=",
+  };
+
+  it("gives each workspace its own roots", () => {
+    expect(memoryRoots("ws-a", env)).toEqual(["tAIBE"]);
+    expect(memoryRoots("ws-b", env)).toEqual([
+      "HR_Helper-v2",
+      "HR_Helper-v2-old",
+    ]);
+  });
+
+  it("gives no roots to a workspace that is not on the list or has none", () => {
+    expect(memoryRoots("ws-c", env)).toEqual([]);
+    expect(memoryRoots("ws-z", env)).toEqual([]);
+    expect(memoryRoots("", env)).toEqual([]);
+    expect(memoryRoots("ws-a", {})).toEqual([]);
   });
 });

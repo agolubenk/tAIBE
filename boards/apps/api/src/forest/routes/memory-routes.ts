@@ -9,7 +9,7 @@ import { requireWorkspacePermission } from "../../utils/require-workspace-permis
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { loadCardBinding } from "../memory/card-binding";
 import { findCardMemory } from "../memory/find-card-memory";
-import { getMemoryReader, memoryProject } from "../memory/memory-reader";
+import { getMemoryReader, memoryRoots } from "../memory/memory-reader";
 import { assertTaskInWorkspace } from "../task-scope";
 import { cardParam } from "./card-schema";
 import { cardMemorySchema } from "./memory-schema";
@@ -21,7 +21,7 @@ const getMemoryRoute = createRoute({
   tags: ["Forest"],
   summary: "List claude-mem observations about a card",
   description:
-    "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Read-only; when the worker is down the last copy is returned and marked stale.",
+    "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Only the workspace's own claude-mem projects are read (CLAUDE_MEM_PROJECTS); a workspace without them gets available: false, reason no-product-map. Read-only; when the worker is down the last copy is returned and marked stale.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["read"] }),
@@ -42,7 +42,7 @@ export const memoryRoutes = apiRouter<
   const memory = await findCardMemory(
     getMemoryReader(),
     await loadCardBinding(taskId),
-    { project: memoryProject() },
+    memoryRoots(workspaceId),
   );
   return c.json(memory, 200);
 });

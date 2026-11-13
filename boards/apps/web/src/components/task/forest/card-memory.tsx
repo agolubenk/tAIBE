@@ -37,7 +37,9 @@ export function CardMemory({
   if (!data.available) {
     return (
       <p className="px-2 py-1 text-muted-foreground text-xs">
-        {t("tasks:card.memory.unavailable")}
+        {data.reason === "no-product-map"
+          ? t("tasks:card.memory.noProductMap")
+          : t("tasks:card.memory.unavailable")}
       </p>
     );
   }
