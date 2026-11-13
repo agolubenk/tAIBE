@@ -151,6 +151,20 @@ applies the owner's answer itself. It is off until all four are set:
 `install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
 While it is off, the journal has one `queue.skip` row per start and «да» works in the t-boards UI.
 
+## Agents' MCP on the Mac (TB-105)
+
+The agents reach t-boards through the MCP hub on the Mac. The hub runs `boards/packages/mcp/dist` of the main tAIBE
+checkout (`infra/scripts/dev-ai/mcp-t-boards.sh`), not the image. A delivery updates only the server. If the delivery
+changes `boards/packages/mcp` (a new tool or field), do this after it on the Mac:
+
+1. `git pull` in the main tAIBE checkout, then `(cd boards/packages/mcp && pnpm run build)`.
+2. Restart the t-boards child of the hub: `pkill -TERM -f 'node <tAIBE>/boards/packages/mcp/dist/index.js'`. The hub
+   starts it again in a few seconds. Other hub servers keep running.
+3. Sessions with a cached tool schema reconnect the hub (`/mcp`).
+
+`npm run mcp-hub:status` and `mcp-hub:check` warn when the source is newer than the build or the running process is
+older than the build. On 12.11 a stale build dropped `doneRef`, and no agent could request `close_task`.
+
 ## Products
 
 `install.sh` seeds three products owned by the admin: HR Helper / Lavaeon, aiBoards&eval and Financial terminal.

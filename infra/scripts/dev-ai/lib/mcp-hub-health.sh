@@ -55,6 +55,32 @@ sys.exit(0 if ok else 1)
 PY
 }
 
+# t-boards в хабе — stdio-сервер из boards/packages/mcp/dist основной папки (mcp-t-boards.sh). Сборку после мёржа никто
+# не обновляет, а выкладка t-boards меняет только сервер (TB-105: 12.11 агенты не могли запросить close_task — в сборке
+# 04.11 не было doneRef). Предупреждение, не ошибка: хаб работает, устарели только схемы инструментов t-boards.
+boards_mcp_warnings() {
+  local pkg="$SERVE_ROOT/boards/packages/mcp" entry newer pid etime days secs started built
+  entry="$pkg/dist/index.js"
+  [ -f "$entry" ] || return 0
+  newer="$(find "$pkg/src" "$SERVE_ROOT/boards/packages/agent-format/src" -type f -newer "$entry" 2>/dev/null | head -1 || true)"
+  if [ -n "$newer" ]; then
+    echo "  ⚠ t-boards: исходник новее сборки (${newer#"$SERVE_ROOT"/}) — (cd $pkg && pnpm run build), затем перезапуск t-boards в хабе"
+  fi
+  pid="$(pgrep -f "node $entry" 2>/dev/null | head -1 || true)"
+  [ -n "$pid" ] || return 0
+  # etime: [[дд-]чч:]мм:сс — без lstart, который зависит от локали.
+  etime="$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  [ -n "$etime" ] || return 0
+  days=0
+  case "$etime" in *-*) days="${etime%%-*}" etime="${etime#*-}" ;; esac
+  secs="$(printf '%s\n' "$etime" | awk -F: '{s = 0; for (i = 1; i <= NF; i++) s = s * 60 + $i; print s}')"
+  started=$(($(date +%s) - days * 86400 - secs))
+  built="$(python3 -I -c 'import os, sys; print(int(os.path.getmtime(sys.argv[1])))' "$entry" 2>/dev/null || echo 0)"
+  if [ "$started" -lt "$((built - 5))" ]; then
+    echo "  ⚠ t-boards: процесс pid $pid старше сборки — перезапуск: pkill -TERM -f 'node $entry' (хаб поднимет его сам)"
+  fi
+}
+
 cmd_status() {
   local kind pid port tty root listener problem kinds
   if [ "$ROOT" != "$SERVE_ROOT" ]; then echo "  (общие хаб и serena обслуживают основную папку $SERVE_ROOT)"; fi
@@ -93,6 +119,7 @@ cmd_status() {
   done
   # shellcheck disable=SC2086 # список экземпляров
   probe_http $kinds || true
+  boards_mcp_warnings
   # По серверам, а не текстом: хост расходится — подсказка с TAIBE_HOST_ROOT, иначе — что sync перепишет.
   if [ -f "$CONFIG_DIR/mcp.json" ]; then
     render_config drift --live "$CONFIG_DIR/mcp.json" 2>&1 | sed 's/^/  /' \
@@ -132,6 +159,7 @@ cmd_check() {
   done
   # shellcheck disable=SC2046 # список экземпляров
   probe_http $(serena_kinds_on) || rc=1
+  boards_mcp_warnings
   return "$rc"
 }
 
