@@ -54,6 +54,18 @@
             "if": "Bash(make check-boards*)",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-wt-deps.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "if": "Bash(git worktree add*)",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-wt-limit.sh\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "if": "Bash(git -C * worktree add*)",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-wt-limit.sh\"",
+            "timeout": 10
           }
         ]
       },

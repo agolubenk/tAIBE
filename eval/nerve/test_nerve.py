@@ -390,6 +390,49 @@ class GithubPollTest(unittest.TestCase):
         sources.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
         self.assertEqual(self.kinds().count(("pr.closed", "#457 влит")), 1)
 
+    def test_merged_pr_removes_its_worktree_and_reports_kept_ones(self):
+        """OPS-52: ветка PR запоминается из списка открытых; после «влит» — wt_gc.py branch по repo_root продукта."""
+        pr = _pr(460, "c" * 40)
+        pr["head"]["ref"] = "fix/done"
+        sources.run = FakeGh([pr])
+        sources.poll_github(self.ctx)
+        self.assertEqual(self.ctx.state["github"]["prs"]["460"]["branch"], "fix/done")
+        gc_calls = []
+        fake = FakeGh([], etag='W/"e2"', merged={460})
+
+        def run(cmd, stdin=None, timeout=30):
+            if cmd[2:4] == [sources.WT_GC, "branch"]:
+                gc_calls.append(cmd)
+                return 0, json.dumps([{"path": "/r/worktrees/fix/done", "branch": "fix/done", "removed": True},
+                                      {"path": "/r/x", "branch": "fix/done", "removed": False, "reason": "незакоммиченные изменения: 2"}]), ""
+            return fake(cmd, stdin, timeout)
+        sources.run = run
+        sources.poll_github(self.ctx)
+        self.assertEqual([c[4:6] for c in gc_calls], [[self.ctx.cfg["repo_root"], "fix/done"]])
+        recs = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "wt.gc"]
+        self.assertEqual([(e["to"], e["text"]) for e in recs], [
+            ([], "#460: worktree /r/worktrees/fix/done удалён"),
+            (["coord"], "#460 влит, worktree /r/x оставлен — незакоммиченные изменения: 2")])
+
+    def test_closed_unmerged_pr_and_gc_failure_do_not_break_the_pass(self):
+        pr = _pr(461, "d" * 40)
+        pr["head"]["ref"] = "fix/dropped"
+        sources.run = FakeGh([pr])
+        sources.poll_github(self.ctx)
+        fake = FakeGh([], etag='W/"e2"')  # закрыт без мёржа — уборки нет
+        sources.run = fake
+        sources.poll_github(self.ctx)
+        self.assertFalse([c for c in fake.calls if sources.WT_GC in c])
+        pr = _pr(462, "e" * 40)
+        pr["head"]["ref"] = "fix/boom"
+        sources.run = FakeGh([pr], etag='W/"e3"')
+        sources.poll_github(self.ctx)
+        fake = FakeGh([], etag='W/"e4"', merged={462})
+        sources.run = lambda cmd, stdin=None, timeout=30: (1, "", "timeout") if sources.WT_GC in cmd else fake(cmd, stdin, timeout)
+        sources.poll_github(self.ctx)
+        self.assertNotIn("462", self.ctx.state["github"]["prs"])
+        self.assertIn(("wt.gc", "#462: уборка worktree fix/boom не удалась: timeout"), self.kinds())
+
     def test_stuck_open_pr_without_author_is_resolved_after_upgrade(self):
         # rev 1 записывал head и updated до падения _gh_view: PR выглядел увиденным, но author и checks пусты.
         sha, upd = "9" * 40, "2026-11-04T10:00:00Z"

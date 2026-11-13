@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 
 import quorum
@@ -90,6 +91,8 @@ def poll_github(ctx):
         n = pr["number"]
         open_now.add(str(n))
         p = known.setdefault(str(n), {"head": "", "updated": "", "seen": [], "changes_by": []})
+        if (pr.get("head") or {}).get("ref"):
+            p["branch"] = pr["head"]["ref"]  # OPS-52: после мёржа — уборка worktree этой ветки
         # «author» — признак разобранного PR: в rev 1 head и updated писались до сбоя _gh_view (SE-40).
         if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"] and "author" in p:
             continue
@@ -115,10 +118,35 @@ def poll_github(ctx):
             continue
         word = "влит" if merged else "закрыт"
         ctx.emit(f"gh:closed:{n}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}", "github")
+        if merged and known[n].get("branch"):
+            _gc_worktree(ctx, n, known[n]["branch"])
         del known[n]
     # etag — только после чистого прохода: иначе 304 спрячет недоразобранные PR до следующего изменения списка.
     st["etag"] = "" if fails else etag
     _raise_fails(fails)
+
+
+WT_GC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "wt_gc.py")
+
+
+def _gc_worktree(ctx, n, branch):
+    """OPS-52 (решение владельца 13.11 «после мёржа»): worktree влитой ветки удаляется, если копия чистая, всё на
+    remote и в ней никто не работает (eval/tools/wt_gc.py). Удалён — запись в журнал без доставки; оставлен —
+    координатору с причиной. Сбой уборки не мешает проходу GitHub: PR уже снят, повтор — `wt_gc.py sweep`."""
+    try:
+        code, out, err = run([sys.executable, "-I", WT_GC, "branch", ctx.cfg["repo_root"], branch, "--json"], timeout=300)
+        res = json.loads(out) if code == 0 and out else None
+    except Exception as e:  # noqa: BLE001 — таймаут или сбой разбора: только запись
+        code, res, err = 1, None, str(e)
+    if res is None:
+        ctx.emit(f"wt:gc:{n}", "wt.gc", DIGEST, [], f"#{n}: уборка worktree {branch} не удалась: {(err or '')[:120]}", "github")
+        return
+    for r in res:
+        if r["removed"]:
+            ctx.emit(f"wt:gc:{n}:{r['path']}", "wt.gc", DIGEST, [], f"#{n}: worktree {r['path']} удалён", "github")
+        else:
+            ctx.emit(f"wt:gc:{n}:{r['path']}", "wt.gc", DIGEST, ["coord"],
+                     f"#{n} влит, worktree {r['path']} оставлен — {r['reason']}", "github")
 
 
 def _raise_fails(fails):
