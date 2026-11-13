@@ -125,6 +125,10 @@ export function approvalItemData({
     ],
     added: now.toISOString().slice(0, 10),
     source: "t-boards",
-    ...(approval.doneRef ? { links: [approval.doneRef] } : {}),
+    // The ops-console takes links as objects {href, text?} (store.ts httpsLink);
+    // a bare string fails the whole PUT with 422 and stops the sync pass (TB-109).
+    ...(approval.doneRef
+      ? { links: [{ href: approval.doneRef, text: "Журнал закрытых" }] }
+      : {}),
   };
 }
