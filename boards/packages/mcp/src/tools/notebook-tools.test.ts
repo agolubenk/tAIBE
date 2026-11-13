@@ -183,6 +183,7 @@ describe("notebook_ask", () => {
     const { isReadTool } = await import("./register-tool.js");
     expect(isReadTool("notebook_ask")).toBe(false);
     expect(isReadTool("notebook_brief")).toBe(false);
+    expect(isReadTool("notebook_add_source")).toBe(false);
   });
 });
 
@@ -239,5 +240,43 @@ describe("notebook_brief", () => {
     });
 
     expect(result.isError).toBe(true);
+  });
+});
+
+describe("notebook_add_source", () => {
+  it.each([
+    ["https://github.com/agolubenk/tAIBE/pull/170", "github-pr"],
+    ["agolubenk/tAIBE#170", "github-pr"],
+    ["https://opencode.ai/docs/agents", "link"],
+    ["https://github.com/agolubenk/tAIBE/blob/main/README.md", "link"],
+  ])("posts %s to the %s route", async (url, kind) => {
+    const { tool, json } = setupTool("notebook_add_source", {
+      sourceId: "s1",
+      kind,
+      ref: url,
+      title: "t",
+      changed: true,
+    });
+
+    const result = await tool.handler({ workspaceId: "ws", url });
+
+    expect(result.isError).toBe(false);
+    expect(json).toHaveBeenCalledWith(`/api/notebook/ws/sources/${kind}`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+  });
+
+  it("passes the API refusal through as an error", async () => {
+    const { tool, json } = setupTool("notebook_add_source");
+    json.mockRejectedValueOnce(new Error("HTTP 422 LINK_PRIVATE_DESTINATION"));
+
+    const result = await tool.handler({
+      workspaceId: "ws",
+      url: "https://10.0.0.1/x",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("LINK_PRIVATE_DESTINATION");
   });
 });
