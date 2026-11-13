@@ -13,15 +13,7 @@ import {
   TagIcon,
   SquarePlusIcon,
 } from "lucide-react";
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CustomFieldChip } from "@/components/custom-fields/custom-field-chip";
 import {
@@ -29,6 +21,8 @@ import {
   isCustomFieldValueEmpty,
 } from "@/components/custom-fields/missing-required-fields";
 import type { CustomFieldDefinition } from "@/components/project/custom-fields/types";
+import { lazyPart } from "@/components/ui/lazy-part";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -88,8 +82,9 @@ import { getInitialTaskColumn } from "./initial-task-column";
 
 // The rich-text editor (tiptap, ~200 KB gzip) loads when the modal first opens,
 // not with every page that can open it (TB-15: the cold board on 3G).
-const TaskDescriptionEditor = lazy(
+const TaskDescriptionEditor = lazyPart(
   () => import("@/components/task/task-description-editor"),
+  <Skeleton aria-hidden className="h-[200px] w-full" />,
 );
 
 type CreateTaskModalProps = {
@@ -800,18 +795,16 @@ function CreateTaskModalContent({
             />
 
             <div className="min-h-[200px]">
-              <Suspense fallback={null}>
-                <TaskDescriptionEditor
-                  key={editorVersion}
-                  value={description}
-                  onChange={setDescription}
-                  placeholder={t(
-                    "common:modals.createTask.descriptionPlaceholder",
-                  )}
-                  projectId={resolvedProjectId || undefined}
-                  uploadAsset={stageAsset}
-                />
-              </Suspense>
+              <TaskDescriptionEditor
+                key={editorVersion}
+                value={description}
+                onChange={setDescription}
+                placeholder={t(
+                  "common:modals.createTask.descriptionPlaceholder",
+                )}
+                projectId={resolvedProjectId || undefined}
+                uploadAsset={stageAsset}
+              />
             </div>
 
             {labels.length > 0 && (

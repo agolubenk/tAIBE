@@ -91,17 +91,14 @@ export default defineConfig({
     rolldownOptions: {
       output: {
         // TB-15: route code splitting left the board with ~215 requests, 160 of
-        // them under 2 KB gzip (single lucide icons, base-ui parts, TanStack
-        // internals, small query hooks). On HTTP/1.1 at 3G RTT each six of
-        // them cost a round trip. These groups merge only those families; the
-        // route chunks stay lazy. Numbers — docs/impl/impl-k6-measurements.md.
+        // them under 2 KB gzip. These groups merge TanStack internals and small
+        // shared modules of src; the route chunks stay lazy. Icons and base-ui
+        // stay split: as groups they win 0.26 s on the board over HTTP/2 but
+        // load every icon of the app on sign-in, cost a weak CPU up to 0.65 s
+        // there and re-download whole on any new icon.
+        // Numbers — docs/impl/impl-k6-measurements.md.
         codeSplitting: {
           groups: [
-            { name: "icons", test: /node_modules\/lucide-react\// },
-            {
-              name: "base-ui",
-              test: /node_modules\/@(base-ui|floating-ui)\//,
-            },
             {
               name: "tanstack",
               test: /node_modules\/@tanstack\/(react-router|router-core|history|react-query|query-core|react-store|store)\//,
