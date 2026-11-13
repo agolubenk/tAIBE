@@ -1,3 +1,4 @@
+import { APPLY_TRIES, causeText, DEFERRED_FAIL } from "./apply-deferral";
 import { journalQueue } from "./queue-actor";
 import type { QueueClient } from "./queue-client";
 import { isBatchClose } from "../approval/batch-close-params";
@@ -38,9 +39,20 @@ const FAIL_TEXT: Record<string, string> = {
 export function failText(reason: string | null): string {
   if (!reason) return "причина не указана";
   const code = reason.split(":")[0] ?? reason;
+  if (code === DEFERRED_FAIL) {
+    return `${causeText(reason.slice(code.length + 1))}, попыток: ${APPLY_TRIES}`;
+  }
   return (
     FAIL_TEXT[code] ?? FAIL_TEXT[reason] ?? "карточка не приняла изменение"
   );
+}
+
+// TB-114 п. 3: after the deferred tries the owner asks again (product, coord
+// 14.11); any other refusal is the agent's to repeat.
+function failedNote(reason: string | null): string {
+  return reason?.startsWith(`${DEFERRED_FAIL}:`)
+    ? `Не применено: ${failText(reason)} — подай заново.`
+    : `Не применено: ${failText(reason)}. Карточка не изменилась; агент подаст новую заявку, если действие ещё нужно.`;
 }
 
 const WHERE: Record<string, string> = {
@@ -78,7 +90,7 @@ export async function showOutcome(client: QueueClient, row: ApprovalRow) {
   const answeredHere = row.decidedVia === "queue";
   let note =
     row.status === "failed"
-      ? `Не применено: ${failText(row.failReason)}. Карточка не изменилась; агент подаст новую заявку, если действие ещё нужно.`
+      ? failedNote(row.failReason)
       : row.status === "expired"
         ? "Срок истёк."
         : `${word[0]?.toUpperCase()}${word.slice(1)} ${where} ${when}.`.replace(

@@ -147,9 +147,8 @@ export async function saveItemState(
   }
 }
 
-// The cards a label grant names, as keys (KEY-12) for the queue item.
-// A batch close shows its first 10 cards (TB-108 R-5), a label grant all of
-// its cards (at most 20).
+// The cards a label grant names (at most 20), as «KEY-12 «title»» for the
+// queue item. A batch close needs none: its item lists the keys from params.
 export async function taskKeys(approval: ApprovalRow): Promise<string[]> {
   // A batch close lists its keys from params, without titles (TB-114).
   if (approval.action === "close_task") return [];

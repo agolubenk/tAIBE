@@ -74,6 +74,19 @@ async function closeOne(
 const LOCK_WAIT = "2s";
 const STATEMENT_LIMIT = "10s";
 
+// TB-114 п. 2: past LOCKED_LIMIT locked cards the whole batch waits for the
+// next try. Without it 250 locked cards hold the owner's transaction
+// 250 × LOCK_WAIT ≈ 8 min.
+export const LOCKED_LIMIT = 5;
+
+// Not a refusal: the whole request rolls back and stays pending; the queue
+// counts the try (apply-deferral.ts), the t-boards UI answers 409.
+export class BatchLocked extends Error {
+  constructor() {
+    super(`more than ${LOCKED_LIMIT} cards are locked by other writes`);
+  }
+}
+
 function isLockTimeout(error: unknown): boolean {
   const cause = error instanceof Error ? (error.cause ?? error) : error;
   return (
@@ -113,6 +126,7 @@ export async function applyBatchClose(
   const changes: Change[] = [];
   const skipped: Skipped[] = [];
   let closed = 0;
+  let locked = 0;
   // Cards are locked in id order: two writes over the same cards wait for
   // each other instead of a deadlock.
   const inLockOrder = [...batch.cards].sort((a, b) =>
@@ -128,6 +142,9 @@ export async function applyBatchClose(
     } catch (error) {
       const reason = isLockTimeout(error) ? "locked" : failureReason(error);
       if (reason === null) throw error;
+      if (reason === "locked" && ++locked > LOCKED_LIMIT) {
+        throw new BatchLocked();
+      }
       skipped.push({ key: card.key, reason });
       await writeJournal(
         {

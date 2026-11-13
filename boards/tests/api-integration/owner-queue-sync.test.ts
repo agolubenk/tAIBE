@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import db, { schema } from "../../apps/api/src/database";
 import {
   agentJournalTable,
@@ -7,11 +7,16 @@ import {
 } from "../../apps/api/src/database/forest-schema";
 import type { OwnerQueueConfig } from "../../apps/api/src/forest/owner-queue/queue-config";
 import {
+  resetRejectedForTest,
+  withoutPaused,
+} from "../../apps/api/src/forest/owner-queue/each-row";
+import {
   CREATE_PER_PASS,
   type SyncDeps,
   syncPass,
 } from "../../apps/api/src/forest/owner-queue/sync-pass";
 import { resetTestDatabase } from "./helpers/database";
+import { holdTaskLocks } from "./helpers/hold-locks";
 import { FakeQueue } from "./helpers/fake-queue";
 import { addTask, createForest } from "./helpers/forest";
 
@@ -399,6 +404,96 @@ describe("API integration: owner-queue sync (TB-102)", () => {
     const note = String(queue.doc("checks", itemId)?.data.agentNote);
     expect(note).toContain("правил не t-boards");
     expect(note).not.toContain("queue_item_changed");
+  });
+
+  // TB-114 п. 3: the owner said «Да» and nothing applied — the item says so
+  // and counts the tries; the fifth fails the request and asks to file again.
+  it("shows a deferred «Да» with its try, then fails it after 5 tries", async () => {
+    const forest = await createForest();
+    const cards = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        addTask(forest.project.id, `Busy ${i}`),
+      ),
+    );
+    const ids = cards.map((card) => String(card?.id));
+    const { queue, deps } = setup(forest);
+    const asked = await forest.agent("/approvals", {
+      action: "close_task",
+      targetId: forest.workspace.id,
+      taskIds: ids,
+      doneReason: "import",
+      reason: "закрыты в Notion",
+    });
+    expect(asked.status).toBe(200);
+    const id = String(asked.body.id);
+    await syncPass(deps);
+    const itemId = (await approval(id))?.queueItemId as string;
+    await queue
+      .as("owner")
+      .patch("checks", itemId, { done: true, choice: "yes" });
+    const release = await holdTaskLocks(ids);
+    try {
+      // The first try cannot write its note (queue down for checks): the
+      // count is saved first, and the request still waits the pause — the
+      // batch does not run again on the next pass.
+      const patch = deps.client.patch;
+      let noteFails = true;
+      deps.client = {
+        ...deps.client,
+        patch: async (collection, docId, data, ifVersion) => {
+          if (noteFails && collection === "checks") {
+            noteFails = false;
+            throw new Error("queue down");
+          }
+          return patch(collection, docId, data, ifVersion);
+        },
+      };
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      resetRejectedForTest();
+      await syncPass(deps);
+      expect(String(logged.mock.calls[0]?.[0])).toContain(
+        `deferred try 1 of request ${id} not recorded`,
+      );
+      logged.mockRestore();
+      expect(withoutPaused([{ id }])).toEqual([]);
+      expect((await approval(id))?.status).toBe("pending");
+      expect((await approval(id))?.queueSyncedStatus).toBe("deferred:1");
+      expect(queue.doc("checks", itemId)?.data.agentNote).toBeUndefined();
+
+      resetRejectedForTest();
+      await syncPass(deps);
+      const check = queue.doc("checks", itemId)?.data;
+      // The pass repeats the apply itself: nothing is asked of the owner.
+      expect(check?.agentStatus).toBe("doing");
+      expect(check?.agentNote).toBe(
+        "Применение отложено: больше 5 карточек заняты другими записями, попытка 2 из 5.",
+      );
+      expect(queue.openToOwner(itemId)).toBe(false);
+      expect((await approval(id))?.status).toBe("pending");
+      expect((await approval(id))?.queueSyncedStatus).toBe("deferred:2");
+
+      // Tries 3 and 4 went the same way; the fifth ends the request.
+      await db
+        .update(ownerApprovalTable)
+        .set({ queueSyncedStatus: "deferred:4" })
+        .where(eq(ownerApprovalTable.id, id));
+      resetRejectedForTest();
+      await syncPass(deps);
+    } finally {
+      await release();
+    }
+    const failed = await approval(id);
+    expect(failed?.status).toBe("failed");
+    expect(failed?.failReason).toBe("apply_deferred:locked");
+    await syncPass(deps);
+    const check = queue.doc("checks", itemId)?.data;
+    expect(check?.agentStatus).toBe("blocked");
+    expect(check?.agentNote).toBe(
+      "Не применено: больше 5 карточек заняты другими записями, попыток: 5 — подай заново.",
+    );
+    // Now the owner is needed again: the item is back in the open ones.
+    expect(queue.openToOwner(itemId)).toBe(true);
+    expect(await taskStatus(ids[0] as string)).toBe("to-do");
   });
 
   // resources r2: new items per pass are capped; the rest go next pass.
