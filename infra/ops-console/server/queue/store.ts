@@ -2,7 +2,8 @@
  * Документы очереди владельца (checks · items · work) и правила записи — то, что в артефакте держалось
  * на дисциплине агентов, здесь проверяет сервер:
  *  - ответ владельца (done, choice, note, at) пишет только владелец; агент — только agentStatus/agentNote;
- *  - planEnd задачи агент не переписывает без basePlanEnd (от planEnd считается отставание);
+ *  - planEnd задачи агент сдвигает позже только по ответу владельца «перенести» (dueRef, guardPlanEnd); basePlanEnd —
+ *    первый план, его ставит сервер;
  *  - ifVersion — защита от одновременной правки (409 вместо молчаливой перезаписи).
  * Каждое изменение — строка журнала oq_events.
  */
@@ -258,12 +259,48 @@ function authorize(actor: Actor, collection: Collection, before: Record<string, 
   if (collection === 'items' && (after.kind === 'inbox' || before?.kind === 'inbox') && !owner) {
     throw apiError(403, 'Входящие (kind: inbox) пишет только владелец через бота; агенту — свой статус в checks (oq_agent_status)')
   }
-  if (collection === 'work' && !actor.scopes.includes('owner') && before) {
-    const prev = before.planEnd
-    if (typeof prev === 'string' && after.planEnd !== prev && after.basePlanEnd !== prev && before.basePlanEnd === undefined) {
-      throw apiError(409, `planEnd не переписывается: от него считается отставание. Сдвиг — новый planEnd и basePlanEnd = «${prev}», причина в note`)
-    }
+}
+
+/** Вариант решения d-…-due…, который разрешает сдвиг срока (TB-112: «держать срок» keep · «перенести» move · «оставить красными» red). */
+export const DUE_MOVE = 'move'
+const DUE_REF = /^d-[A-Za-z0-9_.~:@+-]*due[A-Za-z0-9_.~:@+-]*$/
+const DUE_REFS_MAX = 20
+
+/**
+ * Срок строки плана агент не сдвигает сам (TB-112, F7.3; владелец 13.11: «сроки сдвигаются всё больше — неприемлемо»).
+ * Раньше любое следующее после первого сдвига проходило молча, и 12 строк ушли на 2–4 недели без ответа владельца.
+ * Позже planEnd — только по ответу владельца «перенести» (вариант `move`) в решении `d-…-due…`, где строка названа в
+ * `rows`; id решения — в `dueRef` записи, одна ссылка — один сдвиг (`dueRefs` строки). basePlanEnd — первый план:
+ * его ставит сервер при первом сдвиге, агент не меняет. Раньше срок и снятие пустого — без ответа. Владельцу — всё.
+ */
+async function guardPlanEnd(
+  rowId: string,
+  before: Record<string, unknown>,
+  merged: Record<string, unknown>,
+  find: (collection: Collection, id: string) => Promise<Row | undefined>,
+  visible: (row: Row) => boolean,
+): Promise<void> {
+  const dueRef = merged.dueRef
+  delete merged.dueRef
+  if (before.basePlanEnd !== undefined && merged.basePlanEnd !== before.basePlanEnd) {
+    throw apiError(409, `basePlanEnd — первый план строки («${String(before.basePlanEnd)}»): его не меняют, от него считается отставание`)
   }
+  const prev = typeof before.planEnd === 'string' ? before.planEnd.slice(0, 10) : ''
+  const next = typeof merged.planEnd === 'string' ? merged.planEnd.slice(0, 10) : ''
+  if (!prev || (next && next <= prev)) return
+  const how = `Сдвиг срока позже «${prev}» — только по ответу владельца: решение d-<продукт>-due-<тема> с rows: [«${rowId}»] и вариантом id «${DUE_MOVE}» («перенести»); его id — в dueRef этой записи. Раньше срок — без ответа`
+  if (typeof dueRef !== 'string' || !DUE_REF.test(dueRef)) throw apiError(409, `planEnd не переписывается. ${how}`)
+  const item = await find('items', dueRef)
+  const check = await find('checks', dueRef)
+  if (!item || !visible(item)) throw apiError(409, `Нет решения items/${dueRef}. ${how}`)
+  const rows = (JSON.parse(item.dataJson) as Record<string, unknown>).rows
+  if (!Array.isArray(rows) || !rows.includes(rowId)) throw apiError(409, `В решении ${dueRef} нет этой строки (rows). ${how}`)
+  const answer = check ? (JSON.parse(check.dataJson) as Record<string, unknown>) : {}
+  if (answer.choice !== DUE_MOVE) throw apiError(409, `Владелец не ответил «перенести» в ${dueRef} (ответ: ${String(answer.choice ?? 'нет')}). ${how}`)
+  const used = Array.isArray(before.dueRefs) ? before.dueRefs.filter((r): r is string => typeof r === 'string') : []
+  if (used.includes(dueRef)) throw apiError(409, `Ответ ${dueRef} уже потрачен на сдвиг этой строки: новый сдвиг — новое решение`)
+  merged.dueRefs = [...used, dueRef].slice(-DUE_REFS_MAX)
+  if (before.basePlanEnd === undefined) merged.basePlanEnd = before.planEnd
 }
 
 export interface WriteOptions {
@@ -339,6 +376,12 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
     // Отпуск снимает только держателя: статус и заметка («передано <сессия>») остаются — страница и бот показывают, кому
     // передано; пункт берёт названная живая сессия. Автопередача сама его не предложит: у него есть статус.
     if (collection === 'checks' && opts.release) delete merged.agentBy
+    if (collection === 'work' && before && !owner) {
+      await guardPlanEnd(id, before, merged, (c, docId) => tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, c), eq(oqDocs.id, docId)) }),
+        (r) => canSee(actor.products, r.product))
+    } else if (collection === 'work') {
+      delete merged.dueRef
+    }
     const parsed = SCHEMAS[collection].safeParse(merged)
     if (!parsed.success) throw apiError(422, `Неверный документ: ${parsed.error.issues.map((i) => `${i.path.join('.') || '—'}: ${i.message}`).join('; ').slice(0, 400)}`)
     const json = JSON.stringify(parsed.data)

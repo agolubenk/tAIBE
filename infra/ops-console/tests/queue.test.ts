@@ -98,11 +98,35 @@ describe('документы и права', () => {
     expect((await bearer(t.token).get('/db/items')).status).toBe(401)
   })
 
-  it('planEnd агент не переписывает без basePlanEnd', async () => {
+  it('planEnd позже — только по ответу владельца «перенести» (dueRef), один ответ — один сдвиг; basePlanEnd ставит сервер (TB-112)', async () => {
     const a = bearer(agent)
+    const o = api(app, cookie)
+    const answer = (id: string, choice: string, at: string) => o.put(`/oq/v1/db/checks/${id}`, { data: { done: true, choice, note: '', at } })
     expect((await a.put('/db/work/w-t', { data: { title: 'Задача', track: 'ops', planEnd: '2026-10-20' } })).status).toBe(200)
-    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25' } })).status).toBe(409)
-    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', basePlanEnd: '2026-10-20', note: 'сдвиг: ждали ревью' } })).status).toBe(200)
+    // Прежний обход «basePlanEnd = прежняя дата» без ответа владельца больше не проходит.
+    const plain = await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', basePlanEnd: '2026-10-20', note: 'сдвиг: ждали ревью' } })
+    expect(plain.status).toBe(409)
+    expect(plain.json.error).toContain('d-<продукт>-due-')
+    const due = { kind: 'decision', title: 'Сроки: строки не успевают', rows: ['w-t'], options: [{ id: 'keep', label: 'Держать срок' }, { id: 'move', label: 'Перенести' }] }
+    expect((await a.put('/db/items/d-t-due-1', { data: due })).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1' } })).status).toBe(409) // ответа нет
+    expect((await answer('d-t-due-1', 'keep', '2026-10-18T10:00:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1' } })).status).toBe(409) // «держать срок»
+    expect((await answer('d-t-due-1', 'move', '2026-10-18T10:05:00.000Z')).status).toBe(200)
+    const moved = await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1', note: 'сдвиг по ответу владельца' } })
+    expect(moved.status).toBe(200)
+    expect(moved.json.data).toMatchObject({ planEnd: '2026-10-25', basePlanEnd: '2026-10-20', dueRefs: ['d-t-due-1'] })
+    expect(moved.json.data.dueRef).toBeUndefined()
+    // Один ответ — один сдвиг; первый план не переписывается; раньше срок — без ответа.
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-30', dueRef: 'd-t-due-1' } })).status).toBe(409)
+    expect((await a.patch('/db/work/w-t', { data: { basePlanEnd: '2026-10-25' } })).status).toBe(409)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-23' } })).status).toBe(200)
+    // Ответ по другой строке не сдвигает эту.
+    expect((await a.put('/db/items/d-t-due-2', { data: { ...due, rows: ['w-other'] } })).status).toBe(200)
+    expect((await answer('d-t-due-2', 'move', '2026-10-18T10:10:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-28', dueRef: 'd-t-due-2' } })).status).toBe(409)
+    // Владелец сдвигает сам.
+    expect((await o.patch('/oq/v1/db/work/w-t', { data: { planEnd: '2026-11-05' } })).status).toBe(200)
   })
 
   it('история пункта — журнал изменений', async () => {
