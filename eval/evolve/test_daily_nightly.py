@@ -15,6 +15,34 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import daily  # noqa: E402
+import daily_git as g  # noqa: E402
+
+
+class NetTimeoutTest(unittest.TestCase):
+    """The step now runs under `run.lock` before the night's work: a hung network call must fail it, not hold the
+    lock (LOCK_NB would refuse the next `nightly` and `cycle --force` until someone kills the process)."""
+
+    def hang(self, cmd, **kw):
+        self.seen.append((cmd[:2], kw.get('timeout')))
+        raise subprocess.TimeoutExpired(cmd, kw.get('timeout'))
+
+    def setUp(self):
+        self.seen = []
+        patcher = mock.patch.object(g.subprocess, 'run', self.hang)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_gh_and_fetch_give_up_after_the_timeout(self):
+        with self.assertRaisesRegex(RuntimeError, 'no answer in 60 s'):
+            g.gh('/repo', 'api', 'user')
+        with self.assertRaisesRegex(RuntimeError, 'no answer in 60 s'):
+            g.git('/repo', 'fetch', '--quiet', 'origin', 'board-agents', check=False)
+        self.assertEqual(self.seen, [(['gh', 'api'], g.NET_TIMEOUT_S), (['git', '-C'], g.NET_TIMEOUT_S)])
+
+    def test_local_git_has_no_timeout(self):
+        with self.assertRaises(subprocess.TimeoutExpired):  # the fake hangs; a local command gets no deadline
+            g.git('/repo', 'rev-parse', 'HEAD')
+        self.assertEqual(self.seen, [(['git', '-C'], None)])
 
 
 class NightlyOrderTest(unittest.TestCase):

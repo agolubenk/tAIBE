@@ -16,6 +16,7 @@ that merges (review of PR #83, owner's bridge decision 06.11):
   base branch (none → closed), and `evolveAutoMerge` on. Stdlib only.
 """
 import fnmatch
+import functools
 import json
 import os
 import subprocess
@@ -33,11 +34,21 @@ MAX_MERGE_FILES = 12
 OPEN_PRS_LIMIT = 50       # SE-63: `gh pr list --limit`; a full list may hide an evolve PR — closed on doubt
 OPEN_PRS_TRIES = 3        # one call and two retries before «GitHub did not answer»
 OPEN_PRS_PAUSE_S = 5
+NET_TIMEOUT_S = 60        # one gh or git-fetch call: a hung network call must not hold the night's lock (SE-49)
+
+
+def run_net(cmd, **kw):
+    """A network call (gh, git fetch) with `NET_TIMEOUT_S`; a hang becomes RuntimeError, so the step fails and the
+    night goes on instead of holding `run.lock` until someone kills it."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=NET_TIMEOUT_S, **kw)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('%s: no answer in %d s' % (' '.join(cmd[:3]), NET_TIMEOUT_S)) from None
 
 
 def git(repo, *args, env=None, check=True, data=None):
-    out = subprocess.run(['git', '-C', repo, *args], capture_output=True, text=True, input=data,
-                         env=dict(os.environ, **env) if env else None)
+    run = run_net if args[:1] == ('fetch',) else functools.partial(subprocess.run, capture_output=True, text=True)
+    out = run(['git', '-C', repo, *args], input=data, env=dict(os.environ, **env) if env else None)
     if check and out.returncode != 0:
         raise RuntimeError('git %s: %s' % (' '.join(args[:3]), out.stderr.strip()[:300]))
     return out.stdout if out.returncode == 0 else None
@@ -120,7 +131,7 @@ def commit_files(repo, parent, files, message):
 
 
 def gh(repo, *args, check=True):
-    out = subprocess.run(['gh', *args], capture_output=True, text=True, cwd=repo)
+    out = run_net(['gh', *args], cwd=repo)
     if check and out.returncode != 0:
         raise RuntimeError('gh %s: %s' % (' '.join(args[:3]), (out.stderr or out.stdout).strip()[:300]))
     return out.stdout
@@ -300,9 +311,12 @@ def merge_ready(repo, base, verdicts, enabled, records, dry=False):
         if ok and dry:
             ok, why = False, 'would merge (dry run)'
         elif ok:
-            out = subprocess.run(['gh', 'pr', 'merge', str(pr['number']), '--auto', '--squash', '--delete-branch',
-                                  '--match-head-commit', pr['headRefOid']], capture_output=True, text=True, cwd=repo)
-            ok = out.returncode == 0
-            why = 'merged (auto)' if ok else 'gh refused: %s' % (out.stderr or out.stdout).strip()[:200]
+            try:
+                out = run_net(['gh', 'pr', 'merge', str(pr['number']), '--auto', '--squash', '--delete-branch',
+                               '--match-head-commit', pr['headRefOid']], cwd=repo)
+                ok = out.returncode == 0
+                why = 'merged (auto)' if ok else 'gh refused: %s' % (out.stderr or out.stdout).strip()[:200]
+            except RuntimeError as e:  # no answer: the next night sees the PR again
+                ok, why = False, str(e)
         row.update(merged=ok, why=why)
     return rows
