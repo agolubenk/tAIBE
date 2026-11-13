@@ -50,6 +50,14 @@ export const syncBody = z.object({
     .optional(),
 });
 
+// The sync agent asks about the whole manifest before it uploads content, so
+// /known-shas takes as many shas as /sync takes files. With the old 1000 the
+// client failed with 400 on the 1001st file, before /sync (boards lens on
+// #230). 5000 shas are ~335 KB of JSON.
+export const knownShasBody = z.object({
+  shas: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(SYNC_MANIFEST_MAX),
+});
+
 export const approveBody = z.object({
   versionId: z.string(),
 });

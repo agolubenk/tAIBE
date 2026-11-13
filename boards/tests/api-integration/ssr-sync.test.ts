@@ -260,6 +260,26 @@ describe("API integration: SSR corpus sync", () => {
     expect(second.body.unchanged).toBe(6);
     await approveAll();
 
+    // Boards lens on #230: the sync agent asks /known-shas about the whole
+    // manifest before /sync. 5000 shas pass; the 450 stored ones come back.
+    const stored = skills(0, 1, 2, 3, 4, 5, 6, 7, 8).map((f) => f.sha256);
+    const unknown = Array.from({ length: 5000 - stored.length }, (_, index) =>
+      sha256(`not stored ${index}`),
+    );
+    const known = await forest.ownerApi(
+      "POST",
+      `/ssr/${forest.workspace.id}/known-shas`,
+      { shas: [...stored, ...unknown] },
+    );
+    expect(known.status).toBe(200);
+    expect([...known.body.shas].sort()).toEqual([...stored].sort());
+    const over = await forest.ownerApi(
+      "POST",
+      `/ssr/${forest.workspace.id}/known-shas`,
+      { shas: [...stored, ...unknown, sha256("one more")] },
+    );
+    expect(over.status).toBe(400);
+
     // 450 files again: s8 is left out and archived, s9 is new, one file of
     // s0 changes.
     const changed = file(0, 0, " v2");

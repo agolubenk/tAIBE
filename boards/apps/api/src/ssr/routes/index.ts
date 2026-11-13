@@ -34,6 +34,7 @@ import {
   diffSchema,
   entityParam,
   entitySchema,
+  knownShasBody,
   rollbackBody,
   servedSchema,
   syncBody,
@@ -337,9 +338,7 @@ const knownShasRoute = createRoute({
       required: true,
       content: {
         "application/json": {
-          schema: z.object({
-            shas: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(1000),
-          }),
+          schema: knownShasBody,
         },
       },
     },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  knownShasBody,
   SYNC_BODY_BYTES,
   SYNC_CONTENT_MAX,
   SYNC_MANIFEST_MAX,
@@ -65,6 +66,21 @@ describe("syncBody limits", () => {
         files: [],
         deleted: deleted(SYNC_MANIFEST_MAX + 1),
       }).success,
+    ).toBe(false);
+  });
+
+  // Boards lens on #230: the sync agent asks /known-shas about the whole
+  // manifest first, so that route takes as many shas as /sync takes files.
+  it("takes as many known-shas as manifest files", () => {
+    const shas = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        index.toString(16).padStart(64, "0"),
+      );
+    expect(
+      knownShasBody.safeParse({ shas: shas(SYNC_MANIFEST_MAX) }).success,
+    ).toBe(true);
+    expect(
+      knownShasBody.safeParse({ shas: shas(SYNC_MANIFEST_MAX + 1) }).success,
     ).toBe(false);
   });
 
