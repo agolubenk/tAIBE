@@ -47,7 +47,10 @@ def run_net(cmd, **kw):
 
 
 def git(repo, *args, env=None, check=True, data=None):
-    run = run_net if args[:1] == ('fetch',) else functools.partial(subprocess.run, capture_output=True, text=True)
+    """stdout, or None on a failure with check=False. `fetch` and `push` go to the network: no answer in
+    NET_TIMEOUT_S raises RuntimeError even with check=False."""
+    run = run_net if args[:1] in (('fetch',), ('push',)) else functools.partial(subprocess.run, capture_output=True,
+                                                                                    text=True)
     out = run(['git', '-C', repo, *args], input=data, env=dict(os.environ, **env) if env else None)
     if check and out.returncode != 0:
         raise RuntimeError('git %s: %s' % (' '.join(args[:3]), out.stderr.strip()[:300]))

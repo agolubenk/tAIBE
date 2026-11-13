@@ -385,6 +385,7 @@ def cmd_merge(args):
     if os.path.isfile(args.verdicts):
         with open(args.verdicts, encoding='utf-8') as f:
             verdicts = [json.loads(ln) for ln in f if ln.strip()]
+    verdicts = steps.with_kept_supersedes(verdicts)  # the brak marks a refresh wiped from the worktree
     enabled = merge_switch(code_root)
     rows = g.merge_ready(repo, TARGETS['taibe']['base'], verdicts, enabled, load_json('prs.json', {}), args.dry_run)
     print(json.dumps(rows, ensure_ascii=False, indent=1))

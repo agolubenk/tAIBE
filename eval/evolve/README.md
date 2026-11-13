@@ -101,6 +101,8 @@ A judge that is not reached (a limit message, a wrong answering model, an error,
 of time) is «unavailable», never brak: the file stays pending and is judged again the next night against the same
 baseline. The headless session may append a `supersedes` line that marks an accepted
 verdict brak; a revert PR whose verdict was superseded is closed, not merged. Nobody turns brak into accepted.
+The line lives in the run's worktree until its data PR merges, and the nightly refresh wipes it; so every `merge`
+step also keeps the marks it sees in `~/.claude/evolve/supersedes.json` and checks both (SE-49).
 
 ### Claude judges (`abJudgeClaude`, off by default)
 

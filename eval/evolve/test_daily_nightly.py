@@ -5,6 +5,8 @@ The merge at the end of a cycle meets its own fresh PR with CI still running («
 the base only after the next night's run: its cases were judged a night late, and its `supersedes` lines were not in
 the refreshed worktree when the next merge read the verdicts. `nightly` now runs the merge step before the refresh.
 """
+import argparse
+import json
 import os
 import subprocess
 import sys
@@ -32,12 +34,14 @@ class NetTimeoutTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_gh_and_fetch_give_up_after_the_timeout(self):
+    def test_gh_fetch_and_push_give_up_after_the_timeout(self):
         with self.assertRaisesRegex(RuntimeError, 'no answer in 60 s'):
             g.gh('/repo', 'api', 'user')
         with self.assertRaisesRegex(RuntimeError, 'no answer in 60 s'):
             g.git('/repo', 'fetch', '--quiet', 'origin', 'board-agents', check=False)
-        self.assertEqual(self.seen, [(['gh', 'api'], g.NET_TIMEOUT_S), (['git', '-C'], g.NET_TIMEOUT_S)])
+        with self.assertRaisesRegex(RuntimeError, 'no answer in 60 s'):
+            g.git('/repo', 'push', '--quiet', 'origin', 'abc:refs/heads/evolve/x')
+        self.assertEqual(self.seen, [(['gh', 'api'], g.NET_TIMEOUT_S)] + [(['git', '-C'], g.NET_TIMEOUT_S)] * 2)
 
     def test_local_git_has_no_timeout(self):
         with self.assertRaises(subprocess.TimeoutExpired):  # the fake hangs; a local command gets no deadline
@@ -72,6 +76,42 @@ class NightlyOrderTest(unittest.TestCase):
 
     def test_a_failed_step_costs_nothing(self):
         self.assertEqual(self.run_nightly(RuntimeError('gh down')), (0, ['merge-step', 'log', 'refresh', 'cycle']))
+
+
+class KeptSupersedesTest(unittest.TestCase):
+    """A brak mark outlives the refresh: the session of night N writes `supersedes V` into the worktree, the data PR
+    with it has not merged, night N+1 refreshes the worktree, and the revert PR of V must still not merge."""
+
+    def merge_with(self, lines):
+        path = os.path.join(self.dir, 'verdicts.jsonl')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(''.join(json.dumps(v) + '\n' for v in lines))
+        got = []
+        with mock.patch.object(daily.g, 'main_repo', lambda *a: '/repo'), \
+                mock.patch.object(daily, 'merge_switch', lambda *a: True), \
+                mock.patch.object(daily.g, 'merge_ready', lambda repo, base, verdicts, *a: got.append(verdicts) or []), \
+                mock.patch('builtins.print'):
+            daily.cmd_merge(argparse.Namespace(verdicts=path, dry_run=False))
+        return got[0]
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        patcher = mock.patch.object(daily.steps, 'STATE_DIR', self.dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_mark_survives_the_refresh(self):
+        base = [{'id': 'V', 'status': 'accepted'}]
+        revert_pr = 'evolve: revert\n\nevolve-verdict: V\n'
+        night_n = self.merge_with(base + [{'supersedes': 'V', 'status': 'brak'}])
+        self.assertTrue(g.superseded(night_n, revert_pr))
+        after_refresh = self.merge_with(base)  # checkout --force: the line is gone from the worktree
+        self.assertTrue(g.superseded(after_refresh, revert_pr))
+        self.assertFalse(g.superseded(after_refresh, 'evolve-verdict: W\n'))
+
+    def test_no_mark_writes_nothing(self):
+        self.merge_with([{'id': 'V', 'status': 'accepted'}])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, 'supersedes.json')))
 
 
 if __name__ == '__main__':
