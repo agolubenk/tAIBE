@@ -287,6 +287,7 @@ function budgeted(client: QueueClient, deadline: number): QueueClient {
       return client.get(collection, id);
     },
     history: (collection, id) => client.history(collection, id),
+    list: (collection, offset) => client.list(collection, offset),
     put: (collection, id, data, ifVersion) => {
       spend();
       return client.put(collection, id, data, ifVersion);
