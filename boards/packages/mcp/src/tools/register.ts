@@ -670,7 +670,7 @@ export function registerTools(
     "search",
     {
       description:
-        "Search across tasks, projects, workspaces, comments, and activities. Descriptions and comment text come as an excerpt around the match; read the task for the whole text.",
+        "Search across tasks, projects, workspaces, comments, and activities in one workspace. A card key (DEP-23), a Notion page id or a Notion page link finds that card first. Descriptions and comment text come as an excerpt around the match; read the task for the whole text.",
       inputSchema: z.object({
         q: nonEmptyString.describe("Search query"),
         type: z
@@ -684,7 +684,9 @@ export function registerTools(
           ])
           .optional()
           .describe("Restrict results to one kind. Defaults to all."),
-        workspaceId: optionalNonEmptyString.describe("Limit to one workspace"),
+        // The API needs it (search/schema.ts); without it every call was a 400
+        // (TB-91).
+        workspaceId: nonEmptyString.describe("Workspace to search in"),
         projectId: optionalNonEmptyString.describe("Limit to one project"),
         limit: z
           .number()
@@ -698,7 +700,7 @@ export function registerTools(
     async (args) => {
       const qs = new URLSearchParams({ q: args.q });
       if (args.type) qs.set("type", args.type);
-      if (args.workspaceId) qs.set("workspaceId", args.workspaceId);
+      qs.set("workspaceId", args.workspaceId);
       if (args.projectId) qs.set("projectId", args.projectId);
       if (args.limit !== undefined) qs.set("limit", String(args.limit));
       return run(async () =>

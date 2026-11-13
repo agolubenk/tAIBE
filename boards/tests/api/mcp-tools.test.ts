@@ -70,11 +70,14 @@ describe("MCP tool catalog", () => {
   });
 
   it("passes only the search filters that were supplied", async () => {
-    await call("search", { q: "login bug" });
-    expect(lastRequest().url).toBe("http://api.test/api/search?q=login+bug");
+    await call("search", { q: "login bug", workspaceId: "w1" });
+    expect(lastRequest().url).toBe(
+      "http://api.test/api/search?q=login+bug&workspaceId=w1",
+    );
 
     await call("search", {
       q: "login bug",
+      workspaceId: "w1",
       type: "tasks",
       projectId: "p1",
       limit: 5,
@@ -82,14 +85,27 @@ describe("MCP tool catalog", () => {
     const url = new URL(lastRequest().url);
     expect(Object.fromEntries(url.searchParams)).toEqual({
       q: "login bug",
+      workspaceId: "w1",
       type: "tasks",
       projectId: "p1",
       limit: "5",
     });
   });
 
+  // TB-91: the API answers 400 without a workspace, so the tool asks for it.
+  it("refuses a search without a workspace before the API", async () => {
+    const result = await call("search", { q: "x" });
+
+    expect(result.isError).toBe(true);
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects a search limit above the API maximum", async () => {
-    const result = await call("search", { q: "x", limit: 500 });
+    const result = await call("search", {
+      q: "x",
+      workspaceId: "w1",
+      limit: 500,
+    });
 
     expect(result.isError).toBe(true);
     expect(apiFetch).not.toHaveBeenCalled();
