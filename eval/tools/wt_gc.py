@@ -17,6 +17,7 @@
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -63,13 +64,52 @@ def _inside(path, cwds):
     return any(c == path or c.startswith(path.rstrip("/") + "/") for c in real)
 
 
-def why_not(wt, cwds):
+# Где живут внешние потребители worktree: ссылки (агенты opencode, бинарники) и задачи launchd. 13.11 уборка удалила
+# worktree, из которого ставили агентов opencode, и ссылки в ~/.config/opencode/agents повисли — ревью встало.
+CONSUMER_LINK_DIRS = ("~/.config", "~/.local/bin")
+CONSUMER_FILE_GLOBS = ("~/Library/LaunchAgents/*.plist",)
+
+
+def external_refs():
+    """{цель: где ссылка} — ссылки и задачи launchd, которые смотрят в какой-нибудь worktree. Один проход на запуск."""
+    import glob
+    refs = {}
+    for d in CONSUMER_LINK_DIRS:
+        root = os.path.expanduser(d)
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [x for x in dirnames if x not in ("node_modules", ".git")]
+            for name in dirnames + filenames:
+                f = os.path.join(dirpath, name)
+                if os.path.islink(f):
+                    target = os.path.realpath(f)
+                    if "/worktrees/" in target:
+                        refs[target] = f
+    for pattern in CONSUMER_FILE_GLOBS:
+        for f in glob.glob(os.path.expanduser(pattern)):
+            try:
+                text = open(f, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            for target in re.findall(r"""/[^\s<>"',;]*/worktrees/[^\s<>"',;]+""", text):
+                refs[target] = f
+    return refs
+
+
+def _referenced(path, refs):
+    path = os.path.realpath(path).rstrip("/") + "/"
+    return next((src for target, src in refs.items() if (target.rstrip("/") + "/").startswith(path)), None)
+
+
+def why_not(wt, cwds, refs=None):
     """Причина не удалять worktree или None — можно. Порядок — от дешёвых проверок к дорогим."""
     p = wt["path"]
     if not os.path.isdir(p):
         return "папки нет (git worktree prune)"
     if _inside(p, cwds):
         return "в нём работает процесс"
+    src = _referenced(p, external_refs() if refs is None else refs)
+    if src:
+        return f"на него ссылается {src.replace(os.path.expanduser('~'), '~')}"
     code, out, err = _run(["git", "status", "--porcelain"], cwd=p)
     if code:
         return f"git status: {err[:120]}"
@@ -82,8 +122,8 @@ def why_not(wt, cwds):
     return None
 
 
-def remove(repo, wt, cwds):
-    reason = why_not(wt, cwds)
+def remove(repo, wt, cwds, refs=None):
+    reason = why_not(wt, cwds, refs)
     if reason:
         return {"path": wt["path"], "branch": wt["branch"], "removed": False, "reason": reason}
     code, _, err = _run(["git", "worktree", "remove", wt["path"]], cwd=repo, timeout=900)
@@ -92,10 +132,14 @@ def remove(repo, wt, cwds):
     return {"path": wt["path"], "branch": wt["branch"], "removed": True}
 
 
-def gc_branch(repo, branch, cwds=None):
+def gc_branch(repo, branch, cwds=None, refs=None):
     """После мёржа PR ветки branch: удалить её worktree, если это безопасно. [] — у ветки нет worktree."""
+    mine = [wt for wt in worktrees(repo) if wt["branch"] == branch]
+    if not mine:
+        return []
     cwds = busy_paths() if cwds is None else cwds
-    return [remove(repo, wt, cwds) for wt in worktrees(repo) if wt["branch"] == branch]
+    refs = external_refs() if refs is None else refs
+    return [remove(repo, wt, cwds, refs) for wt in mine]
 
 
 def merged_branches(repo, limit=300):
@@ -110,16 +154,16 @@ def merged_branches(repo, limit=300):
 def sweep(repo, dry_run=False):
     """Все worktree, чья ветка влита PR: удалить безопасные. Для пропущенных Нервом мёржей (демон стоял)."""
     merged = merged_branches(repo)
-    cwds = busy_paths()
+    cwds, refs = busy_paths(), external_refs()
     res = []
     for wt in worktrees(repo):
         if not wt["branch"] or wt["branch"] not in merged:
             continue
         if dry_run:
-            reason = why_not(wt, cwds)
+            reason = why_not(wt, cwds, refs)
             res.append({"path": wt["path"], "branch": wt["branch"], "removed": False, "reason": reason or "dry-run: удалился бы"})
         else:
-            res.append(remove(repo, wt, cwds))
+            res.append(remove(repo, wt, cwds, refs))
     return res
 
 
