@@ -421,11 +421,20 @@ def cmd_ack(sx, a):
 
 def cmd_control(sx, a):
     """spawn_session.sh --launch --role release (SE-72): записан ли Контроль в папках --guard. 0 — да (печатает
-    «папка:префикс»), 3 — списков нет или они пусты, 2 — сомнение: папка не сводится к корню или список не читается."""
-    from lineage_guard_fs import GUARD, MISSING, guard_dirs, read_control  # noqa: E402
-    dirs = guard_dirs(a.guard)
-    if not dirs:
-        return die("control: папки --guard не сводятся к корню репозитория — считаю, что Контроль записан")
+    «папка:префикс»), 3 — списков нет или они пусты (папки вне git пропускаются), 2 — сомнение: папка в git не
+    сводится к основной папке репозитория или список не читается."""
+    from lineage_guard_fs import GUARD, MISSING, main_root, read_control  # noqa: E402
+    dirs = []
+    for d in a.guard:
+        p = Path(d).resolve() if str(d or "").strip() else None
+        # Вне git списка Контроля нет и быть не может: хук читает его из корня репозитория.
+        if p is None or not any((t / ".git").exists() for t in (p, *p.parents)):
+            continue
+        r = main_root(p)
+        if r is None:
+            return die(f"control: {d} не сводится к основной папке репозитория — считаю, что Контроль записан")
+        if r not in dirs:
+            dirs.append(r)
     found = []
     for d in dirs:
         got = read_control(d / GUARD)
