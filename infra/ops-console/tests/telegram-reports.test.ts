@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { eq } from 'drizzle-orm'
 import { api, freshApp, login } from './helpers'
 import { getDb } from '../server/db/client'
-import { agents, alerts, channels, loginAttempts, metricSamples, users } from '../server/db/schema'
+import { agents, alerts, channels, containers, loginAttempts, metricSamples, users } from '../server/db/schema'
 import { encryptJson, hashPassword } from '../server/lib/crypto'
 import { setEnvForTests } from '../server/env'
 import { signInitData } from '../server/telegram/initdata'
@@ -114,6 +114,25 @@ describe('формат отчётов', () => {
     expect(kb.flat().map((b) => b.callback_data)).toEqual([expect.stringMatching(/^rep:more:\d+$/), expect.stringMatching(/^rep:charts:\d+$/), 'rep:now', 'mo:home'])
     expect(JSON.stringify(kb)).toContain('Больше информации')
     expect(kb.flat().every((b) => Buffer.byteLength(b.callback_data) <= 64)).toBe(true)
+  })
+
+  it('контейнеры в отчёте по стекам: «работает/всего», остановленный руками сосед не прощается (OPS-8)', async () => {
+    await seedMetrics(['cpu_pct'])
+    const base = { agentId: 'prod', image: 'x', health: 'none', restartCount: 0, updatedAt: new Date() }
+    await getDb()
+      .insert(containers)
+      .values([
+        { ...base, name: 'backend-api-1', state: 'running', composeProject: 'backend', mainStack: true },
+        { ...base, name: 'tb-api-1', state: 'restarting', restartPolicy: 'always', composeProject: 't-boards', mainStack: false },
+        { ...base, name: 'tb-web-1', state: 'exited', restartPolicy: 'unless-stopped', exitCode: 143, composeProject: 't-boards', mainStack: false },
+      ])
+    const r = await buildReport('daily')
+    expect(r.hosts[0]!.projects).toEqual([
+      { name: 'backend', main: true, total: 1, running: 1, stopped: [] },
+      { name: 't-boards', main: false, total: 2, running: 0, stopped: ['tb-api-1', 'tb-web-1'] },
+    ])
+    expect(digestHtml(r, 'Europe/Minsk')).toContain('📦 Контейнеры: не работают — t-boards: tb-api-1, tb-web-1 · 2 стека: t-boards 0/2, backend 1/1')
+    expect(detailHtmlParts(r, 'Europe/Minsk').join('\n')).toContain('· стеки: backend 1/1, t-boards 0/2 (не работают: tb-api-1, tb-web-1)')
   })
 
   it('подробный отчёт: длинные строки не рвут разметку, сообщения ≤ 3800', () => {
