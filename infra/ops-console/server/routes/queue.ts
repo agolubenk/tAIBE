@@ -137,8 +137,10 @@ queueRoutes.put('/relay', requireScope('agent'), async (c) => {
   throttleWrite(actor.name)
   const beat = await parseBody(c, relayBeatSchema)
   const product = beatProduct(actor.products, beat.product)
-  // Чужой продукт — как несуществующий (404); свой, но не определить (токен нескольких продуктов без основного) — 422.
-  if (!product) throw beat.product ? apiError(404, 'Нет автопередачи для продуктов токена') : apiError(422, 'Укажите product: токен видит несколько продуктов')
+  // Чужой продукт или токен без продуктов — как несуществующее (404); свой, но не определить (несколько продуктов без
+  // основного) — 422.
+  const none = actor.products !== '*' && actor.products.length === 0
+  if (!product) throw beat.product || none ? apiError(404, 'Нет автопередачи для продуктов токена') : apiError(422, 'Укажите product: токен видит несколько продуктов')
   return c.json(await beatRelay(beat, product, actor.products))
 })
 

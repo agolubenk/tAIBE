@@ -2577,6 +2577,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function relayLine(product, named) {
     var live = relayLive(product), last = relayOf(product)[0];
     var names = named ? productNames() || {} : {}, who = named ? (names[product] || product) + ': ' : '';
+    // Консоль до автопередачи по продуктам (нет products): её сессии — только основного продукта (ревью #173).
+    if (!relay.products && product !== window.__oqDefaultProduct) return { ok: false, text: '⚠️ ' + who + 'автопередачи для этого продукта пока нет' };
     if (live) return { ok: true, text: '🔁 ' + who + (named ? 'н' : 'Н') + 'овые входящие сами уходят сессии ' + live.session + ' (отметка в ' + fmtTime(live.at) + ')' };
     return { ok: false, text: '⚠️ ' + who + (last ? (named ? 'а' : 'А') + 'втопередача не работает: сессия ' + last.session + ' не отмечалась с ' + fmtDT(new Date(last.at)) : (named ? 'а' : 'А') + 'втопередача не включена') };
   }

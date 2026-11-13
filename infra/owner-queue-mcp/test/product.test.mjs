@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,8 +42,14 @@ async function consoleFake() {
   return { port: srv.address().port, seen, close: () => srv.close() };
 }
 
+// Временные HOME — один список на файл, удаляются после всех тестов: прогон не оставляет каталогов в $TMPDIR.
+const homes = [];
+process.on('exit', () => { for (const h of homes) rmSync(h, { recursive: true, force: true }); });
+
 function env(port, extra) {
-  const e = { ...process.env, OQ_URL: `http://127.0.0.1:${port}`, OQ_TOKEN: 'hr-token', HOME: mkdtempSync(join(tmpdir(), 'oq-home-')), ...extra };
+  const home = mkdtempSync(join(tmpdir(), 'oq-home-'));
+  homes.push(home);
+  const e = { ...process.env, OQ_URL: `http://127.0.0.1:${port}`, OQ_TOKEN: 'hr-token', HOME: home, ...extra };
   for (const k of ['OQ_PRODUCT', 'TAIBE_PRODUCT', 'OQ_TOKEN_taibe']) if (!(k in extra)) delete e[k];
   return e;
 }
@@ -66,6 +72,33 @@ test('продукт сессии: OQ_PRODUCT, иначе TAIBE_PRODUCT, ина�
   assert.equal(sessionProduct({ OQ_PRODUCT: 'Не slug' }), 'hr-helper');
   assert.equal(tokenName('hr-helper'), 'OQ_TOKEN');
   assert.equal(tokenName('taibe'), 'OQ_TOKEN_taibe');
+});
+
+test('аргументы --relay: неясный продукт или имя — ошибка, а не молчаливый hr-helper (ревью #173)', async () => {
+  const { relayArgs, productFromEnv } = await import('../server.mjs');
+  const ok = { product: 'hr-helper', error: '' };
+  assert.deepEqual(relayArgs(['n', 's', '--relay', 'sess'], ok), { session: 'sess', product: 'hr-helper' });
+  assert.deepEqual(relayArgs(['n', 's', '--relay', 'sess', '--product', 'taibe'], ok), { session: 'sess', product: 'taibe' });
+  assert.match(relayArgs(['n', 's', '--relay', 'sess', '--product'], ok).error, /не slug/);
+  assert.match(relayArgs(['n', 's', '--relay', 'sess', '--product', 'Taibe'], ok).error, /не slug/);
+  assert.match(relayArgs(['n', 's', '--relay', '--product', 'taibe'], ok).error, /нет имени сессии/);
+  assert.match(relayArgs(['n', 's', '--relay', 'sess'], productFromEnv({ TAIBE_PRODUCT: 'taibe_v2' })).error, /TAIBE_PRODUCT/);
+  // Неверный OQ_PRODUCT не прячется за верным TAIBE_PRODUCT.
+  assert.match(productFromEnv({ OQ_PRODUCT: 'TAIBE', TAIBE_PRODUCT: 'taibe' }).error, /OQ_PRODUCT/);
+});
+
+test('--relay продукта без своего токена не стартует: строка в stdout (Monitor будит сессию) и код 2', async (t) => {
+  const fake = await consoleFake();
+  t.after(fake.close);
+  const child = spawn(process.execPath, [SERVER, '--relay', 'sess-1', '--product', NO_TOKEN_PRODUCT], {
+    env: env(fake.port, {}), stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  let out = '';
+  child.stdout.on('data', (c) => { out += c; });
+  const code = await new Promise((resolve) => child.on('exit', resolve));
+  assert.equal(code, 2);
+  assert.match(out, new RegExp(`Автопередача не запущена: нет OQ_TOKEN_${NO_TOKEN_PRODUCT}`));
+  assert.equal(fake.seen.auth.length, 0); // чужим токеном в консоль не ходил
 });
 
 test('сессия taibe ходит в очередь своим токеном; токена продукта нет — прежним OQ_TOKEN', async (t) => {
