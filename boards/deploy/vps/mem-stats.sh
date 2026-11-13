@@ -104,7 +104,8 @@ report() {
     docker inspect -f '{{.Name}} restarts={{.RestartCount}}' "$id"
   done
   # OOM kills from the kernel log: State.OOMKilled in Docker forgets a kill once the container restarts.
-  since="$(head -n 1 "$file" | cut -f1 | sed 's/T/ /; s/Z$//')"
+  # journalctl reads --since in the host time zone unless it names one.
+  since="$(head -n 1 "$file" | cut -f1 | sed 's/T/ /; s/Z$/ UTC/')"
   if ! command -v journalctl >/dev/null 2>&1; then
     echo "oom kills: no journalctl here — check dmesg | grep oom-kill"
     return 0
@@ -117,7 +118,7 @@ report() {
       last[n % 5] = "  task=" task " oom_memcg=" memcg
     }
     END {
-      printf "oom kills since %s UTC: %d\n", since, n
+      printf "oom kills since %s: %d\n", since, n
       for (k = (n > 5 ? n - 4 : 1); k <= n; k++) print last[k % 5]
     }' || echo "oom kills: journalctl -k failed, the count above is not complete — check dmesg | grep oom-kill"
 }
