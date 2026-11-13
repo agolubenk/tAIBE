@@ -116,7 +116,7 @@ describe('формат отчётов', () => {
     expect(kb.flat().every((b) => Buffer.byteLength(b.callback_data) <= 64)).toBe(true)
   })
 
-  it('контейнеры в отчёте по стекам: стек продукта первым, упавший соседний назван (OPS-8)', async () => {
+  it('контейнеры в отчёте по стекам: «работает/всего», остановленный руками сосед не прощается (OPS-8)', async () => {
     await seedMetrics(['cpu_pct'])
     const base = { agentId: 'prod', image: 'x', health: 'none', restartCount: 0, updatedAt: new Date() }
     await getDb()
@@ -128,11 +128,11 @@ describe('формат отчётов', () => {
       ])
     const r = await buildReport('daily')
     expect(r.hosts[0]!.projects).toEqual([
-      { name: 'backend', main: true, total: 1, down: [] },
-      { name: 't-boards', main: false, total: 2, down: ['tb-api-1'] },
+      { name: 'backend', main: true, total: 1, running: 1, stopped: [] },
+      { name: 't-boards', main: false, total: 2, running: 0, stopped: ['tb-api-1', 'tb-web-1'] },
     ])
-    expect(digestHtml(r, 'Europe/Minsk')).toContain('📦 Контейнеры: не работают — t-boards: tb-api-1 · 2 стека: backend 1, t-boards 2')
-    expect(detailHtmlParts(r, 'Europe/Minsk').join('\n')).toContain('· стеки: backend 1, t-boards 2 (не работают: tb-api-1)')
+    expect(digestHtml(r, 'Europe/Minsk')).toContain('📦 Контейнеры: не работают — t-boards: tb-api-1, tb-web-1 · 2 стека: t-boards 0/2, backend 1/1')
+    expect(detailHtmlParts(r, 'Europe/Minsk').join('\n')).toContain('· стеки: backend 1/1, t-boards 0/2 (не работают: tb-api-1, tb-web-1)')
   })
 
   it('подробный отчёт: длинные строки не рвут разметку, сообщения ≤ 3800', () => {

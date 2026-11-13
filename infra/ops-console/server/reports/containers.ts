@@ -1,38 +1,48 @@
 /**
  * Контейнеры в отчёте по compose-проектам (OPS-8). Агент ≥ 1.5 присылает все стеки хоста; без групп строка
  * «все работают» не говорила, какие стеки учтены. Чистая логика, без БД.
+ *
+ * Карточка отвечает «что работает», а не «что сломано» (это алерты, isContainerDown): не работает любой
+ * контейнер не в running, причина остановки не важна — стек, остановленный руками, виден как «t-boards 0/4».
+ * Исключение — разовая задача, завершённая кодом 0 (isExpectedExit: migrate, vault-bootstrap): это не сервис,
+ * в «всего» она не входит.
  */
-import { isContainerDown } from '../../shared/container-state'
+import { isExpectedExit } from '../../shared/container-state'
 import { plural } from '../../shared/plural'
 import type { OpsReport } from '../../shared/report-contract'
 import { escapeHtml } from '../notify/format'
 
 type Projects = NonNullable<OpsReport['hosts'][number]['projects']>
 
-/** Сколько стеков и упавших контейнеров стека называть в карточке — остальное числом. */
+/** Сколько стеков и неработающих контейнеров стека называть в карточке — остальное числом. */
 const SHOW_STACKS = 6
-const SHOW_DOWN = 3
+const SHOW_STOPPED = 3
 
 export function containerProjects(
   list: Array<{ name: string; composeProject: string; mainStack: boolean; state: string; restartPolicy: string; exitCode: number | null }>,
 ): Projects {
   const by = new Map<string, Projects[number]>()
   for (const c of list) {
-    const p = by.get(c.composeProject) ?? { name: c.composeProject, main: false, total: 0, down: [] }
+    const p = by.get(c.composeProject) ?? { name: c.composeProject, main: false, total: 0, running: 0, stopped: [] }
     p.main ||= c.mainStack
-    p.total += 1
-    if (isContainerDown(c)) p.down.push(c.name)
     by.set(c.composeProject, p)
+    if (c.state === 'exited' && isExpectedExit(c.restartPolicy, c.exitCode)) continue
+    p.total += 1
+    if (c.state === 'running') p.running += 1
+    else p.stopped.push(c.name)
   }
-  return [...by.values()].sort((a, b) => Number(b.main) - Number(a.main) || a.name.localeCompare(b.name))
+  return [...by.values()]
+    .filter((p) => p.total > 0)
+    .sort((a, b) => Number(b.main) - Number(a.main) || a.name.localeCompare(b.name))
 }
 
 const more = (n: number, forms: readonly [string, string, string]) => (n > 0 ? ` и ещё ${plural(n, forms)}` : '')
+const label = (name: string) => name || 'без compose'
 
-/** Хвост строки хоста в подробном отчёте (HTML): стеки с числом контейнеров и упавшими; до OPS-8 — только упавшие. */
+/** Хвост строки хоста в подробном отчёте (HTML): стеки «работает/всего» и неработающие; до OPS-8 — только упавшие. */
 export function hostContainers(h: OpsReport['hosts'][number]): string {
   if (!h.projects?.length) return h.containersNotRunning.length ? ` · не работают: ${escapeHtml(h.containersNotRunning.join(', '))}` : ''
-  const stacks = h.projects.map((p) => `${p.name || 'без compose'} ${p.total}${p.down.length ? ` (не работают: ${p.down.join(', ')})` : ''}`)
+  const stacks = h.projects.map((p) => `${label(p.name)} ${p.running}/${p.total}${p.stopped.length ? ` (не работают: ${p.stopped.join(', ')})` : ''}`)
   return ` · стеки: ${escapeHtml(stacks.join(', '))}`
 }
 
@@ -45,19 +55,19 @@ export function containersLine(r: Pick<OpsReport, 'hosts' | 'restarts'>): string
     return `📦 Контейнеры: ${down.length ? `не работают — ${escapeHtml(down.slice(0, 4).join(', '))}${down.length > 4 ? ` и ещё ${down.length - 4}` : ''}` : 'все работают'}${tail}`
   }
   const prefix = withProjects.length > 1
-  const stacks = withProjects.flatMap((h) =>
-    (h.projects ?? []).map((p) => ({ ...p, label: `${prefix ? `${h.name}/` : ''}${p.name || 'без compose'}` })),
-  )
-  const down = stacks.filter((s) => s.down.length)
-  const state = down.length
-    ? `не работают — ${down
+  const stacks = withProjects.flatMap((h) => (h.projects ?? []).map((p) => ({ ...p, label: `${prefix ? `${h.name}/` : ''}${label(p.name)}` })))
+  const stopped = stacks.filter((s) => s.stopped.length)
+  const state = stopped.length
+    ? `не работают — ${stopped
         .slice(0, SHOW_STACKS)
-        .map((s) => `${s.label}: ${s.down.slice(0, SHOW_DOWN).join(', ')}${more(s.down.length - SHOW_DOWN, ['контейнер', 'контейнера', 'контейнеров'])}`)
-        .join('; ')}${more(down.length - SHOW_STACKS, ['стек', 'стека', 'стеков'])}`
+        .map((s) => `${s.label}: ${s.stopped.slice(0, SHOW_STOPPED).join(', ')}${more(s.stopped.length - SHOW_STOPPED, ['контейнер', 'контейнера', 'контейнеров'])}`)
+        .join('; ')}${more(stopped.length - SHOW_STACKS, ['стек', 'стека', 'стеков'])}`
     : 'все работают'
-  const counts = `${stacks
+  // Стеки с неработающими — первыми: при обрезке до SHOW_STACKS «0/4» не уходит в «и ещё».
+  const ordered = [...stopped, ...stacks.filter((s) => !s.stopped.length)]
+  const counts = `${ordered
     .slice(0, SHOW_STACKS)
-    .map((s) => `${s.label} ${s.total}`)
-    .join(', ')}${more(stacks.length - SHOW_STACKS, ['стек', 'стека', 'стеков'])}`
+    .map((s) => `${s.label} ${s.running}/${s.total}`)
+    .join(', ')}${more(ordered.length - SHOW_STACKS, ['стек', 'стека', 'стеков'])}`
   return `📦 Контейнеры: ${escapeHtml(state)} · ${plural(stacks.length, ['стек', 'стека', 'стеков'])}: ${escapeHtml(counts)}${tail}`
 }
