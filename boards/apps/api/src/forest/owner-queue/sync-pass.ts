@@ -1,7 +1,13 @@
 import { decideAndApply, markFailed } from "../approval/decide-and-apply";
 import { approvalItemData, approvalItemId, itemNonce } from "./item-text";
+import { eachRow } from "./each-row";
 import { journalQueue, ownerQueueActor } from "./queue-actor";
-import { type QueueClient, QueueConflict, type QueueDoc } from "./queue-client";
+import {
+  type QueueClient,
+  QueueConflict,
+  type QueueDoc,
+  QueueRejected,
+} from "./queue-client";
 import type { OwnerQueueConfig } from "./queue-config";
 import { lastWriter, readAnswer } from "./read-answer";
 import { showOutcome } from "./show-outcome";
@@ -62,6 +68,12 @@ async function createItem(deps: SyncDeps, row: ApprovalRow) {
       synced: "pending",
     });
   } catch (error) {
+    // A refused document (400/422) was not written: free the claim, so the
+    // try after the pause makes a new item; each-row.ts journals and pauses.
+    if (error instanceof QueueRejected) {
+      await releaseClaim(row.id, itemId);
+      throw error;
+    }
     // A timeout or 5xx may still have written the item: the claim stays
     // without a version, and the next pass adopts the item or, once it is
     // missing for CLAIM_GRACE_MS, frees the claim (correctness r2).
@@ -298,23 +310,8 @@ function budgeted(client: QueueClient, deadline: number): QueueClient {
   };
 }
 
-// A version race on one item skips that item until the next pass; it does
-// not stop the others. Any other failure (queue down, 429, database) ends
-// the pass and the caller backs off.
-async function eachRow(
-  rows: ApprovalRow[],
-  step: (row: ApprovalRow) => Promise<unknown>,
-) {
-  for (const row of rows) {
-    try {
-      await step(row);
-    } catch (error) {
-      if (!(error instanceof QueueConflict)) throw error;
-    }
-  }
-}
-
-// One pass over the queue (spec «Синхронизация»).
+// One pass over the queue (spec «Синхронизация»). Per-request failures —
+// each-row.ts (a 409 or a refused document does not stop the others).
 export async function syncPass(input: SyncDeps) {
   const deps = {
     ...input,
@@ -323,14 +320,20 @@ export async function syncPass(input: SyncDeps) {
   const workspaceIds = [...deps.config.products.keys()];
   try {
     const fresh = await pendingWithoutItem(workspaceIds, deps.now());
-    await eachRow(fresh.slice(0, CREATE_PER_PASS), (row) =>
-      createItem(deps, row),
+    await eachRow(
+      fresh.slice(0, CREATE_PER_PASS),
+      (row) => createItem(deps, row),
+      journalQueue,
     );
-    await eachRow(await pendingWithItem(workspaceIds), (row) =>
-      readPending(deps, row),
+    await eachRow(
+      await pendingWithItem(workspaceIds),
+      (row) => readPending(deps, row),
+      journalQueue,
     );
-    await eachRow(await outcomeToShow(workspaceIds), (row) =>
-      showOutcome(deps.client, row),
+    await eachRow(
+      await outcomeToShow(workspaceIds),
+      (row) => showOutcome(deps.client, row),
+      journalQueue,
     );
   } catch (error) {
     if (!(error instanceof PassBudgetSpent)) throw error;
