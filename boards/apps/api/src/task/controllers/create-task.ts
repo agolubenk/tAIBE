@@ -1,3 +1,4 @@
+import type { AuthorKind } from "../../forest/author-kind";
 import { extractAssetIds } from "../../storage/cleanup-assets";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
@@ -57,9 +58,12 @@ async function createTask({
   priority,
   customFields,
   draftAssetIds,
+  author,
 }: {
   projectId: string;
   currentUserId: string;
+  // TB-83: who creates it, recorded on the "created" activity row.
+  author?: AuthorKind;
   userId?: string;
   title: string;
   status: string;
@@ -220,6 +224,7 @@ async function createTask({
     taskId: createdTask.id,
     userId: createdTask.userId ?? "",
     currentUserId: currentUserId,
+    author,
     type: "created",
     content: null,
   });

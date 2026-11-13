@@ -1,3 +1,4 @@
+import { taskAuthor, writerKind } from "../forest/author-kind";
 import { withVerifiedStorageObject } from "../storage/cleanup-queue";
 import { eq } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
@@ -915,6 +916,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       status,
       customFields,
       draftAssetIds,
+      author: writerKind(c),
     });
 
     return c.json(task, 200);
@@ -928,19 +930,19 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
         title,
         currentUserId: c.get("userId"),
         canUpdateTasks: await hasWorkspacePermission(c, { task: ["update"] }),
+        author: writerKind(c) === "agent" ? "agent" : await taskAuthor(id),
       }),
       200,
     );
   })
   .openapi(getTaskByTicketIdRoute, async (c) => {
     const { ticketId } = c.req.valid("param");
-    return c.json(
-      await getTaskByTicketId(ticketId, c.get("userId"), {
-        ...c.req.valid("query"),
-        apiKeyScope: requestWorkspaceScope(c),
-      }),
-      200,
-    );
+    const task = await getTaskByTicketId(ticketId, c.get("userId"), {
+      ...c.req.valid("query"),
+      apiKeyScope: requestWorkspaceScope(c),
+    });
+    // TB-83: who created it, for the reader's trust.
+    return c.json({ ...task, author: await taskAuthor(task.id) }, 200);
   })
   .openapi(getTaskRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -951,7 +953,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       c.get("userId"),
     );
 
-    return c.json(task, 200);
+    return c.json({ ...task, author: await taskAuthor(id) }, 200);
   })
   .openapi(moveTaskRoute, async (c) => {
     const { id } = c.req.valid("param");

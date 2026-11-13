@@ -8,6 +8,7 @@ import {
 } from "../openapi";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
+import { type AuthorKind, authorMark, writerKind } from "../forest/author-kind";
 import createActivity from "./controllers/create-activity";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
@@ -199,18 +200,31 @@ const activity = apiRouter()
       });
     }
     return c.json(
-      await createActivity(taskId, type, c.get("userId"), message, eventData),
+      // TB-83: the writer's kind is stamped, never taken from the body.
+      await createActivity(taskId, type, c.get("userId"), message, {
+        ...eventData,
+        ...authorMark(writerKind(c)),
+      }),
       200,
     );
   })
   .openapi(createCommentRoute, async (c) => {
     const { taskId, comment } = c.req.valid("json");
-    return c.json(await createComment(taskId, c.get("userId"), comment), 200);
+    return c.json(
+      await createComment(
+        taskId,
+        c.get("userId"),
+        comment,
+        undefined,
+        writerKind(c),
+      ),
+      200,
+    );
   })
   .openapi(updateCommentRoute, async (c) => {
     const { activityId, comment } = c.req.valid("json");
     return c.json(
-      await updateComment(c.get("userId"), activityId, comment),
+      await updateComment(c.get("userId"), activityId, comment, writerKind(c)),
       200,
     );
   })
@@ -226,11 +240,18 @@ subscribeToEvent<{
   currentUserId: string;
   type: string;
   content: string | null;
+  author?: AuthorKind;
 }>("task.created", async (data) => {
   if (!data.currentUserId || !data.taskId || !data.type) {
     return;
   }
-  await createActivity(data.taskId, data.type, data.currentUserId, null, {});
+  await createActivity(
+    data.taskId,
+    data.type,
+    data.currentUserId,
+    null,
+    authorMark(data.author),
+  );
 });
 
 subscribeToEvent<{

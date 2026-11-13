@@ -22,6 +22,7 @@ describe("shapeResult codec fallback (AC-022)", () => {
 
     expect(JSON.parse(first?.type === "text" ? first.text : "null")).toEqual({
       etag: expect.any(String),
+      untrusted: true,
       data: { id: "t1" },
     });
     expect(onFallback).toHaveBeenCalledWith("codec broke");

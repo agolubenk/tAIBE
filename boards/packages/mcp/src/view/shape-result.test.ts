@@ -33,6 +33,7 @@ describe("shapeResult", () => {
     expect(toon?.type === "text" && toon.text.startsWith("{")).toBe(false);
     expect(JSON.parse(json?.type === "text" ? json.text : "null")).toEqual({
       etag: hashValue(data),
+      untrusted: true,
       data,
     });
   });
@@ -41,7 +42,11 @@ describe("shapeResult", () => {
     const result = shapeResult(data, {}, "list_tasks {}");
 
     expect(result.isError).toBe(false);
-    expect(body(result)).toEqual({ etag: hashValue(data), data });
+    expect(body(result)).toEqual({
+      etag: hashValue(data),
+      untrusted: true,
+      data,
+    });
   });
 
   it("answers no body when the etag still matches", () => {
@@ -62,6 +67,7 @@ describe("shapeResult", () => {
 
     expect(body(result)).toEqual({
       etag: hashValue(data),
+      untrusted: true,
       data: { items: [{ id: "t2", title: "Two" }] },
     });
   });
