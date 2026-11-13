@@ -28186,13 +28186,80 @@
       }
     },
     "/notebook/{workspaceId}/embed/work": {
+      "post": {
+        "operationId": "takeNotebookEmbedWork",
+        "tags": [
+          "Notebook"
+        ],
+        "summary": "Take embedding work",
+        "description": "For the embedding worker: search queries waiting for a vector first, then chunks without one for the current model. The items are leased to the caller. With `wait`, an empty answer is held until work arrives.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 25,
+              "default": 0,
+              "description": "Seconds to hold the request open when there is no work."
+            },
+            "required": false,
+            "description": "Seconds to hold the request open when there is no work.",
+            "name": "wait",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Embedding work",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotebookEmbedWork"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing workspace:manage_settings permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      },
       "get": {
         "operationId": "getNotebookEmbedWork",
         "tags": [
           "Notebook"
         ],
-        "summary": "Take embedding work",
-        "description": "For the embedding worker: search queries waiting for a vector first, then chunks without one for the current model. With `wait`, an empty answer is held until work arrives.",
+        "summary": "Take embedding work (deprecated: use POST)",
+        "description": "Deprecated (TB-97): takes and leases work exactly as `POST` does. Kept only for embedding workers older than the `POST` route.",
+        "deprecated": true,
         "parameters": [
           {
             "schema": {
