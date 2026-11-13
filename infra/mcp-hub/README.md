@@ -30,6 +30,22 @@ Claude Code в tAIBE ──────► 127.0.0.1:9122/mcp  (serena-taibe п�
 (`disabledMcpjsonServers` + `enabledPlugins."context7@claude-plugins-official": false`). Хаб не
 запущен — этих четырёх у Claude Code нет, как и serena.
 
+## Хост и продукты
+
+Хаб один на Mac владельца (`:3050`) для всех продуктов; код и эксплуатация — tAIBE, роль ops слоя (`infra/CLAUDE.md`).
+Команды — из основной папки tAIBE (`npm run mcp-hub:*`). В HR те же `npm run mcp-hub:*` — алиасы (решение владельца):
+обёртка HR `infra/scripts/dev-ai/taibe-dev-ai.sh` зовёт код tAIBE с хостом — основной папкой HR (OPS-42).
+
+- **Хост** — продукт, чьи пути получают серверы с хостом (serena `:9121`, git, dams-rag, postgres-readonly, ai-council); сейчас HR.
+  Как выбирается — абзац «Хост» в «Две serena». serena tAIBE (`:9122`) — по требованию, с 08.11 выключена.
+- **Продукт** видит хаб через свой срез `?tags=` у клиента; срез — не граница доверия, копии серверов под продукт —
+  только по замеру (раздел «Подключение клиентов», OPS-43).
+- **Не менять реальный путь папки состояния** `~/.config/hr-helper-mcp-hub/`: 1mcp привязывает хранилище OAuth к
+  realpath этой папки (`auth/storage/protectedRecordStorage.js`, `canonicalPath` → `fs.realpathSync`, 1mcp 0.39.3).
+  Перенос или переименование — повторный вход во все OAuth-серверы и клиенты. Имена с `hr-helper` (папка, логи
+  `~/Library/Logs/hr-helper-mcp-hub/`, LaunchAgent `space.hrhelper.mcp-hub`) остаются; новое имя — только ссылкой на
+  старую папку, не наоборот (OPS-46, отложено).
+
 ## Запуск
 
 В VS Code всё делает задача **«MCP: старт и авторизация»** (`.vscode/tasks.json`, `runOn: folderOpen`):
