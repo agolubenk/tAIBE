@@ -79,3 +79,40 @@ def heartbeat_silent(cfg, mode, cycle, hb, now, awake_now):
         return True
     slept = awake_since_sleep(cycle, hb, awake_now)
     return slept is None or slept > limit.total_seconds()
+
+
+# SE-70: проход внутри (state/pulse новее пульса) — это ещё не тишина. 13.11 17:32–17:38 проход шёл 6 мин, порог
+# пульса днём 5 мин — «НЕРВ МОЛЧИТ» с перезапуском живого демона. Застрявшим проход считается после трёх порогов.
+SLOW_PASS_FACTOR = 3
+
+
+def running_pass(pulse, hb):
+    """(начало прохода, источник), если state/pulse пишет проход, начатый после пульса `hb` — демон внутри прохода;
+    иначе None (демон спит между проходами, демон старше SE-70 без файла, сломанный файл)."""
+    p = as_obj(pulse)
+    started, source = p.get("pass"), p.get("source")
+    if not isinstance(started, str):
+        return None
+    try:
+        start = datetime.fromisoformat(started)
+        if isinstance(hb, str) and hb and start <= datetime.fromisoformat(hb):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return started, source if isinstance(source, str) and source else "?"
+
+
+def pass_stuck(cfg, mode, cycle, hb, run, now, awake_now):
+    """Минуты прохода `run`, если он идёт дольше SLOW_PASS_FACTOR порогов пульса и по стенным часам, и по бодрствованию
+    (Mac уснул посреди прохода — не застрял, тот же приём, что в heartbeat_silent); иначе 0."""
+    limit = SLOW_PASS_FACTOR * heartbeat_stale_after(cfg, mode, cycle).total_seconds()
+    try:
+        age = (now - datetime.fromisoformat(run[0])).total_seconds()
+    except (TypeError, ValueError):
+        return 0
+    if age <= limit:
+        return 0
+    slept = awake_since_sleep(cycle, hb, awake_now)
+    if slept is not None and slept <= limit:
+        return 0
+    return int(age // 60)

@@ -25,6 +25,8 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
+STARTED = time.time()     # SE-70: код старше этого — загружен; правка позже — выход и перезапуск launchd
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
@@ -35,6 +37,7 @@ from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from
 STATE_DIR = os.environ.get("NERVE_STATE_DIR", os.path.join(HERE, "state"))
 from heartbeat import (AWAKE_CLOCK, MAX_CYCLE_SECONDS, as_obj, awake_seconds, awake_since_sleep,  # noqa: E402,F401
                        cycle_seconds, finite_number, heartbeat_silent, heartbeat_stale_after, slept_cycle)
+from pass_watch import close_pass, code_restart, pass_lines, silence_alarm  # noqa: E402
 import state_io  # noqa: E402
 from state_io import load_json, save_json  # noqa: E402,F401
 
@@ -61,6 +64,9 @@ class Ctx:
         self.deliver = deliver
         self.tz = local_tz()
         self.now = datetime.now(timezone.utc)
+        self.t0 = time.monotonic()
+        self.pass_started = self.now.isoformat(timespec="seconds")
+        self.pulse_dir = state_dir     # другой продукт пишет пульс прохода в папку продукта по умолчанию (attach_peers)
         self.projects_root = os.path.expanduser(cfg["team"]["projects_root"])
         self.state = load_json(os.path.join(state_dir, "state.json"), {})
         self.journal = Journal(os.path.join(state_dir, "journal.jsonl"))
@@ -110,6 +116,9 @@ class Ctx:
     def save(self):
         save_json(os.path.join(self.state_dir, "state.json"), self.state)
 
+    def pulse(self, source):
+        state_io.write_pulse(self.pulse_dir, source, self.pass_started, now_iso())
+
 
 def peer_emit(peer, write):
     """Запись в журнал другого продукта: сбой — в его errors (`route`), исключение наружу не идёт (Ф2b, линза 1)."""
@@ -128,9 +137,13 @@ POLLS = [("github", sources.poll_github), ("queue", sources.poll_queue), ("syste
 def one_pass(ctx, polls=None, finish=True):
     """finish=False — пульс и запись state.json оставить run_products (одна запись ≈1 МБ за проход, а не две)."""
     errs = ctx.state.setdefault("errors", {})
+    durs = {}
+    tag = "" if polls is None else f"@{ctx.cfg.get('slug', '?')}"
     for name, fn in (POLLS if polls is None else polls):
         if not ctx.cfg["sources"].get(name, True):
             continue
+        ctx.pulse(name + tag)
+        t = time.monotonic()
         try:
             fn(ctx)
             if name in errs:
@@ -144,15 +157,14 @@ def one_pass(ctx, polls=None, finish=True):
                 ctx.emit(f"err:{name}:{errs[name]['since']}", "nerve.error", DIGEST, ["release"],
                          f"источник {name} не отвечает: {msg}", "nerve")
             errs[name]["msg"] = msg
+        durs[name + tag] = round(time.monotonic() - t, 1)
+    ctx.state["durations"] = {"at": ctx.pass_started, "sources": durs}
     if polls is not None:          # проход другого продукта: пульс и режим пишет только проход по умолчанию
         ctx.save()
         return
     if not finish:
         return
-    ctx.state["heartbeat"] = now_iso()
-    ctx.save()
-    with open(os.path.join(ctx.state_dir, "heartbeat"), "w") as f:
-        f.write(ctx.state["heartbeat"])
+    close_pass(ctx)
 
 
 # ---------- Продукты (OPS-25) ----------
@@ -221,6 +233,8 @@ def attach_peers(ctx, deliver):
             ctx.peers = peer_contexts(deliver, _LAST_PRODUCTS[0]) if _LAST_PRODUCTS else {}
         except Exception:  # noqa: BLE001
             ctx.peers = {}
+    for peer in ctx.peers.values():
+        peer.pulse_dir = ctx.state_dir
 
 
 def _products_error(ctx, e):
@@ -248,11 +262,7 @@ def run_products(ctx, deliver):
     except Exception as e:  # noqa: BLE001
         _products_error(ctx, e)
     # Пульс — после всех продуктов: долгий проход другого продукта не даёт ложное «НЕРВ МОЛЧИТ» ролям по умолчанию.
-    hb = now_iso()
-    ctx.state["heartbeat"] = hb
-    ctx.save()
-    with open(os.path.join(STATE_DIR, "heartbeat"), "w") as f:
-        f.write(hb)
+    close_pass(ctx, ctx.peers)
 
 
 def resolve_product(cfg, a):
@@ -296,12 +306,15 @@ def cmd_run(cfg, a):
     while True:
         deliver = wakes_on()
         ctx = Ctx(cfg, STATE_DIR, deliver=not seed and deliver)
+        ctx.pulse("start")
         attach_peers(ctx, not seed and deliver)
         one_pass(ctx, finish=False)
         seed = False
         run_products(ctx, deliver)
         pause = cycle_seconds(cfg, load_json(os.path.join(STATE_DIR, "mode.json"), {}), a.interval)
         save_json(os.path.join(STATE_DIR, "cycle.json"), {"seconds": pause, "at": now_iso(), "awake": awake_seconds()})
+        if code_restart(ctx, STARTED):
+            return 3      # launchd (KeepAlive.SuccessfulExit=false, ThrottleInterval 30) поднимет демон с новым кодом
         time.sleep(pause)
 
 
@@ -395,13 +408,10 @@ def cmd_tap(cfg, a):
         elif not cur["pending"]:
             cur["last_flush"] = now_iso() if due else cur["last_flush"]
         if role in tc["heartbeat_watchers"]:
-            hb = read_heartbeat()
-            cycle = load_json(os.path.join(STATE_DIR, "cycle.json"), None)
-            stale = heartbeat_silent(cfg, mode, cycle, hb, now, awake_seconds())
-            if stale and not cur["dead_warned"]:
-                print(f"НЕРВ МОЛЧИТ с {hb[11:16] if hb else '—'} UTC: демон не пишет пульс — "
-                      f"launchctl kickstart -k gui/{os.getuid()}/space.hrhelper.nerve", flush=True)
-            cur["dead_warned"] = stale
+            alarm = silence_alarm(cfg, mode, now, STATE_DIR)
+            if alarm and not cur["dead_warned"]:
+                print(alarm, flush=True)
+            cur["dead_warned"] = bool(alarm)
         save_json(cpath, cur)
         if a.once:
             return 0
@@ -437,6 +447,8 @@ def cmd_status(cfg, a):
     mode = load_json(os.path.join(STATE_DIR, "mode.json"), {})
     b = st.get("budget", {})
     print(f"пульс: {st.get('heartbeat', '—')}")
+    for line in pass_lines(st, STATE_DIR):
+        print(line)
     print(f"режим: {json.dumps(mode, ensure_ascii=False)}")
     print(f"лимит: {json.dumps(b.get('limit'), ensure_ascii=False)}")
     waves = b.get("waves", [])
