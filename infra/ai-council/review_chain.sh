@@ -7,13 +7,22 @@
 # 2. Иначе GLM с --resume <out.json>: прошедшие на opencode части не повторяются.
 # 3. GLM не закрыл всё — непройденные части (_meta.not_passed) берёт Claude: не больше 2 агентов-линз на PR.
 #
-# Запуск — из основного checkout: квота и бюджет GLM живут в его .claude/council/council.db.
+# Квота и бюджет GLM живут в .claude/council/council.db хоста. Хост — TAIBE_HOST_ROOT; без неё — repo_root
+# продукта по умолчанию из instances/ (эту же базу ведёт ai-council хаба). Скрипт запускается из любой папки.
 # REVIEW_CHAIN_FORCE=glm — начать сразу с GLM (opencode сломан или его лимит известен заранее).
 # OPENCODE_REVIEW_MODEL — модель opencode (умолчание в glm_pr_review.py).
 # Коды: 0 — все линзы прошли; 1 — запуск; 2 — часть не прошла; 3 — квота или бюджет GLM.
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# Без хоста GLM искал базу консилиума в папке слоя, её там нет — код 1 (OPS-56).
+if [[ -z "${TAIBE_HOST_ROOT:-}" ]]; then
+  TAIBE_HOST_ROOT="$(python3 -I "$here/../../eval/nerve/products.py" get default repo_root)" || {
+    echo "review_chain: хост не найден в instances/ — задай TAIBE_HOST_ROOT" >&2
+    exit 1
+  }
+  export TAIBE_HOST_ROOT
+fi
 pr="${1:?usage: review_chain.sh <PR> <out.json> [lenses.json] [флаги]}"
 out="${2:?usage: review_chain.sh <PR> <out.json> [lenses.json] [флаги]}"
 shift 2
