@@ -9,10 +9,77 @@ import {
   it,
   vi,
 } from "vite-plus/test";
-import { eachRow, REJECT_PAUSE_MS, resetRejectedForTest } from "./each-row";
+import {
+  eachRow,
+  REJECT_PAUSE_MS,
+  resetRejectedForTest,
+  withoutPaused,
+} from "./each-row";
 import { httpQueueClient, QueueConflict, QueueRejected } from "./queue-client";
 
 const rows = ["a", "b", "c"].map((id) => ({ id, workspaceId: "ws1" }));
+
+describe("paused requests do not starve new ones (Control lens on #151)", () => {
+  beforeEach(() => resetRejectedForTest());
+
+  it("30 refused requests leave the share of the next pass to the new ones", async () => {
+    const take = 30;
+    const old = Array.from({ length: take }, (_, i) => ({
+      id: `old${i}`,
+      workspaceId: "ws1",
+    }));
+    const refuse = async () => {
+      throw new QueueRejected("HTTP 422", 422);
+    };
+    await eachRow(
+      old,
+      refuse,
+      vi.fn(async () => {}),
+      () => 1000,
+    );
+    const fresh = [...old, { id: "new", workspaceId: "ws1" }];
+    const seen: string[] = [];
+    await eachRow(
+      withoutPaused(fresh, () => 2000).slice(0, take),
+      async (row) => {
+        seen.push(row.id);
+      },
+      vi.fn(async () => {}),
+      () => 2000,
+    );
+    expect(seen).toEqual(["new"]);
+  });
+
+  it("journals a refused request once, not once per pause", async () => {
+    const journal = vi.fn(async () => {});
+    const refuse = async () => {
+      throw new QueueRejected("HTTP 422", 422);
+    };
+    const one = [{ id: "a", workspaceId: "ws1" }];
+    await eachRow(one, refuse, journal, () => 0);
+    await eachRow(one, refuse, journal, () => REJECT_PAUSE_MS);
+    await eachRow(one, refuse, journal, () => 2 * REJECT_PAUSE_MS);
+    expect(journal).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed journal write ends the pass and does not pause the request", async () => {
+    const refuse = async () => {
+      throw new QueueRejected("HTTP 422", 422);
+    };
+    const one = [{ id: "a", workspaceId: "ws1" }];
+    await expect(
+      eachRow(
+        one,
+        refuse,
+        async () => {
+          throw new Error("database down");
+        },
+        () => 0,
+      ),
+    ).rejects.toThrow("database down");
+    expect(withoutPaused(one, () => 1)).toEqual(one);
+  });
+});
 
 describe("eachRow (TB-110)", () => {
   beforeEach(() => resetRejectedForTest());

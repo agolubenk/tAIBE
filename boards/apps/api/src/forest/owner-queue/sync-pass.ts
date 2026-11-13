@@ -1,6 +1,6 @@
 import { decideAndApply, markFailed } from "../approval/decide-and-apply";
 import { approvalItemData, approvalItemId, itemNonce } from "./item-text";
-import { eachRow } from "./each-row";
+import { eachRow, withoutPaused } from "./each-row";
 import { journalQueue, ownerQueueActor } from "./queue-actor";
 import {
   type QueueClient,
@@ -321,7 +321,7 @@ export async function syncPass(input: SyncDeps) {
   try {
     const fresh = await pendingWithoutItem(workspaceIds, deps.now());
     await eachRow(
-      fresh.slice(0, CREATE_PER_PASS),
+      withoutPaused(fresh).slice(0, CREATE_PER_PASS),
       (row) => createItem(deps, row),
       journalQueue,
     );
