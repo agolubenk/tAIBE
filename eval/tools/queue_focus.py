@@ -174,6 +174,8 @@ def render(result):
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+# The «без аренды» mark of a row card: the board pass writes it to cards[].mark (TB-106 F9); cards[].c is the legacy
+# card code.
 ABANDONED = 'без аренды'
 NOT_ROWS = ('done', 'blocked')
 
@@ -222,7 +224,7 @@ def plan_next(rows, top=5):
             bug = c.get('k') == 'bug'
             cards[key] = {'key': key, 'title': str(c.get('t') or ''), 'status': str(c.get('st') or 'to-do'),
                           'kind': 'bug' if bug else 'task', ('severity' if bug else 'priority'): str(c.get('s') or ''),
-                          'abandoned': c.get('c') == ABANDONED}
+                          'abandoned': c.get('mark') == ABANDONED}
         cards = {k: v for k, v in cards.items() if v['status'].lower() not in WAITING}
         if not cards:
             continue

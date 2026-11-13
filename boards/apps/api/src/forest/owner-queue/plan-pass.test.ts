@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vite-plus/test";
-import { PLAN_WRITES_PER_RUN, type PlanStore, planPass } from "./plan-pass";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  PLAN_WRITES_PER_RUN,
+  type PlanStore,
+  planPass,
+  READ_BUDGET_MS,
+} from "./plan-pass";
 import type { BoardCard, RecentCard } from "./plan-types";
 import {
   listAll,
@@ -50,6 +55,8 @@ class FakeWork {
   readonly patches: { id: string; data: Record<string, unknown> }[] = [];
   race = new Set<string>();
   truncated = false;
+  // Answer in pages of one doc, as a paging console would (no snapshot).
+  paged = false;
 
   add(id: string, data: Record<string, unknown>, version = 1) {
     this.docs.set(id, {
@@ -67,11 +74,21 @@ class FakeWork {
       get: fail,
       put: fail,
       history: fail,
-      list: async (_collection: QueueCollection): Promise<QueuePage> => ({
-        docs: [...this.docs.values()].map((doc) => structuredClone(doc)),
-        nextOffset: null,
-        truncated: this.truncated,
-      }),
+      list: async (
+        _collection: QueueCollection,
+        offset: number,
+      ): Promise<QueuePage> => {
+        const docs = [...this.docs.values()].map((doc) => structuredClone(doc));
+        if (!this.paged) {
+          return { docs, nextOffset: null, truncated: this.truncated };
+        }
+        const next = offset + 1 < docs.length ? offset + 1 : null;
+        return {
+          docs: docs.slice(offset, offset + 1),
+          nextOffset: next,
+          truncated: this.truncated,
+        };
+      },
       patch: async (_collection, id, data, ifVersion) => {
         const doc = this.docs.get(id);
         if (!doc || this.race.has(id) || doc.version !== ifVersion) {
@@ -259,6 +276,71 @@ describe("planPass (TB-106)", () => {
     expect(board.calls).toEqual(["resolve:ws-eval,ws-lav"]);
   });
 
+  it("follows only the rows of its plan products, by the id prefix", async () => {
+    // A board of aiBoards&eval alone: the HR rows (no prefix, queue product
+    // hr-helper like every w-… row) are not its rows.
+    const own: OwnerQueueConfig = {
+      ...config,
+      products: new Map([["ws-eval", "hr-helper"]]),
+      plan: { products: new Map([["ws-eval", "taibe"]]) },
+    };
+    const queue = new FakeWork();
+    queue.add("w-taibe-a", { status: "doing", cards: [card("TB-1")] });
+    queue.add("w-n-high", { status: "doing", cards: [card("TB-1")] });
+    queue.add("w-hr-helper-unplanned", { status: "doing", cards: [] });
+    const board = store({ [`${WS}/TB-1`]: done });
+    await planPass(
+      { client: queue.client(), config: own, store: board, now: () => NOW },
+      { hourly: false, daily: false },
+    );
+    expect(queue.patches.map((patch) => patch.id)).toEqual(["w-taibe-a"]);
+    expect(queue.docs.get("w-n-high")?.data.status).toBe("doing");
+  });
+
+  it("follows the rows of a paged list but makes no off-plan decision on it", async () => {
+    const queue = new FakeWork();
+    queue.paged = true;
+    queue.add("w-a", { status: "doing", cards: [card("TB-1")] });
+    queue.add("w-taibe-unplanned", { status: "doing", cards: [] });
+    const board = store(
+      { [`${WS}/TB-1`]: done },
+      { recent: [["ws-eval", moved("TB-7")]] },
+    );
+    expect(await run(queue, board, true)).toMatchObject({
+      written: 1,
+      hourlyDone: false,
+    });
+    expect(board.calls).toEqual(["resolve:ws-eval,ws-lav"]);
+    expect(queue.docs.get("w-a")?.data.status).toBe("done");
+  });
+
+  describe("read budget", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("skips the hourly reads after a slow board read and still writes, with its own budget", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      const queue = new FakeWork();
+      queue.add("w-a", { status: "doing", cards: [card("TB-1")] });
+      const board = store({ [`${WS}/TB-1`]: done });
+      const slow: PlanStore = {
+        ...board,
+        resolve: async (workspaceIds, refs) => {
+          vi.setSystemTime(NOW.getTime() + READ_BUDGET_MS + 1000);
+          return board.resolve(workspaceIds, refs);
+        },
+      };
+      expect(await run(queue, slow, true)).toMatchObject({
+        written: 1,
+        left: 0,
+        hourlyDone: false,
+      });
+      expect(board.calls).toEqual(["resolve:ws-eval,ws-lav"]);
+    });
+  });
+
   it("puts an aiBoards&eval card into w-taibe-unplanned while the queue product is hr-helper", async () => {
     const queue = new FakeWork();
     queue.add("w-taibe-unplanned", { status: "doing", cards: [] });
@@ -318,5 +400,30 @@ describe("listAll", () => {
     const all = await listAll(client, "work");
     expect(all.docs.map((d) => d.id)).toEqual(["a", "b"]);
     expect(offsets).toEqual([0, 500]);
+    expect(all.snapshot).toBe(false);
+  });
+
+  it("calls one page a snapshot", async () => {
+    const client = {
+      list: async () => ({ docs: [], nextOffset: null, truncated: false }),
+    } as unknown as QueueClient;
+    expect(await listAll(client, "work")).toEqual({
+      docs: [],
+      truncated: false,
+      snapshot: true,
+    });
+  });
+
+  it("reads no next page past the deadline and reports a truncated list", async () => {
+    const offsets: number[] = [];
+    const client = {
+      list: async (_collection: QueueCollection, offset: number) => {
+        offsets.push(offset);
+        return { docs: [], nextOffset: offset + 500, truncated: false };
+      },
+    } as unknown as QueueClient;
+    const all = await listAll(client, "work", Date.now() - 1);
+    expect(offsets).toEqual([0]);
+    expect(all).toMatchObject({ truncated: true, snapshot: false });
   });
 });

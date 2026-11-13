@@ -26,11 +26,14 @@ function entryOf(card: RecentCard): Record<string, unknown> {
 }
 
 // F8: the product's off-plan row w-<slug>-unplanned. A card leaves when a plan
-// row holds it or when it closed more than 14 days ago; a card that moved to
+// row holds it, when it closed more than 14 days ago or when the board no
+// longer has it (deleted, its workspace unmapped); a card that moved to
 // in-progress, in-review or a final column in that time and that no plan row
 // holds joins it once (one entry per card).
 export function refreshOffPlan(input: {
   cards: unknown[];
+  // Every card of this row that the board has (plan-pass.ts resolves the
+  // cards of all rows); recent cards count as found too.
   board: ReadonlyMap<string, BoardCard>;
   // Cards of every other row that is not archived: a card of a done row was
   // planned work too.
@@ -39,6 +42,9 @@ export function refreshOffPlan(input: {
   now: Date;
 }): unknown[] {
   const since = offPlanSince(input.now);
+  const moved = new Map(
+    input.recent.map((card) => [cardUid(card.ws, card.key), card]),
+  );
   const seen = new Set<string>();
   const kept = input.cards.filter((entry) => {
     const ref = cardRef(entry);
@@ -46,8 +52,11 @@ export function refreshOffPlan(input: {
     const uid = cardUid(ref.ws, ref.key);
     if (seen.has(uid)) return false;
     seen.add(uid);
+    const card = input.board.get(uid) ?? moved.get(uid);
     return (
-      !input.planned.has(uid) && !closedLongAgo(input.board.get(uid), since)
+      card !== undefined &&
+      !input.planned.has(uid) &&
+      !closedLongAgo(card, since)
     );
   });
   for (const card of input.recent) {

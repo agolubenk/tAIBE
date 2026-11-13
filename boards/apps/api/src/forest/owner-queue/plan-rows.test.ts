@@ -147,6 +147,26 @@ describe("planWrites (TB-106)", () => {
     ]);
   });
 
+  it("reopens a done row with an end to doing and removes the end (null deletes it in a queue PATCH)", () => {
+    const { writes } = plan(
+      [
+        row("w-a", {
+          status: "done",
+          end: "2026-11-10",
+          cards: [entry("TB-1", { st: "done" })],
+        }),
+      ],
+      [[uid("TB-1"), at("in-progress")]],
+    );
+    expect(writes.map((write) => write.patch)).toEqual([
+      {
+        cards: [entry("TB-1", { st: "in-progress" })],
+        status: "doing",
+        end: null,
+      },
+    ]);
+  });
+
   it("clears the mark once the card has a lease or moved on (F9)", () => {
     const marked = entry("TB-1", { st: "in-progress", mark: "без аренды" });
     const rows = [row("w-a", { status: "doing", cards: [marked] })];

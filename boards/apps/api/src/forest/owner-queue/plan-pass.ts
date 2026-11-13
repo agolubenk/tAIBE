@@ -10,6 +10,7 @@ import {
   offPlanSince,
   type PlanRow,
   type RecentCard,
+  rowProduct,
   withPatch,
 } from "./plan-types";
 import { PlanWriter } from "./plan-writer";
@@ -41,8 +42,12 @@ export type PlanDeps = {
   now: () => Date;
 };
 
-const RUN_DEADLINE_MS = 120_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+// The reads (the queue list, the board queries) stop starting new work after
+// READ_BUDGET_MS; the writes end WRITE_BUDGET_MS after that. The worst run ends
+// within about 2.5 minutes, before the next 5-minute run.
+export const READ_BUDGET_MS = 60_000;
+export const WRITE_BUDGET_MS = 60_000;
 
 export type PlanRuns = { hourly: boolean; daily: boolean };
 
@@ -58,9 +63,16 @@ export type PlanOutcome = {
   dailyDone: boolean;
 };
 
-function planRows(docs: QueueDoc[]): PlanRow[] {
+// The rows of the plan products only, by the id prefix w-<product>-, as
+// eval/tools/queue_focus.py plan_rows reads them. Not the doc's queue product:
+// the queue takes it from the id's own prefix (namespaceOf), so every w-… row
+// is hr-helper there, w-taibe-… included.
+function planRows(docs: QueueDoc[], products: string[]): PlanRow[] {
   return docs.filter(
-    (doc) => doc.data.kind === undefined && doc.data.archived !== true,
+    (doc) =>
+      doc.data.kind === undefined &&
+      doc.data.archived !== true &&
+      rowProduct(doc.id, products) !== null,
   );
 }
 
@@ -115,30 +127,34 @@ export async function planPass(
   deps: PlanDeps,
   runs: PlanRuns,
 ): Promise<PlanOutcome> {
-  const writer = new PlanWriter(deps.client, Date.now() + RUN_DEADLINE_MS);
+  const readBy = Date.now() + READ_BUDGET_MS;
+  const writer = new PlanWriter(deps.client, readBy + WRITE_BUDGET_MS);
   const now = deps.now();
   const workspaceIds = [...deps.config.products.keys()];
   // The plan product, not the queue product: aiBoards&eval plans under
   // w-taibe-* (OQ_PLAN_PRODUCTS).
   const planProducts = deps.config.plan.products;
   const products = [...new Set(planProducts.values())];
-  let list = await listAll(deps.client, "work");
+  let list = await listAll(deps.client, "work", readBy);
   const answers = await applyAnswers(writer, {
     docs: list.docs,
-    rows: planRows(list.docs),
+    rows: planRows(list.docs, products),
     products,
     now,
   });
-  if (answers.changed) list = await listAll(deps.client, "work");
-  // A cut list may miss the row that plans a card or a row before another:
-  // no off-plan decisions and no forecast then.
+  if (answers.changed) list = await listAll(deps.client, "work", readBy);
+  // A cut list, or a paged walk without a snapshot, may miss the row that
+  // plans a card or a row before another: no off-plan decisions and no
+  // forecast then. F4 still follows the rows read.
   if (list.truncated) {
     console.warn("owner-queue plan rows: the work list is truncated");
   }
-  const withHourly = runs.hourly && !list.truncated;
-  const withDaily = runs.daily && !list.truncated;
-  const rows = planRows(list.docs);
+  const whole = !list.truncated && list.snapshot;
+  const rows = planRows(list.docs, products);
   const board = await deps.store.resolve(workspaceIds, refsOf(rows));
+  const inTime = Date.now() <= readBy;
+  const withHourly = runs.hourly && whole && inTime;
+  const withDaily = runs.daily && whole && inTime;
   const { writes, missing } = planWrites({
     rows,
     board,
@@ -146,7 +162,12 @@ export async function planPass(
     hourly: withHourly
       ? {
           abandoned: await deps.store.abandoned(workspaceIds, now),
-          recent: await deps.store.recent(planProducts, offPlanSince(now)),
+          // The plan product, not the queue product: the off-plan row of
+          // aiBoards&eval cards is w-taibe-unplanned (OQ_PLAN_PRODUCTS).
+          recent: await deps.store.recent(
+            deps.config.plan.products,
+            offPlanSince(now),
+          ),
           products,
           now,
         }
