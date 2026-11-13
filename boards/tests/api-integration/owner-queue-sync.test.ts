@@ -6,7 +6,10 @@ import {
   ownerApprovalTable,
 } from "../../apps/api/src/database/forest-schema";
 import type { OwnerQueueConfig } from "../../apps/api/src/forest/owner-queue/queue-config";
-import { resetRejectedForTest } from "../../apps/api/src/forest/owner-queue/each-row";
+import {
+  resetRejectedForTest,
+  withoutPaused,
+} from "../../apps/api/src/forest/owner-queue/each-row";
 import {
   CREATE_PER_PASS,
   type SyncDeps,
@@ -430,13 +433,36 @@ describe("API integration: owner-queue sync (TB-102)", () => {
       .patch("checks", itemId, { done: true, choice: "yes" });
     const release = await holdTaskLocks(ids);
     try {
+      // The first try cannot write its note either (queue down for checks):
+      // the request still waits the pause, the batch does not run again.
+      const patch = deps.client.patch;
+      let noteFails = true;
+      deps.client = {
+        ...deps.client,
+        patch: async (collection, docId, data, ifVersion) => {
+          if (noteFails && collection === "checks") {
+            noteFails = false;
+            throw new Error("queue down");
+          }
+          return patch(collection, docId, data, ifVersion);
+        },
+      };
+      resetRejectedForTest();
+      await syncPass(deps);
+      expect(withoutPaused([{ id }])).toEqual([]);
+      expect((await approval(id))?.status).toBe("pending");
+      expect((await approval(id))?.queueSyncedStatus).not.toMatch(/^deferred:/);
+      expect(queue.doc("checks", itemId)?.data.agentNote).toBeUndefined();
+
       resetRejectedForTest();
       await syncPass(deps);
       const check = queue.doc("checks", itemId)?.data;
-      expect(check?.agentStatus).toBe("blocked");
+      // The pass repeats the apply itself: nothing is asked of the owner.
+      expect(check?.agentStatus).toBe("doing");
       expect(check?.agentNote).toBe(
         "Применение отложено: больше 5 карточек заняты другими записями, попытка 1 из 5.",
       );
+      expect(queue.openToOwner(itemId)).toBe(false);
       expect((await approval(id))?.status).toBe("pending");
       expect((await approval(id))?.queueSyncedStatus).toBe("deferred:1");
 
@@ -459,6 +485,8 @@ describe("API integration: owner-queue sync (TB-102)", () => {
     expect(check?.agentNote).toBe(
       "Не применено: больше 5 карточек заняты другими записями, попыток: 5 — подай заново.",
     );
+    // Now the owner is needed again: the item is back in the open ones.
+    expect(queue.openToOwner(itemId)).toBe(true);
     expect(await taskStatus(ids[0] as string)).toBe("to-do");
   });
 

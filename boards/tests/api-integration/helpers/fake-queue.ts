@@ -76,6 +76,15 @@ export class FakeQueue {
       .map((key) => key.slice("items/".length));
   }
 
+  // Is a decision item open to the owner on /queue (oq_list open_only)? The
+  // rule is the queue's (infra/ops-console/server/queue/open-rule.ts): no
+  // choice yet, or «blocked» written after the answer («ждёт вас снова»).
+  // Here every agent write follows the owner's answer, so «blocked» is enough.
+  openToOwner(id: string): boolean {
+    const check = this.doc("checks", id)?.data ?? {};
+    return !check.choice || check.agentStatus === "blocked";
+  }
+
   doc(collection: QueueCollection, id: string) {
     return this.docs.get(this.key(collection, id));
   }

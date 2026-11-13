@@ -290,8 +290,11 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
 }
 
 // TB-114 п. 3: the «Да» did not apply. Tries 1 to APPLY_TRIES − 1 say so in
-// the item and wait the pause (each-row.ts); the last one ends the request as
-// failed, and step 4 tells the owner to ask again.
+// the item as «doing» and wait the pause (each-row.ts): the pass repeats the
+// apply itself, so the item must not come back to the owner («blocked» after
+// an answer is «ждёт вас снова», open-rule.ts in ops-console; product lens on
+// #227). The last try ends the request as failed, and step 4 asks the owner
+// to file again with «blocked».
 async function deferApply(
   deps: SyncDeps,
   row: ApprovalRow,
@@ -314,11 +317,17 @@ async function deferApply(
     );
     return;
   }
-  await deps.client.patch("checks", itemId, {
-    agentStatus: "blocked",
-    agentNote: deferredNote(cause, tries),
-  });
-  await saveItemState(row.id, itemId, { synced: deferredStatus(tries) });
+  try {
+    await deps.client.patch("checks", itemId, {
+      agentStatus: "doing",
+      agentNote: deferredNote(cause, tries),
+    });
+    await saveItemState(row.id, itemId, { synced: deferredStatus(tries) });
+  } catch {
+    // A failed write keeps the pause too, or a batch's transaction would run
+    // again on every pass (backend lens on #227). The next try writes the
+    // note; a count not saved repeats this try's number.
+  }
   throw new ApplyDeferred(error);
 }
 
