@@ -27,7 +27,14 @@ const SECRET_BODY = "synthetic-body-text-never-in-an-answer";
 
 // The connection stays open, as the worker keeps it: the -wal and -shm files
 // exist while the proxy reads. The caller closes it.
-function makeDb(path: string, rows: Row[], { wal = true } = {}) {
+// claude-mem's own declaration of the index (live claude-mem.db, 14.11).
+const EXTERNAL_CONTENT = ", content='observations', content_rowid='id'";
+
+function makeDb(
+  path: string,
+  rows: Row[],
+  { wal = true, ftsOptions = EXTERNAL_CONTENT } = {},
+) {
   const db = new DatabaseSync(path);
   if (wal) db.exec("PRAGMA journal_mode=WAL");
   db.exec(`
@@ -37,8 +44,7 @@ function makeDb(path: string, rows: Row[], { wal = true } = {}) {
       concepts TEXT, created_at TEXT, created_at_epoch INTEGER
     );
     CREATE VIRTUAL TABLE observations_fts USING fts5(
-      title, subtitle, narrative, text, facts, concepts,
-      content='observations', content_rowid='id'
+      title, subtitle, narrative, text, facts, concepts${ftsOptions}
     );
   `);
   const insert = db.prepare(
@@ -205,6 +211,9 @@ describe("memory-proxy.mjs /api/card-memory", () => {
       "?key=free%20text",
       `?key=${encodeURIComponent('"TB-1" OR title:*')}`,
       "?key=TB-1*",
+      // TB-121: a hyphenated word is not a queue id for the token holder.
+      "?key=api-key",
+      "?key=root-password",
       "?key=TB-1&project=t-boards",
       "?q=TB-1",
     ]) {
@@ -264,6 +273,32 @@ describe("memory-proxy.mjs /api/card-memory", () => {
       status: 503,
       body: { error: "schema_changed" },
     });
+  });
+
+  // TB-121: the join of observations_fts.rowid to observations.id holds only
+  // for an external-content index of observations keyed by id. Any other
+  // index has rowids of its own and would show other observations' titles.
+  it("calls an index not keyed by observations.id schema_changed", async () => {
+    const keys = [{ key: "TB-1", matchedOn: "key" }];
+    const fits = makeDb(join(dir, "fits.db"), [{ title: "TB-1", epoch: T0 }]);
+    expect(
+      (await createCardMemoryDb(join(dir, "fits.db")).find(keys)).status,
+    ).toBe("ok");
+    fits.close();
+    for (const ftsOptions of [
+      "",
+      ", content='observations'",
+      ", content='observations_old', content_rowid='id'",
+      ", content='observations', content_rowid='memory_session_id'",
+    ]) {
+      const path = join(dir, `fts-${ftsOptions.length}.db`);
+      const db = makeDb(path, [{ title: "TB-1", epoch: T0 }], { ftsOptions });
+      const memory = createCardMemoryDb(path);
+      expect(await memory.find(keys), ftsOptions).toEqual({
+        status: "schema_changed",
+      });
+      db.close();
+    }
   });
 
   it("answers 503 unavailable when there is no database, and keeps the worker routes", async () => {

@@ -5201,15 +5201,17 @@
               "properties": {
                 "key": {
                   "type": "string",
-                  "description": "The card id, card key (TB-108) or owner-queue item id."
+                  "description": "The card id, card key (TB-108), Backlog ID or owner-queue item id."
                 },
                 "matchedOn": {
                   "type": "string",
                   "enum": [
                     "id",
                     "key",
+                    "backlog",
                     "queue"
-                  ]
+                  ],
+                  "description": "Where the key comes from: the card's id, its board key, its Backlog ID or an owner-queue item of its «да» requests."
                 },
                 "count": {
                   "type": "integer",
@@ -26504,7 +26506,7 @@
           {
             "schema": {
               "type": "string",
-              "pattern": "^(?=.{3,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+){1,7}$",
+              "pattern": "^(?=.{3,64}$)(?:[a-z][a-z0-9]*-)?[a-z]-[a-z0-9]+(?:-[a-z0-9]+){0,6}$",
               "description": "An owner-queue item id, e.g. d-tb113-mem-1311."
             },
             "required": false,

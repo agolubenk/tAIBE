@@ -18,9 +18,13 @@ const memoryLineSchema = z.object({
 
 const memoryKeySchema = z.object({
   key: z.string().openapi({
-    description: "The card id, card key (TB-108) or owner-queue item id.",
+    description:
+      "The card id, card key (TB-108), Backlog ID or owner-queue item id.",
   }),
-  matchedOn: z.enum(["id", "key", "queue"]),
+  matchedOn: z.enum(["id", "key", "backlog", "queue"]).openapi({
+    description:
+      "Where the key comes from: the card's id, its board key, its Backlog ID or an owner-queue item of its «да» requests.",
+  }),
   count: z.number().int().openapi({
     description: "Observations that name the key exactly, at most 500.",
   }),
