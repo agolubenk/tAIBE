@@ -69,6 +69,14 @@ const getActivitiesRoute = createRoute({
   },
 });
 
+// TB-29. Status and move events date a card (completed_at, cycle time) and
+// are written by the server when the task changes; a client-made one would
+// forge that history.
+const SERVER_WRITTEN_TYPES: ReadonlySet<string> = new Set([
+  "status_changed",
+  "moved",
+]);
+
 const createActivityRoute = createRoute({
   method: "post",
   operationId: "createActivity",
@@ -90,7 +98,7 @@ const createActivityRoute = createRoute({
   responses: {
     200: jsonResponse("The created activity", activitySchema),
     400: errorResponse(
-      "Invalid body, or comment activity submitted through the generic endpoint",
+      "Invalid body, a comment (use the comment endpoint), or a status_changed or moved event, which only the server writes",
     ),
     403: errorResponse(
       "No access to the project, or missing task:update permission",
@@ -196,6 +204,11 @@ const activity = apiRouter()
     if (type === "comment") {
       throw new HTTPException(400, {
         message: "Use the comment endpoint to create comments",
+      });
+    }
+    if (SERVER_WRITTEN_TYPES.has(type)) {
+      throw new HTTPException(400, {
+        message: `activity_server_only: the server writes ${type} when the task changes; change the task instead`,
       });
     }
     return c.json(
