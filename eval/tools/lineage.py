@@ -9,6 +9,9 @@
       наследник после приёма, перевзвода Monitor и кронов: квитанция <TAIBE_LINEAGE>.ack (pid и старт его claude)
   lineage.py retire --child L [--role K] [--timeout 5400] [--foreground]
       spawn_session.sh --handoff: отцепленный сторож ждёт квитанцию L, проверяет наследника и снимает предшественника
+  lineage.py control --guard DIR [--guard DIR]
+      spawn_session.sh --launch --role release: 0 — Контроль записан в merge-guard (наследник — только --handoff),
+      3 — Контроля нет, 2 — сомнение
   lineage.py reap [--idle-hours 24] [--include-waiting] [--prune-days 30] [--kill [--yes]]
       без флагов — список и чистка записей линий старше --prune-days; --kill — действие владельца, только по списку последнего показа (≤ 10 мин)
   lineage.py reap --auto [--apply] [--summary] [--ack-minutes 30] [--auto-idle-hours 8] [--window-minutes 10]
@@ -416,6 +419,27 @@ def cmd_ack(sx, a):
 
 
 
+def cmd_control(sx, a):
+    """spawn_session.sh --launch --role release (SE-72): записан ли Контроль в папках --guard. 0 — да (печатает
+    «папка:префикс»), 3 — списков нет или они пусты, 2 — сомнение: папка не сводится к корню или список не читается."""
+    from lineage_guard_fs import GUARD, MISSING, guard_dirs, read_control  # noqa: E402
+    dirs = guard_dirs(a.guard)
+    if not dirs:
+        return die("control: папки --guard не сводятся к корню репозитория — считаю, что Контроль записан")
+    found = []
+    for d in dirs:
+        got = read_control(d / GUARD)
+        if got is MISSING:
+            continue
+        if got is None:
+            return die(f"control: {d / GUARD} не читается — считаю, что Контроль записан")
+        found += [f"{d.name}:{sid.strip()[:8]}" for sid in got[2] if sid.strip()]
+    if not found:
+        return 3
+    print(" ".join(found))
+    return 0
+
+
 def die(msg):
     print("lineage: " + msg, file=sys.stderr)
     return 2
@@ -442,6 +466,8 @@ def main(argv=None, sx=None):
                    help="папка со списком Контроля: если предшественник — Контроль, он переходит наследнику (IS-233)")
     t.add_argument("--succ-tty", default="", metavar="TTY",
                    help="tty окна наследника от spawn_session.sh (/dev/ttysNNN); пусто — Контроль не передаётся")
+    c = sub.add_parser("control")
+    c.add_argument("--guard", action="append", default=[], metavar="DIR", help="папка со списком Контроля")
     from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
     from lineage_close import add_autoclose_args, add_exited_args, cmd_autoclose, cmd_exited  # noqa: E402
@@ -450,7 +476,7 @@ def main(argv=None, sx=None):
     add_exited_args(sub.add_parser("exited"))
     a = ap.parse_args(argv)
     sx = sx or Sys()
-    return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire,
+    return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire, "control": cmd_control,
             "reap": cmd_reap, "autoclose": cmd_autoclose, "exited": cmd_exited}[a.cmd](sx, a)
 
 
