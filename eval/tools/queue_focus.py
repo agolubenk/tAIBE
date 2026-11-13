@@ -10,7 +10,8 @@
 newest signal. Rows: `work/w-<slug>-*` (the default product: every row without another product's prefix), without
 `who: owner`, `blocked` and `done` rows. Row order: `work/focus-<slug>.rows` (TB-107), then `planStart`, `order`, id.
 Inside a row: the board's law below. A card in two rows belongs to the first row by rank. Cards in progress are held
-by a lane and are skipped, except a card marked «без аренды» (TB-106: no lease, no update for 24 h): it comes first.
+by a lane and are skipped, except a card with `mark` «без аренды» (TB-106: no lease, no update for 24 h; `c` is
+the legacy card code): it comes first.
 One GET of `/db/work`; token — `$OQ_TOKEN` or `instances/_shared.json` `queue.secret_cmd`.
 
 Order is the board's law (`.claude/rules/17-notion-board.md`), not a guess:
@@ -222,7 +223,7 @@ def plan_next(rows, top=5):
             bug = c.get('k') == 'bug'
             cards[key] = {'key': key, 'title': str(c.get('t') or ''), 'status': str(c.get('st') or 'to-do'),
                           'kind': 'bug' if bug else 'task', ('severity' if bug else 'priority'): str(c.get('s') or ''),
-                          'abandoned': c.get('c') == ABANDONED}
+                          'abandoned': c.get('mark') == ABANDONED}
         cards = {k: v for k, v in cards.items() if v['status'].lower() not in WAITING}
         if not cards:
             continue
