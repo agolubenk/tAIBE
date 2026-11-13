@@ -119,17 +119,17 @@ describe("notebook_ask", () => {
   it("starts a thread and returns the answer with short citations", async () => {
     const { tool, json } = setupTool(
       "notebook_ask",
-      thread("answered", "Ответ [1].", 6),
+      thread("answered", "Ответ без номеров ссылок.", 6),
     );
 
     const result = await tool.handler({
-      workspaceId: "ws 1",
+      workspaceId: "ws_1",
       question: "Как?",
     });
     const body = JSON.parse(result.content[0]?.text ?? "{}");
 
     expect(result.isError).toBe(false);
-    expect(json).toHaveBeenCalledWith("/api/notebook/ws%201/threads", {
+    expect(json).toHaveBeenCalledWith("/api/notebook/ws_1/threads", {
       method: "POST",
       body: JSON.stringify({ question: "Как?" }),
     });
@@ -157,9 +157,10 @@ describe("notebook_ask", () => {
     });
     const body = JSON.parse(result.content[0]?.text ?? "{}");
 
-    expect(json.mock.calls[0]?.[0]).toBe(
-      "/api/notebook/ws/threads/th1/messages",
-    );
+    expect(json).toHaveBeenCalledWith("/api/notebook/ws/threads/th1/messages", {
+      method: "POST",
+      body: JSON.stringify({ question: "А дальше?" }),
+    });
     expect(body.answer.startsWith("x".repeat(200))).toBe(true);
     expect(body.answer).toContain("cut at 200");
   });
@@ -278,5 +279,87 @@ describe("notebook_add_source", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("LINK_PRIVATE_DESTINATION");
+  });
+});
+
+describe("notebook review fixes (opencode lenses on #170)", () => {
+  it("keeps every source the answer cites, beyond the first five", async () => {
+    const answer = thread("answered", "Да [1], и ещё [7].", 6);
+    const { tool } = setupTool("notebook_ask", answer);
+
+    const result = await tool.handler({ workspaceId: "ws", question: "q" });
+    const body = JSON.parse(result.content[0]?.text ?? "{}");
+
+    expect(body.citations.map((c: { n: number }) => c.n)).toEqual([1, 7]);
+  });
+
+  it("reports an answered turn with empty text as an error", async () => {
+    const { tool } = setupTool("notebook_ask", thread("answered", "  "));
+
+    const result = await tool.handler({ workspaceId: "ws", question: "q" });
+
+    expect(result.isError).toBe(true);
+  });
+
+  it("reports a thread with no assistant turn as an error", async () => {
+    const empty = { ...thread("answered", "x"), messages: [] };
+    const { tool } = setupTool("notebook_ask", empty);
+
+    const result = await tool.handler({ workspaceId: "ws", question: "q" });
+    const body = JSON.parse(result.content[0]?.text ?? "{}");
+
+    expect(result.isError).toBe(true);
+    expect(body.status).toBe("no-answer-yet");
+  });
+
+  it("turns a transport failure into an error result", async () => {
+    const { tool, json } = setupTool("notebook_ask");
+    json.mockRejectedValueOnce(new Error("HTTP 502 bad gateway"));
+
+    const result = await tool.handler({ workspaceId: "ws", question: "q" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("502");
+  });
+
+  it("refuses ids that could leave /api/notebook/", () => {
+    const { tool } = setupTool("notebook_ask");
+    const schema = tool.schema as unknown as {
+      safeParse: (v: unknown) => { success: boolean };
+    };
+
+    expect(schema.safeParse({ workspaceId: "..", question: "q" }).success).toBe(
+      false,
+    );
+    expect(
+      schema.safeParse({ workspaceId: "ws", question: "q", threadId: "a/b" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("writes a new brief when an answer came after the stored one", async () => {
+    const stale = thread("answered", "Новый ответ");
+    stale.messages.splice(1, 0, {
+      role: "assistant",
+      content: "GOAL: old",
+      status: "brief",
+      model: "glm-4.7",
+      citations: [],
+    });
+    const { tool, json } = setupTool(
+      "notebook_brief",
+      stale,
+      thread("brief", "GOAL: new"),
+    );
+
+    const result = await tool.handler({ workspaceId: "ws", threadId: "th1" });
+    const body = JSON.parse(result.content[0]?.text ?? "{}");
+
+    expect(json).toHaveBeenCalledTimes(2);
+    expect(json.mock.calls[1]).toEqual([
+      "/api/notebook/ws/threads/th1/brief",
+      { method: "POST" },
+    ]);
+    expect(body).toMatchObject({ status: "brief", answer: "GOAL: new" });
   });
 });
