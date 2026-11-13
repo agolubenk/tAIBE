@@ -6,6 +6,7 @@ import {
   ownerApprovalTable,
 } from "../../apps/api/src/database/forest-schema";
 import { resetTestDatabase } from "./helpers/database";
+import { createProjectFixture } from "./helpers/fixtures";
 import { addTask, createForest } from "./helpers/forest";
 
 type Forest = Awaited<ReturnType<typeof createForest>>;
@@ -294,6 +295,96 @@ describe("API integration: agent rights on kaneo routes", () => {
       reason: "agent asks",
     });
     expect(openAlready.status).toBe(400);
+  });
+
+  // TB-82: the guard judges the column the move lands in, not the request.
+  it("moves a card between projects only if it stays open, or closed in its stage", async () => {
+    const forest = await createForest();
+    const project = async (column?: { slug: string; isFinal?: boolean }) => {
+      const { project: created } = await createProjectFixture({
+        workspaceId: forest.workspace.id,
+      });
+      if (column?.isFinal === undefined && column) {
+        await db
+          .delete(schema.columnTable)
+          .where(
+            and(
+              eq(schema.columnTable.projectId, created.id),
+              eq(schema.columnTable.slug, column.slug),
+            ),
+          );
+      } else if (column) {
+        await db
+          .update(schema.columnTable)
+          .set({ isFinal: column.isFinal })
+          .where(
+            and(
+              eq(schema.columnTable.projectId, created.id),
+              eq(schema.columnTable.slug, column.slug),
+            ),
+          );
+      }
+      return created.id;
+    };
+    const card = async (status: string) => {
+      const task = await addTask(forest.project.id, "Task");
+      await db
+        .update(schema.taskTable)
+        .set({ status })
+        .where(eq(schema.taskTable.id, task.id));
+      return { id: task.id, token: await lease(forest, task.id) };
+    };
+    const move = (
+      task: { id: string; token: string },
+      destinationProjectId: string,
+      destinationStatus?: string,
+    ) =>
+      forest.agentApi(
+        "PUT",
+        `/task/move/${task.id}`,
+        { destinationProjectId, destinationStatus },
+        { "x-t-boards-fence": task.token },
+        "dev-1",
+      );
+
+    // No «done» in the new project: the card would land in «new», open.
+    const closed = await card("done");
+    const reopens = await move(closed, await project({ slug: "done" }));
+    expect(reopens.status).toBe(403);
+    expect(reopens.body.message).toContain("reopen_task");
+    // The same slug, but not final in the new project: a reopen too.
+    const sameSlug = await move(
+      closed,
+      await project({ slug: "done", isFinal: false }),
+    );
+    expect(sameSlug.status).toBe(403);
+    expect(sameSlug.body.message).toContain("reopen_task");
+    expect(await taskRow(closed.id)).toMatchObject({
+      projectId: forest.project.id,
+      status: "done",
+    });
+    expect(await journal("task.move", closed.id)).toHaveLength(2);
+
+    const open = await card("to-do");
+    const closes = await move(open, await project(), "done");
+    expect(closes.status).toBe(403);
+    expect(closes.body.message).toContain("close_task");
+    expect((await taskRow(open.id))?.projectId).toBe(forest.project.id);
+
+    const kept = await move(open, await project({ slug: "to-do" }));
+    expect(kept.status).toBe(200);
+    expect(await taskRow(open.id)).toMatchObject({ status: "new" });
+
+    const stays = await move(closed, await project());
+    expect(stays.status).toBe(200);
+    expect(await taskRow(closed.id)).toMatchObject({ status: "done" });
+
+    // Another workspace: not judged (its columns stay hidden), move-task 404.
+    const foreign = await createForest();
+    const elsewhere = await card("done");
+    const hidden = await move(elsewhere, foreign.project.id, "to-do");
+    expect(hidden.status).toBe(404);
+    expect((await taskRow(elsewhere.id))?.projectId).toBe(forest.project.id);
   });
 
   // Owner, 29.10: an agent stops at «На ревью»; the owner's stages past it are

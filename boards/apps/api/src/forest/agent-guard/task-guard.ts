@@ -20,6 +20,7 @@ import { isClosingStatus } from "./closing-status";
 import { changesText, decideTaskWrite } from "./decide-task-write";
 import { answeredApproval } from "./answered-approval";
 import { isPlainJson } from "./json-media-type";
+import { judgeMove } from "./judge-move";
 import { loadGuardedTask, projectWorkspace } from "./load-task";
 
 type Denial = {
@@ -117,7 +118,15 @@ async function guardEdit(
     action: request.action,
     targetId: task.id,
   };
-  const { changes } = request;
+  let { changes } = request;
+  if (request.action === "task.move" && changes.projectId) {
+    const verdict = await judgeMove(task, changes.projectId, changes.status);
+    if (verdict.kind === "deny") {
+      await deny(at, new ForestError("approval_required", verdict.reason));
+      return;
+    }
+    changes = { ...changes, status: verdict.status };
+  }
   const statusChanged =
     changes.status !== undefined && changes.status !== task.status;
   const closes =

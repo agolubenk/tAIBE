@@ -15,6 +15,7 @@ import { assertProjectAccess } from "../../project-access/assert-project-access"
 import { filterUsersWithProjectAccess } from "../../project-access/filter-users-with-project-access";
 import { claimTaskNumber } from "./claim-task-numbers";
 import { nextTaskPosition } from "./next-task-position";
+import { pickDestinationColumn } from "./pick-destination-column";
 
 function isSameProjectMove(
   sourceProjectId: string,
@@ -46,21 +47,19 @@ async function resolveDestinationStatus(
     });
   }
 
-  const requestedColumn = requestedStatus
-    ? destinationColumns.find((column) => column.slug === requestedStatus)
-    : null;
+  const column = pickDestinationColumn(
+    destinationColumns,
+    currentStatus,
+    requestedStatus,
+  );
 
-  if (requestedStatus && !requestedColumn) {
+  if (!column) {
     throw new HTTPException(400, {
       message: "Selected status is not valid for the destination project",
     });
   }
 
-  const matchingCurrentColumn = destinationColumns.find(
-    (column) => column.slug === currentStatus,
-  );
-
-  return requestedColumn ?? matchingCurrentColumn ?? firstColumn;
+  return column;
 }
 
 async function moveTask({
