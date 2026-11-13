@@ -433,8 +433,9 @@ describe("API integration: owner-queue sync (TB-102)", () => {
       .patch("checks", itemId, { done: true, choice: "yes" });
     const release = await holdTaskLocks(ids);
     try {
-      // The first try cannot write its note either (queue down for checks):
-      // the request still waits the pause, the batch does not run again.
+      // The first try cannot write its note (queue down for checks): the
+      // count is saved first, and the request still waits the pause — the
+      // batch does not run again on the next pass.
       const patch = deps.client.patch;
       let noteFails = true;
       deps.client = {
@@ -456,7 +457,7 @@ describe("API integration: owner-queue sync (TB-102)", () => {
       logged.mockRestore();
       expect(withoutPaused([{ id }])).toEqual([]);
       expect((await approval(id))?.status).toBe("pending");
-      expect((await approval(id))?.queueSyncedStatus).not.toMatch(/^deferred:/);
+      expect((await approval(id))?.queueSyncedStatus).toBe("deferred:1");
       expect(queue.doc("checks", itemId)?.data.agentNote).toBeUndefined();
 
       resetRejectedForTest();
@@ -465,13 +466,13 @@ describe("API integration: owner-queue sync (TB-102)", () => {
       // The pass repeats the apply itself: nothing is asked of the owner.
       expect(check?.agentStatus).toBe("doing");
       expect(check?.agentNote).toBe(
-        "Применение отложено: больше 5 карточек заняты другими записями, попытка 1 из 5.",
+        "Применение отложено: больше 5 карточек заняты другими записями, попытка 2 из 5.",
       );
       expect(queue.openToOwner(itemId)).toBe(false);
       expect((await approval(id))?.status).toBe("pending");
-      expect((await approval(id))?.queueSyncedStatus).toBe("deferred:1");
+      expect((await approval(id))?.queueSyncedStatus).toBe("deferred:2");
 
-      // Tries 2 to 4 went the same way; the fifth ends the request.
+      // Tries 3 and 4 went the same way; the fifth ends the request.
       await db
         .update(ownerApprovalTable)
         .set({ queueSyncedStatus: "deferred:4" })

@@ -50,3 +50,43 @@ export const deferredNote = (cause: string, tries: number) =>
   `Применение отложено: ${causeText(cause)}, попытка ${tries} из ${APPLY_TRIES}.`;
 
 export const DEFERRED_FAIL = "apply_deferred";
+
+export type DeferralWrites = {
+  // Ends the request as failed with this reason (markFailed).
+  fail: (reason: string) => Promise<unknown>;
+  // Saves «deferred:<n>» as the request's queueSyncedStatus.
+  save: (synced: string) => Promise<unknown>;
+  // Writes the line to the queue item.
+  note: (text: string) => Promise<unknown>;
+};
+
+// One failed apply of the owner's «Да». «failed»: the request ended, step 4
+// tells the owner. «deferred»: the caller pauses the request (ApplyDeferred).
+// - A failed write is logged and still answers «deferred»: without the pause
+//   a batch's transaction would run again on every pass (backend lens and the
+//   chain on #227). A failed markFailed repeats the last try next time.
+// - The count is saved before the note: the tries stay bounded when only the
+//   queue refuses the write; the note then skips a number.
+export async function recordDeferral(
+  request: { id: string; synced: string | null },
+  error: unknown,
+  writes: DeferralWrites,
+  log: (...data: unknown[]) => void = console.error,
+): Promise<"failed" | "deferred"> {
+  const tries = deferredTries(request.synced) + 1;
+  const cause = deferCause(error);
+  try {
+    if (tries >= APPLY_TRIES) {
+      await writes.fail(`${DEFERRED_FAIL}:${cause}`);
+      return "failed";
+    }
+    await writes.save(deferredStatus(tries));
+    await writes.note(deferredNote(cause, tries));
+  } catch (writeError) {
+    log(
+      `owner-queue: deferred try ${tries} of request ${request.id} not recorded:`,
+      writeError,
+    );
+  }
+  return "deferred";
+}

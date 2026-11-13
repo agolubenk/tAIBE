@@ -1,12 +1,5 @@
 import { decideAndApply, markFailed } from "../approval/decide-and-apply";
-import {
-  APPLY_TRIES,
-  DEFERRED_FAIL,
-  deferCause,
-  deferredNote,
-  deferredStatus,
-  deferredTries,
-} from "./apply-deferral";
+import { recordDeferral } from "./apply-deferral";
 import { approvalItemData, approvalItemId, itemNonce } from "./item-text";
 import { ApplyDeferred, eachRow, withoutPaused } from "./each-row";
 import { journalQueue, ownerQueueActor } from "./queue-actor";
@@ -305,34 +298,27 @@ async function deferApply(
   },
   error: unknown,
 ) {
-  const tries = deferredTries(row.queueSyncedStatus) + 1;
-  const cause = deferCause(error);
-  if (tries >= APPLY_TRIES) {
-    await markFailed(
-      row.id,
-      row.workspaceId,
-      answer.actor,
-      answer.decided,
-      `${DEFERRED_FAIL}:${cause}`,
-    );
-    return;
-  }
-  try {
-    await deps.client.patch("checks", itemId, {
-      agentStatus: "doing",
-      agentNote: deferredNote(cause, tries),
-    });
-    await saveItemState(row.id, itemId, { synced: deferredStatus(tries) });
-  } catch (writeError) {
-    // A failed write keeps the pause too, or a batch's transaction would run
-    // again on every pass (backend lens on #227). The next try writes the
-    // note; a count not saved repeats this try's number.
-    console.error(
-      `owner-queue: deferred try ${tries} of request ${row.id} not recorded:`,
-      writeError,
-    );
-  }
-  throw new ApplyDeferred(error);
+  const outcome = await recordDeferral(
+    { id: row.id, synced: row.queueSyncedStatus },
+    error,
+    {
+      fail: (reason) =>
+        markFailed(
+          row.id,
+          row.workspaceId,
+          answer.actor,
+          answer.decided,
+          reason,
+        ),
+      save: (synced) => saveItemState(row.id, itemId, { synced }),
+      note: (text) =>
+        deps.client.patch("checks", itemId, {
+          agentStatus: "doing",
+          agentNote: text,
+        }),
+    },
+  );
+  if (outcome === "deferred") throw new ApplyDeferred(error);
 }
 
 // One pass ends early, without an error, once it spent its share of the
