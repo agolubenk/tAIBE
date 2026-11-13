@@ -25,6 +25,9 @@ from journal import DIGEST, NERVOUS, Journal, read_from  # noqa: E402
 MSK = timezone(timedelta(hours=3))
 with open(os.path.join(HERE, "config.json"), encoding="utf-8") as _f:
     CFG = json.load(_f)
+# Дельта /changes (OPS-50) ходит в консоль через sources.run — у неё свои тесты с фальшивой консолью
+# (test_queue_delta.py). Здесь опрос очереди — прежним списком: тесты подменяют _oq_get и не идут в сеть.
+CFG["queue"]["delta"] = False
 
 
 def wj(path, data):
