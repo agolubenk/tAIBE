@@ -170,6 +170,13 @@ def _main(check, gr, tmp: Path) -> None:
     check("репозиторий PR: прогон из папки HR — gh repo view там, дифф из HR по -R",
           code == gr.EXIT_OK and lines[:1] == [f"{env.folder}|repo view --json nameWithOwner -q .nameWithOwner"]
           and f"{env.folder}|pr diff 600 -R {HR}" in lines, str(lines))
+    with _caller(tmp, "") as env, contextlib.redirect_stdout(io.StringIO()):
+        os.environ["GH_REPO"] = HR
+        code = gr.main(["600", out, "--dry-run"])
+        lines = env.log.read_text().splitlines()
+    check("репозиторий PR: GH_REPO=agolubenk/HR_Helper-v2 — gh pr diff -R agolubenk/HR_Helper-v2, без gh repo view",
+          code == gr.EXIT_OK and f"{env.folder}|pr diff 600 -R {HR}" in lines
+          and not any("repo view" in x for x in lines), str(lines))
     err = io.StringIO()
     with _caller(tmp, "") as env, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
         code = gr.main(["600", out, "--dry-run"])
