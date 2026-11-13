@@ -10,12 +10,16 @@ type Reader = Pick<typeof db, "select">;
 // owner's stage past review («Подтверждение») counts as closing too: an agent
 // stops at «На ревью» and goes further, or back out, only with the owner's
 // «да» (owner, 29.10).
+export function closesAt(status: string, isFinal: boolean): boolean {
+  return isFinal || status === "archived" || OWNER_STAGE_SLUGS.has(status);
+}
+
 export async function isClosingStatus(
   projectId: string,
   status: string,
   reader: Reader = db,
 ): Promise<boolean> {
-  if (status === "archived" || OWNER_STAGE_SLUGS.has(status)) return true;
+  if (closesAt(status, false)) return true;
   const [column] = await reader
     .select({ isFinal: columnTable.isFinal })
     .from(columnTable)
