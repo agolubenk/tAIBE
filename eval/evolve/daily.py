@@ -3,7 +3,7 @@
 false positives as brak, and corrections that only an accepted verdict may start (owner, 06.11: once a day, by
 itself, «ложноположительные результаты — брак»). The judges are Claude models only (owner decision 06.11).
 
-    bash eval/evolve/daily.sh run                    # what launchd starts at 05:00: `nightly` (lock → refresh → cycle)
+    bash eval/evolve/daily.sh run                    # launchd at 05:00: `nightly` (lock → merge → refresh → cycle)
     python3 -I eval/evolve/daily.py cycle [--force]  # run → session → publish → merge
     python3 -I eval/evolve/daily.py run [--target taibe|hr|all] [--since REV] [--judges claude:m1,claude:m2]
                                         [--no-pr] [--dry-run]
@@ -385,6 +385,7 @@ def cmd_merge(args):
     if os.path.isfile(args.verdicts):
         with open(args.verdicts, encoding='utf-8') as f:
             verdicts = [json.loads(ln) for ln in f if ln.strip()]
+    verdicts = steps.with_kept_supersedes(verdicts)  # the brak marks a refresh wiped from the worktree
     enabled = merge_switch(code_root)
     rows = g.merge_ready(repo, TARGETS['taibe']['base'], verdicts, enabled, load_json('prs.json', {}), args.dry_run)
     print(json.dumps(rows, ensure_ascii=False, indent=1))
@@ -413,11 +414,16 @@ def cmd_cycle(args):
 
 
 def cmd_nightly(args):
-    """What launchd starts: take the lock, refresh the run's worktree, run its fresh `cycle` with the lock handed
-    over (the same open file, so nobody can start between the refresh and the cycle)."""
+    """What launchd starts: take the lock, merge last night's PRs (green by now; their cases and `supersedes` lines
+    join tonight's base, SE-49), refresh the run's worktree, run its fresh `cycle` with the lock handed over (the
+    same open file, so nobody can start between the refresh and the cycle)."""
     repo = g.main_repo(HERE)
     try:
         with resources.Lock(os.path.join(STATE_DIR, 'run.lock')) as lock:
+            try:  # before the refresh: HERE still holds last night's verdicts with the session's `supersedes` lines
+                cmd_merge(args)
+            except Exception as e:  # noqa: BLE001 — a failed merge must not cost the night
+                log('merge before the run failed: %s' % e)
             g.refresh_worktree(repo, args.worktree, steps.BASE)
             fresh = os.path.join(repo, args.worktree, 'eval', 'evolve', 'daily.py')
             os.set_inheritable(lock.fd, True)

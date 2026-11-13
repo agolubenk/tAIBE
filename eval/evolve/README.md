@@ -62,7 +62,9 @@ python3 -I eval/evolve/daily.py cases eval/evolve/cases/*.jsonl   # cases fit fo
 
 launchd (05:00 local, after the notebook sync of 04:17) runs `caffeinate -i python3 -I daily.py nightly` — not
 `/bin/bash daily.sh`: macOS privacy control (TCC) refuses /bin/bash a script in ~/Desktop (exit 126, SE-52); by hand —
-`daily.sh run`. `nightly` it takes the run's one lock (`flock`, shared with `daily.py cycle --force`), refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
+`daily.sh run`. `nightly` takes the run's one lock (`flock`, shared with `daily.py cycle --force`), merges last night's
+PRs (the `merge` step below with all its gates; CI has finished by now, so their cases and `supersedes` lines are in
+tonight's base — SE-49), refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
 `origin/board-agents`; no person's checkout is touched) and starts its fresh `daily.py cycle`:
 
 | Step | Who | What |
@@ -99,6 +101,8 @@ A judge that is not reached (a limit message, a wrong answering model, an error,
 of time) is «unavailable», never brak: the file stays pending and is judged again the next night against the same
 baseline. The headless session may append a `supersedes` line that marks an accepted
 verdict brak; a revert PR whose verdict was superseded is closed, not merged. Nobody turns brak into accepted.
+The line lives in the run's worktree until its data PR merges, and the nightly refresh wipes it; so every `merge`
+step also keeps the marks it sees in `~/.claude/evolve/supersedes.json` and checks both (SE-49).
 
 ### Claude judges (`abJudgeClaude`, off by default)
 

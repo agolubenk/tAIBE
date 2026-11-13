@@ -57,6 +57,18 @@ def save_json(name, data):
     os.replace(path + '.tmp', path)
 
 
+def with_kept_supersedes(verdicts):
+    """`supersedes … brak` lines live in the run's worktree until their data PR merges, and `refresh_worktree`
+    (checkout --force) wipes them. Each merge step keeps the ones it sees in `supersedes.json` and reads both, so a
+    revert PR whose verdict was marked brak never merges after a refresh (SE-49)."""
+    kept = load_json('supersedes.json', {})
+    seen = {v['supersedes']: v.get('status') for v in verdicts if v.get('supersedes')}
+    if any(kept.get(vid) != status for vid, status in seen.items()):
+        kept.update(seen)
+        save_json('supersedes.json', kept)
+    return verdicts + [{'supersedes': vid, 'status': status} for vid, status in kept.items() if vid not in seen]
+
+
 def closed_switch(name, root=ROOT):
     """A switch that is closed on doubt: on only if the board's answer was read (fresh, or cached with no failed
     read since) and says on. Defaults, a failed read or any error — off."""
