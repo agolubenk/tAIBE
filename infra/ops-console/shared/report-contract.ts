@@ -54,6 +54,8 @@ export interface OpsReport {
     memAvgPct: number | null
     diskMaxPct: number | null
     containersNotRunning: string[]
+    /** Контейнеры по compose-проектам (OPS-8): стек продукта первым, name '' — без compose. В отчётах до OPS-8 поля нет. */
+    projects?: Array<{ name: string; main: boolean; total: number; down: string[] }>
   }>
   deploys: { total: number; failed: number; recent: Array<{ title: string; conclusion: string | null; at: string; url: string }> }
   tls: Array<{ domain: string; daysLeft: number | null; error: string | null }>
