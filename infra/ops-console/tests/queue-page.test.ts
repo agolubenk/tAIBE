@@ -36,6 +36,7 @@ type Pure = {
   inboxHotkey: (e: Partial<Record<'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey', string | boolean>>, mac: boolean) => [string, string] | null
   itemState: (it: { kind: string }, e: Record<string, unknown> | undefined) => 'open' | 'again' | 'done'
   isDone: (it: { kind: string }, e: Record<string, unknown> | undefined) => boolean
+  orderItems: <T extends OrderIt>(items: T[], doneOf: ((it: T) => boolean) | null) => T[]
   relayItemState: (relay: unknown, id: string, now: number) => null | { k: 'wait' | 'sending' | 'stuck' | 'off'; session?: string; at?: string; dead?: boolean }
   ownerSnapshotApplies: (local: Record<string, unknown> | undefined, snap: Record<string, unknown> | undefined, pending: boolean) => boolean
   tipHtml: (s: string) => string
@@ -46,6 +47,7 @@ type Pure = {
 }
 type FakeDb = { doc: (path: string) => { set: (data: unknown, opts?: { ifVersion?: number }) => Promise<unknown>; get: () => Promise<unknown> } }
 type Row = { id: string; status?: string; planEnd?: string; basePlanEnd?: string; end?: string }
+type OrderIt = { id: string; kind?: string; added?: string; updatedAt?: number }
 
 // Блок из самой страницы (код репозитория, не ввод) исполняется в отдельном контексте vm без доступа к тесту.
 function pure(): Pure {
@@ -69,7 +71,7 @@ function pure(): Pure {
     classifyOwnText: fn('classifyOwnText'), inboxTitleOf: fn('inboxTitleOf'), inboxDraftId: fn('inboxDraftId'), inboxItemOf: fn('inboxItemOf'),
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
-    itemState: fn('itemState'), isDone: fn('isDone'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
+    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
     tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), roadmapMonthLabel: fn('roadmapMonthLabel'),
     placeRoadmapLabels: fn('placeRoadmapLabels'), targetFromHash: fn('targetFromHash'),
   }
@@ -392,7 +394,7 @@ describe('снимок опроса не откатывает несохранё
     expect(html).toContain('if (snapshotIsStale(r.version, savedVersion[r.id])) return;')
     expect(html).toContain("if (res && typeof res.version === 'number') savedVersion[id] = res.version;")
     // Версию до страницы доносит подмена базы: без неё проверка молча не работала бы.
-    expect(SHIM_JS).toContain('return { id: d.id, data: d.data, version: d.version, product: d.product };')
+    expect(SHIM_JS).toContain('return { id: d.id, data: d.data, version: d.version, product: d.product, updatedAt: d.updatedAt };')
     expect(html).toContain('Object.keys(state).forEach(function (id) { if (state[id] && state[id].pending) persist(id); });')
   })
 
@@ -876,5 +878,64 @@ describe('шапка, Гант и справка (просьба владель�
     expect(html).toContain('<p class="sec-note" id="dash-split" hidden></p>')
     expect(html).toContain("try { paintScope(ws); } catch (e)")
     expect(html).toMatch(/var HR_ONLY = \{ 'card-pr': 1 \};/)
+  })
+})
+
+describe('порядок пунктов: от старых к новым (просьба владельца 13.11)', () => {
+  const ids = (list: OrderIt[]) => list.map((it) => it.id)
+
+  it('по added по возрастанию; без даты — первым (вшитые пункты 15–16.10 старше всех)', () => {
+    const { orderItems } = pure()
+    const list = [
+      { id: 'd-c', added: '2026-11-13', updatedAt: 1 },
+      { id: 'd-a', added: '2026-10-20', updatedAt: 9 },
+      { id: 'd-seed' },
+      { id: 'd-b', added: '2026-11-01', updatedAt: 5 },
+    ]
+    expect(ids(orderItems(list, null))).toEqual(['d-seed', 'd-a', 'd-b', 'd-c'])
+    // Исходный массив не меняется: страница сортирует копию.
+    expect(ids(list)).toEqual(['d-c', 'd-a', 'd-seed', 'd-b'])
+  })
+
+  it('при равной дате — по updatedAt строки снимка, затем по id', () => {
+    const { orderItems } = pure()
+    const list = [
+      { id: 'm-3', added: '2026-11-13', updatedAt: 3000 },
+      { id: 'm-2', added: '2026-11-13', updatedAt: 1000 },
+      { id: 'm-b', added: '2026-11-13', updatedAt: 2000 },
+      { id: 'm-a', added: '2026-11-13', updatedAt: 2000 },
+      { id: 'm-0', added: '2026-11-13' },
+    ]
+    expect(ids(orderItems(list, null))).toEqual(['m-0', 'm-2', 'm-a', 'm-b', 'm-3'])
+  })
+
+  it('«одной очередью»: открытые и «ждёт вас снова» — раньше выполненных, в каждой группе — от старых к новым', () => {
+    const { orderItems, isDone } = pure()
+    const state: Record<string, Record<string, unknown>> = {
+      'c-old-done': { done: true, at: '2026-11-02T10:00:00.000Z' },
+      'd-new-done': { done: true, choice: 'yes', at: '2026-11-13T10:00:00.000Z' },
+      // Ответил, а агент после ответа снова ждёт — открыт.
+      's-again': { done: true, at: '2026-11-10T10:00:00.000Z', agentStatus: 'blocked', agentAt: '2026-11-11T10:00:00.000Z' },
+    }
+    const list = [
+      { id: 'd-new-done', kind: 'decision', added: '2026-11-13', updatedAt: 1 },
+      { id: 'm-new', kind: 'merge', added: '2026-11-12', updatedAt: 1 },
+      { id: 'c-old-done', kind: 'check', added: '2026-11-01', updatedAt: 1 },
+      { id: 's-again', kind: 'server', added: '2026-11-10', updatedAt: 1 },
+      { id: 'd-old', kind: 'decision', added: '2026-11-05', updatedAt: 1 },
+    ]
+    const done = (it: OrderIt) => isDone({ kind: it.kind! }, state[it.id])
+    expect(ids(orderItems(list, done))).toEqual(['d-old', 's-again', 'm-new', 'c-old-done', 'd-new-done'])
+    // По разделам выполненные не уходят вниз: порядок — только по дате.
+    expect(ids(orderItems(list, null))).toEqual(['c-old-done', 'd-old', 's-again', 'm-new', 'd-new-done'])
+  })
+
+  it('страница ставит пункты по этому порядку, а снимок несёт updatedAt строки', () => {
+    expect(html).toContain('var els = orderItems(')
+    expect(html).toContain("updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0")
+    expect(html).toContain('if (it) it.updatedAt = r.updatedAt;')
+    // Пункты базы больше не встают в начало списка в порядке сервера (новые сверху).
+    expect(html).not.toContain("'afterbegin' : 'beforeend'")
+    expect(html).not.toContain('list.slice().reverse().forEach')
   })
 })

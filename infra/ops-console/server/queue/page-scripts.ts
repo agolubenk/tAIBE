@@ -76,7 +76,8 @@ export const SHIM_JS = String.raw`(function () {
         if (!j) return;
         // version — чтобы страница отличала снимок, снятый до своего сохранения (ревью #324, minor).
         // product — продукт документа (v2-lite): метка и фильтр страницы (page-products.ts), рядом с data.
-        s.last = j.docs.map(function (d) { return { id: d.id, data: d.data, version: d.version, product: d.product }; });
+        // updatedAt — время последней записи (мс): порядок пунктов страницы при равной дате added.
+        s.last = j.docs.map(function (d) { return { id: d.id, data: d.data, version: d.version, product: d.product, updatedAt: d.updatedAt }; });
         deliver(col);
       })
       .catch(function (e) {

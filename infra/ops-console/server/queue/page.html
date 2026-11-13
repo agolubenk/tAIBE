@@ -976,7 +976,25 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var html = renderItem(it);
     if (fromDb) html = html.replace('<article class="item"', '<article class="item" data-src="db"');
     if (it.id === TARGET) html = html.replace('<article class="item"', '<article class="item is-target"');
-    list.insertAdjacentHTML(fromDb ? 'afterbegin' : 'beforeend', html);
+    list.insertAdjacentHTML('beforeend', html);
+  }
+  // Пункты в списках — по порядку orderItems (от старых к новым). Узлы переносятся, только если порядок другой: ответ в
+  // поле и раскрытые блоки переживают перенос, фокус возвращается на место.
+  function placeItems() {
+    var byId = {}, groups = {};
+    document.querySelectorAll('section .list > .item[data-id]').forEach(function (el) { byId[el.dataset.id] = el; });
+    ITEMS.concat(DB_ITEMS).forEach(function (it) {
+      if (byId[it.id]) (groups[it.kind] = groups[it.kind] || []).push(it);
+    });
+    var active = document.activeElement;
+    Object.keys(groups).forEach(function (key) {
+      var list = document.querySelector('#sec-' + key + ' .list');
+      if (!list) return;
+      var els = orderItems(groups[key], null).map(function (it) { return byId[it.id]; });
+      var same = list.children.length === els.length && els.every(function (el, i) { return list.children[i] === el; });
+      if (!same) els.forEach(function (el) { list.appendChild(el); });
+    });
+    if (active && active !== document.activeElement && active.isConnected && active.focus) active.focus({ preventScroll: true });
   }
   function showTarget() {
     if (!TARGET || targetShown) return;
@@ -996,6 +1014,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     showTarget();
   });
   ITEMS.forEach(function (it) { mount(it, false); });
+  placeItems();
   showTarget();
 
   var modeEl = document.getElementById('mode');
@@ -1009,6 +1028,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function fmtTime(iso) { try { return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
 
   function render() {
+    placeItems();
     var total = 0, done = 0;
     allItems().forEach(function (it) {
       var el = document.querySelector('.item[data-id="' + it.id + '"]');
@@ -1171,7 +1191,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return list.map(function (d) {
       var id = d.id || d.key || d.doc_id || (typeof d.path === 'string' ? d.path.split('/').pop() : '');
       var data = typeof d.data === 'function' ? d.data() : (d.data || d.value || d.fields || d);
-      return { id: id, data: data, version: typeof d.version === 'number' ? d.version : null };
+      return { id: id, data: data, version: typeof d.version === 'number' ? d.version : null, updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0 };
     }).filter(function (r) { return r.id && r.data && typeof r.data === 'object'; });
   }
   function apply(snap) {
@@ -1268,15 +1288,16 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function applyItems(snap) {
     LIVE.items = true;
-    var list = rowsOf(snap).map(function (r) { return itemFromDb(r.id, r.data); }).filter(Boolean)
+    // updatedAt строки — второй ключ порядка (orderItems): времени создания пункта в снимке нет.
+    var list = rowsOf(snap).map(function (r) { var it = itemFromDb(r.id, r.data); if (it) it.updatedAt = r.updatedAt; return it; }).filter(Boolean)
       .filter(function (it) { return !ITEMS.some(function (b) { return b.id === it.id; }); });
     var key = JSON.stringify(list) + (otherProduct() ? '|other' : '');
     if (key === dbItemsKey) return;
     dbItemsKey = key;
     document.querySelectorAll('.item[data-src="db"]').forEach(function (el) { el.remove(); });
     DB_ITEMS = list;
-    list.slice().reverse().forEach(function (it) { mount(it, true); });
-    render();
+    list.forEach(function (it) { mount(it, true); });
+    render(); // порядок в списках ставит placeItems в начале render
     showTarget();
     if (FILES) FILES.itemsChanged();
   }
@@ -1582,6 +1603,21 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // 'again' — владелец ответил, а сессия после ответа поставила blocked: снова открыт, с меткой «ждёт вас снова».
   function itemState(it, e) { return oqItemState(it.kind, e || {}); }
   function isDone(it, e) { return itemState(it, e) === 'done'; }
+  // Порядок пунктов в списке — от старых к новым (просьба владельца 13.11): по added (дата YYYY-MM-DD), при равной дате —
+  // по updatedAt (время последней записи пункта в базе, мс: времени создания в снимке нет), затем по id. Без даты — раньше
+  // датированных (вшитые пункты 15–16.10 — самые старые). doneOf — для «одной очереди»: открытые и «ждёт вас снова»
+  // раньше выполненных, внутри групп — тот же порядок. Исходный массив не меняется.
+  function orderItems(items, doneOf) {
+    function cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+    return items.map(function (it) {
+      return {
+        it: it, done: doneOf && doneOf(it) ? 1 : 0, added: typeof it.added === 'string' ? it.added : '',
+        at: typeof it.updatedAt === 'number' && isFinite(it.updatedAt) ? it.updatedAt : 0, id: String(it.id),
+      };
+    }).sort(function (a, b) {
+      return a.done - b.done || cmp(a.added, b.added) || a.at - b.at || cmp(a.id, b.id);
+    }).map(function (x) { return x.it; });
+  }
   // Автопередача у входящего без статуса агента (relay — ответ GET /relay консоли; null — старая консоль, молчим):
   // wait — передано, ждём «взял»; sending — процесс жив, ещё не передал; stuck — передано, но «взял» нет 10 минут или
   // процесс с тех пор умер (Monitor сессии истёк): ждать некого, команда руками; off — автопередачи нет.
