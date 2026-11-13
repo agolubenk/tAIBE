@@ -16,6 +16,20 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
    требует при смене статуса» and «PR и линзы». A lens verdict: the first non-empty line has the lens name, the word
    `approve` or `changes`, and the head SHA after it (`Бэкенд: approve на 46b9f87e1`) — the Nerve quorum
    (`eval/nerve/quorum.py`) reads only this line.
+   Review of a new PR (coordinator 13.11, canon `.claude/memory/chunks/process/adversarial-review.md`): the author runs
+   the chain first from the main checkout and puts the report in the PR body:
+   `TAIBE_HOST_ROOT=<repo_root> infra/ai-council/review_chain.sh <PR> /tmp/rc-<PR>.json`. `<repo_root>` is the field of
+   `instances/hr-helper.json`: the council base is in the HR host. Without `TAIBE_HOST_ROOT` the chain exits 1
+   (`.claude/scripts/host_root.py:17`). If the coordinator reports the opencode limit, add
+   `REVIEW_CHAIN_FORCE=glm`. Exit 0 — the author writes `Линза «цепочка»: approve на <sha>` in the PR with a link to the
+   report: the quorum needs 3 lenses (`min_lenses`, `instances/taibe.json`), and a signature with «GLM» counts as
+   Control. Exit 2 — the chain findings are `changes`: fix them and run the chain again on the new head (each run starts
+   a new report). Exit 1 or 3 (chain not available, quota) — do not repeat, tell the coordinator; the PR waits for the
+   chain, no third role lens is assigned, and you take the next card. An urgent PR goes to the owner only through the
+   coordinator. Then at most 2 Claude role lenses: the path owner and the one that the coordinator assigns. If a new
+   head carries only the accepted finding of lens X, write «дельта = принятая находка <X>» in the assign: only X
+   confirms, every other lens writes one line `<Линза> (роль N): approve переношу на <sha>`. New logic or a file outside
+   the finding gets a full round.
 5. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
 
 ## Board
