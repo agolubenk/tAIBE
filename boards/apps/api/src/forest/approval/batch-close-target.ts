@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import db from "../../database";
 import {
@@ -18,9 +18,17 @@ import {
 } from "./batch-close-params";
 import { splitIds } from "./grant-items";
 
-// Ids already in a pending close request of this workspace (R-4: one request
-// per card at a time).
-async function pendingCloseIds(workspaceId: string): Promise<Set<string>> {
+// Ids of these cards already in a pending close request of this workspace
+// (R-4: one request per card at a time). Only the requests that name one of
+// the ids are read, so no unrelated request is cut off by a limit.
+async function pendingCloseIds(
+  workspaceId: string,
+  ids: string[],
+): Promise<Set<string>> {
+  const asked = sql`ARRAY[${sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  )}]::text[]`;
   const rows = await db
     .select({
       targetType: ownerApprovalTable.targetType,
@@ -34,15 +42,24 @@ async function pendingCloseIds(workspaceId: string): Promise<Set<string>> {
         eq(ownerApprovalTable.status, "pending"),
         eq(ownerApprovalTable.action, "close_task"),
         gte(ownerApprovalTable.expiresAt, new Date()),
+        or(
+          inArray(ownerApprovalTable.targetId, ids),
+          sql`string_to_array(${ownerApprovalTable.params}->>'taskIds', ',') && ${asked}`,
+        ),
       ),
     )
-    .limit(500);
-  const ids = new Set<string>();
+    .limit(BATCH_CLOSE_MAX);
+  const wanted = new Set(ids);
+  const found = new Set<string>();
   for (const row of rows) {
-    if (row.targetType === "task") ids.add(row.targetId);
-    for (const id of splitIds(row.params?.taskIds)) ids.add(id);
+    if (row.targetType === "task" && wanted.has(row.targetId)) {
+      found.add(row.targetId);
+    }
+    for (const id of splitIds(row.params?.taskIds)) {
+      if (wanted.has(id)) found.add(id);
+    }
   }
-  return ids;
+  return found;
 }
 
 function refusal(problems: Map<string, string[]>): HTTPException {
@@ -136,7 +153,7 @@ export async function batchCloseTarget(
         )
     ).map((row) => row.taskId),
   );
-  const pending = await pendingCloseIds(workspaceId);
+  const pending = await pendingCloseIds(workspaceId, ids);
 
   const problems = new Map<string, string[]>();
   const refuse = (reason: string, key: string) =>
@@ -164,7 +181,7 @@ export async function batchCloseTarget(
       refuse("approval_pending", key);
     } else {
       targets.set(row.projectId, target);
-      cards.push({ id, from: row.status, key });
+      cards.push({ id, projectId: row.projectId, from: row.status, key });
     }
   }
   if (problems.size > 0) throw refusal(problems);

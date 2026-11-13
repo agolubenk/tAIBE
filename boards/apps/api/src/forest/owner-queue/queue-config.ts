@@ -12,9 +12,6 @@ export type OwnerQueueConfig = {
   // workspace id → queue product slug; a workspace not listed gets no items,
   // only the t-boards UI.
   products: Map<string, string>;
-  // The t-boards web app (KANEO_CLIENT_URL, https only): a batch item links
-  // to the full card list there (TB-108 R-5). Absent — no link.
-  boardsUrl?: string;
 };
 
 // TB-102: the owner-queue sync is off unless the URL, the token file, its
@@ -35,14 +32,7 @@ export function readOwnerQueueConfig(
     }
   }
   if (!url || !tokenFile || !tokenName || products.size === 0) return null;
-  const boardsUrl = env.KANEO_CLIENT_URL?.trim().replace(/\/+$/, "");
-  return {
-    url,
-    tokenFile,
-    tokenName: journalActor(tokenName),
-    products,
-    ...(boardsUrl?.startsWith("https://") ? { boardsUrl } : {}),
-  };
+  return { url, tokenFile, tokenName: journalActor(tokenName), products };
 }
 
 // TB-111: the journal names a token's writes «token:<name>»; comparing with the

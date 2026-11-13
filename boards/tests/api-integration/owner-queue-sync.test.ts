@@ -116,7 +116,6 @@ describe("API integration: owner-queue sync (TB-102)", () => {
     );
     const ids = cards.map((card) => String(card?.id));
     const { queue, deps } = setup(forest);
-    deps.config.boardsUrl = "https://boards.test";
     const asked = await forest.agent("/approvals", {
       action: "close_task",
       targetId: forest.workspace.id,
@@ -132,12 +131,7 @@ describe("API integration: owner-queue sync (TB-102)", () => {
     const item = queue.doc("items", itemId as string);
     expect(String(item?.data.title)).toContain("закрыть карточки (3)");
     expect(String(item?.data.body)).toContain("Карточек: 3");
-    expect(item?.data.links).toEqual([
-      {
-        href: `https://boards.test/dashboard/workspace/${forest.workspace.id}/forest`,
-        text: "Список карточек в t-boards",
-      },
-    ]);
+    expect(String(item?.data.body)).toContain("Все карточки заявки:");
 
     await db
       .update(schema.taskTable)

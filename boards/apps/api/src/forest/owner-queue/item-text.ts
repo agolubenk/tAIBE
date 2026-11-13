@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { projectCounts } from "../approval/batch-close-params";
+import { keysByProject, projectCounts } from "../approval/batch-close-params";
 import { itemIdPrefix } from "./queue-config";
 
 export type ItemApproval = {
@@ -71,12 +71,8 @@ function actionLine(approval: ItemApproval): string {
 
 // The ops-console takes links as objects {href, text?} (store.ts httpsLink);
 // a bare string fails the whole PUT with 422 and stops the sync pass (TB-109).
-function itemLinks(doneRef: string | null, listUrl: string | undefined) {
-  const links = [
-    ...(doneRef ? [{ href: doneRef, text: "Журнал закрытых" }] : []),
-    ...(listUrl ? [{ href: listUrl, text: "Список карточек в t-boards" }] : []),
-  ];
-  return links.length > 0 ? { links } : {};
+function itemLinks(doneRef: string | null) {
+  return doneRef ? { links: [{ href: doneRef, text: "Журнал закрытых" }] } : {};
 }
 
 function moscowTime(date: Date): string {
@@ -97,7 +93,6 @@ export function approvalItemData({
   workspaceName,
   card,
   taskKeys = [],
-  listUrl,
   now,
 }: {
   approval: ItemApproval;
@@ -106,8 +101,6 @@ export function approvalItemData({
   // Label grants: the cards that get the label, as «KEY-12 «title»»; a batch
   // close: its first cards.
   taskKeys?: string[];
-  // A batch close: the full list in t-boards (TB-108 R-5).
-  listUrl?: string;
   now: Date;
 }): Record<string, unknown> {
   const action = actionLine(approval);
@@ -133,9 +126,9 @@ export function approvalItemData({
   }
   if (batch.length > 0) {
     paragraphs.push(
-      "Карточка, которая изменится после заявки, будет в аренде или уже закрыта, не закрывается — после «Да» здесь появится отчёт: сколько закрыто и что пропущено.",
+      `Все карточки заявки:\n${keysByProject(batch)}`,
+      "Не закрывается карточка, которая после заявки изменилась, перенесена в другой проект, удалена, срублена, взята в аренду, занята другой записью или уже закрыта. После «Да» здесь появится отчёт: сколько закрыто и что пропущено.",
     );
-    if (listUrl) paragraphs.push(`Полный список: ${listUrl}`);
   }
   if (approval.doneRef) paragraphs.push(`Журнал закрытых: ${approval.doneRef}`);
   if (approval.doneReason) {
@@ -157,6 +150,6 @@ export function approvalItemData({
     ],
     added: now.toISOString().slice(0, 10),
     source: "t-boards",
-    ...itemLinks(approval.doneRef, batch.length > 0 ? listUrl : undefined),
+    ...itemLinks(approval.doneRef),
   };
 }

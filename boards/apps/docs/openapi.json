@@ -24938,7 +24938,7 @@
           "Forest"
         ],
         "summary": "Ask the owner for a «да»",
-        "description": "Records a pending approval for felling a tree or a sector, for an agent to close, reopen or reprioritise a card (R-022), or for a one-time grant: create_label, attach_label, set_assignee (TB-102 R-10). The server fixes what it covers and applies it itself on the owner's «да» — in t-boards or in the owner queue; the agent does not repeat the write. close_task needs doneRef or doneReason (R-9). Felling needs task:delete.",
+        "description": "Records a pending approval for felling a tree or a sector, for an agent to close, reopen or reprioritise a card (R-022), to close a list of cards at once (close_task with taskIds, targetId the workspace id, up to 250 cards, each to its project's final column — TB-108), or for a one-time grant: create_label, attach_label, set_assignee (TB-102 R-10). The server fixes what it covers and applies it itself on the owner's «да» — in t-boards or in the owner queue; the agent does not repeat the write. close_task needs doneRef or doneReason (R-9). Felling needs task:delete.",
         "parameters": [
           {
             "schema": {
@@ -25009,8 +25009,8 @@
                       "minLength": 1
                     },
                     "minItems": 1,
-                    "maxItems": 20,
-                    "description": "create_label and attach_label (targetId is the workspace label id): the cards that get the label."
+                    "maxItems": 250,
+                    "description": "create_label and attach_label (targetId is the workspace label id): the cards that get the label, up to 20. close_task (targetId is the workspace id, no value): the cards to close, up to 250 — each goes to its project's final column (TB-108)."
                   },
                   "doneRef": {
                     "type": "string",

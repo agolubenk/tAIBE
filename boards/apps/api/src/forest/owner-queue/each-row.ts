@@ -4,6 +4,17 @@ import { QueueConflict, QueueRejected } from "./queue-client";
 // the next try: the same document would be refused again (TB-110).
 export const REJECT_PAUSE_MS = 10 * 60 * 1000;
 
+// The owner's «Да» could not be applied for a reason that is not a refusal
+// (a lock or statement timeout, a database error). The request stays pending
+// and waits REJECT_PAUSE_MS: a batch of 250 cards is not run again on every
+// pass (Control lens on #160).
+export class ApplyDeferred extends Error {
+  constructor(cause: unknown) {
+    const text = cause instanceof Error ? cause.message : String(cause);
+    super(`apply failed, retry after the pause: ${text}`, { cause });
+  }
+}
+
 // request id → time its pause ends (per process, like the sync back-off).
 const rejectedUntil = new Map<string, number>();
 // requests already journaled as refused (per process): one journal row per
@@ -38,7 +49,8 @@ export function withoutPaused<Row extends { id: string }>(
 
 // One step per request of a pass.
 // - A version race (409) skips the item until the next pass.
-// - A refused document (400/422) concerns only this request: it is journaled
+// - A refused document (400/422) or a deferred apply (ApplyDeferred) concerns
+//   only this request: it is journaled
 //   once, then paused for REJECT_PAUSE_MS, and the pass goes on (TB-110: one
 //   item with a bad field stopped every request of both workspaces). A failed
 //   journal write ends the pass before the pause, so the next pass retries.
@@ -55,11 +67,12 @@ export async function eachRow<Row extends { id: string; workspaceId: string }>(
       await step(row);
     } catch (error) {
       if (error instanceof QueueConflict) continue;
-      if (!(error instanceof QueueRejected)) throw error;
+      const deferred = error instanceof ApplyDeferred;
+      if (!deferred && !(error instanceof QueueRejected)) throw error;
       if (!journaled.has(row.id)) {
         await journal(
           row.workspaceId,
-          "queue.item_rejected",
+          deferred ? "approval.apply_deferred" : "queue.item_rejected",
           row.id,
           error.message.slice(0, 500),
         );

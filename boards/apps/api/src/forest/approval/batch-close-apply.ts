@@ -1,4 +1,4 @@
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { cardMetaTable, taskLeaseTable } from "../../database/forest-schema";
 import { applyTaskStatusInTx } from "../../task/controllers/apply-task-status";
 import { publishTaskMutation } from "../../task/controllers/task-mutation-effects";
@@ -28,8 +28,10 @@ async function closeOne(
   targets: Map<string, string>,
 ): Promise<Change[]> {
   const task = await lockApprovalTask(tx, workspaceId, card.id);
-  const target = targets.get(task.projectId);
-  if (!target) throw new ApprovalFailure("moved");
+  const target = targets.get(card.projectId);
+  if (!target || task.projectId !== card.projectId) {
+    throw new ApprovalFailure("moved");
+  }
   // R-3: the card changed after the owner was asked — it is not closed.
   if (task.status !== card.from) {
     throw new ApprovalFailure(
@@ -66,6 +68,22 @@ async function closeOne(
   return changes;
 }
 
+// Bounds of one batch (Control lens on #160): a card another write holds
+// longer than LOCK_WAIT is skipped as «locked», and no statement runs longer
+// than STATEMENT_LIMIT. Both last until the end of the owner's transaction.
+const LOCK_WAIT = "2s";
+const STATEMENT_LIMIT = "10s";
+
+function isLockTimeout(error: unknown): boolean {
+  const cause = error instanceof Error ? (error.cause ?? error) : error;
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    cause.code === "55P03"
+  );
+}
+
 // TB-108 R-3: one «да» for a list of cards. Each card closes in its own
 // savepoint; a card the server must not close is skipped with its reason
 // (Пакет А, owner 13.11). An error that is not a refusal (database down)
@@ -87,10 +105,20 @@ export async function applyBatchClose(
     throw new ApprovalFailure("params_mismatch");
   }
 
+  await tx.execute(sql.raw(`set local lock_timeout = '${LOCK_WAIT}'`));
+  await tx.execute(
+    sql.raw(`set local statement_timeout = '${STATEMENT_LIMIT}'`),
+  );
+
   const changes: Change[] = [];
   const skipped: Skipped[] = [];
   let closed = 0;
-  for (const card of batch.cards) {
+  // Cards are locked in id order: two writes over the same cards wait for
+  // each other instead of a deadlock.
+  const inLockOrder = [...batch.cards].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
+  for (const card of inLockOrder) {
     try {
       const done = await tx.transaction((savepoint) =>
         closeOne(savepoint, approval.workspaceId, card, batch.targets),
@@ -98,7 +126,7 @@ export async function applyBatchClose(
       changes.push(...done);
       if (done.length > 0) closed += 1;
     } catch (error) {
-      const reason = failureReason(error);
+      const reason = isLockTimeout(error) ? "locked" : failureReason(error);
       if (reason === null) throw error;
       skipped.push({ key: card.key, reason });
       await writeJournal(
@@ -123,7 +151,13 @@ export async function applyBatchClose(
       targetType: "approval",
       targetId: approval.id,
       outcome: "allowed",
-      detail: batchReport(closed, batch.cards.length, skipped),
+      detail: batchReport(
+        closed,
+        batch.cards.length,
+        skipped.sort((a, b) =>
+          a.key.localeCompare(b.key, "en", { numeric: true }),
+        ),
+      ),
     },
     tx,
   );

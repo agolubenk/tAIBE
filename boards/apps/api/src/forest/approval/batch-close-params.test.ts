@@ -6,6 +6,7 @@ import {
   finalTarget,
   isBatchClose,
   isClosed,
+  keysByProject,
   parseBatchClose,
   projectCounts,
 } from "./batch-close-params";
@@ -13,8 +14,8 @@ import { batchReport, skipText } from "./batch-close-report";
 
 const batch = {
   cards: [
-    { id: "t1", from: "grilling", key: "APP-1" },
-    { id: "t2", from: "в-работе", key: "HRH-7" },
+    { id: "t1", projectId: "p1", from: "grilling", key: "APP-1" },
+    { id: "t2", projectId: "p2", from: "в-работе", key: "HRH-7" },
   ],
   targets: new Map([
     ["p1", "done"],
@@ -36,6 +37,8 @@ describe("batch close params (TB-108)", () => {
     expect(parseBatchClose({ ...params, from: "grilling" })).toBeNull();
     expect(parseBatchClose({ ...params, targets: "" })).toBeNull();
     expect(parseBatchClose({ ...params, targets: "p1" })).toBeNull();
+    expect(parseBatchClose({ ...params, projects: "p1" })).toBeNull();
+    expect(parseBatchClose({ ...params, projects: "p1," })).toBeNull();
     expect(parseBatchClose(null)).toBeNull();
   });
 
@@ -61,12 +64,28 @@ describe("batch close params (TB-108)", () => {
       }),
     ).not.toBe(base);
     expect(hash({ ...batch, cards: [batch.cards[0]!] })).not.toBe(base);
+    expect(
+      hash({
+        ...batch,
+        cards: [batch.cards[0]!, { ...batch.cards[1]!, projectId: "p1" }],
+      }),
+    ).not.toBe(base);
   });
 
   it("counts cards per project for the owner", () => {
     expect(projectCounts(["APP-1", "HRH-2", "APP-3", "GPL-OLD-4"])).toBe(
       "APP 2, GPL-OLD 1, HRH 1",
     );
+  });
+
+  it("lists every key per project, numbers only", () => {
+    expect(keysByProject(["APP-10", "HRH-2", "APP-9", "odd"])).toBe(
+      "APP: 9, 10\n—: odd\nHRH: 2",
+    );
+    const keys = Array.from({ length: 250 }, (_, i) =>
+      i % 2 ? `APP-${1000 + i}` : `HRH-${1000 + i}`,
+    );
+    expect(keysByProject(keys).length).toBeLessThan(1600);
   });
 });
 
@@ -109,6 +128,12 @@ describe("batch close target and report", () => {
       reason: "leased",
     }));
     expect(batchReport(0, 25, many)).toMatch(/и ещё 5\.$/);
+    // The queue note keeps 2000 characters; the longest report fits.
+    const worst = Array.from({ length: 250 }, (_, i) => ({
+      key: `GPL-OLD-${1000 + i}`,
+      reason: "moved",
+    }));
+    expect(batchReport(0, 250, worst).length).toBeLessThan(1200);
     expect(skipText("target_gone")).toBe("удалена");
   });
 });

@@ -6,6 +6,7 @@ const SKIP_TEXT: Record<string, string> = {
   already_closed: "уже закрыта",
   moved: "перенесена в другой проект",
   leased: "в аренде у сессии",
+  locked: "занята другой записью",
   half_baked: "сырая идея",
   target_gone: "удалена",
   target_felled: "срублена",

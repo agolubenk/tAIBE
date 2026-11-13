@@ -86,7 +86,7 @@ export function registerForestWriteTools(
           .max(250)
           .optional()
           .describe(
-            "create_label, attach_label: the cards that get the label (up to 20). close_task: up to 250 cards closed by one «да», without value — each goes to its project's final column; a card that changed after the request, is leased or already closed is skipped and named in the report.",
+            "create_label, attach_label: the cards that get the label (up to 20). close_task: up to 250 cards closed by one «да», without value — each goes to its project's final column; a card that changed, moved to another project, is leased, locked or already closed is skipped. The owner's queue item shows the report; the cards left open keep their status, so read them back with list_tasks.",
           ),
         doneRef: z
           .string()
