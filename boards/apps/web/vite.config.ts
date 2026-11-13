@@ -88,7 +88,34 @@ export default defineConfig({
     // Generate maps only for private symbolication, then delete after upload.
     // "hidden" alone still writes publicly servable .map files.
     sourcemap: uploadSourceMaps ? "hidden" : false,
-    rollupOptions: {},
+    rolldownOptions: {
+      output: {
+        // TB-15: route code splitting left the board with ~215 requests, 160 of
+        // them under 2 KB gzip (single lucide icons, base-ui parts, TanStack
+        // internals, small query hooks). On HTTP/1.1 at 3G RTT each six of
+        // them cost a round trip. These groups merge only those families; the
+        // route chunks stay lazy. Numbers — docs/impl/impl-k6-measurements.md.
+        codeSplitting: {
+          groups: [
+            { name: "icons", test: /node_modules\/lucide-react\// },
+            {
+              name: "base-ui",
+              test: /node_modules\/@(base-ui|floating-ui)\//,
+            },
+            {
+              name: "tanstack",
+              test: /node_modules\/@tanstack\/(react-router|router-core|history|react-query|query-core|react-store|store)\//,
+            },
+            {
+              name: "shared",
+              test: /\/src\/(hooks\/queries|fetchers|components\/ui|lib)\//,
+              minShareCount: 2,
+              maxModuleSize: 4000,
+            },
+          ],
+        },
+      },
+    },
     commonjsOptions: {
       include: [/better-auth/, /node_modules/],
       transformMixedEsModules: true,

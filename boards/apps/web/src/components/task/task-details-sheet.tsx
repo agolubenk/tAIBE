@@ -1,13 +1,23 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { AlertDialogCreateHandle } from "@/components/ui/alert-dialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { TaskSheetHeader } from "./header/task-sheet-header";
 import { PropertiesRail } from "./properties/properties-rail";
 import { PropertyChips } from "./properties/property-chips";
 import TaskDeleteDialog from "./task-delete-dialog";
-import TaskDetailsContent from "./task-details-content";
 import { TaskShortcuts } from "./task-shortcuts";
+
+// The description editor and the activity load with the first opened task, not
+// with the board (TB-15: the cold board on 3G).
+const TaskDetailsContent = lazy(() => import("./task-details-content"));
 
 type TaskDetailsSheetProps = {
   taskId: string | undefined;
@@ -108,20 +118,22 @@ export default function TaskDetailsSheet({
             className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden"
           >
             <div className="min-w-0 flex-1 lg:overflow-y-auto">
-              <TaskDetailsContent
-                taskId={currentTaskId}
-                projectId={projectId}
-                workspaceId={workspaceId}
-                className="px-5 pt-5 pb-10 lg:px-9 lg:pt-7"
-                properties={
-                  <PropertyChips
-                    taskId={currentTaskId}
-                    projectId={projectId}
-                    workspaceId={workspaceId}
-                    className="pb-5 lg:hidden"
-                  />
-                }
-              />
+              <Suspense fallback={null}>
+                <TaskDetailsContent
+                  taskId={currentTaskId}
+                  projectId={projectId}
+                  workspaceId={workspaceId}
+                  className="px-5 pt-5 pb-10 lg:px-9 lg:pt-7"
+                  properties={
+                    <PropertyChips
+                      taskId={currentTaskId}
+                      projectId={projectId}
+                      workspaceId={workspaceId}
+                      className="pb-5 lg:hidden"
+                    />
+                  }
+                />
+              </Suspense>
             </div>
             <PropertiesRail
               taskId={currentTaskId}
