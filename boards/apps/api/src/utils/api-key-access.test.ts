@@ -53,7 +53,14 @@ describe("keyAccessAllowsMethod (TB-96)", () => {
     for (const method of ["GET", "HEAD", "get", "head"]) {
       expect(keyAccessAllowsMethod("read", method), method).toBe(true);
     }
-    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "post"]) {
+    for (const method of [
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+      "post",
+    ]) {
       expect(keyAccessAllowsMethod("read", method), method).toBe(false);
     }
   });

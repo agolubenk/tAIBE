@@ -45,7 +45,11 @@ async function createKey(userId: string, metadata?: Record<string, unknown>) {
 function call(
   path: string,
   key: string,
-  init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+  init: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  } = {},
 ) {
   const { app } = createApp();
   return app.request(path, {
@@ -100,10 +104,9 @@ describe("API integration: read-only API keys (TB-96)", () => {
           .status,
         label,
       ).toBe(200);
-      expect(
-        (await call("/api/auth/get-session", key)).status,
-        label,
-      ).toBe(200);
+      expect((await call("/api/auth/get-session", key)).status, label).toBe(
+        200,
+      );
     }
   });
 
@@ -161,6 +164,31 @@ describe("API integration: read-only API keys (TB-96)", () => {
       .select({ id: schema.apikeyTable.id })
       .from(schema.apikeyTable);
     expect(keys).toHaveLength(1);
+  });
+
+  it("does not open MCP to a read-only key as a bearer or x-api-key", async () => {
+    const { user } = await seed();
+    const key = await createKey(user.id, { access: "read" });
+    const response = await call("/api/mcp", key, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${key}`,
+        "mcp-method": "initialize",
+        "mcp-protocol-version": "2026-07-28",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2026-07-28",
+          capabilities: {},
+          clientInfo: { name: "tb96-read-key", version: "1.0.0" },
+        },
+      }),
+    });
+    expect(response.status).toBe(401);
   });
 
   it("treats an unknown access value as read-only", async () => {
