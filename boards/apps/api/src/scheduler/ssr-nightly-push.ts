@@ -1,17 +1,18 @@
 import { inArray } from "drizzle-orm";
 import db from "../database";
 import { workspaceTable } from "../database/schema";
-import { pushBackConfigured, runNightlyPush } from "../ssr/pushback";
+import { runNightlyPush } from "../ssr/pushback";
 import { pushRepos } from "../ssr/push-repos";
+import { resolvePushToken } from "../ssr/push-token";
 
 // Nightly push-back (spec RU-9): reconcile the served-latest files of every
-// workspace that names its repo in SSR_PUSH_REPOS into that repo (TB-93). Disabled without a token — a missing config
-// is a setup state, not an error worth paging anyone for.
+// workspace that names its repo in SSR_PUSH_REPOS into that repo (TB-93).
+// Disabled without the token file (TB-116) — a missing config is a setup
+// state, not an error worth paging anyone for: one log line says why.
 export async function runNightlySsrPush(): Promise<{ degraded?: boolean }> {
-  if (!pushBackConfigured()) {
-    console.log(
-      "SSR push-back skipped: SSR_PUSH_GITHUB_TOKEN is not configured",
-    );
+  const { reason } = resolvePushToken();
+  if (reason) {
+    console.log(`SSR push-back skipped: no GitHub token: ${reason}`);
     return {};
   }
   // TB-93: only the workspaces that name their own repo.

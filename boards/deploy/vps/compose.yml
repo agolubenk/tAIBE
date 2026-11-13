@@ -74,6 +74,12 @@ services:
       OQ_TOKEN_NAME: ${OQ_TOKEN_NAME:-}
       OQ_WORKSPACE_PRODUCTS: ${OQ_WORKSPACE_PRODUCTS:-}
       OQ_TOKEN_FILE: /run/tb-secrets/oq_token
+      # SSR push-back (TB-93, TB-116): each workspace pushes into the repo
+      # SSR_PUSH_REPOS names for it (<workspaceId>=<owner>/<repo>, commas).
+      # The GitHub token comes from its file only and is read on every push;
+      # without the file push-back is off and the nightly job logs one line.
+      SSR_PUSH_REPOS: ${SSR_PUSH_REPOS:-}
+      SSR_PUSH_GITHUB_TOKEN_FILE: /run/tb-secrets/ssr_push_github_token
     volumes:
       - ./secrets:/run/tb-secrets:ro
     ports:

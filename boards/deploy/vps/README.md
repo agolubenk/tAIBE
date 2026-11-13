@@ -84,6 +84,7 @@ environment variables (N-007).
 | `notion_token` | 0400, owner 1001. Optional: the owner puts it there |
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
 | `oq_token` | 0400, owner 1001. The owner-queue agent token of t-boards (TB-102, «Owner queue» below). The owner issues it in the ops-console; `install.sh` never makes it. Read on every call |
+| `ssr_push_github_token` | 0400, owner 1001. Optional: the GitHub token of SSR push-back (TB-116, «SSR push-back» below). The owner puts it there; `install.sh` never makes it and logs one line while it is missing. Read on every push |
 | `claude_mem_proxy_token` | 0400, owner 1001. The Mac memory proxy token (OPS-19). The Mac owns it: `mac/memory-agent.sh token` makes it, `mac/memory-token-push.sh` delivers it. `install.sh` never makes it and warns while it is missing. The app reads it on every request |
 
 `install.sh` generates the first three once and never overwrites them. The database password only takes effect when the
@@ -152,6 +153,31 @@ applies the owner's answer itself. It is off until all four are set:
 
 `install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
 While it is off, the journal has one `queue.skip` row per start and «да» works in the t-boards UI.
+
+## SSR push-back (TB-93, TB-116)
+
+The app commits the served SSR versions back into each product's repo: right after a rollback and nightly
+(scheduler `10 3 * * *`). Each workspace pushes only into the repo that `SSR_PUSH_REPOS` names for it. It is off until both are
+set:
+
+1. On GitHub, make a fine-grained token: repository access — only the repos listed in `SSR_PUSH_REPOS`; permission
+   Contents — read and write. Nothing else.
+2. Put it into `/opt/t-boards/secrets/ssr_push_github_token` (0400, owner 1001), never on the command line or the
+   screen. In bash on the VPS run the line below, paste the token (it is not echoed) and press Enter:
+   `read -rs T && printf '%s\n' "$T" | install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/ssr_push_github_token; unset T`.
+   `printf` is a bash builtin, so the token is not in any process's arguments.
+3. Add to `/opt/t-boards/.env`: `SSR_PUSH_REPOS=<workspaceId>=<owner>/<repo>,<workspaceId>=<owner>/<repo>`.
+4. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
+5. Check, without printing the token:
+   `docker compose -p t-boards exec -T app node -e 'let t = ""; try { t = require("fs").readFileSync(process.env.SSR_PUSH_GITHUB_TOKEN_FILE, "utf8").trim(); } catch {} console.log(t ? "token: present" : "token: missing", "| repos:", process.env.SSR_PUSH_REPOS || "(none)")'`.
+   That GitHub takes the token for a repo (200; 401 — a wrong token, 404 — the repo is not in its access list):
+   `docker compose -p t-boards exec -T app node -e 'const t = require("fs").readFileSync(process.env.SSR_PUSH_GITHUB_TOKEN_FILE, "utf8").trim(); fetch("https://api.github.com/repos/<owner>/<repo>", { headers: { Authorization: "Bearer " + t } }).then(r => console.log(r.status))'`.
+
+The app reads the token file on every push, so a rotation is a new file, with no restart. Without the file the nightly
+job logs one line `SSR push-back skipped: no GitHub token: …` and a rollback answers `push.reason: "not_configured"`.
+`install.sh` keeps the `SSR_PUSH_REPOS` line of `.env` on every update and logs one line while the token file is
+missing. The old `SSR_PUSH_GITHUB_TOKEN` and `SSR_PUSH_GITHUB_REPO` variables are ignored. Off again: delete the token
+file.
 
 ## Agents' MCP on the Mac (TB-105)
 
