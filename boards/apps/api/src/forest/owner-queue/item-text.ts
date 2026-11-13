@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { keysByProject, projectCounts } from "../approval/batch-close-params";
 import { itemIdPrefix } from "./queue-config";
 
 export type ItemApproval = {
@@ -37,11 +38,18 @@ export function approvalItemId(
   return `${itemIdPrefix(product)}d-tba-${approvalId}-${nonce}`;
 }
 
+function batchKeys(approval: ItemApproval): string[] {
+  if (approval.action !== "close_task") return [];
+  return (approval.params?.keys ?? "").split(",").filter(Boolean);
+}
+
 function actionLine(approval: ItemApproval): string {
   const p = approval.params ?? {};
   switch (approval.action) {
     case "close_task":
-      return `закрыть карточку → «${p.status ?? "?"}»`;
+      return p.taskIds
+        ? `закрыть карточки (${batchKeys(approval).length}) → финальная колонка своего проекта`
+        : `закрыть карточку → «${p.status ?? "?"}»`;
     case "reopen_task":
       return `вернуть карточку в работу → «${p.status ?? "?"}»`;
     case "set_priority":
@@ -59,6 +67,12 @@ function actionLine(approval: ItemApproval): string {
     default:
       return approval.action;
   }
+}
+
+// The ops-console takes links as objects {href, text?} (store.ts httpsLink);
+// a bare string fails the whole PUT with 422 and stops the sync pass (TB-109).
+function itemLinks(doneRef: string | null) {
+  return doneRef ? { links: [{ href: doneRef, text: "Журнал закрытых" }] } : {};
 }
 
 function moscowTime(date: Date): string {
@@ -84,11 +98,13 @@ export function approvalItemData({
   approval: ItemApproval;
   workspaceName: string;
   card: ItemCard;
-  // Label grants: the cards that get the label, as «KEY-12 «title»».
+  // Label grants: the cards that get the label, as «KEY-12 «title»»; a batch
+  // close: its first cards.
   taskKeys?: string[];
   now: Date;
 }): Record<string, unknown> {
   const action = actionLine(approval);
+  const batch = batchKeys(approval);
   const cardLine = card ? `${card.key} «${card.title}»` : "—";
   const title = `t-boards: ${action}${card ? ` — ${card.key}` : ""}`.slice(
     0,
@@ -96,13 +112,22 @@ export function approvalItemData({
   );
   const paragraphs = [
     `Пространство: ${workspaceName}`,
-    `Карточка: ${cardLine}`,
+    batch.length > 0
+      ? `Карточек: ${batch.length} — ${projectCounts(batch)}`
+      : `Карточка: ${cardLine}`,
     `Действие: ${action}${card?.current ? ` (сейчас: «${card.current}»)` : ""}`,
     `Срок ответа: до ${moscowTime(approval.expiresAt)}. Просит: ${approval.requestedByName}.`,
   ];
   if (taskKeys.length > 0) {
+    const more = batch.length - taskKeys.length;
     paragraphs.push(
-      `Карточки:\n${taskKeys.map((key) => `- ${key}`).join("\n")}`,
+      `${batch.length > 0 ? "Первые карточки" : "Карточки"}:\n${taskKeys.map((key) => `- ${key}`).join("\n")}${more > 0 ? `\n- и ещё ${more}` : ""}`,
+    );
+  }
+  if (batch.length > 0) {
+    paragraphs.push(
+      `Все карточки заявки:\n${keysByProject(batch)}`,
+      "Не закрывается карточка, которая после заявки изменилась, перенесена в другой проект, удалена, срублена, взята в аренду, занята другой записью или уже закрыта. После «Да» здесь появится отчёт: сколько закрыто и что пропущено.",
     );
   }
   if (approval.doneRef) paragraphs.push(`Журнал закрытых: ${approval.doneRef}`);
@@ -125,10 +150,6 @@ export function approvalItemData({
     ],
     added: now.toISOString().slice(0, 10),
     source: "t-boards",
-    // The ops-console takes links as objects {href, text?} (store.ts httpsLink);
-    // a bare string fails the whole PUT with 422 and stops the sync pass (TB-109).
-    ...(approval.doneRef
-      ? { links: [{ href: approval.doneRef, text: "Журнал закрытых" }] }
-      : {}),
+    ...itemLinks(approval.doneRef),
   };
 }
