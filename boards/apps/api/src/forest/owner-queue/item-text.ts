@@ -98,8 +98,8 @@ export function approvalItemData({
   approval: ItemApproval;
   workspaceName: string;
   card: ItemCard;
-  // Label grants: the cards that get the label, as «KEY-12 «title»»; a batch
-  // close: its first cards.
+  // Label grants: the cards that get the label, as «KEY-12 «title»». A batch
+  // close shows only its full key list (TB-114).
   taskKeys?: string[];
   now: Date;
 }): Record<string, unknown> {
@@ -118,10 +118,9 @@ export function approvalItemData({
     `Действие: ${action}${card?.current ? ` (сейчас: «${card.current}»)` : ""}`,
     `Срок ответа: до ${moscowTime(approval.expiresAt)}. Просит: ${approval.requestedByName}.`,
   ];
-  if (taskKeys.length > 0) {
-    const more = batch.length - taskKeys.length;
+  if (batch.length === 0 && taskKeys.length > 0) {
     paragraphs.push(
-      `${batch.length > 0 ? "Первые карточки" : "Карточки"}:\n${taskKeys.map((key) => `- ${key}`).join("\n")}${more > 0 ? `\n- и ещё ${more}` : ""}`,
+      `Карточки:\n${taskKeys.map((key) => `- ${key}`).join("\n")}`,
     );
   }
   if (batch.length > 0) {
