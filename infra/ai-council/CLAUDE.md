@@ -69,8 +69,9 @@ Python-сервис вне npm workspaces: `supervisor.py` (оркестраци
 ## Команды (из корня)
 
 `npm run ai-council:doctor` · `:status` · `:selftest` · `:cards` (t-boards: `-- --q OPS-26`) · `:run -- --card OPS-26` · `:plan` / `:plan-apply` ·
-`:review` · `:gateway` + `:ui` · `:learning-stats` · `:cloud-ping`. Ревью PR на GLM — `python3 infra/ai-council/glm_pr_review.py
-<PR> <out.json>` из основного checkout (`--dry-run` — план вызовов; спека §17.7).
+`:review` · `:gateway` + `:ui` · `:learning-stats` · `:cloud-ping`. Ревью PR — цепочка opencode → GLM → Claude
+`infra/ai-council/review_chain.sh <PR> <out.json>` из основного checkout; одно звено — `glm_pr_review.py <PR> <out.json>
+[--backend opencode] [--resume <прошлый out.json>]` (`--dry-run` — план вызовов; спека §17.7).
 
 ## Гейт
 
