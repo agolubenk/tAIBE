@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import db, { schema } from "../../apps/api/src/database";
 import { encodeEmbedding } from "../../apps/api/src/notebook/embed/embedding-codec";
 import { resetEmbedQueueForTests } from "../../apps/api/src/notebook/embed/embed-queue";
 import { SEARCH_BODY_BYTES } from "../../apps/api/src/notebook/routes/schema";
-import { clearVectorCacheForTests } from "../../apps/api/src/notebook/search/vector-index";
+import { notebookChunkTable } from "../../apps/api/src/database/notebook-schema";
+import {
+  clearVectorCacheForTests,
+  loadVectorIndex,
+} from "../../apps/api/src/notebook/search/vector-index";
 import { createApp } from "../../apps/api/src/index";
 import { mockAuthenticatedSession } from "./helpers/auth";
 import { resetTestDatabase } from "./helpers/database";
@@ -113,6 +118,54 @@ describe("API integration: notebook", () => {
     expect(padded.status).toBe(413);
   });
 
+  // TB-76: past the byte budget the index keeps the freshest chunks, not
+  // whatever order the heap returns.
+  it("keeps the freshest chunks when the vector index is over its budget", async () => {
+    const nb = await notebookFixture();
+    const text = ["# Части", ""];
+    for (const part of [1, 2, 3, 4])
+      text.push(`## Часть ${part}`, "", `Текст ${part}.`, "");
+    await nb.owner("PUT", "/sources", {
+      kind: "repo-doc",
+      ref: "docs/parts.md",
+      title: "Части",
+      text: text.join("\n"),
+    });
+    const chunks = await db
+      .select({
+        id: notebookChunkTable.id,
+        ordinal: notebookChunkTable.ordinal,
+      })
+      .from(notebookChunkTable)
+      .where(eq(notebookChunkTable.workspaceId, nb.workspace.id))
+      .orderBy(notebookChunkTable.ordinal);
+    expect(chunks).toHaveLength(4);
+    // Embedded out of order: the second chunk is the freshest.
+    const minutes = [3, 4, 1, 2];
+    await Promise.all(
+      chunks.map((chunk, i) =>
+        db
+          .update(notebookChunkTable)
+          .set({
+            embedModel: "nomic-embed-text",
+            embedding: encodeEmbedding([1, i]),
+            embeddedAt: new Date(Date.UTC(2026, 10, 13, 12, minutes[i])),
+          })
+          .where(eq(notebookChunkTable.id, chunk.id)),
+      ),
+    );
+
+    // Two dims are 8 bytes: a 16-byte budget holds two rows of four.
+    const index = await loadVectorIndex(
+      nb.workspace.id,
+      "nomic-embed-text",
+      16,
+    );
+    expect(index?.ids).toEqual([chunks[1]?.id, chunks[0]?.id]);
+    const status = await nb.owner("GET", "/status");
+    expect(status.body).toMatchObject({ embedded: 4, searchable: 4 });
+  });
+
   it("embeds chunks through the worker and ranks a query by meaning", async () => {
     const nb = await notebookFixture();
     await nb.owner("PUT", "/sources", {
@@ -146,6 +199,7 @@ describe("API integration: notebook", () => {
       sources: 1,
       chunks: 2,
       embedded: 2,
+      searchable: 2,
       workerOnline: true,
     });
 

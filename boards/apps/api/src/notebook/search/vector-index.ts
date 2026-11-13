@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import db from "../../database";
 import { notebookChunkTable } from "../../database/notebook-schema";
 import { decodeEmbedding, dot, normalize } from "../embed/embedding-codec";
@@ -26,6 +26,7 @@ const cacheKey = (workspaceId: string, model: string) =>
 export async function loadVectorIndex(
   workspaceId: string,
   model: string,
+  bytesMax = VECTOR_BYTES_MAX,
 ): Promise<VectorIndex | null> {
   const scope = and(
     eq(notebookChunkTable.workspaceId, workspaceId),
@@ -50,6 +51,14 @@ export async function loadVectorIndex(
     return cached;
   }
 
+  // TB-76. Past the budget the freshest chunks stay, so the oldest drop out
+  // by a rule and not by the heap's order; /status shows how many are in.
+  const rowsMax = vectorRowsMax(state.width, bytesMax);
+  if (state.count > rowsMax) {
+    console.warn(
+      `notebook: the vector index of workspace ${workspaceId} holds ${rowsMax} of ${state.count} chunks (budget ${bytesMax} bytes)`,
+    );
+  }
   const rows = await db
     .select({
       id: notebookChunkTable.id,
@@ -57,7 +66,11 @@ export async function loadVectorIndex(
     })
     .from(notebookChunkTable)
     .where(scope)
-    .limit(vectorRowsMax(state.width));
+    .orderBy(
+      sql`${notebookChunkTable.embeddedAt} desc nulls last`,
+      desc(notebookChunkTable.id),
+    )
+    .limit(rowsMax);
   const index = buildVectorIndex(stamp, rows);
   if (!index) return null;
   cache.delete(key);
@@ -67,8 +80,16 @@ export async function loadVectorIndex(
 }
 
 // The widest row decides, so a half-finished model switch cannot overrun.
-export function vectorRowsMax(widthBytes: number): number {
-  return Math.max(1, Math.floor(VECTOR_BYTES_MAX / Math.max(4, widthBytes)));
+export function vectorRowsMax(
+  widthBytes: number,
+  bytesMax = VECTOR_BYTES_MAX,
+): number {
+  return Math.max(1, Math.floor(bytesMax / Math.max(4, widthBytes)));
+}
+
+// How many embedded chunks meaning-based search holds (TB-76).
+export function searchableChunks(embedded: number, widthBytes: number | null) {
+  return embedded > 0 ? Math.min(embedded, vectorRowsMax(widthBytes ?? 0)) : 0;
 }
 
 // Oldest first (Map keeps insertion order); the newest index always stays.
