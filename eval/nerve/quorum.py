@@ -18,7 +18,8 @@ SHA — токен сразу за словом (между ними — «с у
 Ключ линзы — роль команды: N-я роль team.roles, если подпись называет «роль N» (нумерация spawn_session.sh), иначе
 роль по github.lens_roles, иначе имя линзы. Так «Линза корректности (роль 4)» и «Линза «корректность и отказы» (роль 4)»
 — одна линза backend. Предел: подпись без номера и без имени из lens_roles даёт отдельный ключ.
-Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, проверки CI не висят.
+Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, CI ok — проверки прошли или
+их нет (ci_state). Висящий или упавший CI кворум не собирает (SE-86).
 """
 import re
 
@@ -111,7 +112,8 @@ def ci_state(checks):
 
 def quorum(verdicts, head, checks, min_lenses=3):
     """verdicts — разобранные вердикты по порядку. Последний вердикт линзы на голову перекрывает её прежние.
-    Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI)."""
+    Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI). Собран — только при CI ok: проваленный
+    CI кворум не собирает (SE-86); PR без проверок — ok, как и раньше (ci_state)."""
     last = {}
     for v in verdicts:
         if v and on_head(v["sha"], head):
@@ -119,7 +121,7 @@ def quorum(verdicts, head, checks, min_lenses=3):
     approved = sorted(k for k, x in last.items() if x == "approve")
     changes = sorted(k for k, x in last.items() if x == "changes")
     ci = ci_state(checks)
-    return (len(approved) >= min_lenses and not changes and ci != "pending"), approved, changes, ci
+    return (len(approved) >= min_lenses and not changes and ci == "ok"), approved, changes, ci
 
 
 def role_of_lens(lens, lens_roles, team_roles=()):

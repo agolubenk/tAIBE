@@ -162,6 +162,9 @@ class QuorumTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS", "FAILURE"])[::3], (False, "failure"), "SE-86: CI упал")
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS", "CANCELLED"])[::3], (False, "failure"))
+        self.assertTrue(quorum.quorum(vs, head, ["SUCCESS", "SKIPPED", "NEUTRAL"])[0], "пропущенные проверки — ok")
 
     def test_later_verdict_of_a_lens_overrides(self):
         head = "abcdef1234"
@@ -294,9 +297,9 @@ class FakeGh:
     """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
     REPO = CFG["github"]["repo"]
 
-    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None):
+    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None, checks=("SUCCESS",)):
         self.open_prs, self.merged, self.broken, self.etag = open_prs, set(merged), set(broken), etag
-        self.comments = comments or {}
+        self.comments, self.checks = comments or {}, checks
         self.calls = []
 
     def __call__(self, cmd, stdin=None, timeout=30):
@@ -314,7 +317,7 @@ class FakeGh:
                 return 1, "", f"GraphQL: Could not resolve to a PullRequest with the number of {n}."
             if n in self.broken:
                 return 1, "", "HTTP 502"
-            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": "SUCCESS"}],
+            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": c} for c in self.checks],
                  "state": "MERGED" if n in self.merged else "OPEN", "mergedAt": "2026-11-04T15:55:00Z"
                  if n in self.merged else None}
             return 0, json.dumps(d), ""
@@ -367,6 +370,36 @@ class GithubPollTest(unittest.TestCase):
         self.assertNotIn("pr.changes", kinds)
         self.assertIn("pr.quorum", kinds)
         self.assertEqual(self.ctx.state["github"]["prs"]["478"]["changes_by"], [])
+
+    def ci_case(self, n, checks):
+        lenses = [f"**Линза {l} — approve на {'c' * 9}**" for l in ("QA", "Бэкенд", "Контроль")]
+        sources.run = FakeGh([_pr(n, "c" * 40)], comments={n: lenses}, checks=checks)
+        sources.poll_github(self.ctx)
+        return [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0]], self.ctx.state["github"]["prs"][str(n)]
+
+    def test_failed_ci_is_no_quorum_and_tells_the_author_once(self):
+        """SE-86: quorum.py:122 собирал кворум при упавшем CI (проверял только ci != "pending")."""
+        events, p = self.ci_case(480, ("SUCCESS", "FAILURE"))
+        self.assertNotIn("pr.quorum", [e["kind"] for e in events])
+        failed = [e for e in events if e["kind"] == "pr.ci_failed"]
+        self.assertEqual([(e["to"], e["class"]) for e in failed], [(["backend"], "nervous")], "автору PR, сразу")
+        self.assertFalse(p["await_ci"])
+        sources.run.etag = 'W/"e2"'
+        self.ctx.state["github"]["prs"]["480"]["updated"] = ""  # PR изменился, голова та же
+        sources.poll_github(self.ctx)
+        again = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.ci_failed"]
+        self.assertEqual(len(again), 1, "одно событие на голову")
+
+    def test_pending_ci_waits_without_quorum(self):
+        events, p = self.ci_case(481, ("SUCCESS", "IN_PROGRESS"))
+        self.assertFalse({"pr.quorum", "pr.ci_failed"} & {e["kind"] for e in events})
+        self.assertTrue(p["await_ci"], "PR, ждущий только CI, опрашивается заново")
+
+    def test_passed_ci_reaches_quorum(self):
+        events, p = self.ci_case(482, ("SUCCESS",))
+        self.assertEqual([e["to"] for e in events if e["kind"] == "pr.quorum"], [["release"]])
+        self.assertNotIn("pr.ci_failed", [e["kind"] for e in events])
+        self.assertFalse(p["await_ci"])
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})

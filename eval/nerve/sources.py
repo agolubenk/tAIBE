@@ -146,10 +146,14 @@ def _check_pr(ctx, n, p, head, refresh=False):
                      f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github")
     ok, approved, changes, ci = quorum.quorum(verdicts, head, p.get("checks") or [], g["min_lenses"])
     p["changes_by"] = changes
-    p["await_ci"] = len(approved) >= g["min_lenses"] and not changes and ci == "pending"
+    lenses = len(approved) >= g["min_lenses"] and not changes  # линз хватает — ждём только CI
+    p["await_ci"] = lenses and ci == "pending"
     if ok:
         ctx.emit(f"gh:quorum:{n}:{head}", "pr.quorum", NERVOUS, g["quorum_to"],
                  f"#{n} собран: approve {', '.join(approved)} на {head[:9]}, CI {ci}", "github")
+    elif lenses and ci == "failure":  # SE-86: кворума нет, чинит автор — один раз на голову
+        ctx.emit(f"gh:cifail:{n}:{head}", "pr.ci_failed", NERVOUS, [p["author"]],
+                 f"#{n}: линзы собраны ({', '.join(approved)}), CI упал на {head[:9]}", "github")
 
 
 # ---------- Очередь владельца ----------
