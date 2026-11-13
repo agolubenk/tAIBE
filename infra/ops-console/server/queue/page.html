@@ -173,6 +173,12 @@ body.hide-done .item.is-done { display: none; }
 body.hide-done .item.is-target.is-done { display: grid; }
 .item.is-target.is-done .item-body { display: grid; }
 .item-head { display: grid; gap: 6px; }
+/* Вид пункта — только «одной очередью» (#sec-queue); в разделах его называет заголовок раздела. Метка — вне .chips:
+   строку чипов читает бот очереди. «решение» среди чипов там повторяло бы метку. */
+.item-kind { display: none; }
+#sec-queue .item-kind { display: inline-block; justify-self: start; font-size: 12px; font-weight: 600; line-height: 1; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
+#sec-queue .item[data-kind="decision"] .item-kind { border-color: var(--accent); color: var(--accent); }
+#sec-queue .chip-decision { display: none; }
 .item-title { font-weight: 600; margin: 0; font-size: 15px; }
 .item.is-done .item-title { color: var(--muted); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -430,7 +436,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   .head-bar, .hb-nav { flex-wrap: nowrap; gap: 6px; }
   .head-bar { min-width: 0; }
   .hb-btn { padding: 0 9px; gap: 4px; }
-  .hb-compose, .hb-reports, .hb-theme { flex: none; width: 40px; padding: 0; justify-content: center; }
+  .hb-compose, .hb-reports, .hb-theme, .hb-layout { flex: none; width: 40px; padding: 0; justify-content: center; }
   .hb-compose[data-draft="1"] { width: auto; padding: 0 8px; }
   /* width: 0 — иначе ширина текста выбора («Все продукты») раздвигает сетку страницы шире экрана; место даёт flex-grow. */
   #head-bar .oq-product-pick { flex: 1 1 0; width: 0; min-width: 0; max-width: none; }
@@ -476,6 +482,8 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
           <li><a href="#sec-inbox" data-kind="inbox">Входящие <span class="jump-c"></span></a></li>
         </ul>
       </details>
+      <!-- Раскладка очереди: подпись называет ту, на которую переключит (скрипт ставит её по выбору из localStorage). -->
+      <button type="button" class="hb-btn hb-layout" id="layout-btn" aria-label="Одной очередью" title="Решения, мёржи, сервер и проверки — одним списком по порядку выполнения"><svg class="hb-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path id="layout-ico" d="M4 6h16M4 10h16M4 14h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="hb-long" id="layout-text">Одной очередью</span></button>
       <details class="jump" id="jump-dash">
         <summary class="hb-btn">Ход работ</summary>
         <ul class="jump-list">
@@ -639,9 +647,9 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
         <li><b>Продукт у пункта</b> — список «Продукт:» в шапке пункта переносит его в другой продукт (кроме мёржа с вердиктом «Контроля»); сессии прежнего продукта его больше не увидят — страница спросит подтверждение.</li>
         <li>Всё сохраняется само, писать мне в чат не нужно; под пунктом видно «сохранено» или ошибку — при ошибке страница повторит сама. Передумали — «Изменить ответ» под пунктом.</li>
         <li><b>«Ждёт вас снова»</b> — вы уже ответили, но агенту снова нужны вы (вопрос в ответ, вывод с ошибкой, «повторите проверку»): что именно — в строке «Агент» под пунктом. Ответьте ещё раз — пункт закроется.</li>
-        <li><b>Над списком</b> — строка связи (подключено ли хранилище ответов; «нет связи» — показан последний снимок), полоса и число — сколько пунктов закрыто, «Показать выполненные» / «Скрыть выполненные» — закрытые пункты в списке. Ссылка вида <code>#item=&lt;id&gt;</code> открывает и подсвечивает один пункт, даже закрытый или из другого продукта.</li>
-        <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и все отчёты «Хода работ» — только по нему, «Все продукты» — по всем, с разбивкой по продуктам под показателями. «＋ Поставить задачу» открывает форму (горячие клавиши — под её кнопками; черновик помнится, точка на кнопке — в форме остался текст). «Очередь» — переходы к разделам с числом открытых; «ждут · снова» — сколько ждут вас и сколько вернулось. «Ход работ» — переходы к отчётам с их главными числами. «К решениям ↓» — к первому разделу очереди (на средних экранах). Справа — тема: авто, светлая или тёмная.</li>
-        <li><b>Шапка на телефоне</b> — одна строка значков: ＋ — поставить задачу, список с числом — разделы очереди, столбики — «Отчёты» (весь «Ход работ» в отдельном окне, ✕ или Esc закрывают), ◐ / ☀ / ☾ — тема. Название каждого значка — в его подписи для экранного чтения и во всплывающей подсказке.</li>
+        <li><b>Над списком</b> — строка связи (подключено ли хранилище ответов; «нет связи» — показан последний снимок), полоса и число — сколько пунктов закрыто, «Показать выполненные» / «Скрыть выполненные» — закрытые пункты в списке. В каждом списке пункты идут от старых к новым. Ссылка вида <code>#item=&lt;id&gt;</code> открывает и подсвечивает один пункт, даже закрытый или из другого продукта.</li>
+        <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и все отчёты «Хода работ» — только по нему, «Все продукты» — по всем, с разбивкой по продуктам под показателями. «＋ Поставить задачу» открывает форму (горячие клавиши — под её кнопками; черновик помнится, точка на кнопке — в форме остался текст). «Очередь» — переходы к разделам с числом открытых; «ждут · снова» — сколько ждут вас и сколько вернулось. «Одной очередью» сводит решения, мёржи, сервер и проверки в один список по порядку выполнения: сначала открытые и «ждут вас снова» от старых к новым, за ними выполненные, у пункта — метка вида; переход «Очередь → Решения» ведёт к первому открытому решению в нём. «По разделам» возвращает разделы; выбор помнится в этом браузере. «Ход работ» — переходы к отчётам с их главными числами. «К решениям ↓» — к первому разделу очереди (на средних экранах). Справа — тема: авто, светлая или тёмная.</li>
+        <li><b>Шапка на телефоне</b> — одна строка значков: ＋ — поставить задачу, список с числом — разделы очереди, полосы или блоки — «Одной очередью» или «По разделам», столбики — «Отчёты» (весь «Ход работ» в отдельном окне, ✕ или Esc закрывают), ◐ / ☀ / ☾ — тема. Название каждого значка — в его подписи для экранного чтения и во всплывающей подсказке.</li>
         <li><b>Ход работ: показатели</b> — плитки сверху: ваша очередь, задачи агентов, просрочки, медиана ожидания мёржа, вехи, открытые карточки t-boards. У каждой карточки отчёта, когда продуктов больше одного, подписано, какой продукт она показывает. Список рядом с заголовком «Ход работ» группирует Гант, роадмап, отчёт и отставание: по блокам (направлениям), проектам или секторам t-boards, по продуктам.</li>
         <li><b>Ваша очередь по дням</b> — левая ось: сколько пунктов поставлено вам и сколько закрыто, нарастающим итогом (разрыв — то, что ждёт вас). Правая ось: сколько пунктов пришло за день; пунктир — медиана за 14 дней, правее красной линии «сегодня» — прогноз на 30 дней. Наведите на график — подсказка с числами дня.</li>
         <li><b>Задачи агентов: план и факт</b> — левая ось, нарастающим итогом: пунктир — сколько задач должно быть готово по плану, сплошная — сколько готово на деле (ниже пунктира — агенты отстают); пунктир от «сегодня» — пересчитанный план: оставшиеся задачи при среднем темпе за 14 дней, над графиком — новый срок и сдвиг от плана. Правая ось — сколько задач готово за день; пунктир — среднее за 14 дней и прогноз на 30 дней. Меньше 7 дат — прогноз не рисуется, подпись «мало данных». Список «Срез» — все задачи или один продукт, проект, сектор или блок. <b>Готовность по разделам</b> — карточки t-boards задач агентов по продуктам, внутри — по проектам, секторам или блокам (список «Разрез»): закрыто, на ревью, открыто и чёрточка — сколько должно быть закрыто по плану к сегодня. <b>Карточки t-boards в плане</b> — сколько карточек прикреплено по продуктам и своему разрезу и сколько закрыто, ниже — открытые карточки по дням сверок.</li>
@@ -662,6 +670,14 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
       <button class="toggle" id="hide-done" type="button" aria-pressed="true">Показать выполненные</button>
     </div>
   </header>
+
+  <!-- «Одной очередью» (кнопка в шапке): решения, мёржи, сервер и проверки — здесь, четыре раздела ниже скрыты. Без
+       data-section: бот очереди собирает разделы и вид пункта по нему, а его страница всегда «по разделам». -->
+  <section id="sec-queue" hidden>
+    <div class="sec-head"><h2 class="sec">Очередь — по порядку выполнения</h2><span class="sec-count" data-count></span></div>
+    <p class="sec-note">Сначала открытые и «ждёт вас снова» — от старых к новым, за ними выполненные. Вид пункта — метка над заголовком.</p>
+    <div class="list"></div>
+  </section>
 
   <section data-section="decision" id="sec-decision">
     <div class="sec-head"><h2 class="sec">Решения</h2><span class="sec-count" data-count></span></div>
@@ -900,6 +916,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     decision: { field: 'Комментарий', placeholder: 'Необязательно' },
     inbox: { done: 'Принято', field: 'Уточнение для агента', placeholder: 'Необязательно' },
   };
+  // Метка вида у пункта «одной очередью» (.item-kind); входящих в общем списке нет.
+  var KIND_NAME = { decision: 'Решение', merge: 'Мёрж', server: 'На сервере', check: 'Проверить руками' };
   var INBOX_TYPE = { bug: '🐞 ошибка', idea: '💡 идея', task: '📝 задача', alert: '🚨 алерт' };
   var INBOX_URGENCY = { now: '⚡ сейчас', queue: '🗂 в очередь' };
   var INBOX_SEVERITY = { critical: '🔴 критично', high: '🟠 высокая', medium: 'средняя', low: 'низкая' };
@@ -946,7 +964,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     answer += '<span class="summary-answer"></span>' + (it.kind === 'inbox' ? '<span class="relay-st" hidden></span>' : '') + '<span class="agent-status"></span><button type="button" class="reopen">Изменить ответ</button><span class="saved" aria-live="polite"></span></div>';
     // Вложения — вне .item-body: бот очереди переносит тело пункта в сообщение, список файлов ему не нужен.
     var filesHtml = it.kind === 'inbox' && FILES ? FILES.cardHtml(it) : '';
-    return '<article class="item" data-id="' + it.id + '"><div class="item-head"><h3 class="item-title">' + esc(it.title) + '</h3>' +
+    var kindHtml = KIND_NAME[it.kind] ? '<span class="item-kind">' + KIND_NAME[it.kind] + '</span>' : '';
+    return '<article class="item" data-id="' + it.id + '" data-kind="' + esc(it.kind) + '"><div class="item-head">' + kindHtml + '<h3 class="item-title">' + esc(it.title) + '</h3>' +
       '<div class="chips">' + chipsHtml + '</div></div>' + (body ? '<div class="item-body">' + body + '</div>' : '') + filesHtml + answer + '</article>';
   }
   // Метка «ждёт вас снова» — первым чипом (строку чипов читает и бот очереди), только пока пункт снова ждёт владельца.
@@ -976,7 +995,75 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var html = renderItem(it);
     if (fromDb) html = html.replace('<article class="item"', '<article class="item" data-src="db"');
     if (it.id === TARGET) html = html.replace('<article class="item"', '<article class="item is-target"');
-    list.insertAdjacentHTML(fromDb ? 'afterbegin' : 'beforeend', html);
+    list.insertAdjacentHTML('beforeend', html);
+  }
+  // Раскладка очереди (просьба владельца 13.11): «по разделам» (по умолчанию) или «одной очередью» — решения, мёржи,
+  // сервер и проверки одним списком #sec-queue по порядку выполнения. Выбор — в этом браузере (localStorage
+  // oq-queue-layout); приватное окно или запрет хранилища — до перезагрузки.
+  var LAYOUT_KEY = 'oq-queue-layout', LAYOUT = 'sections';
+  try { LAYOUT = layoutOf(localStorage.getItem(LAYOUT_KEY)); } catch (e) { LAYOUT = 'sections'; }
+  // Пункты в списках — по порядку orderItems (от старых к новым; «одной очередью» выполненные — после открытых). Узлы
+  // переносятся, только если порядок другой: ответ в поле и раскрытые блоки переживают перенос, фокус возвращается.
+  function placeItems() {
+    var byId = {}, groups = {};
+    document.querySelectorAll('section .list > .item[data-id]').forEach(function (el) { byId[el.dataset.id] = el; });
+    ITEMS.concat(DB_ITEMS).forEach(function (it) {
+      var key = listOfKind(it.kind, LAYOUT);
+      if (byId[it.id]) (groups[key] = groups[key] || []).push(it);
+    });
+    var active = document.activeElement;
+    var doneOf = function (it) { return isDone(it, state[it.id]); };
+    Object.keys(groups).forEach(function (key) {
+      var list = document.querySelector('#sec-' + key + ' .list');
+      if (!list) return;
+      var els = orderItems(groups[key], key === 'queue' ? doneOf : null).map(function (it) { return byId[it.id]; });
+      var same = list.children.length === els.length && els.every(function (el, i) { return list.children[i] === el; });
+      if (!same) els.forEach(function (el) { list.appendChild(el); });
+    });
+    if (active && active !== document.activeElement && active.isConnected && active.focus) active.focus({ preventScroll: true });
+  }
+  // Кнопка раскладки в шапке называет ту раскладку, на которую переключит; значок — тоже её (полосы — один список,
+  // блоки — разделы). «К решениям ↓» «одной очередью» ведёт к общему списку: раздел решений скрыт.
+  var LAYOUT_ICON = { one: 'M4 6h16M4 10h16M4 14h16M4 18h16', sections: 'M4 5h6M4 9h6M14 5h6M14 9h6M4 15h6M4 19h6M14 15h6M14 19h6' };
+  var layoutBtn = document.getElementById('layout-btn');
+  // Инструкция ssh живёт в разделе «На сервере»; «одной очередью» он скрыт, и ссылка «как подключиться» вела бы в
+  // невидимый узел. Поэтому инструкция переезжает в конец общего списка (команды сервера теперь там) и обратно.
+  var sshHowto = document.getElementById('ssh-howto');
+  function placeSshHowto(one) {
+    var sec = document.getElementById(one ? 'sec-queue' : 'sec-server');
+    // Нет узла (правка разметки) — инструкция не переезжает, но переключатель раскладки работает.
+    if (!sshHowto || !sec) return;
+    if (one) sec.appendChild(sshHowto); else sec.insertBefore(sshHowto, sec.querySelector('.list'));
+  }
+  function paintLayout() {
+    var one = LAYOUT === 'one', next = one ? 'По разделам' : 'Одной очередью';
+    document.getElementById('sec-queue').hidden = !one;
+    ['decision', 'merge', 'server', 'check'].forEach(function (k) { document.getElementById('sec-' + k).hidden = one; });
+    placeSshHowto(one);
+    document.getElementById('layout-text').textContent = next;
+    document.getElementById('layout-ico').setAttribute('d', LAYOUT_ICON[one ? 'sections' : 'one']);
+    layoutBtn.setAttribute('aria-label', next);
+    layoutBtn.title = one ? 'Вернуть разделы: решения, мёржи, на сервере, проверить руками'
+      : 'Решения, мёржи, сервер и проверки — одним списком по порядку выполнения';
+    var toDec = document.querySelector('.hb-to-dec');
+    if (toDec) { toDec.setAttribute('href', one ? '#sec-queue' : '#sec-decision'); toDec.textContent = one ? 'К очереди ↓' : 'К решениям ↓'; }
+  }
+  layoutBtn.addEventListener('click', function () {
+    LAYOUT = LAYOUT === 'one' ? 'sections' : 'one';
+    try { localStorage.setItem(LAYOUT_KEY, LAYOUT); } catch (e) { /* приватное окно — до перезагрузки */ }
+    paintLayout();
+    placeItems();
+  });
+  paintLayout();
+  // Переход «Очередь → Решения» и т. п. «одной очередью»: раздела нет — к первому видимому открытому пункту этого вида в
+  // общем списке (выбор продукта и «Скрыть выполненные» прячут пункты), нет такого — к началу списка.
+  function jumpToKind(kind) {
+    var els = document.querySelectorAll('#sec-queue .item[data-kind="' + kind + '"]'), el = null;
+    for (var i = 0; i < els.length && !el; i++) if (!els[i].classList.contains('is-done') && els[i].getClientRects().length) el = els[i];
+    if (!el) { document.getElementById('sec-queue').scrollIntoView({ block: 'start', behavior: smooth() }); return; }
+    el.setAttribute('tabindex', '-1');
+    el.scrollIntoView({ block: 'start', behavior: smooth() });
+    el.focus({ preventScroll: true });
   }
   function showTarget() {
     if (!TARGET || targetShown) return;
@@ -996,6 +1083,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     showTarget();
   });
   ITEMS.forEach(function (it) { mount(it, false); });
+  placeItems();
   showTarget();
 
   var modeEl = document.getElementById('mode');
@@ -1009,6 +1097,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function fmtTime(iso) { try { return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
 
   function render() {
+    placeItems();
     var total = 0, done = 0;
     allItems().forEach(function (it) {
       var el = document.querySelector('.item[data-id="' + it.id + '"]');
@@ -1048,7 +1137,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
       if (it.kind !== 'inbox') { total++; if (d) done++; } // входящие — не дела владельца, в прогресс не идут
     });
-    var openBy = {}, againBy = {};
+    var openBy = {}, againBy = {}, qn = 0, qk = 0;
     document.querySelectorAll('section[data-section]').forEach(function (sec) {
       var kind = sec.dataset.section, n = 0, k = 0, a = 0;
       allItems().forEach(function (it) {
@@ -1059,7 +1148,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       });
       var c = sec.querySelector('[data-count]'); if (c) c.textContent = queueReady() ? k + ' из ' + n : '…';
       openBy[kind] = n - k; againBy[kind] = a;
+      if (listOfKind(kind, 'one') === 'queue') { qn += n; qk += k; }
     });
+    // Общий список «одной очередью» — сумма четырёх разделов (считается и при раскладке по разделам: он лишь скрыт).
+    var qc = document.querySelector('#sec-queue [data-count]'); if (qc) qc.textContent = queueReady() ? qk + ' из ' + qn : '…';
     jumpQueue(openBy, againBy);
     document.getElementById('progress').textContent = !queueReady() ? 'Загружаю ответы…'
       : (queueStale() ? 'Снимок 16.10, нет связи · сделано ' : 'Сделано ') + done + ' из ' + total;
@@ -1171,7 +1263,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return list.map(function (d) {
       var id = d.id || d.key || d.doc_id || (typeof d.path === 'string' ? d.path.split('/').pop() : '');
       var data = typeof d.data === 'function' ? d.data() : (d.data || d.value || d.fields || d);
-      return { id: id, data: data, version: typeof d.version === 'number' ? d.version : null };
+      return { id: id, data: data, version: typeof d.version === 'number' ? d.version : null, updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0 };
     }).filter(function (r) { return r.id && r.data && typeof r.data === 'object'; });
   }
   function apply(snap) {
@@ -1268,15 +1360,20 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function applyItems(snap) {
     LIVE.items = true;
-    var list = rowsOf(snap).map(function (r) { return itemFromDb(r.id, r.data); }).filter(Boolean)
+    // updatedAt строки — второй ключ порядка (orderItems): времени создания пункта в снимке нет. В ключ снимка он не
+    // входит: запись агента в поле, которого страница не показывает (sha, pr, deploy), не пересоздаёт пункты и не
+    // стирает набранный ответ. Порядок берёт updatedAt снимка, после которого пункты пересоздавались.
+    var at = {};
+    var list = rowsOf(snap).map(function (r) { at[r.id] = r.updatedAt; return itemFromDb(r.id, r.data); }).filter(Boolean)
       .filter(function (it) { return !ITEMS.some(function (b) { return b.id === it.id; }); });
     var key = JSON.stringify(list) + (otherProduct() ? '|other' : '');
     if (key === dbItemsKey) return;
     dbItemsKey = key;
+    list.forEach(function (it) { it.updatedAt = at[it.id]; });
     document.querySelectorAll('.item[data-src="db"]').forEach(function (el) { el.remove(); });
     DB_ITEMS = list;
-    list.slice().reverse().forEach(function (it) { mount(it, true); });
-    render();
+    list.forEach(function (it) { mount(it, true); });
+    render(); // порядок в списках ставит placeItems в начале render
     showTarget();
     if (FILES) FILES.itemsChanged();
   }
@@ -1582,6 +1679,28 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // 'again' — владелец ответил, а сессия после ответа поставила blocked: снова открыт, с меткой «ждёт вас снова».
   function itemState(it, e) { return oqItemState(it.kind, e || {}); }
   function isDone(it, e) { return itemState(it, e) === 'done'; }
+  // Порядок пунктов в списке — от старых к новым (просьба владельца 13.11): по added (дата YYYY-MM-DD), при равной дате —
+  // по updatedAt (время последней записи пункта в базе, мс: времени создания в снимке нет), затем по id. Без даты — раньше
+  // датированных (вшитые пункты 15–16.10 — самые старые). doneOf — для «одной очереди»: открытые и «ждёт вас снова»
+  // раньше выполненных, внутри групп — тот же порядок. Исходный массив не меняется.
+  function orderItems(items, doneOf) {
+    function cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+    return items.map(function (it) {
+      return {
+        it: it, done: doneOf && doneOf(it) ? 1 : 0, added: typeof it.added === 'string' ? it.added : '',
+        at: typeof it.updatedAt === 'number' && isFinite(it.updatedAt) ? it.updatedAt : 0, id: String(it.id),
+      };
+    }).sort(function (a, b) {
+      return a.done - b.done || cmp(a.added, b.added) || a.at - b.at || cmp(a.id, b.id);
+    }).map(function (x) { return x.it; });
+  }
+  // Список пункта: «одной очередью» (layout 'one') решения, мёржи, сервер и проверки — в общем списке queue (#sec-queue),
+  // входящие — в своём разделе; «по разделам» — каждый вид в своём. Без внешних имён: страница зовёт её до конца блока.
+  function listOfKind(kind, layout) {
+    return layout === 'one' && (kind === 'decision' || kind === 'merge' || kind === 'server' || kind === 'check') ? 'queue' : kind;
+  }
+  // Раскладка из localStorage (oq-queue-layout): 'one' — одной очередью; пусто, мусор или старое значение — по разделам.
+  function layoutOf(saved) { return saved === 'one' ? 'one' : 'sections'; }
   // Автопередача у входящего без статуса агента (relay — ответ GET /relay консоли; null — старая консоль, молчим):
   // wait — передано, ждём «взял»; sending — процесс жив, ещё не передал; stuck — передано, но «взял» нет 10 минут или
   // процесс с тех пор умер (Monitor сессии истёк): ждать некого, команда руками; off — автопередачи нет.
@@ -2496,6 +2615,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var a = ev.target.closest && ev.target.closest('.jump-list a');
     if (!a) return;
     var d = a.closest('details.jump'); if (d) d.open = false;
+    // «Одной очередью» четыре раздела скрыты: якорь никуда не ведёт — переход к пункту этого вида в общем списке.
+    if (a.dataset.kind && listOfKind(a.dataset.kind, LAYOUT) === 'queue') { ev.preventDefault(); jumpToKind(a.dataset.kind); return; }
     if (!a.dataset.dash) return; // разделы очереди — обычный якорь, отступ под шапку даёт scroll-padding-top
     ev.preventDefault();
     showDash(a.getAttribute('href').slice(1));
