@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import db from "../database";
 import { ssrEntityTable, ssrVersionTable } from "../database/ssr-schema";
@@ -22,15 +22,9 @@ export async function approveDraft(
 ) {
   const entity = await assertEntity(workspaceId, entityId);
   return db.transaction(async (tx) => {
-    await tx
-      .update(ssrVersionTable)
-      .set({ status: "superseded" })
-      .where(
-        and(
-          eq(ssrVersionTable.entityId, entityId),
-          eq(ssrVersionTable.status, "latest"),
-        ),
-      );
+    // Lock order is the batch's (approve-matching.ts): the draft row, then
+    // the live version, then the entity (TB-89). Taking the live version
+    // first let a single and a batch approve of one entity deadlock (40P01).
     // Status and bytes are checked in the UPDATE itself: Postgres re-reads
     // the row after the lock, so a sync or decision that committed first
     // makes this touch nothing instead of approving other bytes.
@@ -40,6 +34,16 @@ export async function approveDraft(
       .where(seenDraftRow(entityId, seen))
       .returning({ number: ssrVersionTable.number });
     if (!approved) throw await decisionConflict(tx, entityId, seen);
+    await tx
+      .update(ssrVersionTable)
+      .set({ status: "superseded" })
+      .where(
+        and(
+          eq(ssrVersionTable.entityId, entityId),
+          eq(ssrVersionTable.status, "latest"),
+          ne(ssrVersionTable.id, seen.versionId),
+        ),
+      );
     await tx
       .update(ssrEntityTable)
       .set({
