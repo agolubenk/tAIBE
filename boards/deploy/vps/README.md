@@ -162,8 +162,10 @@ set:
 
 1. On GitHub, make a fine-grained token: repository access — only the repos listed in `SSR_PUSH_REPOS`; permission
    Contents — read and write. Nothing else.
-2. Put it into `/opt/t-boards/secrets/ssr_push_github_token` (0400, owner 1001), never on the command line:
-   `install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/ssr_push_github_token`, then paste and Ctrl-D.
+2. Put it into `/opt/t-boards/secrets/ssr_push_github_token` (0400, owner 1001), never on the command line or the
+   screen. In bash on the VPS run the line below, paste the token (it is not echoed) and press Enter:
+   `read -rs T && printf '%s\n' "$T" | install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/ssr_push_github_token; unset T`.
+   `printf` is a bash builtin, so the token is not in any process's arguments.
 3. Add to `/opt/t-boards/.env`: `SSR_PUSH_REPOS=<workspaceId>=<owner>/<repo>,<workspaceId>=<owner>/<repo>`.
 4. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
 5. Check, without printing the token:
