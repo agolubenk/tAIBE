@@ -146,4 +146,29 @@ describe("etaPatch (2-day step)", () => {
     expect(etaPatch({ eta: "2026-11-20" }, null)).toEqual({ eta: null });
     expect(etaPatch({}, null)).toEqual({});
   });
+
+  it("writes a 1-day move across planEnd, both ways (TB-128)", () => {
+    const planEnd = "2026-11-20";
+    expect(etaPatch({ planEnd, eta: "2026-11-20" }, "2026-11-21")).toEqual({
+      eta: "2026-11-21",
+    });
+    expect(etaPatch({ planEnd, eta: "2026-11-21" }, "2026-11-20")).toEqual({
+      eta: "2026-11-20",
+    });
+    // planEnd as a full ISO time compares by its day, as forecast() does.
+    expect(
+      etaPatch(
+        { planEnd: "2026-11-20T00:00:00.000Z", eta: "2026-11-20" },
+        "2026-11-21",
+      ),
+    ).toEqual({ eta: "2026-11-21" });
+  });
+
+  it("keeps a 1-day move on one side of planEnd or without one", () => {
+    const planEnd = "2026-11-20";
+    expect(etaPatch({ planEnd, eta: "2026-11-21" }, "2026-11-22")).toEqual({});
+    expect(etaPatch({ planEnd, eta: "2026-11-19" }, "2026-11-20")).toEqual({});
+    expect(etaPatch({ planEnd, eta: "2026-11-20" }, "2026-11-20")).toEqual({});
+    expect(etaPatch({ eta: "2026-11-20" }, "2026-11-21")).toEqual({});
+  });
 });
