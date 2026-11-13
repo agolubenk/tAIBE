@@ -2,11 +2,15 @@
 
 usage: python3 -I context_audit.py "<с YYYY-MM-DD HH:MM>" "<по YYYY-MM-DD HH:MM>" [--json out.json] [--match "<строка>"]
        python3 -I context_audit.py --hours 24 --all [--json out.json]     # ежедневная эволюция (daily_steps)
+       python3 -I context_audit.py "<с>" "<по>" --product taibe [--all]    # команда одного продукта (SE-73)
 
 Время — местное (Минск). Журналы — сессии команды: первое сообщение содержит «ключ реестра» (или строку --match:
 у пилота с геномом ключа реестра нет, его первое сообщение — «…ты — автор t-boards…»). `--all` — все сессии хоста и
 слоя (repo_root и layer_home из eval/nerve/config.json): их папки проектов, папки worktree и субагенты
 `<sid>/subagents/*.jsonl`, без фильтра по первому сообщению; запрос, записанный в двух файлах, считается один раз.
+`--product <slug>` — вместо папки команды HR папки одного продукта: его checkout и worktree (`repo_root` из `instances/`,
+отнесение папки — `budget.Products` Нерва, как у доли окна SE-66). Фильтр первого сообщения и счёт — как без флага;
+с `--all` — все сессии продукта и его субагенты без фильтра. Первая строка вывода называет продукт и папки.
 1. Деньги по статьям: вход, запись кэша (5 мин / 1 ч), чтение кэша, выход. Холодный вызов — запись кэша больше
    половины контекста (от 30K), то есть контекст переписан целиком. Причина (d-f63b-economy-0711), по порядку:
    старт, сжатие, пауза ≥ 60 мин, ToolSearch с прошлого вызова, запись отложенных инструментов без ToolSearch,
@@ -44,8 +48,9 @@ pos = [a for a in sys.argv[1:] if not a.startswith('--')]
 out_json = sys.argv[sys.argv.index('--json') + 1] if '--json' in sys.argv else None
 match = sys.argv[sys.argv.index('--match') + 1] if '--match' in sys.argv else 'ключ реестра'
 hours = sys.argv[sys.argv.index('--hours') + 1] if '--hours' in sys.argv else None
+product = sys.argv[sys.argv.index('--product') + 1] if '--product' in sys.argv else None
 all_dirs = '--all' in sys.argv
-for flag_value in (out_json, match, hours):
+for flag_value in (out_json, match, hours, product):
     if flag_value in pos:
         pos.remove(flag_value)
 if hours:
@@ -67,14 +72,35 @@ def project_prefixes(config=os.path.join(os.path.dirname(os.path.abspath(__file_
     return [re.sub(r'[^A-Za-z0-9]', '-', r) for r in roots if r] or [os.path.basename(ROOT)]
 
 
-def transcripts():
-    """(path, is_subagent): the team dir only, or with --all every dir of the instance and its subagents."""
-    if not all_dirs:
+def product_dirs(slug):
+    """Claude project dirs of one product: its checkout and its worktree dirs. The Nerve decides whose a dir is
+    (budget.Products, SE-66): the longest repo_root wins, so a product nested in another keeps its own dirs."""
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'nerve'))
+    import budget
+    import products
+    try:
+        _shared, known = products.load()
+    except products.ProductError as e:
+        sys.exit(f'context_audit: {e}')
+    if slug not in known:
+        sys.exit(f'context_audit: нет продукта «{slug}»: {", ".join(sorted(known))}')
+    owner = budget.Products({s: d['repo_root'] for s, d in known.items()})
+    return sorted(d for d in glob.glob(HOME_CLAUDE + 'projects/*')
+                  if os.path.isdir(d) and owner.of_project(os.path.basename(d)) == slug)
+
+
+def transcripts(dirs=None):
+    """(path, is_subagent): the team dir only, or the given product dirs; with --all every dir of the instance (or of
+    the product) and its subagents."""
+    if dirs is None and not all_dirs:
         return [(p, False) for p in glob.glob(os.path.join(ROOT, '*.jsonl'))]
-    prefixes, out = project_prefixes(), []
-    for d in glob.glob(HOME_CLAUDE + 'projects/*'):
-        if any(os.path.basename(d).startswith(p) for p in prefixes):
-            out += [(p, False) for p in glob.glob(os.path.join(d, '*.jsonl'))]
+    if dirs is None:
+        prefixes = project_prefixes()
+        dirs = [d for d in glob.glob(HOME_CLAUDE + 'projects/*') if any(os.path.basename(d).startswith(p) for p in prefixes)]
+    out = []
+    for d in dirs:
+        out += [(p, False) for p in glob.glob(os.path.join(d, '*.jsonl'))]
+        if all_dirs:
             out += [(p, True) for p in glob.glob(os.path.join(d, '*', 'subagents', '*.jsonl'))]
 
     def born(item):
@@ -222,7 +248,12 @@ def settle(pending, upto):
 
 
 seen_all, gens, subagent_files = set(), [], 0
-for path, is_sub in transcripts():
+dirs = product_dirs(product) if product else None
+if product:
+    names = [os.path.basename(d) for d in dirs]
+    print(f'Продукт {product}: папок {len(names)} — ' + (', '.join(names[:3]) or 'нет') +
+          (f' и ещё {len(names) - 3}' if len(names) > 3 else ''))
+for path, is_sub in transcripts(dirs):
     try:
         if datetime.fromtimestamp(os.path.getmtime(path)) < since:
             continue
@@ -433,6 +464,7 @@ print('8. Поколение по окну (наибольший контекс�
     for k, v in bands.items()) or '—'))
 if out_json:
     json.dump({'window': [f'{since:%Y-%m-%d %H:%M}', f'{until:%Y-%m-%d %H:%M}'], 'all': all_dirs,
+               **({'product': product, 'dirs': [os.path.basename(d) for d in dirs]} if product else {}),
                'total': round(total, 2), 'generations': bands,
                'money': money, 'cold': cold, 'held': held, 'ups_by_wake': ups_by_wake,
                'hook_src': {f'{e}/{tag}': v for (e, tag), v in hook_src.items()}, 'nested': nested, 'instr': instr,

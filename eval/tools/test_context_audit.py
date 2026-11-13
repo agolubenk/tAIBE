@@ -1,4 +1,5 @@
-"""context_audit.py --all: every dir of the instance and its subagents, one count per request, the cause of each cold
+"""context_audit.py --all: every dir of the instance and its subagents; --product: the dirs of one product (SE-73);
+one count per request, the cause of each cold
 call and the generation cost by window size (d-f63b-economy-0711, item 4). Fake HOME, fixture transcripts.
 
 Run: python3 -I eval/tools/test_context_audit.py
@@ -119,6 +120,74 @@ class ContextAuditAllTest(unittest.TestCase):
         self.assertAlmostEqual(big['handoff_share'], round(share, 3), places=3)
         self.assertEqual(big['life_min'], 79.0)
         self.assertEqual(bands['≤ 250K']['with_handoff'], 0)   # the fork has no ack and no handoff write
+
+
+class ContextAuditProductTest(unittest.TestCase):
+    """SE-73: --product <slug> reads the dirs of one product from instances/ — its checkout and worktrees — not the
+    neighbour with a longer name, not a scratchpad dir that only mentions the path, not the other product."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, os.path.join(HERE, '..', 'nerve'))
+        import products
+        _shared, known = products.load()
+        taibe, hr = project_dir(known['taibe']['repo_root']), project_dir(known['hr-helper']['repo_root'])
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.home = cls.tmp.name
+        projects = os.path.join(cls.home, '.claude', 'projects')
+        team = [prompt('Сборка Т3, ключ реестра boards, роль 6.', 0), call('t1', 1, 50_000, 40_000)]
+        cls.own = [taibe, taibe + '-worktrees-feature-x']
+        files = {os.path.join(projects, taibe, 'a.jsonl'): team,
+                 os.path.join(projects, taibe + '-worktrees-feature-x', 'b.jsonl'): team,
+                 os.path.join(projects, taibe, 'a', 'subagents', 'agent-1.jsonl'): SUB,
+                 os.path.join(projects, taibe + 'x', 'c.jsonl'): team,                       # a longer neighbour
+                 os.path.join(projects, '-private-tmp-claude-501-' + taibe + '-1-scratchpad', 'd.jsonl'): team,
+                 os.path.join(projects, hr, 'e.jsonl'): team}
+        for path, rows in files.items():
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(json.dumps(r, ensure_ascii=False) for r in rows) + '\n')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def audit(self, *flags):
+        out = os.path.join(self.home, 'out.json')
+        res = subprocess.run([sys.executable, '-I', TOOL, '--hours', '24', '--json', out, *flags],
+                             capture_output=True, text=True, env=dict(os.environ, HOME=self.home), timeout=60)
+        data = None
+        if res.returncode == 0:
+            with open(out, encoding='utf-8') as f:
+                data = json.load(f)
+        return res, data
+
+    def test_only_the_product_dirs(self):
+        res, data = self.audit('--product', 'taibe')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual((data['product'], data['dirs']), ('taibe', sorted(self.own)))
+        self.assertEqual((data['sessions'], data['subagents'], data['calls']), (2, 0, 2))
+        first = res.stdout.splitlines()[0]
+        self.assertTrue(first.startswith('Продукт taibe: папок 2 — '), first)
+        self.assertIn(self.own[1], first)
+
+    def test_all_adds_the_product_subagents(self):
+        res, data = self.audit('--product', 'taibe', '--all')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual((data['sessions'], data['subagents']), (2, 1))
+
+    def test_without_the_flag_nothing_changes(self):
+        res, data = self.audit()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertNotIn('product', data)
+        self.assertFalse(res.stdout.startswith('Продукт'))
+        self.assertEqual(data['sessions'], 1)                    # the HR team dir, as before
+
+    def test_unknown_product(self):
+        res, _ = self.audit('--product', 'nope')
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn('нет продукта «nope»', res.stderr)
+        self.assertIn('taibe', res.stderr)
 
 
 class HandoffMarkersTest(unittest.TestCase):
