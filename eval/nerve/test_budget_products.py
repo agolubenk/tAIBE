@@ -33,6 +33,11 @@ def write(path, lines):
         f.write("".join(x + "\n" for x in lines))
 
 
+def at(path, dt):
+    """mtime файла — dt: тест не зависит от часа, в который запущен."""
+    os.utime(path, (dt.timestamp(), dt.timestamp()))
+
+
 class ProductsTest(unittest.TestCase):
     def setUp(self):
         self.p = budget.Products(ROOTS)
@@ -134,6 +139,7 @@ class OverheadTest(unittest.TestCase):
             self.assertEqual(budget.evolve_overhead(d, *win), (0.0, []))
             write(os.path.join(d, "runs", "2026-11-14.json"), ["{not json"])
             write(os.path.join(d, "runs", "session-latest.json"), [json.dumps({"exit": 0, "comment": "x"})])
+            at(os.path.join(d, "runs", "session-latest.json"), datetime(2026, 11, 13, 5, 3, tzinfo=MSK))  # mtime вне окна
             self.assertEqual(budget.evolve_overhead(d, *win), (0.0, []))
             # Цепочка ревью: вложенный budget не словарь, finished не строка или без пояса — ноль, а не исключение.
             for bad in ({"finished": "2026-11-14T05:00:00+03:00", "budget": [1]},
@@ -152,6 +158,21 @@ class OverheadTest(unittest.TestCase):
             self.assertEqual(budget.evolve_overhead(d, *win), (0.0, ["сессия"]))
             mode = {"share5": 0.5, "share5_by": {"taibe": 0.5}, "overhead_unknown": ["сессия"]}
             self.assertTrue(budget.shares_text(mode).endswith("накладные — сверх share5, без $: сессия"))
+
+    def test_a_session_file_without_finished_is_timed_by_mtime(self):
+        """SE-81: файл до SE-66 (без finished и usd) или битый — сессия по mtime: в окне — «без $», вне — ничего."""
+        win = (datetime(2026, 11, 14, 4, 0, tzinfo=MSK), datetime(2026, 11, 14, 8, 0, tzinfo=MSK))
+        for text in (json.dumps({"exit": 0, "comment": "posted to SE-49"}), "{not json",
+                     json.dumps({"exit": 0, "usd": 0.7, "finished": "2026-11-14T05:03:05"})):  # без пояса
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "runs", "session-latest.json")
+                write(path, [text])
+                at(path, datetime(2026, 11, 14, 5, 3, 5, tzinfo=MSK))
+                usd, unknown = budget.evolve_overhead(d, *win)
+                self.assertEqual(unknown, [] if "0.7" in text else ["сессия"])
+                self.assertAlmostEqual(usd, 0.7 if "0.7" in text else 0.0)
+                at(path, datetime(2026, 11, 13, 5, 3, 5, tzinfo=MSK))
+                self.assertEqual(budget.evolve_overhead(d, *win), (0.0, []))
 
 
 class SharesTest(unittest.TestCase):

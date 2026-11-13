@@ -109,27 +109,34 @@ def cmd_session(args):
         res = subprocess.run(cmd, cwd=wt, env=env, capture_output=True, text=True,
                              timeout=steps.SESSION_TIMEOUT_MIN * 60)
     except subprocess.TimeoutExpired:
+        record_session('timeout', None, 'stopped after %d min' % steps.SESSION_TIMEOUT_MIN)
         steps.log('session: stopped after %d min' % steps.SESSION_TIMEOUT_MIN)
-        return 0
-    text = (res.stdout or '') + (res.stderr or '')
-    if res.returncode != 0 and steps.QUOTA.search(text):
-        steps.log('session: quota spent — quiet exit')
         return 0
     try:
         data = json.loads(res.stdout)
     except ValueError:
         data = None
     data = data if isinstance(data, dict) else {}
+    text = (res.stdout or '') + (res.stderr or '')
+    if res.returncode != 0 and steps.QUOTA.search(text):
+        record_session(res.returncode, data.get('total_cost_usd'), 'quota spent')
+        steps.log('session: quota spent — quiet exit')
+        return 0
     result = data.get('result', '')
     line, why = comment_from(result)
     posted = steps.post_card(line) if line and not report.get('card') and not args.no_card else 'not posted: %s' % (
         why if not line else 'the run already posted' if report.get('card') else '--no-card')
-    # usd and finished: the Nerve counts the session as overhead of the 5 h window (SE-66); no transcript has it.
-    steps.save_json('runs/session-latest.json', {'exit': res.returncode, 'comment': posted,
-                                                 'usd': data.get('total_cost_usd'),
-                                                 'finished': datetime.now(timezone.utc).isoformat(timespec='seconds')})
+    record_session(res.returncode, data.get('total_cost_usd'), posted)
     steps.log('session: exit %d, card %s' % (res.returncode, posted))
     return 0
+
+
+def record_session(exit_code, usd, comment):
+    """runs/session-latest.json: the Nerve counts the session as overhead of the 5 h window (SE-66) — no transcript
+    has it. Written on every exit after the session started: a timeout or a spent quota also cost dollars, and usd None
+    makes the Nerve name the session «без $» instead of dropping it (SE-81)."""
+    steps.save_json('runs/session-latest.json', {'exit': exit_code, 'comment': comment, 'usd': usd,
+                                                 'finished': datetime.now(timezone.utc).isoformat(timespec='seconds')})
 
 
 def verdict_lines_ok(base_text, text, run_ids, today_ids):
