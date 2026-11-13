@@ -5,6 +5,7 @@ import {
 } from "../routes/schema";
 import { fetchLink, linkRefusal } from "./link-fetch";
 import { linkSourceText } from "./link-text";
+import type { SourceAuthor } from "./source-author";
 import { upsertSource } from "./upsert-source";
 
 // The ref is what the member pasted, without the fragment: the same page
@@ -35,7 +36,11 @@ export function linkRef(input: string) {
   return url;
 }
 
-export async function addLinkSource(workspaceId: string, input: string) {
+export async function addLinkSource(
+  workspaceId: string,
+  input: string,
+  addedBy?: SourceAuthor,
+) {
   const url = linkRef(input);
   const page = linkSourceText(url, await fetchLink(url));
   if (!page.body) {
@@ -59,6 +64,7 @@ export async function addLinkSource(workspaceId: string, input: string) {
     title: page.title,
     text: page.text,
     maxChunks: FETCHED_SOURCE_CHUNKS_MAX,
+    addedBy,
   });
   return { ...stored, kind: "link" as const, ref: url.href, title: page.title };
 }

@@ -4108,7 +4108,10 @@
 					"GITHUB_UNAVAILABLE": "GitHub did not answer. Try again, or reconnect the integration.",
 					"GITHUB_NO_ACCESS": "The GitHub App may not read this repository's pull requests. Grant it pull request access, or reconnect the integration.",
 					"SOURCE_TOO_MANY_CHUNKS": "The text splits into too many parts for one source (at most 2000)."
-				}
+				},
+				"addedByAgent": "Added by agent {{name}}",
+				"addedByPerson": "Added by {{name}}",
+				"addedByUnknown": "Added by: unknown"
 			}
 		},
 		"ssr": {
