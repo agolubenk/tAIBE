@@ -12,6 +12,14 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)"
 dir="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)" || exit 0
 [ -n "$cmd" ] || exit 0
 case "$cmd" in *WT_DEPS_CHECK=0*) exit 0 ;; esac
+# Установка зависимостей — починка, а не гейт (OPS-54): `pnpm install`/`pnpm i`, в том числе после `cd X &&`, в скобках
+# и с `-C X`/`--dir X`. Иначе хук останавливал ровно ту команду, которую сам предлагает, а обход через WT_DEPS_CHECK=0
+# классификатор авто-режима считает обходом надзора. Цепочка через `;`/`||` не пропускается: гейт после упавшей
+# установки шёл бы на чужих зависимостях.
+case "$cmd" in
+  *';'* | *'||'*) ;;
+  *) printf '%s' "$cmd" | grep -Eq '^[[:space:]]*\(?[[:space:]]*(cd[[:space:]]+[^&;|]+&&[[:space:]]*)?pnpm([[:space:]]+(-C|--dir)(=|[[:space:]]+)[^[:space:]]+)?[[:space:]]+(install|i)([[:space:]]|\)|$)' && exit 0 ;;
+esac
 
 # Ведущий `cd X &&` меняет каталог гейта; относительный X — от cwd.
 lead="$(printf '%s' "$cmd" | sed -nE 's/^[[:space:]]*cd[[:space:]]+("([^"]+)"|'"'"'([^'"'"']+)'"'"'|([^[:space:]&;|]+))[[:space:]]*(&&|;).*/\2\3\4/p')"
@@ -44,6 +52,7 @@ err="$(bash "$script" check "$dir" 2>&1 >/dev/null)"
 {
   echo "Гейт остановлен: зависимости worktree не свои или устарели — результат был бы ложным."
   printf '%s\n' "$err"
+  echo "Установку хук пропускает: команда починки выше или bash infra/scripts/dev/wt-deps.sh install <путь>."
   echo "Команда не про зависимости — добавь WT_DEPS_CHECK=0 в её начало."
 } >&2
 exit 2
