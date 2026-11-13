@@ -107,14 +107,17 @@ class GenomeTest(unittest.TestCase):
             with self.subTest(role=role):
                 self.assertEqual(g['env'].get('CLAUDE_CODE_EFFORT_LEVEL') == 'medium', role == 'coord')
 
-    def test_every_role_runs_on_1m_window(self):
-        """SE-62: without CLAUDE_BIN the genome alone gives 1M. env and autoCompactWindow must agree: the host
-        settings.local.json sets both to 250K, and --settings overrides each key on its own."""
+    def test_every_role_compacts_at_300k_on_1m_model(self):
+        """SE-62 + SE-55 (owner 13.11): the 1M model keeps one session alive, auto-compaction at 300K keeps a turn
+        cheap. env and autoCompactWindow must agree: the host settings.local.json sets both to 250K, and --settings
+        overrides each key on its own. SUCCESSOR_AUTO=off: else the context-threshold hook asks for a successor at
+        85 % of W_eff, before the compaction."""
         for role, g in GENOMES.items():
             with self.subTest(role=role):
                 self.assertIn('[1m]', g['model'])
-                self.assertEqual(g['autoCompactWindow'], 1_000_000)
+                self.assertEqual(g['autoCompactWindow'], 300_000)
                 self.assertEqual(g['env']['CLAUDE_CODE_AUTO_COMPACT_WINDOW'], str(g['autoCompactWindow']))
+                self.assertEqual(g['env']['SUCCESSOR_AUTO'], 'off')
 
 
 class ProductGenomeTest(unittest.TestCase):
