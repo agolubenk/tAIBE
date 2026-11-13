@@ -4,8 +4,10 @@ export type OwnerQueueConfig = {
   // ops-console base, e.g. https://ops.admin.hrhelper.space
   url: string;
   tokenFile: string;
-  // The token's name in the queue, set by the owner when issuing it (R-4,
-  // Q-3): an event under another name is not t-boards' own write.
+  // The token's author name in the queue journal, as the ops-console writes it:
+  // «token:<name>» (server/queue/auth.ts). OQ_TOKEN_NAME may hold the bare name
+  // or the full one (R-4, Q-3; TB-111). An event under another name is not
+  // t-boards' own write.
   tokenName: string;
   // workspace id → queue product slug; a workspace not listed gets no items,
   // only the t-boards UI.
@@ -30,7 +32,13 @@ export function readOwnerQueueConfig(
     }
   }
   if (!url || !tokenFile || !tokenName || products.size === 0) return null;
-  return { url, tokenFile, tokenName, products };
+  return { url, tokenFile, tokenName: journalActor(tokenName), products };
+}
+
+// TB-111: the journal names a token's writes «token:<name>»; comparing with the
+// bare name read every t-boards write as someone else's (queue_item_changed).
+export function journalActor(tokenName: string): string {
+  return tokenName.startsWith("token:") ? tokenName : `token:${tokenName}`;
 }
 
 export function readQueueToken(config: OwnerQueueConfig): string {

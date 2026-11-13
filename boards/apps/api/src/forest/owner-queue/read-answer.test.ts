@@ -80,6 +80,12 @@ describe("owner-queue config and item id", () => {
     ).toBeNull();
     const config = readOwnerQueueConfig(base);
     expect(config?.url).toBe("https://ops.test");
+    // TB-111: the queue journal names the token's writes «token:<name>».
+    expect(config?.tokenName).toBe("token:t-boards");
+    expect(
+      readOwnerQueueConfig({ ...base, OQ_TOKEN_NAME: "token:t-boards" })
+        ?.tokenName,
+    ).toBe("token:t-boards");
     expect([...(config?.products ?? [])]).toEqual([
       ["ws1", "hr-helper"],
       ["ws2", "taibe"],
