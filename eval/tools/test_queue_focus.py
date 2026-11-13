@@ -94,5 +94,60 @@ class QueueFocusTest(unittest.TestCase):
         self.assertTrue(all(not all_cards[k].get('halfBaked') for k in keys))
 
 
+def row(rid, cards=(), **data):
+    return {'id': rid, 'data': dict({'status': 'planned', 'who': 'agent', 'cards': list(cards)}, **data)}
+
+
+def card(key, st='to-do', k='task', s='medium', **extra):
+    return dict({'key': key, 'ws': 'aiboards-eval', 't': key, 'k': k, 's': s, 'st': st}, **extra)
+
+
+class PlanTest(unittest.TestCase):
+    """SE-65 (F1): the next card comes from the product's plan rows, in row order, the board's law inside a row."""
+
+    def test_rows_of_a_product_and_of_the_default_product(self):
+        docs = [row('w-taibe-a'), row('w-n-high'), row('w-taibe-owner', who='owner'), row('w-taibe-b', status='blocked'),
+                row('w-taibe-c', status='done'), {'id': 'w-taibe-focus-doc', 'data': {'kind': 'focus'}},
+                row('track-x'), row('w-taibe-old', archived=True)]
+        taibe = [r for r, _ in q.plan_rows(docs, 'taibe', 'hr-helper', ['hr-helper', 'taibe'])]
+        hr = [r for r, _ in q.plan_rows(docs, 'hr-helper', 'hr-helper', ['hr-helper', 'taibe'])]
+        self.assertEqual(taibe, ['w-taibe-a'])
+        self.assertEqual(hr, ['w-n-high'])
+
+    def test_rank_focus_order_first_then_plan_start_then_undated_last(self):
+        rows = [('w-x-late', {'planStart': '2026-11-20'}), ('w-x-early', {'planStart': '2026-11-10'}),
+                ('w-x-nodate', {}), ('w-x-picked', {'planStart': '2026-12-01'})]
+        self.assertEqual([r for r, _ in q.rank_rows(rows, ['w-x-picked'])],
+                         ['w-x-picked', 'w-x-early', 'w-x-late', 'w-x-nodate'])
+
+    def test_next_skips_held_cards_takes_abandoned_first_and_a_card_once(self):
+        rows = [('w-t-1', {'cards': [card('TB-1', st='in-progress'), card('TB-2', s='low'),
+                                     card('TB-3', st='in-progress', c='без аренды'), card('TB-4', st='done')]}),
+                ('w-t-2', {'cards': [card('TB-2'), card('SE-9', k='bug', s='high')]})]
+        out = q.plan_next(rows)
+        self.assertEqual([i['key'] for i in out], ['TB-3', 'TB-2', 'SE-9'])
+        self.assertEqual([i['row'] for i in out], ['w-t-1', 'w-t-1', 'w-t-2'])
+        self.assertIn('брошена', out[0]['why'])
+        self.assertEqual(out[2]['why'], 'ошибка high')
+
+    def test_grilling_waits_for_the_owner_and_p0_ranks_as_urgent(self):
+        rows = [('w-t-1', {'cards': [card('TB-1', st='grilling', s='urgent'), card('APP-2', s='medium'),
+                                     card('APP-1', s='p0')]})]
+        self.assertEqual([i['key'] for i in q.plan_next(rows)], ['APP-1', 'APP-2'])
+
+    def test_bug_before_task_inside_a_row_and_top_limit(self):
+        rows = [('w-t-1', {'cards': [card('TB-%d' % n, s='urgent') for n in range(1, 7)] + [card('SE-1', k='bug', s='low')]})]
+        out = q.plan_next(rows, top=3)
+        self.assertEqual([i['key'] for i in out], ['SE-1', 'TB-1', 'TB-2'])
+
+    def test_plan_reads_the_focus_doc_order_and_says_when_empty(self):
+        docs = [row('w-taibe-a', [card('TB-1')], planStart='2026-11-01'), row('w-taibe-b', [card('TB-2')], planStart='2026-11-02'),
+                {'id': 'focus-taibe', 'data': {'kind': 'focus', 'rows': ['w-taibe-b']}}]
+        res = q.plan('taibe', root=os.path.join(HERE, '..', '..'), docs=docs)
+        self.assertEqual([i['key'] for i in res['next']], ['TB-2', 'TB-1'])
+        empty = q.plan('taibe', root=os.path.join(HERE, '..', '..'), docs=[row('w-taibe-a', [card('TB-1', st='done')])])
+        self.assertIn('Не бери работу вне плана', q.render_plan(empty))
+
+
 if __name__ == '__main__':
     unittest.main()
