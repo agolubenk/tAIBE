@@ -212,8 +212,9 @@ export const ENHANCE_JS = String.raw`(function () {
       .catch(function (e) { say(el, e.message, true); })
       .then(function () { delete btn.dataset.busy; syncButton(btn, id); });
   }
+  // Мёржи — в своём разделе или «одной очередью» в общем списке #sec-queue (кнопка раскладки в шапке страницы).
   function decorate() {
-    document.querySelectorAll('#sec-merge .item[data-id]').forEach(function (el) {
+    document.querySelectorAll('#sec-merge .item[data-id], #sec-queue .item[data-kind="merge"][data-id]').forEach(function (el) {
       var btn = el.querySelector('.oq-merge');
       if (!btn) {
         var row = el.querySelector('.answer');
@@ -226,8 +227,9 @@ export const ENHANCE_JS = String.raw`(function () {
       }
       syncButton(btn, el.dataset.id);
     });
-    var head = document.querySelector('#sec-merge .sec-head');
-    if (head && !head.querySelector('.oq-redeploy')) {
+    ['#sec-merge .sec-head', '#sec-queue .sec-head'].forEach(function (sel) {
+      var head = document.querySelector(sel);
+      if (!head || head.querySelector('.oq-redeploy')) return;
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'toggle oq-redeploy';
@@ -237,7 +239,7 @@ export const ENHANCE_JS = String.raw`(function () {
         api('POST', '/redeploy').then(function (r) { window.alert(r.message); }, function (e) { window.alert(e.message); });
       });
       head.appendChild(b);
-    }
+    });
   }
   var queued = false;
   new MutationObserver(function () {

@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { OPEN_RULE_JS } from '../server/queue/open-rule'
+import { PRODUCTS_JS } from '../server/queue/page-products'
 import { SHIM_JS } from '../server/queue/page-scripts'
 
 const html = readFileSync(join(__dirname, '../server/queue/page.html'), 'utf8')
@@ -37,6 +38,8 @@ type Pure = {
   itemState: (it: { kind: string }, e: Record<string, unknown> | undefined) => 'open' | 'again' | 'done'
   isDone: (it: { kind: string }, e: Record<string, unknown> | undefined) => boolean
   orderItems: <T extends OrderIt>(items: T[], doneOf: ((it: T) => boolean) | null) => T[]
+  listOfKind: (kind: string, layout: string) => string
+  layoutOf: (saved: unknown) => 'one' | 'sections'
   relayItemState: (relay: unknown, id: string, now: number) => null | { k: 'wait' | 'sending' | 'stuck' | 'off'; session?: string; at?: string; dead?: boolean }
   ownerSnapshotApplies: (local: Record<string, unknown> | undefined, snap: Record<string, unknown> | undefined, pending: boolean) => boolean
   tipHtml: (s: string) => string
@@ -71,7 +74,7 @@ function pure(): Pure {
     classifyOwnText: fn('classifyOwnText'), inboxTitleOf: fn('inboxTitleOf'), inboxDraftId: fn('inboxDraftId'), inboxItemOf: fn('inboxItemOf'),
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
-    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
+    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
     tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), roadmapMonthLabel: fn('roadmapMonthLabel'),
     placeRoadmapLabels: fn('placeRoadmapLabels'), targetFromHash: fn('targetFromHash'),
   }
@@ -318,7 +321,7 @@ describe('раскладка: отчёты слева или выше, данн�
 
   it('порядок в DOM совпадает с экранным: заголовок → «Ход работ» → данные; справка агентов и подвал — в конце данных', () => {
     const order = ['<header class="page-head">', '<a class="skip" href="#queue-data">', 'id="reports-col"', 'id="agents"', 'id="report-card"', 'id="cards-dlg"',
-      'class="col-data"', '<header class="data-head" id="queue-data">', '<div class="howto">', 'id="sec-decision"', 'id="sec-merge"', 'id="sec-server"',
+      'class="col-data"', '<header class="data-head" id="queue-data">', '<div class="howto">', 'id="sec-queue"', 'id="sec-decision"', 'id="sec-merge"', 'id="sec-server"',
       'id="sec-check"', '<details class="agent-howto">', '<footer>']
     const idx = order.map(at)
     expect(idx).toEqual([...idx].sort((a, b) => a - b))
@@ -855,7 +858,8 @@ describe('шапка, Гант и справка (просьба владель�
     expect(bar).toMatch(/<summary class="hb-btn" aria-label="Очередь: разделы" title="[^"]+">/)
     expect(bar).toMatch(/id="reports-open"[^>]*aria-label="Отчёты" title="[^"]+">/)
     // Значки — украшение: экранный диктор читает подпись кнопки, а не svg.
-    expect(bar.match(/<svg class="hb-ico"[^>]*aria-hidden="true"/g)?.length).toBe(2)
+    expect(bar).toMatch(/id="layout-btn" aria-label="Одной очередью" title="[^"]+">/)
+    expect(bar.match(/<svg class="hb-ico"[^>]*aria-hidden="true"/g)?.length).toBe(3)
   })
 
   it('Гант: строка шириной со шкалу — липкое название не уезжает при прокрутке вбок', () => {
@@ -867,7 +871,7 @@ describe('шапка, Гант и справка (просьба владель�
     const howto = html.slice(html.indexOf('<details class="howto-d" id="howto-d"'), html.indexOf('</details>', html.indexOf('id="howto-d"')))
     for (const w of ['Решения', 'Мёржи', '«Влить»', '«Перезапустить деплой»', 'Команды на сервере', 'Проверить руками', 'Входящие',
       '«📎 Добавить файл»', 'Продукт у пункта', '«Изменить ответ»', '«Ждёт вас снова»', '«Показать выполненные»', '#item=',
-      'выбор продукта', '«＋ Поставить задачу»', '«Очередь»', '«Ход работ»', '«К решениям ↓»', 'тема', 'Шапка на телефоне',
+      'выбор продукта', '«＋ Поставить задачу»', '«Очередь»', '«Одной очередью»', '«По разделам»', 'от старых к новым', '«Ход работ»', '«К решениям ↓»', 'тема', 'Шапка на телефоне',
       'Ваша очередь по дням', 'правая ось', 'прогноз на 30 дней', 'план и факт', 'Готовность по разделам', 'Карточки t-boards в плане',
       'Отставание от плана', 'Сколько PR ждали мёржа', '36 часов', 'Диаграмма Ганта', 'Роадмап', 'Отчёт по задачам']) {
       expect(howto.toLowerCase()).toContain(w.toLowerCase())
@@ -937,5 +941,62 @@ describe('порядок пунктов: от старых к новым (про
     // Пункты базы больше не встают в начало списка в порядке сервера (новые сверху).
     expect(html).not.toContain("'afterbegin' : 'beforeend'")
     expect(html).not.toContain('list.slice().reverse().forEach')
+  })
+})
+
+describe('раскладка «Одной очередью» / «По разделам» (просьба владельца 13.11)', () => {
+  const phone = (() => {
+    const at = html.indexOf('@media (max-width: 640px) {')
+    return html.slice(at, html.indexOf('\n}\n', at))
+  })()
+
+  it('одной очередью — решения, мёржи, сервер и проверки в общем списке; входящие — в своём разделе', () => {
+    const { listOfKind } = pure()
+    expect(['decision', 'merge', 'server', 'check', 'inbox'].map((k) => listOfKind(k, 'one'))).toEqual(['queue', 'queue', 'queue', 'queue', 'inbox'])
+    expect(['decision', 'merge', 'server', 'check', 'inbox'].map((k) => listOfKind(k, 'sections'))).toEqual(['decision', 'merge', 'server', 'check', 'inbox'])
+  })
+
+  it('сохранённый выбор: только «one» — одной очередью; пусто, мусор и прочее — по разделам (по умолчанию)', () => {
+    const { layoutOf } = pure()
+    expect(layoutOf('one')).toBe('one')
+    for (const v of [null, '', 'sections', 'ONE', 'queue', undefined]) expect(layoutOf(v)).toBe('sections')
+  })
+
+  it('выбор — localStorage oq-queue-layout, чтение и запись — в try/catch', () => {
+    expect(html).toContain("var LAYOUT_KEY = 'oq-queue-layout', LAYOUT = 'sections';")
+    expect(html).toContain("try { LAYOUT = layoutOf(localStorage.getItem(LAYOUT_KEY)); } catch (e) { LAYOUT = 'sections'; }")
+    expect(html).toContain('try { localStorage.setItem(LAYOUT_KEY, LAYOUT); } catch (e) {')
+  })
+
+  it('общий список — с заголовком, скрыт по умолчанию и без data-section: бот собирает разделы по нему', () => {
+    expect(html).toMatch(/<section id="sec-queue" hidden>\s*<div class="sec-head"><h2 class="sec">Очередь — по порядку выполнения<\/h2><span class="sec-count" data-count><\/span><\/div>/)
+    expect(html).not.toMatch(/data-section="queue"/)
+    // Расстановка: в общем списке выполненные — после открытых; в разделах — только по дате.
+    expect(html).toContain("var els = orderItems(groups[key], key === 'queue' ? doneOf : null)")
+    expect(html).toContain('var key = listOfKind(it.kind, LAYOUT);')
+    // Число общего списка — сумма четырёх разделов.
+    expect(html).toContain("if (qc) qc.textContent = queueReady() ? qk + ' из ' + qn : '…';")
+  })
+
+  it('метка вида — у четырёх видов, вне строки чипов (её читает бот), видна только в общем списке', () => {
+    expect(html).toContain("var KIND_NAME = { decision: 'Решение', merge: 'Мёрж', server: 'На сервере', check: 'Проверить руками' };")
+    expect(html).toContain(`'" data-kind="' + esc(it.kind) + '"><div class="item-head">' + kindHtml + '<h3 class="item-title">'`)
+    expect(html).toContain('.item-kind { display: none; }')
+    expect(html).toMatch(/#sec-queue \.item-kind \{ display: inline-block;/)
+  })
+
+  it('переходы «Очередь → вид» одной очередью ведут к пункту в общем списке, «К решениям ↓» — к общему списку', () => {
+    expect(html).toContain("if (a.dataset.kind && listOfKind(a.dataset.kind, LAYOUT) === 'queue') { ev.preventDefault(); jumpToKind(a.dataset.kind); return; }")
+    expect(html).toContain("toDec.setAttribute('href', one ? '#sec-queue' : '#sec-decision')")
+  })
+
+  it('телефон: кнопка — значок 40 px (касание не меньше 36 px), шапка не раздвигается', () => {
+    expect(phone).toMatch(/\.hb-compose, \.hb-reports, \.hb-theme, \.hb-layout \{ flex: none; width: 40px;/)
+    expect(html).toMatch(/\.hb-btn \{[^}]*min-height: 40px;/)
+  })
+
+  it('подпись продукта и отбор по продукту — и у пунктов общего списка', () => {
+    expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .item[data-id], #sec-queue .item[data-id]').forEach(decorateItem);")
+    expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .list, #sec-queue .list')")
   })
 })
