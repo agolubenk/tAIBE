@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -280,6 +281,18 @@ def _finish_lens(rec: dict) -> None:
     rec["error"] = "; ".join(f"{p['part']}: {p['error']}" for p in parts if p["error"])[:1000]
 
 
+def resume_mismatch(prior: dict | None, pr: str, diff_sha: str) -> str:
+    """Почему прошлый отчёт нельзя продолжить: другой PR или другой дифф (новые коммиты). Пусто — можно."""
+    if not prior:
+        return ""
+    meta = prior.get("_meta") or {}
+    if str(meta.get("pr")) != str(pr):
+        return f"отчёт PR {meta.get('pr')}, а ревьюится {pr}"
+    if meta.get("diff_sha") != diff_sha:
+        return "дифф изменился после прошлого прогона (или отчёт без diff_sha)"
+    return ""
+
+
 def _carry_part(rec: dict, prior: dict | None, lens: str, label: str) -> bool:
     """--resume: часть, прошедшая в прошлом отчёте (другой рецензент цепочки), переносится как есть, без вызова."""
     prev = (prior or {}).get(lens) or {}
@@ -294,10 +307,10 @@ def _carry_part(rec: dict, prior: dict | None, lens: str, label: str) -> bool:
 
 def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_tokens: int, deadline_s: float,
                breaker: int = 2, clock=time.monotonic, on_progress=None, log=print, prior: dict | None = None,
-               backend: str = "glm") -> tuple[dict, int]:
+               backend: str = "glm", diff_sha: str = "") -> tuple[dict, int]:
     """Вызовы по одному. Возвращает (отчёт, код выхода). prior — отчёт прошлого рецензента цепочки (--resume)."""
     out: dict = {"_meta": {"pr": pr, "model": model, "backend": backend, "calls": len(calls), "stopped": "",
-                           "not_passed": []}}
+                           "not_passed": [], "diff_sha": diff_sha}}
     started, stop, stop_kind = clock(), "", ""
     in_row: dict = {}         # линза → ответов 5xx подряд
     dropped: dict = {}        # линза → почему её оставшиеся части не идут
@@ -431,6 +444,11 @@ def main(argv=None) -> int:
     except (OSError, ValueError) as exc:
         print(f"запуск: --resume {args.resume}: {exc}", file=sys.stderr)
         return EXIT_START
+    diff_sha = hashlib.sha256(diff.encode()).hexdigest()[:16]
+    stale = resume_mismatch(prior, args.pr, diff_sha)
+    if stale:
+        print(f"--resume не применён: {stale} — все части ревьюятся заново", flush=True)
+        prior = None
     body = body or ""
 
     def save(report: dict) -> None:
@@ -441,7 +459,8 @@ def main(argv=None) -> int:
             client, calls, pr=args.pr, model=args.model, max_tokens=args.max_tokens,
             prompt_of=lambda c: build_prompt(c, body, whole, skipped, all_files),
             deadline_s=args.deadline_min * 60, breaker=max(args.breaker, 1),
-            on_progress=save, log=lambda m: print(m, flush=True), prior=prior, backend=args.backend)
+            on_progress=save, log=lambda m: print(m, flush=True), prior=prior, backend=args.backend,
+            diff_sha=diff_sha)
 
     if args.backend == "opencode":
         from opencode_client import OpencodeClient

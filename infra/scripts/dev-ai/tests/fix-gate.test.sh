@@ -43,6 +43,8 @@ repo
 expect "pre: чистая копия" 0 bash "$gate" pre "$tmp/r"
 lines a.py 1
 expect "pre: грязная копия — отказ" 1 bash "$gate" pre "$tmp/r"
+repo; : >"$tmp/r/notes.md"
+expect "pre: незатреканный файл — отказ" 1 bash "$gate" pre "$tmp/r"
 
 repo; lines a.py 20
 expect "post: 20 строк в одном файле — ок" 0 bash "$gate" post "$tmp/r"
@@ -68,6 +70,12 @@ repo; mkdir -p "$tmp/r/infra/scripts/prod"; lines infra/scripts/prod/x.sh 2
 expect "post: infra/scripts/prod — отказ" 1 bash "$gate" post "$tmp/r"
 repo; lines Dockerfile.api 1
 expect "post: Dockerfile — отказ" 1 bash "$gate" post "$tmp/r"
+repo; mkdir -p "$tmp/r/apps/x/.claude"; lines apps/x/.claude/settings.json 1
+expect "post: вложенный .claude/ — отказ" 1 bash "$gate" post "$tmp/r"
+repo; lines big.py 30; git -C "$tmp/r" add . && git -C "$tmp/r" commit -qm big; git -C "$tmp/r" mv big.py big2.py
+expect "post: переименование файла на 30 строк считается — отказ" 1 bash "$gate" post "$tmp/r"
+repo; lines big.py 30; git -C "$tmp/r" add . && git -C "$tmp/r" commit -qm big; : >"$tmp/r/big.py"
+expect "post: удаление 30 строк считается — отказ" 1 bash "$gate" post "$tmp/r"
 
 repo; lines a.py 30; lines extra.py 3
 expect "post --rollback: отказ" 1 bash "$gate" post "$tmp/r" --rollback

@@ -29,6 +29,8 @@ review() { # backend model [флаги]
   python3 "$here/glm_pr_review.py" "$pr" "$out" "$model" ${lenses[@]+"${lenses[@]}"} --backend "$backend" "$@"
 }
 
+# Отчёт прошлого прогона не продолжается: GLM берёт только то, что не прошло на opencode в этом прогоне.
+rm -f "$out"
 if [[ "${REVIEW_CHAIN_FORCE:-}" != glm ]]; then
   review opencode "${OPENCODE_REVIEW_MODEL:-}" "$@"
   rc=$?

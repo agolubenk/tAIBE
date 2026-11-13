@@ -10,14 +10,16 @@
 * Агент `taibe-review` (`infra/opencode/agents/taibe-review.md`, ставит `infra/opencode/install.sh`) запрещает все
   инструменты: рецензент видит только дифф из промпта. Запуск — во временной папке, проектные AGENTS.md
   не грузятся (`OPENCODE_DISABLE_PROJECT_CONFIG=1`), лишних токенов на каждую линзу нет.
+* Промпт (дифф, тело PR) — файлом-вложением `--file` во временной папке, не в argv (его видит `ps`).
 * Лимит определяется только по stderr и коду выхода, не по тексту модели: в диффе бывают «rate limit» и «429».
+  Исчерпание подписки (quota, usage limit, 402) — стоп звена; 429 — временный отказ (класс provider).
   Текст ошибки исчерпания у opencode не документирован (13.11) — шаблон шире, чем нужно, и это безопасно:
   ложная «квота» останавливает только этот прогон, следующий начинает с opencode снова (общей отметки нет).
 * memguard не в «ok»/«warn» — opencode не запускается: память важнее ревью, линзы уходят к GLM.
 
 Ошибки начинаются с меток, которые понимает `glm_pr_review.classify_failure`:
 «квота подписки opencode» → quota, «облако выключено: opencode …» → config, «исчерпан запас памяти» → budget,
-«HTTP 504 opencode» → provider (таймаут), остальное → other.
+«HTTP 504/429 opencode» → provider (таймаут, частота), «сеть/opencode: замок занят» → network (стоп звена), остальное → other.
 """
 from __future__ import annotations
 
@@ -36,11 +38,14 @@ from pathlib import Path
 STATE_DIR = Path(os.environ.get("REVIEW_CHAIN_STATE", "~/.local/state/taibe/review-chain")).expanduser()
 MEMGUARD_STATE = Path(os.environ.get("MEMGUARD_STATE", "~/.claude/memguard/state.json")).expanduser()
 MEMGUARD_OK = ("ok", "warn", "")
-QUOTA_RE = re.compile(r"usage limit|limit (reached|exceeded)|quota|insufficient|allowance|billing|exceeded your|"
-                      r"\b(402|429)\b|too many requests", re.I)
+# Исчерпание подписки — стоп звена; 429 и «too many requests» — временный отказ апстрима (повтор, предохранитель).
+QUOTA_RE = re.compile(r"usage limit|limit (reached|exceeded)|quota|allowance|billing|exceeded your|\b402\b|"
+                      r"insufficient (balance|credit|funds|quota)", re.I)
+RATE_RE = re.compile(r"\b429\b|too many requests|rate.?limit", re.I)
 AUTH_RE = re.compile(r"not (logged|authenticated)|no (api )?key|unauthori[sz]ed|\b401\b|auth login|"
                      r"no provider|model .* not found|unknown model", re.I)
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+PROMPT_FILE = "review-prompt.md"
 ENV_KEEP = ("HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TERM")
 
 
@@ -65,6 +70,8 @@ def classify_stderr(code: int, err: str) -> str:
     tail = (err or "").strip()[-300:]
     if QUOTA_RE.search(err or ""):
         return f"квота подписки opencode: {tail}"
+    if RATE_RE.search(err or ""):
+        return f"HTTP 429 opencode: {tail}"
     if AUTH_RE.search(err or ""):
         return f"облако выключено: opencode без входа или модели ({tail})"
     return f"opencode код {code}: {tail}"
@@ -94,12 +101,14 @@ class OpencodeClient:
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.lock_path, "a+") as lock:
             if not self._wait_lock(lock):
-                return Result(False, error=f"HTTP 504 opencode: замок {self.lock_path} занят дольше {self.timeout} с")
+                # Не 5xx: повтор снова ждал бы замок. Звено останавливается, линзы берёт GLM.
+                return Result(False, error=f"сеть/opencode: замок {self.lock_path} занят дольше {self.timeout} с")
             lock.seek(0)
             lock.truncate()
             lock.write(f"{os.getpid()} {purpose}\n")
             lock.flush()
-            return self._run([exe, "run", "--agent", self.agent, "--model", model, prompt])
+            return self._run([exe, "run", "--agent", self.agent, "--model", model, "--file", PROMPT_FILE,
+                              "Follow the instructions in the attached file."], prompt)
 
     def _wait_lock(self, lock) -> bool:
         deadline = self.clock() + self.timeout
@@ -112,11 +121,13 @@ class OpencodeClient:
                     return False
                 time.sleep(0.5)
 
-    def _run(self, argv: list) -> Result:
+    def _run(self, argv: list, prompt: str) -> Result:
         # Только то, что нужно opencode: секреты сессии (ключи, токены) рецензенту не передаются.
         env = {k: v for k, v in os.environ.items() if k in ENV_KEEP or k.startswith(("XDG_", "OPENCODE_", "LC_"))}
         env.update(NO_COLOR="1", OPENCODE_DISABLE_PROJECT_CONFIG="1")
         with tempfile.TemporaryDirectory(prefix="oc-review-") as cwd:
+            # Дифф и тело PR — файлом в папке 0700, а не в argv: argv видит любой процесс (`ps`).
+            Path(cwd, PROMPT_FILE).write_text(prompt)
             proc = self.runner(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                stdin=subprocess.DEVNULL, text=True, start_new_session=True)
             try:

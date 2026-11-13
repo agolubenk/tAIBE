@@ -26,7 +26,9 @@ class _Proc:
 
 def _runner(proc, seen):
     def run(argv, **kw):
-        seen.append((argv, kw.get("env", {}).get("OPENCODE_DISABLE_PROJECT_CONFIG")))
+        prompt = Path(kw["cwd"], "review-prompt.md")
+        seen.append((argv, kw.get("env", {}).get("OPENCODE_DISABLE_PROJECT_CONFIG"),
+                     prompt.read_text() if prompt.exists() else None, sorted(kw.get("env", {}))))
         return proc
     return run
 
@@ -48,13 +50,19 @@ def _opencode(check, gr, tmp: Path) -> None:
     check("opencode: ответ с ANSI и словами «limit 429» в тексте модели — ok, не квота",
           res.ok and res.text.startswith("{") and gr.parse_answer(res).get("verdict") == "accept"
           and seen and seen[0][1] == "1" and "--agent" in seen[0][0], res.error)
+    check("opencode: промпт — файлом --file, не в argv; окружение без секретов",
+          "--file" in seen[0][0] and not any("[user]" in a for a in seen[0][0]) and seen[0][2]
+          and "[user]\np" in seen[0][2] and "GH_TOKEN" not in seen[0][3] and "HOME" in seen[0][3],
+          str(seen[0][0])[:200])
     cases = [(_Proc(1, "", "Error: usage limit reached for this model"), "quota"),
+             (_Proc(1, "", "Error: 429 Too Many Requests from upstream"), "provider"),
+             (_Proc(1, "", "Error: insufficient memory"), "other"),
              (_Proc(1, "", "Error: not logged in. Run opencode auth login"), "config"),
              (_Proc(0, "", ""), "other"),
              (_Proc(0, "", "", hang=True), "provider"),
              (_Proc(2, "", "segfault"), "other")]
     kinds = [gr.classify_failure(_client(oc, tmp, p, []).chat("pr-1", "r", "m", msgs).error) for p, _k in cases]
-    check("opencode: классы отказов по stderr — квота, нет входа, пусто, таймаут, сбой",
+    check("opencode: классы отказов по stderr — квота, 429 (временно), память ≠ квота, нет входа, пусто, таймаут, сбой",
           kinds == [k for _p, k in cases], str(kinds))
     mg.write_text(json.dumps({"level": "critical"}))
     seen = []
@@ -104,7 +112,26 @@ def _resume(check, gr) -> None:
           and second["рес"]["verdict"] == "fail", str(second["_meta"]["reviewers"]))
 
 
+def _lock_and_mismatch(check, gr, tmp: Path) -> None:
+    import fcntl
+    import opencode_client as oc
+    lock = tmp / "busy.lock"
+    with open(lock, "a+") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        ticks = iter([0, 0, 10])
+        client = oc.OpencodeClient(binary=sys.executable, timeout=5, lock_path=lock, clock=lambda: next(ticks),
+                                   runner=_runner(_Proc(0, "{}"), []), killer=lambda _p: None)
+        res = client.chat("pr-1", "r", "m", [{"role": "user", "content": "p"}])
+    check("opencode: замок занят дольше таймаута — класс network (стоп звена, линзы к GLM), без повторов",
+          gr.classify_failure(res.error) == "network", res.error)
+    prior = {"_meta": {"pr": "7", "diff_sha": "abc"}}
+    check("--resume: чужой PR, новый дифф, отчёт без diff_sha — не продолжается; тот же — продолжается",
+          gr.resume_mismatch(prior, "8", "abc") and gr.resume_mismatch(prior, "7", "def")
+          and gr.resume_mismatch({"_meta": {"pr": "7"}}, "7", "abc") and not gr.resume_mismatch(prior, "7", "abc"))
+
+
 def run(tmp: Path, check) -> None:
     import glm_pr_review as gr
     _opencode(check, gr, tmp)
     _resume(check, gr)
+    _lock_and_mismatch(check, gr, tmp)

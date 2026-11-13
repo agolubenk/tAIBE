@@ -18,7 +18,7 @@ max_files="${FIX_GATE_FILES:-2}"
 test_re='(^|/)(__tests__|tests?|e2e)/|\.(spec|test)\.[cm]?[jt]sx?$|(^|/)(test_[^/]*|[^/]*_test)\.py$'
 # Пути поставки (CI, деплой, прод-скрипты, docker, nginx) — не мелкая правка: находка приходит из текста PR,
 # которому нельзя доверять, а 20 строк в workflow меняют то, что уходит в прод.
-deny_re='(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|poetry\.lock|uv\.lock)$|(^|/)drizzle/|(^|/)migrations/|\.snap$|^\.claude/|^\.opencode/|^opencode\.jsonc?$|^\.github/|(^|/)deploy/|(^|/)[^/]*deploy[^/]*$|^infra/(scripts/prod|docker|nginx)/|(^|/)Dockerfile[^/]*$|(^|/)docker-compose[^/]*$'
+deny_re='(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|poetry\.lock|uv\.lock)$|(^|/)drizzle/|(^|/)migrations/|\.snap$|(^|/)\.claude/|(^|/)\.opencode/|(^|/)opencode\.jsonc?$|^\.github/|(^|/)deploy/|(^|/)[^/]*deploy[^/]*$|^infra/(scripts/prod|docker|nginx)/|(^|/)Dockerfile[^/]*$|(^|/)docker-compose[^/]*$'
 
 g() { git -C "$wt" "$@"; }
 
