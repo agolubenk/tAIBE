@@ -58,6 +58,8 @@ export type PlanOutcome = {
   skipped: number;
   // Left for the next run by the budget.
   left: number;
+  // Refused by the queue (400/422): skipped, the run goes on (TB-125).
+  refused: number;
   // The hourly part ran and every doc it changed is written.
   hourlyDone: boolean;
   // The daily part ran and nothing was left for lack of budget.
@@ -109,57 +111,61 @@ async function answeredMeanwhile(writer: PlanWriter, id: string | undefined) {
   return isDueChoice(check?.data.choice);
 }
 
+type Decision = DailyPlan["decisions"][number];
+
 // New decision: the item first, then the last unanswered one archived, then
 // the state. A 409 on the item: it exists — a run wrote it and failed before
 // the state. Our open decision is taken as written and the state points to
 // it, with its rows as the owner reads them; any other doc there is left.
 // A previous decision answered meanwhile stays: the next run applies the
-// answer first, then asks anew. false — a write failed or was left, or an
-// answer came meanwhile: the daily part runs again next run.
+// answer first, then asks anew. true — written or nothing to write; false —
+// a write failed or was left, or an answer came meanwhile: the daily part
+// runs again next run; "left" — the item put was left by the budget.
+async function writeDecision(
+  writer: PlanWriter,
+  decision: Decision,
+): Promise<boolean | "left"> {
+  const { item, state } = decision;
+  const previous =
+    decision.archive && decision.archive !== item.id
+      ? decision.archive
+      : undefined;
+  if (await answeredMeanwhile(writer, previous)) return false;
+  const put = await writer.write(() =>
+    writer.client.put("items", item.id, item.data, 0),
+  );
+  if (put === "left") return "left";
+  let rows = state.data.rows;
+  if (put === "skipped") {
+    const existing = await writer.client.get("items", item.id);
+    const due =
+      existing?.data.archived === true
+        ? null
+        : readItemDue(existing, decision.product);
+    if (!due) {
+      console.warn(`owner-queue due: ${item.id} exists and is not open`);
+      return true;
+    }
+    rows = due;
+  }
+  if (previous && !(await archiveItem(writer, previous))) return false;
+  const written = await writer.write(() =>
+    writer.client.put("work", state.id, { ...state.data, rows }, state.version),
+  );
+  return typeof written !== "string";
+}
+
+// A refused decision is left until tomorrow's: the same refusal would come
+// every run (TB-125).
 async function writeDecisions(writer: PlanWriter, daily: DailyPlan) {
   let complete = true;
   for (const decision of daily.decisions) {
-    const { item, state } = decision;
-    const previous =
-      decision.archive && decision.archive !== item.id
-        ? decision.archive
-        : undefined;
-    if (await answeredMeanwhile(writer, previous)) {
-      complete = false;
-      continue;
-    }
-    const put = await writer.write(() =>
-      writer.client.put("items", item.id, item.data, 0),
+    const result = await writer.unlessRefused(
+      `decision ${decision.item.id}`,
+      () => writeDecision(writer, decision),
     );
-    if (put === "left") return false;
-    let rows = state.data.rows;
-    if (put === "skipped") {
-      const existing = await writer.client.get("items", item.id);
-      const due =
-        existing?.data.archived === true
-          ? null
-          : readItemDue(existing, decision.product);
-      if (!due) {
-        console.warn(`owner-queue due: ${item.id} exists and is not open`);
-        continue;
-      }
-      rows = due;
-    }
-    if (previous) {
-      if (!(await archiveItem(writer, previous))) {
-        complete = false;
-        continue;
-      }
-    }
-    const written = await writer.write(() =>
-      writer.client.put(
-        "work",
-        state.id,
-        { ...state.data, rows },
-        state.version,
-      ),
-    );
-    if (typeof written === "string") complete = false;
+    if (result === "left") return false;
+    if (result === false) complete = false;
   }
   return complete;
 }
@@ -246,8 +252,11 @@ export async function planPass(
     });
     ordered = withEta(writes, rows, daily);
   }
+  // A row the queue refuses is skipped; the other rows go on (TB-125).
   for (const write of ordered) {
-    await writer.patch("work", write.id, write.patch, write.version);
+    await writer.unlessRefused(`row ${write.id}`, () =>
+      writer.patch("work", write.id, write.patch, write.version),
+    );
   }
   const decided = daily ? await writeDecisions(writer, daily) : true;
   const clean = writer.skipped === 0 && writer.left === 0;
@@ -255,6 +264,7 @@ export async function planPass(
     written: writer.written,
     skipped: writer.skipped,
     left: writer.left,
+    refused: writer.refused,
     hourlyDone: withHourly && clean,
     dailyDone: withDaily && writer.left === 0 && decided,
   };

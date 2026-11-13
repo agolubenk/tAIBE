@@ -1,4 +1,9 @@
-import { type QueueClient, QueueConflict, type QueueDoc } from "./queue-client";
+import {
+  type QueueClient,
+  QueueConflict,
+  type QueueDoc,
+  QueueRejected,
+} from "./queue-client";
 
 // The queue takes 120 writes a minute per token and the 30 s pass may spend
 // up to 50 of them: one plan run writes 30 docs at most, the rest go next run.
@@ -13,6 +18,7 @@ export class PlanWriter {
   written = 0;
   skipped = 0;
   left = 0;
+  refused = 0;
   private attempts = 0;
 
   constructor(
@@ -34,6 +40,24 @@ export class PlanWriter {
       if (!(error instanceof QueueConflict)) throw error;
       this.skipped += 1;
       return "skipped";
+    }
+  }
+
+  // The queue refused a doc (400/422: schema, size). The same refusal comes
+  // every run, so the run goes on without that doc (TB-125). Unlike a race or
+  // the budget, a refusal does not make the run incomplete: an incomplete
+  // hourly or daily part would run again every 5 minutes for nothing.
+  async unlessRefused<T>(
+    what: string,
+    step: () => Promise<T>,
+  ): Promise<T | "refused"> {
+    try {
+      return await step();
+    } catch (error) {
+      if (!(error instanceof QueueRejected)) throw error;
+      this.refused += 1;
+      console.warn(`owner-queue plan: ${what} refused: ${error.message}`);
+      return "refused";
     }
   }
 
