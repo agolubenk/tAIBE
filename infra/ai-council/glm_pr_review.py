@@ -21,8 +21,9 @@
 * общий потолок `--deadline-min`: новый вызов после него не начинается. Что не прошло — в `_meta.not_passed`
   и в коде выхода: эти линзы подхватывает другой рецензент.
 
-Линзы — JSON {"имя": "фокус"} или {"имя": {"focus": "…", "split": true}}. Дифф и описание — `gh pr diff/view`
-или `--diff-file`/`--body-file` (env PR_DIFF_FILE/PR_BODY — как у прежней версии из handoff).
+Линзы — JSON {"имя": "фокус"} или {"имя": {"focus": "…", "split": true}}. Дифф и описание — `gh pr diff/view -R`
+или `--diff-file`/`--body-file` (env PR_DIFF_FILE/PR_BODY — как у прежней версии из handoff). Репозиторий PR и
+run_id `<продукт>:pr-<N>` — `pr_repo.py` (`--repo`, GH_REPO или папка вызывающего; SE-80, Ф1а).
 Выход: 0 — все линзы прошли (вердикт может быть fail); 2 — часть не прошла; 3 — квота/бюджет; 1 — запуск.
 """
 from __future__ import annotations
@@ -40,6 +41,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+
+import pr_repo                      # noqa: E402
 
 DEFAULT_LENSES: dict = {
     "корректность и отказы": {
@@ -307,10 +310,11 @@ def _carry_part(rec: dict, prior: dict | None, lens: str, label: str) -> bool:
 
 def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_tokens: int, deadline_s: float,
                breaker: int = 2, clock=time.monotonic, on_progress=None, log=print, prior: dict | None = None,
-               backend: str = "glm", diff_sha: str = "") -> tuple[dict, int]:
+               backend: str = "glm", diff_sha: str = "", run_id: str = "") -> tuple[dict, int]:
     """Вызовы по одному. Возвращает (отчёт, код выхода). prior — отчёт прошлого рецензента цепочки (--resume)."""
-    out: dict = {"_meta": {"pr": pr, "model": model, "backend": backend, "calls": len(calls), "stopped": "",
-                           "not_passed": [], "diff_sha": diff_sha}}
+    run_id = run_id or f"pr-{pr}"
+    out: dict = {"_meta": {"pr": pr, "run_id": run_id, "model": model, "backend": backend, "calls": len(calls),
+                           "stopped": "", "not_passed": [], "diff_sha": diff_sha}}
     started, stop, stop_kind = clock(), "", ""
     in_row: dict = {}         # линза → ответов 5xx подряд
     dropped: dict = {}        # линза → почему её оставшиеся части не идут
@@ -330,7 +334,7 @@ def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_token
             continue
         t0 = clock()
         part["attempted"] = True
-        res = client.chat(f"pr-{pr}", f"pr_review.{call.lens}", model,
+        res = client.chat(run_id, f"pr_review.{call.lens}", model,
                           [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt_of(call)}],
                           temperature=0.2, max_tokens=max_tokens)
         part["seconds"] = round(clock() - t0)
@@ -395,6 +399,7 @@ def _parse_args(argv):
     ap.add_argument("--breaker", type=int, default=2, help="ответов 5xx подряд в линзе — её остаток не идёт")
     ap.add_argument("--diff-file", default=os.environ.get("PR_DIFF_FILE", ""))
     ap.add_argument("--body-file", default="")
+    ap.add_argument("--repo", default="", help="репозиторий PR owner/name; иначе GH_REPO или папка вызывающего")
     ap.add_argument("--dry-run", action="store_true", help="только план вызовов, без сети и базы")
     ap.add_argument("--backend", choices=("glm", "opencode"), default="glm",
                     help="кто рецензирует; цепочка opencode → glm → Claude — review_chain.sh")
@@ -405,23 +410,12 @@ def _parse_args(argv):
     return args
 
 
-def _inputs(args) -> tuple[str, str]:
-    if args.diff_file:
-        diff = Path(args.diff_file).read_text()
-        body = Path(args.body_file).read_text() if args.body_file else os.environ.get("PR_BODY", "")
-        return diff, body
-    gh = dict(cwd=HERE, capture_output=True, text=True, check=True)
-    diff = subprocess.run(["gh", "pr", "diff", args.pr], **gh).stdout
-    body = (Path(args.body_file).read_text() if args.body_file
-            else subprocess.run(["gh", "pr", "view", args.pr, "--json", "body", "--jq", ".body"], **gh).stdout)
-    return diff, body
-
-
 def main(argv=None) -> int:
     args = _parse_args(argv)
     try:
         lenses = json.loads(Path(args.lenses).read_text()) if args.lenses else DEFAULT_LENSES
-        diff, body = _inputs(args)
+        repo = pr_repo.resolve_repo(args.repo, probe=not args.diff_file)
+        diff, body = pr_repo.pr_inputs(args.pr, repo, diff_file=args.diff_file, body_file=args.body_file)
         calls, skipped, whole = plan_calls(lenses, diff, max(args.chunk_chars, 2000))
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"запуск: {exc}", file=sys.stderr)
@@ -460,7 +454,7 @@ def main(argv=None) -> int:
             prompt_of=lambda c: build_prompt(c, body, whole, skipped, all_files),
             deadline_s=args.deadline_min * 60, breaker=max(args.breaker, 1),
             on_progress=save, log=lambda m: print(m, flush=True), prior=prior, backend=args.backend,
-            diff_sha=diff_sha)
+            diff_sha=diff_sha, run_id=pr_repo.run_id(repo, args.pr))
 
     if args.backend == "opencode":
         from opencode_client import OpencodeClient
@@ -481,7 +475,7 @@ def main(argv=None) -> int:
             for node in client.providers.values():
                 node["timeout"] = args.attempt_timeout
             report, code = review(client)
-    report["_meta"].update(attempts=args.attempts, attempt_timeout=args.attempt_timeout,
+    report["_meta"].update(repo=repo, attempts=args.attempts, attempt_timeout=args.attempt_timeout,
                            chunk_chars=args.chunk_chars, skipped_generated=skipped)
     save(report)
     meta = report["_meta"]
