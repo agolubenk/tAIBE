@@ -157,6 +157,18 @@ check("held: корень после ack наследника", mi.held_verdict(
 check("held: Sx без procs — достаточно alive", mi.held_verdict(LIN, type("A", (), {"alive": Sx(heir).alive})(),
                                                                "r.y80w.plit", 20, ST, "r.y80w"), True)
 
+# oq_lines_verdict — чистое правило полей (его зовёт и хук HR): held спрашивается только о предках
+asked = []
+held_yes = lambda line: asked.append(line)  # noqa: E731
+check("правило: своя линия — без held", mi.oq_lines_verdict("r.a.b", "r.a.b", None, held_yes), True)
+check("правило: предок и takeover-предок", mi.oq_lines_verdict("r.a.b.c", "r.a.b", "r.a", held_yes), True)
+checked[0] += 1
+if asked != ["r.a.b", "r.a"]:
+    failures.append(f"held спрошен о {asked}, ждали r.a.b и r.a")
+check("правило: held отказал", mi.oq_lines_verdict("r.a.b", "r.a", None, lambda line: "нет"), False)
+check("правило: линии сессии нет", mi.oq_lines_verdict(None, "r.a", None, held_yes), False)
+check("правило: линия «r» без сегмента", mi.oq_lines_verdict("r", "r", None, held_yes), False)
+
 # полный список процессов — один раз на вызов, даже с проверкой держателя
 reset()
 ack("r.y80w.plit", 20)
