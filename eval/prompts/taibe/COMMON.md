@@ -16,6 +16,12 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
    требует при смене статуса» and «PR и линзы». A lens verdict: the first non-empty line has the lens name, the word
    `approve` or `changes`, and the head SHA after it (`Бэкенд: approve на 46b9f87e1`) — the Nerve quorum
    (`eval/nerve/quorum.py`) reads only this line.
+   Review of a new PR (coordinator 13.11, canon `.claude/memory/chunks/process/adversarial-review.md`): the author
+   runs `infra/ai-council/review_chain.sh <PR> /tmp/rc-<PR>.json` first and puts the report in the PR body; exit 3
+   (quota) — do not repeat, tell the coordinator. Then at most 2 Claude role lenses: the path owner and the one that
+   the coordinator assigns. If a new head carries only the accepted finding of lens X, write «дельта = принятая
+   находка <X>» in the assign: only X confirms, every other lens writes one line
+   `<Линза> (роль N): approve переношу на <sha>`. New logic or a file outside the finding gets a full round.
 5. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
 
 ## Board
