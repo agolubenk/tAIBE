@@ -348,8 +348,8 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False):
     """[(вид, подробность)] защищённых действий команды. git_env — конфиг git где-то задан окружением, disk — текст
     из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется), part —
-    тело `$(…)` или кода маски, вырезанное разбором: что для bash его начало — верхний уровень, не гарантировано, и
-    комментарий с `'` в нём остаётся (strip_comments, keep)."""
+    тело `$(…)` или кода маски: что для bash его начало — верхний уровень, не гарантировано, и комментарий с опасными
+    знаками в нём остаётся (strip_comments, keep). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL."""
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
@@ -359,7 +359,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         written.update(command_writes(cmd))
     cmd, bodies = cut_heredocs(cmd)  # до снятия комментариев: в теле `'` — не кавычка, `#` — не комментарий
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd = strip_comments(cmd, keep=None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
+    cmd = strip_comments(cmd, True, None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
     whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
