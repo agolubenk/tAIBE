@@ -36,7 +36,7 @@ from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E4
 from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
-                               cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
+                               CHANGED, comment_char_may_change, comment_char_seen, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
                                launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
                                split_commands, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
                                comment_readings, uncommented)
@@ -206,7 +206,7 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         is_interp_script = interp if interp is not None else (
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
         try:  # разобран до ошибки — находки этой части и грубый признак по тексту скрипта: в `bash x.sh` его нет
-            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path))
+            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_seen(whole[3], text, whole[4][1])))
         except Exception:
             got, partial = [], True
         found += got
@@ -252,12 +252,11 @@ def named_found(text, cwd):
     return found
 
 
-def script_found(text, interp, cwd, roots, depth, git_env, path=True):
-    """Скрипт с диска (path — его путь: от него `$(dirname "$0")`, см. resolve_dirs): shell — как команды,
-    интерпретатор — построчно с путями в переменных (interp_found)."""
+def script_found(text, interp, cwd, roots, depth, git_env, path=True, keep=False):
+    """Скрипт с диска (path — его путь: от него `$(dirname "$0")`, см. resolve_dirs): shell — как команды (keep — см. classify_bash), интерпретатор — построчно с путями в переменных (interp_found)."""
     if interp:
         return interp_found(text, cwd, roots, by_line=True)
-    return classify_bash(text, cwd, roots, depth + 1, git_env, disk=path)
+    return classify_bash(text, cwd, roots, depth + 1, git_env, disk=path, keep=keep)
 
 
 COARSE = "Makefile или программа awk с признаком защищённого действия"
@@ -345,27 +344,28 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     return found
 
 
-def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, alt=False):
-    """[(вид, подробность)] защищённых действий команды. git_env — конфиг git задан окружением, disk — текст скрипта
-    с диска, written — имена файлов, которые уже пишет эта команда (дополняется), part — тело `$(…)` или кода маски:
-    его начало для bash — не обязательно верхний уровень (strip_comments, keep), alt — разбирается второе прочтение
-    комментариев (comment_readings, SE-82). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL."""
+def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, alt=False, keep=False, raw=None):
+    """[(вид, подробность)] защищённых действий команды. git_env — конфиг git задан окружением, disk — текст скрипта с диска, written — имена файлов, которые уже пишет эта команда (дополняется), part — тело `$(…)` или кода маски:
+    его начало для bash — не обязательно верхний уровень (strip_comments, keep), alt — разбирается второе прочтение комментариев (comment_readings, SE-82). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL.
+    Знак комментария мог смениться (keep — до этого текста: `histchars=…; source x`; текст или внешняя команда называют настройку — comment_char_may_change, SE-77) — разбор дважды: со снятыми комментариями и без (raw), находки обоих."""
+    if raw is None and (keep or CHANGED in (written or ()) or comment_char_may_change(cmd + "\n" + (outer[1] if outer else ""))):  # только raw — код за `'` в комментарии
+        return [f for r in (False, True) for f in classify_bash(cmd, cwd, roots, depth, git_env, disk, written, outer, part, alt, keep, r)]
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
         hit = FALLBACK.search(uncommented(cmd))
         return [("вложенная команда с признаком защищённого действия", cmd[:120])] if hit else []
     if fresh:  # все записи команды — до разбора `$(…)` и heredoc (они разбираются раньше); вложенным — уже от родителя
-        written.update(command_writes(cmd))
+        written.update(command_writes(cmd, keep=keep) | ({CHANGED} if keep else set()))  # keep — и для `eval` в скрипте
     cmd, bodies = (cmd, []) if alt else cut_heredocs(cmd)  # до снятия комментариев; alt — уже снят (comment_readings)
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd, other = comment_readings(cmd, None if part else FALLBACK.search, alt)  # второе прочтение — SE-82
+    cmd, other = (cmd.replace("\\\n", " "), None) if raw else comment_readings(cmd, None if part else FALLBACK.search, alt)  # SE-77, SE-82
     whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
     procs = {f"{PROC}{k}": proc_files(body, cwd) for k, body in enumerate(inner) if f"{PROC}{k}" in cmd}
     procs[SUBS] = inner
-    found = settle(classify_bash(other, cwd, roots, depth, git_env, disk, written, whole[4], part, True))[0] if other else []
+    found = settle(classify_bash(other, cwd, roots, depth, git_env, disk, written, whole[4], part, True, raw=False))[0] if other else []
     for sub in inner:
         found += classify_bash(sub, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
     for readers, body, expands in bodies:

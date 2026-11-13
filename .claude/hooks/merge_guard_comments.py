@@ -4,6 +4,7 @@ comment_readings — SE-82). Простой разбор кавычек не з�
 и потому оставляет комментарий с опасными знаками (`# Docker's …`, `# say "hi`): если разбор ошибся, такой знак
 закрыл бы строку bash. sure_comments — разбор со стеком вложенности; на всём, чего он не моделирует, уверенность
 теряется до конца текста. Решений не принимает; без импорта других модулей merge-guard.
+Ещё здесь — признак, что текст может сменить сам знак комментария (comment_char_may_change, SE-77).
 """
 import re
 
@@ -13,6 +14,33 @@ SEPARATORS = " \t\n;&|()<>"
 WORDS = re.compile(r"(case|alias)(?=[\s;&|()<>]|$)")
 NAME = re.compile(r"[A-Za-z0-9_@*#?$!-]")  # `$NAME`, `$1`, `$@` внутри `${…}`
 BRACE_LOST = set("'\"`{\\")  # в `${…}` кавычки и `\` разные версии bash разбирают по-разному
+# Знак комментария меняют: третий знак `histchars` у zsh — для строк скрипта ниже, `eval` и `source` после него
+# (у `zsh -c` и `eval` весь текст разобран до присваивания); в интерактивном bash (`bash -i`) — `shopt -u
+# interactive_comments`, `+O interactive_comments`, `set +o interactive-comments`: `#` там — буква. Имя ищется в
+# тексте без всего, кроме латинских букв и цифр: `hist""chars`, `${:-hist}chars`, `NO_INTERACTIVE_COMMENTS`.
+COMMENT_CHAR = (b"histchars", b"interactivecomments")
+NOT_ALNUM = bytes(c for c in range(128) if not chr(c).isalnum())
+
+
+def comment_char_may_change(text):
+    """Текст называет настройку, которая меняет знак комментария (COMMENT_CHAR). Тогда `#` в нём и в том, что
+    shell разберёт после, — то ли комментарий, то ли код: разбирать надо обоими способами. Имя, собранное в
+    переменной или выводе команды (`${h}chars`, `$(…)`), не видно."""
+    flat = text.encode("ascii", "ignore").lower().translate(None, NOT_ALNUM)  # 4 МБ — 12–50 мс
+    return any(name in flat for name in COMMENT_CHAR)
+
+
+CHANGED = "\0comment-char"  # в written команды: настройка знака комментария уже была (comment_char_seen)
+
+
+def comment_char_seen(written, text, outer):
+    """Настройка знака комментария была до скрипта text: во внешней команде (`histchars=…; source x`) или в скрипте,
+    который команда прочла раньше (`source a.zsh; source b.zsh`, `source a.zsh; eval …`: настройка живёт в оболочке).
+    Скрипт, который её называет, отмечается в written (CHANGED) — для всего, что команда разберёт после него."""
+    before = CHANGED in (written or ()) or comment_char_may_change(outer)
+    if written is not None and comment_char_may_change(text):
+        written.add(CHANGED)
+    return before
 
 
 def sure_comments(cmd):
