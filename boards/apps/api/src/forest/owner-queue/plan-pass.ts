@@ -88,11 +88,13 @@ export async function planPass(
     hourly: withHourly
       ? {
           abandoned: await deps.store.abandoned(workspaceIds, now),
+          // The plan product, not the queue product: the off-plan row of
+          // aiBoards&eval cards is w-taibe-unplanned (OQ_PLAN_PRODUCTS).
           recent: await deps.store.recent(
-            deps.config.products,
+            deps.config.plan.products,
             offPlanSince(now),
           ),
-          products: [...new Set(deps.config.products.values())],
+          products: [...new Set(deps.config.plan.products.values())],
           now,
         }
       : null,

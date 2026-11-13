@@ -13,12 +13,34 @@ import type { OwnerQueueConfig } from "./queue-config";
 
 const WS = "aiboards-eval";
 const NOW = new Date("2026-11-13T12:00:00Z");
+// As on the VPS: one token, one queue product for both workspaces; the plan
+// product of aiBoards&eval is taibe (OQ_PLAN_PRODUCTS).
 const config: OwnerQueueConfig = {
   url: "http://queue.test",
   tokenFile: "/dev/null",
   tokenName: "token:t-boards",
-  products: new Map([["ws-1", "taibe"]]),
+  products: new Map([
+    ["ws-eval", "hr-helper"],
+    ["ws-lav", "hr-helper"],
+  ]),
+  plan: {
+    products: new Map([
+      ["ws-eval", "taibe"],
+      ["ws-lav", "hr-helper"],
+    ]),
+  },
 };
+type Moved = Omit<RecentCard, "product">;
+const moved = (key: string, ws = WS): Moved => ({
+  ws,
+  key,
+  title: `title ${key}`,
+  bug: false,
+  level: "P2",
+  status: "in-progress",
+  final: false,
+  closedAt: null,
+});
 const card = (key: string, st = "to-do") => ({ key, ws: WS, k: "task", st });
 
 // The console's work rules: PATCH merges, a null field is removed, ifVersion
@@ -68,9 +90,11 @@ class FakeWork {
   }
 }
 
+// recent: [workspace id, card]; the store names the product from the map the
+// pass gives it, as plan-store.ts does.
 function store(
   board: Record<string, BoardCard>,
-  extra: { recent?: RecentCard[]; abandoned?: string[] } = {},
+  extra: { recent?: [string, Moved][]; abandoned?: string[] } = {},
 ): PlanStore & { calls: string[] } {
   const calls: string[] = [];
   return {
@@ -79,9 +103,12 @@ function store(
       calls.push(`resolve:${workspaceIds.join(",")}`);
       return new Map(Object.entries(board));
     },
-    recent: async () => {
+    recent: async (products) => {
       calls.push("recent");
-      return extra.recent ?? [];
+      return (extra.recent ?? []).flatMap(([workspaceId, card]) => {
+        const product = products.get(workspaceId);
+        return product ? [{ ...card, product }] : [];
+      });
     },
     abandoned: async () => {
       calls.push("abandoned");
@@ -189,20 +216,18 @@ describe("planPass (TB-106)", () => {
   it("reads the board only in mapped workspaces and runs F8 and F9 only hourly", async () => {
     const queue = new FakeWork();
     queue.add("w-taibe-unplanned", { status: "doing", cards: [] });
-    const recent: RecentCard = {
-      ws: WS,
-      key: "TB-7",
-      product: "taibe",
+    const recent: Moved = {
+      ...moved("TB-7"),
       title: "off plan",
       bug: true,
       level: "high",
-      status: "in-progress",
-      final: false,
-      closedAt: null,
     };
-    const board = store({}, { recent: [recent], abandoned: [`${WS}/TB-7`] });
+    const board = store(
+      {},
+      { recent: [["ws-eval", recent]], abandoned: [`${WS}/TB-7`] },
+    );
     await run(queue, board);
-    expect(board.calls).toEqual(["resolve:ws-1"]);
+    expect(board.calls).toEqual(["resolve:ws-eval,ws-lav"]);
     expect(queue.patches).toEqual([]);
     await run(queue, board, true);
     expect(board.calls).toContain("recent");
@@ -225,7 +250,43 @@ describe("planPass (TB-106)", () => {
     queue.truncated = true;
     const board = store({});
     expect(await run(queue, board, true)).toMatchObject({ hourlyDone: false });
-    expect(board.calls).toEqual(["resolve:ws-1"]);
+    expect(board.calls).toEqual(["resolve:ws-eval,ws-lav"]);
+  });
+
+  it("puts an aiBoards&eval card into w-taibe-unplanned while the queue product is hr-helper", async () => {
+    const queue = new FakeWork();
+    queue.add("w-taibe-unplanned", { status: "doing", cards: [] });
+    queue.add("w-hr-helper-unplanned", { status: "doing", cards: [] });
+    const board = store(
+      {},
+      {
+        recent: [
+          ["ws-eval", moved("TB-7")],
+          ["ws-lav", moved("APP-3", "hr-helper-lavaeon")],
+        ],
+      },
+    );
+    await run(queue, board, true);
+    expect(queue.docs.get("w-taibe-unplanned")?.data.cards).toEqual([
+      {
+        key: "TB-7",
+        ws: WS,
+        t: "title TB-7",
+        k: "task",
+        s: "P2",
+        st: "in-progress",
+      },
+    ]);
+    expect(queue.docs.get("w-hr-helper-unplanned")?.data.cards).toEqual([
+      {
+        key: "APP-3",
+        ws: "hr-helper-lavaeon",
+        t: "title APP-3",
+        k: "task",
+        s: "P2",
+        st: "in-progress",
+      },
+    ]);
   });
 });
 

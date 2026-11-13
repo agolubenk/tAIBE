@@ -67,6 +67,22 @@ export const cardUid = (ws: string, key: string) =>
 export const offPlanRowId = (product: string) => `w-${product}-unplanned`;
 export const isOffPlanRow = (id: string) => /^w-[a-z0-9-]+-unplanned$/.test(id);
 
+// The default product owns the rows without another product's prefix, as
+// eval/tools/queue_focus.py plan_rows reads them.
+export const DEFAULT_PLAN_PRODUCT = "hr-helper";
+
+// The plan product of a row w-<product>-…; the longest prefix wins. null — not
+// a plan row of these products.
+export function rowProduct(id: string, products: string[]): string | null {
+  if (!id.startsWith("w-")) return null;
+  const owner = products
+    .filter((product) => product !== DEFAULT_PLAN_PRODUCT)
+    .filter((product) => id.startsWith(`w-${product}-`))
+    .sort((a, b) => b.length - a.length)[0];
+  if (owner) return owner;
+  return products.includes(DEFAULT_PLAN_PRODUCT) ? DEFAULT_PLAN_PRODUCT : null;
+}
+
 // The row dates are the owner's local dates, as the rest of the module shows
 // times (Europe/Moscow).
 const LOCAL_DATE = new Intl.DateTimeFormat("en-CA", {
