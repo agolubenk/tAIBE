@@ -57,13 +57,20 @@ def product_roots(ctx):
 
 
 def product_shares(meter, st_meter, share5, q, ws, now_l, evolve_dir=EVOLVE_DIR):
-    """Поля mode.json о долях окна по продуктам (SE-66). Сначала только измерение: решения режима от них не зависят."""
-    by = meter.by_product(ws, now_l)
-    out = {"share5_by": budget.shares(share5, by, budget.evolve_overhead(evolve_dir, ws, now_l), q)}
-    since = _dt(st_meter.get("products_from"))
-    if since:
-        out.update(products_from=_iso(since.astimezone(now_l.tzinfo)), products_partial=since > ws)
-    return out
+    """Поля mode.json о долях окна по продуктам (SE-66). Сначала только измерение: решения режима от них не зависят,
+    поэтому сбой здесь режим и лимит не держит — вместо долей в mode.json причина (share5_by_error)."""
+    try:
+        by = meter.by_product(ws, now_l)
+        overhead, unknown = budget.evolve_overhead(evolve_dir, ws, now_l)
+        out = {"share5_by": budget.shares(share5, by, overhead, q)}
+        if unknown:
+            out["overhead_unknown"] = unknown
+        since = _dt(st_meter.get("products_from"))
+        if since:
+            out.update(products_from=_iso(since.astimezone(now_l.tzinfo)), products_partial=since > ws)
+        return out
+    except Exception as e:  # noqa: BLE001 — измерение не валит poll_budget до write_mode
+        return {"share5_by_error": f"{type(e).__name__}: {e}"[:200]}
 
 
 def poll_budget(ctx):

@@ -255,19 +255,27 @@ def _load(path):
 def evolve_overhead(evolve_dir, t_from, t_to):
     """$ ночной эволюции (eval/evolve) в [t_from, t_to] — накладные (SE-66). Её вызовы Claude идут с
     --no-session-persistence, в транскриптах их нет. Судьи — budget.tokens отчёта runs/<дата>.json по цене входа
-    sonnet (оценка: разбивки токенов в отчёте нет), сессия — usd из runs/session-latest.json; обе — в момент finished."""
-    usd = 0.0
-    for day in sorted({t_from.date(), t_to.date()}):
+    sonnet (оценка: разбивки токенов в отчёте нет), сессия — usd из runs/session-latest.json; обе — в момент finished.
+    Файл прогона назван днём старта: прогон, начатый накануне, мог закончиться в окне — день до t_from тоже читается.
+    → (usd, unknown): unknown — части, которые закончились в окне, но $ не дали (сессия без total_cost_usd)."""
+    usd, unknown = 0.0, []
+
+    def inside(v):  # строка ISO с поясом и внутри окна; прочее (нет, не строка, без пояса) — нет
+        at = parse_ts(v) if isinstance(v, str) else None
+        return at is not None and at.tzinfo is not None and t_from <= at <= t_to
+
+    for day in sorted({t_from.date() - timedelta(days=1), t_from.date(), t_to.date()}):
         r = _load(os.path.join(evolve_dir, "runs", f"{day.isoformat()}.json"))
-        tokens = (r.get("budget") or {}).get("tokens") or 0
-        at = parse_ts(r.get("finished") or "")
-        if tokens and at and t_from <= at <= t_to:
+        tokens = r.get("budget").get("tokens") if isinstance(r.get("budget"), dict) else 0
+        if isinstance(tokens, (int, float)) and tokens > 0 and inside(r.get("finished")):
             usd += tokens * PRICES["sonnet"][0] / 1e6
     s = _load(os.path.join(evolve_dir, "runs", "session-latest.json"))
-    at = parse_ts(s.get("finished") or "")
-    if isinstance(s.get("usd"), (int, float)) and at and t_from <= at <= t_to:
-        usd += s["usd"]
-    return usd
+    if inside(s.get("finished")):
+        if isinstance(s.get("usd"), (int, float)) and not isinstance(s.get("usd"), bool):
+            usd += s["usd"]
+        else:
+            unknown.append("сессия")
+    return usd, unknown
 
 
 def shares(share5, by, overhead_usd, quota):
@@ -288,13 +296,15 @@ def shares_text(mode):
     """Строка статуса и сводки: «share5 0.63: hr-helper 0.41 · taibe 0.17 · не отнесено 0.05 · накладные 0.02»."""
     by = mode.get("share5_by")
     if not by:
-        return "share5 по продуктам: нет данных"
+        err = mode.get("share5_by_error")
+        return "share5 по продуктам: нет данных" + (f" (сбой: {err[:80]})" if err else "")
     order = sorted((k for k in by if k not in SHARE_LABELS), key=lambda k: -by[k]) + \
         [k for k in (UNATTRIBUTED, OVERHEAD) if k in by]
     parts = " · ".join(f"{SHARE_LABELS.get(k, k)} {by[k]:.2f}" for k in order)
     tail = f" (продукты — с {mode['products_from'][11:16]})" if mode.get("products_partial") else ""
     head = f"share5 {mode['share5']:.2f}" if mode.get("share5") is not None else "share5"
-    return f"{head}: {parts}{tail}; накладные — сверх share5"
+    gap = f", без $: {', '.join(mode['overhead_unknown'])}" if mode.get("overhead_unknown") else ""
+    return f"{head}: {parts}{tail}; накладные — сверх share5{gap}"
 
 
 def median(xs):

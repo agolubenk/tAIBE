@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -113,17 +114,44 @@ class OverheadTest(unittest.TestCase):
             write(os.path.join(d, "runs", "session-latest.json"), [json.dumps(
                 {"exit": 0, "usd": 1.5, "finished": "2026-11-14T02:05:00+00:00"})])
             win = (datetime(2026, 11, 14, 4, 0, tzinfo=MSK), datetime(2026, 11, 14, 8, 0, tzinfo=MSK))
-            self.assertAlmostEqual(budget.evolve_overhead(d, *win), 2.0 + 1.5)
+            usd, unknown = budget.evolve_overhead(d, *win)
+            self.assertAlmostEqual(usd, 2.0 + 1.5)
+            self.assertEqual(unknown, [])
             later = (datetime(2026, 11, 14, 6, 0, tzinfo=MSK), datetime(2026, 11, 14, 9, 0, tzinfo=MSK))
-            self.assertEqual(budget.evolve_overhead(d, *later), 0.0)
+            self.assertEqual(budget.evolve_overhead(d, *later), (0.0, []))
+
+    def test_a_run_started_the_day_before_counts_when_it_ends_in_the_window(self):
+        """Цепочка ревью на 97950da5c: файл назван днём старта; прогон 13.11 23:50 → 14.11 00:40 — в окне 14.11."""
+        with tempfile.TemporaryDirectory() as d:
+            write(os.path.join(d, "runs", "2026-11-13.json"), [json.dumps(
+                {"finished": "2026-11-14T00:40:00+03:00", "budget": {"tokens": 1_000_000}})])
+            win = (datetime(2026, 11, 14, 0, 30, tzinfo=MSK), datetime(2026, 11, 14, 5, 30, tzinfo=MSK))
+            self.assertAlmostEqual(budget.evolve_overhead(d, *win)[0], 2.0)
 
     def test_missing_or_broken_files_are_zero(self):
         with tempfile.TemporaryDirectory() as d:
             win = (datetime(2026, 11, 14, 4, 0, tzinfo=MSK), datetime(2026, 11, 14, 8, 0, tzinfo=MSK))
-            self.assertEqual(budget.evolve_overhead(d, *win), 0.0)
+            self.assertEqual(budget.evolve_overhead(d, *win), (0.0, []))
             write(os.path.join(d, "runs", "2026-11-14.json"), ["{not json"])
             write(os.path.join(d, "runs", "session-latest.json"), [json.dumps({"exit": 0, "comment": "x"})])
-            self.assertEqual(budget.evolve_overhead(d, *win), 0.0)
+            self.assertEqual(budget.evolve_overhead(d, *win), (0.0, []))
+            # Цепочка ревью: вложенный budget не словарь, finished не строка или без пояса — ноль, а не исключение.
+            for bad in ({"finished": "2026-11-14T05:00:00+03:00", "budget": [1]},
+                        {"finished": "2026-11-14T05:00:00+03:00", "budget": {"tokens": "много"}},
+                        {"finished": 1763085600, "budget": {"tokens": 5}},
+                        {"finished": "2026-11-14T05:00:00", "budget": {"tokens": 5}}):
+                write(os.path.join(d, "runs", "2026-11-14.json"), [json.dumps(bad)])
+                self.assertEqual(budget.evolve_overhead(d, *win), (0.0, []), bad)
+
+    def test_a_session_without_usd_is_named_not_zero(self):
+        """Цепочка ревью: CLI не дал total_cost_usd — «без $: сессия» в строке статуса, а не честный ноль."""
+        with tempfile.TemporaryDirectory() as d:
+            write(os.path.join(d, "runs", "session-latest.json"), [json.dumps(
+                {"exit": 1, "usd": None, "finished": "2026-11-14T02:05:00+00:00"})])
+            win = (datetime(2026, 11, 14, 4, 0, tzinfo=MSK), datetime(2026, 11, 14, 8, 0, tzinfo=MSK))
+            self.assertEqual(budget.evolve_overhead(d, *win), (0.0, ["сессия"]))
+            mode = {"share5": 0.5, "share5_by": {"taibe": 0.5}, "overhead_unknown": ["сессия"]}
+            self.assertTrue(budget.shares_text(mode).endswith("накладные — сверх share5, без $: сессия"))
 
 
 class SharesTest(unittest.TestCase):
@@ -153,6 +181,16 @@ class SharesTest(unittest.TestCase):
             out = actions.product_shares(m, st, 0.5, 20.0, ws, now_l, evolve_dir=d)
         self.assertEqual(out, {"share5_by": {"hr-helper": 0.25, "taibe": 0.25},
                                "products_from": "2026-11-14T04:00+03:00", "products_partial": True})
+
+    def test_a_failure_in_shares_does_not_stop_the_mode(self):
+        """Цепочка ревью: сбой измерения — причина в mode.json, poll_budget доходит до write_mode."""
+        now_l = datetime(2026, 11, 14, 8, 0, tzinfo=MSK)
+        broken = mock.Mock()
+        broken.by_product.side_effect = AttributeError("'list' object has no attribute 'get'")
+        out = actions.product_shares(broken, {}, 0.5, 20.0, now_l - timedelta(hours=5), now_l, evolve_dir="/nonexistent")
+        self.assertEqual(out, {"share5_by_error": "AttributeError: 'list' object has no attribute 'get'"})
+        self.assertEqual(budget.shares_text(out),
+                         "share5 по продуктам: нет данных (сбой: AttributeError: 'list' object has no attribute 'get')")
 
 
 if __name__ == "__main__":
