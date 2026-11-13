@@ -428,7 +428,8 @@ export function registerTools(
   registerTool(
     "list_task_comments",
     {
-      description: "List comments on a task.",
+      description:
+        "List comments on a task. The dialog marks of linked sessions (eventData.dialog) are in list_task_activity.",
       inputSchema: z.object({ taskId: nonEmptyString }),
     },
     async (args) =>

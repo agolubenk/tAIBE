@@ -4,9 +4,10 @@ import { groupDialogs, readDialog } from "./group-dialogs";
 const said = (
   id: string,
   session?: string,
-  { groupKey = "pair", fencingToken = 1, open = true } = {},
+  { groupKey = "pair", fencingToken = 1, open = true, type = "comment" } = {},
 ) => ({
   id,
+  type,
   eventData: session
     ? { dialog: { groupKey, fencingToken, session, open } }
     : null,
@@ -70,6 +71,13 @@ describe("groupDialogs (TB-11)", () => {
     expect(
       entries.map((entry) => entry.kind === "dialog" && entry.open),
     ).toEqual([false, true]);
+  });
+
+  it("does not group another activity type that carries a mark", () => {
+    const forged = said("x", "writer", { type: "note" });
+    expect(groupDialogs([forged])).toEqual([
+      { kind: "activity", activity: forged },
+    ]);
   });
 
   it("leaves a feed without dialogs as it is", () => {

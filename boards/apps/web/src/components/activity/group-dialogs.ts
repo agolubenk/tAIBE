@@ -32,13 +32,15 @@ export type DialogEntry<T> = {
 
 export type FeedEntry<T> = { kind: "activity"; activity: T } | DialogEntry<T>;
 
-export function groupDialogs<T extends { eventData?: unknown }>(
+export function groupDialogs<T extends { type: string; eventData?: unknown }>(
   chronological: T[],
 ): FeedEntry<T>[] {
   const entries: FeedEntry<T>[] = [];
   const dialogs = new Map<string, DialogEntry<T>>();
   for (const activity of chronological) {
-    const dialog = readDialog(activity.eventData);
+    // Only a comment carries a dialog mark: the server writes it with the comment.
+    const dialog =
+      activity.type === "comment" ? readDialog(activity.eventData) : null;
     if (!dialog) {
       entries.push({ kind: "activity", activity });
       continue;

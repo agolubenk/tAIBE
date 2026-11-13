@@ -58,6 +58,28 @@ export function isDialogOpen(
   );
 }
 
+// Only a comment carries a dialog mark: the server writes it in createComment.
+// A mark on any other activity type is not trusted (TB-11 backend lens, #203).
+export function dialogMarkOf(activity: {
+  type: string;
+  eventData: unknown;
+}): DialogMark | null {
+  return activity.type === "comment"
+    ? readDialogMark(activity.eventData)
+    : null;
+}
+
+// The generic activity route takes eventData from the client: drop a forged
+// dialog mark before the write. The root issue (any type from the client) is
+// TB-29.
+export function withoutDialogMark(
+  eventData: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null | undefined {
+  if (!eventData || !("dialog" in eventData)) return eventData;
+  const { dialog: _forged, ...rest } = eventData;
+  return rest;
+}
+
 export function readDialogMark(eventData: unknown): DialogMark | null {
   if (!eventData || typeof eventData !== "object") return null;
   const dialog = (eventData as { dialog?: unknown }).dialog;

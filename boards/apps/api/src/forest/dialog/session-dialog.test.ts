@@ -2,8 +2,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   type DialogLease,
   decideDialogMark,
+  dialogMarkOf,
   isDialogOpen,
   readDialogMark,
+  withoutDialogMark,
 } from "./session-dialog";
 
 const now = new Date("2026-11-13T20:00:00Z");
@@ -79,6 +81,31 @@ describe("isDialogOpen (R-026)", () => {
 
   it("is archived when the card goes to review or closes", () => {
     expect(isDialogOpen(mark, lease(), { inWork: false }, now)).toBe(false);
+  });
+});
+
+describe("dialog mark only on a comment (#203 lens)", () => {
+  const eventData = {
+    dialog: { groupKey: "g", fencingToken: 1, session: "s" },
+  };
+
+  it("trusts the mark of a comment and ignores it on other types", () => {
+    expect(dialogMarkOf({ type: "comment", eventData })).toEqual({
+      groupKey: "g",
+      fencingToken: 1,
+      session: "s",
+    });
+    expect(dialogMarkOf({ type: "note", eventData })).toBeNull();
+  });
+
+  it("drops a forged mark from client eventData and keeps the rest", () => {
+    expect(withoutDialogMark({ ...eventData, oldStatus: "to-do" })).toEqual({
+      oldStatus: "to-do",
+    });
+    const plain = { oldStatus: "to-do" };
+    expect(withoutDialogMark(plain)).toBe(plain);
+    expect(withoutDialogMark(null)).toBeNull();
+    expect(withoutDialogMark(undefined)).toBeUndefined();
   });
 });
 

@@ -119,6 +119,43 @@ describe("API integration: dialog of linked sessions", () => {
     });
   });
 
+  it("does not trust a dialog mark outside a comment", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id);
+    const lease = await forest.agent(
+      "/leases",
+      { taskId: task.id, groupKey: "pair-3" },
+      "writer",
+    );
+    const forged = {
+      dialog: {
+        groupKey: "pair-3",
+        fencingToken: lease.body.fencingToken,
+        session: "writer",
+      },
+    };
+    const created = await forest.ownerApi("POST", "/activity/create", {
+      taskId: task.id,
+      message: "forged",
+      type: "note",
+      eventData: { ...forged, kept: 1 },
+    });
+    expect(created.status).toBe(200);
+    expect(created.body.eventData).toEqual({ kept: 1 });
+
+    // A row written before the fix: the feed does not add `open` to it.
+    await db.insert(schema.activityTable).values({
+      taskId: task.id,
+      type: "note",
+      userId: forest.ownerId,
+      content: "old forged",
+      eventData: forged,
+    });
+    const items = await feed(forest, task.id);
+    expect(items.get("forged")).toEqual({ kept: 1 });
+    expect(items.get("old forged")).toEqual(forged);
+  });
+
   it("marks nothing on a solo lease", async () => {
     const forest = await createForest();
     const task = await addTask(forest.project.id);

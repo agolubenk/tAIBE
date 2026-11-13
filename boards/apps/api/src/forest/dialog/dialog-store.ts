@@ -11,8 +11,8 @@ import {
   type DialogLease,
   type DialogMark,
   decideDialogMark,
+  dialogMarkOf,
   isDialogOpen,
-  readDialogMark,
 } from "./session-dialog";
 
 async function readLease(taskId: string): Promise<DialogLease | null> {
@@ -59,11 +59,10 @@ async function isCardInWork(taskId: string) {
 
 // Adds `open` to the dialog mark of each dialog comment of one task's feed.
 // Two reads, and only when the feed has a dialog.
-export async function markOpenDialogs<T extends { eventData: unknown }>(
-  taskId: string,
-  activities: T[],
-): Promise<T[]> {
-  if (!activities.some((activity) => readDialogMark(activity.eventData))) {
+export async function markOpenDialogs<
+  T extends { type: string; eventData: unknown },
+>(taskId: string, activities: T[]): Promise<T[]> {
+  if (!activities.some((activity) => dialogMarkOf(activity))) {
     return activities;
   }
   const [lease, inWork] = await Promise.all([
@@ -72,7 +71,7 @@ export async function markOpenDialogs<T extends { eventData: unknown }>(
   ]);
   const now = new Date();
   return activities.map((activity) => {
-    const mark = readDialogMark(activity.eventData);
+    const mark = dialogMarkOf(activity);
     if (!mark) return activity;
     const open = isDialogOpen(mark, lease, { inWork }, now);
     return {
