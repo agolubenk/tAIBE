@@ -1,7 +1,13 @@
 """
 Кто я для merge-guard (pre-tool-use-merge-guard.py): живые сессии из реестра `~/.claude/sessions`, список Контроля
 из основной папки и вердикт «эта сессия — Контроль». Решений о командах не принимает.
+
+Запись списка — sessionId (≥ 8 символов), имя сессии или линия `line:<L>` (TB-81). По линии Контроль — её держатель:
+сессия с линией L или её наследник со своей квитанцией приёма (`lineage.py ack`), у которого нет живого наследника
+с квитанцией. Смена поколения Контроля не требует правки списка владельцем. Линию сессии и квитанции читает
+`eval/tools/lineage.py`; нет модуля — запись линии никого не пропускает.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,6 +15,9 @@ from pathlib import Path
 SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 # Список Контроля — всегда из основной папки: сессия, запущенная в worktree, свою папку править может.
 MAIN_ROOT = Path(str(Path(__file__).resolve().parents[2]).split("/worktrees/", 1)[0])
+LINE_PREFIX = "line:"
+LINEAGE_PATHS = ("eval/tools/lineage.py", ".claude/scripts/lineage.py")
+CHAIN_MAX = 50  # поколений вглубь: защита от петли в файлах квитанций
 
 
 def live_sessions(sessions_dir=SESSIONS_DIR):
@@ -55,12 +64,71 @@ def load_protected(project_dir=None):
     return out
 
 
-def control_verdict(session_id, sessions, control):
+def load_lineage(project_dir=None):
+    """Модуль lineage.py основной папки или None."""
+    for rel in LINEAGE_PATHS:
+        path = Path(project_dir or MAIN_ROOT) / rel
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("merge_guard_lineage", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    return None
+
+
+def _ack_alive(lin, sx, ack):
+    if not isinstance(ack, dict) or not ack.get("start"):
+        return False
+    try:
+        pid = int(ack.get("pid"))
+    except (TypeError, ValueError):
+        return False
+    return sx.alive(lin.Proc(pid, 0, 0, "", str(ack["start"]), ""))
+
+
+def _successor_alive(lin, sx, line, depth=0):
+    """Есть ли у линии живой наследник с квитанцией — через любое число закончившихся поколений."""
+    if depth > CHAIN_MAX:
+        return True  # петля или мусор — не пропускать
+    for child, f in lin.child_acks(line):
+        if _ack_alive(lin, sx, lin.read_json(f)) or _successor_alive(lin, sx, child, depth + 1):
+            return True
+    return False
+
+
+def line_verdict(pid, lines, lin=None, sx=None):
+    """None — сессия pid держит одну из линий lines; иначе причина отказа."""
+    lin = lin or load_lineage()
+    if lin is None:
+        return "в списке Контроля линия, а eval/tools/lineage.py не найден"
+    sx = sx or lin.Sys()
+    p = sx.procs().get(pid) if isinstance(pid, int) else None
+    if p is None:
+        return f"процесс сессии {pid} не найден"
+    mine = lin.session_line(sx, p)
+    if not mine or not lin.valid_line(mine):
+        return "у сессии нет линии (её открыл не spawn_session.sh)"
+    for root in lines:
+        if mine != root and not mine.startswith(root + "."):
+            continue
+        if mine != root:
+            ack = lin.read_json(lin.lfile(mine, ".ack")) or {}
+            if str(ack.get("pid")) != str(p.pid) or lin.norm(ack.get("start")) != lin.norm(p.start):
+                return f"линия {mine} — наследник {root} без своей квитанции приёма (lineage.py ack)"
+        if _successor_alive(lin, sx, mine):
+            return f"линию {mine} уже принял живой наследник"
+        return None
+    return f"линия сессии {mine} не из линий Контроля ({', '.join(lines)})"
+
+
+def control_verdict(session_id, sessions, control, line_check=line_verdict):
     """None — Контроль; иначе причина отказа."""
     me = next((s for s in sessions if s.get("sessionId") == session_id), None)
     if me is None:
         return "не нашёл эту сессию в реестре ~/.claude/sessions — личность не подтверждена"
     sid, name = str(me.get("sessionId", "")), str(me.get("name", ""))
+    lines = [e[len(LINE_PREFIX):] for e in control if e.startswith(LINE_PREFIX)]
+    control = [e for e in control if not e.startswith(LINE_PREFIX)]
     if any(e == sid or (len(e) >= 8 and sid.startswith(e)) for e in control):
         return None
     if name and name in control:
@@ -68,4 +136,13 @@ def control_verdict(session_id, sessions, control):
         if same == 1:
             return None
         return f"имя {name} у {same} живых сессий — по имени не пропускаю; владелец вписывает sessionId"
-    return f"эта сессия — {name or '?'} ({sid[:8]}), её нет в списке Контроля"
+    why_line = None
+    if lines:
+        try:
+            pid = int(me.get("pid"))
+        except (TypeError, ValueError):
+            pid = None
+        why_line = line_check(pid, lines)
+        if why_line is None:
+            return None
+    return f"эта сессия — {name or '?'} ({sid[:8]}), её нет в списке Контроля" + (f"; {why_line}" if why_line else "")
