@@ -7,7 +7,7 @@ On top of upstream it adds:
 - **Agent identity on the board** — each card shows which agent/session works it (migration `0076`).
 - **SSR board snapshots** — server-rendered read-only boards with a nightly push job (migration `0077`), plus `ssr-tools` MCP tools.
 - **Forest pulse** — an agents' feed / pulse panel over board activity.
-- **Notebook card sources** and a `notebook_search` MCP tool.
+- **Notebook card sources** and the `notebook_search`, `notebook_ask` and `notebook_brief` MCP tools.
 - **Workspace-scoped API keys** — one key is limited to one workspace; workspaces are presented as «Продукты» in RU.
 - RU as a first-class product language.
 

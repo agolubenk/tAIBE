@@ -76,3 +76,168 @@ describe("notebook_search", () => {
     ).toBe(true);
   });
 });
+
+function setupTool(name: string, ...answers: unknown[]) {
+  const tools = new Map<string, { schema: never; handler: Handler }>();
+  const server = {
+    registerTool: vi.fn(
+      (n: string, config: { inputSchema: never }, handler: Handler) => {
+        tools.set(n, { schema: config.inputSchema, handler });
+      },
+    ),
+  };
+  const json = vi.fn();
+  for (const answer of answers) json.mockResolvedValueOnce(answer);
+  registerTools(server as never, { client: { json } as never });
+  const tool = tools.get(name);
+  if (!tool) throw new Error(`${name} is not registered`);
+  return { tool, json };
+}
+
+const thread = (status: string | null, content: string, extra = 0) => ({
+  thread: { id: "th1", title: "q", createdAt: "x", updatedAt: "x" },
+  messages: [
+    { role: "user", content: "q", status: null, citations: [], model: null },
+    {
+      role: "assistant",
+      content,
+      status,
+      model: "glm-4.7",
+      citations: Array.from({ length: 2 + extra }, (_, i) => ({
+        n: i + 1,
+        chunkId: `c${i}`,
+        kind: "repo-doc",
+        ref: `docs/a${i}.md`,
+        title: `A${i}`,
+        heading: "h",
+      })),
+    },
+  ],
+});
+
+describe("notebook_ask", () => {
+  it("starts a thread and returns the answer with short citations", async () => {
+    const { tool, json } = setupTool(
+      "notebook_ask",
+      thread("answered", "Ответ [1].", 6),
+    );
+
+    const result = await tool.handler({
+      workspaceId: "ws 1",
+      question: "Как?",
+    });
+    const body = JSON.parse(result.content[0]?.text ?? "{}");
+
+    expect(result.isError).toBe(false);
+    expect(json).toHaveBeenCalledWith("/api/notebook/ws%201/threads", {
+      method: "POST",
+      body: JSON.stringify({ question: "Как?" }),
+    });
+    expect(body).toMatchObject({ threadId: "th1", status: "answered" });
+    expect(body.citations).toHaveLength(5);
+    expect(body.citations[0]).toEqual({
+      n: 1,
+      kind: "repo-doc",
+      ref: "docs/a0.md",
+      title: "A0",
+    });
+  });
+
+  it("asks a follow-up in the given thread and cuts a long answer", async () => {
+    const { tool, json } = setupTool(
+      "notebook_ask",
+      thread("answered", "x".repeat(500)),
+    );
+
+    const result = await tool.handler({
+      workspaceId: "ws",
+      question: "А дальше?",
+      threadId: "th1",
+      maxAnswerChars: 200,
+    });
+    const body = JSON.parse(result.content[0]?.text ?? "{}");
+
+    expect(json.mock.calls[0]?.[0]).toBe(
+      "/api/notebook/ws/threads/th1/messages",
+    );
+    expect(body.answer.startsWith("x".repeat(200))).toBe(true);
+    expect(body.answer).toContain("cut at 200");
+  });
+
+  it.each(["capped", "rate-limited", "failed", "retrieval-only"])(
+    "reports %s as an error, not as an empty answer",
+    async (status) => {
+      const { tool } = setupTool("notebook_ask", thread(status, ""));
+
+      const result = await tool.handler({ workspaceId: "ws", question: "q" });
+      const body = JSON.parse(result.content[0]?.text ?? "{}");
+
+      expect(result.isError).toBe(true);
+      expect(body.status).toBe(status);
+      expect(body.error).toContain("notebook_search");
+      expect(body.citations).toHaveLength(2);
+    },
+  );
+
+  it("is not a read tool: no R-031 view, no fullRef re-run", async () => {
+    const { isReadTool } = await import("./register-tool.js");
+    expect(isReadTool("notebook_ask")).toBe(false);
+    expect(isReadTool("notebook_brief")).toBe(false);
+  });
+});
+
+describe("notebook_brief", () => {
+  it("returns the stored brief without a new model call", async () => {
+    const { tool, json } = setupTool(
+      "notebook_brief",
+      thread("brief", "GOAL: …"),
+    );
+
+    const result = await tool.handler({ workspaceId: "ws", threadId: "th1" });
+
+    expect(result.isError).toBe(false);
+    expect(json).toHaveBeenCalledTimes(1);
+    expect(json).toHaveBeenCalledWith("/api/notebook/ws/threads/th1", {
+      method: "GET",
+    });
+  });
+
+  it("writes a brief when the thread has none, and with force", async () => {
+    const fresh = setupTool(
+      "notebook_brief",
+      thread("answered", "Ответ"),
+      thread("brief", "GOAL: …"),
+    );
+    const made = await fresh.tool.handler({
+      workspaceId: "ws",
+      threadId: "th1",
+    });
+    expect(made.isError).toBe(false);
+    expect(fresh.json.mock.calls[1]?.[0]).toBe(
+      "/api/notebook/ws/threads/th1/brief",
+    );
+
+    const forced = setupTool("notebook_brief", thread("brief", "GOAL: new"));
+    await forced.tool.handler({
+      workspaceId: "ws",
+      threadId: "th1",
+      force: true,
+    });
+    expect(forced.json).toHaveBeenCalledTimes(1);
+    expect(forced.json.mock.calls[0]?.[0]).toBe(
+      "/api/notebook/ws/threads/th1/brief",
+    );
+  });
+
+  it("reports brief-failed as an error", async () => {
+    const { tool } = setupTool("notebook_brief", thread("brief-failed", ""));
+
+    const result = await tool.handler({
+      workspaceId: "ws",
+      threadId: "th1",
+      force: true,
+    });
+
+    expect(result.isError).toBe(true);
+  });
+});

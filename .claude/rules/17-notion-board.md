@@ -51,6 +51,7 @@ paths:
 | Своё состояние | `forest_set_work_state`; дела всех сессий — `forest_list_work_state` |
 | Новая находка | `create_task` в «Ошибки» (баг, уязвимость, несостыковка) или «Задачи»; в описании — файл и строка |
 | Поиск по документам и скиллам | `notebook_search` (блокнот t-boards: индекс `docs/`, `.claude/skills`, правил и спек; файлы — в git) |
+| Проработка идеи, поиск решения, спека (видно владельцу в «Вопросах») | `notebook_ask` (ветка, ответ GLM со ссылками; сначала `notebook_search`), `notebook_brief` (GOAL/CONSTRAINTS/ACCEPTANCE из ветки) — порядок и лимит: `.claude/memory/chunks/process/executors.md` |
 | Старые обсуждения | Notion «Задачи» `collection://50c68c1e-9157-4d01-a068-109aa45dd468`, «Ошибки» `collection://17839024-08ab-4339-898d-1753d18a571b` — только чтение |
 
 Инструменты — MCP t-boards через хаб (`mcp__hub__t-boards_1mcp_*`). Метку `session` передавать одну и ту же на каждый
