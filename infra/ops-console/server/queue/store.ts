@@ -13,7 +13,7 @@ import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
 import { removeItemFiles } from './files/remove'
-import { guardPlanEnd } from './plan-end'
+import { guardPlanEnd, moveToUnseen } from './plan-end'
 import { canSee, DEFAULT_PRODUCT, listProducts, namespaceOf, notFound, productForNew, type Product, type Visibility } from './products'
 
 export const COLLECTIONS = ['checks', 'items', 'work'] as const
@@ -109,6 +109,10 @@ const itemSchema = z
   .passthrough()
   .refine((d) => d.kind !== 'decision' || (d.options?.length ?? 0) > 0, { message: 'У решения должны быть варианты (options)' })
   .refine((d) => (d.kind === 'inbox') === (d.inbox !== undefined), { message: 'Поле inbox — у пункта kind: inbox, и только у него' })
+  .superRefine((d, ctx) => {
+    const unseen = moveToUnseen(d.moveTo, `${d.title}\n${d.body ?? ''}`)
+    if (unseen) ctx.addIssue({ code: 'custom', path: ['moveTo', unseen.row], message: `впиши дату переноса строки ${unseen.row} в текст (${unseen.date.slice(8, 10)}.${unseen.date.slice(5, 7)} или ${unseen.date}): владелец видит текст, не moveTo` })
+  })
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}/).max(30)
 // Документ work может быть частичной правкой задачи из базового плана страницы (WORK_SEED): страница

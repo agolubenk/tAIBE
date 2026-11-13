@@ -108,7 +108,12 @@ describe('документы и права', () => {
     const plain = await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', basePlanEnd: '2026-10-20', note: 'сдвиг: ждали ревью' } })
     expect(plain.status).toBe(409)
     expect(plain.json.error).toContain('d-<продукт>-due-')
-    const due = { kind: 'decision', title: 'Сроки: строки не успевают', rows: ['w-t'], moveTo: { 'w-t': '2026-10-25' }, options: [{ id: 'keep', label: 'Держать срок' }, { id: 'move', label: 'Перенести' }] }
+    const due = { kind: 'decision', title: 'Сроки: строки не успевают', body: 'Задача — перенести на 25.10', rows: ['w-t'], moveTo: { 'w-t': '2026-10-25' }, options: [{ id: 'keep', label: 'Держать срок' }, { id: 'move', label: 'Перенести' }] }
+    // Даты переноса нет в тексте — владелец её не видит: решение не принимается.
+    const hidden = await a.put('/db/items/d-t-due-0', { data: { ...due, body: 'Задача — перенести на прогноз' } })
+    expect(hidden.status).toBe(422)
+    expect(hidden.json.error).toContain('впиши дату переноса строки w-t в текст')
+    expect((await a.put('/db/items/d-t-due-0', { data: { ...due, body: 'Задача — перенести на 2026-10-25' } })).status).toBe(200)
     expect((await a.put('/db/items/d-t-due-1', { data: due })).status).toBe(200)
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1' } })).status).toBe(409) // ответа нет
     expect((await answer('d-t-due-1', 'keep', '2026-10-18T10:00:00.000Z')).status).toBe(200)
@@ -139,16 +144,16 @@ describe('документы и права', () => {
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1' } })).status).toBe(409)
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-23' } })).status).toBe(200)
     // Решение изменили после ответа — ответ не годится, пока владелец не ответит на новый текст.
-    expect((await a.put('/db/items/d-t-due-3', { data: { ...due, moveTo: { 'w-t': '2026-10-27' } } })).status).toBe(200)
+    expect((await a.put('/db/items/d-t-due-3', { data: { ...due, body: 'Задача — на 27.10', moveTo: { 'w-t': '2026-10-27' } } })).status).toBe(200)
     expect((await answer('d-t-due-3', 'move', '2026-10-18T10:07:00.000Z')).status).toBe(200)
-    expect((await a.patch('/db/items/d-t-due-3', { data: { moveTo: { 'w-t': '2026-11-30' } } })).status).toBe(200)
+    expect((await a.patch('/db/items/d-t-due-3', { data: { body: 'Задача — на 30.11', moveTo: { 'w-t': '2026-11-30' } } })).status).toBe(200)
     const stale = await a.patch('/db/work/w-t', { data: { planEnd: '2026-11-30', dueRef: 'd-t-due-3' } })
     expect(stale.status).toBe(409)
     expect(stale.json.error).toContain('изменено после ответа владельца')
     expect((await answer('d-t-due-3', 'move', '2026-10-18T10:08:00.000Z')).status).toBe(200)
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-11-30', dueRef: 'd-t-due-3' } })).status).toBe(200)
     // Ответ по другой строке не сдвигает эту; решение без даты строки — тоже.
-    expect((await a.put('/db/items/d-t-due-2', { data: { ...due, rows: ['w-other'], moveTo: { 'w-other': '2026-12-30' } } })).status).toBe(200)
+    expect((await a.put('/db/items/d-t-due-2', { data: { ...due, body: 'Другая — на 30.12', rows: ['w-other'], moveTo: { 'w-other': '2026-12-30' } } })).status).toBe(200)
     expect((await answer('d-t-due-2', 'move', '2026-10-18T10:10:00.000Z')).status).toBe(200)
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-12-01', dueRef: 'd-t-due-2' } })).status).toBe(409)
     // Неверная форма moveTo — 422 на записи решения.

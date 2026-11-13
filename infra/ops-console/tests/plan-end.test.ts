@@ -1,7 +1,7 @@
 // Правило срока строки плана (TB-112) без HTTP и базы: форма id решения и предел ссылок строки.
 import { describe, expect, it } from 'vitest'
 import type { oqDocs } from '../server/db/schema'
-import { guardPlanEnd } from '../server/queue/plan-end'
+import { guardPlanEnd, moveToUnseen } from '../server/queue/plan-end'
 
 type Row = typeof oqDocs.$inferSelect
 
@@ -47,5 +47,15 @@ describe('guardPlanEnd (TB-112)', () => {
       c === 'checks' ? row('checks', id, { choice: 'move' }) : row('items', id, { kind: 'decision', rows: ['w-1'], moveTo: { 'w-1': '2026-12-01' } })
     const merged = { planEnd: '2026-11-30', dueRef: 'd-t-due-1' }
     await expect(guardPlanEnd('w-1', { planEnd: '2026-11-20' }, merged, find, () => true)).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('дата moveTo должна быть в тексте решения: YYYY-MM-DD или DD.MM, не часть другого числа', () => {
+    const moveTo = { 'w-a': '2026-11-20', 'w-b': '2026-12-02' }
+    expect(moveToUnseen(moveTo, 'A — на 20.11\nB — прогноз 02.12')).toBeUndefined()
+    expect(moveToUnseen(moveTo, 'A — 2026-11-20, B — 02.12.2026')).toBeUndefined()
+    expect(moveToUnseen(moveTo, 'A — на 20.11')).toEqual({ row: 'w-b', date: '2026-12-02' })
+    expect(moveToUnseen(moveTo, 'A — на 120.11, B — 02.123')).toEqual({ row: 'w-a', date: '2026-11-20' })
+    expect(moveToUnseen(moveTo, 'A — 20.11, B — 2.12')).toEqual({ row: 'w-b', date: '2026-12-02' })
+    expect(moveToUnseen(undefined, '')).toBeUndefined()
   })
 })

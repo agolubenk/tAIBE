@@ -20,6 +20,18 @@ const day = (v: unknown): string => (typeof v === 'string' ? v.slice(0, 10) : ''
 const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
 /**
+ * Строка `moveTo`, чьей даты нет в тексте решения: ни `YYYY-MM-DD`, ни `DD.MM`. Страница и бот `moveTo` не показывают,
+ * а сервер ограничивает сдвиг именно им — значит, дата должна быть в тексте, который владелец читает (TB-112).
+ */
+export function moveToUnseen(moveTo: Record<string, string> | undefined, text: string): { row: string; date: string } | undefined {
+  for (const [row, date] of Object.entries(moveTo ?? {})) {
+    const short = new RegExp(`(?<!\\d)${date.slice(8, 10)}\\.${date.slice(5, 7)}(?!\\d)`)
+    if (!text.includes(date) && !short.test(text)) return { row, date }
+  }
+  return undefined
+}
+
+/**
  * Срок строки плана агент не сдвигает сам (TB-112, F7.3; владелец 13.11: «сроки сдвигаются всё больше — неприемлемо»).
  * Раньше любое следующее после первого сдвига проходило молча, и 12 строк ушли на 2–4 недели без ответа владельца.
  * Позже planEnd — только по ответу владельца «перенести» (вариант `move`) в решении `d-…-due…`: строка названа в
