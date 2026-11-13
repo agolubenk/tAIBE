@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import db from "../../apps/api/src/database";
-import { ssrVersionTable } from "../../apps/api/src/database/ssr-schema";
+import {
+  ssrEntityTable,
+  ssrVersionTable,
+} from "../../apps/api/src/database/ssr-schema";
 import { resetTestDatabase } from "./helpers/database";
 import { createForest } from "./helpers/forest";
 
@@ -48,7 +51,15 @@ describe("API integration: SSR single decision is bound to the diff bytes", () =
         .where(eq(ssrVersionTable.id, draft.versionId));
       return current;
     };
-    return { forest, sync, diff, decide, status, versionId: draft.versionId };
+    return {
+      forest,
+      sync,
+      diff,
+      decide,
+      status,
+      versionId: draft.versionId,
+      entityId: row.entityId,
+    };
   }
 
   it("refuses bytes the sync replaced after the diff, then approves what the fresh diff shows", async () => {
@@ -95,6 +106,72 @@ describe("API integration: SSR single decision is bound to the diff bytes", () =
     });
     expect(again.status).toBe(409);
     expect(again.body.code).toBe("CONFLICT");
+  });
+
+  it("a refused approve keeps the previous latest live: the supersede rolls back", async () => {
+    const { decide, diff, status, versionId, entityId } = await setup();
+    const first = await diff();
+    expect(
+      (await decide("approve", { versionId, blobSha: first.body.toBlobSha }))
+        .status,
+    ).toBe(200);
+
+    // A second draft on top of the live version (sync auto-bumps a live
+    // entity, so this one is written directly, as a proposal would be).
+    const live = await status();
+    if (!live) throw new Error("no live version");
+    const proposalSha = sha256("proposal bytes");
+    const [proposal] = await db
+      .insert(ssrVersionTable)
+      .values({
+        entityId,
+        number: 2,
+        blobSha: proposalSha,
+        files: live.files,
+        status: "draft",
+        origin: "sync",
+      })
+      .returning({ id: ssrVersionTable.id });
+    if (!proposal) throw new Error("no proposal row");
+
+    const stale = await decide("approve", {
+      versionId: proposal.id,
+      blobSha: sha256("bytes the owner saw earlier"),
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe("SSR_DRAFT_CHANGED");
+    const versions = async () =>
+      db
+        .select({
+          number: ssrVersionTable.number,
+          status: ssrVersionTable.status,
+        })
+        .from(ssrVersionTable)
+        .where(eq(ssrVersionTable.entityId, entityId))
+        .orderBy(ssrVersionTable.number);
+    const latestOf = async () => {
+      const [entity] = await db
+        .select({ latest: ssrEntityTable.latestVersionId })
+        .from(ssrEntityTable)
+        .where(eq(ssrEntityTable.id, entityId));
+      return entity?.latest;
+    };
+    expect(await versions()).toEqual([
+      { number: 1, status: "latest" },
+      { number: 2, status: "draft" },
+    ]);
+    expect(await latestOf()).toBe(versionId);
+
+    const approved = await decide("approve", {
+      versionId: proposal.id,
+      blobSha: proposalSha,
+    });
+    expect(approved.status).toBe(200);
+    expect(await versions()).toEqual([
+      { number: 1, status: "superseded" },
+      { number: 2, status: "latest" },
+    ]);
+    expect(await latestOf()).toBe(proposal.id);
   });
 
   it("rejects with the sha from the diff and refuses a body without one", async () => {

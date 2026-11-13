@@ -54,10 +54,10 @@ const entity: SsrEntity = {
     },
   ],
 };
-const diff = (toBlobSha: string): SsrDiff => ({
+const diff = (toBlobSha: string, toVersionId = "v-1"): SsrDiff => ({
   from: 1,
   to: 1,
-  toVersionId: "v-1",
+  toVersionId,
   toBlobSha,
   files: [{ path: entity.path, diff: `+${toBlobSha}` }],
 });
@@ -154,5 +154,47 @@ describe("RegistryTab: a single decision names the bytes of the open diff (TB-88
       "workspace:ssr.loadError",
     );
     expect(getSsrDiff).toHaveBeenCalledTimes(1);
+  });
+
+  it("a diff of another version leaves the buttons off", async () => {
+    vi.mocked(getSsrDiff).mockResolvedValue(diff("d".repeat(64), "v-other"));
+    renderTab();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "workspace:ssr.diffShow" }),
+    );
+    await screen.findByText(`+${"d".repeat(64)}`);
+    expect(
+      screen.getByRole("button", { name: "workspace:ssr.approve" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "workspace:ssr.reject" }),
+    ).toBeDisabled();
+  });
+
+  it("a failed diff reload keeps the old bytes on screen but no sha to send", async () => {
+    vi.mocked(getSsrDiff)
+      .mockResolvedValueOnce(diff("e".repeat(64)))
+      .mockRejectedValue(new Error("network"));
+    vi.mocked(approveSsrDraft).mockRejectedValue(
+      new HttpError(409, "changed", { code: "SSR_DRAFT_CHANGED" }),
+    );
+    renderTab();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "workspace:ssr.diffShow" }),
+    );
+    const approve = screen.getByRole("button", {
+      name: "workspace:ssr.approve",
+    });
+    await waitFor(() => expect(approve).toBeEnabled());
+    fireEvent.click(approve);
+
+    await waitFor(() => expect(getSsrDiff).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getAllByText("workspace:ssr.loadError").length).toBe(1),
+    );
+    expect(approve).toBeDisabled();
+    expect(approveSsrDraft).toHaveBeenCalledTimes(1);
   });
 });

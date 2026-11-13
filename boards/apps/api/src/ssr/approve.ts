@@ -154,7 +154,10 @@ async function decisionConflict(
         eq(ssrVersionTable.entityId, entityId),
       ),
     );
-  if (current?.status === "draft" && current.blobSha !== seen.blobSha) {
+  // The guarded UPDATE missed an open draft: its bytes moved after the diff,
+  // even if a later sync brought the same sha back (A→B→A). Either way the
+  // owner reviews the diff again.
+  if (current?.status === "draft") {
     return new ApiError(409, {
       code: "SSR_DRAFT_CHANGED",
       message:

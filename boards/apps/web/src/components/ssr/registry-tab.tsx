@@ -97,8 +97,12 @@ function VersionRow({
     onError: onDecisionError,
   });
   // The bytes on screen: only a loaded, settled diff of this very version.
+  // A failed reload keeps the old data, so an error clears the sha as well.
   const seenSha =
-    diff.data && !diff.isFetching && diff.data.toVersionId === version.id
+    diff.data &&
+    !diff.isFetching &&
+    !diff.isError &&
+    diff.data.toVersionId === version.id
       ? diff.data.toBlobSha
       : null;
   const deciding = approve.isPending || reject.isPending;
