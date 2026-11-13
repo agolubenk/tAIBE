@@ -102,6 +102,7 @@ import { assertApiKeyAuthRoute } from "./utils/api-key-auth-routes";
 import { apiKeyRejection } from "./utils/api-key-rejection";
 import type { ApiKeyWorkspaceScope } from "./utils/api-key-workspace-scope";
 import { applyApiKeyHeaders } from "./utils/apply-api-key-headers";
+import { isLoopbackOrigin } from "./utils/loopback-origin";
 import { authenticateApiRequest } from "./utils/authenticate-api-request";
 import {
   authorizeAssetAccess,
@@ -257,6 +258,10 @@ export function createApp() {
     console.warn(
       "[cors] Neither CORS_ORIGINS nor KANEO_CLIENT_URL is set, so cross-origin requests are refused. Same-origin deployments (the bundled image) are unaffected; set KANEO_CLIENT_URL if the web app is served from another origin.",
     );
+  } else if (!corsOrigins) {
+    console.warn(
+      "[cors] Neither CORS_ORIGINS nor KANEO_CLIENT_URL is set, and NODE_ENV is not production: only loopback origins (localhost, 127.0.0.1, [::1]) may make cross-origin requests.",
+    );
   }
 
   app.use(
@@ -271,9 +276,12 @@ export function createApp() {
       ],
       origin: (origin) => {
         // Reflecting an arbitrary origin alongside credentials lets any site
-        // read authenticated responses, so it stays a development convenience.
+        // read authenticated responses. Unconfigured development answers
+        // pages served from this machine only (TB-87).
         if (!corsOrigins) {
-          return reflectUnconfiguredOrigins ? origin || "*" : null;
+          return reflectUnconfiguredOrigins && isLoopbackOrigin(origin)
+            ? origin
+            : null;
         }
 
         if (!origin) {
