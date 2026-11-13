@@ -106,6 +106,8 @@ function VersionRow({
       ? diff.data.toBlobSha
       : null;
   const deciding = approve.isPending || reject.isPending;
+  const draftChanged =
+    isDraftChanged(approve.error) || isDraftChanged(reject.error);
   const rollback = useMutation({
     mutationFn: () => rollbackSsrEntity(workspaceId, entity.id, version.number),
     onSuccess: invalidate,
@@ -221,9 +223,12 @@ function VersionRow({
             : null}
         </div>
       ) : null}
-      {approve.isError || reject.isError || rollback.isError ? (
+      {/* "Decide again" only while the reloaded diff is there to decide on;
+          a failed reload says so above and the buttons stay off. */}
+      {(approve.isError || reject.isError || rollback.isError) &&
+      !(draftChanged && diff.isError) ? (
         <p className="text-destructive mt-2 text-xs" role="alert">
-          {isDraftChanged(approve.error) || isDraftChanged(reject.error)
+          {draftChanged
             ? t("workspace:ssr.draftChanged")
             : t("workspace:ssr.loadError")}
         </p>

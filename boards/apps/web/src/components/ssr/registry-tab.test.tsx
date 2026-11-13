@@ -194,6 +194,10 @@ describe("RegistryTab: a single decision names the bytes of the open diff (TB-88
     await waitFor(() =>
       expect(screen.getAllByText("workspace:ssr.loadError").length).toBe(1),
     );
+    // The last loaded bytes stay readable, but nothing tells the owner to
+    // decide on them: no "decide again", no enabled button.
+    expect(screen.getByText(`+${"e".repeat(64)}`)).toBeInTheDocument();
+    expect(screen.queryByText("workspace:ssr.draftChanged")).toBeNull();
     expect(approve).toBeDisabled();
     expect(approveSsrDraft).toHaveBeenCalledTimes(1);
   });
