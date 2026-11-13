@@ -2,7 +2,7 @@
 # Local proof of the VPS kit before a delivery (Mac + Docker, amd64 under
 # emulation). Runs the real compose.yml as project tb-selftest on an empty
 # database, so migrations run from scratch, unlike the dev database.
-# Checks: health, migrations = journal, admin and products seed, TLS proxy with a
+# Checks: health, the push-back config in app, migrations = journal, admin and products seed, TLS proxy with a
 # self-signed certificate, a backup dump and its restore. Cleans up after itself.
 # Usage: deploy/vps/selftest.sh <image-tag> <scratch-dir>
 set -euo pipefail
@@ -42,8 +42,10 @@ cp "$vps/compose.yml" "$vps/backup.sh" "$root/"
 for name in postgres_password auth_secret settings_key; do
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n' >"$root/secrets/$name"
 done
-printf 'TB_IMAGE=t-boards:%s\nTB_DOMAIN=%s\nTB_LE_VOLUME=%s\nNOTION_MIRROR_WORKSPACE_ID=\nNOTION_MIRROR_DATABASES=\n' \
+printf 'TB_IMAGE=t-boards:%s\nTB_DOMAIN=%s\nTB_LE_VOLUME=%s\nNOTION_MIRROR_WORKSPACE_ID=\nNOTION_MIRROR_DATABASES=\nSSR_PUSH_REPOS=ws-selftest=acme/selftest\n' \
   "$tag" "$domain" "$le_volume" >"$root/.env"
+# TB-116: a synthetic push-back token; the check below never prints it.
+printf 'selftest-not-a-token' >"$root/secrets/ssr_push_github_token"
 
 # Self-signed certificate where Let's Encrypt would put the real one.
 mkdir -p "$root/cert"
@@ -70,6 +72,13 @@ done
   fail "app is $status"
 }
 log "app healthy"
+
+# TB-116: the push-back token file and the repos reach the app; only «ok» is printed, never the value.
+push="$("${compose[@]}" exec -T app sh -c \
+  'test -s "$SSR_PUSH_GITHUB_TOKEN_FILE" && test -r "$SSR_PUSH_GITHUB_TOKEN_FILE" && [ "$SSR_PUSH_REPOS" = ws-selftest=acme/selftest ] && echo ok' \
+  2>/dev/null | tail -1)"
+[ "$push" = ok ] || fail "SSR push-back: token file or SSR_PUSH_REPOS does not reach app"
+log "ssr push-back config reaches app: ok"
 
 journal="$(node -e "process.stdout.write(String(require(process.argv[1]).entries.length))" \
   "$app/apps/api/drizzle/meta/_journal.json")"

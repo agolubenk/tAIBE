@@ -10,7 +10,7 @@ import { pushRepos } from "../ssr/push-repos";
 export async function runNightlySsrPush(): Promise<{ degraded?: boolean }> {
   if (!pushBackConfigured()) {
     console.log(
-      "SSR push-back skipped: SSR_PUSH_GITHUB_TOKEN is not configured",
+      "SSR push-back skipped: no token (SSR_PUSH_GITHUB_TOKEN_FILE is missing or empty)",
     );
     return {};
   }

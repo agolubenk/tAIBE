@@ -66,6 +66,12 @@ services:
       # mac/memory-token-push.sh. Read on every request; without the file the
       # reader sends no header, which only the proxy's rollout mode accepts.
       CLAUDE_MEM_PROXY_TOKEN_FILE: /run/tb-secrets/claude_mem_proxy_token
+      # SSR push-back (TB-93, TB-116): each workspace named in SSR_PUSH_REPOS
+      # (<workspaceId>=<owner>/<repo>, comma-separated) pushes into its own
+      # repo. Off without the token file; the file is read on every push, so
+      # adding or rotating the token needs no restart.
+      SSR_PUSH_REPOS: ${SSR_PUSH_REPOS:-}
+      SSR_PUSH_GITHUB_TOKEN_FILE: /run/tb-secrets/ssr_push_github_token
       # The owner queue (TB-102): requests go there as items and «да» there
       # is applied here. Off until the URL, the token's name in the queue and
       # the workspace → product pairs are set; the token file is read on
