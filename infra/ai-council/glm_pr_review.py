@@ -420,10 +420,12 @@ def main(argv=None) -> int:
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"запуск: {exc}", file=sys.stderr)
         return EXIT_START
-    all_files = [path for path, _ in split_diff(diff)]
+    all_files, run_id = [path for path, _ in split_diff(diff)], pr_repo.run_id(repo, args.pr)
     per_lens: dict = {}
     for c in calls:
         per_lens.setdefault(c.lens, []).append(c.part.label if c.part else "весь дифф")
+    # Репозиторий видно до первого вызова: PR HR из папки tAIBE без --repo — это PR tAIBE с тем же номером.
+    print(f"PR {args.pr}: репозиторий {repo or '— (дифф из файла)'}, run_id {run_id}", flush=True)
     print(f"план: {len(per_lens)} линз, {len(calls)} вызовов; дифф {len(diff)} симв., файлов {len(all_files)}"
           + (f"; не отправлены (сгенерированные): {', '.join(skipped)}" if skipped else ""), flush=True)
     for name, labels in per_lens.items():
@@ -454,7 +456,7 @@ def main(argv=None) -> int:
             prompt_of=lambda c: build_prompt(c, body, whole, skipped, all_files),
             deadline_s=args.deadline_min * 60, breaker=max(args.breaker, 1),
             on_progress=save, log=lambda m: print(m, flush=True), prior=prior, backend=args.backend,
-            diff_sha=diff_sha, run_id=pr_repo.run_id(repo, args.pr))
+            diff_sha=diff_sha, run_id=run_id)
 
     if args.backend == "opencode":
         from opencode_client import OpencodeClient

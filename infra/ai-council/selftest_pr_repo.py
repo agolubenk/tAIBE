@@ -163,13 +163,16 @@ def _caller(tmp: Path, repo: str):
 
 
 def _main(check, gr, tmp: Path) -> None:
-    out = str(tmp / "pr-repo-out.json")
-    with _caller(tmp, HR) as env, contextlib.redirect_stdout(io.StringIO()):
+    out, shown = str(tmp / "pr-repo-out.json"), io.StringIO()
+    with _caller(tmp, HR) as env, contextlib.redirect_stdout(shown):
         code = gr.main(["600", out, "--dry-run"])
         lines = env.log.read_text().splitlines()
     check("репозиторий PR: прогон из папки HR — gh repo view там, дифф из HR по -R",
           code == gr.EXIT_OK and lines[:1] == [f"{env.folder}|repo view --json nameWithOwner -q .nameWithOwner"]
           and f"{env.folder}|pr diff 600 -R {HR}" in lines, str(lines))
+    check("репозиторий PR: репозиторий и run_id печатаются до плана вызовов",
+          shown.getvalue().startswith(f"PR 600: репозиторий {HR}, run_id hr-helper:pr-600\nплан: "),
+          shown.getvalue()[:160])
     with _caller(tmp, "") as env, contextlib.redirect_stdout(io.StringIO()):
         os.environ["GH_REPO"] = HR
         code = gr.main(["600", out, "--dry-run"])
@@ -202,11 +205,13 @@ def _main(check, gr, tmp: Path) -> None:
               f"{captured.get('run_id')} {meta.get('repo')}")
         path = tmp / "offline.diff"
         path.write_text(DIFF)
-        with _caller(tmp, HR) as env, contextlib.redirect_stdout(io.StringIO()):
+        shown = io.StringIO()
+        with _caller(tmp, HR) as env, contextlib.redirect_stdout(shown):
             code = gr.main(["7", out, "--backend", "opencode", "--diff-file", str(path)])
             lines = env.log.read_text().splitlines()
-        check("репозиторий PR: --diff-file без --repo — gh не зовётся, run_id unknown:pr-7",
-              code == gr.EXIT_OK and not lines and captured.get("run_id") == "unknown:pr-7", str(lines))
+        check("репозиторий PR: --diff-file без --repo — gh не зовётся, run_id unknown:pr-7, это видно в выводе",
+              code == gr.EXIT_OK and not lines and captured.get("run_id") == "unknown:pr-7"
+              and "PR 7: репозиторий — (дифф из файла), run_id unknown:pr-7" in shown.getvalue(), str(lines))
     finally:
         gr.run_review = real
 
