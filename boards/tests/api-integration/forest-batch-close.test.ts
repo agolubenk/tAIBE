@@ -5,6 +5,7 @@ import { agentJournalTable } from "../../apps/api/src/database/forest-schema";
 import { resetTestDatabase } from "./helpers/database";
 import { createProjectFixture } from "./helpers/fixtures";
 import { addTask, createForest } from "./helpers/forest";
+import { holdTaskLocks } from "./helpers/hold-locks";
 
 type Forest = Awaited<ReturnType<typeof createForest>>;
 
@@ -166,6 +167,42 @@ describe("API integration: batch close_task (TB-108)", () => {
     expect(await statusOf(busy.id)).toBe("to-do");
     const [report] = await journal("approval.batch_report", asked.body.id);
     expect(report?.detail).toContain("(занята другой записью)");
+  });
+
+  // TB-114 п. 2: past 5 locked cards the whole batch waits — 250 locked
+  // cards would hold the owner's transaction about 8 minutes.
+  it("defers the whole batch when more than 5 cards are locked", async () => {
+    const forest = await createForest();
+    const cards = await addTasks(forest.project.id, 7);
+    const ids = cards.map((card) => card.id);
+    const asked = await askBatch(forest, ids);
+    expect(asked.status).toBe(200);
+    // The free card is the last in lock order: a deferred batch closes nothing.
+    const inLockOrder = [...ids].sort();
+    const free = inLockOrder[6] as string;
+    const release = await holdTaskLocks(inLockOrder.slice(0, 6));
+
+    const started = Date.now();
+    const decided = await approve(forest, asked.body.id);
+    const waited = Date.now() - started;
+    await release();
+
+    expect(decided.status).toBe(409);
+    expect(decided.body.message).toContain("still pending");
+    expect(waited).toBeLessThan(20_000);
+    const [row] = await db
+      .select({ status: schema.ownerApprovalTable.status })
+      .from(schema.ownerApprovalTable)
+      .where(eq(schema.ownerApprovalTable.id, asked.body.id));
+    expect(row?.status).toBe("pending");
+    expect(await statusOf(free)).toBe("to-do");
+    expect(await journal("approval.batch_report", asked.body.id)).toHaveLength(
+      0,
+    );
+
+    // The cards are free again: the same «да» closes all of them.
+    expect((await approve(forest, asked.body.id)).status).toBe(200);
+    expect(await statusOf(free)).toBe("done");
   });
 
   it("closes 250 cards with one «да»", async () => {

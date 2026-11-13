@@ -2,6 +2,7 @@ import { HTTPException } from "hono/http-exception";
 import type { ForestActor } from "../actor";
 import { ForestError } from "../forest-error";
 import { writeJournal } from "../journal";
+import { BatchLocked } from "./batch-close-apply";
 import { decideAndApply } from "./decide-and-apply";
 
 // N-011: a decision is accepted only from the owner's session. An agent key
@@ -41,6 +42,14 @@ export async function decideApproval({
     decision,
     actor,
     answer: { via: "ui", answeredAt: new Date(), answeredBy: actor.name },
+  }).catch((error: unknown) => {
+    // TB-114: nothing applied, the request stays pending for another «да».
+    if (error instanceof BatchLocked) {
+      throw new HTTPException(409, {
+        message: `${error.message}: nothing was closed, the request is still pending — answer again later`,
+      });
+    }
+    throw error;
   });
   if (outcome.kind === "not_pending") {
     throw new HTTPException(409, {
