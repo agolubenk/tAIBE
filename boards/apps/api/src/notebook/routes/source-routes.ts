@@ -12,6 +12,7 @@ import { notebookEmbedModel } from "../../notebook-model/effective-notebook-mode
 import { addPullRequestSource } from "../sources/github-pr-source";
 import { addLinkSource } from "../sources/link-source";
 import { listSources, pruneSources } from "../sources/list-sources";
+import { sourceAuthor } from "../sources/source-author";
 import { syncCardSources } from "../sources/sync-card-sources";
 import { upsertSource } from "../sources/upsert-source";
 import {
@@ -216,10 +217,13 @@ export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(addLinkRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { url } = c.req.valid("json");
-    return c.json(await addLinkSource(workspaceId, url), 200);
+    return c.json(await addLinkSource(workspaceId, url, sourceAuthor(c)), 200);
   })
   .openapi(addPullRequestRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { url } = c.req.valid("json");
-    return c.json(await addPullRequestSource(workspaceId, url), 200);
+    return c.json(
+      await addPullRequestSource(workspaceId, url, sourceAuthor(c)),
+      200,
+    );
   });

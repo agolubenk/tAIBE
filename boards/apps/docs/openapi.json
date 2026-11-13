@@ -6720,6 +6720,25 @@
                 "chars": {
                   "type": "integer"
                 },
+                "addedByKind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "agent",
+                    "person",
+                    null
+                  ],
+                  "description": "Who added a link or a pull request; null for a synced source or one added before authors were kept."
+                },
+                "addedBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The agent's name with its session, or the member's name."
+                },
                 "updatedAt": {
                   "type": "string",
                   "format": "date-time"
@@ -6738,6 +6757,8 @@
                 "title",
                 "contentSha256",
                 "chars",
+                "addedByKind",
+                "addedBy",
                 "updatedAt",
                 "chunks",
                 "embedded"

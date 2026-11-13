@@ -4094,7 +4094,10 @@
 					"added": "In the notebook: {{title}}",
 					"error": "Could not add the source",
 					"unchanged": "Nothing changed: {{title}}"
-				}
+				},
+				"addedByAgent": "Added by agent {{name}}",
+				"addedByPerson": "Added by {{name}}",
+				"addedByUnknown": "Added by: unknown"
 			},
 			"status": {
 				"counts": "{{sources}} sources · {{chunks}} chunks · {{embedded}} with vectors",

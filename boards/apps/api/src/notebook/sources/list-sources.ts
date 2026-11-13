@@ -17,6 +17,8 @@ export async function listSources(workspaceId: string, model: string) {
       title: notebookSourceTable.title,
       contentSha256: notebookSourceTable.contentSha256,
       chars: notebookSourceTable.chars,
+      addedByKind: notebookSourceTable.addedByKind,
+      addedBy: notebookSourceTable.addedBy,
       updatedAt: notebookSourceTable.updatedAt,
       chunks: sql<number>`count(${notebookChunkTable.id})::int`,
       embedded: sql<number>`count(${notebookChunkTable.id}) filter (where ${notebookChunkTable.embedModel} = ${model} and ${notebookChunkTable.embedding} is not null)::int`,
