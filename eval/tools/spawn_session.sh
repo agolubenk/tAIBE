@@ -273,7 +273,12 @@ control_free() {
   if [ -z "$tai" ]; then ctl="папка tAIBE не найдена"; rc=2
   else ctl="$(python3 -I "$TOOLS/lineage.py" control --guard "$CWD" --guard "$tai" 2>&1)" || rc=$?; fi
   [ "$rc" = 3 ] && return 0
-  [ "$rc" = 0 ] && ctl="Контроль записан в merge-guard: $ctl"
+  if [ "$rc" = 0 ]; then ctl="Контроль записан в merge-guard: $ctl"
+  else
+    # Сомнение — сломан путь или список, а не мёртвый Контроль: флаг обхода его не чинит. Трейсбек — первой строкой.
+    case "$rc" in 2) ;; *) ctl="lineage.py control: сбой (rc $rc): $(printf '%s\n' "$ctl" | head -n 1)" ;; esac
+    hint="почини путь или список и запусти снова; --force-fresh-control — только если прежний Контроль мёртв"
+  fi
   echo "# release: $ctl — $hint" >&2
   note "release — НЕ открыта: $ctl ($hint)"
   REFUSED=1
@@ -290,6 +295,9 @@ launch_role() {
     if [ "$rc" != 3 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
   fi
   if [ "$r" = release ] && [ "$FRESH_CONTROL" = 0 ] && ! control_free; then return; fi
+  if [ "$r" = release ] && [ "$FRESH_CONTROL" = 1 ]; then
+    note "release — ещё НЕ Контроль: мёрж и m-пункты — после того, как владелец впишет её sessionId в merge-guard (s-пункт)"
+  fi
   spawn_one "$r"
   if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then note "$r — команда напечатана"; return; fi
   echo "жду сессию $r (до ${SPAWN_WAIT:-90} с)…"
