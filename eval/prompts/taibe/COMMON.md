@@ -42,8 +42,9 @@ TB «t-boards» `mf6jpr5wftbgr3z93lvw807v`, SE «supertick-eval» `tl3j7yc2mc7ly
 - Next card: when your card goes to review or merges, run `python3 -I eval/tools/queue_focus.py --plan --product
   taibe`. Take the first item and its lease (`forest_acquire_lease`). If the lease is taken, take the next item.
   After a merge, request the card's close in the same step.
-- Switch your lane only for an owner inbox item with `urgency: now`, a production failure or an owner stop. Put any
-  other signal (a Nerve digest, a finding, an idea) as a card in the plan's backlog row and continue your card.
+- Switch your lane only for an owner inbox item with `urgency: now`, an inbox alert (always), a production failure
+  or an owner stop. Put any other signal (a Nerve digest, a finding, an idea, an inbox item with `urgency: queue`) as
+  a card in the plan's backlog row and continue your card.
 - Every owner-queue item of the tAIBE team has `-taibe-` in its id (`m-taibe-91`, `d-taibe-…`). Without it, the
   owner's answer goes to the HR team.
 - Every decision gets 3 or more independent lenses (`.claude/memory/chunks/process/adversarial-review.md`).
