@@ -36,6 +36,21 @@ export function containerProjects(
     .sort((a, b) => Number(b.main) - Number(a.main) || a.name.localeCompare(b.name))
 }
 
+/**
+ * Стеки, которые были у хоста в прошлом сохранённом отчёте и пропали (OPS-57). Сравниваются только хосты, у которых
+ * в прошлом отчёте были группы (агент ≥ 1.5, отчёт после OPS-8); хост, которого не было, ничего не теряет.
+ */
+export function missingProjects(
+  previous: Pick<OpsReport, 'hosts'> | null,
+  agent: string,
+  current: Projects,
+): string[] {
+  const before = previous?.hosts.find((h) => h.agent === agent)?.projects
+  if (!before?.length) return []
+  const now = new Set(current.map((p) => p.name))
+  return before.map((p) => p.name).filter((name) => !now.has(name))
+}
+
 const more = (n: number, forms: readonly [string, string, string]) => (n > 0 ? ` и ещё ${plural(n, forms)}` : '')
 const label = (name: string) => name || 'без compose'
 
@@ -43,7 +58,13 @@ const label = (name: string) => name || 'без compose'
 export function hostContainers(h: OpsReport['hosts'][number]): string {
   if (!h.projects?.length) return h.containersNotRunning.length ? ` · не работают: ${escapeHtml(h.containersNotRunning.join(', '))}` : ''
   const stacks = h.projects.map((p) => `${label(p.name)} ${p.running}/${p.total}${p.stopped.length ? ` (не работают: ${p.stopped.join(', ')})` : ''}`)
-  return ` · стеки: ${escapeHtml(stacks.join(', '))}`
+  const gone = h.missingProjects?.length ? ` · ${gonePhrase(h.missingProjects.map(label))}` : ''
+  return ` · стеки: ${escapeHtml(stacks.join(', ') + gone)}`
+}
+
+/** «пропал стек: t-boards» / «пропали стеки: a, b» — без HTML, экранирует вызывающий. */
+function gonePhrase(names: string[]): string {
+  return `${names.length > 1 ? 'пропали стеки' : 'пропал стек'}: ${names.slice(0, SHOW_STACKS).join(', ')}${more(names.length - SHOW_STACKS, ['стек', 'стека', 'стеков'])}`
 }
 
 /** Строка «📦 Контейнеры: …» карточки отчёта (HTML). Отчёт без групп (до OPS-8) — прежний список упавших. */
@@ -57,12 +78,18 @@ export function containersLine(r: Pick<OpsReport, 'hosts' | 'restarts'>): string
   const prefix = withProjects.length > 1
   const stacks = withProjects.flatMap((h) => (h.projects ?? []).map((p) => ({ ...p, label: `${prefix ? `${h.name}/` : ''}${label(p.name)}` })))
   const stopped = stacks.filter((s) => s.stopped.length)
-  const state = stopped.length
+  // Пропавший стек (OPS-57) — тоже не «все работают»: «было N» — стеков в прошлом отчёте.
+  const gone = withProjects.flatMap((h) => (h.missingProjects ?? []).map((n) => `${prefix ? `${h.name}/` : ''}${label(n)}`))
+  const goneText = gone.length
+    ? `${gonePhrase(gone)} (было ${withProjects.reduce((n, h) => n + (h.projects?.length ?? 0) + (h.missingProjects?.length ?? 0), 0)})`
+    : ''
+  const working = stopped.length
     ? `не работают — ${stopped
         .slice(0, SHOW_STACKS)
         .map((s) => `${s.label}: ${s.stopped.slice(0, SHOW_STOPPED).join(', ')}${more(s.stopped.length - SHOW_STOPPED, ['контейнер', 'контейнера', 'контейнеров'])}`)
         .join('; ')}${more(stopped.length - SHOW_STACKS, ['стек', 'стека', 'стеков'])}`
-    : 'все работают'
+    : ''
+  const state = [goneText, working].filter(Boolean).join('; ') || 'все работают'
   // Стеки с неработающими — первыми: при обрезке до SHOW_STACKS «0/4» не уходит в «и ещё».
   const ordered = [...stopped, ...stacks.filter((s) => !s.stopped.length)]
   const counts = `${ordered
