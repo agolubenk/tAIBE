@@ -26,8 +26,10 @@ class Sx:
     """Процессы и окружение без ps: pid → (линия, старт)."""
 
     def __init__(self, procs):
-        self.p = {pid: LIN.Proc(pid, 1, pid, "ttys001", start, "claude") for pid, (_, start) in procs.items()}
-        self.env = {pid: line for pid, (line, _) in procs.items()}
+        # pid → (линия, старт[, ppid]); без ppid родитель — launchd (1)
+        self.p = {pid: LIN.Proc(pid, (v[2] if len(v) > 2 else 1), pid, "ttys001", v[1], "claude")
+                  for pid, v in procs.items()}
+        self.env = {pid: v[0] for pid, v in procs.items()}
 
     def procs(self):
         return dict(self.p)
@@ -139,6 +141,12 @@ check("корень при братьях", verdict(10, sib), False)
 ack("r.ddgg.s111", 21, at="2026-11-13T21:41:00+0300")
 check("равные квитанции: первый", verdict(21, sib), False)
 check("равные квитанции: второй", verdict(22, sib), False)
+
+# 4. вложенный claude (из Bash сессии Контроля) наследует TAIBE_LINEAGE — не Контроль (находка #181, HR #602)
+reset()
+nested = {10: ("r.ddgg", ST), 50: ("r.ddgg", ST, 10)}
+check("корень с вложенной сессией", verdict(10, nested), True)
+check("вложенный claude корня", verdict(50, nested), False)
 
 # control_verdict: запись line: проходит только через проверку линии; sessionId и имя работают как раньше
 me = {"sessionId": "6fbb5c84-0000-0000-0000-000000000000", "name": "taibe-4b", "pid": 40}

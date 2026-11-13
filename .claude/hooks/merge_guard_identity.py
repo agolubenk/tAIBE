@@ -115,9 +115,12 @@ def line_verdict(pid, lines, lin=None, sx=None):
     if lin is None:
         return "в списке Контроля линия, а eval/tools/lineage.py не найден"
     sx = sx or lin.Sys()
-    p = sx.procs().get(pid) if isinstance(pid, int) else None
+    procs = sx.procs()
+    p = procs.get(pid) if isinstance(pid, int) else None
     if p is None:
         return f"процесс сессии {pid} не найден"
+    if lin.ancestor_claude(procs, p.ppid) is not None:
+        return "сессия запущена из другой сессии claude и унаследовала её линию — по линии не пропускаю"
     mine = lin.session_line(sx, p)
     if not mine or not lin.valid_line(mine):
         return "у сессии нет линии (её открыл не spawn_session.sh)"
