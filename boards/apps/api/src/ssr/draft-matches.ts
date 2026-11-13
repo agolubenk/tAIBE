@@ -107,7 +107,9 @@ export function listOpenDrafts(workspaceId: string): Promise<OpenDraft[]> {
 // batch commits. A sync, approve or reject that touches one of them waits on
 // the lock, and its own UPDATE re-checks status='draft', so it then leaves
 // the decided row alone. Twins are re-read in the same transaction but not
-// locked.
+// locked. Rows lock in id order, so two batches that share drafts queue
+// instead of deadlocking; drafts lock before any live version (TB-89, the
+// single approve in approve.ts keeps the same order).
 export function lockOpenDrafts(
   tx: Tx,
   workspaceId: string,
@@ -124,6 +126,7 @@ export function lockOpenDrafts(
         eq(ssrVersionTable.status, "draft"),
       ),
     )
+    .orderBy(asc(ssrVersionTable.id))
     .for("update", { of: ssrVersionTable });
 }
 
