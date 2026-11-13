@@ -262,16 +262,6 @@ async function applyOne(
   );
 }
 
-// One step of a refusal: a second refusal skips this step, not the others.
-async function tolerate(itemId: string, step: () => Promise<unknown>) {
-  try {
-    await step();
-  } catch (error) {
-    if (!(error instanceof QueueRejected)) throw error;
-    console.warn(`owner-queue due: ${itemId}: ${error.message}`);
-  }
-}
-
 // What a refused answer left behind: the rows it wrote before the refusal.
 type Refusal = { itemId: string; written: string[]; rows: PlanRow[] };
 
@@ -296,7 +286,8 @@ async function refuseAnswer(
   const note = clip(
     `Ответ не применён: очередь отказала в записи (${reason}). ${changed} Ежедневный проход спросит заново, если строки всё ещё не успевают к сроку.`,
   );
-  await tolerate(itemId, async () => {
+  // A second refusal skips its own step, not the others.
+  await writer.unlessRefused(`due ${itemId} note`, async () => {
     if (await writer.client.get("checks", itemId)) {
       await writer.patch("checks", itemId, {
         agentStatus: "done",
@@ -304,8 +295,10 @@ async function refuseAnswer(
       });
     }
   });
-  await tolerate(itemId, () => archiveItem(writer, itemId));
-  await tolerate(itemId, () =>
+  await writer.unlessRefused(`due ${itemId} archive`, () =>
+    archiveItem(writer, itemId),
+  );
+  await writer.unlessRefused(`due ${itemId} state`, () =>
     closeState(writer, doc, { rows: [], note }, now),
   );
 }
@@ -408,6 +401,7 @@ export async function applyAnswers(writer: PlanWriter, input: AnswerInput) {
       if (left !== undefined) open.set(product, left);
     } catch (error) {
       if (!(error instanceof QueueRejected)) throw error;
+      writer.refused += 1;
       const refusal = { itemId: state.item, written, rows: input.rows };
       await refuseAnswer(writer, doc, refusal, error.message, input.now);
     }
