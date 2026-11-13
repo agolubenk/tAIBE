@@ -86,7 +86,7 @@ async function allowShift(
   visible: (row: Row) => boolean,
 ): Promise<void> {
   if (!next) throw apiError(409, `Снять planEnd («${prev}») может только владелец`)
-  const how = `Сдвиг срока позже «${prev}» — только по ответу владельца: решение d-<продукт>-due-<тема> с rows: [«${rowId}»], moveTo: {«${rowId}»: дата} и вариантом id «${DUE_MOVE}» («перенести»); его id — в dueRef этой записи. Раньше срок — без ответа`
+  const how = `Сдвиг срока позже «${prev}» — только по ответу владельца: решение d-<продукт>-due[-<тема>] с rows: [«${rowId}»], moveTo: {«${rowId}»: дата} и вариантом id «${DUE_MOVE}» («перенести»); его id — в dueRef этой записи. Раньше срок — без ответа`
   if (typeof dueRef !== 'string' || !DUE_REF.test(dueRef)) throw apiError(409, `planEnd не переписывается. ${how}`)
   const item = await find('items', dueRef)
   if (!item || !visible(item)) throw apiError(409, `Нет решения items/${dueRef}. ${how}`)
@@ -95,6 +95,10 @@ async function allowShift(
   const check = await find('checks', dueRef)
   const answer = check ? (JSON.parse(check.dataJson) as Record<string, unknown>) : {}
   if (answer.choice !== DUE_MOVE) throw apiError(409, `Владелец не ответил «перенести» в ${dueRef} (ответ: ${String(answer.choice ?? 'нет')}). ${how}`)
+  // Владелец выбирает по подписи, сервер — по id: вариант «move» должен и называться «Перенести…».
+  const options = Array.isArray(d.options) ? (d.options as Array<Record<string, unknown>>) : []
+  const label = String(options.find((o) => o?.id === DUE_MOVE)?.label ?? '')
+  if (!/перенести/i.test(label)) throw apiError(409, `Вариант «${DUE_MOVE}» в ${dueRef} подписан «${label}», а не «Перенести…»: владелец выбирал по подписи`)
   const ownerAt = typeof answer.ownerAt === 'string' ? Date.parse(answer.ownerAt) : NaN
   if (!Number.isFinite(ownerAt) || item.updatedAt.getTime() > ownerAt) {
     throw apiError(409, `Решение ${dueRef} изменено после ответа владельца (или ответ без отметки сервера) — нужен новый ответ на текущий текст`)

@@ -12,7 +12,7 @@ const row = (collection: string, id: string, data: unknown, updatedAt = at): Row
 /** Решение о сроках строки w-1 с ответом «перенести» после последней правки пункта. */
 function store(dueRef: string) {
   const docs = new Map<string, Row>([
-    [`items/${dueRef}`, row('items', dueRef, { kind: 'decision', rows: ['w-1'], moveTo: { 'w-1': '2026-12-01' } })],
+    [`items/${dueRef}`, row('items', dueRef, { kind: 'decision', rows: ['w-1'], moveTo: { 'w-1': '2026-12-01' }, options: [{ id: 'move', label: 'Перенести' }] })],
     [`checks/${dueRef}`, row('checks', dueRef, { choice: 'move', ownerAt: '2026-11-13T10:05:00.000Z' })],
   ])
   return async (c: string, id: string) => docs.get(`${c}/${id}`)
@@ -44,7 +44,7 @@ describe('guardPlanEnd (TB-112)', () => {
 
   it('ответ без отметки сервера ownerAt — не годится', async () => {
     const find = async (c: string, id: string) =>
-      c === 'checks' ? row('checks', id, { choice: 'move' }) : row('items', id, { kind: 'decision', rows: ['w-1'], moveTo: { 'w-1': '2026-12-01' } })
+      c === 'checks' ? row('checks', id, { choice: 'move' }) : row('items', id, { kind: 'decision', rows: ['w-1'], moveTo: { 'w-1': '2026-12-01' }, options: [{ id: 'move', label: 'Перенести' }] })
     const merged = { planEnd: '2026-11-30', dueRef: 'd-t-due-1' }
     await expect(guardPlanEnd('w-1', { planEnd: '2026-11-20' }, merged, find, () => true)).rejects.toMatchObject({ status: 409 })
   })

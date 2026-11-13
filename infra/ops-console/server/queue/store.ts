@@ -73,6 +73,8 @@ const inboxSchema = z
   .strict()
   .refine((d) => !d.severity || d.type === 'bug' || d.type === 'alert', { message: 'Важность (severity) — только у ошибки и алерта' })
 // Формат пунктов — протокол «Для агентов» со страницы артефакта; лишние поля (pr, deploy и будущие) допускаются.
+// Настоящий день календаря: 2026-13-01 и 2026-02-30 — не дата.
+const realDay = (v: string): boolean => !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v
 const itemSchema = z
   .object({
     kind: z.enum(['decision', 'merge', 'server', 'check', 'inbox']),
@@ -103,7 +105,7 @@ const itemSchema = z
     inbox: inboxSchema.optional(),
     // Решение о сроках d-…-due… (TB-112): дата переноса каждой строки из rows. Её видит владелец; позже неё агент
     // срок строки не сдвинет (plan-end.ts).
-    moveTo: z.record(z.string().regex(DOC_ID), z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+    moveTo: z.record(z.string().regex(DOC_ID), z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(realDay, { message: 'moveTo — дата календаря (YYYY-MM-DD)' }))
       .refine((m) => Object.keys(m).length <= 100, { message: 'moveTo — не больше 100 строк' }).optional(),
   })
   .passthrough()

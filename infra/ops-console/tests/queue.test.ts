@@ -107,7 +107,7 @@ describe('документы и права', () => {
     // Прежний обход «basePlanEnd = прежняя дата» без ответа владельца больше не проходит.
     const plain = await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', basePlanEnd: '2026-10-20', note: 'сдвиг: ждали ревью' } })
     expect(plain.status).toBe(409)
-    expect(plain.json.error).toContain('d-<продукт>-due-')
+    expect(plain.json.error).toContain('d-<продукт>-due[-<тема>]')
     const due = { kind: 'decision', title: 'Сроки: строки не успевают', body: 'Задача — перенести на 25.10', rows: ['w-t'], moveTo: { 'w-t': '2026-10-25' }, options: [{ id: 'keep', label: 'Держать срок' }, { id: 'move', label: 'Перенести' }] }
     // Даты переноса нет в тексте — владелец её не видит: решение не принимается.
     const hidden = await a.put('/db/items/d-t-due-0', { data: { ...due, body: 'Задача — перенести на прогноз' } })
@@ -156,7 +156,19 @@ describe('документы и права', () => {
     expect((await a.put('/db/items/d-t-due-2', { data: { ...due, body: 'Другая — на 30.12', rows: ['w-other'], moveTo: { 'w-other': '2026-12-30' } } })).status).toBe(200)
     expect((await answer('d-t-due-2', 'move', '2026-10-18T10:10:00.000Z')).status).toBe(200)
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-12-01', dueRef: 'd-t-due-2' } })).status).toBe(409)
-    // Неверная форма moveTo — 422 на записи решения.
+    // Строка есть в moveTo, но не в rows — не сдвигается.
+    expect((await a.put('/db/items/d-t-due-5', { data: { ...due, rows: ['w-other'] } })).status).toBe(200)
+    expect((await answer('d-t-due-5', 'move', '2026-10-18T10:11:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-12-01', dueRef: 'd-t-due-5' } })).json.error).toContain('нет этой строки')
+    // Вариант move подписан не «Перенести…» — владелец выбирал по подписи: не сдвигается.
+    const swapped = [{ id: 'move', label: 'Держать срок' }, { id: 'keep', label: 'Перенести' }]
+    expect((await a.put('/db/items/d-t-due-6', { data: { ...due, options: swapped } })).status).toBe(200)
+    expect((await answer('d-t-due-6', 'move', '2026-10-18T10:12:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-12-01', dueRef: 'd-t-due-6' } })).json.error).toContain('владелец выбирал по подписи')
+    // Снять срок через null агент не может.
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: null } })).status).toBe(409)
+    // Неверная форма moveTo и не день календаря — 422 на записи решения.
+    expect((await a.put('/db/items/d-t-due-4', { data: { ...due, moveTo: { 'w-t': '2026-13-01' } } })).status).toBe(422)
     expect((await a.put('/db/items/d-t-due-4', { data: { ...due, moveTo: { 'w-t': '25.10.2026' } } })).status).toBe(422)
     expect((await a.put('/db/items/d-t-due-4', { data: { ...due, moveTo: { 'w-t': '2026-10-2[' } } })).status).toBe(422)
     // Новая строка агента: dueRefs нет, basePlanEnd — её planEnd или пусто.
@@ -165,6 +177,9 @@ describe('документы и права', () => {
     expect((await a.put('/db/work/w-n3', { data: { title: 'Н', planEnd: '2026-10-20', basePlanEnd: '2026-10-20' } })).status).toBe(200)
     // Владелец сдвигает и снимает сам.
     expect((await o.patch('/oq/v1/db/work/w-t', { data: { planEnd: '2027-01-05' } })).status).toBe(200)
+    const cleared = await o.patch('/oq/v1/db/work/w-t', { data: { planEnd: null } })
+    expect(cleared.status).toBe(200)
+    expect(cleared.json.data.planEnd).toBeUndefined()
   })
 
   it('история пункта — журнал изменений', async () => {
