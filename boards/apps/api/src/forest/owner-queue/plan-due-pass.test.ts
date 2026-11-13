@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { type PlanStore, planPass } from "./plan-pass";
 import type { BoardCard } from "./plan-types";
 import {
@@ -7,6 +7,7 @@ import {
   QueueConflict,
   type QueueDoc,
   QueueRejected,
+  QueueThrottled,
 } from "./queue-client";
 import type { OwnerQueueConfig } from "./queue-config";
 
@@ -29,7 +30,7 @@ const DAY3 = new Date("2026-11-15T06:00:00Z");
 // last change, not later than its moveTo date, used once (TB-112 part 1, PR
 // #156). race() — another writer moves the doc before the next write; refuse()
 // — the console refuses every write of the doc with 409; reject() — with 422;
-// allow() ends both. agentNote of a check is 2000 at most (checkSchema). afterGet() — the owner
+// allow() ends both; throttle() — the next write of the doc gets 429 (TB-119). agentNote of a check is 2000 at most (checkSchema). afterGet() — the owner
 // acts right after the pass read a doc.
 class MemQueue {
   readonly docs = new Map<string, QueueDoc>();
@@ -38,6 +39,7 @@ class MemQueue {
   private readonly races = new Set<string>();
   private readonly refused = new Set<string>();
   private readonly rejected = new Set<string>();
+  private readonly throttled = new Set<string>();
   private readonly hooks = new Map<string, () => void>();
 
   race(collection: QueueCollection, id: string) {
@@ -50,6 +52,10 @@ class MemQueue {
 
   reject(collection: QueueCollection, id: string) {
     this.rejected.add(`${collection}/${id}`);
+  }
+
+  throttle(collection: QueueCollection, id: string) {
+    this.throttled.add(`${collection}/${id}`);
   }
 
   allow(collection: QueueCollection, id: string) {
@@ -126,6 +132,9 @@ class MemQueue {
     ifVersion?: number,
   ): QueueDoc {
     const key = `${collection}/${id}`;
+    if (this.throttled.delete(key)) {
+      throw new QueueThrottled("HTTP 429 Слишком много записей");
+    }
     if (this.refused.has(key)) throw new QueueConflict("refused");
     if (this.rejected.has(key)) {
       throw new QueueRejected(`HTTP 422 ${key} is too large`, 422);
@@ -664,6 +673,25 @@ describe("TB-112: the answer follows the item the owner read", () => {
     expect(queue.data("work", "due-taibe")).toMatchObject({
       item: ITEM,
       applied: false,
+      rows: [{ id: "w-taibe-a", eta: "2026-11-19" }],
+    });
+  });
+
+  it("a 429 between the item and the state: the day runs again and points the state to it", async () => {
+    const queue = new MemQueue();
+    plan(queue);
+    queue.throttle("work", "due-taibe");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first = await daily(queue, DAY1);
+    warn.mockRestore();
+    expect(first).toMatchObject({ dailyDone: false, refused: 0 });
+    expect(first.left).toBeGreaterThan(0);
+    expect(queue.data("items", ITEM).archived).toBeUndefined();
+    expect(queue.doc("work", "due-taibe")).toBeUndefined();
+    const second = await daily(queue, DAY1);
+    expect(second.dailyDone).toBe(true);
+    expect(queue.data("work", "due-taibe")).toMatchObject({
+      item: ITEM,
       rows: [{ id: "w-taibe-a", eta: "2026-11-19" }],
     });
   });

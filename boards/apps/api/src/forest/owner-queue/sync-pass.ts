@@ -24,6 +24,9 @@ import {
   taskKeys,
   workspaceName,
 } from "./sync-store";
+import { WRITES_PER_PASS } from "./queue-limits";
+
+export { WRITES_PER_PASS };
 
 export type SyncDeps = {
   client: QueueClient;
@@ -279,7 +282,6 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
 
 // One pass ends early, without an error, once it spent its share of the
 // queue's write limit or its time (resources r2); the rest goes next pass.
-export const WRITES_PER_PASS = 50;
 export const PASS_DEADLINE_MS = 25_000;
 
 class PassBudgetSpent extends Error {}
