@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
+from merge_guard_comments import sure_comments  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
@@ -472,6 +473,46 @@ for form in ("eval -- echo hi", "eval -- \"$(cat ok.sh)\"", "emulate sh -c -- \"
              "eval -- -- git push", "builtin eval -- git push"):  # второй `--` shell запустит как команду `--`
     bash(f"r24, `--` на ветке или безвредно на main: {form!r}", form, False,
          cwd=e_branch if form.startswith("builtin") else e_main)
+
+# --- SE-75: `'` в комментарии скрипта сдвигал разбор кавычек — ложная «запись в main» или спрятанный код ---
+se75 = repo_on("main", "se75")
+MEM = "\n".join((  # mem-stats.sh из TB-124, сокращённый: прежний разбор давал «запись в защищённую ветку» на main
+    "# A decimal point in numbers whatever the SSH session's locale (ru_RU prints «307,0»).",
+    "sample_once() {", "    awk -F'\\t' -v now=\"$now\" -v project=\"$PROJECT\" \"$AWK_MIB\"'", "      }'",
+    "  while :; do", "    sleep \"$step\"", "  done", "}", "report() {", "  if [ -z \"$file\" ]; then",
+    "    file=\"$(find \"$DIR\" -maxdepth 1 -name 'mem-*.tsv' 2>/dev/null | sort | tail -n 1)\"", "  fi",
+    "  [ -n \"$file\" ] && [ -s \"$file\" ] || {", "    exit 1", "  }",
+    "  echo \"$file: $(cut -f1 \"$file\" | sort -u | wc -l | tr -d ' ') samples, $(head -n 1 \"$file\" | cut -f1)\"",
+    "  printf '%-10s %8s %8s %8s %8s %10s\\n' service samples p95_MiB peak_MiB limit suggested",
+    "  for id in $(containers); do", "    docker inspect -f '{{.Name}} restarts={{.RestartCount}}' \"$id\"", "  done",
+    "  # OOM kills from the kernel log: Docker's State.OOMKilled forgets a kill once the container restarts.",
+    "  if ! command -v journalctl >/dev/null 2>&1; then", "    return 0", "  fi", "}", "case \"${1:-}\" in", "esac",
+    ""))
+(se75 / "mem.sh").write_text(MEM)
+(se75 / "mem-push.sh").write_text(MEM + "git push origin HEAD:main\n")
+(se75 / "mem-sign.sh").write_text(MEM.replace("Docker's", "Docker's gh pr merge 1"))
+(se75 / "tail.sh").write_text("echo x # don't\ngh pr merge 1\necho 'it's'\n")  # bash выполнит строку 2 до ошибки
+(se75 / "tail2.sh").write_text("G=gh\necho x # don't\n$G pr merge 1\necho 'it'\n")
+bash("SE-75: `'` в комментариях скрипта — не запись в main", "bash mem.sh", False, cwd=se75)
+bash("SE-75: тот же скрипт с настоящей записью в main", "bash mem-push.sh", True, cwd=se75)
+bash("SE-75: признак в комментарии с `'` — лишний отказ, как c1.sh", "bash mem-sign.sh", True, cwd=se75)
+bash("SE-75: кавычка не закрылась после комментария с `'`", "bash tail.sh", True, cwd=se75)
+bash("SE-75: комментарий с `'` не прячет $G", "bash tail2.sh", True, cwd=se75)
+for form in (": # it's\n$G pr merge 1\n: # it's", "echo \"$(echo \"a\")\" # it's\n$G pr merge 1",
+             "echo $(( 16#ff )) # it's\n$G pr merge 1", "f() { echo; } # it's\n$G pr merge 1",
+             "echo ${#x} $# # it's\n$G pr merge 1", "echo \"it's\" # it's\n$G pr merge 1",
+             "cat <<< 'x' # it's\n$G pr merge 1", "echo \"a # it's\"\n$G pr merge 1"):
+    bash(f"SE-75: `'` в комментарии или рядом не прячет код: {form!r}", "G=gh\n" + form, True)
+SURE = ("a # it's\nb", "echo \"$(x \"$f\")\" # it's", "f() { :; } # it's", "a=(1) # it's", "echo ${x#*/} # it's",
+        "echo $'\\'' # it's", "echo 'it''s' # it's", "echo $# ${#x} $((16#f)) # it's", "cat <<< 'x' # it's")
+LOST = ("echo `a` # it's", "cat <<E\nE\n# it's", "echo $[1] # it's", "x=$(case a in a) :;; esac) # it's",
+        "(( 1 # it's\n))", "echo ${x:-'a'} # it's", "( : # it's\n)", "ls (#i)x # it's", "ls !(a) # it's",
+        "x=$(: # it's\n)", "(a)# it's", "alias q=\"'\"\n# it's", "echo 'a # it's", "echo \"$(echo \"#\") # it's\"")
+for text in SURE:  # комментарий — последний ` # ` строки
+    got = sure_comments(text)
+    check(f"SE-75 sure_comments — верхний уровень: {text!r}", None if got == {text.rindex(" # ") + 1} else got, False)
+for text in LOST:
+    check(f"SE-75 sure_comments — уверенности нет: {text!r}", sure_comments(text) or None, False)
 
 if __name__ == "__main__":
     finish(" — формы shell")
