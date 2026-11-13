@@ -17,10 +17,15 @@ import {
   type TaskRequest,
 } from "./classify-task-request";
 import { isClosingStatus } from "./closing-status";
-import { changesText, decideTaskWrite } from "./decide-task-write";
+import {
+  changesText,
+  decideTaskWrite,
+  type WriteFacts,
+} from "./decide-task-write";
 import { answeredApproval } from "./answered-approval";
 import { isPlainJson } from "./json-media-type";
 import { loadGuardedTask, projectWorkspace } from "./load-task";
+import { type MoveFacts, moveFacts, moveRoute } from "./move-facts";
 
 type Denial = {
   workspaceId: string | null;
@@ -100,6 +105,69 @@ async function guardCreate(
   });
 }
 
+type GuardedTask = NonNullable<Awaited<ReturnType<typeof loadGuardedTask>>>;
+
+// What an edit does to the card's closed state. A move to another project
+// compares the two projects by the column the card lands in (TB-80).
+async function writeFacts(
+  request: Extract<TaskRequest, { kind: "edit" }>,
+  task: GuardedTask,
+): Promise<{
+  moved: MoveFacts | null;
+  statusChanged: boolean;
+  facts: WriteFacts;
+}> {
+  const { changes } = request;
+  const destination =
+    request.action === "task.move" && changes.projectId !== task.projectId
+      ? changes.projectId
+      : undefined;
+  // null for a move move-task refuses itself: nothing to judge (moveFacts).
+  const moved = destination
+    ? await moveFacts(task, destination, changes.status)
+    : null;
+  const statusChanged =
+    changes.status !== undefined && changes.status !== task.status;
+  const closes = destination
+    ? (moved?.closes ?? false)
+    : statusChanged && changes.status
+      ? await isClosingStatus(
+          changes.projectId ?? task.projectId,
+          changes.status,
+        )
+      : false;
+  const reopens = destination
+    ? (moved?.reopens ?? false)
+    : statusChanged && !closes
+      ? await isClosingStatus(task.projectId, task.status)
+      : false;
+  const authoredByAgent = changesText(changes, task)
+    ? await isAgentAuthored(task.id)
+    : false;
+  return {
+    moved,
+    statusChanged,
+    facts: { closes, reopens, authoredByAgent, landing: moved?.landing },
+  };
+}
+
+// Where to ask for the owner's «да». A move never spends one: the «да» sets
+// a status in the card's current project and moves nothing (TB-80), so a
+// move gets the way round instead (moveRoute).
+function approvalRequired(
+  approval: { action: string; value: string },
+  task: { id: string; workspaceId: string },
+  moved: MoveFacts | null,
+) {
+  const url = `/api/forest/${task.workspaceId}/approvals`;
+  return new ForestError(
+    "approval_required",
+    moved
+      ? `${moveRoute(moved, url)}. The owner's «да» sets a status in the card's current project and moves nothing, so a move never spends one`
+      : `ask the owner: POST ${url} {action: "${approval.action}", targetId: "${task.id}", value: "${approval.value}"}; the server applies the owner's «да» itself`,
+  );
+}
+
 async function guardEdit(
   c: Context,
   next: Next,
@@ -118,25 +186,8 @@ async function guardEdit(
     targetId: task.id,
   };
   const { changes } = request;
-  const statusChanged =
-    changes.status !== undefined && changes.status !== task.status;
-  const closes =
-    statusChanged && changes.status
-      ? await isClosingStatus(
-          changes.projectId ?? task.projectId,
-          changes.status,
-        )
-      : false;
-  const decision = decideTaskWrite(changes, task, {
-    closes,
-    reopens:
-      statusChanged && !closes
-        ? await isClosingStatus(task.projectId, task.status)
-        : false,
-    authoredByAgent: changesText(changes, task)
-      ? await isAgentAuthored(task.id)
-      : false,
-  });
+  const { moved, statusChanged, facts } = await writeFacts(request, task);
+  const decision = decideTaskWrite(changes, task, facts);
   if (decision.kind === "deny") {
     await deny(at, new ForestError("agent_forbidden", decision.reason));
     return;
@@ -173,14 +224,8 @@ async function guardEdit(
     if (c.res.ok) await attribute();
     return;
   }
-  if (!headers.approvalId) {
-    await deny(
-      at,
-      new ForestError(
-        "approval_required",
-        `ask the owner: POST /api/forest/${task.workspaceId}/approvals {action: "${approval.action}", targetId: "${task.id}", value: "${approval.value}"}; the server applies the owner's «да» itself`,
-      ),
-    );
+  if (moved || !headers.approvalId) {
+    await deny(at, approvalRequired(approval, task, moved));
     return;
   }
   const answered = await answeredApproval({
