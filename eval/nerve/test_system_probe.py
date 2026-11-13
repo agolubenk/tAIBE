@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Проба системы Нервом (OPS-44): хаб MCP и Serena — два прохода без ответа будят release и coord командой из папки
-tAIBE, ожил — сводка release; LaunchAgent хаба не загружен — сводка release раз в сутки. Без сети и launchctl.
+tAIBE, ожил — сводка им же; LaunchAgent хаба не загружен — сводка release раз в сутки с командой autostart.
+Без сети и launchctl.
 python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"""
 import copy
 import os
@@ -76,7 +77,7 @@ class SystemProbeTest(unittest.TestCase):
         self.assertIn("в папке tAIBE: npm run mcp-hub:status", r["text"])
         self.assertTrue(r["key"].startswith("sys:hub:down:"), "ключ хаба прежний — дедуп не сбрасывается")
         up = self.passes(FakeHost({HUB: "200", SERENA: "400"}))
-        self.assertEqual([(x["kind"], x["class"], x["to"]) for x in up], [("sys.hub", DIGEST, ["release"])])
+        self.assertEqual([(x["kind"], x["class"], x["to"]) for x in up], [("sys.hub", DIGEST, ["coord", "release"])])
         self.assertIn("снова отвечает", up[0]["text"])
 
     def test_serena_closed_port_alarms_but_4xx_is_up(self):
@@ -93,6 +94,7 @@ class SystemProbeTest(unittest.TestCase):
         self.assertEqual(len(recs), 1)
         self.assertEqual((recs[0]["class"], recs[0]["to"]), (DIGEST, ["release"]))
         self.assertIn(AGENT, recs[0]["text"])
+        self.assertIn("npm run mcp-hub:autostart", recs[0]["text"])
 
     def test_hung_launchctl_is_not_checked_not_missing(self):
         host = FakeHost({SERENA: "400"}, loaded=())

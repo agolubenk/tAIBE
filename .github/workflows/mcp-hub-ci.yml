@@ -13,6 +13,7 @@ on:
       - "infra/scripts/dev-ai/tests/mcp-hub-*"
       - "infra/scripts/dev-ai/tests/fixtures/**"
       - ".github/workflows/mcp-hub-ci.yml"
+      - "!**/*.md"            # README хаба — без macOS-раннера (минуты ×10)
   pull_request:
     paths:
       - "infra/mcp-hub/**"
@@ -21,6 +22,7 @@ on:
       - "infra/scripts/dev-ai/tests/mcp-hub-*"
       - "infra/scripts/dev-ai/tests/fixtures/**"
       - ".github/workflows/mcp-hub-ci.yml"
+      - "!**/*.md"            # README хаба — без macOS-раннера (минуты ×10)
   workflow_dispatch:
 
 concurrency:

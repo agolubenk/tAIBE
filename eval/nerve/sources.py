@@ -451,11 +451,12 @@ def poll_system(ctx):
     day = ctx.now.astimezone(ctx.tz).strftime("%Y%m%d")
     for label in _launch_agents_missing(s.get("launch_agents") or []):
         ctx.emit(f"sys:agent:{label}:{day}", "sys.hub", DIGEST, ["release"],
-                 f"LaunchAgent {label} не загружен — хаб не поднимется сам после входа в систему; {HUB_HINT}",
+                 f"LaunchAgent {label} не загружен — хаб не поднимется сам после входа в систему; {AGENT_HINT}",
                  "system")
 
 
 HUB_HINT = "в папке tAIBE: npm run mcp-hub:status"
+AGENT_HINT = "в папке tAIBE: npm run mcp-hub:autostart"
 
 
 def _http_code(url):
@@ -465,10 +466,10 @@ def _http_code(url):
 
 
 def _probe_watch(ctx, st, key, title, ok):
-    """Два прохода подряд без ответа — нервное событие release и coord; ожил — сводка release."""
+    """Два прохода подряд без ответа — нервное событие release и coord; ожил — сводка им же: coord будили тревогой."""
     if ok:
         if st.get("down_since"):
-            ctx.emit(f"sys:{key}:up:{st['down_since']}", "sys.hub", DIGEST, ["release"],
+            ctx.emit(f"sys:{key}:up:{st['down_since']}", "sys.hub", DIGEST, ["release", "coord"],
                      f"{title} снова отвечает (лежал с {st['down_since'][11:16]})", "system")
         st.update(fails=0, down_since="")
         return

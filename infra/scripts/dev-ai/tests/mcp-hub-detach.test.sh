@@ -97,6 +97,9 @@ listener() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -un | sed -n
 count() { pgrep -f -- "$1" 2>/dev/null | wc -l | tr -d ' ' || true; }
 group_alive() { ps -axo pgid=,stat= | awk -v g="$1" '$1 == g && $2 !~ /^Z/ { n++ } END { exit !n }'; }
 
+# Ожидания — с запасом на раннер macos-latest (OPS-44: 13.11 там 10 с не хватило ни сироте, ни «чужому» процессу).
+PORT_WAIT="${MCP_HUB_TEST_PORT_WAIT:-30}"   # процесс открыл порт или дошёл до попытки его занять
+PROC_WAIT="${MCP_HUB_TEST_PROC_WAIT:-15}"   # процесс вышел, внук стартовал, замок взят
 wait_until() { # <секунд> <команда…>: ждать, пока команда не станет истинной
   local n=$(($1 * 4))
   shift
@@ -145,7 +148,7 @@ lsp_running() { [ -n "$(first_pid "$LSP_PATTERN")" ]; }
 assert_clean() { # после stop: ни одного процесса теста, порты свободны, pid-файлов и замка нет
   local what="$1" p
   for p in "$HUB_PATTERN" "$WRAPPER_PATTERN" "$CHILD_PATTERN" "$PINNED_PATTERN" "$LSP_PATTERN" "$GORPHAN_PATTERN"; do
-    wait_until 5 none_running "$p" || fail "$what: остался процесс «${p}»"
+    wait_until "$PROC_WAIT" none_running "$p" || fail "$what: остался процесс «${p}»"
   done
   port_busy "$HUB_PORT" && fail "$what: :$HUB_PORT всё ещё слушается"
   port_busy "$SERENA_PORT" && fail "$what: :$SERENA_PORT всё ещё слушается"
@@ -246,7 +249,7 @@ script -q /dev/null bash -c 'source "$1"; spawn_detached "$2/a-new.log" node -e 
   _ "$HUB_SH" "$TMP" "$JS" </dev/null >/dev/null 2>&1
 OLD="$(cat "$TMP/a-old.pid")"
 NEW="$(cat "$TMP/a-new.pid")"
-wait_until 5 dead "$OLD" || fail "старый способ (nohup &): node pid $OLD пережил выход shell — проверка не воспроизводит поломку"
+wait_until "$PROC_WAIT" dead "$OLD" || fail "старый способ (nohup &): node pid $OLD пережил выход shell — проверка не воспроизводит поломку"
 grep -q SIGHUP "$TMP/a-old.log" || fail "старый способ: node умер не от SIGHUP: $(cat "$TMP/a-old.log")"
 ok "nohup &: node получил SIGHUP и умер вместе с shell (так умирал хаб)"
 sleep 1
@@ -385,23 +388,22 @@ orphan_fail() { # <pid> <сообщение>: процессы теста (жи�
 }
 spawn_orphan "$TMP/logs/c-serena.log" "$TMP/bin/uvx" "${SERENA_ARGS[@]}"
 C_SER="$ORPHAN"
-# 30 с, а не 10: на раннере macos-latest (13.11, run 43447213615) сирота за 12 с не дошла даже до bind.
-wait_until 30 port_busy "$SERENA_PORT" || orphan_fail "$C_SER" "сирота serena не открыла порт"
+wait_until "$PORT_WAIT" port_busy "$SERENA_PORT" || orphan_fail "$C_SER" "сирота serena не открыла порт"
 spawn_orphan "$TMP/logs/c-extra.log" "$TMP/bin/uvx" "${SERENA_ARGS[@]}"
 C_EXTRA="$ORPHAN"
-wait_until 30 grep -q "не открыть" "$TMP/logs/c-extra.log" ||
+wait_until "$PORT_WAIT" grep -q "не открыть" "$TMP/logs/c-extra.log" ||
   orphan_fail "$C_EXTRA" "лишняя копия serena не дошла до попытки занять порт"
 spawn_orphan "$TMP/logs/c-hub.log" "$TMP/runtime/node_modules/.bin/1mcp" serve --config "$TMP/config/mcp.json" \
   --transport http --host 127.0.0.1 --port "$HUB_PORT" --enable-async-loading --async-background-retry \
   --health-info-level basic --log-level info
 C_HUB="$ORPHAN"
-wait_until 30 port_busy "$HUB_PORT" || fail "сирота-хаб не открыл порт"
+wait_until "$PORT_WAIT" port_busy "$HUB_PORT" || fail "сирота-хаб не открыл порт"
 run_hub c-start start
 [ "$RC" = 0 ] || fail "start при сиротах: код $RC"
 [ "$(cat "$SER_PIDF")" = "$C_SER" ] || fail "pid-файл serena: $(cat "$SER_PIDF"), а держит порт $C_SER"
 [ "$(cat "$HUB_PIDF")" = "$C_HUB" ] || fail "pid-файл хаба: $(cat "$HUB_PIDF"), а держит порт $C_HUB"
 grep -q "беру под управление" "$TMP/c-start.out" || fail "start не сказал, что усыновил сироту"
-wait_until 5 dead "$C_EXTRA" || fail "лишняя копия serena pid $C_EXTRA жива"
+wait_until "$PROC_WAIT" dead "$C_EXTRA" || fail "лишняя копия serena pid $C_EXTRA жива"
 for port in "$SERENA_PORT" "$TAIBE_PORT"; do
   [ "$(count_on "$WRAPPER_PATTERN" "$port")" = 1 ] || fail "обёрток serena :$port — $(count_on "$WRAPPER_PATTERN" "$port"), нужна 1"
   [ "$(count_on "$CHILD_PATTERN" "$port")" = 1 ] || fail "python serena :$port — $(count_on "$CHILD_PATTERN" "$port"), нужен 1"
@@ -416,7 +418,7 @@ assert_clean "stop усыновлённых"
 step "г) чужой процесс на :serena — понятная ошибка, хаб всё равно стартует, чужой цел"
 spawn_bg "$TMP/logs/d-foreign.log" python3 -m http.server "$SERENA_PORT" --bind 127.0.0.1 --directory "$TMP"
 FOREIGN="$BG_PID"
-wait_until 10 port_busy "$SERENA_PORT" || fail "чужой процесс не открыл порт"
+wait_until "$PORT_WAIT" port_busy "$SERENA_PORT" || fail "чужой процесс не открыл порт"
 run_hub d-start start
 [ "$RC" = 1 ] || fail "start при чужом порте: код $RC, нужен 1"
 grep -q "занят чужим процессом — pid $FOREIGN" "$TMP/d-start.out" || fail "нет понятной ошибки про чужой процесс"
@@ -429,7 +431,7 @@ run_hub d-stop stop
 alive "$FOREIGN" || fail "stop убил чужой процесс"
 grep -q "держит не процесс этого сервиса (pid $FOREIGN)" "$TMP/d-stop.out" || fail "stop не сказал, что порт держит чужой"
 kill -KILL "$FOREIGN" 2>/dev/null || true
-wait_until 5 dead "$FOREIGN" || fail "не удалось убрать чужой процесс теста"
+wait_until "$PROC_WAIT" dead "$FOREIGN" || fail "не удалось убрать чужой процесс теста"
 assert_clean "stop при чужом процессе (чужой не тронут)"
 
 # ── д) запуск по-старому ────────────────────────────────────────────────────────────────────
@@ -439,11 +441,11 @@ SENTINEL="$BG_PID"
 spawn_bg "$TMP/logs/e-legacy.log" "$TMP/bin/uvx" "${SERENA_ARGS[@]}"
 LEG="$BG_PID"
 echo "$LEG" >"$SER_PIDF"
-wait_until 10 port_busy "$SERENA_PORT" || fail "serena по-старому не открыла порт"
+wait_until "$PORT_WAIT" port_busy "$SERENA_PORT" || fail "serena по-старому не открыла порт"
 [ "$(pgid_of "$LEG")" != "$LEG" ] || fail "предусловие: serena по-старому оказалась лидером группы"
 [ "$(pgid_of "$LEG")" = "$(pgid_of "$SENTINEL")" ] || fail "предусловие: сосед не в той же группе"
 LEG_CHILD="$(listener "$SERENA_PORT")"
-wait_until 5 lsp_running || fail "«LSP»-внук не стартовал"
+wait_until "$PROC_WAIT" lsp_running || fail "«LSP»-внук не стартовал"
 LEG_LSP="$(first_pid "$LSP_PATTERN")"
 run_hub e-stop stop
 [ "$RC" = 0 ] || fail "stop: код $RC"
@@ -482,7 +484,7 @@ MCP_HUB_SETTLE_WAIT=8 FAKE_SERENA_CLOSE_AFTER=4 FAKE_SERENA_NO_LSP=1 run_hub g-s
 [ "$RC" = 1 ] || fail "start с serena, отпустившей порт: код $RC, нужен 1"
 grep -q "перестал слушать :$SERENA_PORT" "$TMP/g-start2.out" || fail "нет сообщения «перестал слушать»"
 grep -q "fake serena: порт закрыт" "$TMP/g-start2.out" || fail "нет хвоста лога serena"
-wait_until 5 none_running "$CHILD_PATTERN" || fail "serena, отпустившая порт, оставлена жить без управления"
+wait_until "$PROC_WAIT" none_running "$CHILD_PATTERN" || fail "serena, отпустившая порт, оставлена жить без управления"
 [ ! -f "$SER_PIDF" ] && [ ! -f "$TAI_PIDF" ] || fail "pid-файл serena остался"
 ok "код 1, «перестал слушать» и хвост лога; процесс остановлен, pid-файла нет"
 run_hub g-stop stop
@@ -494,7 +496,7 @@ LOCK="$TMP/config/lifecycle.lock"
 LC_ALL=ru_RU.UTF-8 LANG=ru_RU.UTF-8 TZ=Europe/Moscow bash -c 'source "$1"; lock_acquire "$2"; sleep 4; lock_release' \
   _ "$LIB" "$LOCK" >"$TMP/h-owner.out" 2>&1 &
 H_OWNER=$!
-wait_until 5 test -s "$LOCK/owner" || fail "владелец под ru_RU не взял замок"
+wait_until "$PROC_WAIT" test -s "$LOCK/owner" || fail "владелец под ru_RU не взял замок"
 LC_ALL=C grep -q '[^ -~]' "$LOCK/owner" && fail "время старта владельца записано не в C: $(cat "$LOCK/owner")"
 LC_ALL=C LANG=C.UTF-8 TZ=Asia/Tokyo run_hub h-stop stop
 wait "$H_OWNER" || fail "владелец замка завершился с ошибкой: $(cat "$TMP/h-owner.out")"
@@ -515,7 +517,7 @@ serena_args "$GONE"
 spawn_orphan "$TMP/logs/i-serena.log" "$TMP/bin/uvx" "${SARGS[@]}"
 I_SER="$ORPHAN"
 echo "$I_SER" >"$SER_PIDF"
-wait_until 10 port_busy "$SERENA_PORT" || fail "serena удалённого worktree не открыла порт"
+wait_until "$PORT_WAIT" port_busy "$SERENA_PORT" || fail "serena удалённого worktree не открыла порт"
 run_hub i-start start
 [ "$RC" = 1 ] || fail "start при serena чужой копии: код $RC, нужен 1"
 grep -q "индексирует $GONE, а не $HR_DIR (этого каталога уже нет)" "$TMP/i-start.out" || fail "start не назвал причину"
@@ -557,7 +559,7 @@ step "л) SERENA_BIN: serena хоста старой строкой uvx — ус
 chmod +x "$TMP/pinned/serena"
 spawn_orphan "$TMP/logs/l-old.log" "$TMP/bin/uvx" "${SERENA_ARGS[@]}"
 L_OLD="$ORPHAN"
-wait_until 10 port_busy "$SERENA_PORT" || fail "serena хоста (старая строка uvx) не открыла порт"
+wait_until "$PORT_WAIT" port_busy "$SERENA_PORT" || fail "serena хоста (старая строка uvx) не открыла порт"
 L_OLD_CHILD="$(listener "$SERENA_PORT")"
 printf 'project_name: "mine"\nread_only: true\n' >"$TAIBE_DIR/.serena/project.yml"
 printf '# свой контекст\n' >>"$TMP/serena-home/contexts/claude-code.yml"
@@ -599,7 +601,7 @@ serena_args "$M_HOST"
 spawn_orphan "$TMP/logs/m-serena.log" "$TMP/bin/uvx" "${SARGS[@]}"
 M_SER="$ORPHAN"
 echo "$M_SER" >"$M_CFG/serena-$SERENA_PORT.pid"
-wait_until 10 port_busy "$SERENA_PORT" || fail "serena хоста не открыла порт"
+wait_until "$PORT_WAIT" port_busy "$SERENA_PORT" || fail "serena хоста не открыла порт"
 TAIBE_HOST_ROOT="" MCP_HUB_CONFIG_DIR="$M_CFG" run_hub m-status status
 grep -q "→ хост продукта (serena :$SERENA_PORT): $M_HOST — живой конфиг хаба $M_CFG/mcp.json; TAIBE_HOST_ROOT не задан" \
   "$TMP/m-status.out" || fail "status не взял хост из живого конфига"
@@ -632,7 +634,7 @@ grep -q "индексирует $M_HOST, а не $ROOT" "$TMP/m-status2.out" || 
 ok "без TAIBE_HOST_ROOT: хост $M_HOST из живого конфига (serena хоста своя); без живого конфига — обслуживаемая копия, с причиной"
 TAIBE_HOST_ROOT="$M_HOST" MCP_HUB_CONFIG_DIR="$M_CFG" run_hub m-stop stop
 [ "$RC" = 0 ] || fail "stop: код $RC"
-wait_until 5 dead "$M_SER" || fail "stop не остановил serena хоста $M_SER"
+wait_until "$PROC_WAIT" dead "$M_SER" || fail "stop не остановил serena хоста $M_SER"
 assert_clean "stop serena хоста"
 
 # ── н) предохранители запуска ───────────────────────────────────────────────────────────────
@@ -689,7 +691,7 @@ O_TAI="$(cat "$TAI_PIDF")"
 [ "$(cat "$SER_PIDF")" = "$O_SER" ] && [ "$(cat "$HUB_PIDF")" = "$O_HUB" ] || fail "serena-taibe on перезапустил serena или хаб"
 run_hub o-restart restart
 [ "$RC" = 0 ] || fail "restart с меткой: код $RC"
-wait_until 5 dead "$O_TAI" || fail "restart не остановил прежнюю serena-taibe $O_TAI"
+wait_until "$PROC_WAIT" dead "$O_TAI" || fail "restart не остановил прежнюю serena-taibe $O_TAI"
 O_TAI2="$(cat "$TAI_PIDF" 2>/dev/null || true)"
 [ -n "$O_TAI2" ] && alive "$O_TAI2" && [ -n "$(listener "$TAIBE_PORT")" ] || fail "serena-taibe не вернулась после restart"
 run_hub o-check2 check
@@ -700,7 +702,7 @@ O_SER="$(cat "$SER_PIDF")"
 run_hub o-off serena-taibe off
 [ "$RC" = 0 ] || fail "serena-taibe off: код $RC"
 [ ! -f "$TAI_MARK" ] || fail "serena-taibe off: метка осталась"
-wait_until 5 dead "$O_TAI2" || fail "serena-taibe off: процесс $O_TAI2 жив"
+wait_until "$PROC_WAIT" dead "$O_TAI2" || fail "serena-taibe off: процесс $O_TAI2 жив"
 port_busy "$TAIBE_PORT" && fail "serena-taibe off: :$TAIBE_PORT слушается"
 alive "$O_SER" || fail "serena-taibe off остановил serena хоста"
 run_hub o-restart2 restart
