@@ -17,6 +17,16 @@ const READ = [
   "notebook_search",
 ] as const;
 
+// Owner decision 13.11: research, ideation and spec work go through the
+// notebook (thread in «Вопросы», brief for a spec, pages used in «Источники»).
+// Asks and briefs spend the shared daily model cap and every tool writes, so
+// the read-only reader role does not get them.
+const NOTEBOOK = [
+  "notebook_ask",
+  "notebook_brief",
+  "notebook_add_source",
+] as const;
+
 // A working session takes leases and keeps its state on the board (R-037).
 const LEASE = [
   "forest_acquire_lease",
@@ -29,6 +39,7 @@ export const ROLE_TOOLS = {
   reader: [...READ],
   developer: [
     ...READ,
+    ...NOTEBOOK,
     ...LEASE,
     "update_task",
     "update_task_status",
@@ -40,6 +51,7 @@ export const ROLE_TOOLS = {
   ],
   reviewer: [
     ...READ,
+    ...NOTEBOOK,
     ...LEASE,
     "update_task_status",
     "create_task_comment",
@@ -49,6 +61,7 @@ export const ROLE_TOOLS = {
   ],
   planner: [
     ...READ,
+    ...NOTEBOOK,
     ...LEASE,
     "create_task",
     "update_task",
