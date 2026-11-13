@@ -130,8 +130,38 @@ def _lock_and_mismatch(check, gr, tmp: Path) -> None:
           and gr.resume_mismatch({"_meta": {"pr": "7"}}, "7", "abc") and not gr.resume_mismatch(prior, "7", "abc"))
 
 
+def _host(check, tmp: Path) -> None:
+    """OPS-56: без TAIBE_HOST_ROOT review_chain.sh берёт хост из instances/, а не ищет базу в папке слоя."""
+    import os
+    import shutil
+    root = tmp / "chain-host"
+    (root / "infra/ai-council").mkdir(parents=True)
+    (root / "eval/nerve").mkdir(parents=True)
+    shutil.copy(Path(__file__).with_name("review_chain.sh"), root / "infra/ai-council")
+    (root / "infra/ai-council/glm_pr_review.py").write_text(
+        "import os\nprint('host=' + os.environ.get('TAIBE_HOST_ROOT', '-'))\n")
+    products = root / "eval/nerve/products.py"
+
+    def chain(host=None, products_rc=0):
+        products.write_text(f"import sys\nprint('/instances/host')\nsys.exit({products_rc})\n")
+        env = {k: v for k, v in os.environ.items() if k != "TAIBE_HOST_ROOT"}
+        env["REVIEW_CHAIN_FORCE"] = "glm"
+        if host is not None:
+            env["TAIBE_HOST_ROOT"] = host
+        p = subprocess.run(["bash", str(root / "infra/ai-council/review_chain.sh"), "1", str(tmp / "rc.json")],
+                           capture_output=True, text=True, env=env, cwd="/", timeout=30)
+        return p.returncode, p.stdout.strip()
+
+    got = [chain(), chain(host=""), chain(host="/env/host"), chain(products_rc=1)]
+    check("review_chain: без TAIBE_HOST_ROOT (и с пустой) — хост из instances/, заданный — как есть; "
+          "instances/ сломан — код 1 до вызова GLM",
+          got == [(0, "host=/instances/host"), (0, "host=/instances/host"), (0, "host=/env/host"), (1, "")],
+          str(got))
+
+
 def run(tmp: Path, check) -> None:
     import glm_pr_review as gr
     _opencode(check, gr, tmp)
     _resume(check, gr)
     _lock_and_mismatch(check, gr, tmp)
+    _host(check, tmp)

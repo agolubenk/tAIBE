@@ -70,7 +70,8 @@ Python-сервис вне npm workspaces: `supervisor.py` (оркестраци
 
 `npm run ai-council:doctor` · `:status` · `:selftest` · `:cards` (t-boards: `-- --q OPS-26`) · `:run -- --card OPS-26` · `:plan` / `:plan-apply` ·
 `:review` · `:gateway` + `:ui` · `:learning-stats` · `:cloud-ping`. Ревью PR — цепочка opencode → GLM → Claude
-`infra/ai-council/review_chain.sh <PR> <out.json>` из основного checkout; одно звено — `glm_pr_review.py <PR> <out.json>
+`infra/ai-council/review_chain.sh <PR> <out.json>` из любой папки (хост с базой консилиума — `TAIBE_HOST_ROOT`, без неё
+repo_root продукта по умолчанию из `instances/`); одно звено — `glm_pr_review.py <PR> <out.json>
 [--backend opencode] [--resume <прошлый out.json>]` (`--dry-run` — план вызовов; спека §17.7).
 
 ## Гейт

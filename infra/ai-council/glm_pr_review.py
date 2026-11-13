@@ -4,8 +4,9 @@
     python3 infra/ai-council/glm_pr_review.py <PR> <out.json> [модель] [линзы.json] [max_tokens] [флаги]
     python3 infra/ai-council/glm_pr_review.py 161 /tmp/r.json --dry-run      # план вызовов без сети
 
-Запускать из основного checkout: отметка квоты подписки и счётчики бюджета живут в его
-`.claude/council/council.db`. В worktree базы нет — скрипт откажется, а не потратит квоту вслепую.
+Отметка квоты подписки и счётчики бюджета живут в `.claude/council/council.db` хоста (`TAIBE_HOST_ROOT`).
+`review_chain.sh` задаёт хост сам — repo_root продукта по умолчанию из `instances/`. Без базы скрипт откажется,
+а не потратит квоту вслепую.
 
 Зачем такой (14–15.10.2026, docs/specs/ai-council.md §17.7): линза «корректность» на диффах от ~500 строк
 падала 502 proxy_error — Z.AI рвёт генерацию через ~300 с, а `_post` повторял её четырежды: до 20 мин на
@@ -471,7 +472,8 @@ def main(argv=None) -> int:
         import glm_mode
         from store import DB_PATH, Store
         if not DB_PATH.exists():
-            print(f"нет {DB_PATH} — квота и бюджет не видны; запускайте из основного checkout", file=sys.stderr)
+            print(f"нет {DB_PATH} — квота и бюджет не видны; запускайте через review_chain.sh "
+                  "или с TAIBE_HOST_ROOT=<repo_root из instances/>", file=sys.stderr)
             return EXIT_START
         cfg = cfg_mod.load(HERE / "config.toml", strict=False)
         with Store() as store:
