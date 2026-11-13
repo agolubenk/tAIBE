@@ -365,7 +365,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
     procs = {f"{PROC}{k}": proc_files(body, cwd) for k, body in enumerate(inner) if f"{PROC}{k}" in cmd}
     procs[SUBS] = inner
-    found = settle(classify_bash(other, cwd, roots, depth, git_env, disk, written, outer, part, True))[0] if other else []
+    found = settle(classify_bash(other, cwd, roots, depth, git_env, disk, written, whole[4], part, True))[0] if other else []
     for sub in inner:
         found += classify_bash(sub, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
     for readers, body, expands in bodies:

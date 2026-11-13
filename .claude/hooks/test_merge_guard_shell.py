@@ -556,6 +556,12 @@ for name, text in (("hw.sh", f'cat <<E\nx\nE\n# say "hi\n{HIDDEN}echo "\n'),
     bash(f"SE-82: {name} — запись, спрятанная `\"` комментария, видна: старый m.sh не читается", f"bash {name}", True,
          cwd=se82)
     bash(f"SE-82: {name} командой", text, True, cwd=se82)
+for run_ in ("bash", "source"):  # второе прочтение видит тела heredoc первого: m.sh пишет heredoc
+    WRITTEN = f"cat > m.sh <<'E'\ngh pr merge 1\nE\n# say \"hi\n{run_} m.sh\n\"\n"
+    (se82 / f"hdw-{run_}.sh").write_text(WRITTEN)
+    bash(f"SE-82: heredoc пишет m.sh, `{run_} m.sh` спрятан `\"` комментария — скрипт", f"bash hdw-{run_}.sh", True,
+         cwd=se82)
+    bash(f"SE-82: heredoc пишет m.sh, `{run_} m.sh` спрятан `\"` комментария — команда", WRITTEN, True, cwd=se82)
 check("SE-82 command_writes: имя из второго прочтения и из слов до ошибки",
       None if "w.sh" in command_writes('cat <<E\nx\nE\n# say "hi\necho x > w.sh\necho "') else "нет", False)
 NONE = lambda text: False  # noqa: E731 — признака нет: снимается всё, в чём sure_comments уверен
