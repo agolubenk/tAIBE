@@ -38,8 +38,8 @@ from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load
 from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
                                cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
                                launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
-                               split_commands, strip_comments, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
-                               uncommented)
+                               split_commands, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
+                               comment_readings, uncommented)
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -345,11 +345,11 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     return found
 
 
-def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False):
-    """[(вид, подробность)] защищённых действий команды. git_env — конфиг git где-то задан окружением, disk — текст
-    из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется), part —
-    тело `$(…)` или кода маски: что для bash его начало — верхний уровень, не гарантировано, и комментарий с опасными
-    знаками в нём остаётся (strip_comments, keep). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL."""
+def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, alt=False):
+    """[(вид, подробность)] защищённых действий команды. git_env — конфиг git задан окружением, disk — текст скрипта
+    с диска, written — имена файлов, которые уже пишет эта команда (дополняется), part — тело `$(…)` или кода маски:
+    его начало для bash — не обязательно верхний уровень (strip_comments, keep), alt — разбирается второе прочтение
+    комментариев (comment_readings, SE-82). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL."""
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
@@ -357,15 +357,15 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         return [("вложенная команда с признаком защищённого действия", cmd[:120])] if hit else []
     if fresh:  # все записи команды — до разбора `$(…)` и heredoc (они разбираются раньше); вложенным — уже от родителя
         written.update(command_writes(cmd))
-    cmd, bodies = cut_heredocs(cmd)  # до снятия комментариев: в теле `'` — не кавычка, `#` — не комментарий
+    cmd, bodies = (cmd, []) if alt else cut_heredocs(cmd)  # до снятия комментариев; alt — уже снят (comment_readings)
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd = strip_comments(cmd, True, None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
+    cmd, other = comment_readings(cmd, None if part else FALLBACK.search, alt)  # второе прочтение — SE-82
     whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
     procs = {f"{PROC}{k}": proc_files(body, cwd) for k, body in enumerate(inner) if f"{PROC}{k}" in cmd}
     procs[SUBS] = inner
-    found = []
+    found = settle(classify_bash(other, cwd, roots, depth, git_env, disk, written, outer, part, True))[0] if other else []
     for sub in inner:
         found += classify_bash(sub, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
     for readers, body, expands in bodies:

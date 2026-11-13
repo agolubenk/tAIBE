@@ -11,8 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
-from merge_guard_comments import sure_comments  # noqa: E402
+from merge_guard_comments import comment_readings, sure_comments  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
+from merge_guard_files import command_writes  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import D9, ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
 
@@ -529,6 +530,41 @@ for form in ('G=gh\n$G pr merge 1\necho "', "bash -c 'G=gh\n$G pr merge 1\necho 
 bash("SE-76: Контролю мёрж из скрипта с ошибкой в конце можно", "bash quote.sh", False, who=D9, cwd=se76)
 (se76 / "dq-ok.sh").write_text('# say "hi\necho ok\n')
 bash("SE-76: `\"` в комментарии безобидного скрипта — проход", "bash dq-ok.sh", False, cwd=se76)
+
+# --- SE-82: после heredoc, обратных кавычек, `$[…]` sure_comments не уверен — `"` комментария прятала код ---
+se82 = repo_on("main", "se82")
+LOSS = {"hd": "cat <<E\nx\nE\n", "tick": "echo `true`\n", "arith": "echo $[1]\n"}
+for key, head in LOSS.items():
+    for name, text in ((f"{key}.sh", '# say "hi\ngh pr merge 1\necho "\n'),
+                       (f"{key}-var.sh", '# say "hi\nG=gh\n$G pr merge 1\necho "\n'),
+                       (f"{key}-odd.sh", "# say \"hi\nG=gh\n$G pr merge 1\necho \"x\"\necho '\n")):
+        (se82 / name).write_text(head + text)
+        bash(f"SE-82: {name} — `\"` комментария не прячет код", f"bash {name}", True, cwd=se82)
+    (se82 / f"{key}-ok.sh").write_text(head + '# say "hi\necho ok\necho "x"\n')
+    bash(f"SE-82: {key}-ok.sh — безобидный скрипт с `\"` в комментарии — проход", f"bash {key}-ok.sh", False, cwd=se82)
+bash("SE-82: та же форма командой", 'cat <<E\nx\nE\n# say "hi\nG=gh\n$G pr merge 1\necho "', True)
+bash("SE-82: Контролю мёрж из такого скрипта можно", "bash hd-var.sh", False, who=D9, cwd=se82)
+REDO = 'cat <<E\nx\nE\n# say "hi\nG=gh\n$G pr merge 1\nE\necho "\n'  # второе прочтение не режет heredoc снова
+(se82 / "redo.sh").write_text(REDO)
+bash("SE-82: строка `E` ниже не делает код телом heredoc — скрипт", "bash redo.sh", True, cwd=se82)
+bash("SE-82: строка `E` ниже не делает код телом heredoc — команда", REDO, True)
+(se82 / "m.sh").write_text("echo hi\n")  # старый безобидный файл: хук прочёл бы его, не зная, что команда его пишет
+HIDDEN = "printf '%s\\n' 'gh pr merge 1' > m.sh\nbash m.sh\n"
+for name, text in (("hw.sh", f'cat <<E\nx\nE\n# say "hi\n{HIDDEN}echo "\n'),
+                   ("hw-redo.sh", f'cat <<E\nx\nE\n# say "hi\n{HIDDEN}E\necho "\n')):
+    (se82 / name).write_text(text)
+    bash(f"SE-82: {name} — запись, спрятанная `\"` комментария, видна: старый m.sh не читается", f"bash {name}", True,
+         cwd=se82)
+    bash(f"SE-82: {name} командой", text, True, cwd=se82)
+check("SE-82 command_writes: имя из второго прочтения и из слов до ошибки",
+      None if "w.sh" in command_writes('cat <<E\nx\nE\n# say "hi\necho x > w.sh\necho "') else "нет", False)
+NONE = lambda text: False  # noqa: E731 — признака нет: снимается всё, в чём sure_comments уверен
+check("SE-82 comment_readings: все комментарии точно — второго прочтения нет",
+      comment_readings('a # say "hi\nb', NONE)[1], False)
+check("SE-82 comment_readings: второе прочтение — без комментария, в котором нет уверенности",
+      None if comment_readings('echo `a`\n# say "hi\nb', NONE)[1] == "echo `a`\n\nb" else "нет", False)
+check("SE-82 comment_readings: в самом втором прочтении третьего нет",
+      comment_readings('echo `a`\n# say "hi\nb', NONE, True)[1], False)
 
 if __name__ == "__main__":
     finish(" — формы shell")
