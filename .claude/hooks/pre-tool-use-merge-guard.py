@@ -36,7 +36,7 @@ from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E4
 from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
-                               cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
+                               comment_char_may_change, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
                                launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
                                split_commands, strip_comments, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
                                uncommented)
@@ -206,7 +206,7 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         is_interp_script = interp if interp is not None else (
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
         try:  # разобран до ошибки — находки этой части и грубый признак по тексту скрипта: в `bash x.sh` его нет
-            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path))
+            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_may_change(whole[4][1])))
         except Exception:
             got, partial = [], True
         found += got
@@ -252,12 +252,11 @@ def named_found(text, cwd):
     return found
 
 
-def script_found(text, interp, cwd, roots, depth, git_env, path=True):
-    """Скрипт с диска (path — его путь: от него `$(dirname "$0")`, см. resolve_dirs): shell — как команды,
-    интерпретатор — построчно с путями в переменных (interp_found)."""
+def script_found(text, interp, cwd, roots, depth, git_env, path=True, keep=False):
+    """Скрипт с диска (path — его путь: от него `$(dirname "$0")`, см. resolve_dirs): shell — как команды (keep — см. classify_bash), интерпретатор — построчно с путями в переменных (interp_found)."""
     if interp:
         return interp_found(text, cwd, roots, by_line=True)
-    return classify_bash(text, cwd, roots, depth + 1, git_env, disk=path)
+    return classify_bash(text, cwd, roots, depth + 1, git_env, disk=path, keep=keep)
 
 
 COARSE = "Makefile или программа awk с признаком защищённого действия"
@@ -345,11 +344,12 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     return found
 
 
-def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False):
-    """[(вид, подробность)] защищённых действий команды. git_env — конфиг git где-то задан окружением, disk — текст
-    из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется), part —
-    тело `$(…)` или кода маски: что для bash его начало — верхний уровень, не гарантировано, и комментарий с опасными
-    знаками в нём остаётся (strip_comments, keep). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL."""
+def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, keep=False, raw=None):
+    """[(вид, подробность)] защищённых действий команды. git_env — конфиг git где-то задан окружением, disk — текст из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется), part —
+    тело `$(…)` или кода маски: что для bash его начало — верхний уровень, не гарантировано, и комментарий с опасными знаками в нём остаётся (strip_comments, keep). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL.
+    Знак комментария мог смениться (keep — до этого текста: `histchars=…; source x`; текст или внешняя команда называют настройку — comment_char_may_change, SE-77) — разбор дважды: со снятыми комментариями и без (raw), находки обоих."""
+    if raw is None and (keep or comment_char_may_change(cmd + "\n" + (outer[1] if outer else ""))):  # только комментарий — спрятал бы код за `'` в нём
+        return [f for r in (False, True) for f in classify_bash(cmd, cwd, roots, depth, git_env, disk, written, outer, part, raw=r)]
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
@@ -359,7 +359,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         written.update(command_writes(cmd))
     cmd, bodies = cut_heredocs(cmd)  # до снятия комментариев: в теле `'` — не кавычка, `#` — не комментарий
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd = strip_comments(cmd, True, None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
+    cmd = (cmd if raw else strip_comments(cmd, True, None if part else FALLBACK.search)).replace("\\\n", " ")  # `\` строку не продолжает
     whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))

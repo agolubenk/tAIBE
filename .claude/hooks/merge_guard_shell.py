@@ -10,7 +10,7 @@ import os
 import re
 import shlex
 
-from merge_guard_comments import sure_comments
+from merge_guard_comments import comment_char_may_change, sure_comments
 from merge_guard_files import open_regular
 from merge_guard_vars import (ASSIGN, SHELL_WORDS, SUBST, dir_vars, expand_vars, note_vars, substitute,  # noqa: F401
                               words)  # dir_vars, expand_vars, note_vars, substitute — отсюда для хука
@@ -451,10 +451,10 @@ def proc_files(body, cwd):
 
 def uncommented(text):
     """Shell-текст для грубого признака: без комментариев (strip_comments, force), тела heredoc — как есть: для
-    `python3 <<EOF` в них `#` — не комментарий shell."""
+    `python3 <<EOF` в них `#` — не комментарий shell. Текст может сменить знак комментария — комментарии остаются (SE-77)."""
     try:
         cmd, bodies = cut_heredocs(text)
-        return "\n".join([strip_comments(cmd, force=True)] + [b for _, b, _ in bodies])
+        return "\n".join([cmd if comment_char_may_change(text) else strip_comments(cmd, force=True)] + [b for _, b, _ in bodies])
     except Exception:
         return text
 
