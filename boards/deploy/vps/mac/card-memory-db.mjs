@@ -99,7 +99,7 @@ function schemaFits(db) {
   return true;
 }
 
-// The candidates are the newest 501 matches by rowid (0.1–0.2 ms at any match count); rowid does not grow strictly
+// The candidates are the newest 501 matches by rowid; rowid does not grow strictly
 // with time, so the 5 shown are sorted by created_at_epoch. Above 500 matches «latest» is approximate.
 const CANDIDATES = `SELECT rowid AS id FROM observations_fts WHERE observations_fts MATCH ? ORDER BY rowid DESC LIMIT ${WINDOW}`;
 
@@ -183,7 +183,9 @@ export function createCardMemoryDb(
     };
   }
 
-  // Synchronous and bounded: 6 keys × ≤ 0.2 ms, so health and the worker routes are not held up.
+  // Synchronous: health and the worker routes wait while it runs. Measured on the live 2.5 GB claude-mem.db
+  // (13.11, node 22.23): one key 2.5–23 ms, 6 keys 17 ms warm and 36 ms cold. At the 10 requests a second limit the
+  // event loop is busy up to 170–360 ms a second; the API's 60 s cache keeps real traffic far below that.
   async function find(keys) {
     if (opening) await opening;
     if (state !== "ok" && now() >= retryAt) await open();

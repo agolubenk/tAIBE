@@ -44,6 +44,7 @@ const doc: QueueDoc = {
   data: {},
   version: 1,
   updatedAt: 1,
+  product: "taibe",
 };
 
 describe("assertQueueItemVisible", () => {
@@ -55,6 +56,34 @@ describe("assertQueueItemVisible", () => {
       ),
     ).toBe(200);
     expect(asked).toEqual(["items/d-tb113-mem-1311"]);
+  });
+
+  // Control lens on 20290bce9: a token that sees both products must not show
+  // a Lavaeon item's memory in a tAIBE workspace, or the other way round.
+  it("answers 404 for an item of another product", async () => {
+    const { client } = clientGetting(async () => ({
+      ...doc,
+      product: "hr-helper",
+    }));
+    expect(
+      await statusOf(
+        assertQueueItemVisible("ws-1", "d-tb113-mem-1311", { config, client }),
+      ),
+    ).toBe(404);
+  });
+
+  it("treats an item without a product as the default product", async () => {
+    const { product: _omitted, ...legacy } = doc;
+    const { client } = clientGetting(async () => legacy);
+    const hr = { ...config, products: new Map([["ws-hr", "hr-helper"]]) };
+    expect(
+      await statusOf(
+        assertQueueItemVisible("ws-hr", "d-1", { config: hr, client }),
+      ),
+    ).toBe(200);
+    expect(
+      await statusOf(assertQueueItemVisible("ws-1", "d-1", { config, client })),
+    ).toBe(404);
   });
 
   it("answers 404 for an item the queue does not have or does not show", async () => {

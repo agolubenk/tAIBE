@@ -22,6 +22,8 @@ import { createForest } from "./helpers/forest";
 // server stands in for the memory proxy (/api/card-memory) and the owner
 // queue (/api/oq/v1/db/items/<id>); nothing real is asked.
 const QUEUE_ITEM = "d-tb113-mem-1311";
+// An existing item of the other product (Control lens on 20290bce9).
+const FOREIGN_ITEM = "d-lavaeon-1311";
 const ENV_KEYS = [
   "CLAUDE_MEM_WORKER_HOST",
   "CLAUDE_MEM_WORKER_PORT",
@@ -73,8 +75,11 @@ beforeAll(async () => {
     if (item?.[1]) {
       const id = decodeURIComponent(item[1]);
       queueAsked.push(id);
-      if (id === QUEUE_ITEM) {
-        res.end(JSON.stringify({ id, data: {}, version: 1, updatedAt: 1 }));
+      if (id === QUEUE_ITEM || id === FOREIGN_ITEM) {
+        const product = id === QUEUE_ITEM ? "taibe" : "hr-helper";
+        res.end(
+          JSON.stringify({ id, data: {}, version: 1, updatedAt: 1, product }),
+        );
       } else {
         res.statusCode = 404;
         res.end(JSON.stringify({ error: "not found" }));
@@ -178,7 +183,7 @@ describe("API integration: card memory (TB-113)", () => {
     expect(asked).toEqual([]);
   });
 
-  it("searches by a queue item only when it exists and the workspace is linked", async () => {
+  it("searches by a queue item only when it exists, is of this product and the workspace is linked", async () => {
     const forest = await createForest();
 
     const unlinked = await forest.agent(`/memory?queueItemId=${QUEUE_ITEM}`);
@@ -193,7 +198,9 @@ describe("API integration: card memory (TB-113)", () => {
 
     const unknown = await forest.agent("/memory?queueItemId=d-unknown-1311");
     expect(unknown.status).toBe(404);
-    expect(queueAsked).toEqual([QUEUE_ITEM, "d-unknown-1311"]);
+    const foreign = await forest.agent(`/memory?queueItemId=${FOREIGN_ITEM}`);
+    expect(foreign.status).toBe(404);
+    expect(queueAsked).toEqual([QUEUE_ITEM, "d-unknown-1311", FOREIGN_ITEM]);
     expect(asked).toEqual([[QUEUE_ITEM]]);
   });
 
