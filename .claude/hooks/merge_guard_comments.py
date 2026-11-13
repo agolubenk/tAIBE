@@ -29,6 +29,19 @@ def comment_char_may_change(text):
     return any(name in flat for name in COMMENT_CHAR)
 
 
+CHANGED = "\0comment-char"  # в written команды: настройка знака комментария уже была (comment_char_seen)
+
+
+def comment_char_seen(written, text, outer):
+    """Настройка знака комментария была до скрипта text: во внешней команде (`histchars=…; source x`) или в скрипте,
+    который команда прочла раньше (`source a.zsh; source b.zsh`, `source a.zsh; eval …`: настройка живёт в оболочке).
+    Скрипт, который её называет, отмечается в written (CHANGED) — для всего, что команда разберёт после него."""
+    before = CHANGED in (written or ()) or comment_char_may_change(outer)
+    if written is not None and comment_char_may_change(text):
+        written.add(CHANGED)
+    return before
+
+
 def sure_comments(cmd):
     """Позиции `#`, с которых bash и zsh точно начинают комментарий на верхнем уровне — вне кавычек и любых скобок:
     `$(…)`, `(…)`, `((…))`, `${…}`. Уверенность теряется до конца текста на: обратных кавычках; heredoc (тело могло

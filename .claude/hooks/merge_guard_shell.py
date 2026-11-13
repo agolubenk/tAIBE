@@ -10,7 +10,7 @@ import os
 import re
 import shlex
 
-from merge_guard_comments import comment_char_may_change, sure_comments
+from merge_guard_comments import CHANGED, comment_char_may_change, comment_char_seen, sure_comments  # noqa: F401 хуку
 from merge_guard_files import open_regular
 from merge_guard_vars import (ASSIGN, SHELL_WORDS, SUBST, dir_vars, expand_vars, note_vars, substitute,  # noqa: F401
                               words)  # dir_vars, expand_vars, note_vars, substitute — отсюда для хука

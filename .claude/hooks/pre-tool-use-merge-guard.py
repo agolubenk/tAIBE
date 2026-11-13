@@ -36,7 +36,7 @@ from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E4
 from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
-                               comment_char_may_change, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
+                               CHANGED, comment_char_may_change, comment_char_seen, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
                                launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
                                split_commands, strip_comments, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
                                uncommented)
@@ -206,7 +206,7 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         is_interp_script = interp if interp is not None else (
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
         try:  # разобран до ошибки — находки этой части и грубый признак по тексту скрипта: в `bash x.sh` его нет
-            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_may_change(whole[4][1])))
+            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_seen(whole[3], text, whole[4][1])))
         except Exception:
             got, partial = [], True
         found += got
@@ -348,15 +348,15 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
     """[(вид, подробность)] защищённых действий команды. git_env — конфиг git где-то задан окружением, disk — текст из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется), part —
     тело `$(…)` или кода маски: что для bash его начало — верхний уровень, не гарантировано, и комментарий с опасными знаками в нём остаётся (strip_comments, keep). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL.
     Знак комментария мог смениться (keep — до этого текста: `histchars=…; source x`; текст или внешняя команда называют настройку — comment_char_may_change, SE-77) — разбор дважды: со снятыми комментариями и без (raw), находки обоих."""
-    if raw is None and (keep or comment_char_may_change(cmd + "\n" + (outer[1] if outer else ""))):  # только комментарий — спрятал бы код за `'` в нём
-        return [f for r in (False, True) for f in classify_bash(cmd, cwd, roots, depth, git_env, disk, written, outer, part, raw=r)]
+    if raw is None and (keep or CHANGED in (written or ()) or comment_char_may_change(cmd + "\n" + (outer[1] if outer else ""))):  # только raw — код за `'` в комментарии
+        return [f for r in (False, True) for f in classify_bash(cmd, cwd, roots, depth, git_env, disk, written, outer, part, keep, r)]
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
         hit = FALLBACK.search(uncommented(cmd))
         return [("вложенная команда с признаком защищённого действия", cmd[:120])] if hit else []
     if fresh:  # все записи команды — до разбора `$(…)` и heredoc (они разбираются раньше); вложенным — уже от родителя
-        written.update(command_writes(cmd))
+        written.update(command_writes(cmd) | ({CHANGED} if keep else set()))  # keep — и для `eval` в скрипте
     cmd, bodies = cut_heredocs(cmd)  # до снятия комментариев: в теле `'` — не кавычка, `#` — не комментарий
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
     cmd = (cmd if raw else strip_comments(cmd, True, None if part else FALLBACK.search)).replace("\\\n", " ")  # `\` строку не продолжает

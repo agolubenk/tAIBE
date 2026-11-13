@@ -30,7 +30,13 @@ se77 = repo_on("main", "se77")
 (se77 / "h.zsh").write_text(f"G=gh\n{HIDE}\n")  # сам скрипт настройку не называет — её задал вызывающий
 (se77 / "s.zsh").write_text(f"histchars='!^%'\nG=gh\n{HIDE}\n")  # zsh читает скрипт по строкам
 (se77 / "ok.zsh").write_text("histchars='!^%'\necho a # b\n")
+(se77 / "a.zsh").write_text("histchars='!^%'\n")  # настройка живёт в оболочке и после `source a.zsh`
+(se77 / "e.zsh").write_text(f"eval 'G=gh; {HIDE}'\n")
 bash("SE-77: `source` после `histchars=…` в вызывающей команде", "histchars='!^%'; source h.zsh", True, cwd=se77)
+bash("SE-77: `source` после скрипта, который задал настройку", "source a.zsh; source h.zsh", True, cwd=se77)
+bash("SE-77: `eval` после скрипта, который задал настройку", f"source a.zsh; eval 'G=gh; {HIDE}'", True, cwd=se77)
+bash("SE-77: `eval` внутри скрипта после настройки у вызывающего", "histchars='!^%'; source e.zsh", True, cwd=se77)
+bash("SE-77: порядок — `source h.zsh` до настройки", "source h.zsh; source a.zsh", False, cwd=se77)
 bash("SE-77: скрипт zsh сам меняет знак комментария", "zsh s.zsh", True, cwd=se77)
 bash("SE-77: тот же скрипт — Контролю можно", "zsh s.zsh", False, who=D9, cwd=se77)
 bash("SE-77: безобидный скрипт с `histchars` — проход", "zsh ok.zsh", False, cwd=se77)
