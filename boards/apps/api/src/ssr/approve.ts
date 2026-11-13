@@ -2,31 +2,25 @@ import { and, desc, eq } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import db from "../database";
 import { ssrEntityTable, ssrVersionTable } from "../database/ssr-schema";
+import { ApiError } from "../errors/api-error";
 
 // Owner decisions (spec RU-7, Q-015, D-005): approving a draft makes it the
 // served latest; rollback re-publishes an old snapshot as a new version and
 // fires the immediate push-back (N-3), so the repo never lags a day behind
 // what agents already serve.
 
+// The draft the owner decides on: its id and the aggregate blob sha of the
+// bytes the open diff showed (TB-88). The sync rewrites a draft in place under
+// the same id, so the id alone could approve or reject bytes nobody saw.
+export type SeenDraft = { versionId: string; blobSha: string };
+
 export async function approveDraft(
   workspaceId: string,
   entityId: string,
-  versionId: string,
+  seen: SeenDraft,
   owner: string,
 ) {
   const entity = await assertEntity(workspaceId, entityId);
-  const [draft] = await db
-    .select()
-    .from(ssrVersionTable)
-    .where(
-      and(
-        eq(ssrVersionTable.id, versionId),
-        eq(ssrVersionTable.entityId, entityId),
-      ),
-    );
-  if (!draft || draft.status !== "draft") {
-    throw new HTTPException(409, { message: "Version is not an open draft" });
-  }
   return db.transaction(async (tx) => {
     await tx
       .update(ssrVersionTable)
@@ -37,62 +31,42 @@ export async function approveDraft(
           eq(ssrVersionTable.status, "latest"),
         ),
       );
-    const approved = await tx
+    // Status and bytes are checked in the UPDATE itself: Postgres re-reads
+    // the row after the lock, so a sync or decision that committed first
+    // makes this touch nothing instead of approving other bytes.
+    const [approved] = await tx
       .update(ssrVersionTable)
       .set({ status: "latest", approvedBy: owner, approvedAt: new Date() })
-      .where(
-        and(
-          eq(ssrVersionTable.id, versionId),
-          eq(ssrVersionTable.status, "draft"),
-        ),
-      )
-      .returning({ id: ssrVersionTable.id });
-    if (approved.length === 0) throw notOpenDraft();
+      .where(seenDraftRow(entityId, seen))
+      .returning({ number: ssrVersionTable.number });
+    if (!approved) throw await decisionConflict(tx, entityId, seen);
     await tx
       .update(ssrEntityTable)
       .set({
-        latestVersionId: versionId,
+        latestVersionId: seen.versionId,
         status: "active",
         updatedAt: new Date(),
       })
       .where(eq(ssrEntityTable.id, entity.id));
-    return { entityId, versionId, number: draft.number };
+    return { entityId, versionId: seen.versionId, number: approved.number };
   });
 }
 
 export async function rejectDraft(
   workspaceId: string,
   entityId: string,
-  versionId: string,
+  seen: SeenDraft,
   owner: string,
 ) {
   await assertEntity(workspaceId, entityId);
-  const [draft] = await db
-    .select()
-    .from(ssrVersionTable)
-    .where(
-      and(
-        eq(ssrVersionTable.id, versionId),
-        eq(ssrVersionTable.entityId, entityId),
-      ),
-    );
-  if (!draft || draft.status !== "draft") {
-    throw new HTTPException(409, { message: "Version is not an open draft" });
-  }
-  // The status check sits in the UPDATE: a decision or sync that committed
-  // after the read above must not be overwritten (lost update).
-  const rejected = await db
+  // Same check in the UPDATE as for approval: no lost update, no other bytes.
+  const [rejected] = await db
     .update(ssrVersionTable)
     .set({ status: "rejected", approvedBy: owner, approvedAt: new Date() })
-    .where(
-      and(
-        eq(ssrVersionTable.id, versionId),
-        eq(ssrVersionTable.status, "draft"),
-      ),
-    )
+    .where(seenDraftRow(entityId, seen))
     .returning({ id: ssrVersionTable.id });
-  if (rejected.length === 0) throw notOpenDraft();
-  return { entityId, versionId };
+  if (!rejected) throw await decisionConflict(db, entityId, seen);
+  return { entityId, versionId: seen.versionId };
 }
 
 export async function rollbackToVersion(
@@ -151,6 +125,44 @@ export async function rollbackToVersion(
 
 const notOpenDraft = () =>
   new HTTPException(409, { message: "Version is not an open draft" });
+
+const seenDraftRow = (entityId: string, seen: SeenDraft) =>
+  and(
+    eq(ssrVersionTable.id, seen.versionId),
+    eq(ssrVersionTable.entityId, entityId),
+    eq(ssrVersionTable.status, "draft"),
+    eq(ssrVersionTable.blobSha, seen.blobSha),
+  );
+
+// Why the guarded UPDATE touched nothing. Read only after the miss, so the
+// happy path stays one statement. A still-open draft with other bytes means
+// the sync replaced it after the diff: the owner must look again.
+async function decisionConflict(
+  executor: Pick<typeof db, "select">,
+  entityId: string,
+  seen: SeenDraft,
+) {
+  const [current] = await executor
+    .select({
+      status: ssrVersionTable.status,
+      blobSha: ssrVersionTable.blobSha,
+    })
+    .from(ssrVersionTable)
+    .where(
+      and(
+        eq(ssrVersionTable.id, seen.versionId),
+        eq(ssrVersionTable.entityId, entityId),
+      ),
+    );
+  if (current?.status === "draft" && current.blobSha !== seen.blobSha) {
+    return new ApiError(409, {
+      code: "SSR_DRAFT_CHANGED",
+      message:
+        "The draft changed after you opened the diff; review it again before deciding",
+    });
+  }
+  return notOpenDraft();
+}
 
 async function assertEntity(workspaceId: string, entityId: string) {
   const [entity] = await db

@@ -4125,6 +4125,7 @@
 			"diffFrom": "from",
 			"empty": "Nothing synced yet.",
 			"loadError": "Failed to load SSR data.",
+			"draftChanged": "Nothing was decided: the draft changed after you opened the diff. The diff is refreshed; check it and decide again.",
 			"approveMatching": {
 				"summary": "Drafts: {{total}} · match a version you approved: {{matching}}",
 				"button": "Approve matching ({{matching}})",

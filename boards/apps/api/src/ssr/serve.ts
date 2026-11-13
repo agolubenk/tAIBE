@@ -186,6 +186,8 @@ export async function diffVersions(
 ): Promise<{
   from: number;
   to: number;
+  toVersionId: string;
+  toBlobSha: string;
   files: Array<{ path: string; diff: string }>;
 }> {
   const from = await serveVersion(workspaceId, entityId, fromSpec);
@@ -203,7 +205,13 @@ export async function diffVersions(
     ).split("\n");
     return { path, diff: diffLines(before, after, path).join("\n") };
   });
-  return { from: from.number, to: to.number, files };
+  return {
+    from: from.number,
+    to: to.number,
+    toVersionId: to.versionId,
+    toBlobSha: to.blobSha,
+    files,
+  };
 }
 
 export async function listEntities(workspaceId: string) {

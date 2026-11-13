@@ -4076,7 +4076,8 @@
 				"rest_other": "The other {{count}} drafts stay for per-item review with the diff.",
 				"summary": "Drafts: {{total}} · match a version you approved: {{matching}}",
 				"title": "Approve matching drafts?"
-			}
+			},
+			"draftChanged": "Nothing was decided: the draft changed after you opened the diff. The diff is refreshed; check it and decide again."
 		}
 	},
 	"team": {
