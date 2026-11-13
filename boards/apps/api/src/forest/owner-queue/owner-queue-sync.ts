@@ -62,6 +62,8 @@ let dailyOn = "";
 
 // Every 5 minutes (scheduler): plan rows follow the board. A failure waits for
 // the next run and shows as a failed check-in, not as an exception per run.
+// A doc the queue refused (TB-125) also fails the check-in: the run goes on,
+// but that row does not follow the board until someone looks.
 export async function ownerQueuePlanRows(now: number = Date.now()) {
   const config = await configOrSkip();
   if (!config) return {};
@@ -83,7 +85,7 @@ export async function ownerQueuePlanRows(now: number = Date.now()) {
     );
     if (outcome.hourlyDone) hourlyAt = now;
     if (outcome.dailyDone) dailyOn = today;
-    return {};
+    return { degraded: outcome.refused > 0 };
   } catch (error) {
     console.error("owner-queue plan rows failed:", error);
     return { degraded: true };
