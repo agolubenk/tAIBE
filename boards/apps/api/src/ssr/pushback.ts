@@ -10,6 +10,7 @@ import {
 } from "../database/ssr-schema";
 import { isCorpusPath } from "./corpus";
 import { pushRepoOf } from "./push-repos";
+import { resolvePushToken } from "./push-token";
 
 // Push-back (spec RU-9, D-010, D-012): commits served-latest files into the
 // product repo's main with [skip ci]. The push is conditional — for every
@@ -29,17 +30,16 @@ export type PushResult = {
   reason?: string;
 };
 
-export function pushBackConfigured(): boolean {
-  return Boolean(process.env.SSR_PUSH_GITHUB_TOKEN);
-}
+// One push talks to one repo with one token: the token file is read once per
+// push (TB-116), not once per GitHub call.
+type PushTarget = { repo: string; token: string };
 
-function github(path: string, init: RequestInit = {}) {
-  const token = process.env.SSR_PUSH_GITHUB_TOKEN;
-  if (!token) throw new Error("SSR_PUSH_GITHUB_TOKEN is not configured");
-  return fetch(`${API}${path}`, {
+// `path` is relative to the repo: "/contents/…", "/git/…".
+function github(target: PushTarget, path: string, init: RequestInit = {}) {
+  return fetch(`${API}/repos/${target.repo}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${target.token}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "Content-Type": "application/json",
@@ -51,13 +51,14 @@ function github(path: string, init: RequestInit = {}) {
 type RepoFile = { sha: string | null; content: string | null };
 
 async function readRepoFiles(
-  repo: string,
+  target: PushTarget,
   paths: string[],
 ): Promise<Map<string, RepoFile>> {
   const result = new Map<string, RepoFile>();
   for (const path of paths) {
     const response = await github(
-      `/repos/${repo}/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
+      target,
+      `/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
     );
     if (response.status === 404) {
       result.set(path, { sha: null, content: null });
@@ -137,7 +138,9 @@ export async function pushChangeset(
   message: string,
   filterPaths?: string[],
 ): Promise<PushResult> {
-  if (!pushBackConfigured()) {
+  // TB-116: no token file means push-back is off, not an error.
+  const { token } = resolvePushToken();
+  if (!token) {
     return {
       pushed: false,
       commitSha: null,
@@ -178,8 +181,9 @@ export async function pushChangeset(
     };
   }
 
+  const target: PushTarget = { repo, token };
   const repoFiles = await readRepoFiles(
-    repo,
+    target,
     changeset.map((file) => file.path),
   );
   const states = await db
@@ -235,7 +239,7 @@ export async function pushChangeset(
     return { pushed: false, commitSha: null, files: [], conflicts };
   }
 
-  const commitSha = await commitFiles(repo, message, toPush);
+  const commitSha = await commitFiles(target, message, toPush);
   await db
     .insert(ssrPushStateTable)
     .values(
@@ -266,18 +270,16 @@ export async function pushChangeset(
 }
 
 async function commitFiles(
-  repo: string,
+  target: PushTarget,
   message: string,
   files: ChangesetFile[],
 ): Promise<string> {
-  const refResponse = await github(`/repos/${repo}/git/ref/heads/${BRANCH}`);
+  const refResponse = await github(target, `/git/ref/heads/${BRANCH}`);
   if (!refResponse.ok) {
     throw new Error(`GitHub ref: HTTP ${refResponse.status}`);
   }
   const ref = (await refResponse.json()) as { object: { sha: string } };
-  const commitResponse = await github(
-    `/repos/${repo}/git/commits/${ref.object.sha}`,
-  );
+  const commitResponse = await github(target, `/git/commits/${ref.object.sha}`);
   if (!commitResponse.ok) {
     throw new Error(`GitHub commit: HTTP ${commitResponse.status}`);
   }
@@ -285,7 +287,7 @@ async function commitFiles(
 
   const treeItems = await Promise.all(
     files.map(async (file) => {
-      const blobResponse = await github(`/repos/${repo}/git/blobs`, {
+      const blobResponse = await github(target, "/git/blobs", {
         method: "POST",
         body: JSON.stringify({
           content: Buffer.from(file.content, "utf8").toString("base64"),
@@ -307,7 +309,7 @@ async function commitFiles(
     }),
   );
 
-  const treeResponse = await github(`/repos/${repo}/git/trees`, {
+  const treeResponse = await github(target, "/git/trees", {
     method: "POST",
     body: JSON.stringify({ base_tree: commit.tree.sha, tree: treeItems }),
   });
@@ -316,7 +318,7 @@ async function commitFiles(
   }
   const tree = (await treeResponse.json()) as { sha: string };
 
-  const newCommitResponse = await github(`/repos/${repo}/git/commits`, {
+  const newCommitResponse = await github(target, "/git/commits", {
     method: "POST",
     body: JSON.stringify({
       message: `${message} [skip ci]`,
@@ -329,13 +331,10 @@ async function commitFiles(
   }
   const newCommit = (await newCommitResponse.json()) as { sha: string };
 
-  const updateResponse = await github(
-    `/repos/${repo}/git/refs/heads/${BRANCH}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ sha: newCommit.sha }),
-    },
-  );
+  const updateResponse = await github(target, `/git/refs/heads/${BRANCH}`, {
+    method: "PATCH",
+    body: JSON.stringify({ sha: newCommit.sha }),
+  });
   if (!updateResponse.ok) {
     throw new Error(`GitHub ref update: HTTP ${updateResponse.status}`);
   }
