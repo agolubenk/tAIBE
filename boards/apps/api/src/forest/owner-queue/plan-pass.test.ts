@@ -1,0 +1,255 @@
+import { describe, expect, it } from "vite-plus/test";
+import { PLAN_WRITES_PER_RUN, type PlanStore, planPass } from "./plan-pass";
+import type { BoardCard, RecentCard } from "./plan-types";
+import {
+  listAll,
+  type QueueClient,
+  type QueueCollection,
+  QueueConflict,
+  type QueueDoc,
+  type QueuePage,
+} from "./queue-client";
+import type { OwnerQueueConfig } from "./queue-config";
+
+const WS = "aiboards-eval";
+const NOW = new Date("2026-11-13T12:00:00Z");
+const config: OwnerQueueConfig = {
+  url: "http://queue.test",
+  tokenFile: "/dev/null",
+  tokenName: "token:t-boards",
+  products: new Map([["ws-1", "taibe"]]),
+};
+const card = (key: string, st = "to-do") => ({ key, ws: WS, k: "task", st });
+
+// The console's work rules: PATCH merges, a null field is removed, ifVersion
+// must match (409 otherwise).
+class FakeWork {
+  readonly docs = new Map<string, QueueDoc>();
+  readonly patches: { id: string; data: Record<string, unknown> }[] = [];
+  race = new Set<string>();
+  truncated = false;
+
+  add(id: string, data: Record<string, unknown>, version = 1) {
+    this.docs.set(id, {
+      id,
+      data,
+      version,
+      updatedAt: 0,
+      product: "hr-helper",
+    });
+  }
+
+  client(): QueueClient {
+    const fail = () => Promise.reject(new Error("not used"));
+    return {
+      get: fail,
+      put: fail,
+      history: fail,
+      list: async (_collection: QueueCollection): Promise<QueuePage> => ({
+        docs: [...this.docs.values()].map((doc) => structuredClone(doc)),
+        nextOffset: null,
+        truncated: this.truncated,
+      }),
+      patch: async (_collection, id, data, ifVersion) => {
+        const doc = this.docs.get(id);
+        if (!doc || this.race.has(id) || doc.version !== ifVersion) {
+          throw new QueueConflict("version");
+        }
+        this.patches.push({ id, data });
+        const merged: Record<string, unknown> = { ...doc.data, ...data };
+        for (const [key, value] of Object.entries(merged)) {
+          if (value === null) delete merged[key];
+        }
+        const next = { ...doc, data: merged, version: doc.version + 1 };
+        this.docs.set(id, next);
+        return next;
+      },
+    };
+  }
+}
+
+function store(
+  board: Record<string, BoardCard>,
+  extra: { recent?: RecentCard[]; abandoned?: string[] } = {},
+): PlanStore & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    resolve: async (workspaceIds) => {
+      calls.push(`resolve:${workspaceIds.join(",")}`);
+      return new Map(Object.entries(board));
+    },
+    recent: async () => {
+      calls.push("recent");
+      return extra.recent ?? [];
+    },
+    abandoned: async () => {
+      calls.push("abandoned");
+      return new Set(extra.abandoned ?? []);
+    },
+  };
+}
+
+const done: BoardCard = { status: "done", final: true, closedAt: NOW };
+const run = (queue: FakeWork, board: PlanStore, hourly = false) =>
+  planPass(
+    { client: queue.client(), config, store: board, now: () => NOW },
+    hourly,
+  );
+
+describe("planPass (TB-106)", () => {
+  it("closes a row with ifVersion, sets end to the Moscow date and keeps planEnd", async () => {
+    const queue = new FakeWork();
+    queue.add(
+      "w-a",
+      {
+        status: "doing",
+        who: "agent",
+        planEnd: "2026-11-10",
+        cards: [card("TB-1")],
+      },
+      7,
+    );
+    queue.add("track-ops", {
+      kind: "track",
+      name: "Ops",
+      cards: [card("TB-1")],
+    });
+    const outcome = await run(queue, store({ [`${WS}/TB-1`]: done }));
+    expect(outcome).toEqual({
+      written: 1,
+      skipped: 0,
+      left: 0,
+      hourlyDone: false,
+    });
+    expect(queue.docs.get("w-a")?.data).toMatchObject({
+      status: "done",
+      end: "2026-11-13",
+      planEnd: "2026-11-10",
+      cards: [card("TB-1", "done")],
+    });
+    expect(queue.docs.get("w-a")?.version).toBe(8);
+    expect(queue.docs.get("track-ops")?.version).toBe(1);
+  });
+
+  it("reopens a done row and removes its end", async () => {
+    const queue = new FakeWork();
+    queue.add("w-a", {
+      status: "done",
+      end: "2026-11-01",
+      cards: [card("TB-1", "done")],
+    });
+    await run(
+      queue,
+      store({
+        [`${WS}/TB-1`]: { status: "to-do", final: false, closedAt: null },
+      }),
+    );
+    expect(queue.docs.get("w-a")?.data).toEqual({
+      status: "planned",
+      cards: [card("TB-1", "to-do")],
+    });
+  });
+
+  it("skips a row on 409 until the next run and writes the others", async () => {
+    const queue = new FakeWork();
+    queue.add("w-a", { status: "planned", cards: [card("TB-1")] });
+    queue.add("w-b", { status: "planned", cards: [card("TB-1")] });
+    queue.race.add("w-a");
+    const board = store({ [`${WS}/TB-1`]: done });
+    expect(await run(queue, board, true)).toEqual({
+      written: 1,
+      skipped: 1,
+      left: 0,
+      hourlyDone: false,
+    });
+    expect(queue.docs.get("w-a")?.data.status).toBe("planned");
+    expect(queue.docs.get("w-b")?.data.status).toBe("done");
+    queue.race.clear();
+    expect(await run(queue, board, true)).toMatchObject({
+      written: 1,
+      hourlyDone: true,
+    });
+  });
+
+  it("writes 30 rows a run at most and leaves the rest for the next run", async () => {
+    const queue = new FakeWork();
+    for (let i = 0; i < 35; i += 1) {
+      queue.add(`w-${i}`, { status: "planned", cards: [card("TB-1")] });
+    }
+    const board = store({ [`${WS}/TB-1`]: done });
+    expect(await run(queue, board)).toMatchObject({
+      written: PLAN_WRITES_PER_RUN,
+      left: 35 - PLAN_WRITES_PER_RUN,
+    });
+    expect(await run(queue, board)).toMatchObject({ written: 5, left: 0 });
+    expect(await run(queue, board)).toMatchObject({ written: 0, left: 0 });
+  });
+
+  it("reads the board only in mapped workspaces and runs F8 and F9 only hourly", async () => {
+    const queue = new FakeWork();
+    queue.add("w-taibe-unplanned", { status: "doing", cards: [] });
+    const recent: RecentCard = {
+      ws: WS,
+      key: "TB-7",
+      product: "taibe",
+      title: "off plan",
+      bug: true,
+      level: "high",
+      status: "in-progress",
+      final: false,
+      closedAt: null,
+    };
+    const board = store({}, { recent: [recent], abandoned: [`${WS}/TB-7`] });
+    await run(queue, board);
+    expect(board.calls).toEqual(["resolve:ws-1"]);
+    expect(queue.patches).toEqual([]);
+    await run(queue, board, true);
+    expect(board.calls).toContain("recent");
+    expect(board.calls).toContain("abandoned");
+    expect(queue.docs.get("w-taibe-unplanned")?.data.cards).toEqual([
+      {
+        key: "TB-7",
+        ws: WS,
+        t: "off plan",
+        k: "bug",
+        s: "high",
+        st: "in-progress",
+        mark: "без аренды",
+      },
+    ]);
+  });
+
+  it("makes no off-plan decision on a truncated list", async () => {
+    const queue = new FakeWork();
+    queue.truncated = true;
+    const board = store({});
+    expect(await run(queue, board, true)).toMatchObject({ hourlyDone: false });
+    expect(board.calls).toEqual(["resolve:ws-1"]);
+  });
+});
+
+describe("listAll", () => {
+  it("follows next_offset and stops when it does not move forward", async () => {
+    const offsets: number[] = [];
+    const doc = (id: string): QueueDoc => ({
+      id,
+      data: {},
+      version: 1,
+      updatedAt: 0,
+    });
+    const pages: Record<number, QueuePage> = {
+      0: { docs: [doc("a")], nextOffset: 500, truncated: false },
+      500: { docs: [doc("b")], nextOffset: 500, truncated: false },
+    };
+    const client = {
+      list: async (_collection: QueueCollection, offset: number) => {
+        offsets.push(offset);
+        return pages[offset] as QueuePage;
+      },
+    } as QueueClient;
+    const all = await listAll(client, "work");
+    expect(all.docs.map((d) => d.id)).toEqual(["a", "b"]);
+    expect(offsets).toEqual([0, 500]);
+  });
+});
