@@ -6,6 +6,8 @@ export type ProjectBroadcastMessage = {
   sourceTaskId?: string;
   targetTaskId?: string;
   linksChanged?: boolean;
+  // A column became final or stopped being final: its tasks' completedAt moved.
+  completionChanged?: boolean;
   taskTitleChanged?: boolean;
 };
 

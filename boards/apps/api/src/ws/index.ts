@@ -618,6 +618,9 @@ export function broadcastToProject(
     message: {
       ...message,
       ...(previous?.message.linksChanged ? { linksChanged: true } : {}),
+      ...(previous?.message.completionChanged
+        ? { completionChanged: true }
+        : {}),
       ...(previous?.message.taskTitleChanged ? { taskTitleChanged: true } : {}),
     },
     excludeInitiatorId,
@@ -827,6 +830,7 @@ subscribeToEvent<{
   projectId: string;
   initiatorId?: string;
   linksChanged?: boolean;
+  completionChanged?: boolean;
 }>("project.updated", async (data) => {
   const { projectId, initiatorId } = data;
   if (!projectId) return;
@@ -837,6 +841,7 @@ subscribeToEvent<{
       type: "PROJECT_UPDATED",
       projectId,
       ...(data.linksChanged ? { linksChanged: true } : {}),
+      ...(data.completionChanged ? { completionChanged: true } : {}),
     },
     initiatorId,
   );
