@@ -121,8 +121,10 @@ async function guardEdit(
   let { changes } = request;
   if (request.action === "task.move" && changes.projectId) {
     const verdict = await judgeMove(task, changes.projectId, changes.status);
+    // Not approval_required: the owner's «да» closes or reopens the card in
+    // place and does not move it, so the approval flow is a trap here.
     if (verdict.kind === "deny") {
-      await deny(at, new ForestError("approval_required", verdict.reason));
+      await deny(at, new ForestError("agent_forbidden", verdict.reason));
       return;
     }
     changes = { ...changes, status: verdict.status };

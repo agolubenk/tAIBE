@@ -304,26 +304,25 @@ describe("API integration: agent rights on kaneo routes", () => {
       const { project: created } = await createProjectFixture({
         workspaceId: forest.workspace.id,
       });
-      if (column?.isFinal === undefined && column) {
-        await db
-          .delete(schema.columnTable)
-          .where(
-            and(
-              eq(schema.columnTable.projectId, created.id),
-              eq(schema.columnTable.slug, column.slug),
-            ),
-          );
-      } else if (column) {
-        await db
-          .update(schema.columnTable)
-          .set({ isFinal: column.isFinal })
-          .where(
-            and(
-              eq(schema.columnTable.projectId, created.id),
-              eq(schema.columnTable.slug, column.slug),
-            ),
-          );
-      }
+      if (!column) return created.id;
+      const where = and(
+        eq(schema.columnTable.projectId, created.id),
+        eq(schema.columnTable.slug, column.slug),
+      );
+      // The fixture's default columns must hold the slug, or the case tests
+      // the first-column branch instead.
+      const changed =
+        column.isFinal === undefined
+          ? await db
+              .delete(schema.columnTable)
+              .where(where)
+              .returning({ id: schema.columnTable.id })
+          : await db
+              .update(schema.columnTable)
+              .set({ isFinal: column.isFinal })
+              .where(where)
+              .returning({ id: schema.columnTable.id });
+      expect(changed).toHaveLength(1);
       return created.id;
     };
     const card = async (status: string) => {
@@ -351,6 +350,8 @@ describe("API integration: agent rights on kaneo routes", () => {
     const closed = await card("done");
     const reopens = await move(closed, await project({ slug: "done" }));
     expect(reopens.status).toBe(403);
+    // Not approval_required: a «да» would reopen the card in place.
+    expect(reopens.body.message).toContain("agent_forbidden");
     expect(reopens.body.message).toContain("reopen_task");
     // The same slug, but not final in the new project: a reopen too.
     const sameSlug = await move(
@@ -371,13 +372,44 @@ describe("API integration: agent rights on kaneo routes", () => {
     expect(closes.body.message).toContain("close_task");
     expect((await taskRow(open.id))?.projectId).toBe(forest.project.id);
 
-    const kept = await move(open, await project({ slug: "to-do" }));
-    expect(kept.status).toBe(200);
-    expect(await taskRow(open.id)).toMatchObject({ status: "new" });
+    // A closed card moved into another closing stage: the owner's close.
+    const confirming = await card("confirmation");
+    const stage = await move(confirming, await project(), "done");
+    expect(stage.status).toBe(403);
+    expect(stage.body.message).toContain(
+      "closing stage «confirmation» → «done»",
+    );
+    expect(await taskRow(confirming.id)).toMatchObject({
+      projectId: forest.project.id,
+      status: "confirmation",
+    });
 
-    const stays = await move(closed, await project());
+    const keptIn = await project({ slug: "to-do" });
+    const kept = await move(open, keptIn);
+    expect(kept.status).toBe(200);
+    expect(await taskRow(open.id)).toMatchObject({
+      projectId: keptIn,
+      status: "new",
+    });
+
+    // «done» is final at home but open in the new project: the card stays
+    // open, so the move needs no «да».
+    const openDone = await card("to-do");
+    const openDoneIn = await project({ slug: "done", isFinal: false });
+    const lands = await move(openDone, openDoneIn, "done");
+    expect(lands.status).toBe(200);
+    expect(await taskRow(openDone.id)).toMatchObject({
+      projectId: openDoneIn,
+      status: "done",
+    });
+
+    const staysIn = await project();
+    const stays = await move(closed, staysIn);
     expect(stays.status).toBe(200);
-    expect(await taskRow(closed.id)).toMatchObject({ status: "done" });
+    expect(await taskRow(closed.id)).toMatchObject({
+      projectId: staysIn,
+      status: "done",
+    });
 
     // Another workspace: not judged (its columns stay hidden), move-task 404.
     const foreign = await createForest();
