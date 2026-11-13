@@ -9,6 +9,7 @@ import {
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createActivity from "./controllers/create-activity";
+import { dialogMarkFor, markOpenDialogs } from "../forest/dialog/dialog-store";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
 import getActivities from "./controllers/get-activities";
@@ -181,16 +182,15 @@ const activity = apiRouter()
       200,
     ),
   )
-  .openapi(getActivitiesRoute, async (c) =>
-    c.json(
-      await getActivities(
-        c.req.valid("param").taskId,
-        c.get("userId"),
-        c.req.valid("query").limit,
-      ),
-      200,
-    ),
-  )
+  .openapi(getActivitiesRoute, async (c) => {
+    const { taskId } = c.req.valid("param");
+    const activities = await getActivities(
+      taskId,
+      c.get("userId"),
+      c.req.valid("query").limit,
+    );
+    return c.json(await markOpenDialogs(taskId, activities), 200);
+  })
   .openapi(createActivityRoute, async (c) => {
     const { taskId, message, type, eventData } = c.req.valid("json");
     if (type === "comment") {
@@ -205,7 +205,11 @@ const activity = apiRouter()
   })
   .openapi(createCommentRoute, async (c) => {
     const { taskId, comment } = c.req.valid("json");
-    return c.json(await createComment(taskId, c.get("userId"), comment), 200);
+    const dialog = await dialogMarkFor(c, taskId);
+    return c.json(
+      await createComment(taskId, c.get("userId"), comment, undefined, dialog),
+      200,
+    );
   })
   .openapi(updateCommentRoute, async (c) => {
     const { activityId, comment } = c.req.valid("json");

@@ -2964,7 +2964,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "{{forge}}'da yorum yaptı"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Bağlı oturumların diyaloğu",
+			"live": "Sürüyor",
+			"archived": "Arşivlendi",
+			"summary": "Oturum: {{sessions}} · Mesaj: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Görevler",

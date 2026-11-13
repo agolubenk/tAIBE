@@ -2964,7 +2964,13 @@
 			"importedBy": "Importiert von {{name}}",
 			"commentedOnForge": "hat auf {{forge}} kommentiert"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Dialog verknüpfter Sitzungen",
+			"live": "Aktiv",
+			"archived": "Archiviert",
+			"summary": "Sitzungen: {{sessions}} · Nachrichten: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Aufgaben",

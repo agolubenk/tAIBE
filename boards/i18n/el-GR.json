@@ -2964,7 +2964,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "σχολίασε στο {{forge}}"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Διάλογος συνδεδεμένων συνεδριών",
+			"live": "Σε εξέλιξη",
+			"archived": "Αρχειοθετημένος",
+			"summary": "Συνεδρίες: {{sessions}} · Μηνύματα: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Εργασίες",

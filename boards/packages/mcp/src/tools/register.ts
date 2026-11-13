@@ -2,6 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { buildFullTaskUpdateBody } from "../kaneo/task-helpers.js";
 import { excerptSearchResults } from "../view/excerpt.js";
+import { GROUP_HEADER, withHeaders } from "./agent-write.js";
 import { registerForestTools } from "./forest/register-forest.js";
 import { getCurrentUser } from "./get-current-user.js";
 import { registerNotebookTools } from "./notebook-tools.js";
@@ -441,15 +442,26 @@ export function registerTools(
   registerTool(
     "create_task_comment",
     {
-      description: "Add a comment to a task.",
+      description:
+        "Add a comment to a task. A linked session sends the groupKey of the card's shared lease: its comment joins the group's dialog on the card (R-026); the lease holder joins it without one.",
       inputSchema: z.object({
         taskId: nonEmptyString,
         content: nonEmptyString,
+        groupKey: z
+          .string()
+          .trim()
+          .min(1)
+          .max(120)
+          .optional()
+          .describe("The groupKey of a lease shared by linked sessions."),
       }),
     },
     async (args) =>
       run(() =>
-        client.json(`/api/comment/${encodeURIComponent(args.taskId)}`, {
+        withHeaders(
+          client,
+          args.groupKey ? { [GROUP_HEADER]: args.groupKey } : {},
+        ).json(`/api/comment/${encodeURIComponent(args.taskId)}`, {
           method: "POST",
           body: JSON.stringify({ content: args.content }),
         }),

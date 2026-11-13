@@ -16,6 +16,8 @@ const HEADERS = {
   link: "x-t-boards-link",
 } as const;
 
+export const GROUP_HEADER = HEADERS.groupKey;
+
 // Header values are Latin-1, so the note travels percent-encoded.
 const ENCODE: Partial<Record<keyof typeof HEADERS, (value: string) => string>> =
   { note: encodeURIComponent };

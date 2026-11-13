@@ -2912,7 +2912,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "đã bình luận trên {{forge}}"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Hội thoại của các phiên liên kết",
+			"live": "Đang diễn ra",
+			"archived": "Đã lưu trữ",
+			"summary": "Phiên: {{sessions}} · Tin nhắn: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Nhiệm vụ",

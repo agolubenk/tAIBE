@@ -2964,7 +2964,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "{{forge}} पर टिप्पणी की"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "जुड़े सत्रों का संवाद",
+			"live": "जारी",
+			"archived": "संग्रहीत",
+			"summary": "सत्र: {{sessions}} · संदेश: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "कार्य",

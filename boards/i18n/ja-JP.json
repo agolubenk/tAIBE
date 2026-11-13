@@ -2912,7 +2912,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "{{forge}} でコメント"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "連携セッションの対話",
+			"live": "進行中",
+			"archived": "アーカイブ済み",
+			"summary": "セッション: {{sessions}} · メッセージ: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "タスク",

@@ -10,12 +10,15 @@ import {
 import { publishEvent } from "../../events";
 import createNotification from "../../notification/controllers/create-notification";
 import { parseMentionIds } from "../../utils/parse-mentions";
+import type { DialogMark } from "../../forest/dialog/session-dialog";
 
 async function createComment(
   taskId: string,
   userId: string,
   content: string,
   external?: { userName: string; source: string },
+  // R-026: the comment of a linked session joins its group's dialog.
+  dialog?: DialogMark | null,
 ) {
   const [activity] = await db
     .insert(activityTable)
@@ -24,6 +27,7 @@ async function createComment(
       type: "comment",
       userId,
       content,
+      ...(dialog ? { eventData: { dialog } } : {}),
       ...(external
         ? {
             externalUserName: external.userName,

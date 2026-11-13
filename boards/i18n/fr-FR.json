@@ -3016,7 +3016,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "a commenté sur {{forge}}"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Dialogue des sessions liées",
+			"live": "En cours",
+			"archived": "Archivé",
+			"summary": "Sessions : {{sessions}} · Messages : {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Tâches",

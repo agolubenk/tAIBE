@@ -2912,7 +2912,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "berkomentar di {{forge}}"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Dialog sesi tertaut",
+			"live": "Berlangsung",
+			"archived": "Diarsipkan",
+			"summary": "Sesi: {{sessions}} · Pesan: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Tugas",

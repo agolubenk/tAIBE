@@ -2912,7 +2912,13 @@
 			"importedBy": "由 {{name}} 匯入",
 			"commentedOnForge": "在 {{forge}} 上留言"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "關聯工作階段的對話",
+			"live": "進行中",
+			"archived": "已封存",
+			"summary": "工作階段：{{sessions}} · 訊息：{{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "任務",
