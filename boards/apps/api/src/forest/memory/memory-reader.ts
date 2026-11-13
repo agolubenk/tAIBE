@@ -23,7 +23,22 @@ export function getMemoryReader(): CachedClaudeMemReader {
   return reader;
 }
 
-// Optional: limit the scan to one claude-mem project (the repo's name).
-export function memoryProject(): string | undefined {
-  return process.env.CLAUDE_MEM_PROJECT?.trim() || undefined;
+// The product boundary (R-002, TB-58): a product is a workspace, and its cards
+// read only its own claude-mem projects — the repo folder («tAIBE») and its
+// worktrees («tAIBE/<topic>»). CLAUDE_MEM_PROJECTS is the pair list of
+// OQ_WORKSPACE_PRODUCTS: «<workspaceId>=<root>[|<root>], …». A workspace that
+// is not on the list gets no roots and reads nothing (fail closed).
+export function memoryRoots(
+  workspaceId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  for (const pair of (env.CLAUDE_MEM_PROJECTS ?? "").split(",")) {
+    const [id, roots] = pair.split("=").map((part) => part.trim());
+    if (!id || id !== workspaceId || !roots) continue;
+    return roots
+      .split("|")
+      .map((root) => root.trim())
+      .filter(Boolean);
+  }
+  return [];
 }

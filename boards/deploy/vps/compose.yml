@@ -66,6 +66,12 @@ services:
       # mac/memory-token-push.sh. Read on every request; without the file the
       # reader sends no header, which only the proxy's rollout mode accepts.
       CLAUDE_MEM_PROXY_TOKEN_FILE: /run/tb-secrets/claude_mem_proxy_token
+      # The product boundary (R-002, TB-58): each workspace reads only its own
+      # claude-mem projects — the repo folder and its worktrees («<root>/…»).
+      # «<workspaceId>=<root>[|<root>], …»; a workspace not listed reads
+      # nothing. Defaults: taibe → tAIBE, Lavaeon (HR Helper) → HR_Helper-v2,
+      # Financial terminal → terminal (workspaces on prod 13.11).
+      CLAUDE_MEM_PROJECTS: ${CLAUDE_MEM_PROJECTS:-lth89qy6f8j1greiy4c5cn23=tAIBE,jbza3jvj5qtkquur7mpaxzet=HR_Helper-v2,tn34un5k8phqk9bs3wlj37qj=terminal}
       # The owner queue (TB-102): requests go there as items and «да» there
       # is applied here. Off until the URL, the token's name in the queue and
       # the workspace → product pairs are set; the token file is read on

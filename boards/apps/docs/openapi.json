@@ -5181,7 +5181,19 @@
         "properties": {
           "available": {
             "type": "boolean",
-            "description": "false when the claude-mem worker is unreachable and nothing was cached yet."
+            "description": "false when the claude-mem worker is unreachable and nothing was cached yet, or when the workspace has no claude-mem projects."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "worker-unreachable",
+              "no-product-map",
+              null
+            ],
+            "description": "Why available is false: no-product-map — CLAUDE_MEM_PROJECTS names no claude-mem projects for this workspace (R-002). null when available."
           },
           "stale": {
             "type": "boolean",
@@ -5196,7 +5208,7 @@
           },
           "scanned": {
             "type": "integer",
-            "description": "How many of the latest observations were checked."
+            "description": "How many of the latest observations of the workspace's claude-mem projects were checked."
           },
           "items": {
             "type": "array",
@@ -5258,6 +5270,7 @@
         },
         "required": [
           "available",
+          "reason",
           "stale",
           "fetchedAt",
           "scanned",
@@ -26403,7 +26416,7 @@
           "Forest"
         ],
         "summary": "List claude-mem observations about a card",
-        "description": "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Read-only; when the worker is down the last copy is returned and marked stale.",
+        "description": "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Only the workspace's own claude-mem projects are read (CLAUDE_MEM_PROJECTS); a workspace without them gets available: false, reason no-product-map. Read-only; when the worker is down the last copy is returned and marked stale.",
         "parameters": [
           {
             "schema": {

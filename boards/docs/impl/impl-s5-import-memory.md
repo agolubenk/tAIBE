@@ -54,8 +54,12 @@
   - Backlog ID;
   - номер `<slug>-<number>`;
   - ветку агента из `card_meta.branch`.
-- API: `GET /api/forest/{workspaceId}/cards/{taskId}/memory` (`memory-routes.ts`). Необязательный env
-  `CLAUDE_MEM_PROJECT` сужает поиск до проекта claude-mem.
+- API: `GET /api/forest/{workspaceId}/cards/{taskId}/memory` (`memory-routes.ts`).
+  - Граница продукта (R-002, TB-58): карточка видит только проекты claude-mem своего пространства — папку
+    репозитория и её worktree (`tAIBE`, `tAIBE/<тема>`). Карта — env `CLAUDE_MEM_PROJECTS`:
+    `<workspaceId>=<корень>[|<корень>], …`, формат как у `OQ_WORKSPACE_PRODUCTS`.
+  - Пространства нет в карте — ничего не читается: `available: false`, `reason: no-product-map`.
+  - Воркер фильтрует только по точному имени проекта, а у worktree проект свой, поэтому фильтр — в API.
 - Web: раздел «Память» в боковой панели карточки (`card-memory.tsx`, `use-card-memory.ts`).
 - Живая проба 28.10: из 200 просмотренных наблюдений 3 привязались к PRB-1.
 - MCP-инструмент для агентов — `forest_get_card_memory` (29.10, `impl-r037-work-state.md`).
