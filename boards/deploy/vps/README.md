@@ -85,6 +85,7 @@ environment variables (N-007).
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
 | `oq_token` | 0400, owner 1001. The owner-queue agent token of t-boards (TB-102, «Owner queue» below). The owner issues it in the ops-console; `install.sh` never makes it. Read on every call |
 | `claude_mem_proxy_token` | 0400, owner 1001. The Mac memory proxy token (OPS-19). The Mac owns it: `mac/memory-agent.sh token` makes it, `mac/memory-token-push.sh` delivers it. `install.sh` never makes it and warns while it is missing. The app reads it on every request |
+| `ssr_push_github_token` | 0400, owner 1001. Optional: the GitHub token of SSR push-back (TB-116, «SSR push-back» below). The owner puts it there; `install.sh` never makes it and logs one line while it is missing. Read on every push |
 
 `install.sh` generates the first three once and never overwrites them. The database password only takes effect when the
 volume is first initialised. A replaced `settings_key` leaves the saved model key unreadable: the admin enters it again.
@@ -144,7 +145,8 @@ applies the owner's answer itself. It is off until all four are set:
    journal writes the author as `token:<name>`; t-boards adds the prefix itself, so `t-boards` and `token:t-boards` both
    work (TB-111).
 2. Put the token into `/opt/t-boards/secrets/oq_token` (0400, owner 1001), never on the command line:
-   `install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/oq_token`, then paste and Ctrl-D.
+   `read -rs T && printf '%s' "$T" | install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/oq_token; unset T`,
+   then paste and Enter: the terminal does not show the token, and `printf` (a shell builtin) keeps it out of `ps`.
 3. Add to `/opt/t-boards/.env`: `OQ_URL=https://ops.admin.hrhelper.space`, `OQ_TOKEN_NAME=t-boards`,
    `OQ_WORKSPACE_PRODUCTS=<workspaceId>=hr-helper,<workspaceId>=hr-helper` (Lavaeon and aiBoards&eval; a workspace not
    listed gets no items, only the t-boards UI).
@@ -152,6 +154,22 @@ applies the owner's answer itself. It is off until all four are set:
 
 `install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
 While it is off, the journal has one `queue.skip` row per start and «да» works in the t-boards UI.
+
+## SSR push-back (TB-93, TB-116)
+
+A workspace named in `SSR_PUSH_REPOS` commits its served-latest SSR files into the `main` of its own repo (spec RU-9).
+It is off until both are set:
+
+1. Make a fine-grained GitHub token with «Contents: read and write» on the product repos only. Put it into
+   `/opt/t-boards/secrets/ssr_push_github_token` (0400, owner 1001), never on the command line:
+   `read -rs T && printf '%s' "$T" | install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/ssr_push_github_token; unset T`,
+   then paste and Enter: the terminal does not show the token, and `printf` (a shell builtin) keeps it out of `ps`.
+2. Add to `/opt/t-boards/.env`: `SSR_PUSH_REPOS=<workspaceId>=<owner>/<repo>[,<workspaceId>=<owner>/<repo>]`, then
+   `cd /opt/t-boards && docker compose -p t-boards up -d app`.
+
+The token file is read on every push: a rotation needs no restart. `install.sh` keeps the `SSR_PUSH_*` lines of `.env` on
+every update. While it is off, the nightly job logs `SSR push-back skipped` and pushes nothing. Off again: remove the
+file or the line and `up -d app`.
 
 ## Agents' MCP on the Mac (TB-105)
 

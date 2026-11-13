@@ -10,6 +10,7 @@ import {
 } from "../database/ssr-schema";
 import { isCorpusPath } from "./corpus";
 import { pushRepoOf } from "./push-repos";
+import { pushToken } from "./push-token";
 
 // Push-back (spec RU-9, D-010, D-012): commits served-latest files into the
 // product repo's main with [skip ci]. The push is conditional — for every
@@ -30,12 +31,16 @@ export type PushResult = {
 };
 
 export function pushBackConfigured(): boolean {
-  return Boolean(process.env.SSR_PUSH_GITHUB_TOKEN);
+  return Boolean(pushToken());
 }
 
 function github(path: string, init: RequestInit = {}) {
-  const token = process.env.SSR_PUSH_GITHUB_TOKEN;
-  if (!token) throw new Error("SSR_PUSH_GITHUB_TOKEN is not configured");
+  const token = pushToken();
+  if (!token) {
+    throw new Error(
+      "SSR push-back token is not configured (SSR_PUSH_GITHUB_TOKEN_FILE)",
+    );
+  }
   return fetch(`${API}${path}`, {
     ...init,
     headers: {
