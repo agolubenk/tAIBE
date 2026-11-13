@@ -165,6 +165,33 @@ describe("API integration: card memory (TB-113)", () => {
     });
   });
 
+  // TB-121: «R-036» has a board key's form, and the proxy labels it «key».
+  // The API labels it by where it came from.
+  it("labels a Backlog ID as a Backlog ID, not as a card key", async () => {
+    const forest = await createForest();
+    const card = await numberedCard(forest.project.id, "memc", 5);
+    await db.insert(schema.cardMetaTable).values({
+      taskId: card.id,
+      workspaceId: forest.workspace.id,
+      backlogId: "R-036",
+      updatedBy: "test",
+    });
+
+    const res = await forest.agent(`/cards/${card.id}/memory`);
+    expect(res.status).toBe(200);
+    expect(asked).toEqual([[card.id, "MEMC-5", "R-036"]]);
+    expect(
+      res.body.keys.map((k: { key: string; matchedOn: string }) => [
+        k.key,
+        k.matchedOn,
+      ]),
+    ).toEqual([
+      [card.id, "id"],
+      ["MEMC-5", "key"],
+      ["R-036", "backlog"],
+    ]);
+  });
+
   it("finds the same card by its key in this workspace only", async () => {
     const forest = await createForest();
     const other = await createForest();

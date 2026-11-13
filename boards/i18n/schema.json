@@ -2629,9 +2629,12 @@
 								},
 								"user": {
 									"type": "string"
+								},
+								"agent": {
+									"type": "string"
 								}
 							},
-							"required": ["admin", "user"]
+							"required": ["admin", "user", "agent"]
 						},
 						"status": {
 							"type": "object",
@@ -2687,6 +2690,9 @@
 								"selfRoleHint": {
 									"type": "string"
 								},
+								"agentRoleHint": {
+									"type": "string"
+								},
 								"save": {
 									"type": "string"
 								},
@@ -2701,6 +2707,7 @@
 								"email",
 								"role",
 								"selfRoleHint",
+								"agentRoleHint",
 								"save",
 								"saving"
 							]
@@ -3149,6 +3156,264 @@
 						"members",
 						"addMember",
 						"confirm",
+						"toast"
+					]
+				},
+				"adminNotebookModel": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"title": {
+							"type": "string"
+						},
+						"subtitle": {
+							"type": "string"
+						},
+						"loadError": {
+							"type": "string"
+						},
+						"retry": {
+							"type": "string"
+						},
+						"fields": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string"
+								},
+								"description": {
+									"type": "string"
+								},
+								"save": {
+									"type": "string"
+								},
+								"baseUrl": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"label": {
+											"type": "string"
+										},
+										"hint": {
+											"type": "string"
+										}
+									},
+									"required": ["label", "hint"]
+								},
+								"model": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"label": {
+											"type": "string"
+										},
+										"hint": {
+											"type": "string"
+										}
+									},
+									"required": ["label", "hint"]
+								},
+								"embedModel": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"label": {
+											"type": "string"
+										},
+										"hint": {
+											"type": "string"
+										}
+									},
+									"required": ["label", "hint"]
+								},
+								"dailyMax": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"label": {
+											"type": "string"
+										},
+										"hint": {
+											"type": "string"
+										}
+									},
+									"required": ["label", "hint"]
+								}
+							},
+							"required": [
+								"title",
+								"description",
+								"save",
+								"baseUrl",
+								"model",
+								"embedModel",
+								"dailyMax"
+							]
+						},
+						"key": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string"
+								},
+								"description": {
+									"type": "string"
+								},
+								"current": {
+									"type": "string"
+								},
+								"status": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"settings": {
+											"type": "string"
+										},
+										"file": {
+											"type": "string"
+										},
+										"missing": {
+											"type": "string"
+										},
+										"unreadable": {
+											"type": "string"
+										}
+									},
+									"required": ["settings", "file", "missing", "unreadable"]
+								},
+								"newLabel": {
+									"type": "string"
+								},
+								"save": {
+									"type": "string"
+								},
+								"remove": {
+									"type": "string"
+								},
+								"note": {
+									"type": "string"
+								},
+								"noEncryptionKey": {
+									"type": "string"
+								},
+								"fileWithheld": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"title",
+								"description",
+								"current",
+								"status",
+								"newLabel",
+								"save",
+								"remove",
+								"note",
+								"noEncryptionKey",
+								"fileWithheld"
+							]
+						},
+						"usage": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string"
+								},
+								"total": {
+									"type": "string"
+								},
+								"total_zero": {
+									"type": "string"
+								},
+								"total_one": {
+									"type": "string"
+								},
+								"total_two": {
+									"type": "string"
+								},
+								"total_few": {
+									"type": "string"
+								},
+								"total_many": {
+									"type": "string"
+								},
+								"total_other": {
+									"type": "string"
+								},
+								"calls_one": {
+									"type": "string"
+								},
+								"calls_zero": {
+									"type": "string"
+								},
+								"calls_two": {
+									"type": "string"
+								},
+								"calls_few": {
+									"type": "string"
+								},
+								"calls_many": {
+									"type": "string"
+								},
+								"calls_other": {
+									"type": "string"
+								},
+								"empty": {
+									"type": "string"
+								}
+							},
+							"required": ["title", "empty"]
+						},
+						"validation": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"baseUrl": {
+									"type": "string"
+								},
+								"dailyMax": {
+									"type": "string"
+								}
+							},
+							"required": ["baseUrl", "dailyMax"]
+						},
+						"toast": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"saved": {
+									"type": "string"
+								},
+								"saveError": {
+									"type": "string"
+								},
+								"noEncryptionKey": {
+									"type": "string"
+								},
+								"keyForOldAddress": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"saved",
+								"saveError",
+								"noEncryptionKey",
+								"keyForOldAddress"
+							]
+						}
+					},
+					"required": [
+						"title",
+						"subtitle",
+						"loadError",
+						"retry",
+						"fields",
+						"key",
+						"usage",
+						"validation",
 						"toast"
 					]
 				},
@@ -9799,15 +10064,48 @@
 								},
 								"toggle": {
 									"type": "string"
+								},
+								"toArchive": {
+									"type": "string"
+								},
+								"toArchiveLabel": {
+									"type": "string"
+								},
+								"mayReturn": {
+									"type": "string"
 								}
 							},
-							"required": ["disabled", "lastKey", "noKey", "toggle"]
+							"required": [
+								"disabled",
+								"lastKey",
+								"noKey",
+								"toggle",
+								"toArchive",
+								"toArchiveLabel",
+								"mayReturn"
+							]
+						},
+						"archive": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string"
+								},
+								"hint": {
+									"type": "string"
+								}
+							},
+							"required": ["title", "hint"]
 						},
 						"toast": {
 							"type": "object",
 							"additionalProperties": false,
 							"properties": {
 								"enabled": {
+									"type": "string"
+								},
+								"archived": {
 									"type": "string"
 								},
 								"disabled_one": {
@@ -9830,9 +10128,12 @@
 								},
 								"error": {
 									"type": "string"
+								},
+								"disabledNoKeys": {
+									"type": "string"
 								}
 							},
-							"required": ["enabled", "error"]
+							"required": ["enabled", "archived", "error", "disabledNoKeys"]
 						},
 						"tools": {
 							"type": "object",
@@ -9934,6 +10235,9 @@
 								},
 								"loadError": {
 									"type": "string"
+								},
+								"configure": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -9943,7 +10247,8 @@
 								"keyFound",
 								"keyMissing",
 								"note",
-								"loadError"
+								"loadError",
+								"configure"
 							]
 						}
 					},
@@ -9957,9 +10262,253 @@
 						"emptyDescription",
 						"loadError",
 						"row",
+						"archive",
 						"toast",
 						"tools",
 						"model"
+					]
+				},
+				"workspacePipeline": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"pageTitle": {
+							"type": "string"
+						},
+						"title": {
+							"type": "string"
+						},
+						"subtitle": {
+							"type": "string"
+						},
+						"readOnly": {
+							"type": "string"
+						},
+						"loadFailed": {
+							"type": "string"
+						},
+						"saveFailed": {
+							"type": "string"
+						},
+						"masterTitle": {
+							"type": "string"
+						},
+						"automation": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string"
+								},
+								"description": {
+									"type": "string"
+								}
+							},
+							"required": ["title", "description"]
+						},
+						"evolutionTitle": {
+							"type": "string"
+						},
+						"evolutionSubtitle": {
+							"type": "string"
+						},
+						"pipelineTitle": {
+							"type": "string"
+						},
+						"pipelineSubtitle": {
+							"type": "string"
+						},
+						"toggles": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"abJudge": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"abJudgeClaude": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"askOnce": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"handoffDupes": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"evolveAutoMerge": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"promptBrief": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"successorAuto": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"grillHint": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"nerveWakes": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"swarm": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"councilReview": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								},
+								"cardAutofill": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"title": {
+											"type": "string"
+										},
+										"description": {
+											"type": "string"
+										}
+									},
+									"required": ["title", "description"]
+								}
+							},
+							"required": [
+								"abJudge",
+								"abJudgeClaude",
+								"askOnce",
+								"handoffDupes",
+								"evolveAutoMerge",
+								"promptBrief",
+								"successorAuto",
+								"grillHint",
+								"nerveWakes",
+								"swarm",
+								"councilReview",
+								"cardAutofill"
+							]
+						}
+					},
+					"required": [
+						"pageTitle",
+						"title",
+						"subtitle",
+						"readOnly",
+						"loadFailed",
+						"saveFailed",
+						"masterTitle",
+						"automation",
+						"evolutionTitle",
+						"evolutionSubtitle",
+						"pipelineTitle",
+						"pipelineSubtitle",
+						"toggles"
 					]
 				}
 			},
@@ -9976,6 +10525,7 @@
 				"apiKeys",
 				"adminUsers",
 				"adminWorkspaces",
+				"adminNotebookModel",
 				"informationPage",
 				"notificationsPage",
 				"preferencesPage",
@@ -10013,7 +10563,8 @@
 				"codeHosting",
 				"shared",
 				"projectCustomFields",
-				"agentsPage"
+				"agentsPage",
+				"workspacePipeline"
 			]
 		},
 		"navigation": {
@@ -14043,9 +14594,12 @@
 								},
 								"ownerSession": {
 									"type": "string"
+								},
+								"ownerQueue": {
+									"type": "string"
 								}
 							},
-							"required": ["agent", "person", "ownerSession"]
+							"required": ["agent", "person", "ownerSession", "ownerQueue"]
 						},
 						"fields": {
 							"type": "object",
@@ -14237,11 +14791,14 @@
 										"key": {
 											"type": "string"
 										},
+										"backlog": {
+											"type": "string"
+										},
 										"queue": {
 											"type": "string"
 										}
 									},
-									"required": ["id", "key", "queue"]
+									"required": ["id", "key", "backlog", "queue"]
 								}
 							},
 							"required": [
@@ -15618,6 +16175,27 @@
 										"closeTask": {
 											"type": "string"
 										},
+										"closeTasks": {
+											"type": "string"
+										},
+										"closeTasks_zero": {
+											"type": "string"
+										},
+										"closeTasks_one": {
+											"type": "string"
+										},
+										"closeTasks_two": {
+											"type": "string"
+										},
+										"closeTasks_few": {
+											"type": "string"
+										},
+										"closeTasks_many": {
+											"type": "string"
+										},
+										"closeTasks_other": {
+											"type": "string"
+										},
 										"reopenTask": {
 											"type": "string"
 										},
@@ -15629,6 +16207,51 @@
 										},
 										"fellSector": {
 											"type": "string"
+										},
+										"createLabel": {
+											"type": "string"
+										},
+										"createLabel_zero": {
+											"type": "string"
+										},
+										"createLabel_one": {
+											"type": "string"
+										},
+										"createLabel_two": {
+											"type": "string"
+										},
+										"createLabel_few": {
+											"type": "string"
+										},
+										"createLabel_many": {
+											"type": "string"
+										},
+										"createLabel_other": {
+											"type": "string"
+										},
+										"attachLabel": {
+											"type": "string"
+										},
+										"attachLabel_zero": {
+											"type": "string"
+										},
+										"attachLabel_one": {
+											"type": "string"
+										},
+										"attachLabel_two": {
+											"type": "string"
+										},
+										"attachLabel_few": {
+											"type": "string"
+										},
+										"attachLabel_many": {
+											"type": "string"
+										},
+										"attachLabel_other": {
+											"type": "string"
+										},
+										"setAssignee": {
+											"type": "string"
 										}
 									},
 									"required": [
@@ -15636,7 +16259,8 @@
 										"reopenTask",
 										"setPriority",
 										"fellTree",
-										"fellSector"
+										"fellSector",
+										"setAssignee"
 									]
 								},
 								"status": {
@@ -15660,6 +16284,9 @@
 										},
 										"all": {
 											"type": "string"
+										},
+										"failed": {
+											"type": "string"
 										}
 									},
 									"required": [
@@ -15668,7 +16295,8 @@
 										"rejected",
 										"consumed",
 										"expired",
-										"all"
+										"all",
+										"failed"
 									]
 								},
 								"toast": {
@@ -15683,9 +16311,27 @@
 										},
 										"decideError": {
 											"type": "string"
+										},
+										"applied": {
+											"type": "string"
+										},
+										"failed": {
+											"type": "string"
 										}
 									},
-									"required": ["approved", "rejected", "decideError"]
+									"required": [
+										"approved",
+										"rejected",
+										"decideError",
+										"applied",
+										"failed"
+									]
+								},
+								"failReason": {
+									"type": "string"
+								},
+								"doneReason": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -15698,7 +16344,9 @@
 								"targetUnknown",
 								"action",
 								"status",
-								"toast"
+								"toast",
+								"failReason",
+								"doneReason"
 							]
 						},
 						"leases": {
@@ -16017,9 +16665,15 @@
 								},
 								"sources": {
 									"type": "string"
+								},
+								"evolution": {
+									"type": "string"
+								},
+								"registry": {
+									"type": "string"
 								}
 							},
-							"required": ["chat", "search", "sources"]
+							"required": ["chat", "search", "sources", "evolution", "registry"]
 						},
 						"hints": {
 							"type": "object",
@@ -16133,6 +16787,42 @@
 										"failed"
 									]
 								},
+								"brief": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"button": {
+											"type": "string"
+										},
+										"pending": {
+											"type": "string"
+										},
+										"title": {
+											"type": "string"
+										},
+										"failed": {
+											"type": "string"
+										},
+										"noModel": {
+											"type": "string"
+										},
+										"capped": {
+											"type": "string"
+										},
+										"toastError": {
+											"type": "string"
+										}
+									},
+									"required": [
+										"button",
+										"pending",
+										"title",
+										"failed",
+										"noModel",
+										"capped",
+										"toastError"
+									]
+								},
 								"toast": {
 									"type": "object",
 									"additionalProperties": false,
@@ -16164,6 +16854,7 @@
 								"deleteTitle",
 								"deleteDescription",
 								"answerStatus",
+								"brief",
 								"toast"
 							]
 						},
@@ -16227,9 +16918,135 @@
 								},
 								"chunks": {
 									"type": "string"
+								},
+								"add": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"label": {
+											"type": "string"
+										},
+										"placeholder": {
+											"type": "string"
+										},
+										"submit": {
+											"type": "string"
+										},
+										"hint": {
+											"type": "string"
+										}
+									},
+									"required": ["label", "placeholder", "submit", "hint"]
+								},
+								"refresh": {
+									"type": "string"
+								},
+								"toast": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"added": {
+											"type": "string"
+										},
+										"unchanged": {
+											"type": "string"
+										},
+										"error": {
+											"type": "string"
+										}
+									},
+									"required": ["added", "unchanged", "error"]
+								},
+								"errors": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"LINK_INVALID_URL": {
+											"type": "string"
+										},
+										"LINK_NOT_HTTPS": {
+											"type": "string"
+										},
+										"LINK_PRIVATE_DESTINATION": {
+											"type": "string"
+										},
+										"LINK_UNREACHABLE": {
+											"type": "string"
+										},
+										"LINK_TOO_MANY_REDIRECTS": {
+											"type": "string"
+										},
+										"LINK_TIMEOUT": {
+											"type": "string"
+										},
+										"LINK_UPSTREAM_STATUS": {
+											"type": "string"
+										},
+										"LINK_TOO_LARGE": {
+											"type": "string"
+										},
+										"LINK_CONTENT_TYPE": {
+											"type": "string"
+										},
+										"LINK_PDF_UNSUPPORTED": {
+											"type": "string"
+										},
+										"LINK_EMPTY": {
+											"type": "string"
+										},
+										"PR_INVALID_URL": {
+											"type": "string"
+										},
+										"PR_REPO_NOT_LINKED": {
+											"type": "string"
+										},
+										"PR_NOT_FOUND": {
+											"type": "string"
+										},
+										"GITHUB_APP_NOT_CONFIGURED": {
+											"type": "string"
+										},
+										"GITHUB_UNAVAILABLE": {
+											"type": "string"
+										},
+										"GITHUB_NO_ACCESS": {
+											"type": "string"
+										},
+										"SOURCE_TOO_MANY_CHUNKS": {
+											"type": "string"
+										}
+									},
+									"required": [
+										"LINK_INVALID_URL",
+										"LINK_NOT_HTTPS",
+										"LINK_PRIVATE_DESTINATION",
+										"LINK_UNREACHABLE",
+										"LINK_TOO_MANY_REDIRECTS",
+										"LINK_TIMEOUT",
+										"LINK_UPSTREAM_STATUS",
+										"LINK_TOO_LARGE",
+										"LINK_CONTENT_TYPE",
+										"LINK_PDF_UNSUPPORTED",
+										"LINK_EMPTY",
+										"PR_INVALID_URL",
+										"PR_REPO_NOT_LINKED",
+										"PR_NOT_FOUND",
+										"GITHUB_APP_NOT_CONFIGURED",
+										"GITHUB_UNAVAILABLE",
+										"GITHUB_NO_ACCESS",
+										"SOURCE_TOO_MANY_CHUNKS"
+									]
 								}
 							},
-							"required": ["empty", "model", "chunks"]
+							"required": [
+								"empty",
+								"model",
+								"chunks",
+								"add",
+								"refresh",
+								"toast",
+								"errors"
+							]
 						}
 					},
 					"required": [
@@ -16241,6 +17058,234 @@
 						"search",
 						"sources"
 					]
+				},
+				"ssr": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"pageTitle": {
+							"type": "string"
+						},
+						"tabs": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"evolution": {
+									"type": "string"
+								},
+								"registry": {
+									"type": "string"
+								}
+							},
+							"required": ["evolution", "registry"]
+						},
+						"approve": {
+							"type": "string"
+						},
+						"reject": {
+							"type": "string"
+						},
+						"rollback": {
+							"type": "string"
+						},
+						"diffShow": {
+							"type": "string"
+						},
+						"diffHide": {
+							"type": "string"
+						},
+						"diffFrom": {
+							"type": "string"
+						},
+						"empty": {
+							"type": "string"
+						},
+						"loadError": {
+							"type": "string"
+						},
+						"approveMatching": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"summary": {
+									"type": "string"
+								},
+								"button": {
+									"type": "string"
+								},
+								"buttonPartial": {
+									"type": "string"
+								},
+								"pending": {
+									"type": "string"
+								},
+								"title": {
+									"type": "string"
+								},
+								"description_one": {
+									"type": "string"
+								},
+								"description_zero": {
+									"type": "string"
+								},
+								"description_two": {
+									"type": "string"
+								},
+								"description_few": {
+									"type": "string"
+								},
+								"description_many": {
+									"type": "string"
+								},
+								"description_other": {
+									"type": "string"
+								},
+								"effect_one": {
+									"type": "string"
+								},
+								"effect_zero": {
+									"type": "string"
+								},
+								"effect_two": {
+									"type": "string"
+								},
+								"effect_few": {
+									"type": "string"
+								},
+								"effect_many": {
+									"type": "string"
+								},
+								"effect_other": {
+									"type": "string"
+								},
+								"later_one": {
+									"type": "string"
+								},
+								"later_zero": {
+									"type": "string"
+								},
+								"later_two": {
+									"type": "string"
+								},
+								"later_few": {
+									"type": "string"
+								},
+								"later_many": {
+									"type": "string"
+								},
+								"later_other": {
+									"type": "string"
+								},
+								"rest_one": {
+									"type": "string"
+								},
+								"rest_zero": {
+									"type": "string"
+								},
+								"rest_two": {
+									"type": "string"
+								},
+								"rest_few": {
+									"type": "string"
+								},
+								"rest_many": {
+									"type": "string"
+								},
+								"rest_other": {
+									"type": "string"
+								},
+								"group": {
+									"type": "string"
+								},
+								"group_zero": {
+									"type": "string"
+								},
+								"group_one": {
+									"type": "string"
+								},
+								"group_two": {
+									"type": "string"
+								},
+								"group_few": {
+									"type": "string"
+								},
+								"group_many": {
+									"type": "string"
+								},
+								"group_other": {
+									"type": "string"
+								},
+								"listLabel": {
+									"type": "string"
+								},
+								"done_one": {
+									"type": "string"
+								},
+								"done_zero": {
+									"type": "string"
+								},
+								"done_two": {
+									"type": "string"
+								},
+								"done_few": {
+									"type": "string"
+								},
+								"done_many": {
+									"type": "string"
+								},
+								"done_other": {
+									"type": "string"
+								},
+								"left_one": {
+									"type": "string"
+								},
+								"left_zero": {
+									"type": "string"
+								},
+								"left_two": {
+									"type": "string"
+								},
+								"left_few": {
+									"type": "string"
+								},
+								"left_many": {
+									"type": "string"
+								},
+								"left_other": {
+									"type": "string"
+								},
+								"changed": {
+									"type": "string"
+								},
+								"error": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"summary",
+								"button",
+								"buttonPartial",
+								"pending",
+								"title",
+								"listLabel",
+								"changed",
+								"error"
+							]
+						}
+					},
+					"required": [
+						"pageTitle",
+						"tabs",
+						"approve",
+						"reject",
+						"rollback",
+						"diffShow",
+						"diffHide",
+						"diffFrom",
+						"empty",
+						"loadError",
+						"approveMatching"
+					]
 				}
 			},
 			"required": [
@@ -16251,7 +17296,8 @@
 				"myWork",
 				"myTasks",
 				"forest",
-				"notebook"
+				"notebook",
+				"ssr"
 			]
 		},
 		"team": {
@@ -16273,9 +17319,12 @@
 						},
 						"viewer": {
 							"type": "string"
+						},
+						"agent": {
+							"type": "string"
 						}
 					},
-					"required": ["owner", "admin", "member", "viewer"]
+					"required": ["owner", "admin", "member", "viewer", "agent"]
 				},
 				"members": {
 					"type": "object",

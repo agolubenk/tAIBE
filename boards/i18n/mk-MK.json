@@ -3586,6 +3586,7 @@
 				"matched": {
 					"id": "card id",
 					"key": "card key",
+					"backlog": "Backlog ID",
 					"queue": "queue item"
 				}
 			},

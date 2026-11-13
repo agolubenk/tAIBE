@@ -39,7 +39,10 @@ const primaryCode = (err) =>
 const KEY_FORMS = [
   ["id", /^[a-z0-9]{24}$/],
   ["key", /^[A-Z][A-Z0-9]{0,9}-[0-9]{1,6}$/],
-  ["queue", /^(?=.{3,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+){1,7}$/],
+  [
+    "queue",
+    /^(?=.{3,64}$)(?:[a-z][a-z0-9]*-)?[a-z]-[a-z0-9]+(?:-[a-z0-9]+){0,6}$/,
+  ],
 ];
 
 export function keyForm(key) {
@@ -82,6 +85,22 @@ function columns(db, table) {
     .map((row) => row.name);
 }
 
+// The search joins observations_fts.rowid to observations.id. That holds only for an external-content index of
+// observations keyed by id, as claude-mem declares it (checked on the live database 14.11). An index built any
+// other way would join to other observations and show their titles, so it is «schema_changed» (TB-121).
+const FTS_CONTENT = /\bcontent\s*=\s*['"]?observations['"]?\s*[,)]/i;
+const FTS_CONTENT_ROWID = /\bcontent_rowid\s*=\s*['"]?id['"]?\s*[,)]/i;
+
+function ftsIndexesObservations(db) {
+  const row = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'observations_fts'",
+    )
+    .get();
+  const sql = typeof row?.sql === "string" ? row.sql : "";
+  return FTS_CONTENT.test(sql) && FTS_CONTENT_ROWID.test(sql);
+}
+
 // claude-mem changes its schema between versions: anything unexpected is «schema_changed», not a wrong answer.
 function schemaFits(db) {
   const mode = db.prepare("PRAGMA journal_mode").get();
@@ -93,6 +112,7 @@ function schemaFits(db) {
   ) {
     return false;
   }
+  if (!ftsIndexesObservations(db)) return false;
   const observations = columns(db, "observations");
   if (OBSERVATION_COLUMNS.some((c) => !observations.includes(c))) return false;
   db.prepare(

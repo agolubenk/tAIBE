@@ -4,7 +4,7 @@ import type {
   CardMemoryKeyResult,
 } from "@kaneo/claude-mem-reader";
 import { describe, expect, it } from "vite-plus/test";
-import { orderMemoryKeys } from "./card-memory-keys";
+import { labelBySource, orderMemoryKeys } from "./card-memory-keys";
 import {
   createCardMemoryFinder,
   FAILED_MS,
@@ -155,6 +155,46 @@ describe("createCardMemoryFinder", () => {
     expect(await find(["TB-1"])).toMatchObject({ available: false });
   });
 
+  // TB-121: a burst of calls for one key set while the proxy is asked is one
+  // request; a sleeping Mac fails it once, not once per call.
+  it("shares one request among calls for the same key set that overlap it", async () => {
+    const answers: ((value: CardMemoryAnswer) => void)[] = [];
+    const calls: string[][] = [];
+    const client: CardMemoryClient = {
+      find(keys) {
+        calls.push(keys);
+        return new Promise((resolve) => answers.push(resolve));
+      },
+    };
+    const find = createCardMemoryFinder(client, () => 3_000_000);
+
+    const first = find(["TB-1", "TB-2"]);
+    const second = find(["TB-2", "TB-1"]);
+    const other = find(["TB-3"]);
+    expect(calls).toEqual([["TB-1", "TB-2"], ["TB-3"]]);
+
+    answers[0]?.({ keys: [result("TB-1", 4), result("TB-2", 4)] });
+    answers[1]?.({ keys: [result("TB-3", 1)] });
+    expect((await first).keys).toHaveLength(2);
+    expect(await second).toEqual(await first);
+    expect((await other).keys[0]?.count).toBe(1);
+  });
+
+  it("asks again after a shared request has settled", async () => {
+    const clock = clockAt(4_000_000);
+    const { client, calls } = scriptedClient([new Error("proxy down"), 8]);
+    const find = createCardMemoryFinder(client, () => clock.now);
+
+    const [one, two] = await Promise.all([find(["TB-1"]), find(["TB-1"])]);
+    expect(one).toMatchObject({ available: false });
+    expect(two).toMatchObject({ available: false });
+    expect(calls).toHaveLength(1);
+
+    clock.tick(FAILED_MS);
+    expect((await find(["TB-1"])).keys[0]?.count).toBe(8);
+    expect(calls).toHaveLength(2);
+  });
+
   it("keeps separate answers for separate key sets", async () => {
     const clock = clockAt(0);
     const { client, calls } = scriptedClient([1, 2]);
@@ -170,25 +210,49 @@ describe("orderMemoryKeys", () => {
   it("keeps valid keys in order, drops repeats, empties and other words, caps at 6", () => {
     expect(
       orderMemoryKeys([
-        "g88se9086hag2gzm0fgjul5w",
-        "TB-108",
-        null,
-        "TB-108",
-        "free text",
-        undefined,
-        "s-tb-update-tb108",
-        "d-tb113-mem-1311",
-        "m-166-1311",
-        "s-tb-mcp-restart-1311",
-        "q-extra-1311",
+        ["g88se9086hag2gzm0fgjul5w", "id"],
+        ["TB-108", "key"],
+        [null, "backlog"],
+        ["TB-108", "backlog"],
+        ["free text", "backlog"],
+        // TB-121: a lowercase Backlog ID is no queue id and is left out.
+        ["auth-refactor", "backlog"],
+        [undefined, "queue"],
+        ["s-tb-update-tb108", "queue"],
+        ["d-tb113-mem-1311", "queue"],
+        ["m-166-1311", "queue"],
+        ["s-tb-mcp-restart-1311", "queue"],
+        ["q-extra-1311", "queue"],
       ]),
     ).toEqual([
-      "g88se9086hag2gzm0fgjul5w",
-      "TB-108",
-      "s-tb-update-tb108",
-      "d-tb113-mem-1311",
-      "m-166-1311",
-      "s-tb-mcp-restart-1311",
+      { key: "g88se9086hag2gzm0fgjul5w", source: "id" },
+      { key: "TB-108", source: "key" },
+      { key: "s-tb-update-tb108", source: "queue" },
+      { key: "d-tb113-mem-1311", source: "queue" },
+      { key: "m-166-1311", source: "queue" },
+      { key: "s-tb-mcp-restart-1311", source: "queue" },
     ]);
+  });
+});
+
+// TB-121: the proxy labels a key by its form, so a Backlog ID «R-036» came
+// back as a card key. The API labels it by where the key came from.
+describe("labelBySource", () => {
+  it("labels each key by its source and keeps the rest of the answer", () => {
+    const memory = {
+      available: true,
+      stale: false,
+      fetchedAt: new Date(1_000),
+      keys: [result("TB-108", 2), result("R-036", 3)],
+    };
+    const labelled = labelBySource(memory, [
+      { key: "TB-108", source: "key" },
+      { key: "R-036", source: "backlog" },
+    ]);
+    expect(labelled.keys.map((k) => [k.key, k.matchedOn, k.count])).toEqual([
+      ["TB-108", "key", 2],
+      ["R-036", "backlog", 3],
+    ]);
+    expect(labelled.fetchedAt).toEqual(new Date(1_000));
   });
 });

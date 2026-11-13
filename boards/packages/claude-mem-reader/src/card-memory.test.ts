@@ -53,6 +53,30 @@ describe("memoryKeyForm (TB-113)", () => {
     }
     expect(memoryKeyForm(`a-${"b".repeat(63)}`)).toBeNull();
   });
+
+  // TB-121: a queue id starts with its kind letter, after the product's
+  // prefix if any. A plain hyphenated word is not a queue id.
+  it("takes queue ids of every kind and refuses hyphenated words", () => {
+    for (const id of [
+      "d-taibe-tb130-memory-1411",
+      "s-set-control-mki9-1311",
+      "m-633-1311",
+      "i-20261113-070035-20d0",
+      "c-evening-1211",
+      "d-tba-hlpejao130re9rl4v68eoxpf-hlztkp",
+      "taibe-d-tba-hlpejao130re9rl4v68eoxpf-hlztkp",
+    ]) {
+      expect(memoryKeyForm(id), id).toBe("queue");
+    }
+    for (const word of [
+      "api-key",
+      "root-password",
+      "auth-refactor",
+      "db-password-prod",
+    ]) {
+      expect(memoryKeyForm(word), word).toBeNull();
+    }
+  });
 });
 
 describe("createCardMemoryClient", () => {
