@@ -308,6 +308,11 @@ Code. context7 работает без авторизации (анонимны�
 dams-rag), `context` (headroom), `docs` (markitdown, context7), `git` (git), `db`
 (postgres-readonly), `infra` (docker), `remote` (github, notion, sentry, cloudflare, t-boards), `boards` (t-boards), `memory` (mcp-search).
 
+Срез — не граница доверия (OPS-21): auth у хаба выключен. Копию сервера под продукт (`git-taibe` и т. п.) заводите
+только по факту вызовов — замер `python3 -I infra/mcp-hub/usage_by_server.py --days 7` (транскрипты Claude Code по
+серверу и продукту + `tool.routed` журнала хаба; клиента 1mcp в журнал не пишет). Замер 13.11 (OPS-43): через хаб
+вызывают только t-boards, копии не нужны.
+
 ## Что какой сервер даёт
 
 | Сервер | Что | Заметки |
