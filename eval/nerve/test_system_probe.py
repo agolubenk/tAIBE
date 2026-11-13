@@ -4,6 +4,7 @@ tAIBE, ожил — сводка release; LaunchAgent хаба не загруж
 python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"""
 import copy
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -92,6 +93,18 @@ class SystemProbeTest(unittest.TestCase):
         self.assertEqual(len(recs), 1)
         self.assertEqual((recs[0]["class"], recs[0]["to"]), (DIGEST, ["release"]))
         self.assertIn(AGENT, recs[0]["text"])
+
+    def test_hung_launchctl_is_not_checked_not_missing(self):
+        host = FakeHost({SERENA: "400"}, loaded=())
+
+        def hung(cmd, stdin=None, timeout=30):
+            if cmd[0] == "launchctl":
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            return host(cmd, stdin, timeout)
+
+        recs = self.passes(hung, 2)
+        self.assertEqual([r["key"].split(":")[1] for r in recs], ["hub"], "тревога хаба есть, LaunchAgent — молчит")
+        self.assertEqual(self.ctx.state["hub"]["fails"], 2, "состояние хаба обновлено до вызова launchctl")
 
     def test_old_config_without_new_keys_probes_hub_only(self):
         for key in ("serena_mcp", "launch_agents"):

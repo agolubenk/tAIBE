@@ -480,10 +480,19 @@ def _probe_watch(ctx, st, key, title, ok):
 
 
 def _launch_agents_missing(labels):
-    """Метки LaunchAgent, которых нет в gui-домене пользователя (launchctl print ≠ 0). Нет launchctl — не проверяем."""
+    """Метки LaunchAgent, которых нет в gui-домене пользователя (launchctl print ≠ 0). Нет launchctl, сбой или зависание
+    вызова — метка не проверена, а не «не загружена»."""
     if not labels or not shutil.which("launchctl"):
         return []
-    return [label for label in labels if run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout=10)[0] != 0]
+    missing = []
+    for label in labels:
+        try:
+            rc = run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout=10)[0]
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if rc != 0:
+            missing.append(label)
+    return missing
 
 
 def recent_limit_texts(project_root, since, tail):
