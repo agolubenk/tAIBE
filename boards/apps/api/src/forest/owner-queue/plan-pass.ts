@@ -1,4 +1,9 @@
-import { listAll, type QueueClient, QueueConflict } from "./queue-client";
+import {
+  listAll,
+  type QueueClient,
+  QueueConflict,
+  type QueueDoc,
+} from "./queue-client";
 import type { OwnerQueueConfig } from "./queue-config";
 import { planWrites } from "./plan-rows";
 import {
@@ -9,6 +14,7 @@ import {
   offPlanSince,
   type PlanRow,
   type RecentCard,
+  rowProduct,
 } from "./plan-types";
 
 // The board side of a run (plan-store.ts); tests use an in-memory one. Every
@@ -32,7 +38,11 @@ export type PlanDeps = {
 // The queue takes 120 writes a minute per token and the 30 s pass may spend
 // up to 50 of them: one run writes 30 rows at most, the rest go next run.
 export const PLAN_WRITES_PER_RUN = 30;
-const RUN_DEADLINE_MS = 120_000;
+// The reads (the queue list, the board queries) stop starting new work after
+// READ_BUDGET_MS; the writes get WRITE_BUDGET_MS from the end of the reads.
+// The worst run ends within about 2.5 minutes, before the next 5-minute run.
+export const READ_BUDGET_MS = 60_000;
+export const WRITE_BUDGET_MS = 60_000;
 
 export type PlanOutcome = {
   written: number;
@@ -44,9 +54,16 @@ export type PlanOutcome = {
   hourlyDone: boolean;
 };
 
-function planRows(docs: PlanRow[]): PlanRow[] {
+// The rows of the plan products only, by the id prefix w-<product>-, as
+// eval/tools/queue_focus.py plan_rows reads them. Not the doc's queue product:
+// the queue takes it from the id's own prefix (namespaceOf), so every w-… row
+// is hr-helper there, w-taibe-… included.
+function planRows(docs: QueueDoc[], products: string[]): PlanRow[] {
   return docs.filter(
-    (doc) => doc.data.kind === undefined && doc.data.archived !== true,
+    (doc) =>
+      doc.data.kind === undefined &&
+      doc.data.archived !== true &&
+      rowProduct(doc.id, products) !== null,
   );
 }
 
@@ -70,17 +87,20 @@ export async function planPass(
   deps: PlanDeps,
   hourly: boolean,
 ): Promise<PlanOutcome> {
-  const deadline = Date.now() + RUN_DEADLINE_MS;
+  const readBy = Date.now() + READ_BUDGET_MS;
   const now = deps.now();
   const workspaceIds = [...deps.config.products.keys()];
-  const list = await listAll(deps.client, "work");
-  // A cut list may miss the row that plans a card: no off-plan decisions then.
+  const products = [...new Set(deps.config.plan.products.values())];
+  const list = await listAll(deps.client, "work", readBy);
+  // A cut list, or a paged walk without a snapshot, may miss the row that
+  // plans a card: no off-plan decisions then. F4 still follows the rows read.
   if (list.truncated) {
     console.warn("owner-queue plan rows: the work list is truncated");
   }
-  const withHourly = hourly && !list.truncated;
-  const rows = planRows(list.docs);
+  const rows = planRows(list.docs, products);
   const board = await deps.store.resolve(workspaceIds, refsOf(rows));
+  const withHourly =
+    hourly && !list.truncated && list.snapshot && Date.now() <= readBy;
   const { writes, missing } = planWrites({
     rows,
     board,
@@ -94,11 +114,12 @@ export async function planPass(
             deps.config.plan.products,
             offPlanSince(now),
           ),
-          products: [...new Set(deps.config.plan.products.values())],
+          products,
           now,
         }
       : null,
   });
+  const deadline = Date.now() + WRITE_BUDGET_MS;
   if (missing.length > 0) {
     console.warn(
       `owner-queue plan rows: no row ${missing.join(", ")}; off-plan cards are not shown`,
