@@ -190,6 +190,85 @@ def _oq_get(ctx, collection):
     return j["docs"], meta
 
 
+# Дельта очереди (OPS-50, HR #623 — GET /api/oq/v1/changes): полный список один раз, дальше — только изменённые
+# документы и удалённые id после курсора. Состояние — в памяти процесса, как _OQ_CACHE: после рестарта — один полный
+# список. Включается `queue.delta: true`; без него и при сбое /changes — прежний список /db/:col (_oq_get).
+_OQ_DELTA = {}
+_OQ_DELTA_COLS = ("checks", "items")
+_OQ_FULL_EVERY = 12 * 3600      # полный список раз в 12 ч — страховка от правки базы консоли мимо журнала событий
+_OQ_DELTA_BACKOFF = 1800        # /changes не ответил (не 410) — 30 мин прежний список, потом новая попытка
+
+
+def _oq_curl(ctx, url):
+    """(HTTP-код, тело) одного запроса к очереди; байты — в счётчик. Без -f: 410 — ответ консоли, а не сбой curl."""
+    code, out, err = run(["curl", "-sS", "--compressed", "-m", "20", "-H", "@-",
+                          "-w", "\n%{http_code} %{size_download} %{size_header} %{size_request}", url],
+                         stdin=f"Authorization: Bearer {ctx.oq_token()}\n")
+    if code != 0:
+        raise RuntimeError(f"очередь /changes: {err.strip()[:120]}")
+    body, _, tail = out.rpartition("\n")
+    status, down, head, req = (tail.split(" ", 3) + [""] * 4)[:4]
+    _oq_count(ctx, sum(int(x or 0) for x in (down, head, req)))
+    return status, body
+
+
+def _oq_delta(ctx, now):
+    """{коллекция: (docs, meta)} по /changes: дельта от курсора; нет курсора, 410 или пора — полный список."""
+    st = _OQ_DELTA
+    base = f"{ctx.cfg['queue']['url'].rstrip('/')}/api/oq/v1/changes?col={','.join(_OQ_DELTA_COLS)}"
+    if st.get("base") != base or now - st.get("full_at", 0) >= _OQ_FULL_EVERY:
+        st.clear()
+    if st.get("cursor"):
+        status, body = _oq_curl(ctx, f"{base}&since={st['cursor']}")
+        if status == "200":
+            j = json.loads(body)
+            for col in _OQ_DELTA_COLS:
+                ch, docs = j["changes"][col], st["docs"][col]
+                for i in ch["removed"]:
+                    docs.pop(i, None)
+                for d in ch["docs"]:
+                    docs[d["id"]] = d
+            st["cursor"] = j["cursor"]
+            return _oq_view(st)
+        if status != "410":
+            raise RuntimeError(f"очередь /changes: HTTP {status}")
+    status, body = _oq_curl(ctx, base)
+    if status != "200":
+        raise RuntimeError(f"очередь /changes (полный список): HTTP {status}")
+    j = json.loads(body)
+    if j.get("full") is not True or not isinstance(j.get("cursor"), str):
+        raise RuntimeError("очередь /changes: ответ без full и cursor")
+    lists = j["collections"]
+    st.clear()
+    st.update(base=base, cursor=j["cursor"], full_at=now,
+              docs={col: {d["id"]: d for d in lists[col]["docs"]} for col in _OQ_DELTA_COLS},
+              meta={col: ({k: lists[col].get(k) for k in ("total", "limit")} if lists[col].get("truncated") is True
+                          else {}) for col in _OQ_DELTA_COLS})
+    return _oq_view(st)
+
+
+def _oq_view(st):
+    """Списки как у /db/:col: свежие первыми; meta — обрезка потолком последнего полного списка."""
+    return {col: (sorted(st["docs"][col].values(), key=lambda d: d.get("updatedAt") or 0, reverse=True),
+                  st["meta"][col]) for col in _OQ_DELTA_COLS}
+
+
+def _oq_lists(ctx):
+    """{коллекция: (docs, meta)} для items и checks. Дельта — если включена и не на паузе; сбой дельты (старая консоль
+    без /changes, сеть, разбор) — пауза _OQ_DELTA_BACKOFF и прежний список в этом же проходе."""
+    now = ctx.now.timestamp()
+    if ctx.cfg["queue"].get("delta") and now >= _OQ_DELTA.get("off_until", 0):
+        try:
+            return _oq_delta(ctx, now)
+        except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as e:
+            _OQ_DELTA.clear()
+            _OQ_DELTA["off_until"] = now + _OQ_DELTA_BACKOFF
+            ctx.emit(f"oq:delta:{ctx.now.astimezone(ctx.tz):%Y-%m-%d}", "queue.delta", DIGEST, ["release"],
+                     f"дельта очереди /changes не работает ({str(e)[:160]}) — Нерв на прежнем полном списке, "
+                     f"повтор через {_OQ_DELTA_BACKOFF // 60} мин", "queue")
+    return {col: _oq_get(ctx, col) for col in ("items", "checks")}
+
+
 def _oq_count(ctx, n):
     """Байты опроса очереди по дням (сжатое тело, заголовки ответа и запрос — как по сети; TLS-рукопожатие нового
     процесса curl, около 4 КБ на вызов по оценке, curl не сообщает) — приёмка фазы 0 «Нерв ≤ 50 МБ в сутки».
@@ -211,14 +290,15 @@ _OQ_TLS_EST = 4096
 
 def _oq_bytes_watch(ctx, prev):
     """Итог прошлых суток с оценкой TLS выше порога (по умолчанию 40 МБ при цели 50) — в сводку release, раз в неделю:
-    /changes уже следующая фаза, ежедневный повтор — шум."""
+    ежедневный повтор — шум. С дельтой /changes (OPS-50) порог — признак, что дельта выключена или на паузе."""
     warn = ctx.cfg["queue"].get("bytes_warn", 40_000_000)
     tls = prev["calls"] * _OQ_TLS_EST
     if prev["n"] + tls > warn:
         year, week, _ = datetime.strptime(prev["day"], "%Y-%m-%d").isocalendar()
         ctx.emit(f"oq:bytes:{year}-W{week:02d}", "queue.bytes", DIGEST, ["release"],
                  f"Нерв: {(prev['n'] + tls) / 1e6:.1f} МБ опроса очереди за {prev['day']} (из них TLS ≈ {tls / 1e6:.1f}, "
-                 f"оценка; порог {warn / 1e6:.0f}, цель ≤ 50) — полный список на каждой правке дорог, нужен /changes",
+                 f"оценка; порог {warn / 1e6:.0f}, цель ≤ 50) — проверь дельту /changes: queue.delta включён, сводка "
+                 f"queue.delta молчит (OPS-50)",
                  "queue")
 
 
@@ -239,8 +319,9 @@ def route_source(source, rules, default="coord"):
 
 def poll_queue(ctx):
     q = ctx.cfg["queue"]
-    item_docs, item_meta = _oq_get(ctx, "items")
-    checks, check_meta = _oq_get(ctx, "checks")
+    lists = _oq_lists(ctx)
+    item_docs, item_meta = lists["items"]
+    checks, check_meta = lists["checks"]
     _oq_watch(ctx, "items", item_meta)
     _oq_watch(ctx, "checks", check_meta)
     items = {d["id"]: d.get("data") or {} for d in item_docs}

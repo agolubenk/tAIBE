@@ -189,6 +189,7 @@
     "url": "https://ops.admin.hrhelper.space",
     "secret_cmd": "infra/scripts/dev-ai/mcp-secret.sh",
     "owner_items": true,
+    "delta": true,
     "source_roles": [
       [
         "supertick|t-boards|aiBoards|d4dev|админ-хост",

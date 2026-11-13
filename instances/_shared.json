@@ -14,7 +14,8 @@
   "queue": {
     "url": "https://ops.admin.hrhelper.space",
     "secret_cmd": "infra/scripts/dev-ai/mcp-secret.sh",
-    "owner_items": true
+    "owner_items": true,
+    "delta": true
   },
   "system": {
     "mem_critical": 10,

@@ -31,7 +31,7 @@ TOP = ("repo_root", "product_tree", "layer_home", "interval_seconds", "sources",
 NESTED = {
     "team": ("projects_root", "project_dir", "roles", "active_hours"),
     "github": ("repo", "min_lenses", "quorum_to", "path_roles", "lens_roles"),
-    "queue": ("url", "secret_cmd", "owner_items", "source_roles"),
+    "queue": ("url", "secret_cmd", "owner_items", "delta", "source_roles"),
     "boards": ("url", "product", "workspace", "note"),
 }
 # Где живёт поле: путь или его префикс. Поля продукта, которых нет в config.json (slug, title, active, queue.match),
@@ -39,7 +39,7 @@ NESTED = {
 PRODUCT = ("slug", "title", "active", "repo_root", "product_tree", "team.project_dir", "team.roles", "team.active_hours",
            "github", "queue.source_roles", "queue.match")
 SHARED = ("default_product", "layer_home", "interval_seconds", "sources", "team.projects_root", "queue.url",
-          "queue.secret_cmd", "queue.owner_items", "system", "budget", "circadian", "tap", "boards")
+          "queue.secret_cmd", "queue.owner_items", "queue.delta", "system", "budget", "circadian", "tap", "boards")
 REQUIRED = ("slug", "repo_root", "product_tree", "team.project_dir", "team.roles", "team.active_hours", "github.repo",
             "github.path_roles", "github.lens_roles", "queue.source_roles")
 # R-2 спеки M1: значение, похожее на ключ, в публичном git не живёт — только secret_cmd.
