@@ -169,26 +169,32 @@ describe("API integration: read-only API keys (TB-96)", () => {
   it("does not open MCP to a read-only key as a bearer or x-api-key", async () => {
     const { user } = await seed();
     const key = await createKey(user.id, { access: "read" });
-    const response = await call("/api/mcp", key, {
-      method: "POST",
-      headers: {
-        accept: "application/json, text/event-stream",
-        authorization: `Bearer ${key}`,
-        "mcp-method": "initialize",
-        "mcp-protocol-version": "2026-07-28",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2026-07-28",
-          capabilities: {},
-          clientInfo: { name: "tb96-read-key", version: "1.0.0" },
+    const initialize = (headers: Record<string, string>) =>
+      call("/api/mcp", key, {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-method": "initialize",
+          "mcp-protocol-version": "2026-07-28",
+          ...headers,
         },
-      }),
-    });
-    expect(response.status).toBe(401);
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2026-07-28",
+            capabilities: {},
+            clientInfo: { name: "tb96-read-key", version: "1.0.0" },
+          },
+        }),
+      });
+    // call() always sends x-api-key; the second request adds the key as a bearer.
+    expect((await initialize({})).status, "x-api-key only").toBe(401);
+    expect(
+      (await initialize({ authorization: `Bearer ${key}` })).status,
+      "bearer and x-api-key",
+    ).toBe(401);
   });
 
   it("treats an unknown access value as read-only", async () => {
