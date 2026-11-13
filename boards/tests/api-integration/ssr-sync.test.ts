@@ -17,6 +17,15 @@ import { createForest } from "./helpers/forest";
 const sha256 = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
 
+const blobShaOf = async (versionId: string) => {
+  const [row] = await db
+    .select({ blobSha: ssrVersionTable.blobSha })
+    .from(ssrVersionTable)
+    .where(eq(ssrVersionTable.id, versionId));
+  if (!row) throw new Error(`no version ${versionId}`);
+  return row.blobSha;
+};
+
 describe("API integration: SSR corpus sync", () => {
   beforeEach(async () => {
     await resetTestDatabase();
@@ -89,7 +98,10 @@ describe("API integration: SSR corpus sync", () => {
     await rejectDraft(
       forest.workspace.id,
       entity.id,
-      draft.versionId,
+      {
+        versionId: draft.versionId,
+        blobSha: await blobShaOf(draft.versionId),
+      },
       forest.ownerId,
     );
 
@@ -148,7 +160,7 @@ describe("API integration: SSR corpus sync", () => {
     await approveDraft(
       forest.workspace.id,
       entity.id,
-      draft.versionId,
+      { versionId: draft.versionId, blobSha: read.blobSha },
       forest.ownerId,
     );
     const replaced = await replaceOpenDraft(db, draft.versionId, {
@@ -187,7 +199,7 @@ describe("API integration: SSR corpus sync", () => {
       rejectDraft(
         forest.workspace.id,
         entity.id,
-        draft.versionId,
+        { versionId: draft.versionId, blobSha: read.blobSha },
         forest.ownerId,
       ),
     ).rejects.toMatchObject({ status: 409 });
