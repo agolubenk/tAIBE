@@ -45,10 +45,12 @@ export function missingProjects(
   agent: string,
   current: Projects,
 ): string[] {
-  const before = previous?.hosts.find((h) => h.agent === agent)?.projects
-  if (!before?.length) return []
+  const host = previous?.hosts.find((h) => h.agent === agent)
+  // A stack stays missing until it returns: the saved report keeps it in missingProjects, not in projects.
+  const before = new Set([...(host?.projects ?? []).map((p) => p.name), ...(host?.missingProjects ?? [])])
+  if (!before.size) return []
   const now = new Set(current.map((p) => p.name))
-  return before.map((p) => p.name).filter((name) => !now.has(name))
+  return [...before].filter((name) => !now.has(name))
 }
 
 const more = (n: number, forms: readonly [string, string, string]) => (n > 0 ? ` и ещё ${plural(n, forms)}` : '')

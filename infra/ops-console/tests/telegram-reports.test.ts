@@ -166,11 +166,29 @@ describe('формат отчётов', () => {
     expect(digest).toContain('📦 Контейнеры: пропал стек: t-boards (было 2) · 1 стек: backend 1/1')
     expect(digest).not.toContain('все работают')
 
-    // Следующий отчёт сравнивается с этим: стека уже не было — сигнала больше нет, битое последнее тело — молчание.
-    await getDb().insert(reports).values(saved(new Date(), JSON.stringify(r)))
+    // Второй и третий отчёт подряд без стека: сигнал держится, пока стек не вернётся.
+    const at = (s: number) => new Date(Date.now() + s * 1000)
+    await getDb().insert(reports).values(saved(at(0), JSON.stringify(r)))
+    const r2 = await buildReport('daily')
+    expect(r2.hosts[0]!.missingProjects).toEqual(['t-boards'])
+    expect(digestHtml(r2, 'Europe/Minsk')).toContain('📦 Контейнеры: пропал стек: t-boards (было 2) · 1 стек: backend 1/1')
+    await getDb().insert(reports).values(saved(at(1), JSON.stringify(r2)))
+    const r3 = await buildReport('daily')
+    expect(r3.hosts[0]!.missingProjects).toEqual(['t-boards'])
+
+    // Битое последнее тело — молчание; следующий целый отчёт снова видит пропажу.
+    await getDb().insert(reports).values(saved(at(2), 'not json'))
     expect((await buildReport('daily')).hosts[0]!.missingProjects).toBeUndefined()
-    await getDb().insert(reports).values(saved(new Date(Date.now() + 1000), 'not json'))
-    expect((await buildReport('daily')).hosts[0]!.missingProjects).toBeUndefined()
+    await getDb().insert(reports).values(saved(at(3), JSON.stringify(r3)))
+    expect((await buildReport('daily')).hosts[0]!.missingProjects).toEqual(['t-boards'])
+
+    // Стек вернулся — строки нет.
+    await getDb()
+      .insert(containers)
+      .values(['tb-api-1', 'tb-web-1'].map((name) => ({ ...base, name, state: 'running', composeProject: 't-boards', mainStack: false })))
+    const r4 = await buildReport('daily')
+    expect(r4.hosts[0]!.missingProjects).toBeUndefined()
+    expect(digestHtml(r4, 'Europe/Minsk')).not.toContain('пропал')
   })
 
   it('подробный отчёт: длинные строки не рвут разметку, сообщения ≤ 3800', () => {

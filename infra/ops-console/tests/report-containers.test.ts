@@ -95,6 +95,17 @@ describe('пропавший стек (OPS-57)', () => {
     expect(missingProjects(prev, 'prod', [...now, stack('t-boards', 4, ['a', 'b', 'c', 'd'])])).toEqual([])
   })
 
+  it('пропавший стек числится пропавшим, пока не вернётся: прошлый отчёт держит его в missingProjects', () => {
+    const prev = { hosts: [{ ...host('prod', now), missingProjects: ['t-boards'] }] }
+    expect(missingProjects(prev, 'prod', now)).toEqual(['t-boards'])
+    expect(missingProjects(prev, 'prod', [...now, stack('t-boards', 2)])).toEqual([])
+    // Хост потерял все стеки: projects пуст, пропавшие всё равно сравниваются; повтор имени не двоится.
+    const empty = { hosts: [{ ...host('prod', []), missingProjects: ['backend', 't-boards'] }] }
+    expect(missingProjects(empty, 'prod', [])).toEqual(['backend', 't-boards'])
+    const both = { hosts: [{ ...host('prod', now), missingProjects: ['backend'] }] }
+    expect(missingProjects(both, 'prod', [])).toEqual(['backend'])
+  })
+
   it('пропал стек — карточка не пишет «все работают», хост называет его', () => {
     const h = { ...host('prod', now), missingProjects: ['t-boards'] }
     expect(containersLine({ hosts: [h], restarts: [] })).toBe(
