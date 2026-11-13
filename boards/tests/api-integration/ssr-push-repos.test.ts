@@ -60,8 +60,8 @@ describe("API integration: SSR push-back repo per workspace", () => {
 
   beforeEach(async () => {
     await resetTestDatabase();
-    // Every file is new to the repo; the commit stops at the ref read, so no
-    // test reaches a write.
+    // Every file is new to the repo; the commit stops at the ref read. The
+    // full-commit test below brings a GitHub that accepts every write.
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -101,6 +101,59 @@ describe("API integration: SSR push-back repo per workspace", () => {
     expect(urls.length).toBeGreaterThan(0);
     for (const url of urls) {
       expect(url).toMatch(
+        /^https:\/\/api\.github\.com\/repos\/acme\/product-a\//,
+      );
+    }
+  });
+
+  it("sends the whole commit, every read and write, into the workspace's own repo", async () => {
+    const mapped = await createForest();
+    const other = await createForest();
+    await servedCorpus(mapped);
+    await servedCorpus(other);
+    vi.stubEnv(
+      "SSR_PUSH_REPOS",
+      `${mapped.workspace.id}=acme/product-a,${other.workspace.id}=acme/product-b`,
+    );
+    // A GitHub that accepts the commit: the file is new, then ref, base
+    // commit, blob, tree, new commit and the ref update all succeed.
+    const calls: { method: string; url: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        calls.push({ method, url });
+        const json = (body: unknown, status = 200) =>
+          new Response(JSON.stringify(body), { status });
+        if (url.includes("/contents/")) return json({}, 404);
+        if (url.includes("/git/ref/heads/"))
+          return json({ object: { sha: "base-commit" } });
+        if (method === "GET" && url.includes("/git/commits/"))
+          return json({ tree: { sha: "base-tree" } });
+        if (url.endsWith("/git/blobs")) return json({ sha: "blob-1" }, 201);
+        if (url.endsWith("/git/trees")) return json({ sha: "tree-1" }, 201);
+        if (url.endsWith("/git/commits"))
+          return json({ sha: "new-commit" }, 201);
+        if (url.includes("/git/refs/heads/")) return json({});
+        return json({ message: "unexpected" }, 500);
+      }),
+    );
+
+    expect(await pushChangeset(mapped.workspace.id, "m")).toMatchObject({
+      pushed: true,
+      commitSha: "new-commit",
+    });
+
+    const writes = calls.filter((call) => call.method !== "GET");
+    expect(writes.map((call) => call.url.replace(/^.*\/git\//, ""))).toEqual(
+      expect.arrayContaining(["blobs", "trees", "commits"]),
+    );
+    expect(writes.some((call) => /\/git\/refs\/heads\//.test(call.url))).toBe(
+      true,
+    );
+    for (const call of calls) {
+      expect(call.url).toMatch(
         /^https:\/\/api\.github\.com\/repos\/acme\/product-a\//,
       );
     }
