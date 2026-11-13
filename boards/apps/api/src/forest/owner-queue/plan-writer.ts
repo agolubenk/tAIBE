@@ -3,14 +3,14 @@ import {
   QueueConflict,
   type QueueDoc,
   QueueRejected,
+  QueueThrottled,
 } from "./queue-client";
+import { PLAN_WRITES_PER_RUN } from "./queue-limits";
 
-// The queue takes 120 writes a minute per token and the 30 s pass may spend
-// up to 50 of them: one plan run writes 30 docs at most, the rest go next run.
-export const PLAN_WRITES_PER_RUN = 30;
+export { PLAN_WRITES_PER_RUN } from "./queue-limits";
 
 // «skipped» — a version race (409): the doc waits for the next run; «left» —
-// the run spent its writes or its time.
+// the run spent its writes or its time, or the queue answered 429.
 export type WriteResult = QueueDoc | "skipped" | "left";
 
 // Every write of one plan run goes through one budget.
@@ -20,6 +20,7 @@ export class PlanWriter {
   left = 0;
   refused = 0;
   private attempts = 0;
+  private throttled = false;
 
   constructor(
     readonly client: QueueClient,
@@ -27,7 +28,11 @@ export class PlanWriter {
   ) {}
 
   async write(run: () => Promise<QueueDoc>): Promise<WriteResult> {
-    if (this.attempts >= PLAN_WRITES_PER_RUN || Date.now() > this.deadline) {
+    if (
+      this.throttled ||
+      this.attempts >= PLAN_WRITES_PER_RUN ||
+      Date.now() > this.deadline
+    ) {
       this.left += 1;
       return "left";
     }
@@ -37,6 +42,14 @@ export class PlanWriter {
       this.written += 1;
       return doc;
     } catch (error) {
+      if (error instanceof QueueThrottled) {
+        // The window frees up in seconds, not within this run: no retry here,
+        // the doc and the rest of the run wait for the next run (TB-119).
+        console.warn(`owner-queue plan: ${error.message}; the rest waits`);
+        this.throttled = true;
+        this.left += 1;
+        return "left";
+      }
       if (!(error instanceof QueueConflict)) throw error;
       this.skipped += 1;
       return "skipped";

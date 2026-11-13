@@ -188,7 +188,8 @@ async function writeDecisions(writer: PlanWriter, daily: DailyPlan) {
 // applied (TB-112), then F4 — each row follows its cards on the board; hourly
 // also F8 (the off-plan row) and F9 (the «без аренды» mark); daily the
 // forecast, eta and a due decision (TB-112). A row is written once per run,
-// only when a value changed, with ifVersion; 30 writes a run at most.
+// only when a value changed, with ifVersion; PLAN_WRITES_PER_RUN (20) writes a
+// run at most.
 export async function planPass(
   deps: PlanDeps,
   runs: PlanRuns,
