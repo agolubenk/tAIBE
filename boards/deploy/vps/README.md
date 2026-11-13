@@ -140,7 +140,9 @@ t-boards puts every pending «да» request into the owner queue (ops-console) 
 applies the owner's answer itself. It is off until all four are set:
 
 1. In the ops-console, issue an agent token named `t-boards` (scope `agent`, products `hr-helper`). The name is
-   `OQ_TOKEN_NAME`: an item whose last writer has another name is treated as edited by someone else (R-4).
+   `OQ_TOKEN_NAME`: an item whose last writer has another name is treated as edited by someone else (R-4). The queue
+   journal writes the author as `token:<name>`; t-boards adds the prefix itself, so `t-boards` and `token:t-boards` both
+   work (TB-111).
 2. Put the token into `/opt/t-boards/secrets/oq_token` (0400, owner 1001), never on the command line:
    `install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/oq_token`, then paste and Ctrl-D.
 3. Add to `/opt/t-boards/.env`: `OQ_URL=https://ops.admin.hrhelper.space`, `OQ_TOKEN_NAME=t-boards`,
