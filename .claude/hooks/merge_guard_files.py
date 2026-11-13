@@ -198,18 +198,18 @@ def command_writes(text, depth=0, alt=False, keep=False, raw=False):
     прочёл бы с диска старый файл. Знак комментария мог смениться (keep — до текста, или текст называет настройку —
     comment_char_may_change, SE-77) — имена и из прочтения без снятия комментариев (raw), в том числе у `eval`/`-c`."""
     from merge_guard_shell import (SHELLS, command_name, comment_char_may_change, comment_readings, cut_heredocs,  # shell
-                                   cut_substitutions, expand_vars, note_vars, split_commands, strip_prefix,  # импортирует
-                                   substitute, tokens_before_error)  # этот модуль
+                                   cut_substitutions, expand_vars, heredoc_text, join_lines, note_vars,  # импортирует
+                                   split_commands, strip_prefix, substitute, tokens_before_error)  # этот модуль
     if depth > 3:
         return set()
     source, keep = text, keep or comment_char_may_change(text)  # `histchars='!^%'; echo a # ; echo … > m.sh`
     try:
         text, bodies = (text, []) if alt else cut_heredocs(text)
-        text, other = (text.replace("\\\n", " "), None) if raw else comment_readings(text, None, alt)  # с `'"`… остаётся
+        text, other = (join_lines(text), None) if raw else comment_readings(text, None, alt)  # с `'"`… остаётся
         text, inner = cut_substitutions(text)
     except Exception:
         return set()
-    names, env, more = set(), {}, inner + [b for _, b, _ in bodies]
+    names, env, more = set(), {}, inner + [heredoc_text(b, e) for _, b, e in bodies]  # тело — как его прочтёт bash
     try:
         for argv, targets, *_ in split_commands(tokens_before_error(text)[0]):
             out = [o.strip("'\"") for t in targets for o in substitute(t, env)]

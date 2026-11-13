@@ -179,7 +179,9 @@ def strip_comments(cmd, force=False, keep=None, trust=False, kept=None):
     здесь точно на верхнем уровне (sure_comments, SE-75, SE-76): там всё до конца строки — комментарий. Такой снят —
     текст без него и при несошедшихся кавычках: с ним кавычки сошлись бы через строки и спрятали бы код, который
     bash выполнит до ошибки в конце скрипта. trust — снять и остальные комментарии в начале слова (второе прочтение,
-    comment_readings); kept — список, куда пишутся позиции комментариев, которые остались."""
+    comment_readings); kept — список, куда пишутся позиции комментариев, которые остались. `\\`+перевод строки вне
+    `'…'` и `$'…'` снимается целиком, как в bash (SE-83): `g\\`⏎`h` — слово `gh`, а `\\\\`⏎ — экранированная `\\` и
+    конец строки. В снятом комментарии `\\` строку не продолжает: перевод строки после него остаётся."""
     out, i, quote, word, sure, hits = [], 0, None, False, None, []
 
     def sure_comment(at, text):
@@ -200,9 +202,9 @@ def strip_comments(cmd, force=False, keep=None, trust=False, kept=None):
             continue
         elif quote == "$'":
             quote = None if c == "'" else quote
-        elif c == "\\":
-            word = word or cmd[i + 1:i + 2] != "\n"  # `\`+перевод строки — склейка, слово не начинает
-            out.append(cmd[i:i + 2])
+        elif c == "\\":  # `\`+перевод строки вне `'…'` и `$'…'` — склейка: bash снимает оба знака, слово не начинает
+            word = word or cmd[i + 1:i + 2] != "\n"
+            out.append("" if cmd[i + 1:i + 2] == "\n" else cmd[i:i + 2])  # `\\`⏎ — экранированная `\`, строка кончилась
             i += 2
             continue
         elif c == "$" and quote is None and cmd[i + 1:i + 2] == "'":
@@ -233,9 +235,9 @@ def comment_readings(cmd, keep, trust=False):
     начале слова, который strip_comments оставил (sure_comments не уверен: после heredoc, обратных кавычек, `$[…]`),
     bash может прочесть и как комментарий: тогда его `"` или `'` не сходится с кавычкой ниже и не прячет код до неё
     (SE-82). Второе прочтение — без всех таких комментариев, его находки идут в решение вместе с первым. trust — это
-    прочтение и разбирается, третьего нет. `\\`+перевод строки — склейка: после снятия, в комментарии её нет.
+    прочтение и разбирается, третьего нет. Склейку строк делает strip_comments (SE-83).
     cmd — уже без тел heredoc, и второе прочтение их повторно не режет: на месте heredoc осталось `<< E`, и строка
     `E` ниже сделала бы телом код, который bash выполнит."""
     kept = []
-    plain = strip_comments(cmd, True, keep, trust, kept).replace("\\\n", " ")
-    return plain, strip_comments(cmd, True, keep, True).replace("\\\n", " ") if kept and not trust else None
+    plain = strip_comments(cmd, True, keep, trust, kept)
+    return plain, strip_comments(cmd, True, keep, True) if kept and not trust else None
