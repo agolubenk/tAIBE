@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -280,18 +281,46 @@ def _finish_lens(rec: dict) -> None:
     rec["error"] = "; ".join(f"{p['part']}: {p['error']}" for p in parts if p["error"])[:1000]
 
 
+def resume_mismatch(prior: dict | None, pr: str, diff_sha: str) -> str:
+    """Почему прошлый отчёт нельзя продолжить: другой PR или другой дифф (новые коммиты). Пусто — можно."""
+    if not prior:
+        return ""
+    meta = prior.get("_meta") or {}
+    if str(meta.get("pr")) != str(pr):
+        return f"отчёт PR {meta.get('pr')}, а ревьюится {pr}"
+    if meta.get("diff_sha") != diff_sha:
+        return "дифф изменился после прошлого прогона (или отчёт без diff_sha)"
+    return ""
+
+
+def _carry_part(rec: dict, prior: dict | None, lens: str, label: str) -> bool:
+    """--resume: часть, прошедшая в прошлом отчёте (другой рецензент цепочки), переносится как есть, без вызова."""
+    prev = (prior or {}).get(lens) or {}
+    done = next((p for p in prev.get("parts") or [] if p.get("part") == label and p.get("ok")), None)
+    if not done:
+        return False
+    rec["parts"].append({**done, "reviewer": done.get("reviewer") or (prior or {}).get("_meta", {}).get("backend", "glm")})
+    rec["findings"].extend(f for f in prev.get("findings") or [] if f.get("part", label) == label)
+    rec["checked"].extend(c for c in prev.get("checked") or [] if c not in rec["checked"])
+    return True
+
+
 def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_tokens: int, deadline_s: float,
-               breaker: int = 2, clock=time.monotonic, on_progress=None, log=print) -> tuple[dict, int]:
-    """Вызовы по одному. Возвращает (отчёт, код выхода)."""
-    out: dict = {"_meta": {"pr": pr, "model": model, "calls": len(calls), "stopped": "", "not_passed": []}}
+               breaker: int = 2, clock=time.monotonic, on_progress=None, log=print, prior: dict | None = None,
+               backend: str = "glm", diff_sha: str = "") -> tuple[dict, int]:
+    """Вызовы по одному. Возвращает (отчёт, код выхода). prior — отчёт прошлого рецензента цепочки (--resume)."""
+    out: dict = {"_meta": {"pr": pr, "model": model, "backend": backend, "calls": len(calls), "stopped": "",
+                           "not_passed": [], "diff_sha": diff_sha}}
     started, stop, stop_kind = clock(), "", ""
     in_row: dict = {}         # линза → ответов 5xx подряд
     dropped: dict = {}        # линза → почему её оставшиеся части не идут
     for call in calls:
         rec = out.setdefault(call.lens, _lens_record())
         label = call.part.label if call.part else "весь дифф"
+        if _carry_part(rec, prior, call.lens, label):
+            continue
         part = {"part": label, "files": call.part.files if call.part else [], "attempted": False, "ok": False,
-                "seconds": 0, "verdict": None, "error": "", "kind": ""}
+                "seconds": 0, "verdict": None, "error": "", "kind": "", "reviewer": backend}
         rec["parts"].append(part)
         if not stop and clock() - started > deadline_s:
             stop, stop_kind = f"потолок {round(deadline_s / 60)} мин на всё ревью", "deadline"
@@ -328,10 +357,13 @@ def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_token
         _log_part(log, call.lens, part, rec)
         if on_progress:
             on_progress(out)
+    reviewers: dict = {}
     for name, rec in out.items():
         if name != "_meta":
             _finish_lens(rec)
             out["_meta"]["not_passed"] += [f"{name} ({p['part']})" for p in rec["parts"] if not p["ok"]]
+            reviewers[name] = sorted({p.get("reviewer", backend) for p in rec["parts"] if p["ok"]})
+    out["_meta"]["reviewers"] = reviewers
     out["_meta"]["stopped"] = stop
     out["_meta"]["dropped_lenses"] = dropped
     code = (EXIT_LIMIT if stop_kind in ("quota", "budget") else EXIT_START if stop_kind == "config"
@@ -352,7 +384,8 @@ def _parse_args(argv):
     ap = argparse.ArgumentParser(description="Ревью PR на GLM по линзам (см. шапку модуля).")
     ap.add_argument("pr")
     ap.add_argument("out", type=Path)
-    ap.add_argument("model", nargs="?", default="glm-5")
+    ap.add_argument("model", nargs="?", default="",
+                    help="glm: glm-5; opencode: $OPENCODE_REVIEW_MODEL или opencode-go/glm-5.3")
     ap.add_argument("lenses", nargs="?", default="", help="JSON-файл линз; пусто — линзы по умолчанию")
     ap.add_argument("max_tokens", nargs="?", type=int, default=6000)
     ap.add_argument("--attempts", type=int, default=2, help="попыток на вызов (5xx, перегрузка)")
@@ -363,7 +396,13 @@ def _parse_args(argv):
     ap.add_argument("--diff-file", default=os.environ.get("PR_DIFF_FILE", ""))
     ap.add_argument("--body-file", default="")
     ap.add_argument("--dry-run", action="store_true", help="только план вызовов, без сети и базы")
-    return ap.parse_args(argv)
+    ap.add_argument("--backend", choices=("glm", "opencode"), default="glm",
+                    help="кто рецензирует; цепочка opencode → glm → Claude — review_chain.sh")
+    ap.add_argument("--resume", default="", help="отчёт прошлого рецензента: прошедшие части не повторяются")
+    args = ap.parse_args(argv)
+    args.model = args.model or ("glm-5" if args.backend == "glm"
+                                else os.environ.get("OPENCODE_REVIEW_MODEL", "opencode-go/glm-5.3"))
+    return args
 
 
 def _inputs(args) -> tuple[str, str]:
@@ -400,31 +439,48 @@ def main(argv=None) -> int:
         return EXIT_OK
     if args.dry_run:
         return EXIT_OK
-
-    import cloud
-    import config as cfg_mod
-    import glm_mode
-    from store import DB_PATH, Store
-    if not DB_PATH.exists():
-        print(f"нет {DB_PATH} — квота и бюджет не видны; запускайте из основного checkout", file=sys.stderr)
+    try:
+        prior = json.loads(Path(args.resume).read_text()) if args.resume and Path(args.resume).exists() else None
+    except (OSError, ValueError) as exc:
+        print(f"запуск: --resume {args.resume}: {exc}", file=sys.stderr)
         return EXIT_START
-    cfg = cfg_mod.load(HERE / "config.toml", strict=False)
+    diff_sha = hashlib.sha256(diff.encode()).hexdigest()[:16]
+    stale = resume_mismatch(prior, args.pr, diff_sha)
+    if stale:
+        print(f"--resume не применён: {stale} — все части ревьюятся заново", flush=True)
+        prior = None
     body = body or ""
 
     def save(report: dict) -> None:
         args.out.write_text(json.dumps(report, ensure_ascii=False, indent=1))
 
-    with Store() as store:
-        client = cloud.build(cfg, store=store, logger=lambda m: print(m, flush=True))
-        glm_mode.apply_budget(client, cfg, True)      # лимиты режима GLM 5.x; платный контур закрыт
-        client.max_retries = max(args.attempts, 1) - 1
-        for node in client.providers.values():
-            node["timeout"] = args.attempt_timeout
-        report, code = run_review(
+    def review(client) -> tuple[dict, int]:
+        return run_review(
             client, calls, pr=args.pr, model=args.model, max_tokens=args.max_tokens,
             prompt_of=lambda c: build_prompt(c, body, whole, skipped, all_files),
             deadline_s=args.deadline_min * 60, breaker=max(args.breaker, 1),
-            on_progress=save, log=lambda m: print(m, flush=True))
+            on_progress=save, log=lambda m: print(m, flush=True), prior=prior, backend=args.backend,
+            diff_sha=diff_sha)
+
+    if args.backend == "opencode":
+        from opencode_client import OpencodeClient
+        report, code = review(OpencodeClient(timeout=args.attempt_timeout))
+    else:
+        import cloud
+        import config as cfg_mod
+        import glm_mode
+        from store import DB_PATH, Store
+        if not DB_PATH.exists():
+            print(f"нет {DB_PATH} — квота и бюджет не видны; запускайте из основного checkout", file=sys.stderr)
+            return EXIT_START
+        cfg = cfg_mod.load(HERE / "config.toml", strict=False)
+        with Store() as store:
+            client = cloud.build(cfg, store=store, logger=lambda m: print(m, flush=True))
+            glm_mode.apply_budget(client, cfg, True)      # лимиты режима GLM 5.x; платный контур закрыт
+            client.max_retries = max(args.attempts, 1) - 1
+            for node in client.providers.values():
+                node["timeout"] = args.attempt_timeout
+            report, code = review(client)
     report["_meta"].update(attempts=args.attempts, attempt_timeout=args.attempt_timeout,
                            chunk_chars=args.chunk_chars, skipped_generated=skipped)
     save(report)
@@ -432,7 +488,8 @@ def main(argv=None) -> int:
     print(f"\nитог: {sum(1 for k, v in report.items() if k != '_meta' and v['ok'])}/{len(per_lens)} линз прошли"
           + (f"; остановлено — {meta['stopped']}" if meta["stopped"] else ""))
     if meta["not_passed"]:
-        print("не пройдены на GLM (подхватить другим рецензентом): " + "; ".join(meta["not_passed"]))
+        nxt = "GLM (review_chain.sh)" if args.backend == "opencode" else "Claude, не больше 2 линз-агентов"
+        print(f"не пройдены на {args.backend} (подхватить: {nxt}): " + "; ".join(meta["not_passed"]))
     return code
 
 
