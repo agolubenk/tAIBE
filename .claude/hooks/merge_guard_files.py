@@ -189,23 +189,27 @@ def opaque(paths, written):
     return ANY in written or any(ANY + n in written for n in path_names(paths))
 
 
-def command_writes(text, depth=0):
+def command_writes(text, depth=0, alt=False):
     """Имена файлов, которые пишет команда целиком — с подстановками, heredoc и `bash -c`, без учёта порядка. Хук
     разбирает `$(…)` и heredoc раньше основной команды, а shell выполняет их после записи в той же строке
-    (`printf … > m.sh; echo $(bash m.sh)`). Лишнее имя — лишь грубая проверка вместо разбора; что не разобрать — без имён."""
-    from merge_guard_shell import (SHELLS, command_name, cut_heredocs, cut_substitutions, expand_vars,  # shell
-                                   note_vars, split_commands, strip_comments, strip_prefix, substitute,  # импортирует
-                                   tokenize)  # этот модуль
+    (`printf … > m.sh; echo $(bash m.sh)`). Лишнее имя — лишь грубая проверка вместо разбора; что не разобрать — без имён.
+    Кавычки не сошлись — имена из слов до ошибки: bash их выполнит (SE-76). Имена и из второго прочтения комментариев
+    (comment_readings, SE-82; alt — оно само): запись, спрятанная `"` комментария, иначе не попала бы в имена, и хук
+    прочёл бы с диска старый файл."""
+    from merge_guard_shell import (SHELLS, command_name, comment_readings, cut_heredocs, cut_substitutions,  # shell
+                                   expand_vars, note_vars, split_commands, strip_prefix, substitute,  # импортирует
+                                   tokens_before_error)  # этот модуль
     if depth > 3:
         return set()
     try:
-        text, bodies = cut_heredocs(text)
-        text, inner = cut_substitutions(strip_comments(text).replace("\\\n", " "))
+        text, bodies = (text, []) if alt else cut_heredocs(text)
+        text, other = comment_readings(text, None, alt)  # комментарий с `'"`… остаётся: лишнее имя — не пропуск
+        text, inner = cut_substitutions(text)
     except Exception:
         return set()
     names, env, more = set(), {}, inner + [b for _, b, _ in bodies]
     try:
-        for argv, targets, *_ in split_commands(tokenize(text)):
+        for argv, targets, *_ in split_commands(tokens_before_error(text)[0]):
             out = [o.strip("'\"") for t in targets for o in substitute(t, env)]
             names |= base_names(out) | gh_config(out)
             names |= {GH_MOVED} if config_moved(argv) else set()  # gh прочтёт другой конфиг — как переписанный
@@ -216,4 +220,5 @@ def command_writes(text, depth=0):
                 more += v[1:] if v[0] == "eval" else v[v.index("-c") + 1:][:1] if v[0] in SHELLS and "-c" in v else []
     except Exception:
         pass
+    names |= command_writes(other, depth, True) if other else set()
     return names.union(*(command_writes(m, depth + 1) for m in more))

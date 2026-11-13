@@ -1,8 +1,9 @@
 """
-Где bash точно видит комментарий, для merge-guard (strip_comments в merge_guard_shell, SE-75). Простой разбор кавычек
-там не знает вложенности (`"$(cut -f1 "$f")"`, `$((…))`, `${…}`) и потому оставляет комментарий с `'` (`# Docker's …`):
-если разбор ошибся, `'` закрыл бы строку bash. Здесь — разбор со стеком вложенности; на всём, чего он не моделирует,
-уверенность теряется до конца текста. Решений не принимает; без импорта других модулей merge-guard.
+Где bash точно видит комментарий (sure_comments, SE-75), и снятие комментариев для merge-guard (strip_comments,
+comment_readings — SE-82). Простой разбор кавычек не знает вложенности (`"$(cut -f1 "$f")"`, `$((…))`, `${…}`)
+и потому оставляет комментарий с опасными знаками (`# Docker's …`, `# say "hi`): если разбор ошибся, такой знак
+закрыл бы строку bash. sure_comments — разбор со стеком вложенности; на всём, чего он не моделирует, уверенность
+теряется до конца текста. Решений не принимает; без импорта других модулей merge-guard.
 Ещё здесь — признак, что текст может сменить сам знак комментария (comment_char_may_change, SE-77).
 """
 import re
@@ -144,3 +145,97 @@ def expansion(cmd, i, stack):
             return None
         j += 1
     return None if j >= len(cmd) else j + 1
+
+
+COMMENT_SAFE = re.compile(r"[^'\"`(){}\]]*")
+# `(` — только после пробела: не `$(`, `<(`, `@(`
+COMMENT_PARENS = re.compile(r"(?:[^'\"`(){}\]\\]|(?<=[ \t])\(|\))*")
+
+
+def comment_safe(text):
+    """Текст от `#` до конца строки можно снять как комментарий (см. strip_comments): в нём нет `'"`{}]` — символов,
+    которыми bash закрыл бы строку, `${…}`, `$[…]` или обратные кавычки, а скобки, если есть, — парные, `(` после
+    пробела и без `\\`: закрыть `$(…)`, `$((…))` или `((…))` нечем, открыть подстановку — тоже."""
+    if COMMENT_SAFE.fullmatch(text):
+        return True
+    if not COMMENT_PARENS.fullmatch(text):
+        return False
+    depth = 0
+    for c in text:
+        depth += (c == "(") - (c == ")")
+        if depth < 0:
+            return False
+    return depth == 0
+
+
+def strip_comments(cmd, force=False, keep=None, trust=False, kept=None):
+    """Комментарии shell — от `#` в начале слова до конца строки — снять, как это делает bash: `\\` в конце комментария
+    строку не продолжает, `#` внутри слова (`a\\ #b`, `"…"#`, `$'…'`) — не комментарий. Снимается только то, что
+    пропускает comment_safe: если разбор ошибся и для bash этот `#` внутри строки, `${…}`, `$((…))` или обратных
+    кавычек, закрыть их bash может только символом, которого там нет, — и такой текст остаётся на разбор. Кавычки не
+    сошлись — команда остаётся как есть (лишний отказ, не пропуск); force — всё равно снять: так безопасно для
+    грубого признака, правило comment_safe от разбора кавычек не зависит. keep — признак, с которым комментарий
+    остаётся всегда; задан — снимается и комментарий с опасными знаками (`# Docker's …`, `# say "hi`), если bash
+    здесь точно на верхнем уровне (sure_comments, SE-75, SE-76): там всё до конца строки — комментарий. Такой снят —
+    текст без него и при несошедшихся кавычках: с ним кавычки сошлись бы через строки и спрятали бы код, который
+    bash выполнит до ошибки в конце скрипта. trust — снять и остальные комментарии в начале слова (второе прочтение,
+    comment_readings); kept — список, куда пишутся позиции комментариев, которые остались."""
+    out, i, quote, word, sure, hits = [], 0, None, False, None, []
+
+    def sure_comment(at, text):
+        nonlocal sure
+        if keep is None or keep(text):
+            return False
+        sure = sure_comments(cmd) if sure is None else sure  # один разбор на текст, и только если нужен
+        hits.extend([at] if at in sure else [])
+        return at in sure
+
+    while i < len(cmd):
+        c = cmd[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif quote == "$'" and c == "\\":  # в $'…' `\'` — экранированная кавычка
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        elif quote == "$'":
+            quote = None if c == "'" else quote
+        elif c == "\\":
+            word = word or cmd[i + 1:i + 2] != "\n"  # `\`+перевод строки — склейка, слово не начинает
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        elif c == "$" and quote is None and cmd[i + 1:i + 2] == "'":
+            quote, word = "$'", True
+            out.append("$'")
+            i += 2
+            continue
+        elif c == "'" and quote is None:
+            quote = "'"
+        elif c == '"':
+            quote = None if quote == '"' else '"'
+        elif c == "#" and quote is None and not word:
+            end = cmd.find("\n", i)
+            end = len(cmd) if end < 0 else end
+            if trust or comment_safe(cmd[i:end]) or sure_comment(i, cmd[i:end]):
+                i = end
+                continue
+            if kept is not None:
+                kept.append(i)
+        word = quote is not None or c not in " \t\n;&|(<>"  # `)` слово не кончает: `$(true)#` — не комментарий
+        out.append(c)
+        i += 1
+    return cmd if quote and not force and not hits else "".join(out)
+
+
+def comment_readings(cmd, keep, trust=False):
+    """(текст без комментариев, второе прочтение или None) для разбора команды (classify_bash, force). Комментарий в
+    начале слова, который strip_comments оставил (sure_comments не уверен: после heredoc, обратных кавычек, `$[…]`),
+    bash может прочесть и как комментарий: тогда его `"` или `'` не сходится с кавычкой ниже и не прячет код до неё
+    (SE-82). Второе прочтение — без всех таких комментариев, его находки идут в решение вместе с первым. trust — это
+    прочтение и разбирается, третьего нет. `\\`+перевод строки — склейка: после снятия, в комментарии её нет.
+    cmd — уже без тел heredoc, и второе прочтение их повторно не режет: на месте heredoc осталось `<< E`, и строка
+    `E` ниже сделала бы телом код, который bash выполнит."""
+    kept = []
+    plain = strip_comments(cmd, True, keep, trust, kept).replace("\\\n", " ")
+    return plain, strip_comments(cmd, True, keep, True).replace("\\\n", " ") if kept and not trust else None
