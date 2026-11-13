@@ -7,6 +7,21 @@ export {
   type ObservationLike,
 } from "./bind.js";
 export {
+  CARD_MEMORY_PATH,
+  type CardMemoryAnswer,
+  type CardMemoryClient,
+  type CardMemoryKeyResult,
+  type CardMemoryLine,
+  createCardMemoryClient,
+  parseCardMemory,
+} from "./card-memory.js";
+export {
+  MAX_MEMORY_KEYS,
+  type MemoryKeyForm,
+  memoryKeyForm,
+  QUEUE_ITEM_ID_PATTERN,
+} from "./memory-keys.js";
+export {
   type CachedClaudeMemReader,
   type CachedResult,
   createMemoryCacheStore,

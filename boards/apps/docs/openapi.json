@@ -5181,11 +5181,11 @@
         "properties": {
           "available": {
             "type": "boolean",
-            "description": "false when the claude-mem worker is unreachable and nothing was cached yet."
+            "description": "false when the Mac memory proxy is unreachable and no answer from the last 24 hours is kept."
           },
           "stale": {
             "type": "boolean",
-            "description": "true when the worker is down and the list is a cached copy."
+            "description": "true when the proxy is unreachable and the keys are the last answer, at most 24 hours old."
           },
           "fetchedAt": {
             "type": [
@@ -5194,64 +5194,69 @@
             ],
             "format": "date-time"
           },
-          "scanned": {
-            "type": "integer",
-            "description": "How many of the latest observations were checked."
-          },
-          "items": {
+          "keys": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "id": {
-                  "type": "integer"
-                },
-                "type": {
-                  "type": "string"
-                },
-                "title": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "subtitle": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "createdAt": {
-                  "type": "string"
+                "key": {
+                  "type": "string",
+                  "description": "The card id, card key (TB-108) or owner-queue item id."
                 },
                 "matchedOn": {
                   "type": "string",
                   "enum": [
-                    "branch",
-                    "task-id"
+                    "id",
+                    "key",
+                    "queue"
                   ]
                 },
-                "matchedValue": {
-                  "type": "string",
-                  "description": "The card's branch or identifier the observation names."
+                "count": {
+                  "type": "integer",
+                  "description": "Observations that name the key exactly, at most 500."
                 },
-                "source": {
-                  "type": "string",
-                  "enum": [
-                    "metadata",
-                    "text"
-                  ]
+                "capped": {
+                  "type": "boolean",
+                  "description": "true when more than 500 observations name the key; latest is then approximate."
+                },
+                "latest": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer"
+                      },
+                      "title": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The observation's title, at most 120 characters."
+                      },
+                      "project": {
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "title",
+                      "project",
+                      "createdAt"
+                    ]
+                  },
+                  "description": "Up to 5, newest first."
                 }
               },
               "required": [
-                "id",
-                "type",
-                "title",
-                "subtitle",
-                "createdAt",
+                "key",
                 "matchedOn",
-                "matchedValue",
-                "source"
+                "count",
+                "capped",
+                "latest"
               ]
             }
           }
@@ -5260,8 +5265,7 @@
           "available",
           "stale",
           "fetchedAt",
-          "scanned",
-          "items"
+          "keys"
         ]
       },
       "ForestMirrorRuns": {
@@ -26403,7 +26407,7 @@
           "Forest"
         ],
         "summary": "List claude-mem observations about a card",
-        "description": "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Read-only; when the worker is down the last copy is returned and marked stale.",
+        "description": "For each of the card's keys — its id, board key, Backlog ID and the owner-queue items of its «да» requests, up to 6 — how many claude-mem observations name it exactly and the 5 newest titles. Read-only, through the Mac memory proxy; when the proxy is down the last answer is returned, marked stale, for up to 24 hours.",
         "parameters": [
           {
             "schema": {
@@ -26465,6 +26469,114 @@
           },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/forest/{workspaceId}/memory": {
+      "get": {
+        "operationId": "lookupForestMemory",
+        "tags": [
+          "Forest"
+        ],
+        "summary": "List claude-mem observations by card key or owner-queue item",
+        "description": "The same answer as a card's memory, found by exactly one of ticketKey (a card of this workspace, e.g. TB-108: its card memory) or queueItemId (an owner-queue item the t-boards token sees: observations that name it). Any other word cannot be searched.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 40,
+              "description": "A card key of this workspace, e.g. TB-108."
+            },
+            "required": false,
+            "description": "A card key of this workspace, e.g. TB-108.",
+            "name": "ticketKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^(?=.{3,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+){1,7}$",
+              "description": "An owner-queue item id, e.g. d-tb113-mem-1311."
+            },
+            "required": false,
+            "description": "An owner-queue item id, e.g. d-tb113-mem-1311.",
+            "name": "queueItemId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForestCardMemory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Neither or both of ticketKey and queueItemId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing task:read permission or project access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such card in this workspace or no such queue item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          },
+          "503": {
+            "description": "The owner queue is not linked or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }

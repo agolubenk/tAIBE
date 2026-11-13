@@ -71,7 +71,7 @@ case "${1:-}" in
     }
     mkdir -p "$home" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
     # A copy, not a link: a branch switch must not swap the code launchd runs.
-    cp "$here/memory-proxy.mjs" "$home/memory-proxy.mjs"
+    cp "$here/memory-proxy.mjs" "$here/card-memory-db.mjs" "$home/"
     cat >"$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

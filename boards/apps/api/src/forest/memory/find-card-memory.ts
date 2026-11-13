@@ -1,92 +1,82 @@
-import {
-  type CardBinding,
-  type CachedClaudeMemReader,
-  matchObservationToCards,
-  type Observation,
+import type {
+  CardMemoryClient,
+  CardMemoryKeyResult,
 } from "@kaneo/claude-mem-reader";
 
-export const MEMORY_PAGE_SIZE = 100;
-export const MEMORY_PAGES = 2;
-
-export type CardMemoryItem = {
-  id: number;
-  type: string;
-  title: string | null;
-  subtitle: string | null;
-  createdAt: string;
-  matchedOn: "branch" | "task-id";
-  matchedValue: string;
-  source: "metadata" | "text";
-};
+// A fresh answer is reused for a minute; when the Mac proxy fails, the last
+// answer is shown as stale for up to a day, then «unavailable» (TB-113).
+export const FRESH_MS = 60_000;
+export const STALE_MS = 24 * 60 * 60_000;
+const CACHE_ENTRIES = 500;
 
 export type CardMemory = {
   available: boolean;
   stale: boolean;
   fetchedAt: Date | null;
-  scanned: number;
-  items: CardMemoryItem[];
+  keys: CardMemoryKeyResult[];
 };
 
 const UNAVAILABLE: CardMemory = {
   available: false,
   stale: false,
   fetchedAt: null,
-  scanned: 0,
-  items: [],
+  keys: [],
 };
 
-// The card's observations among the worker's latest ones. Scans a bounded
-// window instead of searching: the worker has no filter by card, and a card
-// is read while it is worked on, so its observations are recent. A worker
-// that is down and was never read answers «unavailable», not an error.
-export async function findCardMemory(
-  reader: CachedClaudeMemReader,
-  binding: CardBinding,
-  options: { project?: string } = {},
-): Promise<CardMemory> {
-  const observations: Observation[] = [];
-  let stale = false;
-  let fetchedAt: number | null = null;
+type Entry = { keys: CardMemoryKeyResult[]; fetchedAt: number };
 
-  for (let page = 0; page < MEMORY_PAGES; page++) {
-    const result = await reader
-      .listObservations({
-        project: options.project,
-        limit: MEMORY_PAGE_SIZE,
-        offset: page * MEMORY_PAGE_SIZE,
-      })
-      .catch(() => null);
-    if (!result) {
-      if (page === 0) return UNAVAILABLE;
-      break;
+export type CardMemoryFinder = (keys: string[]) => Promise<CardMemory>;
+
+// The cache key is the key set. The keys and titles live in this process's
+// memory only and never reach a log: a failure is not logged with them.
+export function createCardMemoryFinder(
+  client: CardMemoryClient,
+  clock: () => number = Date.now,
+): CardMemoryFinder {
+  const cache = new Map<string, Entry>();
+
+  function remember(id: string, entry: Entry) {
+    cache.delete(id);
+    cache.set(id, entry);
+    if (cache.size > CACHE_ENTRIES) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
     }
-    stale ||= result.stale;
-    fetchedAt = Math.min(fetchedAt ?? result.fetchedAt, result.fetchedAt);
-    observations.push(...result.data.items);
-    if (!result.data.hasMore) break;
   }
 
-  const items: CardMemoryItem[] = [];
-  for (const observation of observations) {
-    const [best] = matchObservationToCards(observation, [binding]);
-    if (!best) continue;
-    items.push({
-      id: observation.id,
-      type: observation.type,
-      title: observation.title,
-      subtitle: observation.subtitle,
-      createdAt: observation.createdAt,
-      matchedOn: best.matchedOn,
-      matchedValue: best.matchedValue,
-      source: best.source,
-    });
-  }
-
-  return {
-    available: true,
-    stale,
-    fetchedAt: fetchedAt === null ? null : new Date(fetchedAt),
-    scanned: observations.length,
-    items,
+  return async (keys) => {
+    if (keys.length === 0) return UNAVAILABLE;
+    const id = [...keys].sort().join(" ");
+    const now = clock();
+    const known = cache.get(id);
+    if (known && now - known.fetchedAt < FRESH_MS) {
+      return {
+        available: true,
+        stale: false,
+        fetchedAt: new Date(known.fetchedAt),
+        keys: known.keys,
+      };
+    }
+    try {
+      const answer = await client.find(keys);
+      remember(id, { keys: answer.keys, fetchedAt: now });
+      return {
+        available: true,
+        stale: false,
+        fetchedAt: new Date(now),
+        keys: answer.keys,
+      };
+    } catch {
+      if (known && now - known.fetchedAt < STALE_MS) {
+        return {
+          available: true,
+          stale: true,
+          fetchedAt: new Date(known.fetchedAt),
+          keys: known.keys,
+        };
+      }
+      if (known) cache.delete(id);
+      return UNAVAILABLE;
+    }
   };
 }
