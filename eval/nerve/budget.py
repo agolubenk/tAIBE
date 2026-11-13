@@ -257,20 +257,29 @@ def evolve_overhead(evolve_dir, t_from, t_to):
     --no-session-persistence, в транскриптах их нет. Судьи — budget.tokens отчёта runs/<дата>.json по цене входа
     sonnet (оценка: разбивки токенов в отчёте нет), сессия — usd из runs/session-latest.json; обе — в момент finished.
     Файл прогона назван днём старта: прогон, начатый накануне, мог закончиться в окне — день до t_from тоже читается.
+    Файл сессии без finished (записан до SE-66) или битый — время по mtime файла (SE-81).
     → (usd, unknown): unknown — части, которые закончились в окне, но $ не дали (сессия без total_cost_usd)."""
     usd, unknown = 0.0, []
 
-    def inside(v):  # строка ISO с поясом и внутри окна; прочее (нет, не строка, без пояса) — нет
+    def when(v):  # строка ISO с поясом → время; прочее (нет, не строка, без пояса) — None
         at = parse_ts(v) if isinstance(v, str) else None
-        return at is not None and at.tzinfo is not None and t_from <= at <= t_to
+        return at if at is not None and at.tzinfo is not None else None
+
+    def inside(v):
+        at = v if isinstance(v, datetime) else when(v)
+        return at is not None and t_from <= at <= t_to
 
     for day in sorted({t_from.date() - timedelta(days=1), t_from.date(), t_to.date()}):
         r = _load(os.path.join(evolve_dir, "runs", f"{day.isoformat()}.json"))
         tokens = r.get("budget").get("tokens") if isinstance(r.get("budget"), dict) else 0
         if isinstance(tokens, (int, float)) and tokens > 0 and inside(r.get("finished")):
             usd += tokens * PRICES["sonnet"][0] / 1e6
-    s = _load(os.path.join(evolve_dir, "runs", "session-latest.json"))
-    if inside(s.get("finished")):
+    path = os.path.join(evolve_dir, "runs", "session-latest.json")
+    s = _load(path)
+    ended = when(s.get("finished"))
+    if ended is None and os.path.isfile(path):
+        ended = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
+    if inside(ended):
         if isinstance(s.get("usd"), (int, float)) and not isinstance(s.get("usd"), bool):
             usd += s["usd"]
         else:
