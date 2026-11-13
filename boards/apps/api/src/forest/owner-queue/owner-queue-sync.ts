@@ -1,4 +1,6 @@
 import { expiryPass } from "./expiry-pass";
+import { planPass } from "./plan-pass";
+import { planStore } from "./plan-store";
 import { journalQueue } from "./queue-actor";
 import { httpQueueClient } from "./queue-client";
 import { readOwnerQueueConfig } from "./queue-config";
@@ -44,6 +46,35 @@ export async function ownerQueueTick(now: number = Date.now()) {
       `owner-queue sync failed, next try in ${BACKOFF_SECONDS[backoffStep]} s:`,
       error,
     );
+  }
+}
+
+// TB-106: the off-plan row and the «без аренды» mark once an hour. In memory:
+// a restart runs them at once. A run that left a row unwritten repeats them.
+const HOURLY_MS = 59 * 60 * 1000;
+let hourlyAt = 0;
+
+// Every 5 minutes (scheduler): plan rows follow the board. A failure waits for
+// the next run and shows as a failed check-in, not as an exception per run.
+export async function ownerQueuePlanRows(now: number = Date.now()) {
+  const config = await configOrSkip();
+  if (!config) return {};
+  const hourly = now - hourlyAt >= HOURLY_MS;
+  try {
+    const outcome = await planPass(
+      {
+        client: httpQueueClient(config),
+        config,
+        store: planStore,
+        now: () => new Date(),
+      },
+      hourly,
+    );
+    if (outcome.hourlyDone) hourlyAt = now;
+    return {};
+  } catch (error) {
+    console.error("owner-queue plan rows failed:", error);
+    return { degraded: true };
   }
 }
 
