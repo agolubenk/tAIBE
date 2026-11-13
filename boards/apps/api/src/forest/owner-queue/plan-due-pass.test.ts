@@ -28,8 +28,8 @@ const DAY3 = new Date("2026-11-15T06:00:00Z");
 // a work row needs dueRef = an item naming the row, answered «move» after its
 // last change, not later than its moveTo date, used once (TB-112 part 1, PR
 // #156). race() — another writer moves the doc before the next write; refuse()
-// — the console refuses every write of the doc with 409; reject() — with 422.
-// agentNote of a check is 2000 at most (checkSchema). afterGet() — the owner
+// — the console refuses every write of the doc with 409; reject() — with 422;
+// allow() ends both. agentNote of a check is 2000 at most (checkSchema). afterGet() — the owner
 // acts right after the pass read a doc.
 class MemQueue {
   readonly docs = new Map<string, QueueDoc>();
@@ -50,6 +50,11 @@ class MemQueue {
 
   reject(collection: QueueCollection, id: string) {
     this.rejected.add(`${collection}/${id}`);
+  }
+
+  allow(collection: QueueCollection, id: string) {
+    this.refused.delete(`${collection}/${id}`);
+    this.rejected.delete(`${collection}/${id}`);
   }
 
   afterGet(collection: QueueCollection, id: string, act: () => void) {
@@ -638,18 +643,50 @@ describe("TB-112: the answer follows the item the owner read", () => {
     queue.reject("work", "w-taibe-tb-backlog");
     await expect(run(queue)).resolves.toMatchObject({ left: 0 });
     expect(cardsOf(queue, "w-taibe-a")).toEqual(keys(6));
-    expect(queue.data("checks", ITEM)).toMatchObject({
-      agentStatus: "blocked",
+    expect(queue.data("checks", ITEM).agentStatus).toBe("done");
+    const note = String(queue.data("checks", ITEM).agentNote);
+    expect(note).toContain("Ответ не применён: очередь отказала в записи");
+    expect(note).toContain("Срок и строки не менялись.");
+    // As an applied answer: the item is archived (a second answer there would
+    // be lost), the state closes with no rows.
+    expect(queue.data("items", ITEM).archived).toBe(true);
+    expect(queue.data("work", "due-taibe")).toMatchObject({
+      applied: true,
+      rows: [],
     });
-    expect(String(queue.data("checks", ITEM).agentNote)).toContain(
-      "Ответ не применён: очередь отказала в записи",
-    );
-    expect(queue.data("items", ITEM).archived).toBeUndefined();
-    expect(queue.data("work", "due-taibe")).toMatchObject({ applied: true });
     // Closed: the next runs do not try again every 5 minutes.
     queue.writes.length = 0;
     await run(queue, DAY3);
     expect(queue.writes).toEqual([]);
+    // The next daily run asks again from the actual plan.
+    queue.allow("work", "w-taibe-tb-backlog");
+    await daily(queue, DAY3);
+    expect(queue.data("items", "d-taibe-due-20261115")).toMatchObject({
+      rows: ["w-taibe-a"],
+    });
+    expect(queue.data("work", "due-taibe")).toMatchObject({
+      item: "d-taibe-due-20261115",
+      applied: false,
+    });
+  });
+
+  it("a refusal midway names the rows already written", async () => {
+    const queue = await decided();
+    queue.answer(ITEM, "keep");
+    // keep writes the backlog row first, then the row that loses the cards.
+    queue.reject("work", "w-taibe-a");
+    await run(queue);
+    expect(cardsOf(queue, "w-taibe-tb-backlog")).toHaveLength(6);
+    expect(cardsOf(queue, "w-taibe-a")).toEqual(keys(6));
+    const note = String(queue.data("checks", ITEM).agentNote);
+    expect(note).toContain(
+      "До отказа уже изменены строки: «Бэклог»; остальные — нет.",
+    );
+    expect(note).not.toContain("не менялись");
+    expect(queue.data("work", "due-taibe")).toMatchObject({
+      applied: true,
+      rows: [],
+    });
   });
 
   it("a long outcome note is cut to the queue's 2000 characters", async () => {

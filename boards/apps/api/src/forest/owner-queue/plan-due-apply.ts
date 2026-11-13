@@ -22,13 +22,15 @@ export type RowPatch = {
 };
 
 // What one answer works on: the rows the owner read in the decision item and
-// the plan rows of that product only.
+// the plan rows of that product only. written — the rows this answer has
+// written so far (a refusal midway tells the owner which).
 type Answer = {
   item: QueueDoc;
   due: DueRow[];
   rows: PlanRow[];
   products: string[];
   product: string;
+  written: string[];
 };
 
 const uidOf = (entry: unknown) => {
@@ -148,10 +150,11 @@ export async function archiveItem(writer: PlanWriter, id: string) {
   return typeof result !== "string";
 }
 
-const titleOf = (answer: Answer, id: string) => {
-  const title = answer.rows.find((row) => row.id === id)?.data.title;
+const rowTitle = (rows: PlanRow[], id: string) => {
+  const title = rows.find((row) => row.id === id)?.data.title;
   return typeof title === "string" ? `«${title}»` : id;
 };
+const titleOf = (answer: Answer, id: string) => rowTitle(answer.rows, id);
 
 // The moves; a 409 is either a race (the row changed: the next run tries
 // again) or the queue refused the move itself (the row did not change).
@@ -167,7 +170,10 @@ async function applyMove(writer: PlanWriter, answer: Answer) {
       write.version,
     );
     if (result === "left") return { complete: false, note: "" };
-    if (result !== "skipped") continue;
+    if (result !== "skipped") {
+      answer.written.push(write.id);
+      continue;
+    }
     const row = await writer.client.get("work", write.id);
     if (row?.version === write.version) refused.push(write.id);
     else complete = false;
@@ -194,6 +200,7 @@ async function applyKeep(writer: PlanWriter, answer: Answer) {
       write.version,
     );
     if (typeof result === "string") return { complete: false, note: "" };
+    answer.written.push(write.id);
   }
   const note = [
     `В строки бэклога ушло карточек: ${moved}.`,
@@ -255,34 +262,52 @@ async function applyOne(
   );
 }
 
+// One step of a refusal: a second refusal skips this step, not the others.
+async function tolerate(itemId: string, step: () => Promise<unknown>) {
+  try {
+    await step();
+  } catch (error) {
+    if (!(error instanceof QueueRejected)) throw error;
+    console.warn(`owner-queue due: ${itemId}: ${error.message}`);
+  }
+}
+
+// What a refused answer left behind: the rows it wrote before the refusal.
+type Refusal = { itemId: string; written: string[]; rows: PlanRow[] };
+
 // The queue refused a write of this answer (400/422: schema, size). A retry
-// gets the same refusal every 5 minutes, so the answer closes unapplied: the
-// owner reads why on the decision (blocked), the item stays open for them.
+// gets the same refusal every 5 minutes, so the answer closes unapplied, as an
+// applied one does: the note on the decision says which rows changed before
+// the refusal, the item is archived (a second answer there would be lost) and
+// rows: [] makes the next daily run ask again from the actual plan.
 async function refuseAnswer(
   writer: PlanWriter,
   doc: QueueDoc,
-  itemId: string,
+  refusal: Refusal,
   reason: string,
   now: Date,
 ) {
+  const { itemId, written, rows } = refusal;
   console.warn(`owner-queue due: ${itemId} not applied: ${reason}`);
+  const changed =
+    written.length > 0
+      ? `До отказа уже изменены строки: ${[...new Set(written)].map((id) => rowTitle(rows, id)).join(", ")}; остальные — нет.`
+      : "Срок и строки не менялись.";
   const note = clip(
-    `Ответ не применён: очередь отказала в записи (${reason}). Срок и строки не менялись.`,
+    `Ответ не применён: очередь отказала в записи (${reason}). ${changed} Ежедневный проход спросит заново, если строки всё ещё не успевают к сроку.`,
   );
-  try {
+  await tolerate(itemId, async () => {
     if (await writer.client.get("checks", itemId)) {
       await writer.patch("checks", itemId, {
-        agentStatus: "blocked",
+        agentStatus: "done",
         agentNote: note,
       });
     }
-    await closeState(writer, doc, { note }, now);
-  } catch (error) {
-    if (!(error instanceof QueueRejected)) throw error;
-    console.warn(
-      `owner-queue due: ${itemId} state not closed: ${error.message}`,
-    );
-  }
+  });
+  await tolerate(itemId, () => archiveItem(writer, itemId));
+  await tolerate(itemId, () =>
+    closeState(writer, doc, { rows: [], note }, now),
+  );
 }
 
 // The answer counts for the text the owner read: the item is unchanged since
@@ -319,6 +344,7 @@ async function applyProduct(
   product: string,
   doc: QueueDoc,
   itemId: string,
+  written: string[],
 ): Promise<DueChoice | null | undefined> {
   const item = await writer.client.get("items", itemId);
   const due = readItemDue(item, product);
@@ -353,6 +379,7 @@ async function applyProduct(
     rows: input.rows,
     products: input.products,
     product,
+    written,
   };
   return (await applyOne(writer, doc, answer, choice, input.now))
     ? undefined
@@ -368,12 +395,21 @@ export async function applyAnswers(writer: PlanWriter, input: AnswerInput) {
     if (!doc || !state || state.applied) continue;
     // A refused write stops this answer only: the rest of the run (other
     // products, F4, the daily part) goes on.
+    const written: string[] = [];
     try {
-      const left = await applyProduct(writer, input, product, doc, state.item);
+      const left = await applyProduct(
+        writer,
+        input,
+        product,
+        doc,
+        state.item,
+        written,
+      );
       if (left !== undefined) open.set(product, left);
     } catch (error) {
       if (!(error instanceof QueueRejected)) throw error;
-      await refuseAnswer(writer, doc, state.item, error.message, input.now);
+      const refusal = { itemId: state.item, written, rows: input.rows };
+      await refuseAnswer(writer, doc, refusal, error.message, input.now);
     }
   }
   return { changed: writer.written > before, open };
