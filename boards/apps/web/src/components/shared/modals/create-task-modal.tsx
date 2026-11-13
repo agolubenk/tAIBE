@@ -21,7 +21,8 @@ import {
   isCustomFieldValueEmpty,
 } from "@/components/custom-fields/missing-required-fields";
 import type { CustomFieldDefinition } from "@/components/project/custom-fields/types";
-import TaskDescriptionEditor from "@/components/task/task-description-editor";
+import { lazyPart } from "@/components/ui/lazy-part";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -78,6 +79,13 @@ import { stripLineBreaks } from "@/lib/strip-line-breaks";
 import useProjectStore from "@/store/project";
 import type Task from "@/types/task";
 import { getInitialTaskColumn } from "./initial-task-column";
+
+// The rich-text editor (tiptap, ~200 KB gzip) loads when the modal first opens,
+// not with every page that can open it (TB-15: the cold board on 3G).
+const TaskDescriptionEditor = lazyPart(
+  () => import("@/components/task/task-description-editor"),
+  <Skeleton aria-hidden className="h-[200px] w-full" />,
+);
 
 type CreateTaskModalProps = {
   open: boolean;

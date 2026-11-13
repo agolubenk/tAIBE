@@ -1,13 +1,24 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertDialogCreateHandle } from "@/components/ui/alert-dialog";
+import { lazyPart } from "@/components/ui/lazy-part";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TaskSheetHeader } from "./header/task-sheet-header";
 import { PropertiesRail } from "./properties/properties-rail";
 import { PropertyChips } from "./properties/property-chips";
 import TaskDeleteDialog from "./task-delete-dialog";
-import TaskDetailsContent from "./task-details-content";
 import { TaskShortcuts } from "./task-shortcuts";
+
+// The description editor and the activity load with the first opened task, not
+// with the board (TB-15: the cold board on 3G).
+const TaskDetailsContent = lazyPart(
+  () => import("./task-details-content"),
+  <div aria-hidden className="space-y-4 px-5 pt-5 pb-10 lg:px-9 lg:pt-7">
+    <Skeleton className="h-8 w-2/3" />
+    <Skeleton className="h-44 w-full" />
+  </div>,
+);
 
 type TaskDetailsSheetProps = {
   taskId: string | undefined;

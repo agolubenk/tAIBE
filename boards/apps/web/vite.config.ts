@@ -88,7 +88,31 @@ export default defineConfig({
     // Generate maps only for private symbolication, then delete after upload.
     // "hidden" alone still writes publicly servable .map files.
     sourcemap: uploadSourceMaps ? "hidden" : false,
-    rollupOptions: {},
+    rolldownOptions: {
+      output: {
+        // TB-15: route code splitting left the board with ~215 requests, 160 of
+        // them under 2 KB gzip. These groups merge TanStack internals and small
+        // shared modules of src; the route chunks stay lazy. Icons and base-ui
+        // stay split: as groups they win 0.26 s on the board over HTTP/2 but
+        // load every icon of the app on sign-in, cost a weak CPU up to 0.65 s
+        // there and re-download whole on any new icon.
+        // Numbers — docs/impl/impl-k6-measurements.md.
+        codeSplitting: {
+          groups: [
+            {
+              name: "tanstack",
+              test: /node_modules\/@tanstack\/(react-router|router-core|history|react-query|query-core|react-store|store)\//,
+            },
+            {
+              name: "shared",
+              test: /\/src\/(hooks\/queries|fetchers|components\/ui|lib)\//,
+              minShareCount: 2,
+              maxModuleSize: 4000,
+            },
+          ],
+        },
+      },
+    },
     commonjsOptions: {
       include: [/better-auth/, /node_modules/],
       transformMixedEsModules: true,
