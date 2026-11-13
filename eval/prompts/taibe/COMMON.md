@@ -59,3 +59,5 @@ TB «t-boards» `mf6jpr5wftbgr3z93lvw807v`, SE «supertick-eval» `tl3j7yc2mc7ly
   does not deploy production.
 - Take HR work (`HR_Helper-v2`). Give it to the HR team as a t-boards card.
 - Call local models outside the machine lock (`infra/ai-council/ollama.py`, `local_inference_slot`).
+- Put `[skip ci]` in a PR commit. It goes only in the merge title (Control): since 13.11 the required check
+  `secrets · hygiene · data · syntax` runs on every PR head.
