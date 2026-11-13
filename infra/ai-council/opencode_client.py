@@ -46,6 +46,10 @@ AUTH_RE = re.compile(r"not (logged|authenticated)|no (api )?key|unauthori[sz]ed|
                      r"no provider|model .* not found|unknown model", re.I)
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 PROMPT_FILE = "review-prompt.md"
+# Без этой строки модель иногда рецензирует сам приложенный файл как PR (13.11, 1 из 2 проб).
+TASK_LINE = ("The attached file is your whole task, not material to review: its [system] part gives your role and rules, "
+             "its [user] part gives the lens, the PR body and the diff. Do exactly what it says and answer with the JSON "
+             "object only.")
 ENV_KEEP = ("HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TERM")
 
 
@@ -108,7 +112,7 @@ class OpencodeClient:
             lock.write(f"{os.getpid()} {purpose}\n")
             lock.flush()
             return self._run([exe, "run", "--agent", self.agent, "--model", model, "--file", PROMPT_FILE,
-                              "Follow the instructions in the attached file."], prompt)
+                              TASK_LINE], prompt)
 
     def _wait_lock(self, lock) -> bool:
         deadline = self.clock() + self.timeout
