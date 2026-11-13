@@ -35,10 +35,11 @@ class RenderTest(unittest.TestCase):
     def test_check_passes_on_the_repo(self):
         self.assertEqual(P.main(["render", "--check"]), 0)
 
-    def test_taibe_is_inactive_until_f4(self):
+    def test_taibe_is_active_since_t3_launch(self):
+        # Т3 tAIBE запущена 13.11 21:28: команда и Нерв продукта taibe работают на active = true.
         shared, products = P.load()
         self.assertEqual(shared["default_product"], "hr-helper")
-        self.assertIs(products["taibe"]["active"], False)
+        self.assertIs(products["taibe"]["active"], True)
         cfg = P.config_for("taibe", shared, products)
         self.assertEqual(cfg["github"]["repo"], "agolubenk/tAIBE")
         self.assertEqual(cfg["team"]["projects_root"], shared["team"]["projects_root"], "слияние не теряет общий лист")
@@ -54,7 +55,7 @@ class GetTest(unittest.TestCase):
             self.assertEqual(P.main(["get", "default", "slug"]), 0)
             self.assertEqual(P.main(["get", "taibe", "github.repo"]), 0)
             self.assertEqual(P.main(["get", "taibe", "active"]), 0)
-        self.assertEqual(out.getvalue().split(), ["hr-helper", "agolubenk/tAIBE", "false"])
+        self.assertEqual(out.getvalue().split(), ["hr-helper", "agolubenk/tAIBE", "true"])
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(P.main(["get", "taibe", "no.such"]), 1)
 

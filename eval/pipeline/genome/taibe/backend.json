@@ -59,6 +59,12 @@
       "mcp__ai-council"
     ]
   },
+  "disabledMcpjsonServers": [
+    "ai-council",
+    "docker",
+    "github",
+    "notion"
+  ],
   "env": {
     "CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH": "600",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000",
