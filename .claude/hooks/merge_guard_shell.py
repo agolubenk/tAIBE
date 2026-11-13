@@ -147,14 +147,15 @@ def strip_comments(cmd, force=False, keep=None):
     кавычек, закрыть их bash может только символом, которого там нет, — и такой текст остаётся на разбор. Кавычки не
     сошлись — команда остаётся как есть (лишний отказ, не пропуск); force — всё равно снять: так безопасно для
     грубого признака, правило comment_safe от разбора кавычек не зависит. keep — признак, с которым комментарий
-    остаётся всегда; задан — снимается и комментарий, где из опасных знаков только `'` (`# Docker's …`), если bash
-    здесь точно на верхнем уровне (sure_comments, SE-75). Такой снят — текст без него и при несошедшихся кавычках:
-    с ним `'` сошлись бы через строки и спрятали бы код, который bash выполнит до ошибки в конце скрипта."""
+    остаётся всегда; задан — снимается и комментарий с опасными знаками (`# Docker's …`, `# say "hi`), если bash
+    здесь точно на верхнем уровне (sure_comments, SE-75, SE-76): там всё до конца строки — комментарий. Такой снят —
+    текст без него и при несошедшихся кавычках: с ним кавычки сошлись бы через строки и спрятали бы код, который
+    bash выполнит до ошибки в конце скрипта."""
     out, i, quote, word, sure, hits = [], 0, None, False, None, []
 
-    def apostrophe_only(at, text):
+    def sure_comment(at, text):
         nonlocal sure
-        if keep is None or "'" not in text or keep(text) or not comment_safe(text.replace("'", "")):
+        if keep is None or keep(text):
             return False
         sure = sure_comments(cmd) if sure is None else sure  # один разбор на текст, и только если нужен
         hits.extend([at] if at in sure else [])
@@ -187,7 +188,7 @@ def strip_comments(cmd, force=False, keep=None):
         elif c == "#" and quote is None and not word:
             end = cmd.find("\n", i)
             end = len(cmd) if end < 0 else end
-            if comment_safe(cmd[i:end]) or apostrophe_only(i, cmd[i:end]):
+            if comment_safe(cmd[i:end]) or sure_comment(i, cmd[i:end]):
                 i = end
                 continue
         word = quote is not None or c not in " \t\n;&|(<>"  # `)` слово не кончает: `$(true)#` — не комментарий
@@ -199,14 +200,40 @@ def strip_comments(cmd, force=False, keep=None):
 FD = re.compile(r"(?<![^\s;&|(])\d+(?=[<>])")  # `0<f`, `2>&1`: номер дескриптора — не аргумент команды
 
 
-def tokenize(cmd):
-    """Слова и разделители; флаги zsh `${(L)G}` — `${#L#G}`: скобки внутри не делят слово, имя не подставляется."""
+def _lexer(cmd):
     cmd = re.sub(r"\$\{\(([^()]*)\)", r"${#\1#", FD.sub("", cmd))
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
     lex.commenters = ""
-    return list(lex)
+    return lex
+
+
+def tokenize(cmd):
+    """Слова и разделители; флаги zsh `${(L)G}` — `${#L#G}`: скобки внутри не делят слово, имя не подставляется."""
+    return list(_lexer(cmd))
+
+
+def tokens_before_error(cmd):
+    """(слова, разобран ли весь текст): слова до места, где разбор упал, — кавычка не закрылась, `\\` в конце текста.
+    bash (файл, stdin, `-c`, eval, source) и zsh со скрипта выполняют команды до такой ошибки (SE-76); среди слов —
+    и начало команды, на которой разбор упал (лишний отказ, не пропуск)."""
+    out = []
+    try:
+        for token in _lexer(cmd):
+            out.append(token)
+    except ValueError:
+        return out, False
+    return out, True
+
+
+PARTIAL = "\0partial"  # находка-метка: текст разобран только до ошибки (tokens_before_error)
+
+
+def settle(found):
+    """(находки без меток PARTIAL, была ли метка) — грубый признак по неразобранному тексту решает вызывающий."""
+    rest = [f for f in found if f[0] != PARTIAL]
+    return rest, len(rest) < len(found)
 
 
 def split_commands(tokens):
