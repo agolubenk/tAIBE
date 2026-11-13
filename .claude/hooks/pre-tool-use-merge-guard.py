@@ -35,10 +35,11 @@ from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identi
 from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E402
 from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
-from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name, cut_heredocs,  # noqa: E402
-                               cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
-                               launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
-                               strip_prefix, subst_code, SUBST_AT, tokenize, uncommented)
+from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
+                               cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
+                               launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
+                               split_commands, strip_comments, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
+                               uncommented)
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -204,11 +205,13 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         first_line = text.split("\n", 1)[0]
         is_interp_script = interp if interp is not None else (
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
-        try:
-            found += script_found(text, is_interp_script, cwd, roots, depth, git_env, path)
-        except Exception:  # грубый признак — по тексту скрипта: в команде (`bash x.sh`) его нет
-            if FALLBACK.search(text if is_interp_script else uncommented(text)):
-                found.append((UNPARSED, s))
+        try:  # разобран до ошибки — находки этой части и грубый признак по тексту скрипта: в `bash x.sh` его нет
+            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path))
+        except Exception:
+            got, partial = [], True
+        found += got
+        if partial and FALLBACK.search(text if is_interp_script else uncommented(text)):
+            found.append((UNPARSED, s))
     if scripts and opaque(scripts, whole[3] or ()) and not whole[2]:  # `git switch x && bash m.sh` — с диска прочтён не тот код
         found.append((BLIND_RUN, scripts[0]))
     elif scripts and not seen and FALLBACK.search(whole[4][1]):
@@ -345,8 +348,8 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False):
     """[(вид, подробность)] защищённых действий команды. git_env — конфиг git где-то задан окружением, disk — текст
     из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется), part —
-    тело `$(…)` или кода маски, вырезанное разбором: что для bash его начало — верхний уровень, не гарантировано, и
-    комментарий с `'` в нём остаётся (strip_comments, keep)."""
+    тело `$(…)` или кода маски: что для bash его начало — верхний уровень, не гарантировано, и комментарий с опасными
+    знаками в нём остаётся (strip_comments, keep). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL."""
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
@@ -356,7 +359,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         written.update(command_writes(cmd))
     cmd, bodies = cut_heredocs(cmd)  # до снятия комментариев: в теле `'` — не кавычка, `#` — не комментарий
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd = strip_comments(cmd, keep=None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
+    cmd = strip_comments(cmd, True, None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
     whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
@@ -369,7 +372,8 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         found += classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk, written, whole[4])
     for code in qualifier_code(cmd):  # zsh `ls *(e:'gh pr merge 1':)`
         found += classify_bash(code, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
-    tokens = tokenize(cmd)
+    tokens, complete = tokens_before_error(cmd)
+    found += [] if complete else [(PARTIAL, cmd[:120])]
     found += [(DEFERRED, t[:120]) for t in tokens if ("$(" in t or "`" in t) and FALLBACK.search(t)]
     env, prev, st, saved = dir_vars({}, cwd), ([], []), new_state(cwd), []
     fed = [r for readers, _, _ in bodies for r in readers]
@@ -448,11 +452,13 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
         if why:
             return f"merge-guard: {why}."
     for cmd in shell:
-        try:
-            found += classify_bash(cmd, cwd, roots)
-        except Exception as exc:  # разбор не удался — решает грубый признак
-            if FALLBACK.search(cmd):
-                return f"merge-guard: команду не разобрать ({exc.__class__.__name__}), а в ней признак защищённого действия. Разбейте её на простые команды."
+        try:  # разобрана до ошибки — находки этой части, и грубый признак, как у неразобранной
+            (got, partial), why = settle(classify_bash(cmd, cwd, roots)), "кавычки не сошлись"
+        except Exception as exc:
+            (got, partial), why = ([], True), exc.__class__.__name__
+        found += got
+        if partial and FALLBACK.search(cmd):
+            return f"merge-guard: команду не разобрать ({why}), а в ней признак защищённого действия. Разбейте её на простые команды."
     if code is not None:
         found += interp_found(code, cwd, roots)
 
