@@ -1,9 +1,11 @@
 import { type OpenCard, PACE_DAYS, type RowForecast } from "./plan-eta";
 
 // F7.2: one owner decision per product about the rows that miss their term.
-// Its state lives in work/due-<P> (kind «due»: not a plan row, the page skips
-// a doc without a title); the queue server checks a later planEnd against the
-// decision's rows and the «move» answer (TB-112 part 1).
+// The decision item d-<P>-due-<date> is the source of truth: what the owner
+// read is what the answer applies — rows, the move dates (moveTo, checked by
+// the queue server, TB-112 part 1) and the cut cards (due). work/due-<P> (kind
+// «due»: not a plan row, the page skips a doc without a title) only points to
+// the open item and keeps the late rows for the next «ask again?» check.
 
 export const DUE_CHOICES = ["keep", "move", "red"] as const;
 export type DueChoice = (typeof DUE_CHOICES)[number];
@@ -40,6 +42,48 @@ const LAG_STEP_DAYS = 2;
 export const dueStateId = (product: string) => `due-${product}`;
 export const dueItemId = (product: string, today: string) =>
   `d-${product}-due-${today.replaceAll("-", "")}`;
+// Every decision item of the product starts so (the queue server: DUE_REF).
+export const dueItemPrefix = (product: string) => `d-${product}-due-`;
+export const DUE_SOURCE = "t-boards (TB-112)";
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const isDueRow = (row: unknown): row is DueRow => {
+  if (!row || typeof row !== "object") return false;
+  const one = row as Record<string, unknown>;
+  return (
+    typeof one.id === "string" &&
+    typeof one.planEnd === "string" &&
+    typeof one.eta === "string" &&
+    DATE.test(one.eta) &&
+    typeof one.lag === "number" &&
+    Array.isArray(one.cut) &&
+    one.cut.every((key) => typeof key === "string")
+  );
+};
+
+// The rows of a decision item as the owner read them; null — not a decision
+// of this product written by t-boards, or a broken one. The move date of a
+// row is moveTo[id] (the queue server caps planEnd by it), not due[].eta.
+export function readItemDue(
+  item: { id: string; data: Record<string, unknown> } | null,
+  product: string,
+): DueRow[] | null {
+  if (!item || !item.id.startsWith(dueItemPrefix(product))) return null;
+  const { data } = item;
+  if (data.kind !== "decision" || data.source !== DUE_SOURCE) return null;
+  const due = Array.isArray(data.due) ? data.due.filter(isDueRow) : [];
+  const moveTo =
+    data.moveTo && typeof data.moveTo === "object"
+      ? (data.moveTo as Record<string, unknown>)
+      : {};
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  return due.flatMap((row) => {
+    const to = moveTo[row.id];
+    return rows.includes(row.id) && typeof to === "string" && DATE.test(to)
+      ? [{ ...row, eta: to }]
+      : [];
+  });
+}
 
 export function readState(data: Record<string, unknown> | undefined) {
   if (!data || data.kind !== "due" || typeof data.item !== "string") {
@@ -132,6 +176,11 @@ export function dueItemData(input: {
       "«Держать срок» — хвосты строк уходят в строку бэклога того же направления. «Перенести» — срок строки станет датой прогноза. «Оставить красными» — ничего не меняется. Молчание — ничего не меняется; новый вопрос — только если строки или отставание изменятся. Статус этого пункта ведёт только t-boards.",
     ].join("\n\n"),
     rows: late.map((row) => row.id),
+    // «Перенести»: the date of each row the body names; the queue server lets
+    // planEnd move up to it only (TB-112 part 1).
+    moveTo: Object.fromEntries(late.map((row) => [row.id, row.eta])),
+    // «Держать срок»: the cut cards the body names; the answer moves these.
+    due: late,
     options: [
       {
         id: "keep",
@@ -142,6 +191,6 @@ export function dueItemData(input: {
       { id: "red", label: "Оставить красными" },
     ],
     added: input.today,
-    source: "t-boards (TB-112)",
+    source: DUE_SOURCE,
   };
 }

@@ -38,7 +38,7 @@ export class PlanWriter {
   }
 
   patch(
-    collection: "work" | "items",
+    collection: "work" | "items" | "checks",
     id: string,
     data: Record<string, unknown>,
     ifVersion?: number,

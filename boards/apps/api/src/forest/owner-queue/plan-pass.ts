@@ -1,4 +1,5 @@
 import { archiveItem, applyAnswers } from "./plan-due-apply";
+import { readItemDue } from "./plan-due";
 import { type DailyPlan, dailyPlan } from "./plan-due-daily";
 import { PACE_DAYS } from "./plan-eta";
 import { planWrites, type RowWrite } from "./plan-rows";
@@ -100,22 +101,49 @@ function withEta(writes: RowWrite[], rows: PlanRow[], daily: DailyPlan) {
   return [...byId.values()].sort((a, b) => a.rank - b.rank);
 }
 
-// New decision: the item first (409 — it exists: the day was run already),
-// then the last unanswered one archived, then the state.
+// New decision: the item first, then the last unanswered one archived, then
+// the state. A 409 on the item: it exists — a run wrote it and failed before
+// the state. Our open decision is taken as written and the state points to
+// it, with its rows as the owner reads them; any other doc there is left.
+// false — a write failed or was left: the daily part runs again next run.
 async function writeDecisions(writer: PlanWriter, daily: DailyPlan) {
+  let complete = true;
   for (const decision of daily.decisions) {
     const { item, state } = decision;
     const put = await writer.write(() =>
       writer.client.put("items", item.id, item.data, 0),
     );
-    if (typeof put === "string") continue;
-    if (decision.archive && decision.archive !== item.id) {
-      await archiveItem(writer, decision.archive);
+    if (put === "left") return false;
+    let rows = state.data.rows;
+    if (put === "skipped") {
+      const existing = await writer.client.get("items", item.id);
+      const due =
+        existing?.data.archived === true
+          ? null
+          : readItemDue(existing, decision.product);
+      if (!due) {
+        console.warn(`owner-queue due: ${item.id} exists and is not open`);
+        continue;
+      }
+      rows = due;
     }
-    await writer.write(() =>
-      writer.client.put("work", state.id, state.data, state.version),
+    if (decision.archive && decision.archive !== item.id) {
+      if (!(await archiveItem(writer, decision.archive))) {
+        complete = false;
+        continue;
+      }
+    }
+    const written = await writer.write(() =>
+      writer.client.put(
+        "work",
+        state.id,
+        { ...state.data, rows },
+        state.version,
+      ),
     );
+    if (typeof written === "string") complete = false;
   }
+  return complete;
 }
 
 // One run over the plan rows. Every 5 minutes: an answered due decision is
@@ -203,13 +231,13 @@ export async function planPass(
   for (const write of ordered) {
     await writer.patch("work", write.id, write.patch, write.version);
   }
-  if (daily) await writeDecisions(writer, daily);
+  const decided = daily ? await writeDecisions(writer, daily) : true;
   const clean = writer.skipped === 0 && writer.left === 0;
   return {
     written: writer.written,
     skipped: writer.skipped,
     left: writer.left,
     hourlyDone: withHourly && clean,
-    dailyDone: withDaily && writer.left === 0,
+    dailyDone: withDaily && writer.left === 0 && decided,
   };
 }
