@@ -369,6 +369,20 @@ class CommandsTest(Base):
         self.assertEqual(L.line_records(), [(LONG_CHILD, L.lfile(LONG_CHILD, ".json"))])
         self.assertEqual(L.child_acks(LONG_PARENT), [(LONG_CHILD, L.lfile(LONG_CHILD, ".ack"))])
 
+    def test_fake_h_record_is_not_a_second_record(self):
+        """SE-64: файл h<хэш>.<сегмент>.json с чужим полем line не дублирует запись линии. Запись засчитывается,
+        только если её имя — lfile(line), поэтому window_plan не обрабатывает линию дважды."""
+        L.ldir().mkdir(parents=True)
+        for line in ("r.a1", LONG_CHILD):
+            L.lfile(line, ".json").write_text(json.dumps({"line": line}), encoding="utf-8")
+        fakes = {"h0000000000000000.a1": "r.a1", L.line_hash("r.zz") + ".a1": "r.a1",
+                 "h1111111111111111.zz99": LONG_CHILD, L.line_hash(LONG_CHILD) + ".zz99": LONG_CHILD}
+        for stem, line in fakes.items():
+            (L.ldir() / f"{stem}.json").write_text(json.dumps({"line": line}), encoding="utf-8")
+        self.assertEqual(len(list(L.ldir().glob("*.json"))), 6)
+        self.assertEqual(L.line_records(), [(LONG_CHILD, L.lfile(LONG_CHILD, ".json")),
+                                            ("r.a1", L.ldir() / "r.a1.json")])
+
     def test_line_key_keeps_short_names(self):
         """Линия до 200 символов — имя прежнее; длиннее — h<хэш родителя>.<сегмент>, LINE_RE его не принимает."""
         mid = "r" + "".join(f".{i:04d}" for i in range(39))   # 197 символов
