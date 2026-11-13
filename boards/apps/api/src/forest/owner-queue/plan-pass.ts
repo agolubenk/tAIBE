@@ -60,6 +60,8 @@ export type PlanOutcome = {
   left: number;
   // Refused by the queue (400/422): skipped, the run goes on (TB-125).
   refused: number;
+  // The queue answered 429: the rest of the run waits for the next (TB-119).
+  throttled: boolean;
   // The hourly part ran and every doc it changed is written.
   hourlyDone: boolean;
   // The daily part ran and nothing was left for lack of budget.
@@ -184,6 +186,27 @@ async function writeDecisions(writer: PlanWriter, daily: DailyPlan) {
   return complete;
 }
 
+// A 429 now and then is the limit at work: the rest is written next run. A
+// 429 in THROTTLED_RUNS_ALERT runs in a row means the token's writes go
+// elsewhere and the rows stop following the board: the check-in fails then.
+// A refused doc (TB-125) fails it at once.
+export const THROTTLED_RUNS_ALERT = 3;
+
+export function planCheckIn() {
+  let throttledRuns = 0;
+  return (outcome: Pick<PlanOutcome, "refused" | "throttled">) => {
+    throttledRuns = outcome.throttled ? throttledRuns + 1 : 0;
+    if (throttledRuns === THROTTLED_RUNS_ALERT) {
+      console.warn(
+        `owner-queue plan: 429 in ${THROTTLED_RUNS_ALERT} runs in a row; the plan rows lag behind the board`,
+      );
+    }
+    return {
+      degraded: outcome.refused > 0 || throttledRuns >= THROTTLED_RUNS_ALERT,
+    };
+  };
+}
+
 // One run over the plan rows. Every 5 minutes: an answered due decision is
 // applied (TB-112), then F4 — each row follows its cards on the board; hourly
 // also F8 (the off-plan row) and F9 (the «без аренды» mark); daily the
@@ -280,6 +303,7 @@ export async function planPass(
     skipped: writer.skipped,
     left: writer.left,
     refused: writer.refused,
+    throttled: writer.throttled,
     hourlyDone: withHourly && clean,
     dailyDone: withDaily && writer.left === 0 && decided,
   };

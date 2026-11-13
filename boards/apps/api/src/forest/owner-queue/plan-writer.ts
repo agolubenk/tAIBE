@@ -20,7 +20,8 @@ export class PlanWriter {
   left = 0;
   refused = 0;
   private attempts = 0;
-  private throttled = false;
+  // The queue answered 429 in this run (TB-119).
+  throttled = false;
 
   constructor(
     readonly client: QueueClient,

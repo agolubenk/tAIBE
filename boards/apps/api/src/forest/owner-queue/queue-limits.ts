@@ -8,6 +8,10 @@ export const QUEUE_WRITES_PER_MINUTE = 120;
 export const WRITES_PER_PASS = 50;
 
 // One plan run: what two passes leave of the minute, 120 − 2 × 50 = 20
-// (TB-119). The rest of the run's writes go next run.
+// (TB-119). The rest of the run's writes go next run. Not in the sum: the
+// tail of a pass that started in the previous window (a pass lasts up to
+// 25 s), and other writers of the same token. So a 429 can still come; the
+// plan run takes it as «left» (plan-writer.ts). The expiry pass only reads
+// the queue.
 export const PLAN_WRITES_PER_RUN =
   QUEUE_WRITES_PER_MINUTE - 2 * WRITES_PER_PASS;

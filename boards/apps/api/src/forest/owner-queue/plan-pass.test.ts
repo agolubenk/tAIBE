@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   PLAN_WRITES_PER_RUN,
   type PlanStore,
+  planCheckIn,
   planPass,
   READ_BUDGET_MS,
+  THROTTLED_RUNS_ALERT,
 } from "./plan-pass";
 import type { BoardCard, RecentCard } from "./plan-types";
 import {
@@ -182,6 +184,7 @@ describe("planPass (TB-106)", () => {
       skipped: 0,
       left: 0,
       refused: 0,
+      throttled: false,
       hourlyDone: false,
       dailyDone: false,
     });
@@ -225,6 +228,7 @@ describe("planPass (TB-106)", () => {
       skipped: 1,
       left: 0,
       refused: 0,
+      throttled: false,
       hourlyDone: false,
       dailyDone: false,
     });
@@ -249,6 +253,7 @@ describe("planPass (TB-106)", () => {
       skipped: 0,
       left: 0,
       refused: 1,
+      throttled: false,
       hourlyDone: true,
       dailyDone: false,
     });
@@ -319,6 +324,7 @@ describe("planPass (TB-106)", () => {
       skipped: 0,
       left: 3,
       refused: 0,
+      throttled: true,
       // Incomplete: the hourly part runs again next run.
       hourlyDone: false,
       dailyDone: false,
@@ -336,6 +342,26 @@ describe("planPass (TB-106)", () => {
       left: 0,
       hourlyDone: true,
     });
+  });
+
+  it("fails the check-in after a 429 in 3 runs in a row, not before, and on a refusal at once", () => {
+    const checkIn = planCheckIn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const throttled = { refused: 0, throttled: true };
+    const clean = { refused: 0, throttled: false };
+    for (let run = 1; run < THROTTLED_RUNS_ALERT; run += 1) {
+      expect(checkIn(throttled)).toEqual({ degraded: false });
+    }
+    expect(checkIn(throttled)).toEqual({ degraded: true });
+    expect(checkIn(throttled)).toEqual({ degraded: true });
+    expect(warn).toHaveBeenCalledTimes(1);
+    // A run without a 429 starts the count again.
+    expect(checkIn(clean)).toEqual({ degraded: false });
+    expect(checkIn(throttled)).toEqual({ degraded: false });
+    expect(checkIn({ refused: 1, throttled: false })).toEqual({
+      degraded: true,
+    });
+    warn.mockRestore();
   });
 
   it("reads the board only in mapped workspaces and runs F8 and F9 only hourly", async () => {
