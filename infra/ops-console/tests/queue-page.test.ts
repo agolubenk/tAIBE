@@ -24,6 +24,8 @@ type Pure = {
   statsFromDb: (d: unknown) => null | { bugs: Record<string, number>; tasks: Record<string, number>; inPlan: number; notInPlan: number; history: { d: string; bugs: number }[] }
   lagOf: (w: Row, t: Date) => number | null
   lagGroups: (ws: Row[], t: Date) => { open: { w: Row; lag: number }[]; closed: { w: Row; lag: number }[]; onTime: number }
+  etaLate: (w: Row) => number
+  etaLateTag: (w: Row) => string
   classifyOwnText: (text: string) => { type: string; urgency: string; severity?: string }
   inboxTitleOf: (text: string) => string
   inboxDraftId: (now: Date, rand: Uint8Array) => string
@@ -45,7 +47,7 @@ type Pure = {
   targetFromHash: (hash: string) => string
 }
 type FakeDb = { doc: (path: string) => { set: (data: unknown, opts?: { ifVersion?: number }) => Promise<unknown>; get: () => Promise<unknown> } }
-type Row = { id: string; status?: string; planEnd?: string; basePlanEnd?: string; end?: string }
+type Row = { id: string; status?: string; planEnd?: string; basePlanEnd?: string; end?: string; eta?: string }
 
 // Блок из самой страницы (код репозитория, не ввод) исполняется в отдельном контексте vm без доступа к тесту.
 function pure(): Pure {
@@ -66,6 +68,7 @@ function pure(): Pure {
   return {
     trackFromDb: fn('trackFromDb'), mergeTracks: fn('mergeTracks'), cleanCards: fn('cleanCards'), cardsLabel: fn('cardsLabel'), cardRowHtml: fn('cardRowHtml'),
     cardsInPlan: fn('cardsInPlan'), statsFromDb: fn('statsFromDb'), lagOf: fn('lagOf'), lagGroups: fn('lagGroups'),
+    etaLate: fn('etaLate'), etaLateTag: fn('etaLateTag'),
     classifyOwnText: fn('classifyOwnText'), inboxTitleOf: fn('inboxTitleOf'), inboxDraftId: fn('inboxDraftId'), inboxItemOf: fn('inboxItemOf'),
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
@@ -222,6 +225,36 @@ describe('сводка сверки с досками', () => {
     expect(st?.inPlan).toBe(428)
     expect(st?.notInPlan).toBe(0)
     expect(st?.history).toEqual([{ d: '2026-10-20', bugs: 251, tasks: 218, inPlan: 0 }])
+  })
+})
+
+describe('прогноз позже срока: «не успевает на N дн.» (TB-123, приёмка TB-112 п. 2)', () => {
+  it('строка с eta на 3 дня позже planEnd получает метку', () => {
+    const { etaLate, etaLateTag } = pure()
+    const w = { id: 'a', status: 'doing', planEnd: '2026-11-20', eta: '2026-11-23' }
+    expect(etaLate(w)).toBe(3)
+    expect(etaLateTag(w)).toContain('не успевает на 3 дн.')
+  })
+
+  it('без eta, с eta не позже planEnd и у закрытой строки метки нет', () => {
+    const { etaLate, etaLateTag } = pure()
+    const rows: Row[] = [
+      { id: 'no-eta', status: 'doing', planEnd: '2026-11-20' },
+      { id: 'same', status: 'planned', planEnd: '2026-11-20', eta: '2026-11-20' },
+      { id: 'early', status: 'planned', planEnd: '2026-11-20', eta: '2026-11-18' },
+      { id: 'no-plan', status: 'doing', eta: '2026-11-23' },
+      { id: 'done', status: 'done', planEnd: '2026-11-20', eta: '2026-11-23' },
+    ]
+    for (const w of rows) {
+      expect(etaLate(w)).toBe(0)
+      expect(etaLateTag(w)).toBe('')
+    }
+  })
+
+  it('сравнивает с текущим planEnd: сдвиг, принятый владельцем, — новый срок', () => {
+    const { etaLate } = pure()
+    expect(etaLate({ id: 'moved', status: 'doing', basePlanEnd: '2026-11-10', planEnd: '2026-11-23', eta: '2026-11-23' })).toBe(0)
+    expect(etaLate({ id: 'moved-late', status: 'doing', basePlanEnd: '2026-11-10', planEnd: '2026-11-20', eta: '2026-11-22' })).toBe(2)
   })
 })
 

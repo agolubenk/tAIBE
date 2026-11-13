@@ -354,6 +354,7 @@ table.rep th { font-size: 12px; color: var(--muted); font-weight: 600; white-spa
 table.rep td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 table.rep td.when { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .is-late { color: var(--warn); font-weight: 600; }
+.eta-late { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 600; color: var(--warn); white-space: nowrap; }
 .trk { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .trk i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
 /* Строка — во всю ширину шкалы, а не окна прокрутки: иначе при прокрутке вбок липкое название уезжало вместе со
@@ -646,7 +647,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
         <li><b>Ваша очередь по дням</b> — левая ось: сколько пунктов поставлено вам и сколько закрыто, нарастающим итогом (разрыв — то, что ждёт вас). Правая ось: сколько пунктов пришло за день; пунктир — медиана за 14 дней, правее красной линии «сегодня» — прогноз на 30 дней. Наведите на график — подсказка с числами дня.</li>
         <li><b>Задачи агентов: план и факт</b> — левая ось, нарастающим итогом: пунктир — сколько задач должно быть готово по плану, сплошная — сколько готово на деле (ниже пунктира — агенты отстают); пунктир от «сегодня» — пересчитанный план: оставшиеся задачи при среднем темпе за 14 дней, над графиком — новый срок и сдвиг от плана. Правая ось — сколько задач готово за день; пунктир — среднее за 14 дней и прогноз на 30 дней. Меньше 7 дат — прогноз не рисуется, подпись «мало данных». Список «Срез» — все задачи или один продукт, проект, сектор или блок. <b>Готовность по разделам</b> — карточки t-boards задач агентов по продуктам, внутри — по проектам, секторам или блокам (список «Разрез»): закрыто, на ревью, открыто и чёрточка — сколько должно быть закрыто по плану к сегодня. <b>Карточки t-boards в плане</b> — сколько карточек прикреплено по продуктам и своему разрезу и сколько закрыто, ниже — открытые карточки по дням сверок.</li>
         <li><b>Отставание от плана</b> — сверху открытые задачи позже плана, свёрнуто ниже — закрытые со сдвигом срока. <b>Сколько PR ждали мёржа</b> — точка на PR (пустая — ещё открыт), шкала до 36 часов: дольше — треугольник на верхней линии с номером и настоящим числом часов; только PR репозитория HR.</li>
-        <li><b>Диаграмма Ганта</b> — рамка — план, заливка — факт, красный хвост — отставание; шкала прокручивается вбок, названия задач остаются слева, наведите на строку — даты и статус. <b>Роадмап</b> — вехи по неделям: залитый ромб — достигнута, пустой — по плану, красная обводка — просрочена. <b>Отчёт по задачам</b> — таблица всех задач (раскрытая помнится); кнопка «N карточек» открывает список карточек t-boards строки.</li>
+        <li><b>Диаграмма Ганта</b> — рамка — план, заливка — факт, красный хвост — отставание; шкала прокручивается вбок, названия задач остаются слева, наведите на строку — даты и статус. <b>Роадмап</b> — вехи по неделям: залитый ромб — достигнута, пустой — по плану, красная обводка — просрочена. <b>Отчёт по задачам</b> — таблица всех задач (раскрытая помнится); метка «не успевает на N дн.» — прогноз по темпу агентов позже срока строки, число таких строк видно и в свёрнутом заголовке; кнопка «N карточек» открывает список карточек t-boards строки.</li>
       </ol>
       <div class="legend"><span><span class="chip chip-decision">решение</span> выбрать вариант</span><span><span class="chip chip-deploy">деплой</span> мёрж выкатит прод</span><span><span class="chip chip-ssh">ssh</span> команда на сервере</span><span><span class="chip chip-wait">после …</span> сначала другой пункт</span></div>
       </details>
@@ -1463,6 +1464,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (w.status === 'done') return t > pe ? null : 0;
     return t > pe ? diffD(t, pe) : 0;
   }
+  // Прогноз позже срока (TB-112 п. 2): eta пишет проход досок (темп последних 14 дней). Сравнение — с текущим planEnd:
+  // сдвиг, принятый владельцем, и есть новый срок. Закрытая строка и строка без eta метки не дают.
+  function etaLate(w) {
+    var pe = dParse(w.planEnd), eta = dParse(w.eta);
+    return w.status !== 'done' && pe && eta && eta > pe ? diffD(eta, pe) : 0;
+  }
+  function etaLateTag(w) { var n = etaLate(w); return n > 0 ? ' <span class="eta-late">не успевает на ' + n + ' дн.</span>' : ''; }
   function stateOf(w) { return w.status === 'done' ? 'done' : (w.status === 'doing' || w.status === 'taken') ? 'doing' : w.status === 'blocked' ? 'blocked' : 'planned'; }
   // Открытые позже плана — это и есть «просрочено»: их отставание растёт каждый день. У строк с датой факта
   // (закрытых или с end при незакрытом статусе) сдвиг итоговый — они во втором списке.
@@ -2176,7 +2184,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       var link = w.link ? ' <a href="' + esc(w.link) + '" target="_blank" rel="noopener">' + esc(w.linkText || 'ссылка') + '</a>' : '';
       // Кнопка, а не ссылка: бот берёт первую <a> ячейки как ссылку строки.
       var cards = w.cards && w.cards.length ? ' <button type="button" class="cards-btn" data-cards="' + esc(w.id) + '" aria-haspopup="dialog">' + esc(cardsLabel(w.cards)) + '</button>' : '';
-      return '<tr><td>' + esc(w.title) + (w.milestone ? ' ◆' : '') + '</td><td><span class="trk"><i style="background:' + tr.c + '"></i>' + esc(tr.name) + '</span></td>' +
+      return '<tr><td>' + esc(w.title) + (w.milestone ? ' ◆' : '') + etaLateTag(w) + '</td><td><span class="trk"><i style="background:' + tr.c + '"></i>' + esc(tr.name) + '</span></td>' +
         '<td>' + (w.who === 'owner' ? 'вы' : 'агент') + '</td><td><span class="st st-' + esc(st) + '">' + esc(ST_LABEL[st] || st) + '</span></td>' +
         '<td class="when">' + rangeText(w.planStart, w.planEnd) + '</td><td class="when">' + fact + '</td>' +
         '<td class="num' + (lag > 0 ? ' is-late' : '') + '">' + (lag == null ? '—' : lag > 0 ? '+' + lag : lag < 0 ? '−' + (-lag) : '0') + '</td>' +
@@ -2185,7 +2193,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     document.getElementById('report').innerHTML = head + '<tbody>' + body + '</tbody>';
     // Число строк — в заголовке: отчёт свёрнут, а владельцу видно, что в нём есть.
     var rc = document.getElementById('report-count');
-    if (rc) rc.textContent = ws.length + ' ' + plural(ws.length, 'задача', 'задачи', 'задач');
+    var atRisk = ws.filter(function (w) { return etaLate(w) > 0; }).length;
+    if (rc) rc.textContent = ws.length + ' ' + plural(ws.length, 'задача', 'задачи', 'задач') + (atRisk ? ' · не успевают: ' + atRisk : '');
   }
 
   var cardsDlg = document.getElementById('cards-dlg');
@@ -2239,8 +2248,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         if (as && ae && ae >= as) bars += '<span class="g-act" style="left:' + L(as) + 'px;width:' + ((diffD(ae, as) + 1) * ppd - 2) + 'px;background:' + tr.c + '"></span>';
         if (lag > 0 && pe) bars += '<span class="g-lag" style="left:' + L(addD(pe, 1)) + 'px;width:' + (lag * ppd - 2) + 'px"></span>';
         if (w.milestone && (e || pe)) bars += '<span class="g-ms" style="left:' + (L(e || pe) + ppd / 2) + 'px;' + (w.status === 'done' ? 'background:' + tr.c + ';border-color:' + tr.c : 'border-color:' + tr.c) + '"></span>';
-        var tipL = tipAttr([w.title, 'план: ' + rangeText(w.planStart, w.planEnd), 'факт: ' + (s || e ? rangeText(w.start || w.end, w.end) + (e ? '' : ' (идёт)') : 'не начато'), 'статус: ' + (ST_LABEL[w.status] || w.status || 'в плане') + (lag > 0 ? ' · отставание ' + lag + ' дн.' : ''), w.note]);
-        o += '<div class="g-row"' + tipL + '><div class="g-label">' + esc(w.title) + '</div><div class="g-track" style="width:' + width + 'px">' + grid + now + (bars || '<span class="g-date" style="left:4px">без даты</span>') + '</div></div>';
+        var tipL = tipAttr([w.title, 'план: ' + rangeText(w.planStart, w.planEnd), 'факт: ' + (s || e ? rangeText(w.start || w.end, w.end) + (e ? '' : ' (идёт)') : 'не начато'), 'статус: ' + (ST_LABEL[w.status] || w.status || 'в плане') + (lag > 0 ? ' · отставание ' + lag + ' дн.' : '') + (etaLate(w) > 0 ? ' · не успевает на ' + etaLate(w) + ' дн.' : ''), w.note]);
+        o += '<div class="g-row"' + tipL + '><div class="g-label">' + esc(w.title) + etaLateTag(w) + '</div><div class="g-track" style="width:' + width + 'px">' + grid + now + (bars || '<span class="g-date" style="left:4px">без даты</span>') + '</div></div>';
       });
     });
     var undated = ws.length - dated.length;
