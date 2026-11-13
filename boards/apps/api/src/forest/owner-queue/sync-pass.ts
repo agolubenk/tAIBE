@@ -323,10 +323,14 @@ async function deferApply(
       agentNote: deferredNote(cause, tries),
     });
     await saveItemState(row.id, itemId, { synced: deferredStatus(tries) });
-  } catch {
+  } catch (writeError) {
     // A failed write keeps the pause too, or a batch's transaction would run
     // again on every pass (backend lens on #227). The next try writes the
     // note; a count not saved repeats this try's number.
+    console.error(
+      `owner-queue: deferred try ${tries} of request ${row.id} not recorded:`,
+      writeError,
+    );
   }
   throw new ApplyDeferred(error);
 }

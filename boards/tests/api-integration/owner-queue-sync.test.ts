@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import db, { schema } from "../../apps/api/src/database";
 import {
   agentJournalTable,
@@ -447,8 +447,13 @@ describe("API integration: owner-queue sync (TB-102)", () => {
           return patch(collection, docId, data, ifVersion);
         },
       };
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       resetRejectedForTest();
       await syncPass(deps);
+      expect(String(logged.mock.calls[0]?.[0])).toContain(
+        `deferred try 1 of request ${id} not recorded`,
+      );
+      logged.mockRestore();
       expect(withoutPaused([{ id }])).toEqual([]);
       expect((await approval(id))?.status).toBe("pending");
       expect((await approval(id))?.queueSyncedStatus).not.toMatch(/^deferred:/);
