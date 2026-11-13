@@ -1,34 +1,11 @@
 import { lazy, type ReactNode, Suspense } from "react";
 import { useTranslation } from "react-i18next";
+import { reloadOnce } from "@/lib/chunk-reload";
 import { Button } from "./button";
 import { ErrorBoundary } from "./error-boundary";
 
 // Errors of the chunk imports themselves, as opposed to render errors of the loaded part.
 const loadErrors = new WeakSet<object>();
-
-// The same test and sessionStorage key as `lazyRouteComponent` of @tanstack/react-router,
-// so a route chunk and a part chunk missing after one deploy reload the page only once.
-const CHUNK_MISSING = [
-  "Failed to fetch dynamically imported module",
-  "error loading dynamically imported module",
-  "Importing a module script failed",
-];
-
-function reloadOnce(error: Error): boolean {
-  if (!CHUNK_MISSING.some((prefix) => error.message.startsWith(prefix))) {
-    return false;
-  }
-  const key = `tanstack_router_reload:${error.message}`;
-  try {
-    if (sessionStorage.getItem(key)) return false;
-    sessionStorage.setItem(key, "1");
-  } catch {
-    // Storage is off (private mode): show the retry, do not risk a reload loop.
-    return false;
-  }
-  window.location.reload();
-  return true;
-}
 
 type Part<P> = (props: P) => ReactNode;
 

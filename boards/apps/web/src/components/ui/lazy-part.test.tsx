@@ -29,6 +29,7 @@ type EditorModule = { default: typeof Editor };
 
 const placeholder = <div data-testid="placeholder" />;
 const MISSING = "Failed to fetch dynamically imported module: /assets/x-1.js";
+const CSS_MISSING = "Unable to preload CSS for /assets/x-1.css";
 const reload = vi.fn();
 
 // Mount in an async act scope, so Suspense commits the part when its import settles.
@@ -75,40 +76,44 @@ describe("lazyPart (TB-15)", () => {
     expect(screen.queryByTestId("placeholder")).not.toBeInTheDocument();
   });
 
-  it("reloads the page once when a deploy removed the chunk, then offers a retry instead of the crash screen", async () => {
-    const load = vi
-      .fn<() => Promise<EditorModule>>()
-      .mockRejectedValue(new TypeError(MISSING));
-    const crash = vi.fn(() => <p>crash screen</p>);
-    const First = lazyPart(load, placeholder);
-    await mount(
-      <ErrorBoundary fallback={crash}>
-        <First text="b" />
-      </ErrorBoundary>,
-    );
-    await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
-    cleanup();
+  it.each([
+    ["script", new TypeError(MISSING)],
+    ["CSS (TB-127)", new Error(CSS_MISSING)],
+  ])(
+    "reloads the page once when a deploy removed the chunk's %s, then offers a retry instead of the crash screen",
+    async (_, missing) => {
+      const load = vi
+        .fn<() => Promise<EditorModule>>()
+        .mockRejectedValue(missing);
+      const crash = vi.fn(() => <p>crash screen</p>);
+      const First = lazyPart(load, placeholder);
+      await mount(
+        <ErrorBoundary fallback={crash}>
+          <First text="b" />
+        </ErrorBoundary>,
+      );
+      await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
+      cleanup();
 
-    // The same tab after that reload: the chunk is still missing, no second automatic reload.
-    const Second = lazyPart(load, placeholder);
-    await mount(
-      <ErrorBoundary fallback={crash}>
-        <Second text="b" />
-      </ErrorBoundary>,
-    );
-    expect(
-      await screen.findByText("common:error.messages.network"),
-    ).toBeInTheDocument();
-    expect(reload).toHaveBeenCalledOnce();
-    expect(crash).not.toHaveBeenCalled();
-  });
+      // The same tab after that reload: the chunk is still missing, no second automatic reload.
+      const Second = lazyPart(load, placeholder);
+      await mount(
+        <ErrorBoundary fallback={crash}>
+          <Second text="b" />
+        </ErrorBoundary>,
+      );
+      expect(
+        await screen.findByText("common:error.messages.network"),
+      ).toBeInTheDocument();
+      expect(reload).toHaveBeenCalledOnce();
+      expect(crash).not.toHaveBeenCalled();
+    },
+  );
 
   it("imports again on the first retry", async () => {
     const load = vi
       .fn<() => Promise<EditorModule>>()
-      .mockRejectedValueOnce(
-        new Error("Unable to preload CSS for /assets/x.css"),
-      )
+      .mockRejectedValueOnce(new Error("network down"))
       .mockResolvedValueOnce({ default: Editor });
     const Part = lazyPart(load, placeholder);
     await mount(<Part text="c" />);
