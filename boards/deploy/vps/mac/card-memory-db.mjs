@@ -28,12 +28,17 @@ const OBSERVATION_COLUMNS = [
   "created_at",
   "created_at_epoch",
 ];
-const SQLITE_ERROR = 1;
+// Primary result codes; node:sqlite may give an extended code, so the low byte is compared.
+// SQLITE_ERROR (1) and SQLITE_NOTADB (26) from the schema probe: the file is not a claude-mem database we know.
+const NOT_RECOGNISED = new Set([1, 26]);
+// SQLITE_BUSY (5) and SQLITE_LOCKED (6).
 const SQLITE_BUSY = new Set([5, 6]);
+const primaryCode = (err) =>
+  typeof err?.errcode === "number" ? err.errcode & 0xff : null;
 
 const KEY_FORMS = [
   ["id", /^[a-z0-9]{24}$/],
-  ["key", /^[A-Z][A-Z0-9]{1,9}-[0-9]{1,6}$/],
+  ["key", /^[A-Z][A-Z0-9]{0,9}-[0-9]{1,6}$/],
   ["queue", /^(?=.{3,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+){1,7}$/],
 ];
 
@@ -112,7 +117,7 @@ function prepare(db) {
   };
 }
 
-const isBusy = (err) => SQLITE_BUSY.has(err?.errcode);
+const isBusy = (err) => SQLITE_BUSY.has(primaryCode(err));
 
 export function createCardMemoryDb(
   path,
@@ -148,10 +153,18 @@ export function createCardMemoryDb(
         readOnly: true,
         timeout: DB_TIMEOUT_MS,
       });
+    } catch {
+      // No file (SQLITE_CANTOPEN): try again in 30 s.
+      return (state = "unavailable");
+    }
+    try {
       state = schemaFits(db) ? "ok" : "schema_changed";
     } catch (err) {
-      // No file, or no -shm after a reboot until the worker opens the database: try again in 30 s.
-      state = err?.errcode === SQLITE_ERROR ? "schema_changed" : "unavailable";
+      // A file that is not a database (SQLITE_NOTADB) or not claude-mem's (SQLITE_ERROR) is «schema_changed».
+      // A lock, or no -shm after a reboot until the worker opens the database, is «unavailable»: try again in 30 s.
+      state = NOT_RECOGNISED.has(primaryCode(err))
+        ? "schema_changed"
+        : "unavailable";
     }
     if (state === "ok") statements = prepare(db);
     else close();

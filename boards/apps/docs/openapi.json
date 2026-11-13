@@ -26493,12 +26493,11 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 3,
-              "maxLength": 40,
-              "description": "A card key of this workspace, e.g. TB-108."
+              "pattern": "^[A-Z][A-Z0-9]{0,9}-[0-9]{1,6}$",
+              "description": "A card key of this workspace, e.g. TB-108: a project key of 1 to 10 Latin letters and digits, a hyphen and the number."
             },
             "required": false,
-            "description": "A card key of this workspace, e.g. TB-108.",
+            "description": "A card key of this workspace, e.g. TB-108: a project key of 1 to 10 Latin letters and digits, a hyphen and the number.",
             "name": "ticketKey",
             "in": "query"
           },

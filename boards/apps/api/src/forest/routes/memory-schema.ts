@@ -1,4 +1,7 @@
-import { QUEUE_ITEM_ID_PATTERN } from "@kaneo/claude-mem-reader";
+import {
+  BOARD_KEY_PATTERN,
+  QUEUE_ITEM_ID_PATTERN,
+} from "@kaneo/claude-mem-reader";
 import { nullableResponseTimestamp, z } from "../../openapi";
 import { workspaceParam } from "./schema";
 
@@ -49,9 +52,18 @@ export const memoryLookupParam = workspaceParam;
 
 // Exactly one of the two; the handler refuses both or neither with 400.
 export const memoryLookupQuery = z.object({
-  ticketKey: z.string().trim().min(3).max(40).optional().openapi({
-    description: "A card key of this workspace, e.g. TB-108.",
-  }),
+  // The same form as the card's memory keys: a key outside it would be
+  // searched under other keys and answered as if it had none (400 instead).
+  ticketKey: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(BOARD_KEY_PATTERN)
+    .optional()
+    .openapi({
+      description:
+        "A card key of this workspace, e.g. TB-108: a project key of 1 to 10 Latin letters and digits, a hyphen and the number.",
+    }),
   queueItemId: z.string().regex(QUEUE_ITEM_ID_PATTERN).optional().openapi({
     description: "An owner-queue item id, e.g. d-tb113-mem-1311.",
   }),

@@ -16,6 +16,7 @@ export {
   parseCardMemory,
 } from "./card-memory.js";
 export {
+  BOARD_KEY_PATTERN,
   MAX_MEMORY_KEYS,
   type MemoryKeyForm,
   memoryKeyForm,

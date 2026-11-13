@@ -5,7 +5,12 @@ import type {
 } from "@kaneo/claude-mem-reader";
 import { describe, expect, it } from "vite-plus/test";
 import { orderMemoryKeys } from "./card-memory-keys";
-import { createCardMemoryFinder, FRESH_MS, STALE_MS } from "./find-card-memory";
+import {
+  createCardMemoryFinder,
+  FAILED_MS,
+  FRESH_MS,
+  STALE_MS,
+} from "./find-card-memory";
 
 function result(key: string, count: number): CardMemoryKeyResult {
   return {
@@ -49,11 +54,12 @@ function clockAt(start: number) {
 }
 
 describe("createCardMemoryFinder", () => {
-  it("answers unavailable for no keys and does not call the proxy", async () => {
+  // Control lens on 20290bce9: no searchable key is not a proxy failure.
+  it("answers an empty available list for no keys and does not call the proxy", async () => {
     const { client, calls } = scriptedClient([]);
     const find = createCardMemoryFinder(client);
     expect(await find([])).toEqual({
-      available: false,
+      available: true,
       stale: false,
       fetchedAt: null,
       keys: [],
@@ -112,8 +118,34 @@ describe("createCardMemoryFinder", () => {
       keys: [],
     });
     // The old answer is dropped, not shown again on the next failure.
-    clock.tick(1);
+    clock.tick(FAILED_MS);
     expect(await find(["TB-113"])).toMatchObject({ available: false });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("does not ask the proxy for 10 s after a failure, for any key set", async () => {
+    const clock = clockAt(2_000_000);
+    const { client, calls } = scriptedClient([5, new Error("proxy down"), 6]);
+    const find = createCardMemoryFinder(client, () => clock.now);
+
+    await find(["TB-1"]);
+    clock.tick(FRESH_MS);
+    expect(await find(["TB-1"])).toMatchObject({ stale: true });
+    expect(calls).toHaveLength(2);
+
+    clock.tick(FAILED_MS - 1);
+    expect(await find(["TB-1"])).toMatchObject({
+      available: true,
+      stale: true,
+    });
+    expect(await find(["TB-2"])).toMatchObject({ available: false });
+    expect(calls).toHaveLength(2);
+
+    clock.tick(1);
+    expect(await find(["TB-2"])).toMatchObject({
+      available: true,
+      stale: false,
+    });
     expect(calls).toHaveLength(3);
   });
 

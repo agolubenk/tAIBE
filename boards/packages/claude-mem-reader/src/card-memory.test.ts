@@ -39,6 +39,14 @@ describe("memoryKeyForm (TB-113)", () => {
     expect(memoryKeyForm("d-tb113-mem-1311")).toBe("queue");
   });
 
+  // Control lens on 20290bce9: the queue panel's project key is one letter.
+  it("knows a one-letter project key and refuses an 11-letter one", () => {
+    expect(memoryKeyForm("Q-12")).toBe("key");
+    expect(memoryKeyForm("ABCDEFGHIJ-1")).toBe("key");
+    expect(memoryKeyForm("ABCDEFGHIJK-1")).toBeNull();
+    expect(memoryKeyForm("HR-OPS-1")).toBeNull();
+  });
+
   it("refuses free words, quotes, wildcards and too long ids", () => {
     for (const word of ["main", "PR", '"TB-1"', "TB-1*", "a b", "tb-108x!"]) {
       expect(memoryKeyForm(word)).toBeNull();

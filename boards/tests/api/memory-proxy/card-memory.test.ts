@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { createCardMemoryDb } from "../../../deploy/vps/mac/card-memory-db.mjs";
 import {
   type FakeWorker,
   makeHome,
@@ -213,6 +214,49 @@ describe("memory-proxy.mjs /api/card-memory", () => {
     }
   });
 
+  // Control lens on 20290bce9: the queue panel's project key is one letter.
+  it("finds a key of a one-letter project", async () => {
+    writer = makeDb(dbPath, [{ title: "Queue panel Q-12 done", epoch: T0 }]);
+    await start();
+    const { status, body } = await ask("?key=Q-12");
+    expect(status).toBe(200);
+    expect(body.keys[0]).toMatchObject({
+      key: "Q-12",
+      matchedOn: "key",
+      count: 1,
+    });
+  });
+
+  it("answers 503 schema_changed for a file that is not a database", async () => {
+    writeFileSync(dbPath, "not a database ".repeat(100));
+    await start();
+    expect(await ask("?key=TB-1")).toEqual({
+      status: 503,
+      body: { error: "schema_changed" },
+    });
+  });
+
+  // WAL: a reader sees the last commit while the worker holds a write
+  // transaction, so a write never makes the proxy wait or answer busy.
+  it("keeps answering from the last commit while the worker writes", async () => {
+    writer = makeDb(dbPath, [{ title: "TB-1 first", epoch: T0 }]);
+    await start();
+    writer.exec("BEGIN IMMEDIATE");
+    writer.exec(
+      "INSERT INTO observations (project, title, created_at, created_at_epoch) VALUES ('t-boards', 'TB-1 second', '2026-11-02T00:00:00.000Z', 1793577600000)",
+    );
+    writer.exec(
+      "INSERT INTO observations_fts (rowid, title) VALUES (last_insert_rowid(), 'TB-1 second')",
+    );
+    const started = Date.now();
+    const during = await ask("?key=TB-1");
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(during.status).toBe(200);
+    expect(during.body.keys[0].count).toBe(1);
+    writer.exec("COMMIT");
+    expect((await ask("?key=TB-1")).body.keys[0].count).toBe(2);
+  });
+
   it("answers 503 schema_changed for a database it does not recognise", async () => {
     writer = makeDb(dbPath, [{ title: "TB-1", epoch: T0 }], { wal: false });
     await start();
@@ -253,5 +297,62 @@ describe("memory-proxy.mjs /api/card-memory", () => {
     );
     expect(proxy?.output()).not.toContain("TB-108");
     expect(proxy?.output()).not.toContain("secret title");
+  });
+});
+
+// The busy branch (SQLITE_BUSY or SQLITE_LOCKED during a read) cannot be made
+// with a real WAL writer, so the module gets the real node:sqlite with a lock
+// switch in front of its statements.
+describe("card-memory-db.mjs busy", () => {
+  let dir: string;
+  let writer: DatabaseSync | undefined;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "tb-card-memory-busy-"));
+  });
+
+  afterEach(() => {
+    writer?.close();
+    writer = undefined;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("answers busy while a read hits a lock and reads again after it", async () => {
+    const path = join(dir, "claude-mem.db");
+    writer = makeDb(path, [{ title: "TB-1", epoch: T0 }]);
+    const lock = { held: false };
+    class LockableDb extends DatabaseSync {
+      prepare(sql: string) {
+        const statement = super.prepare(sql);
+        const guard =
+          <A extends unknown[], R>(read: (...args: A) => R) =>
+          (...args: A): R => {
+            if (lock.held) {
+              // SQLITE_BUSY_RECOVERY: an extended code of SQLITE_BUSY.
+              throw Object.assign(new Error("database is locked"), {
+                errcode: 261,
+              });
+            }
+            return read(...args);
+          };
+        return {
+          get: guard(statement.get.bind(statement)),
+          all: guard(statement.all.bind(statement)),
+        } as unknown as ReturnType<DatabaseSync["prepare"]>;
+      }
+    }
+    const memory = createCardMemoryDb(path, {
+      load: async () => ({ DatabaseSync: LockableDb }),
+    });
+    const keys = [{ key: "TB-1", matchedOn: "key" }];
+
+    expect((await memory.find(keys)).status).toBe("ok");
+    lock.held = true;
+    expect(await memory.find(keys)).toEqual({ status: "busy" });
+    expect(memory.state()).toBe("ok");
+    lock.held = false;
+    const after = await memory.find(keys);
+    expect(after.status).toBe("ok");
+    expect(after.keys[0].count).toBe(1);
   });
 });

@@ -5,8 +5,11 @@ import type {
 
 // A fresh answer is reused for a minute; when the Mac proxy fails, the last
 // answer is shown as stale for up to a day, then «unavailable» (TB-113).
+// After a failure the proxy is not asked again for 10 s: a sleeping Mac must
+// not hold every card opening for the client's timeout.
 export const FRESH_MS = 60_000;
 export const STALE_MS = 24 * 60 * 60_000;
+export const FAILED_MS = 10_000;
 const CACHE_ENTRIES = 500;
 
 export type CardMemory = {
@@ -23,6 +26,15 @@ const UNAVAILABLE: CardMemory = {
   keys: [],
 };
 
+// No key of the card fits a searchable form: there is nothing to ask, which
+// is not a proxy failure.
+const NOTHING_TO_SEARCH: CardMemory = {
+  available: true,
+  stale: false,
+  fetchedAt: null,
+  keys: [],
+};
+
 type Entry = { keys: CardMemoryKeyResult[]; fetchedAt: number };
 
 export type CardMemoryFinder = (keys: string[]) => Promise<CardMemory>;
@@ -34,6 +46,9 @@ export function createCardMemoryFinder(
   clock: () => number = Date.now,
 ): CardMemoryFinder {
   const cache = new Map<string, Entry>();
+  // The proxy fails as a whole (Mac asleep, no database, busy, rate limit),
+  // so one failure pauses the calls for every key set.
+  let failedUntil = 0;
 
   function remember(id: string, entry: Entry) {
     cache.delete(id);
@@ -44,8 +59,25 @@ export function createCardMemoryFinder(
     }
   }
 
+  function lastAnswer(
+    id: string,
+    known: Entry | undefined,
+    now: number,
+  ): CardMemory {
+    if (known && now - known.fetchedAt < STALE_MS) {
+      return {
+        available: true,
+        stale: true,
+        fetchedAt: new Date(known.fetchedAt),
+        keys: known.keys,
+      };
+    }
+    if (known) cache.delete(id);
+    return UNAVAILABLE;
+  }
+
   return async (keys) => {
-    if (keys.length === 0) return UNAVAILABLE;
+    if (keys.length === 0) return NOTHING_TO_SEARCH;
     const id = [...keys].sort().join(" ");
     const now = clock();
     const known = cache.get(id);
@@ -57,6 +89,7 @@ export function createCardMemoryFinder(
         keys: known.keys,
       };
     }
+    if (now < failedUntil) return lastAnswer(id, known, now);
     try {
       const answer = await client.find(keys);
       remember(id, { keys: answer.keys, fetchedAt: now });
@@ -67,16 +100,8 @@ export function createCardMemoryFinder(
         keys: answer.keys,
       };
     } catch {
-      if (known && now - known.fetchedAt < STALE_MS) {
-        return {
-          available: true,
-          stale: true,
-          fetchedAt: new Date(known.fetchedAt),
-          keys: known.keys,
-        };
-      }
-      if (known) cache.delete(id);
-      return UNAVAILABLE;
+      failedUntil = now + FAILED_MS;
+      return lastAnswer(id, known, now);
     }
   };
 }

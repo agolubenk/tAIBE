@@ -176,6 +176,9 @@ describe("API integration: card memory (TB-113)", () => {
       card.id,
       "MEMB-3",
     ]);
+    // The key is read in capitals, as the board shows it.
+    const lower = await forest.agent("/memory?ticketKey=memb-3");
+    expect(lower.status).toBe(200);
 
     asked.length = 0;
     const theirs = await other.agent("/memory?ticketKey=MEMB-3");
@@ -211,6 +214,11 @@ describe("API integration: card memory (TB-113)", () => {
       "",
       `?ticketKey=MEMB-3&queueItemId=${QUEUE_ITEM}`,
       "?queueItemId=Not%20An%20Id",
+      // Control lens on 20290bce9: a key outside the board-key form would be
+      // answered as a card without memory; it is refused instead.
+      "?ticketKey=free%20text",
+      "?ticketKey=HR-OPS-1",
+      "?ticketKey=ABCDEFGHIJK-1",
     ]) {
       const res = await forest.agent(`/memory${query}`);
       expect(res.status, query).toBe(400);
