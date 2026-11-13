@@ -1,10 +1,9 @@
-import { and, asc, eq, isNotNull, notInArray } from "drizzle-orm";
+import { and, eq, isNotNull, notInArray } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import createActivities from "../../activity/controllers/create-activities";
 import db from "../../database";
 import {
   assetTable,
-  columnTable,
   externalLinkTable,
   integrationTable,
   projectTable,
@@ -13,6 +12,7 @@ import {
 import { publishEvent } from "../../events";
 import { assertProjectAccess } from "../../project-access/assert-project-access";
 import { filterUsersWithProjectAccess } from "../../project-access/filter-users-with-project-access";
+import { resolveDestinationStatus } from "../resolve-destination-status";
 import { claimTaskNumber } from "./claim-task-numbers";
 import { nextTaskPosition } from "./next-task-position";
 
@@ -21,46 +21,6 @@ function isSameProjectMove(
   destinationProjectId: string,
 ) {
   return sourceProjectId === destinationProjectId;
-}
-
-async function resolveDestinationStatus(
-  destinationProjectId: string,
-  currentStatus: string,
-  requestedStatus?: string,
-) {
-  const destinationColumns = await db
-    .select({
-      id: columnTable.id,
-      slug: columnTable.slug,
-      position: columnTable.position,
-    })
-    .from(columnTable)
-    .where(eq(columnTable.projectId, destinationProjectId))
-    .orderBy(asc(columnTable.position));
-
-  const [firstColumn] = destinationColumns;
-
-  if (!firstColumn) {
-    throw new HTTPException(400, {
-      message: "Destination project does not have a workflow",
-    });
-  }
-
-  const requestedColumn = requestedStatus
-    ? destinationColumns.find((column) => column.slug === requestedStatus)
-    : null;
-
-  if (requestedStatus && !requestedColumn) {
-    throw new HTTPException(400, {
-      message: "Selected status is not valid for the destination project",
-    });
-  }
-
-  const matchingCurrentColumn = destinationColumns.find(
-    (column) => column.slug === currentStatus,
-  );
-
-  return requestedColumn ?? matchingCurrentColumn ?? firstColumn;
 }
 
 async function moveTask({

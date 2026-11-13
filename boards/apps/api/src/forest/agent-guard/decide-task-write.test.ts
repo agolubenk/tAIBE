@@ -105,4 +105,34 @@ describe("decideTaskWrite", () => {
       approval: null,
     });
   });
+
+  // TB-80: a move to another project lands in a column of that project.
+  it("asks about a move's landing even with the same slug or no status", () => {
+    const closed = { ...current, status: "done" };
+    const reopens = { ...open, reopens: true };
+    expect(
+      decideTaskWrite({ projectId: "p2" }, closed, {
+        ...reopens,
+        landing: "new",
+      }),
+    ).toEqual({
+      kind: "allow",
+      approval: { action: "reopen_task", value: "new" },
+    });
+    expect(
+      decideTaskWrite({ projectId: "p2", status: "done" }, closed, {
+        ...reopens,
+        landing: "done",
+      }),
+    ).toEqual({
+      kind: "allow",
+      approval: { action: "reopen_task", value: "done" },
+    });
+    expect(
+      decideTaskWrite({ projectId: "p2", status: "finished" }, closed, {
+        ...open,
+        landing: "finished",
+      }),
+    ).toEqual({ kind: "allow", approval: null });
+  });
 });

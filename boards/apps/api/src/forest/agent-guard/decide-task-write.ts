@@ -15,6 +15,10 @@ export type WriteFacts = {
   reopens: boolean;
   // An agent created this card, so its text is not the owner's statement.
   authoredByAgent: boolean;
+  // A move to another project: the status the card lands in (TB-80). Its
+  // closes and reopens compare the two projects, so they count even when the
+  // slug stays the same or the request names no status.
+  landing?: string;
 };
 
 export type WriteDecision =
@@ -49,7 +53,9 @@ export function decideTaskWrite(
   }
 
   const statusChanged =
-    changes.status !== undefined && changes.status !== current.status;
+    facts.landing !== undefined ||
+    (changes.status !== undefined && changes.status !== current.status);
+  const status = facts.landing ?? changes.status;
   const statusAction = !statusChanged
     ? null
     : facts.closes
@@ -65,10 +71,10 @@ export function decideTaskWrite(
       reason: `${statusAction === "close_task" ? "closing" : "reopening"} and a priority change need separate approvals; send them one at a time`,
     };
   }
-  if (statusAction && changes.status) {
+  if (statusAction && status) {
     return {
       kind: "allow",
-      approval: { action: statusAction, value: changes.status },
+      approval: { action: statusAction, value: status },
     };
   }
   if (priorityChanged && changes.priority) {
