@@ -40,13 +40,21 @@ class Sx:
         return self.env.get(pid)
 
 
-def ack(line, pid, start=ST):
-    LIN.lfile(line, ".ack").write_text(json.dumps({"line": line, "pid": pid, "start": start}), encoding="utf-8")
+def rec(line, role="release"):
+    LIN.lfile(line, ".json").write_text(json.dumps({"line": line, "role": role}), encoding="utf-8")
+
+
+def ack(line, pid, start=ST, at="2026-11-13T21:40:00+0300", role="release"):
+    """Наследник: запись линии с ролью и квитанция приёма."""
+    rec(line, role)
+    LIN.lfile(line, ".ack").write_text(json.dumps({"line": line, "pid": pid, "start": start, "at": at}),
+                                       encoding="utf-8")
 
 
 def reset():
     for f in LDIR.iterdir():
         f.unlink()
+    rec("r.ddgg")
 
 
 def check(label, got, want_pass):
@@ -74,6 +82,7 @@ check("процесса нет", verdict(99, {10: ("r.ddgg", ST)}), False)
 # наследник без квитанции не Контроль; с квитанцией — Контроль, предшественник — уже нет
 reset()
 both = {10: ("r.ddgg", ST), 20: ("r.ddgg.ab12", ST)}
+rec("r.ddgg.ab12")
 check("наследник до ack", verdict(20, both), False)
 check("предшественник до ack наследника", verdict(10, both), True)
 ack("r.ddgg.ab12", 20)
@@ -85,7 +94,7 @@ check("квитанция старого процесса с тем же pid", v
 # через закончившееся поколение: внук принял, сын умер — корень не Контроль
 reset()
 ack("r.ddgg.ab12", 20)
-ack("r.ddgg.ab12.cd34", 30)
+ack("r.ddgg.ab12.cd34", 30, at="2026-11-13T22:00:00+0300")
 chain = {10: ("r.ddgg", ST), 30: ("r.ddgg.ab12.cd34", ST)}
 check("внук после ack", verdict(30, chain), True)
 check("корень при живом внуке", verdict(10, chain), False)
@@ -94,6 +103,42 @@ check("корень при живом внуке", verdict(10, chain), False)
 reset()
 ack("r.ddgg.ab12", 20)
 check("корень, наследник с ack умер", verdict(10, {10: ("r.ddgg", ST)}), True)
+
+# находки линзы «инструмент» на 98debfe99 (комментарий 6861869072)
+# 1. сын без квитанции не прячет от корня живого внука с квитанцией
+reset()
+rec("r.ddgg.aaaa")
+ack("r.ddgg.aaaa.bbbb", 30)
+gap = {10: ("r.ddgg", ST), 20: ("r.ddgg.aaaa", ST), 30: ("r.ddgg.aaaa.bbbb", ST)}
+check("корень при внуке через сына без ack", verdict(10, gap), False)
+check("внук через сына без ack", verdict(30, gap), True)
+# 2. потомок другой роли в линии Контроля и его наследник — не Контроль
+reset()
+ack("r.ddgg.xxxx", 20, role="backend")
+ack("r.ddgg.xxxx.yyyy", 30, role="backend")
+other = {10: ("r.ddgg", ST), 20: ("r.ddgg.xxxx", ST), 30: ("r.ddgg.xxxx.yyyy", ST)}
+check("корень при потомках другой роли", verdict(10, other), True)
+check("потомок другой роли", verdict(20, other), False)
+check("наследник потомка другой роли", verdict(30, other), False)
+reset()
+ack("r.ddgg.nnnn", 20, role="")
+check("наследник без роли в записи", verdict(20, {20: ("r.ddgg.nnnn", ST)}), False)
+reset()
+LIN.lfile("r.ddgg", ".json").unlink()
+ack("r.ddgg.ab12", 20)
+check("корень без записи: наследник не проходит", verdict(20, {20: ("r.ddgg.ab12", ST)}), False)
+check("корень без записи: корень проходит", verdict(10, {10: ("r.ddgg", ST)}), True)
+# 3. братья: проходит самая новая квитанция; равные — отказ обоим
+reset()
+ack("r.ddgg.s111", 21, at="2026-11-13T21:40:00+0300")
+ack("r.ddgg.s222", 22, at="2026-11-13T21:41:00+0300")
+sib = {10: ("r.ddgg", ST), 21: ("r.ddgg.s111", ST), 22: ("r.ddgg.s222", ST)}
+check("старший брат", verdict(21, sib), False)
+check("младший брат (новее квитанция)", verdict(22, sib), True)
+check("корень при братьях", verdict(10, sib), False)
+ack("r.ddgg.s111", 21, at="2026-11-13T21:41:00+0300")
+check("равные квитанции: первый", verdict(21, sib), False)
+check("равные квитанции: второй", verdict(22, sib), False)
 
 # control_verdict: запись line: проходит только через проверку линии; sessionId и имя работают как раньше
 me = {"sessionId": "6fbb5c84-0000-0000-0000-000000000000", "name": "taibe-4b", "pid": 40}

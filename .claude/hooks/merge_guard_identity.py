@@ -2,10 +2,12 @@
 Кто я для merge-guard (pre-tool-use-merge-guard.py): живые сессии из реестра `~/.claude/sessions`, список Контроля
 из основной папки и вердикт «эта сессия — Контроль». Решений о командах не принимает.
 
-Запись списка — sessionId (≥ 8 символов), имя сессии или линия `line:<L>` (TB-81). По линии Контроль — её держатель:
-сессия с линией L или её наследник со своей квитанцией приёма (`lineage.py ack`), у которого нет живого наследника
-с квитанцией. Смена поколения Контроля не требует правки списка владельцем. Линию сессии и квитанции читает
-`eval/tools/lineage.py`; нет модуля — запись линии никого не пропускает.
+Запись списка — sessionId (≥ 8 символов), имя сессии или линия `line:<L>` (TB-81). По линии Контроль — один
+держатель: среди живых сессий поддерева L той же роли, что запись корня L (`role` в `<L>.json`), — наследник
+с самой новой своей квитанцией приёма (`lineage.py ack`); нет такого — сам корень. Наследник другой роли, без роли
+в записи или без своей квитанции не проходит; равные квитанции братьев — отказ обоим. Смена поколения Контроля не
+требует правки списка владельцем. Линию сессии, записи и квитанции читает `eval/tools/lineage.py`; нет модуля —
+запись линии никого не пропускает.
 """
 import importlib.util
 import json
@@ -17,7 +19,6 @@ SESSIONS_DIR = Path.home() / ".claude" / "sessions"
 MAIN_ROOT = Path(str(Path(__file__).resolve().parents[2]).split("/worktrees/", 1)[0])
 LINE_PREFIX = "line:"
 LINEAGE_PATHS = ("eval/tools/lineage.py", ".claude/scripts/lineage.py")
-CHAIN_MAX = 50  # поколений вглубь: защита от петли в файлах квитанций
 
 
 def live_sessions(sessions_dir=SESSIONS_DIR):
@@ -76,24 +77,36 @@ def load_lineage(project_dir=None):
     return None
 
 
-def _ack_alive(lin, sx, ack):
-    if not isinstance(ack, dict) or not ack.get("start"):
-        return False
+def _role(lin, line):
+    rec = lin.read_json(lin.lfile(line, ".json"))
+    role = rec.get("role") if isinstance(rec, dict) else None
+    return role if isinstance(role, str) and role else None
+
+
+def _live_ack(lin, sx, line):
+    """Квитанция линии, если её процесс жив (тот же pid и старт); иначе None."""
+    ack = lin.read_json(lin.lfile(line, ".ack"))
+    if not isinstance(ack, dict) or not ack.get("start") or not ack.get("at"):
+        return None
     try:
         pid = int(ack.get("pid"))
     except (TypeError, ValueError):
-        return False
-    return sx.alive(lin.Proc(pid, 0, 0, "", str(ack["start"]), ""))
+        return None
+    return ack if sx.alive(lin.Proc(pid, 0, 0, "", str(ack["start"]), "")) else None
 
 
-def _successor_alive(lin, sx, line, depth=0):
-    """Есть ли у линии живой наследник с квитанцией — через любое число закончившихся поколений."""
-    if depth > CHAIN_MAX:
-        return True  # петля или мусор — не пропускать
-    for child, f in lin.child_acks(line):
-        if _ack_alive(lin, sx, lin.read_json(f)) or _successor_alive(lin, sx, child, depth + 1):
-            return True
-    return False
+def line_holders(lin, sx, root):
+    """Держатели линии root: [линия наследника] с самой новой живой квитанцией той же роли (на любой глубине, через
+    любые поколения без квитанции); несколько — при равных квитанциях; [] — держит сам корень."""
+    role = _role(lin, root)
+    if role is None:
+        return []
+    acked = [(str(ack["at"]), line) for line, _ in lin.line_records()
+             if line.startswith(root + ".") and _role(lin, line) == role and (ack := _live_ack(lin, sx, line))]
+    if not acked:
+        return []
+    newest = max(at for at, _ in acked)
+    return sorted(line for at, line in acked if at == newest)
 
 
 def line_verdict(pid, lines, lin=None, sx=None):
@@ -112,12 +125,19 @@ def line_verdict(pid, lines, lin=None, sx=None):
         if mine != root and not mine.startswith(root + "."):
             continue
         if mine != root:
+            role = _role(lin, root)
+            if role is None or _role(lin, mine) != role:
+                return (f"линия {mine} — потомок {root} не той роли (корень: {role or 'без роли'}, "
+                        f"эта: {_role(lin, mine) or 'без роли'}); наследник Контроля — spawn_session.sh --handoff --role")
             ack = lin.read_json(lin.lfile(mine, ".ack")) or {}
             if str(ack.get("pid")) != str(p.pid) or lin.norm(ack.get("start")) != lin.norm(p.start):
                 return f"линия {mine} — наследник {root} без своей квитанции приёма (lineage.py ack)"
-        if _successor_alive(lin, sx, mine):
-            return f"линию {mine} уже принял живой наследник"
-        return None
+        holders = line_holders(lin, sx, root)
+        if (not holders and mine == root) or holders == [mine]:
+            return None
+        if len(holders) > 1:
+            return f"у линии {root} несколько держателей с равной квитанцией ({', '.join(holders)}) — отказ всем"
+        return f"линию {root} держит {holders[0] if holders else root}, не {mine}"
     return f"линия сессии {mine} не из линий Контроля ({', '.join(lines)})"
 
 
