@@ -16,6 +16,7 @@ async function getComments(taskId: string) {
       userImage: userTable.image,
       userRole: userTable.role,
       eventData: activityTable.eventData,
+      externalSource: activityTable.externalSource,
     })
     .from(activityTable)
     .innerJoin(userTable, eq(activityTable.userId, userTable.id))
@@ -40,7 +41,7 @@ async function getComments(taskId: string) {
       name: c.userName,
       image: c.userImage,
     },
-    author: authorOfRow(c.userRole, c.eventData),
+    author: authorOfRow(c.userRole, c.eventData, c.externalSource),
   }));
 }
 

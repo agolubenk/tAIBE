@@ -152,7 +152,10 @@ const comment = apiRouter()
   .openapi(updateTaskCommentRoute, async (c) => {
     const { id } = c.req.valid("param");
     const { content } = c.req.valid("json");
-    return c.json(await updateComment(c.get("userId"), id, content), 200);
+    return c.json(
+      await updateComment(c.get("userId"), id, content, writerKind(c)),
+      200,
+    );
   })
   .openapi(deleteTaskCommentRoute, async (c) =>
     c.json(await deleteComment(c.get("userId"), c.req.valid("param").id), 200),

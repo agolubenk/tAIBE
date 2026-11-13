@@ -224,7 +224,7 @@ const activity = apiRouter()
   .openapi(updateCommentRoute, async (c) => {
     const { activityId, comment } = c.req.valid("json");
     return c.json(
-      await updateComment(c.get("userId"), activityId, comment),
+      await updateComment(c.get("userId"), activityId, comment, writerKind(c)),
       200,
     );
   })

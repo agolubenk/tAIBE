@@ -930,6 +930,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
         title,
         currentUserId: c.get("userId"),
         canUpdateTasks: await hasWorkspacePermission(c, { task: ["update"] }),
+        author: writerKind(c) === "agent" ? "agent" : await taskAuthor(id),
       }),
       200,
     );

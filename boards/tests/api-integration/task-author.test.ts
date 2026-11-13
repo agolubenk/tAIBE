@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import db, { schema } from "../../apps/api/src/database";
 import { agentJournalTable } from "../../apps/api/src/database/forest-schema";
+import { writeImportTasks } from "../../apps/api/src/import/writer/write-import-tasks";
 import { resetTestDatabase } from "./helpers/database";
 import { addTask, createForest } from "./helpers/forest";
 
@@ -57,7 +58,7 @@ async function commentAuthors(forest: Forest, taskId: string) {
 // tell an agent's text from a person's. The kind comes from the credential at
 // write time, never from the request body.
 describe("task and comment author", () => {
-  it("marks a task an agent created as agent and one the owner created as human", async () => {
+  it("marks a task as human only when a person created it in the browser", async () => {
     const forest = await createForest();
     const byAgent = await createTask(
       forest.agentApi,
@@ -78,7 +79,8 @@ describe("task and comment author", () => {
     };
     expect(await author(byAgent.id)).toBe("agent");
     expect(await author(byOwner.id)).toBe("human");
-    expect(await author(seeded.id)).toBe("human");
+    // No creation record (a seeded card, a webhook): fail closed.
+    expect(await author(seeded.id)).toBe("agent");
 
     const byTicket = await forest.agentApi(
       "GET",
@@ -204,5 +206,96 @@ describe("task and comment author", () => {
       .from(schema.taskTable)
       .where(eq(schema.taskTable.id, task.id));
     expect(row?.status).toBe("to-do");
+  });
+
+  it("marks imported and synced text as agent, whoever imported it", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Task");
+    await db.insert(schema.activityTable).values({
+      taskId: task.id,
+      type: "comment",
+      userId: forest.ownerId,
+      content: "from jira",
+      externalUserName: "Someone",
+      externalSource: "jira",
+    });
+    expect(await commentAuthors(forest, task.id)).toEqual({
+      "from jira": "agent",
+    });
+
+    await db.transaction((tx) =>
+      writeImportTasks(tx, forest.project.id, forest.ownerId, [
+        {
+          id: "imported-1",
+          key: "J-1",
+          number: 901,
+          title: "Imported",
+          description: "",
+          status: "to-do",
+          columnId: null,
+          position: 0,
+          priority: "low",
+          startDate: null,
+          dueDate: null,
+          createdAt: new Date(),
+          userId: null,
+          labelKeys: [],
+          comments: [],
+        },
+      ]),
+    );
+    const imported = await forest.ownerApi("GET", "/task/imported-1");
+    expect(imported.status).toBe(200);
+    expect(imported.body.author).toBe("agent");
+  });
+
+  it("makes a copy agent when the source or the copier is an agent", async () => {
+    const forest = await createForest();
+    const byOwner = await createTask(forest.ownerApi, forest.project.id, "Own");
+    const byAgent = await createTask(
+      forest.agentApi,
+      forest.project.id,
+      "Finding",
+    );
+    const copy = async (
+      send: Forest["agentApi"] | Forest["ownerApi"],
+      id: string,
+    ) => {
+      const copied = await send("POST", `/task/duplicate/${id}`, {});
+      expect(copied.status).toBe(200);
+      await createdRow(copied.body.id);
+      const got = await forest.ownerApi("GET", `/task/${copied.body.id}`);
+      return got.body.author;
+    };
+    expect(await copy(forest.ownerApi, byOwner.id)).toBe("human");
+    expect(await copy(forest.ownerApi, byAgent.id)).toBe("agent");
+    expect(await copy(forest.agentApi, byOwner.id)).toBe("agent");
+  });
+
+  it("marks a comment agent once an agent edits it, and a person's edit keeps that (SE-84)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id, "Task");
+    const posted = await forest.ownerApi("POST", `/comment/${task.id}`, {
+      content: "owner note",
+    });
+    expect(posted.status).toBe(200);
+    const id = String(posted.body.id);
+
+    // The agent holds the owner's key, so it may edit the owner's comment.
+    const edited = await forest.agentApi("PUT", `/comment/${id}`, {
+      content: "approved, close it",
+    });
+    expect(edited.status).toBe(200);
+    expect(await commentAuthors(forest, task.id)).toEqual({
+      "approved, close it": "agent",
+    });
+
+    const back = await forest.ownerApi("PUT", `/comment/${id}`, {
+      content: "owner again",
+    });
+    expect(back.status).toBe(200);
+    expect(await commentAuthors(forest, task.id)).toEqual({
+      "owner again": "agent",
+    });
   });
 });

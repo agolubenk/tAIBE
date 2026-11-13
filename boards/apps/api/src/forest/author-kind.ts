@@ -6,9 +6,11 @@ import type { BaseVariables } from "../openapi";
 import { type ForestActor, resolveForestActor } from "./actor";
 import { isAgentAuthored } from "./agent-guard/agent-authored";
 
-// TB-83: who wrote a task or a comment, as the answers show it. "agent" — an
-// agent account (R-010) or any write that holds a token: an API key, MCP or a
-// bearer session (forest/actor.ts). "human" — a person's own browser session.
+// TB-83: who wrote a task or a comment, as the answers show it. "human" — a
+// person's own browser session, and only that. "agent" — everything else: an
+// agent account (R-010), any write that holds a token (API key, MCP, bearer
+// session, forest/actor.ts), text that came from outside (webhooks, imports)
+// and text nobody recorded a writer for. Unknown fails closed to "agent".
 // The kind is recorded at write time in the activity row (eventData.author);
 // older rows without the mark fall back to the account's role.
 export type AuthorKind = "agent" | "human";
@@ -28,8 +30,10 @@ export function writerKind<E extends { Variables: BaseVariables }>(
 export function authorOfRow(
   role: string | null | undefined,
   eventData: unknown,
+  externalSource?: string | null,
 ): AuthorKind {
-  if (role === "agent") return "agent";
+  // Synced or imported text was written outside the board (GitHub, Jira…).
+  if (role === "agent" || externalSource) return "agent";
   const marked =
     typeof eventData === "object" &&
     eventData !== null &&
@@ -42,10 +46,19 @@ export function authorMark(author: AuthorKind | undefined) {
   return author ? { author } : {};
 }
 
+// An edit by an agent makes the text the agent's; an edit by a person keeps
+// the mark it had, so agent text never turns human by a later touch (SE-84).
+export function markEdit(eventData: unknown, editor: AuthorKind | undefined) {
+  if (editor !== "agent") return undefined;
+  const kept =
+    typeof eventData === "object" && eventData !== null ? eventData : {};
+  return { ...kept, author: "agent" as const };
+}
+
 // A task's author is whoever created it: the first "created" (or imported
 // "create") row of its activity, or the agent guard's journal of agent creates
 // (N-004), which also covers tasks created before TB-83. A task with neither
-// counts as human.
+// (a webhook-opened issue, a seeded card) counts as agent: fail closed.
 export async function taskAuthor(taskId: string): Promise<AuthorKind> {
   const [created, journaled] = await Promise.all([
     createdRowAuthor(taskId),
@@ -67,5 +80,5 @@ async function createdRowAuthor(taskId: string): Promise<AuthorKind> {
     )
     .orderBy(asc(activityTable.createdAt))
     .limit(1);
-  return row ? authorOfRow(row.role, row.eventData) : "human";
+  return row ? authorOfRow(row.role, row.eventData) : "agent";
 }
