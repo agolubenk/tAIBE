@@ -53,9 +53,10 @@ npm run ai:restart-all    # хаб + serena + AI Council разом (кнопк�
 npm run ai:status-all     # сводный статус хаба, консилиума и его очереди (пауза — кто, когда, зачем)
 ```
 
-`init`, `start`, `restart` и `npm run ai:restart-all` — только из основной папки репо, из связанного worktree
-скрипт отказывает с подсказкой `(cd <основная папка> && npm run …)`. Serena индексирует ту копию, из которой её подняли, а после
-`git worktree remove` осталась бы на несуществующем каталоге; stdio-серверы хаба работали бы на коде worktree.
+`init`, `start`, `restart`, `sync`, `connect`, `disconnect` и `npm run ai:restart-all` — только из основной папки
+репо, из связанного worktree скрипт отказывает с подсказкой `(cd <основная папка> && npm run …)`. Serena индексирует ту
+копию, из которой её подняли, а после `git worktree remove` осталась бы на несуществующем каталоге; stdio-серверы хаба
+работали бы на коде worktree; `sync`, `connect` и `disconnect` переписали бы живой конфиг шаблоном worktree (OPS-42).
 Осознанно обслуживать копию worktree — `MCP_HUB_ALLOW_WORKTREE=1`. `status`, `check`, `stop`, `logs` работают
 откуда угодно; `status` предупреждает, а `check` возвращает 1, если serena (`--project`) или хаб (рабочий каталог)
 обслуживают не основную папку.

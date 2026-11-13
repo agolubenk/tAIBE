@@ -31,7 +31,8 @@
 # Процессы стартуют в своей сессии (конец задачи VS Code их не гасит), stop гасит всё дерево,
 # start/stop/restart — под замком, сироты прошлых запусков берутся под управление или
 # останавливаются (lib/proc-lifecycle.sh; разбор — README хаба, «Старт и стоп»). Общие сервисы
-# обслуживают основную папку репо: из связанного worktree start/restart/init отказывают
+# обслуживают основную папку репо: из связанного worktree start/restart/init отказывают, и sync/connect/disconnect
+# тоже — они переписывают живой конфиг шаблоном своей копии (OPS-42)
 # (MCP_HUB_ALLOW_WORKTREE=1 — осознанно обслуживать его копию). Для теста
 # (tests/mcp-hub-detach.test.sh) каталоги и uvx переопределяются: MCP_HUB_CONFIG_DIR,
 # MCP_HUB_RUNTIME_DIR, MCP_HUB_LOG_DIR, MCP_HUB_UVX, MCP_HUB_STOP_WAIT, MCP_HUB_SETTLE_WAIT, порты —
@@ -428,11 +429,19 @@ cmd_stop() {
 
 # Общие сервисы поднимаются только из основной папки: из worktree serena индексировала бы его копию
 # (а после `git worktree remove` — несуществующий каталог), stdio-серверы хаба работали бы на его коде.
+# sync/connect/disconnect — тоже: живой конфиг собрался бы из шаблона и render_config.py копии worktree (OPS-42).
 from_main_only() { # <команда>
   [ "$ROOT" != "$SERVE_ROOT" ] || return 0
-  echo "✗ $1: общие хаб и serena поднимаются из основной папки репо — (cd $MAIN_ROOT && npm run mcp-hub:$1)" >&2
-  echo "  Отсюда ($ROOT) serena индексировала бы копию worktree, а после его удаления — несуществующий" >&2
-  echo "  каталог. Осознанно обслуживать эту копию: MCP_HUB_ALLOW_WORKTREE=1 (своя serena для worktree — README хаба)." >&2
+  echo "✗ $1: общие хаб и serena обслуживает основная папка репо — (cd $MAIN_ROOT && npm run mcp-hub:$1)" >&2
+  case "$1" in
+    sync | connect | disconnect)
+      echo "  Отсюда ($ROOT) живой конфиг хаба собрался бы из шаблона копии worktree, а не основной папки." >&2
+      ;;
+    *)
+      echo "  Отсюда ($ROOT) serena индексировала бы копию worktree, а после его удаления — несуществующий каталог." >&2
+      ;;
+  esac
+  echo "  Осознанно обслуживать эту копию: MCP_HUB_ALLOW_WORKTREE=1 (своя serena для worktree — README хаба)." >&2
   return 1
 }
 
@@ -471,10 +480,19 @@ main() {
     status) cmd_status ;;
     check) cmd_check ;;
     logs) cmd_logs "${2:-40}" ;;
-    sync) cmd_sync ;;
+    sync)
+      from_main_only sync || return 1
+      cmd_sync
+      ;;
     connectors) cmd_connectors ;;
-    connect) cmd_connect "${2:-}" ;;
-    disconnect) cmd_disconnect "${2:-}" ;;
+    connect)
+      from_main_only connect || return 1
+      cmd_connect "${2:-}"
+      ;;
+    disconnect)
+      from_main_only disconnect || return 1
+      cmd_disconnect "${2:-}"
+      ;;
     serena-taibe) cmd_serena_taibe "${2:-status}" ;; # on/off — под замком, on — из основной папки
     autostart)
       # plist записывает путь к репо: из worktree он вёл бы в копию, которую потом удалят.
