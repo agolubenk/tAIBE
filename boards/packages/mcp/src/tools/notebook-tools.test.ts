@@ -320,6 +320,27 @@ describe("notebook review fixes (opencode lenses on #170)", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("502");
+    expect(result.content[0]?.text).toContain("do not repeat it blindly");
+  });
+
+  it("writes a new brief when a question came after the stored one", async () => {
+    const pending = thread("brief", "GOAL: old");
+    pending.messages.push({
+      role: "user",
+      content: "А если иначе?",
+      status: null,
+      model: null,
+      citations: [],
+    });
+    const { tool, json } = setupTool(
+      "notebook_brief",
+      pending,
+      thread("brief", "GOAL: new"),
+    );
+
+    await tool.handler({ workspaceId: "ws", threadId: "th1" });
+
+    expect(json).toHaveBeenCalledTimes(2);
   });
 
   it("refuses ids that could leave /api/notebook/", () => {

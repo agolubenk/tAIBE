@@ -88,7 +88,12 @@ async function settle(
   try {
     return shape((await fn()) as ThreadAnswer);
   } catch (e) {
-    return errorResult(e instanceof Error ? e.message : String(e));
+    // A timeout or 502 after the API took the question may still have spent a
+    // model call and written the thread: say so, or the agent asks again.
+    const reason = e instanceof Error ? e.message : String(e);
+    return errorResult(
+      `${reason}. The call may still have reached the notebook and spent a model call: do not repeat it blindly — check the thread in «Вопросы» or use notebook_search.`,
+    );
   }
 }
 
@@ -220,7 +225,11 @@ export function registerNotebookTools(
             const current = (await client.json(base, {
               method: "GET",
             })) as ThreadAnswer;
-            if (lastAssistant(current)?.status === "brief") return current;
+            // Current only while nothing came after it: a newer question or
+            // answer makes the stored brief stale.
+            const last = current.messages.at(-1);
+            if (last?.role === "assistant" && last.status === "brief")
+              return current;
           }
           return client.json(`${base}/brief`, { method: "POST" });
         },
