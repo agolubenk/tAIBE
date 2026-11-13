@@ -1,6 +1,7 @@
-import { listAll, type QueueClient, QueueConflict } from "./queue-client";
-import type { OwnerQueueConfig } from "./queue-config";
-import { planWrites } from "./plan-rows";
+import { archiveItem, applyAnswers } from "./plan-due-apply";
+import { type DailyPlan, dailyPlan } from "./plan-due-daily";
+import { PACE_DAYS } from "./plan-eta";
+import { planWrites, type RowWrite } from "./plan-rows";
 import {
   type BoardCard,
   type CardRef,
@@ -9,7 +10,13 @@ import {
   offPlanSince,
   type PlanRow,
   type RecentCard,
+  withPatch,
 } from "./plan-types";
+import { PlanWriter } from "./plan-writer";
+import { listAll, type QueueClient, type QueueDoc } from "./queue-client";
+import type { OwnerQueueConfig } from "./queue-config";
+
+export { PLAN_WRITES_PER_RUN } from "./plan-writer";
 
 // The board side of a run (plan-store.ts); tests use an in-memory one. Every
 // read stays inside the workspaces mapped to a product.
@@ -20,6 +27,11 @@ export interface PlanStore {
   ): Promise<Map<string, BoardCard>>;
   recent(products: Map<string, string>, since: Date): Promise<RecentCard[]>;
   abandoned(workspaceIds: string[], now: Date): Promise<Set<string>>;
+  // Plan product → cards closed since then (TB-112 pace).
+  closed(
+    products: Map<string, string>,
+    since: Date,
+  ): Promise<Map<string, number>>;
 }
 
 export type PlanDeps = {
@@ -29,22 +41,24 @@ export type PlanDeps = {
   now: () => Date;
 };
 
-// The queue takes 120 writes a minute per token and the 30 s pass may spend
-// up to 50 of them: one run writes 30 rows at most, the rest go next run.
-export const PLAN_WRITES_PER_RUN = 30;
 const RUN_DEADLINE_MS = 120_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type PlanRuns = { hourly: boolean; daily: boolean };
 
 export type PlanOutcome = {
   written: number;
-  // A version race (409): the row waits for the next run.
+  // A version race (409): the doc waits for the next run.
   skipped: number;
   // Left for the next run by the budget.
   left: number;
-  // The hourly part ran and every row it changed is written.
+  // The hourly part ran and every doc it changed is written.
   hourlyDone: boolean;
+  // The daily part ran and nothing was left for lack of budget.
+  dailyDone: boolean;
 };
 
-function planRows(docs: PlanRow[]): PlanRow[] {
+function planRows(docs: QueueDoc[]): PlanRow[] {
   return docs.filter(
     (doc) => doc.data.kind === undefined && doc.data.archived !== true,
   );
@@ -62,23 +76,67 @@ function refsOf(rows: PlanRow[]): CardRef[] {
   return refs;
 }
 
-// One run over the plan rows (TB-106): every 5 minutes F4 — each row follows
-// its cards on the board; with hourly also F8 (the off-plan row) and F9 (the
-// «без аренды» mark). A row is written once per run, only when a value
-// changed, with ifVersion.
+// The eta fields join the row's write of this run: one write per row.
+function withEta(writes: RowWrite[], rows: PlanRow[], daily: DailyPlan) {
+  const byId = new Map(writes.map((write) => [write.id, write]));
+  const versions = new Map(rows.map((row) => [row.id, row.version]));
+  for (const [id, patch] of daily.eta) {
+    const write = byId.get(id);
+    if (write) Object.assign(write.patch, patch);
+    else byId.set(id, { id, version: versions.get(id) ?? 0, patch, rank: 3 });
+  }
+  return [...byId.values()].sort((a, b) => a.rank - b.rank);
+}
+
+// New decision: the item first (409 — it exists: the day was run already),
+// then the last unanswered one archived, then the state.
+async function writeDecisions(writer: PlanWriter, daily: DailyPlan) {
+  for (const decision of daily.decisions) {
+    const { item, state } = decision;
+    const put = await writer.write(() =>
+      writer.client.put("items", item.id, item.data, 0),
+    );
+    if (typeof put === "string") continue;
+    if (decision.archive && decision.archive !== item.id) {
+      await archiveItem(writer, decision.archive);
+    }
+    await writer.write(() =>
+      writer.client.put("work", state.id, state.data, state.version),
+    );
+  }
+}
+
+// One run over the plan rows. Every 5 minutes: an answered due decision is
+// applied (TB-112), then F4 — each row follows its cards on the board; hourly
+// also F8 (the off-plan row) and F9 (the «без аренды» mark); daily the
+// forecast, eta and a due decision (TB-112). A row is written once per run,
+// only when a value changed, with ifVersion; 30 writes a run at most.
 export async function planPass(
   deps: PlanDeps,
-  hourly: boolean,
+  runs: PlanRuns,
 ): Promise<PlanOutcome> {
-  const deadline = Date.now() + RUN_DEADLINE_MS;
+  const writer = new PlanWriter(deps.client, Date.now() + RUN_DEADLINE_MS);
   const now = deps.now();
   const workspaceIds = [...deps.config.products.keys()];
-  const list = await listAll(deps.client, "work");
-  // A cut list may miss the row that plans a card: no off-plan decisions then.
+  // The plan product, not the queue product: aiBoards&eval plans under
+  // w-taibe-* (OQ_PLAN_PRODUCTS).
+  const planProducts = deps.config.plan.products;
+  const products = [...new Set(planProducts.values())];
+  let list = await listAll(deps.client, "work");
+  const answers = await applyAnswers(writer, {
+    docs: list.docs,
+    rows: planRows(list.docs),
+    products,
+    now,
+  });
+  if (answers.changed) list = await listAll(deps.client, "work");
+  // A cut list may miss the row that plans a card or a row before another:
+  // no off-plan decisions and no forecast then.
   if (list.truncated) {
     console.warn("owner-queue plan rows: the work list is truncated");
   }
-  const withHourly = hourly && !list.truncated;
+  const withHourly = runs.hourly && !list.truncated;
+  const withDaily = runs.daily && !list.truncated;
   const rows = planRows(list.docs);
   const board = await deps.store.resolve(workspaceIds, refsOf(rows));
   const { writes, missing } = planWrites({
@@ -88,13 +146,8 @@ export async function planPass(
     hourly: withHourly
       ? {
           abandoned: await deps.store.abandoned(workspaceIds, now),
-          // The plan product, not the queue product: the off-plan row of
-          // aiBoards&eval cards is w-taibe-unplanned (OQ_PLAN_PRODUCTS).
-          recent: await deps.store.recent(
-            deps.config.plan.products,
-            offPlanSince(now),
-          ),
-          products: [...new Set(deps.config.plan.products.values())],
+          recent: await deps.store.recent(planProducts, offPlanSince(now)),
+          products,
           now,
         }
       : null,
@@ -104,21 +157,38 @@ export async function planPass(
       `owner-queue plan rows: no row ${missing.join(", ")}; off-plan cards are not shown`,
     );
   }
-  const outcome = { written: 0, skipped: 0, left: 0, hourlyDone: false };
-  for (const [index, write] of writes.entries()) {
-    if (index >= PLAN_WRITES_PER_RUN || Date.now() > deadline) {
-      outcome.left = writes.length - index;
-      break;
-    }
-    try {
-      await deps.client.patch("work", write.id, write.patch, write.version);
-      outcome.written += 1;
-    } catch (error) {
-      if (!(error instanceof QueueConflict)) throw error;
-      outcome.skipped += 1;
-    }
+  let daily: DailyPlan | null = null;
+  let ordered = writes;
+  if (withDaily) {
+    const patched = new Map(writes.map((write) => [write.id, write.patch]));
+    daily = dailyPlan({
+      docs: list.docs,
+      rows: rows.map((row) => {
+        const patch = patched.get(row.id);
+        return patch ? { ...row, data: withPatch(row.data, patch) } : row;
+      }),
+      board,
+      closed: await deps.store.closed(
+        planProducts,
+        new Date(now.getTime() - PACE_DAYS * DAY_MS),
+      ),
+      products,
+      open: answers.open,
+      today: localDate(now),
+      now,
+    });
+    ordered = withEta(writes, rows, daily);
   }
-  outcome.hourlyDone =
-    withHourly && outcome.skipped === 0 && outcome.left === 0;
-  return outcome;
+  for (const write of ordered) {
+    await writer.patch("work", write.id, write.patch, write.version);
+  }
+  if (daily) await writeDecisions(writer, daily);
+  const clean = writer.skipped === 0 && writer.left === 0;
+  return {
+    written: writer.written,
+    skipped: writer.skipped,
+    left: writer.left,
+    hourlyDone: withHourly && clean,
+    dailyDone: withDaily && writer.left === 0,
+  };
 }

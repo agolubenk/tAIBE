@@ -155,4 +155,29 @@ describe("API integration: owner-queue plan store (TB-106)", () => {
       [1, 3].map((n) => `${mine.workspace.slug}/TB-${n}`),
     );
   });
+
+  it("counts cards closed in 14 days per plan product (TB-112 pace)", async () => {
+    const mine = await board();
+    const other = await board();
+    const unmapped = await board();
+    const now = new Date();
+    const ago = (days: number) => new Date(now.getTime() - days * DAY);
+    await card(mine.project.id, 1, "done", { completedAt: ago(3) });
+    await card(mine.project.id, 2, "closed", { completedAt: ago(1) });
+    await card(mine.project.id, 3, "done", { completedAt: ago(20) });
+    await card(mine.project.id, 4, "to-do");
+    await card(mine.project.id, 5, "in-review");
+    await card(other.project.id, 1, "done", { completedAt: ago(2) });
+    await card(unmapped.project.id, 1, "done", { completedAt: ago(2) });
+
+    const closed = await planStore.closed(
+      new Map([
+        [mine.workspace.id, "taibe"],
+        [other.workspace.id, "hr-helper"],
+      ]),
+      ago(14),
+    );
+
+    expect(Object.fromEntries(closed)).toEqual({ taibe: 2, "hr-helper": 1 });
+  });
 });

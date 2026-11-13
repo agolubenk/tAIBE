@@ -215,4 +215,35 @@ async function abandoned(workspaceIds: string[], now: Date) {
   );
 }
 
-export const planStore: PlanStore = { resolve, recent, abandoned };
+// TB-112 pace in one query: cards of each mapped workspace that entered a
+// final column (or «archived») since then. A card closed, reopened and closed
+// again is one row, so it counts once; its date is the last close.
+async function closed(products: Map<string, string>, since: Date) {
+  const perProduct = new Map<string, number>();
+  const workspaceIds = [...products.keys()];
+  if (workspaceIds.length === 0) return perProduct;
+  const rows = await db
+    .select({
+      workspaceId: projectTable.workspaceId,
+      count: sql<number>`count(distinct ${taskTable.id})`.mapWith(Number),
+    })
+    .from(taskTable)
+    .innerJoin(projectTable, eq(taskTable.projectId, projectTable.id))
+    .leftJoin(columnTable, cardColumn())
+    .where(
+      and(
+        inArray(projectTable.workspaceId, workspaceIds),
+        gte(taskTable.completedAt, since),
+        or(eq(columnTable.isFinal, true), eq(taskTable.status, "archived")),
+      ),
+    )
+    .groupBy(projectTable.workspaceId);
+  for (const row of rows) {
+    const product = products.get(row.workspaceId);
+    if (!product) continue;
+    perProduct.set(product, (perProduct.get(product) ?? 0) + row.count);
+  }
+  return perProduct;
+}
+
+export const planStore: PlanStore = { resolve, recent, abandoned, closed };
