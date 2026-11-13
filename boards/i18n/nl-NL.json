@@ -2964,7 +2964,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "heeft gereageerd op {{forge}}"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Dialoog van gekoppelde sessies",
+			"live": "Actief",
+			"archived": "Gearchiveerd",
+			"summary": "Sessies: {{sessions}} · Berichten: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Taken",

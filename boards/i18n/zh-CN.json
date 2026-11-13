@@ -2912,7 +2912,13 @@
 			"importedBy": "由 {{name}} 导入",
 			"commentedOnForge": "在 {{forge}} 上评论"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "关联会话的对话",
+			"live": "进行中",
+			"archived": "已归档",
+			"summary": "会话：{{sessions}} · 消息：{{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "任务",

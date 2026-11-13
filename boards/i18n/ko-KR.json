@@ -2912,7 +2912,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "{{forge}}에 댓글을 남김"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "연결된 세션의 대화",
+			"live": "진행 중",
+			"archived": "보관됨",
+			"summary": "세션: {{sessions}} · 메시지: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "작업",

@@ -2964,6 +2964,12 @@
 			},
 			"importedFrom": "Imported from {{source}}",
 			"importedBy": "Imported by {{name}}"
+		},
+		"dialog": {
+			"title": "Dialog of linked sessions",
+			"live": "Live",
+			"archived": "Archived",
+			"summary": "Sessions: {{sessions}} · Messages: {{messages}}"
 		}
 	},
 	"tasks": {

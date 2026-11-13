@@ -11,6 +11,7 @@ import {
   requireWorkspacePermission,
 } from "../utils/require-workspace-permission";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
+import { dialogMarkFor } from "../forest/dialog/dialog-store";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
 import getComments from "./controllers/get-comments";
@@ -137,8 +138,9 @@ const comment = apiRouter()
       externalUserName && externalSource
         ? { userName: externalUserName, source: externalSource }
         : undefined;
+    const dialog = await dialogMarkFor(c, taskId);
     return c.json(
-      await createComment(taskId, c.get("userId"), content, external),
+      await createComment(taskId, c.get("userId"), content, external, dialog),
       200,
     );
   })

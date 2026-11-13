@@ -2964,7 +2964,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "{{forge}}-da şərh yazdı"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Əlaqəli sessiyaların dialoqu",
+			"live": "Davam edir",
+			"archived": "Arxivdə",
+			"summary": "Sessiya: {{sessions}} · Mesaj: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Tapşırıqlar",

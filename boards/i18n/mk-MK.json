@@ -2964,7 +2964,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "коментираше на {{forge}}"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Дијалог на поврзани сесии",
+			"live": "Во тек",
+			"archived": "Архивиран",
+			"summary": "Сесии: {{sessions}} · Пораки: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Задачи",
