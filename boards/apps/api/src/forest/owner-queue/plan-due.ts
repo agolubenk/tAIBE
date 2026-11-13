@@ -62,17 +62,20 @@ const RANK: Record<string, number> = {
   low: 3,
   p3: 3,
 };
-const rankOf = (card: OpenCard) => RANK[card.level.toLowerCase()] ?? 4;
+const rankOf = (card: { level: string }) =>
+  RANK[card.level.toLowerCase()] ?? 4;
+
+// The board's law as a sort: the next card first.
+export const byLaw = (
+  a: { bug: boolean; level: string; key: string },
+  b: { bug: boolean; level: string; key: string },
+) =>
+  Number(b.bug) - Number(a.bug) ||
+  rankOf(a) - rankOf(b) ||
+  a.key.localeCompare(b.key);
 
 export function cutList(open: OpenCard[], lag: number, perDay: number) {
-  const tail = open
-    .filter((card) => !card.active)
-    .sort(
-      (a, b) =>
-        Number(a.bug) - Number(b.bug) ||
-        rankOf(b) - rankOf(a) ||
-        b.key.localeCompare(a.key),
-    );
+  const tail = open.filter((card) => !card.active).sort((a, b) => byLaw(b, a));
   return tail.slice(0, Math.ceil(lag * perDay)).map((card) => card.key);
 }
 
