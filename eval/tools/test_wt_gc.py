@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """OPS-52: уборка worktree после мёржа — на настоящем git во временной папке (origin — голый репозиторий)."""
+import contextlib
+import io
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +21,7 @@ def git(cwd, *args):
 class WtGcTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.origin = os.path.join(self.tmp, "origin.git")
         self.repo = os.path.join(self.tmp, "repo")
         git(self.tmp, "init", "-q", "--bare", "-b", "main", self.origin)
@@ -76,6 +81,7 @@ class WtGcTest(unittest.TestCase):
         open(os.path.join(path, "notes.md"), "w").write("черновик\n")
         (r,) = wt_gc.gc_branch(self.repo, "fix/untracked", cwds=set(), refs={})
         self.assertFalse(r["removed"])
+        self.assertIn("незакоммиченные изменения: 1", r["reason"])
         self.assertTrue(os.path.exists(os.path.join(path, "notes.md")))
 
     def test_worktree_with_external_consumer_is_kept(self):
@@ -87,6 +93,7 @@ class WtGcTest(unittest.TestCase):
         git(path, "commit", "-q", "-m", "agents")
         git(path, "push", "-q", "origin", "feature/agents")
         home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
         os.makedirs(os.path.join(home, "cfg", "opencode", "agents"))
         os.symlink(os.path.join(path, "agents", "a.md"), os.path.join(home, "cfg", "opencode", "agents", "a.md"))
         old = wt_gc.CONSUMER_LINK_DIRS, wt_gc.CONSUMER_FILE_GLOBS
@@ -104,6 +111,39 @@ class WtGcTest(unittest.TestCase):
         self.assertIn("job.plist", r["reason"])
         os.remove(plist)
         self.assertTrue(wt_gc.gc_branch(self.repo, "feature/agents", cwds=set())[0]["removed"])
+
+    def test_branch_cli_json_is_the_contract_nerve_reads(self):
+        """Ревью #178: Нерв разбирает stdout `branch --json` — проверяем настоящий вывод, а не рукописный JSON."""
+        self.wt("fix/cli")
+        old = wt_gc.busy_paths, wt_gc.external_refs
+        self.addCleanup(lambda: (setattr(wt_gc, "busy_paths", old[0]), setattr(wt_gc, "external_refs", old[1])))
+        wt_gc.busy_paths, wt_gc.external_refs = (lambda: set()), (lambda: {})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(wt_gc.main(["wt_gc.py", "branch", self.repo, "fix/cli", "--json"]), 0)
+        (r,) = json.loads(out.getvalue())
+        self.assertEqual((r["branch"], r["removed"]), ("fix/cli", True))
+        self.assertTrue(r["path"].endswith("worktrees/fix/cli"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            wt_gc.main(["wt_gc.py", "branch", self.repo, "fix/cli"])
+        self.assertIn("нет worktree", out.getvalue())
+
+    def test_sweep_removes_only_merged_branches(self):
+        """Ревью #178: чистая и запушенная, но не влитая ветка остаётся — влитость решает sweep по списку gh."""
+        merged, open_ = self.wt("fix/merged"), self.wt("fix/open")
+        old = wt_gc.merged_branches, wt_gc.busy_paths, wt_gc.external_refs
+        self.addCleanup(lambda: (setattr(wt_gc, "merged_branches", old[0]), setattr(wt_gc, "busy_paths", old[1]),
+                                 setattr(wt_gc, "external_refs", old[2])))
+        wt_gc.merged_branches = lambda repo: {"fix/merged", "fix/gone"}
+        wt_gc.busy_paths, wt_gc.external_refs = (lambda: set()), (lambda: {})
+        dry = wt_gc.sweep(self.repo, dry_run=True)
+        self.assertEqual([(r["branch"], r["removed"]) for r in dry], [("fix/merged", False)])
+        self.assertTrue(os.path.isdir(merged))
+        res = wt_gc.sweep(self.repo)
+        self.assertEqual([(r["branch"], r["removed"]) for r in res], [("fix/merged", True)])
+        self.assertFalse(os.path.exists(merged))
+        self.assertTrue(os.path.isdir(open_))
 
     def test_limit(self):
         old = wt_gc.LIMIT

@@ -21,7 +21,8 @@ import re
 import subprocess
 import sys
 
-LIMIT = 10
+# Предел на продукт; WT_LIMIT — для тестов и переходного решения владельца, не для обхода (обход — WT_LIMIT_CHECK=0).
+LIMIT = int(os.environ.get("WT_LIMIT") or 10)
 
 
 def _run(cmd, cwd=None, timeout=120):
@@ -57,11 +58,15 @@ def busy_paths():
     return {l[1:] for l in out.splitlines() if l.startswith("n")} if not code or out else set()
 
 
-def _inside(path, cwds):
-    # git и lsof печатают настоящие пути (/private/var/…), а путь могли дать через ссылку (/var/…): сравниваем realpath.
+def _real(cwds):
+    """git и lsof печатают настоящие пути (/private/var/…), а путь могли дать через ссылку (/var/…): realpath — один раз
+    на запуск, а не на каждый worktree."""
+    return {os.path.realpath(c) for c in cwds}
+
+
+def _inside(path, real_cwds):
     path = os.path.realpath(path)
-    real = {os.path.realpath(c) for c in cwds}
-    return any(c == path or c.startswith(path.rstrip("/") + "/") for c in real)
+    return any(c == path or c.startswith(path.rstrip("/") + "/") for c in real_cwds)
 
 
 # Где живут внешние потребители worktree: ссылки (агенты opencode, бинарники) и задачи launchd. 13.11 уборка удалила
@@ -126,7 +131,8 @@ def remove(repo, wt, cwds, refs=None):
     reason = why_not(wt, cwds, refs)
     if reason:
         return {"path": wt["path"], "branch": wt["branch"], "removed": False, "reason": reason}
-    code, _, err = _run(["git", "worktree", "remove", wt["path"]], cwd=repo, timeout=900)
+    # Бюджет меньше таймаута Нерва на весь вызов (300 с): иначе Нерв убьёт процесс посреди удаления.
+    code, _, err = _run(["git", "worktree", "remove", wt["path"]], cwd=repo, timeout=240)
     if code:
         return {"path": wt["path"], "branch": wt["branch"], "removed": False, "reason": f"git отказал: {err[:160]}"}
     return {"path": wt["path"], "branch": wt["branch"], "removed": True}
@@ -137,24 +143,24 @@ def gc_branch(repo, branch, cwds=None, refs=None):
     mine = [wt for wt in worktrees(repo) if wt["branch"] == branch]
     if not mine:
         return []
-    cwds = busy_paths() if cwds is None else cwds
+    cwds = _real(busy_paths() if cwds is None else cwds)
     refs = external_refs() if refs is None else refs
     return [remove(repo, wt, cwds, refs) for wt in mine]
 
 
-def merged_branches(repo, limit=300):
-    """Ветки влитых PR репозитория (gh, репозиторий — по origin рабочей папки)."""
-    code, out, _ = _run(["gh", "pr", "list", "--state", "merged", "--limit", str(limit), "--json", "headRefName"],
-                        cwd=repo, timeout=120)
+def merged_branches(repo, limit=2000):
+    """Ветки влитых PR репозитория (gh, репозиторий — по origin рабочей папки). Окно — последние limit мёржей."""
+    code, out, err = _run(["gh", "pr", "list", "--state", "merged", "--limit", str(limit), "--json", "headRefName"],
+                          cwd=repo, timeout=180)
     if code:
-        raise RuntimeError("gh pr list не ответил")
+        raise RuntimeError(f"gh pr list не ответил: {err[:160]}")
     return {p["headRefName"] for p in json.loads(out or "[]")}
 
 
 def sweep(repo, dry_run=False):
     """Все worktree, чья ветка влита PR: удалить безопасные. Для пропущенных Нервом мёржей (демон стоял)."""
     merged = merged_branches(repo)
-    cwds, refs = busy_paths(), external_refs()
+    cwds, refs = _real(busy_paths()), external_refs()
     res = []
     for wt in worktrees(repo):
         if not wt["branch"] or wt["branch"] not in merged:
@@ -205,6 +211,8 @@ def main(argv):
         res = sweep(repo, dry_run="--dry-run" in argv)
     if as_json:
         print(json.dumps(res, ensure_ascii=False))
+    elif not res:
+        print(f"у ветки {argv[3]} нет worktree" if cmd == "branch" else "worktree с влитыми PR нет")
     else:
         for r in res:
             print(("удалён  " if r["removed"] else "оставлен ") + r["path"] + ("" if r["removed"] else f" — {r['reason']}"))

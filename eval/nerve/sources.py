@@ -139,7 +139,9 @@ def _gc_worktree(ctx, n, branch):
     except Exception as e:  # noqa: BLE001 — таймаут или сбой разбора: только запись
         code, res, err = 1, None, str(e)
     if res is None:
-        ctx.emit(f"wt:gc:{n}", "wt.gc", DIGEST, [], f"#{n}: уборка worktree {branch} не удалась: {(err or '')[:120]}", "github")
+        # Сбой — координатору: повтора нет (PR уже снят), worktree занимает место в пределе, пока его не уберёт sweep.
+        ctx.emit(f"wt:gc:{n}", "wt.gc", DIGEST, ["coord"],
+                 f"#{n}: уборка worktree {branch} не удалась: {(err or '')[:120]} — wt_gc.py sweep", "github")
         return
     for r in res:
         if r["removed"]:

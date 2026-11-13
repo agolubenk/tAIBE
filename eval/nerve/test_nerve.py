@@ -409,6 +409,7 @@ class GithubPollTest(unittest.TestCase):
         sources.run = run
         sources.poll_github(self.ctx)
         self.assertEqual([c[4:6] for c in gc_calls], [[self.ctx.cfg["repo_root"], "fix/done"]])
+        self.assertIn(("pr.closed", "#460 влит"), self.kinds())
         recs = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "wt.gc"]
         self.assertEqual([(e["to"], e["text"]) for e in recs], [
             ([], "#460: worktree /r/worktrees/fix/done удалён"),
@@ -431,7 +432,9 @@ class GithubPollTest(unittest.TestCase):
         sources.run = lambda cmd, stdin=None, timeout=30: (1, "", "timeout") if sources.WT_GC in cmd else fake(cmd, stdin, timeout)
         sources.poll_github(self.ctx)
         self.assertNotIn("462", self.ctx.state["github"]["prs"])
-        self.assertIn(("wt.gc", "#462: уборка worktree fix/boom не удалась: timeout"), self.kinds())
+        self.assertIn(("pr.closed", "#462 влит"), self.kinds())
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["key"] == "wt:gc:462"]
+        self.assertEqual([(e["to"], e["text"]) for e in rec], [(["coord"], "#462: уборка worktree fix/boom не удалась: timeout — wt_gc.py sweep")])
 
     def test_stuck_open_pr_without_author_is_resolved_after_upgrade(self):
         # rev 1 записывал head и updated до падения _gh_view: PR выглядел увиденным, но author и checks пусты.

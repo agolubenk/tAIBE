@@ -20,6 +20,16 @@ if [ -n "$lead" ]; then
   esac
   dir="$lead"
 fi
+# `git -C X worktree add` — репозиторий X (относительный — от каталога выше).
+gdir="$(printf '%s' "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+("([^"]+)"|'"'"'([^'"'"']+)'"'"'|([^[:space:]&;|]+))[[:space:]]+worktree[[:space:]]+add.*/\2\3\4/p')"
+if [ -n "$gdir" ]; then
+  case "$gdir" in
+    "~"*) gdir="$HOME${gdir#\~}" ;;
+    /*) ;;
+    *) gdir="${dir:-.}/$gdir" ;;
+  esac
+  dir="$gdir"
+fi
 [ -n "$dir" ] && [ -d "$dir" ] || exit 0
 # Основной checkout: каталог общего .git (у linked worktree — .git основного).
 common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || exit 0
@@ -33,6 +43,6 @@ err="$(python3 -I "$script" check-limit "$repo" 2>&1 >/dev/null)"
 {
   echo "Новый worktree не создан."
   printf '%s\n' "$err"
-  echo "Владелец разрешил исключение — добавь WT_LIMIT_CHECK=0 в начало команды."
+  echo "Обход (WT_LIMIT_CHECK=0 в начале команды) — только если владелец разрешил это исключение в этой сессии."
 } >&2
 exit 2
