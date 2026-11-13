@@ -121,4 +121,18 @@ describe('пропавший стек (OPS-57)', () => {
       '📦 Контейнеры: пропали стеки: a/t-boards, a/без compose (было 4); не работают — a/backend: w · 2 стека: a/backend 1/2, b/x 1/1 · перезапусков: 0',
     )
   })
+
+  it('хост потерял все стеки — карточка и строка хоста называют пропажу, пустого «стеки:» нет', () => {
+    const gone = { ...host('prod', []), missingProjects: ['backend', 't-boards'] }
+    expect(containersLine({ hosts: [gone], restarts: [] })).toBe(
+      '📦 Контейнеры: пропали стеки: backend, t-boards (было 2) · перезапусков: 0',
+    )
+    expect(hostContainers(gone)).toBe(' · пропали стеки: backend, t-boards')
+    // Два хоста: у prod пропало всё, второй работает.
+    expect(containersLine({ hosts: [gone, host('b', [stack('x', 1)])], restarts: [] })).toBe(
+      '📦 Контейнеры: пропали стеки: prod/backend, prod/t-boards (было 3) · 1 стек: b/x 1/1 · перезапусков: 0',
+    )
+    // Хост без стеков и без пропаж (старый агент, пустой хост) — прежний путь.
+    expect(hostContainers(host('old', []))).toBe('')
+  })
 })
