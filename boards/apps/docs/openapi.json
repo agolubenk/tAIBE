@@ -17139,7 +17139,7 @@
             }
           },
           "400": {
-            "description": "Invalid body, or comment activity submitted through the generic endpoint",
+            "description": "Invalid body, a comment (use the comment endpoint), or a status_changed or moved event, which only the server writes",
             "content": {
               "application/json": {
                 "schema": {
