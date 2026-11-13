@@ -393,7 +393,7 @@ class GithubPollTest(unittest.TestCase):
     def test_merged_pr_removes_its_worktree_and_reports_kept_ones(self):
         """OPS-52: ветка PR запоминается из списка открытых; после «влит» — wt_gc.py branch по repo_root продукта."""
         pr = _pr(460, "c" * 40)
-        pr["head"]["ref"] = "fix/done"
+        pr["head"]["ref"], pr["base"] = "fix/done", {"ref": "main"}
         sources.run = FakeGh([pr])
         sources.poll_github(self.ctx)
         self.assertEqual(self.ctx.state["github"]["prs"]["460"]["branch"], "fix/done")
@@ -408,12 +408,20 @@ class GithubPollTest(unittest.TestCase):
             return fake(cmd, stdin, timeout)
         sources.run = run
         sources.poll_github(self.ctx)
-        self.assertEqual([c[4:6] for c in gc_calls], [[self.ctx.cfg["repo_root"], "fix/done"]])
+        self.assertEqual([c[4:] for c in gc_calls], [[self.ctx.cfg["repo_root"], "fix/done", "--json", "--head", "c" * 40, "--base", "main"]])
         self.assertIn(("pr.closed", "#460 влит"), self.kinds())
         recs = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "wt.gc"]
         self.assertEqual([(e["to"], e["text"]) for e in recs], [
             ([], "#460: worktree /r/worktrees/fix/done удалён"),
             (["coord"], "#460 влит, worktree /r/x оставлен — незакоммиченные изменения: 2")])
+
+    def test_fork_pr_with_same_branch_name_is_not_ours(self):
+        """Ревью #178: PR из форка с именем локальной ветки не должен убрать чужой worktree."""
+        pr = _pr(463, "f" * 40)
+        pr["head"]["ref"], pr["head"]["repo"] = "fix/done", {"full_name": "someone/fork"}
+        sources.run = FakeGh([pr])
+        sources.poll_github(self.ctx)
+        self.assertNotIn("branch", self.ctx.state["github"]["prs"]["463"])
 
     def test_closed_unmerged_pr_and_gc_failure_do_not_break_the_pass(self):
         pr = _pr(461, "d" * 40)

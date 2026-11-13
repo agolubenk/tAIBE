@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,9 @@ class WtGcTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # Свежий worktree «активен» (индекс изменён секунды назад): проверка активности — в отдельном тесте.
+        self.addCleanup(setattr, wt_gc, "ACTIVE_S", wt_gc.ACTIVE_S)
+        wt_gc.ACTIVE_S = 0
         self.origin = os.path.join(self.tmp, "origin.git")
         self.repo = os.path.join(self.tmp, "repo")
         git(self.tmp, "init", "-q", "--bare", "-b", "main", self.origin)
@@ -32,6 +36,7 @@ class WtGcTest(unittest.TestCase):
         git(self.repo, "add", "a.txt")
         git(self.repo, "commit", "-q", "-m", "init")
         git(self.repo, "push", "-q", "origin", "main")
+        git(self.repo, "remote", "set-head", "origin", "main")  # основная ветка — как у живых репозиториев
 
     def wt(self, branch, push=True, extra_commit=False):
         path = os.path.join(self.repo, "worktrees", branch)
@@ -106,7 +111,9 @@ class WtGcTest(unittest.TestCase):
         self.assertIn("ссылается", r["reason"])
         # Задача launchd с путём внутрь worktree — тоже потребитель.
         os.remove(os.path.join(home, "cfg", "opencode", "agents", "a.md"))
-        open(plist, "w").write(f"<string>{os.path.realpath(path)}/eval/run.py</string>\n")
+        # Путь через ссылку (/var/… вместо /private/var/…) — сравнение по realpath всё равно его узнаёт.
+        with open(plist, "wb") as fh:
+            plistlib.dump({"Label": "job", "ProgramArguments": ["python3", f"{path}/eval/run.py"]}, fh)
         (r,) = wt_gc.gc_branch(self.repo, "feature/agents", cwds=set())
         self.assertIn("job.plist", r["reason"])
         os.remove(plist)
@@ -132,10 +139,12 @@ class WtGcTest(unittest.TestCase):
     def test_sweep_removes_only_merged_branches(self):
         """Ревью #178: чистая и запушенная, но не влитая ветка остаётся — влитость решает sweep по списку gh."""
         merged, open_ = self.wt("fix/merged"), self.wt("fix/open")
-        old = wt_gc.merged_branches, wt_gc.busy_paths, wt_gc.external_refs
-        self.addCleanup(lambda: (setattr(wt_gc, "merged_branches", old[0]), setattr(wt_gc, "busy_paths", old[1]),
+        old = wt_gc.merged_prs, wt_gc.busy_paths, wt_gc.external_refs
+        self.addCleanup(lambda: (setattr(wt_gc, "merged_prs", old[0]), setattr(wt_gc, "busy_paths", old[1]),
                                  setattr(wt_gc, "external_refs", old[2])))
-        wt_gc.merged_branches = lambda repo: {"fix/merged", "fix/gone"}
+        heads = {b: subprocess.run(["git", "rev-parse", "HEAD"], cwd=p, capture_output=True, text=True).stdout.strip()
+                 for b, p in (("fix/merged", merged), ("fix/open", open_))}
+        wt_gc.merged_prs = lambda repo: {"fix/merged": (heads["fix/merged"], "main"), "fix/gone": ("0" * 40, "main")}
         wt_gc.busy_paths, wt_gc.external_refs = (lambda: set()), (lambda: {})
         dry = wt_gc.sweep(self.repo, dry_run=True)
         self.assertEqual([(r["branch"], r["removed"]) for r in dry], [("fix/merged", False)])
@@ -144,6 +153,38 @@ class WtGcTest(unittest.TestCase):
         self.assertEqual([(r["branch"], r["removed"]) for r in res], [("fix/merged", True)])
         self.assertFalse(os.path.exists(merged))
         self.assertTrue(os.path.isdir(open_))
+
+    def test_session_state_head_base_lsof_and_activity_keep_the_worktree(self):
+        """Ревью #178 (две линзы, major): игнорируемое состояние сессии, чужая голова или база, сбой lsof, работа
+        в последний час — worktree остаётся. Копии файлов основного checkout и сборка — не мешают."""
+        open(os.path.join(self.repo, ".git", "info", "exclude"), "a").write(".ai/\n.env\nnode_modules/\n")
+        open(os.path.join(self.repo, ".env"), "w").write("A=1\n")
+        path = self.wt("fix/state")
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True).stdout.strip()
+        os.makedirs(os.path.join(path, "node_modules", "x"))
+        open(os.path.join(path, ".env"), "w").write("A=1\n")  # копия основного checkout
+        os.makedirs(os.path.join(path, ".ai", "task", "T-1"))
+        open(os.path.join(path, ".ai", "task", "T-1", "brief.md"), "w").write("дело\n")
+        (r,) = wt_gc.gc_branch(self.repo, "fix/state", cwds=set(), refs={}, head=head, base="main")
+        self.assertIn("игнорируемые файлы не из сборки: .ai/", r["reason"])
+        shutil.rmtree(os.path.join(path, ".ai"))
+        open(os.path.join(path, ".env"), "w").write("A=2\n")  # правленый .env — не копия
+        (r,) = wt_gc.gc_branch(self.repo, "fix/state", cwds=set(), refs={}, head=head, base="main")
+        self.assertIn(".env", r["reason"])
+        open(os.path.join(path, ".env"), "w").write("A=1\n")
+        self.assertIn("не голова влитого PR", wt_gc.gc_branch(self.repo, "fix/state", cwds=set(), refs={}, head="1" * 40)[0]["reason"])
+        self.assertIn("не в основную ветку main", wt_gc.gc_branch(self.repo, "fix/state", cwds=set(), refs={}, head=head, base="feature/x")[0]["reason"])
+        self.assertIn("lsof не ответил", wt_gc.gc_branch(self.repo, "fix/state", cwds=None, refs={}, head=head)[0]["reason"])
+        wt_gc.ACTIVE_S = 3600
+        self.assertIn("работали", wt_gc.gc_branch(self.repo, "fix/state", cwds=set(), refs={}, head=head)[0]["reason"])
+        wt_gc.ACTIVE_S = 0
+        self.assertTrue(wt_gc.gc_branch(self.repo, "fix/state", cwds=set(), refs={}, head=head, base="main")[0]["removed"])
+
+    def test_empty_branch_and_git_failure_are_errors(self):
+        with self.assertRaises(ValueError):
+            wt_gc.gc_branch(self.repo, "", cwds=set(), refs={})
+        self.assertEqual(wt_gc.main(["wt_gc.py", "branch", self.repo, ""]), 2)
+        self.assertEqual(wt_gc.main(["wt_gc.py", "branch", os.path.join(self.tmp, "нет"), "fix/x"]), 1)
 
     def test_limit(self):
         old = wt_gc.LIMIT

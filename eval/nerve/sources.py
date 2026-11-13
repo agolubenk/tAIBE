@@ -64,7 +64,8 @@ def _gh_view(repo, n):
 
 # rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. При первом проходе
 # нового кода etag сбрасывается: полный список разбирает их заново.
-GH_STATE_REV = 2
+# rev 3 (OPS-52): у известных PR нет ветки и базы — полный список один раз, чтобы уборка worktree их знала.
+GH_STATE_REV = 3
 
 
 def poll_github(ctx):
@@ -91,8 +92,10 @@ def poll_github(ctx):
         n = pr["number"]
         open_now.add(str(n))
         p = known.setdefault(str(n), {"head": "", "updated": "", "seen": [], "changes_by": []})
-        if (pr.get("head") or {}).get("ref"):
-            p["branch"] = pr["head"]["ref"]  # OPS-52: после мёржа — уборка worktree этой ветки
+        # OPS-52: после мёржа — уборка worktree этой ветки. PR из форка — не наша ветка, даже при том же имени.
+        head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+        if (pr.get("head") or {}).get("ref") and head_repo in (None, ctx.cfg["github"]["repo"]):
+            p["branch"], p["base"] = pr["head"]["ref"], (pr.get("base") or {}).get("ref", "")
         # «author» — признак разобранного PR: в rev 1 head и updated писались до сбоя _gh_view (SE-40).
         if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"] and "author" in p:
             continue
@@ -119,7 +122,7 @@ def poll_github(ctx):
         word = "влит" if merged else "закрыт"
         ctx.emit(f"gh:closed:{n}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}", "github")
         if merged and known[n].get("branch"):
-            _gc_worktree(ctx, n, known[n]["branch"])
+            _gc_worktree(ctx, n, known[n]["branch"], known[n].get("head", ""), known[n].get("base", ""))
         del known[n]
     # etag — только после чистого прохода: иначе 304 спрячет недоразобранные PR до следующего изменения списка.
     st["etag"] = "" if fails else etag
@@ -129,12 +132,15 @@ def poll_github(ctx):
 WT_GC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "wt_gc.py")
 
 
-def _gc_worktree(ctx, n, branch):
+def _gc_worktree(ctx, n, branch, head="", base=""):
     """OPS-52 (решение владельца 13.11 «после мёржа»): worktree влитой ветки удаляется, если копия чистая, всё на
     remote и в ней никто не работает (eval/tools/wt_gc.py). Удалён — запись в журнал без доставки; оставлен —
     координатору с причиной. Сбой уборки не мешает проходу GitHub: PR уже снят, повтор — `wt_gc.py sweep`."""
     try:
-        code, out, err = run([sys.executable, "-I", WT_GC, "branch", ctx.cfg["repo_root"], branch, "--json"], timeout=300)
+        cmd = [sys.executable, "-I", WT_GC, "branch", ctx.cfg["repo_root"], branch, "--json"]
+        # Голова и база PR: worktree удаляется, только если его HEAD — голова влитого PR, а база — основная ветка.
+        cmd += (["--head", head] if head else []) + (["--base", base] if base else [])
+        code, out, err = run(cmd, timeout=300)
         res = json.loads(out) if code == 0 and out else None
     except Exception as e:  # noqa: BLE001 — таймаут или сбой разбора: только запись
         code, res, err = 1, None, str(e)

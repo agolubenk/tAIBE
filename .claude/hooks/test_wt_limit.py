@@ -49,6 +49,10 @@ class WtLimitHookTest(unittest.TestCase):
         self.assertEqual(self.run_hook(f"{ADD} w2", os.path.join(self.repo, "w1"))[0], 2)
         self.assertEqual(self.run_hook(f"cd {self.repo} && {ADD} w2", self.root)[0], 2)
         self.assertEqual(self.run_hook(f"WT_LIMIT_CHECK=0 {ADD} w2", self.repo)[0], 0)
+        # Текст обхода не в начале команды — не обход (ревью #178); два пробела между словами — та же команда.
+        self.assertEqual(self.run_hook(f"{ADD} w2  # WT_LIMIT_CHECK=0", self.repo)[0], 2)
+        self.assertEqual(self.run_hook(f"echo WT_LIMIT_CHECK=0; {ADD} w2", self.repo)[0], 2)
+        self.assertEqual(self.run_hook("git worktree  add w2", self.repo)[0], 2)
 
     def test_git_dash_c_checks_the_named_repo(self):
         """Ревью #178: `git -C <repo> worktree add` из другого репозитория — предел репозитория из -C."""

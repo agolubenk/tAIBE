@@ -8,7 +8,10 @@ input="$(cat)" || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)" || exit 0
 dir="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)" || exit 0
-case "$cmd" in *WT_LIMIT_CHECK=0*) exit 0 ;; *"worktree add"*) ;; *) exit 0 ;; esac
+# Обход — только в начале команды (`WT_LIMIT_CHECK=0 git …` или `env WT_LIMIT_CHECK=0 …`): текст обхода в echo,
+# комментарии или сообщении коммита не считается (ревью #178).
+printf '%s' "$cmd" | grep -Eq '^[[:space:]]*(env[[:space:]]+)?WT_LIMIT_CHECK=0[[:space:]]' && exit 0
+printf '%s' "$cmd" | grep -Eq 'worktree[[:space:]]+add([[:space:]]|$)' || exit 0
 
 # Ведущий `cd X &&` меняет репозиторий; относительный X — от cwd.
 lead="$(printf '%s' "$cmd" | sed -nE 's/^[[:space:]]*cd[[:space:]]+("([^"]+)"|'"'"'([^'"'"']+)'"'"'|([^[:space:]&;|]+))[[:space:]]*(&&|;).*/\2\3\4/p')"
