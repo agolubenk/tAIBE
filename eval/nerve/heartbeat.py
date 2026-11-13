@@ -84,11 +84,13 @@ def heartbeat_silent(cfg, mode, cycle, hb, now, awake_now):
 # SE-70: проход внутри (state/pulse новее пульса) — это ещё не тишина. 13.11 17:32–17:38 проход шёл 6 мин, порог
 # пульса днём 5 мин — «НЕРВ МОЛЧИТ» с перезапуском живого демона. Застрявшим проход считается после трёх порогов.
 SLOW_PASS_FACTOR = 3
+PULSE_FUTURE_SLACK = timedelta(minutes=1)
 
 
-def running_pass(pulse, hb):
+def running_pass(pulse, hb, now=None):
     """(начало прохода, источник), если state/pulse пишет проход, начатый после пульса `hb` — демон внутри прохода;
-    иначе None (демон спит между проходами, демон старше SE-70 без файла, сломанный файл)."""
+    иначе None (демон спит между проходами, демон старше SE-70 без файла, сломанный файл, начало прохода в будущем —
+    часы отвели назад: тогда решает прежняя проверка пульса)."""
     p = as_obj(pulse)
     started, source = p.get("pass"), p.get("source")
     if not isinstance(started, str):
@@ -97,9 +99,11 @@ def running_pass(pulse, hb):
         start = datetime.fromisoformat(started)
         if isinstance(hb, str) and hb and start <= datetime.fromisoformat(hb):
             return None
+        if now is not None and start > now + PULSE_FUTURE_SLACK:
+            return None
     except (TypeError, ValueError):
         return None
-    return started, source if isinstance(source, str) and source else "?"
+    return started, source if isinstance(source, str) and source else "неизвестен"
 
 
 def pass_stuck(cfg, mode, cycle, hb, run, now, awake_now):

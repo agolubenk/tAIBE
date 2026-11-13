@@ -98,7 +98,29 @@ class PassTest(unittest.TestCase):
     def test_slow_pass_once_an_hour(self):
         self.run_pass(queue=3 * PERIOD)
         self.run_pass(budget=3 * PERIOD)
-        self.assertEqual(len(self.slow_events()), 1, "ключ — час: каждый медленный проход не будит release")
+        self.assertEqual(len(self.slow_events()), 1, "каждый медленный проход не будит release")
+
+    def test_slow_pass_hour_counts_from_last_digest_not_calendar(self):
+        path = os.path.join(self.d, "state.json")
+        for minutes, expect in ((59, 0), (61, 1)):   # 10:59 → 11:01 — граница часа, но прошло 2 мин
+            st = state_io.load_json(path, {})
+            st["slow_at"] = ago(minutes)
+            wj(path, st)
+            before = len(self.slow_events())
+            self.run_pass(queue=3 * PERIOD)
+            self.assertEqual(len(self.slow_events()) - before, expect, f"прошлый дайджест {minutes} мин назад")
+
+    def test_pulse_write_failure_does_not_stop_the_pass(self):
+        real = state_io.save_json
+
+        def save(path, data):
+            if path.endswith("pulse"):
+                raise OSError("диск полон")
+            return real(path, data)
+
+        with mock.patch.object(state_io, "save_json", save):
+            ctx = self.run_pass(github=1, queue=2)
+        self.assertEqual(ctx.state["durations"]["sources"], {"github": 1, "queue": 2})
 
     def test_pulse_names_the_running_source(self):
         ctx = self.run_pass(github=1, queue=1)
@@ -121,12 +143,12 @@ class RestartTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             now = time.time()
             for name, age in (("products.py", 10), ("old.py", 500), ("test_x.py", 10), ("notes.txt", 10),
-                              ("future.py", -3600)):
+                              ("future.py", -3600), ("same.py", 100)):
                 p = os.path.join(d, name)
                 open(p, "w").close()
                 os.utime(p, (now - age, now - age))
             self.assertEqual(pass_watch.code_changed(now - 100, d, now), ["products.py"],
-                             "тесты, не-py и mtime в будущем — не повод для перезапуска")
+                             "тесты, не-py, mtime в будущем и mtime ровно в секунду старта — не повод для перезапуска")
 
     def test_run_exits_nonzero_when_products_py_is_newer_than_start(self):
         started = os.stat(os.path.join(HERE, "products.py")).st_mtime - 1
@@ -137,6 +159,7 @@ class RestartTest(unittest.TestCase):
                     mock.patch.object(nerve, "Ctx") as ctx, mock.patch.object(nerve, "wakes_on", return_value=False), \
                     mock.patch.object(nerve.time, "sleep", side_effect=AssertionError("уснул вместо выхода")), \
                     mock.patch("sys.stderr"):
+                ctx.return_value.now, ctx.return_value.tz = datetime.now(timezone.utc), timezone.utc
                 rc = nerve.cmd_run(CFG, Namespace(interval=60))
         self.assertNotEqual(rc, 0, "launchd поднимает демон только после выхода с кодом ≠ 0")
         kinds = [c.args[1] for c in ctx.return_value.emit.call_args_list]
@@ -146,8 +169,10 @@ class RestartTest(unittest.TestCase):
 class TapTest(unittest.TestCase):
     def run_tap(self, d, role="coord"):
         env = dict(os.environ, NERVE_STATE_DIR=d)
-        return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), "tap", role, "--once"],
-                              capture_output=True, text=True, env=env, timeout=30).stdout
+        r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), "tap", role, "--once"],
+                           capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(r.returncode, 0, f"тап упал: {r.stderr[-600:]}")   # пустой stdout упавшего тапа — не «тишина»
+        return r.stdout
 
     def state(self, d, hb_min, pulse=None):
         open(os.path.join(d, "journal.jsonl"), "a").close()
@@ -180,6 +205,26 @@ class TapTest(unittest.TestCase):
             self.state(d, 7)
             with open(os.path.join(d, "pulse"), "w") as f:
                 f.write("[1")
+            self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d))
+
+    def test_no_pulse_file_old_daemon(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, 2)
+            self.assertEqual(self.run_tap(d), "", "демон старше SE-70, пульс свежий — тихо")
+            self.state(d, 7)
+            self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d), "демон старше SE-70, пульс старый — прежняя тревога")
+
+    def test_stuck_then_dead_prints_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, 17, ("budget", 16))
+            self.assertIn("НЕРВ ЗАСТРЯЛ", self.run_tap(d))
+            os.remove(os.path.join(d, "pulse"))
+            self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d), "застрял → молчит: другая тревога — новая строка")
+            self.assertEqual(self.run_tap(d), "")
+
+    def test_pulse_in_future_falls_back_to_heartbeat(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.state(d, 7, ("budget", -120))   # часы отвели на 2 ч назад посреди прохода
             self.assertIn("НЕРВ МОЛЧИТ", self.run_tap(d))
 
 

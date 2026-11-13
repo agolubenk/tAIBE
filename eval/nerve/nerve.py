@@ -409,9 +409,10 @@ def cmd_tap(cfg, a):
             cur["last_flush"] = now_iso() if due else cur["last_flush"]
         if role in tc["heartbeat_watchers"]:
             alarm = silence_alarm(cfg, mode, now, STATE_DIR)
-            if alarm and not cur["dead_warned"]:
+            kind = " ".join(alarm.split()[:2])   # «НЕРВ ЗАСТРЯЛ» → «НЕРВ МОЛЧИТ»: хуже — новая строка, иначе одна на эпизод
+            if alarm and cur["dead_warned"] != kind:
                 print(alarm, flush=True)
-            cur["dead_warned"] = bool(alarm)
+            cur["dead_warned"] = kind
         save_json(cpath, cur)
         if a.once:
             return 0
