@@ -8,10 +8,14 @@
 в записи или без своей квитанции не проходит; равные квитанции братьев — отказ обоим. Смена поколения Контроля не
 требует правки списка владельцем. Линию сессии, записи и квитанции читает `eval/tools/lineage.py`; нет модуля —
 запись линии никого не пропускает.
+
+Линия в `session` у oq_agent_status (TB-81, часть 2) — только своя; `takeover` (перехват входящего у держателя,
+OPS-35) — только линия предка, которую сессия держит по тем же правилам, что запись `line:` списка Контроля.
 """
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 
 SESSIONS_DIR = Path.home() / ".claude" / "sessions"
@@ -115,33 +119,92 @@ def line_verdict(pid, lines, lin=None, sx=None):
     if lin is None:
         return "в списке Контроля линия, а eval/tools/lineage.py не найден"
     sx = sx or lin.Sys()
+    p, mine, why = session_proc_line(lin, sx, pid)
+    if why:
+        return why
+    for root in lines:
+        if mine == root or mine.startswith(root + "."):
+            return held_verdict(lin, sx, mine, p.pid, p.start, root)
+    return f"линия сессии {mine} не из линий Контроля ({', '.join(lines)})"
+
+
+def session_proc_line(lin, sx, pid):
+    """(процесс, линия, None) сессии pid или (None, None, причина): процесса нет, сессию запустили из другой сессии
+    claude (окружение, а с ним TAIBE_LINEAGE, — от родителя; GLM HR #602 run 1, находка 6) или линии у неё нет."""
     procs = sx.procs()
     p = procs.get(pid) if isinstance(pid, int) else None
     if p is None:
-        return f"процесс сессии {pid} не найден"
+        return None, None, f"процесс сессии {pid} не найден"
     if lin.ancestor_claude(procs, p.ppid) is not None:
-        return "сессия запущена из другой сессии claude и унаследовала её линию — по линии не пропускаю"
+        return None, None, "сессия запущена из другой сессии claude и унаследовала её линию — по линии не пропускаю"
     mine = lin.session_line(sx, p)
     if not mine or not lin.valid_line(mine):
-        return "у сессии нет линии (её открыл не spawn_session.sh)"
-    for root in lines:
-        if mine != root and not mine.startswith(root + "."):
+        return None, None, "у сессии нет линии (её открыл не spawn_session.sh)"
+    return p, mine, None
+
+
+def held_verdict(lin, sx, mine, pid, start, root):
+    """None — сессия с линией mine (процесс pid, старт start) держит линию root; иначе причина отказа. Одно правило
+    для записи line: списка Контроля и линии в очереди владельца — здесь и в хуке HR (грузит этот файл из
+    TAIBE_ROOT): mine — root или его наследник той же роли со своей квитанцией приёма, и среди живых квитанций
+    поддерева root он новейший (нет такой — держит сам root). sx нужен только alive (ps -p на кандидата)."""
+    if mine != root and not mine.startswith(root + "."):
+        return f"линия {mine} — не {root} и не её наследник"
+    if mine != root:
+        role = _role(lin, root)
+        if role is None or _role(lin, mine) != role:
+            return (f"линия {mine} — потомок {root} не той роли (корень: {role or 'без роли'}, "
+                    f"эта: {_role(lin, mine) or 'без роли'}); наследник — spawn_session.sh --handoff --role")
+        ack = lin.read_json(lin.lfile(mine, ".ack")) or {}
+        if str(ack.get("pid")) != str(pid) or lin.norm(ack.get("start")) != lin.norm(start):
+            return f"линия {mine} — наследник {root} без своей квитанции приёма (lineage.py ack)"
+    holders = line_holders(lin, sx, root)
+    if (not holders and mine == root) or holders == [mine]:
+        return None
+    if len(holders) > 1:
+        return f"у линии {root} несколько держателей с равной квитанцией ({', '.join(holders)}) — отказ всем"
+    return f"линию {root} держит {holders[0] if holders else root}, не {mine}"
+
+
+# Линия, как её понимает сервер очереди (heirOf, infra/ops-console/server/queue/store.ts): r и хотя бы один сегмент.
+OQ_LINE_RE = re.compile(r"r(?:\.[a-z0-9]+)+")
+
+
+def oq_line_verdict(pid, value, takeover=None, lin=None, sx=None):
+    """Линия в oq_agent_status: None — пропустить, иначе причина отказа. session (value) — своя линия или линия
+    предка, которую сессия pid держит (OPS-55: сервер сравнивает agentBy целиком, отпустить захват предка можно только
+    его линией); takeover — линия предка value, которую сессия держит. «Держит» — held_verdict, как запись line:
+    списка Контроля. Нет eval/tools/lineage.py — линию не пропускаю."""
+    lin = lin or load_lineage()
+    if lin is None:
+        return "линия в session, а eval/tools/lineage.py не найден"
+    sx = sx or lin.Sys()
+    p, mine, why = session_proc_line(lin, sx, pid)  # ps -A — один раз (≈0,2 с при 957 процессах, замер 13.11)
+    if why:
+        return why + " — в session своё имя"
+    return oq_lines_verdict(mine, value, takeover, lambda line: held_verdict(lin, sx, mine, p.pid, p.start, line))
+
+
+def oq_lines_verdict(mine, value, takeover, held):
+    """Правило линий в oq_agent_status — одно на хуки tAIBE и HR (HR грузит этот файл из TAIBE_ROOT): mine — линия
+    сессии, value — session, takeover — или None; held(line) — None, если сессия держит line (held_verdict).
+    session — mine или линия её предка, которую сессия держит; takeover — линия предка session, которую сессия
+    держит. Своя линия — тоже через held: предшественник после квитанции наследника её уже не держит (иначе у пункта
+    два держателя — сервер пропускает обоих по by == prevBy; линза роли 4, issuecomment-6862359737). None —
+    пропустить, иначе причина отказа."""
+    if not OQ_LINE_RE.fullmatch(mine or ""):
+        return f"линия сессии «{mine}» не линия очереди (r и сегменты) — в session своё имя"
+    for field, line, under in (("session", value, mine), ("takeover", takeover, value)):
+        if line is None:
             continue
-        if mine != root:
-            role = _role(lin, root)
-            if role is None or _role(lin, mine) != role:
-                return (f"линия {mine} — потомок {root} не той роли (корень: {role or 'без роли'}, "
-                        f"эта: {_role(lin, mine) or 'без роли'}); наследник Контроля — spawn_session.sh --handoff --role")
-            ack = lin.read_json(lin.lfile(mine, ".ack")) or {}
-            if str(ack.get("pid")) != str(p.pid) or lin.norm(ack.get("start")) != lin.norm(p.start):
-                return f"линия {mine} — наследник {root} без своей квитанции приёма (lineage.py ack)"
-        holders = line_holders(lin, sx, root)
-        if (not holders and mine == root) or holders == [mine]:
-            return None
-        if len(holders) > 1:
-            return f"у линии {root} несколько держателей с равной квитанцией ({', '.join(holders)}) — отказ всем"
-        return f"линию {root} держит {holders[0] if holders else root}, не {mine}"
-    return f"линия сессии {mine} не из линий Контроля ({', '.join(lines)})"
+        own = field == "session" and line == mine
+        if not own and (not OQ_LINE_RE.fullmatch(line) or not under.startswith(line + ".")):
+            return (f"{field} — своя линия ({mine}) или линия её предка" if field == "session" else
+                    f"takeover — линия предка {value}") + f", а не «{line[:80]}»"
+        why = held(line)
+        if why:
+            return f"{field} {line}: {why}"
+    return None
 
 
 def control_verdict(session_id, sessions, control, line_check=line_verdict):

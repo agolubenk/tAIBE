@@ -34,7 +34,8 @@ from merge_guard_launch import (awk_programs, implied_commands, make_files, pack
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
 from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E402
 from merge_guard_vars import BLIND, VAR, words  # noqa: E402
-from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
+from merge_guard_identity import (MAIN_ROOT, control_verdict, live_sessions, load_control,  # noqa: E402,F401 MAIN_ROOT — тесту
+                                  oq_line_verdict)
 from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name, cut_heredocs,  # noqa: E402
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
@@ -442,7 +443,7 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
             shell = [inp["command"]]  # serena execute_shell_command и подобные
         if "github" not in tool.lower() and WRITE_OP.search(mcp_op(tool)):  # serena и др. правят файлы мимо Edit
             found += [("file", p) for v in mcp_paths(inp) for base in [cwd, *roots] if (p := protected_path(v, base, roots))]
-        why = oq_identity(tool, inp, sid, get_sessions)
+        why = oq_identity(tool, inp, sid, get_sessions, oq_line_verdict)
         if why:
             return f"merge-guard: {why}."
     for cmd in shell:
