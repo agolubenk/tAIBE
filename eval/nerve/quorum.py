@@ -13,7 +13,8 @@ SHA — токен сразу за словом (между ними — «с у
 отзыв важнее approve.
 Автор: все сессии Т3 пишут в GitHub под одним аккаунтом владельца, логин линзу не отличает. Поэтому автор — подпись
 перед словом вердикта: в ней слово «линза»/lens, название линзы (корректность, ресурсы, продукт, инструмент — SE-74:
-подписи «корректность: approve на <sha>» tAIBE) или имя из github.lens_roles, в ней нет слова «автор», и она не
+подписи «корректность: approve на <sha>» tAIBE), «роль N» в пределах team.roles (подпись Т3 «<линза> (роль N)», SE-74:
+«boards (роль 6)» не узнавалась) или имя из github.lens_roles, в ней нет слова «автор», и она не
 начинается с «Голова», «Ответ», «Итог», «Сводка». Пределы: подпись — текст, автор PR может подписаться линзой; подпись
 без слова «линза» засчитывается по подстрокам lens_roles («Проверка CI» — «провер»).
 Ключ линзы — роль команды: N-я роль team.roles, если подпись называет «роль N» (нумерация spawn_session.sh), иначе
@@ -49,10 +50,7 @@ _MD = " \t*_#>`"
 
 def _lens_key(label, lens_roles, team_roles):
     """Роль по «роль N» или по lens_roles; иначе имя в «…» рядом со словом «линза», иначе начало подписи."""
-    r = ROLE_RE.search(label)
-    if r and 1 <= int(r.group(1)) <= len(team_roles):
-        return team_roles[int(r.group(1)) - 1]
-    role = role_of_lens(label.lower(), lens_roles)
+    role = _team_role(label, team_roles) or role_of_lens(label.lower(), lens_roles)
     if role:
         return role
     q = NAMED_RE.search(label)
@@ -62,11 +60,18 @@ def _lens_key(label, lens_roles, team_roles):
     return re.split(r"[(,·]", name, maxsplit=1)[0].strip(_MD + ".").lower() or "?"
 
 
-def is_lens_author(label, lens_roles):
-    """Подпись принадлежит линзе: слово «линза»/lens или имя из lens_roles; не автор PR, не ответ и не сводка."""
+def _team_role(label, team_roles):
+    r = ROLE_RE.search(label)
+    return team_roles[int(r.group(1)) - 1] if r and 1 <= int(r.group(1)) <= len(team_roles) else None
+
+
+def is_lens_author(label, lens_roles, team_roles=()):
+    """Подпись принадлежит линзе: слово «линза»/lens, название линзы, «роль N» команды или имя из lens_roles; не автор
+    PR, не ответ и не сводка."""
     if not label or NOT_LENS_RE.search(label):
         return False
-    return bool(LENS_WORD_RE.search(label)) or role_of_lens(label.lower(), lens_roles) is not None
+    return bool(LENS_WORD_RE.search(label)) or _team_role(label, team_roles) is not None \
+        or role_of_lens(label.lower(), lens_roles) is not None
 
 
 def _first_line(body):
@@ -93,7 +98,7 @@ def parse_verdict(body, lens_roles, team_roles=()):
     if not found:
         return None
     label = first[:start].strip(_MD)
-    if not is_lens_author(label, lens_roles):
+    if not is_lens_author(label, lens_roles, team_roles):
         return None
     verdict, sha = min(found, key=lambda f: RANK[f[0]])
     return {"lens": _lens_key(label, lens_roles, team_roles), "verdict": verdict, "sha": sha}

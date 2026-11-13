@@ -72,6 +72,16 @@ class QuorumTest(unittest.TestCase):
                      "Ответ Контролю (changes на fda5df42c) — голова 66f6273c3.",
                      "Ресурсы: changes на 8916b7a6e учтены", "Автор, корректность: approve на 2e946a8a5"):
             self.assertIsNone(pv(body), body)
+        # «<линза> (роль N)» — подпись Т3 с 13.11: «boards (роль 6)» не узнавалась ни словом, ни lens_roles.
+        roles = ["coord", "plan", "frontend", "backend", "release", "boards"]
+        for body, want in {"boards (роль 6): approve на 6da688033": ("boards", "approve", "6da688033"),
+                           "boards (роль 6): approve переношу на 707414982": ("boards", "approve", "707414982"),
+                           "frontend (роль 3): changes на 77bdb4ae9": ("frontend", "changes", "77bdb4ae9")}.items():
+            v = quorum.parse_verdict(body, [], roles)
+            self.assertEqual((v["lens"], v["verdict"], v["sha"]) if v else None, want, body)
+        for body in ("boards (роль 9): approve на 6da688033", "Ответ (роль 6): approve на 6da688033",
+                     "frontend, автор (роль 3): approve на 77bdb4ae9", "boards: approve на 6da688033"):
+            self.assertIsNone(quorum.parse_verdict(body, [], roles), body)
         head = "b78da37c7" + "0" * 31
         vs = [pv(x) for x in ("Продукт (план, роль 2): approve на b78da37c7",
                               "ресурсы сервер→браузер (роль 4): approve на b78da37c7",
