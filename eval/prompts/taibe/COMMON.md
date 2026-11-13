@@ -27,9 +27,9 @@ TB «t-boards» `mf6jpr5wftbgr3z93lvw807v`, SE «supertick-eval» `tl3j7yc2mc7ly
 
 ## First steps
 
-0. **Tools.** In your first turn, load the deferred tools of the work cycle with one `ToolSearch` call. A later
-   load rewrites the whole cache window (SE-43: 63 of 279 loads in 48 h, $94.6). Add the tools of your role to the
-   list:
+0. **Tools.** In your first turn and in the first turn after a context compaction, load the deferred tools of the
+   work cycle with one `ToolSearch` call: a compaction unloads them. A later load rewrites the whole cache window
+   (SE-43: 63 of 279 loads in 48 h, $94.6). Add the tools of your role to the list:
    `select:Monitor,TaskStop,mcp__plugin_claude-mem_mcp-search__work_state_read,mcp__plugin_claude-mem_mcp-search__work_state_write,mcp__hub__t-boards_1mcp_forest_set_work_state,mcp__hub__t-boards_1mcp_forest_acquire_lease,mcp__hub__t-boards_1mcp_forest_release_lease,mcp__hub__t-boards_1mcp_update_task_status,mcp__hub__t-boards_1mcp_get_task,mcp__hub__t-boards_1mcp_get_task_by_ticket_id,mcp__hub__t-boards_1mcp_list_task_comments,mcp__hub__t-boards_1mcp_create_task_comment,mcp__hub__t-boards_1mcp_create_task,mcp__hub__t-boards_1mcp_search,mcp__hub__t-boards_1mcp_forest_request_approval`
 1. **Nerve.** One Monitor (persistent): `python3 -I eval/nerve/nerve.py tap <key> --product taibe`. Always write
    the flag: a session after `--resume` can lose the genome and its `TAIBE_PRODUCT`.
