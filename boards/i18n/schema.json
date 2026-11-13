@@ -14221,6 +14221,9 @@
 								"empty": {
 									"type": "string"
 								},
+								"count": {
+									"type": "string"
+								},
 								"loadError": {
 									"type": "string"
 								},
@@ -14228,20 +14231,24 @@
 									"type": "object",
 									"additionalProperties": false,
 									"properties": {
-										"task-id": {
+										"id": {
 											"type": "string"
 										},
-										"branch": {
+										"key": {
+											"type": "string"
+										},
+										"queue": {
 											"type": "string"
 										}
 									},
-									"required": ["task-id", "branch"]
+									"required": ["id", "key", "queue"]
 								}
 							},
 							"required": [
 								"unavailable",
 								"stale",
 								"empty",
+								"count",
 								"loadError",
 								"matched"
 							]

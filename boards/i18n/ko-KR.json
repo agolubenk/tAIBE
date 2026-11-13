@@ -3519,14 +3519,16 @@
 				"saveError": "Could not save the card fields"
 			},
 			"memory": {
-				"empty": "No observations name this card among the latest {{total}}.",
+				"unavailable": "claude-mem is not reachable, and nothing was read from it yet.",
+				"stale": "claude-mem is not reachable: a copy from {{time}}.",
+				"empty": "No observations name this card.",
+				"count": "Observations: {{total}}",
 				"loadError": "Could not load the memory.",
 				"matched": {
-					"branch": "branch {{value}}",
-					"task-id": "names {{value}}"
-				},
-				"stale": "claude-mem is not reachable: a copy from {{time}}.",
-				"unavailable": "claude-mem is not reachable, and nothing was read from it yet."
+					"id": "card id",
+					"key": "card key",
+					"queue": "queue item"
+				}
 			},
 			"worker": {
 				"executor": "Done by {{name}}",
