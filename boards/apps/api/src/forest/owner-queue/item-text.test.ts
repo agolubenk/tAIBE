@@ -42,3 +42,53 @@ describe("approvalItemData links (TB-109)", () => {
     expect(item()).not.toHaveProperty("links");
   });
 });
+
+describe("approvalItemData for a batch close (TB-108 R-5)", () => {
+  const keys = Array.from({ length: 12 }, (_, i) =>
+    i < 8 ? `APP-${i + 1}` : `HRH-${i + 1}`,
+  );
+  const batch = approvalItemData({
+    approval: approval({
+      params: {
+        taskIds: keys.join(","),
+        keys: keys.join(","),
+        from: "",
+        targets: "",
+      },
+      doneReason: "import",
+    }),
+    workspaceName: "HR Helper / Lavaeon",
+    card: null,
+    taskKeys: keys.slice(0, 10).map((key) => `${key} «t»`),
+    listUrl: "https://boards.test/dashboard/workspace/ws/forest",
+    now: new Date("2026-11-13T07:54:27Z"),
+  });
+
+  it("shows counts per project, the first 10 cards and the full list", () => {
+    const body = String(batch.body);
+    expect(batch.title).toContain("закрыть карточки (12)");
+    expect(body).toContain("Карточек: 12 — APP 8, HRH 4");
+    expect(body).toContain("- HRH-10 «t»");
+    expect(body).not.toContain("HRH-11");
+    expect(body).toContain("- и ещё 2");
+    expect(body).toContain("Полный список: https://boards.test/");
+    expect(batch.links).toEqual([
+      {
+        href: "https://boards.test/dashboard/workspace/ws/forest",
+        text: "Список карточек в t-boards",
+      },
+    ]);
+    expect((batch.links as unknown[]).every(isQueueLink)).toBe(true);
+  });
+
+  it("gives a single close no list link", () => {
+    const single = approvalItemData({
+      approval: approval(),
+      workspaceName: "w",
+      card: { key: "TB-1", title: "t", current: "In Review" },
+      listUrl: "https://boards.test/x",
+      now: new Date(),
+    });
+    expect(single).not.toHaveProperty("links");
+  });
+});

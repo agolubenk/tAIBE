@@ -41,11 +41,17 @@ const missingSince = new Map<string, number>();
 const OWN_STATUS_NOTE = "Статус этого пункта ведёт только t-boards.";
 
 async function itemData(deps: SyncDeps, row: ApprovalRow) {
+  const boardsUrl = deps.config.boardsUrl;
   return approvalItemData({
     approval: row,
     workspaceName: await workspaceName(row.workspaceId),
     card: await itemCard(row),
     taskKeys: await taskKeys(row),
+    ...(boardsUrl
+      ? {
+          listUrl: `${boardsUrl}/dashboard/workspace/${row.workspaceId}/forest`,
+        }
+      : {}),
     now: deps.now(),
   });
 }
