@@ -133,7 +133,7 @@ function workBrief(d) {
 const TOOLS = [
   {
     name: 'oq_list',
-    description: 'Список документов коллекции. Ответ — до 95 тыс. символов (дорого для контекста): {total, asOf, docs, next_offset?, '
+    description: 'Список документов коллекции, по 20 (limit до 30). Ответ — до 95 тыс. символов (дорого для контекста): {total, asOf, docs, next_offset? и more «ещё N», '
       + 'shown + truncated? — окно урезал потолок размера, oversized? — id документов больше потолка, их целиком — oq_get, '
       + 'serverCapped? — консоль обрезала список, пояснение в поле}. '
       + 'Сначала сузьте: ответы владельца, которые вы не прочли, — checks с unread: true; обзор — brief: true (длинные строки — '
@@ -145,7 +145,7 @@ const TOOLS = [
       properties: {
         collection: COLL,
         open_only: { type: 'boolean', description: 'items: только открытые владельцу и не archived — без ответа или «ждёт вас снова» (ответил, а сессия после ответа поставила blocked); правило — у сервера, как на /queue' },
-        limit: { type: 'number', description: 'по умолчанию 50, от 1 до 500 (вне границ — ближайшая)' },
+        limit: { type: 'number', description: 'по умолчанию 20, от 1 до 30 (вне границ — ближайшая); с ids — по умолчанию все названные, до 500' },
         offset: { type: 'number', description: 'с какого документа после фильтров — next_offset прошлого ответа; по умолчанию 0 (свежий список)' },
         as_of: { type: 'string', description: 'asOf прошлого ответа — продолжить обход по тому же снимку' },
         ids: { type: 'array', items: { type: 'string' }, description: 'только эти id' },
@@ -185,7 +185,7 @@ const TOOLS = [
           && !(d.data.kind === 'inbox' && answered.get(d.id)?.agentStatus === 'done'));
       }
       list = filterDocs(collection, list, filters);
-      const { from, docs: shown } = pageList(list, { offset, limit });
+      const { from, docs: shown } = pageList(list, { offset, limit, ids: filters.ids });
       const summary = collection === 'items' && shown.some((d) => d.data.kind === 'inbox') ? await filesSummary() : {};
       const rows = shown.map((d) => (collection === 'items'
         ? { id: d.id, version: d.version, ...(d.product ? { product: d.product } : {}), kind: d.data.kind, title: d.data.title, source: d.data.source, added: d.data.added, archived: d.data.archived,

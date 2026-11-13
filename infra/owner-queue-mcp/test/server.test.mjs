@@ -157,8 +157,10 @@ test('oq_list: список больше потолка ответа — next_of
   let page = { next_offset: 0 };
   let asOf;
   for (let calls = 0; page.next_offset !== undefined; calls += 1) {
-    assert.ok(calls < 10, 'next_offset не сходится');
+    assert.ok(calls < 10, 'next_offset не сходится'); // 120 по 30 — 4 страницы
     page = body(await m.call('oq_list', { collection: 'checks', limit: 500, offset: page.next_offset, as_of: asOf }));
+    assert.ok(page.docs.length <= 30, 'limit выше потолка — 30 (SE-45)');
+    if (page.next_offset !== undefined) assert.equal(page.more, `ещё ${page.total - page.next_offset}`);
     assert.equal(page.total, 120);
     assert.equal(page.resnapshot, undefined);
     asOf ??= page.asOf;
@@ -174,11 +176,17 @@ test('oq_list: список больше потолка ответа — next_of
   const unread = body(await m.call('oq_list', { collection: 'checks', unread: true }));
   assert.deepEqual(unread.docs.map((d) => d.id), CHECKS.filter((_, i) => i % 10 === 0).map((d) => d.id));
 
-  // brief: весь список в одном ответе, длинное поле — начало и длина; целиком — oq_get.
-  const brief = body(await m.call('oq_list', { collection: 'checks', limit: 500, brief: true }));
-  assert.equal(brief.docs.length, m.state.checks.length);
-  assert.equal(brief.next_offset, undefined);
+  // brief: длинное поле — начало и длина; целиком — oq_get. Без limit — 20 и «ещё N».
+  const brief = body(await m.call('oq_list', { collection: 'checks', brief: true }));
+  assert.equal(brief.docs.length, 20);
+  assert.equal(brief.next_offset, 20);
+  assert.equal(brief.more, `ещё ${m.state.checks.length - 20}`);
   assert.equal(brief.docs[1].noteLen, 2_000);
+  // С ids — все названные, без потолка 30.
+  const named = m.state.checks.slice(0, 40).map((d) => d.id);
+  const byIds = body(await m.call('oq_list', { collection: 'checks', ids: named, brief: true }));
+  assert.deepEqual(byIds.docs.map((d) => d.id), named);
+  assert.equal(byIds.next_offset, undefined);
 });
 
 test('oq_agent_status: takeover и release уходят полями запроса, не в data', { timeout: 30_000 }, async (t) => {
