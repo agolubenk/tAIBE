@@ -944,32 +944,39 @@ describe('порядок пунктов: от старых к новым (про
   })
 
   // applyItems со страницы — в vm с заглушками DOM: ключ снимка без updatedAt (замечание Контроля к #154).
+  // itemFromDb — настоящая, со страницы: в ключ снимка идёт ровно то, что она кладёт в пункт.
   const applyItemsRun = () => {
-    const src = fnSource('applyItems')
-    const mounted: { id: string; updatedAt?: number }[] = []
+    const mounted: { id: string; title?: string; updatedAt?: number }[] = []
     const ctx = createContext({
       LIVE: {}, ITEMS: [], DB_ITEMS: [], dbItemsKey: '', FILES: null,
+      LABELS: { merge: 'Мёрж' }, INBOX_TYPE: {}, INBOX_URGENCY: {}, INBOX_SEVERITY: {},
+      textToHtml: (t: unknown) => (typeof t === 'string' ? t : ''), safeLink: () => '',
       rowsOf: (snap: unknown) => snap,
-      // как настоящая itemFromDb: в пункт идут только поля, которые страница показывает (sha, pr — нет)
-      itemFromDb: (id: string, d: { kind: string; title: string }) => ({ id, kind: d.kind, title: d.title }),
       otherProduct: () => false,
       document: { querySelectorAll: () => [] },
-      mount: (it: { id: string; updatedAt?: number }) => mounted.push({ ...it }),
+      // живая ссылка: видно, какой updatedAt у пункта на странице после каждого снимка
+      mount: (it: { id: string; updatedAt?: number }) => mounted.push(it),
       render: () => {}, showTarget: () => {},
     })
-    runInContext(src, ctx)
+    runInContext(fnSource('itemFromDb'), ctx)
+    runInContext(fnSource('applyItems'), ctx)
     return { apply: (rows: unknown) => runInContext('applyItems', ctx)(rows), mounted }
   }
 
-  it('запись агента в невидимое поле (sha) меняет updatedAt, но не пересоздаёт пункты', () => {
+  it('запись агента в невидимое поле (sha) не пересоздаёт пункты; порядок держит updatedAt последнего пересоздания', () => {
     const { apply, mounted } = applyItemsRun()
-    apply([{ id: 'm-1', data: { kind: 'merge', title: 'A' }, updatedAt: 100 }])
-    expect(mounted).toEqual([{ id: 'm-1', kind: 'merge', title: 'A', updatedAt: 100 }])
-    apply([{ id: 'm-1', data: { kind: 'merge', title: 'A', sha: 'abc' }, updatedAt: 200 }])
+    const row = (data: Record<string, unknown>, updatedAt: number) => [{ id: 'm-1', data: { kind: 'merge', added: '2026-11-13', ...data }, updatedAt }]
+    apply(row({ title: 'A' }, 100))
     expect(mounted).toHaveLength(1)
+    expect(mounted[0]).toMatchObject({ id: 'm-1', title: 'A', updatedAt: 100 })
+    apply(row({ title: 'A', sha: 'abc', pr: 154 }, 200))
+    expect(mounted).toHaveLength(1)
+    // Пункты не переставляются от невидимой записи: updatedAt — снимка, после которого пункт пересоздан.
+    expect(mounted[0]?.updatedAt).toBe(100)
     // Видимое поле изменилось — пункты пересоздаются, порядок берёт свежий updatedAt.
-    apply([{ id: 'm-1', data: { kind: 'merge', title: 'B' }, updatedAt: 300 }])
-    expect(mounted[1]).toEqual({ id: 'm-1', kind: 'merge', title: 'B', updatedAt: 300 })
+    apply(row({ title: 'B', sha: 'abc' }, 300))
+    expect(mounted).toHaveLength(2)
+    expect(mounted[1]).toMatchObject({ id: 'm-1', title: 'B', updatedAt: 300 })
   })
 })
 
@@ -978,6 +985,7 @@ function fnSource(name: string): string {
   const start = html.indexOf('  function ' + name + '(')
   if (start < 0) throw new Error('нет функции ' + name)
   const end = html.indexOf('\n  }\n', start)
+  if (end < 0) throw new Error('не найден конец функции ' + name)
   return html.slice(start, end + 4)
 }
 
@@ -1031,7 +1039,7 @@ describe('раскладка «Одной очередью» / «По разде
     // В разметке инструкция — в разделе сервера, перед списком; ссылка «как подключиться» ведёт на неё.
     expect(html).toMatch(/<section data-section="server" id="sec-server">[\s\S]*?<div class="howto" id="ssh-howto">[\s\S]*?<div class="list"><\/div>\s*<\/section>/)
     expect(html).toContain('<a href="#ssh-howto">как подключиться</a>')
-    expect(html).toMatch(/function paintLayout\(\) \{[\s\S]*?placeSshHowto\(one\);/)
+    expect(fnSource('paintLayout')).toContain('placeSshHowto(one);')
     const calls: string[] = []
     const howto = { id: 'ssh-howto' }
     const sec = (id: string) => ({
@@ -1045,6 +1053,14 @@ describe('раскладка «Одной очередью» / «По разде
     place(true)
     place(false)
     expect(calls).toEqual(['sec-queue.append(ssh-howto)', 'sec-server.insertBefore(ssh-howto, sec-server .list)'])
+    // Нет узла инструкции или раздела — без исключения: переключатель раскладки не ломается.
+    for (const env of [{ sshHowto: null, document: { getElementById: sec } }, { sshHowto: howto, document: { getElementById: () => null } }]) {
+      const bare = createContext(env)
+      runInContext(fnSource('placeSshHowto'), bare)
+      expect(() => runInContext('placeSshHowto', bare)(true)).not.toThrow()
+      expect(() => runInContext('placeSshHowto', bare)(false)).not.toThrow()
+    }
+    expect(calls).toHaveLength(2)
   })
 
   it('телефон: кнопка — значок 40 px (касание не меньше 36 px), шапка не раздвигается', () => {

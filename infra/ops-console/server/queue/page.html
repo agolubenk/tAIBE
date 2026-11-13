@@ -1031,6 +1031,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   var sshHowto = document.getElementById('ssh-howto');
   function placeSshHowto(one) {
     var sec = document.getElementById(one ? 'sec-queue' : 'sec-server');
+    // Нет узла (правка разметки) — инструкция не переезжает, но переключатель раскладки работает.
+    if (!sshHowto || !sec) return;
     if (one) sec.appendChild(sshHowto); else sec.insertBefore(sshHowto, sec.querySelector('.list'));
   }
   function paintLayout() {
