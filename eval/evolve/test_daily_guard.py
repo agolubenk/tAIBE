@@ -197,13 +197,29 @@ class WorktreeAndMergeTest(unittest.TestCase):
         import pipeline_settings as ps
         on = {'automation': True, 'toggles': dict(ps.defaults()['toggles'], evolveAutoMerge=True)}
         root = os.path.abspath(os.path.join(daily.HERE, '..', '..'))
-        for source, want in (('board (just fetched)', True), ('cache x (5 s old)', True),
-                             ('cache x (900 s old, last read failed: timeout)', False),
-                             ('defaults (no board settings known)', False)):
-            with self.subTest(source), mock.patch.object(ps, 'load', lambda r, s=source: (on, s)):
-                self.assertEqual(daily.merge_switch(root), want)
-        with mock.patch.object(ps, 'load', side_effect=OSError('x')):
-            self.assertFalse(daily.merge_switch(root))
+        missing = os.path.join(tempfile.mkdtemp(), 'evolveAutoMerge.on')  # the owner's file is absent
+        with mock.patch.dict(os.environ, {'TAIBE_PIPELINE': ''}):
+            for source, want in (('board (just fetched)', True), ('cache x (5 s old)', True),
+                                 ('cache x (900 s old, last read failed: timeout)', False),
+                                 ('defaults (no board settings known)', False)):
+                with self.subTest(source), mock.patch.object(ps, 'load', lambda r, s=source: (on, s)):
+                    self.assertEqual(daily.merge_switch(root, missing), want)
+            with mock.patch.object(ps, 'load', side_effect=OSError('x')):
+                self.assertFalse(daily.merge_switch(root, missing))
+
+    def test_merge_switch_takes_the_owner_file_and_env_off_wins(self):
+        root = os.path.abspath(os.path.join(daily.HERE, '..', '..'))
+        path = os.path.join(tempfile.mkdtemp(), 'evolveAutoMerge.on')
+        with mock.patch.object(daily.steps, 'closed_switch', lambda name, root=None: False), \
+                mock.patch.dict(os.environ, {'TAIBE_PIPELINE': ''}):
+            self.assertFalse(daily.merge_switch(root, path))
+            open(path, 'w').close()
+            self.assertTrue(daily.merge_switch(root, path))
+            for env in ('off', 'evolveAutoMerge=off', 'swarm=off,evolveautomerge=off'):
+                with self.subTest(env), mock.patch.dict(os.environ, {'TAIBE_PIPELINE': env}):
+                    self.assertFalse(daily.merge_switch(root, path))
+            with mock.patch.dict(os.environ, {'TAIBE_PIPELINE': 'abJudgeClaude=off'}):
+                self.assertTrue(daily.merge_switch(root, path))  # another switch's «off» does not touch this one
 
 
 class ResourcesTest(unittest.TestCase):

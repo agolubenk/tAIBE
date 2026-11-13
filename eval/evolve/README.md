@@ -73,7 +73,7 @@ launchd (05:00 local, after the notebook sync of 04:17) runs `caffeinate -i pyth
 | act | `daily.py run` | Accepted loss of the merged version → revert PR; accepted win → pinned in `verdicts.jsonl`; brak and insufficient → recorded, never applied |
 | session | `daily_session.cmd_session` | `claude -p` with `daily-prompt.md` and one input file the code prepares (verdicts as labels and reasons, queued artifacts with their diffs, the day's incidents as scrubbed command templates): cases for the queue, a review of accepted verdicts (it can only append a `supersedes … brak` line), antigens as data (rows plus fire/quiet cases in `antigen_cases.json`), and a last line for SE-49 that the code posts after the personal-data scan. Exact rights: read the worktree, write four data paths, two exact check commands; no git, gh, hub, MCP, agents or code. 60 turns, $4, 45 min; quota spent — quiet exit |
 | publish | `daily_session.cmd_publish` | Runs nothing the model wrote. Data (cases, verdicts) passes `check_cases`, the past-lines rule and `guard.scan` (names, e-mails, phones, `/Users/`, UUIDs, tokens → refused) → one PR that may merge by itself; antigens pass `guard.check_antigens` (lesson ≤ 400, no «ignore/bypass» wording; pattern < 50 ms on 100 KB in a child process; own fire/quiet cases) → one PR for a person |
-| merge | `daily.py merge` | Only PRs this run opened (`prs.json` record + `Evolve-Run:` trailer, head unchanged), no `D`/`R` (`git diff --name-status -M`), safe class only — data, or a skill / prompt (not `lens-*`) restored to the exact blob of a version already in the base; every check green; the base branch has required checks (none → closed); `evolveAutoMerge` on and read from the board (defaults or a failed read → off) → `gh pr merge --auto --squash --match-head-commit`. Rules, cards, agents, commands, the genome, `*.py`, `*.sh`, lenses: PRs marked «[manual merge]». HR: PRs only |
+| merge | `daily.py merge` | Only PRs this run opened (`prs.json` record + `Evolve-Run:` trailer, head unchanged), no `D`/`R` (`git diff --name-status -M`), safe class only — data, or a skill / prompt (not `lens-*`) restored to the exact blob of a version already in the base; every check green; the base branch has required checks (none → closed); `evolveAutoMerge` on — read from the board (defaults or a failed read → off) or the owner's file `~/.claude/evolve/evolveAutoMerge.on` → `gh pr merge --auto --squash --match-head-commit`. Rules, cards, agents, commands, the genome, `*.py`, `*.sh`, lenses: PRs marked «[manual merge]». HR: PRs only |
 
 The merge is done by the owner's scheduled job, not by a Claude session: the sessions' merge-guard
 (`.claude/hooks/pre-tool-use-merge-guard.py`) is not bypassed and not changed, and the headless session itself has
@@ -126,7 +126,12 @@ worse and cheaper» keeps B; an old version that is cheaper at the same quality 
 
 `evolveAutoMerge` is **off** by default and off whenever the settings cannot be read. Leave it off for a week and
 read the journal (`~/.claude/evolve/runs/*.json`, the `[manual merge]` and data PRs it opened); then turn on
-«Allow auto-merge» and required checks for `board-agents` in GitHub, and the switch in the board's settings.
+«Allow auto-merge» and required checks for `board-agents` in GitHub, and the switch in the board's settings — or,
+while this install has no `T_BOARDS_PIPELINE_KEY` to read the board, the owner's local file
+`touch ~/.claude/evolve/evolveAutoMerge.on` (owner decision 13.11; remove the file to turn it off — a board «off»
+cannot override the file). `TAIBE_PIPELINE=evolveAutoMerge=off` turns it off over both. GitHub still decides:
+without required checks on the base branch nothing merges by itself. Make required only a check that runs on every
+PR (`checks-ci.yml`), never a path-filtered one: a PR that does not trigger it would wait forever.
 
 ### Install (owner, after the merge)
 
