@@ -39,6 +39,25 @@ it("announces committed column changes for focused remote boards", async () => {
   expect(publish).toHaveBeenCalledTimes(4);
 });
 
+// TB-30: the trigger moves completed_at on the column's tasks, so open cards
+// must hear that completion changed; a rename must not say so.
+it("marks the project update when a column's finality changes", async () => {
+  const { workspace } = await createWorkspaceMember();
+  const { project } = await createProjectFixture({ workspaceId: workspace.id });
+  const column = await createColumn({ projectId: project.id, name: "Shipped" });
+  publish.mockClear();
+  await updateColumn(column.id, { isFinal: true });
+  await updateColumn(column.id, { isFinal: true });
+  await updateColumn(column.id, { isFinal: false });
+  expect(
+    publish.mock.calls.filter(([name]) => name === "project.updated"),
+  ).toEqual([
+    ["project.updated", { projectId: project.id, completionChanged: true }],
+    ["project.updated", { projectId: project.id }],
+    ["project.updated", { projectId: project.id, completionChanged: true }],
+  ]);
+});
+
 it.each(["missing", "foreign"])(
   "rolls back all positions when a later %s column is invalid",
   async (kind) => {

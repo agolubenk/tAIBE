@@ -13,7 +13,7 @@ vi.mock("../../../apps/api/src/redis", () => ({
   closeRedis: async () => {},
 }));
 
-it("retains the link-refresh flag when receiving a Redis project broadcast", async () => {
+it("retains the link, completion and title flags when receiving a Redis project broadcast", async () => {
   const adapter = new RedisBroadcastAdapter();
   const receive = vi.fn();
   await adapter.subscribe(receive);
@@ -29,6 +29,7 @@ it("retains the link-refresh flag when receiving a Redis project broadcast", asy
         type: "PROJECT_UPDATED",
         projectId: "project",
         linksChanged: true,
+        completionChanged: true,
         taskTitleChanged: true,
       },
     }),
@@ -37,6 +38,7 @@ it("retains the link-refresh flag when receiving a Redis project broadcast", asy
     expect.objectContaining({
       message: expect.objectContaining({
         linksChanged: true,
+        completionChanged: true,
         taskTitleChanged: true,
       }),
     }),

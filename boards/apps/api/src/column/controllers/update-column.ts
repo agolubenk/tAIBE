@@ -37,7 +37,8 @@ async function updateColumn(
     throw new HTTPException(500, { message: "Failed to update column" });
   }
 
-  if (existing.isFinal !== updated.isFinal) {
+  const completionChanged = existing.isFinal !== updated.isFinal;
+  if (completionChanged) {
     const parents = await getProjectSubtaskParentProjects(
       updated.projectId,
       updated.slug,
@@ -50,7 +51,12 @@ async function updateColumn(
     });
   }
 
-  await publishEvent("project.updated", { projectId: updated.projectId });
+  // The database trigger has just set or cleared completed_at on this column's
+  // tasks; open cards refetch only on this hint (TB-30).
+  await publishEvent("project.updated", {
+    projectId: updated.projectId,
+    ...(completionChanged ? { completionChanged: true } : {}),
+  });
 
   return updated;
 }
