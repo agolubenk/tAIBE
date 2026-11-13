@@ -65,8 +65,9 @@ A не останавливает.
 2. `security add-generic-password -U -s hr-helper-mcp -a T_BOARDS_API_KEY -w` — ключ спросит сам.
 3. `bash infra/scripts/dev-ai/mcp-hub.sh restart hub` (из основной папки tAIBE): только агрегатор, за секунды.
 4. Проверка в Claude Code и в одном клиенте без отложенных инструментов (Continue): `whoami` — новый ключ,
-   `list_workspaces` — 3 воркспейса. Если ключ нужен `apply-plan.mjs`: `T_BOARDS_API_KEY=… node
-   boards/deploy/vps/seed/apply-plan.mjs` без `--apply` — план читается.
+   `list_workspaces` — 3 воркспейса. Если ключ нужен `apply-plan.mjs`:
+   `T_BOARDS_API_KEY="$(bash infra/scripts/dev-ai/mcp-secret.sh T_BOARDS_API_KEY)" node boards/deploy/vps/seed/apply-plan.mjs`
+   без `--apply` — план читается. Ключ берётся из Keychain и в историю shell не попадает.
 5. Отзыв старого ключа в настройках t-boards. Проверка: запрос со старым ключом → 401.
 6. В календарь — ротация через 25 дней по тем же шагам.
 
