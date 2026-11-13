@@ -37,6 +37,13 @@ bash("SE-77: `source` после скрипта, который задал на�
 bash("SE-77: `eval` после скрипта, который задал настройку", f"source a.zsh; eval 'G=gh; {HIDE}'", True, cwd=se77)
 bash("SE-77: `eval` внутри скрипта после настройки у вызывающего", "histchars='!^%'; source e.zsh", True, cwd=se77)
 bash("SE-77: порядок — `source h.zsh` до настройки", "source h.zsh; source a.zsh", False, cwd=se77)
+(se77 / "m.sh").write_text("echo ok\n")  # старый безобидный файл на диске — запись за `#` его заменяет
+(se77 / "w.zsh").write_text("echo a # ; echo gh pr merge 1 > m.sh\nbash m.sh\n")
+STALE = "echo a # ; echo gh pr merge 1 > m.sh"
+bash("SE-77: запись за `#` после настройки — не старый m.sh", f"histchars='!^%'\n{STALE}; bash m.sh", True, cwd=se77)
+bash("SE-77: та же запись в `eval`", f"histchars='!^%'; eval '{STALE}'; bash m.sh", True, cwd=se77)
+bash("SE-77: та же запись в скрипте после настройки", "histchars='!^%'; source w.zsh", True, cwd=se77)
+bash("SE-77: без настройки `#` — комментарий, m.sh старый", f"{STALE}; bash m.sh", False, cwd=se77)
 bash("SE-77: скрипт zsh сам меняет знак комментария", "zsh s.zsh", True, cwd=se77)
 bash("SE-77: тот же скрипт — Контролю можно", "zsh s.zsh", False, who=D9, cwd=se77)
 bash("SE-77: безобидный скрипт с `histchars` — проход", "zsh ok.zsh", False, cwd=se77)

@@ -356,7 +356,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         hit = FALLBACK.search(uncommented(cmd))
         return [("вложенная команда с признаком защищённого действия", cmd[:120])] if hit else []
     if fresh:  # все записи команды — до разбора `$(…)` и heredoc (они разбираются раньше); вложенным — уже от родителя
-        written.update(command_writes(cmd) | ({CHANGED} if keep else set()))  # keep — и для `eval` в скрипте
+        written.update(command_writes(cmd, keep=keep) | ({CHANGED} if keep else set()))  # keep — и для `eval` в скрипте
     cmd, bodies = (cmd, []) if alt else cut_heredocs(cmd)  # до снятия комментариев; alt — уже снят (comment_readings)
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
     cmd, other = (cmd.replace("\\\n", " "), None) if raw else comment_readings(cmd, None if part else FALLBACK.search, alt)  # SE-77, SE-82
