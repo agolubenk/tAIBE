@@ -56,11 +56,11 @@ export function missingProjects(
 const more = (n: number, forms: readonly [string, string, string]) => (n > 0 ? ` и ещё ${plural(n, forms)}` : '')
 const label = (name: string) => name || 'без compose'
 
-/** Хвост строки хоста в подробном отчёте (HTML): стеки «работает/всего» и неработающие; до OPS-8 — только упавшие. */
 /** Хост со стеками в отчёте: есть текущие или пропавшие (хост, потерявший все стеки, — худший случай OPS-57). */
 const hasStacks = (h: Pick<OpsReport['hosts'][number], 'projects' | 'missingProjects'>) =>
   Boolean(h.projects?.length || h.missingProjects?.length)
 
+/** Хвост строки хоста в подробном отчёте (HTML): стеки «работает/всего» и неработающие; до OPS-8 — только упавшие. */
 export function hostContainers(h: OpsReport['hosts'][number]): string {
   if (!hasStacks(h)) return h.containersNotRunning.length ? ` · не работают: ${escapeHtml(h.containersNotRunning.join(', '))}` : ''
   const stacks = (h.projects ?? []).map((p) => `${label(p.name)} ${p.running}/${p.total}${p.stopped.length ? ` (не работают: ${p.stopped.join(', ')})` : ''}`)
