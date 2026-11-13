@@ -57,5 +57,7 @@ describe('guardPlanEnd (TB-112)', () => {
     expect(moveToUnseen(moveTo, 'A — на 120.11, B — 02.123')).toEqual({ row: 'w-a', date: '2026-11-20' })
     expect(moveToUnseen(moveTo, 'A — 20.11, B — 2.12')).toEqual({ row: 'w-b', date: '2026-12-02' })
     expect(moveToUnseen(undefined, '')).toBeUndefined()
+    // Неверную дату отклоняет схема; здесь она не роняет проверку (RegExp из сырой строки).
+    expect(moveToUnseen({ 'w-a': '2026-10-2[' }, '')).toBeUndefined()
   })
 })

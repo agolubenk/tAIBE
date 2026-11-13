@@ -25,6 +25,8 @@ const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON
  */
 export function moveToUnseen(moveTo: Record<string, string> | undefined, text: string): { row: string; date: string } | undefined {
   for (const [row, date] of Object.entries(moveTo ?? {})) {
+    // zod 3 зовёт superRefine и после провала regex поля: неверную дату уже отклонила схема (422), здесь её не трогаем.
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
     const short = new RegExp(`(?<!\\d)${date.slice(8, 10)}\\.${date.slice(5, 7)}(?!\\d)`)
     if (!text.includes(date) && !short.test(text)) return { row, date }
   }

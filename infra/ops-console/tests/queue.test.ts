@@ -158,6 +158,7 @@ describe('документы и права', () => {
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-12-01', dueRef: 'd-t-due-2' } })).status).toBe(409)
     // Неверная форма moveTo — 422 на записи решения.
     expect((await a.put('/db/items/d-t-due-4', { data: { ...due, moveTo: { 'w-t': '25.10.2026' } } })).status).toBe(422)
+    expect((await a.put('/db/items/d-t-due-4', { data: { ...due, moveTo: { 'w-t': '2026-10-2[' } } })).status).toBe(422)
     // Новая строка агента: dueRefs нет, basePlanEnd — её planEnd или пусто.
     expect((await a.put('/db/work/w-n1', { data: { title: 'Н', planEnd: '2026-10-20', dueRefs: ['d-t-due-1'] } })).status).toBe(409)
     expect((await a.put('/db/work/w-n2', { data: { title: 'Н', planEnd: '2026-10-20', basePlanEnd: '2026-10-01' } })).status).toBe(409)
