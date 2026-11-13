@@ -9,6 +9,10 @@
 # --launch идемпотентен (OPS-24): сначала поднимает нерв (не загружен → bootstrap, молчит → kickstart), живую роль
 # продукта пропускает («жива: …»), после открытия ждёт сессию новой линии до SPAWN_WAIT с (90), затем следующую роль;
 # в конце печатает итог. --force — открыть и при живой роли. Продукт — основной checkout папки --cwd (team_status.py).
+# Роль release (Контроль) --launch не открывает, если в merge-guard (основная папка --cwd или tAIBE) уже записан
+# Контроль — и с --force (SE-72): Контроль передаёт только --handoff из сессии Контроля, иначе владельцу снова
+# ручной s-set-control. Прежний Контроль мёртв и нужен новый — --force-fresh-control и s-пункт владельцу.
+# Отказ — строкой в итоге, остальные роли открываются, код выхода 3.
 # (в инстансе HR_Helper-v2 скрипт лежит в supertick-eval/tools/ — работает так же; корень дерева берётся из его места)
 # Продукт (OPS-25): --product SLUG, иначе $TAIBE_PRODUCT (его ставит геном роли — наследник берёт продукт
 # предшественника), иначе продукт по умолчанию из instances/. У продукта не по умолчанию — геном
@@ -37,7 +41,7 @@ TOOLS="$(cd "$(dirname "$0")" && pwd)"
 CWD="$PWD"
 TERMINAL="${SPAWN_TERMINAL:-terminal}"
 PROMPT_DIR=""
-HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO=""
+HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO="" FRESH_CONTROL=0 REFUSED=0
 PRODUCT="" CWD_SET=0
 CLOSE="${SPAWN_AUTOCLOSE:-on}"
 DELAY="${SPAWN_CLOSE_DELAY:-10}"  # с отсчёта перед закрытием окна (Enter — оставить)
@@ -63,6 +67,7 @@ while [ $# -gt 0 ]; do
     --no-retire) RETIRE=off; shift ;;
     --keep-window) CLOSE=off; shift ;;
     --force) FORCE=1; shift ;;
+    --force-fresh-control) FRESH_CONTROL=1; shift ;;
     --status) INFO=status; shift ;;
     --stop) INFO=stop; shift ;;
     -h|--help) awk 'NR>1{if(/^#/)print;else exit}' "$0"; exit 0 ;;  # шапка до первой строки кода — без номеров строк
@@ -258,6 +263,27 @@ record() {
 # Одна роль в --launch: живую пропустить, иначе открыть и дождаться её сессии. Итог — строкой в SUMMARY.
 SUMMARY=""
 note() { SUMMARY="$SUMMARY$(printf '\n  %s' "$*")"; }
+
+# SE-72: Контроля нет ни в одной папке merge-guard → 0. Записан или сомнение (папка не найдена, список не читается) →
+# отказ строкой в итоге и 1 (fail-closed). SPAWN_GUARD_TAIBE — только для тестов: это защита от ошибки запуска, не
+# граница доступа (новая сессия не станет Контролем, пока владелец не впишет её в merge-guard).
+control_free() {
+  local tai rc=0 ctl hint="наследник Контроля — только spawn_session.sh --handoff <файл> из сессии Контроля; прежний мёртв — --force-fresh-control и s-пункт владельцу"
+  tai="${SPAWN_GUARD_TAIBE:-$(cd "$TOOLS/../.." 2>/dev/null && pwd)}" || tai=""
+  if [ -z "$tai" ]; then ctl="папка tAIBE не найдена"; rc=2
+  else ctl="$(python3 -I "$TOOLS/lineage.py" control --guard "$CWD" --guard "$tai" 2>&1)" || rc=$?; fi
+  [ "$rc" = 3 ] && return 0
+  if [ "$rc" = 0 ]; then ctl="Контроль записан в merge-guard: $ctl"
+  else
+    # Сомнение — сломан путь или список, а не мёртвый Контроль: флаг обхода его не чинит. Трейсбек — первой строкой.
+    case "$rc" in 2) ;; *) ctl="lineage.py control: сбой (rc $rc): $(printf '%s\n' "$ctl" | head -n 1)" ;; esac
+    hint="почини путь или список и запусти снова; --force-fresh-control — только если прежний Контроль мёртв"
+  fi
+  echo "# release: $ctl — $hint" >&2
+  note "release — НЕ открыта: $ctl ($hint)"
+  REFUSED=1
+  return 1
+}
 launch_role() {
   local r="$1" live rc got
   role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
@@ -267,6 +293,10 @@ launch_role() {
     # Открывать только по явному «роли нет» (rc 3). Любой другой rc (1 — трейсбек Python, 2 — ошибка) — проверка
     # сломалась: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
     if [ "$rc" != 3 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
+  fi
+  if [ "$r" = release ] && [ "$FRESH_CONTROL" = 0 ] && ! control_free; then return; fi
+  if [ "$r" = release ] && [ "$FRESH_CONTROL" = 1 ]; then
+    note "release — ещё НЕ Контроль: мёрж и m-пункты — после того, как владелец впишет её sessionId в merge-guard (s-пункт)"
   fi
   spawn_one "$r"
   if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then note "$r — команда напечатана"; return; fi
@@ -330,6 +360,7 @@ elif [ "$LAUNCH" = 1 ]; then
   for r in $(echo "$ROLES" | tr ',' ' '); do launch_role "$r"; done
   echo "итог ($(basename "${MAIN:-$CWD}")):$SUMMARY"
   python3 -I "$TOOLS/team_status.py" nerve 2>&1 | sed 's/^/  /' || true
+  [ "$REFUSED" = 0 ] || exit 3
 else
   die "нужен --handoff FILE или --launch (см. --help)"
 fi

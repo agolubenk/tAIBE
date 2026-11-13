@@ -5,6 +5,7 @@ descendant gets its own lineage id under its parent's.
 
 Run: python3 -I eval/tools/test_spawn_session.py   (exit 1 on mismatch; --dry-run only, nothing is launched)
 """
+import json
 import os
 import re
 import subprocess
@@ -157,6 +158,58 @@ rc, out = product_run({}, "--product", "nope")
 if rc == 0 or "нет продукта nope" not in out:
     failed += 1
     print("FAIL: unknown product is refused")
+    print(out)
+
+# SE-72: --launch не открывает release, пока в merge-guard (папка --cwd или tAIBE) записан Контроль, — и с --force.
+# Новый Контроль при записанном — только --force-fresh-control. Остальные роли открываются, код выхода 3.
+def control_run(cwd_list, tai_list, *flags, tai_text=None):
+    sys.path.insert(0, str(SCRIPT.parent))
+    from lineage_guard_fs import GUARD  # noqa: E402 — путь списка Контроля тот же, что читает хук
+    with tempfile.TemporaryDirectory() as tmp:
+        dirs = {}
+        for name, ctl, text in (("prod", cwd_list, None), ("tai", tai_list, tai_text)):
+            d = Path(tmp) / name
+            subprocess.run(["git", "init", "-q", str(d)], check=True, timeout=30)
+            if ctl is not None or text is not None:
+                (d / GUARD).parent.mkdir()
+                (d / GUARD).write_text(text if text is not None else json.dumps({"control": ctl}) + "\n",
+                                       encoding="utf-8")
+            dirs[name] = d
+        lists = [d / GUARD for d in dirs.values()]
+        before = [f.read_bytes() if f.exists() else None for f in lists]
+        env = {**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
+               "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"), "NERVE_PLIST": os.path.join(tmp, "none.plist"),
+               "SPAWN_GUARD_TAIBE": str(dirs["tai"])}
+        run = subprocess.run(["bash", str(SCRIPT), "--launch", "--roles", "coord,release", "--dry-run",
+                              "--cwd", str(dirs["prod"]), *flags], capture_output=True, text=True, env=env, timeout=60)
+        after = [f.read_bytes() if f.exists() else None for f in lists]
+        return run.returncode, run.stdout + run.stderr, before == after
+
+
+SID = "0123abcd-0000-4000-8000-000000000000"
+for name, cwd_list, tai_list, flags, opened, extra in [
+    ("Control in the product guard: release refused", [SID], None, [], False, "prod:0123abcd"),
+    ("--force does not bypass the Control check", [SID], None, ["--force"], False, "prod:0123abcd"),
+    ("Control only in the tAIBE guard: release refused", None, [SID], [], False, "tai:0123abcd"),
+    ("--force-fresh-control opens release", [SID], [SID], ["--force-fresh-control"], True, None),
+    ("no guard files: release opens", None, None, [], True, None),
+    ("empty Control lists: release opens", [], [], [], True, None),
+]:
+    rc, out, same = control_run(cwd_list, tai_list, *flags)
+    ok = (same and "# coord: вставить" in out and ("# release: вставить" in out) == opened
+          and rc == (0 if opened else 3)
+          and ("release — ещё НЕ Контроль" in out) == ("--force-fresh-control" in flags)
+          and (opened or ("release — НЕ открыта: Контроль записан в merge-guard: " + extra in out
+                          and "--handoff" in out)))
+    if not ok:
+        failed += 1
+        print("FAIL: SE-72", name, "rc", rc)
+        print(out)
+rc, out, same = control_run(None, None, tai_text="{not json")
+if (not same or rc != 3 or "# release: вставить" in out or "не читается" not in out
+        or "почини путь или список" not in out):
+    failed += 1
+    print("FAIL: SE-72 unreadable guard refuses release (fail-closed)")
     print(out)
 
 print("spawn_session: %d failed" % failed)

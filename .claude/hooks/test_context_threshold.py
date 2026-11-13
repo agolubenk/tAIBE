@@ -197,7 +197,9 @@ class SpawnTest(unittest.TestCase):
         self.assertTrue("cd '%s'" % self.tmp.resolve() in r.stdout or "cd '%s'" % self.tmp in r.stdout)
 
     def test_launch_and_refusals(self):
-        r = self.sh("--launch", "--role", "release", "--prompt-dir", str(self.tmp / "roles"))
+        # SE-72: список Контроля tAIBE — из временной папки (вне git — списка нет), не из checkout, где идёт тест.
+        no_control = {**os.environ, "SPAWN_GUARD_TAIBE": str(self.tmp)}
+        r = self.sh("--launch", "--role", "release", "--prompt-dir", str(self.tmp / "roles"), env=no_control)
         self.assertEqual((r.returncode, "Пусковой файл" in r.stdout), (0, True))
         self.assertEqual(self.sh("--handoff", str(self.handoff), "--role", "nope").returncode, 2)
         self.assertEqual(self.sh("--handoff", str(self.tmp / "missing.md")).returncode, 2)
