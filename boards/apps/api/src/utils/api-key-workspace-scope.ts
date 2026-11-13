@@ -12,7 +12,9 @@ export type ApiKeyWorkspaceScope =
 const ALL: ApiKeyWorkspaceScope = { kind: "all" };
 const INVALID: ApiKeyWorkspaceScope = { kind: "invalid" };
 
-function decode(raw: unknown): { ok: true; value: unknown } | { ok: false } {
+export function decodeApiKeyMetadata(
+  raw: unknown,
+): { ok: true; value: unknown } | { ok: false } {
   let value = raw;
   // Better Auth stored some metadata double-stringified; unwrap once more.
   for (let i = 0; i < 2 && typeof value === "string"; i++) {
@@ -29,7 +31,7 @@ export function parseApiKeyWorkspaceScope(
   metadata: unknown,
 ): ApiKeyWorkspaceScope {
   if (metadata === null || metadata === undefined) return ALL;
-  const decoded = decode(metadata);
+  const decoded = decodeApiKeyMetadata(metadata);
   if (!decoded.ok) return INVALID;
   const { value } = decoded;
   if (value === null) return ALL;

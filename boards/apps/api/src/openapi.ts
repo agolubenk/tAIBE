@@ -1,6 +1,7 @@
 import { OpenAPIHono, z } from "@hono/zod-openapi";
 import type { Session, User } from "better-auth/types";
 import { apiErrorSchema } from "./errors/api-error-schema";
+import type { ApiKeyAccess } from "./utils/api-key-access";
 import type { ApiKeyWorkspaceScope } from "./utils/api-key-workspace-scope";
 import { validationHook } from "./errors/validation-error";
 
@@ -13,6 +14,7 @@ export type ApiKey = {
   enabled: boolean;
   permissions: Record<string, string[]> | null;
   workspaceScope?: ApiKeyWorkspaceScope;
+  access?: ApiKeyAccess;
   // R-010: set when the key belongs to an agent user; it acts under this name.
   agent?: { name: string } | null;
   expiresAt?: Date | null;

@@ -804,6 +804,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Chỉ đọc",
+				"readOnlyDescription": "Khóa này chỉ đọc được, không thay đổi được gì.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -814,7 +816,8 @@
 				"expires": "Hết hạn ngày {{date}}",
 				"neverExpires": "Không bao giờ hết hạn",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Chỉ đọc"
 			}
 		},
 		"workspaceGeneral": {

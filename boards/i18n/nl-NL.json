@@ -690,6 +690,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Alleen lezen",
+				"readOnlyDescription": "De sleutel kan lezen, maar niets wijzigen.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -700,7 +702,8 @@
 				"expires": "Verloopt op {{date}}",
 				"neverExpires": "Verloopt nooit",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Alleen lezen"
 			}
 		},
 		"workspaceGeneral": {

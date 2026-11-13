@@ -4141,6 +4141,12 @@
 								},
 								"workspaceDescription": {
 									"type": "string"
+								},
+								"readOnlyLabel": {
+									"type": "string"
+								},
+								"readOnlyDescription": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -4161,7 +4167,9 @@
 								"validation",
 								"workspaceLabel",
 								"workspaceAll",
-								"workspaceDescription"
+								"workspaceDescription",
+								"readOnlyLabel",
+								"readOnlyDescription"
 							]
 						},
 						"row": {
@@ -4191,6 +4199,9 @@
 								},
 								"workspaceUnknown": {
 									"type": "string"
+								},
+								"readOnlyBadge": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -4201,7 +4212,8 @@
 								"expiredBadge",
 								"actions",
 								"workspaceBadge",
-								"workspaceUnknown"
+								"workspaceUnknown",
+								"readOnlyBadge"
 							]
 						}
 					},

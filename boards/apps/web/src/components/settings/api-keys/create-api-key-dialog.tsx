@@ -12,7 +12,7 @@ import {
 import { ApiKeyExpiryToggle } from "@/components/settings/api-keys/api-key-expiry-toggle";
 import {
   ALL_WORKSPACES,
-  apiKeyWorkspaceMetadata,
+  apiKeyMetadata,
 } from "@/components/settings/api-keys/api-key-workspace";
 import { ApiKeyWorkspaceSelect } from "@/components/settings/api-keys/api-key-workspace-select";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import useCreateApiKey from "@/hooks/mutations/api-key/use-create-api-key";
 import { toast } from "@/lib/toast";
 import type { CreateApiKeyResponse } from "@/types/api-key";
@@ -44,6 +45,7 @@ type FormValues = {
   name: string;
   expiresIn: ApiKeyExpiration;
   workspace: string;
+  readOnly: boolean;
 };
 
 type CreateApiKeyDialogProps = {
@@ -72,6 +74,7 @@ export function CreateApiKeyDialog({
           .min(3, t("settings:apiKey.createDialog.validation.nameShort")),
         expiresIn: z.custom<ApiKeyExpiration>(isApiKeyExpiration),
         workspace: z.string().min(1),
+        readOnly: z.boolean(),
       }),
     [t],
   );
@@ -82,6 +85,7 @@ export function CreateApiKeyDialog({
       name: "",
       expiresIn: DEFAULT_API_KEY_EXPIRATION,
       workspace: ALL_WORKSPACES,
+      readOnly: false,
     },
   });
 
@@ -90,7 +94,7 @@ export function CreateApiKeyDialog({
       const result = await createApiKey({
         name: data.name,
         expiresIn: getExpirationSeconds(data.expiresIn),
-        metadata: apiKeyWorkspaceMetadata(data.workspace),
+        metadata: apiKeyMetadata(data.workspace, data.readOnly),
       });
       form.reset();
       onSuccess(result);
@@ -187,6 +191,29 @@ export function CreateApiKeyDialog({
                     <FormDescription className="text-xs">
                       {t("settings:apiKey.createDialog.workspaceDescription")}
                     </FormDescription>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="readOnly"
+                render={({ field }) => (
+                  <FormItem className="flex items-center justify-between gap-4">
+                    <div className="min-w-0 space-y-0.5">
+                      <FormLabel>
+                        {t("settings:apiKey.createDialog.readOnlyLabel")}
+                      </FormLabel>
+                      <FormDescription className="text-xs">
+                        {t("settings:apiKey.createDialog.readOnlyDescription")}
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={isPending}
+                      />
+                    </FormControl>
                   </FormItem>
                 )}
               />

@@ -100,6 +100,10 @@ import { assertAgentAuthRoute } from "./agent-identity/agent-auth-routes";
 import { realignAgentRoles } from "./agent-identity/realign-agent-roles";
 import { assertApiKeyAuthRoute } from "./utils/api-key-auth-routes";
 import { apiKeyRejection } from "./utils/api-key-rejection";
+import {
+  type ApiKeyAccess,
+  assertKeyAccessAllowsMethod,
+} from "./utils/api-key-access";
 import type { ApiKeyWorkspaceScope } from "./utils/api-key-workspace-scope";
 import { applyApiKeyHeaders } from "./utils/apply-api-key-headers";
 import { authenticateApiRequest } from "./utils/authenticate-api-request";
@@ -147,6 +151,7 @@ type ApiKey = {
   enabled: boolean;
   permissions: Record<string, string[]> | null;
   workspaceScope?: ApiKeyWorkspaceScope;
+  access?: ApiKeyAccess;
   agent?: { name: string } | null;
 };
 
@@ -488,6 +493,7 @@ export function createApp() {
     assertScopedKeyAuthRoute(scope, c.req.method, c.req.path);
     assertAgentAuthRoute(apiKeyResult.key.agent, c.req.method, c.req.path);
     assertApiKeyAuthRoute(c.req.method, c.req.path);
+    assertKeyAccessAllowsMethod(apiKeyResult.key.access, c.req.method);
     await next();
     c.res = await limitAuthResponseToScope(scope, c.req.path, c.res);
     c.set(
@@ -817,6 +823,7 @@ export function createApp() {
       assertScopedKeyAuthRoute(scope, c.req.method, c.req.path);
       assertAgentAuthRoute(apiKeyResult.key.agent, c.req.method, c.req.path);
       assertApiKeyAuthRoute(c.req.method, c.req.path);
+      assertKeyAccessAllowsMethod(apiKeyResult.key.access, c.req.method);
 
       // Better Auth API key plugin validates from x-api-key by default.
       headers.set("x-api-key", bearerToken);

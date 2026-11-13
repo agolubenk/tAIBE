@@ -804,6 +804,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "읽기 전용",
+				"readOnlyDescription": "이 키는 읽을 수만 있고 아무것도 변경할 수 없습니다.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -814,7 +816,8 @@
 				"expires": "{{date}} 만료",
 				"neverExpires": "만료 없음",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "읽기 전용"
 			}
 		},
 		"workspaceGeneral": {

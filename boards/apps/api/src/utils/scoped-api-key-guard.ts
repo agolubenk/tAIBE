@@ -1,6 +1,10 @@
 import type { Context, Next } from "hono";
 import { ApiError } from "../errors/api-error";
 import {
+  assertKeyAccessAllowsMethod,
+  requestKeyAccess,
+} from "./api-key-access";
+import {
   type ApiKeyWorkspaceScope,
   isWorkspaceScoped,
   requestWorkspaceScope,
@@ -27,6 +31,8 @@ export async function scopedApiKeyGuard(c: Context, next: Next) {
   ) {
     throw outOfScope();
   }
+  // TB-96: a read-only key, scoped or not, only reads.
+  assertKeyAccessAllowsMethod(requestKeyAccess(c), c.req.method);
   return next();
 }
 

@@ -1684,6 +1684,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Tylko odczyt",
+				"readOnlyDescription": "Klucz może odczytywać dane, ale niczego nie zmienia.",
 				"workspaceLabel": "Workspace"
 			},
 			"createdModal": {
@@ -1710,7 +1712,8 @@
 				"expires": "Wygasa {{date}}",
 				"neverExpires": "Nigdy nie wygasa",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Tylko odczyt"
 			}
 		},
 		"apiKeys": "Klucze API",
