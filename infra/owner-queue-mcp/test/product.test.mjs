@@ -64,7 +64,8 @@ async function listOnce(port, extra) {
 }
 
 test('продукт сессии: OQ_PRODUCT, иначе TAIBE_PRODUCT, иначе hr-helper; имя токена — OQ_TOKEN или OQ_TOKEN_<slug>', async () => {
-  process.env.OQ_TOKEN ??= 'test-token'; // импорт сервера не ходит в Keychain
+  process.env.OQ_TOKEN ??= 'test-token';
+  process.env.OQ_PRODUCT = 'hr-helper'; // импорт сервера не ходит в Keychain: продукт основной, его токен — в env
   const { sessionProduct, tokenName } = await import('../server.mjs');
   assert.equal(sessionProduct({}), 'hr-helper');
   assert.equal(sessionProduct({ TAIBE_PRODUCT: 'taibe' }), 'taibe');
@@ -75,6 +76,8 @@ test('продукт сессии: OQ_PRODUCT, иначе TAIBE_PRODUCT, ина�
 });
 
 test('аргументы --relay: неясный продукт или имя — ошибка, а не молчаливый hr-helper (ревью #173)', async () => {
+  process.env.OQ_TOKEN ??= 'test-token';
+  process.env.OQ_PRODUCT = 'hr-helper';
   const { relayArgs, productFromEnv } = await import('../server.mjs');
   const ok = { product: 'hr-helper', error: '' };
   assert.deepEqual(relayArgs(['n', 's', '--relay', 'sess'], ok), { session: 'sess', product: 'hr-helper' });
@@ -110,6 +113,20 @@ test('сессия taibe ходит в очередь своим токеном;
   assert.equal(fake.seen.auth.at(-1), 'Bearer hr-token');
   await listOnce(fake.port, {});
   assert.equal(fake.seen.auth.at(-1), 'Bearer hr-token');
+});
+
+test('откат на OQ_TOKEN виден модели: instructions и описание инструментов (ревью #173)', async (t) => {
+  const fake = await consoleFake();
+  t.after(fake.close);
+  const child = spawn(process.execPath, [SERVER], { env: env(fake.port, { TAIBE_PRODUCT: NO_TOKEN_PRODUCT }), stdio: ['pipe', 'pipe', 'ignore'] });
+  t.after(() => child.kill());
+  const lines = createInterface({ input: child.stdout });
+  const next = () => new Promise((resolve) => lines.once('line', (l) => resolve(JSON.parse(l).result)));
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+  assert.match((await next()).instructions, new RegExp(`токена OQ_TOKEN_${NO_TOKEN_PRODUCT} нет`));
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' })}\n`);
+  const put = (await next()).tools.find((x) => x.name === 'oq_put');
+  assert.match(put.description, /ВНИМАНИЕ: продукт сессии/);
 });
 
 test('--relay --product taibe: будит сессию только входящими taibe и отмечается за taibe своим токеном', async (t) => {

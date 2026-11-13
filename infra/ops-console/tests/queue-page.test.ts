@@ -455,6 +455,9 @@ describe('автопередача входящих на странице: че�
     const died = { alive: true, sessions: [hr, { ...tb, alive: false }], relayed: { 'i-1': { session: 'taibe-coord-1', at: at(2) } } }
     expect(relayItemState(died, 'i-1', NOW, 'taibe')).toMatchObject({ k: 'stuck', dead: true })
     expect(relayItemState({ alive: true, sessions: [alive], relayed: {} }, 'i-1', NOW, 'hr-helper')).toEqual({ k: 'sending', session: 'hr-helper-v2-43' })
+    // Пункт перенесли в taibe после передачи сессии HR: «передано» сессии HR не считается, ждём сессию taibe.
+    const moved = { alive: true, sessions: [hr, tb], relayed: { 'i-1': { session: 'hr-helper-v2-43', at: at(2), product: 'hr-helper' } } }
+    expect(relayItemState(moved, 'i-1', NOW, 'taibe')).toEqual({ k: 'sending', session: 'taibe-coord-1' })
   })
 })
 

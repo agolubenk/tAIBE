@@ -57,8 +57,8 @@ export interface RelayView {
   /** Хоть одна видимая актору сессия отмечалась за RELAY_STALE_MS. */
   alive: boolean
   sessions: RelaySession[]
-  /** Кому и когда передано входящее (по id пункта) — первая передача. */
-  relayed: Record<string, { session: string; at: string }>
+  /** Кому и когда передано входящее (по id пункта) — первая передача; product — продукт передавшей сессии. */
+  relayed: Record<string, { session: string; at: string; product: string }>
   /** По продукту: последняя отметившаяся сессия и жива ли автопередача продукта (хоть одна сессия жива). */
   products: Record<string, { alive: boolean; session: string; at: string }>
 }
@@ -73,14 +73,24 @@ export function beatProduct(products: Visibility, asked: string | undefined): st
   return products !== '*' && products.length === 1 ? products[0]! : null
 }
 
+/**
+ * Ключ записи — `<сессия>@<продукт>` (ревью #173, п. 1): одно имя сессии у двух продуктов — две записи, и отметка
+ * токена taibe не перезаписывает сессию HR с тем же именем. Ключ без «@» — запись прежней версии: продукт её поля
+ * (по умолчанию основной). Имя сессии «@» не содержит (relayBeatSchema), slug продукта — тоже.
+ */
+const keyOf = (session: string, product: string) => `${session}@${product}`
+const sessionOf = (key: string) => (key.includes('@') ? key.slice(0, key.lastIndexOf('@')) : key)
+
 function view(stored: Stored, now: number, visible: Visibility): RelayView {
-  const own = Object.entries(stored.sessions).filter(([, v]) => canSee(visible, v.product))
+  const own = Object.entries(stored.sessions)
+    .filter(([, v]) => canSee(visible, v.product))
+    .map(([key, v]) => [sessionOf(key), v] as const)
   const sessions = own
     .map(([session, v]) => ({ session, at: v.at, alive: now - Date.parse(v.at) < RELAY_STALE_MS, product: v.product }))
     .sort((a, b) => b.at.localeCompare(a.at))
   const relayed: RelayView['relayed'] = {}
   for (const [session, v] of own) {
-    for (const [id, at] of Object.entries(v.relayed)) if (!relayed[id] || relayed[id].at > at) relayed[id] = { session, at }
+    for (const [id, at] of Object.entries(v.relayed)) if (!relayed[id] || relayed[id].at > at) relayed[id] = { session, at, product: v.product }
   }
   // Сессии уже по убыванию времени: первая живая продукта, а без живых — последняя отметившаяся.
   const products: RelayView['products'] = {}
@@ -114,16 +124,19 @@ export function beatRelay(beat: RelayBeat, product: string, visible: Visibility,
 async function applyBeat(beat: RelayBeat, product: string, visible: Visibility, now: Date): Promise<RelayView> {
   const stored = await readSetting(KEY, storedSchema)
   const at = now.toISOString()
-  const prev = stored.sessions[beat.session]
-  // Сессия сменила продукт — прежние передачи относятся к чужому продукту: их не переносим.
-  const relayed = { ...(prev && prev.product === product ? prev.relayed : {}) }
+  const key = keyOf(beat.session, product)
+  const sessions = { ...stored.sessions }
+  // Запись прежней версии (ключ — одно имя) того же продукта переезжает под новый ключ; чужого продукта — не трогаем.
+  const legacy = sessions[beat.session]
+  if (legacy && legacy.product === product) delete sessions[beat.session]
+  const prev = sessions[key] ?? (legacy && legacy.product === product ? legacy : undefined)
+  const relayed = { ...(prev?.relayed ?? {}) }
+  // id не сверяется с пространством продукта: перенесённое владельцем входящее хранит прежний id без префикса
+  // (product-change.ts), и такая проверка отбросила бы законную передачу. Фильтр по продукту — в relayPass процесса.
   for (const id of beat.relayed) relayed[id] ??= at
-  const sessions = {
-    ...stored.sessions,
-    [beat.session]: { at, product, relayed: Object.fromEntries(Object.entries(relayed).sort((a, b) => b[1].localeCompare(a[1])).slice(0, MAX_RELAYED)) },
-  }
+  sessions[key] = { at, product, relayed: Object.fromEntries(Object.entries(relayed).sort((a, b) => b[1].localeCompare(a[1])).slice(0, MAX_RELAYED)) }
   // Сессии без отметки сутки забываются; одновременно — не больше MAX_SESSIONS на продукт.
-  const perProduct: Record<string, number> = {}
+  const perProduct: Record<string, number> = Object.create(null)
   const kept = Object.entries(sessions)
     .filter(([, v]) => now.getTime() - Date.parse(v.at) < FORGET_MS)
     .sort((a, b) => b[1].at.localeCompare(a[1].at))

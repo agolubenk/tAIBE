@@ -1593,6 +1593,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (!relay || !Array.isArray(relay.sessions) || !relay.relayed || typeof relay.relayed !== 'object') return null;
     var live = relay.sessions.filter(function (s) { return relaySessionFits(s, product) && s.alive; })[0] || null;
     var r = Object.prototype.hasOwnProperty.call(relay.relayed, id) ? relay.relayed[id] : null;
+    // Передача сессией другого продукта (пункт перенесли, или процесс прежней версии без фильтра) — не «передано»:
+    // ждём сессию своего продукта (ревью #173).
+    if (r && product && r.product && r.product !== product) r = null;
     if (r && (!live || now - Date.parse(r.at) > RELAY_SLOW_MS)) return { k: 'stuck', session: r.session, at: r.at, dead: !live };
     if (r) return { k: 'wait', session: r.session, at: r.at };
     if (live) return { k: 'sending', session: live.session };
@@ -2561,8 +2564,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (!rl) return;
     var product = window.__oqProductOf ? window.__oqProductOf(it.id) : window.__oqDefaultProduct;
     // Консоль до автопередачи по продуктам (в ответе нет products) передаёт только входящие основного продукта.
-    var old = product !== window.__oqDefaultProduct && !(relay && relay.products);
-    var html = d || e.agentStatus ? '' : old ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id, product);
+    // relay null — ответа /relay ещё нет или консоль без него: молчим, а не «никто не возьмёт» (ревью #173).
+    var old = !!relay && product !== window.__oqDefaultProduct && !relay.products;
+    var html = d || e.agentStatus || !relay ? '' : old ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id, product);
     if (rl.innerHTML !== html) rl.innerHTML = html;
     rl.hidden = !html;
   }

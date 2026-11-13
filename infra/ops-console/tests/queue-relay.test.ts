@@ -124,10 +124,28 @@ describe('автопередача по продуктам (OPS-51, фаза 4a)
     expect((await call(agent, 'PUT', '/relay', { session: 'hr-helper-v2-43', product: 'taibe' })).status).toBe(404)
     expect((await call(taibe, 'PUT', '/relay', { session: 'taibe-coord-1', product: 'hr-helper' })).status).toBe(404)
     expect((await call(taibe, 'PUT', '/relay', { session: 'taibe-coord-1', product: 'Не slug' })).status).toBe(400)
-    // Владелец ('*') отмечает ту же сессию за HR: передачи taibe к HR не переходят.
-    await call(owner, 'PUT', '/relay', { session: 'taibe-coord-1', product: 'hr-helper' })
+    // Владелец ('*') отмечает то же имя за HR: это отдельная запись, передачи taibe к HR не переходят.
+    expect((await call(owner, 'PUT', '/relay', { session: 'taibe-coord-1', product: 'hr-helper' })).status).toBe(200)
     const hr = (await call(reader, 'GET', '/relay')).json
+    expect(hr.sessions.find((s: { session: string }) => s.session === 'taibe-coord-1')).toMatchObject({ product: 'hr-helper' })
     expect(hr.relayed['i-20261113-143043-ef29']).toBeUndefined()
+    expect((await call(taibe, 'GET', '/relay')).json.relayed['i-20261113-143043-ef29']).toMatchObject({ session: 'taibe-coord-1', product: 'taibe' })
+  })
+
+  it('токен taibe с именем сессии HR не трогает запись HR: ключ — сессия и продукт (ревью #173, п. 1)', async () => {
+    await writeSetting('oq-relay', { sessions: {} })
+    await call(agent, 'PUT', '/relay', { session: 'hr-helper-v2-43', relayed: ['i-20261113-100000-aa01'] })
+    const before = (await call(reader, 'GET', '/relay')).json
+    expect((await call(taibe, 'PUT', '/relay', { session: 'hr-helper-v2-43', relayed: ['i-20261113-143043-ef29'] })).status).toBe(200)
+    const after = (await call(reader, 'GET', '/relay')).json
+    expect(after.sessions).toEqual(before.sessions)
+    expect(after.relayed).toEqual(before.relayed)
+    // Запись прежней версии (ключ — одно имя, без продукта) переезжает под новый ключ при отметке того же продукта.
+    await writeSetting('oq-relay', { sessions: { 'hr-helper-v2-old': { at: new Date().toISOString(), relayed: { 'i-20261113-090000-bb02': new Date().toISOString() } } } })
+    await call(agent, 'PUT', '/relay', { session: 'hr-helper-v2-old' })
+    const moved = (await call(reader, 'GET', '/relay')).json
+    expect(moved.sessions.map((x: { session: string }) => x.session)).toEqual(['hr-helper-v2-old'])
+    expect(moved.relayed['i-20261113-090000-bb02']).toMatchObject({ session: 'hr-helper-v2-old' })
   })
 
   it('живость по продукту: мёртвая сессия HR не делает живым taibe и наоборот', async () => {
@@ -159,6 +177,7 @@ describe('проход автопередачи (relayPass в owner-queue-mcp/re
   beforeAll(async () => {
     // Токен из окружения: импорт сервера не ходит в Keychain; без запуска как скрипта MCP по stdio не стартует.
     process.env.OQ_TOKEN ??= 'test-token'
+    process.env.OQ_PRODUCT = 'hr-helper' // в сессии tAIBE TAIBE_PRODUCT=taibe — импорт полез бы в Keychain за OQ_TOKEN_taibe
     // @ts-expect-error — сервер MCP на чистом JS без типов (infra/owner-queue-mcp)
     relayPass = (await import('../../owner-queue-mcp/server.mjs')).relayPass
   })
