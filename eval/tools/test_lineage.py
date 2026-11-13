@@ -456,7 +456,8 @@ class ReapTest(Base):
         proj = self.dir / "projects" / "-x-proj"
         proj.mkdir(parents=True)
         recs = [{"type": "mode"}, {"type": "user", "isMeta": True, "message": {"content": "Линия: r.zz.zz"}},
-                {"type": "user", "message": {"content": "Сборка Т3, ключ реестра backend… Линия: r.a1.b2 (поколение 2)"}},
+                {"type": "user", "message": {"content": "Сборка Т3, ключ реестра backend, роль 4, наследник. Handoff: "
+                                             "/h.md — прочитай. Линия: r.a1.b2 (поколение 2) — метка session."}},
                 {"type": "user", "message": {"content": [{"type": "text", "text": "Линия: r.q.q"}]}}]
         (proj / f"{sid}.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECTS_DIR": str(self.dir / "projects")}):
