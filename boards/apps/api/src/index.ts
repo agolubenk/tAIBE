@@ -38,6 +38,7 @@ import {
   validationHook,
   validationHookWithMessage,
 } from "./errors/validation-error";
+import { checkMigrationDrift } from "./database/migration-drift";
 import { prepareDatabaseStartup } from "./database/prepare-database-startup";
 import { waitForDatabase } from "./database/wait-for-database";
 import discordIntegration from "./discord-integration";
@@ -1098,8 +1099,11 @@ export async function runStartupTasks() {
       await migrateSessionColumn();
 
       console.log("🔄 Migrating database...");
-      await migrate(getDatabase(), {
-        migrationsFolder: `${currentDir}/../drizzle`,
+      const migrationsFolder = `${currentDir}/../drizzle`;
+      await migrate(getDatabase(), { migrationsFolder });
+      // TB-64: an applied migration whose file changed afterwards.
+      await checkMigrationDrift(getDatabase(), migrationsFolder, {
+        production: process.env.NODE_ENV === "production",
       });
       console.log("✅ Database migrated successfully!");
       // Renames rows of "column", so it runs after the migrations that create
