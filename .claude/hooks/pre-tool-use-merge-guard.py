@@ -342,9 +342,11 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     return found
 
 
-def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None):
+def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False):
     """[(вид, подробность)] защищённых действий команды. git_env — конфиг git где-то задан окружением, disk — текст
-    из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется)."""
+    из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется), part —
+    тело `$(…)` или кода маски, вырезанное разбором: что для bash его начало — верхний уровень, не гарантировано, и
+    комментарий с `'` в нём остаётся (strip_comments, keep)."""
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
@@ -354,7 +356,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         written.update(command_writes(cmd))
     cmd, bodies = cut_heredocs(cmd)  # до снятия комментариев: в теле `'` — не кавычка, `#` — не комментарий
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd = strip_comments(cmd).replace("\\\n", " ")  # комментарий с `\` в конце следующую строку не съедает
+    cmd = strip_comments(cmd, keep=None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
     whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
@@ -362,11 +364,11 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
     procs[SUBS] = inner
     found = []
     for sub in inner:
-        found += classify_bash(sub, cwd, roots, depth + 1, git_env, disk, written, whole[4])
+        found += classify_bash(sub, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
     for readers, body, expands in bodies:
         found += classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk, written, whole[4])
     for code in qualifier_code(cmd):  # zsh `ls *(e:'gh pr merge 1':)`
-        found += classify_bash(code, cwd, roots, depth + 1, git_env, disk, written, whole[4])
+        found += classify_bash(code, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
     tokens = tokenize(cmd)
     found += [(DEFERRED, t[:120]) for t in tokens if ("$(" in t or "`" in t) and FALLBACK.search(t)]
     env, prev, st, saved = dir_vars({}, cwd), ([], []), new_state(cwd), []
