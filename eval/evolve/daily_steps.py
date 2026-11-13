@@ -29,6 +29,7 @@ CARD, WORKSPACE = 'SE-49', 'lth89qy6f8j1greiy4c5cn23'
 STATE_DIR = os.path.expanduser(os.environ.get('EVOLVE_STATE_DIR') or '~/.claude/evolve')
 AUDIT_KEEP = 30  # nightly context-audit files kept in runs/ (one a night)
 CLAUDE_OVERRIDE = 'abJudgeClaude.on'  # in STATE_DIR: the owner's local «on» for nightly Claude judges
+MERGE_OVERRIDE = 'evolveAutoMerge.on'  # in STATE_DIR: the owner's local «on» for the run's auto-merge of safe PRs
 BASE = 'board-agents'  # tAIBE's default branch: where the run's PRs go
 
 
@@ -70,15 +71,26 @@ def closed_switch(name, root=ROOT):
     return bool(settings['automation'] and settings['toggles'].get(name))
 
 
-def claude_judges_on(root=ROOT, override=None):
-    """Nightly Claude judges: on only if the owner said so — `abJudgeClaude` read from the board (closed on doubt), or
-    the owner's local file `~/.claude/evolve/abJudgeClaude.on` (the deployed board has no such switch yet).
-    `TAIBE_PIPELINE` with `off` or `abJudgeClaude=off` turns it off over both."""
+def owner_switch(name, filename, root=ROOT, override=None):
+    """A paid switch: on only if the owner said so — `name` read from the board (closed on doubt), or the owner's
+    local file `~/.claude/evolve/<filename>` (the board cannot be read without this install's own key).
+    `TAIBE_PIPELINE` with `off` or `<name>=off` turns it off over both."""
     env = os.environ.get('TAIBE_PIPELINE', '').replace(' ', '').lower()
-    if env in ('off', '0', 'false', 'no') or 'abjudgeclaude=off' in env.split(','):
+    if env in ('off', '0', 'false', 'no') or name.lower() + '=off' in env.split(','):
         return False
-    path = override or os.path.join(STATE_DIR, CLAUDE_OVERRIDE)
-    return closed_switch('abJudgeClaude', root) or os.path.isfile(path)
+    path = override or os.path.join(STATE_DIR, filename)
+    return closed_switch(name, root) or os.path.isfile(path)
+
+
+def claude_judges_on(root=ROOT, override=None):
+    """Nightly Claude judges (`abJudgeClaude`, file `abJudgeClaude.on`)."""
+    return owner_switch('abJudgeClaude', CLAUDE_OVERRIDE, root, override)
+
+
+def auto_merge_on(root=ROOT, override=None):
+    """The run's auto-merge of its safe PRs (`evolveAutoMerge`, file `evolveAutoMerge.on`). GitHub still decides:
+    `daily_git.merge_ready` refuses a base branch without required checks."""
+    return owner_switch('evolveAutoMerge', MERGE_OVERRIDE, root, override)
 
 
 def switch(name, root=ROOT):

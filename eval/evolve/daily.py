@@ -373,9 +373,9 @@ def summary(report):
                                                                     len(queue) - len(waiting), tail)
 
 
-def merge_switch(root):
-    """evolveAutoMerge, closed on doubt (`daily_steps.closed_switch`)."""
-    return steps.closed_switch('evolveAutoMerge', root)
+def merge_switch(root, override=None):
+    """evolveAutoMerge: the board (closed on doubt) or the owner's file `~/.claude/evolve/evolveAutoMerge.on`."""
+    return steps.auto_merge_on(root, override)
 
 
 def cmd_merge(args):
