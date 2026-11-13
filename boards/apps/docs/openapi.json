@@ -24954,83 +24954,159 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "action": {
-                    "type": "string",
-                    "enum": [
-                      "fell_tree",
-                      "fell_sector",
-                      "close_task",
-                      "reopen_task",
-                      "set_priority",
-                      "create_label",
-                      "attach_label",
-                      "set_assignee"
-                    ]
-                  },
-                  "targetId": {
-                    "type": "string"
-                  },
-                  "value": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 64,
-                    "description": "close_task: the closing status; reopen_task: the open status a closed card returns to; set_priority: the new priority; set_assignee: the user id. Part of what the owner approves."
-                  },
-                  "reason": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 2000
-                  },
-                  "label": {
+                "oneOf": [
+                  {
                     "type": "object",
                     "properties": {
-                      "name": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "create_label",
+                          "attach_label"
+                        ]
+                      },
+                      "targetId": {
+                        "type": "string"
+                      },
+                      "value": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 64
+                        "maxLength": 64,
+                        "description": "close_task: the closing status; reopen_task: the open status a closed card returns to; set_priority: the new priority; set_assignee: the user id. Part of what the owner approves."
                       },
-                      "color": {
+                      "reason": {
                         "type": "string",
-                        "pattern": "^#[0-9a-fA-F]{6}$"
+                        "minLength": 1,
+                        "maxLength": 2000
+                      },
+                      "label": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "color": {
+                            "type": "string",
+                            "pattern": "^#[0-9a-fA-F]{6}$"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "color"
+                        ],
+                        "description": "create_label: the new workspace label (targetId is the workspace id)."
+                      },
+                      "doneRef": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "description": "close_task: the commit or PR (github.com/agolubenk/HR_Helper-v2|tAIBE) with the docs/plans/done entry (R-9)."
+                      },
+                      "doneReason": {
+                        "type": "string",
+                        "enum": [
+                          "duplicate",
+                          "obsolete",
+                          "import"
+                        ],
+                        "description": "close_task without a done entry: duplicate, obsolete or import (R-9)."
+                      },
+                      "taskIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "description": "create_label and attach_label (targetId is the workspace label id): the cards that get the label, up to 20."
                       }
                     },
                     "required": [
-                      "name",
-                      "color"
-                    ],
-                    "description": "create_label: the new workspace label (targetId is the workspace id)."
+                      "action",
+                      "targetId",
+                      "reason"
+                    ]
                   },
-                  "taskIds": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "fell_tree",
+                          "fell_sector",
+                          "close_task",
+                          "reopen_task",
+                          "set_priority",
+                          "set_assignee"
+                        ]
+                      },
+                      "targetId": {
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "description": "close_task: the closing status; reopen_task: the open status a closed card returns to; set_priority: the new priority; set_assignee: the user id. Part of what the owner approves."
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000
+                      },
+                      "label": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "color": {
+                            "type": "string",
+                            "pattern": "^#[0-9a-fA-F]{6}$"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "color"
+                        ],
+                        "description": "create_label: the new workspace label (targetId is the workspace id)."
+                      },
+                      "doneRef": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "description": "close_task: the commit or PR (github.com/agolubenk/HR_Helper-v2|tAIBE) with the docs/plans/done entry (R-9)."
+                      },
+                      "doneReason": {
+                        "type": "string",
+                        "enum": [
+                          "duplicate",
+                          "obsolete",
+                          "import"
+                        ],
+                        "description": "close_task without a done entry: duplicate, obsolete or import (R-9)."
+                      },
+                      "taskIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "minItems": 1,
+                        "maxItems": 250,
+                        "description": "close_task (targetId is the workspace id, no value): the cards to close, up to 250 — each goes to its project's final column (TB-108)."
+                      }
                     },
-                    "minItems": 1,
-                    "maxItems": 250,
-                    "description": "create_label and attach_label (targetId is the workspace label id): the cards that get the label, up to 20. close_task (targetId is the workspace id, no value): the cards to close, up to 250 — each goes to its project's final column (TB-108)."
-                  },
-                  "doneRef": {
-                    "type": "string",
-                    "maxLength": 200,
-                    "description": "close_task: the commit or PR (github.com/agolubenk/HR_Helper-v2|tAIBE) with the docs/plans/done entry (R-9)."
-                  },
-                  "doneReason": {
-                    "type": "string",
-                    "enum": [
-                      "duplicate",
-                      "obsolete",
-                      "import"
-                    ],
-                    "description": "close_task without a done entry: duplicate, obsolete or import (R-9)."
+                    "required": [
+                      "action",
+                      "targetId",
+                      "reason"
+                    ]
                   }
-                },
-                "required": [
-                  "action",
-                  "targetId",
-                  "reason"
                 ]
               }
             }
