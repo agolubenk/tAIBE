@@ -58,7 +58,7 @@ services:
       # install.sh creates it; read once at start, 32+ characters.
       SETTINGS_ENCRYPTION_KEY_FILE: /run/tb-secrets/settings_key
       # Seals the ntfy / Gotify tokens and webhook secrets a user saves
-      # (TB-19). install.sh creates it once; read once at start.
+      # (TB-19). install.sh creates it once; read on first use, kept until restart.
       NOTIFICATION_SECRET_ENCRYPTION_KEY_FILE: /run/tb-secrets/notification_secret_key
       # claude-mem of the owner's Mac, GET only, through the tunnel's read-only
       # proxy (R-040, d-tb-claude-mem). While the Mac sleeps cards show the

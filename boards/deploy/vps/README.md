@@ -81,7 +81,7 @@ environment variables (N-007).
 | `postgres_password` | 0440, owner 70:1001. Postgres reads it as uid 70, the app as gid 1001 |
 | `auth_secret` | 0400, owner 1001 |
 | `settings_key` | 0400, owner 1001. Seals the notebook model key an instance admin saves in the settings |
-| `notification_secret_key` | 0400, owner 1001. Seals the ntfy / Gotify tokens and webhook signing secrets a user saves (TB-19). `install.sh` makes it once and never replaces it; a `NOTIFICATION_SECRET_ENCRYPTION_KEY` still in `.env` goes into the file as it is. A new key leaves the saved ones unreadable: users enter them again. The app reads it once at start |
+| `notification_secret_key` | 0400, owner 1001. Seals the ntfy / Gotify tokens and webhook signing secrets a user saves (TB-19). `install.sh` makes it once and never replaces it; a `NOTIFICATION_SECRET_ENCRYPTION_KEY` still in `.env` goes into the file as it is. A new key leaves the saved ones unreadable: users enter them again. The app reads it on first use and keeps it until a restart; a file it could not read is tried again on the next use |
 | `notion_token` | 0400, owner 1001. Optional: the owner puts it there |
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
 | `oq_token` | 0400, owner 1001. The owner-queue agent token of t-boards (TB-102, «Owner queue» below). The owner issues it in the ops-console; `install.sh` never makes it. Read on every call |
