@@ -203,7 +203,7 @@ def command_writes(text, depth=0, alt=False):
         return set()
     try:
         text, bodies = (text, []) if alt else cut_heredocs(text)
-        text, other = comment_readings(text, lambda _: False, alt)  # точный комментарий снят с любыми знаками
+        text, other = comment_readings(text, None, alt)  # комментарий с `'"`… остаётся: лишнее имя — не пропуск
         text, inner = cut_substitutions(text)
     except Exception:
         return set()

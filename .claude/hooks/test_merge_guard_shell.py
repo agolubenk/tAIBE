@@ -562,6 +562,8 @@ for run_ in ("bash", "source"):  # второе прочтение видит т
     bash(f"SE-82: heredoc пишет m.sh, `{run_} m.sh` спрятан `\"` комментария — скрипт", f"bash hdw-{run_}.sh", True,
          cwd=se82)
     bash(f"SE-82: heredoc пишет m.sh, `{run_} m.sh` спрятан `\"` комментария — команда", WRITTEN, True, cwd=se82)
+bash("SE-82: комментарий с признаком и записью остаётся и для имён записи (zsh с другим histchars прочтёт его как код)",
+     "echo a # ; printf '%s\\n' 'gh pr merge 1' > m.sh; bash m.sh", True, cwd=se82)
 check("SE-82 command_writes: имя из второго прочтения и из слов до ошибки",
       None if "w.sh" in command_writes('cat <<E\nx\nE\n# say "hi\necho x > w.sh\necho "') else "нет", False)
 NONE = lambda text: False  # noqa: E731 — признака нет: снимается всё, в чём sure_comments уверен
