@@ -67,7 +67,8 @@ sample() {
   start="$(date +%s)"
   echo "mem-stats: $file, every $step s for $minutes min" >&2
   while :; do
-    sample_once >>"$file"
+    # A container recreated between `ps` and `stats` (up -d app) fails one sample, not the day.
+    sample_once >>"$file" || echo "mem-stats: $(date -u +%H:%M:%SZ) sample failed, next in $step s" >&2
     [ $(($(date +%s) - start)) -lt $((minutes * 60)) ] || break
     sleep "$step"
   done
@@ -98,17 +99,34 @@ report() {
       { v[++n] = $3; limit = $4 }
       END { flush() }'
   # A restart or an OOM kill in the window says more than any percentile.
-  local id
+  local id since
   for id in $(containers); do
-    docker inspect -f '{{.Name}} restarts={{.RestartCount}} oom_killed={{.State.OOMKilled}}' "$id"
+    docker inspect -f '{{.Name}} restarts={{.RestartCount}}' "$id"
   done
+  # OOM kills from the kernel log: State.OOMKilled in Docker forgets a kill once the container restarts.
+  since="$(head -n 1 "$file" | cut -f1 | sed 's/T/ /; s/Z$//')"
+  if ! command -v journalctl >/dev/null 2>&1; then
+    echo "oom kills: no journalctl here — check dmesg | grep oom-kill"
+    return 0
+  fi
+  journalctl -k --utc --since "$since" --no-pager 2>/dev/null | awk -v since="$since" '
+    /oom-kill:/ {
+      n++; task = $0; memcg = $0
+      sub(/.*task=/, "", task); sub(/,.*/, "", task)
+      sub(/.*oom_memcg=/, "", memcg); sub(/,.*/, "", memcg)
+      last[n % 5] = "  task=" task " oom_memcg=" memcg
+    }
+    END {
+      printf "oom kills since %s UTC: %d\n", since, n
+      for (k = (n > 5 ? n - 4 : 1); k <= n; k++) print last[k % 5]
+    }' || echo "oom kills: journalctl -k failed, the count above is not complete — check dmesg | grep oom-kill"
 }
 
 case "${1:-}" in
   sample) shift; sample "$@" ;;
   report) shift; report "$@" ;;
   *)
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac
