@@ -6,7 +6,12 @@ import {
   ownerApprovalTable,
 } from "../../apps/api/src/database/forest-schema";
 import { resetTestDatabase } from "./helpers/database";
-import { addTask, createForest } from "./helpers/forest";
+import {
+  addTask,
+  approve,
+  createForest,
+  requestApproval,
+} from "./helpers/forest";
 
 type Forest = Awaited<ReturnType<typeof createForest>>;
 
@@ -14,44 +19,6 @@ async function lease(forest: Forest, taskId: string, session = "dev-1") {
   const res = await forest.agent("/leases", { taskId }, session);
   expect(res.status).toBe(200);
   return String(res.body.fencingToken);
-}
-
-async function request(
-  forest: Forest,
-  action: "close_task" | "reopen_task" | "set_priority",
-  targetId: string,
-  value: string,
-) {
-  const requested = await forest.agent("/approvals", {
-    action,
-    targetId,
-    value,
-    reason: "agent asks",
-    ...(action === "close_task"
-      ? { doneRef: "https://github.com/agolubenk/tAIBE/pull/1" }
-      : {}),
-  });
-  expect(requested.status).toBe(200);
-  expect(requested.body.params).toEqual(
-    action === "set_priority" ? { priority: value } : { status: value },
-  );
-  return String(requested.body.id);
-}
-
-// TB-102: «да» in t-boards applies the request at once (R-12).
-async function approve(
-  forest: Forest,
-  action: "close_task" | "reopen_task" | "set_priority",
-  targetId: string,
-  value: string,
-) {
-  const id = await request(forest, action, targetId, value);
-  const decided = await forest.owner(`/approvals/${id}/decide`, {
-    decision: "approved",
-  });
-  expect(decided.status).toBe(200);
-  expect(decided.body.status).toBe("consumed");
-  return id;
 }
 
 async function journal(action: string, targetId: string) {
@@ -343,7 +310,12 @@ describe("API integration: agent rights on kaneo routes", () => {
     );
     expect(unapproved.status).toBe(403);
 
-    const pendingId = await request(forest, "set_priority", task.id, "urgent");
+    const pendingId = await requestApproval(
+      forest,
+      "set_priority",
+      task.id,
+      "urgent",
+    );
     const early = await forest.agentApi(
       "PUT",
       `/task/priority/${task.id}`,

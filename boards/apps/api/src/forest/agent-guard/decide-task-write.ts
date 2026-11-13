@@ -52,6 +52,16 @@ export function decideTaskWrite(
     };
   }
 
+  // «Брёвна» are terminal (R-8): no «да» takes a card out of them, so a move
+  // of such a card is refused here, not sent to the owner.
+  if (facts.landing !== undefined && current.status === "closed") {
+    return {
+      kind: "deny",
+      reason:
+        "the card is in «Брёвна» (closed), which is terminal (R-8): it does not move to another project",
+    };
+  }
+
   const statusChanged =
     facts.landing !== undefined ||
     (changes.status !== undefined && changes.status !== current.status);

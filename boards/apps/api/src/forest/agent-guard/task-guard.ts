@@ -25,7 +25,7 @@ import {
 import { answeredApproval } from "./answered-approval";
 import { isPlainJson } from "./json-media-type";
 import { loadGuardedTask, projectWorkspace } from "./load-task";
-import { moveFacts } from "./move-facts";
+import { type MoveFacts, moveFacts, moveRoute } from "./move-facts";
 
 type Denial = {
   workspaceId: string | null;
@@ -113,7 +113,7 @@ async function writeFacts(
   request: Extract<TaskRequest, { kind: "edit" }>,
   task: GuardedTask,
 ): Promise<{
-  destination: string | undefined;
+  moved: MoveFacts | null;
   statusChanged: boolean;
   facts: WriteFacts;
 }> {
@@ -122,21 +122,22 @@ async function writeFacts(
     request.action === "task.move" && changes.projectId !== task.projectId
       ? changes.projectId
       : undefined;
+  // null for a move move-task refuses itself: nothing to judge (moveFacts).
   const moved = destination
     ? await moveFacts(task, destination, changes.status)
     : null;
   const statusChanged =
     changes.status !== undefined && changes.status !== task.status;
-  const closes = moved
-    ? moved.closes
+  const closes = destination
+    ? (moved?.closes ?? false)
     : statusChanged && changes.status
       ? await isClosingStatus(
           changes.projectId ?? task.projectId,
           changes.status,
         )
       : false;
-  const reopens = moved
-    ? moved.reopens
+  const reopens = destination
+    ? (moved?.reopens ?? false)
     : statusChanged && !closes
       ? await isClosingStatus(task.projectId, task.status)
       : false;
@@ -144,24 +145,25 @@ async function writeFacts(
     ? await isAgentAuthored(task.id)
     : false;
   return {
-    destination,
+    moved,
     statusChanged,
     facts: { closes, reopens, authoredByAgent, landing: moved?.landing },
   };
 }
 
 // Where to ask for the owner's «да». A move never spends one: the «да» sets
-// a status in the card's own project and moves nothing (TB-80).
+// a status in the card's current project and moves nothing (TB-80), so a
+// move gets the way round instead (moveRoute).
 function approvalRequired(
   approval: { action: string; value: string },
   task: { id: string; workspaceId: string },
-  moving: boolean,
+  moved: MoveFacts | null,
 ) {
   const url = `/api/forest/${task.workspaceId}/approvals`;
   return new ForestError(
     "approval_required",
-    moving
-      ? `this move ${approval.action === "close_task" ? "closes" : "reopens"} the card; the owner's «да» applies in its own project: ask ${approval.action} there with a status of that project (POST ${url}), then move it. A card in a final column moves into a final column without a «да»`
+    moved
+      ? `${moveRoute(moved, url)}. The owner's «да» sets a status in the card's current project and moves nothing, so a move never spends one`
       : `ask the owner: POST ${url} {action: "${approval.action}", targetId: "${task.id}", value: "${approval.value}"}; the server applies the owner's «да» itself`,
   );
 }
@@ -184,7 +186,7 @@ async function guardEdit(
     targetId: task.id,
   };
   const { changes } = request;
-  const { destination, statusChanged, facts } = await writeFacts(request, task);
+  const { moved, statusChanged, facts } = await writeFacts(request, task);
   const decision = decideTaskWrite(changes, task, facts);
   if (decision.kind === "deny") {
     await deny(at, new ForestError("agent_forbidden", decision.reason));
@@ -222,8 +224,8 @@ async function guardEdit(
     if (c.res.ok) await attribute();
     return;
   }
-  if (destination || !headers.approvalId) {
-    await deny(at, approvalRequired(approval, task, destination !== undefined));
+  if (moved || !headers.approvalId) {
+    await deny(at, approvalRequired(approval, task, moved));
     return;
   }
   const answered = await answeredApproval({

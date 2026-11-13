@@ -135,4 +135,21 @@ describe("decideTaskWrite", () => {
       }),
     ).toEqual({ kind: "allow", approval: null });
   });
+
+  // R-8: no «да» takes a card out of «Брёвна», so the move is not sent to
+  // the owner.
+  it("refuses to move a card in «Брёвна» instead of asking a «да»", () => {
+    const logs = { ...current, status: "closed" };
+    const decision = decideTaskWrite(
+      { projectId: "p2", status: "closed" },
+      logs,
+      { ...open, closes: true, landing: "closed" },
+    );
+    expect(decision.kind === "deny" && decision.reason).toContain("terminal");
+    // The same status inside the project is not a move.
+    expect(decideTaskWrite({ status: "closed" }, logs, open)).toEqual({
+      kind: "allow",
+      approval: null,
+    });
+  });
 });
