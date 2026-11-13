@@ -9,13 +9,13 @@ import {
   ssrVersionTable,
 } from "../database/ssr-schema";
 import { isCorpusPath } from "./corpus";
+import { pushRepoOf } from "./push-repos";
 
 // Push-back (spec RU-9, D-010, D-012): commits served-latest files into the
 // product repo's main with [skip ci]. The push is conditional — for every
 // file the repo's current sha must equal what the sync last saw; anything
 // else is a conflict row, never a silent overwrite. Rollbacks push
 // immediately; the nightly job only reconciles what drifted.
-const REPO = process.env.SSR_PUSH_GITHUB_REPO ?? "agolubenk/HR_Helper-v2";
 const BRANCH = process.env.SSR_PUSH_GITHUB_BRANCH ?? "main";
 const API = "https://api.github.com";
 
@@ -50,11 +50,14 @@ function github(path: string, init: RequestInit = {}) {
 
 type RepoFile = { sha: string | null; content: string | null };
 
-async function readRepoFiles(paths: string[]): Promise<Map<string, RepoFile>> {
+async function readRepoFiles(
+  repo: string,
+  paths: string[],
+): Promise<Map<string, RepoFile>> {
   const result = new Map<string, RepoFile>();
   for (const path of paths) {
     const response = await github(
-      `/repos/${REPO}/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
+      `/repos/${repo}/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
     );
     if (response.status === 404) {
       result.set(path, { sha: null, content: null });
@@ -143,6 +146,17 @@ export async function pushChangeset(
       reason: "not_configured",
     };
   }
+  // TB-93: the repo of this workspace, never a repo of another product.
+  const repo = pushRepoOf(workspaceId);
+  if (!repo) {
+    return {
+      pushed: false,
+      commitSha: null,
+      files: [],
+      conflicts: [],
+      reason: "no_repo",
+    };
+  }
   let changeset = await collectChangeset(workspaceId);
   if (filterPaths) {
     const allow = new Set(filterPaths);
@@ -164,7 +178,10 @@ export async function pushChangeset(
     };
   }
 
-  const repoFiles = await readRepoFiles(changeset.map((file) => file.path));
+  const repoFiles = await readRepoFiles(
+    repo,
+    changeset.map((file) => file.path),
+  );
   const states = await db
     .select()
     .from(ssrPushStateTable)
@@ -218,7 +235,7 @@ export async function pushChangeset(
     return { pushed: false, commitSha: null, files: [], conflicts };
   }
 
-  const commitSha = await commitFiles(message, toPush);
+  const commitSha = await commitFiles(repo, message, toPush);
   await db
     .insert(ssrPushStateTable)
     .values(
@@ -249,16 +266,17 @@ export async function pushChangeset(
 }
 
 async function commitFiles(
+  repo: string,
   message: string,
   files: ChangesetFile[],
 ): Promise<string> {
-  const refResponse = await github(`/repos/${REPO}/git/ref/heads/${BRANCH}`);
+  const refResponse = await github(`/repos/${repo}/git/ref/heads/${BRANCH}`);
   if (!refResponse.ok) {
     throw new Error(`GitHub ref: HTTP ${refResponse.status}`);
   }
   const ref = (await refResponse.json()) as { object: { sha: string } };
   const commitResponse = await github(
-    `/repos/${REPO}/git/commits/${ref.object.sha}`,
+    `/repos/${repo}/git/commits/${ref.object.sha}`,
   );
   if (!commitResponse.ok) {
     throw new Error(`GitHub commit: HTTP ${commitResponse.status}`);
@@ -267,7 +285,7 @@ async function commitFiles(
 
   const treeItems = await Promise.all(
     files.map(async (file) => {
-      const blobResponse = await github(`/repos/${REPO}/git/blobs`, {
+      const blobResponse = await github(`/repos/${repo}/git/blobs`, {
         method: "POST",
         body: JSON.stringify({
           content: Buffer.from(file.content, "utf8").toString("base64"),
@@ -289,7 +307,7 @@ async function commitFiles(
     }),
   );
 
-  const treeResponse = await github(`/repos/${REPO}/git/trees`, {
+  const treeResponse = await github(`/repos/${repo}/git/trees`, {
     method: "POST",
     body: JSON.stringify({ base_tree: commit.tree.sha, tree: treeItems }),
   });
@@ -298,7 +316,7 @@ async function commitFiles(
   }
   const tree = (await treeResponse.json()) as { sha: string };
 
-  const newCommitResponse = await github(`/repos/${REPO}/git/commits`, {
+  const newCommitResponse = await github(`/repos/${repo}/git/commits`, {
     method: "POST",
     body: JSON.stringify({
       message: `${message} [skip ci]`,
@@ -312,7 +330,7 @@ async function commitFiles(
   const newCommit = (await newCommitResponse.json()) as { sha: string };
 
   const updateResponse = await github(
-    `/repos/${REPO}/git/refs/heads/${BRANCH}`,
+    `/repos/${repo}/git/refs/heads/${BRANCH}`,
     {
       method: "PATCH",
       body: JSON.stringify({ sha: newCommit.sha }),
