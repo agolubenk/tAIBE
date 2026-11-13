@@ -156,6 +156,26 @@ describe("API integration: owner-queue plan store (TB-106)", () => {
     );
   });
 
+  it("finds the cards the owner named by key in mapped workspaces (TB-107)", async () => {
+    const mine = await board();
+    const unmapped = await board();
+    await card(mine.project.id, 1, "to-do");
+    await card(mine.project.id, 2, "done", { completedAt: new Date() });
+    await card(unmapped.project.id, 3, "to-do");
+
+    const named = await planStore.named(
+      new Map([[mine.workspace.id, "hr-helper"]]),
+      ["TB-1", "TB-2", "TB-3", "TB-404"],
+    );
+
+    expect(named.map((c) => c.key).sort()).toEqual(["TB-1", "TB-2"]);
+    expect(named.find((c) => c.key === "TB-2")).toMatchObject({
+      ws: mine.workspace.slug,
+      product: "hr-helper",
+      final: true,
+    });
+  });
+
   it("counts cards closed in 14 days per plan product (TB-112 pace)", async () => {
     const mine = await board();
     const other = await board();

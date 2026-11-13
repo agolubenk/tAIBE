@@ -118,6 +118,10 @@ function store(
       calls.push("closed");
       return new Map();
     },
+    named: async () => {
+      calls.push("named");
+      return [];
+    },
   };
 }
 

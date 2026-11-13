@@ -62,8 +62,7 @@ const RANK: Record<string, number> = {
   low: 3,
   p3: 3,
 };
-const rankOf = (card: { level: string }) =>
-  RANK[card.level.toLowerCase()] ?? 4;
+const rankOf = (card: { level: string }) => RANK[card.level.toLowerCase()] ?? 4;
 
 // The board's law as a sort: the next card first.
 export const byLaw = (

@@ -8,6 +8,7 @@ import {
   isNull,
   lt,
   or,
+  type SQL,
   sql,
 } from "drizzle-orm";
 import db from "../../database";
@@ -28,6 +29,7 @@ import {
 } from "./plan-types";
 
 const RECENT_MAX = 300;
+const NAMED_MAX = 200;
 const ABANDONED_MAX = 1000;
 const ABANDONED_AFTER_MS = 24 * 60 * 60 * 1000;
 // The page takes an upper-case key only (CARD_KEY in the queue page).
@@ -112,9 +114,12 @@ async function resolve(workspaceIds: string[], refs: CardRef[]) {
   return board;
 }
 
-// F8: cards of the mapped workspaces that moved to in-progress or in-review,
-// or closed, since the given time.
-async function recent(products: Map<string, string>, since: Date) {
+// Cards of the mapped workspaces in the row format, with their plan product.
+async function productCards(
+  products: Map<string, string>,
+  where: SQL | undefined,
+  limit: number,
+): Promise<RecentCard[]> {
   const workspaceIds = [...products.keys()];
   if (workspaceIds.length === 0) return [];
   const rows = await db
@@ -141,26 +146,11 @@ async function recent(products: Map<string, string>, since: Date) {
       and(
         inArray(projectTable.workspaceId, workspaceIds),
         isNull(projectTable.archivedAt),
-        or(
-          and(
-            inArray(taskTable.status, [...ACTIVE_STATUSES]),
-            gte(taskTable.updatedAt, since),
-          ),
-          and(
-            eq(columnTable.isFinal, true),
-            or(
-              gte(taskTable.completedAt, since),
-              and(
-                isNull(taskTable.completedAt),
-                gte(taskTable.updatedAt, since),
-              ),
-            ),
-          ),
-        ),
+        where,
       ),
     )
     .orderBy(desc(taskTable.updatedAt))
-    .limit(RECENT_MAX);
+    .limit(limit);
   const cards: RecentCard[] = [];
   for (const row of rows) {
     const key = `${row.slug.toUpperCase()}-${row.number}`;
@@ -178,6 +168,48 @@ async function recent(products: Map<string, string>, since: Date) {
     });
   }
   return cards;
+}
+
+// F8: cards of the mapped workspaces that moved to in-progress or in-review,
+// or closed, since the given time.
+function recent(products: Map<string, string>, since: Date) {
+  return productCards(
+    products,
+    or(
+      and(
+        inArray(taskTable.status, [...ACTIVE_STATUSES]),
+        gte(taskTable.updatedAt, since),
+      ),
+      and(
+        eq(columnTable.isFinal, true),
+        or(
+          gte(taskTable.completedAt, since),
+          and(isNull(taskTable.completedAt), gte(taskTable.updatedAt, since)),
+        ),
+      ),
+    ),
+    RECENT_MAX,
+  );
+}
+
+// TB-107: the cards the owner named, by key, in one query; a key that no
+// mapped workspace has is dropped.
+function named(products: Map<string, string>, keys: string[]) {
+  const parts = keys.slice(0, NAMED_MAX).map(splitKey);
+  if (parts.length === 0) return Promise.resolve([]);
+  return productCards(
+    products,
+    and(
+      inArray(taskTable.number, [...new Set(parts.map((key) => key.number))]),
+      inArray(sql`lower(${projectTable.slug})`, [
+        ...new Set(parts.map((key) => key.slug)),
+      ]),
+    ),
+    NAMED_MAX * 2,
+  ).then((cards) => {
+    const wanted = new Set(keys.map((key) => key.toUpperCase()));
+    return cards.filter((card) => wanted.has(card.key));
+  });
 }
 
 // F9 in one query: cards in in-progress without a live lease (none, or
@@ -246,4 +278,10 @@ async function closed(products: Map<string, string>, since: Date) {
   return perProduct;
 }
 
-export const planStore: PlanStore = { resolve, recent, abandoned, closed };
+export const planStore: PlanStore = {
+  resolve,
+  recent,
+  named,
+  abandoned,
+  closed,
+};

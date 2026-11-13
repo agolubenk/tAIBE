@@ -130,6 +130,7 @@ function store(board: string[], closed: number): PlanStore {
     resolve: async () =>
       new Map(board.map((key) => [`${WS}/${key}`, todo] as const)),
     recent: async () => [],
+    named: async () => [],
     abandoned: async () => new Set(),
     closed: async (products) =>
       new Map([...new Set(products.values())].map((p) => [p, closed])),

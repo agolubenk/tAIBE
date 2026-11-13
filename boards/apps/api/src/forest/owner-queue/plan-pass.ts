@@ -1,6 +1,14 @@
 import { archiveItem, applyAnswers } from "./plan-due-apply";
 import { type DailyPlan, dailyPlan } from "./plan-due-daily";
 import { PACE_DAYS } from "./plan-eta";
+import {
+  applyReverts,
+  focusPlans,
+  readNamed,
+  withInputs,
+  writeFocus,
+} from "./plan-focus-run";
+import type { FocusPlan } from "./plan-focus";
 import { planWrites, type RowWrite } from "./plan-rows";
 import {
   type BoardCard,
@@ -27,6 +35,8 @@ export interface PlanStore {
   ): Promise<Map<string, BoardCard>>;
   recent(products: Map<string, string>, since: Date): Promise<RecentCard[]>;
   abandoned(workspaceIds: string[], now: Date): Promise<Set<string>>;
+  // The cards with these keys (TB-107 inputs), with their plan product.
+  named(products: Map<string, string>, keys: string[]): Promise<RecentCard[]>;
   // Plan product → cards closed since then (TB-112 pace).
   closed(
     products: Map<string, string>,
@@ -129,7 +139,8 @@ export async function planPass(
     products,
     now,
   });
-  if (answers.changed) list = await listAll(deps.client, "work");
+  const back = await applyReverts(writer, list.docs, products, now);
+  if (answers.changed || back) list = await listAll(deps.client, "work");
   // A cut list may miss the row that plans a card or a row before another:
   // no off-plan decisions and no forecast then.
   if (list.truncated) {
@@ -158,15 +169,17 @@ export async function planPass(
     );
   }
   let daily: DailyPlan | null = null;
+  let focus: FocusPlan[] = [];
   let ordered = writes;
   if (withDaily) {
     const patched = new Map(writes.map((write) => [write.id, write.patch]));
+    const current = rows.map((row) => {
+      const patch = patched.get(row.id);
+      return patch ? { ...row, data: withPatch(row.data, patch) } : row;
+    });
     daily = dailyPlan({
       docs: list.docs,
-      rows: rows.map((row) => {
-        const patch = patched.get(row.id);
-        return patch ? { ...row, data: withPatch(row.data, patch) } : row;
-      }),
+      rows: current,
       board,
       closed: await deps.store.closed(
         planProducts,
@@ -177,12 +190,27 @@ export async function planPass(
       today: localDate(now),
       now,
     });
-    ordered = withEta(writes, rows, daily);
+    // TB-107 after the eta step: the owner's inputs into the plan and the
+    // focus order.
+    const named = await readNamed(deps.client, now);
+    focus = focusPlans({
+      docs: list.docs,
+      rows: current,
+      board,
+      cards: await deps.store.named(planProducts, [...named.keys.keys()]),
+      named,
+      products,
+      url: deps.config.url,
+      today: localDate(now),
+      now,
+    });
+    ordered = withInputs(withEta(writes, rows, daily), rows, focus);
   }
   for (const write of ordered) {
     await writer.patch("work", write.id, write.patch, write.version);
   }
   if (daily) await writeDecisions(writer, daily);
+  await writeFocus(writer, focus);
   const clean = writer.skipped === 0 && writer.left === 0;
   return {
     written: writer.written,
