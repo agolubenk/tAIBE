@@ -937,12 +937,49 @@ describe('порядок пунктов: от старых к новым (про
   it('страница ставит пункты по этому порядку, а снимок несёт updatedAt строки', () => {
     expect(html).toContain('var els = orderItems(')
     expect(html).toContain("updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0")
-    expect(html).toContain('if (it) it.updatedAt = r.updatedAt;')
+    expect(html).toContain('list.forEach(function (it) { it.updatedAt = at[it.id]; });')
     // Пункты базы больше не встают в начало списка в порядке сервера (новые сверху).
     expect(html).not.toContain("'afterbegin' : 'beforeend'")
     expect(html).not.toContain('list.slice().reverse().forEach')
   })
+
+  // applyItems со страницы — в vm с заглушками DOM: ключ снимка без updatedAt (замечание Контроля к #154).
+  const applyItemsRun = () => {
+    const src = fnSource('applyItems')
+    const mounted: { id: string; updatedAt?: number }[] = []
+    const ctx = createContext({
+      LIVE: {}, ITEMS: [], DB_ITEMS: [], dbItemsKey: '', FILES: null,
+      rowsOf: (snap: unknown) => snap,
+      // как настоящая itemFromDb: в пункт идут только поля, которые страница показывает (sha, pr — нет)
+      itemFromDb: (id: string, d: { kind: string; title: string }) => ({ id, kind: d.kind, title: d.title }),
+      otherProduct: () => false,
+      document: { querySelectorAll: () => [] },
+      mount: (it: { id: string; updatedAt?: number }) => mounted.push({ ...it }),
+      render: () => {}, showTarget: () => {},
+    })
+    runInContext(src, ctx)
+    return { apply: (rows: unknown) => runInContext('applyItems', ctx)(rows), mounted }
+  }
+
+  it('запись агента в невидимое поле (sha) меняет updatedAt, но не пересоздаёт пункты', () => {
+    const { apply, mounted } = applyItemsRun()
+    apply([{ id: 'm-1', data: { kind: 'merge', title: 'A' }, updatedAt: 100 }])
+    expect(mounted).toEqual([{ id: 'm-1', kind: 'merge', title: 'A', updatedAt: 100 }])
+    apply([{ id: 'm-1', data: { kind: 'merge', title: 'A', sha: 'abc' }, updatedAt: 200 }])
+    expect(mounted).toHaveLength(1)
+    // Видимое поле изменилось — пункты пересоздаются, порядок берёт свежий updatedAt.
+    apply([{ id: 'm-1', data: { kind: 'merge', title: 'B' }, updatedAt: 300 }])
+    expect(mounted[1]).toEqual({ id: 'm-1', kind: 'merge', title: 'B', updatedAt: 300 })
+  })
 })
+
+// Текст функции страницы по имени: от «function <имя>(» до закрывающей скобки на том же отступе.
+function fnSource(name: string): string {
+  const start = html.indexOf('  function ' + name + '(')
+  if (start < 0) throw new Error('нет функции ' + name)
+  const end = html.indexOf('\n  }\n', start)
+  return html.slice(start, end + 4)
+}
 
 describe('раскладка «Одной очередью» / «По разделам» (просьба владельца 13.11)', () => {
   const phone = (() => {
@@ -988,6 +1025,26 @@ describe('раскладка «Одной очередью» / «По разде
   it('переходы «Очередь → вид» одной очередью ведут к пункту в общем списке, «К решениям ↓» — к общему списку', () => {
     expect(html).toContain("if (a.dataset.kind && listOfKind(a.dataset.kind, LAYOUT) === 'queue') { ev.preventDefault(); jumpToKind(a.dataset.kind); return; }")
     expect(html).toContain("toDec.setAttribute('href', one ? '#sec-queue' : '#sec-decision')")
+  })
+
+  it('инструкция ssh: одной очередью — в конце общего списка (раздел «На сервере» скрыт), по разделам — на месте', () => {
+    // В разметке инструкция — в разделе сервера, перед списком; ссылка «как подключиться» ведёт на неё.
+    expect(html).toMatch(/<section data-section="server" id="sec-server">[\s\S]*?<div class="howto" id="ssh-howto">[\s\S]*?<div class="list"><\/div>\s*<\/section>/)
+    expect(html).toContain('<a href="#ssh-howto">как подключиться</a>')
+    expect(html).toMatch(/function paintLayout\(\) \{[\s\S]*?placeSshHowto\(one\);/)
+    const calls: string[] = []
+    const howto = { id: 'ssh-howto' }
+    const sec = (id: string) => ({
+      appendChild: (n: { id: string }) => calls.push(`${id}.append(${n.id})`),
+      insertBefore: (n: { id: string }, ref: { id: string }) => calls.push(`${id}.insertBefore(${n.id}, ${ref.id})`),
+      querySelector: (sel: string) => (sel === '.list' ? { id: `${id} .list` } : null),
+    })
+    const ctx = createContext({ sshHowto: howto, document: { getElementById: (id: string) => sec(id) } })
+    runInContext(fnSource('placeSshHowto'), ctx)
+    const place = runInContext('placeSshHowto', ctx)
+    place(true)
+    place(false)
+    expect(calls).toEqual(['sec-queue.append(ssh-howto)', 'sec-server.insertBefore(ssh-howto, sec-server .list)'])
   })
 
   it('телефон: кнопка — значок 40 px (касание не меньше 36 px), шапка не раздвигается', () => {

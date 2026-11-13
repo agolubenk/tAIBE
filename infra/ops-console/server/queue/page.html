@@ -1026,10 +1026,18 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // блоки — разделы). «К решениям ↓» «одной очередью» ведёт к общему списку: раздел решений скрыт.
   var LAYOUT_ICON = { one: 'M4 6h16M4 10h16M4 14h16M4 18h16', sections: 'M4 5h6M4 9h6M14 5h6M14 9h6M4 15h6M4 19h6M14 15h6M14 19h6' };
   var layoutBtn = document.getElementById('layout-btn');
+  // Инструкция ssh живёт в разделе «На сервере»; «одной очередью» он скрыт, и ссылка «как подключиться» вела бы в
+  // невидимый узел. Поэтому инструкция переезжает в конец общего списка (команды сервера теперь там) и обратно.
+  var sshHowto = document.getElementById('ssh-howto');
+  function placeSshHowto(one) {
+    var sec = document.getElementById(one ? 'sec-queue' : 'sec-server');
+    if (one) sec.appendChild(sshHowto); else sec.insertBefore(sshHowto, sec.querySelector('.list'));
+  }
   function paintLayout() {
     var one = LAYOUT === 'one', next = one ? 'По разделам' : 'Одной очередью';
     document.getElementById('sec-queue').hidden = !one;
     ['decision', 'merge', 'server', 'check'].forEach(function (k) { document.getElementById('sec-' + k).hidden = one; });
+    placeSshHowto(one);
     document.getElementById('layout-text').textContent = next;
     document.getElementById('layout-ico').setAttribute('d', LAYOUT_ICON[one ? 'sections' : 'one']);
     layoutBtn.setAttribute('aria-label', next);
@@ -1350,12 +1358,16 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function applyItems(snap) {
     LIVE.items = true;
-    // updatedAt строки — второй ключ порядка (orderItems): времени создания пункта в снимке нет.
-    var list = rowsOf(snap).map(function (r) { var it = itemFromDb(r.id, r.data); if (it) it.updatedAt = r.updatedAt; return it; }).filter(Boolean)
+    // updatedAt строки — второй ключ порядка (orderItems): времени создания пункта в снимке нет. В ключ снимка он не
+    // входит: запись агента в поле, которого страница не показывает (sha, pr, deploy), не пересоздаёт пункты и не
+    // стирает набранный ответ. Порядок берёт updatedAt снимка, после которого пункты пересоздавались.
+    var at = {};
+    var list = rowsOf(snap).map(function (r) { at[r.id] = r.updatedAt; return itemFromDb(r.id, r.data); }).filter(Boolean)
       .filter(function (it) { return !ITEMS.some(function (b) { return b.id === it.id; }); });
     var key = JSON.stringify(list) + (otherProduct() ? '|other' : '');
     if (key === dbItemsKey) return;
     dbItemsKey = key;
+    list.forEach(function (it) { it.updatedAt = at[it.id]; });
     document.querySelectorAll('.item[data-src="db"]').forEach(function (el) { el.remove(); });
     DB_ITEMS = list;
     list.forEach(function (it) { mount(it, true); });
