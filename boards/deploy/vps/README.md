@@ -62,6 +62,7 @@ the tunnel:
 | `compose.yml` | VPS | postgres, app, tls, backup |
 | `tls.conf.template` | VPS | `install.sh` renders it into `/opt/t-boards/tls.conf` |
 | `backup.sh` | VPS, backup container | Dumps every 2 h and checks each dump with `pg_restore --list`. Keeps 3 days; `latest.dump` points at the newest |
+| `mem-stats.sh` | VPS | TB-124: `sample [minutes] [step_s]` writes `docker stats` of the project's containers (used and limit, MiB) into `mem-stats/mem-<UTC>.tsv`, default 24 h every 60 s; `report` prints samples, p95, peak, the current limit and a suggested one (peak × 1.5, a multiple of 32 MiB, at least 64), then restarts and OOM kills. Reads only names and memory numbers |
 | `mirror-setup.sh` | VPS | Turns the Notion mirror on: asks for the token, checks it reads every database, writes the workspace and databases into `.env`, recreates the app |
 | `backup-key.sh` | VPS | Adds the Mac pull key with `restrict`, `from="10.77.0.2"` and `command="cat latest.dump"` |
 | `mac/backup-agent.sh` | Mac | `key` / `install` / `remove` for the pull key and the LaunchAgent, which runs every 2 h |
@@ -192,7 +193,12 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
   and is covered by the dump.
 - `NOTIFICATION_SECRET_ENCRYPTION_KEY` is read only from env. Notification channels that store secrets stay off until
   the variable supports `_FILE`.
-- Memory limits (app 1 GB, postgres 256 MB) are provisional until the K-6 measurements (R-005).
+- Memory limits (app 1 GB, postgres 256 MB, tls 64 MB, backup 128 MB) are provisional until the first day on the VPS
+  is measured (R-005, TB-124). The day after a deploy: `systemd-run --unit=tb-mem-stats --collect
+  /opt/t-boards/mem-stats.sh sample` (detached from SSH; stop early with `systemctl stop tb-mem-stats`), then
+  `bash /opt/t-boards/mem-stats.sh report`. The report goes to the TB-124 card, and the new limits in `compose.yml`
+  are the owner's decision. A local reference: app 237 MB idle and 337 MB at peak on 120 synthetic cards
+  (`boards/docs/impl/impl-k6-measurements.md`).
 - A device without `/etc/hosts` (a phone) needs a DNS override for the subdomain. There is no DNS server in the
   tunnel yet.
 - The backup pull key accepts only `10.77.0.2`, the first peer. The Mac has to be added first.

@@ -25,7 +25,7 @@ name="t-boards-$tag"
 mkdir "$stage/$name"
 
 cp "$vps/compose.yml" "$vps/tls.conf.template" "$vps/backup.sh" \
-  "$vps/install.sh" "$vps/render-tls.sh" "$vps/wg-setup.sh" "$vps/wg-issue.sh" "$vps/wg-psk.sh" "$vps/backup-key.sh" "$vps/mirror-setup.sh" \
+  "$vps/install.sh" "$vps/render-tls.sh" "$vps/wg-setup.sh" "$vps/wg-issue.sh" "$vps/wg-psk.sh" "$vps/backup-key.sh" "$vps/mirror-setup.sh" "$vps/mem-stats.sh" \
   "$stage/$name/"
 mkdir "$stage/$name/seed"
 cp "$vps/seed/products.json" "$stage/$name/seed/"
