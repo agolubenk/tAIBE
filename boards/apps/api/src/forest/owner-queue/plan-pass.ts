@@ -149,9 +149,23 @@ async function writeDecision(
     rows = due;
   }
   if (previous && !(await archiveItem(writer, previous))) return false;
-  const written = await writer.write(() =>
-    writer.client.put("work", state.id, { ...state.data, rows }, state.version),
+  const written = await writer.unlessRefused(`due state ${state.id}`, () =>
+    writer.write(() =>
+      writer.client.put(
+        "work",
+        state.id,
+        { ...state.data, rows },
+        state.version,
+      ),
+    ),
   );
+  if (written === "refused") {
+    // No state points to the item: an answer there would never be read.
+    await writer.unlessRefused(`decision ${item.id} archive`, () =>
+      archiveItem(writer, item.id),
+    );
+    return true;
+  }
   return typeof written !== "string";
 }
 

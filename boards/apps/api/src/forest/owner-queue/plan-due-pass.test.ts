@@ -327,6 +327,16 @@ describe("TB-125: a doc the queue refuses (422) does not stop the run", () => {
     });
   });
 
+  it("a refused state archives the new item: no answer is lost to it", async () => {
+    const queue = new MemQueue();
+    plan(queue);
+    queue.reject("work", "due-taibe");
+    const outcome = await daily(queue, DAY1);
+    expect(outcome).toMatchObject({ refused: 1, dailyDone: true });
+    expect(queue.data("items", "d-taibe-due-20261113").archived).toBe(true);
+    expect(queue.doc("work", "due-taibe")).toBeUndefined();
+  });
+
   it("a refused eta row is skipped; the other rows and the decision are written", async () => {
     const queue = new MemQueue();
     plan(queue);
