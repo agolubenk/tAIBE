@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray, sql } from "drizzle-orm";
 import db from "../database";
 import {
   ssrBlobTable,
@@ -14,6 +14,10 @@ import { scanSecrets } from "./secret-scan";
 
 const sha256 = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
+
+// Rows per push-baseline insert: 3 parameters a row, far under PostgreSQL's
+// 65535 per statement.
+const PUSH_STATE_CHUNK = 1000;
 
 export type SyncFile = { path: string; sha256: string; content?: string };
 
@@ -373,18 +377,27 @@ export async function syncCorpus(
       }
     }
 
-    // Per-file push baseline: what the repo looked like at this sync.
-    for (const file of input.files) {
+    // Per-file push baseline: what the repo looked like at this sync. One
+    // statement per PUSH_STATE_CHUNK files, not one per file: a manifest of
+    // 5000 files (TB-129) held the transaction for 5000 round trips. A path
+    // named twice keeps its last sha, as the per-file upsert did.
+    const baseline = [
+      ...new Map(input.files.map((file) => [file.path, file.sha256])),
+    ];
+    for (let at = 0; at < baseline.length; at += PUSH_STATE_CHUNK) {
       await tx
         .insert(ssrPushStateTable)
-        .values({
-          workspaceId,
-          path: file.path,
-          lastSyncedSha: file.sha256,
-        })
+        .values(
+          baseline
+            .slice(at, at + PUSH_STATE_CHUNK)
+            .map(([path, sha]) => ({ workspaceId, path, lastSyncedSha: sha })),
+        )
         .onConflictDoUpdate({
           target: [ssrPushStateTable.workspaceId, ssrPushStateTable.path],
-          set: { lastSyncedSha: file.sha256, updatedAt: new Date() },
+          set: {
+            lastSyncedSha: sql`excluded.${sql.identifier(ssrPushStateTable.lastSyncedSha.name)}`,
+            updatedAt: new Date(),
+          },
         });
     }
   });
