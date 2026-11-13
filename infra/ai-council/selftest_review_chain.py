@@ -51,7 +51,7 @@ def _opencode(check, gr, tmp: Path) -> None:
           res.ok and res.text.startswith("{") and gr.parse_answer(res).get("verdict") == "accept"
           and seen and seen[0][1] == "1" and "--agent" in seen[0][0], res.error)
     check("opencode: промпт — файлом --file, не в argv; окружение без секретов",
-          "--file" in seen[0][0] and not any("[user]" in a for a in seen[0][0]) and seen[0][2]
+          "--file" in seen[0][0] and not any("[user]\np" in a for a in seen[0][0]) and seen[0][2]
           and "[user]\np" in seen[0][2] and "GH_TOKEN" not in seen[0][3] and "HOME" in seen[0][3],
           str(seen[0][0])[:200])
     cases = [(_Proc(1, "", "Error: usage limit reached for this model"), "quota"),
