@@ -182,10 +182,16 @@ describe('запись — надёжность и пары', () => {
 })
 
 describe('relay и вложения', () => {
-  it('relay — про входящие HR: токен без HR получает 404 на чтение и отметку', async () => {
-    expect((await call(taibe, 'GET', '/relay')).status).toBe(404)
-    expect((await call(taibe, 'PUT', '/relay', { session: 'hr-sess' })).status).toBe(404)
-    expect((await call(hr, 'GET', '/relay')).status).toBe(200)
+  it('relay по продуктам (OPS-51): токен taibe отмечается за taibe и не видит сессий и id HR', async () => {
+    expect((await call(hr, 'PUT', '/relay', { session: 'hr-sess', relayed: ['i-20261113-100000-aa01'] })).status).toBe(200)
+    expect((await call(taibe, 'PUT', '/relay', { session: 'taibe-sess' })).status).toBe(200)
+    const seen = await call(taibe, 'GET', '/relay')
+    expect(seen.status).toBe(200)
+    const names = (r: { json: Record<string, unknown> | null }) => ((r.json?.sessions ?? []) as { session: string }[]).map((s) => s.session)
+    expect(names(seen)).toEqual(['taibe-sess'])
+    expect(seen.json?.relayed).toEqual({})
+    expect((await call(taibe, 'PUT', '/relay', { session: 'taibe-sess', product: 'hr-helper' })).status).toBe(404)
+    expect(names(await call(hr, 'GET', '/relay'))).toEqual(['hr-sess'])
   })
 
   it('файлы чужого пункта — как у несуществующего: пусто', async () => {

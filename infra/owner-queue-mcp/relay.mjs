@@ -15,6 +15,8 @@ import { join } from 'node:path';
 // Имя сессии — ключ объекта на сервере: служебные имена объекта не берём (ревью «Контроля» #324, п. 7).
 // Предел имени сессии — как у консоли (server/queue/store.ts SESSION_MAX): линия растёт на 5 символов за поколение.
 export const SESSION_MAX = 1000;
+/** Основной продукт очереди (server/queue/product-boards.ts консоли). */
+const DEFAULT_PRODUCT = 'hr-helper';
 const RELAY_SESSION = new RegExp(`^(?!(?:__proto__|constructor|prototype)$)[A-Za-z0-9._-]{1,${SESSION_MAX}}$`);
 /** Сколько id принимает одна отметка (relayBeatSchema в консоли). */
 const RELAY_ACK_BATCH = 50;
@@ -32,10 +34,13 @@ const RELAY_LABEL = {
  * входящие старше суток не передаются (их видно в oq_list open_only), только считаются — иначе первый запуск завалил
  * бы сессию старым.
  */
-export function relayPass(items, checks, relayed, now, first) {
+export function relayPass(items, checks, relayed, now, first, product = DEFAULT_PRODUCT) {
   const answers = new Map(checks.map((c) => [c.id, c.data || {}]));
   const at = (d) => Date.parse(d.data.inbox?.receivedAt || '') || Date.parse(d.data.added || '') || 0;
+  // Только входящие своего продукта (OPS-51): токен может видеть и чужие (до выпуска токена продукта — общий OQ_TOKEN),
+  // но сессию будят лишь задачи её продукта. Документ без поля product — ответ консоли до v2-lite, это основной продукт.
   const fresh = items
+    .filter((d) => (d.product || DEFAULT_PRODUCT) === product)
     .filter((d) => d.data?.kind === 'inbox' && d.data.archived !== true && !relayed[d.id]
       && !answers.get(d.id)?.agentStatus && !answers.get(d.id)?.done)
     .sort((a, b) => at(a) - at(b));
@@ -64,15 +69,17 @@ function relayPrune(relayed, now) {
 }
 
 /** conn — адрес API, токен и запрос из server.mjs: без обратного импорта (цикл модулей). */
-export async function relayLoop(session, { BASE, TOKEN, api }) {
+export async function relayLoop(session, { BASE, TOKEN, api, product = DEFAULT_PRODUCT }) {
   if (!RELAY_SESSION.test(session || '')) {
-    process.stderr.write('Использование: node server.mjs --relay <имя сессии> (латиница, цифры, «.», «_», «-»)\n');
+    process.stderr.write('Использование: node server.mjs --relay <имя сессии> [--product <slug>] (имя — латиница, цифры, «.», «_», «-»)\n');
     process.exit(2);
   }
   const dir = join(homedir(), '.hr-owner-queue-bot', 'relay');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   // Имя файла — до 255 байт: длинная линия — по хэшу; короткие имена — как раньше (журнал прежних запусков на месте).
-  const file = join(dir, `${session.length > 120 ? createHash('sha1').update(session).digest('hex') : session}.json`);
+  // Журнал — на сессию и продукт: та же сессия с другим --product не должна считать чужие передачи своими.
+  const base = product === DEFAULT_PRODUCT ? session : `${session}@${product}`;
+  const file = join(dir, `${base.length > 120 ? createHash('sha1').update(base).digest('hex') : base}.json`);
   // unacked — переданные сессии, но ещё не отмеченные в консоли: отправляются, пока PUT /relay не пройдёт (п. 3). Иначе
   // сбой одного PUT (таймаут, 5xx, 429, больше 50 id) оставлял пункт навсегда «📨 Передаётся…».
   let relayed = {}, unacked = [], first = false;
@@ -95,13 +102,13 @@ export async function relayLoop(session, { BASE, TOKEN, api }) {
     return last[col];
   }
   // Диагностика — в stderr: stdout читает Monitor, каждая строка в нём будит сессию.
-  process.stderr.write(`[owner-queue-relay] ${session}: автопередача входящих запущена, журнал ${file}\n`);
+  process.stderr.write(`[owner-queue-relay] ${session}: автопередача входящих продукта ${product} запущена, журнал ${file}\n`);
   let beat = 0;
   for (;;) {
     try {
       const [items, checks] = await Promise.all([poll('items'), poll('checks')]);
       const now = Date.now();
-      const r = relayPass(items, checks, relayed, now, first);
+      const r = relayPass(items, checks, relayed, now, first, product);
       for (const line of r.lines) process.stdout.write(`${line}\n`);
       if (r.old) process.stdout.write(`Входящих старше суток без статуса агента: ${r.old} — не переданы, список: oq_list items open_only.\n`);
       unacked.push(...r.sent.filter((id) => !unacked.includes(id)));
@@ -111,7 +118,7 @@ export async function relayLoop(session, { BASE, TOKEN, api }) {
         // Порциями по RELAY_ACK_BATCH: подтверждённая порция уходит из unacked, сбой — повтор на следующем проходе.
         do {
           const part = unacked.slice(0, RELAY_ACK_BATCH);
-          await api('PUT', '/relay', { session, relayed: part });
+          await api('PUT', '/relay', { session, relayed: part, product });
           unacked = unacked.slice(part.length);
           save();
         } while (unacked.length);

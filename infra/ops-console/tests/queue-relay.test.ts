@@ -6,7 +6,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { freshApp } from './helpers'
 import { createToken } from '../server/queue/auth'
-import { RELAY_STALE_MS } from '../server/queue/relay'
+import { beatProduct, RELAY_STALE_MS } from '../server/queue/relay'
 import { writeSetting } from '../server/settings/store'
 
 type App = Awaited<ReturnType<typeof freshApp>>
@@ -34,7 +34,7 @@ describe('отметка автопередачи: PUT/GET /relay', () => {
   it('до первой отметки — сессий нет; отметка агента — жива, переданные id видны с сессией и временем', async () => {
     const empty = await call(reader, 'GET', '/relay')
     expect(empty.status).toBe(200)
-    expect(empty.json).toEqual({ alive: false, sessions: [], relayed: {} })
+    expect(empty.json).toEqual({ alive: false, sessions: [], relayed: {}, products: {} })
     const beat = await call(agent, 'PUT', '/relay', { session: 'hr-helper-v2-43', relayed: ['i-20261023-001000-ab12'] })
     expect(beat.status).toBe(200)
     const got = await call(reader, 'GET', '/relay')
@@ -89,9 +89,72 @@ describe('отметка автопередачи: PUT/GET /relay', () => {
   })
 })
 
+describe('автопередача по продуктам (OPS-51, фаза 4a)', () => {
+  let taibe: string
+  let owner: string
+  beforeAll(async () => {
+    taibe = (await createToken('relay-taibe', ['read', 'agent'], { products: ['taibe'] })).token
+    owner = (await createToken('relay-owner', ['owner'])).token
+  })
+
+  it('сессия taibe отмечается без product — продукт токена; HR её не видит, владелец видит обе по продуктам', async () => {
+    await writeSetting('oq-relay', { sessions: {} })
+    expect((await call(agent, 'PUT', '/relay', { session: 'hr-helper-v2-43', relayed: ['i-20261113-100000-aa01'] })).status).toBe(200)
+    const beat = await call(taibe, 'PUT', '/relay', { session: 'taibe-coord-1', relayed: ['i-20261113-143043-ef29'] })
+    expect(beat.status).toBe(200)
+    // Ответ отметки — то, что видит сам актор: только своя сессия и свои id.
+    expect(beat.json.sessions.map((s: { session: string }) => s.session)).toEqual(['taibe-coord-1'])
+    expect(Object.keys(beat.json.relayed)).toEqual(['i-20261113-143043-ef29'])
+
+    const hr = (await call(reader, 'GET', '/relay')).json
+    expect(hr.sessions.map((s: { session: string }) => s.session)).toEqual(['hr-helper-v2-43'])
+    expect(Object.keys(hr.relayed)).toEqual(['i-20261113-100000-aa01'])
+    expect(Object.keys(hr.products)).toEqual(['hr-helper'])
+
+    const t = (await call(taibe, 'GET', '/relay')).json
+    expect(t.sessions).toMatchObject([{ session: 'taibe-coord-1', product: 'taibe', alive: true }])
+    expect(t.products).toMatchObject({ taibe: { alive: true, session: 'taibe-coord-1' } })
+
+    const all = (await call(owner, 'GET', '/relay')).json
+    expect(all.products).toMatchObject({ 'hr-helper': { alive: true, session: 'hr-helper-v2-43' }, taibe: { alive: true, session: 'taibe-coord-1' } })
+    expect(all.relayed['i-20261113-143043-ef29']).toMatchObject({ session: 'taibe-coord-1' })
+  })
+
+  it('отметка за чужой продукт — 404, как у несуществующего; сменивший продукт сессия не тащит чужие id', async () => {
+    expect((await call(agent, 'PUT', '/relay', { session: 'hr-helper-v2-43', product: 'taibe' })).status).toBe(404)
+    expect((await call(taibe, 'PUT', '/relay', { session: 'taibe-coord-1', product: 'hr-helper' })).status).toBe(404)
+    expect((await call(taibe, 'PUT', '/relay', { session: 'taibe-coord-1', product: 'Не slug' })).status).toBe(400)
+    // Владелец ('*') отмечает ту же сессию за HR: передачи taibe к HR не переходят.
+    await call(owner, 'PUT', '/relay', { session: 'taibe-coord-1', product: 'hr-helper' })
+    const hr = (await call(reader, 'GET', '/relay')).json
+    expect(hr.relayed['i-20261113-143043-ef29']).toBeUndefined()
+  })
+
+  it('живость по продукту: мёртвая сессия HR не делает живым taibe и наоборот', async () => {
+    const old = new Date(Date.now() - RELAY_STALE_MS - 1000).toISOString()
+    await writeSetting('oq-relay', { sessions: { 'hr-helper-v2-43': { at: old, relayed: {} }, 'taibe-coord-1': { at: new Date().toISOString(), relayed: {}, product: 'taibe' } } })
+    const all = (await call(owner, 'GET', '/relay')).json
+    expect(all.products['hr-helper']).toMatchObject({ alive: false, session: 'hr-helper-v2-43' })
+    expect(all.products.taibe).toMatchObject({ alive: true })
+    // Запись без product (процесс прежней версии) — основной продукт.
+    expect(all.sessions.find((s: { session: string }) => s.session === 'hr-helper-v2-43').product).toBe('hr-helper')
+    expect((await call(reader, 'GET', '/relay')).json.alive).toBe(false)
+  })
+
+  it('beatProduct: явный — если виден; без явного — основной, иначе единственный; иначе null', () => {
+    expect(beatProduct('*', undefined)).toBe('hr-helper')
+    expect(beatProduct('*', 'taibe')).toBe('taibe')
+    expect(beatProduct(['taibe'], undefined)).toBe('taibe')
+    expect(beatProduct(['taibe'], 'hr-helper')).toBeNull()
+    expect(beatProduct(['hr-helper', 'taibe'], undefined)).toBe('hr-helper')
+    expect(beatProduct(['taibe', 'other'], undefined)).toBeNull()
+    expect(beatProduct([], undefined)).toBeNull()
+  })
+})
+
 describe('проход автопередачи (relayPass в owner-queue-mcp/relay.mjs, реэкспорт из server.mjs)', () => {
-  type Doc = { id: string; data: Record<string, unknown> }
-  let relayPass: (items: Doc[], checks: Doc[], relayed: Record<string, string>, now: number, first: boolean) => { lines: string[]; sent: string[]; old: number }
+  type Doc = { id: string; data: Record<string, unknown>; product?: string }
+  let relayPass: (items: Doc[], checks: Doc[], relayed: Record<string, string>, now: number, first: boolean, product?: string) => { lines: string[]; sent: string[]; old: number }
 
   beforeAll(async () => {
     // Токен из окружения: импорт сервера не ходит в Keychain; без запуска как скрипта MCP по stdio не стартует.
@@ -145,6 +208,13 @@ describe('проход автопередачи (relayPass в owner-queue-mcp/re
     expect(relayPass([inbox('i-old2', {}, { receivedAt: new Date(NOW - 2 * 86_400_000).toISOString() })], [], {}, NOW, false).sent).toEqual(['i-old2'])
     // Старое в журнале — со временем, а не меткой: Date.parse('старше суток') давал NaN, и запись не уходила никогда.
     expect(Number.isNaN(Date.parse(relayed['i-old']!))).toBe(false)
+  })
+
+  it('только входящие своего продукта: сессия taibe не получает HR, сессия HR — taibe; без поля product — HR', () => {
+    const items = [inbox('i-hr', {}), { ...inbox('i-hr2'), product: 'hr-helper' }, { ...inbox('i-tb'), product: 'taibe' }]
+    expect(relayPass(items, [], {}, NOW, false).sent).toEqual(['i-hr', 'i-hr2'])
+    expect(relayPass(items, [], {}, NOW, false, 'hr-helper').sent).toEqual(['i-hr', 'i-hr2'])
+    expect(relayPass(items, [], {}, NOW, false, 'taibe').sent).toEqual(['i-tb'])
   })
 
   it('пересланное — текст третьего лица: пометка «текст отправителя», а не «данные владельца» (ревью #324, п. 6)', () => {

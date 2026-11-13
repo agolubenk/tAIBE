@@ -36,7 +36,7 @@ type Pure = {
   inboxHotkey: (e: Partial<Record<'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey', string | boolean>>, mac: boolean) => [string, string] | null
   itemState: (it: { kind: string }, e: Record<string, unknown> | undefined) => 'open' | 'again' | 'done'
   isDone: (it: { kind: string }, e: Record<string, unknown> | undefined) => boolean
-  relayItemState: (relay: unknown, id: string, now: number) => null | { k: 'wait' | 'sending' | 'stuck' | 'off'; session?: string; at?: string; dead?: boolean }
+  relayItemState: (relay: unknown, id: string, now: number, product?: string) => null | { k: 'wait' | 'sending' | 'stuck' | 'off'; session?: string; at?: string; dead?: boolean }
   ownerSnapshotApplies: (local: Record<string, unknown> | undefined, snap: Record<string, unknown> | undefined, pending: boolean) => boolean
   tipHtml: (s: string) => string
   roadmapLabelMode: (pxPerWeek: number) => 'weeks' | 'months'
@@ -442,6 +442,19 @@ describe('автопередача входящих на странице: че�
     expect(relayItemState({ sessions: 'x', relayed: {} }, 'i-1', NOW)).toBeNull()
     // Служебные имена объекта не принимаются за «передано».
     expect(relayItemState({ alive: true, sessions: [alive], relayed: {} }, 'constructor', NOW)).toEqual({ k: 'sending', session: 'hr-helper-v2-43' })
+  })
+
+  it('по продуктам (OPS-51): живая сессия HR не передаёт входящее taibe; ответ без product — как раньше', () => {
+    const { relayItemState } = pure()
+    const hr = { ...alive, product: 'hr-helper' }
+    const tb = { session: 'taibe-coord-1', at: at(0.5), alive: true, product: 'taibe' }
+    expect(relayItemState({ alive: true, sessions: [hr], relayed: {} }, 'i-1', NOW, 'taibe')).toEqual({ k: 'off' })
+    expect(relayItemState({ alive: true, sessions: [hr, tb], relayed: {} }, 'i-1', NOW, 'taibe')).toEqual({ k: 'sending', session: 'taibe-coord-1' })
+    expect(relayItemState({ alive: true, sessions: [tb, hr], relayed: {} }, 'i-1', NOW, 'hr-helper')).toEqual({ k: 'sending', session: 'hr-helper-v2-43' })
+    // Передано сессией taibe, а она умерла, хотя HR жива — «stuck, dead»: живость берётся у своего продукта.
+    const died = { alive: true, sessions: [hr, { ...tb, alive: false }], relayed: { 'i-1': { session: 'taibe-coord-1', at: at(2) } } }
+    expect(relayItemState(died, 'i-1', NOW, 'taibe')).toMatchObject({ k: 'stuck', dead: true })
+    expect(relayItemState({ alive: true, sessions: [alive], relayed: {} }, 'i-1', NOW, 'hr-helper')).toEqual({ k: 'sending', session: 'hr-helper-v2-43' })
   })
 })
 
