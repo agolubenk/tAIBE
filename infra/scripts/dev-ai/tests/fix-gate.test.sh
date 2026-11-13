@@ -4,7 +4,7 @@
 #   bash infra/scripts/dev-ai/tests/fix-gate.test.sh      # ~1 с, сети нет
 #
 # Проверяет: pre — грязная копия отказ; post — 20 строк в 1 файле ок, 21 строка отказ, 3 файла кода отказ,
-# новый файл считается (git add -N), тест не считается, бинарный файл и lock-файл отказ, нет правки отказ,
+# новый файл считается (git add -N), тест не считается, бинарный файл, lock-файл и пути поставки отказ, нет правки отказ,
 # --rollback возвращает копию к HEAD и убирает новые файлы.
 set -euo pipefail
 
@@ -60,6 +60,14 @@ repo; lines package-lock.json 1
 expect "post: lock-файл — отказ" 1 bash "$gate" post "$tmp/r"
 repo
 expect "post: правки нет — отказ" 1 bash "$gate" post "$tmp/r"
+repo; mkdir -p "$tmp/r/.github/workflows"; lines .github/workflows/ci.yml 2
+expect "post: workflow .github/ — отказ" 1 bash "$gate" post "$tmp/r"
+repo; mkdir -p "$tmp/r/boards/deploy/vps"; lines boards/deploy/vps/run.sh 2
+expect "post: путь deploy/ — отказ" 1 bash "$gate" post "$tmp/r"
+repo; mkdir -p "$tmp/r/infra/scripts/prod"; lines infra/scripts/prod/x.sh 2
+expect "post: infra/scripts/prod — отказ" 1 bash "$gate" post "$tmp/r"
+repo; lines Dockerfile.api 1
+expect "post: Dockerfile — отказ" 1 bash "$gate" post "$tmp/r"
 
 repo; lines a.py 30; lines extra.py 3
 expect "post --rollback: отказ" 1 bash "$gate" post "$tmp/r" --rollback

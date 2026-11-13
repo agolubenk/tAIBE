@@ -41,6 +41,7 @@ QUOTA_RE = re.compile(r"usage limit|limit (reached|exceeded)|quota|insufficient|
 AUTH_RE = re.compile(r"not (logged|authenticated)|no (api )?key|unauthori[sz]ed|\b401\b|auth login|"
                      r"no provider|model .* not found|unknown model", re.I)
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+ENV_KEEP = ("HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TERM")
 
 
 @dataclass
@@ -112,7 +113,9 @@ class OpencodeClient:
                 time.sleep(0.5)
 
     def _run(self, argv: list) -> Result:
-        env = {**os.environ, "NO_COLOR": "1", "OPENCODE_DISABLE_PROJECT_CONFIG": "1"}
+        # Только то, что нужно opencode: секреты сессии (ключи, токены) рецензенту не передаются.
+        env = {k: v for k, v in os.environ.items() if k in ENV_KEEP or k.startswith(("XDG_", "OPENCODE_", "LC_"))}
+        env.update(NO_COLOR="1", OPENCODE_DISABLE_PROJECT_CONFIG="1")
         with tempfile.TemporaryDirectory(prefix="oc-review-") as cwd:
             proc = self.runner(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                stdin=subprocess.DEVNULL, text=True, start_new_session=True)

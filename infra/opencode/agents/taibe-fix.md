@@ -41,6 +41,27 @@ permissions:
   - action: edit
     resource: "**/drizzle/**"
     effect: deny
+  - action: edit
+    resource: ".github/**"
+    effect: deny
+  - action: edit
+    resource: "**/deploy/**"
+    effect: deny
+  - action: edit
+    resource: "**/*deploy*"
+    effect: deny
+  - action: edit
+    resource: "infra/scripts/prod/**"
+    effect: deny
+  - action: edit
+    resource: "infra/docker/**"
+    effect: deny
+  - action: edit
+    resource: "infra/nginx/**"
+    effect: deny
+  - action: edit
+    resource: "**/Dockerfile*"
+    effect: deny
 ---
 You fix exactly one review finding in the current git worktree. The user message gives the finding: file and line,
 the failure scenario and the expected fix.
