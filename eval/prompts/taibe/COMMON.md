@@ -18,9 +18,9 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
    (`eval/nerve/quorum.py`) reads only this line.
    Review of a new PR (coordinator 13.11, canon `.claude/memory/chunks/process/adversarial-review.md`): the author runs
    the chain first from the main checkout and puts the report in the PR body:
-   `TAIBE_HOST_ROOT=$HOME/Desktop/Development/HR_Helper-v2 infra/ai-council/review_chain.sh <PR> /tmp/rc-<PR>.json`.
-   The council base is in the HR host (`repo_root` of `instances/hr-helper.json`); without `TAIBE_HOST_ROOT` the chain
-   exits 1 (`.claude/scripts/host_root.py:17`). If the coordinator reports the opencode limit, add
+   `TAIBE_HOST_ROOT=<repo_root> infra/ai-council/review_chain.sh <PR> /tmp/rc-<PR>.json`. `<repo_root>` is the field of
+   `instances/hr-helper.json`: the council base is in the HR host. Without `TAIBE_HOST_ROOT` the chain exits 1
+   (`.claude/scripts/host_root.py:17`). If the coordinator reports the opencode limit, add
    `REVIEW_CHAIN_FORCE=glm`. Exit 0 — the author writes `Линза «цепочка»: approve на <sha>` in the PR with a link to the
    report: the quorum needs 3 lenses (`min_lenses`, `instances/taibe.json`), and a signature with «GLM» counts as
    Control. Exit 2 — the chain findings are `changes`: fix them and run the chain again on the new head (each run starts
