@@ -43,6 +43,8 @@ type Pure = {
   roadmapMonthLabel: (d: Date, first: boolean) => string
   placeRoadmapLabels: (items: { x: number; prio: number }[], laneW: number, labelW: number, gap: number) => ('up' | 'dn' | null)[]
   targetFromHash: (hash: string) => string
+  lineTail: (s: string, max: number) => string
+  lineHtml: (s: string) => string
 }
 type FakeDb = { doc: (path: string) => { set: (data: unknown, opts?: { ifVersion?: number }) => Promise<unknown>; get: () => Promise<unknown> } }
 type Row = { id: string; status?: string; planEnd?: string; basePlanEnd?: string; end?: string }
@@ -71,7 +73,7 @@ function pure(): Pure {
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
     itemState: fn('itemState'), isDone: fn('isDone'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
     tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), roadmapMonthLabel: fn('roadmapMonthLabel'),
-    placeRoadmapLabels: fn('placeRoadmapLabels'), targetFromHash: fn('targetFromHash'),
+    placeRoadmapLabels: fn('placeRoadmapLabels'), targetFromHash: fn('targetFromHash'), lineTail: fn('lineTail'), lineHtml: fn('lineHtml'),
   }
 }
 
@@ -876,5 +878,26 @@ describe('шапка, Гант и справка (просьба владель�
     expect(html).toContain('<p class="sec-note" id="dash-split" hidden></p>')
     expect(html).toContain("try { paintScope(ws); } catch (e)")
     expect(html).toMatch(/var HR_ONLY = \{ 'card-pr': 1 \};/)
+  })
+})
+
+describe('линия сессии в очереди: конец, а не начало (OPS-39)', () => {
+  const line = `r.62u1${'.ab12'.repeat(26)}.zz99`
+  it('длинная линия — «…» и два последних сегмента; короткая линия и имя не по линии — как раньше', () => {
+    const { lineTail } = pure()
+    expect(lineTail(line, 40)).toBe('…ab12.zz99')
+    expect(lineTail('r.62u1.ab12', 40)).toBe('r.62u1.ab12')
+    expect(lineTail('r.62u1.ab12.cd34', 40)).toBe('…ab12.cd34')
+    expect(lineTail('hr-helper-v2-43', 40)).toBe('hr-helper-v2-43')
+    expect(lineTail('x'.repeat(50), 40)).toBe(`${'x'.repeat(39)}…`)
+    // Не линия: заглавные, «r.» без сегмента, точка в конце — обычная обрезка.
+    expect(lineTail('R.62u1.ab12.cd34', 40)).toBe('R.62u1.ab12.cd34')
+    expect(lineTail('r.62u1.ab12.cd34.', 40)).toBe('r.62u1.ab12.cd34.')
+  })
+  it('полная линия — в подсказке и экранирована; без сокращения подсказки нет', () => {
+    const { lineHtml } = pure()
+    expect(lineHtml(line)).toBe(`<span title="${line}">…ab12.zz99</span>`)
+    expect(lineHtml('r.62u1.ab12')).toBe('r.62u1.ab12')
+    expect(lineHtml('<b>"x"</b>')).toBe('&lt;b&gt;&quot;x&quot;&lt;/b&gt;')
   })
 })

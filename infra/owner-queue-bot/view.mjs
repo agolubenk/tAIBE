@@ -20,6 +20,14 @@ const PRE_CLOSE = '</code></pre>';
 // Текст со страницы — экранирован, невидимые символы показаны метками (заголовки, подписи, заметки).
 export const esc = (s) => escText(revealInvisible(s).text);
 export const cut = (s, n) => { const t = String(s ?? ''); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+// Линия сессии растёт на сегмент за поколение (r.62u1 → r.62u1.ab12), а начало у сессий одной роли общее: обрезка
+// конца делала их одинаковыми (OPS-39). Показ — «…» и два последних сегмента; не линия — первые n знаков, как cut.
+const SESSION_LINE = /^r(\.[a-z0-9]+)+$/;
+export const lineTail = (s, n) => {
+  const t = String(s ?? '');
+  const seg = SESSION_LINE.test(t) ? t.split('.') : [];
+  return seg.length > 3 ? '…' + seg.slice(-2).join('.') : cut(t, n);
+};
 export const btn = (text, data) => ({ text: cut(revealInvisible(text).text, 64), callback_data: data });
 const plain = toPlain;
 

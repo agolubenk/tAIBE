@@ -274,6 +274,19 @@ test('автопередача: процесс сессии жив — «пер�
   assert.match(sentView(d, item, { ...live, sessions: [{ session: '<b>x</b>', at: live.sessions[0].at, alive: true }] }).text, /&lt;b&gt;x/);
 });
 
+test('автопередача: длинная линия сессии — «…» и два последних сегмента, начало роли общее (OPS-39)', () => {
+  const d = { ...draftFrom({ text: 'На проде 502 у всех' }), urgency: 'now' };
+  const line = `r.62u1${'.ab12'.repeat(26)}.zz99`;
+  const at = '2026-10-23T00:10:00.000Z';
+  const text = sentView(d, itemOf(d), { alive: true, sessions: [{ session: line, at, alive: true }], relayed: {} }).text;
+  assertTelegramHtml(text);
+  assert.match(text, /Передаю сессии <b>…ab12\.zz99<\/b>/);
+  // Короткая линия (до двух поколений) и имя не по линии — как есть.
+  for (const s of ['r.62u1.ab12', 'hr-helper-v2-43']) {
+    assert.match(sentView(d, itemOf(d), { alive: true, sessions: [{ session: s, at, alive: true }], relayed: {} }).text, new RegExp(`Передаю сессии <b>${s.replace(/\./g, '\\.')}</b>`));
+  }
+});
+
 test('автопередача в отправке: статус берётся у консоли; сбой статуса — ответ как раньше', async () => {
   const ok = harness({ relay: async () => ({ alive: true, sessions: [{ session: 'hr-helper-v2-43', at: '2026-10-23T00:10:00.000Z', alive: true }], relayed: {} }) });
   await ok.inbox.start(7, { text: 'На проде 502 у всех' });

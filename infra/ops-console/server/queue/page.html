@@ -917,7 +917,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
 
   function chipHtml(c) {
     var cls = c[1] === 'deploy' ? 'chip chip-deploy' : c[1] === 'ssh' ? 'chip chip-ssh' : c[1] === 'wait' ? 'chip chip-wait' : 'chip';
-    return '<span class="' + cls + '">' + esc(c[0]) + '</span>';
+    return '<span class="' + cls + '"' + (c[2] ? ' title="' + esc(c[2]) + '"' : '') + '>' + esc(c[0]) + '</span>';
   }
   function cmdHtml(text) {
     return '<div class="cmd"><pre><code>' + esc(text) + '</code></pre><button class="copy" type="button">Копировать</button></div>';
@@ -1228,7 +1228,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var it = { id: id, kind: d.kind, title: d.title.slice(0, 300), added: typeof d.added === 'string' ? d.added.slice(0, 10) : '', fromDb: true };
     var chips = Array.isArray(d.chips) ? d.chips.filter(function (c) { return Array.isArray(c) && typeof c[0] === 'string'; })
       .map(function (c) { return [c[0].slice(0, 40), ['deploy', 'ssh', 'wait'].indexOf(c[1]) >= 0 ? c[1] : '']; }) : [];
-    if (typeof d.source === 'string' && d.source) chips.push(['от: ' + d.source.slice(0, 40), '']);
+    if (typeof d.source === 'string' && d.source) chips.push(['от: ' + lineTail(d.source, 40), '', d.source.slice(0, 1000)]);
     it.chips = chips.slice(0, 6);
     var links = Array.isArray(d.links) ? d.links.slice(0, 8).map(safeLink).filter(Boolean) : [];
     it.body = textToHtml(d.body) + (links.length ? '<p>' + links.join(' · ') + '</p>' : '');
@@ -1639,6 +1639,20 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   // Подсказка: первая строка — жирным, остальные — с новой строки (без <br> вторая прилипала к первой, 400dd…17f2).
   function tipHtml(s) { return String(s).split('\n').map(function (l, i) { return i ? esc(l) : '<b>' + esc(l) + '</b>'; }).join('<br>'); }
+  // Линия сессии растёт на сегмент за поколение (r.62u1 → r.62u1.ab12), а начало у сессий одной роли общее: обрезка
+  // конца делала их одинаковыми (OPS-39). Показ — «…» и два последних сегмента, полная линия — в подсказке; хранится
+  // линия целиком (по ней узнаётся наследник). Не линия (имя вроде hr-helper-v2-70) — как раньше, первые max знаков.
+  var SESSION_LINE = /^r(\.[a-z0-9]+)+$/;
+  function lineTail(s, max) {
+    s = String(s);
+    var seg = SESSION_LINE.test(s) ? s.split('.') : [];
+    if (seg.length > 3) return '…' + seg.slice(-2).join('.');
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  }
+  function lineHtml(s) {
+    var t = lineTail(s, 120);
+    return t === String(s) ? esc(t) : '<span title="' + esc(String(s).slice(0, 1000)) + '">' + esc(t) + '</span>';
+  }
 
   // Роадмап по неделям (400dd…fead): на горизонте в ~38 недель неделе достаётся 15–22 px, а подписи «5 окт – 11 окт»
   // нужно ~84 px — тогда шкала подписывается месяцами, а недели остаются линиями.
@@ -2542,9 +2556,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function relayHtml(id) {
     var x = relayItemState(relay, id, Date.now());
     if (!x) return '';
-    if (x.k === 'wait') return '📨 Передано сессии ' + esc(x.session) + ' в ' + esc(fmtTime(x.at)) + ' — ждём «взял»';
-    if (x.k === 'sending') return '📨 Передаётся сессии ' + esc(x.session) + '…';
-    if (x.k === 'stuck') return '<span class="warn">📨 Передано сессии ' + esc(x.session) + ' в ' + esc(fmtTime(x.at)) + ', но «взял» нет' + (x.dead ? ', а автопередача не работает' : ' 10 минут') + ' — вставьте в сессию сами:</span> ' + relayCmd(id);
+    if (x.k === 'wait') return '📨 Передано сессии ' + lineHtml(x.session) + ' в ' + esc(fmtTime(x.at)) + ' — ждём «взял»';
+    if (x.k === 'sending') return '📨 Передаётся сессии ' + lineHtml(x.session) + '…';
+    if (x.k === 'stuck') return '<span class="warn">📨 Передано сессии ' + lineHtml(x.session) + ' в ' + esc(fmtTime(x.at)) + ', но «взял» нет' + (x.dead ? ', а автопередача не работает' : ' 10 минут') + ' — вставьте в сессию сами:</span> ' + relayCmd(id);
     return '<span class="warn">⚠️ Автопередача не работает — чтобы агент взял сейчас, вставьте в сессию:</span> ' + relayCmd(id);
   }
   // Строка у входящего без статуса агента (после «взял» — обычный статус агента).
@@ -2562,9 +2576,11 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     note.hidden = !relay;
     note.classList.toggle('warn', !!relay && !live);
     note.textContent = !relay ? '' : live
-      ? '🔁 Новые входящие сами уходят сессии ' + live.session + ' (отметка в ' + fmtTime(live.at) + '): «Возьми входящее» вставлять не нужно.'
-      : (last ? '⚠️ Автопередача не работает: сессия ' + last.session + ' не отмечалась с ' + fmtDT(new Date(last.at)) + '.' : 'Автопередача входящих не включена.') +
+      ? '🔁 Новые входящие сами уходят сессии ' + lineTail(live.session, 120) + ' (отметка в ' + fmtTime(live.at) + '): «Возьми входящее» вставлять не нужно.'
+      : (last ? '⚠️ Автопередача не работает: сессия ' + lineTail(last.session, 120) + ' не отмечалась с ' + fmtDT(new Date(last.at)) + '.' : 'Автопередача входящих не включена.') +
         ' Чтобы агент взял задачу сейчас, вставьте в сессию «Возьми входящее» с номером — команда и «Копировать» есть у пункта.';
+    // Текст заметки — textContent, подсказка с полной линией — у всей заметки (OPS-39).
+    note.title = relay && (live || last) ? String((live || last).session) : '';
     allItems().forEach(function (it) {
       if (it.kind !== 'inbox') return;
       var el = document.querySelector('.item[data-id="' + it.id + '"]'), e = state[it.id] || {};
@@ -2664,7 +2680,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         : up && up.done ? ', файлов: ' + up.done : '');
       var live = relayLive();
       status(live
-        ? saved + ' — передаю сессии ' + esc(live.session) + ': возьмёт в течение минуты, статус появится у пункта. Номер: <code>' + esc(id) + '</code>'
+        ? saved + ' — передаю сессии ' + lineHtml(live.session) + ': возьмёт в течение минуты, статус появится у пункта. Номер: <code>' + esc(id) + '</code>'
         : now
           ? saved + '. ' + (relay ? 'Автопередача сейчас не работает. ' : '') + 'Чтобы агент взял её сейчас, вставьте в сессию Claude: ' +
             '<span><code>Возьми входящее ' + esc(id) + '</code> <button type="button" class="copy">Копировать</button></span>'
