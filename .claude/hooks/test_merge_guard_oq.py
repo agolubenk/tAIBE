@@ -107,6 +107,9 @@ check("takeover — чужая линия", oq(20, both, "r.y80w.plit", "r.gtew"
 check("takeover — соседка корня", oq(20, both, "r.y80w.plit", "r.y80"), False)
 check("takeover — не линия", oq(20, both, "r.y80w.plit", "hr-helper-v2-4e"), False)
 check("предшественник после ack наследника: takeover потомка", oq(10, both, "r.y80w", "r.y80w.plit"), False)
+check("предшественник после ack наследника: своя линия", oq(10, both, "r.y80w"), False)
+check("наследник после ack: своя линия", oq(20, both, "r.y80w.plit"), True)
+check("наследник умер после ack: корень снова держит свою линию", oq(10, {10: ("r.y80w", ST)}, "r.y80w"), True)
 check("чужая квитанция (pid другой)", oq(21, {21: ("r.y80w.plit", ST)}, "r.y80w.plit", "r.y80w"), False)
 check("квитанция старого процесса с тем же pid",
       oq(20, {20: ("r.y80w.plit", "Sat Nov 14 01:00:00 2026")}, "r.y80w.plit", "r.y80w"), False)
@@ -160,11 +163,12 @@ check("held: Sx без procs — достаточно alive", mi.held_verdict(LI
 # oq_lines_verdict — чистое правило полей (его зовёт и хук HR): held спрашивается только о предках
 asked = []
 held_yes = lambda line: asked.append(line)  # noqa: E731
-check("правило: своя линия — без held", mi.oq_lines_verdict("r.a.b", "r.a.b", None, held_yes), True)
+check("правило: своя линия — тоже через held", mi.oq_lines_verdict("r.a.b", "r.a.b", None, held_yes), True)
 check("правило: предок и takeover-предок", mi.oq_lines_verdict("r.a.b.c", "r.a.b", "r.a", held_yes), True)
 checked[0] += 1
-if asked != ["r.a.b", "r.a"]:
-    failures.append(f"held спрошен о {asked}, ждали r.a.b и r.a")
+if asked != ["r.a.b", "r.a.b", "r.a"]:
+    failures.append(f"held спрошен о {asked}, ждали r.a.b (своя), затем r.a.b и r.a")
+check("правило: своя линия, held отказал", mi.oq_lines_verdict("r.a.b", "r.a.b", None, lambda line: "нет"), False)
 check("правило: held отказал", mi.oq_lines_verdict("r.a.b", "r.a", None, lambda line: "нет"), False)
 check("правило: линии сессии нет", mi.oq_lines_verdict(None, "r.a", None, held_yes), False)
 check("правило: линия «r» без сегмента", mi.oq_lines_verdict("r", "r", None, held_yes), False)

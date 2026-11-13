@@ -189,13 +189,16 @@ def oq_lines_verdict(mine, value, takeover, held):
     """Правило линий в oq_agent_status — одно на хуки tAIBE и HR (HR грузит этот файл из TAIBE_ROOT): mine — линия
     сессии, value — session, takeover — или None; held(line) — None, если сессия держит line (held_verdict).
     session — mine или линия её предка, которую сессия держит; takeover — линия предка session, которую сессия
-    держит. None — пропустить, иначе причина отказа."""
+    держит. Своя линия — тоже через held: предшественник после квитанции наследника её уже не держит (иначе у пункта
+    два держателя — сервер пропускает обоих по by == prevBy; линза роли 4, issuecomment-6862359737). None —
+    пропустить, иначе причина отказа."""
     if not OQ_LINE_RE.fullmatch(mine or ""):
         return f"линия сессии «{mine}» не линия очереди (r и сегменты) — в session своё имя"
     for field, line, under in (("session", value, mine), ("takeover", takeover, value)):
-        if line is None or (field == "session" and line == mine):
+        if line is None:
             continue
-        if not OQ_LINE_RE.fullmatch(line) or not under.startswith(line + "."):
+        own = field == "session" and line == mine
+        if not own and (not OQ_LINE_RE.fullmatch(line) or not under.startswith(line + ".")):
             return (f"{field} — своя линия ({mine}) или линия её предка" if field == "session" else
                     f"takeover — линия предка {value}") + f", а не «{line[:80]}»"
         why = held(line)
