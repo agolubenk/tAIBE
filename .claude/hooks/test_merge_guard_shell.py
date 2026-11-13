@@ -503,11 +503,16 @@ for form in (": # it's\n$G pr merge 1\n: # it's", "echo \"$(echo \"a\")\" # it's
              "echo ${#x} $# # it's\n$G pr merge 1", "echo \"it's\" # it's\n$G pr merge 1",
              "cat <<< 'x' # it's\n$G pr merge 1", "echo \"a # it's\"\n$G pr merge 1"):
     bash(f"SE-75: `'` в комментарии или рядом не прячет код: {form!r}", "G=gh\n" + form, True)
+# Контроль на 439e47b9f: маска чисел zsh `<1-2>`, `<1->`, `<->` — часть слова, `#` за ней — тоже (zsh 5.9 выполняет код)
+for form in ("setopt nonomatch\nG=gh\n: <1-2>#'\n'; $G pr merge 1; : '\n'", "G=gh\nnoglob : <1-2>#'\n'; $G pr merge 1; : '\n'",
+             "setopt nonomatch\nG=gh\n: <->#'\n'; $G pr merge 1; : '\n'"):
+    bash(f"SE-75: `#` за маской чисел zsh — не комментарий: {form!r}", form, True)
 SURE = ("a # it's\nb", "echo \"$(x \"$f\")\" # it's", "f() { :; } # it's", "a=(1) # it's", "echo ${x#*/} # it's",
         "echo $'\\'' # it's", "echo 'it''s' # it's", "echo $# ${#x} $((16#f)) # it's", "cat <<< 'x' # it's")
 LOST = ("echo `a` # it's", "cat <<E\nE\n# it's", "echo $[1] # it's", "x=$(case a in a) :;; esac) # it's",
         "(( 1 # it's\n))", "echo ${x:-'a'} # it's", "( : # it's\n)", "ls (#i)x # it's", "ls !(a) # it's",
-        "x=$(: # it's\n)", "(a)# it's", "alias q=\"'\"\n# it's", "echo 'a # it's", "echo \"$(echo \"#\") # it's\"")
+        "x=$(: # it's\n)", "(a)# it's", "alias q=\"'\"\n# it's", "echo 'a # it's", "echo \"$(echo \"#\") # it's\"",
+        "<1-2>#'", ": <1->#'", ": <->#'")
 for text in SURE:  # комментарий — последний ` # ` строки
     got = sure_comments(text)
     check(f"SE-75 sure_comments — верхний уровень: {text!r}", None if got == {text.rindex(" # ") + 1} else got, False)
