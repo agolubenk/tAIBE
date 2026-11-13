@@ -202,3 +202,5 @@ def run(tmp: Path, check) -> None:
     _review(check, gr)
     import selftest_review_chain
     selftest_review_chain.run(tmp, check)
+    import selftest_pr_repo
+    selftest_pr_repo.run(tmp, check)
