@@ -81,12 +81,13 @@ environment variables (N-007).
 | `postgres_password` | 0440, owner 70:1001. Postgres reads it as uid 70, the app as gid 1001 |
 | `auth_secret` | 0400, owner 1001 |
 | `settings_key` | 0400, owner 1001. Seals the notebook model key an instance admin saves in the settings |
+| `notification_secret_key` | 0400, owner 1001. Seals the ntfy / Gotify tokens and webhook signing secrets a user saves (TB-19). `install.sh` makes it once and never replaces it; a `NOTIFICATION_SECRET_ENCRYPTION_KEY` still in `.env` goes into the file as it is. A new key leaves the saved ones unreadable: users enter them again. The app reads it once at start |
 | `notion_token` | 0400, owner 1001. Optional: the owner puts it there |
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
 | `oq_token` | 0400, owner 1001. The owner-queue agent token of t-boards (TB-102, «Owner queue» below). The owner issues it in the ops-console; `install.sh` never makes it. Read on every call |
 | `claude_mem_proxy_token` | 0400, owner 1001. The Mac memory proxy token (OPS-19). The Mac owns it: `mac/memory-agent.sh token` makes it, `mac/memory-token-push.sh` delivers it. `install.sh` never makes it and warns while it is missing. The app reads it on every request |
 
-`install.sh` generates the first three once and never overwrites them. The database password only takes effect when the
+`install.sh` generates the first four once and never overwrites them. The database password only takes effect when the
 volume is first initialised. A replaced `settings_key` leaves the saved model key unreadable: the admin enters it again.
 The app reads `settings_key` once at start, so a new one needs `docker compose -p t-boards up -d app`; anything shorter
 than 32 characters counts as no key.
@@ -190,8 +191,6 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
 
 - Image uploads need S3 (`isStorageConfigured`). None is configured, so uploads are off. All data lives in Postgres
   and is covered by the dump.
-- `NOTIFICATION_SECRET_ENCRYPTION_KEY` is read only from env. Notification channels that store secrets stay off until
-  the variable supports `_FILE`.
 - Memory limits (app 1 GB, postgres 256 MB) are provisional until the K-6 measurements (R-005).
 - A device without `/etc/hosts` (a phone) needs a DNS override for the subdomain. There is no DNS server in the
   tunnel yet.
