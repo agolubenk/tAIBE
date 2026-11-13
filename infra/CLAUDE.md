@@ -22,12 +22,15 @@ MCP-хаб, шлюз моделей, сжатие контекста, ops-кон
 | `scripts/prod/ops-deploy-event.py` | Событие деплоя → карточка «Деплои» ops-консоли (подпись агента хоста) | python stdlib |
 
 Команды — корневой `package.json` (`npm run mcp-hub:*`, `llm-gateway:*`, `ai-council:*`, `ai-pipeline:*`, `done:index`)
-и `Makefile` (`make check-infra`). CI — `.github/workflows/infra-ci.yml`.
+и `Makefile` (`make check-infra`). CI — `.github/workflows/infra-ci.yml`; хаб — `mcp-hub-ci.yml` (macOS, только при
+правке кода хаба).
 
 ## Логика решений
 
 - **Сервис контроля не ломает поставку.** Очередь, консилиум и хаб — совещательные: их отказ не блокирует PR и
   мёрж, а молча не теряет пункт владельца (идемпотентность `ifVersion`, повтор — 409, а не дубль).
+- **Хаб MCP ведёт эта роль** (OPS-44): перезапуск — только окном (`mcp-hub/README.md`, «Окно перезапуска хаба»),
+  тревоги Нерва `sys.hub` приходят release и coord. Пока у tAIBE нет своей команды (OPS-25), пейджер — очередь владельца.
 - **Секреты — только по цепочке env → Keychain** (`scripts/dev-ai/mcp-secret.sh`, service `hr-helper-mcp`); в git —
   только `*.env.example`. MCP- и API-ключи наружу — хэшем, ключ показывается один раз.
 - **Локальные модели — строго последовательно** (машинный flock `~/.local/state/taibe/council/ollama-local.lock`:

@@ -1,0 +1,59 @@
+name: MCP hub CI
+
+# OPS-44: tests of the MCP hub (1mcp on the owner's Mac). The lifecycle test needs macOS (BSD `script`, `stat -f`)
+# and a real 1mcp at the version that mcp-hub.sh pins; it runs only when the hub code changes.
+# shellcheck of all *.sh is in checks-ci.yml.
+on:
+  push:
+    branches: [board-agents, main]
+    paths:
+      - "infra/mcp-hub/**"
+      - "infra/scripts/dev-ai/mcp-hub.sh"
+      - "infra/scripts/dev-ai/lib/**"
+      - "infra/scripts/dev-ai/tests/mcp-hub-*"
+      - "infra/scripts/dev-ai/tests/fixtures/**"
+      - ".github/workflows/mcp-hub-ci.yml"
+      - "!**/*.md"            # README хаба — без macOS-раннера (минуты ×10)
+  pull_request:
+    paths:
+      - "infra/mcp-hub/**"
+      - "infra/scripts/dev-ai/mcp-hub.sh"
+      - "infra/scripts/dev-ai/lib/**"
+      - "infra/scripts/dev-ai/tests/mcp-hub-*"
+      - "infra/scripts/dev-ai/tests/fixtures/**"
+      - ".github/workflows/mcp-hub-ci.yml"
+      - "!**/*.md"            # README хаба — без macOS-раннера (минуты ×10)
+  workflow_dispatch:
+
+concurrency:
+  group: mcp-hub-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hub:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: render_config and usage_by_server (python)
+        run: python3 -I -m unittest discover -s infra/mcp-hub -p 'test_*.py'
+      - name: upgrade — OAuth sessions copy
+        run: bash infra/scripts/dev-ai/tests/mcp-hub-upgrade.test.sh
+      - name: 1mcp at the pinned version
+        run: |
+          v="$(sed -n 's/^ONE_MCP_VERSION="\([0-9.]*\)"$/\1/p' infra/scripts/dev-ai/mcp-hub.sh)"
+          test -n "$v"
+          npm install --prefix "$RUNNER_TEMP/runtime" --no-audit --no-fund --loglevel=error "@1mcp/agent@$v"
+      - name: lifecycle — detach, stop, orphans, lock
+        env:
+          MCP_HUB_TEST_RUNTIME: ${{ runner.temp }}/runtime
+        run: bash infra/scripts/dev-ai/tests/mcp-hub-detach.test.sh

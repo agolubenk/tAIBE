@@ -439,19 +439,61 @@ def poll_system(ctx):
             elif free < s["mem_warn"]:
                 ctx.emit(f"sys:mem:warn:{hour}", "sys.memory", DIGEST, ["release"],
                          f"память Mac: свободно {free}%", "system")
+    # OPS-44: хаб и Serena — release и coord, команда из папки tAIBE; LaunchAgent хаба — раз в сутки release.
     hub = ctx.state.setdefault("hub", {"fails": 0, "down_since": ""})
-    _, out, _ = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-m", "5", s["hub_health"]], timeout=10)
-    if out.strip() == "200":
-        if hub["down_since"]:
-            ctx.emit(f"sys:hub:up:{hub['down_since']}", "sys.hub", DIGEST, ["release"],
-                     f"хаб MCP снова отвечает (лежал с {hub['down_since'][11:16]})", "system")
-        hub.update(fails=0, down_since="")
-    else:
-        hub["fails"] += 1
-        if hub["fails"] >= 2 and not hub["down_since"]:
-            hub["down_since"] = ctx.now.astimezone(ctx.tz).isoformat(timespec="minutes")
-            ctx.emit(f"sys:hub:down:{hub['down_since']}", "sys.hub", NERVOUS, ["release"],
-                     "хаб MCP :3050 не отвечает два прохода — npm run mcp-hub:status", "system")
+    _probe_watch(ctx, hub, "hub", "хаб MCP :3050", _http_code(s["hub_health"]) == "200")
+    probes = ctx.state.setdefault("probes", {})
+    for url in s.get("serena_mcp") or []:
+        port = url.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[-1]
+        st = probes.setdefault(f"serena:{port}", {"fails": 0, "down_since": ""})
+        # Serena отдаёт MCP по streamable HTTP: на голый GET — 4xx, это «слушает»; 000 — порт закрыт.
+        _probe_watch(ctx, st, f"serena:{port}", f"Serena :{port}", _http_code(url) not in ("", "000"))
+    day = ctx.now.astimezone(ctx.tz).strftime("%Y%m%d")
+    for label in _launch_agents_missing(s.get("launch_agents") or []):
+        ctx.emit(f"sys:agent:{label}:{day}", "sys.hub", DIGEST, ["release"],
+                 f"LaunchAgent {label} не загружен — хаб не поднимется сам после входа в систему; {AGENT_HINT}",
+                 "system")
+
+
+HUB_HINT = "в папке tAIBE: npm run mcp-hub:status"
+AGENT_HINT = "в папке tAIBE: npm run mcp-hub:autostart"
+
+
+def _http_code(url):
+    """HTTP-код ответа или «000» (нет соединения); тело не читается."""
+    _, out, _ = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-m", "5", url], timeout=10)
+    return out.strip()
+
+
+def _probe_watch(ctx, st, key, title, ok):
+    """Два прохода подряд без ответа — нервное событие release и coord; ожил — сводка им же: coord будили тревогой."""
+    if ok:
+        if st.get("down_since"):
+            ctx.emit(f"sys:{key}:up:{st['down_since']}", "sys.hub", DIGEST, ["release", "coord"],
+                     f"{title} снова отвечает (лежал с {st['down_since'][11:16]})", "system")
+        st.update(fails=0, down_since="")
+        return
+    st["fails"] = st.get("fails", 0) + 1
+    if st["fails"] >= 2 and not st.get("down_since"):
+        st["down_since"] = ctx.now.astimezone(ctx.tz).isoformat(timespec="minutes")
+        ctx.emit(f"sys:{key}:down:{st['down_since']}", "sys.hub", NERVOUS, ["release", "coord"],
+                 f"{title} не отвечает два прохода — {HUB_HINT}", "system")
+
+
+def _launch_agents_missing(labels):
+    """Метки LaunchAgent, которых нет в gui-домене пользователя (launchctl print ≠ 0). Нет launchctl, сбой или зависание
+    вызова — метка не проверена, а не «не загружена»."""
+    if not labels or not shutil.which("launchctl"):
+        return []
+    missing = []
+    for label in labels:
+        try:
+            rc = run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout=10)[0]
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if rc != 0:
+            missing.append(label)
+    return missing
 
 
 def recent_limit_texts(project_root, since, tail):
