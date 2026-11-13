@@ -144,16 +144,11 @@ def _check_pr(ctx, n, p, head, refresh=False):
         if v["verdict"] == "changes" and quorum.on_head(v["sha"], head):
             ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, [p["author"]],
                      f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github")
-    ok, approved, changes, ci = quorum.quorum(verdicts, head, p.get("checks") or [], g["min_lenses"])
+    _, approved, changes, ci = quorum.quorum(verdicts, head, p.get("checks") or [], g["min_lenses"])
     p["changes_by"] = changes
-    lenses = len(approved) >= g["min_lenses"] and not changes  # линз хватает — ждём только CI
-    p["await_ci"] = lenses and ci == "pending"
-    if ok:
-        ctx.emit(f"gh:quorum:{n}:{head}", "pr.quorum", NERVOUS, g["quorum_to"],
-                 f"#{n} собран: approve {', '.join(approved)} на {head[:9]}, CI {ci}", "github")
-    elif lenses and ci == "failure":  # SE-86: кворума нет, чинит автор — один раз на голову
-        ctx.emit(f"gh:cifail:{n}:{head}", "pr.ci_failed", NERVOUS, [p["author"]],
-                 f"#{n}: линзы собраны ({', '.join(approved)}), CI упал на {head[:9]}", "github")
+    ev, p["await_ci"] = quorum.pr_event(n, head, approved, changes, ci, g["min_lenses"], g["quorum_to"], p["author"])
+    if ev:  # pr.quorum Контролю или pr.ci_failed автору (SE-86); ключ — один на голову
+        ctx.emit(*ev[:2], NERVOUS, *ev[2:], "github")
 
 
 # ---------- Очередь владельца ----------

@@ -124,6 +124,20 @@ def quorum(verdicts, head, checks, min_lenses=3):
     return (len(approved) >= min_lenses and not changes and ci == "ok"), approved, changes, ci
 
 
+def pr_event(n, head, approved, changes, ci, min_lenses, quorum_to, author):
+    """Событие PR после разбора вердиктов: ((ключ, вид, кому, текст) или None, ждёт ли PR только CI). Линз мало или
+    есть changes — ничего. Линзы собраны: CI ok — pr.quorum в quorum_to; CI упал — pr.ci_failed автору, кворума нет
+    (SE-86); CI идёт — await_ci, PR опрашивается заново. Ключ — один на голову: журнал событие не повторяет."""
+    if len(approved) < min_lenses or changes or ci == "pending":
+        return None, len(approved) >= min_lenses and not changes
+    lenses, short = ", ".join(approved), head[:9]
+    if ci == "ok":
+        return (f"gh:quorum:{n}:{head}", "pr.quorum", quorum_to,
+                f"#{n} собран: approve {lenses} на {short}, CI ok"), False
+    return (f"gh:cifail:{n}:{head}", "pr.ci_failed", [author],
+            f"#{n}: линзы собраны ({lenses}), CI упал на {short}"), False
+
+
 def role_of_lens(lens, lens_roles, team_roles=()):
     """Роль линзы: ключ, который уже роль из team_roles, иначе первое совпадение в lens_roles."""
     if lens in team_roles:

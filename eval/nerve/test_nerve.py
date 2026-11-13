@@ -162,9 +162,20 @@ class QuorumTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
-        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS", "FAILURE"])[::3], (False, "failure"), "SE-86: CI упал")
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS", "FAILURE"])[::3], (False, "failure"), "SE-86")
         self.assertEqual(quorum.quorum(vs, head, ["SUCCESS", "CANCELLED"])[::3], (False, "failure"))
         self.assertTrue(quorum.quorum(vs, head, ["SUCCESS", "SKIPPED", "NEUTRAL"])[0], "пропущенные проверки — ok")
+
+    def test_pr_event_by_ci(self):
+        """SE-86: линзы собраны — событие решает CI; ключ один на голову."""
+        ev = lambda ci, approved=("a", "b", "c"), changes=(): quorum.pr_event(  # noqa: E731
+            7, "f" * 40, list(approved), list(changes), ci, 3, ["release"], "backend")
+        self.assertEqual(ev("ok")[0][:3], (f"gh:quorum:7:{'f' * 40}", "pr.quorum", ["release"]))
+        self.assertEqual(ev("failure")[0][:3], (f"gh:cifail:7:{'f' * 40}", "pr.ci_failed", ["backend"]))
+        self.assertEqual((ev("ok")[1], ev("failure")[1]), (False, False))
+        self.assertEqual(ev("pending"), (None, True), "ждёт только CI")
+        self.assertEqual(ev("failure", approved=("a", "b")), (None, False), "линз мало — ни события, ни ожидания")
+        self.assertEqual(ev("pending", changes=("d",)), (None, False))
 
     def test_later_verdict_of_a_lens_overrides(self):
         head = "abcdef1234"
