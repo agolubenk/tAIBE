@@ -8,6 +8,7 @@ import {
   userTable,
 } from "../../database/schema";
 import { publishEvent } from "../../events";
+import { type AuthorKind, authorMark } from "../../forest/author-kind";
 import createNotification from "../../notification/controllers/create-notification";
 import { parseMentionIds } from "../../utils/parse-mentions";
 
@@ -16,6 +17,8 @@ async function createComment(
   userId: string,
   content: string,
   external?: { userName: string; source: string },
+  // TB-83: who wrote it, recorded with the comment.
+  author?: AuthorKind,
 ) {
   const [activity] = await db
     .insert(activityTable)
@@ -24,6 +27,7 @@ async function createComment(
       type: "comment",
       userId,
       content,
+      eventData: author ? authorMark(author) : null,
       ...(external
         ? {
             externalUserName: external.userName,

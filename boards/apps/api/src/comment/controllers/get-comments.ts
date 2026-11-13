@@ -1,6 +1,7 @@
 import { and, asc, eq, isNotNull } from "drizzle-orm";
 import db from "../../database";
 import { activityTable, userTable } from "../../database/schema";
+import { authorOfRow } from "../../forest/author-kind";
 
 async function getComments(taskId: string) {
   const comments = await db
@@ -13,6 +14,8 @@ async function getComments(taskId: string) {
       updatedAt: activityTable.updatedAt,
       userName: userTable.name,
       userImage: userTable.image,
+      userRole: userTable.role,
+      eventData: activityTable.eventData,
     })
     .from(activityTable)
     .innerJoin(userTable, eq(activityTable.userId, userTable.id))
@@ -37,6 +40,7 @@ async function getComments(taskId: string) {
       name: c.userName,
       image: c.userImage,
     },
+    author: authorOfRow(c.userRole, c.eventData),
   }));
 }
 

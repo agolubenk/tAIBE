@@ -8,6 +8,7 @@ import { insertProject } from "../../project/controllers/insert-project";
 import { claimTaskNumber } from "../../task/controllers/claim-task-numbers";
 import { nextTaskPosition } from "../../task/controllers/next-task-position";
 import type { ForestActor } from "../actor";
+import { authorOfActor } from "../author-kind";
 import { writeJournal } from "../journal";
 
 export const GROW_SEED_LIMIT = 100;
@@ -121,6 +122,7 @@ export async function growForest(input: GrowInput) {
       taskId: task.id,
       userId: task.userId ?? "",
       currentUserId: input.actor.userId,
+      author: authorOfActor(input.actor),
       type: "created",
       content: null,
     });

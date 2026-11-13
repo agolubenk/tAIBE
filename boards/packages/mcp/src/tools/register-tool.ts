@@ -6,6 +6,7 @@ import {
   withAgentIdentity,
 } from "../kaneo/agent-identity.js";
 import { errorResult } from "../utils/mcp-result.js";
+import { withBoardTextRule } from "../view/board-text.js";
 import { shapeResult } from "../view/shape-result.js";
 import { splitView, viewOptionsShape } from "../view/view-options.js";
 import { defaultCounter } from "../view/wire-format.js";
@@ -194,7 +195,11 @@ export function createRegisterTool(
     };
     return server.registerTool(
       name,
-      { ...config, inputSchema },
+      {
+        ...config,
+        description: withBoardTextRule(name, config.description),
+        inputSchema,
+      },
       async (args) => {
         if (!onCall) return handle(args);
         const started = performance.now();
