@@ -374,12 +374,23 @@ spawn_orphan() { # <лог> <команда…>: своя сессия, ppid 1, 
   spawn_bg "$log" python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
   ORPHAN="$BG_PID"
 }
+orphan_fail() { # <pid> <сообщение>: процессы теста (жив ли, стадия, сколько живёт), слушатель порта — и fail
+  {
+    echo "  ── процесс $1: $(ps -o pid=,ppid=,pgid=,stat=,etime=,command= -p "$1" 2>/dev/null || echo 'нет')"
+    echo "  ── процессы теста:"
+    ps -ax -o pid=,ppid=,pgid=,stat=,etime=,command= | grep -F "$TMP" | grep -v grep | cut -c1-220 | sed 's/^/     /' || true
+    echo "  ── слушатель :$SERENA_PORT — $(listener "$SERENA_PORT")"
+  } >&2
+  fail "$2"
+}
 spawn_orphan "$TMP/logs/c-serena.log" "$TMP/bin/uvx" "${SERENA_ARGS[@]}"
 C_SER="$ORPHAN"
-wait_until 10 port_busy "$SERENA_PORT" || fail "сирота serena не открыла порт"
+# 30 с, а не 10: на раннере macos-latest (13.11, run 43447213615) сирота за 12 с не дошла даже до bind.
+wait_until 30 port_busy "$SERENA_PORT" || orphan_fail "$C_SER" "сирота serena не открыла порт"
 spawn_orphan "$TMP/logs/c-extra.log" "$TMP/bin/uvx" "${SERENA_ARGS[@]}"
 C_EXTRA="$ORPHAN"
-wait_until 10 grep -q "не открыть" "$TMP/logs/c-extra.log" || fail "лишняя копия serena не дошла до попытки занять порт"
+wait_until 30 grep -q "не открыть" "$TMP/logs/c-extra.log" ||
+  orphan_fail "$C_EXTRA" "лишняя копия serena не дошла до попытки занять порт"
 spawn_orphan "$TMP/logs/c-hub.log" "$TMP/runtime/node_modules/.bin/1mcp" serve --config "$TMP/config/mcp.json" \
   --transport http --host 127.0.0.1 --port "$HUB_PORT" --enable-async-loading --async-background-retry \
   --health-info-level basic --log-level info
