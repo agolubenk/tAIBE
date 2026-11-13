@@ -6,6 +6,7 @@ import {
   type QueueCollection,
   QueueConflict,
   type QueueDoc,
+  QueueRejected,
 } from "./queue-client";
 import type { OwnerQueueConfig } from "./queue-config";
 
@@ -27,13 +28,17 @@ const DAY3 = new Date("2026-11-15T06:00:00Z");
 // a work row needs dueRef = an item naming the row, answered «move» after its
 // last change, not later than its moveTo date, used once (TB-112 part 1, PR
 // #156). race() — another writer moves the doc before the next write; refuse()
-// — the console refuses every write of the doc with 409.
+// — the console refuses every write of the doc with 409; reject() — with 422.
+// agentNote of a check is 2000 at most (checkSchema). afterGet() — the owner
+// acts right after the pass read a doc.
 class MemQueue {
   readonly docs = new Map<string, QueueDoc>();
   readonly writes: string[] = [];
   private clock = Date.parse("2026-11-13T00:00:00Z");
   private readonly races = new Set<string>();
   private readonly refused = new Set<string>();
+  private readonly rejected = new Set<string>();
+  private readonly hooks = new Map<string, () => void>();
 
   race(collection: QueueCollection, id: string) {
     this.races.add(`${collection}/${id}`);
@@ -41,6 +46,14 @@ class MemQueue {
 
   refuse(collection: QueueCollection, id: string) {
     this.refused.add(`${collection}/${id}`);
+  }
+
+  reject(collection: QueueCollection, id: string) {
+    this.rejected.add(`${collection}/${id}`);
+  }
+
+  afterGet(collection: QueueCollection, id: string, act: () => void) {
+    this.hooks.set(`${collection}/${id}`, act);
   }
 
   // The owner's answer; the console stamps ownerAt.
@@ -109,6 +122,9 @@ class MemQueue {
   ): QueueDoc {
     const key = `${collection}/${id}`;
     if (this.refused.has(key)) throw new QueueConflict("refused");
+    if (this.rejected.has(key)) {
+      throw new QueueRejected(`HTTP 422 ${key} is too large`, 422);
+    }
     if (this.races.delete(key)) {
       const moved = this.doc(collection, id);
       if (moved) this.set(collection, id, { ...moved.data });
@@ -127,6 +143,9 @@ class MemQueue {
       if (value === null) delete next[key];
     }
     if (collection === "work") this.guard(id, current?.data ?? {}, next);
+    if (String(next.agentNote ?? "").length > 2000) {
+      throw new QueueRejected("HTTP 422 agentNote is over 2000", 422);
+    }
     this.writes.push(`${collection}/${id}`);
     this.set(collection, id, next);
     return structuredClone(this.doc(collection, id) as QueueDoc);
@@ -136,7 +155,11 @@ class MemQueue {
     return {
       get: async (collection, id) => {
         const doc = this.doc(collection, id);
-        return doc ? structuredClone(doc) : null;
+        const read = doc ? structuredClone(doc) : null;
+        const key = `${collection}/${id}`;
+        this.hooks.get(key)?.();
+        this.hooks.delete(key);
+        return read;
       },
       put: async (collection, id, data, ifVersion) =>
         this.write(collection, id, data, false, ifVersion),
@@ -607,5 +630,61 @@ describe("TB-112: the answer follows the item the owner read", () => {
     expect(queue.doc("items", "d-taibe-due-20261115")).toBeUndefined();
     expect(queue.data("work", "due-taibe").applied).toBe(true);
     expect(queue.data("work", "w-taibe-a").planEnd).toBe("2026-11-19");
+  });
+
+  it("a refused write (422) closes the answer unapplied, tells the owner, and the run goes on", async () => {
+    const queue = await decided();
+    queue.answer(ITEM, "keep");
+    queue.reject("work", "w-taibe-tb-backlog");
+    await expect(run(queue)).resolves.toMatchObject({ left: 0 });
+    expect(cardsOf(queue, "w-taibe-a")).toEqual(keys(6));
+    expect(queue.data("checks", ITEM)).toMatchObject({
+      agentStatus: "blocked",
+    });
+    expect(String(queue.data("checks", ITEM).agentNote)).toContain(
+      "Ответ не применён: очередь отказала в записи",
+    );
+    expect(queue.data("items", ITEM).archived).toBeUndefined();
+    expect(queue.data("work", "due-taibe")).toMatchObject({ applied: true });
+    // Closed: the next runs do not try again every 5 minutes.
+    queue.writes.length = 0;
+    await run(queue, DAY3);
+    expect(queue.writes).toEqual([]);
+  });
+
+  it("a long outcome note is cut to the queue's 2000 characters", async () => {
+    const queue = new MemQueue();
+    plan(queue);
+    queue.set("work", "w-taibe-a", {
+      ...queue.data("work", "w-taibe-a"),
+      title: "Т".repeat(2100),
+    });
+    await daily(queue, DAY1);
+    queue.answer(ITEM, "move");
+    queue.refuse("work", "w-taibe-a");
+    await run(queue);
+    const note = String(queue.data("checks", ITEM).agentNote);
+    expect(note).toHaveLength(2000);
+    expect(note.startsWith("Перенесено строк: 0.")).toBe(true);
+    expect(note.endsWith("…")).toBe(true);
+    expect(queue.data("checks", ITEM).agentStatus).toBe("done");
+  });
+
+  it("an answer that comes during the run is not lost to the new decision", async () => {
+    const queue = await decided();
+    plan(queue, keys(7));
+    // The owner answers right after the answer pass read the old decision.
+    queue.afterGet("checks", ITEM, () => queue.answer(ITEM, "move"));
+    const first = await daily(queue, DAY2);
+    expect(first.dailyDone).toBe(false);
+    expect(queue.data("items", ITEM).archived).toBeUndefined();
+    expect(queue.doc("items", "d-taibe-due-20261114")).toBeUndefined();
+    // The next run applies it first.
+    await daily(queue, DAY2);
+    expect(queue.data("work", "w-taibe-a")).toMatchObject({
+      planEnd: "2026-11-19",
+      dueRefs: [ITEM],
+    });
+    expect(queue.data("items", ITEM).archived).toBe(true);
   });
 });

@@ -8,7 +8,12 @@ import {
 } from "./plan-due";
 import { cardRef, cardUid, type PlanRow, rowProduct } from "./plan-types";
 import type { PlanWriter } from "./plan-writer";
-import type { QueueDoc } from "./queue-client";
+import { type QueueDoc, QueueRejected } from "./queue-client";
+
+// agentNote of a check: the queue refuses a longer one (checkSchema, 422).
+const NOTE_MAX = 2000;
+const clip = (note: string) =>
+  note.length <= NOTE_MAX ? note : `${note.slice(0, NOTE_MAX - 1)}…`;
 
 export type RowPatch = {
   id: string;
@@ -235,7 +240,7 @@ async function applyOne(
   if (done.note) {
     const noted = await writer.patch("checks", answer.item.id, {
       agentStatus: "done",
-      agentNote: done.note,
+      agentNote: clip(done.note),
     });
     if (typeof noted === "string") return false;
   }
@@ -245,9 +250,39 @@ async function applyOne(
   return closeState(
     writer,
     doc,
-    { choice, ...(done.note ? { note: done.note } : {}) },
+    { choice, ...(done.note ? { note: clip(done.note) } : {}) },
     now,
   );
+}
+
+// The queue refused a write of this answer (400/422: schema, size). A retry
+// gets the same refusal every 5 minutes, so the answer closes unapplied: the
+// owner reads why on the decision (blocked), the item stays open for them.
+async function refuseAnswer(
+  writer: PlanWriter,
+  doc: QueueDoc,
+  itemId: string,
+  reason: string,
+  now: Date,
+) {
+  console.warn(`owner-queue due: ${itemId} not applied: ${reason}`);
+  const note = clip(
+    `Ответ не применён: очередь отказала в записи (${reason}). Срок и строки не менялись.`,
+  );
+  try {
+    if (await writer.client.get("checks", itemId)) {
+      await writer.patch("checks", itemId, {
+        agentStatus: "blocked",
+        agentNote: note,
+      });
+    }
+    await closeState(writer, doc, { note }, now);
+  } catch (error) {
+    if (!(error instanceof QueueRejected)) throw error;
+    console.warn(
+      `owner-queue due: ${itemId} state not closed: ${error.message}`,
+    );
+  }
 }
 
 // The answer counts for the text the owner read: the item is unchanged since
@@ -269,55 +304,76 @@ function answeredAfter(check: QueueDoc, item: QueueDoc) {
 // work doc changed (the run reads the list again) and the products whose
 // decision is still open: null — unanswered, a choice — answered, not
 // applied yet.
-export async function applyAnswers(
+type AnswerInput = {
+  docs: QueueDoc[];
+  rows: PlanRow[];
+  products: string[];
+  now: Date;
+};
+
+// One product's open decision. Returns what stays open: null — unanswered,
+// a choice — answered, not applied yet; undefined — nothing open.
+async function applyProduct(
   writer: PlanWriter,
-  input: { docs: QueueDoc[]; rows: PlanRow[]; products: string[]; now: Date },
-) {
+  input: AnswerInput,
+  product: string,
+  doc: QueueDoc,
+  itemId: string,
+): Promise<DueChoice | null | undefined> {
+  const item = await writer.client.get("items", itemId);
+  const due = readItemDue(item, product);
+  if (!item || !due || item.data.archived === true) {
+    await closeState(
+      writer,
+      doc,
+      { note: `решение ${itemId} в архиве или не найдено — не применяю` },
+      input.now,
+    );
+    return undefined;
+  }
+  const check = await writer.client.get("checks", item.id);
+  const choice = check?.data.choice;
+  if (!check || !isDueChoice(choice)) return null;
+  if (!answeredAfter(check, item)) {
+    // The item changed after the answer: the owner did not see this text.
+    // Nothing moves; rows: [] makes the next daily run ask again.
+    if (await archiveItem(writer, item.id)) {
+      await closeState(
+        writer,
+        doc,
+        { rows: [], note: "решение изменено после ответа — спрошу заново" },
+        input.now,
+      );
+    }
+    return undefined;
+  }
+  const answer = {
+    item,
+    due,
+    rows: input.rows,
+    products: input.products,
+    product,
+  };
+  return (await applyOne(writer, doc, answer, choice, input.now))
+    ? undefined
+    : choice;
+}
+
+export async function applyAnswers(writer: PlanWriter, input: AnswerInput) {
   const open = new Map<string, DueChoice | null>();
   const before = writer.written;
   for (const product of input.products) {
     const doc = input.docs.find((one) => one.id === dueStateId(product));
     const state = readState(doc?.data);
     if (!doc || !state || state.applied) continue;
-    const item = await writer.client.get("items", state.item);
-    const due = readItemDue(item, product);
-    if (!item || !due || item.data.archived === true) {
-      await closeState(
-        writer,
-        doc,
-        { note: `решение ${state.item} в архиве или не найдено — не применяю` },
-        input.now,
-      );
-      continue;
-    }
-    const check = await writer.client.get("checks", item.id);
-    const choice = check?.data.choice;
-    if (!check || !isDueChoice(choice)) {
-      open.set(product, null);
-      continue;
-    }
-    if (!answeredAfter(check, item)) {
-      // The item changed after the answer: the owner did not see this text.
-      // Nothing moves; rows: [] makes the next daily run ask again.
-      if (await archiveItem(writer, item.id)) {
-        await closeState(
-          writer,
-          doc,
-          { rows: [], note: "решение изменено после ответа — спрошу заново" },
-          input.now,
-        );
-      }
-      continue;
-    }
-    const answer = {
-      item,
-      due,
-      rows: input.rows,
-      products: input.products,
-      product,
-    };
-    if (!(await applyOne(writer, doc, answer, choice, input.now))) {
-      open.set(product, choice);
+    // A refused write stops this answer only: the rest of the run (other
+    // products, F4, the daily part) goes on.
+    try {
+      const left = await applyProduct(writer, input, product, doc, state.item);
+      if (left !== undefined) open.set(product, left);
+    } catch (error) {
+      if (!(error instanceof QueueRejected)) throw error;
+      await refuseAnswer(writer, doc, state.item, error.message, input.now);
     }
   }
   return { changed: writer.written > before, open };

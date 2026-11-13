@@ -1,5 +1,5 @@
 import { archiveItem, applyAnswers } from "./plan-due-apply";
-import { readItemDue } from "./plan-due";
+import { isDueChoice, readItemDue } from "./plan-due";
 import { type DailyPlan, dailyPlan } from "./plan-due-daily";
 import { PACE_DAYS } from "./plan-eta";
 import { planWrites, type RowWrite } from "./plan-rows";
@@ -101,15 +101,33 @@ function withEta(writes: RowWrite[], rows: PlanRow[], daily: DailyPlan) {
   return [...byId.values()].sort((a, b) => a.rank - b.rank);
 }
 
+// The owner answered the previous decision after applyAnswers read it (the
+// same run): archiving it now would lose the answer.
+async function answeredMeanwhile(writer: PlanWriter, id: string | undefined) {
+  if (!id) return false;
+  const check = await writer.client.get("checks", id);
+  return isDueChoice(check?.data.choice);
+}
+
 // New decision: the item first, then the last unanswered one archived, then
 // the state. A 409 on the item: it exists — a run wrote it and failed before
 // the state. Our open decision is taken as written and the state points to
 // it, with its rows as the owner reads them; any other doc there is left.
-// false — a write failed or was left: the daily part runs again next run.
+// A previous decision answered meanwhile stays: the next run applies the
+// answer first, then asks anew. false — a write failed or was left, or an
+// answer came meanwhile: the daily part runs again next run.
 async function writeDecisions(writer: PlanWriter, daily: DailyPlan) {
   let complete = true;
   for (const decision of daily.decisions) {
     const { item, state } = decision;
+    const previous =
+      decision.archive && decision.archive !== item.id
+        ? decision.archive
+        : undefined;
+    if (await answeredMeanwhile(writer, previous)) {
+      complete = false;
+      continue;
+    }
     const put = await writer.write(() =>
       writer.client.put("items", item.id, item.data, 0),
     );
@@ -127,8 +145,8 @@ async function writeDecisions(writer: PlanWriter, daily: DailyPlan) {
       }
       rows = due;
     }
-    if (decision.archive && decision.archive !== item.id) {
-      if (!(await archiveItem(writer, decision.archive))) {
+    if (previous) {
+      if (!(await archiveItem(writer, previous))) {
         complete = false;
         continue;
       }
