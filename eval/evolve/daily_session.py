@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -115,13 +116,18 @@ def cmd_session(args):
         steps.log('session: quota spent — quiet exit')
         return 0
     try:
-        result = json.loads(res.stdout).get('result', '')
+        data = json.loads(res.stdout)
     except ValueError:
-        result = ''
+        data = None
+    data = data if isinstance(data, dict) else {}
+    result = data.get('result', '')
     line, why = comment_from(result)
     posted = steps.post_card(line) if line and not report.get('card') and not args.no_card else 'not posted: %s' % (
         why if not line else 'the run already posted' if report.get('card') else '--no-card')
-    steps.save_json('runs/session-latest.json', {'exit': res.returncode, 'comment': posted})
+    # usd and finished: the Nerve counts the session as overhead of the 5 h window (SE-66); no transcript has it.
+    steps.save_json('runs/session-latest.json', {'exit': res.returncode, 'comment': posted,
+                                                 'usd': data.get('total_cost_usd'),
+                                                 'finished': datetime.now(timezone.utc).isoformat(timespec='seconds')})
     steps.log('session: exit %d, card %s' % (res.returncode, posted))
     return 0
 
