@@ -96,6 +96,7 @@ describe("API integration: owner-queue plan store (TB-106)", () => {
       workspaceId: mine.workspace.id,
       kind: "bug",
       severity: "high",
+      updatedBy: "import",
     });
     await card(mine.project.id, 2, "done", {
       completedAt: new Date(now.getTime() - 2 * DAY),
