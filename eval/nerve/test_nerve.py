@@ -528,7 +528,9 @@ class TapTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             wj(os.path.join(d, "mode.json"), {"phase": "night"})
             open(os.path.join(d, "journal.jsonl"), "w").close()
+            # run_products ведёт учёт прохода (SE-70: длительности, пульс) — с подменённым Ctx он не нужен
             with mock.patch.object(nerve, "STATE_DIR", d), mock.patch.object(nerve, "one_pass"), \
+                    mock.patch.object(nerve, "run_products"), \
                     mock.patch.object(nerve, "Ctx"), mock.patch.object(nerve, "wakes_on", return_value=False), \
                     mock.patch.object(nerve.time, "sleep", side_effect=Slept) as sleep:
                 with self.assertRaises(Slept):
