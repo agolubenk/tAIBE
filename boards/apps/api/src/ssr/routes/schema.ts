@@ -15,18 +15,47 @@ const versionSpec = z.union([
   z.string().regex(/^\d+$/),
 ]);
 
+// TB-129. The sync is the whole manifest (RU-13 archives what it leaves
+// out), so the corpus cannot be split into several syncs: the manifest
+// limit is the corpus limit. An entry without content is a path and a sha,
+// at most ~600 bytes; 5000 of them plus 5000 deleted paths are 5.2 MiB, under
+// the route's 12 MB body bound, which also caps the content.
+export const SYNC_BODY_BYTES = 12 * 1024 * 1024;
+export const SYNC_MANIFEST_MAX = 5000;
+export const SYNC_CONTENT_MAX = 400;
+export const SYNC_PATH_MAX = 500;
+
 export const syncBody = z.object({
   commitSha: z.string().regex(/^[0-9a-f]{6,40}$/i),
   files: z
     .array(
       z.object({
-        path: z.string().min(1).max(500),
+        path: z.string().min(1).max(SYNC_PATH_MAX),
         sha256: z.string().regex(/^[0-9a-f]{64}$/),
         content: z.string().max(600_000).optional(),
       }),
     )
-    .max(400),
-  deleted: z.array(z.string().min(1).max(500)).max(400).optional(),
+    .max(SYNC_MANIFEST_MAX)
+    .refine(
+      (files) =>
+        files.filter((file) => file.content !== undefined).length <=
+        SYNC_CONTENT_MAX,
+      {
+        message: `at most ${SYNC_CONTENT_MAX} files with content in one sync`,
+      },
+    ),
+  deleted: z
+    .array(z.string().min(1).max(SYNC_PATH_MAX))
+    .max(SYNC_MANIFEST_MAX)
+    .optional(),
+});
+
+// The sync agent asks about the whole manifest before it uploads content, so
+// /known-shas takes as many shas as /sync takes files. With the old 1000 the
+// client failed with 400 on the 1001st file, before /sync (boards lens on
+// #230). 5000 shas are ~335 KB of JSON.
+export const knownShasBody = z.object({
+  shas: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(SYNC_MANIFEST_MAX),
 });
 
 export const approveBody = z.object({

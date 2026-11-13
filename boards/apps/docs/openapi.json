@@ -29003,7 +29003,7 @@
                       "type": "string",
                       "pattern": "^[0-9a-f]{64}$"
                     },
-                    "maxItems": 1000
+                    "maxItems": 5000
                   }
                 },
                 "required": [
@@ -29262,7 +29262,7 @@
                         "sha256"
                       ]
                     },
-                    "maxItems": 400
+                    "maxItems": 5000
                   },
                   "deleted": {
                     "type": "array",
@@ -29271,7 +29271,7 @@
                       "minLength": 1,
                       "maxLength": 500
                     },
-                    "maxItems": 400
+                    "maxItems": 5000
                   }
                 },
                 "required": [
