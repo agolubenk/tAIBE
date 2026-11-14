@@ -45,22 +45,6 @@ def _gh_view(repo, n):
     return [f["path"] for f in d.get("files") or []], checks, d.get("state"), d.get("mergedAt")
 
 
-_BODY_TIME_Q = ("query($o:String!,$r:String!,$n:Int!)"
-                "{repository(owner:$o,name:$r){pullRequest(number:$n){lastEditedAt createdAt}}}")
-
-
-def _gh_body_time(repo, n):
-    """Время правки тела PR (SE-50): lastEditedAt, у неправленного — createdAt. updated_at списка не годится: его
-    двигает каждый комментарий и пуш."""
-    owner, name = repo.split("/", 1)
-    code, out, err = sources.run(["gh", "api", "graphql", "-f", f"query={_BODY_TIME_Q}", "-f", f"o={owner}",
-                                  "-f", f"r={name}", "-F", f"n={n}"])
-    if code != 0:
-        raise RuntimeError(f"gh body time {repo}#{n}: {err.strip()[:200]}")
-    pr = json.loads(out)["data"]["repository"]["pullRequest"]
-    return pr.get("lastEditedAt") or pr.get("createdAt") or ""
-
-
 # rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. rev 3 (SE-50): у PR нет
 # вердиктов тела. При первом проходе нового кода etag сбрасывается: полный список разбирает их заново.
 GH_STATE_REV = 3
@@ -144,12 +128,12 @@ def _check_pr(ctx, n, p, head, refresh=False, body=None):
         v = quorum.parse_verdict(c.get("body"), g["lens_roles"], roles)
         if not v:
             continue
-        said.append(dict(v, at=c.get("created_at") or ""))
+        said.append(v)
         if v["verdict"] == "changes" and quorum.on_head(v["sha"], head):
             ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, [p["author"]],
                      f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github")
     # Строки тела пишет автор PR, поэтому pr.changes о них не шлётся; в changes_by и в кворум они входят.
-    verdicts = quorum.with_body(p.get("body_verdicts") or [], said, head, lambda: _gh_body_time(g["repo"], n))
+    verdicts = quorum.with_body(p.get("body_verdicts") or [], said, head)
     ok, approved, changes, ci = quorum.quorum(verdicts, head, p.get("checks") or [], g["min_lenses"])
     p["changes_by"] = changes
     p["await_ci"] = len(approved) >= g["min_lenses"] and not changes and ci == "pending"

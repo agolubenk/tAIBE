@@ -83,45 +83,33 @@ class BodyVerdictsTest(unittest.TestCase):
         self.assertEqual(short(body(text)), [("backend", "approve", H)])
 
 
-def v(lens, verdict, at=None):
-    d = {"lens": lens, "verdict": verdict, "sha": H}
-    return d if at is None else dict(d, at=at)
+def v(lens, verdict, sha=HEAD):
+    return {"lens": lens, "verdict": verdict, "sha": sha[:9]}
 
 
 class WithBodyTest(unittest.TestCase):
-    def never(self):
-        raise AssertionError("время тела запрошено без спора линз")
-
-    def test_no_shared_lens_asks_no_body_time(self):
-        out = quorum.with_body([v("plan", "approve")], [v("backend", "approve", "2026-11-13T19:00:00Z")], HEAD, self.never)
+    def test_lens_without_a_comment_keeps_its_body_line(self):
+        out = quorum.with_body([v("plan", "approve")], [v("backend", "approve")], HEAD)
         self.assertEqual(sorted(x["lens"] for x in out), ["backend", "plan"])
 
-    def test_newer_line_of_the_same_lens_wins(self):
-        body_vs, said = [v("plan", "approve")], [v("plan", "changes", "2026-11-13T19:00:00Z")]
-        late = quorum.with_body(body_vs, said, HEAD, lambda: "2026-11-13T19:30:00Z")
-        early = quorum.with_body(body_vs, said, HEAD, lambda: "2026-11-13T18:30:00Z")
-        tie = quorum.with_body(body_vs, said, HEAD, lambda: "2026-11-13T19:00:00Z")
-        self.assertEqual([quorum.quorum(x, HEAD, [], 1)[1:3] for x in (late, early, tie)],
-                         [(["plan"], []), ([], ["plan"]), ([], ["plan"])])
+    def test_comment_on_the_head_overrides_the_body_line_of_the_same_lens(self):
+        for body_word, said_word in (("approve", "changes"), ("changes", "approve")):
+            out = quorum.with_body([v("plan", body_word)], [v("plan", said_word)], HEAD)
+            self.assertEqual([x["verdict"] for x in out], [said_word])
+
+    def test_comment_on_an_old_head_does_not_override_the_body_line(self):
+        out = quorum.with_body([v("plan", "approve")], [v("plan", "changes", OLD)], HEAD)
+        self.assertEqual(quorum.quorum(out, HEAD, [], 1)[1:3], (["plan"], []))
 
 
 class BodyGh(FakeGh):
-    """FakeGh с датами комментариев, временем правки тела (graphql) и своим CI в gh pr view."""
+    """FakeGh со своим CI в gh pr view."""
 
-    def __init__(self, open_prs, dated=None, edited=None, rollup="SUCCESS", **kw):
+    def __init__(self, open_prs, rollup="SUCCESS", **kw):
         super().__init__(open_prs, **kw)
-        self.dated, self.edited, self.rollup = dated or {}, edited, rollup
+        self.rollup = rollup
 
     def __call__(self, cmd, stdin=None, timeout=30):
-        if cmd[:3] == ["gh", "api", "graphql"]:
-            self.calls.append(list(cmd))
-            pr = {"lastEditedAt": self.edited, "createdAt": "2026-11-13T18:00:00Z"}
-            return 0, json.dumps({"data": {"repository": {"pullRequest": pr}}}), ""
-        if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
-            self.calls.append(list(cmd))
-            n = int(cmd[-1].split("/")[4])
-            return 0, json.dumps([{"id": 100 + i, "body": b, "created_at": t}
-                                  for i, (b, t) in enumerate(self.dated.get(n, []))]), ""
         if cmd[:3] == ["gh", "pr", "view"]:
             self.calls.append(list(cmd))
             d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"status": self.rollup}],
@@ -151,24 +139,22 @@ class PollBodyTest(unittest.TestCase):
         return self.ctx.state["github"]["prs"]["643"]
 
     def test_body_table_reaches_quorum_without_comments(self):
-        sources.run = fake = BodyGh([hr_pr(hr_body(ROWS))])
+        sources.run = BodyGh([hr_pr(hr_body(ROWS))])
         gh_poll.poll_github(self.ctx)
         self.assertIn("pr.quorum", self.kinds())
-        self.assertEqual(fake.asked("graphql"), [], "без спора линз время тела не спрашивается")
 
-    def test_newer_comment_of_the_same_lens_beats_the_body_and_a_later_edit_beats_it(self):
-        comment = [(f"**Продукт (роль 2): CHANGES на {H}**", "2026-11-14T02:00:00Z")]
-        sources.run = fake = BodyGh([hr_pr(hr_body(ROWS))], dated={643: comment}, edited="2026-11-14T01:30:00Z")
-        gh_poll.poll_github(self.ctx)
-        self.assertNotIn("pr.quorum", self.kinds())
-        self.assertEqual(self.pr()["changes_by"], ["plan"])
-        q = fake.asked("graphql")
-        self.assertEqual(len(q), 1)
-        self.assertIn("o=" + FakeGh.REPO.split("/")[0], q[0])
-        self.assertIn("r=" + FakeGh.REPO.split("/")[1], q[0])
-        self.assertIn("n=643", q[0])
-        sources.run = BodyGh([hr_pr(hr_body(ROWS), "2026-11-14T03:10:00Z")], dated={643: comment},
-                             edited="2026-11-14T02:30:00Z", etag='W/"e2"')
+    def test_body_edit_after_a_lens_changes_comment_does_not_drop_it(self):
+        """Проба Контроля на af1175836: approve release, plan и «ресурсы» в теле, changes Контроля в комментарии на ту же
+        голову. Правка тела позже комментария раньше давала кворум; теперь changes остаётся при любой правке."""
+        rows = [f"| гейт и безопасность (роль 5) | Контроль | {H} | accept |", f"| продукт (роль 2) | — | {H} | accept |",
+                f"| ресурсы | — | {H} | accept |"]
+        said = {643: [f"Гейт и безопасность — Контроль (роль 5): changes на {H}"]}
+        for upd in ("2026-11-14T02:00:00Z", "2026-11-14T04:00:00Z"):
+            sources.run = BodyGh([hr_pr(hr_body(rows), upd)], comments=said, etag=f'W/"{upd}"')
+            gh_poll.poll_github(self.ctx)
+            self.assertNotIn("pr.quorum", self.kinds(), upd)
+            self.assertEqual(self.pr()["changes_by"], ["release"], upd)
+        sources.run = BodyGh([hr_pr(hr_body(rows), "2026-11-14T04:10:00Z")], etag='W/"e3"')  # Контроль снял changes
         gh_poll.poll_github(self.ctx)
         self.assertIn("pr.quorum", self.kinds())
 
