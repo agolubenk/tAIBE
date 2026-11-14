@@ -7,8 +7,11 @@
 2. Копия — размер как у программы из набора, затем sha256.
 3. ln/cp/install/ditto/rsync/mv с источником-инструментом или невидимым источником — имя цели получает догадку
    (метка в written, см. command_writes); имя не видно — догадку получает любой путь и голое имя после смены PATH.
-4. Голое имя ищется по папкам PATH, только если тот же текст меняет PATH (`PATH=… cmd`, export, `PATH+=`, zsh path);
-   невидимая папка — догадка. Остаток: ссылку в папке PATH сделал прошлый вызов, теперь голое имя (карточка SE-90).
+   Программы по пути при решении хука нет или её переписывает тот же текст (`cat G > n`, `dd of=n`, python) —
+   содержимое не видно: догадка, как у невидимой цели.
+4. Голое имя ищется по папкам PATH, только если тот же текст меняет PATH (`PATH=… cmd`, `env PATH=… cmd`, `env -P`,
+   export, `PATH+=`, zsh path); невидимая папка — догадка. Остаток: ссылку в папке PATH сделал прошлый вызов, теперь
+   голое имя (карточка SE-90).
 """
 import hashlib
 import os
@@ -16,8 +19,8 @@ import shutil
 import stat
 import sys
 
-from merge_guard_files import open_regular
-from merge_guard_shell import command_name as _name  # shell импортирует files, files этот модуль — лениво
+from merge_guard_files import open_regular, rewritten
+from merge_guard_shell import command_name as _name, strip_prefix  # shell импортирует files, files этот модуль — лениво
 from merge_guard_vars import ASSIGN, DECLARE, SUBST, substitute, words
 
 TOOLS = ("git", "gh", "curl", "wget", "http", "xh")
@@ -26,6 +29,7 @@ ANY_TOOL = MARK + "*"  # то же, но имя не видно (`cp "$G" bin/`)
 PATH_KEY = "\0path"  # ключ env: папки PATH, заданные текстом
 HIDDEN = "\0hidden"  # папка PATH, которую разбор не видит
 COPIERS = {"ln", "cp", "install", "ditto", "rsync", "mv", "gln", "gcp", "ginstall"}
+ENV_VALUED = {"-u", "-P", "-C", "-S"}  # опции env со значением в следующем слове (BSD и GNU)
 VALUED = {"-m", "-o", "-g", "-B", "-S", "-M", "-e", "-f", "--arch", "--mode", "--owner", "--group", "--rsh", "--chmod",
           "--suffix", "--exclude", "--include", "--filter"}  # значение — следующий аргумент, не источник
 GIT_HOMES = ("/Library/Developer/CommandLineTools/usr/bin/git", "/Applications/Xcode.app/Contents/Developer/usr/bin/git")
@@ -130,38 +134,63 @@ def copy_marks(v, cwd=None, marks=()):
 
 
 def note_path(argv, env):
-    """Папки PATH, которые задаёт команда argv (п. 4): `PATH=…` в начале команды или после export/typeset/…, `PATH+=…`;
-    `$PATH` — папки хука, не ищутся; zsh `path=(…)` разбор делит на подоболочку — папка невидима."""
-    if not any(t[:4] in ("PATH", "path") for t in argv):
+    """Папки PATH, которые задаёт команда argv (п. 4): `PATH=…` в префиксе команды (и после env, sudo, nice…), после
+    export/typeset/…, `PATH+=…`, `env -P папки`; `$PATH` — папки хука, не ищутся; zsh `path=(…)` разбор делит на
+    подоболочку, `env -S 'строка'` и `env -C папка` — тоже: папка невидима."""
+    if not any(t[:4] in ("PATH", "path") or t[:2] == "-P" for t in argv):
         return
-    a = [t for t in argv[1:] if not t.startswith("-")] if argv[:1] and argv[0] in DECLARE else argv
-    for t in a:
+    found, in_env, moved, prev = [], False, False, ""
+    if argv[:1] and argv[0] in DECLARE:
+        pre = [t for t in argv[1:] if not t.startswith("-")]
+    else:
+        rest = strip_prefix(argv)
+        pre = argv[:len(argv) - len(rest)]
+        if argv[len(pre):] != rest:  # `env -S 'PATH=bin swiftc …'` — строка разобрана как команда заново
+            pre, found = [], [HIDDEN] if any("PATH" in t or "path" in t for t in argv) else []
+    for t in pre:
+        in_env = _name(t) == "env" or in_env and (t.startswith("-") or "=" in t or prev in ENV_VALUED)
+        if in_env and (prev == "-P" or t.startswith("-P") and len(t) > 2):  # BSD `env -P папки cmd` — вместо PATH
+            found += (t if prev == "-P" else t[2:]).split(":")
+        moved = moved or in_env and t.startswith(("-C", "--chdir"))  # GNU `env -C папка`: от неё и папки PATH
+        prev = t
         m = ASSIGN.fullmatch(t)
-        if not m:
-            break
-        if m.group(1) == "path" or m.group(1) == "PATH" and m.group(2):
-            env[PATH_KEY] = env.get(PATH_KEY, []) + [HIDDEN]
-        elif m.group(1) == "PATH":
-            dirs = [d for text in substitute(m.group(4), env) for d in " ".join(words(text)).split(":")]
-            env[PATH_KEY] = env.get(PATH_KEY, []) + [HIDDEN if _hidden(d) else d for d in dirs
-                                                     if d not in ("$PATH", "${PATH}")]
+        if m and (m.group(1) == "path" or m.group(1) == "PATH" and m.group(2)):
+            found.append(HIDDEN)
+        elif m and m.group(1) == "PATH":
+            found += [d for text in substitute(m.group(4), env) for d in " ".join(words(text)).split(":")]
+    dirs = [HIDDEN if _hidden(d) or moved and not os.path.isabs(os.path.expanduser(d)) else d for d in found
+            if d not in ("$PATH", "${PATH}")]
+    if dirs:
+        env[PATH_KEY] = env.get(PATH_KEY, []) + dirs
+
+
+def _unseen(path, word, written):
+    """Файла path при решении хука нет или тот же текст переписывает word (путь, как написан): запустится то, чего хук не
+    видел."""
+    return not os.path.exists(path) or rewritten([word], written)
 
 
 def alias_kind(exe, cwd, written, dirs):
     """(инструмент по идентичности или None, догадка ли) для команды с первым словом exe: путь — по файлу (п. 1, 2) и
-    меткам копирования (п. 3); голое имя — по папкам dirs, если текст менял PATH (п. 4)."""
+    меткам копирования (п. 3); голое имя — по папкам dirs, если текст менял PATH (п. 4), до первого файла, который хук
+    видит. Файла нет или его переписывает тот же текст — догадка: копию делает и `cat >`, и `dd`, и python."""
     if MARK not in written and not dirs and "/" not in exe:
         return None, False  # без меток копирования и смены PATH голое имя решает только имя
     base = exe.rpartition("/")[2]
     guess = not _hidden(base) and MARK + _name(base) in written
     if _hidden(exe):
         return None, guess  # `$G …` — догадка хука по `$` в имени; `"$D/x"` — папка не видна
-    if "/" in exe:
+    if "/" in exe:  # `cat G > n; ./n …`, `dd of=n`, python: файла нет или его переписывают — содержимое не видно
         p = _path(exe, cwd)
-        return (identify(p) if p else None), guess or ANY_TOOL in written
-    tool = None
+        tool = identify(p) if p else None
+        return tool, guess or ANY_TOOL in written or not tool and (not p or _unseen(p, exe, written))
+    tool, guess = None, guess or ANY_TOOL in written
     for d in dirs:
-        guess = guess or d == HIDDEN or ANY_TOOL in written
-        p = None if d == HIDDEN else _path(d or ".", cwd)
-        tool = tool or (identify(os.path.join(p, exe)) if p else None)
+        home = None if d == HIDDEN else _path(d or ".", cwd)
+        p = os.path.join(home, exe) if home else None
+        tool = identify(p) if p else None
+        unseen = not p or _unseen(p, os.path.join(d, exe), written)
+        guess = guess or not tool and unseen
+        if tool or not unseen:  # первый файл, который хук видит, — его shell и запустит
+            break
     return tool, guess
