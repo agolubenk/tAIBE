@@ -31,6 +31,8 @@ export interface Doc {
   data: Record<string, unknown>
   version: number
   updatedAt: number
+  /** Время создания документа (мс): не меняется при правке — порядок пунктов страницы /queue «от старых к новым». */
+  createdAt: number
   /** Продукт документа — рядом с data, не в ней: продукт в data запрещён, меняется только отдельным запросом. */
   product: string
 }
@@ -159,7 +161,10 @@ export function isCollection(v: string): v is Collection {
 const has = (a: Actor, s: Scope) => a.scopes.includes('owner') || a.scopes.includes(s)
 
 export function parseDoc(row: typeof oqDocs.$inferSelect): Doc {
-  return { id: row.id, data: JSON.parse(row.dataJson) as Record<string, unknown>, version: row.version, updatedAt: row.updatedAt.getTime(), product: row.product }
+  return {
+    id: row.id, data: JSON.parse(row.dataJson) as Record<string, unknown>, version: row.version,
+    updatedAt: row.updatedAt.getTime(), createdAt: row.createdAt.getTime(), product: row.product,
+  }
 }
 
 /** Документ в видимости актора; чужого продукта — null, как несуществующий. */
@@ -351,7 +356,7 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
       await tx.insert(oqDocs).values({ collection, id, dataJson: json, version, createdAt: at, updatedAt: at, updatedBy: actor.name, product })
     }
     await tx.insert(oqEvents).values({ at, actor: actor.name, collection, docId: id, action: opts.merge ? 'update' : 'set', beforeJson: row?.dataJson ?? null, afterJson: json, product })
-    return { id, data: parsed.data as Record<string, unknown>, version, updatedAt: at.getTime(), product }
+    return { id, data: parsed.data as Record<string, unknown>, version, updatedAt: at.getTime(), createdAt: (row?.createdAt ?? at).getTime(), product }
   })
 }
 

@@ -98,6 +98,21 @@ describe('документы и права', () => {
     expect((await bearer(t.token).get('/db/items')).status).toBe(401)
   })
 
+  it('createdAt пункта не меняется при правке, updatedAt — растёт: порядок /queue «от старых к новым» (замечание владельца 14.11)', async () => {
+    const a = bearer(agent)
+    const put = await a.put('/db/items/d-created', { data: decision })
+    expect(put.status).toBe(200)
+    expect(put.json.createdAt).toBe(put.json.updatedAt)
+    await new Promise((r) => setTimeout(r, 5))
+    const patch = await a.patch('/db/items/d-created', { data: { title: 'Поправлено' } })
+    expect(patch.status).toBe(200)
+    expect(patch.json.createdAt).toBe(put.json.createdAt)
+    expect(patch.json.updatedAt).toBeGreaterThan(put.json.updatedAt)
+    const listed = (await a.get('/db/items')).json.docs.find((d: any) => d.id === 'd-created')
+    expect(listed.createdAt).toBe(put.json.createdAt)
+    expect((await a.get('/db/items/d-created')).json.createdAt).toBe(put.json.createdAt)
+  })
+
   it('planEnd агент не переписывает без basePlanEnd', async () => {
     const a = bearer(agent)
     expect((await a.put('/db/work/w-t', { data: { title: 'Задача', track: 'ops', planEnd: '2026-10-20' } })).status).toBe(200)

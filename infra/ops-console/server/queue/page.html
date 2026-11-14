@@ -1263,7 +1263,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return list.map(function (d) {
       var id = d.id || d.key || d.doc_id || (typeof d.path === 'string' ? d.path.split('/').pop() : '');
       var data = typeof d.data === 'function' ? d.data() : (d.data || d.value || d.fields || d);
-      return { id: id, data: data, version: typeof d.version === 'number' ? d.version : null, updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0 };
+      return { id: id, data: data, version: typeof d.version === 'number' ? d.version : null, updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0,
+        createdAt: typeof d.createdAt === 'number' ? d.createdAt : 0 };
     }).filter(function (r) { return r.id && r.data && typeof r.data === 'object'; });
   }
   function apply(snap) {
@@ -1360,16 +1361,16 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function applyItems(snap) {
     LIVE.items = true;
-    // updatedAt строки — второй ключ порядка (orderItems): времени создания пункта в снимке нет. В ключ снимка он не
-    // входит: запись агента в поле, которого страница не показывает (sha, pr, deploy), не пересоздаёт пункты и не
-    // стирает набранный ответ. Порядок берёт updatedAt снимка, после которого пункты пересоздавались.
+    // createdAt строки — второй ключ порядка (orderItems), updatedAt — запасной, если консоль его не прислала. В ключ
+    // снимка они не входят: запись агента в поле, которого страница не показывает (sha, pr, deploy), не пересоздаёт
+    // пункты и не стирает набранный ответ. createdAt пункта не меняется, поэтому порядок от снимка не зависит.
     var at = {};
-    var list = rowsOf(snap).map(function (r) { at[r.id] = r.updatedAt; return itemFromDb(r.id, r.data); }).filter(Boolean)
+    var list = rowsOf(snap).map(function (r) { at[r.id] = r; return itemFromDb(r.id, r.data); }).filter(Boolean)
       .filter(function (it) { return !ITEMS.some(function (b) { return b.id === it.id; }); });
     var key = JSON.stringify(list) + (otherProduct() ? '|other' : '');
     if (key === dbItemsKey) return;
     dbItemsKey = key;
-    list.forEach(function (it) { it.updatedAt = at[it.id]; });
+    list.forEach(function (it) { it.createdAt = at[it.id].createdAt; it.updatedAt = at[it.id].updatedAt; });
     document.querySelectorAll('.item[data-src="db"]').forEach(function (el) { el.remove(); });
     DB_ITEMS = list;
     list.forEach(function (it) { mount(it, true); });
@@ -1680,15 +1681,17 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function itemState(it, e) { return oqItemState(it.kind, e || {}); }
   function isDone(it, e) { return itemState(it, e) === 'done'; }
   // Порядок пунктов в списке — от старых к новым (просьба владельца 13.11): по added (дата YYYY-MM-DD), при равной дате —
-  // по updatedAt (время последней записи пункта в базе, мс: времени создания в снимке нет), затем по id. Без даты — раньше
-  // датированных (вшитые пункты 15–16.10 — самые старые). doneOf — для «одной очереди»: открытые и «ждёт вас снова»
-  // раньше выполненных, внутри групп — тот же порядок. Исходный массив не меняется.
+  // по createdAt (время создания пункта в базе, мс), затем по id. Время создания не меняется при правке пункта: шаг
+  // «1 из 3», поправленный после «2 из 3», остаётся выше (замечание владельца 14.11). Без createdAt (снимок старой
+  // консоли) — updatedAt. Без даты — раньше датированных (вшитые пункты 15–16.10 — самые старые). doneOf — для «одной
+  // очереди»: открытые и «ждёт вас снова» раньше выполненных, внутри групп — тот же порядок. Исходный массив не меняется.
   function orderItems(items, doneOf) {
     function cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+    function ms(v) { return typeof v === 'number' && isFinite(v) && v > 0 ? v : 0; }
     return items.map(function (it) {
       return {
         it: it, done: doneOf && doneOf(it) ? 1 : 0, added: typeof it.added === 'string' ? it.added : '',
-        at: typeof it.updatedAt === 'number' && isFinite(it.updatedAt) ? it.updatedAt : 0, id: String(it.id),
+        at: ms(it.createdAt) || ms(it.updatedAt), id: String(it.id),
       };
     }).sort(function (a, b) {
       return a.done - b.done || cmp(a.added, b.added) || a.at - b.at || cmp(a.id, b.id);

@@ -50,7 +50,7 @@ type Pure = {
 }
 type FakeDb = { doc: (path: string) => { set: (data: unknown, opts?: { ifVersion?: number }) => Promise<unknown>; get: () => Promise<unknown> } }
 type Row = { id: string; status?: string; planEnd?: string; basePlanEnd?: string; end?: string }
-type OrderIt = { id: string; kind?: string; added?: string; updatedAt?: number }
+type OrderIt = { id: string; kind?: string; added?: string; updatedAt?: number; createdAt?: number }
 
 // Блок из самой страницы (код репозитория, не ввод) исполняется в отдельном контексте vm без доступа к тесту.
 function pure(): Pure {
@@ -397,7 +397,7 @@ describe('снимок опроса не откатывает несохранё
     expect(html).toContain('if (snapshotIsStale(r.version, savedVersion[r.id])) return;')
     expect(html).toContain("if (res && typeof res.version === 'number') savedVersion[id] = res.version;")
     // Версию до страницы доносит подмена базы: без неё проверка молча не работала бы.
-    expect(SHIM_JS).toContain('return { id: d.id, data: d.data, version: d.version, product: d.product, updatedAt: d.updatedAt };')
+    expect(SHIM_JS).toContain('return { id: d.id, data: d.data, version: d.version, product: d.product, updatedAt: d.updatedAt, createdAt: d.createdAt };')
     expect(html).toContain('Object.keys(state).forEach(function (id) { if (state[id] && state[id].pending) persist(id); });')
   })
 
@@ -921,7 +921,17 @@ describe('порядок пунктов: от старых к новым (про
     expect(ids(list)).toEqual(['d-c', 'd-a', 'd-seed', 'd-b'])
   })
 
-  it('при равной дате — по updatedAt строки снимка, затем по id', () => {
+  it('при равной дате — по createdAt: шаг «1 из 3», поправленный после «2 из 3», остаётся выше (замечание владельца 14.11)', () => {
+    const { orderItems } = pure()
+    const list = [
+      { id: 's-keychain', added: '2026-11-14', createdAt: 2000, updatedAt: 2500 },
+      { id: 's-token', added: '2026-11-14', createdAt: 1000, updatedAt: 9000 },
+      { id: 's-copy', added: '2026-11-14', createdAt: 3000, updatedAt: 3000 },
+    ]
+    expect(ids(orderItems(list, null))).toEqual(['s-token', 's-keychain', 's-copy'])
+  })
+
+  it('при равной дате без createdAt (снимок старой консоли) — по updatedAt строки снимка, затем по id', () => {
     const { orderItems } = pure()
     const list = [
       { id: 'm-3', added: '2026-11-13', updatedAt: 3000 },
@@ -954,10 +964,11 @@ describe('порядок пунктов: от старых к новым (про
     expect(ids(orderItems(list, null))).toEqual(['c-old-done', 'd-old', 's-again', 'm-new', 'd-new-done'])
   })
 
-  it('страница ставит пункты по этому порядку, а снимок несёт updatedAt строки', () => {
+  it('страница ставит пункты по этому порядку, а снимок несёт createdAt и updatedAt строки', () => {
     expect(html).toContain('var els = orderItems(')
     expect(html).toContain("updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0")
-    expect(html).toContain('list.forEach(function (it) { it.updatedAt = at[it.id]; });')
+    expect(html).toContain("createdAt: typeof d.createdAt === 'number' ? d.createdAt : 0")
+    expect(html).toContain('list.forEach(function (it) { it.createdAt = at[it.id].createdAt; it.updatedAt = at[it.id].updatedAt; });')
     // Пункты базы больше не встают в начало списка в порядке сервера (новые сверху).
     expect(html).not.toContain("'afterbegin' : 'beforeend'")
     expect(html).not.toContain('list.slice().reverse().forEach')
