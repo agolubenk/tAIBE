@@ -1,41 +1,9 @@
 #!/bin/zsh
-# Runs t-boards API integration tests against <POSTGRES_DB>_test without
-# printing the password: DATABASE_URL lives only in this process's env.
-# Usage: zsh boards/tools/run-int.sh [<filter> ...] (vitest file filters,
-# relative to apps/api). No args = the whole suite.
-# T_BOARDS_APP picks the checkout (default: the boards/ workspace next to this
-# script; a worktree reuses the default checkout's .env when it has none).
-# Every checkout shares one test database, so runs take a lock and go one at a time
-# (lockf on macOS, flock on Linux).
-set -e
-setopt pipefail
-root="${0:A:h:h}"
-app="${T_BOARDS_APP:-$root}"
-if [[ -z "$T_BOARDS_INT_LOCKED" ]]; then
-  echo "run-int: waiting for the test database lock" >&2
-  if command -v lockf >/dev/null; then
-    T_BOARDS_INT_LOCKED=1 exec lockf -t 3600 /tmp/t-boards-int.lock zsh "$0" "$@"
-  else
-    T_BOARDS_INT_LOCKED=1 exec flock -w 3600 /tmp/t-boards-int.lock zsh "$0" "$@"
-  fi
-fi
-env_file="$app/.env"
-if [[ ! -f "$env_file" ]]; then
-  # Linked worktree без своего .env — берём .env досок основного checkout.
-  main="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
-  main="${main:h}"
-  rel="${root#$(git -C "$root" rev-parse --show-toplevel)/}"
-  env_file="$main/$rel/.env"
-fi
-while IFS='=' read -r k v; do
-  case "$k" in POSTGRES_HOST|POSTGRES_PORT|POSTGRES_DB|POSTGRES_USER|POSTGRES_PASSWORD_FILE) export "$k=$v" ;; esac
-done < "$env_file"
-pw_file="$POSTGRES_PASSWORD_FILE"
-[[ "$pw_file" = /* ]] || pw_file="$(dirname "$env_file")/$pw_file"
-export DATABASE_URL="$(PW_FILE="$pw_file" node -e '
-const fs=require("fs");const e=process.env;
-const pw=encodeURIComponent(fs.readFileSync(e.PW_FILE,"utf8").trim());
-process.stdout.write(`postgresql://${encodeURIComponent(e.POSTGRES_USER)}:${pw}@${e.POSTGRES_HOST}:${e.POSTGRES_PORT}/${e.POSTGRES_DB}`);')"
-unset POSTGRES_PASSWORD_FILE
-cd "$app/apps/api"
-pnpm exec vp test run --config vitest.integration.config.ts "$@" 2>&1 | sed -E 's#postgresql://[^@ ]*@#postgresql://***@#g'
+# Retired 14.11 (TB-145). It took the database from boards/.env, that is the
+# live t-boards-postgres-1 (5433), and from the main checkout's .env in a
+# worktree without one. Integration tests run only through scripts/it-pg.sh,
+# which starts a Postgres of its own and removes it on exit. The file stays so
+# that old commands stop with this pointer; the former body is in git history.
+echo "run-int: retired (TB-145), it pointed at the live board database." >&2
+echo "run-int: from boards/ run: scripts/it-pg.sh <name> [test files…]" >&2
+exit 2
