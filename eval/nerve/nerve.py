@@ -29,6 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import actions  # noqa: E402
+import gh_source  # noqa: E402
 import sources  # noqa: E402
 from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
 
@@ -123,7 +124,7 @@ def peer_emit(peer, write):
         return False
 
 
-POLLS = [("github", sources.poll_github), ("queue", sources.poll_queue), ("system", sources.poll_system),
+POLLS = [("github", gh_source.poll_github), ("queue", sources.poll_queue), ("system", sources.poll_system),
          ("budget", actions.poll_budget)]
 
 
@@ -160,7 +161,7 @@ def one_pass(ctx, polls=None, finish=True):
 # ---------- Продукты (OPS-25) ----------
 
 # Свой репо продукта. Очередь и бюджет аккаунта общие — их обходит проход по умолчанию и раздаёт продуктам (Ф2b).
-PRODUCT_POLLS = [("github", sources.poll_github)]
+PRODUCT_POLLS = [("github", gh_source.poll_github)]
 
 
 def load_products():
