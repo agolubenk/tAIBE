@@ -88,6 +88,7 @@ check-eval:
 
 check-layer:
 	@for t in .claude/hooks/test_*.py .claude/scripts/test_*.py eval/tools/test_*.py; do python3 "$$t" || exit 1; done
+	bash .claude/scripts/test_heavy_gate.sh
 	bash .claude/scripts/sync-agent-skills.sh --check
 	python3 -I eval/evolve/catalog.py --check
 

@@ -31,5 +31,6 @@ jobs:
             echo "== $t"
             python3 "$t"
           done
+          bash .claude/scripts/test_heavy_gate.sh
       - name: Always-loaded context (L1) of every role within budget (eval/evolve/catalog.py)
         run: python3 -I eval/evolve/catalog.py --check
