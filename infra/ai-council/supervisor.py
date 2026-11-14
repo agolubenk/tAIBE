@@ -456,6 +456,7 @@ def _council_checks(slug: str) -> list[tuple[str, bool, str]]:
                  f"не определён — {product_mod.ENV}=<slug> или repo_root хоста в instances/<slug>.json")]
     paths = sorted({p for group in council.modules.values() for p in group})
     missing = [p for p in paths if not (root / p).exists()]
+    empty = sorted(name for name, group in council.modules.items() if group and all(p in missing for p in group))
     roots = [r for r in council.default_roots if (root / r).is_dir()]
     return [
         ("продукт консилиума", True, f"{council.slug} ({'--product' if slug else council.how})"),
@@ -465,6 +466,8 @@ def _council_checks(slug: str) -> list[tuple[str, bool, str]]:
         ("модули → код", len(missing) < len(paths),
          f"{len(council.modules)} модулей, путей есть {len(paths) - len(missing)}/{len(paths)}"
          + (f"; нет: {', '.join(missing)}" if missing else "")),
+        ("модули без кода на диске", not empty,
+         (", ".join(empty) + " — их карточки ищут в корнях по умолчанию") if empty else "нет"),
         ("корни поиска по умолчанию", bool(roots), ", ".join(roots) or "нет — поиск от корня"),
         ("схема Prisma", not council.prisma_schema or (root / council.prisma_schema).is_file(),
          council.prisma_schema or "у продукта нет — слоя Prisma в графе нет"),

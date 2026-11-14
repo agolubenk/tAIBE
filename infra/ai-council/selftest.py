@@ -1452,6 +1452,23 @@ def test_linked_ids_robustness() -> None:
         got = retrieval.Retriever._linked_ids({"linked_card_ids": raw})
         check(f"_linked_ids: {raw!r} → {expected!r} без исключения", got == expected, got)
 
+    # SE-108: модуль без кода на диске не сужает поиск молча — строка в stderr и корни по умолчанию ([]).
+    import contextlib
+    import io
+    real = next(p.name for p in sorted(retrieval.REPO_ROOT.iterdir()) if p.is_dir() and not p.name.startswith("."))
+    stub = SimpleNamespace(MODULE_PATHS={"live": [real, "nope-a"], "gone": ["nope-b/x", "nope-c"]},
+                           _EMPTY_MODULES_SAID=set())
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        live = retrieval.Retriever._roots_for(stub, ["live"])
+        mixed = retrieval.Retriever._roots_for(stub, ["live", "gone"])
+        again = retrieval.Retriever._roots_for(stub, ["gone"])
+    said = [x for x in err.getvalue().splitlines() if x.strip()]
+    check("_roots_for: есть путь на диске → только он; модуль без кода → [] (корни по умолчанию)",
+          live == [real] and mixed == [] and again == [], (live, mixed, again))
+    check("_roots_for: о модуле без кода — одна строка в stderr на процесс",
+          len(said) == 1 and "«gone»" in said[0], said)
+
 
 def test_planner(tmp: Path) -> None:
     import planner_service as planner
