@@ -3,6 +3,7 @@ import { formatDateTime } from "@/lib/format";
 import { isRefreshable } from "./added-source-kind";
 import type { NotebookSource } from "./notebook-types";
 import { RefreshSourceButton } from "./refresh-source-button";
+import { RemoveSourceButton } from "./remove-source-button";
 import { SourceLabel } from "./source-label";
 
 type SourceRowProps = {
@@ -35,12 +36,20 @@ export function SourceRow({ workspaceId, source, canRefresh }: SourceRowProps) {
           </span>
         </div>
         {canRefresh && isRefreshable(source.kind) ? (
-          <RefreshSourceButton
-            workspaceId={workspaceId}
-            kind={source.kind}
-            ref_={source.ref}
-            title={source.title}
-          />
+          <>
+            <RefreshSourceButton
+              workspaceId={workspaceId}
+              kind={source.kind}
+              ref_={source.ref}
+              title={source.title}
+            />
+            <RemoveSourceButton
+              workspaceId={workspaceId}
+              kind={source.kind}
+              ref_={source.ref}
+              title={source.title}
+            />
+          </>
         ) : null}
       </div>
     </li>

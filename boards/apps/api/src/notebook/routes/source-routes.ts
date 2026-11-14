@@ -11,7 +11,11 @@ import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { notebookEmbedModel } from "../../notebook-model/effective-notebook-model";
 import { addPullRequestSource } from "../sources/github-pr-source";
 import { addLinkSource } from "../sources/link-source";
-import { listSources, pruneSources } from "../sources/list-sources";
+import {
+  deleteSources,
+  listSources,
+  pruneSources,
+} from "../sources/list-sources";
 import { syncCardSources } from "../sources/sync-card-sources";
 import { upsertSource } from "../sources/upsert-source";
 import {
@@ -22,6 +26,7 @@ import {
   prunedSchema,
   pruneSourcesBody,
   putSourceBody,
+  removeSourceBody,
   SOURCE_BODY_BYTES,
   SOURCE_URL_BODY_BYTES,
   sourcesSchema,
@@ -97,6 +102,34 @@ const pruneSourcesRoute = createRoute({
   },
   responses: {
     200: jsonResponse("Sources pruned", prunedSchema),
+    403: errorResponse("Missing workspace:manage_settings permission"),
+    413: errorResponse("Request body is too large"),
+  },
+});
+
+const removeSourceRoute = createRoute({
+  method: "post",
+  operationId: "removeNotebookSource",
+  path: "/{workspaceId}/sources/remove",
+  tags: ["Notebook"],
+  summary: "Remove one added page or pull request from the notebook",
+  description:
+    "Deletes one link or github-pr source with its chunks. The synced kinds are refused: their next sync would bring them back. A ref that is already gone answers deleted: 0.",
+  middleware: [
+    workspaceAccess.fromParam(),
+    requireWorkspacePermission({ workspace: ["manage_settings"] }),
+    boundedRequestBody(SOURCE_URL_BODY_BYTES),
+  ] as const,
+  request: {
+    params: workspaceParam,
+    body: {
+      required: true,
+      content: { "application/json": { schema: removeSourceBody } },
+    },
+  },
+  responses: {
+    200: jsonResponse("Source removed", prunedSchema),
+    400: errorResponse("Not a link or github-pr source, or no ref"),
     403: errorResponse("Missing workspace:manage_settings permission"),
     413: errorResponse("Request body is too large"),
   },
@@ -206,6 +239,14 @@ export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     const { kind, keep } = c.req.valid("json");
     return c.json(
       { deleted: await pruneSources(workspaceId, kind, keep) },
+      200,
+    );
+  })
+  .openapi(removeSourceRoute, async (c) => {
+    const { workspaceId } = c.req.valid("param");
+    const { kind, ref } = c.req.valid("json");
+    return c.json(
+      { deleted: await deleteSources(workspaceId, kind, [ref]) },
       200,
     );
   })

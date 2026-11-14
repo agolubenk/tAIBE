@@ -1316,10 +1316,16 @@
 					"SOURCE_TOO_MANY_CHUNKS": "The text splits into too many parts for one source (at most 2000)."
 				},
 				"refresh": "Refresh {{title}}",
+				"remove": "Remove {{title}}",
+				"removeTitle": "Remove this source from the notebook?",
+				"removeDescription": "{{title}} and its chunks leave the notebook, and answers stop citing it. You can add the link again later.",
+				"removeConfirm": "Remove",
 				"toast": {
 					"added": "In the notebook: {{title}}",
 					"error": "Could not add the source",
-					"unchanged": "Nothing changed: {{title}}"
+					"unchanged": "Nothing changed: {{title}}",
+					"removed": "Removed from the notebook: {{title}}",
+					"removeError": "Could not remove the source"
 				}
 			},
 			"status": {
