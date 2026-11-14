@@ -148,6 +148,22 @@ describe('автопередача по продуктам (OPS-51, фаза 4a)
     expect(moved.relayed['i-20261113-090000-bb02']).toMatchObject({ session: 'hr-helper-v2-old' })
   })
 
+  it('входящее перенесли HR → taibe после передачи: отметка id — последней передачи по продуктам (ревью #173, цепочка)', async () => {
+    const t0 = new Date(Date.now() - 5 * 60_000)
+    const t1 = new Date(Date.now() - 4 * 60_000)
+    await writeSetting('oq-relay', { sessions: {
+      'hr-helper-v2-43@hr-helper': { at: t1.toISOString(), product: 'hr-helper', relayed: { 'i-20261113-143043-ef29': t0.toISOString() } },
+      'hr-helper-v2-44@hr-helper': { at: t1.toISOString(), product: 'hr-helper', relayed: { 'i-20261113-143043-ef29': t1.toISOString() } },
+    } })
+    // Внутри продукта — первая передача (t0), а не повтор второй сессии HR.
+    expect((await call(owner, 'GET', '/relay')).json.relayed['i-20261113-143043-ef29']).toMatchObject({ session: 'hr-helper-v2-43', product: 'hr-helper' })
+    // Сессия taibe передаёт перенесённый пункт позже — владелец и страница видят передачу taibe, wait → stuck идёт от неё.
+    await call(taibe, 'PUT', '/relay', { session: 'taibe-coord-1', relayed: ['i-20261113-143043-ef29'] })
+    expect((await call(owner, 'GET', '/relay')).json.relayed['i-20261113-143043-ef29']).toMatchObject({ session: 'taibe-coord-1', product: 'taibe' })
+    // Актор HR передачи taibe не видит — у него остаётся своя.
+    expect((await call(reader, 'GET', '/relay')).json.relayed['i-20261113-143043-ef29']).toMatchObject({ session: 'hr-helper-v2-43', product: 'hr-helper' })
+  })
+
   it('живость по продукту: мёртвая сессия HR не делает живым taibe и наоборот', async () => {
     const old = new Date(Date.now() - RELAY_STALE_MS - 1000).toISOString()
     await writeSetting('oq-relay', { sessions: { 'hr-helper-v2-43': { at: old, relayed: {} }, 'taibe-coord-1': { at: new Date().toISOString(), relayed: {}, product: 'taibe' } } })

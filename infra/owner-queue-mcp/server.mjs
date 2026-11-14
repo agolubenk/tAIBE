@@ -21,10 +21,12 @@ const PRODUCT_SLUG = /^[a-z][a-z0-9-]{1,30}$/;
 
 /**
  * Продукт сессии (фаза 4a, OPS-51): OQ_PRODUCT, иначе TAIBE_PRODUCT (его ставят геном роли и spawn_session.sh), иначе
- * основной. Задаёт токен очереди и то, чьи входящие передаёт --relay.
+ * основной. Задаёт токен очереди и то, чьи входящие передаёт --relay. null — продукт в env с опечаткой: сессия не
+ * работает ни под каким продуктом, пока env не исправят (ревью #173, цепочка: молча стать hr-helper с токеном HR нельзя).
  */
 export function sessionProduct(env = process.env) {
-  return productFromEnv(env).product;
+  const p = productFromEnv(env);
+  return p.error ? null : p.product;
 }
 
 /**
@@ -75,18 +77,19 @@ function token(product, { fallback = true } = {}) {
   return { value: secret('OQ_TOKEN'), name: 'OQ_TOKEN' };
 }
 const ENV_PRODUCT = productFromEnv();
-if (ENV_PRODUCT.error) process.stderr.write(`[owner-queue] ${ENV_PRODUCT.error}; продукт сессии — ${DEFAULT_PRODUCT}\n`);
+if (ENV_PRODUCT.error) process.stderr.write(`[owner-queue] ${ENV_PRODUCT.error}; токен не выбран, инструменты отвечают ошибкой\n`);
 const PRODUCT = ENV_PRODUCT.product;
 // Автопередача берёт токен сама (без отката на чужой продукт) — у MCP по stdio токен читается здесь, один раз.
+// Опечатка продукта в env — без токена вовсе: сессия получает ошибку с причиной, а не очередь HR под видом своей.
 const RELAY_MODE = process.argv[2] === '--relay';
-const { value: TOKEN, name: TOKEN_NAME } = RELAY_MODE ? { value: '', name: '' } : token(PRODUCT);
+const { value: TOKEN, name: TOKEN_NAME } = RELAY_MODE || ENV_PRODUCT.error ? { value: '', name: '' } : token(PRODUCT);
 
 /**
  * Откат на чужой токен или неверный продукт в env — видно модели, а не только в stderr (его клиент MCP не показывает;
  * ревью #173): строка в описании инструментов и в instructions.
  */
 const FALLBACK_NOTE = RELAY_MODE ? '' : [
-  ENV_PRODUCT.error ? `ВНИМАНИЕ: ${ENV_PRODUCT.error}, работаю как ${DEFAULT_PRODUCT}.` : '',
+  ENV_PRODUCT.error ? `ВНИМАНИЕ: ${ENV_PRODUCT.error} — очередь недоступна, пока переменную не исправят (затем /mcp).` : '',
   TOKEN_NAME === 'OQ_TOKEN' && PRODUCT !== DEFAULT_PRODUCT
     ? `ВНИМАНИЕ: продукт сессии ${PRODUCT}, но токена ${tokenName(PRODUCT)} нет — работаю с OQ_TOKEN: видны пункты ${DEFAULT_PRODUCT}, пункты ${PRODUCT} не видны и создавать их нельзя.`
     : '',
@@ -97,6 +100,7 @@ function api(method, path, body) {
 }
 
 async function apiWith(tok, method, path, body, name = tokenName(PRODUCT)) {
+  if (!tok && ENV_PRODUCT.error && !RELAY_MODE) throw new Error(`Продукт сессии не определён: ${ENV_PRODUCT.error}. Исправьте переменную и переподключите /mcp`);
   if (!tok) throw new Error(`Нет токена очереди: ${name} в окружении или в Keychain (security add-generic-password -U -s hr-helper-mcp -a ${name} -w <токен>)`);
   const res = await fetch(BASE + path, {
     method,
@@ -482,16 +486,18 @@ if (isMain && RELAY_MODE) {
   // Токен — только свой (без отката на OQ_TOKEN): чужим токеном входящие продукта не видны, и процесс крутился бы
   // вхолостую, а консоль отвечала бы 404 на каждую отметку.
   const fail = (text) => {
-    // stdout — его читает Monitor и будит сессию: она узнаёт, что автопередачи нет.
-    process.stdout.write(`Автопередача не запущена: ${text}\n`);
-    process.exit(2);
+    // stdout — его читает Monitor и будит сессию: она узнаёт, что автопередачи нет. Под Monitor stdout — pipe, запись
+    // в него на macOS асинхронная: выход — только после сброса строки (ревью #173, цепочка).
+    process.stdout.write(`Автопередача не запущена: ${text}\n`, () => process.exit(2));
   };
   const a = relayArgs(process.argv);
+  const t = a.error ? null : token(a.product, { fallback: false });
   if (a.error) fail(`${a.error}. Использование: node server.mjs --relay <имя сессии> [--product <slug>]`);
-  const t = token(a.product, { fallback: false });
-  if (!t.value) fail(`нет ${t.name} для продукта ${a.product} (env или Keychain: security add-generic-password -U -s hr-helper-mcp -a ${t.name} -w <токен>)`);
-  const relayApi = (method, path, body) => apiWith(t.value, method, path, body, t.name);
-  import('./relay.mjs').then((m) => m.relayLoop(a.session, { BASE, TOKEN: t.value, api: relayApi, product: a.product }));
+  else if (!t.value) fail(`нет ${t.name} для продукта ${a.product} (env или Keychain: security add-generic-password -U -s hr-helper-mcp -a ${t.name} -w <токен>)`);
+  else {
+    const relayApi = (method, path, body) => apiWith(t.value, method, path, body, t.name);
+    import('./relay.mjs').then((m) => m.relayLoop(a.session, { BASE, TOKEN: t.value, api: relayApi, product: a.product }));
+  }
 } else if (isMain) {
   createInterface({ input: process.stdin }).on('line', (line) => {
     if (!line.trim()) return;

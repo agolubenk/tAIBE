@@ -266,6 +266,8 @@ test('автопередача: процесс сессии жив — «пер�
   // Консоль без /relay или сбой — как раньше, без слов об автопередаче.
   const unknown = sentView(d, item, null).text;
   assert.match(unknown, /⚡ Агент сам не стартует/);
+  // Сессия без поля product — основной продукт: входящее taibe она не передаёт (ревью #173, цепочка).
+  assert.match(sentView(d, { ...item, product: 'taibe' }, live).text, /Автопередача сейчас не работает/);
   assert.doesNotMatch(unknown, /Автопередача/);
   // «В очередь» при живой автопередаче — карточку заведёт та же сессия.
   const q = { ...d, urgency: 'queue' };

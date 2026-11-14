@@ -205,7 +205,7 @@ export function sentView(d, item, relay = null) {
   // Сессия без поля product — ответ консоли до автопередачи по продуктам, она про основной продукт.
   const product = item.product || DEFAULT_PRODUCT;
   const live = relay && Array.isArray(relay.sessions)
-    ? relay.sessions.find((s) => s && s.alive && typeof s.session === 'string' && (!s.product || s.product === product))
+    ? relay.sessions.find((s) => s && s.alive && typeof s.session === 'string' && (s.product || DEFAULT_PRODUCT) === product)
     : null;
   const next = live
     ? `${d.urgency === 'now' ? '⚡' : '🗂'} Передаю сессии <b>${esc(cut(live.session, 120))}</b> — возьмёт в течение минуты${d.urgency === 'now' ? '' : ' и заведёт карточку'}. «Возьми входящее» вставлять не нужно.`

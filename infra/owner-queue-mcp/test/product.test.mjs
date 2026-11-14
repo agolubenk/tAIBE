@@ -70,7 +70,9 @@ test('продукт сессии: OQ_PRODUCT, иначе TAIBE_PRODUCT, ина�
   assert.equal(sessionProduct({}), 'hr-helper');
   assert.equal(sessionProduct({ TAIBE_PRODUCT: 'taibe' }), 'taibe');
   assert.equal(sessionProduct({ OQ_PRODUCT: 'taibe', TAIBE_PRODUCT: 'hr-helper' }), 'taibe');
-  assert.equal(sessionProduct({ OQ_PRODUCT: 'Не slug' }), 'hr-helper');
+  // Опечатка продукта — не hr-helper, а «не определён» (ревью #173, цепочка): ни токена HR, ни очереди HR.
+  assert.equal(sessionProduct({ OQ_PRODUCT: 'Не slug' }), null);
+  assert.equal(sessionProduct({ OQ_PRODUCT: 'Taibe', TAIBE_PRODUCT: 'taibe' }), null);
   assert.equal(tokenName('hr-helper'), 'OQ_TOKEN');
   assert.equal(tokenName('taibe'), 'OQ_TOKEN_taibe');
 });
@@ -127,6 +129,23 @@ test('откат на OQ_TOKEN виден модели: instructions и опис
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' })}\n`);
   const put = (await next()).tools.find((x) => x.name === 'oq_put');
   assert.match(put.description, /ВНИМАНИЕ: продукт сессии/);
+});
+
+test('опечатка OQ_PRODUCT при верном TAIBE_PRODUCT: в консоль не ходит ни с каким токеном, модель видит причину (ревью #173)', async (t) => {
+  const fake = await consoleFake();
+  t.after(fake.close);
+  const child = spawn(process.execPath, [SERVER], {
+    env: env(fake.port, { OQ_PRODUCT: 'Taibe', TAIBE_PRODUCT: 'taibe', OQ_TOKEN_taibe: 'tb-token' }), stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  t.after(() => child.kill());
+  const lines = createInterface({ input: child.stdout });
+  const next = () => new Promise((resolve) => lines.once('line', (l) => resolve(JSON.parse(l))));
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+  assert.match((await next()).result.instructions, /OQ_PRODUCT=«Taibe».*очередь недоступна/);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'oq_list', arguments: { collection: 'items', limit: 1 } } })}\n`);
+  const r = await next();
+  assert.match(JSON.stringify(r), /Продукт сессии не определён/);
+  assert.equal(fake.seen.auth.length, 0);
 });
 
 test('--relay --product taibe: будит сессию только входящими taibe и отмечается за taibe своим токеном', async (t) => {

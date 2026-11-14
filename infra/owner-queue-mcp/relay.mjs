@@ -71,8 +71,10 @@ function relayPrune(relayed, now) {
 /** conn — адрес API, токен и запрос из server.mjs: без обратного импорта (цикл модулей). */
 export async function relayLoop(session, { BASE, TOKEN, api, product = DEFAULT_PRODUCT }) {
   if (!RELAY_SESSION.test(session || '')) {
-    process.stderr.write('Использование: node server.mjs --relay <имя сессии> [--product <slug>] (имя — латиница, цифры, «.», «_», «-»)\n');
-    process.exit(2);
+    // Выход — после сброса строки: под Monitor вывод — pipe, и process.exit сразу после write терял бы её (ревью #173).
+    process.stderr.write('Использование: node server.mjs --relay <имя сессии> [--product <slug>] (имя — латиница, цифры, «.», «_», «-»)\n',
+      () => process.exit(2));
+    return;
   }
   const dir = join(homedir(), '.hr-owner-queue-bot', 'relay');
   mkdirSync(dir, { recursive: true, mode: 0o700 });

@@ -1586,9 +1586,11 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // wait — передано, ждём «взял»; sending — процесс жив, ещё не передал; stuck — передано, но «взял» нет 10 минут или
   // процесс с тех пор умер (Monitor сессии истёк): ждать некого, команда руками; off — автопередачи нет.
   // product — продукт входящего (OPS-51): живой считается только сессия его продукта. Сессия без поля product — ответ
-  // консоли до автопередачи по продуктам: подходит любому (такой ответ бывает только про HR).
+  // консоли до автопередачи по продуктам, она про основной продукт: другому продукту не подходит (ревью #173, цепочка).
   var RELAY_SLOW_MS = 10 * 60000;
-  function relaySessionFits(s, product) { return !!s && (!product || !s.product || s.product === product); }
+  // Основной продукт: на странице его ставит page-scripts.ts; в чистом контексте (тесты блока) window нет.
+  function relayDefaultProduct() { return (typeof window !== 'undefined' && window.__oqDefaultProduct) || 'hr-helper'; }
+  function relaySessionFits(s, product) { return !!s && (!product || (s.product || relayDefaultProduct()) === product); }
   function relayItemState(relay, id, now, product) {
     if (!relay || !Array.isArray(relay.sessions) || !relay.relayed || typeof relay.relayed !== 'object') return null;
     var live = relay.sessions.filter(function (s) { return relaySessionFits(s, product) && s.alive; })[0] || null;

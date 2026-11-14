@@ -57,7 +57,10 @@ export interface RelayView {
   /** Хоть одна видимая актору сессия отмечалась за RELAY_STALE_MS. */
   alive: boolean
   sessions: RelaySession[]
-  /** Кому и когда передано входящее (по id пункта) — первая передача; product — продукт передавшей сессии. */
+  /**
+   * Кому и когда передано входящее (по id пункта): первая передача внутри продукта, а из передач разных продуктов —
+   * последняя; product — продукт передавшей сессии.
+   */
   relayed: Record<string, { session: string; at: string; product: string }>
   /** По продукту: последняя отметившаяся сессия и жива ли автопередача продукта (хоть одна сессия жива). */
   products: Record<string, { alive: boolean; session: string; at: string }>
@@ -88,9 +91,21 @@ function view(stored: Stored, now: number, visible: Visibility): RelayView {
   const sessions = own
     .map(([session, v]) => ({ session, at: v.at, alive: now - Date.parse(v.at) < RELAY_STALE_MS, product: v.product }))
     .sort((a, b) => b.at.localeCompare(a.at))
-  const relayed: RelayView['relayed'] = {}
+  // Отметка — по паре (id, продукт): первая передача внутри продукта. Владелец перенёс входящее в другой продукт —
+  // его передаёт уже сессия нового продукта, и это позже первой передачи. Поэтому из продуктов берётся последняя
+  // передача: страница сверяет её продукт с продуктом пункта, и wait → stuck работает после переноса (ревью #173,
+  // цепочка). Раньше брали первую передачу вообще, и после HR → taibe пункт вечно висел «передаётся».
+  const byPair = new Map<string, { id: string; session: string; at: string; product: string }>()
   for (const [session, v] of own) {
-    for (const [id, at] of Object.entries(v.relayed)) if (!relayed[id] || relayed[id].at > at) relayed[id] = { session, at, product: v.product }
+    for (const [id, at] of Object.entries(v.relayed)) {
+      const k = `${id}\u0000${v.product}`
+      const cur = byPair.get(k)
+      if (!cur || cur.at > at) byPair.set(k, { id, session, at, product: v.product })
+    }
+  }
+  const relayed: RelayView['relayed'] = {}
+  for (const { id, session, at, product } of byPair.values()) {
+    if (!relayed[id] || relayed[id].at < at) relayed[id] = { session, at, product }
   }
   // Сессии уже по убыванию времени: первая живая продукта, а без живых — последняя отметившаяся.
   const products: RelayView['products'] = {}
