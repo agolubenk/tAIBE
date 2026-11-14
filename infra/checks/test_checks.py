@@ -108,6 +108,49 @@ class ChecksTest(unittest.TestCase):
             with self.subTest(line):
                 self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [secret])
 
+    def test_secrets_key_after_underscore_or_dash(self):
+        # OPS-71 (Claude lens #283): `\b` does not fire after `_`, so these keys passed; redact masks them.
+        ant = 'sk-' + 'ant-' + 'Qz8Lm4Rt7Wx2Ny5Kp9Bv3Hd'
+        glpat = 'glp' + 'at-' + 'Rt7Wx2Ny5Kp9Bv3HdQz8Lm'
+        cases = [
+            (f'x_{ant} end', 'anthropic-key', ant),
+            (f'x_{glpat} end', 'gitlab-token', glpat),
+            (f'TOKEN_{ant} end', 'anthropic-key', ant),
+            (f'_{ant}_', 'anthropic-key', ant + '_'),
+            (f'TOKEN_{glpat} end', 'gitlab-token', glpat),
+        ]
+        # The rest of the rules that redact starts after `_` too.
+        for prefix, body, rule in (
+                ('sk-' + 'proj-', 'Wx2Ny5Kp9Bv3HdQz8Lm4Rt7Xc6Fj1Gs0Ue', 'openai-key'),
+                ('sk-' + 'or-v1-', 'a3f91c7e' * 6, 'openrouter-key'),
+                ('gh' + 'p_', 'Ny5Kp9Bv3HdQz8Lm4Rt7Wx2Xc6Fj1Gs0Ue7Ia', 'github-token'),
+                ('AK' + 'IA', 'Q7W2N5K9B3HD8L4R', 'aws-access-key'),
+                ('AI' + 'za', 'Kp9Bv3HdQz8Lm4Rt7Wx2Ny5Xc6Fj1Gs0Ue7', 'google-api-key'),
+                ('sk' + '_live_', 'Bv3HdQz8Lm4Rt7Wx2Ny5', 'stripe-key'),
+                ('tb' + 'k_', 'Hd' + 'Qz8Lm4Rt7Wx2Ny5Kp9Bv3Xc6Fj1Gs0Ue', 't-boards-key'),
+                ('xo' + 'xb-', '8312904756-Lm4Rt7Wx2Ny5', 'slack-token')):
+            cases.append((f'id_{prefix}{body} end', rule, prefix + body))
+            cases.append((f'id-{prefix}{body} end', rule, prefix + body))
+        for line, rule, value in cases:
+            with self.subTest(line):
+                self.assertIn((rule, value), secrets_scan.scan_line(line))
+        # A letter or a digit before the prefix is still a longer word, not a key.
+        self.assertEqual(secrets_scan.scan_line(f'ask-{ant[3:]} x9{glpat}'), [])
+
+    def test_secrets_starts_after_underscore_stay_linear(self):
+        # OPS-71: a start after every `_`/`-` must not rescan a long run to its end. Each unit is repeated to 256 000
+        # characters and closed by every end the rule bodies treat differently. With `github_pat_` started after `_`,
+        # the `é` end takes 16 s.
+        units = ('_sk-ant-', 'x_glpat-', '_sk-', '_sk-proj-', '_sk-or-v1-', '_ghp_', '_AKIA', '_AIza', '_sk_live_',
+                 '_tbk_', 'github_pat_', 'xoxb-', 'xoxb_', '_xoxb-', '-xoxb', 'xoxb--')
+        for unit in units:
+            for end in ('', '_', '-', '!', 'é'):
+                line = unit * (256000 // len(unit)) + end
+                with self.subTest(unit=unit, end=end):
+                    started = time.perf_counter()
+                    secrets_scan.scan_line(line)
+                    self.assertLess(time.perf_counter() - started, 1.0)
+
     def test_secrets_hostile_lines_stay_linear(self):
         # TB-136 security lens: a rule that may restart at every character and scan to the end of the line is
         # quadratic. On 64 000 characters each line takes up to 14 ms linear and 2.4-12 s quadratic.
