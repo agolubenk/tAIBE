@@ -103,7 +103,7 @@ check-infra:
 	@for f in infra/scripts/dev-ai/*.sh infra/scripts/dev-ai/lib/*.sh infra/scripts/dev/*.sh; do bash -n "$$f" || exit 1; done
 
 check-boards:
-	cd boards && pnpm lint && pnpm typecheck && pnpm test
+	bash .claude/scripts/heavy-gate.sh bash -c 'cd boards && pnpm lint && pnpm typecheck && pnpm test'
 
 genome-check:
 	cd eval/pipeline/genome && python3 -I build.py --check

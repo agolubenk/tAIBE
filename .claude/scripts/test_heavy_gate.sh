@@ -46,13 +46,13 @@ check "второй ждёт первого" [ "$(tr '\n' ' ' <"$tmp/log")" = "A
 check "ждущему — чей гейт, один раз" [ "$(grep -c 'чужой гейт' "$tmp/b.err")" -eq 1 ]
 
 # 2б. Команда в замке — без значений: её видят ждущие из других сессий.
-bash "$gate" sh -c 'sleep 1' API_TOKEN=s3cr3t --token t0k --filter=@x/y >/dev/null &
+bash "$gate" sh -c 'sleep 1' API_TOKEN=s3cr3t --token t0k --filter=@x/y -H 'Authorization: Bearer b3ar' >/dev/null &
 m=$!
 i=0
 while [ ! -s "$HEAVY_GATE_LOCK/owner" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
 shown="$(sed -n 5p "$HEAVY_GATE_LOCK/owner")"
 wait "$m"
-check "в замке нет значений присваиваний и токенов" sh -c "! printf '%s' '$shown' | grep -q -E 's3cr3t|t0k|@x/y'"
+check "в замке нет значений присваиваний и токенов" sh -c "! printf '%s' '$shown' | grep -q -E 's3cr3t|t0k|@x/y|b3ar'"
 check "в замке видна сама команда" [ "${shown%% *}" = sh ]
 
 # 3. Замок умершего владельца снимается сразу.
@@ -99,6 +99,19 @@ kill -TERM "$g"
 check "TERM — обёртка вышла" finishes "$g" 3
 check "TERM — замок отпущен" no_lock
 check "TERM — команда погашена" sh -c "! kill -0 ${kid:-999999} 2>/dev/null"
+
+# 6b. Составная команда (`bash -c 'cd x && …'` — форма из подсказки хука): TERM гасит и внука, а не только bash -c.
+bash "$gate" bash -c 'sleep 31; true' &
+g=$!
+i=0
+while [ ! -s "$HEAVY_GATE_LOCK/owner" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+sleep 0.3
+mid="$(pgrep -P "$g" bash)"
+grand="$(pgrep -P "${mid:-999999}" sleep)"
+check "составная — внук запущен" [ -n "$grand" ]
+kill -TERM "$g"
+check "составная, TERM — обёртка вышла" finishes "$g" 3
+check "составная, TERM — внук погашен" finishes "${grand:-999999}" 3
 
 # 7. HEAVY_GATE_WAIT=0: занято — код 75, команда не запускалась. Ожидание, снятие и пропуск — в журнале замка.
 sleep 30 &

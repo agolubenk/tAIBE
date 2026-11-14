@@ -90,7 +90,7 @@ if [ -n "$said" ]; then log "wait=$(($(date +%s) - since))s"; fi
 # Команда для ждущих — в чаты других сессий, поэтому без значений: `NAME=…` и слово после флага с token|key|secret|
 # password — `***`, длина — до 120 символов.
 shown="$(printf '%s ' "$@" | tr '\n' ' ' |
-  sed -E 's/([A-Za-z_][A-Za-z0-9_]*)=[^[:space:]]*/\1=***/g; s/(-[-A-Za-z_]*(token|key|secret|password|passwd|pass)[-A-Za-z_]*)[[:space:]]+[^[:space:]]+/\1 ***/g' |
+  sed -E 's/([A-Za-z_][A-Za-z0-9_]*)=[^[:space:]]*/\1=***/g; s/(-[-A-Za-z_]*(token|key|secret|password|passwd|pass)[-A-Za-z_]*)[[:space:]]+[^[:space:]]+/\1 ***/g; s/(Bearer|Basic|Token)[[:space:]]+[^[:space:]]+/\1 ***/g' |
   cut -c1-120)"
 me="$$|$(proc_start $$)"
 printf '%s\n%s\n%s\n%s\n%s\n' "$$" "${me#*|}" "$(date +%s)" "$LABEL" "$shown" >"$LOCK/owner"
@@ -101,7 +101,9 @@ release() {
 }
 stop() { # <код> — сигнал обёртке: погасить команду, отпустить замок
   if [ -n "$child" ]; then
-    kill -TERM "$child" 2>/dev/null
+    # Своя группа процессов (set -m при запуске): TERM всей группе гасит и внуков — `bash -c 'cd x && tsc'`
+    # сам TERM детям не пересылает, и tsc остался бы сиротой без замка (линза Контроля #338).
+    kill -TERM -- "-$child" 2>/dev/null || kill -TERM "$child" 2>/dev/null
     wait "$child" 2>/dev/null
   fi
   exit "$1"
@@ -112,8 +114,10 @@ trap 'stop 143' TERM
 trap 'stop 129' HUP
 
 export HEAVY_GATE_HELD="$LOCK"
+set -m # команда — лидер своей группы процессов
 "$@" &
 child=$!
+set +m
 printf '%s\n%s\n' "$child" "$(proc_start "$child")" >>"$LOCK/owner"
 wait "$child"
 rc=$?

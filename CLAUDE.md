@@ -35,7 +35,7 @@ python3 -I -m unittest discover -s eval/swarm    -p 'test_*.py'
 for t in .claude/hooks/test_*.py .claude/scripts/test_*.py; do python3 "$t"; done
 ```
 
-Тяжёлый гейт — через `.claude/scripts/heavy-gate.sh <команда>` (один на Mac).
+Тяжёлый гейт — через `.claude/scripts/heavy-gate.sh <команда>` (один на Mac, ждёт без срока: длинный — в фоне).
 
 Всё разом — `make check` (eval + слой + infra); доски — `make check-boards`. infra (from repo root):
 

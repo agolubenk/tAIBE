@@ -32,6 +32,8 @@ LIGHT = {"--version", "-v", "--help", "-h"}
 VALUE_FLAGS = {"-w", "--workspace", "--prefix", "-C", "-f", "--file", "-p", "--project-name", "--filter", "-F",
                "--dir"}
 VP_DIRECT = {"check", "test", "build", "lint"}  # vite-plus без `run`: `vp check` — линт и типы досок
+PKG_MANAGERS = {"pnpm", "npm", "yarn", "bun"}
+PKG_EXEC = {"exec", "dlx", "x"}  # `pnpm exec tsc` — дальше настоящая команда
 
 
 def positional(args):
@@ -47,12 +49,47 @@ def positional(args):
     return out
 
 
-def heavy(argv):
-    """Имя тяжёлой команды (`tsc`, `npm`…) или None: argv без префиксов (normalize), первое слово — без пути."""
-    while argv and argv[0] in RUNNERS:
-        argv = argv[1:]
+def first_positional(args):
+    """Индекс первого слова без флагов и их значений или None."""
+    skip = False
+    for i, a in enumerate(args):
+        if skip:
+            skip = False
+        elif a in VALUE_FLAGS:
+            skip = True
+        elif not a.startswith("-"):
+            return i
+    return None
+
+
+def unwrap(argv):
+    """Настоящая команда за запускателями: `npx tsc`, `pnpm exec tsc`, `npm exec -- vitest`, `pnpm vitest run`
+    (линза backend #338)."""
+    while argv:
+        if argv[0] in RUNNERS:
+            argv = argv[1:]
+        elif os.path.basename(argv[0]) in PKG_MANAGERS:
+            i = first_positional(argv[1:])
+            if i is None:
+                return argv
+            word = argv[1 + i]
+            if word in PKG_EXEC:
+                argv = argv[2 + i:]
+            elif word in TOOLS:
+                argv = argv[1 + i:]
+                return argv
+            else:
+                return argv
+        else:
+            return argv
         while argv and argv[0].startswith("-"):
             argv = argv[1:]
+    return argv
+
+
+def heavy(argv):
+    """Имя тяжёлой команды (`tsc`, `npm`…) или None: argv без префиксов (normalize), первое слово — без пути."""
+    argv = unwrap(argv)
     if not argv or LIGHT & set(argv[1:]):
         return None
     name = os.path.basename(argv[0])
