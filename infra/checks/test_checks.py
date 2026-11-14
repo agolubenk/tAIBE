@@ -106,6 +106,27 @@ class ChecksTest(unittest.TestCase):
         self.assertIn(('boards/apps/api/drizzle/0002_orphan.sql', 'migration is not in the journal — it never runs'),
                       paths)
 
+    def test_oq_schema_has_one_writer(self):
+        bad = {
+            'boards/apps/api/src/a.ts': 'await db.execute(sql`select * from oq.docs`)',
+            'boards/apps/api/src/b.ts': 'db.execute(sql`insert into "oq"."events" (id) values (1)`)',
+            'boards/packages/x/src/c.ts': 'export const oq = pgSchema("oq")',
+            'boards/apps/api/src/d.ts': "await client.query('SET search_path TO oq, public')",
+            'boards/apps/api/scripts/e.sh': 'psql -c "alter schema oq owner to t_boards"',
+        }
+        fine = {
+            'boards/apps/api/drizzle/0005_oq.sql': 'CREATE TABLE "oq"."docs" ("id" text);',
+            'boards/apps/web/src/queue.ts': 'fetch(`/api/oq/v1/db/items?state=1`)',
+            'boards/apps/web/src/names.ts': 'const oqDocs = items.docs; const ok = toq.events',
+            'boards/tests/api-integration/oq-schema.test.ts': 'await client.query("select 1 from oq.docs")',
+            'boards/apps/api/README.md': 'The console writes oq.docs.',
+            'infra/ops-console/server/db/pg.ts': 'select * from oq.docs',
+        }
+        for rel, text in {**bad, **fine}.items():
+            write(self.root, rel, text + '\n')
+        hits = {p for _, level, p, m in self.findings('data') if level == 'error' and m.startswith('SQL to the')}
+        self.assertEqual(hits, set(bad))
+
     def test_syntax(self):
         write(self.root, 'ok.py', 'x = 1\n')
         write(self.root, 'bad.py', 'def f(:\n')

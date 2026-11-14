@@ -7,7 +7,10 @@
 - the owner-decision ledger `eval/data/decisions.jsonl`: id, q, a, source, ISO date on every line;
 - drizzle migrations `boards/apps/api/drizzle/`: the journal is sequential (`idx` 0…n), `when` strictly grows
   (drizzle skips a migration whose `when` is not newer — the 0077 collision of 31.10), every journal entry has its
-  `.sql` and snapshot, and every `.sql` is in the journal.
+  `.sql` and snapshot, and every `.sql` is in the journal;
+- the owner-queue schema `oq` in the boards' Postgres (TB-28, `docs/specs/owner-queue-move.md` §5.2): the boards'
+  code under `boards/apps/` and `boards/packages/` holds no SQL to `oq.*` — the ops console is its only writer, and the
+  boards app connects as a superuser. Only the migrations create the schema.
 """
 import glob
 import json
@@ -22,6 +25,11 @@ STATUSES = {'to-do', 'in-progress', 'in-review', 'done', 'archived', 'planned', 
 PRIORITIES = {'no-priority', 'low', 'medium', 'high', 'urgent', 'critical'}
 DRIZZLE = 'boards/apps/api/drizzle'
 DATE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+OQ_CODE = ('boards/apps/', 'boards/packages/')
+OQ_EXT = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.sql', '.sh')
+# A table of the schema, the schema itself in DDL or search_path, a drizzle pgSchema("oq").
+OQ_SQL = re.compile(r'''\boq"?\s*\.\s*"?(docs|events|files)\b|\bschema\s+"?oq\b|search_path[^;\n]*\boq\b|'''
+                    r'''pgSchema\(\s*['"`]oq['"`]''', re.IGNORECASE)
 
 
 def json_files(root, files):
@@ -146,5 +154,18 @@ def drizzle(root):
     return out
 
 
+def oq_schema(root, files, read_text):
+    out = []
+    for path in files:
+        if not path.startswith(OQ_CODE) or path.startswith(DRIZZLE + '/') or not path.endswith(OQ_EXT):
+            continue
+        for n, line in enumerate((read_text(root, path) or '').splitlines(), 1):
+            if OQ_SQL.search(line):
+                out.append(Finding('data', 'error', path, n, 'SQL to the owner-queue schema oq.*: the ops console is '
+                                   'its only writer, the boards read it through the console API (TB-28)'))
+    return out
+
+
 def run(root, files, read_text):
-    return json_files(root, files) + plans(root) + decisions(root) + drizzle(root)
+    return (json_files(root, files) + plans(root) + decisions(root) + drizzle(root)
+            + oq_schema(root, files, read_text))

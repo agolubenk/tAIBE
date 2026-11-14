@@ -135,9 +135,9 @@ restored="$(sh "$vps/mac/restore-check.sh" "$root/backups/latest.dump")" || fail
 printf '%s\n' "$restored"
 printf '%s\n' "$restored" | grep -qx "migrations $journal" || fail "restored dump lacks $journal migrations"
 cards="$(grep -c -E '"key": "[A-Z]{2,5}-[0-9]{3}"' "$vps/seed/products.json")"
-for row in "users 1" "workspaces 3" "tasks $cards"; do
+for row in "users 1" "workspaces 3" "tasks $cards" "oq_guards 3"; do
   printf '%s\n' "$restored" | grep -qx "$row" || fail "restored dump lacks $row"
 done
-log "restore: $journal migrations, the admin, 3 products and $cards cards back"
+log "restore: $journal migrations, the admin, 3 products, $cards cards and the 3 owner-queue write guards back"
 
 log "selftest: all checks passed"
