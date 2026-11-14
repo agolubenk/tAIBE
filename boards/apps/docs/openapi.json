@@ -15281,6 +15281,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
           }
@@ -16131,6 +16141,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
           }
@@ -16451,6 +16471,16 @@
           },
           "404": {
             "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
             "content": {
               "application/json": {
                 "schema": {
@@ -17354,6 +17384,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
           }
@@ -17700,6 +17740,16 @@
           },
           "404": {
             "description": "Comment not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
             "content": {
               "application/json": {
                 "schema": {
