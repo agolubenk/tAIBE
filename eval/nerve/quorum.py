@@ -19,6 +19,13 @@ SHA — токен сразу за словом (между ними — «с у
 роль по github.lens_roles, иначе имя линзы. Так «Линза корректности (роль 4)» и «Линза «корректность и отказы» (роль 4)»
 — одна линза backend. Предел: подпись без номера и без имени из lens_roles даёт отдельный ключ.
 Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, проверки CI не висят.
+Тело PR (SE-50): каждая строка вне таблицы разбирается так же, как первая строка комментария. Строка таблицы вердиктов
+HR («| Линза | Участник | Голова | Вердикт |», «| Линза | Вердикт |») приводится к «Линза «<имя>»: <слово> на <SHA>» и
+идёт в тот же parse_verdict. SHA — «на <SHA>» в ячейке вердикта, иначе ячейка «Голова». accept/approve/OK → approve,
+fail/changes/reject → changes; «ждём», «—» и прочее — не вердикт. Код в ``` и цитаты пропускаются. Если у одной линзы
+на голову есть строка тела и комментарий, побеждает более новый: время комментария против времени правки тела.
+Пределы: время у тела одно — правка любой строки делает новее все строки тела; линза таблицы — по имени в колонке
+«Линза» (участник не читается), поэтому та же линза под другим именем в комментарии — второй ключ.
 """
 import re
 
@@ -93,6 +100,69 @@ def parse_verdict(body, lens_roles, team_roles=()):
         return None
     verdict, sha = min(found, key=lambda f: RANK[f[0]])
     return {"lens": _lens_key(label, lens_roles, team_roles), "verdict": verdict, "sha": sha}
+
+
+TABLE_WORDS = {"approve": "approve", "approved": "approve", "accept": "approve", "accepted": "approve",
+               "ok": "approve", "ок": "approve", "fail": "changes", "failed": "changes", "changes": "changes",
+               "reject": "changes", "rejected": "changes"}
+_CELL_WORD_RE = re.compile(r"[\s*_`]*([^\W\d_]+)")
+_SHA_RE = re.compile(r"(?<![0-9a-z])([0-9a-f]{7,40})(?![0-9a-z])", re.I)
+_ON_SHA_RE = re.compile(r"(?<!\w)(?:на|at|on|@)" + _P + r"([0-9a-f]{7,40})(?![0-9a-z])", re.I)
+_COLUMNS = (("lens", r"линз|lens"), ("verdict", r"вердикт|verdict"), ("head", r"голов|head|sha|коммит|commit"))
+
+
+def _columns(cells):
+    """Колонки линзы, вердикта и головы по заголовку таблицы; None — таблица не вердиктов."""
+    low = [c.strip(_MD).lower() for c in cells]
+    cols = {k: next((i for i, c in enumerate(low) if re.match(pat, c)), None) for k, pat in _COLUMNS}
+    return cols if cols["lens"] is not None and cols["verdict"] is not None else None
+
+
+def _row_line(cells, cols):
+    """Строка таблицы вердиктов → «Линза «<имя>»: <approve|changes> на <SHA>»; None — в строке нет вердикта."""
+    def cell(key):
+        i = cols[key]
+        return cells[i] if i is not None and i < len(cells) else ""
+    word = _CELL_WORD_RE.match(cell("verdict"))
+    word = TABLE_WORDS.get(word.group(1).casefold()) if word else None
+    sha = _ON_SHA_RE.search(cell("verdict")) or _SHA_RE.search(cell("head"))
+    label = cell("lens").strip(_MD + "«»")
+    if not ROLE_RE.search(label):  # «ресурсы (−5 запросов)» и «ресурсы» — одна линза; «(роль N)» остаётся ключом
+        label = label.split("(", 1)[0].strip(_MD)
+    return f"Линза «{label}»: {word} на {sha.group(1)}" if word and sha and label else None
+
+
+def body_verdicts(body, lens_roles, team_roles=()):
+    """Вердикты тела PR по порядку строк (SE-50): строка — parse_verdict, строка таблицы вердиктов — через _row_line."""
+    found, cols, table, fence = [], None, False, False
+    for raw in (body or "").splitlines():
+        s = raw.strip()
+        if s.startswith(("```", "~~~")):
+            fence, table = not fence, False
+            continue
+        if fence or s.startswith(">"):
+            continue
+        if not s.startswith("|"):
+            table = False
+            v = parse_verdict(s, lens_roles, team_roles)
+        elif not table:
+            table, cols, v = True, _columns(s.strip("|").split("|")), None
+        else:
+            line = _row_line([c.strip() for c in s.strip("|").split("|")], cols) if cols else None
+            v = parse_verdict(line, lens_roles, team_roles) if line else None
+        if v:
+            found.append(v)
+    return found
+
+
+def with_body(body_vs, comment_vs, head, body_time):
+    """Вердикты тела и комментариев в одном порядке для quorum(): по времени, последний у линзы побеждает (SE-50).
+    comment_vs несут «at» (created_at комментария). body_time() — время правки тела, ленивый запрос: его зовут, только
+    если у одной линзы на голову есть и строка тела, и комментарий. Равное время — комментарий новее."""
+    def lenses(vs):
+        return {v["lens"] for v in vs if on_head(v["sha"], head)}
+    at = body_time() if lenses(body_vs) & lenses(comment_vs) else ""
+    return sorted([dict(v, at=at) for v in body_vs] + list(comment_vs), key=lambda v: v.get("at") or "")
 
 
 def on_head(sha, head):

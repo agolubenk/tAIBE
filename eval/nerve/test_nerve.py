@@ -17,6 +17,7 @@ sys.path.insert(0, HERE)
 
 import actions  # noqa: E402
 import budget  # noqa: E402
+import gh_poll  # noqa: E402
 import nerve  # noqa: E402
 import quorum  # noqa: E402
 import sources  # noqa: E402
@@ -340,9 +341,9 @@ class GithubPollTest(unittest.TestCase):
     def test_every_gh_call_names_the_repo(self):
         fake = FakeGh([_pr(458, "a" * 40)])
         sources.run = fake
-        files, checks, state, _ = sources._gh_view(FakeGh.REPO, 458)
+        files, checks, state, _ = gh_poll._gh_view(FakeGh.REPO, 458)
         self.assertEqual((files, checks, state), (["apps/backend/src/x.ts"], ["SUCCESS"], "OPEN"))
-        sources.poll_github(self.ctx)
+        gh_poll.poll_github(self.ctx)
         self.assertTrue(fake.calls)
         for c in fake.calls:
             if c[:3] == ["gh", "pr", "view"]:
@@ -362,7 +363,7 @@ class GithubPollTest(unittest.TestCase):
             "**Линза «корректность и отказы» (роль 4) — ACCEPT на 2bc2b66ff**",
             "**Контроль (роль 5: безопасность · отказы · поставка) — ACCEPT на голове `2bc2b66ff`**"]})
         sources.run = fake
-        sources.poll_github(self.ctx)
+        gh_poll.poll_github(self.ctx)
         kinds = [k for k, _ in self.kinds()]
         self.assertNotIn("pr.changes", kinds)
         self.assertIn("pr.quorum", kinds)
@@ -370,10 +371,10 @@ class GithubPollTest(unittest.TestCase):
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
-        sources.poll_github(self.ctx)
+        gh_poll.poll_github(self.ctx)
         self.assertEqual(self.ctx.state["github"]["prs"]["479"]["changes_by"], ["backend"])
         sources.run = FakeGh([_pr(479, "b" * 40, "2026-11-04T11:00:00Z")], etag='W/"e2"')
-        sources.poll_github(self.ctx)
+        gh_poll.poll_github(self.ctx)
         rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.newhead"]
         self.assertEqual([e["to"] for e in rec], [["backend"]])
 
@@ -382,12 +383,12 @@ class GithubPollTest(unittest.TestCase):
         self.ctx.state["github"] = {"etag": 'W/"e1"', "prs": {"457": {"head": "b" * 40, "updated": "x",
                                                                        "seen": [], "changes_by": []}}}
         sources.run = FakeGh([], merged={457})
-        sources.poll_github(self.ctx)
+        gh_poll.poll_github(self.ctx)
         st = self.ctx.state["github"]
         self.assertNotIn("457", st["prs"])
         self.assertIn(("pr.closed", "#457 влит"), self.kinds())
-        self.assertEqual((st["rev"], st["etag"]), (sources.GH_STATE_REV, 'W/"e1"'))
-        sources.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
+        self.assertEqual((st["rev"], st["etag"]), (gh_poll.GH_STATE_REV, 'W/"e1"'))
+        gh_poll.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
         self.assertEqual(self.kinds().count(("pr.closed", "#457 влит")), 1)
 
     def test_stuck_open_pr_without_author_is_resolved_after_upgrade(self):
@@ -396,34 +397,34 @@ class GithubPollTest(unittest.TestCase):
         self.ctx.state["github"] = {"etag": 'W/"e1"', "prs": {"458": {"head": sha, "updated": upd,
                                                                        "seen": [], "changes_by": []}}}
         sources.run = FakeGh([_pr(458, sha, upd)])
-        sources.poll_github(self.ctx)
+        gh_poll.poll_github(self.ctx)
         p = self.ctx.state["github"]["prs"]["458"]
         self.assertEqual(p.get("checks"), ["SUCCESS"])
         self.assertIn("author", p)
 
     def test_one_failing_pr_does_not_stop_the_pass_and_is_retried(self):
         sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)], merged={9}, broken={1})
-        self.ctx.state["github"] = {"etag": "", "rev": sources.GH_STATE_REV,
+        self.ctx.state["github"] = {"etag": "", "rev": gh_poll.GH_STATE_REV,
                                     "prs": {"9": {"head": "e" * 40, "updated": "x", "seen": [], "changes_by": []}}}
         with self.assertRaisesRegex(RuntimeError, r"PR с ошибкой: 1; #1: gh pr view"):
-            sources.poll_github(self.ctx)
+            gh_poll.poll_github(self.ctx)
         st = self.ctx.state["github"]
         self.assertIn("author", st["prs"]["2"], "#2 разобран, хотя #1 упал раньше")
         self.assertNotIn("9", st["prs"], "цикл закрытых прошёл")
         self.assertEqual((st["prs"]["1"]["head"], st["prs"]["1"]["updated"]), ("", ""), "#1 не считается увиденным")
         self.assertEqual(st["etag"], "", "без etag следующий проход берёт полный список, а не 304")
         sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)])
-        sources.poll_github(self.ctx)
+        gh_poll.poll_github(self.ctx)
         self.assertIn("author", st["prs"]["1"])
         self.assertEqual(st["etag"], 'W/"e1"')
         self.assertEqual(self.kinds().count(("pr.new", "#1 открыт: PR 1")), 1, "повтор не дублирует событие")
 
     def test_closed_pr_that_fails_stays_for_retry(self):
         sources.run = FakeGh([], broken={7})
-        self.ctx.state["github"] = {"etag": "", "rev": sources.GH_STATE_REV,
+        self.ctx.state["github"] = {"etag": "", "rev": gh_poll.GH_STATE_REV,
                                     "prs": {"7": {"head": "f" * 40, "updated": "x", "seen": [], "changes_by": []}}}
         with self.assertRaises(RuntimeError):
-            sources.poll_github(self.ctx)
+            gh_poll.poll_github(self.ctx)
         self.assertIn("7", self.ctx.state["github"]["prs"])
         self.assertNotIn("pr.closed", [k for k, _ in self.kinds()])
 
