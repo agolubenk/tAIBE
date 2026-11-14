@@ -804,6 +804,12 @@ describe('роадмап по неделям: подписи не налезаю
     expect(roadmapLabelMode((1200 * 7) / 266)).toBe('months')
   })
 
+  it('заголовок столбца — по подписям шкалы: «Неделя» над неделями, «Месяц» над месяцами (карточка HR epz36yxj)', () => {
+    expect(html).toContain("var byWeeks = roadmapLabelMode(dx * 7) === 'weeks';")
+    expect(html).toContain(`'<div class="rm-row rm-head"><div class="rm-name">' + (byWeeks ? 'Неделя' : 'Месяц') + '</div>`)
+    expect(html).not.toContain('<div class="rm-name">Неделя</div>')
+  })
+
   it('месяц — коротко, год — у первой подписи и у января', () => {
     const { roadmapMonthLabel } = pure()
     expect(roadmapMonthLabel(new Date(2026, 10, 1), false)).toBe('ноя')
@@ -1157,5 +1163,13 @@ describe('таяние ответа и якорь прокрутки (прось
     expect(html).toContain('new ResizeObserver(function () { restoreAnchor(); })')
     expect(html).toMatch(/scheduleDash\(\);\n {4}restoreAnchor\(\);\n {2}\}/)
     expect(html).toContain("if (ev.pointerType === 'touch') return;")
+  })
+})
+
+describe('роадмап: вехи без подписи видны на снимке бота (карточка HR u68lwzb1)', () => {
+  it('у полосы — «+N вех без подписи», названия и даты — в её подсказке', () => {
+    expect(html).toContain('var hidden = marks.filter(function (m, i) { return !levels[i]; });')
+    expect(html).toContain("'>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>'")
+    expect(html).toContain("tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); }))")
   })
 })
