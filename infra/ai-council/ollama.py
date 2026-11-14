@@ -46,8 +46,8 @@ LOCAL_INFERENCE_LOCK = _LOCK_OVERRIDE or os.path.join(os.path.expanduser("~"), M
 # Модельный лок L-моделей — тоже у машины (OPS-29). Лок в council.db держал «одну L-модель» только внутри хоста:
 # у каждого хоста своя база, и два хоста выгружали модели друг друга (пинг-понг 17–18 GB, в окне — две L-модели на
 # 24 GB). Порядок постоянный: модельный лок — внешний, на весь блок large_model; лок инференса — внутренний, на
-# вызов. Шлюз моделей берёт только лок инференса, поэтому взаимной блокировки нет. С AI_COUNCIL_LOCAL_LOCK (тесты)
-# файл лежит рядом с ним.
+# вызов. Тот же порядок у шлюза моделей и у прогрева (OPS-59): L-модель — лок L-модели, затем лок инференса, поэтому
+# взаимной блокировки нет. С AI_COUNCIL_LOCAL_LOCK (тесты) файл лежит рядом с ним.
 MACHINE_MODEL_LOCK = (os.path.join(os.path.dirname(_LOCK_OVERRIDE), "large-model.lock") if _LOCK_OVERRIDE
                       else os.path.join(os.path.expanduser("~"), ".local", "state", "taibe", "council", "large-model.lock"))
 _model_lock = {"depth": 0}   # процесс держит машинный модельный лок: вложенный large_model — без flock
@@ -68,15 +68,16 @@ def _flock_by(handle, deadline: float, wait_seconds: float, path: str = "", what
                     except BlockingIOError:
                         pass
                 who = describe_holder(holder) if path else "держатель неизвестен"
-                raise TimeoutError(f"{what} занят другим процессом дольше {int(wait_seconds)} с: {who}. "
+                raise TimeoutError(f"{what} занят другим процессом дольше {round(wait_seconds, 1):g} с: {who}. "
                                    "Кто держит — python3 infra/ai-council/supervisor.py status")
             time.sleep(0.25)
 
 
 @contextmanager
-def machine_model_slot(model: str, holder: str, wait_seconds: float):
+def machine_model_slot(model: str, holder: str, wait_seconds: float, who: str = ""):
     """Машинный лок L-модели на блок large_model (OPS-29). Реентерабелен внутри процесса, как прежний лок в БД
-    для одного holder: вложенный блок не ждёт сам себя."""
+    для одного holder: вложенный блок не ждёт сам себя. `who` — отметка держателя вне консилиума (прогрев и установка
+    моделей, `infra/scripts/dev-ai/ollama-locked.py --model`, OPS-59); без неё — «council <holder> <модель>»."""
     if _model_lock["depth"]:
         _model_lock["depth"] += 1
         try:
@@ -88,7 +89,7 @@ def machine_model_slot(model: str, holder: str, wait_seconds: float):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a+") as handle:
         _flock_by(handle, time.time() + wait_seconds, wait_seconds, path, what=f"модельный лок под {model}")
-        mark_holder(handle, f"council {holder} {model}")
+        mark_holder(handle, " ".join(who.split()) or f"council {holder} {model}")
         _model_lock.update(depth=1)
         try:
             yield

@@ -192,30 +192,62 @@ export class Proxy {
     return this.fail(ctx, { ...err, message: `gateway: ${ctx.tried.map((t) => `${t.key}→${t.model}:${t.status}`).join(', ') || 'нет попыток'} | ${err.message}`, raw: undefined })
   }
 
-  // Слот локального инференса: семафор процесса, затем машинный замок с остатком того же дедлайна localMaxWaitMs.
-  // → { release, lock } или { error } (503: занято или замок недоступен — ротация на другие модели).
-  async localSlot(clientSignal) {
-    const t0 = Date.now()
-    const release = await this.local.acquire(this.cfg.localMaxWaitMs, clientSignal)
-    if (!release) return { error: 'локальная модель занята другим запросом' }
-    if (!this.cfg.localLock) return { release }
+  // L-тир — правило консилиума (`OllamaClient.is_large`): модель из его [models.large] или не легче порога в ГиБ.
+  isLargeLocal(model) {
+    if (this.cfg.localLarge?.includes(model)) return true
+    const size = this.discovery?.local?.models?.find((m) => m.name === model)?.sizeBytes || 0
+    return this.cfg.localLargeGb > 0 && size / 2 ** 30 >= this.cfg.localLargeGb
+  }
+
+  // Машинный замок → { lock } | { error } (503). Никогда не бросает.
+  async machineLock(path, what, waitMs, signal) {
     let lock
     try {
-      lock = await acquireMachineLock({ path: this.cfg.localLock, waitMs: this.cfg.localMaxWaitMs - (Date.now() - t0), signal: clientSignal, python: this.cfg.python })
+      lock = await acquireMachineLock({ path, waitMs, signal, python: this.cfg.python })
     } catch (e) {
-      lock = { failed: e.message } // семафор не должен утечь ни при каком сбое замка
+      lock = { failed: e.message } // семафор и взятые замки не должны утечь ни при каком сбое замка
     }
-    if (lock.held) return { release, lock }
-    release()
-    if (lock.failed) this.log({ level: 'warn', msg: 'machine-lock', error: lock.failed })
+    if (lock.held) return { lock }
+    if (lock.failed) this.log({ level: 'warn', msg: 'machine-lock', path, error: lock.failed })
     if (!lock.busy) return { error: `машинный замок локальной модели недоступен: ${lock.failed}` }
-    const waited = Number((this.cfg.localMaxWaitMs / 1000).toFixed(1))
-    return { error: `локальная модель занята другим процессом на этом Mac дольше ${waited} с: ${lockHolder(this.cfg.localLock)}` }
+    return { error: `${what} дольше ${Number((this.cfg.localMaxWaitMs / 1000).toFixed(1))} с: ${lockHolder(path)}` }
+  }
+
+  // Слот локального инференса в пределах одного дедлайна localMaxWaitMs. → { release, lock } или { error } (503: занято
+  // или замок недоступен — ротация на другие модели).
+  // L-модель (OPS-59): сначала машинный лок L-модели, потом семафор процесса и замок инференса. Порядок машинных замков
+  // как у консилиума (лок L-модели на блок large_model снаружи, замок инференса на вызов внутри), иначе два процесса
+  // ждали бы друг друга. Лок L-модели — до семафора: блок консилиума длится минуты, и запрос к L-модели, ждущий его
+  // с семафором, держал бы все S-модели шлюза. S-модель — семафор и замок инференса, как раньше.
+  async localSlot(clientSignal, model) {
+    const t0 = Date.now()
+    const left = () => Math.max(0, this.cfg.localMaxWaitMs - (Date.now() - t0))
+    const held = []
+    const drop = () => held.splice(0).reverse().forEach((h) => h.release())
+    if (this.cfg.localLargeLock && this.isLargeLocal(model)) {
+      const got = await this.machineLock(this.cfg.localLargeLock, `лок L-модели (${model}) занят другим процессом на этом Mac`, left(), clientSignal)
+      if (got.error) return got
+      held.push(got.lock)
+    }
+    const release = await this.local.acquire(left(), clientSignal)
+    if (!release) return (drop(), { error: 'локальная модель занята другим запросом' })
+    if (this.cfg.localLock) {
+      const got = await this.machineLock(this.cfg.localLock, 'локальная модель занята другим процессом на этом Mac', left(), clientSignal)
+      if (got.error) return (drop(), release(), got)
+      held.push(got.lock)
+    }
+    if (!held.length) return { release }
+    // Внутренний замок снимается первым; держатель любого из них умер — вызов обрывается.
+    const lock = {
+      release: () => [...held].reverse().forEach((h) => h.release()),
+      onLost: (cb) => held.forEach((h) => h.onLost(cb)),
+    }
+    return { release, lock }
   }
 
   async attempt(ctx, cand, key, path, body, clientSignal) {
     const isLocal = cand.provider === 'local'
-    const slot = isLocal ? await this.localSlot(clientSignal) : { release: await this.remote.acquire(this.cfg.maxWaitMs, clientSignal) }
+    const slot = isLocal ? await this.localSlot(clientSignal, cand.model) :{ release: await this.remote.acquire(this.cfg.maxWaitMs, clientSignal) }
     const { release, lock } = slot
     const note = (status) => ctx.tried.push({ key: key?.id || 'local', model: cand.model, status })
     if (!release) {
