@@ -120,10 +120,17 @@ def quorum(verdicts, head, checks, min_lenses=3):
     for v in verdicts:
         if v and on_head(v["sha"], head):
             last[v["lens"]] = v["verdict"]
-    approved = sorted({products.base_role(k) for k, x in last.items() if x == "approve"})
-    changes = sorted(k for k, x in last.items() if x == "changes")
+    approved, changes = tally(last)
     ci = ci_state(checks)
     return (len(approved) >= min_lenses and not changes and ci != "pending"), approved, changes, ci
+
+
+def tally(last):
+    """{линза: последний вердикт на голову} → (одобрившие линзы по базовой роли, линзы с changes по точному ключу).
+    Один подсчёт для Нерва и eval/tools/release_status.py."""
+    approved = sorted({products.base_role(k) for k, x in last.items() if x == "approve"})
+    changes = sorted(k for k, x in last.items() if x == "changes")
+    return approved, changes
 
 
 def role_of_lens(lens, lens_roles, team_roles=()):
@@ -147,3 +154,9 @@ def author_role(files, path_roles, default="coord"):
     if not votes:
         return default
     return max(sorted(votes), key=lambda r: votes[r])
+
+
+def author_roles(author, team_roles):
+    """Адресаты pr.changes: роль автора и её вторые сессии из team.roles (backend → backend, backend-2). Автор по
+    путям файлов — всегда базовая роль, а PR могла открыть вторая сессия; чужой PR каждая сессия пропускает сама."""
+    return [author] + [r for r in team_roles if r != author and products.base_role(r) == author]

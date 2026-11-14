@@ -386,6 +386,14 @@ class CommandsTest(Base):
         self.assertIn("снимать некого", out.getvalue())
 
 
+class LauncherTest(unittest.TestCase):
+    def test_launcher_of_second_session(self):
+        """#324: пусковой скрипт второй сессии — backend-2.sh; без него её пусковой bash не снимается с сессией."""
+        for name, ok in (("backend.sh", True), ("backend-2.sh", True), ("successor.sh", True),
+                         ("backend-10.sh", False), ("backend-2.shx", False)):
+            self.assertEqual(bool(L.LAUNCHER_RE.search(f"bash /tmp/claude-spawn.AbC123/{name}")), ok, name)
+
+
 class ReapTest(Base):
     def setUp(self):
         super().setUp()

@@ -176,7 +176,7 @@ def second_run(product, *flags):
 for name, product, flags, want in [
     ("tAIBE backend-2: own key, base genome and launch file", "taibe", ["--launch", "--role", "backend-2"],
      ["ключ реестра backend-2, роль 7. Пусковой файл: ", "/prompts/taibe/roles/4-backend.md",
-      "/genome/taibe/backend.json", "вторая сессия роли backend (роль 4)", "тап Нерва", "«(роль 7)»",
+      "/genome/taibe/backend.json", "вторая сессия роли backend (роль 4)", "тап Нерва", "source пунктов очереди", "«(роль 7)»",
       "backend-2 — команда напечатана"]),
     ("HR frontend-2: base genome and launch file of frontend", "hr-helper", ["--launch", "--role", "frontend-2"],
      ["ключ реестра frontend-2, роль 8.", "/prompts/launch-3010/roles/3-frontend.md", "/genome/frontend.json",

@@ -66,7 +66,10 @@ python3 -I -m unittest discover -s $N -p 'test_*.py'
 `tap` принимают ключ или номер 1–8. Номер вне диапазона и неизвестное имя у `emit` дают код 2.
 Вторая сессия роли (`backend-2`, `frontend-2`, решения владельца 14.11) — свой ключ и свой курсор: `emit backend` до
 `backend-2` не доходит, `all` — доходит обеим. Геном и пусковой файл у неё — базовой роли (`products.base_role`,
-`spawn_session.sh`), отдельного генома нет.
+`spawn_session.sh`), отдельного генома нет. Кворум считает её approve линзой базовой роли (`quorum.tally`, так же
+`tools/release_status.py`), а changes — по точному ключу. `pr.changes` автору PR идёт базовой роли и её вторым
+сессиям (`quorum.author_roles`): по путям файлов их не различить. Ответ владельца на пункт с `source`
+«backend-2|Бэкенд-2|роль 7» (или frontend-2, роль 8) — второй сессии: эти правила `queue.source_roles` стоят до базовых.
 Сессия роли ставит **один** Monitor: `python3 -I eval/nerve/nerve.py tap <роль>` — фильтр внутри, без `| grep`
 (память `feedback_monitor_no_pipe_filters`). Курсор тапа — `state/tap-<роль>.json`, первый запуск начинает с конца журнала.
 Пульс (`coord`, `release`) считается устаревшим через два цикла демона, но не раньше `heartbeat_stale_min`. Цикл

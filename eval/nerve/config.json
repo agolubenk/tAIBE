@@ -206,6 +206,14 @@
         "release"
       ],
       [
+        "backend-2|Бэкенд-2|роль 7",
+        "backend-2"
+      ],
+      [
+        "frontend-2|Фронтенд-2|роль 8",
+        "frontend-2"
+      ],
+      [
         "Бэкенд|backend|Данные",
         "backend"
       ],

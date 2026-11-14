@@ -18,6 +18,7 @@ sys.path.insert(0, HERE)
 import actions  # noqa: E402
 import budget  # noqa: E402
 import nerve  # noqa: E402
+import products  # noqa: E402
 import quorum  # noqa: E402
 import sources  # noqa: E402
 from journal import DIGEST, NERVOUS, Journal, read_from  # noqa: E402
@@ -163,6 +164,13 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
 
+    def test_author_roles_add_second_sessions(self):
+        roles = CFG["team"]["roles"]
+        self.assertEqual(quorum.author_roles("backend", roles), ["backend", "backend-2"])
+        self.assertEqual(quorum.author_roles("frontend", roles), ["frontend", "frontend-2"])
+        self.assertEqual(quorum.author_roles("coord", roles), ["coord"])
+        self.assertEqual(quorum.author_roles("backend", ["backend"]), ["backend"])
+
     def test_second_session_is_the_same_lens(self):
         """Линза backend #324: approve от backend и backend-2 — одна линза. Кворум трёх линз — от трёх ролей."""
         head = "abd008c5c" + "0" * 31
@@ -285,6 +293,16 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(sources.route_source("hr-helper-v2-85 (QA)", rules), "coord")
         self.assertEqual(sources.route_source("plan-13-10", rules), "plan")
 
+    def test_route_source_second_sessions(self):
+        """#324 B1: пункт второй сессии — её ключ, не базовой роли; правила стоят до базовых в обоих продуктах."""
+        shared, prods = products.load()
+        for slug in ("taibe", "hr-helper"):
+            rules = products.config_for(slug, shared, prods)["queue"]["source_roles"]
+            for src, role in (("backend-2 r.ab12", "backend-2"), ("Бэкенд-2 (роль 7) r.ab12", "backend-2"),
+                              ("Фронтенд-2 r.cd34", "frontend-2"), ("frontend (роль 8)", "frontend-2"),
+                              ("Бэкенд r.f93t", "backend"), ("Фронтенд (роль 3)", "frontend")):
+                self.assertEqual(sources.route_source(src, rules), role, (slug, src))
+
 
 class FakeCtx:
     def __init__(self, d):
@@ -398,6 +416,13 @@ class GithubPollTest(unittest.TestCase):
                              comments={324: three + ["Данные (роль 6): approve на abd008c5c"]})
         sources.poll_github(self.ctx)
         self.assertIn(("pr.quorum", "#324 собран: approve backend, boards, plan на abd008c5c, CI ok"), self.kinds())
+
+    def test_changes_reach_the_author_role_and_its_second_session(self):
+        """#324 B2: автор по путям — базовая роль; changes доходит и до второй сессии (PR могла открыть она)."""
+        sources.run = FakeGh([_pr(480, "c" * 40)], comments={480: ["**Линза плана (роль 2) — CHANGES на ccccccc**"]})
+        sources.poll_github(self.ctx)
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.changes"]
+        self.assertEqual([e["to"] for e in rec], [["backend", "backend-2"]])
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
