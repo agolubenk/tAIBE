@@ -77,7 +77,7 @@ export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hin
     failStreak = 0;
     if (s.mode !== lastMode) { log(`режим страницы: ${s.mode}`); lastMode = s.mode; }
     if (isStandby()) return; // этого бота опрашивает другой процесс — уведомления шлёт он
-    if (alerted.ready) { alerted.ready = false; await broadcast({ text: '✅ Связь с артефактом восстановлена.' }); }
+    if (alerted.ready) { alerted.ready = false; await broadcast({ text: '✅ Связь со страницей очереди восстановлена.' }); }
     if (s.mode === 'local') return onLocal(s);
     if (localSince && s.mode === 'shared') {
       if (alerted.local) { alerted.local = false; await broadcast(backNotice(now() - localSince)); }

@@ -452,7 +452,9 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 @media (min-width: 641px) and (max-width: 1399.98px) { .hb-to-dec { display: inline-flex; } }
 /* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди. Шапка — одна строка (просьба владельца
    10.11): у кнопок вместо названий значки (название — в aria-label и title), выбор продукта забирает оставшееся место. */
+.rm-range { justify-self: start; }
 @media (max-width: 640px) {
+  .rm-range { display: none; }
   .col-reports { display: none; }
   .hb-reports { display: inline-flex; }
   .hb-long, #jump-dash { display: none; }
@@ -643,6 +645,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     <div class="card" id="card-roadmap">
       <h3>Роадмап по неделям</h3>
       <p class="sub">Вехи по направлениям: залитый ромб — достигнута, пустой — по плану, с красной обводкой — просрочена.</p>
+      <button class="toggle rm-range" id="rm-range" type="button" aria-pressed="false">Весь горизонт</button>
       <div class="rm-scroll"><div class="rm" id="roadmap"></div></div>
     </div>
     <details class="card rep-card" id="report-card">
@@ -1886,6 +1889,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // Роадмап по неделям (400dd…fead): на горизонте в ~38 недель неделе достаётся 15–22 px, а подписи «5 окт – 11 окт»
   // нужно ~84 px — тогда шкала подписывается месяцами, а недели остаются линиями.
   var RM_WEEK_LABEL_PX = 84;
+  // Окно роадмапа в неделях для полосы шириной laneW: столько недель, сколько помещается с недельной подписью
+  // (RM_WEEK_LABEL_PX на неделю), от 3 до 10: на самой узкой полосе (300 px) 3 недели по 100 px — подписи недельные;
+  // назад — до 2 (четверть окна), остальное — вперёд от текущей недели.
+  function rmWindowWeeks(laneW) {
+    var total = Math.max(3, Math.min(10, Math.floor(laneW / RM_WEEK_LABEL_PX)));
+    return { total: total, back: Math.min(2, Math.floor(total / 4)) };
+  }
   function roadmapLabelMode(pxPerWeek) { return pxPerWeek >= RM_WEEK_LABEL_PX ? 'weeks' : 'months'; }
   var RM_MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
   /** Подпись месяца шкалы: год — у первой подписи и у января. */
@@ -1910,6 +1920,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     });
     return out;
   }
+  /**
+   * «N просрочено до окна» (решение продукта #347): из просроченных (late) — те, чей план раньше начала окна a. Веху,
+   * которая уже стоит меткой в окне (ms: факт end в окне, план раньше), второй раз не считаем (линза фронтенда #347).
+   */
+  function roadmapBefore(late, ms, a) {
+    return late.filter(function (w) { var d = planEndOf(w); return !!d && d < a && ms.indexOf(w) < 0; });
+  }
   // Ссылка «#item=<id>» из колонки «Связь» на /deploys → id пункта или ''. Шаблон — DOC_ID сервера (store.ts): без
   // кавычек и скобок, поэтому id можно подставить в селектор [data-id="…"].
   function targetFromHash(hash) {
@@ -1920,6 +1937,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return /^[A-Za-z0-9_.~:@+-]{1,80}$/.test(id) ? id : '';
   }
   /* oq-pure:end */
+  // Окно роадмапа (rmWindowWeeks) или весь горизонт — выбор в этом браузере (oq-roadmap-range).
+  var RM_RANGE_KEY = 'oq-roadmap-range', RM_RANGE = 'window';
+  try { RM_RANGE = localStorage.getItem(RM_RANGE_KEY) === 'all' ? 'all' : 'window'; } catch (e) { RM_RANGE = 'window'; }
+  function rmWindowOn() { return RM_RANGE !== 'all' && !(window.matchMedia && window.matchMedia('(max-width: 640px)').matches); }
 
   // Базовые направления — потоки агентов; продуктовые блоки и переименования — документы work/track-<id>.
   var SEED_TRACKS = [
@@ -2493,8 +2514,19 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function roadmap(ws, t) {
     var host = document.getElementById('roadmap'), a = t, b = t;
     ws.forEach(function (w) { ['planStart', 'planEnd', 'start', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && d < a) a = d; if (d && d > b) b = d; }); });
+    // Окно ближайших недель (карточка HR vb1ea4jq): по умолчанию — целые недели вокруг сегодня, столько, сколько
+    // помещается с недельными подписями (до 2 назад и до 10 всего); «Весь горизонт» — прежний вид месяцами.
+    // Телефон — всегда весь горизонт, как было.
+    var win = rmWindowOn();
+    if (win) {
+      var wk = rmWindowWeeks(Math.max(300, (host.clientWidth || 720) - 150)), m0 = addD(t, -((t.getDay() + 6) % 7));
+      var wa = addD(m0, -7 * wk.back), wb = addD(m0, 7 * (wk.total - wk.back) - 1);
+      if (a < wa) a = wa;
+      if (b > wb) b = wb;
+    }
     a = addD(a, -((a.getDay() + 6) % 7)); b = addD(b, 6 - ((b.getDay() + 6) % 7));
     var nd = diffD(b, a) + 1;
+    var inWin = function (d) { return !!d && d >= a && d <= b; };
     function P(d, half) { return ((diffD(d, a) + (half ? 0.5 : 0)) * 100 / nd).toFixed(2) + '%'; }
     // Подпись вехи шириной 112 px у края полосы прижимается внутрь — как в placeRoadmapLabels
     function PL(d) { return 'clamp(56px, ' + P(d, true) + ', calc(100% - 56px))'; }
@@ -2502,7 +2534,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var laneW = Math.max(300, (host.clientWidth || 720) - 150), dx = laneW / nd;
     var lines = '', heads = '';
     for (var d = a; d <= b; d = addD(d, 7)) lines += '<span class="rm-wk" style="left:' + P(d) + '"></span>';
-    if (roadmapLabelMode(dx * 7) === 'weeks') {
+    var byWeeks = roadmapLabelMode(dx * 7) === 'weeks';
+    if (byWeeks) {
       for (var dw = a; dw <= b; dw = addD(dw, 7)) heads += '<span class="rm-wk" style="left:' + P(dw) + '">' + esc(fmtD(dw) + ' – ' + fmtD(addD(dw, 6))) + '</span>';
     } else {
       // Месяцы: первый неполный — подписью в начале, если до следующего месяца хватает места; дальше — с 1-го числа
@@ -2516,33 +2549,49 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
     }
     var now = '<span class="rm-now" style="left:' + P(t, true) + '"' + tipAttr(['Сегодня', fmtD(t)]) + '></span>';
-    var o = '<div class="rm-row rm-head"><div class="rm-name">Неделя</div><div class="rm-lane">' + heads + '</div></div>';
+    // Заголовок столбца — по подписям шкалы: над месяцами «Неделя» вводила в заблуждение (карточка HR epz36yxj).
+    var o = '<div class="rm-row rm-head"><div class="rm-name">' + (byWeeks ? 'Неделя' : 'Месяц') + '</div><div class="rm-lane">' + heads + '</div></div>';
     REP.tracksIn(TRACKS, ws).forEach(function (tr) {
       var list = ws.filter(function (w) { return w.track === tr.id; }), lo = null, hi = null;
       list.forEach(function (w) { ['planStart', 'start'].forEach(function (k) { var d = dParse(w[k]); if (d && (!lo || d < lo)) lo = d; }); ['planEnd', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && (!hi || d > hi)) hi = d; }); });
       var done = list.filter(function (w) { return w.status === 'done'; }).length;
       var lane = lines;
-      if (lo && hi) lane += '<span class="rm-span" style="left:' + P(lo) + ';width:' + ((diffD(hi, lo) + 1) * 100 / nd).toFixed(2) + '%;background:' + tr.c + '"></span>';
+      if (lo && lo < a) lo = a;
+      if (hi && hi > b) hi = b;
+      if (lo && hi && lo <= hi) lane += '<span class="rm-span" style="left:' + P(lo) + ';width:' + ((diffD(hi, lo) + 1) * 100 / nd).toFixed(2) + '%;background:' + tr.c + '"></span>';
       var late = list.filter(function (w) { return w.status !== 'done' && lagOf(w, t) > 0; });
-      var ms = list.filter(function (w) { return w.milestone && (dParse(w.end) || planEndOf(w)); });
+      var msAll = list.filter(function (w) { return w.milestone && (dParse(w.end) || planEndOf(w)); });
+      var ms = msAll.filter(function (w) { return inWin(dParse(w.end) || planEndOf(w)); });
+      // Просрочено до начала окна (линза фронтенда #347, решение продукта): в окне такой задачи не видно, а просрочка —
+      // главный красный сигнал. Число — у названия полосы, названия, план и отставание — в подсказке. Просроченную веху
+      // считаем здесь, а не во «вне окна»; веху с меткой в окне — только меткой (roadmapBefore в блоке oq-pure).
+      var before = win ? roadmapBefore(late, ms, a) : [];
+      var away = msAll.filter(function (w) { return !inWin(dParse(w.end) || planEndOf(w)) && before.indexOf(w) < 0; }).length;
       var marks = ms.map(function (w) {
         var at = dParse(w.end) || planEndOf(w), isLate = w.status !== 'done' && lagOf(w, t) > 0;
         return { w: w, at: at, isLate: isLate, x: (diffD(at, a) + 0.5) * dx, prio: isLate ? 0 : w.status === 'done' ? 2 : 1 };
       });
       var levels = placeRoadmapLabels(marks, laneW, 112, 8);
+      // Вехи без подписи (не влезли рядом с соседями): их название — только в подсказке, а на снимке бота (/charts)
+      // подсказок нет. Число — у названия полосы, названия и даты — в её подсказке (карточка HR u68lwzb1).
+      var hidden = marks.filter(function (m, i) { return !levels[i]; });
       marks.forEach(function (m, i) {
         var w = m.w;
         lane += '<span class="rm-ms' + (w.status === 'done' ? ' done' : '') + (m.isLate ? ' late' : '') + '" style="left:' + P(m.at, true) + ';color:' + tr.c + '"' + tipAttr([w.title, (w.status === 'done' ? 'достигнута ' : 'план ') + fmtD(m.at), w.note]) + '></span>';
         if (levels[i]) lane += '<span class="rm-lbl ' + levels[i] + '" style="left:' + PL(m.at) + '"' + tipAttr([w.title, (w.status === 'done' ? 'достигнута ' : 'план ') + fmtD(m.at), w.note]) + '>' + esc(w.title.split(':')[0].slice(0, 34)) + '<small>' + esc(fmtD(m.at)) + '</small></span>';
       });
-      if (!ms.length && late.length) {
+      if (win) late = late.filter(function (w) { return inWin(planEndOf(w)); });
+      if (!msAll.length && late.length) {
         late.forEach(function (w, i) {
           var at = planEndOf(w);
           lane += '<span class="rm-ms late" style="left:' + P(at, true) + ';color:' + tr.c + '"' + tipAttr([w.title, 'план ' + fmtD(at) + ' · отставание ' + lagOf(w, t) + ' дн.', w.note]) + '></span>';
         });
         lane += '<span class="rm-lbl dn" style="left:' + PL(planEndOf(late[0])) + '">просрочено: ' + late.length + '<small>с ' + esc(fmtD(planEndOf(late[late.length - 1]))) + '</small></span>';
       }
-      o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small></span></div><div class="rm-lane">' + lane + now + '</div></div>';
+      o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small>' +
+        (hidden.length ? '<br><small class="rm-hidden"' + tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); })) + '>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>' : '') +
+        (before.length ? '<br><small class="rm-before is-late"' + tipAttr(before.map(function (w) { return w.title + ' — план ' + fmtD(planEndOf(w)) + ', отставание ' + lagOf(w, t) + ' дн.'; })) + '>' + before.length + ' просрочено до окна</small>' : '') +
+        (away ? '<br><small class="rm-away">' + away + ' ' + plural(away, 'веха', 'вехи', 'вех') + ' вне окна</small>' : '') + '</span></div><div class="rm-lane">' + lane + now + '</div></div>';
     });
     host.innerHTML = ws.length ? o : '<p class="empty" style="padding:10px">' + noRows('Нет задач.') + '</p>';
   }
@@ -2636,6 +2685,19 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { jumpDash(c, ws, lag, st); } catch (e) { /* числа в шапке необязательны */ }
     document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
       : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
+  }
+  // Переключатель окна роадмапа: подпись постоянная — «Весь горизонт», состояние — aria-pressed (линза фронтенда #347:
+  // меняющаяся подпись вместе с aria-pressed читалась диктором наоборот). Перерисовывается только роадмап.
+  var rmRangeBtn = document.getElementById('rm-range');
+  function paintRmRange() { rmRangeBtn.setAttribute('aria-pressed', String(RM_RANGE === 'all')); }
+  if (rmRangeBtn) {
+    paintRmRange();
+    rmRangeBtn.addEventListener('click', function () {
+      RM_RANGE = RM_RANGE === 'all' ? 'window' : 'all';
+      try { localStorage.setItem(RM_RANGE_KEY, RM_RANGE); } catch (e) { /* приватное окно — до перезагрузки */ }
+      paintRmRange();
+      try { roadmap(workList(), today0()); } catch (e) { document.getElementById('roadmap').textContent = 'Роадмап не построился: ' + e.message; }
+    });
   }
   if (window.ResizeObserver) {
     new ResizeObserver(function () {

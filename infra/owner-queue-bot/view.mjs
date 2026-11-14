@@ -77,7 +77,7 @@ export function menuFingerprint(snap) {
   return JSON.stringify([snap.progress, snap.mode, snap.checkedAt, snap.news[0], ...Object.keys(KINDS).map((k) => openOf(snap, k).length), freshOf(snap).length]);
 }
 
-export function menuView(snap, { notify, hint = 'нужен вход в claude.ai в браузере бота' }) {
+export function menuView(snap, { notify, hint = 'проверьте, что ops-консоль доступна и токен бота не отозван' }) {
   const lines = [`<b>${esc(snap.title)}</b>`, `${esc(snap.progress)} · ${esc(snap.checkedAt)}`, modeLine(snap, esc(hint))];
   if (snap.news[0]) lines.push('', plainSafe(sanitizeTg(snap.news[0])));
   lines.push('');
@@ -144,7 +144,7 @@ export function sectionView(snap, kind, { page = 0, showDone = false } = {}) {
 export function freshView(snap) {
   const list = freshOf(snap);
   return {
-    text: `🆕 <b>Пункты от сессий</b> — открыто ${list.length}\n\nИх добавили агенты через базу артефакта; у каждого пометка «от: …».`,
+    text: `🆕 <b>Пункты от сессий</b> — открыто ${list.length}\n\nИх добавили агенты через очередь; у каждого пометка «от: …».`,
     keyboard: [...listKeyboard(list.slice(0, 30)), [btn('🏠 Меню', 'm')]],
   };
 }
@@ -333,7 +333,7 @@ export function backNotice(downMs) {
 }
 
 export const HELP = [
-  '<b>Бот «Очередь владельца»</b> повторяет артефакт: те же пункты, кнопки и ответы, сохранение в ту же базу.',
+  '<b>Бот «Очередь владельца»</b> повторяет страницу /queue ops-консоли: те же пункты, кнопки и ответы, сохранение в ту же базу.',
   '',
   '/menu — сводка и разделы (сводка обновляется сама)',
   '/decisions · /merges · /server · /checks · /inbox — разделы',
