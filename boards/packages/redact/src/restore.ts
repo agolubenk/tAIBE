@@ -100,28 +100,62 @@ const markerKinds = (text: string) =>
   [...text.matchAll(MARKER)].map((match) => match[1] ?? "");
 
 type StoredBlock = { offset: number; markers: Marker[] };
+// `next` is the copy the next equal incoming block takes, in text order.
+type BlockCopies = { copies: StoredBlock[]; next: number; ambiguous: boolean };
+
+const sameValues = (a: Marker[], b: Marker[]) =>
+  a.length === b.length &&
+  a.every((marker, index) => marker.original === b[index]?.original);
 
 // Each block of the masked view that holds markers: where it starts and
-// what its markers stand for. Equal blocks are kept in text order.
+// what its markers stand for. Equal blocks are kept in text order; they are
+// ambiguous if their copies stand for different values (TB-143 B2).
 function markerBlocks(view: {
   text: string;
   markers: Marker[];
-}): Map<string, StoredBlock[]> {
-  const blocks = new Map<string, StoredBlock[]>();
+}): Map<string, BlockCopies> {
+  const blocks = new Map<string, BlockCopies>();
   let offset = 0;
   let index = 0;
   for (const part of view.text.split(BLOCK_SEPARATOR)) {
     const count = markerKinds(part).length;
     if (count > 0) {
-      const list = blocks.get(part) ?? [];
-      list.push({ offset, markers: view.markers.slice(index, index + count) });
-      blocks.set(part, list);
+      const block = {
+        offset,
+        markers: view.markers.slice(index, index + count),
+      };
+      const entry = blocks.get(part);
+      if (entry) {
+        const first = entry.copies[0];
+        if (first && !sameValues(first.markers, block.markers)) {
+          entry.ambiguous = true;
+        }
+        entry.copies.push(block);
+      } else {
+        blocks.set(part, { copies: [block], next: 0, ambiguous: false });
+      }
       index += count;
     }
     offset += part.length;
   }
   return blocks;
 }
+
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  let length = 0;
+  while (length < max && a.charCodeAt(length) === b.charCodeAt(length)) {
+    length++;
+  }
+  return length;
+}
+
+/**
+ * The longest text with markers that is restored (TB-143 B3). Restoring is
+ * linear in the text, but the text goes through redact three times on a
+ * write; a longer text is refused before any of that work.
+ */
+export const RESTORE_MAX_CHARS = 256 * 1024;
 
 export type RestoreResult =
   | { ok: true; text: string }
@@ -132,22 +166,32 @@ export type RestoreResult =
       expected: number;
       received: number;
     }
-  | { ok: false; reason: "block" | "context" };
+  | { ok: false; reason: "size"; max: number }
+  | { ok: false; reason: "block" | "context" | "ambiguous" | "mask" };
 
 /**
  * Puts the stored values back in place of the markers in `incoming`.
  * Text without markers is returned as is. Otherwise, nothing is restored if:
+ * - the text is longer than `RESTORE_MAX_CHARS` (`size`);
  * - a kind has a different number of markers than stored values (`count`);
  * - a block (paragraph) that holds a marker is not byte for byte a block of
  *   the masked stored text: the marker moved or its block changed (`block`);
  * - the text above a block with a marker is not the stored text above it and
- *   holds raw HTML, a code fence or `$$` (`context`).
+ *   holds raw HTML, a code fence or `$$` (`context`);
+ * - equal blocks with markers stand for different values and the text above
+ *   one of them changed, so the values could change places (`ambiguous`);
+ * - the restored text does not mask back to what the caller sent: a value
+ *   lost the context that masks it, e.g. `password:` in an edited block
+ *   above (`mask`).
  */
 export function restoreRedacted(
   stored: string,
   incoming: string,
 ): RestoreResult {
   if (!hasRedactionMarker(incoming)) return { ok: true, text: incoming };
+  if (incoming.length > RESTORE_MAX_CHARS) {
+    return { ok: false, reason: "size", max: RESTORE_MAX_CHARS };
+  }
 
   const view = maskedView(stored);
   const expected = countKinds(view.markers.map((marker) => marker.kind));
@@ -167,17 +211,27 @@ export function restoreRedacted(
   }
 
   const blocks = markerBlocks(view);
+  // Computed once (TB-143 B3): the text above a block at `offset` is the
+  // stored text above it if both start there and the texts agree up to it;
+  // it holds raw HTML, a fence or `$$` if the first of them starts before
+  // it. No match crosses a block boundary: the separator ends with a line
+  // break, which none of them holds.
+  const unchangedUpTo = commonPrefixLength(incoming, view.text);
+  const context = incoming.search(OPENS_CONTEXT);
+  const contextAt = context === -1 ? Number.POSITIVE_INFINITY : context;
+
   let out = "";
   let offset = 0;
   for (const part of incoming.split(BLOCK_SEPARATOR)) {
     if (hasRedactionMarker(part)) {
-      const block = blocks.get(part)?.shift();
-      if (!block) return { ok: false, reason: "block" };
-      const above = incoming.slice(0, offset);
-      if (
-        above !== view.text.slice(0, block.offset) &&
-        OPENS_CONTEXT.test(above)
-      ) {
+      const entry = blocks.get(part);
+      const block = entry?.copies[entry.next++];
+      if (!entry || !block) return { ok: false, reason: "block" };
+      const aboveUnchanged = offset === block.offset && unchangedUpTo >= offset;
+      if (!aboveUnchanged && entry.ambiguous) {
+        return { ok: false, reason: "ambiguous" };
+      }
+      if (!aboveUnchanged && contextAt < offset) {
         return { ok: false, reason: "context" };
       }
       let used = 0;
@@ -189,6 +243,14 @@ export function restoreRedacted(
       out += part;
     }
     offset += part.length;
+  }
+
+  // TB-143 B1: the masked read of what is stored must be what the caller
+  // sent, or a raw secret the caller typed, masked. Otherwise a restored
+  // value is no longer masked, and the next read would show it.
+  const masked = redact(out).text;
+  if (masked !== incoming && masked !== redact(incoming).text) {
+    return { ok: false, reason: "mask" };
   }
   return { ok: true, text: out };
 }
