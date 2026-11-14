@@ -66,10 +66,10 @@ const CORPUS: Matcher[] = [
         .replace(/\.(ts|md)$/, ""),
   },
   // R-060 (TB-163): task-folder templates (.ai/templates/brief.md …), read by
-  // name without the extension.
+  // name without the extension. Dot files (.gitkeep) would give an empty name.
   {
     kind: "template",
-    pattern: /^\.ai\/templates\/[^/]+$/,
+    pattern: /^\.ai\/templates\/[^/.][^/]*$/,
     name: (path) => baseName(path).replace(/\.[^.]+$/, ""),
   },
 ];

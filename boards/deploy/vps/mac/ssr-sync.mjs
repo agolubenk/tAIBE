@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Uploads the SSR corpus (skills, rules, agents, genomes, prompts, nerve,
-// ai-council config, product prompts, templates) to tAI-Boards: files whose sha256 is
+// ai-council config, product prompts) to tAI-Boards: files whose sha256 is
 // new to the server ride along, everything else travels as a manifest entry.
 // The corpus allowlist lives on the server too — a path outside it aborts
 // the whole sync. Reads git-tracked files at HEAD only (spec RU-4), never
@@ -27,9 +27,6 @@ const PATHSPECS = [
   ":(glob)infra/ai-council/config.toml",
   ":(glob)apps/backend/src/modules/ai/prompts/**",
   ":(glob)apps/backend/src/modules/ai/prompt-templates/**",
-  // task-folder templates (TB-163); the server must know the kind first, or
-  // the round aborts (RU-9)
-  ":(glob).ai/templates/*",
   ":(exclude,glob)**/node_modules/**",
 ];
 

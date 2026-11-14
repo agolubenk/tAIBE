@@ -35,6 +35,7 @@ describe("ssr corpus", () => {
     // Live task folders and nested files stay out of the registry.
     expect(isCorpusPath(".ai/task/tb-163/brief.md")).toBe(false);
     expect(isCorpusPath(".ai/templates/old/brief.md")).toBe(false);
+    expect(isCorpusPath(".ai/templates/.gitkeep")).toBe(false);
   });
 
   it("folds a skill's files into its folder entity", () => {
