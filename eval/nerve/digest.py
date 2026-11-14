@@ -22,9 +22,12 @@ def pend(cur, rec):
 
 
 def fresh(cur, pdir):
-    """Тексты к выдаче. pr.changes выпадает, если PR закрыт (демон убрал его из prs), sha не на текущей голове или
-    линзы больше нет в changes_by. Нет github.prs в state.json — выдаётся всё (fail open). Строка без записи сверки
-    (старый курсор, другие виды событий) выдаётся как есть."""
+    """Тексты к выдаче. pr.changes выпадает, если его sha не на текущей голове PR или линзы больше нет в changes_by.
+    Fail open — выдаётся: нет github.prs в state.json, файл битый, PR нет в prs (демон видит не все открытые PR,
+    а закрытие приходит своим событием pr.closed). Строка без записи сверки (старый курсор, другие виды событий)
+    выдаётся как есть. Нет записей сверки — state.json (~1 МБ) не читается."""
+    if not cur.get("changes_meta"):
+        return list(cur["pending"])
     st = load_json(os.path.join(pdir, "state.json"), {})
     gh = st.get("github") if isinstance(st, dict) else None
     prs = gh.get("prs") if isinstance(gh, dict) else None
@@ -43,5 +46,5 @@ def fresh(cur, pdir):
 def _stale(m, prs):
     p = prs.get(m.get("pr"))
     if not isinstance(p, dict):
-        return True
+        return False
     return not quorum.on_head(m.get("sha"), p.get("head")) or m.get("lens") not in (p.get("changes_by") or [])

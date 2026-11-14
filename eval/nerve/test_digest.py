@@ -1,10 +1,11 @@
-"""SE-106: дайджест роли не выдаёт pr.changes, если голова PR сменилась, PR закрыт или линза сняла changes."""
+"""SE-106: дайджест роли не выдаёт pr.changes, если голова PR сменилась или линза сняла changes."""
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -46,9 +47,17 @@ class FreshTest(unittest.TestCase):
         rec = changes(sha=A[:9])          # вердикт пишет короткий sha
         self.assertEqual(self.out(rec), [rec["text"]])
 
-    def test_closed_pr_is_dropped(self):
+    def test_pr_missing_from_state_is_kept(self):
+        # Демон видит не все открытые PR (страница списка); закрытие приходит своим событием pr.closed.
         state(self.d, {"8": {"head": A, "changes_by": ["backend"]}})
-        self.assertEqual(self.out(changes(n=7)), [])
+        rec = changes(n=7)
+        self.assertEqual(self.out(rec), [rec["text"]])
+
+    def test_no_check_records_skip_state_read(self):
+        cur = {"pending": ["#9 открыт: x"]}
+        with mock.patch.object(digest, "load_json") as load:
+            self.assertEqual(digest.fresh(cur, self.d), ["#9 открыт: x"])
+        load.assert_not_called()
 
     def test_lens_that_approved_after_changes_is_dropped(self):
         state(self.d, {"7": {"head": A, "changes_by": ["release"]}})
