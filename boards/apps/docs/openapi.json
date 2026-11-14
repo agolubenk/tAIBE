@@ -5264,6 +5264,87 @@
           "items"
         ]
       },
+      "ForestCardCost": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer",
+            "description": "Answered MCP calls that named this card by taskId since TB-44."
+          },
+          "tokens": {
+            "type": "integer",
+            "description": "Tokens of those answers, counted with o200k_base (D-018): what agents read about the card, not what their models spent."
+          },
+          "actors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor": {
+                  "type": "string",
+                  "description": "Who called: bearer:<user id> for a remote MCP client."
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "tokens": {
+                  "type": "integer"
+                },
+                "firstAt": {
+                  "type": "string"
+                },
+                "lastAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actor",
+                "calls",
+                "tokens",
+                "firstAt",
+                "lastAt"
+              ]
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More than 50 actors; the totals still count them all."
+          },
+          "card": {
+            "type": "object",
+            "properties": {
+              "tokens": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "costUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "tokens",
+              "costUsd"
+            ],
+            "description": "What the card's writers entered from provider usage: input + output tokens, cache priced into costUsd."
+          }
+        },
+        "required": [
+          "taskId",
+          "calls",
+          "tokens",
+          "actors",
+          "truncated",
+          "card"
+        ]
+      },
       "ForestMirrorRuns": {
         "type": "object",
         "properties": {
@@ -26429,6 +26510,79 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ForestCardMemory"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing task:read permission or project access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/forest/{workspaceId}/cards/{taskId}/cost": {
+      "get": {
+        "operationId": "getForestCardCost",
+        "tags": [
+          "Forest"
+        ],
+        "summary": "Get a card's MCP spend",
+        "description": "Answered MCP calls about the card and the tokens of their answers, per caller, from the journal (R-036). Calls journaled before TB-44 and calls by ticket ID are not counted. The card's own tokens and costUsd come alongside.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "taskId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The card's spend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForestCardCost"
                 }
               }
             }
