@@ -90,9 +90,29 @@ class RoutingAndCallTest(unittest.TestCase):
         with mock.patch.object(judging.subprocess, 'run', cli_answer(tokens=5000)):
             judging.claude_call(budget)(None, 'short prompt')
         self.assertEqual((budget.calls, budget.tokens), (1, 5000))
-        self.assertGreater(budget.ratio, 1)  # the real call was larger than its estimate
+        self.assertEqual(budget.overhead, 5000 - budget.estimated)  # the real call was larger than its estimate
+        self.assertEqual(budget.report()['usage'], {'input': 4900, 'output': 100, 'cache_read': 0, 'cache_write': 0})
         self.assertEqual((resources.JUDGE_MAX_CALLS, resources.JUDGE_MAX_TOKENS, resources.MAX_ARTIFACTS),
                          (160, 1_200_000, 2))
+
+    def test_usage_without_model_usage_comes_from_usage(self):
+        data = {'usage': {'input_tokens': 10, 'output_tokens': 2, 'cache_read_input_tokens': 300,
+                          'cache_creation_input_tokens': 40}}
+        self.assertEqual(judging.usage_split(data), {'input': 10, 'output': 2, 'cache_read': 300, 'cache_write': 40})
+        self.assertEqual(sum(judging.usage_split(None).values()), 0)
+
+    def test_the_excess_per_call_is_added_not_multiplied(self):  # SE-49, replay of 14.11
+        budget = resources.Budget()
+        for _ in range(24):                  # calibration of two judges: estimate 4023, real 7969 a call
+            budget.charge(7969, 4023)
+        budget.charge(5488, 1542)            # the smallest call of the night: real/estimate = 3.56
+        budget.charge(1100, 1000)            # a later call with a small excess does not lower the largest one
+        self.assertEqual(budget.overhead, 3946)
+        # successor-handoff: 56 calls, 777952 tokens estimated (log of 14.11). With the excess added it fits the
+        # night; a ratio of 3.56 would have asked 2.77M tokens of a 1.2M ceiling.
+        self.assertTrue(budget.covers(56, 777952))
+        self.assertFalse(budget.covers(80, 839280))  # infra/ai-council/CLAUDE.md still does not fit
+        self.assertFalse(budget.covers(136, 0))      # and the call ceiling holds as before
 
 
 def item(path, text_a=OLD, text_b=NEW, cases_file=None):

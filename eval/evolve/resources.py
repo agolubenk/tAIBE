@@ -80,25 +80,36 @@ class Lock:
 
 class Budget:
     """Claude judge calls and tokens spent tonight. `check` refuses a call whose estimate does not fit; `charge` books
-    the real tokens of a call and keeps the worst ratio of real to estimated tokens seen tonight, which `covers` then
-    applies to an estimate of many calls."""
+    the real tokens of a call and keeps the largest excess of real over estimated tokens seen tonight (`overhead`),
+    which `covers` then adds to each of many calls.
+
+    SE-49: the excess is about the same per call (what the CLI adds and the reasoning), not a share of the prompt. On
+    14.11 a ratio learned on the small calibration calls (3.56) priced a big artifact 3.5 times too high, and no big
+    artifact fitted a night. Replay of that night: one excess of 3946 tokens a call gives both the total and that
+    worst ratio."""
 
     def __init__(self, calls=CLAUDE_MAX_CALLS, tokens=CLAUDE_MAX_TOKENS):
-        self.max_calls, self.max_tokens, self.calls, self.tokens, self.ratio = calls, tokens, 0, 0, 1.0
+        self.max_calls, self.max_tokens, self.calls, self.tokens = calls, tokens, 0, 0
+        self.overhead, self.estimated, self.usage = 0, 0, {}
 
     def covers(self, calls, tokens):
         """True when `calls` more calls of `tokens` estimated tokens in all still fit tonight's ceiling."""
-        return self.calls + calls <= self.max_calls and self.tokens + tokens * self.ratio <= self.max_tokens
+        return (self.calls + calls <= self.max_calls and
+                self.tokens + tokens + calls * self.overhead <= self.max_tokens)
 
     def check(self, tokens):
         if not self.covers(1, tokens):
             raise BudgetSpent('Claude ceiling for the night: %d calls, %d tokens' % (self.max_calls, self.max_tokens))
 
-    def charge(self, tokens, estimate=0):
+    def charge(self, tokens, estimate=0, usage=None):
+        """Book one call: its real tokens, its estimate and, when the CLI gave it, the split by kind of token."""
         self.calls += 1
         self.tokens += tokens
         if estimate:
-            self.ratio = max(self.ratio, tokens / estimate)
+            self.estimated += estimate
+            self.overhead = max(self.overhead, tokens - estimate)
+        for kind, n in (usage or {}).items():
+            self.usage[kind] = self.usage.get(kind, 0) + n
 
     def spend(self, tokens):
         self.check(tokens)
@@ -106,7 +117,7 @@ class Budget:
 
     def report(self):
         return {'calls': self.calls, 'tokens': self.tokens, 'max_calls': self.max_calls, 'max_tokens': self.max_tokens,
-                'ratio': round(self.ratio, 2)}
+                'estimated': self.estimated, 'overhead': self.overhead, 'usage': dict(self.usage)}
 
 
 class BudgetSpent(OSError):
