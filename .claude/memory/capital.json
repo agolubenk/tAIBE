@@ -183,7 +183,7 @@
       "tags": ["process", "review", "adversarial", "resources"],
       "status": "active",
       "version": 1,
-      "token_estimate": 1150,
+      "token_estimate": 2790,
       "load_condition": "task_contains:!адверсар|!adversar|альтернатив|!сравни вариант|!сравнить вариант|!сравнение вариант",
       "last_updated": "2026-11-15",
       "provenance": "канон процесса; корневой CLAUDE.md §Адверсариальная проверка + линзы в карточках ролей",
