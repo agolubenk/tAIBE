@@ -5214,14 +5214,14 @@
                     "string",
                     "null"
                   ],
-                  "description": "The observation's title; a secret in it reads [REDACTED:<kind>]."
+                  "description": "The observation's title. For a caller with a token a secret in it reads [REDACTED:<kind>]."
                 },
                 "subtitle": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "description": "Masked the same way as title."
+                  "description": "Masked for a caller with a token, as title."
                 },
                 "createdAt": {
                   "type": "string"
@@ -26455,7 +26455,7 @@
           "Forest"
         ],
         "summary": "List claude-mem observations about a card",
-        "description": "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Read-only; when the worker is down the last copy is returned and marked stale.",
+        "description": "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Read-only; when the worker is down the last copy is returned and marked stale. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
         "parameters": [
           {
             "schema": {

@@ -48,7 +48,9 @@ vi.mock("../../apps/api/src/forest/memory/memory-reader", () => {
 describe("API integration: card memory (TB-192)", () => {
   beforeEach(resetTestDatabase);
 
-  it("masks secrets in observation titles for the card UI and for an agent's key (MCP)", async () => {
+  // TB-143 decision (a): a caller with a token feeds a model and reads the
+  // mask; the web app's cookie session reads the titles as stored.
+  it("masks secrets in observation titles for an agent's key (MCP), not for the web app", async () => {
     const forest = await createForest();
     const card = await addTask(forest.project.id, "Remembered card");
     if (!card) throw new Error("fixture");
@@ -64,24 +66,33 @@ describe("API integration: card memory (TB-192)", () => {
     ];
 
     const path = `/cards/${card.id}/memory`;
-    for (const res of [await forest.owner(path), await forest.agent(path)]) {
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({
-        available: true,
-        scanned: 2,
-        items: [
-          {
-            id: 1,
-            title: `${card.id}: rotated [REDACTED:api_key]`,
-            subtitle: "pushed with [REDACTED:api_key]",
-            matchedOn: "task-id",
-            matchedValue: card.id,
-          },
-        ],
-      });
-      expect(res.body.items).toHaveLength(1);
-      expect(JSON.stringify(res.body)).not.toContain(key);
-      expect(JSON.stringify(res.body)).not.toContain(github);
-    }
+    const agent = await forest.agent(path);
+    expect(agent.status).toBe(200);
+    expect(agent.body).toMatchObject({
+      available: true,
+      scanned: 2,
+      items: [
+        {
+          id: 1,
+          title: `${card.id}: rotated [REDACTED:api_key]`,
+          subtitle: "pushed with [REDACTED:api_key]",
+          matchedOn: "task-id",
+          matchedValue: card.id,
+        },
+      ],
+    });
+    expect(agent.body.items).toHaveLength(1);
+    expect(JSON.stringify(agent.body)).not.toContain(key);
+    expect(JSON.stringify(agent.body)).not.toContain(github);
+
+    const owner = await forest.owner(path);
+    expect(owner.status).toBe(200);
+    expect(owner.body.items).toMatchObject([
+      {
+        id: 1,
+        title: `${card.id}: rotated ${key}`,
+        subtitle: `pushed with ${github}`,
+      },
+    ]);
   });
 });

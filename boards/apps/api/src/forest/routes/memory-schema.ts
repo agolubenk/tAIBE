@@ -7,10 +7,10 @@ const memoryItemSchema = z.object({
   type: z.string(),
   title: z.string().nullable().openapi({
     description:
-      "The observation's title; a secret in it reads [REDACTED:<kind>].",
+      "The observation's title. For a caller with a token a secret in it reads [REDACTED:<kind>].",
   }),
   subtitle: z.string().nullable().openapi({
-    description: "Masked the same way as title.",
+    description: "Masked for a caller with a token, as title.",
   }),
   createdAt: z.string(),
   matchedOn: z.enum(["branch", "task-id"]),

@@ -110,9 +110,9 @@ describe("forest card tools", () => {
     expect(data.comments.map((comment) => comment.id)).toEqual(["c2"]);
   });
 
-  // TB-192: the mask is put by the API (findCardMemory). The tool reads only
-  // that route and passes its answer on, so the agent gets the same masked
-  // titles as the card UI.
+  // TB-192: the memory route masks the titles for a caller with a token
+  // (maskForTokenCaller). The tool reads only that route and passes its
+  // answer on, so no unmasked copy reaches the agent another way.
   it("returns the card memory as the API masked it, from the one route", async () => {
     const answer = {
       available: true,
