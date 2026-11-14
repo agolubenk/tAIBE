@@ -88,6 +88,13 @@ class ChecksTest(unittest.TestCase):
             with self.subTest(line):
                 self.assertEqual(secrets_scan.scan_line(line), [])
 
+    def test_secrets_env_name_after_lowercase_prefix(self):
+        # TB-136 security lens: found on b3e63b792, missed on 6ff80cf69.
+        value = 'Qz8Lm4' + 'Rt7Wx2Ny5Kp9Bv3'
+        for name in ('foo_API_KEY', 'my_TOKEN', 'app_CLIENT_SECRET', 'db_PASSWORD'):
+            with self.subTest(name):
+                self.assertNotEqual(secrets_scan.scan_line(f'{name}={value}'), [])
+
     def test_secrets_hostile_lines_stay_linear(self):
         # TB-136 security lens: a rule that may restart at every character and scan to the end of the line is
         # quadratic. On 64 000 characters each line takes up to 14 ms linear and 2.4-12 s quadratic.

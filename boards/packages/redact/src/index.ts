@@ -65,10 +65,10 @@ const pem: Detector = (text) => {
   return hits;
 };
 
-// The password part has at most 256 characters: unbounded, it ran to the end
-// of the text from every scheme of a "postgres://a:" run.
+// The user and the password have at most 256 characters each: unbounded,
+// they ran to the end of the text from every scheme of a "postgres://a:" run.
 const dbUrl = collect(
-  /(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^\s"'`/]*:[^\s@"'`]{1,256}@[^\s"'`]+/gi,
+  /(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^\s"'`/:@]{0,256}:[^\s@"'`]{1,256}@[^\s"'`]+/gi,
   "db_url",
 );
 
@@ -154,13 +154,13 @@ const credentialAssignment = collectGroup(
 
 // Environment style, uppercase only: any NAME ending in API_KEY, TOKEN,
 // SECRET or PASSWORD (GITHUB_TOKEN=, CLIENT_SECRET=). Prose like
-// "the secret: ..." is lowercase and stays. The name starts after a
-// non-name character or after "<lowercase>_" (foo_GITHUB_TOKEN) and has at
-// most 64 characters before the suffix: an
+// "the secret: ..." is lowercase and stays. The name starts where a run
+// of [A-Z0-9_] starts, also after a lowercase prefix (foo_API_KEY,
+// app_CLIENT_SECRET), and has at most 64 characters before the suffix: an
 // open [A-Z0-9_]* that may start after every "_" made a run of "_" quadratic
 // (64 000 characters: 2 s, TB-136 security lens).
 const secretAssignment = collectGroup(
-  /(?:(?<![A-Za-z0-9_])|(?<=[a-z]_))[A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,

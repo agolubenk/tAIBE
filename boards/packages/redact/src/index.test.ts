@@ -320,6 +320,18 @@ describe("@kaneo/redact", () => {
     expect(redact("")).toEqual({ text: "", hits: [] });
   });
 
+  // TB-136 security lens: an env name after a lowercase prefix is still a
+  // credential name (the base rule caught app_CLIENT_SECRET=).
+  it.each(["foo_API_KEY", "my_TOKEN", "app_CLIENT_SECRET", "db_PASSWORD"])(
+    "redacts the value of %s= after a lowercase prefix",
+    (name) => {
+      const value = join("Qz8Lm4", "Rt7Wx2Ny5Kp9Bv3");
+      expect(redact(`${name}=${value}`).text).toBe(
+        `${name}=[REDACTED:password_assignment]`,
+      );
+    },
+  );
+
   describe("pem without one lazy regex (TB-136)", () => {
     const begin = join("-----BEGIN ", "PRIVATE KEY-----");
 
