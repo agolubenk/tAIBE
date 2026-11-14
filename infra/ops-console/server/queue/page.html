@@ -183,6 +183,8 @@ body:not(.hide-done) .item.is-melting { animation-name: oq-melt-keep; }
 /* !important — пауза сильнее правил вида выше и ниже (oq-melt-keep, oq-melt-flat): иначе их специфичность её перебьёт. */
 .item.is-melting:has(:focus-visible) { animation: none !important; }
 @media (hover: hover) { .item.is-melting:hover { animation: none !important; } }
+/* Касание (наведения нет): тап по тающей карточке держит её, тап вне карточки отпускает — 10 с заново (линза coord #337). */
+.item.is-melting.is-held { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { body.hide-done .item.is-melting { animation-name: oq-melt-flat; } }
 /* Пока тает, высота карточки та же, что до ответа: ответ виден по нажатому варианту или галочке, строки «✓ …» и
    «Изменить ответ» появятся после таяния (правила .item.is-done:not(.is-melting) ниже). Подсказка — в строке «Сохранено»:
@@ -1167,6 +1169,14 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (id !== HOVER) { HOVER = id; rememberAnchor(); }
   });
   document.addEventListener('pointerout', function (ev) { if (!ev.relatedTarget) { HOVER = null; rememberAnchor(); } });
+  // Касание: тап по тающей карточке держит её (.is-held), тап в другом месте отпускает — таяние начинается заново.
+  document.addEventListener('pointerdown', function (ev) {
+    if (ev.pointerType !== 'touch') return;
+    var id = itemOf(ev.target);
+    document.querySelectorAll('.item.is-held').forEach(function (el) { if (el.dataset.id !== id) el.classList.remove('is-held'); });
+    var el = MELT[id] && itemEl(id);
+    if (el) el.classList.add('is-held');
+  }, { passive: true });
   // Страница поменяла высоту не через render (отчёты и графики дорисовались) — тот же возврат после раскладки, до кадра.
   if (window.ResizeObserver) new ResizeObserver(function () { restoreAnchor(); }).observe(document.querySelector('main.wrap') || document.body);
 

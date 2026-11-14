@@ -1142,6 +1142,12 @@ describe('таяние ответа и якорь прокрутки (прось
     expect(html.indexOf('var MELT = {};')).toBeLessThan(html.indexOf('ITEMS.forEach(function (it) { mount(it, false); });'))
   })
 
+  it('касание без наведения: тап держит тающую карточку, тап вне — отпускает (линза coord #337)', () => {
+    expect(html).toContain('.item.is-melting.is-held { animation: none !important; }')
+    expect(html).toContain("if (ev.pointerType !== 'touch') return;")
+    expect(html).toContain("if (el) el.classList.add('is-held');")
+  })
+
   it('якорь прокрутки — скриптом: карточка под курсором (или с фокусом), без них — верхняя видимая; браузерный выключен', () => {
     expect(html).toContain('html { overflow-anchor: none; }')
     expect(html).toContain("window.addEventListener('scroll', rememberAnchor, { passive: true });")
