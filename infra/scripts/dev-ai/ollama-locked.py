@@ -32,12 +32,15 @@ EX_TEMPFAIL = 75
 
 
 def is_large(model: str) -> bool:
-    """L-тир по правилу консилиума. Конфиг не прочитан — только порог по размеру из /api/tags (как у консилиума)."""
-    import config as config_mod
+    """L-тир по правилу консилиума. Конфиг не прочитан — только порог по размеру из /api/tags (как у консилиума).
+    Любой сбой конфига — не отказ команды: неверный TAIBE_HOST_ROOT (HostRootError на импорте), Python 3.10 без
+    tomllib, ошибка TOML. Иначе прогрев пропускал бы каждую модель с чужой причиной (линза boards, #268)."""
     try:
+        import config as config_mod
         client = ollama.build(config_mod.load(strict=False))
-    except config_mod.ConfigError as exc:
-        print(f"ollama-locked: конфиг консилиума не прочитан ({exc}) — L-тир только по размеру", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — любой сбой конфига ведёт к порогу по размеру
+        print(f"ollama-locked: конфиг консилиума не прочитан ({type(exc).__name__}: {exc}) — L-тир только по размеру",
+              file=sys.stderr)
         client = ollama.OllamaClient()
     return client.is_large(model)
 

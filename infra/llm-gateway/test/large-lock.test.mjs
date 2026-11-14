@@ -189,6 +189,12 @@ test('прогрев L-модели (ollama-locked.py --model/--large) ждёт 
   // S-модель (её нет в [models.large], размер 0) — только замок инференса, блок консилиума ей не мешает.
   const small = await locked(['--wait', '0.3', '--model', 'loc:8k', '--', 'python3', '-c', 'print("ran")']).done
   assert.equal(small.code, 0, small.err)
+  // Конфиг консилиума не читается (неверный TAIBE_HOST_ROOT — HostRootError на импорте): L-тир только по размеру,
+  // команда идёт, а не падает (линза boards, #268).
+  const noCfg = await proc([LOCKED, '--wait', '0.3', '--model', 'loc:8k', '--', 'python3', '-c', 'print("ran")'], { TAIBE_HOST_ROOT: join(dir, 'нет') }).done
+  assert.equal(noCfg.code, 0, noCfg.err)
+  assert.match(noCfg.err, /конфиг консилиума не прочитан \(\w+Error: .*L-тир только по размеру/)
+  assert.match(noCfg.out, /ran/)
   await c.done
 
   const short = await makeGw({ GW_LOCAL_MAX_WAIT_MS: '300' })
