@@ -30,9 +30,14 @@ MANUAL_ONLY = ('eval/prompts/lens-*', '*.py', '*.sh', '.claude/rules/*', '*CLAUD
 BRANCH_PREFIX = 'evolve/'
 TRAILER = 'Evolve-Run: '
 MAX_MERGE_FILES = 12
-OPEN_PRS_LIMIT = 50       # SE-63: `gh pr list --limit`; a full list may hide an evolve PR — closed on doubt
+# SE-63: `gh pr list --limit`; a full list may hide an evolve PR — closed on doubt. SE-49: 50 closed the cases of
+# every night while board-agents had 84 open PRs (14.11); the list goes without files now, so 500 rows stay light.
+OPEN_PRS_LIMIT = 500
 OPEN_PRS_TRIES = 3        # one call and two retries before «GitHub did not answer»
 OPEN_PRS_PAUSE_S = 5
+DATA_BRANCH = BRANCH_PREFIX + 'data-'
+NO_ANSWER = 'GitHub did not list the open evolve PRs'
+FULL_LIST = 'the list of open PRs is full (%d) and may hide an evolve PR' % OPEN_PRS_LIMIT
 
 
 def git(repo, *args, env=None, check=True, data=None):
@@ -126,31 +131,41 @@ def gh(repo, *args, check=True):
     return out.stdout
 
 
-def open_data_cases(repo, base, sleep=time.sleep):
-    """{cases file name: PR number} for the open evolve data PRs (SE-63). Their cases wait for the merge: a new run
-    that wrote them again would open a PR that conflicts with them. None when GitHub does not answer after
-    `OPEN_PRS_TRIES` calls, or the list is full (`OPEN_PRS_LIMIT` rows may hide one) — closed on doubt: the caller
-    writes and publishes no cases that night."""
-    prs = None
+def gh_json(repo, args, sleep):
+    """`gh <args>` as JSON, `OPEN_PRS_TRIES` calls with a pause; None when GitHub does not answer."""
     for attempt in range(OPEN_PRS_TRIES):
         try:
-            prs = json.loads(gh(repo, 'pr', 'list', '--base', base, '--state', 'open', '--limit',
-                                str(OPEN_PRS_LIMIT), '--json', 'number,headRefName,files') or '[]')
-            break
+            return json.loads(gh(repo, *args) or '[]')
         except (RuntimeError, OSError, ValueError):
             if attempt + 1 < OPEN_PRS_TRIES:
                 sleep(OPEN_PRS_PAUSE_S)
-    if prs is None or len(prs) >= OPEN_PRS_LIMIT:
-        return None
+    return None
+
+
+def open_data_cases(repo, base, sleep=time.sleep, why=None):
+    """{cases file name: PR number} for the open evolve data PRs (SE-63). Their cases wait for the merge: a new run
+    that wrote them again would open a PR that conflicts with them. None when GitHub does not answer after
+    `OPEN_PRS_TRIES` calls, or the list is full (`OPEN_PRS_LIMIT` rows may hide one) — closed on doubt: the caller
+    writes and publishes no cases that night; `why` (a list) gets NO_ANSWER or FULL_LIST.
+    SE-49: the list goes without files, and only an evolve data PR is asked for its files (one `gh pr view`)."""
+    prs = gh_json(repo, ('pr', 'list', '--base', base, '--state', 'open', '--limit', str(OPEN_PRS_LIMIT),
+                         '--json', 'number,headRefName'), sleep)
+    unknown = NO_ANSWER if not isinstance(prs, list) else FULL_LIST if len(prs) >= OPEN_PRS_LIMIT else ''
     found = {}
-    for pr in sorted(prs, key=lambda p: p.get('number') or 0):
-        if not str(pr.get('headRefName') or '').startswith(BRANCH_PREFIX + 'data-'):
+    for pr in sorted(prs if not unknown else [], key=lambda p: p.get('number') or 0):
+        if not str(pr.get('headRefName') or '').startswith(DATA_BRANCH):
             continue
-        for f in pr.get('files') or []:
+        files = gh_json(repo, ('pr', 'view', str(pr['number']), '--json', 'files'), sleep)
+        if not isinstance(files, dict):
+            unknown = NO_ANSWER
+            break
+        for f in files.get('files') or []:
             path = str(f.get('path') or '')
             if fnmatch.fnmatchcase(path, DATA_PATHS[0]) and path.count('/') == DATA_PATHS[0].count('/'):
                 found.setdefault(os.path.basename(path), pr['number'])
-    return found
+    if unknown and why is not None:
+        why.append(unknown)
+    return None if unknown else found
 
 
 def blob_of(repo, rev, path):

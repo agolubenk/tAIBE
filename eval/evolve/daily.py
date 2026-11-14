@@ -328,7 +328,10 @@ def cmd_run(args):
                              'judged': done}
         report['targets'][target] = t
     report['budget'] = args.budget.report()
-    mark_waiting(queue, g.open_data_cases(repo, steps.BASE) if queue else {})
+    why = []
+    mark_waiting(queue, g.open_data_cases(repo, steps.BASE, why=why) if queue else {})
+    if why:
+        report['prs_unknown'] = why[0]   # SE-49: «no answer» and «a full list» are told apart in the summary
     report['queue'] = queue
     report['finished'] = now().isoformat(timespec='seconds')
     report['summary'] = summary(report)
@@ -366,7 +369,7 @@ def summary(report):
     if not waiting:
         tail = ''
     elif UNKNOWN_PRS in waiting:  # one run marks every row the same way (mark_waiting)
-        tail = '; cases of %d wait: GitHub did not list the open evolve PRs' % len(waiting)
+        tail = '; cases of %d wait: %s' % (len(waiting), report.get('prs_unknown') or g.NO_ANSWER)
     else:
         tail = '; cases of %d wait for the merge of %s' % (len(waiting), ', '.join(sorted(set(waiting))))
     return 'evolve %s: A/B %s; cases needed for %d artifacts%s' % (report['date'], shown,

@@ -159,7 +159,9 @@ def cmd_publish(args):
     dirty = [ln[3:] for ln in (g.git(wt, 'status', '--porcelain', '--untracked-files=all') or '').splitlines()]
     rows, files = [], {'data': {}, 'antigens': {}}
     run_ids = {v.get('id') for t in report.get('targets', {}).values() for v in t.get('judged', [])}
-    open_cases = g.open_data_cases(repo, steps.BASE) if any(fnmatch.fnmatchcase(p, CASES) for p in dirty) else {}
+    why = []
+    open_cases = g.open_data_cases(repo, steps.BASE, why=why) if any(fnmatch.fnmatchcase(p, CASES) for p in dirty) \
+        else {}
     for p in dirty:
         kind = 'data' if p == VERDICTS or fnmatch.fnmatchcase(p, CASES) else \
             'antigens' if p in (ANTIGENS, ANTIGEN_CASES) else None
@@ -167,7 +169,7 @@ def cmd_publish(args):
             if not p.startswith('eval/evolve/.session/'):
                 rows.append({'not_published': p, 'why': 'outside what the run publishes'})
             continue
-        waits = cases_wait(p, open_cases)
+        waits = cases_wait(p, open_cases, why)
         if waits:
             rows.append({'refused': p, 'why': waits})
             continue
@@ -208,14 +210,14 @@ def cmd_publish(args):
     return 0
 
 
-def cases_wait(path, open_cases):
+def cases_wait(path, open_cases, why=()):
     """Why a cases file is not published now (SE-63), or ''. An open evolve data PR already adds this file: a second
     PR would conflict with it, and merged together they would double the cases. `open_cases` None — GitHub did not
-    answer, closed on doubt."""
+    answer or the list was full (`why`), closed on doubt."""
     if not fnmatch.fnmatchcase(path, CASES):
         return ''
     if open_cases is None:
-        return 'GitHub did not list the open evolve PRs — cases are not published on doubt'
+        return '%s — cases are not published on doubt' % (why[0] if why else g.NO_ANSWER)
     pr = open_cases.get(os.path.basename(path))
     return 'its cases wait for the merge of PR #%s' % pr if pr else ''
 

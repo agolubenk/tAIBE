@@ -30,17 +30,29 @@ def pr_list(*prs):
     return json.dumps([{'number': n, 'headRefName': b, 'files': [{'path': p} for p in paths]} for n, b, paths in prs])
 
 
-def fake_gh(*answers, calls=None):
-    """A fake `gh`: one answer per call, the last one repeats; an exception answer is raised."""
+def fake_gh(*answers, calls=None, views=None, view_error=None):
+    """A fake `gh`: one `pr list` answer per call, the last one repeats; an exception answer is raised. `pr view N`
+    (SE-49) gives the files of PR N from the last list answer, or raises `view_error`; `views` gets the numbers."""
     seen = calls if calls is not None else []
+    viewed = views if views is not None else []
+    files = {}
 
     def call(repo, *args, check=True):
+        if args[:2] == ('pr', 'view'):
+            viewed.append(int(args[2]))
+            if view_error is not None:
+                raise view_error
+            return json.dumps({'files': files.get(int(args[2]), [])})
         if args[:2] != ('pr', 'list'):
-            raise AssertionError('only `gh pr list` is expected, got %s' % (args,))
+            raise AssertionError('only `gh pr list` and `gh pr view` are expected, got %s' % (args,))
         seen.append(args)
         answer = answers[min(len(seen), len(answers)) - 1]
         if isinstance(answer, Exception):
             raise answer
+        try:
+            files.update({pr['number']: pr.get('files', []) for pr in json.loads(answer)})
+        except (ValueError, TypeError, KeyError):
+            pass
         return answer
     return call
 
@@ -60,11 +72,14 @@ class OpenDataCasesTest(unittest.TestCase):
         self.assertEqual(found, {'card-infra.jsonl': 124, 'prompt-lens-2.jsonl': 124})
 
     def test_github_that_does_not_answer_is_none_after_the_retries(self):
-        for answer in (RuntimeError('gh pr list: HTTP 502'), OSError('no gh'), 'not json'):
-            calls, pauses = [], []
+        for answer in (RuntimeError('gh pr list: HTTP 502'), OSError('no gh'), 'not json', '{"a": 1}'):
+            calls, pauses, why = [], [], []
             with mock.patch.object(g, 'gh', fake_gh(answer, calls=calls)):
-                self.assertIsNone(g.open_data_cases('/repo', 'board-agents', sleep=pauses.append), answer)
-            self.assertEqual((len(calls), pauses), (g.OPEN_PRS_TRIES, [g.OPEN_PRS_PAUSE_S] * (g.OPEN_PRS_TRIES - 1)))
+                self.assertIsNone(g.open_data_cases('/repo', 'board-agents', sleep=pauses.append, why=why), answer)
+            self.assertEqual(why, [g.NO_ANSWER], answer)
+            if answer != '{"a": 1}':   # an answer that is not a list is not retried: GitHub did answer
+                self.assertEqual((len(calls), pauses),
+                                 (g.OPEN_PRS_TRIES, [g.OPEN_PRS_PAUSE_S] * (g.OPEN_PRS_TRIES - 1)))
 
     def test_one_failure_then_an_answer(self):
         calls, pauses = [], []
@@ -75,8 +90,31 @@ class OpenDataCasesTest(unittest.TestCase):
 
     def test_a_full_list_may_hide_a_pr(self):
         full = pr_list(*[(n, 'fix/x-%d' % n, []) for n in range(g.OPEN_PRS_LIMIT)])
+        why = []
         with mock.patch.object(g, 'gh', fake_gh(full)):
-            self.assertIsNone(g.open_data_cases('/repo', 'board-agents', sleep=lambda s: None))
+            self.assertIsNone(g.open_data_cases('/repo', 'board-agents', sleep=lambda s: None, why=why))
+        self.assertEqual(why, [g.FULL_LIST])
+
+    def test_list_without_files_and_files_only_of_data_prs(self):
+        # SE-49, night 14.11: board-agents had 84 open PRs, the old limit 50 closed the cases of 18 artifacts.
+        prs = [(n, 'fix/x-%d' % n, ['eval/evolve/cases/rule-x.jsonl']) for n in range(1, 83)]
+        prs += [(140, 'evolve/data-2026-11-13', ['eval/evolve/cases/card-infra.jsonl']),
+                (141, 'evolve/data-2026-11-14', ['eval/evolve/cases/rule-y.jsonl'])]
+        calls, views = [], []
+        with mock.patch.object(g, 'gh', fake_gh(pr_list(*prs), calls=calls, views=views)):
+            found = g.open_data_cases('/repo', 'board-agents')
+        self.assertEqual(found, {'card-infra.jsonl': 140, 'rule-y.jsonl': 141})
+        self.assertEqual(views, [140, 141], 'files are asked only of evolve data PRs')
+        self.assertEqual(calls[0][calls[0].index('--json') + 1], 'number,headRefName', 'the list goes without files')
+        self.assertEqual(calls[0][calls[0].index('--limit') + 1], str(g.OPEN_PRS_LIMIT))
+
+    def test_files_that_do_not_come_close_on_doubt(self):
+        answer = pr_list((124, 'evolve/data-2026-11-11', ['eval/evolve/cases/card-infra.jsonl']))
+        for error in (RuntimeError('gh pr view: HTTP 502'), OSError('no gh')):
+            views, why = [], []
+            with mock.patch.object(g, 'gh', fake_gh(answer, views=views, view_error=error)):
+                self.assertIsNone(g.open_data_cases('/repo', 'board-agents', sleep=lambda s: None, why=why))
+            self.assertEqual((views, why), ([124] * g.OPEN_PRS_TRIES, [g.NO_ANSWER]), error)
 
 
 class RepoTest(unittest.TestCase):
@@ -163,6 +201,12 @@ class RunQueueTest(RepoTest):
         report, given = self.night(RuntimeError('gh pr list: network'))
         self.assertEqual((given, report['queue'][0]['waits']), ([], daily.UNKNOWN_PRS))
         self.assertIn('GitHub did not list the open evolve PRs', report['summary'])
+
+    def test_a_full_list_is_named_in_the_summary(self):
+        report, given = self.night(pr_list(*[(n, 'fix/x-%d' % n, []) for n in range(g.OPEN_PRS_LIMIT)]))
+        self.assertEqual((given, report['queue'][0]['waits']), ([], daily.UNKNOWN_PRS))
+        self.assertIn('cases of 1 wait: ' + g.FULL_LIST, report['summary'])
+        self.assertNotIn('GitHub did not list', report['summary'], 'GitHub did answer (SE-49)')
 
 
 class PublishTest(RepoTest):
