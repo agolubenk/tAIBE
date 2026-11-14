@@ -166,7 +166,8 @@ def _check_pr(ctx, n, p, head):
             continue
         verdicts.append(v)
         if v["verdict"] == "changes" and quorum.on_head(v["sha"], head):
-            ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, [p["author"]],
+            to = quorum.author_roles(p["author"], ctx.cfg["team"]["roles"])   # с вторыми сессиями роли (#324)
+            ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, to,
                      f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github")
     ok, approved, changes, ci = quorum.quorum(verdicts, head, p.get("checks") or [], g["min_lenses"])
     p["changes_by"] = changes

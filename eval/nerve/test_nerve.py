@@ -19,6 +19,7 @@ sys.path.insert(0, HERE)
 import actions  # noqa: E402
 import budget  # noqa: E402
 import nerve  # noqa: E402
+import products  # noqa: E402
 import quorum  # noqa: E402
 import gh_source  # noqa: E402
 import sources  # noqa: E402
@@ -165,6 +166,29 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
 
+    def test_author_roles_add_second_sessions(self):
+        roles = CFG["team"]["roles"]
+        self.assertEqual(quorum.author_roles("backend", roles), ["backend", "backend-2"])
+        self.assertEqual(quorum.author_roles("frontend", roles), ["frontend", "frontend-2"])
+        self.assertEqual(quorum.author_roles("coord", roles), ["coord"])
+        self.assertEqual(quorum.author_roles("backend", ["backend"]), ["backend"])
+
+    def test_second_session_is_the_same_lens(self):
+        """Линза backend #324: approve от backend и backend-2 — одна линза. Кворум трёх линз — от трёх ролей."""
+        head = "abd008c5c" + "0" * 31
+        vs = [pv(f"{l}: approve на abd008c5c") for l in ("Бэкенд (роль 4)", "Бэкенд (роль 7)", "Линза плана (роль 2)")]
+        self.assertEqual([v["lens"] for v in vs], ["backend", "backend-2", "plan"])
+        ok, approved, _, _ = quorum.quorum(vs, head, ["SUCCESS"])
+        self.assertEqual((ok, approved), (False, ["backend", "plan"]))
+        ok, approved, _, ci = quorum.quorum(vs, head, ["IN_PROGRESS"])
+        self.assertLess(len(approved), 3, "await_ci (sources.py) считает те же approved")
+        ok, approved, _, _ = quorum.quorum(vs + [pv("Данные (роль 6): approve на abd008c5c")], head, ["SUCCESS"])
+        self.assertEqual((ok, approved), (True, ["backend", "boards", "plan"]))
+        ch = vs + [pv("Данные (роль 6): approve на abd008c5c"), pv("Бэкенд (роль 7): changes на abd008c5c")]
+        ok, approved, changes, _ = quorum.quorum(ch, head, ["SUCCESS"])
+        self.assertEqual((ok, approved, changes), (False, ["backend", "boards", "plan"], ["backend-2"]),
+                         "changes второй сессии блокирует и адресован ей")
+
     def test_later_verdict_of_a_lens_overrides(self):
         head = "abcdef1234"
         vs = [pv(x) for x in (
@@ -271,6 +295,16 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(sources.route_source("hr-helper-v2-85 (QA)", rules), "coord")
         self.assertEqual(sources.route_source("plan-13-10", rules), "plan")
 
+    def test_route_source_second_sessions(self):
+        """#324 B1: пункт второй сессии — её ключ, не базовой роли; правила стоят до базовых в обоих продуктах."""
+        shared, prods = products.load()
+        for slug in ("taibe", "hr-helper"):
+            rules = products.config_for(slug, shared, prods)["queue"]["source_roles"]
+            for src, role in (("backend-2 r.ab12", "backend-2"), ("Бэкенд-2 (роль 7) r.ab12", "backend-2"),
+                              ("Фронтенд-2 r.cd34", "frontend-2"), ("frontend (роль 8)", "frontend-2"),
+                              ("Бэкенд r.f93t", "backend"), ("Фронтенд (роль 3)", "frontend")):
+                self.assertEqual(sources.route_source(src, rules), role, (slug, src))
+
 
 class FakeCtx:
     def __init__(self, d):
@@ -375,6 +409,28 @@ class GithubPollTest(unittest.TestCase):
         self.assertNotIn("pr.changes", kinds)
         self.assertIn("pr.quorum", kinds)
         self.assertEqual(self.ctx.state["github"]["prs"]["478"]["changes_by"], [])
+
+    def test_second_session_approve_does_not_make_quorum(self):
+        """Линза backend #324: backend + backend-2 + plan — две линзы: ни pr.quorum, ни await_ci."""
+        head = "abd008c5c" + "0" * 31
+        three = ["Бэкенд (роль 4): approve на abd008c5c", "Бэкенд (роль 7): approve на abd008c5c",
+                 "Линза плана (роль 2): approve на abd008c5c"]
+        sources.run = FakeGh([_pr(324, head)], comments={324: three})
+        gh_source.poll_github(self.ctx)
+        p = self.ctx.state["github"]["prs"]["324"]
+        self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+        self.assertFalse(p["await_ci"])
+        sources.run = FakeGh([_pr(324, head, "2026-11-04T11:00:00Z")],
+                             comments={324: three + ["Данные (роль 6): approve на abd008c5c"]})
+        gh_source.poll_github(self.ctx)
+        self.assertIn(("pr.quorum", "#324 собран: approve backend, boards, plan на abd008c5c, CI ok"), self.kinds())
+
+    def test_changes_reach_the_author_role_and_its_second_session(self):
+        """#324 B2: автор по путям — базовая роль; changes доходит и до второй сессии (PR могла открыть она)."""
+        sources.run = FakeGh([_pr(480, "c" * 40)], comments={480: ["**Линза плана (роль 2) — CHANGES на ccccccc**"]})
+        gh_source.poll_github(self.ctx)
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.changes"]
+        self.assertEqual([e["to"] for e in rec], [["backend", "backend-2"]])
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
@@ -707,16 +763,38 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "emit", "backend, release,4", "двум").returncode, 0)
             self.assertEqual(self.nerve(d, "emit", "plan,frontend,backend,release,boards", "пятерым").returncode, 0)
             to = [sorted(r["to"]) for r in self.records(d)]
-            self.assertEqual(to, [["boards"], ["backend", "release"], sorted(CFG["team"]["roles"][1:])])
+            self.assertEqual(to, [["boards"], ["backend", "release"], ["backend", "boards", "frontend", "plan", "release"]])
             out = self.nerve(d, "tap", "boards", "--once").stdout
             self.assertIn("роль 6: одна", out, "tap 6 и tap boards — один курсор")
             self.assertIn("пятерым", out)
             self.assertNotIn("двум", out)
 
+    def test_second_session_has_its_own_cursor(self):
+        """backend-2 (роль 7): emit «backend» до неё не доходит (нет двойной работы), «all» — доходит обеим."""
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            wj(os.path.join(d, "state.json"), {"heartbeat": datetime.now(timezone.utc).isoformat()})
+            for role in ("backend", "backend-2"):
+                self.assertEqual(self.nerve(d, "tap", role, "--once").stdout, "")  # курсоры — с конца журнала
+            self.assertEqual(self.nerve(d, "emit", "backend", "только первой").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "7", "только второй").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "frontend-2,backend-2", "вторым").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "all", "всем").returncode, 0)
+            self.assertEqual([sorted(r["to"]) for r in self.records(d)][1:3], [["backend-2"], ["backend-2", "frontend-2"]])
+            first = self.nerve(d, "tap", "backend", "--once").stdout
+            second = self.nerve(d, "tap", "backend-2", "--once").stdout
+            self.assertIn("только первой", first)
+            self.assertNotIn("только второй", first)
+            self.assertNotIn("только первой", second)
+            self.assertIn("только второй", second)
+            self.assertIn("вторым", second)
+            self.assertIn("всем", first)
+            self.assertIn("всем", second)
+
     def test_emit_refuses_unknown_role(self):
         with tempfile.TemporaryDirectory() as d:
             open(os.path.join(d, "journal.jsonl"), "w").close()
-            for target in ("tboards", "7", "backend,review", ","):
+            for target in ("tboards", "9", "backend-3", "backend,review", ","):
                 p = self.nerve(d, "emit", target, "никому")
                 self.assertEqual(p.returncode, 2, target)
                 self.assertIn("ничего не записано", p.stderr, target)
@@ -728,7 +806,7 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "tap", "backend,release", "--once").returncode, 2)
             self.assertEqual(self.nerve(d, "tap", "selftest", "--once").returncode, 0, "split/6-verify.sh")
             self.assertTrue(os.path.exists(os.path.join(d, "tap-selftest.json")))
-            for n in ("0", "7", "99"):
+            for n in ("0", "9", "99"):
                 self.assertEqual(self.nerve(d, "tap", n, "--once").returncode, 2, f"emit не запишет «{n}»")
                 self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
 
@@ -1076,7 +1154,7 @@ class RoleNumberingTest(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             body = re.search(r"^role_num\(\) \{\n(.*?)^\}", f.read(), re.S | re.M)
         self.assertIsNotNone(body, f"role_num() not found in {path}")
-        numbered = {key: int(n) for key, n in re.findall(r"(\w+)\) echo (\d+)", body.group(1))}
+        numbered = {key: int(n) for key, n in re.findall(r"([\w-]+)\) echo (\d+)", body.group(1))}
         expected = {key: i for i, key in enumerate(CFG["team"]["roles"], 1)}
         self.assertEqual(numbered, expected)
 
