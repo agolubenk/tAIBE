@@ -1,8 +1,13 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { FOREST_TABS, type ForestTab } from "@/components/forest/forest-types";
+import {
+  type ForestTab,
+  visibleForestTabs,
+} from "@/components/forest/forest-types";
 import useSectors from "@/hooks/queries/forest/use-sectors";
+import { authClient } from "@/lib/auth-client";
+import { hasInstanceAdminRole } from "@/lib/instance-admin";
 import type { PaletteGroup } from "./palette-filter";
 
 // The forest's tabs and sectors as jump targets (R-090). Sectors load only once
@@ -15,6 +20,9 @@ export function useForestGroups(
   const navigate = useNavigate();
   const typed = query.trim().length > 0;
   const { data: sectors } = useSectors(typed && workspaceId ? workspaceId : "");
+  // The owner queue tab is the owner's alone (TB-156).
+  const { data: session } = authClient.useSession();
+  const isOwner = hasInstanceAdminRole(session?.user?.role);
 
   return useMemo<PaletteGroup[]>(() => {
     if (!workspaceId) return [];
@@ -30,7 +38,7 @@ export function useForestGroups(
         value: "forest",
         label: t("navigation:sidebar.forest"),
         kind: "lookup",
-        items: FOREST_TABS.map((tab) => ({
+        items: visibleForestTabs(isOwner).map((tab) => ({
           value: `forest-${tab}`,
           label: t(`workspace:forest.tabs.${tab}`),
           onRun: () => goTo(tab),
@@ -47,5 +55,5 @@ export function useForestGroups(
         })),
       },
     ];
-  }, [navigate, sectors, t, workspaceId]);
+  }, [isOwner, navigate, sectors, t, workspaceId]);
 }

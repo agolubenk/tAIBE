@@ -3776,7 +3776,8 @@
 				"leases": "Leases",
 				"sessions": "Sessions",
 				"journal": "Feed",
-				"mirror": "Notion mirror"
+				"mirror": "Notion mirror",
+				"queue": "Owner queue"
 			},
 			"hints": {
 				"pulse": "What needs you now: «да» requests and sessions waiting for an answer, open bugs and urgent cards, and what was refused in the last day.",
@@ -3788,7 +3789,8 @@
 				"leases": "Who is working on which card right now. A lease ends on its own when its holder stops renewing it.",
 				"sessions": "What each session is doing: its step, branch and what it waits for. Agents record it after each step; a session silent for 30 days disappears.",
 				"journal": "What agents and people did on the board, newest first. Entries about cards of projects you may not open are left out.",
-				"mirror": "The board reads Notion on a schedule and compares the two. A clean run means every page has its card in the same status; the move off Notion waits for an unbroken streak of clean runs."
+				"mirror": "The board reads Notion on a schedule and compares the two. A clean run means every page has its card in the same status; the move off Notion waits for an unbroken streak of clean runs.",
+				"queue": "The owner's queue from the ops console, read only and for the owner alone. Answers are given in the console or through a card's «да» request."
 			},
 			"pulse": {
 				"fires": "What is on fire",
@@ -4000,6 +4002,55 @@
 				"toast": {
 					"started": "Mirror run started",
 					"error": "Could not start the mirror run"
+				}
+			},
+			"queue": {
+				"openConsole": "Open in the console",
+				"collectionLabel": "Collection",
+				"collection": {
+					"items": "Items",
+					"checks": "Answers"
+				},
+				"stateLabel": "State",
+				"state": {
+					"open": "Open",
+					"answered": "Answered",
+					"all": "All"
+				},
+				"productLabel": "Product",
+				"allProducts": "All products",
+				"truncated": "The console capped the list at part of its {{total}} documents; the oldest are not shown.",
+				"truncatedNoTotal": "The console capped the list; the oldest documents are not shown.",
+				"empty": "Nothing here.",
+				"range": "{{first}}–{{last}} of {{total}}",
+				"previous": "Previous",
+				"next": "Next",
+				"rowState": {
+					"open": "Open",
+					"done": "Answered"
+				},
+				"choice": "Answer: {{choice}}",
+				"answer": {
+					"title": "Owner's answer",
+					"none": "No answer yet.",
+					"done": "Done",
+					"notDone": "Not done"
+				},
+				"files": {
+					"title": "Files",
+					"open": "Open the files in the console"
+				},
+				"history": {
+					"item": "History",
+					"answer": "Answer history",
+					"empty": "No events.",
+					"older": "Older events: {{n}}. They are in the console."
+				},
+				"error": {
+					"forbidden": "Only the owner's own session can read the owner queue.",
+					"off": "The owner queue is not connected to this board.",
+					"notFound": "This document is no longer in the queue.",
+					"unavailable": "The ops console did not answer. Try again later."
 				}
 			}
 		},

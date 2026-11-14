@@ -9,6 +9,7 @@ import { historyRoutes } from "./routes/history-routes";
 import { leaseRoutes } from "./routes/lease-routes";
 import { memoryRoutes } from "./routes/memory-routes";
 import { mirrorRoutes } from "./routes/mirror-routes";
+import { ownerQueueRoutes } from "./routes/owner-queue-routes";
 import { pulseRoutes } from "./routes/pulse-routes";
 import { readRoutes } from "./routes/read-routes";
 import { treeRoutes } from "./routes/tree-routes";
@@ -32,6 +33,7 @@ const forest = apiRouter<BaseVariables & { workspaceId: string }>()
   .route("/", contextRoutes)
   .route("/", memoryRoutes)
   .route("/", mirrorRoutes)
+  .route("/", ownerQueueRoutes)
   .route("/", treeRoutes)
   .route("/", workStateRoutes)
   .route("/", workersRoutes)

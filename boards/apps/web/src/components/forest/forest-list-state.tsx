@@ -7,6 +7,8 @@ type ForestListStateProps = {
   isError: boolean;
   isEmpty: boolean;
   empty: string;
+  // A tab that knows why the read failed says so instead of the generic text.
+  error?: string;
   children: ReactNode;
 };
 
@@ -16,6 +18,7 @@ export function ForestListState({
   isError,
   isEmpty,
   empty,
+  error,
   children,
 }: ForestListStateProps) {
   const { t } = useTranslation();
@@ -32,7 +35,7 @@ export function ForestListState({
   if (isError) {
     return (
       <p role="alert" className="py-6 text-muted-foreground text-sm">
-        {t("workspace:forest.loadError")}
+        {error ?? t("workspace:forest.loadError")}
       </p>
     );
   }

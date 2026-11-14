@@ -3,8 +3,10 @@ import { useTranslation } from "react-i18next";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs";
 import useApprovals from "@/hooks/queries/forest/use-approvals";
+import { authClient } from "@/lib/auth-client";
+import { hasInstanceAdminRole } from "@/lib/instance-admin";
 import { ApprovalsTab } from "./approvals-tab";
-import { FOREST_TABS, type ForestTab, isForestTab } from "./forest-types";
+import { type ForestTab, isForestTab, visibleForestTabs } from "./forest-types";
 import { JournalTab } from "./journal-tab";
 import { LeasesTab } from "./leases-tab";
 import { LogsTab } from "./logs-tab";
@@ -19,6 +21,20 @@ import { TreesTab } from "./trees-tab";
 const GraphTab = lazy(() =>
   import("./graph/graph-tab").then((module) => ({ default: module.GraphTab })),
 );
+// TB-156: the owner queue is the owner's alone; members never load its code.
+const OwnerQueueTab = lazy(() =>
+  import("./owner-queue/owner-queue-tab").then((module) => ({
+    default: module.OwnerQueueTab,
+  })),
+);
+
+const panelFallback = (
+  <div className="flex flex-col gap-2">
+    {[1, 2, 3].map((row) => (
+      <Skeleton key={row} className="h-11 w-full rounded-lg" />
+    ))}
+  </div>
+);
 
 type ForestPageProps = {
   workspaceId: string;
@@ -31,16 +47,21 @@ type ForestPageProps = {
 // with their seeds, «да» requests and leases of a workspace in one place
 // (R-028, R-029, N-011), what each session is doing (R-037), the agents' feed
 // and the links graph (R-090), and the Notion mirror's reconciliation runs
-// (AC-002, AC-003).
+// (AC-002, AC-003), and the owner's queue from the ops-console (TB-156).
 export function ForestPage({
   workspaceId,
-  tab,
+  tab: requested,
   sectorId,
   onTabChange,
 }: ForestPageProps) {
   const { t } = useTranslation();
   const { data: pending } = useApprovals(workspaceId, "pending");
   const pendingCount = pending?.items.length ?? 0;
+  const { data: session } = authClient.useSession();
+  const isOwner = hasInstanceAdminRole(session?.user?.role);
+  const tabs = visibleForestTabs(isOwner);
+  // A shared link to the queue tab opens the pulse for everyone else.
+  const tab = tabs.includes(requested) ? requested : "pulse";
 
   return (
     <Tabs
@@ -52,7 +73,7 @@ export function ForestPage({
     >
       <div className="overflow-x-auto">
         <TabsList variant="underline">
-          {FOREST_TABS.map((item) => (
+          {tabs.map((item) => (
             <TabsTab key={item} value={item} className="gap-1.5">
               {t(`workspace:forest.tabs.${item}`)}
               {item === "approvals" && pendingCount > 0 ? (
@@ -98,6 +119,13 @@ export function ForestPage({
       <TabsPanel value="mirror">
         <MirrorTab workspaceId={workspaceId} />
       </TabsPanel>
+      {isOwner ? (
+        <TabsPanel value="queue">
+          <Suspense fallback={panelFallback}>
+            <OwnerQueueTab workspaceId={workspaceId} />
+          </Suspense>
+        </TabsPanel>
+      ) : null}
     </Tabs>
   );
 }

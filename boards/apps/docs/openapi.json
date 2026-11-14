@@ -5552,6 +5552,311 @@
           "runId"
         ]
       },
+      "OwnerQueueList": {
+        "type": "object",
+        "properties": {
+          "docs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "product": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "added": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pr": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "inboxType": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "open",
+                    "done",
+                    null
+                  ],
+                  "description": "open — in the console's open list (?open=1), done — not in it. Items only; null for checks."
+                },
+                "choice": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "done": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "answeredAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "updatedAt": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "product",
+                "kind",
+                "title",
+                "added",
+                "source",
+                "pr",
+                "inboxType",
+                "state",
+                "choice",
+                "done",
+                "answeredAt",
+                "updatedAt"
+              ]
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "products": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "collectionTotal": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "When the console capped the list: how many documents the collection has in all."
+          },
+          "queueUrl": {
+            "type": "string",
+            "description": "The owner queue page in the ops-console."
+          }
+        },
+        "required": [
+          "docs",
+          "page",
+          "pageSize",
+          "total",
+          "products",
+          "truncated",
+          "collectionTotal",
+          "queueUrl"
+        ]
+      },
+      "OwnerQueueDoc": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "version": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "number"
+              },
+              "product": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "data",
+              "version",
+              "updatedAt"
+            ]
+          },
+          "check": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "version": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "number"
+              },
+              "product": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "data",
+              "version",
+              "updatedAt"
+            ]
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "number"
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "after": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "at",
+                "actor",
+                "action",
+                "after"
+              ]
+            }
+          },
+          "checkHistory": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "number"
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "after": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "at",
+                "actor",
+                "action",
+                "after"
+              ]
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "number"
+                },
+                "createdAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "kind",
+                "size",
+                "createdAt"
+              ]
+            }
+          },
+          "queueUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc",
+          "check",
+          "history",
+          "checkHistory",
+          "files",
+          "queueUrl"
+        ]
+      },
       "ForestTrees": {
         "type": "object",
         "properties": {
@@ -26593,6 +26898,221 @@
           },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/forest/{workspaceId}/owner-queue/{collection}": {
+      "get": {
+        "operationId": "listForestOwnerQueue",
+        "tags": [
+          "Forest"
+        ],
+        "summary": "List the owner queue",
+        "description": "The owner queue from the ops-console, read only and for the owner's session alone: 50 documents a page, newest first. Items can be filtered to open or answered by the console's own rule.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "items",
+                "checks"
+              ]
+            },
+            "required": true,
+            "name": "collection",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "answered",
+                "all"
+              ]
+            },
+            "required": false,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,40}$"
+            },
+            "required": false,
+            "name": "product",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owner queue page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerQueueList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the owner's session (agents, API keys and members)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The owner queue is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          },
+          "502": {
+            "description": "The ops-console did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/forest/{workspaceId}/owner-queue/{collection}/{id}": {
+      "get": {
+        "operationId": "getForestOwnerQueueDoc",
+        "tags": [
+          "Forest"
+        ],
+        "summary": "Read one owner queue document",
+        "description": "One document with its journal; an item also comes with the owner's answer and its attachments' metadata.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "items",
+                "checks"
+              ]
+            },
+            "required": true,
+            "name": "collection",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.~:@+-]{1,80}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owner queue document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerQueueDoc"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the owner's session (agents, API keys and members)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not configured, or no such document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          },
+          "502": {
+            "description": "The ops-console did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
