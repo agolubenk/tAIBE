@@ -83,6 +83,8 @@ class ChecksTest(unittest.TestCase):
             'import { Route as LayoutAuthenticatedWorkspaceSlugTaskTicketIdChar123TitleChar125RouteImport }',
             '`http://localhost:5173/dashboard/workspace/' + 'Ab3dE5fG7hJ9kL1mN3pQ5r/project/St7uV9wX1yZ3aB5cD7eF9g/'
             'task/Hj2kL4mN6pQ8rS0tU2vW4x`',
+            'function currentWindow(apiKey: ApiKeyUsageRow, now: Date): RateWindow {',
+            '{ access_token: AccessTokenPayload; }',
         ]
         for line in quiet:
             with self.subTest(line):
@@ -94,6 +96,17 @@ class ChecksTest(unittest.TestCase):
         for name in ('foo_API_KEY', 'my_TOKEN', 'app_CLIENT_SECRET', 'db_PASSWORD'):
             with self.subTest(name):
                 self.assertNotEqual(secrets_scan.scan_line(f'{name}={value}'), [])
+
+    def test_secrets_value_ends_at_comma_or_semicolon(self):
+        # Claude lens #283 B2: with `;` or `,` glued on, looks_like_secret dropped the key.
+        value = 'Zq8fK2mP' + '9xL4vB7nR1tY'
+        board_key = 'PlVrNsKtWqZmXbHc' * 4
+        for line, secret in ((f'export OPENAI_API_KEY={value}; python app.py', value),
+                             (f'{{api_key: {value}, region: eu}}', value),
+                             (f'Server=x;ApiKey={value};Db=y', value),
+                             (f'export T_BOARDS_API_KEY={board_key}; curl', board_key)):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [secret])
 
     def test_secrets_hostile_lines_stay_linear(self):
         # TB-136 security lens: a rule that may restart at every character and scan to the end of the line is

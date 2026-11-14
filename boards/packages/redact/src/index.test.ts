@@ -255,6 +255,8 @@ describe("@kaneo/redact", () => {
       ["a password reference", "password: $DB_PASSWORD"],
       ["joined words", "DEPLOY_TOKEN: replace_with_deploy_token"],
       ["a translated label", '"api_key": "APIキーを入力してください"'],
+      ["a type annotation", "function f(apiKey: ApiKeyUsageRow, now: Date)"],
+      ["a type in a literal", "{ access_token: AccessTokenPayload; }"],
     ])("leaves %s untouched", (_name, input) => {
       const result = redact(input);
       expect(result.hits).toHaveLength(0);
@@ -271,9 +273,57 @@ describe("@kaneo/redact", () => {
         "your_secure_password",
         "パスワードを入力",
         "%s\\nX-GitHub",
+        "ApiKeyUsageRow",
+        "SecretStr",
       ]) {
         expect(looksLikeSecret(value)).toBe(false);
       }
+    });
+  });
+
+  // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the
+  // Authorization header as a JSON key, an empty x-api-key header.
+  describe("values next to code punctuation and JSON headers (#283)", () => {
+    const value = join("Zq8fK2mP", "9xL4vB7nR1tY");
+    const boardKey = "PlVrNsKtWqZmXbHc".repeat(4);
+
+    it.each([
+      [
+        "an env line with a command after it",
+        `export OPENAI_API_KEY=${value}; python app.py`,
+        value,
+      ],
+      ["an object literal", `{api_key: ${value}, region: eu}`, value],
+      ["a connection string", `Server=x;ApiKey=${value};Db=y`, value],
+      [
+        "a board key before a command",
+        `export T_BOARDS_API_KEY=${boardKey}; curl`,
+        boardKey,
+      ],
+    ])(
+      "redacts the value in %s and keeps the punctuation",
+      (_name, input, secret) => {
+        const result = redact(input);
+        expect(result.text).toBe(
+          input.replace(secret, "[REDACTED:password_assignment]"),
+        );
+        expect(result.text).not.toContain(secret);
+      },
+    );
+
+    it.each([
+      ["double quotes", `{"Authorization": "Bearer ${value}Qz8Lm4Rt7Wx2"}`],
+      ["single quotes", `{'Authorization': 'Bearer ${value}Qz8Lm4Rt7Wx2'}`],
+    ])("redacts a bearer token under a JSON key in %s", (_name, input) => {
+      const token = `${value}Qz8Lm4Rt7Wx2`;
+      expectSingleHit(input, "bearer", token);
+    });
+
+    it("leaves the next header alone after an empty x-api-key", () => {
+      const input = "x-api-key:\nContent-Type: application/json";
+      const result = redact(input);
+      expect(result.hits).toHaveLength(0);
+      expect(result.text).toBe(input);
     });
   });
 
@@ -377,4 +427,20 @@ describe("@kaneo/redact", () => {
     redact(text);
     expect(performance.now() - started).toBeLessThan(250);
   });
+
+  // Claude lens #283 B1: a run of a key prefix that fails only at its last
+  // character (one the key class does not take, but the end check does).
+  // A start after every `-` or `_` of the run scanned to the end again.
+  it.each([
+    [join("xox", "b-"), "_"],
+    [join("github", "_pat_"), "-"],
+  ])(
+    "redacts 256 000 characters of %j and a final %j in linear time",
+    (unit, stop) => {
+      const text = unit.repeat(Math.ceil(256_000 / unit.length)) + stop;
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
+    },
+  );
 });

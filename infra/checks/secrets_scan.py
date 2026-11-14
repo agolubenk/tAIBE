@@ -35,14 +35,14 @@ PATTERNS = [
 ]
 # A credential name in any case, also as the end of a longer name (x-api-key, "api_key" in JSON); quotes optional.
 ASSIGNED = re.compile(r'(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)'
-                      r'\b["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s]{12,})')
+                      r'\b["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s,;]{12,})')
 # Environment style, uppercase only: any NAME ending in API_KEY, TOKEN, SECRET or PASSWORD (T_BOARDS_API_KEY=,
 # GITHUB_TOKEN:). `\b` does not fire after `_`, so ASSIGNED misses these names. The name starts where a run of
 # [A-Z0-9_] starts, also after a lowercase prefix (foo_API_KEY, app_CLIENT_SECRET), and has at most 64 characters
 # before the suffix: an open [A-Z0-9_]* that may start after every `_` made a long run of `_` quadratic (64 000
 # characters: 12 s, TB-136 security lens).
 ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))'
-                          r'["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s]{12,})')
+                          r'["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s,;]{12,})')
 # Long runs of the base64 alphabet mixing upper, lower and digits with high entropy: encoded key material. The same
 # thresholds as the base64 rule in redact; hex digests are single-case and never reach it.
 BASE64 = re.compile(r'[A-Za-z0-9+/]{64,}={0,2}')
@@ -57,6 +57,9 @@ CODE_CHARS = re.compile(r'[(){}\[\];,<>\\]')
 DOTTED_NAME = re.compile(r'^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$')
 JOINED_WORDS = re.compile(r'^[A-Za-z]+(?:[_-][A-Za-z]+)+$')
 CAMEL_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)*$')
+# A type name: capitalized words, no digit (apiKey: ApiKeyUsageRow,). Since the value ends at `,` and `;` (#283 B2),
+# the comma no longer drops it.
+TYPE_NAME = re.compile(r'^(?:[A-Z][a-z]+)+$')
 PLACEHOLDER = re.compile(r'(?i)example|changeme|change-me|placeholder|dummy|sample|your[_-]|xxx|\*\*\*|<[^>]*>|\$\{|'
                          r'\{\{|\[[^\]]*\]|redacted|test|fake|ci-only|not-a-|secret123|password123|^\$|'
                          r'^(?:pass(?:word)?|secret|postgres|root|admin|user|kaneo)$')
@@ -76,12 +79,12 @@ def entropy(s):
 def looks_like_secret(value):
     """`looksLikeSecret` of redact: a value given to a credential name in code is mostly code (options.apiKey,
     z.string(), apiKey) or a placeholder (your_secure_password). A key has 8+ printable ASCII characters, no code
-    punctuation, and is not a dotted name, words joined by _ or -, or a short camelCase name."""
+    punctuation, and is not a dotted name, words joined by _ or -, or a short camelCase or type name."""
     if len(value) < 8 or not PRINTABLE.match(value) or CODE_CHARS.search(value):
         return False
     if DOTTED_NAME.match(value) or JOINED_WORDS.match(value):
         return False
-    return not (len(value) < 32 and CAMEL_WORD.match(value))
+    return not (len(value) < 32 and (CAMEL_WORD.match(value) or TYPE_NAME.match(value)))
 
 
 def is_base64_key(line, m):

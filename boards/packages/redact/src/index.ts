@@ -77,14 +77,20 @@ const dbUrl = collect(
 // (your_secure_password), not a secret. Measured on this repo: without this
 // filter 95% of the new assignment hits were such code. A key has 8+
 // printable ASCII characters, no code punctuation, and is not a dotted name,
-// words joined by _ or -, or a short camelCase name. The same filter is
-// `looks_like_secret` in infra/checks/secrets_scan.py.
+// words joined by _ or -, or a short camelCase name or type name. A type
+// name is capitalized words with no digit (`apiKey: ApiKeyUsageRow,`): since
+// the value ends at `,` and `;` (#283 B2), the comma no longer drops it. The
+// same filter is `looks_like_secret` in infra/checks/secrets_scan.py.
 export function looksLikeSecret(value: string): boolean {
   if (value.length < 8 || !/^[\x21-\x7e]+$/.test(value)) return false;
   if (/[(){}[\];,<>\\]/.test(value)) return false;
   if (/^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$/.test(value)) return false;
   if (/^[A-Za-z]+(?:[_-][A-Za-z]+)+$/.test(value)) return false;
-  return !(value.length < 32 && /^[a-z]+(?:[A-Z][a-z0-9]*)*$/.test(value));
+  if (value.length >= 32) return true;
+  return (
+    !/^[a-z]+(?:[A-Z][a-z0-9]*)*$/.test(value) &&
+    !/^(?:[A-Z][a-z]+)+$/.test(value)
+  );
 }
 
 // TB-136: credentials in a URL of any other scheme (https, smtp, ftp): only
@@ -97,8 +103,11 @@ const urlCredentials = collectGroup(
   1,
 );
 
+// The header also as a JSON key ("Authorization": "Bearer …", Claude lens
+// #283 B3). `\s*` stays: a token in the block below its header is still
+// masked, and restore (#292) relies on that.
 const bearer = collectGroup(
-  /Authorization\s*:\s*Bearer\s+(?!\[REDACTED)([^\s"']+)/gi,
+  /Authorization["']?\s*:\s*["']?Bearer\s+(?!\[REDACTED)([^\s"']+)/gi,
   "bearer",
   1,
 );
@@ -106,8 +115,10 @@ const bearer = collectGroup(
 // TB-136: the header of the board's own API keys, like `bearer`. Keys issued
 // before the tbk_ prefix are 64 letters with no format of their own. In code
 // the header mostly carries a variable ("x-api-key": apiKey), hence the filter.
+// The value stays on the header's line: `x-api-key:` with an empty value
+// does not take the next header (Content-Type: …) as the key.
 const apiKeyHeader = collectGroup(
-  /\bx-api-key["']?\s*:\s*["'`]?(?!\[REDACTED|\$)([^\s"'`,;]+)/gi,
+  /\bx-api-key["']?[ \t]*:[ \t]*["'`]?(?!\[REDACTED|\$)([^\s"'`,;]+)/gi,
   "api_key",
   1,
   looksLikeSecret,
@@ -120,9 +131,12 @@ const jwt = collect(
   "jwt",
 );
 
-// Provider formats; tbk_ is the board's own key (TB-136, auth.ts).
+// Provider formats; tbk_ is the board's own key (TB-136, auth.ts). A key does
+// not start after `_` or `-`: `xox[…]-[A-Za-z0-9-]` and `github_pat_[…_]`
+// hold their own prefix, so with a start after every "xoxb-" of a run, each
+// start scanned to the run's end (64 KB: 1.5 s, Claude lens #283 B1).
 const apiKey = collect(
-  /(?<![A-Za-z0-9])(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|[sr]k_live_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|glpat-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|tbk_[A-Za-z0-9]{32,})(?![A-Za-z0-9_-])/g,
+  /(?<![A-Za-z0-9_-])(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|[sr]k_live_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|glpat-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|tbk_[A-Za-z0-9]{32,})(?![A-Za-z0-9_-])/g,
   "api_key",
 );
 
@@ -144,9 +158,12 @@ const passwordAssignment = collectGroup(
 
 // TB-136: api_key, access_token, auth_token, private_key in any case, also
 // as the end of a longer name (T_BOARDS_API_KEY, x-api-key: …), which is
-// how the board's own keys without a prefix show up.
+// how the board's own keys without a prefix show up. The value ends at `,` or
+// `;` (`KEY=<v>; cmd`, `{api_key: <v>, …}`): with them glued on, the filter
+// dropped the key (Claude lens #283 B2). A password keeps them (it may hold
+// them), so passwordAssignment above does not stop there.
 const credentialAssignment = collectGroup(
-  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
+  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
   "password_assignment",
   1,
   looksLikeSecret,
@@ -158,9 +175,10 @@ const credentialAssignment = collectGroup(
 // of [A-Z0-9_] starts, also after a lowercase prefix (foo_API_KEY,
 // app_CLIENT_SECRET), and has at most 64 characters before the suffix: an
 // open [A-Z0-9_]* that may start after every "_" made a run of "_" quadratic
-// (64 000 characters: 2 s, TB-136 security lens).
+// (64 000 characters: 2 s, TB-136 security lens). The value ends at `,` or
+// `;`, as in credentialAssignment.
 const secretAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,
