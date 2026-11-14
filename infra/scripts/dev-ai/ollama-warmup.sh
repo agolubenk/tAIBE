@@ -2,6 +2,12 @@
 set -euo pipefail
 
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Каждый вызов модели — под машинным замком локального инференса, общим с консилиумом и шлюзом моделей (OPS-33):
+# раньше прогрев шёл параллельно с их инференсом. Замок — на одну модель, а не на весь прогрев. Ждать замок —
+# не дольше OLLAMA_WARMUP_LOCK_WAIT секунд; не дождались — модель пропускается.
+LOCK_WAIT="${OLLAMA_WARMUP_LOCK_WAIT:-300}"
+LOCK_BUSY=75
 
 models=(
   "glm4:latest"
@@ -19,11 +25,19 @@ models=(
 
 echo "Checking Ollama at $OLLAMA_HOST ..."
 curl -fsS "$OLLAMA_HOST" >/dev/null
+command -v python3 >/dev/null || { echo "Нужен python3: он держит замок локального инференса (OPS-33)" >&2; exit 1; }
+
+locked() {
+  local model="$1"
+  shift
+  python3 -I "$HERE/ollama-locked.py" --who "warmup $model" --wait "$LOCK_WAIT" -- "$@"
+}
 
 warm_llm() {
   local model="$1"
   echo "Warming LLM: $model"
-  curl -fsS "$OLLAMA_HOST/api/generate" \
+  local rc=0
+  locked "$model" curl -fsS "$OLLAMA_HOST/api/generate" \
     -H "Content-Type: application/json" \
     -d "{
       \"model\": \"$model\",
@@ -32,18 +46,29 @@ warm_llm() {
       \"options\": {
         \"num_predict\": 8
       }
-    }" >/dev/null || echo "⚠ $model не установлена/не отвечает — пропуск (не фатально)"
+    }" >/dev/null || rc=$?
+  case "$rc" in
+    0) ;;
+    "$LOCK_BUSY") echo "⚠ $model: замок локального инференса занят дольше ${LOCK_WAIT} с — пропуск" ;;
+    *) echo "⚠ $model не установлена/не отвечает — пропуск (не фатально)" ;;
+  esac
 }
 
 warm_embed() {
   local model="$1"
   echo "Warming EMBED: $model"
-  curl -fsS "$OLLAMA_HOST/api/embeddings" \
+  local rc=0
+  locked "$model" curl -fsS "$OLLAMA_HOST/api/embeddings" \
     -H "Content-Type: application/json" \
     -d "{
       \"model\": \"$model\",
       \"prompt\": \"warmup\"
-    }" >/dev/null
+    }" >/dev/null || rc=$?
+  if [[ "$rc" == "$LOCK_BUSY" ]]; then
+    echo "⚠ $model: замок локального инференса занят дольше ${LOCK_WAIT} с — пропуск"
+  elif [[ "$rc" != 0 ]]; then
+    return "$rc"
+  fi
 }
 
 for model in "${models[@]}"; do

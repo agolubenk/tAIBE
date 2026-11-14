@@ -1,7 +1,7 @@
 // Ядро шлюза: один запрос клиента → перебор кандидатов (модель × ключ) с паузами и ожиданием,
 // без потери данных: клиент получает байты апстрима как есть, ротация возможна только до первого `data:`.
 import { once } from 'node:events'
-import { acquireMachineLock } from './machine-lock.mjs'
+import { acquireMachineLock, lockHolder } from './machine-lock.mjs'
 import { requestNeeds } from './router.mjs'
 import { Semaphore, buildRequest, describeError, embeddedError, firstDataError, localBody, readUntilFirstData } from './upstream.mjs'
 
@@ -208,7 +208,9 @@ export class Proxy {
     if (lock.held) return { release, lock }
     release()
     if (lock.failed) this.log({ level: 'warn', msg: 'machine-lock', error: lock.failed })
-    return { error: lock.busy ? 'локальная модель занята другим процессом на этом Mac (консилиум)' : `машинный замок локальной модели недоступен: ${lock.failed}` }
+    if (!lock.busy) return { error: `машинный замок локальной модели недоступен: ${lock.failed}` }
+    const waited = Number((this.cfg.localMaxWaitMs / 1000).toFixed(1))
+    return { error: `локальная модель занята другим процессом на этом Mac дольше ${waited} с: ${lockHolder(this.cfg.localLock)}` }
   }
 
   async attempt(ctx, cand, key, path, body, clientSignal) {

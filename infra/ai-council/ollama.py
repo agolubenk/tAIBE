@@ -29,9 +29,10 @@ from dataclasses import dataclass, field
 
 DOWN_TTL = 120  # сек: после сетевого сбоя не долбим демона на каждом вызове
 # Один локальный инференс консилиума на машину: генерацию и эмбеддинги всех процессов консилиума (воркер,
-# облачные полосы воркера, контекст, планировщик) пропускает один файловый лок. Тот же машинный файл берёт шлюз
-# моделей (`infra/llm-gateway/src/machine-lock.mjs`, OPS-27). Мимо замка ходят backend продукта в docker (OPS-28),
-# роли Continue напрямую и прогрев (OPS-33), так что вместе с ними два инференса параллельно всё ещё возможны. Модельный лок
+# облачные полосы воркера, контекст, планировщик) пропускает один файловый лок. Тот же машинный файл берут шлюз
+# моделей (`infra/llm-gateway/src/machine-lock.mjs`, OPS-27), с ним — chat, edit и apply Continue, и прогрев
+# (`infra/scripts/dev-ai/ollama-locked.py`, OPS-33). Мимо замка ходят только клиенты, названные в README шлюза
+# («Мимо замка»: автокомплит и эмбеддинги, backend продукта в docker — OPS-28). Модельный лок
 # (`large_model`, машинный — OPS-29) держит только резидентность L-моделей, S-модели и эмбеддинги идут мимо него.
 # Лок — у машины, а не у хоста и не у копии кода: консилиумы всех продуктов-хостов на одном Mac делят
 # один файл, иначе два хоста дадут два инференса параллельно. Путь — в домашней папке пользователя вне
@@ -187,11 +188,12 @@ def describe_holder(h: dict | None) -> str:
 
 
 @contextmanager
-def local_inference_slot(wait_seconds: float):
-    """Эксклюзивный доступ консилиума к локальному Ollama на время одного HTTP-вызова: между процессами
-    консилиума всех хостов и со шлюзом моделей (машинный файл, OPS-27), но не с backend продукта (OPS-28) и не с
-    ролями Continue напрямую (OPS-33). Лок файловый (flock):
-    снимается и при падении процесса. Не дождались — TimeoutError, вызов не делается."""
+def local_inference_slot(wait_seconds: float, who: str = "council"):
+    """Эксклюзивный доступ к локальному Ollama на время одного HTTP-вызова: между процессами консилиума всех хостов,
+    шлюзом моделей (машинный файл, OPS-27) и скриптами прогрева и установки моделей (`who` — их отметка в файле
+    замка, `infra/scripts/dev-ai/ollama-locked.py`, OPS-33). Мимо замка — только клиенты, названные в README шлюза
+    (`infra/llm-gateway/README.md`, «Мимо замка»). Лок файловый (flock): снимается и при падении процесса.
+    Не дождались — TimeoutError, вызов не делается."""
     path = LOCAL_INFERENCE_LOCK
     deadline = time.time() + wait_seconds
     with ExitStack() as held:
@@ -199,7 +201,7 @@ def local_inference_slot(wait_seconds: float):
         handle = held.enter_context(open(path, "a+"))
         _flock_by(handle, deadline, wait_seconds, path)
         held.callback(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
-        mark_holder(handle, "council")
+        mark_holder(handle, " ".join(who.split()) or "council")   # одна строка «pid кто»
         held.callback(clear_mark, handle)    # LIFO: отметка стирается до снятия замка
         yield
 PRESSURE_CRITICAL = 4   # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
