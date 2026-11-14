@@ -191,7 +191,14 @@ def normalize(argv):
 
 
 def command_name(word):
-    """Имя команды без пути: `/opt/homebrew/bin/gh` → `gh`; zsh `=gh` (EQUALS) — путь к gh, тоже `gh`."""
+    """Имя команды без пути и в нижнем регистре: `/opt/homebrew/bin/gh` → `gh`; zsh `=gh` (EQUALS) — путь к gh. APFS
+    регистр не различает: `GIT`, `/usr/bin/Gh`, `ZSH` запускают git, gh, zsh (SE-90). На Linux такой программы нет —
+    итог не мягче ложного отказа. Встроенные команды shell регистр различают — для них exact_name."""
+    return exact_name(word).lower()
+
+
+def exact_name(word):
+    """Имя команды без пути, как написано: `CD x` — не встроенная `cd`, а /usr/bin/cd в подоболочке (папка та же)."""
     w = word.lstrip("`")
     return os.path.basename(w[1:] if w.startswith("=") and len(w) > 1 else w)
 
@@ -266,7 +273,8 @@ EXEC_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\x
 
 
 def launcher(word):
-    """Семейство оболочки или интерпретатора по имени команды (python3.12 → python); не они — None."""
+    """Семейство оболочки или интерпретатора по имени команды (python3.12 → python, `BASH` → bash); не они — None."""
+    word = command_name(word)
     if word in SHELLS:
         return "sh"
     w = re.sub(r"[\d.]+$", "", word)
