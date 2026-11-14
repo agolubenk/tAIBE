@@ -1,8 +1,10 @@
 import { eq } from "drizzle-orm";
+import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import db from "../../database";
 import { labelTable, userTable } from "../../database/schema";
 import { assertAssignableUser } from "../../utils/assert-assignable-user";
+import { refuseMarkerForTokenCaller } from "../../utils/token-caller-text";
 import { assertTaskInWorkspace } from "../task-scope";
 import type { GrantApprovalAction } from "./approval-params";
 import { grantItems } from "./grant-items";
@@ -38,6 +40,7 @@ async function assertTasks(
 // TB-102 R-10: the request fixes exactly what the server will do on «да»;
 // the same parts go into the hash (grantItems).
 export async function grantApprovalTarget(
+  c: Context,
   workspaceId: string,
   userId: string,
   action: GrantApprovalAction,
@@ -56,6 +59,13 @@ export async function grantApprovalTarget(
     if (!body.label) {
       throw new HTTPException(400, { message: "create_label needs label" });
     }
+    // TB-180: the server creates the label from these params on «да», so a
+    // marker copied from a masked read would be stored as the name (TB-144).
+    refuseMarkerForTokenCaller(
+      c,
+      body.label.name,
+      "To put a workspace label on cards, ask for attach_label with the label id (GET /label/workspace/{workspaceId} lists them).",
+    );
     const ids = await assertTasks(workspaceId, userId, body.taskIds);
     const params = { ...body.label, taskIds: ids.join(",") };
     return {

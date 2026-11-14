@@ -61,6 +61,9 @@ const requestApprovalRoute = createRoute({
     ),
     403: errorResponse("Missing permission or project access"),
     404: errorResponse("Task, tree or sector not found"),
+    409: errorResponse(
+      "A caller with a token sent a [REDACTED:…] marker in a new label name (create_label); a new value has no stored value for it",
+    ),
     410: errorResponse("The tree or sector was already felled"),
   },
 });
@@ -176,7 +179,13 @@ export const approvalRoutes = apiRouter<
               )),
             }
           : isGrantApprovalAction(body.action)
-            ? await grantApprovalTarget(workspaceId, userId, body.action, body)
+            ? await grantApprovalTarget(
+                c,
+                workspaceId,
+                userId,
+                body.action,
+                body,
+              )
             : await fellApprovalTarget(
                 c,
                 workspaceId,

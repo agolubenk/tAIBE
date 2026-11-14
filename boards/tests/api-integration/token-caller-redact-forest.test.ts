@@ -68,4 +68,30 @@ describe("API integration: sectors, felling reasons and the journal for callers 
       });
     }
   });
+
+  // TB-180: on «да» the server creates the label from the request's params,
+  // so a marker copied from a masked read would become the label's name.
+  it("refuses a create_label request with a marker in the name from an API key; the owner's request is kept", async () => {
+    const forest = await createForest();
+    const card = await addTask(forest.project.id, "card");
+    if (!card) throw new Error("fixture");
+    const ask = (call: typeof forest.agent, name: string) =>
+      call("/approvals", {
+        action: "create_label",
+        targetId: forest.workspace.id,
+        label: { name, color: "#000000" },
+        taskIds: [card.id],
+        reason: "grant",
+      });
+
+    const refused = await ask(forest.agent, `env ${MARK}`);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe("REDACTED_MARKERS_MISMATCH");
+    expect(String(refused.body.message)).toContain("attach_label");
+    const none = await forest.owner("/approvals?status=pending");
+    expect(none.body.items).toEqual([]);
+
+    expect((await ask(forest.agent, "env")).status).toBe(200);
+    expect((await ask(forest.owner, `owner ${MARK}`)).status).toBe(200);
+  });
 });

@@ -25137,6 +25137,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent a [REDACTED:…] marker in a new label name (create_label); a new value has no stored value for it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "410": {
             "description": "The tree or sector was already felled",
             "content": {
