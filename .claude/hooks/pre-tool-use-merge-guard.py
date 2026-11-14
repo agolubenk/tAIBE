@@ -21,30 +21,25 @@ import re
 import sys
 from pathlib import Path
 
-HOME_CLAUDE = Path.home() / ".claude"
-PROJECT_DIR = Path(__file__).resolve().parents[2]
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
-from merge_guard_gh import classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
+from merge_guard_gh import classify_gh, classify_http, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts, read_names,  # noqa: E402
                                 syntax_only)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
+from merge_guard_paths import interp_found, main_roots, protected_path  # noqa: E402 — защищённые файлы (SE-85)
 from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E402
 from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
                                CHANGED, comment_char_may_change, comment_char_seen, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
-                               heredoc_text, join_lines,
+                               heredoc_text, join_lines, comments_off,
                                launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
                                split_commands, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
                                comment_readings, uncommented)
 
-
-GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
-GUARDED_CLAUDE_DIRS = ("rules", "hooks")
 
 # Если разбор упал — защищённой считается команда, где есть хоть один из этих признаков.
 FALLBACK = re.compile(
@@ -55,85 +50,10 @@ FALLBACK = re.compile(
 GIT_ENV = re.compile(r"\b(GIT_CONFIG\w*|GIT_DIR|GIT_COMMON_DIR|HOME|XDG_CONFIG_HOME)=")
 
 
-# ---------- защищённые файлы ----------
-
-def main_roots(project_dir=PROJECT_DIR):
-    """Основная папка и папка, откуда сессия грузит хуки и законы (если её запустили в worktree)."""
-    s = os.path.realpath(project_dir)
-    return sorted({s.split("/worktrees/", 1)[0], s})
-
-
-def protected_path(path_str, cwd, roots):
-    if not path_str or path_str.startswith("-"):
-        return None
-    p = os.path.join(cwd, os.path.expanduser(path_str))
-    if is_lost(p):  # `cd "$X" && echo > 01-base.md`: папка может оказаться .claude/rules — по имени файла не понять
-        return f"{path_str} после cd в папку, которую разбор не видит (пишите по абсолютному пути),"
-    p = os.path.realpath(p)
-    home = os.path.realpath(HOME_CLAUDE)
-    if p == os.path.join(home, "sessions") or p.startswith(os.path.join(home, "sessions") + "/"):
-        return p
-    if p in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
-        return p
-    for root in roots:
-        claude = os.path.join(os.path.realpath(root), ".claude")
-        if os.path.dirname(p) == claude and os.path.basename(p) in GUARDED_CLAUDE_FILES:
-            return p
-        if any(p == os.path.join(claude, d) or p.startswith(os.path.join(claude, d) + "/") for d in GUARDED_CLAUDE_DIRS):
-            return p
-    return None
-
-
-INTERP_WRITE = re.compile(r"""open\([^\n]*?,\s*(mode\s*=\s*)?['"][wax][+bt]*['"]|write_text|write_bytes|writeFile|appendFile|unlink|remove\(|rename|replace\(|rmSync|rmtree""")
-# Путь собран из частей: '.claude' и защищённое имя отдельными строками (os.path.join, Path / …).
-JOINED_CLAUDE = re.compile(r"""['"]\.claude['"].{0,80}?['"](rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S)
-
-
 # ---------- решение ----------
 
 def is_interp(word):
     return launcher(word) not in (None, "sh")
-
-
-# Присваивание пути переменной (python, js, perl): `p = '.claude/settings.json'`, `const S = path.join(…)`.
-PATH_VAR = re.compile(r"\s*(?:(?:const|let|var|my|our)\s+)?\$?([A-Za-z_]\w*)\s*(?::[^=\n]*)?=(?!=)")
-READS = re.compile(r"\.read|read_text|readFile|load|open\(|glob|listdir|scandir|walk|exists|is_?file|stat\(")
-
-
-def path_vars(lines, cwd, roots):
-    """Имена переменных, которым присвоен защищённый путь (не содержимое файла: строки с чтением не берутся)."""
-    names = set()
-    for ln in lines:
-        m = PATH_VAR.match(ln)
-        if m and not READS.search(ln) and (JOINED_CLAUDE.search(ln) or any(
-                protected_path(x.group(0), cwd, roots) for x in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", ln))):
-            names.add(m.group(1))
-    return names
-
-
-def interp_found(text, cwd, roots, by_line=False):
-    """Код python/node/…: защищённая команда в subprocess и запись в защищённые файлы. by_line — скрипт с диска:
-    запись и защищённый путь ищутся в одной строке (или путь в переменной из path_vars), иначе любой скрипт, который
-    читает законы и пишет своё, — отказ."""
-    found = []
-    kind = classify_interp(["_", text], cwd)
-    if kind:
-        found.append((kind, text[:120]))
-    chunks = text.splitlines() if by_line else [text]
-    names = path_vars(chunks, cwd, roots) if by_line else set()
-    for chunk in chunks:
-        if not INTERP_WRITE.search(chunk):
-            continue
-        hit = next((n for n in names if re.search(rf"(?<![\w.]){re.escape(n)}\b", chunk)), None)
-        if hit:
-            found.append(("file", f".claude/… (путь в переменной {hit} — правьте через Edit)"))
-        for m in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", chunk):
-            p = protected_path(m.group(0), cwd, roots)
-            if p:
-                found.append(("file", p))
-        if JOINED_CLAUDE.search(chunk):
-            found.append(("file", ".claude/… (путь собран из частей — правьте через Edit)"))
-    return found
 
 
 SOURCE = {"source", "."}
@@ -164,14 +84,14 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
     скрипт `<(…)` — файлы, которые выводит команда подстановки (procs, см. proc_files). Код не виден и признака
     в команде нет — грубый признак по файлам, которые команда называет (named_found)."""
     fam = launcher(a[0])
-    mod, blind = None, False
+    mod, blind, off = None, False, False
     stdin_files = [g for f in stdin_files for g in (expand_word(f, cwd) if f else [f])]  # `bash < m.s?`
     if fam is None and a[0] not in SOURCE:  # ./x.sh — по первой строке
         scripts, interp = [exe], None
     else:
         code, stdin, first, module, end = launch_args(a) if fam else (False, False, a[1] if len(a) > 1 else None, None, 1)
         opts = a[1:end]
-        if fam == "sh" and syntax_only(opts):  # `bash -n x.sh` — только синтаксис; BASH_ENV — implied_commands
+        if fam == "sh" and syntax_only(opts, command_name(a[0]) == "zsh"):  # `bash -n x.sh` — только синтаксис; BASH_ENV — implied_commands
             return []
         if code and fam == "sh":
             return eval_code(first or "", cwd, roots, depth, git_env, whole, procs)
@@ -182,6 +102,7 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         via = (procs or {}).get(first)  # `bash <(cat x.sh)`, `source <(…)`: код — вывод команды подстановки
         # `.` и `source` без файла stdin не читают: bash отвечает «filename argument required»
         from_stdin = stdin or named_stdin or (fam is not None and not (first or mod or code))
+        off = from_stdin and comments_off(a)  # `zsh -i < y.sh`: `#` в коде со stdin — буква (SE-85)
         blind = (from_stdin and (not stdin_files or None in stdin_files)) or bool(via and None in via)
         if (blind or (from_stdin and HEREDOC in stdin_files)) and FALLBACK.search(whole[0]):  # `bash -s gh … <<EOF`
             return [(STDIN, whole[0][:120])]
@@ -207,7 +128,7 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         is_interp_script = interp if interp is not None else (
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
         try:  # разобран до ошибки — находки этой части и грубый признак по тексту скрипта: в `bash x.sh` его нет
-            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_seen(whole[3], text, whole[4][1])))
+            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_seen(whole[3], text, whole[4][1]) or off))
         except Exception:
             got, partial = [], True
         found += got
@@ -281,7 +202,7 @@ def classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk=Fa
     found, text = [], heredoc_text(body, expands)  # читателю — тело после раскрытия `\` (SE-83)
     for r in readers:
         if r[0] in SHELLS and not any(re.fullmatch(r"-[a-z]*c[a-z]*", x) for x in r[1:]):
-            found += classify_bash(text, cwd, roots, depth + 1, git_env, disk, written, outer)
+            found += classify_bash(text, cwd, roots, depth + 1, git_env, disk, written, outer, keep=comments_off(r))  # SE-85
         elif is_interp(r[0]):
             found += interp_found(text, cwd, roots)
     if expands:  # метка без кавычек: $(…) и `…` в теле shell выполнит, кто бы ни читал; `\\$(…)` — тоже: тело как есть
