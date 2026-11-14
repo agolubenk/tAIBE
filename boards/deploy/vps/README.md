@@ -167,6 +167,20 @@ changes `boards/packages/mcp` (a new tool or field), do this after it on the Mac
 `npm run mcp-hub:status` and `mcp-hub:check` warn when the source is newer than the build or the running process is
 older than the build. On 12.11 a stale build dropped `doneRef`, and no agent could request `close_task`.
 
+## SSR push-back (TB-160)
+
+The registry pushes approved versions back into the repo of their product (spec RU-9): at night, and at once after
+a rollback. Each workspace has its own repo and branch; there is no default repo. A workspace that is not listed is
+not pushed, and its versions stay served.
+
+- `SSR_PUSH_GITHUB_TOKEN` — the GitHub token. Without it push-back is off.
+- `SSR_PUSH_TARGETS=<workspaceId>=<owner>/<repo>@<branch>,…` — for example Lavaeon → `HR_Helper-v2@main`,
+  aiBoards&eval → `tAIBE@<branch>`. A malformed entry or a workspace named twice is left out, with one log line.
+- `SSR_PUSH_GITHUB_REPO` and `SSR_PUSH_GITHUB_BRANCH` (one repo for every workspace) are ignored, with a log line.
+
+`compose.yml` does not pass these variables to the app yet, and `install.sh` does not keep them in `.env`, so
+push-back is off on the server. Turning it on is an owner item: the token, the targets and the two deploy lines.
+
 ## Products
 
 `install.sh` seeds three products owned by the admin: HR Helper / Lavaeon, aiBoards&eval and Financial terminal.
