@@ -18,7 +18,8 @@ SHA — токен сразу за словом (между ними — «с у
 Ключ линзы — роль команды: N-я роль team.roles, если подпись называет «роль N» (нумерация spawn_session.sh), иначе
 роль по github.lens_roles, иначе имя линзы. Так «Линза корректности (роль 4)» и «Линза «корректность и отказы» (роль 4)»
 — одна линза backend. Предел: подпись без номера и без имени из lens_roles даёт отдельный ключ.
-Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, проверки CI не висят.
+Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, CI ok — каждая проверка
+SUCCESS, NEUTRAL или SKIPPED, или проверок нет (ci_state). Висящий, упавший или неизвестный CI кворум не собирает (SE-86).
 """
 import re
 
@@ -99,19 +100,25 @@ def on_head(sha, head):
     return bool(sha) and bool(head) and head.lower().startswith(sha.lower())
 
 
+CI_OK = ("SUCCESS", "NEUTRAL", "SKIPPED")
+CI_FAILED = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
+
+
 def ci_state(checks):
-    """checks — список статусов/выводов. pending, если что-то не завершено; failure, если есть провал; иначе ok."""
+    """checks — выводы и статусы проверок (CheckConclusionState, CheckStatusState, StatusState GitHub). failure — есть
+    провал из CI_FAILED (он окончателен, даже если другие ещё идут); ok — каждая проверка в CI_OK или проверок нет;
+    иначе pending: идёт, ждёт, REQUESTED, COMPLETED без вывода, пусто, неизвестное значение. Список разрешённых — новое
+    значение GitHub не даст ни ложного кворума, ни ложного pr.ci_failed (SE-86)."""
     states = [str(c or "").upper() for c in checks]
-    if any(s in ("PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING") for s in states):
-        return "pending"
-    if any(s in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED") for s in states):
+    if any(s in CI_FAILED for s in states):
         return "failure"
-    return "ok"
+    return "ok" if all(s in CI_OK for s in states) else "pending"
 
 
 def quorum(verdicts, head, checks, min_lenses=3):
     """verdicts — разобранные вердикты по порядку. Последний вердикт линзы на голову перекрывает её прежние.
-    Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI)."""
+    Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI). Собран — только при CI ok: проваленный
+    CI кворум не собирает (SE-86); PR без проверок — ok, как и раньше (ci_state)."""
     last = {}
     for v in verdicts:
         if v and on_head(v["sha"], head):
@@ -119,7 +126,21 @@ def quorum(verdicts, head, checks, min_lenses=3):
     approved = sorted(k for k, x in last.items() if x == "approve")
     changes = sorted(k for k, x in last.items() if x == "changes")
     ci = ci_state(checks)
-    return (len(approved) >= min_lenses and not changes and ci != "pending"), approved, changes, ci
+    return (len(approved) >= min_lenses and not changes and ci == "ok"), approved, changes, ci
+
+
+def pr_event(n, head, approved, changes, ci, min_lenses, quorum_to, author):
+    """Событие PR после разбора вердиктов: ((ключ, вид, кому, текст) или None, ждёт ли PR только CI). Линз мало или
+    есть changes — ничего. Линзы собраны: CI ok — pr.quorum в quorum_to; CI упал — pr.ci_failed автору, кворума нет
+    (SE-86); CI идёт — await_ci, PR опрашивается заново. Ключ — один на голову: журнал событие не повторяет."""
+    if len(approved) < min_lenses or changes or ci == "pending":
+        return None, len(approved) >= min_lenses and not changes
+    lenses, short = ", ".join(approved), head[:9]
+    if ci == "ok":
+        return (f"gh:quorum:{n}:{head}", "pr.quorum", quorum_to,
+                f"#{n} собран: approve {lenses} на {short}, CI ok"), False
+    return (f"gh:cifail:{n}:{head}", "pr.ci_failed", [author],
+            f"#{n}: линзы собраны ({lenses}), CI упал на {short}"), False
 
 
 def role_of_lens(lens, lens_roles, team_roles=()):
