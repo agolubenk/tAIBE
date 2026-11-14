@@ -169,6 +169,7 @@ describe("httpQueueClient status mapping (TB-110)", () => {
       tokenFile,
       tokenName: "token:t-boards",
       products: new Map([["ws1", "hr-helper"]]),
+      plan: { products: new Map([["ws1", "hr-helper"]]) },
     });
   };
   const respond = (status: number, body: unknown) => {

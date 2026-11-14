@@ -12,27 +12,54 @@ export type OwnerQueueConfig = {
   // workspace id → queue product slug; a workspace not listed gets no items,
   // only the t-boards UI.
   products: Map<string, string>;
+  plan: {
+    // workspace id → plan product: whose rows w-<product>-* its cards belong
+    // to (TB-106). Items keep the queue product: one token sees one queue
+    // product, while the plan rows of several products live in it.
+    products: Map<string, string>;
+  };
 };
+
+// «<workspaceId>=<slug>,…»; a pair with a bad slug is dropped.
+function workspacePairs(value: string | undefined): Map<string, string> {
+  const pairs = new Map<string, string>();
+  for (const pair of (value ?? "").split(",")) {
+    const [workspaceId, product] = pair.split("=").map((part) => part.trim());
+    if (workspaceId && product && /^[a-z0-9-]{1,40}$/.test(product)) {
+      pairs.set(workspaceId, product);
+    }
+  }
+  return pairs;
+}
 
 // TB-102: the owner-queue sync is off unless the URL, the token file, its
 // name and at least one workspace → product pair are set (AC-14). The token
 // comes from a file only and is read on every call, so rotation needs no
-// restart.
+// restart. OQ_PLAN_PRODUCTS (optional, TB-106) names the plan product of a
+// mapped workspace; a workspace not listed there plans under its queue
+// product.
 export function readOwnerQueueConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): OwnerQueueConfig | null {
   const url = env.OQ_URL?.trim().replace(/\/+$/, "");
   const tokenFile = env.OQ_TOKEN_FILE?.trim();
   const tokenName = env.OQ_TOKEN_NAME?.trim();
-  const products = new Map<string, string>();
-  for (const pair of (env.OQ_WORKSPACE_PRODUCTS ?? "").split(",")) {
-    const [workspaceId, product] = pair.split("=").map((part) => part.trim());
-    if (workspaceId && product && /^[a-z0-9-]{1,40}$/.test(product)) {
-      products.set(workspaceId, product);
-    }
-  }
+  const products = workspacePairs(env.OQ_WORKSPACE_PRODUCTS);
   if (!url || !tokenFile || !tokenName || products.size === 0) return null;
-  return { url, tokenFile, tokenName: journalActor(tokenName), products };
+  const planned = workspacePairs(env.OQ_PLAN_PRODUCTS);
+  const plan = new Map(
+    [...products].map(([workspaceId, product]) => [
+      workspaceId,
+      planned.get(workspaceId) ?? product,
+    ]),
+  );
+  return {
+    url,
+    tokenFile,
+    tokenName: journalActor(tokenName),
+    products,
+    plan: { products: plan },
+  };
 }
 
 // TB-111: the journal names a token's writes «token:<name>»; comparing with the
