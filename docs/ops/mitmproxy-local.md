@@ -1,7 +1,7 @@
 # mitmproxy — локальный прокси для ручной проверки досок
 
 > **Статус (2026-11-14):** ✅ скрипт `infra/scripts/security/mitmproxy-local.sh`, mitmproxy 12.3.1. Карточка TB-164
-> (TB-24 S24-1, R-075, N-006), спека — [`../specs/phase-c-stage2.md`](../specs/phase-c-stage2.md) §4. Почему не hetty —
+> (TB-24 S24-1, R-075, N-006), спека — `docs/specs/phase-c-stage2.md` §4 (PR #307). Почему не hetty —
 > [`../integrations/hetty/README.md`](../integrations/hetty/README.md), разбор инструмента —
 > [`../integrations/mitmproxy/README.md`](../integrations/mitmproxy/README.md).
 
