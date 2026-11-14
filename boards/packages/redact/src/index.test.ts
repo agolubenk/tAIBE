@@ -431,10 +431,28 @@ describe("@kaneo/redact", () => {
   // Claude lens #283 B1: a run of a key prefix that fails only at its last
   // character (one the key class does not take, but the end check does).
   // A start after every `-` or `_` of the run scanned to the end again.
-  it.each([
-    [join("xox", "b-"), "_"],
-    [join("github", "_pat_"), "-"],
-  ])(
+  // Frontend lens #283: every provider prefix with every kind of end, also
+  // for the group that may start after `_` or `-`.
+  const prefixUnits = [
+    join("xox", "b-"),
+    join("gh", "p_"),
+    join("gh", "o_a"),
+    "sk-",
+    join("github", "_pat_"),
+    join("gl", "pat-"),
+    join("AI", "za"),
+    join("AK", "IA"),
+    "tbk_",
+    join("sk", "_live_"),
+    "_",
+    "-",
+    "a",
+  ];
+  it.each(
+    prefixUnits.flatMap((unit) =>
+      ["", "_", "-", "!"].map((stop) => [unit, stop] as const),
+    ),
+  )(
     "redacts 256 000 characters of %j and a final %j in linear time",
     (unit, stop) => {
       const text = unit.repeat(Math.ceil(256_000 / unit.length)) + stop;
@@ -443,4 +461,21 @@ describe("@kaneo/redact", () => {
       expect(performance.now() - started).toBeLessThan(250);
     },
   );
+
+  it("redacts one 256 000-character key body with a failing end in linear time", () => {
+    const text = `${join("gh", "p_")}${"a".repeat(256_000)}_`;
+    const started = performance.now();
+    redact(text);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  // Frontend lens #283: a key with an alphanumeric body or a fixed length may
+  // follow `_` or `-` (masked on board-agents before B1).
+  it.each([
+    ["after a dash", "id-", secrets.ghp],
+    ["after an env-name underscore", "TOKEN_", secrets.ghp],
+    ["after an underscore", "x_", secrets.aws],
+  ])("redacts a provider key %s", (_name, before, secret) => {
+    expectSingleHit(`${before}${secret} `, "api_key", secret);
+  });
 });
