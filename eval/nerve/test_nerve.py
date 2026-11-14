@@ -481,6 +481,12 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         self.assertTrue(self.ctx.state["github"]["prs"]["481"]["await_ci"])
         self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+        idle = FakeGh([_pr(481, head)], comments={481: three}, ci={481: "IN_PROGRESS"})
+        sources.run = idle
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([c[:3] for c in idle.calls if c[:2] != ["gh", "pr"] or c[2] != "list"],
+                         [["gh", "pr", "view"]], "CI идёт: только статус проверок, комментарии не читаются (#292: 54 КБ)")
+        self.assertTrue(self.ctx.state["github"]["prs"]["481"]["await_ci"])
         fake = FakeGh([_pr(481, head)], comments={481: three})
         sources.run = fake
         gh_source.poll_github(self.ctx)
@@ -504,6 +510,29 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual(len(st["prs"]), 26)
         self.assertNotIn("backfill", st)
         self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], ["#26 открыт: PR 26"])
+
+    def test_pr_opened_during_a_restart_gap_says_open(self):
+        """SE-120: граница догона — самое позднее updated известных PR, а не старт нового процесса. PR, открытый
+        в паузе перезапуска, получает «открыт»; давний PR, впервые увиденный новым кодом, — нет."""
+        known = self._known(1)
+        known["1"]["updated"] = "2026-11-05T00:00:00Z"
+        self.ctx.state["github"] = {"rev": 2, "prs": known}
+        sources.run = FakeGh([_pr(1, "a" * 40, "2026-11-05T00:00:00Z"),
+                              _pr(2, "b" * 40, created="2026-11-05T00:05:00Z"),
+                              _pr(3, "c" * 40, created="2026-11-04T10:00:00Z")])
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], ["#2 открыт: PR 2"])
+        self.assertEqual(sorted(self.ctx.state["github"]["prs"]), ["1", "2", "3"])
+
+    def test_backfill_boundary_ignores_bad_dates_and_the_future(self):
+        p = lambda u: {"updated": u}  # noqa: E731
+        since = gh_source._backfill_since
+        self.assertEqual(since({"1": p("2026-11-04T10:00:00Z"), "2": p("2026-11-05T00:00:00Z"), "3": p("x"),
+                                "4": p("")}), "2026-11-05T00:00:00Z")
+        now = since({})
+        self.assertRegex(now, gh_source.ISO_RE)
+        self.assertLess(since({"1": p("2999-01-01T00:00:00Z")}), "2999", "не позже текущего момента")
+        self.assertEqual(since({"1": p("x")})[:4], now[:4], "нет дат — сейчас, как до SE-120")
 
 
 class LimitActionTest(unittest.TestCase):

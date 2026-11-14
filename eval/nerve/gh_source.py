@@ -5,6 +5,7 @@
 точка подмены в тестах.
 """
 import json
+import re
 from datetime import datetime, timezone
 
 import quorum
@@ -14,6 +15,7 @@ from journal import DIGEST, NERVOUS
 GH_LIMIT = 1000        # не больше 1000 открытых PR за проход
 GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title"
 GH_NEW_PER_PASS = 20   # новых для Нерва PR за проход: догон не задерживает очередь владельца на минуты
+ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 def _gh_list(repo):
@@ -51,6 +53,7 @@ def _gh_view(repo, n):
 # rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. При первом проходе
 # нового кода etag сбрасывается: полный список разбирает их заново.
 # rev 3: все страницы списка. PR, созданные до перехода, впервые увиденные Нервом, — догон: без «открыт».
+# Граница перехода — самое позднее updated известных PR (SE-120), см. _backfill_since.
 GH_STATE_REV = 3
 
 
@@ -72,12 +75,32 @@ def _gh_closed(ctx, repo, known, open_now, fails):
         del known[n]
 
 
+def _backfill_since(known):
+    """Граница догона при смене ревизии — самое позднее updated известных PR, не позже текущего момента; без них —
+    сейчас. Старый процесс видел список не раньше этого updated: PR, открытый в паузе перезапуска, создан позже и
+    получает «открыт», а давний PR, впервые увиденный новым кодом, — нет. Раньше граница была стартом нового
+    процесса, и PR из паузы шёл молча (SE-120)."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    seen = [u for u in (p.get("updated") or "" for p in known.values()) if ISO_RE.match(u)]
+    return min(max(seen), now) if seen else now
+
+
+def _recheck_ci(ctx, n, p):
+    """PR ждёт только CI: сначала статус проверок, комментарии — когда CI доехал. Пока CI идёт, комментарии не
+    читаются: у большого PR это десятки КБ за проход (#292 — 54 КБ). Новый вердикт меняет updated PR — его разбирает
+    основной путь прохода."""
+    _, checks, _, _, _ = _gh_view(ctx.cfg["github"]["repo"], n)
+    p["checks"] = checks
+    if quorum.ci_state(checks) != "pending":
+        _check_pr(ctx, n, p, p["head"])
+
+
 def poll_github(ctx):
     g = ctx.cfg["github"]
     st = ctx.state.setdefault("github", {"prs": {}})
     if st.get("rev") != GH_STATE_REV:
         st["rev"] = GH_STATE_REV
-        st["backfill"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        st["backfill"] = _backfill_since(st["prs"])
     st.pop("etag", None)   # etag REST-страницы (rev 1–3); у gh pr list его нет — SE-119
     prs = _gh_list(g["repo"])
     known = st["prs"]
@@ -98,7 +121,7 @@ def poll_github(ctx):
                 # CI доезжает, не меняя PR: кворум, ждущий только CI, перепроверяется каждый проход. Раньше — только
                 # на ответе 304, а его почти не было (etag менял каждый push). Сбой — повтор: await_ci не снят.
                 try:
-                    _check_pr(ctx, n, p, p["head"], refresh=True)
+                    _recheck_ci(ctx, n, p)
                 except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
                     fails.append(f"#{n}: {e}")
             continue
@@ -127,11 +150,11 @@ def _raise_fails(fails):
         raise RuntimeError(f"PR с ошибкой: {len(fails)}; " + "; ".join(fails))
 
 
-def _check_pr(ctx, n, p, head, refresh=False):
+def _check_pr(ctx, n, p, head):
     g = ctx.cfg["github"]
     head_changed = p["head"] != head
     comments = _gh_comments(g["repo"], n)
-    if head_changed or refresh or "author" not in p:
+    if head_changed or "author" not in p:
         files, checks, _, _, _ = _gh_view(g["repo"], n)
         p["author"] = quorum.author_role(files, g["path_roles"])
         p["checks"] = checks
