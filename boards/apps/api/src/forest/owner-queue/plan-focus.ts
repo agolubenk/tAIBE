@@ -1,9 +1,5 @@
 import { rankRows } from "./plan-eta";
-import {
-  focusItemData,
-  focusItemId,
-  type ItemFocus,
-} from "./plan-focus-item";
+import { focusItemData, focusItemId, type ItemFocus } from "./plan-focus-item";
 import { INPUT_MS, inputsRowId, type Named } from "./plan-inputs";
 import { refreshOffPlan } from "./plan-off-plan";
 import {

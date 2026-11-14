@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  type FocusDoc,
-  focusPlan,
-  readFocus,
-  revertedDoc,
-} from "./plan-focus";
+import { type FocusDoc, focusPlan, readFocus, revertedDoc } from "./plan-focus";
 import { type ItemFocus, readItemFocus } from "./plan-focus-item";
 import type { Named } from "./plan-inputs";
 import type { BoardCard, PlanRow, RecentCard } from "./plan-types";
@@ -243,7 +238,12 @@ describe("readItemFocus (TB-107)", () => {
       named: named([["APP-2", T1]]),
     });
     if ("missing" in result || !result.item) throw new Error("no item");
-    return { id: result.item.id, data: result.item.data, version: 1, updatedAt: 0 };
+    return {
+      id: result.item.id,
+      data: result.item.data,
+      version: 1,
+      updatedAt: 0,
+    };
   };
 
   it("reads the order the item offered", () => {
@@ -258,11 +258,17 @@ describe("readItemFocus (TB-107)", () => {
     const item = offered();
     expect(readItemFocus(item, "taibe")).toBeNull();
     expect(
-      readItemFocus({ ...item, data: { ...item.data, source: "agent" } }, "hr-helper"),
+      readItemFocus(
+        { ...item, data: { ...item.data, source: "agent" } },
+        "hr-helper",
+      ),
     ).toBeNull();
     expect(
       readItemFocus(
-        { ...item, data: { ...item.data, focus: { rows: [1], prev: [], keys: [] } } },
+        {
+          ...item,
+          data: { ...item.data, focus: { rows: [1], prev: [], keys: [] } },
+        },
         "hr-helper",
       ),
     ).toBeNull();
@@ -298,9 +304,9 @@ describe("after «вернуть» (TB-107)", () => {
   });
 
   it("keeps an order changed since, and restores nothing without the item's order", () => {
-    expect(revertedDoc({ ...doc, rows: ["w-n-b"] }, day, offered, own).rows).toEqual(
-      ["w-n-b"],
-    );
+    expect(
+      revertedDoc({ ...doc, rows: ["w-n-b"] }, day, offered, own).rows,
+    ).toEqual(["w-n-b"]);
     const closed = revertedDoc(doc, day, null, own);
     expect(closed.rows).toEqual(offered.rows);
     expect(closed.day?.applied).toBe(true);
