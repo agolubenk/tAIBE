@@ -167,6 +167,17 @@ CASES = {
                   ('ScheduleWakeup', {'delaySeconds': 3300, 'reason': 'x', 'prompt': 'x'}),
                   ('ScheduleWakeup', {'stop': True}), bash('sleep 3600; echo "timeout_ms": 3600000')],
     },
+    # SE-49: 14.11 — 143 open PRs, 110 full-list calls in 3 days (45 sessions) saw 30.
+    'gh-list-limit': {
+        'fire': [bash('gh pr list --state open --json number,title'), bash('gh pr list -R o/r --json number'),
+                 bash('gh issue list'), bash('gh run list --json status'),
+                 bash('x=$(gh pr list --state all --json number)'), bash('gh pr list --state open | wc -l'),
+                 bash("gh pr list --json number --jq '.[] | .number'"), bash('gh --repo o/r pr list')],
+        'quiet': [bash('gh pr list --limit 500 --state open'), bash('gh pr list -L 50'), bash('gh pr list -L50'),
+                  bash('gh pr list --limit=500'), bash('gh pr list --head fix/a --state all --json number'),
+                  bash('gh pr list --search "SE-92 in:title" --state all'), bash('gh run list -w eval-ci.yml'),
+                  bash('gh pr view 12'), bash('echo "gh pr list"'), bash('grep -rn "gh pr list" eval')],
+    },
 }
 
 
