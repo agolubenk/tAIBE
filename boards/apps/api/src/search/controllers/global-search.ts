@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import db from "../../database";
 import {
   activityTable,
@@ -10,8 +10,11 @@ import {
 } from "../../database/schema";
 import { canAccessProject } from "../../project-access/can-access-project";
 import { projectAccessCondition } from "../../project-access/project-access-condition";
-import { escapeLikePattern } from "../like-pattern";
+import { isMarkerQuery } from "../../utils/visible-match";
 import { TASK_SHORT_ID_PATTERN } from "../task-short-id";
+import { getActivitySearchContent } from "./activity-content";
+import { findTaskByShortId } from "./short-id-task";
+import { searchWindow } from "./visible-rows";
 
 type SearchParams = {
   query: string;
@@ -27,6 +30,8 @@ type SearchParams = {
   workspaceId?: string;
   projectId?: string;
   limit?: number;
+  /** A caller with a token reads masked text: matches count only in it (TB-191). */
+  tokenCaller?: boolean;
 };
 
 type SearchResult = {
@@ -49,55 +54,6 @@ type SearchResult = {
   status?: string;
 };
 
-function toDisplayCase(value: string) {
-  return value
-    .replace(/[-_]/g, " ")
-    .split(" ")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function getActivitySearchContent(
-  type: string,
-  content: string | null,
-  eventData: unknown,
-) {
-  if (content) return content;
-  if (!eventData || typeof eventData !== "object" || Array.isArray(eventData)) {
-    return undefined;
-  }
-
-  const data = eventData as Record<string, unknown>;
-
-  switch (type) {
-    case "status_changed":
-      return `changed status from ${toDisplayCase(String(data.oldStatus ?? ""))} to ${toDisplayCase(String(data.newStatus ?? ""))}`;
-    case "priority_changed":
-      return `changed priority from ${toDisplayCase(String(data.oldPriority ?? ""))} to ${toDisplayCase(String(data.newPriority ?? ""))}`;
-    case "unassigned":
-      return "unassigned the task";
-    case "assignee_changed":
-      return data.isSelfAssigned
-        ? "assigned the task to themselves"
-        : `assigned the task to ${String(data.newAssignee ?? "someone")}`;
-    case "due_date_changed":
-      if (!data.newDueDate) {
-        return "cleared the due date";
-      }
-      if (!data.oldDueDate) {
-        return `set due date to ${String(data.newDueDate)}`;
-      }
-      return `changed due date from ${String(data.oldDueDate)} to ${String(data.newDueDate)}`;
-    case "title_changed":
-      return `changed title from "${String(data.oldTitle ?? "")}" to "${String(data.newTitle ?? "")}"`;
-    case "task":
-      return "created the task";
-    default:
-      return undefined;
-  }
-}
-
 async function globalSearch(params: SearchParams): Promise<{
   results: SearchResult[];
   totalCount: number;
@@ -111,7 +67,15 @@ async function globalSearch(params: SearchParams): Promise<{
     workspaceId,
     projectId,
     limit = 20,
+    tokenCaller = false,
   } = params;
+
+  if (tokenCaller && isMarkerQuery(query)) {
+    return { results: [], totalCount: 0, searchQuery: query };
+  }
+  // TB-191: a caller with a token gets the newest candidates, scored again
+  // on the text it reads; the owner keeps the SQL ranking.
+  const { rows, order, budget, pick } = searchWindow(tokenCaller, query, limit);
 
   let resolvedUserId = userId;
   if (!resolvedUserId && userEmail) {
@@ -176,43 +140,12 @@ async function globalSearch(params: SearchParams): Promise<{
       const slug = shortIdMatch[1];
       const taskNumber = shortIdNumber;
 
-      const shortIdTasks = await db
-        .select({
-          id: taskTable.id,
-          title: taskTable.title,
-          description: taskTable.description,
-          projectId: taskTable.projectId,
-          projectName: projectTable.name,
-          projectSlug: projectTable.slug,
-          workspaceId: projectTable.workspaceId,
-          workspaceName: workspaceTable.name,
-          userId: taskTable.userId,
-          userName: userTable.name,
-          createdAt: taskTable.createdAt,
-          taskNumber: taskTable.number,
-          priority: taskTable.priority,
-          status: taskTable.status,
-        })
-        .from(taskTable)
-        .leftJoin(projectTable, eq(taskTable.projectId, projectTable.id))
-        .leftJoin(
-          workspaceTable,
-          eq(projectTable.workspaceId, workspaceTable.id),
-        )
-        .leftJoin(userTable, eq(taskTable.userId, userTable.id))
-        .where(
-          and(
-            workspaceFilter,
-            projectId ? eq(taskTable.projectId, projectId) : undefined,
-            // A project key may hold `_`, which `ilike` reads as "any one
-            // character", so `DE_-23` would also match a task in `DEP` and the
-            // `limit(1)` below would pick whichever came back first. Escaping
-            // keeps the case-insensitive comparison and drops the wildcards.
-            ilike(projectTable.slug, escapeLikePattern(slug)),
-            eq(taskTable.number, taskNumber),
-          ),
-        )
-        .limit(1);
+      const shortIdTasks = await findTaskByShortId(
+        slug,
+        taskNumber,
+        workspaceFilter,
+        projectId,
+      );
 
       for (const task of shortIdTasks) {
         seenTaskIds.add(task.id);
@@ -246,11 +179,15 @@ async function globalSearch(params: SearchParams): Promise<{
       END
     `;
 
+    const tasksFit = budget(taskTable.createdAt, [
+      taskTable.title,
+      taskTable.description,
+    ]);
     const taskQuery = db
       .select({
         id: taskTable.id,
         title: taskTable.title,
-        description: taskTable.description,
+        description: tasksFit.text<string>(taskTable.description),
         projectId: taskTable.projectId,
         projectName: projectTable.name,
         projectSlug: projectTable.slug,
@@ -263,6 +200,7 @@ async function globalSearch(params: SearchParams): Promise<{
         priority: taskTable.priority,
         status: taskTable.status,
         relevanceScore: taskRelevanceScore.as("relevanceScore"),
+        fits: tasksFit.fits,
       })
       .from(taskTable)
       .leftJoin(projectTable, eq(taskTable.projectId, projectTable.id))
@@ -278,12 +216,15 @@ async function globalSearch(params: SearchParams): Promise<{
           ),
         ),
       )
-      .orderBy(desc(taskRelevanceScore), desc(taskTable.createdAt))
-      .limit(limit);
+      .orderBy(...order(taskRelevanceScore, taskTable.createdAt))
+      .limit(rows);
 
     const tasks = await taskQuery;
 
-    for (const task of tasks) {
+    for (const task of pick(tasks, (t) => [
+      [t.title, 3],
+      [t.description, 2],
+    ])) {
       if (seenTaskIds.has(task.id)) continue;
       results.push({
         id: task.id,
@@ -315,16 +256,21 @@ async function globalSearch(params: SearchParams): Promise<{
       END
     `;
 
+    const projectsFit = budget(projectTable.createdAt, [
+      projectTable.name,
+      projectTable.description,
+    ]);
     const projectQuery = db
       .select({
         id: projectTable.id,
         name: projectTable.name,
-        description: projectTable.description,
+        description: projectsFit.text<string>(projectTable.description),
         slug: projectTable.slug,
         workspaceId: projectTable.workspaceId,
         workspaceName: workspaceTable.name,
         createdAt: projectTable.createdAt,
         relevanceScore: projectRelevanceScore.as("relevanceScore"),
+        fits: projectsFit.fits,
       })
       .from(projectTable)
       .leftJoin(workspaceTable, eq(projectTable.workspaceId, workspaceTable.id))
@@ -337,12 +283,15 @@ async function globalSearch(params: SearchParams): Promise<{
           ),
         ),
       )
-      .orderBy(desc(projectRelevanceScore), desc(projectTable.createdAt))
-      .limit(limit);
+      .orderBy(...order(projectRelevanceScore, projectTable.createdAt))
+      .limit(rows);
 
     const projects = await projectQuery;
 
-    for (const project of projects) {
+    for (const project of pick(projects, (p) => [
+      [p.name, 3],
+      [p.description, 2],
+    ])) {
       results.push({
         id: project.id,
         type: "project",
@@ -367,13 +316,18 @@ async function globalSearch(params: SearchParams): Promise<{
       END
     `;
 
+    const workspacesFit = budget(workspaceTable.createdAt, [
+      workspaceTable.name,
+      workspaceTable.description,
+    ]);
     const workspaceQuery = db
       .select({
         id: workspaceTable.id,
         name: workspaceTable.name,
-        description: workspaceTable.description,
+        description: workspacesFit.text<string>(workspaceTable.description),
         createdAt: workspaceTable.createdAt,
         relevanceScore: workspaceRelevanceScore.as("relevanceScore"),
+        fits: workspacesFit.fits,
       })
       .from(workspaceTable)
       .leftJoin(
@@ -389,12 +343,15 @@ async function globalSearch(params: SearchParams): Promise<{
           ),
         ),
       )
-      .orderBy(desc(workspaceRelevanceScore), desc(workspaceTable.createdAt))
-      .limit(limit);
+      .orderBy(...order(workspaceRelevanceScore, workspaceTable.createdAt))
+      .limit(rows);
 
     const workspaces = await workspaceQuery;
 
-    for (const workspace of workspaces) {
+    for (const workspace of pick(workspaces, (w) => [
+      [w.name, 3],
+      [w.description, 2],
+    ])) {
       results.push({
         id: workspace.id,
         type: "workspace",
@@ -418,12 +375,16 @@ async function globalSearch(params: SearchParams): Promise<{
       END
     `;
 
+    const activitiesFit = budget(activityTable.createdAt, [
+      searchableActivityText,
+      taskTable.title,
+    ]);
     const activityQuery = db
       .select({
         id: activityTable.id,
         type: activityTable.type,
-        content: activityTable.content,
-        eventData: activityTable.eventData,
+        content: activitiesFit.text<string>(activityTable.content),
+        eventData: activitiesFit.text<unknown>(activityTable.eventData),
         taskId: activityTable.taskId,
         taskTitle: taskTable.title,
         taskNumber: taskTable.number,
@@ -435,7 +396,9 @@ async function globalSearch(params: SearchParams): Promise<{
         userId: activityTable.userId,
         userName: userTable.name,
         createdAt: activityTable.createdAt,
+        searchText: activitiesFit.text<string>(searchableActivityText),
         relevanceScore: activityRelevanceScore.as("relevanceScore"),
+        fits: activitiesFit.fits,
       })
       .from(activityTable)
       .leftJoin(taskTable, eq(activityTable.taskId, taskTable.id))
@@ -453,12 +416,15 @@ async function globalSearch(params: SearchParams): Promise<{
           type === "comments" ? eq(activityTable.type, "comment") : undefined,
         ),
       )
-      .orderBy(desc(activityRelevanceScore), desc(activityTable.createdAt))
-      .limit(limit);
+      .orderBy(...order(activityRelevanceScore, activityTable.createdAt))
+      .limit(rows);
 
     const activities = await activityQuery;
 
-    for (const activity of activities) {
+    for (const activity of pick(activities, (a) => [
+      [a.searchText, 2],
+      [a.taskTitle, 1],
+    ])) {
       const isComment = activity.type === "comment";
       const activityContent = getActivitySearchContent(
         activity.type,

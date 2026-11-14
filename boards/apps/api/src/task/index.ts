@@ -67,6 +67,7 @@ import updateTaskStatus from "./controllers/update-task-status";
 import updateTaskTitle from "./controllers/update-task-title";
 import {
   getDeferredDescriptionMatches,
+  getVisibleDeferredDescriptionMatches,
   getDescriptionPage,
   getMaskedDescriptionPage,
 } from "./description-pages";
@@ -786,6 +787,8 @@ const descriptionMatchesRoute = createRoute({
   path: "/description-matches/{projectId}",
   tags: ["Tasks"],
   summary: "Search descriptions omitted from task lists",
+  description:
+    "Follow `nextCursor` as `after` until it is null. A caller with an API key reads descriptions with secrets masked, so a match counts only outside a secret and a query with `[REDACTED:` finds nothing; its pages are windows of omitted descriptions, so a page can have no `ids` and still have a `nextCursor`.",
   middleware: [workspaceAccess.fromProject("projectId")] as const,
   request: { params: projectIdParam, query: descriptionMatchesQuery },
   responses: {
@@ -812,11 +815,11 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
     return c.json(
       maskForTokenCaller(
         c,
-        await getDeferredDescriptionMatches(
-          c.req.valid("param").projectId,
-          query,
-          after,
-        ),
+        await (
+          isTokenCaller(c)
+            ? getVisibleDeferredDescriptionMatches
+            : getDeferredDescriptionMatches
+        )(c.req.valid("param").projectId, query, after),
       ),
       200,
     );
