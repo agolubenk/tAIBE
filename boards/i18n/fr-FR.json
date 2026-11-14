@@ -1261,7 +1261,19 @@
 			"titleOptional": "Titre (optionnel)",
 			"url": "URL",
 			"remove": "Supprimer {{title}}",
-			"removeError": "Échec de la suppression du lien de la ressource."
+			"removeError": "Échec de la suppression du lien de la ressource.",
+			"review": {
+				"done": "Review done {{time}}",
+				"errorAppMissing": "The GitHub App is not installed for this repository.",
+				"errorFork": "Reviews run only for PRs from the repository.",
+				"errorGeneric": "Failed to request a review.",
+				"errorNotPullRequest": "This link is not a pull request.",
+				"errorRunning": "A review is already running.",
+				"forkOnly": "Only PRs from the repository",
+				"request": "Request a review of {{title}}",
+				"requestHint": "Request a review",
+				"running": "Review running"
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Rôles",

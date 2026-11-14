@@ -2197,7 +2197,19 @@
 			"adding": "Adding...",
 			"empty": "No resources linked to this task.",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "Request a review of {{title}}",
+				"requestHint": "Request a review",
+				"running": "Review running",
+				"done": "Review done {{time}}",
+				"forkOnly": "Only PRs from the repository",
+				"errorRunning": "A review is already running.",
+				"errorFork": "Reviews run only for PRs from the repository.",
+				"errorNotPullRequest": "This link is not a pull request.",
+				"errorAppMissing": "The GitHub App is not installed for this repository.",
+				"errorGeneric": "Failed to request a review."
+			}
 		},
 		"security": "Security",
 		"securityPage": {

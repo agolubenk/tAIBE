@@ -1507,7 +1507,19 @@
 			"titleOptional": "标题（可选）",
 			"url": "URL",
 			"remove": "移除 {{title}}",
-			"removeError": "移除资源链接失败。"
+			"removeError": "移除资源链接失败。",
+			"review": {
+				"done": "Review done {{time}}",
+				"errorAppMissing": "The GitHub App is not installed for this repository.",
+				"errorFork": "Reviews run only for PRs from the repository.",
+				"errorGeneric": "Failed to request a review.",
+				"errorNotPullRequest": "This link is not a pull request.",
+				"errorRunning": "A review is already running.",
+				"forkOnly": "Only PRs from the repository",
+				"request": "Request a review of {{title}}",
+				"requestHint": "Request a review",
+				"running": "Review running"
+			}
 		},
 		"customFields": {
 			"createError": "创建自定义字段失败。",

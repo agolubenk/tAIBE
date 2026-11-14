@@ -1277,7 +1277,19 @@
 			"titleOptional": "Название (необязательно)",
 			"url": "URL",
 			"remove": "Удалить {{title}}",
-			"removeError": "Не удалось удалить ссылку на ресурс."
+			"removeError": "Не удалось удалить ссылку на ресурс.",
+			"review": {
+				"request": "Запросить ревью: {{title}}",
+				"requestHint": "Запросить ревью",
+				"running": "Ревью идёт",
+				"done": "Ревью готово {{time}}",
+				"forkOnly": "Только PR из репозитория",
+				"errorRunning": "Ревью уже идёт.",
+				"errorFork": "Ревью идёт только для PR из репозитория.",
+				"errorNotPullRequest": "Эта ссылка — не PR.",
+				"errorAppMissing": "GitHub App не установлено для этого репозитория.",
+				"errorGeneric": "Не удалось запросить ревью."
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Роли",
