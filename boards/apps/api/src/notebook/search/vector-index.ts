@@ -62,7 +62,10 @@ export async function loadVectorIndex(
     .select({ id: notebookChunkTable.id })
     .from(notebookChunkTable)
     .where(scope)
-    .orderBy(desc(notebookChunkTable.embeddedAt), desc(notebookChunkTable.id))
+    .orderBy(
+      sql`${notebookChunkTable.embeddedAt} desc nulls last`,
+      desc(notebookChunkTable.id),
+    )
     .limit(rowsMax);
   const rows = await db
     .select({
@@ -74,7 +77,9 @@ export async function loadVectorIndex(
       state.count > rowsMax
         ? and(scope, inArray(notebookChunkTable.id, newest))
         : scope,
-    );
+    )
+    // Vectors saved between the count and this read stay within the budget.
+    .limit(rowsMax);
   if (state.count > rowsMax) {
     console.warn(
       `Notebook vector index of workspace ${workspaceId} holds the newest ${rowsMax} of ${state.count} chunks; older ones are found by words only`,
