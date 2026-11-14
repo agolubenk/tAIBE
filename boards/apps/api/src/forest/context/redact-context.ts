@@ -7,6 +7,11 @@ import { redact } from "@kaneo/redact";
 const clean = (text: string) => redact(text).text;
 const cleanNullable = (text: string | null) =>
   text === null ? null : clean(text);
+// jsonb columns are typed, not checked: a value that is not a string passes
+// as it is, so one odd row cannot turn the pack into a 500 (redact throws on
+// a non-string).
+const cleanJson = <T>(value: T): T =>
+  typeof value === "string" ? (clean(value) as T) : value;
 
 export function redactContextTask<
   T extends { title: string; description: string | null; labels: string[] },
@@ -34,8 +39,8 @@ export function redactContextMeta<
     report: cleanNullable(meta.report),
     executor: cleanNullable(meta.executor),
     branch: cleanNullable(meta.branch),
-    pullRequests: meta.pullRequests.map(clean),
-    files: meta.files.map(clean),
+    pullRequests: meta.pullRequests.map(cleanJson),
+    files: meta.files.map(cleanJson),
     contextPack: cleanNullable(meta.contextPack),
   };
 }
@@ -51,7 +56,10 @@ export function redactContextApproval<
       params === null
         ? null
         : Object.fromEntries(
-            Object.entries(params).map(([key, value]) => [key, clean(value)]),
+            Object.entries(params).map(([key, value]) => [
+              key,
+              cleanJson(value),
+            ]),
           ),
   };
 }
