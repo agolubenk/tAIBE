@@ -1,7 +1,7 @@
 {
   "slug": "taibe",
   "title": "aiBoards&eval (tAIBE)",
-  "active": false,
+  "active": true,
   "repo_root": "/Users/agolubenko/Desktop/Development/tAIBE",
   "product_tree": "eval",
   "team": {
