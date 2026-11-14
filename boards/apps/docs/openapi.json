@@ -29068,7 +29068,7 @@
           "SSR"
         ],
         "summary": "Serve a version's files by entity name and kind",
-        "description": "The MCP tools resolve names this way: kind narrows the lookup (skill, rule, agent, genome, prompt, nerve, config, product-prompt).",
+        "description": "The MCP tools resolve names this way: kind narrows the lookup (skill, rule, agent, genome, prompt, nerve, config, product-prompt, template).",
         "parameters": [
           {
             "schema": {

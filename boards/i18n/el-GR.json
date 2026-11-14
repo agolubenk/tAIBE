@@ -4125,6 +4125,17 @@
 			"diffFrom": "from",
 			"empty": "Nothing synced yet.",
 			"loadError": "Failed to load SSR data.",
+			"kind": {
+				"skill": "Skill",
+				"rule": "Rule",
+				"agent": "Agent",
+				"genome": "Genome",
+				"prompt": "Prompt",
+				"nerve": "Nerve config",
+				"config": "Council config",
+				"product-prompt": "Product prompt",
+				"template": "Template"
+			},
 			"approveMatching": {
 				"button": "Approve matching ({{matching}})",
 				"buttonPartial": "Approve {{batch}} of {{matching}}",

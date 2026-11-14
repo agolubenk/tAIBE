@@ -302,7 +302,7 @@ const contentByNameRoute = createRoute({
   tags: ["SSR"],
   summary: "Serve a version's files by entity name and kind",
   description:
-    "The MCP tools resolve names this way: kind narrows the lookup (skill, rule, agent, genome, prompt, nerve, config, product-prompt).",
+    "The MCP tools resolve names this way: kind narrows the lookup (skill, rule, agent, genome, prompt, nerve, config, product-prompt, template).",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ workspace: ["read"] }),

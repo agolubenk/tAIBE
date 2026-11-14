@@ -13,6 +13,14 @@ const versionField = z
 
 const idField = z.string().trim().min(1);
 
+const contentPath = (
+  workspaceId: string,
+  name: string,
+  kind: string,
+  version: string | undefined,
+) =>
+  `/api/ssr/${encodeURIComponent(workspaceId)}/entities/by-name/${encodeURIComponent(name)}/content?kind=${encodeURIComponent(kind)}${version ? `&version=${encodeURIComponent(version)}` : ""}`;
+
 function artifactTool(
   registerTool: RegisterTool,
   client: ToolClient,
@@ -34,10 +42,9 @@ function artifactTool(
     },
     ({ workspaceId, name, version }) =>
       run(() =>
-        client.json(
-          `/api/ssr/${encodeURIComponent(workspaceId)}/entities/by-name/${encodeURIComponent(name)}/content?kind=${encodeURIComponent(kind)}${version ? `&version=${encodeURIComponent(version)}` : ""}`,
-          { method: "GET" },
-        ),
+        client.json(contentPath(workspaceId, name, kind, version), {
+          method: "GET",
+        }),
       ),
   );
 }
@@ -62,18 +69,39 @@ export function registerSsrTools(
     "rule",
     "Serve a rule file from the SSR registry at a chosen version (latest by default, '-1' or an explicit number).",
   );
-  artifactTool(
-    registerTool,
-    client,
+  // Task-folder templates (TB-163) ride on get_prompt: one optional field
+  // instead of one more tool in every session's tool list.
+  registerTool(
     "get_prompt",
-    "prompt",
-    "Serve a prompt file from the SSR registry at a chosen version (latest by default, '-1' or an explicit number). Covers launch prompts, lenses and role prompts.",
+    {
+      description:
+        "Serve a prompt file from the SSR registry at a chosen version (latest by default, '-1' or an explicit number). Covers launch prompts, lenses and role prompts; kind 'template' serves a task-folder template (brief, review, cloud-question).",
+      inputSchema: z.object({
+        workspaceId: idField,
+        name: idField.describe(
+          "Entity name: the prompt's path under prompts/, or the template's file name without the extension.",
+        ),
+        version: versionField,
+        kind: z
+          .enum(["prompt", "template"])
+          .optional()
+          .describe(
+            "'template' for a task-folder template; 'prompt' by default.",
+          ),
+      }),
+    },
+    ({ workspaceId, name, version, kind }) =>
+      run(() =>
+        client.json(contentPath(workspaceId, name, kind ?? "prompt", version), {
+          method: "GET",
+        }),
+      ),
   );
   registerTool(
     "ssr_list",
     {
       description:
-        "List SSR registry entities (skills, rules, agents, genomes, prompts, nerve configs, ai-council config, product prompts) with their latest version and status. Use it to discover names before get_skill/get_rule/get_prompt.",
+        "List SSR registry entities (skills, rules, agents, genomes, prompts, nerve configs, ai-council config, product prompts, templates) with their latest version and status. Use it to discover names before get_skill/get_rule/get_prompt.",
       inputSchema: z.object({ workspaceId: idField }),
     },
     ({ workspaceId }) =>

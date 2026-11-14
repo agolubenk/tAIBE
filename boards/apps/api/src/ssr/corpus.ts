@@ -9,7 +9,8 @@ export type SsrKind =
   | "prompt"
   | "nerve"
   | "config"
-  | "product-prompt";
+  | "product-prompt"
+  | "template";
 
 type Matcher = {
   kind: SsrKind;
@@ -63,6 +64,13 @@ const CORPUS: Matcher[] = [
       path
         .replace("apps/backend/src/modules/ai/", "")
         .replace(/\.(ts|md)$/, ""),
+  },
+  // R-060 (TB-163): task-folder templates (.ai/templates/brief.md …), read by
+  // name without the extension.
+  {
+    kind: "template",
+    pattern: /^\.ai\/templates\/[^/]+$/,
+    name: (path) => baseName(path).replace(/\.[^.]+$/, ""),
   },
 ];
 

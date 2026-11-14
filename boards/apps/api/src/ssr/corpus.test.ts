@@ -24,6 +24,19 @@ describe("ssr corpus", () => {
     expect(isCorpusPath("eval/data/run.jsonl")).toBe(false);
   });
 
+  it("takes task-folder templates by file name without the extension (TB-163)", () => {
+    for (const file of ["brief", "review", "cloud-question"]) {
+      expect(entityOfPath(`.ai/templates/${file}.md`)).toEqual({
+        kind: "template",
+        name: file,
+        path: `.ai/templates/${file}.md`,
+      });
+    }
+    // Live task folders and nested files stay out of the registry.
+    expect(isCorpusPath(".ai/task/tb-163/brief.md")).toBe(false);
+    expect(isCorpusPath(".ai/templates/old/brief.md")).toBe(false);
+  });
+
   it("folds a skill's files into its folder entity", () => {
     expect(entityOfPath(".claude/skills/grill-task/protocol.md")).toEqual({
       kind: "skill",
