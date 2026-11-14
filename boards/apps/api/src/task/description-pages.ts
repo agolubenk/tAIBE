@@ -137,7 +137,9 @@ export async function getDeferredDescriptionMatches(
 // only outside secrets. The page is a window of deferred rows by id, cut by
 // row count and stored size, never by matches: so the cursor does not show
 // where a match inside a secret was. A page can hold no ids and still have a
-// cursor. Only rows whose stored text holds the query are loaded and masked.
+// cursor. The query is searched only in the rows of the page (boards cost
+// lens #350: the window has up to 101 rows, a page of 1 MiB at most 15), and
+// only rows whose stored text holds it are loaded and masked.
 export async function getVisibleDeferredDescriptionMatches(
   projectId: string,
   query: string,
@@ -149,7 +151,6 @@ export async function getVisibleDeferredDescriptionMatches(
       .select({
         id: taskTable.id,
         bytes: sql<number>`octet_length(${taskTable.description})`,
-        holdsQuery: sql<boolean>`strpos(lower(${taskTable.description}), lower(${query})) > 0`,
       })
       .from(taskTable)
       .where(
@@ -162,14 +163,19 @@ export async function getVisibleDeferredDescriptionMatches(
       .orderBy(asc(taskTable.id))
       .limit(DESCRIPTION_MATCH_PAGE_SIZE + 1);
     const page = maskedMatchPage(window, DESCRIPTION_MATCH_PAGE_SIZE);
-    const candidates = page
-      .filter((row) => row.holdsQuery)
-      .map((row) => row.id);
-    const texts = candidates.length
+    const texts = page.length
       ? await tx
           .select({ id: taskTable.id, description: taskTable.description })
           .from(taskTable)
-          .where(inArray(taskTable.id, candidates))
+          .where(
+            and(
+              inArray(
+                taskTable.id,
+                page.map((row) => row.id),
+              ),
+              sql`strpos(lower(${taskTable.description}), lower(${query})) > 0`,
+            ),
+          )
       : [];
     const visible = new Set(
       texts

@@ -112,4 +112,45 @@ describe("API integration: search for callers with a token (TB-191)", () => {
       [longHidden.id, longVisible.id].sort(),
     );
   });
+
+  it("pages omitted descriptions for an API key the same with and without a hidden match", async () => {
+    const forest = await createForest();
+    const { project } = await createProjectFixture({
+      workspaceId: forest.workspace.id,
+      slug: "PGS",
+    });
+    // 17 descriptions of 70 KiB: a page of 1 MiB holds 14 of them.
+    const big = "x ".repeat(35 * 1024);
+    for (let number = 1; number <= 17; number++) {
+      await db.insert(schema.taskTable).values({
+        projectId: project.id,
+        title: `Big ${number}`,
+        description: number % 4 === 0 ? `${big} ${SECRET}` : big,
+        status: "to-do",
+        number,
+        userId: forest.ownerId,
+      });
+    }
+    const walk = async (query: string) => {
+      const pages: Matches[] = [];
+      let after: string | null = null;
+      do {
+        const params = new URLSearchParams({ query });
+        if (after) params.set("after", after);
+        const res = await forest.agentApi(
+          "GET",
+          `/task/description-matches/${project.id}?${params}`,
+        );
+        expect(res.status).toBe(200);
+        const page = res.body as Matches;
+        pages.push(page);
+        after = page.nextCursor;
+      } while (after && pages.length < 5);
+      return pages;
+    };
+
+    const hidden = await walk(PART);
+    expect(hidden).toEqual(await walk("no such text"));
+    expect(hidden.map((page) => page.ids)).toEqual([[], []]);
+  });
 });
