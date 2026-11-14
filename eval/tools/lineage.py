@@ -38,7 +38,7 @@ from pathlib import Path
 Proc = namedtuple("Proc", "pid ppid pgid tty start command")
 LINE_RE = re.compile(r"^r(\.[a-z0-9]+)*$")
 LINE_ARG_RE = re.compile(r"Линия: (r(?:\.[a-z0-9]+)+)")  # в первом сообщении, которое пишет spawn_session.sh
-LAUNCHER_RE = re.compile(r"/claude-spawn\.[A-Za-z0-9]+/[a-z]+\.sh(\s|$)")  # пусковой скрипт spawn_session.sh
+LAUNCHER_RE = re.compile(r"/claude-spawn\.[A-Za-z0-9]+/[a-z]+(?:-[2-9])?\.sh(\s|$)")  # пусковой скрипт spawn_session.sh
 SHELLS = {"login", "zsh", "bash", "sh", "fish", "tcsh", "csh"}
 TERM_WAIT = 10          # с между TERM и KILL
 TAP_WAIT = 180          # с на взвод Monitor наследника (nerve.py tap <роль>)
