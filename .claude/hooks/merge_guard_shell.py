@@ -15,6 +15,7 @@ from merge_guard_files import open_regular
 from merge_guard_vars import (ASSIGN, SHELL_WORDS, SUBST, dir_vars, expand_vars, note_vars, substitute,  # noqa: F401
                               words)  # dir_vars, expand_vars, note_vars, substitute — отсюда для хука
 from merge_guard_expand import NAMES_MAX, brace_words  # раскрытия до запуска
+from merge_guard_heredoc import cut_heredocs, heredoc_text, join_lines  # noqa: F401 — и для хука (SE-83)
 
 PROC = SUBST + "P"  # на месте <(…) и =(…): PROC + номер в списке подстановок — файл с выводом этой команды
 SUBST_AT = re.compile(rf"{SUBST}C(\d+)x")  # на месте $(…) и `…`: SUBST, C, номер в списке подстановок, x (subst_code)
@@ -25,7 +26,6 @@ WRAPPERS = {"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "
             "noglob", "nocorrect", "-", "parallel", "watch", "stdbuf", "unbuffer", "chronic", "arch"}  # `-`, nocorrect — zsh
 WRAPPER_VALUE_FLAGS = {"-I", "-n", "-P", "-L", "-d", "-E", "-s", "-u", "-g", "-C", "-k"}
 SHELLS = {"bash", "sh", "zsh", "dash"}
-HEREDOC = re.compile(r"<<-?\s*\\?(['\"]?)(\w+)\1([^\n]*)\n(.*?)\n[ \t]*\2[ \t]*(?=\n|$)", re.S)  # `<<\EOF` = `<<'EOF'`
 # `$(…)`, которая печатает текущую ветку: на её место — CURRENT, остальные подстановки в цели push — «не видно куда».
 CURRENT_BRANCH = re.compile(r"\s*git\s+(branch\s+--show-current|rev-parse\s+--abbrev-ref\s+HEAD"
                             r"|symbolic-ref\s+(-q\s+)?--short(\s+-q)?\s+HEAD)\s*")
@@ -35,38 +35,6 @@ PWD_CMD = re.compile(r"\s*pwd(\s+-[LP])?\s*")  # `$(pwd)`, `` `pwd` `` — па�
 def is_lost(path):
     """Путь от папки, которую разбор не видит (LOST): что там лежит, не прочесть."""
     return path == LOST or path.startswith(LOST + "/")
-
-
-def cut_heredocs(cmd):
-    """Тела heredoc — отдельно: [(читатели, тело, раскрывает ли shell `$(…)` в теле)].
-    Читатели — argv команды с `<<` и команд после `|` в той же строке (`cat <<EOF | bash`)."""
-    bodies = []
-
-    def repl(m):
-        line = cmd[cmd.rfind("\n", 0, m.start()) + 1:m.start()]
-        heads = [re.split(r"[;&|(]", line)[-1]] + m.group(3).split("|")[1:]
-        readers = [a for a in (normalize(words(h)) for h in heads) if a]
-        bodies.append((readers, m.group(4), not m.group(1)))
-        return f"<< {m.group(2)}{m.group(3)}\n"
-
-    return HEREDOC.sub(repl, cmd), bodies
-
-
-HEREDOC_ESCAPE = re.compile(r"\\([$`\\\n])")
-JOIN = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
-
-
-def heredoc_text(body, expands):
-    """Что получит читатель heredoc (SE-83). Метка без кавычек — shell раскрыл в теле `\\$`, `` \\` ``, `\\\\` и снял
-    `\\`+перевод строки: `g\\\\`⏎`h` придёт как `g\\`⏎`h`, и bash-читатель склеит слово `gh`. С кавычками — тело как есть."""
-    return HEREDOC_ESCAPE.sub(lambda m: "" if m.group(1) == "\n" else m.group(1), body) if expands else body
-
-
-def join_lines(text):
-    """Склейка строк для грубого признака (SE-83): нечётная серия `\\` перед переводом строки теряет последнюю `\\` и
-    перевод строки, без пробела; чётная — нет. Кавычек и комментариев не различает: лишняя склейка меняет лишь текст
-    строки или комментария, признак от неё только виднее."""
-    return JOIN.sub(r"\1", text)
 
 
 def _subst_end(cmd, i):
@@ -389,11 +357,13 @@ def proc_files(body, cwd):
 
 
 def uncommented(text):
-    """Shell-текст для грубого признака: без комментариев (strip_comments, force), тела heredoc — как есть: для
-    `python3 <<EOF` в них `#` — не комментарий shell. Текст может сменить знак комментария — комментарии остаются (SE-77)."""
+    """Shell-текст для грубого признака: без комментариев (strip_comments, force), тела heredoc — как их получит читатель
+    (heredoc_text, join_lines; SE-83): для `python3 <<EOF` в них `#` — не комментарий shell. Текст может сменить знак
+    комментария — комментарии остаются (SE-77)."""
     try:
         cmd, bodies = cut_heredocs(text)
-        return "\n".join([cmd if comment_char_may_change(text) else strip_comments(cmd, force=True)] + [b for _, b, _ in bodies])
+        return "\n".join([cmd if comment_char_may_change(text) else strip_comments(cmd, force=True)] +
+                         [join_lines(heredoc_text(b, e)) for _, b, e in bodies])
     except Exception:
         return text
 
