@@ -12,7 +12,8 @@
 линзу, и агент запускал её снова. Теперь:
 
 * вызов — не больше `--attempts` попыток по `--attempt-timeout` с (330: дольше обрыва Z.AI, чтобы пришёл
-  его 502, а не локальный таймаут — тот ставит маркер сбоя провайдера на 5 мин);
+  его 502, а не локальный таймаут — тот ставит маркер сбоя провайдера на 5 мин). У `--backend opencode` попытка
+  одна, её умолчание — `opencode_client.ATTEMPT_TIMEOUT` (OPS-53: opencode отвечает дольше 330 с);
 * линза с `"split": true` (по умолчанию — корректность) идёт частями по файлам: ядро отдельно от тестов и UI,
   часть не больше `--chunk-chars` символов; сгенерированное (lock-файлы, снапшоты) не отправляется ни одной линзе;
 * квота подписки, лимит бюджета, ошибка конфигурации или недоступная сеть — ревью останавливается сразу;
@@ -63,6 +64,7 @@ SYSTEM = (
     '"scenario":"...","fix":"..."}],"checked":["..."]}'
 )
 BODY_CHARS = 5000
+GLM_ATTEMPT_TIMEOUT = 330  # дольше обрыва Z.AI (~300 с): приходит его 502, а не локальный таймаут
 EXIT_OK, EXIT_START, EXIT_NOT_PASSED, EXIT_LIMIT = 0, 1, 2, 3
 
 # ── дифф → части ─────────────────────────────────────────────────────────────
@@ -389,7 +391,8 @@ def _parse_args(argv):
     ap.add_argument("lenses", nargs="?", default="", help="JSON-файл линз; пусто — линзы по умолчанию")
     ap.add_argument("max_tokens", nargs="?", type=int, default=6000)
     ap.add_argument("--attempts", type=int, default=2, help="попыток на вызов (5xx, перегрузка)")
-    ap.add_argument("--attempt-timeout", type=int, default=330, help="секунд на попытку")
+    ap.add_argument("--attempt-timeout", type=int, default=0,
+                    help="секунд на попытку; 0 — по рецензенту: glm 330, opencode — opencode_client.ATTEMPT_TIMEOUT")
     ap.add_argument("--chunk-chars", type=int, default=24000, help="размер части для линз с делением")
     ap.add_argument("--deadline-min", type=float, default=45.0, help="потолок на всё ревью")
     ap.add_argument("--breaker", type=int, default=2, help="ответов 5xx подряд в линзе — её остаток не идёт")
@@ -402,6 +405,9 @@ def _parse_args(argv):
     args = ap.parse_args(argv)
     args.model = args.model or ("glm-5" if args.backend == "glm"
                                 else os.environ.get("OPENCODE_REVIEW_MODEL", "opencode-go/glm-5.3"))
+    if args.attempt_timeout <= 0:  # 330 — под обрыв Z.AI; opencode отвечает дольше (OPS-53)
+        from opencode_client import ATTEMPT_TIMEOUT
+        args.attempt_timeout = GLM_ATTEMPT_TIMEOUT if args.backend == "glm" else ATTEMPT_TIMEOUT
     return args
 
 

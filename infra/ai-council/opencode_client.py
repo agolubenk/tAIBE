@@ -38,6 +38,10 @@ from pathlib import Path
 STATE_DIR = Path(os.environ.get("REVIEW_CHAIN_STATE", "~/.local/state/taibe/review-chain")).expanduser()
 MEMGUARD_STATE = Path(os.environ.get("MEMGUARD_STATE", "~/.claude/memguard/state.json")).expanduser()
 MEMGUARD_OK = ("ok", "warn", "")
+# Попытка и ожидание замка, с (OPS-53). Замер 14.11, opencode-go/glm-5.3, линза «корректность» на весь дифф:
+# 13,5 тыс. симв. — 466 с, 26,7 тыс. — 480 с, 44,3 тыс. — 374 с (13.11: 92–218 с и два 504 на 330 с). Время от размера
+# диффа почти не зависит; 720 — полтора максимума. Больше — дольше держится машинный замок при зависшем вызове.
+ATTEMPT_TIMEOUT = 720
 # Исчерпание подписки — стоп звена; 429 и «too many requests» — временный отказ апстрима (повтор, предохранитель).
 QUOTA_RE = re.compile(r"usage limit|limit (reached|exceeded)|quota|allowance|billing|exceeded your|\b402\b|"
                       r"insufficient (balance|credit|funds|quota)", re.I)
@@ -82,7 +86,7 @@ def classify_stderr(code: int, err: str) -> str:
 
 
 class OpencodeClient:
-    def __init__(self, binary: str = "opencode", agent: str = "taibe-review", timeout: int = 330,
+    def __init__(self, binary: str = "opencode", agent: str = "taibe-review", timeout: int = ATTEMPT_TIMEOUT,
                  lock_path: Path | None = None, runner=subprocess.Popen, clock=time.monotonic, killer=None):
         self.binary = binary
         self.agent = agent
