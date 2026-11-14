@@ -9,6 +9,9 @@ usage: peer_turns.py [--hours 60] [--until "YYYY-MM-DD HH:MM"] [--projects DIR] 
 (уведомление монитора с «НЕРВ»), истёкший срок монитора, прочий монитор и фон, человек, сжатие, прочее.
 Ответ владельца — событие `owner.answer` журнала Нерва (ключ `oq:answer:<id>:<время ответа>`); прочитан — первый
 вход любой сессии (текст, результат инструмента, вставка) с этим id после ответа.
+Маршрут: дошёл ли ответ до адресата — сессии, чей тап (`nerve.py tap <роль> [--product <slug>]`) слушает роль и
+продукт из события. Пауза лимита (`limit.hit` → `limit.resume`): тап придерживает `owner.answer` до конца паузы
+(`nerve.py` cmd_tap, `tap.pass_in_pause`), поэтому отдельный счёт — опоздание, отсчитанное от конца паузы.
 
 Только чтение: журналы сессий `<projects>/*/*.jsonl` (без папки наблюдателя claude-mem) и журналы Нерва
 `<nerve>/journal.jsonl`, `<nerve>/products/*/journal.jsonl`. Вывод — только числа и доли: ни текста сообщений,
@@ -26,6 +29,9 @@ from datetime import datetime, timedelta, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECTS = os.path.expanduser("~/.claude/projects")
 NERVE = os.path.join(HERE, "..", "nerve", "state")
+SHARED = os.path.join(HERE, "..", "..", "instances", "_shared.json")  # default_product: его журнал — без папки
+TAP = re.compile(r"nerve\.py tap ([a-z0-9][a-z0-9_-]*)(?:\s+--product\s+([a-z0-9-]+))?")
+ENV_PRODUCT = re.compile(r"TAIBE_PRODUCT=([a-z0-9-]+)")
 SKIP_DIRS = ("claude-mem-observer",)  # служебные сессии наблюдателя памяти — не ходы команды
 KINDS = ("пир", "нерв", "монитор истёк", "монитор", "человек", "сжатие", "прочее")  # истёк — срок Monitor, перевзвод
 LATE = timedelta(minutes=15)
@@ -85,35 +91,79 @@ def team_of(text):
     return "Т3" if "т3" in low else "Т2" if "ключ реестра" in low else "прочие"
 
 
-def owner_answers(nerve, since, until):
-    """{id пункта: время ответа} для ответов владельца в окне."""
-    out = {}
+def journals(nerve):
+    """(продукт, путь) журналов Нерва; продукт по умолчанию — пустая строка."""
     products = glob.glob(os.path.join(nerve, "products", "*", "journal.jsonl"))
-    for path in [os.path.join(nerve, "journal.jsonl")] + products:
-        try:
-            lines = open(path, encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        with lines:
-            for line in lines:
-                if '"owner.answer"' not in line:
-                    continue
+    return [("", os.path.join(nerve, "journal.jsonl"))] + [(os.path.basename(os.path.dirname(p)), p) for p in products]
+
+
+def records(path, marker):
+    try:
+        lines = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    with lines:
+        for line in lines:
+            if marker in line:
                 try:
-                    parts = str(json.loads(line).get("key", "")).split(":", 3)
+                    yield json.loads(line)
                 except ValueError:
                     continue
-                at = parse_ts(parts[3]) if len(parts) == 4 and parts[0] == "oq" else None
-                if at and since <= at <= until:
-                    out[parts[2]] = min(at, out.get(parts[2], at))
+
+
+def owner_answers(nerve, since, until):
+    """{id пункта: {at — время ответа, ts — запись в журнал, product, to}} для ответов владельца в окне."""
+    out = {}
+    for product, path in journals(nerve):
+        for o in records(path, '"owner.answer"'):
+            parts = str(o.get("key", "")).split(":", 3)
+            at = parse_ts(parts[3]) if len(parts) == 4 and parts[0] == "oq" else None
+            if at and since <= at <= until and (parts[2] not in out or at < out[parts[2]]["at"]):
+                out[parts[2]] = {"at": at, "ts": parse_ts(o.get("ts", "")) or at, "product": product,
+                                 "to": set(o.get("to") or [])}
     return out
 
 
-def scan(path, since, until, rx, answers, seen, stats):
-    """Один проход по журналу сессии: ходы и вставки по причинам, первое прочтение ответов владельца."""
+def pauses(nerve, until):
+    """[(начало, конец)] пауз лимита: `limit.hit` → `limit.resume`; незакрытая — до конца окна."""
+    marks = sorted((parse_ts(o.get("ts", "")), o.get("kind")) for _, path in journals(nerve)
+                   for o in records(path, '"limit.') if o.get("kind") in ("limit.hit", "limit.resume")
+                   and parse_ts(o.get("ts", "")))
+    out, start = [], None
+    for t, kind in marks:
+        if kind == "limit.hit" and start is None:
+            start = t
+        elif kind == "limit.resume" and start is not None:
+            out.append((start, t))
+            start = None
+    return out + ([(start, until)] if start else [])
+
+
+def tap_of(line, default):
+    """(роль, продукт) тапа из команды в строке журнала сессии; продукт по умолчанию — пустая строка."""
+    m = TAP.search(line)
+    if not m:
+        return None
+    env = ENV_PRODUCT.search(line)
+    product = m.group(2) or (env.group(1) if env else "")
+    return m.group(1), "" if product == default else product
+
+
+def first(seen, key, t):
+    if key not in seen or t < seen[key]:
+        seen[key] = t
+
+
+def scan(path, since, until, rx, answers, seen, stats, routed, default=""):
+    """Один проход по журналу сессии: ходы и вставки по причинам, первое прочтение ответов владельца — любой сессией
+    (`seen`) и адресатом (`routed`: тап сессии слушает роль и продукт события)."""
     team, turns, inserts = None, collections.Counter(), collections.Counter()
+    taps, reads = collections.Counter(), {}
     with open(path, encoding="utf-8", errors="replace") as lines:
         for line in lines:
             is_user, is_insert = '"user"' in line, '"queued_command"' in line  # без пробелов в JSON не полагаться
+            if "nerve.py tap" in line and '"tool_use"' in line:
+                taps.update([tap_of(line, default)] if tap_of(line, default) else [])
             if not (is_user or is_insert):
                 continue
             hits = set(rx.findall(line)) if rx else set()
@@ -125,8 +175,8 @@ def scan(path, since, until, rx, answers, seen, stats):
                 continue
             t = parse_ts(o.get("timestamp", ""))
             for h in hits:
-                if t and t >= answers[h] and (h not in seen or t < seen[h]):
-                    seen[h] = t
+                if t and t >= answers[h]["at"]:
+                    first(reads, h, t)
             if team is None and o.get("type") == "user" and "human" in (origin(o), o.get("turnOrigin")):
                 team = team_of(user_text(o))
             if not t or not since <= t <= until:
@@ -136,6 +186,11 @@ def scan(path, since, until, rx, answers, seen, stats):
                 inserts[input_kind(None, str(a.get("prompt") or ""))] += 1
             elif kind:
                 turns[kind] += 1
+    tap = taps.most_common(1)[0][0] if taps else None  # роль сессии — тап, который она взводит чаще всего
+    for h, t in reads.items():
+        first(seen, h, t)
+        if tap and tap[0] in answers[h]["to"] and tap[1] == answers[h]["product"]:
+            first(routed, h, t)
     team = team or "прочие"
     stats.setdefault(team, {"turns": collections.Counter(), "inserts": collections.Counter()})
     stats[team]["turns"].update(turns)
@@ -146,7 +201,22 @@ def share(part, whole):
     return round(part / whole, 3) if whole else 0.0
 
 
-def summary(stats, answers, seen, until):
+def in_pause(start, end, gaps):
+    """Сколько из [start, end] пришлось на паузы лимита. Пересечение, а не «ответ внутри паузы»: `limit.hit` пишется
+    на проход Нерва позже, чем аккаунт встал, и ответ за минуту до записи тоже придержан."""
+    return sum((min(end, b) - max(start, a) for a, b in gaps if min(end, b) > max(start, a)), timedelta())
+
+
+def routing(due, seen, routed, gaps, until):
+    wait = {i: (seen.get(i, until) - a["at"], in_pause(a["at"], seen.get(i, until), gaps)) for i, a in due.items()}
+    late = [i for i, a in due.items() if i not in seen or wait[i][0] > LATE]
+    return {"прочитано_адресатом": sum(1 for i in due if i in routed),
+            "первым_прочёл_адресат": sum(1 for i in due if i in routed and routed[i] == seen.get(i)),
+            "опоздали_в_паузе_лимита": sum(1 for i in late if wait[i][1]),
+            "дольше_15_мин_без_паузы": sum(1 for i in late if wait[i][0] - wait[i][1] > LATE)}
+
+
+def summary(stats, answers, seen, until, routed=None, gaps=()):
     teams = {}
     for team, s in sorted(stats.items()):
         n = sum(s["turns"].values())
@@ -154,28 +224,37 @@ def summary(stats, answers, seen, until):
                        "доля_пир": share(s["turns"]["пир"], n),
                        "доля_пир_и_нерв": share(s["turns"]["пир"] + s["turns"]["нерв"], n),
                        "вставок_пир": s["inserts"]["пир"], "вставок_нерв": s["inserts"]["нерв"]}
-    due = {i: at for i, at in answers.items() if at + LATE <= until}  # моложе 15 мин — опоздать ещё не мог
-    lags = sorted((seen[i] - at).total_seconds() / 60 for i, at in due.items() if i in seen)
-    late = sum(1 for i, at in due.items() if i not in seen or seen[i] - at > LATE)
+    due = {i: a for i, a in answers.items() if a["at"] + LATE <= until}  # моложе 15 мин — опоздать ещё не мог
+    lags = sorted((seen[i] - a["at"]).total_seconds() / 60 for i, a in due.items() if i in seen)
+    late = sum(1 for i, a in due.items() if i not in seen or seen[i] - a["at"] > LATE)
     return {"команды": teams, "ответы_владельца": {
         "в_окне": len(answers), "к_сроку": len(due), "без_прочтения_дольше_15_мин": late,
         "не_прочитано": sum(1 for i in due if i not in seen),
         "медиана_мин": round(lags[len(lags) // 2], 1) if lags else None,
-        "p90_мин": round(lags[int(len(lags) * 0.9)], 1) if lags else None}}
+        "p90_мин": round(lags[int(len(lags) * 0.9)], 1) if lags else None,
+        **routing(due, seen, routed or {}, gaps, until)}}
 
 
-def run(projects, nerve, since, until):
+def default_product(shared=SHARED):
+    try:
+        with open(shared, encoding="utf-8") as f:
+            return str(json.load(f).get("default_product") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def run(projects, nerve, since, until, default=""):
     answers = owner_answers(nerve, since, until)
     rx = re.compile(r"(?<![\w-])(" + "|".join(re.escape(i) for i in sorted(answers, key=len, reverse=True)) +
                     r")(?![\w-])") if answers else None
-    seen, stats = {}, {}
+    seen, stats, routed = {}, {}, {}
     for path in glob.glob(os.path.join(projects, "*", "*.jsonl")):
         if any(s in os.path.basename(os.path.dirname(path)) for s in SKIP_DIRS):
             continue
         if datetime.fromtimestamp(os.path.getmtime(path), timezone.utc) < since:
             continue
-        scan(path, since, until, rx, answers, seen, stats)
-    return summary(stats, answers, seen, until)
+        scan(path, since, until, rx, answers, seen, stats, routed, default)
+    return summary(stats, answers, seen, until, routed, pauses(nerve, until))
 
 
 def render(res, since, until):
@@ -190,6 +269,9 @@ def render(res, since, until):
     out.append(f"Ответы владельца: в окне {a['в_окне']}, к сроку {a['к_сроку']}; без прочтения дольше 15 мин "
                f"{a['без_прочтения_дольше_15_мин']} (не прочитано {a['не_прочитано']}); до прочтения медиана "
                f"{a['медиана_мин']} мин, p90 {a['p90_мин']} мин (цель — 0 дольше 15 мин)")
+    out.append(f"Маршрут: прочитано адресатом {a['прочитано_адресатом']} из {a['к_сроку']} (первым прочёл адресат "
+               f"{a['первым_прочёл_адресат']}); из опоздавших в паузе лимита {a['опоздали_в_паузе_лимита']}; "
+               f"дольше 15 мин без учёта паузы {a['дольше_15_мин_без_паузы']}")
     return "\n".join(out)
 
 
@@ -199,11 +281,12 @@ def main(argv=None):
     p.add_argument("--until", help="YYYY-MM-DD HH:MM, местное время; по умолчанию — сейчас")
     p.add_argument("--projects", default=PROJECTS)
     p.add_argument("--nerve", default=NERVE)
+    p.add_argument("--shared", default=SHARED, help="instances/_shared.json — продукт по умолчанию")
     p.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
     until = datetime.strptime(a.until, "%Y-%m-%d %H:%M").astimezone() if a.until else datetime.now(timezone.utc)
     since = until - timedelta(hours=a.hours)
-    res = run(a.projects, a.nerve, since, until)
+    res = run(a.projects, a.nerve, since, until, default_product(a.shared))
     print(json.dumps(res, ensure_ascii=False, indent=1) if a.json else render(res, since, until))
     return 0
 

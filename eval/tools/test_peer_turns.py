@@ -142,6 +142,61 @@ class OwnerAnswers(Base):
         self.assertEqual((a["в_окне"], a["медиана_мин"]), (0, None))
 
 
+def tap(t, command):
+    return {"type": "assistant", "timestamp": iso(t), "message": {"content": [
+        {"type": "tool_use", "name": "Monitor", "input": {"command": command}}]}}
+
+
+def limit(kind, t):
+    return json.dumps({"seq": "1", "ts": iso(t), "key": f"{kind}:{iso(t)}", "kind": kind, "to": ["coord"],
+                       "text": SECRET})
+
+
+class Routing(Base):
+    """x1–x3 — главному журналу, адресат boards; s1 — сессия boards (тап без продукта)."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("p-tAIBE/s1.jsonl", [tap(T0 - timedelta(minutes=29), "python3 -I eval/nerve/nerve.py tap boards")]
+                   + session())
+
+    def add(self, rel, command, *reads):
+        """Сессия с тапом `command`, которая читает id в заданные минуты после T0."""
+        self.write(rel, [tap(T0 - timedelta(minutes=20), command)] + [
+            turn(T0 + timedelta(minutes=m), "task_notification", note(f"НЕРВ owner.answer: {i}")) for i, m in reads])
+
+    def test_reader_role_and_product(self):
+        self.add("p-other/s3.jsonl", "TAIBE_PRODUCT=hr-helper python3 nerve.py tap coord", ("d-taibe-x1", 2))
+        self.add("p-other/s4.jsonl", "python3 nerve.py tap boards --product taibe", ("d-taibe-x3", 25))
+        a = PT.run(self.projects, self.nerve, SINCE, UNTIL, default="hr-helper")["ответы_владельца"]
+        self.assertEqual(a["прочитано_адресатом"], 2, "x3 прочла boards другого продукта — не адресат")
+        self.assertEqual(a["первым_прочёл_адресат"], 1, "x1 первой прочла coord")
+        self.assertEqual(a["без_прочтения_дольше_15_мин"], 2, "x2 через 30 мин, x3 через 25 мин")
+        self.assertEqual(a["опоздали_в_паузе_лимита"], 0)
+
+    def test_limit_pause_counts_from_its_end(self):
+        with open(os.path.join(self.nerve, "journal.jsonl"), "a") as f:
+            f.write(limit("limit.hit", T0 - timedelta(minutes=1)) + "\n" +
+                    limit("limit.resume", T0 + timedelta(minutes=20)) + "\n")
+        a = self.run_pt()["ответы_владельца"]
+        self.assertEqual(a["без_прочтения_дольше_15_мин"], 2, "счёт приёмки паузу не вычитает")
+        self.assertEqual(a["опоздали_в_паузе_лимита"], 2)
+        self.assertEqual(a["дольше_15_мин_без_паузы"], 1, "x2 — 10 мин без паузы; x3 не прочитан — 100 мин")
+
+    def test_open_pause_runs_to_window_end(self):
+        with open(os.path.join(self.nerve, "journal.jsonl"), "a") as f:
+            f.write(limit("limit.hit", T0 - timedelta(minutes=1)) + "\n")
+        a = self.run_pt()["ответы_владельца"]
+        self.assertEqual((a["опоздали_в_паузе_лимита"], a["дольше_15_мин_без_паузы"]), (2, 0),
+                         "пауза ещё идёт — время без паузы 0")
+
+    def test_tap_of(self):
+        self.assertEqual(PT.tap_of('"command":"nerve.py tap boards --product taibe"', "hr-helper"),
+                         ("boards", "taibe"))
+        self.assertEqual(PT.tap_of("nerve.py tap coord --product hr-helper", "hr-helper"), ("coord", ""))
+        self.assertIsNone(PT.tap_of("nerve.py tap --product taibe boards", ""), "флаг — не роль")
+
+
 class Privacy(Base):
     def digest(self):
         h = hashlib.sha256()
