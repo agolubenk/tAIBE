@@ -403,6 +403,18 @@ describe("API integration: label, field and link routes for callers with a token
     expect(dropOne.status).toBe(409);
     expect(dropOne.body.code).toBe(MISMATCH);
     expect(await value(keys.id)).toBe(JSON.stringify([SECRET, SECRET_2]));
+
+    // A field of another project is not found; its options are not compared.
+    const { project: other } = await createProjectFixture({
+      workspaceId: forest.workspace.id,
+      slug: "OTH",
+    });
+    const foreign = await addField(other.id, {
+      name: "Env",
+      type: "dropdown",
+      options: [SECRET, SECRET_2],
+    });
+    expect((await put(foreign.id, MARK)).status).toBe(404);
   });
 
   it("masks notifications, task relations, trees and a card's place for an API key", async () => {

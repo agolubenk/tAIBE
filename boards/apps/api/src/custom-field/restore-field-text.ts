@@ -5,6 +5,7 @@ import db from "../database";
 import {
   customFieldDefinitionTable,
   customFieldValueTable,
+  taskTable,
 } from "../database/schema";
 import {
   isTokenCaller,
@@ -33,6 +34,13 @@ export async function restoreFieldValue(
       value: customFieldValueTable.value,
     })
     .from(customFieldDefinitionTable)
+    .innerJoin(
+      taskTable,
+      and(
+        eq(taskTable.id, taskId),
+        eq(taskTable.projectId, customFieldDefinitionTable.projectId),
+      ),
+    )
     .leftJoin(
       customFieldValueTable,
       and(
@@ -42,8 +50,10 @@ export async function restoreFieldValue(
     )
     .where(eq(customFieldDefinitionTable.id, fieldId))
     .limit(1);
+  // No field of the task's project: setCustomFieldValue answers 404 first.
+  if (!row) return value;
   // TB-178: a choice value names options, which the caller reads masked too.
-  if (row && isChoiceType(row.type) && Array.isArray(row.options)) {
+  if (isChoiceType(row.type) && Array.isArray(row.options)) {
     return restoreChoiceValue(
       value,
       row.type,
@@ -51,7 +61,7 @@ export async function restoreFieldValue(
       row.value,
     );
   }
-  return restoreForTokenCaller(c, value, async () => row?.value);
+  return restoreForTokenCaller(c, value, async () => row.value);
 }
 
 type StoredField = {
