@@ -45,7 +45,9 @@ const named = (
   ({
     keys: new Map(keys),
     rows: new Map(rows),
-    byProduct: new Map(byProduct.map(([product, own]) => [product, new Map(own)])),
+    byProduct: new Map(
+      byProduct.map(([product, own]) => [product, new Map(own)]),
+    ),
   }) satisfies Named;
 const focusDoc = (data: FocusDoc): QueueDoc => ({
   id: "focus-hr-helper",
@@ -121,7 +123,9 @@ describe("focusPlan (TB-107)", () => {
 
   it("takes a key of two products only for the product of the owner's item (OPS, IDEA)", () => {
     const rows = ROWS.map((one) =>
-      one.id === "w-n-a" ? { ...one, data: { ...one.data, cards: [entry("OPS-67")] } } : one,
+      one.id === "w-n-a"
+        ? { ...one, data: { ...one.data, cards: [entry("OPS-67")] } }
+        : one,
     );
     const cards = [
       card("OPS-67"),
@@ -136,10 +140,13 @@ describe("focusPlan (TB-107)", () => {
         rows: result.focus?.data.rows ?? [],
       };
     };
-    // On a d-taibe-… item: the tAIBE card; the HR row with OPS-67 stays.
-    expect(step(named([["OPS-67", T1]], [], [["taibe", [["OPS-67", T1]]]]))).toEqual({
+    // On a d-taibe-… item: the tAIBE card; the HR row with OPS-67 stays
+    // behind the inputs row.
+    expect(
+      step(named([["OPS-67", T1]], [], [["taibe", [["OPS-67", T1]]]])),
+    ).toEqual({
       inputs: [],
-      rows: [],
+      rows: ["w-n-inputs"],
     });
     // In the inbox: no product, skipped; a key of one product counts.
     expect(
@@ -150,8 +157,17 @@ describe("focusPlan (TB-107)", () => {
         ]),
       ),
     ).toEqual({ inputs: ["APP-9"], rows: ["w-n-inputs"] });
+    // No row holds OPS-67: the HR card does not enter the HR inputs row.
+    const loose = plan({
+      cards,
+      named: named([["OPS-67", T1]], [], [["taibe", [["OPS-67", T1]]]]),
+    });
+    if ("missing" in loose) throw new Error("no inputs row");
+    expect(loose.inputs).toBeNull();
     // On a d-hr-… item: the HR row goes up.
-    expect(step(named([["OPS-67", T1]], [], [["hr-helper", [["OPS-67", T1]]]]))).toEqual({
+    expect(
+      step(named([["OPS-67", T1]], [], [["hr-helper", [["OPS-67", T1]]]])),
+    ).toEqual({
       inputs: [],
       rows: ["w-n-inputs", "w-n-a"],
     });

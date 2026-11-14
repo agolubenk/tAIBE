@@ -78,7 +78,11 @@ const latest = (map: Map<string, number>, id: string, at: number) =>
 
 // Card keys and row ids named in the texts, each once, in the order named.
 export function namedIn(texts: OwnerText[]): Named {
-  const named: Named = { keys: new Map(), rows: new Map(), byProduct: new Map() };
+  const named: Named = {
+    keys: new Map(),
+    rows: new Map(),
+    byProduct: new Map(),
+  };
   for (const { text: one, at, product } of texts) {
     const own = product ? (named.byProduct.get(product) ?? new Map()) : null;
     if (product && own) named.byProduct.set(product, own);
@@ -96,7 +100,10 @@ export function namedIn(texts: OwnerText[]): Named {
 export function sharedKeys(cards: RecentCard[]): Set<string> {
   const products = new Map<string, Set<string>>();
   for (const card of cards) {
-    products.set(card.key, (products.get(card.key) ?? new Set()).add(card.product));
+    products.set(
+      card.key,
+      (products.get(card.key) ?? new Set()).add(card.product),
+    );
   }
   return new Set(
     [...products].filter(([, of]) => of.size > 1).map(([key]) => key),

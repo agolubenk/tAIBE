@@ -197,8 +197,7 @@ export function focusPlan(input: Input): FocusPlan | { missing: string } {
   const namedOf = (key: string) =>
     namedAt(input.named, shared, input.product, key);
   const mine = input.cards.filter(
-    (card) =>
-      card.product === input.product && namedOf(card.key) !== undefined,
+    (card) => card.product === input.product && namedOf(card.key) !== undefined,
   );
   const board = new Map(input.board);
   for (const card of mine) board.set(cardUid(card.ws, card.key), card);

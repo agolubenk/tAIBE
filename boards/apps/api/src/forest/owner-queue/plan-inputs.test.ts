@@ -45,7 +45,9 @@ describe("ownerTexts (TB-107)", () => {
   ];
 
   it("takes the inbox text and the owner's notes on decisions and checks", () => {
-    const texts = ownerTexts(items, checks, PRODUCTS, NOW).map((one) => one.text);
+    const texts = ownerTexts(items, checks, PRODUCTS, NOW).map(
+      (one) => one.text,
+    );
     expect(texts).toEqual([
       "сломалось APP-584",
       "и ещё GLOB-35",
@@ -76,7 +78,10 @@ describe("ownerTexts (TB-107)", () => {
       doc("c-hr-y", { kind: "check", title: "c" }),
     ];
     const notes = [
-      doc("d-taibe-x", { note: "OPS-67 первым", ownerAt: "2026-11-13T09:00:00Z" }),
+      doc("d-taibe-x", {
+        note: "OPS-67 первым",
+        ownerAt: "2026-11-13T09:00:00Z",
+      }),
       doc("c-hr-y", { note: "OPS-5", ownerAt: "2026-11-13T09:00:00Z" }),
     ];
     const texts = ownerTexts(
@@ -100,7 +105,12 @@ describe("itemProduct", () => {
     expect(itemProduct("d-taibe-gl10-sessions-1411", PRODUCTS)).toBe("taibe");
     expect(itemProduct("d-hr-focus-1311", PRODUCTS)).toBe("hr-helper");
     expect(itemProduct("c-hr-helper-x", PRODUCTS)).toBe("hr-helper");
-    for (const id of ["d-1", "d-20261114-135d8d", "d-merge-guard-3010", "i-1"]) {
+    for (const id of [
+      "d-1",
+      "d-20261114-135d8d",
+      "d-merge-guard-3010",
+      "i-1",
+    ]) {
       expect(itemProduct(id, PRODUCTS)).toBeNull();
     }
   });
@@ -133,7 +143,9 @@ describe("namedIn", () => {
       ["APP-1", 3],
     ]);
     expect([...(named.byProduct.get("taibe") ?? [])]).toEqual([["OPS-67", 4]]);
-    expect([...(named.byProduct.get("hr-helper") ?? [])]).toEqual([["APP-1", 3]]);
+    expect([...(named.byProduct.get("hr-helper") ?? [])]).toEqual([
+      ["APP-1", 3],
+    ]);
   });
 
   it("names the inputs row of a product", () => {
@@ -145,7 +157,11 @@ describe("namedIn", () => {
 describe("namedAt (one key, two products)", () => {
   const card = (key: string, product: string) =>
     ({ key, product }) as RecentCard;
-  const cards = [card("OPS-67", "hr-helper"), card("OPS-67", "taibe"), card("TB-5", "taibe")];
+  const cards = [
+    card("OPS-67", "hr-helper"),
+    card("OPS-67", "taibe"),
+    card("TB-5", "taibe"),
+  ];
 
   it("finds the keys on the cards of 2+ products", () => {
     expect([...sharedKeys(cards)]).toEqual(["OPS-67"]);
