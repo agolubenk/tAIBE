@@ -190,6 +190,37 @@ describe("restoreRedacted (TB-143)", () => {
     }
   });
 
+  // A caller (an LLM, a JSON client) often trims the text or writes one blank
+  // line in place of two; the blocks with markers did not change.
+  it("restores when the caller trims line breaks around the blocks", () => {
+    const tail = `deploy with ${KEY_A}\n`;
+    const view = redact(tail).text;
+
+    expect(restoreRedacted(tail, view.trimEnd())).toEqual({
+      ok: true,
+      text: `deploy with ${KEY_A}`,
+    });
+    expect(restoreRedacted(tail, `${view}\n\nnote`)).toEqual({
+      ok: true,
+      text: `${tail}\n\nnote`,
+    });
+
+    const spaced = `\nintro\n\n\nbackup ${KEY_B}`;
+    expect(
+      restoreRedacted(spaced, "intro\n\nbackup [REDACTED:api_key]"),
+    ).toEqual({ ok: true, text: `intro\n\nbackup ${KEY_B}` });
+  });
+
+  it("keeps the indent of a block with a marker", () => {
+    const code = `    ![x](https://example.test/p.png?k=${KEY_A})`;
+    const view = redact(code).text;
+
+    expect(restoreRedacted(code, view.trimStart())).toEqual({
+      ok: false,
+      reason: "block",
+    });
+  });
+
   it("keeps a raw secret the caller types next to the markers", () => {
     const text = `deploy with ${KEY_A}`;
     const incoming = `deploy with [REDACTED:api_key]\n\nnew key ${KEY_B}`;
