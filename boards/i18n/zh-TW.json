@@ -4036,7 +4036,8 @@
 				"model": "Model {{model}} · {{calls}} of {{max}} answers today",
 				"noModel": "No model connected: answers come as sources without text",
 				"workerOffline": "Worker offline: search by words only",
-				"workerOnline": "Worker online"
+				"workerOnline": "Worker online",
+				"indexCapped": "Meaning search holds the newest {{indexed}} of {{embedded}}: older chunks are found by words only"
 			},
 			"tabs": {
 				"chat": "Questions",

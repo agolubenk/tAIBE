@@ -3,6 +3,7 @@ import { encodeEmbedding } from "../embed/embedding-codec";
 import {
   buildVectorIndex,
   evictOverBudget,
+  indexedChunks,
   nearestChunks,
   VECTOR_BYTES_MAX,
   type VectorIndex,
@@ -46,6 +47,13 @@ describe("vector index", () => {
     );
     expect(vectorRowsMax(0)).toBeGreaterThan(0);
     expect(vectorRowsMax(VECTOR_BYTES_MAX * 2)).toBe(1);
+  });
+
+  it("counts the chunks the index holds against its budget (TB-76)", () => {
+    expect(indexedChunks(0, 0)).toBe(0);
+    expect(indexedChunks(9028, 768 * 4)).toBe(9028);
+    expect(indexedChunks(12_000, 768 * 4)).toBe(10_922);
+    expect(vectorRowsMax(2 * 4, 2 * 2 * 4)).toBe(2);
   });
 
   it("drops the oldest indexes past the byte budget and keeps the newest", () => {
