@@ -16,7 +16,8 @@ interface PullRequestReviewProps {
 
 // TB-172: a sibling of the row's link, never inside it. The state comes from
 // the server (metadata), so a running review keeps the button off after a
-// reload; while the request is in flight the button is off too.
+// reload; while the request is in flight the button is off too. On touch the
+// target is 44 px and keeps a gap from the PR link: a stray tap costs a run.
 export function PullRequestReview({ taskId, link }: PullRequestReviewProps) {
   const { t } = useTranslation();
   const request = useRequestPullRequestReview();
@@ -82,7 +83,7 @@ export function PullRequestReview({ taskId, link }: PullRequestReviewProps) {
         title={t("settings:externalLinks.review.requestHint")}
         disabled={disabled}
         onClick={press}
-        className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+        className="flex size-6 shrink-0 items-center justify-center rounded-md pointer-coarse:ml-2 pointer-coarse:size-11 text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
       >
         {request.isPending ? (
           <Loader2

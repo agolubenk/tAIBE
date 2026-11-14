@@ -2199,16 +2199,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running",
-				"done": "Review done {{time}}",
+				"request": "Request an AI review of {{title}}",
+				"requestHint": "Request an AI review",
+				"running": "AI review running",
+				"done": "AI review done {{time}}",
 				"forkOnly": "Only PRs from the repository",
-				"errorRunning": "A review is already running.",
-				"errorFork": "Reviews run only for PRs from the repository.",
+				"errorRunning": "An AI review is already running.",
+				"errorFork": "AI reviews run only for PRs from the repository.",
+				"errorClosed": "This pull request is closed.",
 				"errorNotPullRequest": "This link is not a pull request.",
 				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorGeneric": "Failed to request a review."
+				"errorGeneric": "Failed to request an AI review."
 			}
 		},
 		"security": "Security",

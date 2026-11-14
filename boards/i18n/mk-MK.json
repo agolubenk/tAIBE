@@ -1255,16 +1255,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "Побарај AI-преглед за {{title}}",
+				"requestHint": "Побарај AI-преглед",
+				"running": "AI-прегледот е во тек",
+				"done": "AI-прегледот е готов {{time}}",
+				"forkOnly": "Само PR од репозиториумот",
+				"errorRunning": "AI-преглед веќе е во тек.",
+				"errorFork": "AI-прегледи се прават само за PR од репозиториумот.",
+				"errorClosed": "Овој pull request е затворен.",
+				"errorNotPullRequest": "Оваа врска не е pull request.",
+				"errorAppMissing": "GitHub App не е инсталирана за овој репозиториум.",
+				"errorGeneric": "Барањето за AI-преглед не успеа."
 			}
 		},
 		"workspaceRoles": {

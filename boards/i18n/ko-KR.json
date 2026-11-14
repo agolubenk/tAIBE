@@ -1247,16 +1247,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "{{title}} AI 리뷰 요청",
+				"requestHint": "AI 리뷰 요청",
+				"running": "AI 리뷰 진행 중",
+				"done": "AI 리뷰 완료 {{time}}",
+				"forkOnly": "저장소 내 PR만",
+				"errorRunning": "AI 리뷰가 이미 진행 중입니다.",
+				"errorFork": "AI 리뷰는 저장소 내 PR에서만 실행됩니다.",
+				"errorClosed": "이 풀 리퀘스트는 닫혔습니다.",
+				"errorNotPullRequest": "이 링크는 풀 리퀘스트가 아닙니다.",
+				"errorAppMissing": "이 저장소에 GitHub App이 설치되어 있지 않습니다.",
+				"errorGeneric": "AI 리뷰를 요청하지 못했습니다."
 			}
 		},
 		"workspaceRoles": {

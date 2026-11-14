@@ -1500,16 +1500,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "{{title}} की AI समीक्षा का अनुरोध करें",
+				"requestHint": "AI समीक्षा का अनुरोध करें",
+				"running": "AI समीक्षा चल रही है",
+				"done": "AI समीक्षा पूरी हुई {{time}}",
+				"forkOnly": "केवल रिपॉज़िटरी के PR",
+				"errorRunning": "एक AI समीक्षा पहले से चल रही है।",
+				"errorFork": "AI समीक्षा केवल रिपॉज़िटरी के PR के लिए चलती है।",
+				"errorClosed": "यह pull request बंद है।",
+				"errorNotPullRequest": "यह लिंक pull request नहीं है।",
+				"errorAppMissing": "इस रिपॉज़िटरी के लिए GitHub App इंस्टॉल नहीं है।",
+				"errorGeneric": "AI समीक्षा का अनुरोध नहीं हो सका।"
 			}
 		},
 		"mattermostIntegration": {

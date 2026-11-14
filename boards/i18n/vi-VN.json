@@ -1491,16 +1491,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "Yêu cầu AI đánh giá {{title}}",
+				"requestHint": "Yêu cầu AI đánh giá",
+				"running": "AI đang đánh giá",
+				"done": "AI đã đánh giá xong {{time}}",
+				"forkOnly": "Chỉ PR từ kho mã",
+				"errorRunning": "AI đang đánh giá rồi.",
+				"errorFork": "AI chỉ đánh giá PR từ kho mã.",
+				"errorClosed": "Pull request này đã đóng.",
+				"errorNotPullRequest": "Liên kết này không phải pull request.",
+				"errorAppMissing": "GitHub App chưa được cài cho kho mã này.",
+				"errorGeneric": "Không thể yêu cầu AI đánh giá."
 			}
 		},
 		"mattermostIntegration": {

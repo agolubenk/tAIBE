@@ -1509,16 +1509,17 @@
 			"remove": "移除 {{title}}",
 			"removeError": "移除资源链接失败。",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "请求 AI 审查 {{title}}",
+				"requestHint": "请求 AI 审查",
+				"running": "AI 审查进行中",
+				"done": "AI 审查已完成 {{time}}",
+				"forkOnly": "仅限仓库内的 PR",
+				"errorRunning": "AI 审查已在进行中。",
+				"errorFork": "AI 审查仅适用于仓库内的 PR。",
+				"errorClosed": "此拉取请求已关闭。",
+				"errorNotPullRequest": "此链接不是拉取请求。",
+				"errorAppMissing": "此仓库未安装 GitHub App。",
+				"errorGeneric": "无法请求 AI 审查。"
 			}
 		},
 		"customFields": {

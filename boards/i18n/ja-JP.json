@@ -1491,16 +1491,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "{{title}} の AI レビューを依頼",
+				"requestHint": "AI レビューを依頼",
+				"running": "AI レビュー実行中",
+				"done": "AI レビュー完了 {{time}}",
+				"forkOnly": "リポジトリ内の PR のみ",
+				"errorRunning": "AI レビューはすでに実行中です。",
+				"errorFork": "AI レビューはリポジトリ内の PR でのみ実行されます。",
+				"errorClosed": "このプルリクエストはクローズされています。",
+				"errorNotPullRequest": "このリンクはプルリクエストではありません。",
+				"errorAppMissing": "このリポジトリに GitHub App がインストールされていません。",
+				"errorGeneric": "AI レビューを依頼できませんでした。"
 			}
 		},
 		"mattermostIntegration": {

@@ -1271,16 +1271,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "Запросити ШІ-рев'ю: {{title}}",
+				"requestHint": "Запросити ШІ-рев'ю",
+				"running": "ШІ-рев'ю триває",
+				"done": "ШІ-рев'ю готове {{time}}",
+				"forkOnly": "Лише PR з репозиторію",
+				"errorRunning": "ШІ-рев'ю вже триває.",
+				"errorFork": "ШІ-рев'ю працює лише для PR з репозиторію.",
+				"errorClosed": "Цей PR закрито.",
+				"errorNotPullRequest": "Це посилання — не PR.",
+				"errorAppMissing": "GitHub App не встановлено для цього репозиторію.",
+				"errorGeneric": "Не вдалося запросити ШІ-рев'ю."
 			}
 		},
 		"workspaceRoles": {

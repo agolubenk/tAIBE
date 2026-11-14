@@ -1071,16 +1071,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "AI-review aanvragen voor {{title}}",
+				"requestHint": "AI-review aanvragen",
+				"running": "AI-review loopt",
+				"done": "AI-review klaar {{time}}",
+				"forkOnly": "Alleen PR's uit de repository",
+				"errorRunning": "Er loopt al een AI-review.",
+				"errorFork": "AI-reviews draaien alleen voor PR's uit de repository.",
+				"errorClosed": "Deze pull request is gesloten.",
+				"errorNotPullRequest": "Deze link is geen pull request.",
+				"errorAppMissing": "De GitHub App is niet geïnstalleerd voor deze repository.",
+				"errorGeneric": "AI-review aanvragen is mislukt."
 			}
 		},
 		"notifications": "Meldingen",

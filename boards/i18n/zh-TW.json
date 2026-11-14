@@ -1508,16 +1508,17 @@
 			"remove": "移除 {{title}}",
 			"removeError": "無法移除資源連結。",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "要求 AI 審查 {{title}}",
+				"requestHint": "要求 AI 審查",
+				"running": "AI 審查進行中",
+				"done": "AI 審查已完成 {{time}}",
+				"forkOnly": "僅限儲存庫內的 PR",
+				"errorRunning": "AI 審查已在進行中。",
+				"errorFork": "AI 審查僅適用於儲存庫內的 PR。",
+				"errorClosed": "此拉取請求已關閉。",
+				"errorNotPullRequest": "此連結不是拉取請求。",
+				"errorAppMissing": "此儲存庫未安裝 GitHub App。",
+				"errorGeneric": "無法要求 AI 審查。"
 			}
 		},
 		"customFields": {

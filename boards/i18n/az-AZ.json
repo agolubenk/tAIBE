@@ -1518,16 +1518,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "{{title}} üçün Sİ rəyi istə",
+				"requestHint": "Sİ rəyi istə",
+				"running": "Sİ rəyi gedir",
+				"done": "Sİ rəyi hazırdır {{time}}",
+				"forkOnly": "Yalnız repozitoriyadan olan PR-lar",
+				"errorRunning": "Sİ rəyi artıq gedir.",
+				"errorFork": "Sİ rəyi yalnız repozitoriyadan olan PR-lar üçün işləyir.",
+				"errorClosed": "Bu pull request bağlıdır.",
+				"errorNotPullRequest": "Bu keçid pull request deyil.",
+				"errorAppMissing": "GitHub App bu repozitoriya üçün quraşdırılmayıb.",
+				"errorGeneric": "Sİ rəyi istənilə bilmədi."
 			}
 		},
 		"customFields": {

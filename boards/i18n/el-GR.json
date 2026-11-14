@@ -1255,16 +1255,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "Αίτημα ελέγχου ΤΝ για {{title}}",
+				"requestHint": "Αίτημα ελέγχου ΤΝ",
+				"running": "Ο έλεγχος ΤΝ εκτελείται",
+				"done": "Ο έλεγχος ΤΝ ολοκληρώθηκε {{time}}",
+				"forkOnly": "Μόνο PR από το αποθετήριο",
+				"errorRunning": "Ένας έλεγχος ΤΝ εκτελείται ήδη.",
+				"errorFork": "Οι έλεγχοι ΤΝ εκτελούνται μόνο για PR από το αποθετήριο.",
+				"errorClosed": "Αυτό το pull request είναι κλειστό.",
+				"errorNotPullRequest": "Αυτός ο σύνδεσμος δεν είναι pull request.",
+				"errorAppMissing": "Η GitHub App δεν είναι εγκατεστημένη για αυτό το αποθετήριο.",
+				"errorGeneric": "Δεν ήταν δυνατό το αίτημα ελέγχου ΤΝ."
 			}
 		},
 		"workspaceRoles": {

@@ -1255,16 +1255,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "{{title}} için yapay zekâ incelemesi iste",
+				"requestHint": "Yapay zekâ incelemesi iste",
+				"running": "Yapay zekâ incelemesi sürüyor",
+				"done": "Yapay zekâ incelemesi tamamlandı {{time}}",
+				"forkOnly": "Yalnızca depodaki PR'ler",
+				"errorRunning": "Bir yapay zekâ incelemesi zaten sürüyor.",
+				"errorFork": "Yapay zekâ incelemeleri yalnızca depodaki PR'ler için çalışır.",
+				"errorClosed": "Bu pull request kapalı.",
+				"errorNotPullRequest": "Bu bağlantı bir pull request değil.",
+				"errorAppMissing": "GitHub App bu depo için kurulu değil.",
+				"errorGeneric": "Yapay zekâ incelemesi istenemedi."
 			}
 		},
 		"workspaceRoles": {

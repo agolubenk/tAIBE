@@ -1334,16 +1334,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "KI-Review für {{title}} anfordern",
+				"requestHint": "KI-Review anfordern",
+				"running": "KI-Review läuft",
+				"done": "KI-Review fertig {{time}}",
+				"forkOnly": "Nur PRs aus dem Repository",
+				"errorRunning": "Ein KI-Review läuft bereits.",
+				"errorFork": "KI-Reviews laufen nur für PRs aus dem Repository.",
+				"errorClosed": "Dieser Pull Request ist geschlossen.",
+				"errorNotPullRequest": "Dieser Link ist kein Pull Request.",
+				"errorAppMissing": "Die GitHub App ist für dieses Repository nicht installiert.",
+				"errorGeneric": "KI-Review konnte nicht angefordert werden."
 			}
 		},
 		"workspaceRoles": {

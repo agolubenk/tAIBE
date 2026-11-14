@@ -50,6 +50,8 @@ describe("pull request review state (TB-172)", () => {
     expect(canRequestReview(link(null))).toBe(true);
     expect(canRequestReview(link({ createdFrom: "github-import" }))).toBe(true);
     expect(canRequestReview(link({ merged: true }))).toBe(false);
+    expect(canRequestReview(link({ state: "closed" }))).toBe(false);
+    expect(canRequestReview(link({ state: "open" }))).toBe(true);
     expect(canRequestReview(link({ createdFrom: "gitea" }))).toBe(false);
     expect(
       canRequestReview(
@@ -83,6 +85,9 @@ describe("pull request review state (TB-172)", () => {
     expect(getReviewErrorKey(fork)).toBe(
       "settings:externalLinks.review.errorFork",
     );
+    expect(
+      getReviewErrorKey(new HttpError(422, "x", { code: "PR_CLOSED" })),
+    ).toBe("settings:externalLinks.review.errorClosed");
     expect(getReviewErrorKey(app)).toBe(
       "settings:externalLinks.review.errorAppMissing",
     );

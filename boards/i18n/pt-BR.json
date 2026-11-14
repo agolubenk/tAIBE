@@ -1509,16 +1509,17 @@
 			"remove": "Remove {{title}}",
 			"removeError": "Failed to remove the resource link.",
 			"review": {
-				"done": "Review done {{time}}",
-				"errorAppMissing": "The GitHub App is not installed for this repository.",
-				"errorFork": "Reviews run only for PRs from the repository.",
-				"errorGeneric": "Failed to request a review.",
-				"errorNotPullRequest": "This link is not a pull request.",
-				"errorRunning": "A review is already running.",
-				"forkOnly": "Only PRs from the repository",
-				"request": "Request a review of {{title}}",
-				"requestHint": "Request a review",
-				"running": "Review running"
+				"request": "Solicitar revisão por IA de {{title}}",
+				"requestHint": "Solicitar revisão por IA",
+				"running": "Revisão por IA em andamento",
+				"done": "Revisão por IA concluída {{time}}",
+				"forkOnly": "Apenas PRs do repositório",
+				"errorRunning": "Uma revisão por IA já está em andamento.",
+				"errorFork": "Revisões por IA rodam apenas para PRs do repositório.",
+				"errorClosed": "Este pull request está fechado.",
+				"errorNotPullRequest": "Este link não é um pull request.",
+				"errorAppMissing": "O GitHub App não está instalado neste repositório.",
+				"errorGeneric": "Não foi possível solicitar a revisão por IA."
 			}
 		},
 		"mattermostIntegration": {

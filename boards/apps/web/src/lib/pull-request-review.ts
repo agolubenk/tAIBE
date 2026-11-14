@@ -11,6 +11,8 @@ export type PullRequestReviewState = "idle" | "running" | "done" | "fork";
 export function canRequestReview(link: ExternalLink): boolean {
   if (link.resourceType !== "pull_request") return false;
   if (link.metadata?.merged === true) return false;
+  // Closed without a merge; a reopen resets the state.
+  if (link.metadata?.state === "closed") return false;
   const type = link.integration?.type;
   if (type) return type === "github";
   const from = link.metadata?.createdFrom;
@@ -40,6 +42,7 @@ export function getReviewHref(link: ExternalLink): string | null {
 const ERROR_KEYS: Record<string, string> = {
   REVIEW_RUNNING: "settings:externalLinks.review.errorRunning",
   PR_FROM_FORK: "settings:externalLinks.review.errorFork",
+  PR_CLOSED: "settings:externalLinks.review.errorClosed",
   NOT_A_PULL_REQUEST: "settings:externalLinks.review.errorNotPullRequest",
   GITHUB_APP_MISSING: "settings:externalLinks.review.errorAppMissing",
 };

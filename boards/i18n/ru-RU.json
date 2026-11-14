@@ -1279,16 +1279,17 @@
 			"remove": "Удалить {{title}}",
 			"removeError": "Не удалось удалить ссылку на ресурс.",
 			"review": {
-				"request": "Запросить ревью: {{title}}",
-				"requestHint": "Запросить ревью",
-				"running": "Ревью идёт",
-				"done": "Ревью готово {{time}}",
+				"request": "Запросить ИИ-ревью: {{title}}",
+				"requestHint": "Запросить ИИ-ревью",
+				"running": "ИИ-ревью идёт",
+				"done": "ИИ-ревью готово {{time}}",
 				"forkOnly": "Только PR из репозитория",
-				"errorRunning": "Ревью уже идёт.",
-				"errorFork": "Ревью идёт только для PR из репозитория.",
+				"errorRunning": "ИИ-ревью уже идёт.",
+				"errorFork": "ИИ-ревью идёт только для PR из репозитория.",
+				"errorClosed": "Этот PR закрыт.",
 				"errorNotPullRequest": "Эта ссылка — не PR.",
 				"errorAppMissing": "GitHub App не установлено для этого репозитория.",
-				"errorGeneric": "Не удалось запросить ревью."
+				"errorGeneric": "Не удалось запросить ИИ-ревью."
 			}
 		},
 		"workspaceRoles": {
