@@ -218,7 +218,7 @@ const setCustomFieldValueRoute = createRoute({
     ),
     404: errorResponse("Task not found"),
     409: errorResponse(
-      "A caller with a token sent [REDACTED:kind] markers that do not match the stored value; keep the markers in place",
+      "A caller with a token sent [REDACTED:kind] markers that match neither the stored value nor exactly one field option per marker; keep the markers in place",
     ),
   },
 });

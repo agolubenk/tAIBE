@@ -21,6 +21,15 @@ const ROUTERS = [
   "label/index.ts",
   "custom-field/index.ts",
   "external-link/index.ts",
+  // Reads that show card text and have no write-back of that text. Meta,
+  // work state, approvals, leases and logs stay raw: an agent writes them and
+  // their write routes restore no marker.
+  "notification/index.ts",
+  "task-relation/index.ts",
+  "forest/routes/tree-routes.ts",
+  "forest/routes/graph-routes.ts",
+  "forest/routes/bugs-routes.ts",
+  "forest/routes/memory-routes.ts",
 ];
 const NO_TEXT = new Set([
   "stagedUploadRoute",

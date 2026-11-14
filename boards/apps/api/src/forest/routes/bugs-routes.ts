@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { listBoardBugs } from "../bugs/list-board-bugs";
 import { bugsQuery, bugsSchema } from "./bugs-schema";
@@ -36,7 +37,10 @@ export const bugsRoutes = apiRouter<
   const { workspaceId } = c.req.valid("param");
   const { projectId } = c.req.valid("query");
   return c.json(
-    await listBoardBugs(workspaceId, projectId, c.get("userId")),
+    maskForTokenCaller(
+      c,
+      await listBoardBugs(workspaceId, projectId, c.get("userId")),
+    ),
     200,
   );
 });

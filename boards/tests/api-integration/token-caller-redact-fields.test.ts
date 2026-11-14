@@ -358,4 +358,106 @@ describe("API integration: label, field and link routes for callers with a token
         .where(eq(schema.customFieldDefinitionTable.projectId, project.id)),
     ).toEqual([]);
   });
+
+  it("picks a masked dropdown or multiselect option by the field's options, and refuses an ambiguous pick", async () => {
+    const { forest, project, task } = await setup();
+    const value = async (fieldId: string) => {
+      const [row] = await db
+        .select({ value: schema.customFieldValueTable.value })
+        .from(schema.customFieldValueTable)
+        .where(eq(schema.customFieldValueTable.fieldId, fieldId));
+      return row?.value;
+    };
+    const put = (fieldId: string, sent: string) =>
+      forest.agentApi("PUT", "/custom-field/value", {
+        taskId: task.id,
+        fieldId,
+        value: sent,
+      });
+
+    const env = await addField(project.id, {
+      name: "Env",
+      type: "dropdown",
+      options: ["prod", SECRET],
+    });
+    expect((await put(env.id, MARK)).status).toBe(200);
+    expect(await value(env.id)).toBe(SECRET);
+
+    const keys = await addField(project.id, {
+      name: "Keys",
+      type: "multiselect",
+      options: ["prod", SECRET, SECRET_2],
+    });
+    const owner = await forest.ownerApi("PUT", "/custom-field/value", {
+      taskId: task.id,
+      fieldId: keys.id,
+      value: JSON.stringify(["prod", SECRET]),
+    });
+    expect(owner.status).toBe(200);
+    expect((await put(keys.id, JSON.stringify([MARK]))).status).toBe(200);
+    expect(await value(keys.id)).toBe(JSON.stringify([SECRET]));
+    expect((await put(keys.id, JSON.stringify([MARK, MARK]))).status).toBe(200);
+    expect(await value(keys.id)).toBe(JSON.stringify([SECRET, SECRET_2]));
+
+    const dropOne = await put(keys.id, JSON.stringify([MARK]));
+    expect(dropOne.status).toBe(409);
+    expect(dropOne.body.code).toBe(MISMATCH);
+    expect(await value(keys.id)).toBe(JSON.stringify([SECRET, SECRET_2]));
+  });
+
+  it("masks notifications, task relations, trees and a card's place for an API key", async () => {
+    const { forest, project } = await setup();
+    const [root] = await db
+      .insert(schema.taskTable)
+      .values({
+        projectId: project.id,
+        title: `root ${SECRET}`,
+        status: "to-do",
+        number: 8,
+      })
+      .returning();
+    const [child] = await db
+      .insert(schema.taskTable)
+      .values({
+        projectId: project.id,
+        title: "child",
+        status: "to-do",
+        number: 9,
+      })
+      .returning();
+    if (!root || !child) throw new Error("fixture");
+    await db.insert(schema.taskRelationTable).values({
+      sourceTaskId: root.id,
+      targetTaskId: child.id,
+      relationType: "subtask",
+    });
+    await db.insert(schema.notificationTable).values({
+      userId: forest.ownerId,
+      title: `alert ${SECRET}`,
+      content: "deploy",
+    });
+
+    const reads: [string, () => ReturnType<typeof forest.agent>][] = [
+      ["/notification", () => forest.agentApi("GET", "/notification")],
+      [
+        "/task-relation/{child}",
+        () => forest.agentApi("GET", `/task-relation/${child.id}`),
+      ],
+      ["/forest/trees", () => forest.agent("/trees")],
+      ["/forest/place", () => forest.agent(`/cards/${child.id}/place`)],
+    ];
+    for (const [route, read] of reads) {
+      const res = await read();
+      const text = JSON.stringify(res.body);
+      expect({
+        route,
+        status: res.status,
+        leaks: text.includes(SECRET),
+        masked: text.includes(MARK),
+      }).toEqual({ route, status: 200, leaks: false, masked: true });
+    }
+
+    const owner = await forest.ownerApi("GET", "/notification");
+    expect(JSON.stringify(owner.body)).toContain(SECRET);
+  });
 });

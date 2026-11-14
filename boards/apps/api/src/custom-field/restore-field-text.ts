@@ -1,3 +1,4 @@
+import { hasRedactionMarker } from "@kaneo/redact/restore";
 import { and, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import db from "../database";
@@ -6,35 +7,51 @@ import {
   customFieldValueTable,
 } from "../database/schema";
 import {
+  isTokenCaller,
   restoreEachForTokenCaller,
   restoreForTokenCaller,
 } from "../utils/token-caller-text";
-import { readOptions } from "./choice-options";
+import { isChoiceType, readOptions } from "./choice-options";
+import { restoreChoiceValue } from "./restore-choice-value";
 import type { CustomFieldUpdateInput } from "./resolve-field-update";
 
 // TB-144: a caller with a token reads custom-field text masked where a task
 // read masks it. A write-back gets the stored values back in place of the
 // markers. The stored row is read only if a value carries a marker.
 
-export function restoreFieldValue(
+export async function restoreFieldValue(
   c: Context,
   taskId: string,
   fieldId: string,
   value: string,
 ): Promise<string> {
-  return restoreForTokenCaller(c, value, async () => {
-    const [row] = await db
-      .select({ value: customFieldValueTable.value })
-      .from(customFieldValueTable)
-      .where(
-        and(
-          eq(customFieldValueTable.taskId, taskId),
-          eq(customFieldValueTable.fieldId, fieldId),
-        ),
-      )
-      .limit(1);
-    return row?.value;
-  });
+  if (!isTokenCaller(c) || !hasRedactionMarker(value)) return value;
+  const [row] = await db
+    .select({
+      type: customFieldDefinitionTable.type,
+      options: customFieldDefinitionTable.options,
+      value: customFieldValueTable.value,
+    })
+    .from(customFieldDefinitionTable)
+    .leftJoin(
+      customFieldValueTable,
+      and(
+        eq(customFieldValueTable.fieldId, customFieldDefinitionTable.id),
+        eq(customFieldValueTable.taskId, taskId),
+      ),
+    )
+    .where(eq(customFieldDefinitionTable.id, fieldId))
+    .limit(1);
+  // TB-178: a choice value names options, which the caller reads masked too.
+  if (row && isChoiceType(row.type) && Array.isArray(row.options)) {
+    return restoreChoiceValue(
+      value,
+      row.type,
+      readOptions(row.options),
+      row.value,
+    );
+  }
+  return restoreForTokenCaller(c, value, async () => row?.value);
 }
 
 type StoredField = {
