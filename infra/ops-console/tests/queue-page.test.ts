@@ -1130,8 +1130,11 @@ describe('таяние ответа и якорь прокрутки (прось
   })
 
   it('таяние начинает только свой ответ, до render(); конец — animationend; тающий пункт не уезжает и не перемонтируется', () => {
-    expect(html).toContain('markMelt(id); render(); persist(id); return;')
-    expect(html).toContain('markMelt(id); render(); persist(id);\n')
+    // persist до render (Claude-линза #337): до записи строка «Сохранено» показывает «Сохраняю…», а не время.
+    expect(html).toContain('markMelt(id); persist(id); render(); return;')
+    expect(html).toContain('markMelt(id); persist(id); render();\n')
+    expect(html).toContain('persist(rid); render(); return;')
+    expect(html).not.toContain('render(); persist(')
     expect(html).toContain("if (!/^oq-melt/.test(ev.animationName) || !id || !MELT[id]) return;")
     expect(html).toContain('var doneOf = function (it) { return isDone(it, state[it.id]) && !MELT[it.id]; };')
     expect(html).toContain("el.classList.toggle('is-melting', !!MELT[it.id]);")

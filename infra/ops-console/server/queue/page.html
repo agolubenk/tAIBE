@@ -1321,13 +1321,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (opt) {
       var id = itemOf(opt); if (!id) return;
       var e = entry(id); e.choice = opt.dataset.opt; e.done = true; e.at = new Date().toISOString();
-      markMelt(id); render(); persist(id); return;
+      markMelt(id); persist(id); render(); return;
     }
     var re = t.closest && t.closest('.reopen');
     if (re) {
       var rid = itemOf(re); if (!rid) return;
       var r = entry(rid); r.choice = null; r.done = false; r.at = new Date().toISOString();
-      render(); persist(rid); return;
+      persist(rid); render(); return;
     }
     var b = t.closest && t.closest('.copy');
     if (b) {
@@ -1345,7 +1345,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (t.classList.contains('cb')) { e.done = t.checked; e.at = new Date().toISOString(); }
     else if (t.classList.contains('field')) { e.note = t.value.slice(0, 20000); e.at = new Date().toISOString(); }
     else return;
-    markMelt(id); render(); persist(id);
+    // persist до render: строка «Сохранено» показывает «Сохраняю…» (pending), а не время до записи (Claude-линза #337).
+    markMelt(id); persist(id); render();
   });
 
   var hideBtn = document.getElementById('hide-done');
