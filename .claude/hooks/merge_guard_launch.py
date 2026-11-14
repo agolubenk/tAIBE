@@ -287,18 +287,30 @@ def implied_commands(argvs):
     return [list(v) for v in dict.fromkeys(tuple(v) for v in out if v[0] and v[-1])]
 
 
-def syntax_only(opts):
+def syntax_only(opts, zsh=False):
     """Оболочка только проверит синтаксис файла (`bash -n x.sh`, `-o noexec`): `-n`/`+n` и `-o`/`+o noexec` bash
     применяет по порядку, решает последнее (`-n +n`, `+no noexec` — запуск, сверено с bash 3.2); интерактивный bash
-    (`-i`, `--rcfile`, `--init-file`) `-n` не слушает. opts — слова до файла скрипта."""
-    on, names = False, []  # names — знак у каждого `o` связки, `None` у `O`: их значения идут следующими словами
+    (`-i`, `--rcfile`, `--init-file`) `-n` не слушает. opts — слова до файла скрипта. zsh (SE-85, сверено с zsh 5.9):
+    остаток связки после `o` — имя опции (`-onocorrect` — не `-n`, `-fonoexec` — noexec), `-O` — флаг без значения,
+    регистр, `_` и `-` в имени не важны, `exec` — обратная к noexec (`-n -o exec`, `-n --exec` — запуск)."""
+    def after(sign, name, on):  # noexec после опции `name` со знаком `-`/`+`; `None` — у bash `-O`, значение — shopt
+        if zsh:
+            return {"noexec": sign == "-", "exec": sign == "+"}.get(re.sub(r"[-_]", "", name.lower()), on)
+        return sign == "-" if sign and name == "noexec" else on
+
+    on, names = False, []  # names — знак у каждого `o` связки (у bash и `None` у `O`): значения — следующими словами
     for x in opts:
         if names:
-            sign = names.pop(0)
-            on = sign == "-" if sign and x == "noexec" else on
+            on = after(names.pop(0), x, on)
+        elif zsh and x[:2] == "--" and x[2:]:  # `--no-exec`, `--EXEC` — опция по имени
+            on = after("-", x[2:], on)
         elif x in ("--rcfile", "--init-file") or re.fullmatch(r"[-+][a-zA-Z]*i[a-zA-Z]*", x):
             return False
-        elif re.fullmatch(r"[-+][a-zA-Z]+", x):
-            on = x[0] == "-" if "n" in x else on
-            names += [x[0] if c == "o" else None for c in x[1:] if c in "oO"]
+        elif re.fullmatch(r"[-+][a-zA-Z_]+", x):  # `_` — в имени опции zsh (`-oNO_EXEC`)
+            cut = re.search(r"o.", x[1:]) if zsh else None
+            flags, value = (x[:cut.start() + 2], x[cut.start() + 2:]) if cut else (x, None)
+            on = x[0] == "-" if "n" in flags else on
+            names += [x[0] if c == "o" else None for c in flags[1:] if c == "o" or c == "O" and not zsh]
+            if value is not None:
+                on = after(names.pop(), value, on)
     return on

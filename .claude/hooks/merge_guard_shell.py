@@ -303,7 +303,12 @@ def launch_args(a):
                 if fam != "sh":  # остаток связки или следующий аргумент — сам код, а не файл
                     i += k == len(x)
                     return code, stdin, None, None, i
-            elif ch in valued and fam == "sh":
+            elif ch in valued and fam == "sh":  # bash: `-o`/`-O` берут следующий аргумент, остаток связки — флаги (`-oc x 'код'`)
+                if command_name(a[0]) == "zsh":  # zsh: `-O` — флаг, у `-o` остаток связки — имя опции (`-onocorrect`, SE-85)
+                    if ch == "O":
+                        continue
+                    if x[k:]:
+                        break
                 i += 1
             elif ch in valued:
                 value = x[k:] or (a[i] if i < len(a) else "")
@@ -314,6 +319,15 @@ def launch_args(a):
             elif ch in attached:
                 k += re.match(attached[ch], x[k:]).end()
     return code, stdin, (a[i] if i < len(a) else None), None, i
+
+
+def comments_off(a):
+    """zsh с интерактивным режимом (SE-85): у него `interactive_comments` выключен, и `#` в строках со stdin — буква
+    (`zsh -i < y.sh`, `cat y.sh | zsh -fi`). Режим — буква `i` в связке `-…` или имя `interactive` (`-o INTER_ACTIVE`,
+    `-ointeractive`, `--interactive`). Лишнее совпадение (`-o ignoreeof`, `-i +i`, `--emulate sh`) — лишь второй
+    разбор (classify_bash, keep), не пропуск."""
+    return command_name(a[0]) == "zsh" and any(
+        x[:1] == "-" and x[1:2] != "-" and "i" in x or re.sub(r"[-_]", "", x.lower()) == "interactive" for x in a[1:])
 
 
 def device(path_str, cwd):

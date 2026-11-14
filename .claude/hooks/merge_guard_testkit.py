@@ -19,7 +19,7 @@ HOME = TMP / "home" / ".claude"
 (ROOT / ".claude" / "rules").mkdir(parents=True)
 (ROOT / "worktrees" / "fix" / "x" / ".claude" / "rules").mkdir(parents=True)
 (HOME / "sessions").mkdir(parents=True)
-mg.HOME_CLAUDE = HOME
+sys.modules["merge_guard_paths"].HOME_CLAUDE = HOME  # protected_path читает HOME_CLAUDE своего модуля (SE-85)
 
 D9 = {"sessionId": "d9d9d9d9-0000-0000-0000-000000000000", "name": "hr-helper-v2-d9", "pid": 1}
 C4 = {"sessionId": "4c4c4c4c-0000-0000-0000-000000000000", "name": "hr-helper-v2-4c", "pid": 2}
