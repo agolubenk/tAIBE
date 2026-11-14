@@ -388,7 +388,36 @@ export async function deleteDoc(actor: Actor, collection: Collection, id: string
  * История читает NULL как продукт по умолчанию — так помечены и события образа до v2-lite.
  */
 export async function logEvent(actor: string, collection: string, docId: string, action: string, after: unknown, product: string | null): Promise<void> {
-  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: after === undefined ? null : JSON.stringify(after).slice(0, 20_000), product })
+  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: eventAfterJson(after), product })
+}
+
+/** Предел after события в журнале, символов. */
+export const EVENT_AFTER_MAX = 20_000
+/**
+ * Сколько символов документа сохраняет маркер обрезки. Повторное экранирование JSON-текста удлиняет его не больше
+ * чем вдвое (`\` и `"`), поэтому маркер — не длиннее ~16 100 символов, в предел помещается.
+ */
+const EVENT_AFTER_HEAD = 8_000
+
+/**
+ * Q-36: after события — всегда валидный JSON. Длиннее предела — маркер `{ truncated, afterLen, head }` вместо JSON,
+ * разрезанного посередине: такой JSON не читался, и одно событие роняло всю историю документа (500).
+ */
+export function eventAfterJson(after: unknown): string | null {
+  if (after === undefined) return null
+  const json = JSON.stringify(after)
+  if (json.length <= EVENT_AFTER_MAX) return json
+  return JSON.stringify({ truncated: true, afterLen: json.length, head: json.slice(0, EVENT_AFTER_HEAD) })
+}
+
+/** События, записанные до Q-36, могут хранить обрезанный JSON: вместо исключения — маркер с началом записи. */
+function parseEventAfter(raw: string | null): unknown {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return { truncated: true, head: raw.slice(0, EVENT_AFTER_HEAD) }
+  }
 }
 
 /** История документа — события видимых продуктов (у событий старого образа продукта нет — это HR). */
@@ -400,7 +429,7 @@ export async function docHistory(collection: Collection, id: string, products: V
     .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own))
     .orderBy(desc(oqEvents.at))
     .limit(Math.min(limit, 100))
-  const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: r.afterJson ? JSON.parse(r.afterJson) : null, raw: r.afterJson }))
+  const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson), raw: r.afterJson }))
   // Смена продукта пишет событие в оба продукта; кто видит оба (владелец), получает одно.
   const seen = new Set<string>()
   return events
