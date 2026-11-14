@@ -29,6 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import actions  # noqa: E402
+import digest  # noqa: E402
 import sources  # noqa: E402
 from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
 
@@ -68,8 +69,8 @@ class Ctx:
         self.emitted = 0
         self.peers = None              # {slug: Ctx} других активных продуктов (attach_peers), None — не собраны
 
-    def emit(self, key, kind, cls, to, text, src=""):
-        ok = self.journal.emit(key, kind, cls, to if self.deliver else [], text, src)
+    def emit(self, key, kind, cls, to, text, src="", **extra):
+        ok = self.journal.emit(key, kind, cls, to if self.deliver else [], text, src, **extra)
         self.emitted += ok
         return ok
 
@@ -380,7 +381,7 @@ def cmd_tap(cfg, a):
                 else:
                     print(fmt(r, tz), flush=True)
             else:
-                cur["pending"].append(r["text"])
+                digest.pend(cur, r)
         if not pause and cur["held"]:
             for line in cur["held"]:
                 print(line + " (придержано на время лимита)", flush=True)
@@ -388,11 +389,13 @@ def cmd_tap(cfg, a):
         every = timedelta(minutes=tc["digest_minutes"] * (tc["batch_factor"] if mode.get("batch") else 1))
         due = now - datetime.fromisoformat(cur["last_flush"]) >= every
         if cur["pending"] and due and not pause and mode.get("phase", "day") == "day":
-            n = len(cur["pending"])
-            head = " · ".join(cur["pending"][: tc["digest_max"]])
+            texts = digest.fresh(cur, pdir)   # SE-106: pr.changes на сменённой голове выпадает
+            n = len(texts)
+            head = " · ".join(texts[: tc["digest_max"]])
             more = f" · ещё {n - tc['digest_max']}" if n > tc["digest_max"] else ""
-            print(f"НЕРВ {datetime.now(tz):%H:%M} дайджест ({n}): {head}{more}", flush=True)
-            cur["pending"] = []
+            if n:
+                print(f"НЕРВ {datetime.now(tz):%H:%M} дайджест ({n}): {head}{more}", flush=True)
+            cur["pending"], cur["changes_meta"] = [], []
             cur["last_flush"] = now_iso()
         elif not cur["pending"]:
             cur["last_flush"] = now_iso() if due else cur["last_flush"]

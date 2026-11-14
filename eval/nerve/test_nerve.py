@@ -280,8 +280,8 @@ class FakeCtx:
         self.deliver = False
         self.state = {}
 
-    def emit(self, key, kind, cls, to, text, src=""):
-        return self.journal.emit(key, kind, cls, to, text, src)
+    def emit(self, key, kind, cls, to, text, src="", **extra):
+        return self.journal.emit(key, kind, cls, to, text, src, **extra)
 
     peers = None
     emit_account = emit

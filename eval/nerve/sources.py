@@ -143,7 +143,7 @@ def _check_pr(ctx, n, p, head, refresh=False):
         verdicts.append(v)
         if v["verdict"] == "changes" and quorum.on_head(v["sha"], head):
             ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, [p["author"]],
-                     f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github")
+                     f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github", pr=n, sha=v["sha"], lens=v["lens"])
     ok, approved, changes, ci = quorum.quorum(verdicts, head, p.get("checks") or [], g["min_lenses"])
     p["changes_by"] = changes
     p["await_ci"] = len(approved) >= g["min_lenses"] and not changes and ci == "pending"
