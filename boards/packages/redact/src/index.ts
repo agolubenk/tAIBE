@@ -25,20 +25,22 @@ function collect(pattern: RegExp, kind: SecretKind): Detector {
 }
 
 // Replaces only group 1 of each match, keeping the surrounding context
-// (header name, assignment key, quotes) readable.
+// (header name, assignment key, quotes) readable. `accept` also gets the
+// character after the value ("" at the end of the text).
 function collectGroup(
   pattern: RegExp,
   kind: SecretKind,
   group: number,
-  accept: (value: string) => boolean = () => true,
+  accept: (value: string, next: string) => boolean = () => true,
 ): Detector {
   return (text) => {
     const hits: RedactHit[] = [];
     pattern.lastIndex = 0;
     for (const match of text.matchAll(pattern)) {
       const value = match[group];
-      if (value === undefined || !accept(value)) continue;
+      if (value === undefined) continue;
       const start = match.index + match[0].indexOf(value);
+      if (!accept(value, text.charAt(start + value.length))) continue;
       hits.push({ kind, start, end: start + value.length });
     }
     return hits;
@@ -77,20 +79,30 @@ const dbUrl = collect(
 // (your_secure_password), not a secret. Measured on this repo: without this
 // filter 95% of the new assignment hits were such code. A key has 8+
 // printable ASCII characters, no code punctuation, and is not a dotted name,
-// words joined by _ or -, or a short camelCase name or type name. A type
-// name is capitalized words with no digit (`apiKey: ApiKeyUsageRow,`): since
-// the value ends at `,` and `;` (#283 B2), the comma no longer drops it. The
-// same filter is `looks_like_secret` in infra/checks/secrets_scan.py.
-export function looksLikeSecret(value: string): boolean {
+// words joined by _ or -, or a short camelCase name. The same filter is
+// `looks_like_secret` in infra/checks/secrets_scan.py.
+//
+// A type name is capitalized words with no digit. Since the value ends at `,`
+// and `;` (#283 B2), the comma no longer drops `apiKey: ApiKeyUsageRow,`.
+// TB-193: such a value is a type only if `,`, `;` or `)` comes right after
+// it (`next`), as in a parameter list or a type literal (today the value
+// patterns glue `)` to the value, and the punctuation rule drops it; the set
+// keeps it so the rule does not depend on a pattern). Elsewhere it may be
+// a passphrase (CLIENT_SECRET=<capitalized words> at the end of a line) and
+// is masked. The price: a type with no punctuation after it is masked too
+// (`apiKey: ApiKeyItem | null`, a type line with no `;`). The end of a line
+// is not a type context: an .env value ends there.
+const TYPE_NAME = /^(?:[A-Z][a-z]+)+$/;
+const TYPE_CONTEXT = new Set([",", ";", ")"]);
+
+export function looksLikeSecret(value: string, next = ""): boolean {
   if (value.length < 8 || !/^[\x21-\x7e]+$/.test(value)) return false;
   if (/[(){}[\];,<>\\]/.test(value)) return false;
   if (/^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$/.test(value)) return false;
   if (/^[A-Za-z]+(?:[_-][A-Za-z]+)+$/.test(value)) return false;
   if (value.length >= 32) return true;
-  return (
-    !/^[a-z]+(?:[A-Z][a-z0-9]*)*$/.test(value) &&
-    !/^(?:[A-Z][a-z]+)+$/.test(value)
-  );
+  if (/^[a-z]+(?:[A-Z][a-z0-9]*)*$/.test(value)) return false;
+  return !(TYPE_NAME.test(value) && TYPE_CONTEXT.has(next));
 }
 
 // TB-136: credentials in a URL of any other scheme (https, smtp, ftp): only
