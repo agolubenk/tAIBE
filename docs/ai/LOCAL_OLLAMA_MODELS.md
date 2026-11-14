@@ -22,9 +22,10 @@
 > Облачный GLM-автокомплит невозможен в принципе: у Z.AI нет `/completions` (FIM) эндпоинта —
 > Continue получал HTTP 404. Тёплая латентность FIM ≈ 0.8 с.
 >
-> **Управление шлюзом HR Gateway (:8789):** код и npm-скрипты — в worktree `worktrees/feature/llm-gateway`
-> (`cd worktrees/feature/llm-gateway && npm run llm-gateway:restart|status|sync`), а данные (`.env` с ключами
-> OpenRouter, `.state`) — всегда в основном дереве, `infra/llm-gateway/` — лаунчер резолвит их туда сам.
+> **Управление шлюзом HR Gateway (:8789):** код — `infra/llm-gateway/` (перенос `e5289f88c`, 01.11), npm-скрипты —
+> в корневом `package.json:29-36` (`npm run llm-gateway:restart|status|sync`; сверка 14.11). Данные (`.env` с ключами
+> OpenRouter, `.state`) — всегда в основном дереве, `infra/llm-gateway/`; при запуске из worktree лаунчер резолвит
+> их туда сам (`infra/llm-gateway/bin/llm-gateway.sh:3,8`).
 
 Четыре **независимые роли** моделей для разных задач. Один процесс `ollama serve` на `http://127.0.0.1:11434` — в каждом запросе указывается своё имя модели. Ollama сам выгружает/подгружает веса (`OLLAMA_KEEP_ALIVE`, `OLLAMA_MAX_LOADED_MODELS`).
 
