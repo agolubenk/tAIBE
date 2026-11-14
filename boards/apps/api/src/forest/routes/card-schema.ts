@@ -25,6 +25,10 @@ export const cardMetaSchema = z
     contextPack: z.string().nullable(),
     updatedBy: z.string().nullable(),
     updatedAt: nullableResponseTimestamp,
+    revision: z.string().nullable().openapi({
+      description:
+        "Send it back as expectedMetaRevision so a change made since your read is not overwritten. null: the card has no fields yet.",
+    }),
     mirrored: z.boolean().openapi({
       description:
         "Notion is the source of this card's Notion fields: it came from a Notion page and the mirror runs for the workspace (R-081). They are read-only while true.",
