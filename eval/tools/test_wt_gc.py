@@ -186,16 +186,49 @@ class WtGcTest(unittest.TestCase):
         self.assertEqual(wt_gc.main(["wt_gc.py", "branch", self.repo, ""]), 2)
         self.assertEqual(wt_gc.main(["wt_gc.py", "branch", os.path.join(self.tmp, "нет"), "fix/x"]), 1)
 
-    def test_limit(self):
+    def _limit(self, n):
         old = wt_gc.LIMIT
         self.addCleanup(setattr, wt_gc, "LIMIT", old)
-        wt_gc.LIMIT = 2
+        wt_gc.LIMIT = n
+        self.addCleanup(os.environ.pop, "WT_LIMIT_ENFORCE_FROM", None)
+        os.environ.pop("WT_LIMIT_ENFORCE_FROM", None)
+        return os.path.join(self.repo, ".git", wt_gc.ARMED_FILE)
+
+    def test_limit_blocks_once_armed(self):
+        """Ниже предела метка взводится; дальше предел останавливает и до ENFORCE_FROM."""
+        armed = self._limit(2)
         self.wt("f/1")
-        self.assertIsNone(wt_gc.limit_text(self.repo))
+        self.assertEqual(wt_gc.limit_text(self.repo, today="2026-11-14"), (None, None))
+        self.assertTrue(os.path.exists(armed))
         self.wt("f/2")
         self.assertEqual(wt_gc.count(self.repo), 2)
-        self.assertIn("Предел worktree продукта — 2", wt_gc.limit_text(self.repo) or "")
+        mode, text = wt_gc.limit_text(self.repo, today="2026-11-14")
+        self.assertEqual(mode, "block")
+        self.assertIn("Предел worktree продукта — 2", text)
         self.assertEqual(wt_gc.main(["wt_gc.py", "check-limit", self.repo]), 3)
+
+    def test_limit_warns_until_date_or_drop(self):
+        """Решение владельца 14.11 (B): продукт выше предела — предупреждение до ENFORCE_FROM или до спуска к пределу."""
+        armed = self._limit(1)
+        self.wt("f/1")
+        self.wt("f/2")
+        self.assertFalse(os.path.exists(armed))  # проверок не было: продукт сразу выше предела
+        mode, text = wt_gc.limit_text(self.repo, today="2026-11-14")
+        self.assertEqual(mode, "warn")
+        self.assertIn("Предупреждение", text)
+        self.assertIn("20.11", text)
+        self.assertFalse(os.path.exists(armed))
+        self.assertEqual(wt_gc.limit_text(self.repo, today=wt_gc.ENFORCE_FROM)[0], "block")
+        # Переменная окружения только приближает дату остановки.
+        os.environ["WT_LIMIT_ENFORCE_FROM"] = "2026-12-31"
+        self.assertEqual(wt_gc.limit_text(self.repo, today="2026-11-14")[0], "warn")
+        os.environ["WT_LIMIT_ENFORCE_FROM"] = "2026-11-01"
+        self.assertEqual(wt_gc.main(["wt_gc.py", "check-limit", self.repo]), 3)
+        del os.environ["WT_LIMIT_ENFORCE_FROM"]
+        # Продукт спустился до предела — метка взведена, после роста — остановка.
+        git(self.repo, "worktree", "remove", os.path.join(self.repo, "worktrees", "f/2"))
+        self.assertEqual(wt_gc.limit_text(self.repo, today="2026-11-14")[0], "block")
+        self.assertTrue(os.path.exists(armed))
 
 
 if __name__ == "__main__":

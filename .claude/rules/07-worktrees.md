@@ -74,6 +74,8 @@ make wt-rm TRACK=fix NAME=candidate-merge-n-plus-one
 - Не больше **10** worktree на продукт. Перед новым — найди открытый worktree своего сектора. `make wt-add` и
   `git worktree add` на пределе останавливает `eval/tools/wt_gc.py check-limit` (хук
   `.claude/hooks/pre-tool-use-wt-limit.sh`); исключение — только по слову владельца, `WT_LIMIT_CHECK=0`.
+  До 20.11 (владелец 14.11, `d-taibe-ops52-limit-1311` = B) продукт выше предела получает только предупреждение —
+  своди работу в существующие worktree. Остановка включается сама 20.11 или когда продукт впервые опустится до 10.
 - Работа влита — worktree удаляется сам: Нерв видит мёрж PR в основную ветку и вызывает `wt_gc.py branch`
   (`eval/nerve/sources.py`). Удаляется только копия, чей HEAD — голова влитого PR, без правок, без неотслеживаемых
   файлов, без игнорируемого состояния сессии (`.ai/task/`, `.claude/memory/session/`, `CLAUDE.local.md`, правленый

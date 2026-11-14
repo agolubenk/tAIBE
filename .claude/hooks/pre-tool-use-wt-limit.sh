@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse (Bash): `git worktree add` сверх предела worktree продукта (OPS-52, решение владельца 13.11: не больше 10
-# на продукт) — блок с подсказкой. Предел и подсчёт — eval/tools/wt_gc.py check-limit по основному checkout репозитория.
+# на продукт) — блок с подсказкой; до 20.11, пока продукт не спускался до предела, — только предупреждение (14.11).
+# Предел, режим и подсчёт — eval/tools/wt_gc.py check-limit по основному checkout репозитория.
 # Какие команды — фильтр `if` в .claude/settings.json; обход для одной команды — WT_LIMIT_CHECK=0 в её начале.
 # Fail-open: любой сбой самого хука — exit 0.
 input="$(cat)" || exit 0
@@ -42,7 +43,14 @@ repo="$(dirname "$common")"
 script="$(dirname "$0")/../../eval/tools/wt_gc.py"
 [ -f "$script" ] || exit 0
 err="$(python3 -I "$script" check-limit "$repo" 2>&1 >/dev/null)"
-[ $? -eq 3 ] || exit 0
+rc=$?
+# 4 — продукт выше предела, но остановка ещё не включена (решение владельца 14.11, вариант B): команда идёт,
+# модель получает предупреждение в контекст.
+if [ $rc -eq 4 ]; then
+  jq -n --arg t "$err" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $t}}' 2>/dev/null
+  exit 0
+fi
+[ $rc -eq 3 ] || exit 0
 {
   echo "Новый worktree не создан."
   printf '%s\n' "$err"

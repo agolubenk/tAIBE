@@ -29,9 +29,17 @@ def run(cmd, stdin=None, timeout=30):
 
 # ---------- GitHub ----------
 
+PULLS_PAGE = 100
+PULLS_MAX_PAGES = 10
+
+
 def _gh_list(repo, etag):
-    """Открытые PR с условным запросом. Возвращает (список | None при 304, новый etag)."""
-    cmd = ["gh", "api", "-i", f"repos/{repo}/pulls?state=open&per_page=50"]
+    """Открытые PR, все страницы; первая — условным запросом. Возвращает (список | None при 304, новый etag).
+    Порядок — по обновлению: любое изменение PR (голова, комментарий) поднимает его на первую страницу, поэтому 304
+    первой значит «не менялось ничего». Раньше — одна страница из 50: при 125 открытых PR (14.11) старые выпадали
+    из списка, Нерв объявлял их закрытыми и переставал считать их вердикты и мёрж."""
+    base = f"repos/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={PULLS_PAGE}"
+    cmd = ["gh", "api", "-i", base]
     if etag:
         cmd[2:2] = ["-H", f"If-None-Match: {etag}"]
     code, out, err = run(cmd)
@@ -41,7 +49,14 @@ def _gh_list(repo, etag):
     if code != 0:
         raise RuntimeError(f"gh pulls: {(err or head).strip()[:200]}")
     m = re.search(r"(?im)^etag:\s*(.+?)\s*$", head)
-    return json.loads(body), (m.group(1) if m else "")
+    prs, page = json.loads(body), 1
+    while len(prs) == PULLS_PAGE * page and page < PULLS_MAX_PAGES:
+        page += 1
+        code, out, err = run(["gh", "api", f"{base}&page={page}"])
+        if code != 0:
+            raise RuntimeError(f"gh pulls page {page}: {err.strip()[:200]}")
+        prs.extend(json.loads(out))
+    return prs, (m.group(1) if m else "")
 
 
 def _gh_comments(repo, n):
@@ -64,7 +79,8 @@ def _gh_view(repo, n):
 
 # rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. При первом проходе
 # нового кода etag сбрасывается: полный список разбирает их заново.
-# rev 3 (OPS-52): у известных PR нет ветки и базы — полный список один раз, чтобы уборка worktree их знала.
+# rev 3 (OPS-52): у известных PR нет ветки и базы — полный список один раз, чтобы уборка worktree их знала. Он же
+# возвращает PR, которые одна страница из 50 потеряла: они придут как новые (pr.new в дайджест), один раз.
 GH_STATE_REV = 3
 
 
@@ -115,12 +131,16 @@ def poll_github(ctx):
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     for n in [k for k in known if k not in open_now]:
         try:
-            _, _, _, merged = _gh_view(g["repo"], int(n))
+            _, _, state, merged = _gh_view(g["repo"], int(n))
         except Exception as e:  # noqa: BLE001 — PR остаётся в prs, повтор на следующем проходе
             fails.append(f"#{n}: {e}")
             continue
+        if state == "OPEN":
+            continue  # нет в списке (сдвиг при листании, больше PULLS_MAX_PAGES страниц), но открыт: не закрывать
         word = "влит" if merged else "закрыт"
-        ctx.emit(f"gh:closed:{n}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}", "github")
+        # Ключ по исходу: ложное «закрыт» прошлых версий не глушит настоящее «влит» того же номера.
+        ctx.emit(f"gh:{'merged' if merged else 'closed'}:{n}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}",
+                 "github")
         if merged and known[n].get("branch"):
             _gc_worktree(ctx, n, known[n]["branch"], known[n].get("head", ""), known[n].get("base", ""))
         del known[n]

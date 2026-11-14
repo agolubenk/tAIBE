@@ -13,11 +13,13 @@
 - на worktree не ссылаются ссылки в ~/.config, ~/.local/bin и задачи launchd;
 - `git worktree remove` без `--force` — git сам откажет при грязной или запертой (`git worktree lock`) копии.
 
-Предел (решение владельца 13.11): не больше LIMIT worktree на продукт. `count` / `check-limit` — для `make wt-add` и хука.
+Предел (владелец 13.11): не больше LIMIT worktree на продукт. Режим (владелец 14.11, d-taibe-ops52-limit-1311 = B):
+сначала только предупреждение; остановка включается сама с ENFORCE_FROM или когда продукт опустится до LIMIT (метка
+wt-limit-armed в общей папке .git, обратно не снимается). `count` / `check-limit` — для `make wt-add` и хука.
 
     python3 -I eval/tools/wt_gc.py branch <repo_root> <branch> [--head SHA] [--base REF] [--json]  # Нерв после мёржа
     python3 -I eval/tools/wt_gc.py sweep <repo_root> [--dry-run] [--json]  # все worktree с влитыми PR (gh)
-    python3 -I eval/tools/wt_gc.py check-limit <repo_root>                # код 3 — предел достигнут
+    python3 -I eval/tools/wt_gc.py check-limit <repo_root>                # 3 — остановка, 4 — только предупреждение
 """
 import json
 import os
@@ -39,6 +41,9 @@ def _limit():
 
 
 LIMIT = _limit()
+# С этой даты предел останавливает всегда (решение владельца 14.11, вариант B); раньше — если метка взведена.
+ENFORCE_FROM = "2026-11-20"
+ARMED_FILE = "wt-limit-armed"
 # Работа в worktree за это время — повод оставить его (сессия Claude продолжает связанную задачу в той же копии).
 ACTIVE_S = 3600
 # Игнорируемое, которое восстанавливается установкой или сборкой: с ним копию можно удалить.
@@ -166,7 +171,8 @@ def _active_recently(path, now=None):
 
 def _odd_ignored(path, repo):
     """Игнорируемые файлы, которые не восстановить: не из сборки и не копии файлов основного checkout."""
-    code, out, err = _run(["git", "status", "--porcelain", "--ignored", "--untracked-files=normal"], cwd=path)
+    code, out, err = _run(["git", "--no-optional-locks", "status", "--porcelain", "--ignored", "--untracked-files=normal"],
+                          cwd=path)
     if code:
         raise GitError(f"git status --ignored: {err[:120]}")
     odd = []
@@ -214,7 +220,8 @@ def why_not(wt, repo, cwds, refs, head=None, base=None):
     src = _referenced(p, refs)
     if src:
         return f"на него ссылается {src.replace(os.path.expanduser('~'), '~')}"
-    code, out, err = _run(["git", "status", "--porcelain"], cwd=p)
+    # --no-optional-locks: status не обновляет index, иначе каждый проход уборки сам продлевал бы «работали N мин назад».
+    code, out, err = _run(["git", "--no-optional-locks", "status", "--porcelain"], cwd=p)
     if code:
         return f"git status: {err[:120]}"
     if out:
@@ -291,14 +298,48 @@ def count(repo):
     return sum(1 for wt in worktrees(repo) if not wt["prunable"])
 
 
-def limit_text(repo):
-    """Отказ на пределе: сколько worktree и что с ними сделать."""
+def _enforce_from():
+    """WT_LIMIT_ENFORCE_FROM может только приблизить дату остановки (тесты), не отодвинуть."""
+    v = os.environ.get("WT_LIMIT_ENFORCE_FROM") or ""
+    return v if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) and v < ENFORCE_FROM else ENFORCE_FROM
+
+
+def _armed_path(repo):
+    code, out, _ = _run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=repo)
+    return os.path.join(out, ARMED_FILE) if not code and out else ""
+
+
+def limit_state(repo, today=None):
+    """(число worktree, режим): None — ниже предела; "block" — остановка; "warn" — выше предела, пока только
+    предупреждение. Продукт на пределе или ниже — метка взводится, и дальше предел останавливает всегда."""
     n = count(repo)
+    armed = _armed_path(repo)
+    if n <= LIMIT and armed and not os.path.exists(armed):
+        try:
+            with open(armed, "w") as fh:
+                fh.write(time.strftime("%Y-%m-%d %H:%M") + f" {n}\n")
+        except OSError:
+            pass
     if n < LIMIT:
-        return None
-    return (f"Предел worktree продукта — {LIMIT} (решение владельца 13.11), сейчас {n}. Сначала закончите или "
+        return n, None
+    if (today or time.strftime("%Y-%m-%d")) >= _enforce_from() or (armed and os.path.exists(armed)):
+        return n, "block"
+    return n, "warn"
+
+
+def limit_text(repo, today=None):
+    """(режим, текст): режим None — ниже предела, "block" — отказ, "warn" — предупреждение."""
+    n, mode = limit_state(repo, today)
+    if not mode:
+        return None, None
+    text = (f"Предел worktree продукта — {LIMIT} (решение владельца 13.11), сейчас {n}. Сначала закончите или "
             f"объедините работу: связанные задачи сектора — в одном worktree. Влитые удаляет "
             f"`python3 -I eval/tools/wt_gc.py sweep {repo}`; список — `git worktree list`.")
+    if mode == "warn":
+        d = _enforce_from()
+        text = (f"Предупреждение: worktree создаётся, но продукт выше предела. Остановка включится сама "
+                f"{d[8:10]}.{d[5:7]} или когда worktree станет {LIMIT} и меньше (решение владельца 14.11). " + text)
+    return mode, text
 
 
 def _opt(argv, name):
@@ -316,11 +357,10 @@ def main(argv):
             print(count(repo))
             return 0
         if cmd == "check-limit":
-            text = limit_text(repo)
+            mode, text = limit_text(repo)
             if text:
                 print(text, file=sys.stderr)
-                return 3
-            return 0
+            return {"block": 3, "warn": 4}.get(mode, 0)
         if cmd == "branch":
             if len(argv) < 4 or not argv[3] or argv[3].startswith("--"):
                 print("branch <repo_root> <branch> [--head SHA] [--base REF]", file=sys.stderr)
