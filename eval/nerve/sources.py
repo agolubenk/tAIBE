@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 
 import quorum
@@ -28,9 +29,17 @@ def run(cmd, stdin=None, timeout=30):
 
 # ---------- GitHub ----------
 
+PULLS_PAGE = 100
+PULLS_MAX_PAGES = 10
+
+
 def _gh_list(repo, etag):
-    """Открытые PR с условным запросом. Возвращает (список | None при 304, новый etag)."""
-    cmd = ["gh", "api", "-i", f"repos/{repo}/pulls?state=open&per_page=50"]
+    """Открытые PR, все страницы; первая — условным запросом. Возвращает (список | None при 304, новый etag).
+    Порядок — по обновлению: любое изменение PR (голова, комментарий) поднимает его на первую страницу, поэтому 304
+    первой значит «не менялось ничего». Раньше — одна страница из 50: при 125 открытых PR (14.11) старые выпадали
+    из списка, Нерв объявлял их закрытыми и переставал считать их вердикты и мёрж."""
+    base = f"repos/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={PULLS_PAGE}"
+    cmd = ["gh", "api", "-i", base]
     if etag:
         cmd[2:2] = ["-H", f"If-None-Match: {etag}"]
     code, out, err = run(cmd)
@@ -40,7 +49,14 @@ def _gh_list(repo, etag):
     if code != 0:
         raise RuntimeError(f"gh pulls: {(err or head).strip()[:200]}")
     m = re.search(r"(?im)^etag:\s*(.+?)\s*$", head)
-    return json.loads(body), (m.group(1) if m else "")
+    prs, page = json.loads(body), 1
+    while len(prs) == PULLS_PAGE * page and page < PULLS_MAX_PAGES:
+        page += 1
+        code, out, err = run(["gh", "api", f"{base}&page={page}"])
+        if code != 0:
+            raise RuntimeError(f"gh pulls page {page}: {err.strip()[:200]}")
+        prs.extend(json.loads(out))
+    return prs, (m.group(1) if m else "")
 
 
 def _gh_comments(repo, n):
@@ -63,7 +79,9 @@ def _gh_view(repo, n):
 
 # rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. При первом проходе
 # нового кода etag сбрасывается: полный список разбирает их заново.
-GH_STATE_REV = 2
+# rev 3 (OPS-52): у известных PR нет ветки и базы — полный список один раз, чтобы уборка worktree их знала. Он же
+# возвращает PR, которые одна страница из 50 потеряла: они придут как новые (pr.new в дайджест), один раз.
+GH_STATE_REV = 3
 
 
 def poll_github(ctx):
@@ -90,6 +108,10 @@ def poll_github(ctx):
         n = pr["number"]
         open_now.add(str(n))
         p = known.setdefault(str(n), {"head": "", "updated": "", "seen": [], "changes_by": []})
+        # OPS-52: после мёржа — уборка worktree этой ветки. PR из форка — не наша ветка, даже при том же имени.
+        head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+        if (pr.get("head") or {}).get("ref") and head_repo in (None, ctx.cfg["github"]["repo"]):
+            p["branch"], p["base"] = pr["head"]["ref"], (pr.get("base") or {}).get("ref", "")
         # «author» — признак разобранного PR: в rev 1 head и updated писались до сбоя _gh_view (SE-40).
         if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"] and "author" in p:
             continue
@@ -109,16 +131,50 @@ def poll_github(ctx):
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     for n in [k for k in known if k not in open_now]:
         try:
-            _, _, _, merged = _gh_view(g["repo"], int(n))
+            _, _, state, merged = _gh_view(g["repo"], int(n))
         except Exception as e:  # noqa: BLE001 — PR остаётся в prs, повтор на следующем проходе
             fails.append(f"#{n}: {e}")
             continue
+        if state == "OPEN":
+            continue  # нет в списке (сдвиг при листании, больше PULLS_MAX_PAGES страниц), но открыт: не закрывать
         word = "влит" if merged else "закрыт"
-        ctx.emit(f"gh:closed:{n}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}", "github")
+        # Ключ по исходу: ложное «закрыт» прошлых версий не глушит настоящее «влит» того же номера.
+        ctx.emit(f"gh:{'merged' if merged else 'closed'}:{n}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}",
+                 "github")
+        if merged and known[n].get("branch"):
+            _gc_worktree(ctx, n, known[n]["branch"], known[n].get("head", ""), known[n].get("base", ""))
         del known[n]
     # etag — только после чистого прохода: иначе 304 спрячет недоразобранные PR до следующего изменения списка.
     st["etag"] = "" if fails else etag
     _raise_fails(fails)
+
+
+WT_GC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "wt_gc.py")
+
+
+def _gc_worktree(ctx, n, branch, head="", base=""):
+    """OPS-52 (решение владельца 13.11 «после мёржа»): worktree влитой ветки удаляется, если копия чистая, всё на
+    remote и в ней никто не работает (eval/tools/wt_gc.py). Удалён — запись в журнал без доставки; оставлен —
+    координатору с причиной. Сбой уборки не мешает проходу GitHub: PR уже снят, повтор — `wt_gc.py sweep`."""
+    try:
+        cmd = [sys.executable, "-I", WT_GC, "branch", ctx.cfg["repo_root"], branch, "--json"]
+        # Голова и база PR: worktree удаляется, только если его HEAD — голова влитого PR, а база — основная ветка.
+        cmd += (["--head", head] if head else []) + (["--base", base] if base else [])
+        code, out, err = run(cmd, timeout=300)
+        res = json.loads(out) if code == 0 and out else None
+    except Exception as e:  # noqa: BLE001 — таймаут или сбой разбора: только запись
+        code, res, err = 1, None, str(e)
+    if res is None:
+        # Сбой — координатору: повтора нет (PR уже снят), worktree занимает место в пределе, пока его не уберёт sweep.
+        ctx.emit(f"wt:gc:{n}", "wt.gc", DIGEST, ["coord"],
+                 f"#{n}: уборка worktree {branch} не удалась: {(err or '')[:120]} — wt_gc.py sweep", "github")
+        return
+    for r in res:
+        if r["removed"]:
+            ctx.emit(f"wt:gc:{n}:{r['path']}", "wt.gc", DIGEST, [], f"#{n}: worktree {r['path']} удалён", "github")
+        else:
+            ctx.emit(f"wt:gc:{n}:{r['path']}", "wt.gc", DIGEST, ["coord"],
+                     f"#{n} влит, worktree {r['path']} оставлен — {r['reason']}", "github")
 
 
 def _raise_fails(fails):

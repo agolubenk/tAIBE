@@ -32,6 +32,7 @@ wt-list:
 wt-add:
 	@test -n "$(TRACK)" || (echo "TRACK required (feature|fix|refactor|spike|review)" && exit 1)
 	@test -n "$(NAME)" || (echo "NAME required (kebab-case topic)" && exit 1)
+	@[ "$(WT_LIMIT_CHECK)" = 0 ] || { python3 -I eval/tools/wt_gc.py check-limit "$(CURDIR)"; rc=$$?; [ $$rc -ne 3 ]; }
 	@mkdir -p "worktrees/$(TRACK)"
 	@if git show-ref --verify --quiet "refs/heads/$(TRACK)/$(NAME)"; then \
 		git worktree add "worktrees/$(TRACK)/$(NAME)" "$(TRACK)/$(NAME)"; \

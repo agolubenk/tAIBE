@@ -294,14 +294,17 @@ class FakeGh:
     """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
     REPO = CFG["github"]["repo"]
 
-    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None):
+    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None, closed=(), page2=()):
         self.open_prs, self.merged, self.broken, self.etag = open_prs, set(merged), set(broken), etag
+        self.closed, self.page2 = set(closed), list(page2)
         self.comments = comments or {}
         self.calls = []
 
     def __call__(self, cmd, stdin=None, timeout=30):
         self.calls.append(list(cmd))
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/pulls"):
+            if cmd[-1].endswith("&page=2"):
+                return 0, json.dumps(self.page2), ""
             if "-H" in cmd and self.etag in cmd[cmd.index("-H") + 1]:
                 return 1, "HTTP/2.0 304 Not Modified\r\n\r\n", ""
             return 0, f"HTTP/2.0 200 OK\r\nEtag: {self.etag}\r\n\r\n" + json.dumps(self.open_prs), ""
@@ -315,7 +318,8 @@ class FakeGh:
             if n in self.broken:
                 return 1, "", "HTTP 502"
             d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": "SUCCESS"}],
-                 "state": "MERGED" if n in self.merged else "OPEN", "mergedAt": "2026-11-04T15:55:00Z"
+                 "state": "MERGED" if n in self.merged else "CLOSED" if n in self.closed else "OPEN",
+                 "mergedAt": "2026-11-04T15:55:00Z"
                  if n in self.merged else None}
             return 0, json.dumps(d), ""
         raise AssertionError(f"неожиданный вызов: {cmd}")
@@ -390,6 +394,62 @@ class GithubPollTest(unittest.TestCase):
         sources.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
         self.assertEqual(self.kinds().count(("pr.closed", "#457 влит")), 1)
 
+    def test_merged_pr_removes_its_worktree_and_reports_kept_ones(self):
+        """OPS-52: ветка PR запоминается из списка открытых; после «влит» — wt_gc.py branch по repo_root продукта."""
+        pr = _pr(460, "c" * 40)
+        pr["head"]["ref"], pr["base"] = "fix/done", {"ref": "main"}
+        sources.run = FakeGh([pr])
+        sources.poll_github(self.ctx)
+        self.assertEqual(self.ctx.state["github"]["prs"]["460"]["branch"], "fix/done")
+        gc_calls = []
+        fake = FakeGh([], etag='W/"e2"', merged={460})
+
+        def run(cmd, stdin=None, timeout=30):
+            if cmd[2:4] == [sources.WT_GC, "branch"]:
+                gc_calls.append(cmd)
+                return 0, json.dumps([{"path": "/r/worktrees/fix/done", "branch": "fix/done", "removed": True},
+                                      {"path": "/r/x", "branch": "fix/done", "removed": False, "reason": "незакоммиченные изменения: 2"}]), ""
+            return fake(cmd, stdin, timeout)
+        sources.run = run
+        sources.poll_github(self.ctx)
+        self.assertEqual([c[4:] for c in gc_calls], [[self.ctx.cfg["repo_root"], "fix/done", "--json", "--head", "c" * 40, "--base", "main"]])
+        self.assertIn(("pr.closed", "#460 влит"), self.kinds())
+        recs = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "wt.gc"]
+        self.assertEqual([(e["to"], e["text"]) for e in recs], [
+            ([], "#460: worktree /r/worktrees/fix/done удалён"),
+            (["coord"], "#460 влит, worktree /r/x оставлен — незакоммиченные изменения: 2")])
+
+    def test_fork_pr_with_same_branch_name_is_not_ours(self):
+        """Ревью #178: PR из форка с именем локальной ветки не должен убрать чужой worktree."""
+        pr = _pr(463, "f" * 40)
+        pr["head"]["ref"], pr["head"]["repo"] = "fix/done", {"full_name": "someone/fork"}
+        sources.run = FakeGh([pr])
+        sources.poll_github(self.ctx)
+        self.assertNotIn("branch", self.ctx.state["github"]["prs"]["463"])
+
+    def test_closed_unmerged_pr_and_gc_failure_do_not_break_the_pass(self):
+        pr = _pr(461, "d" * 40)
+        pr["head"]["ref"] = "fix/dropped"
+        sources.run = FakeGh([pr])
+        sources.poll_github(self.ctx)
+        fake = FakeGh([], etag='W/"e2"', closed={461})  # закрыт без мёржа — уборки нет
+        sources.run = fake
+        sources.poll_github(self.ctx)
+        self.assertFalse([c for c in fake.calls if sources.WT_GC in c])
+        self.assertIn(("pr.closed", "#461 закрыт"), self.kinds())
+        self.assertNotIn("461", self.ctx.state["github"]["prs"])
+        pr = _pr(462, "e" * 40)
+        pr["head"]["ref"] = "fix/boom"
+        sources.run = FakeGh([pr], etag='W/"e3"')
+        sources.poll_github(self.ctx)
+        fake = FakeGh([], etag='W/"e4"', merged={462})
+        sources.run = lambda cmd, stdin=None, timeout=30: (1, "", "timeout") if sources.WT_GC in cmd else fake(cmd, stdin, timeout)
+        sources.poll_github(self.ctx)
+        self.assertNotIn("462", self.ctx.state["github"]["prs"])
+        self.assertIn(("pr.closed", "#462 влит"), self.kinds())
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["key"] == "wt:gc:462"]
+        self.assertEqual([(e["to"], e["text"]) for e in rec], [(["coord"], "#462: уборка worktree fix/boom не удалась: timeout — wt_gc.py sweep")])
+
     def test_stuck_open_pr_without_author_is_resolved_after_upgrade(self):
         # rev 1 записывал head и updated до падения _gh_view: PR выглядел увиденным, но author и checks пусты.
         sha, upd = "9" * 40, "2026-11-04T10:00:00Z"
@@ -417,6 +477,23 @@ class GithubPollTest(unittest.TestCase):
         self.assertIn("author", st["prs"]["1"])
         self.assertEqual(st["etag"], 'W/"e1"')
         self.assertEqual(self.kinds().count(("pr.new", "#1 открыт: PR 1")), 1, "повтор не дублирует событие")
+
+    def test_all_pages_are_read_and_an_open_pr_missing_from_the_list_is_not_closed(self):
+        """14.11: 125 открытых PR при одной странице из 50 — старые выпадали, Нерв объявлял их закрытыми."""
+        page1 = [_pr(n, f"{n:040d}") for n in range(300, 200, -1)]
+        fake = FakeGh(page1, page2=[_pr(173, "1" * 40)])
+        sources.run = fake
+        sources.poll_github(self.ctx)
+        lists = [c[-1] for c in fake.calls if c[:2] == ["gh", "api"] and "/pulls?" in c[-1]]
+        self.assertEqual(len(lists), 2)
+        self.assertIn("sort=updated", lists[0])
+        self.assertIn("per_page=100", lists[0])
+        self.assertIn("173", self.ctx.state["github"]["prs"])
+        # #173 нет в списке (сдвиг при листании), но он открыт — не закрыт и остаётся под наблюдением.
+        sources.run = FakeGh(page1, etag='W/"e2"')
+        sources.poll_github(self.ctx)
+        self.assertIn("173", self.ctx.state["github"]["prs"])
+        self.assertNotIn("pr.closed", [k for k, _ in self.kinds()])
 
     def test_closed_pr_that_fails_stays_for_retry(self):
         sources.run = FakeGh([], broken={7})
