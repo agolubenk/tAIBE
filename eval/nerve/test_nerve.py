@@ -855,6 +855,26 @@ class ProductsTest(unittest.TestCase):
         self.assertEqual([(r["kind"], r["to"]) for r in self.records("taibe")], [("owner.answer", ["release"])])
         self.assertEqual([r for r in self.records() if r["kind"] == "owner.answer"], [])
 
+    def test_answer_in_another_journal_is_not_repeated(self):
+        """SE-109, линза boards: ответ, уже записанный в журнал HR по старому правилу, после смены `queue.match` в
+        журнал tAIBE не идёт; новый ответ на тот же пункт (другое `at`) — идёт."""
+        self.taibe["queue"] = dict(CFG["queue"], match=r"-taibe(-|\d|$)", source_roles=[["taibe-310", "release"]])
+        ctx = self.peered()
+        old_at, new_at = "2026-11-14T13:41:36.560Z", "2026-11-14T19:00:00Z"
+        ctx.journal.emit(f"oq:answer:m-taibe310-1411:{old_at}", "owner.answer", NERVOUS, ["coord"], "старое", "queue")
+        items = [{"id": "m-taibe310-1411", "product": "hr-helper", "data": {"kind": "merge", "source": "taibe-310"}}]
+        checks = [{"id": "m-taibe310-1411", "data": {"done": True, "at": old_at}}]
+        poll = lambda: sources.poll_queue(ctx)  # noqa: E731
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            poll()
+        self.assertEqual([r for r in self.records("taibe") if r["kind"] == "owner.answer"], [])
+        self.assertEqual(len([r for r in self.records() if r["kind"] == "owner.answer"]), 1, "в HR — только старое")
+        checks = [{"id": "m-taibe310-1411", "data": {"done": True, "at": new_at}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            poll()
+        self.assertEqual([r["key"] for r in self.records("taibe") if r["kind"] == "owner.answer"],
+                         [f"oq:answer:m-taibe310-1411:{new_at}"])
+
     def test_broken_queue_match_falls_back_to_substring(self):
         """SE-109: битое выражение (минуя проверку `products.py`) не роняет обход очереди — сравнение подстрокой."""
         self.taibe["queue"] = dict(CFG["queue"], match="-taibe[")
