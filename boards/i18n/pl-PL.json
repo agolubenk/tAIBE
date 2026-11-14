@@ -1300,7 +1300,7 @@
 					"GITHUB_UNAVAILABLE": "GitHub did not answer. Try again, or reconnect the integration.",
 					"LINK_CONTENT_TYPE": "Only HTML, Markdown and plain text pages can be added.",
 					"LINK_EMPTY": "The page has no text to add; it may need JavaScript to show it.",
-					"LINK_BUSY": "Other links are still loading in this workspace. Try again in a few seconds.",
+					"LINK_BUSY": "Too many links are loading right now. Try again in a few seconds.",
 					"LINK_INVALID_URL": "Enter a valid https link without a user name or password.",
 					"LINK_NOT_HTTPS": "Only https links can be added.",
 					"LINK_PDF_UNSUPPORTED": "PDF links are not supported yet.",

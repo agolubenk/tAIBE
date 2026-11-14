@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { linkFetchesInFlight, withLinkSlot } from "./link-slots";
+import {
+  LINK_FETCHES_PER_PROCESS,
+  linkFetchesInFlight,
+  withLinkSlot,
+} from "./link-slots";
 
 function pending() {
   let release!: () => void;
@@ -45,6 +49,28 @@ describe("withLinkSlot (TB-132)", () => {
     a.release();
     b.release();
     await Promise.all(busy);
+  });
+
+  it("caps the process at eight fetches across workspaces", async () => {
+    const held = pending();
+    const busy = Array.from({ length: LINK_FETCHES_PER_PROCESS }, (_, i) =>
+      withLinkSlot(`ws-many-${i}`, () => held.promise),
+    );
+    expect(linkFetchesInFlight()).toBe(LINK_FETCHES_PER_PROCESS);
+    const fresh = vi.fn(async () => "never");
+
+    await expect(withLinkSlot("ws-fresh", fresh)).rejects.toMatchObject({
+      status: 429,
+      code: "LINK_BUSY",
+    });
+    expect(fresh).not.toHaveBeenCalled();
+
+    held.release();
+    await Promise.all(busy);
+    expect(linkFetchesInFlight()).toBe(0);
+    await expect(withLinkSlot("ws-fresh", async () => "ok")).resolves.toBe(
+      "ok",
+    );
   });
 
   it("frees the slot when the fetch fails", async () => {
