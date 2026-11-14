@@ -43,6 +43,14 @@ class ReleaseStatusTest(unittest.TestCase):
     def test_quorum_pr_needs_nothing(self):
         self.assertFalse(any("PR #440" in t for t in self.todo))
 
+    def test_second_session_is_the_same_lens(self):
+        """#324 B3: approve backend и backend-2 — одна линза, как в кворуме Нерва (quorum.tally)."""
+        pr = {"number": 450, "state": "open", "merged_at": None, "head": {"sha": "3" * 40}, "base": {"ref": "main"}}
+        labels = ("Бэкенд (роль 4)", "Бэкенд (роль 7)", "Линза плана (роль 2)")
+        rows, todo = rs.build_rows([pr], {450: [{"body": f"{x}: approve на 3333333"} for x in labels]}, [], 3)
+        self.assertEqual(rows[0][4], 2)
+        self.assertIn("PR #450 голова 333333333: линз 2/3", todo)
+
     def test_render(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
