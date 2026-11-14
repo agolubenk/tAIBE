@@ -346,13 +346,16 @@ describe("ownerReverts (TB-107)", () => {
       decision("d-hr-focus-20261112"),
       decision("d-hr-focus-20261113"),
       decision("d-taibe-focus-20261113"),
+      decision("d-taibe-focus-20261114"),
       decision("d-hr-due-20261113"),
       decision("d-hr-focus-20261101"),
     ];
     const checks = [
       doc("d-hr-focus-20261112", { choice: "revert", ownerAt: "2026-11-12T09:00:00Z" }),
       doc("d-hr-focus-20261113", { choice: "revert", ownerAt: "2026-11-13T09:00:00Z" }),
+      // An agent's status, and the owner's note without «Вернуть», do not count.
       doc("d-taibe-focus-20261113", { agentNote: "revert", agentStatus: "done" }),
+      doc("d-taibe-focus-20261114", { note: "ок", ownerAt: "2026-11-13T12:00:00Z" }),
       doc("d-hr-due-20261113", { choice: "revert", ownerAt: "2026-11-13T10:00:00Z" }),
       doc("d-hr-focus-20261101", { choice: "revert", ownerAt: "2026-11-01T09:00:00Z" }),
       doc("d-hr-focus-20261199", { choice: "revert", ownerAt: "2026-11-13T11:00:00Z" }),
