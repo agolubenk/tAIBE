@@ -4,8 +4,8 @@
 > взято: идея OpenProject (циклы связей), идеи i-have-adhd и agno (судья A/B и nonce-фенсы, `eval/evolve/`). Сводка
 > вариантов и предложений — ниже, подробный разбор — в папке инструмента. Адверсариальная проверка разборов — пока
 > только авторская (по три линзы в каждом файле); прогон линз консилиума — следующий шаг.
-> **14.11:** вторая волна — инструменты ревью этапа 2 (TB-167, S23-1): abide, react-doctor, checkov разбираются;
-> review_ducktective — позже, hetty — живость для S24-1.
+> **14.11:** вторая волна — инструменты ревью этапа 2 (TB-167, S23-1): abide — взята идея (решение владельца
+> F-S23-1 = A); react-doctor и checkov — ждут прогона release; review_ducktective — позже, hetty — живость для S24-1.
 
 ## Главный принцип
 
@@ -47,7 +47,7 @@
 | [ai-memory](ai-memory/README.md) | [akitaonrails/ai-memory](https://github.com/akitaonrails/ai-memory) | 💡 взять идею | `@kaneo/redact`: шаблоны секретов санитайзера (MIT) — расширить вычистку после E5; старение и handoff без LLM как образец | сервис — нет: заменил бы claude-mem, +25 описаний MCP-инструментов на старт |
 | [i-have-adhd](i-have-adhd/README.md) | [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd) | ✅ идея взята частично | eval: слепое A/B-сравнение ответов «со скиллом / без» (stdlib Python, MIT) — фитнес промптов — ✅ своя реализация идеи в `eval/evolve/ab.py` (01.11); формат пунктов очереди «действие первым, один следующий шаг» | скилл always-on — нет: спорит с DoD, ~1,7K токенов на сессию |
 | [codebase-memory-mcp](codebase-memory-mcp/README.md) | [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) | 💡 идея + пилот | `scout`, консилиум: `detect_changes` (дифф → затронутые символы, «радиус поражения»), экономный вывод курсором с лимитом; пилот MCP против Serena с замером | MIT, локально; заявленное «в 10 раз меньше токенов» — цифра авторов, проверить замером |
-| [abide](abide/README.md) | [coldteadotai/abide](https://github.com/coldteadotai/abide) | 🔍 разбирается | ревью (R-070, R-074): идея «правило → проверка правки»; правила R-074 — детерминированными проверками в CI | инструмент — не статический линтер: хук агента и внешняя модель TypeSafe по платному ключу, дифф уходит наружу; развилка F-S23-1 — владельцу (TB-167, 14.11) |
+| [abide](abide/README.md) | [coldteadotai/abide](https://github.com/coldteadotai/abide) | 💡 взять идею | ревью (R-070, R-074): идея «правило → проверка правки»; правила R-074 (2, 4, 7) — проверками без модели в CI (S23-3, TB-169) | инструмент — нет: хук агента и внешняя модель TypeSafe по платному ключу, дифф уходит наружу; решение владельца F-S23-1 = A (14.11); пилот хука — только после замера |
 | [react-doctor](react-doctor/README.md) | [millionco/react-doctor](https://github.com/millionco/react-doctor) | 🔍 разбирается | ревью web: плагин oxlint, отдельный шаг `boards-ci` отчётом, метка `react-doctor/` (N-005) | решение — после прогона release: настоящих находок ≥ 5 и ложных ≤ 30 % в выборке 20; Modified MIT (TB-167, 14.11) |
 | [checkov](checkov/README.md) | [bridgecrewio/checkov](https://github.com/bridgecrewio/checkov) | 🔍 разбирается | ревью инфраструктуры: только dockerfile и openapi; compose не разбирает, github_actions и secrets дублируют actionlint и `infra/checks` | решение — после прогона release, тот же порог; Apache-2.0 (TB-167, 14.11) |
 | review_ducktective | [PavelShaura/review_ducktective](https://github.com/PavelShaura/review_ducktective) | ⏸ вернуться позже | LLM-ревью по кнопке (R-070) | F-23-1 = цепочка opencode → GLM → Claude (#169); проект молодой: v0.1.0, 20 звёзд (14.11); вернуться, если цепочка не даёт находок, которые даёт он |
