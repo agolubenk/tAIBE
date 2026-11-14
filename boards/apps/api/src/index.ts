@@ -82,6 +82,7 @@ import { descriptionPageQuery, listTasksQuery } from "./task/schema";
 import taskRelation from "./task-relation";
 // t-boards
 import agentIdentity from "./agent-identity";
+import agentJournal from "./agent-journal";
 import forest from "./forest";
 import notebook from "./notebook";
 import ssr from "./ssr";
@@ -930,6 +931,8 @@ export function createApp() {
   const taskRelationApi = api.route("/task-relation", taskRelation);
   const forestApi = api.route("/forest", forest);
   const agentIdentityApi = api.route("/agent-identity", agentIdentity);
+  // TB-135: not a workspace route, so a one-workspace key is refused (R-002).
+  const agentJournalApi = api.route("/agent-journal", agentJournal);
   const notebookApi = api.route("/notebook", notebook);
   const ssrApi = api.route("/ssr", ssr);
   const externalLinkApi = api.route("/external-link", externalLink);
@@ -1066,6 +1069,7 @@ export function createApp() {
     taskRelationApi,
     forestApi,
     agentIdentityApi,
+    agentJournalApi,
     notebookApi,
     ssrApi,
     telegramIntegrationApi,
@@ -1235,6 +1239,7 @@ const {
   taskRelationApi,
   forestApi,
   agentIdentityApi,
+  agentJournalApi,
   notebookApi,
   ssrApi,
   telegramIntegrationApi,
@@ -1286,6 +1291,7 @@ export type AppType =
   | typeof taskRelationApi
   | typeof forestApi
   | typeof agentIdentityApi
+  | typeof agentJournalApi
   | typeof notebookApi
   | typeof ssrApi
   | typeof externalLinkApi

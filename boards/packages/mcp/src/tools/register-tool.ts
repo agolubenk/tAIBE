@@ -91,7 +91,8 @@ const logFallback: FormatFallback = (tool, error) =>
   console.error(`kaneo-mcp: ${tool} answered in JSON, TOON failed: ${error}`);
 
 // R-036: one record per call for the host's journal. The arguments are as the
-// caller sent them; the host redacts them before storing.
+// caller sent them; the host redacts them before storing. With agent sessions
+// the call names who it ran as (TB-135), so the host journals it under them.
 export type ToolCall = {
   tool: string;
   args: unknown;
@@ -99,6 +100,7 @@ export type ToolCall = {
   bytes: number;
   tokens: number;
   ms: number;
+  identity?: AgentIdentity;
 };
 
 export type RegisterHooks = {
@@ -177,11 +179,15 @@ export function createRegisterTool(
         onFormatFallback(name, e),
       );
     };
-    const handle = async (args: unknown): Promise<CallToolResult> => {
+    const handle = async (
+      args: unknown,
+    ): Promise<{ result: CallToolResult; identity?: AgentIdentity }> => {
       const parsed = inputSchema.safeParse(args);
-      if (!parsed.success) return errorResult(z.prettifyError(parsed.error));
+      if (!parsed.success) {
+        return { result: errorResult(z.prettifyError(parsed.error)) };
+      }
       const data = { ...(parsed.data as Record<string, unknown>) };
-      if (!agentIdentity) return dispatch(data);
+      if (!agentIdentity) return { result: await dispatch(data) };
       const identity: AgentIdentity = {
         harness:
           harnessSlug(data.harness as string | undefined) ??
@@ -190,15 +196,16 @@ export function createRegisterTool(
       };
       delete data.harness;
       if (!ownSession) delete data.session;
-      return withAgentIdentity(identity, () => dispatch(data));
+      const result = await withAgentIdentity(identity, () => dispatch(data));
+      return { result, identity };
     };
     return server.registerTool(
       name,
       { ...config, inputSchema },
       async (args) => {
-        if (!onCall) return handle(args);
+        if (!onCall) return (await handle(args)).result;
         const started = performance.now();
-        const result = await handle(args);
+        const { result, identity } = await handle(args);
         const text = answerText(result);
         try {
           onCall({
@@ -208,6 +215,7 @@ export function createRegisterTool(
             bytes: new TextEncoder().encode(text).length,
             tokens: defaultCounter.count(text),
             ms: Math.round(performance.now() - started),
+            ...(identity ? { identity } : {}),
           });
         } catch (e) {
           // The journal must not turn an answered call into a failed one.

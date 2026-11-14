@@ -14,8 +14,13 @@ export const cardCostSchema = z
     }),
     actors: z.array(
       z.object({
+        actorId: z.string().openapi({
+          description:
+            "Who called, one per key and session: agent:<user id> for a session's agent, bearer:<user id>[:<label>] or key:<key id>[:<label>] otherwise.",
+        }),
         actor: z.string().openapi({
-          description: "Who called: bearer:<user id> for a remote MCP client.",
+          description:
+            "The caller's name: the agent's name, or the session label the client gave.",
         }),
         calls: z.number().int(),
         tokens: z.number().int(),

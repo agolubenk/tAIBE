@@ -7,7 +7,9 @@ const MAX_ACTORS = 50;
 // TB-44 (R-036): what agents spent reading and writing a card through MCP —
 // answer tokens (o200k_base, D-018) and calls per actor, from the journal.
 // Money is the card's costUsd: the server never sees provider usage. Rows
-// written before TB-44 are filed under the tool and are not counted.
+// written before TB-44 are filed under the tool and are not counted. Callers
+// are told apart by actor id: a session label is the client's word and two
+// keys may give the same one (TB-135).
 export async function cardCost(taskId: string) {
   const journal = agentJournalTable;
   // Every mcp.call detail is JSON with numeric tokens (callDetail); the
@@ -29,7 +31,8 @@ export async function cardCost(taskId: string) {
   const [actors, [total], [meta]] = await Promise.all([
     db
       .select({
-        actor: journal.actorName,
+        actorId: journal.actorId,
+        actor: sql<string>`max(${journal.actorName})`,
         calls,
         tokens,
         firstAt: first,
@@ -37,7 +40,7 @@ export async function cardCost(taskId: string) {
       })
       .from(journal)
       .where(callsAboutCard)
-      .groupBy(journal.actorName)
+      .groupBy(journal.actorId)
       .orderBy(desc(tokens))
       .limit(MAX_ACTORS + 1),
     db.select({ calls, tokens }).from(journal).where(callsAboutCard),
