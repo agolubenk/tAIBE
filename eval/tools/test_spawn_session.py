@@ -159,5 +159,89 @@ if rc == 0 or "нет продукта nope" not in out:
     print("FAIL: unknown product is refused")
     print(out)
 
+# SE-93: окно открыто, только если пусковой скрипт стартовал — он удаляет свою папку. Terminal вернул -1712, окна не
+# было, а скрипт писал «открыто», записывал линию и запускал сторожа retire без наследника. Подмены в копии слоя:
+# osascript (FAKE_RC — код, FAKE_START=1 — «окно открылось»: папка скрипта удаляется), lineage.py и team_status.py
+# пишут в журнал свой подкоманду — настоящий нерв и launchd не трогаются.
+FAKE_OSA = r"""#!/bin/bash
+echo osascript >>"$FAKE_LOG"
+l="$(printf '%s' "$*" | sed -n "s|.*/bin/bash '\([^']*\)'.*|\1|p")"
+if [ "${FAKE_START:-0}" = 1 ] && [ -n "$l" ]; then rm -rf "$(dirname "$l")"; fi
+if [ "${FAKE_RC:-0}" = 0 ]; then echo "123 /dev/ttys009"; exit 0; fi
+echo "execution error: Terminal got an error: AppleEvent timed out. (-1712)" >&2
+exit "$FAKE_RC"
+"""
+FAKE_PY = """import os, sys
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write(sys.argv[1] + "\\n")
+if sys.argv[1] == "wait":
+    sys.exit(1)
+print("нерв: подмена")
+"""
+
+
+def osa_run(terminal, rc, start, launch=False):
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = Path(tmp) / "layer" / "tools"
+        tools.mkdir(parents=True)
+        (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        for f in ("lineage.py", "team_status.py"):
+            (tools / f).write_text(FAKE_PY, encoding="utf-8")
+        (tools.parent / "pipeline").mkdir()
+        (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
+        fake_bin = Path(tmp) / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "osascript").write_text(FAKE_OSA, encoding="utf-8")
+        (fake_bin / "osascript").chmod(0o755)
+        handoff = Path(tmp) / "h.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        log = Path(tmp) / "fake.log"
+        env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "TMPDIR": tmp, "TAIBE_LINEAGE": "r.ab12",
+               "FAKE_RC": str(rc), "FAKE_START": "1" if start else "0", "FAKE_LOG": str(log), "SPAWN_START_WAIT": "1"}
+        if launch:
+            args = ["--launch", "--roles", "plan,coord", "--force", "--prompt-dir",
+                    str(SCRIPT.parent.parent / "prompts" / "launch-3010" / "roles")]
+        else:
+            args = ["--handoff", str(handoff)]
+        run = subprocess.run(["bash", str(tools / "spawn_session.sh"), *args, "--terminal", terminal, "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+        calls = log.read_text(encoding="utf-8").split() if log.exists() else []
+        return run.returncode, run.stdout + run.stderr, calls, list(Path(tmp).glob("claude-spawn.*"))
+
+
+for terminal in ("terminal", "iterm"):
+    rc, out, calls, left = osa_run(terminal, 1, start=False)
+    for name, ok in [
+        (f"{terminal}: osascript error -> code 4", rc == 4),
+        (f"{terminal}: no «открыто», hint --terminal print", "открыто:" not in out and "--terminal print" in out),
+        (f"{terminal}: no lineage record, no retire guard", "record" not in calls and "retire" not in calls),
+        (f"{terminal}: launcher folder removed — a late window starts nothing", left == []),
+    ]:
+        if not ok:
+            failed += 1
+            print("FAIL:", name, rc, calls, left)
+            print(out)
+    rc, out, calls, _ = osa_run(terminal, 0, start=True)
+    if not (rc == 0 and "открыто:" in out and calls.count("record") == 1 and "retire" in calls):
+        failed += 1
+        print(f"FAIL: {terminal}: window opened -> record, «открыто», retire", rc, calls)
+        print(out)
+rc, out, calls, _ = osa_run("terminal", 1, start=True)  # -1712 пришёл, но окно всё же открылось
+if not (rc == 0 and "открыто:" in out and "record" in calls and "retire" in calls and "код 1, но пусковой" in out):
+    failed += 1
+    print("FAIL: osascript error but the launcher started -> opened with a warning", rc, calls)
+    print(out)
+rc, out, calls, _ = osa_run("terminal", 0, start=False)  # osascript без ошибки, а скрипт не стартовал
+if not (rc == 4 and "открыто:" not in out and "record" not in calls and "retire" not in calls):
+    failed += 1
+    print("FAIL: osascript ok but the launcher never started -> code 4", rc, calls)
+    print(out)
+rc, out, calls, _ = osa_run("terminal", 1, start=False, launch=True)
+if not (rc == 4 and calls.count("osascript") == 1 and "plan — НЕ открыта: окно не открылось" in out
+        and "дальше не открывал: окно plan не открылось" in out and "coord —" not in out and "wait" not in calls):
+    failed += 1
+    print("FAIL: --launch stops after the first window that did not open", rc, calls)
+    print(out)
+
 print("spawn_session: %d failed" % failed)
 sys.exit(1 if failed else 0)

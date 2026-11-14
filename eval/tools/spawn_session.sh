@@ -18,6 +18,8 @@
 # команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
 # · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам
 # · --keep-window (или SPAWN_AUTOCLOSE=off): окно Terminal не закрывается само после выхода claude.
+# Окно открыто, только если пусковой скрипт стартовал за SPAWN_START_WAIT с (30; он удаляет свою папку). Иначе — код 4,
+# подсказка --terminal print, линия не записана, сторож retire не запущен, --launch дальше не открывает (SE-93).
 # Окно Terminal закрывается само, когда claude в нём вышел с кодом 0: 10 с отсчёта (Enter — оставить), затем
 # lineage.py autoclose — окно этой линии, одна вкладка, в ней только shell; настройка Terminal «When the shell exits»
 # не важна. Код ≠ 0 — окно остаётся. Код выхода пишется в запись линии (lineage.py exited) для автоуборки.
@@ -164,7 +166,7 @@ first_message() {
 
 # Одна сессия: пусковой скрипт в $TMPDIR, затем окно терминала (или печать команды).
 spawn_one() {
-  local role="$1" msg genome="" dir launcher cmd lineage out wid tty
+  local role="$1" msg genome="" dir launcher cmd lineage out="" wid tty osa
   lineage="$(child_lineage)"
   SPAWNED_LINE="$lineage"
   SPAWNED_TTY=""
@@ -232,14 +234,28 @@ spawn_one() {
     record "$lineage" print "" "" "$role"
     return
   fi
+  osa=0
   if [ "$TERMINAL" = iterm ]; then
-    osascript -e "tell application \"iTerm\" to create window with default profile command \"$cmd\"" >/dev/null
-    record "$lineage" iterm "" "" "$role"
+    osascript -e "tell application \"iTerm\" to create window with default profile command \"$cmd\"" >/dev/null || osa=$?
   else
     # id окна и tty вкладки — сразу при открытии: у окна нет tty, у вкладки нет id; по ним сторож закроет именно его.
     out="$(osascript -e 'tell application "Terminal"' -e "set t to do script \"$cmd\"" -e 'activate' \
       -e 'try' -e 'set w to first window whose tabs contains t' -e 'return ((id of w) as text) & " " & (tty of t)' \
-      -e 'on error' -e 'return "- " & (tty of t)' -e 'end try' -e 'end tell')" || out=""
+      -e 'on error' -e 'return "- " & (tty of t)' -e 'end try' -e 'end tell')" || { osa=$?; out=""; }
+  fi
+  # Окно открыто, только если пусковой скрипт стартовал (SE-93). Код osascript — не признак: Terminal вернул -1712
+  # (ответ не пришёл за 2 мин), окна не было, а скрипт писал «открыто» и запускал сторожа без наследника.
+  if ! launcher_started "$dir"; then
+    rm -rf "$dir"  # окно, открывшееся позже, не найдёт скрипт: наследника без записи линии не будет
+    echo "spawn_session: окно ${role:-наследника} не открылось — osascript код $osa, пусковой скрипт не стартовал" \
+      "за ${SPAWN_START_WAIT:-30} с. Линия не записана, сторож не запущен. Вручную: тот же вызов с --terminal print" >&2
+    SPAWN_FAILED=1
+    return
+  fi
+  [ "$osa" = 0 ] || echo "# spawn_session: osascript вернул код $osa, но пусковой скрипт стартовал — окно открыто" >&2
+  if [ "$TERMINAL" = iterm ]; then
+    record "$lineage" iterm "" "" "$role"
+  else
     wid="${out%% *}"; tty="${out#* }"
     case "$wid" in *[!0-9]*|"") wid="" ;; esac
     case "$tty" in /dev/tty*) ;; *) tty="" ;; esac
@@ -249,6 +265,16 @@ spawn_one() {
   echo "открыто: ${role:-наследник} → $launcher"
 }
 
+# Пусковой скрипт стартовал: прочитав текст, он удаляет свою папку. Ждём до SPAWN_START_WAIT с (30).
+launcher_started() {
+  local i=0 n=$(( ${SPAWN_START_WAIT:-30} * 2 ))
+  while [ -d "$1" ]; do
+    [ "$i" -lt "$n" ] || return 1
+    sleep 0.5
+    i=$((i + 1))
+  done
+}
+
 # Запись линии (окно, tty) для сторожа и reap_sessions.sh. Сбой — предупреждение: окно уже открыто.
 record() {
   python3 -I "$TOOLS/lineage.py" record --line "$1" --terminal "$2" --window-id "$3" --tty "$4" --role "$5" \
@@ -256,7 +282,7 @@ record() {
 }
 
 # Одна роль в --launch: живую пропустить, иначе открыть и дождаться её сессии. Итог — строкой в SUMMARY.
-SUMMARY=""
+SUMMARY="" SPAWN_FAILED=0
 note() { SUMMARY="$SUMMARY$(printf '\n  %s' "$*")"; }
 launch_role() {
   local r="$1" live rc got
@@ -269,6 +295,7 @@ launch_role() {
     if [ "$rc" != 3 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
   fi
   spawn_one "$r"
+  if [ "$SPAWN_FAILED" = 1 ]; then note "$r — НЕ открыта: окно не открылось (--terminal print — вручную)"; return; fi
   if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then note "$r — команда напечатана"; return; fi
   echo "жду сессию $r (до ${SPAWN_WAIT:-90} с)…"
   got="$(python3 -I "$TOOLS/team_status.py" wait --role "$r" --line "$SPAWNED_LINE" --timeout "${SPAWN_WAIT:-90}" 2>&1)" \
@@ -294,6 +321,7 @@ elif [ -n "$HANDOFF" ]; then
       || echo "# spawn_session: handoff повторяет постоянный контекст — в следующий раз пиши только дельту" >&2
   fi
   spawn_one "$ROLE"
+  [ "$SPAWN_FAILED" = 0 ] || exit 4  # наследника нет — предшественник остаётся, сторож не нужен
   # Предшественник уходит сам: сторож ждёт квитанцию наследника и проверяет его, модель в этом не участвует.
   if [ "$DRY" = 0 ] && [ "$RETIRE" != off ]; then
     # --guard: если предшественник — Контроль, сторож впишет наследника в список Контроля этих папок (IS-233).
@@ -327,9 +355,14 @@ elif [ "$LAUNCH" = 1 ]; then
   echo "$nerve"
   # Следующая роль — после того, как сессия предыдущей появилась (wait): окна не стартуют разом, MCP и индексация
   # не толкаются. Сессия не появилась — таймаут в итог, дальше по порядку.
-  for r in $(echo "$ROLES" | tr ',' ' '); do launch_role "$r"; done
+  # Окно не открылось — остальные роли не открываем: Terminal завис, и каждая следующая ждала бы те же 2 мин.
+  for r in $(echo "$ROLES" | tr ',' ' '); do
+    launch_role "$r"
+    [ "$SPAWN_FAILED" = 0 ] || { note "дальше не открывал: окно $r не открылось"; break; }
+  done
   echo "итог ($(basename "${MAIN:-$CWD}")):$SUMMARY"
   python3 -I "$TOOLS/team_status.py" nerve 2>&1 | sed 's/^/  /' || true
+  [ "$SPAWN_FAILED" = 0 ] || exit 4
 else
   die "нужен --handoff FILE или --launch (см. --help)"
 fi
