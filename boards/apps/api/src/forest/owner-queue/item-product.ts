@@ -1,10 +1,11 @@
 import { DEFAULT_PLAN_PRODUCT } from "./plan-types";
 
 // The product of a queue item by its id, by the rule of queue.match in
-// instances/<slug>.json as the Nerve reads it (for_item): an item of a
-// product carries "-<tag>-" in its id (d-taibe-hetty-1411, and older forms
-// like s-restart-4-taibe-1211) or starts with "<product>-" (taibe-m-93, the
-// console's own form). hr is the tag of the default product.
+// instances/<slug>.json as the Nerve reads it (for_item, a regex since
+// SE-109): an item of a product carries "-<tag>" followed by "-", a digit or
+// the end in its id (d-taibe-hetty-1411, the merge form m-taibe310-1411, older
+// forms like s-restart-4-taibe-1211) or starts with "<product>-" (taibe-m-93,
+// the console's own form). hr is the tag of the default product.
 // The console's doc.product cannot tell: it reads only the start of the id
 // (namespaceOf, infra/ops-console/server/queue/products.ts), so every
 // d-taibe-… item comes as hr-helper there. null — no product of these in the
@@ -27,7 +28,14 @@ export function productOfItemId(
   return (
     order.find(
       (product) =>
-        id.includes(`-${tagOf(product)}-`) || id.startsWith(`${product}-`),
+        carriesTag(id, tagOf(product)) || id.startsWith(`${product}-`),
     ) ?? null
   );
+}
+
+// "-<tag>" with "-", a digit or the end after it: m-taibe310-1411 is tAIBE,
+// d-taibeta-1 is not (instances/taibe.json queue.match "-taibe(-|\d|$)").
+function carriesTag(id: string, tag: string): boolean {
+  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`-${escaped}(-|\\d|$)`).test(id);
 }

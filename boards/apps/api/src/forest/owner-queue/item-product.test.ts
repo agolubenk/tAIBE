@@ -18,10 +18,16 @@ describe("productOfItemId (queue.match)", () => {
     }
   });
 
-  it("does not see the merge form m-taibe<pr>-…: queue.match needs a dash after the tag", () => {
-    // The same gap as the Nerve's for_item (eval/nerve/nerve.py:86); the fix
-    // changes the rule or the item name in both places at once.
-    expect(productOfItemId("m-taibe310-1411", PRODUCTS)).toBeNull();
+  it("sees the merge form m-taibe<pr>-… and a tag at the end (SE-109)", () => {
+    // The same rule as the Nerve's for_item: queue.match "-taibe(-|\d|$)".
+    expect(productOfItemId("m-taibe310-1411", PRODUCTS)).toBe("taibe");
+    expect(productOfItemId("s-restart-taibe", PRODUCTS)).toBe("taibe");
+    expect(productOfItemId("d-hr2-x", PRODUCTS)).toBe("hr-helper");
+  });
+
+  it("does not take a tag inside another word", () => {
+    expect(productOfItemId("d-taibeta-1", PRODUCTS)).toBeNull();
+    expect(productOfItemId("d-hrm-1", PRODUCTS)).toBeNull();
   });
 
   it("gives hr to the default product and null to an id without a tag", () => {
