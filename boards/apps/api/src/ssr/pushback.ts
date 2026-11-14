@@ -20,6 +20,23 @@ const BRANCH = process.env.SSR_PUSH_GITHUB_BRANCH ?? "main";
 const API = "https://api.github.com";
 
 type ChangesetFile = { path: string; sha256: string; content: string };
+// content is null when no blob holds the sha that the served version names.
+type ChangesetEntry = { path: string; sha256: string; content: string | null };
+
+const sha256Hex = (text: string) =>
+  createHash("sha256").update(text, "utf8").digest("hex");
+
+// TB-94. The sha names the bytes that go into the product repo: a blob that is
+// missing or does not hash to its sha (bytes stored before the TB-92 sync
+// check, a damaged row) must not be committed under the version's name.
+export function blobIntegrityFailures(changeset: ChangesetEntry[]): string[] {
+  return changeset
+    .filter(
+      (file) =>
+        file.content === null || sha256Hex(file.content) !== file.sha256,
+    )
+    .map((file) => file.path);
+}
 
 export type PushResult = {
   pushed: boolean;
@@ -80,7 +97,7 @@ async function readRepoFiles(paths: string[]): Promise<Map<string, RepoFile>> {
 // The files that differ between the repo and the served latest versions.
 export async function collectChangeset(
   workspaceId: string,
-): Promise<ChangesetFile[]> {
+): Promise<ChangesetEntry[]> {
   const entities = await db
     .select()
     .from(ssrEntityTable)
@@ -121,12 +138,13 @@ export async function collectChangeset(
     .where(inArray(ssrBlobTable.sha256, [...wanted.values()]));
   const blobBySha = new Map(blobs.map((blob) => [blob.sha256, blob]));
 
-  const changeset: ChangesetFile[] = [];
-  for (const [path, sha] of wanted) {
-    const blob = blobBySha.get(sha);
-    if (blob) changeset.push({ path, sha256: sha, content: blob.content });
-  }
-  return changeset;
+  // A missing blob stays in the changeset: the push refuses it loudly instead
+  // of skipping the file every night without a word.
+  return [...wanted].map(([path, sha]) => ({
+    path,
+    sha256: sha,
+    content: blobBySha.get(sha)?.content ?? null,
+  }));
 }
 
 export async function pushChangeset(
@@ -164,7 +182,26 @@ export async function pushChangeset(
     };
   }
 
-  const repoFiles = await readRepoFiles(changeset.map((file) => file.path));
+  // Integrity guard (TB-94): one bad blob aborts the whole push before any
+  // GitHub call, like the allowlist guard; the paths go to the server log.
+  const broken = blobIntegrityFailures(changeset);
+  if (broken.length > 0) {
+    console.error(
+      `SSR push-back workspace ${workspaceId}: blob integrity failed, push aborted: ${broken.slice(0, 5).join(", ")}`,
+    );
+    return {
+      pushed: false,
+      commitSha: null,
+      files: [],
+      conflicts: [],
+      reason: `blob_integrity: ${broken.length} file(s), first ${broken[0]}`,
+    };
+  }
+  const files = changeset.filter(
+    (file): file is ChangesetFile => file.content !== null,
+  );
+
+  const repoFiles = await readRepoFiles(files.map((file) => file.path));
   const states = await db
     .select()
     .from(ssrPushStateTable)
@@ -173,7 +210,7 @@ export async function pushChangeset(
         eq(ssrPushStateTable.workspaceId, workspaceId),
         inArray(
           ssrPushStateTable.path,
-          changeset.map((file) => file.path),
+          files.map((file) => file.path),
         ),
       ),
     );
@@ -182,13 +219,11 @@ export async function pushChangeset(
   // Conditional push (D-012): repo sha must equal the sync's baseline.
   const conflicts: PushResult["conflicts"] = [];
   const toPush: ChangesetFile[] = [];
-  for (const file of changeset) {
+  for (const file of files) {
     const repo = repoFiles.get(file.path);
     // git's blob sha is not our content sha; compare content hashes.
     const baseline = baselineByPath.get(file.path)?.lastSyncedSha ?? null;
-    const repoContentSha = repo?.content
-      ? createHash("sha256").update(repo.content, "utf8").digest("hex")
-      : null;
+    const repoContentSha = repo?.content ? sha256Hex(repo.content) : null;
     if (
       repoContentSha !== null &&
       baseline !== null &&
