@@ -2389,7 +2389,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var laneW = Math.max(300, (host.clientWidth || 720) - 150), dx = laneW / nd;
     var lines = '', heads = '';
     for (var d = a; d <= b; d = addD(d, 7)) lines += '<span class="rm-wk" style="left:' + P(d) + '"></span>';
-    if (roadmapLabelMode(dx * 7) === 'weeks') {
+    var byWeeks = roadmapLabelMode(dx * 7) === 'weeks';
+    if (byWeeks) {
       for (var dw = a; dw <= b; dw = addD(dw, 7)) heads += '<span class="rm-wk" style="left:' + P(dw) + '">' + esc(fmtD(dw) + ' – ' + fmtD(addD(dw, 6))) + '</span>';
     } else {
       // Месяцы: первый неполный — подписью в начале, если до следующего месяца хватает места; дальше — с 1-го числа
@@ -2403,7 +2404,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
     }
     var now = '<span class="rm-now" style="left:' + P(t, true) + '"' + tipAttr(['Сегодня', fmtD(t)]) + '></span>';
-    var o = '<div class="rm-row rm-head"><div class="rm-name">Неделя</div><div class="rm-lane">' + heads + '</div></div>';
+    // Заголовок столбца — по подписям шкалы: над месяцами «Неделя» вводила в заблуждение (карточка HR epz36yxj).
+    var o = '<div class="rm-row rm-head"><div class="rm-name">' + (byWeeks ? 'Неделя' : 'Месяц') + '</div><div class="rm-lane">' + heads + '</div></div>';
     REP.tracksIn(TRACKS, ws).forEach(function (tr) {
       var list = ws.filter(function (w) { return w.track === tr.id; }), lo = null, hi = null;
       list.forEach(function (w) { ['planStart', 'start'].forEach(function (k) { var d = dParse(w[k]); if (d && (!lo || d < lo)) lo = d; }); ['planEnd', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && (!hi || d > hi)) hi = d; }); });

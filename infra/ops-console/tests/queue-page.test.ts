@@ -804,6 +804,12 @@ describe('роадмап по неделям: подписи не налезаю
     expect(roadmapLabelMode((1200 * 7) / 266)).toBe('months')
   })
 
+  it('заголовок столбца — по подписям шкалы: «Неделя» над неделями, «Месяц» над месяцами (карточка HR epz36yxj)', () => {
+    expect(html).toContain("var byWeeks = roadmapLabelMode(dx * 7) === 'weeks';")
+    expect(html).toContain(`'<div class="rm-row rm-head"><div class="rm-name">' + (byWeeks ? 'Неделя' : 'Месяц') + '</div>`)
+    expect(html).not.toContain('<div class="rm-name">Неделя</div>')
+  })
+
   it('месяц — коротко, год — у первой подписи и у января', () => {
     const { roadmapMonthLabel } = pure()
     expect(roadmapMonthLabel(new Date(2026, 10, 1), false)).toBe('ноя')
