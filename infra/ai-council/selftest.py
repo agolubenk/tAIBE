@@ -1101,6 +1101,24 @@ def test_cloud_budget(tmp: Path) -> None:
         ok_more, _ = client.check_budget("run-gw2", "executive.deep")
         check("шлюз: ниже потолка — вызов разрешён", ok_more)
 
+        # OPS-22: окна 2 и 30 мин считают все ушедшие запросы, удачные и нет, — провайдер считает запросы.
+        # Отказ по бюджету в сеть не ушёл и в окно не входит.
+        for i, (ok_flag, refused_why, ago) in enumerate([(0, "", 60), (1, "", 600), (0, "бюджет", 30)]):
+            store.x("INSERT INTO cloud_usage (run_id, role, provider, model, ok, refused, error, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?)", (f"gw-win-{i}", "x", "gateway", "executive.deep", ok_flag,
+                                                 refused_why, "HTTP 500" if not ok_flag else "", now_ts - ago))
+        client.rate_limits = {"gateway": {"max_calls_per_30min": 2}}
+        ok_win, why_win = client.check_budget("run-gw3", "executive.deep")
+        check("шлюз: окно 30 мин считает и неудачные запросы",
+              not ok_win and "2/2 вызовов за последние 30 мин" in why_win, why_win[:80])
+        client.rate_limits = {"gateway": {"max_calls_per_2min": 1}}
+        ok_2m, why_2m = client.check_budget("run-gw4", "executive.deep")
+        check("шлюз: окно 2 мин — неудачный запрос занимает место",
+              not ok_2m and "1/1 вызовов за последние 2 мин" in why_2m, why_2m[:80])
+        client.rate_limits = {"gateway": {"max_calls_per_30min": 3}}
+        ok_win3, why_win3 = client.check_budget("run-gw5", "executive.deep")
+        check("шлюз: отказ по бюджету в окно не входит", ok_win3, why_win3[:80])
+
         # Неизвестная модель не должна молча уходить в сеть под чужим ключом.
         result = client.chat("run-7", "judge.cloud", "нет-такой-модели",
                              [{"role": "user", "content": "x"}])
