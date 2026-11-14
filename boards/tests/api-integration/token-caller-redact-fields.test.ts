@@ -274,3 +274,88 @@ describe("API integration: masked labels, fields and links written back (TB-144)
     }
   });
 });
+
+describe("API integration: label, field and link routes for callers with a token (TB-178)", () => {
+  beforeEach(resetTestDatabase);
+
+  it("masks every read route for an API key; a browser session reads the real values", async () => {
+    const { forest, project, task } = await setup();
+    const ws = forest.workspace.id;
+    const label = await addLabel(ws, task.id, `env ${SECRET}`);
+    const field = await addField(project.id, {
+      name: `Vault ${SECRET}`,
+      type: "text",
+    });
+    const value = await forest.ownerApi("PUT", "/custom-field/value", {
+      taskId: task.id,
+      fieldId: field.id,
+      value: `key ${SECRET}`,
+    });
+    expect(value.status).toBe(200);
+    const link = await forest.ownerApi(
+      "POST",
+      `/external-link/task/${task.id}`,
+      { url: `https://ci.example/run?token=${SECRET}`, title: "run" },
+    );
+    expect(link.status).toBe(200);
+
+    for (const route of [
+      `/label/task/${task.id}`,
+      `/label/workspace/${ws}`,
+      `/label/${label.id}`,
+      `/custom-field/project/${project.id}`,
+      `/custom-field/project/${project.id}/values`,
+      `/custom-field/task/${task.id}`,
+      `/custom-field/project/${project.id}/filter-values`,
+      `/external-link/task/${task.id}`,
+    ]) {
+      const agent = await forest.agentApi("GET", route);
+      const text = JSON.stringify(agent.body);
+      expect({ route, status: agent.status }).toEqual({ route, status: 200 });
+      expect({
+        route,
+        leaks: text.includes(SECRET),
+        masked: text.includes(MARK),
+      }).toEqual({ route, leaks: false, masked: true });
+
+      const owner = await forest.ownerApi("GET", route);
+      expect({
+        route,
+        real: JSON.stringify(owner.body).includes(SECRET),
+      }).toEqual({ route, real: true });
+    }
+  });
+
+  it("masks the answer of a write that restored a value, and refuses a marker in a new field", async () => {
+    const { forest, project, task } = await setup();
+    const label = await addLabel(forest.workspace.id, task.id, `env ${SECRET}`);
+    const updated = await forest.agentApi("PUT", `/label/${label.id}`, {
+      name: `env ${MARK}`,
+      color: "#000000",
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body.name).toBe(`env ${MARK}`);
+    expect(await labelName(label.id)).toBe(`env ${SECRET}`);
+
+    for (const body of [
+      { name: `Vault ${MARK}`, type: "text" },
+      { name: "Env", type: "dropdown", options: ["prod", MARK] },
+    ]) {
+      const res = await forest.agentApi("POST", "/custom-field", {
+        projectId: project.id,
+        ...body,
+      });
+      expect({ body, status: res.status, code: res.body?.code }).toEqual({
+        body,
+        status: 409,
+        code: MISMATCH,
+      });
+    }
+    expect(
+      await db
+        .select()
+        .from(schema.customFieldDefinitionTable)
+        .where(eq(schema.customFieldDefinitionTable.projectId, project.id)),
+    ).toEqual([]);
+  });
+});

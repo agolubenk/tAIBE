@@ -32333,6 +32333,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent a [REDACTED:kind] marker in the name, default or options; a new field has no stored value to restore",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
           }

@@ -5,6 +5,10 @@ import {
   jsonResponse,
 } from "../openapi";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
+import {
+  maskForTokenCaller,
+  refuseMarkerForTokenCaller,
+} from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createCustomField from "./controllers/create-custom-field";
 import deleteCustomField from "./controllers/delete-custom-field";
@@ -144,6 +148,9 @@ const createCustomFieldRoute = createRoute({
   },
   responses: {
     200: jsonResponse("The created custom field", customFieldDefinitionSchema),
+    409: errorResponse(
+      "A caller with a token sent a [REDACTED:kind] marker in the name, default or options; a new field has no stored value to restore",
+    ),
     400: errorResponse("Invalid body"),
     403: errorResponse(
       "No access to the project, or missing project:update permission",
@@ -273,35 +280,64 @@ const updateCustomFieldRoute = createRoute({
 
 const customField = apiRouter()
   .openapi(getCustomFieldsRoute, async (c) =>
-    c.json(await getCustomFieldsByProject(c.req.valid("param").projectId), 200),
+    c.json(
+      maskForTokenCaller(
+        c,
+        await getCustomFieldsByProject(c.req.valid("param").projectId),
+      ),
+      200,
+    ),
   )
   .openapi(getCustomFieldValuesByProjectRoute, async (c) =>
     c.json(
-      await getCustomFieldValuesByProject(c.req.valid("param").projectId),
+      maskForTokenCaller(
+        c,
+        await getCustomFieldValuesByProject(c.req.valid("param").projectId),
+      ),
       200,
     ),
   )
   .openapi(getCustomFieldValuesByTaskRoute, async (c) =>
-    c.json(await getCustomFieldValuesByTask(c.req.valid("param").taskId), 200),
+    c.json(
+      maskForTokenCaller(
+        c,
+        await getCustomFieldValuesByTask(c.req.valid("param").taskId),
+      ),
+      200,
+    ),
   )
   .openapi(getCustomFieldFilterValuesRoute, async (c) =>
     c.json(
-      await getCustomFieldFilterValues(c.req.valid("param").projectId),
+      maskForTokenCaller(
+        c,
+        await getCustomFieldFilterValues(c.req.valid("param").projectId),
+      ),
       200,
     ),
   )
   .openapi(createCustomFieldRoute, async (c) => {
     const { projectId, name, type, required, defaultValue, options } =
       c.req.valid("json");
+    // TB-178: a caller with a token reads field names and options masked.
+    for (const value of [name, defaultValue, ...(options ?? [])]) {
+      refuseMarkerForTokenCaller(
+        c,
+        value,
+        "Send the full name, default and options; a person copies a masked field in the web app.",
+      );
+    }
 
     return c.json(
-      await createCustomField(
-        projectId,
-        name,
-        type,
-        required,
-        defaultValue,
-        options,
+      maskForTokenCaller(
+        c,
+        await createCustomField(
+          projectId,
+          name,
+          type,
+          required,
+          defaultValue,
+          options,
+        ),
       ),
       200,
     );
@@ -310,22 +346,37 @@ const customField = apiRouter()
     const { projectId } = c.req.valid("param");
     const { fields } = c.req.valid("json");
 
-    return c.json(await reorderCustomFields(projectId, fields), 200);
+    return c.json(
+      maskForTokenCaller(c, await reorderCustomFields(projectId, fields)),
+      200,
+    );
   })
   .openapi(setCustomFieldValueRoute, async (c) => {
     const { taskId, fieldId, value } = c.req.valid("json");
     const restored = await restoreFieldValue(c, taskId, fieldId, value);
 
-    return c.json(await setCustomFieldValue(taskId, fieldId, restored), 200);
+    return c.json(
+      maskForTokenCaller(
+        c,
+        await setCustomFieldValue(taskId, fieldId, restored),
+      ),
+      200,
+    );
   })
   .openapi(deleteCustomFieldRoute, async (c) =>
-    c.json(await deleteCustomField(c.req.valid("param").id), 200),
+    c.json(
+      maskForTokenCaller(c, await deleteCustomField(c.req.valid("param").id)),
+      200,
+    ),
   )
   .openapi(updateCustomFieldRoute, async (c) => {
     const { id } = c.req.valid("param");
     const input = await restoreFieldUpdate(c, id, c.req.valid("json"));
 
-    return c.json(await updateCustomField(id, input), 200);
+    return c.json(
+      maskForTokenCaller(c, await updateCustomField(id, input)),
+      200,
+    );
   });
 
 export default customField;

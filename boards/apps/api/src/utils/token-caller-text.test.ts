@@ -16,6 +16,11 @@ const ROUTERS = [
   "comment/index.ts",
   "activity/index.ts",
   "search/index.ts",
+  // TB-178: label names, field values and link URLs are masked on their own
+  // routes too, so a key sees no secret in any answer.
+  "label/index.ts",
+  "custom-field/index.ts",
+  "external-link/index.ts",
 ];
 const NO_TEXT = new Set([
   "stagedUploadRoute",

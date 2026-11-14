@@ -9,7 +9,10 @@ import {
   jsonResponse,
 } from "../openapi";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
-import { refuseMarkerForTokenCaller } from "../utils/token-caller-text";
+import {
+  maskForTokenCaller,
+  refuseMarkerForTokenCaller,
+} from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createExternalLink from "./controllers/create-external-link";
 import deleteExternalLink from "./controllers/delete-external-link";
@@ -121,17 +124,20 @@ const externalLink = apiRouter<BaseVariables & { workspaceId: string }>()
     });
 
     return c.json(
-      {
+      maskForTokenCaller(c, {
         ...link,
         metadata: link.metadata ? JSON.parse(link.metadata) : null,
-      },
+      }),
       200,
     );
   })
   .openapi(deleteExternalLinkRoute, async (c) => {
     const { taskId, id } = c.req.valid("param");
     return c.json(
-      await deleteExternalLink({ taskId, id, userId: c.get("userId") }),
+      maskForTokenCaller(
+        c,
+        await deleteExternalLink({ taskId, id, userId: c.get("userId") }),
+      ),
       200,
     );
   })
@@ -148,10 +154,13 @@ const externalLink = apiRouter<BaseVariables & { workspaceId: string }>()
     });
 
     return c.json(
-      links.map((link) => ({
-        ...link,
-        metadata: link.metadata ? JSON.parse(link.metadata) : null,
-      })),
+      maskForTokenCaller(
+        c,
+        links.map((link) => ({
+          ...link,
+          metadata: link.metadata ? JSON.parse(link.metadata) : null,
+        })),
+      ),
       200,
     );
   });
