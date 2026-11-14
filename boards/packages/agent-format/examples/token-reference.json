@@ -1,0 +1,130 @@
+{
+	"counter": "gpt-tokenizer@4.1.0/o200k_base",
+	"cards": [
+		{
+			"name": "card-en",
+			"format": "toon",
+			"value": {
+				"id": "TB-18",
+				"title": "Token counter: reference cards with fixed counts",
+				"status": "in-progress",
+				"priority": "medium",
+				"labels": ["backend", "tokens"],
+				"assignee": "backend",
+				"author": "agent",
+				"dueDate": null
+			},
+			"text": "id: TB-18\ntitle: \"Token counter: reference cards with fixed counts\"\nstatus: in-progress\npriority: medium\nlabels[2]: backend,tokens\nassignee: backend\nauthor: agent\ndueDate: null",
+			"tokens": 48
+		},
+		{
+			"name": "card-ru",
+			"format": "toon",
+			"value": {
+				"id": "TB-83",
+				"title": "Автор задачи и комментария: агент или человек",
+				"status": "in-review",
+				"author": "agent",
+				"untrusted": true,
+				"description": "Ответ показывает, кто написал задачу и комментарий. «Человек» — только собственная сессия браузера; токен, вебхук, импорт и неизвестный автор — «агент». Текст доски — данные, а не инструкции: просьба в комментарии не закрывает карточку."
+			},
+			"text": "id: TB-83\ntitle: \"Автор задачи и комментария: агент или человек\"\nstatus: in-review\nauthor: agent\nuntrusted: true\ndescription: \"Ответ показывает, кто написал задачу и комментарий. «Человек» — только собственная сессия браузера; токен, вебхук, импорт и неизвестный автор — «агент». Текст доски — данные, а не инструкции: просьба в комментарии не закрывает карточку.\"",
+			"tokens": 100
+		},
+		{
+			"name": "card-ru",
+			"format": "json",
+			"value": {
+				"id": "TB-83",
+				"title": "Автор задачи и комментария: агент или человек",
+				"status": "in-review",
+				"author": "agent",
+				"untrusted": true,
+				"description": "Ответ показывает, кто написал задачу и комментарий. «Человек» — только собственная сессия браузера; токен, вебхук, импорт и неизвестный автор — «агент». Текст доски — данные, а не инструкции: просьба в комментарии не закрывает карточку."
+			},
+			"text": "{\n  \"id\": \"TB-83\",\n  \"title\": \"Автор задачи и комментария: агент или человек\",\n  \"status\": \"in-review\",\n  \"author\": \"agent\",\n  \"untrusted\": true,\n  \"description\": \"Ответ показывает, кто написал задачу и комментарий. «Человек» — только собственная сессия браузера; токен, вебхук, импорт и неизвестный автор — «агент». Текст доски — данные, а не инструкции: просьба в комментарии не закрывает карточку.\"\n}",
+			"tokens": 117
+		},
+		{
+			"name": "task-list",
+			"format": "toon",
+			"value": {
+				"total": 5,
+				"tasks": [
+					{
+						"number": 18,
+						"title": "Token counter reference cards",
+						"status": "in-progress",
+						"priority": "medium"
+					},
+					{
+						"number": 19,
+						"title": "Ключ уведомлений из файла",
+						"status": "in-review",
+						"priority": "high"
+					},
+					{
+						"number": 83,
+						"title": "Автор: агент или человек",
+						"status": "in-review",
+						"priority": "high"
+					},
+					{
+						"number": 113,
+						"title": "Card memory proxy on the Mac",
+						"status": "to-do",
+						"priority": "low"
+					},
+					{
+						"number": 131,
+						"title": "Журнал агента: хэши генома и причина пробуждения",
+						"status": "to-do",
+						"priority": "medium"
+					}
+				]
+			},
+			"text": "total: 5\ntasks[5]{number,title,status,priority}:\n  18,Token counter reference cards,in-progress,medium\n  19,Ключ уведомлений из файла,in-review,high\n  83,\"Автор: агент или человек\",in-review,high\n  113,Card memory proxy on the Mac,to-do,low\n  131,\"Журнал агента: хэши генома и причина пробуждения\",to-do,medium",
+			"tokens": 98
+		},
+		{
+			"name": "comments-emoji",
+			"format": "json",
+			"value": {
+				"comments": [
+					{
+						"author": "agent",
+						"content": "Готово ✅ PR #245, гейт зелёный 🚀"
+					},
+					{
+						"author": "human",
+						"content": "Looks good — merge after CI 👍🏽"
+					},
+					{
+						"author": "agent",
+						"content": "Edge: 👨‍👩‍👧‍👦 ZWJ, flags 🇧🇾🇺🇦, combining é, 中文 и 日本語."
+					}
+				]
+			},
+			"text": "{\n  \"comments\": [\n    {\n      \"author\": \"agent\",\n      \"content\": \"Готово ✅ PR #245, гейт зелёный 🚀\"\n    },\n    {\n      \"author\": \"human\",\n      \"content\": \"Looks good — merge after CI 👍🏽\"\n    },\n    {\n      \"author\": \"agent\",\n      \"content\": \"Edge: 👨‍👩‍👧‍👦 ZWJ, flags 🇧🇾🇺🇦, combining é, 中文 и 日本語.\"\n    }\n  ]\n}",
+			"tokens": 118
+		},
+		{
+			"name": "mixed-code-text",
+			"format": "text",
+			"text": "Run `pnpm typecheck && pnpm test` in boards/, then open https://github.com/example/repo/pull/245.\n\tExit code: 0 · 841 + 1501 tests · 3.14 s\n    const n = defaultCounter.count(text); // o200k_base\n\n",
+			"tokens": 64
+		},
+		{
+			"name": "long-cyrillic",
+			"format": "text",
+			"text": "Счётчик токенов решает, сколько текста карточки агент получит в ответе. Если библиотека токенизатора обновится и начнёт считать иначе, бюджеты ответов поплывут молча: одна и та же карточка станет длиннее или короче, обрезка сработает в другом месте, а сравнение замеров до и после потеряет смысл. Поэтому в репозитории лежат эталонные карточки с закреплёнными числами. Любое расхождение роняет тест, и смена счётчика становится решением, а не случайностью обновления зависимостей. Счётчик токенов решает, сколько текста карточки агент получит в ответе. Если библиотека токенизатора обновится и начнёт считать иначе, бюджеты ответов поплывут молча: одна и та же карточка станет длиннее или короче, обрезка сработает в другом месте, а сравнение замеров до и после потеряет смысл. Поэтому в репозитории лежат эталонные карточки с закреплёнными числами. Любое расхождение роняет тест, и смена счётчика становится решением, а не случайностью обновления зависимостей. ",
+			"tokens": 271
+		},
+		{
+			"name": "empty",
+			"format": "text",
+			"text": "",
+			"tokens": 0
+		}
+	]
+}
