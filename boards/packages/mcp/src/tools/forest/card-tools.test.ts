@@ -1,6 +1,9 @@
+import { defaultCounter } from "@kaneo/agent-format";
 import { describe, expect, it, vi } from "vite-plus/test";
+import type { z } from "zod";
 import { decodeWire } from "../../view/wire-format.js";
 import { registerTools } from "../register.js";
+import { CARD_TOKENS_RULE } from "./card-tools.js";
 
 type Handler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
@@ -108,5 +111,33 @@ describe("forest card tools", () => {
       data: { comments: Array<{ id: string }> };
     };
     expect(data.comments.map((comment) => comment.id)).toEqual(["c2"]);
+  });
+});
+
+describe("card tokens rule (D-018)", () => {
+  it("tells the writer to use provider usage, price cache in costUsd, o200k only without usage", () => {
+    const configs = new Map<string, { inputSchema: z.ZodObject }>();
+    const server = {
+      registerTool: vi.fn((name: string, config: never) => {
+        configs.set(name, config);
+      }),
+    };
+    registerTools(server as never, { client: { json: vi.fn() } as never });
+
+    const tokens = configs.get("forest_set_card_meta")?.inputSchema.shape
+      .tokens as z.ZodType | undefined;
+    expect(tokens?.description).toBe(CARD_TOKENS_RULE);
+    expect(CARD_TOKENS_RULE).toMatch(/provider usage/);
+    expect(CARD_TOKENS_RULE).toMatch(/o200k_base/);
+    // D-018 names cache: it is priced, not dropped.
+    expect(CARD_TOKENS_RULE).toMatch(/Cache counts in costUsd/);
+    // One count for every provider: OpenAI-style prompt_tokens holds cache.
+    expect(CARD_TOKENS_RULE).toMatch(/input without cache \+ output/);
+    expect(CARD_TOKENS_RULE).toMatch(/o200k_base of input \+ output text/);
+  });
+
+  // The rule rides in every tools/list of a session that sees the tool.
+  it("costs at most 42 tokens", () => {
+    expect(defaultCounter.count(CARD_TOKENS_RULE)).toBeLessThanOrEqual(42);
   });
 });
