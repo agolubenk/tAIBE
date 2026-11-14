@@ -1917,6 +1917,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     });
     return out;
   }
+  /**
+   * «N просрочено до окна» (решение продукта #347): из просроченных (late) — те, чей план раньше начала окна a. Веху,
+   * которая уже стоит меткой в окне (ms: факт end в окне, план раньше), второй раз не считаем (линза фронтенда #347).
+   */
+  function roadmapBefore(late, ms, a) {
+    return late.filter(function (w) { var d = planEndOf(w); return !!d && d < a && ms.indexOf(w) < 0; });
+  }
   // Ссылка «#item=<id>» из колонки «Связь» на /deploys → id пункта или ''. Шаблон — DOC_ID сервера (store.ts): без
   // кавычек и скобок, поэтому id можно подставить в селектор [data-id="…"].
   function targetFromHash(hash) {
@@ -2554,8 +2561,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       var ms = msAll.filter(function (w) { return inWin(dParse(w.end) || planEndOf(w)); });
       // Просрочено до начала окна (линза фронтенда #347, решение продукта): в окне такой задачи не видно, а просрочка —
       // главный красный сигнал. Число — у названия полосы, названия, план и отставание — в подсказке. Просроченную веху
-      // считаем здесь, а не во «вне окна».
-      var before = win ? late.filter(function (w) { var d = planEndOf(w); return !!d && d < a; }) : [];
+      // считаем здесь, а не во «вне окна»; веху с меткой в окне — только меткой (roadmapBefore в блоке oq-pure).
+      var before = win ? roadmapBefore(late, ms, a) : [];
       var away = msAll.filter(function (w) { return !inWin(dParse(w.end) || planEndOf(w)) && before.indexOf(w) < 0; }).length;
       var marks = ms.map(function (w) {
         var at = dParse(w.end) || planEndOf(w), isLate = w.status !== 'done' && lagOf(w, t) > 0;
@@ -2580,7 +2587,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
       o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small>' +
         (hidden.length ? '<br><small class="rm-hidden"' + tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); })) + '>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>' : '') +
-        (before.length ? '<br><small class="rm-before"' + tipAttr(before.map(function (w) { return w.title + ' — план ' + fmtD(planEndOf(w)) + ', отставание ' + lagOf(w, t) + ' дн.'; })) + '>' + before.length + ' просрочено до окна</small>' : '') +
+        (before.length ? '<br><small class="rm-before is-late"' + tipAttr(before.map(function (w) { return w.title + ' — план ' + fmtD(planEndOf(w)) + ', отставание ' + lagOf(w, t) + ' дн.'; })) + '>' + before.length + ' просрочено до окна</small>' : '') +
         (away ? '<br><small class="rm-away">' + away + ' ' + plural(away, 'веха', 'вехи', 'вех') + ' вне окна</small>' : '') + '</span></div><div class="rm-lane">' + lane + now + '</div></div>';
     });
     host.innerHTML = ws.length ? o : '<p class="empty" style="padding:10px">' + noRows('Нет задач.') + '</p>';
