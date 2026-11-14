@@ -4084,9 +4084,15 @@
 					"hint": "A web page (HTML, Markdown or plain text, up to 2 MB) is read once; a pull request comes through the GitHub App with its discussion. Adding the same link again refreshes it. PDF is not supported yet."
 				},
 				"refresh": "Refresh {{title}}",
+				"remove": "Remove {{title}}",
+				"removeTitle": "Remove this source from the notebook?",
+				"removeDescription": "{{title}} and its chunks leave the notebook, and answers stop citing it. You can add the link again later.",
+				"removeConfirm": "Remove",
 				"toast": {
 					"added": "In the notebook: {{title}}",
 					"unchanged": "Nothing changed: {{title}}",
+					"removed": "Removed from the notebook: {{title}}",
+					"removeError": "Could not remove the source",
 					"error": "Could not add the source"
 				},
 				"errors": {

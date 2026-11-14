@@ -99,6 +99,16 @@ export const pruneSourcesBody = z.object({
   }),
 });
 
+// TB-132: one source a member added by hand. The synced kinds (cards, docs,
+// uploads) come back on their next sync, so this route does not take them.
+export const removeSourceBody = z.object({
+  kind: z.enum(["link", "github-pr"]),
+  ref: z.string().min(1).max(SOURCE_URL_MAX).openapi({
+    description:
+      "The ref the sources list shows: the URL of a page or owner/repo#n of a pull request.",
+  }),
+});
+
 export const prunedSchema = z
   .object({ deleted: z.number().int() })
   .openapi("NotebookPruned");
