@@ -4101,6 +4101,7 @@
 					"LINK_CONTENT_TYPE": "Only HTML, Markdown and plain text pages can be added.",
 					"LINK_PDF_UNSUPPORTED": "PDF links are not supported yet.",
 					"LINK_EMPTY": "The page has no text to add; it may need JavaScript to show it.",
+					"LINK_BUSY": "Other links are still loading in this workspace. Try again in a few seconds.",
 					"PR_INVALID_URL": "Enter a GitHub pull request link, such as https://github.com/owner/repo/pull/12.",
 					"PR_REPO_NOT_LINKED": "This repository is not linked to a project every member of the workspace can open.",
 					"PR_NOT_FOUND": "This pull request was not found in the linked repository.",

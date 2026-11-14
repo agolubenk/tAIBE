@@ -4,6 +4,7 @@ import {
   SOURCE_URL_MAX,
 } from "../routes/schema";
 import { fetchLink, linkRefusal } from "./link-fetch";
+import { withLinkSlot } from "./link-slots";
 import { linkSourceText } from "./link-text";
 import { upsertSource } from "./upsert-source";
 
@@ -37,7 +38,8 @@ export function linkRef(input: string) {
 
 export async function addLinkSource(workspaceId: string, input: string) {
   const url = linkRef(input);
-  const page = linkSourceText(url, await fetchLink(url));
+  const fetched = await withLinkSlot(workspaceId, () => fetchLink(url));
+  const page = linkSourceText(url, fetched);
   if (!page.body) {
     throw linkRefusal(
       422,
