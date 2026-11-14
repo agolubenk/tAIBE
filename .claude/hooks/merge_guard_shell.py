@@ -5,6 +5,7 @@
 и команды из подстановок `$(…)`/`` `…` ``/`<(…)`/`=(…)` (zsh). Ключевые слова shell (`if … then`, `do`, `!`, `{`)
 и обёртки (`env`, `sudo`, `xargs`) снимаются с начала команды, переменные из `NAME=…` и `for NAME in …` — в argv.
 """
+import functools
 import glob
 import os
 import re
@@ -190,6 +191,7 @@ def normalize(argv):
     return [command_name(rest[0])] + rest[1:] if rest else []
 
 
+@functools.lru_cache(maxsize=4096)
 def command_name(word):
     """Имя команды без пути и в нижнем регистре: `/opt/homebrew/bin/gh` → `gh`; zsh `=gh` (EQUALS) — путь к gh. APFS
     регистр не различает: `GIT`, `/usr/bin/Gh`, `ZSH` запускают git, gh, zsh (SE-90). На Linux такой программы нет —
@@ -197,10 +199,11 @@ def command_name(word):
     return exact_name(word).lower()
 
 
+@functools.lru_cache(maxsize=4096)  # зовётся на каждое слово команды: в тексте из тысяч строк слова повторяются
 def exact_name(word):
     """Имя команды без пути, как написано: `CD x` — не встроенная `cd`, а /usr/bin/cd в подоболочке (папка та же)."""
     w = word.lstrip("`")
-    return os.path.basename(w[1:] if w.startswith("=") and len(w) > 1 else w)
+    return (w[1:] if w.startswith("=") and len(w) > 1 else w).rpartition("/")[2]  # os.path.basename без его накладных
 
 
 def strip_prefix(argv):

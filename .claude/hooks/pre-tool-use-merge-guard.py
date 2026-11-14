@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, start_budget  # noqa: E402
+from merge_guard_alias import PATH_KEY, alias_kind, note_path  # noqa: E402 — инструмент под другим именем (SE-90)
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, dir_words, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
 from merge_guard_gh import classify_gh, classify_http, hooks_off  # noqa: E402
@@ -215,10 +216,27 @@ FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
 GUESSED = {"git", "gh", "curl", "wget", "http", "xh"}  # имена догадки: `$D/GIT` на macOS — тот же git (регистр)
 
 
+def tool_kind(name, a, cwd, written, git_env):
+    """Защищённое действие инструмента name с аргументами a[1:]: git, gh, curl/wget/http/xh."""
+    b = [name] + a[1:]
+    if name == "git":
+        return classify_git(b, cwd, env_config=git_env)
+    if name == "gh":
+        return classify_gh(b, cwd, written)
+    return classify_http(b, cwd) if name in ("curl", "wget", "http", "xh") else None
+
+
+def guess_kind(a, cwd, written, git_env, g=True):
+    """Имя не видно — догадка по аргументам: как gh, git, curl; g="blind" — голый push на main тоже отказ."""
+    return (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
+            or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd))
+
+
 def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, ("", "")), exe="", stdin_files=(), procs=None,
-                  hid=()):
+                  hid=(), dirs=()):
     """Одна команда после снятия обёрток. whole — исходная команда без тел heredoc и с ними (см. runs_code), exe — первое
-    слово с путём, stdin_files — файлы, которые придут ей на stdin, hid — имена, заданные невидимо (BLIND)."""
+    слово с путём, stdin_files — файлы, которые придут ей на stdin, hid — имена, заданные невидимо (BLIND), dirs — папки
+    PATH, заданные текстом (note_path)."""
     if a[0] == "eval":  # `eval -- 'gh pr merge 1'`: ведущий `--` bash и zsh пропускают
         code = a[2:] if a[1:2] == ["--"] else a[1:]
         return eval_code(" ".join(code), cwd, roots, depth, git_env, whole, procs) if code else []
@@ -238,11 +256,10 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
         found += interp_found(" ".join(a[1:]), cwd, roots)
     found += launched(a, cwd, roots, depth, git_env, whole)
     written = whole[3] or ()
-    http = lambda x: classify_http(x, cwd)  # noqa: E731
-    kind = {"gh": lambda x: classify_gh(x, cwd, written), "curl": http, "wget": http, "http": http,
-            "xh": http}.get(a[0], lambda _: None)(a)
-    if a[0] == "git":
-        kind = classify_git(a, cwd, env_config=git_env)
+    kind = tool_kind(a[0], a, cwd, written, git_env)
+    real, guessed = alias_kind(exe or a[0], cwd, written, dirs)  # ссылка, копия, имя после смены PATH (SE-90)
+    kind = kind or (tool_kind(real, a, cwd, written, git_env) if real and real != a[0] else None) or (
+        guess_kind(a, cwd, written, git_env) if guessed else None)
     if "$" in exe or SUBST in exe:  # имя не видно: `$GH pr merge 1`, `$(echo gh) pr merge 1`, `${G/x/gh}` — как gh, git, curl
         hidden = not whole[2] and (SUBST in exe or "*" in hid or any(n in hid for n in VAR.findall(exe)))  # не с диска
         if depth < 3 and SUBST_AT.search(exe):  # `$(cat c.txt)`, `x=$(cat c.txt); $x`: слова команды — текст файла
@@ -253,11 +270,11 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
         g = "blind" if hidden else True  # имя задано невидимо: голый push на main — тоже отказ (classify_git)
         base = exe.rpartition("/")[2] if "/" in exe else ""  # `"$D/swiftc"`: имя видно — не git (SE-78)
         named = not hidden and re.fullmatch(r"[\w.+-]+", base) and SUBST not in base and base.lower() not in GUESSED
-        kind = kind or (None if named else (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
-                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd)))
+        kind = kind or (None if named else guess_kind(a, cwd, written, git_env, g))
         tail = strip_prefix(a[1:])  # `$X` раскроется и в пусто, и в префикс (`$SUDO`, `${DRY:+echo}`): `$X gh pr merge 1`
         if tail:
-            found += classify_argv(normalize(tail), cwd, roots, depth, git_env, whole, tail[0], stdin_files, procs, hid)
+            found += classify_argv(normalize(tail), cwd, roots, depth, git_env, whole, tail[0], stdin_files, procs, hid,
+                                   dirs)
     if kind:
         found.append((kind, " ".join(a)[:120]))
     if a[0] == "claude" and hooks_off(a):
@@ -281,7 +298,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         hit = FALLBACK.search(uncommented(cmd))
         return [("вложенная команда с признаком защищённого действия", cmd[:120])] if hit else []
     if fresh:  # все записи команды — до разбора `$(…)` и heredoc (они разбираются раньше); вложенным — уже от родителя
-        written.update(command_writes(cmd, keep=keep) | ({CHANGED} if keep else set()))  # keep — и для `eval` в скрипте
+        written.update(command_writes(cmd, keep=keep, cwd=cwd) | ({CHANGED} if keep else set()))  # keep — и для `eval` в скрипте
     cmd, bodies = (cmd, []) if alt else cut_heredocs(cmd)  # до снятия комментариев; alt — уже снят (comment_readings)
     cmd, other = (join_lines(cmd), None) if raw else comment_readings(cmd, None if part else FALLBACK.search, alt)  # SE-77, SE-82, SE-83
     whole = (cmd, "\n".join([cmd] + [join_lines(heredoc_text(b, e)) for _, b, e in bodies]), disk, written)
@@ -311,6 +328,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
             if p:
                 found.append(("file", p))
         note_vars(argv, env)
+        note_path(argv, env)  # `PATH=bin:$PATH swiftc …` — голое имя ищется в bin (SE-90 п. 4)
         expanded, overflow = expand_vars(argv, env)
         braced, head = brace_argv(argv), strip_prefix(argv)  # скобки shell раскрывает до запуска: `{gh,pr,merge,1}`
         if braced is None and (FALLBACK.search(" ".join(argv)) or head and re.search(r"^(gh|git)$|[{$]", command_name(head[0]))):
@@ -324,13 +342,13 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         for v in implied_commands(expanded):  # `BASH_ENV=m.sh bash -c true`, `NODE_OPTIONS='-r ./m.js' npm test`
             found += classify_argv(normalize(v), cwd, roots, depth, git_env, whole[:2] + (True,) + whole[3:],
                                   strip_prefix(v)[0])
-        cut = [(v, strip_prefix(v)) for v in expanded]  # снятые слова решают, сменит ли `cd` папку (dir_words)
-        prefixes = [v[:len(v) - len(r)] if v[len(v) - len(r):] == r else None for v, r in cut if r]
-        variants = [([command_name(r[0])] + r[1:], r[0]) for _, r in cut if r]
+        cut = [(v, r) for v, r in ((v, strip_prefix(v)) for v in expanded) if r]  # снятые слова — для dir_words
+        variants = [([command_name(r[0])] + r[1:], r[0]) for _, r in cut]
         stdin_files = [x for f in sources or (cat_files(*prev, cwd) if piped else []) for x in procs.get(f, [f])]
         stdin_files = stdin_files or ([HEREDOC] if argv in fed else [])
         prev = ([v for v, _ in variants], stdin_files)
-        steps = [dir_words(p, v, e) for p, (v, e) in zip(prefixes, variants)]  # `CD x`, `nohup cd x` — папка та же (SE-90)
+        steps = [dir_words(v[:len(v) - len(r)] if v[len(v) - len(r):] == r else None, w, e) for (v, r), (w, e) in zip(
+            cut, variants)] if any(w[0] in DIR_CMDS for w, _ in variants) else []  # `CD x`, `nohup cd x` — папка та же
         if any(v is None or v and v[0] in DIR_CMDS for v in steps):
             new = dir_step(steps, st, piped)  # bash и zsh расходятся (`command cd`, `… | cd`) — LOST и в скрипте с диска
             if disk and is_lost(new) and not piped and None not in steps:  # `cd "$ROOT"` в функциях и циклах — папка прежняя
@@ -339,7 +357,8 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
                 cwd = new
             dir_vars(env, cwd, st["old"])
         for a, exe in ((v, e) for v, e in variants if v[0] not in DIR_CMDS):
-            found += classify_argv(a, cwd, roots, depth, git_env, whole, exe, stdin_files, procs, env.get(BLIND, ()))
+            found += classify_argv(a, cwd, roots, depth, git_env, whole, exe, stdin_files, procs, env.get(BLIND, ()),
+                                   env.get(PATH_KEY, ()))
     return found
 
 
