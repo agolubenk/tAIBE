@@ -22,7 +22,7 @@ import { httpRequest } from '../lib/http'
 import { apiError } from '../http-types'
 import { oqWrite } from './oq-write'
 import { DEFAULT_PRODUCT, listProducts } from './products'
-import { eventJson, getDoc, logEvent, writeDocIn, type Actor } from './store'
+import { eventAfterJson, getDoc, logEvent, writeDocIn, type Actor } from './store'
 
 export interface GithubResponse {
   status: number
@@ -462,7 +462,7 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
     // только пункты HR (:382) — правка на день, когда мёрж подключат другим продуктам.
     const itemProduct = (await w.doc('items', itemId))?.product ?? DEFAULT_PRODUCT
     const after = { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi, method: info.method, repo }
-    await w.event({ actor: actor.name, collection: 'items', docId: itemId, action: 'merge', afterJson: eventJson(after), product: itemProduct })
+    await w.event({ actor: actor.name, collection: 'items', docId: itemId, action: 'merge', afterJson: eventAfterJson(after), product: itemProduct })
   })
   return { sha: merged.sha ?? '', message }
 }

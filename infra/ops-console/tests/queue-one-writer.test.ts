@@ -45,6 +45,14 @@ describe('один путь записи: исходники', () => {
     const src = readFileSync(WRITER, 'utf8')
     expect([DRIZZLE_WRITE.test(src), SQL_WRITE.test(src), TABLES.test(src), TRANSACTION.test(src)]).toEqual([true, true, true, true])
   })
+
+  // Q-36: тело события длиннее предела — валидный маркер, а не JSON, разрезанный посередине. logEvent проверяет
+  // queue-history-truncated.test.ts; событие merge (github.ts) пишется мимо logEvent, поэтому — скан.
+  it('тело события не режется посередине: нет slice(0, 20_000), событие merge идёт через eventAfterJson', () => {
+    const cut = tsFiles(SERVER).filter((f) => /\.slice\(\s*0\s*,\s*20_?000\s*\)/.test(readFileSync(f, 'utf8')))
+    expect(cut.map((f) => relative(SERVER, f))).toEqual([])
+    expect(readFileSync(join(SERVER, 'queue', 'github.ts'), 'utf8')).toMatch(/action: 'merge', afterJson: eventAfterJson\(after\)/)
+  })
 })
 
 describe('один путь записи: время и значения по умолчанию', () => {
