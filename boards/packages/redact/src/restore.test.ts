@@ -170,16 +170,16 @@ describe("restoreRedacted (TB-143)", () => {
     expect(restoreRedacted(dollar, view)).toEqual({ ok: true, text: dollar });
   });
 
-  // B1 (Claude lens on e4e66d156): `\s*` in the password, SECRET= and bearer
-  // rules spans a blank line, so the label can stand in the block above.
+  // B1 (Claude lens on e4e66d156): `\s*` in a rule spans a blank line, so
+  // the label can stand in the block above the value. The bearer rule does
+  // so before and after TB-136 (#283), which keeps password and SECRET
+  // values on the label's line.
   it("refuses a write-back that would leave a restored value unmasked", () => {
     const pw = join("hunter", "2-Staging!");
-    for (const [label, edited] of [
-      ["Staging DB password:", "Staging DB credentials"],
-      ["SECRET=", "SECRET is below"],
-      ["Authorization: Bearer", "Authorization header"],
+    for (const [text, label, edited] of [
+      [`Authorization: Bearer\n\n${pw}`, "Authorization: Bearer", "Header"],
+      [`Authorization:\n\nBearer ${pw}`, "Authorization:", "Header"],
     ] as const) {
-      const text = `${label}\n\n${pw}`;
       const view = redact(text).text;
       expect(view).not.toContain(pw);
 
