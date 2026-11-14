@@ -58,6 +58,13 @@ class BodyVerdictsTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual((approved, changes), (["plan", "корректность и отказы", "ресурсы"], []))
 
+    def test_two_rows_of_one_lens_on_one_head_the_last_row_wins(self):
+        fail = f"| продукт/UX | GLM glm-5 (Контроль) | {H} | fail, 1 major |"
+        ok = f"| продукт/UX (круг 2) | Контроль | {H} | **OK** |"
+        for rows, approved, changes in (([fail, ok], ["plan"], []), ([ok, fail], [], ["plan"])):
+            text = "\n".join(["| Линза | Участник | Голова | Вердикт |", "|---|---|---|---|", *rows])
+            self.assertEqual(quorum.quorum(body(text), HEAD, [], 1)[1:3], (approved, changes), rows[0])
+
     def test_hr_body_before_fill_has_no_verdicts(self):
         self.assertEqual(body(hr_body()), [])
 
@@ -96,6 +103,12 @@ class WithBodyTest(unittest.TestCase):
         for body_word, said_word in (("approve", "changes"), ("changes", "approve")):
             out = quorum.with_body([v("plan", body_word)], [v("plan", said_word)], HEAD)
             self.assertEqual([x["verdict"] for x in out], [said_word])
+
+    def test_body_changes_without_a_comment_of_that_lens_blocks_the_quorum(self):
+        out = quorum.with_body([v("plan", "changes")], [v("backend", "approve")], HEAD)
+        self.assertEqual(sorted((x["lens"], x["verdict"]) for x in out), [("backend", "approve"), ("plan", "changes")])
+        ok, approved, changes, _ = quorum.quorum(out, HEAD, [], 1)
+        self.assertEqual((ok, approved, changes), (False, ["backend"], ["plan"]))
 
     def test_comment_on_an_old_head_does_not_override_the_body_line(self):
         out = quorum.with_body([v("plan", "approve")], [v("plan", "changes", OLD)], HEAD)
@@ -157,6 +170,19 @@ class PollBodyTest(unittest.TestCase):
         sources.run = BodyGh([hr_pr(hr_body(rows), "2026-11-14T04:10:00Z")], etag='W/"e3"')  # Контроль снял changes
         gh_poll.poll_github(self.ctx)
         self.assertIn("pr.quorum", self.kinds())
+
+    def test_body_change_on_the_same_head_without_comments_is_read_again(self):
+        """Находка цепочки на 74b6237b3: правка строки тела на той же голове, без комментариев линз. Каждая правка
+        (новый updated_at) разбирается заново: changes → approve даёт кворум, approve → changes возвращает changes_by."""
+        fail = ROWS[:3] + [f"| продукт/UX (круг 2) | Контроль | `{H}` | fail, 1 major |", ROWS[4]]
+        steps = [(fail, "03:00", ["plan"], 0), (ROWS, "03:10", [], 1), (fail, "03:20", ["plan"], 1)]
+        for rows, hm, changes, quorums in steps:
+            upd = f"2026-11-14T{hm}:00Z"
+            sources.run = BodyGh([hr_pr(hr_body(rows), upd)], etag=f'W/"{upd}"')
+            gh_poll.poll_github(self.ctx)
+            self.assertEqual(self.pr()["changes_by"], changes, hm)
+            self.assertEqual(self.kinds().count("pr.quorum"), quorums, hm)  # один pr.quorum на голову
+        self.assertNotIn("pr.changes", self.kinds())  # строки тела пишет автор: pr.changes о них не шлётся
 
     def test_304_refresh_keeps_the_body_verdicts(self):
         sources.run = BodyGh([hr_pr(hr_body(ROWS))], rollup="IN_PROGRESS")
