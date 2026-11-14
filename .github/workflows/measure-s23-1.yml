@@ -1,0 +1,254 @@
+# TB-167 (S23-1): one measurement run of react-doctor and checkov on board-agents.
+# It runs from a draft PR that is closed without a merge. It is not a gate: every
+# tool step ends green, and the numbers go to JSON artifacts for plan's triage.
+name: measure-s23-1
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/measure-s23-1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: measure-s23-1
+  cancel-in-progress: true
+
+env:
+  DO_NOT_TRACK: "1"
+
+jobs:
+  react-doctor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: board-agents
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: boards/pnpm-lock.yaml
+      - name: pnpm install (boards)
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        working-directory: boards
+        run: pnpm install --frozen-lockfile
+      - name: oxlint 1.85.0 and oxlint-plugin-react-doctor 0.9.23, outside the workspace, no scripts
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        run: |
+          mkdir -p "$OUT" "$RUNNER_TEMP/rd"
+          cd "$RUNNER_TEMP/rd"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --ignore-scripts oxlint@1.85.0 oxlint-plugin-react-doctor@0.9.23
+      - name: config with only react-doctor rules (framework-specific rules off)
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        working-directory: ${{ runner.temp }}/rd
+        run: |
+          node --input-type=module -e '
+            import * as rd from "oxlint-plugin-react-doctor";
+            import { writeFileSync } from "node:fs";
+            const fw = rd.FRAMEWORK_SPECIFIC_RULE_KEYS ?? new Set();
+            const name = (key) => (key.includes("/") ? key : `react-doctor/${key}`);
+            const keys = Object.keys(rd.ALL_REACT_DOCTOR_RULES ?? rd.default.rules);
+            const rules = Object.fromEntries(keys.filter((k) => !fw.has(k)).map((k) => [name(k), "warn"]));
+            writeFileSync(".oxlintrc.json", JSON.stringify({
+              plugins: [],
+              categories: { correctness: "off" },
+              jsPlugins: [{ name: "react-doctor", specifier: "oxlint-plugin-react-doctor" }],
+              rules,
+            }, null, 2));
+            const registry = (rd.REACT_DOCTOR_RULES ?? []).map((e) => ({ ...e }));
+            writeFileSync(process.env.OUT + "/react-doctor-registry.json", JSON.stringify(registry, (k, v) => (typeof v === "function" ? undefined : v)));
+            console.log(`rules on: ${Object.keys(rules).length} of ${keys.length} (framework-specific off: ${fw.size})`);
+          '
+          cp .oxlintrc.json "$OUT/react-doctor-oxlintrc.json"
+      - name: react-doctor on boards/apps/web (oxlint --format json)
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        working-directory: boards
+        run: |
+          start=$(date +%s)
+          set +e
+          "$RUNNER_TEMP/rd/node_modules/.bin/oxlint" -c "$RUNNER_TEMP/rd/.oxlintrc.json" --format json apps/web \
+            > "$OUT/react-doctor.json" 2> "$OUT/react-doctor.stderr"
+          code=$?
+          echo "{\"exit\": $code, \"seconds\": $(( $(date +%s) - start ))}" | tee "$OUT/react-doctor-time.json"
+      - name: boards oxlint rule list (for the duplicate count)
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        run: |
+          set +e
+          "$RUNNER_TEMP/rd/node_modules/.bin/oxlint" --rules --format json > "$OUT/oxlint-rules.json" 2>/dev/null \
+            || "$RUNNER_TEMP/rd/node_modules/.bin/oxlint" --rules > "$OUT/oxlint-rules.txt" 2>&1
+          grep -o -E '"(react|jsx-a11y)/[a-z0-9-]+"' boards/vite.config.ts | tr -d '"' | sort -u > "$OUT/boards-explicit-rules.txt"
+          true
+      - name: summary (react-doctor)
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        run: |
+          python3 -I - <<'PY'
+          import json, os, re, collections
+          out = os.environ["OUT"]
+          raw = open(f"{out}/react-doctor.json").read() or "{}"
+          data = json.loads(raw)
+          diags = data.get("diagnostics", []) if isinstance(data, dict) else data
+          def rule(d):
+              code = str(d.get("code", ""))
+              m = re.match(r"^([\w@/.-]+)\((.+)\)$", code)
+              return f"{m.group(1)}/{m.group(2)}" if m else code
+          by_rule = collections.Counter(rule(d) for d in diags)
+          base = lambda r: r.split("/")[-1]
+          # Boards turns on every correctness rule of react and jsx-a11y plus the explicit ones.
+          boards = set(l.strip() for l in open(f"{out}/boards-explicit-rules.txt") if l.strip())
+          correctness = set()
+          try:
+              rules = json.load(open(f"{out}/oxlint-rules.json"))
+              for r in rules if isinstance(rules, list) else rules.get("rules", []):
+                  scope = str(r.get("scope", r.get("plugin", ""))).replace("_", "-")
+                  name = r.get("value", r.get("name", ""))
+                  if scope in ("react", "jsx-a11y", "react-perf") and r.get("category") == "correctness":
+                      correctness.add(f"{scope}/{name}")
+          except Exception as exc:
+              correctness = None
+              print("oxlint --rules json not read:", exc)
+          enabled = boards | (correctness or set())
+          enabled_base = {base(r) for r in enabled}
+          dup = {r: n for r, n in by_rule.items() if base(r) in enabled_base}
+          rr, sample = collections.defaultdict(list), []
+          for d in diags:
+              rr[rule(d)].append(d)
+          while len(sample) < 20 and any(rr.values()):
+              for r in sorted(rr, key=lambda r: -by_rule[r]):
+                  if rr[r] and len(sample) < 20:
+                      d = rr[r].pop(0)
+                      span = (d.get("labels") or [{}])[0].get("span", {})
+                      sample.append({"rule": r, "file": d.get("filename"), "line": span.get("line"), "message": d.get("message")})
+          summary = {
+              "findings": len(diags), "rules_with_findings": len(by_rule),
+              "top10": by_rule.most_common(10), "by_rule": dict(by_rule.most_common()),
+              "duplicates_of_boards_rules": {"total": sum(dup.values()), "by_rule": dup,
+                  "boards_explicit": sorted(boards), "boards_correctness_known": correctness is not None},
+              "time": json.load(open(f"{out}/react-doctor-time.json")),
+              "sample20": sample,
+          }
+          json.dump(summary, open(f"{out}/react-doctor-summary.json", "w"), ensure_ascii=False, indent=1)
+          print(json.dumps({k: summary[k] for k in ("findings", "rules_with_findings", "top10", "time")}, ensure_ascii=False))
+          print("duplicates:", summary["duplicates_of_boards_rules"]["total"])
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: react-doctor
+          path: ${{ runner.temp }}/measure-out/
+          retention-days: 14
+
+  checkov:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: board-agents
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: checkov 3.4.5 (pinned)
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        run: |
+          mkdir -p "$OUT"
+          python3 -m pip install --disable-pip-version-check --quiet checkov==3.4.5
+          checkov --version
+      - name: run A — dockerfile, openapi
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        run: |
+          start=$(date +%s)
+          set +e
+          checkov -d . --framework dockerfile openapi --skip-path claude-plugins-official --skip-path node_modules \
+            --skip-download --soft-fail --quiet -o json > "$OUT/checkov-A.json" 2> "$OUT/checkov-A.stderr"
+          echo "{\"exit\": $?, \"seconds\": $(( $(date +%s) - start ))}" | tee "$OUT/checkov-A-time.json"
+      - name: run B — all frameworks
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        run: |
+          start=$(date +%s)
+          set +e
+          checkov -d . --skip-path claude-plugins-official --skip-path node_modules \
+            --skip-download --soft-fail --quiet -o json > "$OUT/checkov-B.json" 2> "$OUT/checkov-B.stderr"
+          echo "{\"exit\": $?, \"seconds\": $(( $(date +%s) - start ))}" | tee "$OUT/checkov-B-time.json"
+      - name: actionlint 1.7.7 on the same tree (as checks-ci)
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        run: |
+          set +e
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -format '{{json .}}' > "$OUT/actionlint.json" 2> "$OUT/actionlint.stderr"
+          true
+      - name: summary (checkov)
+        env:
+          OUT: ${{ runner.temp }}/measure-out
+        run: |
+          python3 -I - <<'PY'
+          import json, os, collections
+          out = os.environ["OUT"]
+          def reports(name):
+              raw = open(f"{out}/{name}").read().strip() or "[]"
+              data = json.loads(raw)
+              return data if isinstance(data, list) else [data]
+          def failed(reps):
+              rows = []
+              for rep in reps:
+                  for c in (rep.get("results") or {}).get("failed_checks", []):
+                      rows.append({"framework": rep.get("check_type"), "check": c.get("check_id"),
+                                   "name": c.get("check_name"), "file": c.get("file_path"),
+                                   "lines": c.get("file_line_range"), "resource": c.get("resource")})
+              return rows
+          res = {}
+          for v in ("A", "B"):
+              rows = failed(reports(f"checkov-{v}.json"))
+              res[v] = {"findings": len(rows),
+                        "by_framework": dict(collections.Counter(r["framework"] for r in rows).most_common()),
+                        "by_check": dict(collections.Counter(f'{r["check"]} {r["name"]}' for r in rows).most_common()),
+                        "time": json.load(open(f"{out}/checkov-{v}-time.json"))}
+              if v == "A":
+                  rr = collections.defaultdict(list)
+                  for r in rows:
+                      rr[r["check"]].append(r)
+                  sample = []
+                  while len(sample) < 20 and any(rr.values()):
+                      for k in sorted(rr):
+                          if rr[k] and len(sample) < 20:
+                              sample.append(rr[k].pop(0))
+                  res[v]["sample20"] = sample
+              else:
+                  gha = [r for r in rows if r["framework"] == "github_actions"]
+                  try:
+                      al = json.loads(open(f"{out}/actionlint.json").read().strip() or "[]")
+                  except Exception:
+                      al = []
+                  def hit(r):
+                      lo, hi = (r["lines"] or [0, 0])[:2]
+                      f = (r["file"] or "").lstrip("/")
+                      return any(str(a.get("filepath", "")).lstrip("./") == f and lo <= int(a.get("line", -1)) <= hi for a in al)
+                  res[v]["github_actions"] = {"findings": len(gha), "actionlint_findings": len(al),
+                                              "same_place_as_actionlint": sum(1 for r in gha if hit(r)),
+                                              "by_check": dict(collections.Counter(f'{r["check"]} {r["name"]}' for r in gha).most_common())}
+          json.dump(res, open(f"{out}/checkov-summary.json", "w"), ensure_ascii=False, indent=1)
+          for v in res:
+              print(v, res[v]["findings"], res[v]["by_framework"], res[v]["time"])
+          print("gha:", {k: res["B"]["github_actions"][k] for k in ("findings", "actionlint_findings", "same_place_as_actionlint")})
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: checkov
+          path: ${{ runner.temp }}/measure-out/
+          retention-days: 14
