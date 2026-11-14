@@ -180,13 +180,14 @@ def config_moved(argv):
 
 def rewritten(paths, written):
     """Файл из paths переписывает та же команда: прочитанное хуком — не то, что выполнится."""
-    paths = set(paths)
-    return bool(paths) and (ANY in written or bool(path_names(paths) & set(written)))
+    paths, written = set(paths), {w.casefold() for w in written}  # APFS: `> X.sh; bash x.sh` — тот же файл (IS-245)
+    return bool(paths) and (ANY in written or bool({n.casefold() for n in path_names(paths)} & written))
 
 
 def opaque(paths, written):
     """Файл из paths та же команда переписывает тем, чего не видно: дерево другой ветки, загрузка, распаковка."""
-    return ANY in written or any(ANY + n in written for n in path_names(paths))
+    written = {w.casefold() for w in written}
+    return ANY in written or any(ANY + n.casefold() in written for n in path_names(paths))
 
 
 def command_writes(text, depth=0):
