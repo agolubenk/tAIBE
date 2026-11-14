@@ -2278,12 +2278,12 @@ def test_prisma_parser() -> None:
     """
     import graph_build
 
-    if not graph_build.PRISMA_SCHEMA.is_file():
-        # Хост без Prisma (дом слоя tAIBE: доски на Drizzle) — парсеру проверять нечего. В хосте с
-        # монорепо apps/ отсутствие схемы — сбой: её переместили, и граф молча потерял модели.
-        host_has_apps = (graph_build.REPO_ROOT / "apps").is_dir()
-        check("prisma-парсер: schema.prisma найден" if host_has_apps else "prisma-парсер: хост без Prisma — пропуск",
-              not host_has_apps, str(graph_build.PRISMA_SCHEMA))
+    if graph_build.PRISMA_SCHEMA is None or not graph_build.PRISMA_SCHEMA.is_file():
+        # У продукта нет поля council.prisma_schema (дом слоя tAIBE: доски на Drizzle) — парсеру проверять нечего. Поле
+        # есть, а файла нет — сбой: схему переместили, и граф молча потерял модели (Ф2 OPS-23).
+        declared = graph_build.PRISMA_SCHEMA is not None
+        check("prisma-парсер: schema.prisma найден" if declared else "prisma-парсер: у продукта нет схемы Prisma — пропуск",
+              not declared, str(graph_build.PRISMA_SCHEMA))
         return
 
     result = graph_build._parse_prisma_models()

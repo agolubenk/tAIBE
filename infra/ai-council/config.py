@@ -28,12 +28,8 @@ COUNCIL_DB_REL = ".claude/council/council.db"
 REPO_ROOT = host_root(require=COUNCIL_DB_REL)
 CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
-# Канонический словарь модулей (метки карточки t-boards ∩ этот список → cards.modules, корни кода в retrieval).
-CANONICAL_MODULES = {
-    "backend", "frontend", "telegram", "extension", "mobile", "ai-tooling/mcp",
-    "security/auth", "db/queues", "realtime", "ops/ci", "recruiting/ats",
-    "huntflow", "hh.ru", "i18n", "ux", "docs",
-}
+# Словарь модулей карточки (метки t-boards ∩ словарь → cards.modules) — ключи `council.modules` продукта
+# (instances/<slug>.json, Ф2 OPS-23): product.current().modules.
 
 VALID_PROFILES = {"adaptive", "fast", "deep"}
 

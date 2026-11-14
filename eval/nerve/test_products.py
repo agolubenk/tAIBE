@@ -96,6 +96,14 @@ class ErrorsTest(unittest.TestCase):
     def test_paths_are_not_secrets(self):
         self.assertIsNone(P.SECRET_RE.search("/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state"))
 
+    def test_council_relative_paths_pass_and_keys_still_fail(self):  # Ф2 OPS-23
+        path = "apps/backend/src/modules/integrations/telegram"   # 46 знаков из букв и «/» — форма base64
+        edit(self.d, "hr-helper.json", lambda d: d.update(council={"modules": {"telegram": [path]}}))
+        P.load(self.d)
+        for key in ("AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcd/E", "ghp_" + "a1B2" * 9, "AKIA" + "ABCDEFGHIJKLMNOP"):
+            edit(self.d, "hr-helper.json", lambda d, k=key: d.update(council={"modules": {"x": [k]}}))
+            self.fails("похоже на ключ")
+
 
 class ProductDirTest(unittest.TestCase):
     def test_default_stays_in_place_others_go_under_products(self):
