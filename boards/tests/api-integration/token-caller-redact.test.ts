@@ -275,9 +275,10 @@ describe("API integration: free text for callers with a token (TB-143)", () => {
     const pw = join("hunter", "2-Staging!");
     const other = join("gh", "p_", "Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2");
     const cases: [string, string, string][] = [
+      // The bearer rule spans a blank line before and after TB-136 (#283).
       [
-        `Staging DB password:\n\n${pw}`,
-        "Staging DB credentials\n\n[REDACTED:password_assignment]",
+        `Authorization: Bearer\n\n${pw}`,
+        "Header\n\n[REDACTED:bearer]",
         "would no longer hide them",
       ],
       [
