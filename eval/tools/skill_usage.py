@@ -1,6 +1,6 @@
 """TB-22 S22-3 (R-061): skill usage per day from Claude Code transcripts — counters for the SSR registry.
 
-usage: python3 -I eval/tools/skill_usage.py [--days 7] [--json] [--post]
+usage: python3 -I eval/tools/skill_usage.py [--days 7] [--json] [--post] [--product <slug> ...]
 
 Reads the transcripts of this Mac (`~/.claude/projects/*/*.jsonl` and `<sid>/subagents/*.jsonl`) and counts the
 `Skill` tool calls the way `eval/tools/context_audit.py` counts them. Per skill and local day:
@@ -17,9 +17,13 @@ typed by a person is not a `Skill` call and is not counted in v1.
 
 --post sends the counters to tAI-Boards: `POST {baseUrl}/api/ssr/{workspace}/usage`, one request per workspace, with
 the Mac sync key. The workspace of a product is the sync home (`~/.t-boards-notebook*/config.json`) whose `repoRoot`
-is the product's `repo_root`. The body holds counters only — kind, name, day, numbers and a host hash — never the
-transcript text (N-009). Each run sends the full counts of the last --days days, so a repeated day replaces the
-stored counts and does not add to them.
+is the product's `repo_root`; a home without `baseUrl` is not sent to. The body holds counters only — kind, name,
+day, numbers and a host hash — never the transcript text (N-009). Each run sends the full counts of the last --days
+days, so a repeated day replaces the stored counts and does not add to them.
+
+--product <slug> (repeat it for more) — the products whose counters are sent and printed as JSON. By default, only
+the product of this checkout (the `instances/` product whose `repo_root` holds this file: taibe in tAIBE). A team
+does not write to another product's workspace: the counters of HR go out only by the HR coord's decision.
 """
 import glob
 import hashlib
@@ -183,7 +187,8 @@ def payloads(counts, host):
 
 
 def sync_homes(pattern=HOMES):
-    """real repoRoot → {workspace, base_url, home} of each Mac sync home; the key stays in the home."""
+    """real repoRoot → {workspace, base_url, home} of each Mac sync home; the key stays in the home. base_url is None
+    when the home has no baseUrl: the server address is the home's setting, never a value in this code."""
     out = {}
     for home in sorted(glob.glob(pattern)):
         try:
@@ -194,12 +199,17 @@ def sync_homes(pattern=HOMES):
         if cfg.get('repoRoot') and cfg.get('workspaceId'):
             out[os.path.realpath(cfg['repoRoot'])] = {
                 'workspace': cfg['workspaceId'], 'home': home,
-                'base_url': (cfg.get('baseUrl') or 'https://d4dev.admin.hrhelper.space').rstrip('/')}
+                'base_url': (cfg.get('baseUrl') or '').rstrip('/') or None}
     return out
 
 
+def own_product(roots, path=HERE):
+    """The product of this checkout: the one whose repo_root holds this file."""
+    return product_of(path, roots)
+
+
 def post(bodies, roots, homes, opener=urllib.request.urlopen):
-    """Send each product's body to its workspace. → (lines, failed)."""
+    """Send each product's body to its workspace; one product's failure does not stop the others. → (lines, failed)."""
     lines, failed = [], 0
     for product, body in sorted(bodies.items()):
         target = homes.get(roots.get(product, ''))
@@ -207,12 +217,16 @@ def post(bodies, roots, homes, opener=urllib.request.urlopen):
             lines.append('%s: no sync home with repoRoot %s — not sent' % (product, roots.get(product)))
             failed += 1
             continue
-        with open(os.path.join(target['home'], 'api_key'), encoding='utf-8') as f:
-            key = f.read().strip()
+        if not target['base_url']:
+            lines.append('%s: no baseUrl in %s/config.json — not sent' % (product, target['home']))
+            failed += 1
+            continue
         url = '%s/api/ssr/%s/usage' % (target['base_url'], target['workspace'])
-        req = urllib.request.Request(url, data=json.dumps(body).encode('utf-8'), method='POST',
-                                     headers={'content-type': 'application/json', 'x-api-key': key})
         try:
+            with open(os.path.join(target['home'], 'api_key'), encoding='utf-8') as f:
+                key = f.read().strip()
+            req = urllib.request.Request(url, data=json.dumps(body).encode('utf-8'), method='POST',
+                                         headers={'content-type': 'application/json', 'x-api-key': key})
             with opener(req, timeout=POST_TIMEOUT) as res:
                 answer = res.read().decode('utf-8', 'replace')
             lines.append('%s → %s: %s' % (product, target['workspace'], answer[:300]))
@@ -239,16 +253,34 @@ def render(result):
     return '\n'.join(lines)
 
 
+def selected(argv, roots):
+    """The --product slugs; by default, the product of this checkout only."""
+    chosen = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == '--product']
+    if chosen:
+        return set(chosen)
+    own = own_product(roots)
+    return {own} if own else set()
+
+
+def pick(bodies, chosen):
+    """(the bodies of the chosen products, the names of the products left out)."""
+    return ({product: body for product, body in bodies.items() if product in chosen},
+            sorted(set(bodies) - set(chosen)))
+
+
 def main(argv):
     days = int(argv[argv.index('--days') + 1]) if '--days' in argv else 7
+    roots = products()
     result = collect(days)
-    bodies = payloads(result['counts'], host_id())
+    bodies, left = pick(payloads(result['counts'], host_id()), selected(argv, roots))
     if '--json' in argv:
         print(json.dumps(bodies, ensure_ascii=False, indent=1))
     else:
         print(render(result))
+    if left:
+        print('не выбраны (--product), не отправляются: ' + ', '.join(left))
     if '--post' in argv:
-        lines, failed = post(bodies, products(), sync_homes())
+        lines, failed = post(bodies, roots, sync_homes())
         print('\n'.join(lines))
         return 1 if failed else 0
     return 0

@@ -192,6 +192,61 @@ class PostTest(unittest.TestCase):
             self.assertEqual(failed, 1)
             self.assertIn('no sync home', lines[0])
 
+    def test_no_base_url_or_no_key_skips_that_product_only(self):
+        server = http.server.HTTPServer(('127.0.0.1', 0), Capture)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = {}
+            for slug, cfg_url, key in (('a', None, 'k-a'), ('b', 'http://127.0.0.1:%d' % server.server_port, None),
+                                       ('c', 'http://127.0.0.1:%d' % server.server_port, 'k-c')):
+                repo, home = os.path.join(tmp, 'repo-' + slug), os.path.join(tmp, '.t-boards-notebook-' + slug)
+                os.makedirs(repo)
+                os.makedirs(home)
+                cfg = {'workspaceId': 'ws-' + slug, 'repoRoot': repo}
+                if cfg_url:
+                    cfg['baseUrl'] = cfg_url
+                with open(os.path.join(home, 'config.json'), 'w', encoding='utf-8') as f:
+                    json.dump(cfg, f)
+                if key:
+                    with open(os.path.join(home, 'api_key'), 'w', encoding='utf-8') as f:
+                        f.write(key)
+                roots[slug] = os.path.realpath(repo)
+            homes = su.sync_homes(os.path.join(tmp, '.t-boards-notebook*'))
+            row = {'activations': 1, 'tokens': 10, 'errors': 0}
+            bodies = su.payloads({(slug, 'x', DAY): row for slug in roots}, 'h1')
+            Capture.got = []
+            lines, failed = su.post(bodies, roots, homes)
+            self.assertEqual(failed, 2, lines)                    # a: no baseUrl; b: no key file
+            self.assertIn('no baseUrl', lines[0])
+            self.assertEqual([(p, k) for p, k, _ in Capture.got], [('/api/ssr/ws-c/usage', 'k-c')])
+
+
+class SelectTest(unittest.TestCase):
+    def test_default_is_the_product_of_this_checkout_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = {'taibe': os.path.realpath(tmp), 'hr-helper': os.path.realpath(os.path.join(tmp, 'x', 'hr'))}
+            os.makedirs(roots['hr-helper'])
+            here = os.path.join(tmp, 'eval', 'tools')
+            os.makedirs(here)
+            self.assertEqual(su.own_product(roots, here), 'taibe')
+            self.assertEqual(su.own_product(roots, roots['hr-helper']), 'hr-helper')   # the longest root wins
+            self.assertIsNone(su.own_product(roots, os.path.realpath(os.path.dirname(tmp))))
+        roots = {'taibe': os.path.realpath(ROOT_OF_REPO), 'hr-helper': '/nonexistent/hr'}
+        self.assertEqual(su.selected([], roots), {'taibe'})        # not every product: HR only by --product
+        self.assertEqual(su.selected(['--post', '--product', 'hr-helper', '--product', 'taibe'], roots),
+                         {'hr-helper', 'taibe'})
+        self.assertEqual(su.selected([], {}), set())               # no product holds this file: nothing is sent
+
+    def test_pick_sends_only_the_chosen_products(self):
+        bodies = {'taibe': {'host': 'h'}, 'hr-helper': {'host': 'h'}}
+        self.assertEqual(su.pick(bodies, {'taibe'}), ({'taibe': {'host': 'h'}}, ['hr-helper']))
+        self.assertEqual(su.pick(bodies, set()), ({}, ['hr-helper', 'taibe']))
+
+
+ROOT_OF_REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
+
 
 if __name__ == '__main__':
     unittest.main()
