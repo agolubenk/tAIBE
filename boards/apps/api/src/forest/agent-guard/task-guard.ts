@@ -21,6 +21,7 @@ import { changesText, decideTaskWrite } from "./decide-task-write";
 import { answeredApproval } from "./answered-approval";
 import { isPlainJson } from "./json-media-type";
 import { loadGuardedTask, projectWorkspace } from "./load-task";
+import { restoreGuardedText } from "./restore-guarded-text";
 
 type Denial = {
   workspaceId: string | null;
@@ -117,7 +118,7 @@ async function guardEdit(
     action: request.action,
     targetId: task.id,
   };
-  const { changes } = request;
+  const changes = restoreGuardedText(request.changes, task);
   const statusChanged =
     changes.status !== undefined && changes.status !== task.status;
   const closes =
