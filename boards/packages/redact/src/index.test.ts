@@ -438,6 +438,7 @@ describe("@kaneo/redact", () => {
     join("gh", "p_"),
     join("gh", "o_a"),
     "sk-",
+    join("sk", "-ant-"),
     join("github", "_pat_"),
     join("gl", "pat-"),
     join("AI", "za"),
@@ -475,7 +476,20 @@ describe("@kaneo/redact", () => {
     ["after a dash", "id-", secrets.ghp],
     ["after an env-name underscore", "TOKEN_", secrets.ghp],
     ["after an underscore", "x_", secrets.aws],
+    ["sk-ant- after a dash", "foo-", secrets.anthropic],
+    ["sk- after an underscore", "x_", secrets.openai],
+    ["glpat- after a dash", "id-", secrets.gitlab],
   ])("redacts a provider key %s", (_name, before, secret) => {
     expectSingleHit(`${before}${secret} `, "api_key", secret);
+  });
+
+  // Claude lens #283 N1: markdown emphasis around a key. The body of sk-ant-
+  // takes `_`, so the hit ends after the closing `_`, as on board-agents.
+  it("redacts an sk-ant- key in markdown emphasis", () => {
+    const input = `_${secrets.anthropic}_`;
+    const result = redact(input);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.kind).toBe("api_key");
+    expect(result.text).toBe("_[REDACTED:api_key]");
   });
 });

@@ -133,15 +133,17 @@ const jwt = collect(
 
 // Provider formats; tbk_ is the board's own key (TB-136, auth.ts). Two
 // groups by what may precede the key:
-// - sk-, github_pat_, xox…-, glpat-: the body takes the prefix's own `-` or
-//   `_`, so a run of "xoxb-" restarted after every `-` and scanned to the
-//   run's end (64 KB: 1.5 s, Claude lens #283 B1). Such a key does not start
+// - github_pat_, xox…-: the body takes the prefix's own `_` or `-` but not
+//   every character of the end check, so a run of "xoxb-" with a final `_`
+//   failed at the end, restarted after every `-` and scanned to the end
+//   again (64 KB: 1.5 s, Claude lens #283 B1). Such a key does not start
 //   after `_` or `-` ("slack-xoxb-…" stays open: the price of linear time).
-// - gh?_, rk_live_, tbk_ (alphanumeric body), AKIA, AIza (fixed length): a
-//   start scans one body only, so the key may follow `_` or `-`
-//   ("TOKEN_ghp_…", "id-ghp_…", frontend lens #283).
+// - All others may follow `_` or `-` ("TOKEN_ghp_…", "id-glpat-…", lenses
+//   #283): the body of sk-, sk-ant-, glpat- is the end check's class, so the
+//   first start takes the whole run and never fails at its end; gh?_,
+//   rk_live_, tbk_ have an alphanumeric body; AKIA, AIza a fixed length.
 const apiKey = collect(
-  /(?:(?<![A-Za-z0-9_-])(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|glpat-[A-Za-z0-9_-]{20,})|(?<![A-Za-z0-9])(?:[sr]k_live_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|tbk_[A-Za-z0-9]{32,}))(?![A-Za-z0-9_-])/g,
+  /(?:(?<![A-Za-z0-9_-])(?:github_pat_[A-Za-z0-9_]{20,}|xox[abposr]-[A-Za-z0-9-]{10,})|(?<![A-Za-z0-9])(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|[sr]k_live_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|tbk_[A-Za-z0-9]{32,}))(?![A-Za-z0-9_-])/g,
   "api_key",
 );
 
