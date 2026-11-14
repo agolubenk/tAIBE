@@ -782,6 +782,18 @@ class ProductsTest(unittest.TestCase):
         self.assertIn("owner.stop", [k for k, _ in hr])
         self.assertNotIn("owner.inbox", [k for k, _ in tb], "R-7: входящее — одному coord продукта по умолчанию")
 
+    def test_owner_answer_on_taibe_item_with_console_default_product(self):
+        """SE-88: консоль даёт `d-taibe-…` поле `product: hr-helper` (id не начинается с `taibe-`) — ответ всё равно
+        в журнал tAIBE, координатору HR — ничего."""
+        self.taibe["queue"] = dict(CFG["queue"], match="-taibe-", source_roles=[["taibe-59", "coord"]])
+        ctx = self.peered()
+        items = [{"id": "d-taibe-se44-1311", "product": "hr-helper", "data": {"kind": "decision", "source": "taibe-59"}}]
+        checks = [{"id": "d-taibe-se44-1311", "data": {"choice": "A", "at": "2026-11-13T20:08:00Z"}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            sources.poll_queue(ctx)
+        self.assertEqual([(r["kind"], r["to"]) for r in self.records("taibe")], [("owner.answer", ["coord"])])
+        self.assertEqual([r for r in self.records() if r["kind"] == "owner.answer"], [])
+
     def test_failing_peer_does_not_break_default_events(self):
         """Линза 1: сбой журнала продукта — в его errors; событие и состояние продукта по умолчанию — как без продуктов."""
         ctx = self.peered()
@@ -811,11 +823,14 @@ class ProductsTest(unittest.TestCase):
         self.assertFalse(ctx.peers["taibe"].deliver, "после простоя — снова seed")
 
     def test_item_product_field_wins_over_id(self):
-        """Мост: продукт пункта выбирает владелец (поле `product` документа, v2-lite) — оно важнее метки в id;
-        входящее с продуктом — coord этого продукта и стоп только туда."""
+        """Мост: поле `product` документа с продуктом из peers важнее метки в id; входящее с продуктом — coord этого
+        продукта и стоп только туда. Поле с продуктом по умолчанию метку `-taibe-` не перебивает (SE-88)."""
+        self.taibe["queue"] = dict(CFG["queue"], match="-taibe-")
         ctx = self.peered()
         self.assertIs(ctx.for_item("s-set-control-b1-0711", "taibe"), ctx.peers["taibe"])
-        self.assertIs(ctx.for_item("d-taibe-m1m2-0411", "hr-helper"), ctx)
+        self.assertIs(ctx.for_item("d-taibe-m1m2-0411", "hr-helper"), ctx.peers["taibe"])
+        self.assertIs(ctx.for_item("d-465", "hr-helper"), ctx)
+        self.assertIs(ctx.for_item("d-taibe-1", "gone"), ctx.peers["taibe"], "неизвестный продукт — по метке")
         items = [{"id": "i-2", "product": "taibe",
                   "data": {"kind": "inbox", "inbox": {"text": "стоп", "urgency": "now"}}}]
         with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else [], {})):
