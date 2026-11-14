@@ -38,6 +38,7 @@
 - **TB-99 — SSR: отклонённый черновик ломал синк (Q-015)** (2026-11-04 · `f70f687` · TB-99) — отклонённый черновик не ломает следующий синк и не выходит в живые без владельца (PR #41). #bug
 - **OPS-15 — WireGuard: PresharedKey и MTU** (2026-10-30 · `d9f1063` · OPS-15) — новые устройства получают PresharedKey и MTU 1380; install.sh ставит wg-issue.sh и wg-psk.sh. #bug #infra
 - **OPS-17 — WireGuard: файрвол d4dev** (2026-10-30 · `304e8b4` · OPS-17) — правила wg0 вынесены в t-boards-rules.sh, приложение слышит прокси памяти Mac через туннель. #bug #infra
+- **OPS-19 — Туннель: прокси памяти Mac отвечает только app** (2026-11-14 · `81b78dfe1` (#54) · OPS-19) — прокси памяти требует токен: файл токена есть только у app, читатель памяти его шлёт; у tls снят `CAP_NET_RAW`. Приёмка владельца на VPS 14.11 (`c-taibe-ops19-cmds-1411`): CapDrop `[CAP_NET_RAW]`, без токена 401, с токеном 200. #bug #security #infra
 - **TB-103 — одобренная заявка close_task на «Брёвна» была неисполнима из не-Done** (2026-11-13 · `04f9903ad`, tAIBE #133 · TB-103) — закрыта TB-102 (R-8): одно «да» на `closed` сервер проводит одной транзакцией через Done (`forest/approval/status-path.ts`; тесты `status-path.test.ts`, `approval-migrate-stuck.test.ts`). На d4dev с 04f9903-tb102; OPS-37, TB-73, OPS-26, OPS-38 закрыты 10.11. #bug
 
 Ход реализации до переноса (шаги S1–S6, R-…, B-…) — [`boards/docs/impl-progress.md`](../../../boards/docs/impl-progress.md).
