@@ -6,6 +6,7 @@
 остаётся прежним (`--backend opencode`).
 
 * Один процесс opencode на весь Mac: машинный flock `~/.local/state/taibe/review-chain/opencode.lock`.
+  Ждущие встают в очередь меток `opencode.waiters/` (OPS-61): держатель между линзами уступает старшему ждущему.
   V2 поднимает свой сервер на каждый `opencode run`, а сессий на Mac 6–7 — параллельно память не выдержит.
 * Агент `taibe-review` (`infra/opencode/agents/taibe-review.md`, ставит `infra/opencode/install.sh`) запрещает все
   инструменты: рецензент видит только дифф из промпта. Запуск — во временной папке, проектные AGENTS.md
@@ -38,6 +39,11 @@ from pathlib import Path
 STATE_DIR = Path(os.environ.get("REVIEW_CHAIN_STATE", "~/.local/state/taibe/review-chain")).expanduser()
 MEMGUARD_STATE = Path(os.environ.get("MEMGUARD_STATE", "~/.claude/memguard/state.json")).expanduser()
 MEMGUARD_OK = ("ok", "warn", "")
+# Очередь к замку (OPS-61): flock на macOS не FIFO, а держатель снова берёт замок через миллисекунды после LOCK_UN.
+# Ждущий кладёт метку `<замок>.waiters/<ns>-<pid>`; захват — только когда нет живой метки старше своей. Уступка
+# ограничена YIELD_MAX: живой чужой pid на метке (переиспользованный номер) задерживает не дольше, а не навсегда.
+LOCK_POLL = 0.5
+YIELD_MAX = 10.0
 # Исчерпание подписки — стоп звена; 429 и «too many requests» — временный отказ апстрима (повтор, предохранитель).
 QUOTA_RE = re.compile(r"usage limit|limit (reached|exceeded)|quota|allowance|billing|exceeded your|\b402\b|"
                       r"insufficient (balance|credit|funds|quota)", re.I)
@@ -115,15 +121,40 @@ class OpencodeClient:
                               TASK_LINE], prompt)
 
     def _wait_lock(self, lock) -> bool:
-        deadline = self.clock() + self.timeout
-        while True:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return True
-            except BlockingIOError:
-                if self.clock() >= deadline:
+        start = self.clock()
+        mark = self._join_queue()
+        try:
+            while True:
+                waited = self.clock() - start
+                if waited >= YIELD_MAX or not self._older_waiters(mark):
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        return True
+                    except BlockingIOError:
+                        pass
+                if waited >= self.timeout:
                     return False
-                time.sleep(0.5)
+                time.sleep(LOCK_POLL)
+        finally:
+            mark.unlink(missing_ok=True)
+
+    def _join_queue(self) -> Path:
+        queue = self.lock_path.with_suffix(".waiters")
+        queue.mkdir(parents=True, exist_ok=True)
+        mark = queue / f"{time.time_ns():020d}-{os.getpid()}"
+        mark.touch()
+        return mark
+
+    def _older_waiters(self, mark: Path) -> bool:
+        """Есть живой ждущий с меткой старше нашей. Метку мёртвого процесса убирает и не учитывает."""
+        for other in mark.parent.iterdir():
+            if other.name >= mark.name:
+                continue
+            pid = other.name.rpartition("-")[2]
+            if pid.isdigit() and _alive(int(pid)):
+                return True
+            other.unlink(missing_ok=True)
+        return False
 
     def _run(self, argv: list, prompt: str) -> Result:
         # Только то, что нужно opencode: секреты сессии (ключи, токены) рецензенту не передаются.
@@ -147,6 +178,16 @@ class OpencodeClient:
                 return Result(False, error=classify_stderr(0, err))
             return Result(False, error=f"opencode: пустой ответ ({(err or '').strip()[-200:]})")
         return Result(True, text=out)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _kill_group(proc) -> None:
