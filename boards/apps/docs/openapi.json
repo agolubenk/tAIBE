@@ -18372,7 +18372,7 @@
             }
           },
           "409": {
-            "description": "The workspace label is being deleted",
+            "description": "The workspace label is being deleted, or a caller with a token sent a [REDACTED:kind] marker in a new name",
             "content": {
               "application/json": {
                 "schema": {
@@ -18542,7 +18542,7 @@
             }
           },
           "409": {
-            "description": "The workspace label is being deleted",
+            "description": "The workspace label is being deleted, or a caller with a token sent [REDACTED:kind] markers that do not match the stored name",
             "content": {
               "application/json": {
                 "schema": {
@@ -30991,6 +30991,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent a [REDACTED:kind] marker in the URL or title; a new link has no stored value to restore",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
           }
@@ -32522,6 +32532,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent [REDACTED:kind] markers that do not match the stored value; keep the markers in place",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
           }
@@ -32698,6 +32718,16 @@
           },
           "404": {
             "description": "Custom field not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A caller with a token sent [REDACTED:kind] markers in the name, default or options that do not match the stored values; keep the markers in place",
             "content": {
               "application/json": {
                 "schema": {

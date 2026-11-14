@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { buildCardContext } from "../context/card-context";
 import { assertTaskInWorkspace } from "../task-scope";
@@ -38,5 +39,17 @@ export const contextRoutes = apiRouter<
   const { workspaceId, taskId } = c.req.valid("param");
   const userId = c.get("userId");
   await assertTaskInWorkspace(taskId, workspaceId, userId);
-  return c.json(await buildCardContext(taskId, workspaceId, userId), 200);
+  const { meta, lease, approvals, ...card } = await buildCardContext(
+    taskId,
+    workspaceId,
+    userId,
+  );
+  // TB-144: the task text, labels, linked card titles and comments reach a
+  // caller with a token masked, as on the task and comment routes (TB-143).
+  // Forest working data stays as its own routes return it: a masked copy of
+  // meta would come back through set_card_meta, which restores nothing.
+  return c.json(
+    { ...maskForTokenCaller(c, card), meta, lease, approvals },
+    200,
+  );
 });

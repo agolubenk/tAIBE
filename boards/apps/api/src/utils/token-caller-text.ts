@@ -57,3 +57,50 @@ export async function restoreForTokenCaller(
     message: mismatchMessage(result),
   });
 }
+
+/**
+ * TB-144: a list of values (dropdown options) a caller with a token read
+ * masked. Each value with a marker gets back the first unused stored value
+ * it restores against, so equal markers keep the stored order. The write is
+ * refused (409) if a value with a marker matches no stored value.
+ */
+export async function restoreEachForTokenCaller(
+  c: Context,
+  incoming: readonly string[],
+  loadStored: () => Promise<readonly string[]>,
+): Promise<string[]> {
+  if (!isTokenCaller(c) || !incoming.some((value) => hasRedactionMarker(value)))
+    return [...incoming];
+  const unused = [...(await loadStored())];
+  return incoming.map((value) => {
+    if (!hasRedactionMarker(value)) return value;
+    for (const [index, stored] of unused.entries()) {
+      const result = restoreRedacted(stored, value);
+      if (result.ok) {
+        unused.splice(index, 1);
+        return result.text;
+      }
+    }
+    throw new ApiError(409, {
+      code: "REDACTED_MARKERS_MISMATCH",
+      message: `"${value}" matches no stored value. Send each value with a [REDACTED:…] marker back exactly as you read it; a person changes it in the web app.`,
+    });
+  });
+}
+
+/**
+ * TB-144: a new value (a label name, a link URL) has no stored value for a
+ * marker to stand for. A caller with a token that sends a marker in it is
+ * refused (409), so a marker is never stored in place of a secret.
+ */
+export function refuseMarkerForTokenCaller(
+  c: Context,
+  incoming: string | undefined,
+  hint: string,
+): void {
+  if (!incoming || !isTokenCaller(c) || !hasRedactionMarker(incoming)) return;
+  throw new ApiError(409, {
+    code: "REDACTED_MARKERS_MISMATCH",
+    message: `A new value has no stored value for a [REDACTED:…] marker. ${hint}`,
+  });
+}

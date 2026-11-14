@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import { readAgentHeaders } from "../agent-guard/agent-headers";
@@ -74,7 +75,9 @@ export const historyRoutes = apiRouter<
     const { take } = c.req.valid("query");
     await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
     const entries = await listCardHistory(taskId, take ?? HISTORY_DEFAULT);
-    return c.json({ entries }, 200);
+    // TB-144: the changes keep old titles and descriptions; a caller with a
+    // token reads them masked, as it reads the task (TB-143).
+    return c.json(maskForTokenCaller(c, { entries }), 200);
   })
   .openapi(rollbackRoute, async (c) => {
     const { workspaceId, taskId, historyId } = c.req.valid("param");

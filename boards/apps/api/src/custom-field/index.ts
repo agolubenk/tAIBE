@@ -15,6 +15,7 @@ import getCustomFieldsByProject from "./controllers/get-custom-fields-by-project
 import reorderCustomFields from "./controllers/reorder-custom-field";
 import setCustomFieldValue from "./controllers/set-custom-field-value";
 import updateCustomField from "./controllers/update-custom-field";
+import { restoreFieldUpdate, restoreFieldValue } from "./restore-field-text";
 import {
   customFieldDefinitionListSchema,
   customFieldDefinitionSchema,
@@ -209,6 +210,9 @@ const setCustomFieldValueRoute = createRoute({
       "No access to the project, or missing task:update permission",
     ),
     404: errorResponse("Task not found"),
+    409: errorResponse(
+      "A caller with a token sent [REDACTED:kind] markers that do not match the stored value; keep the markers in place",
+    ),
   },
 });
 
@@ -261,6 +265,9 @@ const updateCustomFieldRoute = createRoute({
       "No access to the project, or missing project:update permission",
     ),
     404: errorResponse("Custom field not found"),
+    409: errorResponse(
+      "A caller with a token sent [REDACTED:kind] markers in the name, default or options that do not match the stored values; keep the markers in place",
+    ),
   },
 });
 
@@ -307,17 +314,18 @@ const customField = apiRouter()
   })
   .openapi(setCustomFieldValueRoute, async (c) => {
     const { taskId, fieldId, value } = c.req.valid("json");
+    const restored = await restoreFieldValue(c, taskId, fieldId, value);
 
-    return c.json(await setCustomFieldValue(taskId, fieldId, value), 200);
+    return c.json(await setCustomFieldValue(taskId, fieldId, restored), 200);
   })
   .openapi(deleteCustomFieldRoute, async (c) =>
     c.json(await deleteCustomField(c.req.valid("param").id), 200),
   )
-  .openapi(updateCustomFieldRoute, async (c) =>
-    c.json(
-      await updateCustomField(c.req.valid("param").id, c.req.valid("json")),
-      200,
-    ),
-  );
+  .openapi(updateCustomFieldRoute, async (c) => {
+    const { id } = c.req.valid("param");
+    const input = await restoreFieldUpdate(c, id, c.req.valid("json"));
+
+    return c.json(await updateCustomField(id, input), 200);
+  });
 
 export default customField;

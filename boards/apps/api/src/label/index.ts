@@ -5,6 +5,10 @@ import {
   jsonResponse,
 } from "../openapi";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
+import {
+  refuseMarkerForTokenCaller,
+  restoreForTokenCaller,
+} from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import assignLabelToTask from "./controllers/assign-label-to-task";
 import createLabel from "./controllers/create-label";
@@ -19,6 +23,7 @@ import {
   labelSchema,
   pendingLabelDeletionSchema,
 } from "./response";
+import { storedLabelName } from "./stored-label-name";
 import {
   attachLabelBody,
   createLabelBody,
@@ -81,7 +86,9 @@ const createLabelRoute = createRoute({
     400: errorResponse("Invalid body, or workspace ID could not be determined"),
     403: errorResponse("Missing label:create permission"),
     404: errorResponse("Workspace or task not found"),
-    409: errorResponse("The workspace label is being deleted"),
+    409: errorResponse(
+      "The workspace label is being deleted, or a caller with a token sent a [REDACTED:kind] marker in a new name",
+    ),
   },
 });
 
@@ -172,7 +179,9 @@ const updateLabelRoute = createRoute({
   },
   responses: {
     200: jsonResponse("Label updated successfully", labelSchema),
-    409: errorResponse("The workspace label is being deleted"),
+    409: errorResponse(
+      "The workspace label is being deleted, or a caller with a token sent [REDACTED:kind] markers that do not match the stored name",
+    ),
     400: errorResponse("Invalid body"),
     403: errorResponse(
       "No access to the project, or missing label:update permission",
@@ -222,6 +231,12 @@ const label = apiRouter()
   })
   .openapi(createLabelRoute, async (c) => {
     const { name, color, workspaceId, taskId } = c.req.valid("json");
+    // TB-144: task reads mask label names for a caller with a token.
+    refuseMarkerForTokenCaller(
+      c,
+      name,
+      "To put a workspace label on a task, attach it by id: PUT /label/{id}/task (GET /label/workspace/{workspaceId} lists them).",
+    );
     const userId = c.get("userId");
     return c.json(
       await createLabel(name, color, taskId, workspaceId, userId),
@@ -246,7 +261,10 @@ const label = apiRouter()
   .openapi(updateLabelRoute, async (c) => {
     const { id } = c.req.valid("param");
     const { name, color } = c.req.valid("json");
-    return c.json(await updateLabel(id, name, color), 200);
+    const restored = await restoreForTokenCaller(c, name, () =>
+      storedLabelName(id),
+    );
+    return c.json(await updateLabel(id, restored, color), 200);
   })
   .openapi(deleteLabelRoute, async (c) => {
     const { id } = c.req.valid("param");
