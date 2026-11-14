@@ -1,4 +1,5 @@
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { redact } from "@kaneo/redact";
+import { and, asc, eq, gt, type SQL, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { projectTable, taskTable } from "../database/schema";
 import { boundedTaskRead } from "./bounded-read";
@@ -15,19 +16,40 @@ export const boardDescription = sql<
   string | null
 >`case when ${descriptionDeferred} then null else ${taskTable.description} end`;
 
+type DescriptionPageOptions = {
+  offset: number;
+  version?: string;
+  publicProjectId?: string;
+};
+
+function descriptionPageConditions(
+  taskId: string,
+  options: DescriptionPageOptions,
+): SQL[] {
+  const conditions = [eq(taskTable.id, taskId)];
+  if (options.publicProjectId)
+    conditions.push(
+      eq(taskTable.projectId, options.publicProjectId),
+      eq(projectTable.isPublic, true),
+    );
+  if (options.version)
+    conditions.push(sql`${taskTable}.xmin::text = ${options.version}`);
+  return conditions;
+}
+
+function descriptionUnavailable(options: DescriptionPageOptions) {
+  return new HTTPException(options.version ? 409 : 404, {
+    message:
+      "Description changed or is unavailable; refresh before loading it again",
+  });
+}
+
 export async function getDescriptionPage(
   taskId: string,
-  options: { offset: number; version?: string; publicProjectId?: string },
+  options: DescriptionPageOptions,
 ) {
   return boundedTaskRead(async (tx) => {
-    const conditions = [eq(taskTable.id, taskId)];
-    if (options.publicProjectId)
-      conditions.push(
-        eq(taskTable.projectId, options.publicProjectId),
-        eq(projectTable.isPublic, true),
-      );
-    if (options.version)
-      conditions.push(sql`${taskTable}.xmin::text = ${options.version}`);
+    const conditions = descriptionPageConditions(taskId, options);
     const [row] = await tx
       .select({
         content: sql<string>`coalesce(substring(${taskTable.description} from ${options.offset + 1}::integer for ${DESCRIPTION_CHUNK_CHARACTERS + 1}::integer), '')`,
@@ -37,11 +59,7 @@ export async function getDescriptionPage(
       .innerJoin(projectTable, eq(projectTable.id, taskTable.projectId))
       .where(and(...conditions))
       .limit(1);
-    if (!row)
-      throw new HTTPException(options.version ? 409 : 404, {
-        message:
-          "Description changed or is unavailable; refresh before loading it again",
-      });
+    if (!row) throw descriptionUnavailable(options);
     // PostgreSQL offsets count Unicode characters, not JavaScript UTF-16 units.
     const characters = Array.from(row.content);
     return {
@@ -51,6 +69,34 @@ export async function getDescriptionPage(
         characters.length > DESCRIPTION_CHUNK_CHARACTERS
           ? options.offset + DESCRIPTION_CHUNK_CHARACTERS
           : null,
+    };
+  });
+}
+
+// TB-143: a caller with a token pages the masked description. Pages cut the
+// text that redact has already seen, so no secret is split at a page edge.
+// Offsets count characters of the masked text; the version guards the row.
+export async function getMaskedDescriptionPage(
+  taskId: string,
+  options: DescriptionPageOptions,
+) {
+  return boundedTaskRead(async (tx) => {
+    const [row] = await tx
+      .select({
+        content: sql<string>`coalesce(${taskTable.description}, '')`,
+        version: sql<string>`${taskTable}.xmin::text`,
+      })
+      .from(taskTable)
+      .innerJoin(projectTable, eq(projectTable.id, taskTable.projectId))
+      .where(and(...descriptionPageConditions(taskId, options)))
+      .limit(1);
+    if (!row) throw descriptionUnavailable(options);
+    const characters = Array.from(redact(row.content).text);
+    const end = options.offset + DESCRIPTION_CHUNK_CHARACTERS;
+    return {
+      content: characters.slice(options.offset, end).join(""),
+      version: row.version,
+      nextOffset: characters.length > end ? end : null,
     };
   });
 }
