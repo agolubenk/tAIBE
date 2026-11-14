@@ -183,8 +183,8 @@
     "tool": "Bash",
     "field": "command",
     "pattern": "{CMD}gh\\s+(?:-R\\s+\\S{1,200}\\s+|--repo[ =]\\S{1,200}\\s+)?(?:pr|issue|run)\\s+list\\b",
-    "unless": "gh[ \\t][^\\n;&|]{0,400}?[ \\t](?:--limit|--head|--search|--author|--label|--branch|--workflow|--commit|-[LHSAlbwc])(?=[ \\t=\\d]|$)",
-    "lesson": "gh pr list and gh issue list give 30 rows by default (gh run list: 20) and do not tell you that the list is cut. On 14.11, 143 PRs were open, and in 3 days 110 full-list calls in 45 sessions saw only 30 of them. For a full list, add --limit 500. A narrow filter (--head, --search, --author, --label) is OK as it is.",
+    "unless": "gh[ \\t][^\\n;&|]{0,400}?[ \\t](?:--limit|--head|--search|--author|--assignee|--label|--branch|--workflow|--commit|-[LHSAalbwc])(?=[ \\t=\\d]|$)",
+    "lesson": "gh pr list and gh issue list give 30 rows by default (gh run list: 20) and do not tell you that the list is cut. On 14.11, 143 PRs were open, and a PR list without a limit showed only 30. For a full PR or issue list, add --limit 500. For gh run list, filter with --branch, --workflow or --commit. A narrow filter (--head, --search, --author, --assignee, --label) is OK as it is.",
     "memory": ""
   }
 ]
