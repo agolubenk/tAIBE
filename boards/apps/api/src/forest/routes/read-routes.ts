@@ -7,6 +7,7 @@ import {
   z,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { getLog } from "../read/get-log";
 import { listLogs } from "../read/list-logs";
@@ -95,26 +96,36 @@ export const readRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listLogsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { q, cursor, take } = c.req.valid("query");
-    return c.json(await listLogs({ workspaceId, query: q, cursor, take }), 200);
+    return c.json(
+      maskForTokenCaller(
+        c,
+        await listLogs({ workspaceId, query: q, cursor, take }),
+        ["nextCursor"],
+      ),
+      200,
+    );
   })
   .openapi(getLogRoute, async (c) => {
     const { workspaceId, logId } = c.req.valid("param");
     const log = await getLog(workspaceId, logId);
     return c.json(
-      {
+      maskForTokenCaller(c, {
         ...log,
         fields: log.fields as Record<string, unknown>,
         history: log.history as Record<string, unknown>[],
-      },
+      }),
       200,
     );
   })
   .openapi(listSectorsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { status } = c.req.valid("query");
-    return c.json(await listSectors(workspaceId, status), 200);
+    return c.json(
+      maskForTokenCaller(c, await listSectors(workspaceId, status)),
+      200,
+    );
   })
   .openapi(detectSectorsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
-    return c.json(await detectSectors(workspaceId), 200);
+    return c.json(maskForTokenCaller(c, await detectSectors(workspaceId)), 200);
   });

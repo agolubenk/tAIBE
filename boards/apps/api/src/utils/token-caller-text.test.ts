@@ -23,14 +23,20 @@ const ROUTERS = [
   "custom-field/index.ts",
   "external-link/index.ts",
   // Reads that show card text and have no write-back of that text. Meta,
-  // work state, approvals, leases and logs stay raw: an agent writes them and
-  // their write routes restore no marker.
+  // work state and leases stay raw: an agent writes them and their write
+  // routes restore no marker.
   "notification/index.ts",
   "task-relation/index.ts",
   "forest/routes/tree-routes.ts",
   "forest/routes/graph-routes.ts",
   "forest/routes/bugs-routes.ts",
   "forest/routes/memory-routes.ts",
+  // TB-179: sector names hold a root's title; a refused felling names a card
+  // in the approval's reason and in the journal; felled logs and fires hold
+  // card titles.
+  "forest/routes/read-routes.ts",
+  "forest/routes/approval-routes.ts",
+  "forest/routes/pulse-routes.ts",
 ];
 const NO_TEXT = new Set([
   "stagedUploadRoute",

@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { listFires } from "../read/list-fires";
 import { listJournal } from "../read/list-journal";
@@ -61,14 +62,18 @@ export const pulseRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     const { workspaceId } = c.req.valid("param");
     const { actor, outcome, cursor, take } = c.req.valid("query");
     return c.json(
-      await listJournal({
-        workspaceId,
-        userId: c.get("userId"),
-        actor,
-        denied: outcome === "denied",
-        cursor,
-        take,
-      }),
+      maskForTokenCaller(
+        c,
+        await listJournal({
+          workspaceId,
+          userId: c.get("userId"),
+          actor,
+          denied: outcome === "denied",
+          cursor,
+          take,
+        }),
+        ["nextCursor"],
+      ),
       200,
     );
   })
@@ -76,7 +81,10 @@ export const pulseRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     const { workspaceId } = c.req.valid("param");
     const { take } = c.req.valid("query");
     return c.json(
-      await listFires({ workspaceId, userId: c.get("userId"), take }),
+      maskForTokenCaller(
+        c,
+        await listFires({ workspaceId, userId: c.get("userId"), take }),
+      ),
       200,
     );
   });
