@@ -36,11 +36,21 @@ export function linkRefusal(
   return new ApiError(status, { code, message });
 }
 
-const GUARD_REFUSALS: Record<GuardReason, [ContentfulStatusCode, string]> = {
+const unreachable = () =>
+  linkRefusal(422, "LINK_UNREACHABLE", "The page could not be reached.");
+
+// TB-132: a private address and a name that does not resolve get the same
+// answer. With two codes, a member with manage_settings could paste
+// https://<name>/ (or redirect to it) and learn which names the internal DNS
+// knows. The guard still refuses both before any connection.
+const GUARD_REFUSALS: Record<
+  GuardReason,
+  [ContentfulStatusCode, string] | null
+> = {
   "invalid-url": [400, "LINK_INVALID_URL"],
   protocol: [400, "LINK_NOT_HTTPS"],
-  destination: [422, "LINK_PRIVATE_DESTINATION"],
-  unresolved: [422, "LINK_UNREACHABLE"],
+  destination: null,
+  unresolved: null,
   redirects: [422, "LINK_TOO_MANY_REDIRECTS"],
 };
 
@@ -65,6 +75,33 @@ function isLinkMime(mime: string): mime is LinkMime {
   return (LINK_MIME_TYPES as readonly string[]).includes(mime);
 }
 
+// TB-132, the WHATWG order: a byte-order mark names the encoding and wins over
+// the header and <meta>; then the header; then, for HTML, <meta charset> or
+// <meta http-equiv content="…; charset=…"> within the first 1024 bytes.
+const META_PRESCAN_BYTES = 1024;
+const META_CHARSET = /<meta\s[^>]*?charset\s*=\s*["']?\s*([\w.:-]+)/i;
+const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
+
+function bomCharset(bytes: Uint8Array) {
+  const [a, b, c] = bytes;
+  if (a === 0xef && b === 0xbb && c === 0xbf) return "utf-8";
+  if (a === 0xff && b === 0xfe) return "utf-16le";
+  if (a === 0xfe && b === 0xff) return "utf-16be";
+  return undefined;
+}
+
+function metaCharset(bytes: Uint8Array) {
+  const head = new TextDecoder("latin1")
+    .decode(bytes.subarray(0, META_PRESCAN_BYTES))
+    .replace(HTML_COMMENT, "");
+  const label = head.match(META_CHARSET)?.[1];
+  // The prescan reads ASCII-compatible bytes, so a page that got this far is
+  // not UTF-16 whatever its <meta> says; WHATWG maps the label to UTF-8.
+  if (label && /^utf-16/i.test(label)) return "utf-8";
+  if (label && /^x-user-defined$/i.test(label)) return "windows-1252";
+  return label;
+}
+
 function decode(bytes: Uint8Array, charset: string | undefined) {
   try {
     return new TextDecoder(charset ?? "utf-8").decode(bytes);
@@ -77,10 +114,10 @@ function toRefusal(error: unknown, timeout: boolean) {
   if (error instanceof ApiError) return error;
   if (timeout) return timedOut();
   if (error instanceof GuardError) {
-    const [status, code] = GUARD_REFUSALS[error.reason];
-    return linkRefusal(status, code, error.message);
+    const refusal = GUARD_REFUSALS[error.reason];
+    return refusal ? linkRefusal(...refusal, error.message) : unreachable();
   }
-  return linkRefusal(422, "LINK_UNREACHABLE", "The page could not be reached.");
+  return unreachable();
 }
 
 // One explicit fetch a member asked for: https on every hop, a public address
@@ -155,7 +192,12 @@ export async function fetchLink(
       bytes.set(value, size);
       size += value.byteLength;
     }
-    return { mime, body: decode(bytes.subarray(0, size), charset) };
+    const body = bytes.subarray(0, size);
+    const declared =
+      bomCharset(body) ??
+      charset ??
+      (mime === "text/html" ? metaCharset(body) : undefined);
+    return { mime, body: decode(body, declared) };
   };
 
   try {

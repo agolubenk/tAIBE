@@ -336,8 +336,8 @@ describe("API integration: notebook PR and link sources", () => {
     expect((await nb.search("пятницы"))[0]?.source.ref).toBe(PAGE_URL);
 
     for (const [url, status, code] of [
-      ["https://127.0.0.1/admin", 422, "LINK_PRIVATE_DESTINATION"],
-      ["https://localhost:5432/", 422, "LINK_PRIVATE_DESTINATION"],
+      ["https://127.0.0.1/admin", 422, "LINK_UNREACHABLE"],
+      ["https://localhost:5432/", 422, "LINK_UNREACHABLE"],
       ["http://93.184.216.34/lease", 400, "LINK_NOT_HTTPS"],
     ] as const) {
       const refused = await nb.owner("POST", "/sources/link", { url });
