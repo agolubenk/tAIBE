@@ -3,7 +3,8 @@
 Проверка merge-guard: склейка строк (SE-83) — `\\`+перевод строки bash снимает целиком (`g\\`⏎`h` — слово `gh`), а
 `\\\\`⏎ — экранированная `\\` и конец строки. Раньше склейка шла пробелом и без учёта `\\\\`: оба пути прятали команду.
 Тело heredoc без кавычек у метки читатель получает после раскрытия `\\` (`\\\\` → `\\`, `\\`⏎ снят), имена записей в
-теле — тоже; разбор без снятия комментариев (SE-77) склеивает строки так же. Конец тела heredoc — как у shell.
+теле — тоже; разбор без снятия комментариев (SE-77) склеивает строки так же. Конец тела heredoc — как у shell, строка
+с `<<` — логическая; `<<` в комментарии, кавычках и арифметике — не оператор (SE-87).
 
 Запуск: python3 -I .claude/hooks/test_merge_guard_lines.py  (только эти проверки; все — test_merge_guard.py)
 """
@@ -69,6 +70,34 @@ for name, text, deny in (
         ("N: ` E`, в теле echo", "cat <<E | bash\necho a\n E\necho b\nE", False),
         ("метки нет, читателя нет", "cat <<E > f.txt\nsome text\n E", False)):
     bash(f"SE-83 конец heredoc: {name}", text, deny, cwd=se83)
+# Строка с `<<` — логическая (линза Контроля на a86ebb5de): `\`⏎ продолжает её, читатели и начало тела — после склейки.
+# `<<` — оператор, только если shell так его читает (SE-87): в комментарии, кавычках, `$((…))`, `((…))`, `$[…]`, `${…}`
+# — нет, и строки под ним — команды. В `$(…)` и `` `…` `` — да, и внутри `"…"`. bash 3.2 и zsh 5.9 выполняют формы с
+# отказом (проверено 14.11 поддельным gh; `<\`⏎`<` склеивает только bash).
+GH = "gh pr merge 1"
+for name, text, deny in (
+        ("P: `\\`⏎ в имени читателя", f"cat <<E | ba\\\nsh\n{ACT}\nE", True),
+        ("P2: `\\`⏎ перед `| bash`", f"cat <<E \\\n| bash\n{ACT}\nE", True),
+        ("`<\\`⏎`<` — тот же `<<`", f"cat <\\\n<E | bash\n{ACT}\nE", True),
+        ("`\\`⏎ в метке — склейка", f"cat <<E\\\nF | bash\n{ACT}\nEF", True),
+        ("`cat - a#<<E`: `#` в слове — не комментарий", f"cat - a#<<E | bash\n{ACT}\nE", True),
+        ("heredoc в `\"$(…)\"`", f"echo \"$(cat <<E | bash\n{ACT}\nE\n)\"", True),
+        ("R: `<<` в комментарии", f"echo a # <<E\n{GH}\nE", True), ("R: после `;`", f"echo a;# <<E\n{GH}\nE", True),
+        ("S: `$((1<<2))`", f"echo $((1<<2))\n{GH}\n2", True), ("S: `((x=1<<2))`", f"((x=1<<2))\n{GH}\n2", True),
+        ("S: `$[1<<2]`", f"echo $[1<<2]\n{GH}\n2", True), ("S: `$\\`⏎`((`", f"echo $\\\n((1<<2))\n{GH}\n2", True),
+        ("S: скобки внутри", f"echo $(( (1+1)<<2 ))\n{GH}\n2", True),
+        ("`\"…\"` на две строки", f"echo \"a\n<<E x\"\n{GH}\nE", True), ("`'<<E'`", f"echo '<<E'\n{GH}\nE", True),
+        ("`\"$(echo \"<<E\")\"`", f"echo \"$(echo \"<<E\")\"\n{GH}\nE", True),
+        ("`${x/<<E/b}`", f"x=a; echo ${{x/<<E/b}}\n{GH}\nE", True), ("`$'<<E'`", f"echo $'<<E'\n{GH}\nE", True),
+        ("`\\`⏎, читателя нет", "cat <<E \\\n> f.txt\na\nE", False),
+        ("P, в теле echo", "cat <<E | ba\\\nsh\necho ok\nE", False), ("`$((1<<2))`", "echo $((1<<2))", False),
+        ("`<<` в комментарии, ниже ls", "echo a # <<E\nls", False),
+        ("`git commit -m \"$(cat <<'EOF' …)\"`", f"git commit -m \"$(cat <<'EOF'\nfix: x\n{GH} later\nEOF\n)\"", False),
+        ("`x=$(cat <<'EOF' …)`", f"x=$(cat <<'EOF'\n{GH}\nEOF\n)", False),
+        ("`x=`cat <<'EOF' …``", f"x=`cat <<'EOF'\n{GH}\nEOF\n`", False),
+        ("`$((1<<2))` в данных", "cat <<'E' | wc -l\necho $((1<<2))\nE", False),
+        ("`case … a)` в `$(…)`", f"x=$(case a in a) cat <<'E';; esac\n{GH}\nE\n)", False)):
+    bash(f"SE-83/SE-87 оператор `<<`: {name}", text, deny, cwd=se83)
 for text, want in (("g\\\nh", "gh"), ("echo \\\\\nx", "echo \\\\\nx"), ("echo 'a\\\nb'", "echo 'a\\\nb'"),
                    ("echo \"a\\\nb\"", "echo \"ab\""), ("echo $'a\\\nb'", "echo $'a\\\nb'"), ("a \\\n#b", "a "),
                    ("a\\\n#b", "a#b"), ("# x \\\nb", "\nb")):
@@ -80,10 +109,19 @@ check("SE-83 heredoc_text: метка в кавычках — тело как е
       else "нет", False)
 for text, want in (("cat <<E >/dev/null\nx\nE\\\n\ny\nE", ("cat << E >/dev/null\ny\nE", ["x"])),
                    ("cat <<'E'\na\\\nE\nb", ("cat << E\nb", ["a\\"])), ("cat <<-E\n\tx\n\tE\ny", ("cat << E\ny", ["\tx"])),
-                   ("cat <<E\nx\n E", ("cat << E\nx\n E", ["x\n E"]))):
+                   ("cat <<E\nx\n E", ("cat << E\nx\n E", ["x\n E"])),
+                   ("cat <<E | ba\\\nsh\nx\nE\ny", ("cat << E | ba\\\nsh\ny", ["x"])),
+                   ("echo \"$(cat <<'E'\nx\nE\n)\"", ("echo \"$(cat << E\n)\"", ["x"])),
+                   ("echo $((1<<2)) | bash\nx\n2", ("echo $((1<<2)) | bash\nx\n2", ["x"])),  # не оператор: текст остаётся
+                   ("echo a # <<E\nx\nE", ("echo a # <<E\nx\nE", [])),  # читателя-shell нет — и тела нет
+                   ("cat <<A | bash\nx\ncat <<B | bash\ny", ("cat << A | bash\nx\ncat << B | bash\ny", ["x\ncat <<B | bash\ny"]))):
     got = cut_heredocs(text)
     check(f"SE-83 cut_heredocs: конец тела как у shell: {text!r}",
           None if (got[0], [b for _, b, _ in got[1]]) == want else got, False)
+MANY = "".join(f"x=$((1<<2)) # <<b\ncat <<E{n} | bash\n" for n in range(300))  # тел до конца текста — n²
+check("SE-83 cut_heredocs: 300 `<<` без метки — одно тело до конца текста",
+      None if [len(b) for _, b, _ in cut_heredocs(MANY)[1]] == [len(MANY) - len("x=$((1<<2)) # <<b\ncat <<E0 | bash\n")]
+      else len(cut_heredocs(MANY)[1]), False)
 check("SE-83 join_lines: нечётная серия — склейка, чётная — нет",
       None if join_lines("gh \\\npr a\\\\\nb c\\\\\\\nd") == "gh pr a\\\\\nb c\\\\d" else "нет", False)
 
