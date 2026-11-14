@@ -35,6 +35,16 @@ def wj(path, data):
         json.dump(data, f)
 
 
+def without_product_env(test):
+    """SE-89: сессии команды tAIBE стартуют с TAIBE_PRODUCT=taibe, а nerve.py tap/emit берёт продукт из env
+    (`resolve_product`). Тест, который ждёт продукт по умолчанию, снимает переменную на время себя: patch.dict
+    вернёт окружение после теста, другие тесты изменения не видят."""
+    patch = mock.patch.dict(os.environ)
+    patch.start()
+    test.addCleanup(patch.stop)
+    os.environ.pop("TAIBE_PRODUCT", None)
+
+
 LR, TEAM = CFG["github"]["lens_roles"], CFG["team"]["roles"]
 
 
@@ -445,6 +455,9 @@ class LimitActionTest(unittest.TestCase):
 
 
 class TapTest(unittest.TestCase):
+    def setUp(self):
+        without_product_env(self)
+
     def run_tap(self, d, role):
         env = dict(os.environ, NERVE_STATE_DIR=d)
         return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), "tap", role, "--once"],
@@ -583,6 +596,9 @@ class TapTest(unittest.TestCase):
 
 
 class EmitTest(unittest.TestCase):
+    def setUp(self):
+        without_product_env(self)
+
     def nerve(self, d, *args):
         env = dict(os.environ, NERVE_STATE_DIR=d)
         return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), *args],
