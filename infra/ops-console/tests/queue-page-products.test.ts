@@ -343,6 +343,9 @@ describe('отбор снимков по продукту в подмене ба
       // Задача и сводка tAIBE, записанные токеном HR: продукт — по доске карточек и data.ws, когда карта известна.
       { id: 'w-tb', data: { title: 'tAIBE через HR', track: 'core', cards: [{ key: 'OPS-34', ws: 'aiboards-eval' }, { id: 'q' }] }, version: 1, product: 'hr-helper' },
       { id: 'w-mixed', data: { title: 'обе доски', track: 'core', cards: [{ key: 'OPS-1', ws: 'aiboards-eval' }, { key: 'APP-1', ws: 'hr-helper-lavaeon' }] }, version: 1, product: 'hr-helper' },
+      // Строка плана tAIBE по id «w-taibe-…» (как queue_focus.py и TB-106): карточки с доски HR её продукт не меняют.
+      { id: 'w-taibe-from-hr', data: { title: 'слой tAIBE на доске HR', track: 'core', cards: [{ key: 'IS-1', ws: 'hr-helper-lavaeon' }] }, version: 1, product: 'hr-helper' },
+      { id: 'w-taibe-inputs', data: { title: 'вбросы tAIBE без карточек', track: 'core' }, version: 1, product: 'hr-helper' },
       { id: 'cards-stats-aiboards-eval', data: { kind: 'stats', ws: 'aiboards-eval' }, version: 1, product: 'hr-helper' },
     ],
     checks: [
@@ -406,7 +409,7 @@ describe('отбор снимков по продукту в подмене ба
     expect(s.last('items')).toEqual(['d-hr', 'taibe-d-1', 'd-old', 'taibe-d-link'])
     s.win.__oqView('hr-helper')
     expect(s.last('items')).toEqual(['d-hr', 'd-old'])
-    expect(s.last('work')).toEqual(['w-hr', 'track-core', 'w-tb', 'w-mixed', 'cards-stats-aiboards-eval'])
+    expect(s.last('work')).toEqual(['w-hr', 'track-core', 'w-tb', 'w-mixed', 'w-taibe-from-hr', 'w-taibe-inputs', 'cards-stats-aiboards-eval'])
     s.win.__oqView('')
     expect(s.last('items')).toEqual(['d-hr', 'taibe-d-1', 'd-old', 'taibe-d-link'])
     // Ответы при смене выбора не перевыдаются: их отбор не меняется.
@@ -434,7 +437,7 @@ describe('отбор снимков по продукту в подмене ба
     await s.subscribe()
     expect(s.win.__oqDefaultProduct).toBe('hr-helper')
     s.win.__oqBoards([{ slug: 'hr-helper', boards: ['hr-helper-lavaeon'] }, { slug: 'taibe', boards: ['aiboards-eval'] }])
-    expect(s.last('work')).toEqual(['taibe-w-1', 'track-core', 'w-tb', 'cards-stats-aiboards-eval'])
+    expect(s.last('work')).toEqual(['taibe-w-1', 'track-core', 'w-tb', 'w-taibe-from-hr', 'w-taibe-inputs', 'cards-stats-aiboards-eval'])
     s.win.__oqView('hr-helper')
     expect(s.last('work')).toEqual(['w-hr', 'track-core', 'w-mixed'])
     // Пункты очереди — только по столбцу product.
