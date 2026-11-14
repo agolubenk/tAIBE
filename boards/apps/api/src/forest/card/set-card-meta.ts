@@ -5,7 +5,7 @@ import { assertAgentLease } from "../agent-guard/assert-agent-lease";
 import { ForestError } from "../forest-error";
 import { writeJournal } from "../journal";
 import { isMirroredCard } from "./card-mirror";
-import { loadCardMeta, toCardMeta } from "./card-meta";
+import { loadCardMeta, metaRevision, toCardMeta } from "./card-meta";
 import { type CardMetaPatch, patchFields } from "./card-patch";
 import { decideCardWrite } from "./decide-card-write";
 import { writeCardMeta } from "./write-card-meta";
@@ -18,8 +18,10 @@ export async function setCardMeta(input: {
   actor: ForestActor;
   headers: AgentHeaders;
   patch: CardMetaPatch;
+  // TB-142: the revision the writer read; undefined — no check.
+  expectedRevision?: string | null;
 }) {
-  const { workspaceId, taskId, actor } = input;
+  const { workspaceId, taskId, actor, expectedRevision } = input;
   const fields = patchFields(input.patch);
   const journal = (outcome: "allowed" | "denied", detail: string) =>
     actor.kind === "agent"
@@ -55,7 +57,19 @@ export async function setCardMeta(input: {
     workspaceId,
     patch: input.patch,
     actorId: actor.id,
+    expectedRevision,
   });
+  if (!row) {
+    // Someone else (the owner in the UI holds no lease) wrote in between.
+    const moved = await loadCardMeta(taskId);
+    const current = moved ? metaRevision(moved.updatedAt) : "none";
+    const error = new ForestError(
+      "revision_conflict",
+      `card fields are at revision ${current}, not ${expectedRevision ?? "none"}; read them again`,
+    );
+    await journal("denied", error.message);
+    throw error;
+  }
   await journal("allowed", fields.join(","));
   return toCardMeta(taskId, row);
 }

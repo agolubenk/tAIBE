@@ -4598,6 +4598,13 @@
             ],
             "format": "date-time"
           },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Send it back as expectedMetaRevision so a change made since your read is not overwritten. null: the card has no fields yet."
+          },
           "mirrored": {
             "type": "boolean",
             "description": "Notion is the source of this card's Notion fields: it came from a Notion page and the mirror runs for the workspace (R-081). They are read-only while true."
@@ -4621,6 +4628,7 @@
           "contextPack",
           "updatedBy",
           "updatedAt",
+          "revision",
           "mirrored"
         ]
       },
@@ -4898,6 +4906,13 @@
                 ],
                 "format": "date-time"
               },
+              "revision": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Send it back as expectedMetaRevision so a change made since your read is not overwritten. null: the card has no fields yet."
+              },
               "mirrored": {
                 "type": "boolean",
                 "description": "Notion is the source of this card's Notion fields: it came from a Notion page and the mirror runs for the workspace (R-081). They are read-only while true."
@@ -4920,6 +4935,7 @@
               "contextPack",
               "updatedBy",
               "updatedAt",
+              "revision",
               "mirrored"
             ]
           },
@@ -25957,7 +25973,7 @@
           "Forest"
         ],
         "summary": "Change a card's Notion and agent fields",
-        "description": "Sends only the fields to change; null clears one. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only.",
+        "description": "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only.",
         "parameters": [
           {
             "schema": {
@@ -26075,6 +26091,14 @@
                     ],
                     "minLength": 1,
                     "maxLength": 2000
+                  },
+                  "expectedMetaRevision": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "The revision from the read. If the fields changed since, the write is refused with 409 revision_conflict and the current revision. null: write only if the card has no fields yet. Omitted: no check."
                   }
                 },
                 "additionalProperties": false
@@ -26124,7 +26148,7 @@
             }
           },
           "409": {
-            "description": "No live lease of this session, or the Backlog ID is taken",
+            "description": "No live lease of this session, the Backlog ID is taken, or revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision)",
             "content": {
               "application/json": {
                 "schema": {

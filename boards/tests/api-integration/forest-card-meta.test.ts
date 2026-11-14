@@ -260,4 +260,126 @@ describe("API integration: card fields (R-024, R-081)", () => {
     expect(agentMark.status).toBe(403);
     expect(agentMark.body.message).toContain("owner_session_required");
   });
+  describe("expectedMetaRevision (TB-142)", () => {
+    const agentRead = (forest: Forest, taskId: string) =>
+      forest.agent(meta(taskId), undefined, "dev-1");
+
+    it("refuses an agent write over the owner's edit made since its read", async () => {
+      const forest = await createForest();
+      const task = await addTask(forest.project.id, "Line card");
+      const first = await ownerPut(forest, task.id, {
+        contextPack: "owner v1",
+      });
+      expect(first.body.revision).toEqual(expect.any(String));
+
+      const read = await agentRead(forest, task.id);
+      expect(read.body.revision).toBe(first.body.revision);
+      const token = await lease(forest, task.id);
+      const edit = await ownerPut(forest, task.id, { contextPack: "owner v2" });
+      expect(edit.body.revision).not.toBe(read.body.revision);
+
+      const stale = await agentPut(
+        forest,
+        task.id,
+        { contextPack: "agent", expectedMetaRevision: read.body.revision },
+        token,
+      );
+      expect(stale.status).toBe(409);
+      expect(stale.body.message).toContain("revision_conflict");
+      expect(stale.body.message).toContain(edit.body.revision);
+      expect((await agentRead(forest, task.id)).body).toMatchObject({
+        contextPack: "owner v2",
+        revision: edit.body.revision,
+      });
+      const rows = await journal("card.meta", task.id);
+      expect(rows.map((row) => row.outcome)).toEqual(["denied"]);
+
+      const fresh = await agentPut(
+        forest,
+        task.id,
+        {
+          contextPack: "owner v2 + agent",
+          expectedMetaRevision: edit.body.revision,
+        },
+        token,
+      );
+      expect(fresh.status).toBe(200);
+      expect(fresh.body.revision > edit.body.revision).toBe(true);
+    });
+
+    it("moves the revision on every write, even in the same millisecond", async () => {
+      const forest = await createForest();
+      const task = await addTask(forest.project.id);
+      // The app clock stands still: the revision must still move forward.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date() });
+      try {
+        const revisions: string[] = [];
+        for (const executor of ["a", "b", "c"]) {
+          const res = await ownerPut(forest, task.id, { executor });
+          expect(res.status).toBe(200);
+          revisions.push(res.body.revision);
+        }
+        expect(new Set(revisions).size).toBe(3);
+        expect([...revisions].sort()).toEqual(revisions);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("null writes only a card without fields yet", async () => {
+      const forest = await createForest();
+      const task = await addTask(forest.project.id);
+      expect((await agentRead(forest, task.id)).body.revision).toBeNull();
+      const token = await lease(forest, task.id);
+
+      const created = await agentPut(
+        forest,
+        task.id,
+        { branch: "fix/x", expectedMetaRevision: null },
+        token,
+      );
+      expect(created.status).toBe(200);
+      const again = await agentPut(
+        forest,
+        task.id,
+        { branch: "fix/y", expectedMetaRevision: null },
+        token,
+      );
+      expect(again.status).toBe(409);
+      expect(again.body.message).toContain(created.body.revision);
+      expect((await agentRead(forest, task.id)).body.branch).toBe("fix/x");
+    });
+
+    it("matches a row the importer wrote with the database clock", async () => {
+      const forest = await createForest();
+      const task = await notionCard(forest);
+      const read = await forest.owner(meta(task.id));
+
+      const res = await ownerPut(forest, task.id, {
+        executor: "dev-1",
+        expectedMetaRevision: read.body.revision,
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("keeps the old behaviour without it and needs a field besides it", async () => {
+      const forest = await createForest();
+      const task = await addTask(forest.project.id);
+      expect((await ownerPut(forest, task.id, { executor: "a" })).status).toBe(
+        200,
+      );
+      expect((await ownerPut(forest, task.id, { executor: "b" })).status).toBe(
+        200,
+      );
+      const onlyRevision = await ownerPut(forest, task.id, {
+        expectedMetaRevision: null,
+      });
+      expect(onlyRevision.status).toBe(400);
+      const notATime = await ownerPut(forest, task.id, {
+        executor: "c",
+        expectedMetaRevision: "7",
+      });
+      expect(notATime.status).toBe(400);
+    });
+  });
 });

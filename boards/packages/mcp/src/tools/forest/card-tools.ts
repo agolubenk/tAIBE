@@ -82,12 +82,22 @@ export function registerForestCardTools(
     "forest_set_card_meta",
     {
       description:
-        "Change a card's fields under your lease (session, fencingToken). Send only what changes; null clears. Notion fields change only on cards you created and never on a card mirrored from Notion; half-baked is the owner's alone.",
+        "Change a card's fields under your lease (session, fencingToken). Send only what changes; null clears. Send expectedMetaRevision (revision from forest_get_card_meta) when you read, edit and write back (contextPack): if the owner changed the fields since, the write is refused with 409 revision_conflict, so read again and merge. expectedRevision checks the task, not these fields. Notion fields change only on cards you created and never on a card mirrored from Notion; half-baked is the owner's alone.",
       // Strict: a halfBaked or a misspelt field is refused, not dropped.
       inputSchema: z.strictObject({
         workspaceId: id,
         taskId: id,
         ...cardFields,
+        expectedMetaRevision: z
+          .string()
+          .trim()
+          .min(1)
+          .max(40)
+          .nullable()
+          .optional()
+          .describe(
+            "The revision from your read; null: only if the card has no fields yet. Omitted: no check.",
+          ),
       }),
     },
     ({ workspaceId, taskId, ...body }, callClient) =>
