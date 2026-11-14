@@ -12,41 +12,24 @@ import quorum
 import sources
 from journal import DIGEST, NERVOUS
 
-GH_PAGE = 100          # PR на страницу списка — потолок GitHub
-GH_PAGES = 10          # не больше 1000 открытых PR за проход
+GH_LIMIT = 1000        # не больше 1000 открытых PR за проход
+GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title"
 GH_NEW_PER_PASS = 20   # новых для Нерва PR за проход: догон не задерживает очередь владельца на минуты
+ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
-def _gh_page(repo, page, etag=""):
-    """Страница открытых PR, свежие сверху. Возвращает (список | None при 304, etag, есть ли следующая)."""
-    cmd = ["gh", "api", "-i",
-           f"repos/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={GH_PAGE}&page={page}"]
-    if etag:
-        cmd[2:2] = ["-H", f"If-None-Match: {etag}"]
-    code, out, err = sources.run(cmd)
-    head, _, body = out.partition("\r\n\r\n") if "\r\n\r\n" in out else out.partition("\n\n")
-    if " 304 " in head.split("\n", 1)[0]:
-        return None, etag, False
+def _gh_list(repo):
+    """Все открытые PR одним `gh pr list --json` (GraphQL, только нужные поля) — в форме REST, которую ждёт проход.
+    SE-119: REST-список отдавал все поля PR — 3,45 МБ JSON (~400 КБ gzip) на 165 открытых PR tAIBE, и почти каждый
+    проход целиком: etag первой страницы меняет каждый push (pushed_at репозитория). Тот же список так — 46 КБ (15 КБ
+    gzip). Условного запроса у GraphQL нет: список читается каждый проход. До SE-114 читалась одна страница из 50 —
+    старые PR выпадали из списка и считались закрытыми."""
+    code, out, err = sources.run(["gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", str(GH_LIMIT),
+                                  "--json", GH_FIELDS])
     if code != 0:
-        raise RuntimeError(f"gh pulls p{page}: {(err or head).strip()[:200]}")
-    m = re.search(r"(?im)^etag:\s*(.+?)\s*$", head)
-    return json.loads(body), (m.group(1) if m else ""), re.search(r'(?im)^link:.*rel="next"', head) is not None
-
-
-def _gh_list(repo, etag):
-    """Все открытые PR. Возвращает (список | None при 304, etag первой страницы). Условный запрос — только первой
-    страницы: при sort=updated любое изменение открытого PR поднимает его наверх, поэтому 304 на ней — список не
-    менялся; закрытие PR с дальних страниц увидит следующий полный проход. Раньше читалась одна страница из 50:
-    при 161 открытом PR в tAIBE старые выпадали из списка, считались закрытыми, и их головы и кворум Нерв не видел."""
-    prs, tag, more = _gh_page(repo, 1, etag)
-    if prs is None:
-        return None, etag
-    page = 1
-    while more and page < GH_PAGES:
-        page += 1
-        rest, _, more = _gh_page(repo, page)
-        prs += rest
-    return prs, tag
+        raise RuntimeError(f"gh pr list {repo}: {err.strip()[:200]}")
+    return [{"number": d["number"], "title": d.get("title") or "", "updated_at": d["updatedAt"],
+             "created_at": d.get("createdAt") or "", "head": {"sha": d["headRefOid"]}} for d in json.loads(out)]
 
 
 def _gh_comments(repo, n):
@@ -70,6 +53,7 @@ def _gh_view(repo, n):
 # rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. При первом проходе
 # нового кода etag сбрасывается: полный список разбирает их заново.
 # rev 3: все страницы списка. PR, созданные до перехода, впервые увиденные Нервом, — догон: без «открыт».
+# Граница перехода — самое позднее updated известных PR (SE-120), см. _backfill_since.
 GH_STATE_REV = 3
 
 
@@ -91,38 +75,55 @@ def _gh_closed(ctx, repo, known, open_now, fails):
         del known[n]
 
 
+def _backfill_since(known):
+    """Граница догона при смене ревизии — самое позднее updated известных PR, не позже текущего момента; без них —
+    сейчас. Старый процесс видел список не раньше этого updated: PR, открытый в паузе перезапуска, создан позже и
+    получает «открыт», а давний PR, впервые увиденный новым кодом, — нет. Раньше граница была стартом нового
+    процесса, и PR из паузы шёл молча (SE-120)."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    seen = [u for u in (p.get("updated") or "" for p in known.values()) if ISO_RE.match(u)]
+    return min(max(seen), now) if seen else now
+
+
+def _recheck_ci(ctx, n, p):
+    """PR ждёт только CI: сначала статус проверок, комментарии — когда CI доехал. Пока CI идёт, комментарии не
+    читаются: у большого PR это десятки КБ за проход (#292 — 54 КБ). Новый вердикт меняет updated PR — его разбирает
+    основной путь прохода."""
+    _, checks, _, _, _ = _gh_view(ctx.cfg["github"]["repo"], n)
+    p["checks"] = checks
+    if quorum.ci_state(checks) != "pending":
+        _check_pr(ctx, n, p, p["head"])
+
+
 def poll_github(ctx):
     g = ctx.cfg["github"]
-    st = ctx.state.setdefault("github", {"etag": "", "prs": {}})
+    st = ctx.state.setdefault("github", {"prs": {}})
     if st.get("rev") != GH_STATE_REV:
-        st["etag"], st["rev"] = "", GH_STATE_REV
-        st["backfill"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    prs, etag = _gh_list(g["repo"], st.get("etag", ""))
+        st["rev"] = GH_STATE_REV
+        st["backfill"] = _backfill_since(st["prs"])
+    st.pop("etag", None)   # etag REST-страницы (rev 1–3); у gh pr list его нет — SE-119
+    prs = _gh_list(g["repo"])
     known = st["prs"]
     fails = []
-    if prs is None:
-        # 304: список не менялся, но CI мог доехать у PR, ждущего только CI. Сбой — повтор на следующем проходе
-        # сам (await_ci не снят), etag не трогаем.
-        for n, p in known.items():
-            if p.get("await_ci"):
-                try:
-                    _check_pr(ctx, int(n), p, p["head"], refresh=True)
-                except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
-                    fails.append(f"#{n}: {e}")
-        _raise_fails(fails)
-        return
     open_now, fresh, deferred = set(), 0, 0
     for pr in prs:
         n = pr["number"]
         open_now.add(str(n))
         if str(n) not in known:
             if fresh >= GH_NEW_PER_PASS:
-                deferred += 1   # следующий проход: etag не ставится, список полный
+                deferred += 1   # следующий проход: список читается целиком каждый раз
                 continue
             fresh += 1
         p = known.setdefault(str(n), {"head": "", "updated": "", "seen": [], "changes_by": []})
         # «author» — признак разобранного PR: в rev 1 head и updated писались до сбоя _gh_view (SE-40).
         if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"] and "author" in p:
+            if p.get("await_ci"):
+                # CI доезжает, не меняя PR: кворум, ждущий только CI, перепроверяется каждый проход. Раньше — только
+                # на ответе 304, а его почти не было (etag менял каждый push). Сбой — повтор: await_ci не снят.
+                try:
+                    _recheck_ci(ctx, n, p)
+                except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
+                    fails.append(f"#{n}: {e}")
             continue
         if not p["head"] and pr.get("created_at", "") >= st.get("backfill", ""):
             ctx.emit(f"gh:new:{n}", "pr.new", DIGEST, ["coord"], f"#{n} открыт: {pr['title'][:80]}", "github")
@@ -139,8 +140,6 @@ def poll_github(ctx):
             continue
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     _gh_closed(ctx, g["repo"], known, open_now, fails)
-    # etag — только после чистого и полного прохода: иначе 304 спрячет недоразобранные PR до изменения списка.
-    st["etag"] = "" if fails or deferred else etag
     if not fails and not deferred:
         st.pop("backfill", None)   # догон окончен: дальше каждый новый PR — «открыт»
     _raise_fails(fails)
@@ -151,11 +150,11 @@ def _raise_fails(fails):
         raise RuntimeError(f"PR с ошибкой: {len(fails)}; " + "; ".join(fails))
 
 
-def _check_pr(ctx, n, p, head, refresh=False):
+def _check_pr(ctx, n, p, head):
     g = ctx.cfg["github"]
     head_changed = p["head"] != head
     comments = _gh_comments(g["repo"], n)
-    if head_changed or refresh or "author" not in p:
+    if head_changed or "author" not in p:
         files, checks, _, _, _ = _gh_view(g["repo"], n)
         p["author"] = quorum.author_role(files, g["path_roles"])
         p["checks"] = checks
