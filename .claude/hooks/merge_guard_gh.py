@@ -3,6 +3,7 @@ gh, curl и код интерпретаторов для merge-guard (pre-tool-u
 защищённую ветку (merge_guard_git.protected_branches) через `gh pr`/`gh api`/GraphQL/`gh workflow`, HTTP к
 api.github.com и те же команды внутри subprocess-кода.
 """
+import json
 import os
 import re
 import shlex
@@ -27,8 +28,17 @@ GH_UNKNOWN = ("подкоманда gh не встроенная и не про�
 GH_KEY = r"[A-Za-z0-9_][\w.-]*"
 UNSEEN_BODY = "запрос GraphQL, тело которого не видно (stdin, файла ещё нет или он больше 1 МБ)"
 VISIBILITY = "смена видимости репозитория (код, история и docs открываются разом и необратимо)"  # IS-124
-VIS_JSON_KEY = r"\b(visibility|private)\b[\"']?\s*[:=]"
-API_REPO = r"api\.github\.com/repos/[^/\s\"'?]+/[^/\s\"'?]+(?=[\s\"'?]|$)"  # сам репозиторий, не его ресурсы
+VIS_KEYS = ("visibility", "private")
+# Сам репозиторий, не его ресурсы: `repos/<o>/<r>` или `repositories/<id>` (GitHub отвечает на него 200, не редиректом).
+REPO_PATH = r"(?:^|/)(?:repos/[^/]+/[^/]+|repositories/\d+)$"
+# Тот же путь в URL: хост без учёта регистра, с точкой в конце и портом (`API.GITHUB.COM:443`) — искать в blob.lower().
+API_REPO = r"api\.github\.com\.?(?::\d+)?/(?:repos/[^/\s\"'`?#]+/[^/\s\"'`?#]+|repositories/\d+)(?=[\s\"'`?#),;]|$)"
+# curl/wget/httpie шлют не GET: метод, тело или выгрузка. Значение метода — отдельно (`-X GET` — чтение).
+# `-X PATCH`, `-sXPATCH`, `--method=PATCH`; `(?!H)` — склеенный заголовок `-HX-GitHub-Api-Version: …` не метод
+HTTP_METHOD = re.compile(r"(?:-(?!H)[A-Za-z]*X|--request|--method)(?:=?(.+))?")
+HTTP_BODY = re.compile(r"-d.*|--data(?:-\w+)?(?:=.*)?|--json(?:=.*)?|-T.*|--upload-file(?:=.*)?|-F.*|--form(?:-string)?(?:=.*)?|"
+                       r"--(?:body|post)-(?:file|data)(?:=.*)?|-(?!H)[A-Za-z]*[dTF][A-Za-z]*")
+HTTPIE_ITEM = re.compile(r"[\w\[\].-]+(?::=@?|=(?!=)@?|@)")  # `http URL private:=false` — httpie с данными шлёт POST
 
 
 def field_file(path, cwd=".", written=()):
@@ -81,13 +91,47 @@ def contents_branch(fields):
     return branch
 
 
+def body_visibility(body):
+    """Тело запроса меняет видимость: ключ visibility или private на любом уровне JSON (`\\u`-escape в ключе JSON
+    декодирует — текстом его не найти) или тело не JSON: что поймёт GitHub, не видно (SE-91)."""
+    keys = []
+
+    def pairs(items):
+        keys.extend(k for k, _ in items)
+        return dict(items)
+
+    try:
+        json.loads(body, object_pairs_hook=pairs)
+    except (ValueError, RecursionError):
+        return True
+    return any(k.lower() in VIS_KEYS for k in keys)
+
+
 def repo_visibility(fields):
     """`PATCH repos/<o>/<r>` меняет видимость: поле visibility или private (`-f`, `-F`), такой ключ в теле `--input`
-    или тело `--input` не видно (stdin, файла нет, больше 1 МБ)."""
+    или тело `--input` не видно (stdin, файла нет, больше 1 МБ) либо не JSON."""
     for flag, raw, body in fields:
-        if flag == "--input" and (not body or re.search(VIS_JSON_KEY, body)):
+        if flag == "--input" and (not body or body_visibility(body)):
             return True
-        if flag != "--input" and raw.partition("=")[0] in ("visibility", "private"):
+        if flag != "--input" and raw.partition("=")[0].lower() in VIS_KEYS:
+            return True
+    return False
+
+
+def http_write(a):
+    """curl/wget/httpie шлёт не GET: метод не GET/HEAD, тело или выгрузка (в том числе из файла и stdin — его не видно),
+    слово метода (`http PATCH URL`) или данные httpie (`http URL private:=false`)."""
+    httpie = os.path.basename(a[0]) in ("http", "https") if a else False
+    for i, t in enumerate(a[1:], 1):
+        m = HTTP_METHOD.fullmatch(t)
+        if m:
+            value = m.group(1) or (a[i + 1] if i + 1 < len(a) else "")
+            if value.upper() not in ("GET", "HEAD"):
+                return True
+            continue
+        if HTTP_BODY.fullmatch(t) or t.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+            return True
+        if httpie and not t.startswith("-") and HTTPIE_ITEM.match(t):
             return True
     return False
 
@@ -120,6 +164,8 @@ def classify_gh_api(a, cwd=".", written=()):
     if p == "graphql" or p.endswith("/graphql"):
         if unseen:
             return UNSEEN_BODY
+        # На будущее: сейчас у UpdateRepositoryInput нет поля visibility и мутации видимости в схеме нет (интроспекция
+        # Контроля 14.11, SE-91) — правило не срабатывает, но и не мешает.
         if re.search(r"\bupdateRepository\b", blob) and re.search(r"\bvisibility\b", blob):
             return VISIBILITY
         if re.search(r"\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b", blob):
@@ -131,7 +177,7 @@ def classify_gh_api(a, cwd=".", written=()):
         return None
     if (method or ("POST" if fields else "GET")) == "GET":
         return None
-    if re.search(r"(?:^|/)repos/[^/]+/[^/]+$", p) and repo_visibility(fields):
+    if re.search(REPO_PATH, p) and repo_visibility(fields):
         return VISIBILITY
     if re.search(r"/pulls/\d+/merge$", p) or p.endswith("/merges"):
         return MERGE
@@ -298,11 +344,28 @@ def classify_gh(a, cwd=".", written=(), depth=0, guess=False):
     return None
 
 
+def code_visibility(blob, q):
+    """Код меняет сам репозиторий (SE-91): путь `repos/<o>/<r>` или `repositories/<id>` и метод PATCH (единственный, что
+    правит репозиторий: urllib `method='PATCH'`, fetch `method:'PATCH'`, requests.patch, http.client с хостом отдельно)
+    или подмена метода заголовком — при упоминании api.github.com; `gh api` из кода — PATCH или поле visibility/private.
+    Чтение (`urlopen(…)['private']`) проходит."""
+    low = blob.lower()
+    if not re.search(r"[\"'`/](?:repos/[^/\s\"'`]+/[^/\s\"'`]+|repositories/\d+)(?=[\"'`?#\s),;]|$)", blob):
+        return False
+    write = re.search(r"\bpatch\b|x-http-method-override", low)
+    if "api.github.com" in low and write:
+        return True
+    fields = re.search(rf"(?:^|{q})(?:-[fF]|--(?:raw-)?field|--input)(?:{q}|=)", blob)
+    return bool(re.search(rf"\bgh{q}api\b", blob) and (write or fields and re.search(r"\b(visibility|private)\b", low)))
+
+
 def classify_interp(a, cwd="."):
     """Защищённая команда, запущенная из python/node/… списком аргументов или строкой."""
     blob = " ".join(a[1:])
     q = r"[\"',\s\]\[]+"
     if re.search(rf"\bgh{q}repo{q}edit\b", blob) and "visibility" in blob:
+        return VISIBILITY
+    if code_visibility(blob, q):
         return VISIBILITY
     if re.search(rf"\bgh{q}pr{q}merge\b|mergePullRequest|/pulls/\d+/merge\b", blob):
         return MERGE
@@ -316,10 +379,10 @@ def classify_interp(a, cwd="."):
 
 def classify_http(a, cwd="."):
     blob = " ".join(a)
-    if "api.github.com" not in blob:
+    if "api.github.com" not in blob.lower():  # curl сам приводит хост к нижнему регистру: `API.GITHUB.COM` — тот же
         return None
-    if re.search(API_REPO, blob) and re.search(VIS_JSON_KEY, blob):
-        return VISIBILITY
+    if re.search(API_REPO, blob.lower()) and http_write(a):
+        return VISIBILITY  # любой не-GET к самому репозиторию: тело может быть в файле или stdin, его не видно (SE-91)
     if re.search(r"\bupdateRepository\b", blob) and re.search(r"\bvisibility\b", blob):
         return VISIBILITY
     if re.search(r"/pulls/\d+/merge\b|/merges\b|mergePullRequest", blob):
