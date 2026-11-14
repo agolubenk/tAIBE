@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -292,20 +293,29 @@ class FakeCtx:
 
 
 class FakeGh:
-    """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
+    """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом, closed —
+    закрытые без мёржа. Список PR — страницами по gh_poll.PAGE из open_prs (или готовые pages), etag у страницы свой:
+    etags[страница], иначе «<etag>#<страница>»."""
     REPO = CFG["github"]["repo"]
 
-    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None):
+    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None, closed=(), pages=None, etags=None):
         self.open_prs, self.merged, self.broken, self.etag = open_prs, set(merged), set(broken), etag
-        self.comments = comments or {}
+        self.comments, self.closed, self.pages, self.etags = comments or {}, set(closed), pages, etags or {}
         self.calls = []
+
+    def page(self, n):
+        if self.pages is not None:
+            return self.pages.get(n, [])
+        return self.open_prs[(n - 1) * gh_poll.PAGE:n * gh_poll.PAGE]
 
     def __call__(self, cmd, stdin=None, timeout=30):
         self.calls.append(list(cmd))
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/pulls"):
-            if "-H" in cmd and self.etag in cmd[cmd.index("-H") + 1]:
+            page = int(re.search(r"[?&]page=(\d+)", cmd[-1]).group(1))
+            tag = self.etags.get(page, f"{self.etag}#{page}")
+            if "-H" in cmd and cmd[cmd.index("-H") + 1] == f"If-None-Match: {tag}":
                 return 1, "HTTP/2.0 304 Not Modified\r\n\r\n", ""
-            return 0, f"HTTP/2.0 200 OK\r\nEtag: {self.etag}\r\n\r\n" + json.dumps(self.open_prs), ""
+            return 0, f"HTTP/2.0 200 OK\r\nEtag: {tag}\r\n\r\n" + json.dumps(self.page(page)), ""
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
             n = int(cmd[-1].split("/")[4])
             return 0, json.dumps([{"id": i, "body": b} for i, b in enumerate(self.comments.get(n, []))]), ""
@@ -315,9 +325,9 @@ class FakeGh:
                 return 1, "", f"GraphQL: Could not resolve to a PullRequest with the number of {n}."
             if n in self.broken:
                 return 1, "", "HTTP 502"
+            state = "MERGED" if n in self.merged else "CLOSED" if n in self.closed else "OPEN"
             d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": "SUCCESS"}],
-                 "state": "MERGED" if n in self.merged else "OPEN", "mergedAt": "2026-11-04T15:55:00Z"
-                 if n in self.merged else None}
+                 "state": state, "mergedAt": "2026-11-04T15:55:00Z" if n in self.merged else None}
             return 0, json.dumps(d), ""
         raise AssertionError(f"неожиданный вызов: {cmd}")
 
@@ -334,6 +344,8 @@ class GithubPollTest(unittest.TestCase):
         self.ctx = FakeCtx(self.d)
         self._run = sources.run
         self.addCleanup(setattr, sources, "run", self._run)
+        gh_poll._PAGES.clear()
+        self.addCleanup(gh_poll._PAGES.clear)
 
     def kinds(self):
         return [(e["kind"], e["text"]) for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0]]
@@ -379,16 +391,20 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual([e["to"] for e in rec], [["backend"]])
 
     def test_stuck_merged_pr_is_reported_once_after_upgrade(self):
-        # Состояние rev 1: #457 влит, но остался в prs; etag живой — без сброса 304 спрятал бы его навсегда.
-        self.ctx.state["github"] = {"etag": 'W/"e1"', "prs": {"457": {"head": "b" * 40, "updated": "x",
-                                                                       "seen": [], "changes_by": []}}}
-        sources.run = FakeGh([], merged={457})
+        # Состояние rev 1: #457 влит, но остался в prs; etag живой — 304 спрятал бы его навсегда. С SE-92 etag из
+        # состояния не читается: первый проход процесса идёт без кэша страниц.
+        self.ctx.state["github"] = {"etag": 'W/"e1"#1', "prs": {"457": {"head": "b" * 40, "updated": "x",
+                                                                         "seen": [], "changes_by": []}}}
+        sources.run = fake = FakeGh([], merged={457})
         gh_poll.poll_github(self.ctx)
         st = self.ctx.state["github"]
         self.assertNotIn("457", st["prs"])
         self.assertIn(("pr.closed", "#457 влит"), self.kinds())
-        self.assertEqual((st["rev"], st["etag"]), (gh_poll.GH_STATE_REV, 'W/"e1"'))
+        self.assertEqual(st["rev"], gh_poll.GH_STATE_REV)
+        self.assertNotIn("etag", st, "etag единственной страницы (до SE-92) из состояния убран")
+        self.assertEqual(gh_poll._PAGES[FakeGh.REPO], {1: ('W/"e1"#1', [])})
         gh_poll.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
+        self.assertEqual(fake.calls[-1][2:4], ["-H", 'If-None-Match: W/"e1"#1'])
         self.assertEqual(self.kinds().count(("pr.closed", "#457 влит")), 1)
 
     def test_stuck_open_pr_without_author_is_resolved_after_upgrade(self):
@@ -412,11 +428,11 @@ class GithubPollTest(unittest.TestCase):
         self.assertIn("author", st["prs"]["2"], "#2 разобран, хотя #1 упал раньше")
         self.assertNotIn("9", st["prs"], "цикл закрытых прошёл")
         self.assertEqual((st["prs"]["1"]["head"], st["prs"]["1"]["updated"]), ("", ""), "#1 не считается увиденным")
-        self.assertEqual(st["etag"], "", "без etag следующий проход берёт полный список, а не 304")
+        self.assertNotIn(FakeGh.REPO, gh_poll._PAGES, "без кэша страниц следующий проход берёт полный список, а не 304")
         sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)])
         gh_poll.poll_github(self.ctx)
         self.assertIn("author", st["prs"]["1"])
-        self.assertEqual(st["etag"], 'W/"e1"')
+        self.assertIn(FakeGh.REPO, gh_poll._PAGES)
         self.assertEqual(self.kinds().count(("pr.new", "#1 открыт: PR 1")), 1, "повтор не дублирует событие")
 
     def test_closed_pr_that_fails_stays_for_retry(self):
@@ -427,6 +443,76 @@ class GithubPollTest(unittest.TestCase):
             gh_poll.poll_github(self.ctx)
         self.assertIn("7", self.ctx.state["github"]["prs"])
         self.assertNotIn("pr.closed", [k for k, _ in self.kinds()])
+
+    @staticmethod
+    def seen(sha, upd="2026-11-04T10:00:00Z"):
+        return {"head": sha, "updated": upd, "seen": [], "changes_by": [], "author": "backend", "checks": ["SUCCESS"],
+                "body_verdicts": []}
+
+    @staticmethod
+    def asked(fake, since=0):
+        """(список: страницы с If-None-Match или без, комментарии: номера, pr view: номера) после since вызовов."""
+        lists, comments, views = [], [], []
+        for c in fake.calls[since:]:
+            if c[:3] == ["gh", "pr", "view"]:
+                views.append(int(c[3]))
+            elif "/issues/" in c[-1]:
+                comments.append(int(c[-1].split("/")[4]))
+            else:
+                lists.append((int(c[-1].rsplit("page=", 1)[1]), "-H" in c))
+        return lists, comments, views
+
+    def test_all_pages_are_read_and_only_a_changed_page_is_downloaded_again(self):
+        """SE-92: открыто 120 PR, читалась одна страница из 50 — #1…#70 ложно «закрыт» и без кворума."""
+        sha = {n: f"{n:040x}" for n in range(1, 121)}
+        approve = [f"**{lens}: approve на {sha[3][:9]}**" for lens in ("Бэкенд", "Фронтенд", "Продукт")]
+        self.ctx.state["github"] = {"rev": gh_poll.GH_STATE_REV, "prs": {"5": self.seen(sha[5])}}
+        prs = [_pr(n, sha[n]) for n in range(120, 0, -1)]  # как у GitHub: новые сверху
+        sources.run = fake = FakeGh(prs, comments={3: approve})
+        gh_poll.poll_github(self.ctx)
+        st, kinds = self.ctx.state["github"], self.kinds()
+        self.assertEqual(self.asked(fake)[0], [(1, False), (2, False), (3, False)])
+        self.assertEqual(len(st["prs"]), 120)
+        self.assertNotIn("pr.closed", [k for k, _ in kinds])
+        self.assertIn("pr.quorum", [k for k, _ in kinds if "#3 " in _])
+        before = len(fake.calls)
+        gh_poll.poll_github(self.ctx)  # ничего не менялось: три 304, ни одного PR в разбор
+        self.assertEqual(self.asked(fake, before), ([(1, True), (2, True), (3, True)], [], []))
+        prs[110] = _pr(10, "a" * 40, "2026-11-04T12:00:00Z")  # новая голова у #10 — меняется только страница 3
+        sources.run = fake = FakeGh(prs, etags={3: 'W/"p3-new"'})
+        gh_poll.poll_github(self.ctx)
+        self.assertEqual(self.asked(fake), ([(1, True), (2, True), (3, True)], [10], [10]),
+                         "страницы 1–2 из кэша, без «закрыт» и без лишних gh pr view")
+        self.assertEqual(st["prs"]["10"]["head"], "a" * 40)
+
+    def test_shifted_pages_repeat_a_pr_and_hide_an_open_one_without_a_false_close(self):
+        """Между запросами страниц PR закрылся: номер на двух страницах, живой PR ни на одной (SE-92)."""
+        sha = {n: f"{n:040x}" for n in range(1, 61)}
+        prs = [_pr(n, sha[n]) for n in range(60, 0, -1)]  # prs[49] — #11, prs[50] — #10
+        self.ctx.state["github"] = {"rev": gh_poll.GH_STATE_REV,
+                                    "prs": {"10": self.seen(sha[10]), "99": self.seen("9" * 40)}}
+        sources.run = fake = FakeGh(prs, pages={1: prs[:50], 2: [prs[49]] + prs[51:]}, closed={99})
+        gh_poll.poll_github(self.ctx)
+        kinds = self.kinds()
+        self.assertIn("10", self.ctx.state["github"]["prs"])
+        self.assertNotIn(("pr.closed", "#10 закрыт"), kinds)
+        self.assertIn(("pr.closed", "#99 закрыт"), kinds)
+        self.assertEqual(kinds.count(("pr.new", "#11 открыт: PR 11")), 1)
+        self.assertEqual(self.asked(fake)[1].count(11), 1, "повтор номера не разбирается второй раз")
+
+    def test_more_pages_than_the_limit_raise_and_close_nothing(self):
+        self.addCleanup(setattr, gh_poll, "MAX_PAGES", gh_poll.MAX_PAGES)
+        gh_poll.MAX_PAGES = 2
+        self.ctx.state["github"] = {"rev": gh_poll.GH_STATE_REV, "prs": {"500": self.seen("5" * 40)}}
+        sources.run = FakeGh([_pr(n, "a" * 40) for n in range(100, 0, -1)])
+        with self.assertRaisesRegex(RuntimeError, "больше 100 открытых PR, список неполный"):
+            gh_poll.poll_github(self.ctx)
+        self.assertIn("500", self.ctx.state["github"]["prs"])
+        self.assertEqual(self.kinds(), [])
+        sources.run = FakeGh([_pr(n, "a" * 40) for n in range(99, 0, -1)], closed={500})  # 2-я страница неполная
+        gh_poll.poll_github(self.ctx)
+        self.assertIn(("pr.closed", "#500 закрыт"), self.kinds())
+        self.assertFalse("500" in self.ctx.state["github"]["prs"])
 
 
 class LimitActionTest(unittest.TestCase):
