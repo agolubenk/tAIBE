@@ -246,8 +246,9 @@
   отметки. Это задумано: `QUOTA_MAX_WAIT_SECONDS` (`cloud.py:196`) — раз в 6 ч проверка одним вызовом, если время
   сброса разобрано неверно. Цена — один отказной вызов в 6 ч, денег не стоит.
 - **Ф2 (14.11, OPS-23)** — M1 влит (`instances/`, `eval/nerve/products.py`). Поля `council` (стек, модули, корни
-  поиска, схема Prisma) читает `infra/ai-council/product.py`; поля HR равны коду до Ф2 (`selftest_product.py`).
-  Ф1а — PR #241. Ф3 ждёт Ф1.
+  поиска, схема Prisma) читает `infra/ai-council/product.py`. Поля tAIBE — в `instances/taibe.json`; карта HR — в
+  файле репозитория HR, в instances только `council.file` (решение владельца `d-taibe-ops23-m1-publish-1411` = B,
+  14.11 15:34). Поля HR из файла равны коду до Ф2 (сверено при переносе). Ф1а — PR #241. Ф3 ждёт Ф1.
 - **Публичный репозиторий.** `instances/`, отчёты `doctor` и этот документ — без локальных путей и приватных данных.
   `state/` — в `.gitignore` до Ф5.
 

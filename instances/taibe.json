@@ -198,16 +198,20 @@
   },
   "council": {
     "stack": "aiBoards&eval (tAIBE: доски — Hono + Drizzle + PostgreSQL, React + Vite; eval и слой — Python stdlib)",
-    "default_roots": ["boards", "eval"],
+    "default_roots": ["boards", "eval", "infra"],
     "modules": {
       "boards": ["boards/apps/api/src", "boards/apps/web/src", "boards/packages"],
       "kanban": ["boards/apps/api/src", "boards/apps/web/src", "boards/packages"],
       "eval": ["eval"],
       "pipeline": ["eval", "infra/ai-council"],
       "process": ["process", ".claude"],
-      "ai-tooling/mcp": ["infra/ai-council", "boards/packages/mcp"],
+      "ai-tooling/mcp": ["infra/ai-council", "infra/mcp-hub", "infra/owner-queue-mcp", "boards/packages/mcp"],
       "ops/ci": ["infra"],
-      "docs": ["docs"]
+      "docs": ["docs"],
+      "vpn": ["boards/deploy", "infra"],
+      "security": ["boards/apps/api/src", "boards/deploy", "infra"],
+      "secret": ["infra/checks", "boards/deploy", "infra"],
+      "context": [".claude", "eval/tools", "infra/headroom"]
     }
   }
 }

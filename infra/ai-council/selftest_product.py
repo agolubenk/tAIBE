@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """AI Council — самопроверка полей продукта (Ф2 OPS-23, `product.py`). Только stdlib, сети и Ollama нет.
 
-1. HR: поля `council` из instances/hr-helper.json дают те же стек, карту модулей, словарь модулей, корни поиска и
-   схему Prisma, что были зашиты в коде до Ф2. Значения ниже — копия кода board-agents 117050963
-   (`review_prompts.py:150`, `retrieval.py:380-399`, `config.py:32-36`, `retrieval.py:250`, `graph_build.py:48`).
-2. Определение продукта: env, хост, worktree внутри основной папки, имя папки (CI), нет продукта.
-3. Поле с абсолютным путём или «..» — громкая ошибка, а не поиск вне репозитория.
+1. Карта кода HR не лежит в публичном репозитории: в `instances/hr-helper.json` — только `council.file`
+   (решение владельца d-taibe-ops23-m1-publish-1411 = B). Поля из файла продукта читаются так же, как из instances.
+2. tAIBE: свои поля в instances.
+3. Определение продукта: env, хост, worktree внутри основной папки, имя папки (CI), нет продукта; корень для
+   `council.file`.
+4. Ошибки громкие и с файлом: путь вне репозитория, `file` рядом с полями, неизвестное поле, повтор модуля, не JSON.
+5. Ошибка в файлах продукта не останавливает консилиум: `current()` — строка в stderr и пустые поля;
+   `product_root` отдаёт свою ошибку, а не ошибку нерва.
 
     python3 infra/ai-council/selftest_product.py
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import shutil
 import sys
@@ -23,6 +28,8 @@ sys.path.insert(0, str(HERE))
 import product  # noqa: E402
 
 FAILS: list[str] = []
+FIXTURE = {"stack": "Продукт X (Go, Vue)", "default_roots": ["svc", "web"], "prisma_schema": "db/schema.prisma",
+           "modules": {"Backend": ["svc/api"], "frontend": ["web/src"]}}
 
 
 def check(name: str, ok: bool, detail: object = "") -> None:
@@ -31,58 +38,12 @@ def check(name: str, ok: bool, detail: object = "") -> None:
         FAILS.append(name)
 
 
-# Код до Ф2 (board-agents 117050963).
-HR_FIRST_LINE = ("Ты участник ревью-консилиума проекта HR Helper v2 (NestJS + Prisma, React + Vite, "
-                 "Telegram SM, мобильные клиенты). Ревьюируется карточка t-boards в колонке ревью: ")
-HR_MODULE_PATHS = {
-    "frontend": ["apps/frontend/src"],
-    "backend": ["apps/backend/src"],
-    "telegram": ["apps/backend/src/modules/integrations/telegram",
-                 "apps/telegram-sessions/src", "apps/frontend/src/features/telegram"],
-    "extension": ["apps/extension"],
-    "mobile": ["apps/mobile", "apps/mobile-android", "apps/mobile-ios"],
-    "recruiting/ats": ["apps/backend/src/modules/recruiting",
-                       "apps/frontend/src/features/recruiting"],
-    "security/auth": ["apps/backend/src/modules/auth", "apps/backend/src/common/guards"],
-    "db/queues": ["apps/backend/prisma", "apps/backend/src/common/queues"],
-    "realtime": ["apps/backend/src/modules/realtime"],
-    "ai-tooling/mcp": ["apps/backend/src/modules/mcp", "infra/ai-council"],
-    "huntflow": ["apps/backend/src/modules/integrations/huntflow"],
-    "hh.ru": ["apps/backend/src/modules/integrations/hh"],
-    "i18n": ["apps/frontend/src/shared/i18n"],
-    "ops/ci": ["infra"],
-    "docs": ["docs"],
-    "ux": ["apps/frontend/src/shared/components"],
-}
-HR_CANONICAL_MODULES = {
-    "backend", "frontend", "telegram", "extension", "mobile", "ai-tooling/mcp",
-    "security/auth", "db/queues", "realtime", "ops/ci", "recruiting/ats",
-    "huntflow", "hh.ru", "i18n", "ux", "docs",
-}
-# До Ф2 корни по умолчанию: ("apps", "packages", "boards", "eval"), отфильтрованные по папкам хоста; у HR есть только
-# apps и packages (проверено на Mac 14.11).
-HR_DEFAULT_ROOTS = ("apps", "packages")
-HR_PRISMA = "apps/backend/prisma/schema.prisma"
-
-
-def hr_matches_code_before_f2() -> None:
-    import review_prompts
-
-    hr = product.load(Path("/nonexistent"), env={product.ENV: "hr-helper"})
-    rules = review_prompts.base_rules(hr.stack)
-    check("HR: первая строка правил ревью — как до Ф2", rules.startswith(HR_FIRST_LINE), rules[:200])
-    check("HR: карта модулей — как до Ф2", {k: list(v) for k, v in hr.modules.items()} == HR_MODULE_PATHS,
-          sorted(set(hr.modules) ^ set(HR_MODULE_PATHS)))
-    check("HR: словарь модулей карточки — как до Ф2", set(hr.modules) == HR_CANONICAL_MODULES)
-    check("HR: корни поиска по умолчанию — как до Ф2", hr.default_roots == HR_DEFAULT_ROOTS, hr.default_roots)
-    check("HR: схема Prisma — как до Ф2", hr.prisma_schema == HR_PRISMA, hr.prisma_schema)
-
-    taibe = product.load(Path("/nonexistent"), env={product.ENV: "taibe"})
-    check("tAIBE: свой стек, свои модули, схемы Prisma нет",
-          bool(taibe.stack) and "HR Helper" not in taibe.stack and {"boards", "kanban", "pipeline"} <= set(taibe.modules)
-          and taibe.prisma_schema == "", taibe)
-    check("без стека — правила без названия проекта",
-          review_prompts.base_rules("").startswith("Ты участник ревью-консилиума. Ревьюируется"))
+def raises(fn, *needles: str) -> tuple[bool, str]:
+    try:
+        fn()
+    except product.ProductError as exc:
+        return all(n in str(exc) for n in needles), str(exc)
+    return False, "нет исключения"
 
 
 def instances_copy(tmp: Path, roots: dict[str, Path]) -> str:
@@ -95,6 +56,60 @@ def instances_copy(tmp: Path, roots: dict[str, Path]) -> str:
         data["repo_root"] = str(root)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(dst)
+
+
+def public_repo_has_no_hr_map() -> None:
+    raw = json.loads((Path(product.nerve_products.INSTANCES) / "hr-helper.json").read_text(encoding="utf-8"))
+    check("HR: в instances только council.file — карты кода HR в публичном репозитории нет",
+          set(raw.get("council", {})) == {"file"}, raw.get("council"))
+
+
+def file_fields() -> None:
+    import review_prompts
+
+    with tempfile.TemporaryDirectory() as raw:
+        repo = Path(raw)
+        (repo / "docs/ai").mkdir(parents=True)
+        (repo / "docs/ai/council.json").write_text(json.dumps(FIXTURE, ensure_ascii=False), encoding="utf-8")
+        data = {"council": {"file": "docs/ai/council.json"}}
+        c = product.council_of("x", "host", data, repo)
+        check("файл продукта: поля прочитаны, ключи модулей в нижнем регистре",
+              c.stack == FIXTURE["stack"] and c.modules == {"backend": ("svc/api",), "frontend": ("web/src",)}
+              and c.default_roots == ("svc", "web") and c.prisma_schema == "db/schema.prisma"
+              and c.source == "docs/ai/council.json", c)
+        check("файл продукта: стек — в первой строке правил ревью",
+              review_prompts.base_rules(c.stack).startswith(f"Ты участник ревью-консилиума проекта {FIXTURE['stack']}."))
+        inline = product.council_of("x", "host", {"council": FIXTURE})
+        check("те же поля в instances дают тот же Council (кроме источника)",
+              inline.modules == c.modules and inline.stack == c.stack and inline.source == "instances/x.json")
+
+        gone = product.council_of("x", "host", {"council": {"file": "docs/ai/nope.json"}}, repo)
+        check("файла нет → продукт есть, поля пустые, источник «(нет файла)»",
+              gone.slug == "x" and not gone.modules and not gone.stack
+              and gone.source == "docs/ai/nope.json" + product.NO_FILE, gone)
+        check("корня нет (продукт не на этой машине) → поля пустые",
+              not product.council_of("x", "env", data, None).modules)
+
+        (repo / "docs/ai/bad.json").write_text("{не json", encoding="utf-8")
+        ok, why = raises(lambda: product.council_of("x", "host", {"council": {"file": "docs/ai/bad.json"}}, repo),
+                         "docs/ai/bad.json", "не JSON")
+        check("файл не JSON → ошибка с файлом и без абсолютного пути", ok and raw not in why, why)
+        (repo / "docs/ai/extra.json").write_text(json.dumps({"stack": "s", "module": {}}), encoding="utf-8")
+        ok, why = raises(lambda: product.council_of("x", "host", {"council": {"file": "docs/ai/extra.json"}}, repo),
+                         "неизвестное поле module")
+        check("опечатка в поле файла → ошибка", ok, why)
+
+
+def taibe_fields() -> None:
+    taibe = product.load(Path("/nonexistent"), env={product.ENV: "taibe"})
+    check("tAIBE: свой стек, модули досок и меток, корни с infra, схемы Prisma нет",
+          bool(taibe.stack) and "HR Helper" not in taibe.stack
+          and {"boards", "kanban", "pipeline", "security", "secret", "vpn", "context"} <= set(taibe.modules)
+          and "infra" in taibe.default_roots and taibe.prisma_schema == "" and taibe.source == "instances/taibe.json",
+          taibe)
+    import review_prompts
+    check("без стека — правила без названия проекта",
+          review_prompts.base_rules("").startswith("Ты участник ревью-консилиума. Ревьюируется"))
 
 
 def resolution() -> None:
@@ -118,31 +133,80 @@ def resolution() -> None:
         check("чужая папка → продукта нет, поля пустые", how(lone) == ("", "") and
               product.load(lone, {}, inst) == product.Council(), how(lone))
         check("env COUNCIL_PRODUCT сильнее хоста", how(hr, {product.ENV: "taibe"}) == ("taibe", "env"))
-        try:
-            product.resolve(hr, {product.ENV: "nope"}, inst)
-            check("неизвестный COUNCIL_PRODUCT — ошибка", False, "нет исключения")
-        except product.ProductError as exc:
-            check("неизвестный COUNCIL_PRODUCT — ошибка", "nope" in str(exc), exc)
+        ok, why = raises(lambda: product.resolve(hr, {product.ENV: "nope"}, inst), "nope")
+        check("неизвестный COUNCIL_PRODUCT — ошибка", ok, why)
+
+        data = {"repo_root": str(hr)}
+        hr_wt = hr / "worktrees" / "fix" / "y"
+        hr_wt.mkdir(parents=True)
+        check("council.file читается от хоста-worktree, а не от основной папки",
+              product.code_root(hr_wt, "worktree", data) == hr_wt.resolve())
+        check("env и хост вне продукта → council.file от repo_root",
+              product.code_root(lone, "env", data) == hr.resolve())
+        check("env и хост внутри продукта → council.file от хоста",
+              product.code_root(hr_wt, "env", data) == hr_wt.resolve())
+        check("продукта нет → корня нет", product.code_root(lone, "", {}) is None)
+
+        (hr / "docs/ai").mkdir(parents=True)
+        (hr / "docs/ai/council.json").write_text(json.dumps(FIXTURE), encoding="utf-8")
+        got = product.load(hr, {}, inst)
+        check("HR на своём хосте читает карту из своего репозитория",
+              got.slug == "hr-helper" and got.source == "docs/ai/council.json" and "backend" in got.modules, got)
 
 
 def bad_paths() -> None:
     for value in ("/etc", "~/x", "apps/../../x", ""):
-        try:
-            product.council_of("hr-helper", "env", {"council": {"modules": {"x": [value]}}})
-            check(f"путь «{value}» в council.modules — ошибка", False, "нет исключения")
-        except product.ProductError as exc:
-            check(f"путь «{value}» в council.modules — ошибка", "council.modules.x" in str(exc), exc)
+        ok, why = raises(lambda: product.council_of("hr-helper", "env", {"council": {"modules": {"x": [value]}}}),
+                         "council.modules.x")
+        check(f"путь «{value}» в council.modules — ошибка", ok, why)
+    ok, why = raises(lambda: product.council_of("hr-helper", "env", {"council": {"prisma_schema": "/abs/s.prisma"}}),
+                     "council.prisma_schema")
+    check("абсолютный council.prisma_schema — ошибка", ok, why)
+    ok, why = raises(lambda: product.council_of("x", "env", {"council": {"file": "../x.json"}}, Path("/")),
+                     "council.file")
+    check("council.file вне репозитория — ошибка", ok, why)
+    ok, why = raises(lambda: product.council_of("x", "env", {"council": {"file": "a.json", "stack": "s"}}),
+                     "council.file", "council.stack")
+    check("council.file рядом с полями — ошибка, одно место", ok, why)
+    ok, why = raises(lambda: product.council_of("x", "env", {"council": {"modules": {"UX": [], "ux ": []}}}),
+                     "уже есть")
+    check("повтор модуля после нижнего регистра — ошибка, а не тихая замена", ok, why)
+
+
+def failures_do_not_stop_council() -> None:
+    saved = product.load
+
+    def broken(*_a, **_k):
+        raise product.ProductError("instances/x.json: не JSON")
+
+    product.load = broken
+    product.current.cache_clear()
+    err = io.StringIO()
     try:
-        product.council_of("hr-helper", "env", {"council": {"prisma_schema": "/abs/schema.prisma"}})
-        check("абсолютный council.prisma_schema — ошибка", False, "нет исключения")
-    except product.ProductError:
-        check("абсолютный council.prisma_schema — ошибка", True)
+        with contextlib.redirect_stderr(err):
+            got = product.current()
+    finally:
+        product.load = saved
+        product.current.cache_clear()
+    lines = [x for x in err.getvalue().splitlines() if x.strip()]
+    check("current(): ошибка файлов → пустые поля и одна строка в stderr, без исключения",
+          got == product.Council() and len(lines) == 1 and "instances/x.json" in lines[0], (got, lines))
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        inst = instances_copy(tmp, {})
+        (Path(inst) / "taibe.json").write_text("{битый", encoding="utf-8")
+        ok, why = raises(lambda: product.product_root("taibe", inst))
+        check("product_root: битый instances → ProductError консилиума (doctor её ловит)", ok, why)
 
 
 def main() -> int:
-    hr_matches_code_before_f2()
+    public_repo_has_no_hr_map()
+    file_fields()
+    taibe_fields()
     resolution()
     bad_paths()
+    failures_do_not_stop_council()
     print(f"\n{'OK' if not FAILS else 'FAIL'}: {len(FAILS)} провалов")
     return 1 if FAILS else 0
 

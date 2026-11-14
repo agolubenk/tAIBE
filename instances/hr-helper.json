@@ -208,27 +208,6 @@
     ]
   },
   "council": {
-    "stack": "HR Helper v2 (NestJS + Prisma, React + Vite, Telegram SM, мобильные клиенты)",
-    "default_roots": ["apps", "packages"],
-    "prisma_schema": "apps/backend/prisma/schema.prisma",
-    "modules": {
-      "frontend": ["apps/frontend/src"],
-      "backend": ["apps/backend/src"],
-      "telegram": ["apps/backend/src/modules/integrations/telegram", "apps/telegram-sessions/src",
-                   "apps/frontend/src/features/telegram"],
-      "extension": ["apps/extension"],
-      "mobile": ["apps/mobile", "apps/mobile-android", "apps/mobile-ios"],
-      "recruiting/ats": ["apps/backend/src/modules/recruiting", "apps/frontend/src/features/recruiting"],
-      "security/auth": ["apps/backend/src/modules/auth", "apps/backend/src/common/guards"],
-      "db/queues": ["apps/backend/prisma", "apps/backend/src/common/queues"],
-      "realtime": ["apps/backend/src/modules/realtime"],
-      "ai-tooling/mcp": ["apps/backend/src/modules/mcp", "infra/ai-council"],
-      "huntflow": ["apps/backend/src/modules/integrations/huntflow"],
-      "hh.ru": ["apps/backend/src/modules/integrations/hh"],
-      "i18n": ["apps/frontend/src/shared/i18n"],
-      "ops/ci": ["infra"],
-      "docs": ["docs"],
-      "ux": ["apps/frontend/src/shared/components"]
-    }
+    "file": "docs/ai/council.json"
   }
 }

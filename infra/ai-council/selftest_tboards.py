@@ -227,9 +227,9 @@ def _client(check, tb, url: str) -> None:
 def _card(check, tb, url: str, tmp: Path) -> None:
     from store import Store
     cfg = SimpleNamespace(get=lambda key, default=None: default)
-    # Словарь модулей — поле продукта (Ф2 OPS-23). Фикстура — метка «Backend», это словарь HR; хост прогона любой.
-    hr = tb.product.load(Path("/nonexistent"), env={tb.product.ENV: "hr-helper"})
-    saved, tb.product.current = tb.product.current, lambda: hr
+    # Словарь модулей — поле продукта (Ф2 OPS-23). Фикстура — метка «Backend»; словарь — свой, от хоста не зависит.
+    fixture = tb.product.Council(slug="fixture", how="env", modules={"backend": ("src",), "frontend": ("web",)})
+    saved, tb.product.current = tb.product.current, lambda: fixture
     try:
         with tb.Client(url, KEY, WS, "aiboards-eval", "aiBoards&eval") as client:
             card = tb.fetch_card(cfg, "OPS-26", client)

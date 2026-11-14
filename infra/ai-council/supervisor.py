@@ -440,14 +440,15 @@ def _rel(path: Path) -> str:
 
 def _council_checks(slug: str) -> list[tuple[str, bool, str]]:
     """Поля council продукта (Ф2 OPS-23): стек, модули, корни поиска, схема Prisma. `--product` сверяет пути с
-    `repo_root` этого продукта. В отчёте только slug и пути от корня продукта."""
+    `repo_root` этого продукта. В отчёте только slug и пути от корня продукта. Поля читаются заново, а не из
+    `current()`: тот глотает ошибку, чтобы консилиум стартовал, а doctor её показывает."""
     import product as product_mod
     try:
         if slug:
             council = product_mod.load(REPO_ROOT, env={product_mod.ENV: slug})
             root = product_mod.product_root(slug)
         else:
-            council, root = product_mod.current(), REPO_ROOT
+            council, root = product_mod.load(REPO_ROOT), REPO_ROOT
     except product_mod.ProductError as exc:
         return [("продукт консилиума", False, str(exc))]
     if not council.slug:
@@ -458,6 +459,8 @@ def _council_checks(slug: str) -> list[tuple[str, bool, str]]:
     roots = [r for r in council.default_roots if (root / r).is_dir()]
     return [
         ("продукт консилиума", True, f"{council.slug} ({'--product' if slug else council.how})"),
+        ("поля council", bool(council.source) and not council.source.endswith(product_mod.NO_FILE),
+         council.source or "нет council в instances — шаги с полями пропускаются"),
         ("стек в промпте ревью", bool(council.stack), council.stack or "нет council.stack — промпт без стека"),
         ("модули → код", len(missing) < len(paths),
          f"{len(council.modules)} модулей, путей есть {len(paths) - len(missing)}/{len(paths)}"
