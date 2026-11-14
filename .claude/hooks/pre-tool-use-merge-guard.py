@@ -332,8 +332,8 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         prev = ([v for v, _ in variants], stdin_files)
         steps = [dir_words(p, v, e) for p, (v, e) in zip(prefixes, variants)]  # `CD x`, `nohup cd x` — папка та же (SE-90)
         if any(v is None or v and v[0] in DIR_CMDS for v in steps):
-            new = dir_step(steps, st, piped)
-            if disk and is_lost(new):  # в скрипте с диска `cd "$ROOT"` в функциях и циклах обычен — папка прежняя
+            new = dir_step(steps, st, piped)  # bash и zsh расходятся (`command cd`, `… | cd`) — LOST и в скрипте с диска
+            if disk and is_lost(new) and not piped and None not in steps:  # `cd "$ROOT"` в функциях и циклах — папка прежняя
                 st.update(new_state(cwd))
             else:
                 cwd = new

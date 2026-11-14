@@ -42,6 +42,14 @@ for pre in ("Builtin", "Command", "Time", "Nohup", "Env", "Sudo", "Nice", "nohup
          cwd=se90)
 for pre in ("", "builtin ", "time ", "A=1 ", "! "):
     bash(f"SE-90: `{pre}cd` к ветке feature — папка сменилась, проход", f"{pre}cd {se90f}; git push", False, cwd=se90)
+# В скрипте с диска «неизвестна» от расхождения bash и zsh не сбрасывается на прежнюю папку (так — только `cd "$ROOT"`):
+# из ветки feature `command cd M` и `noglob cd M` переводят shell в main (линза Контроля на bbe88f7e0).
+for name, text, shell, deny in (("c.sh", f"command cd {se90} && git push\n", "bash", True),
+                                ("n.sh", f"noglob cd {se90}\ngit push\n", "zsh", True),
+                                ("p.sh", f"echo | cd {se90}\ngit push\n", "zsh", True),
+                                ("nohup.sh", f"nohup cd {se90}\ngit push\n", "bash", False)):
+    (se90f / name).write_text(text)
+    bash(f"SE-90: скрипт с диска {name} ({shell}) из ветки feature", f"{shell} {name}", deny, cwd=se90f)
 # Записи команды (merge_guard_files): имя сравнивается свёрнутым — запись видна и у имени в другом регистре.
 for text, want in (("CP a.sh b.sh", {"a.sh", "b.sh"}), ("NPM pkg set scripts.t=x", {"package.json"}),
                    ("TAR -xf a.tar -C ~/.config/gh", {GH_WRITTEN}), ("UNZIP -o a.zip -d ~/.config/gh", {GH_WRITTEN}),
