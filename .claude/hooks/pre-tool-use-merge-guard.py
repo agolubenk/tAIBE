@@ -37,6 +37,7 @@ from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
                                CHANGED, comment_char_may_change, comment_char_seen, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
+                               heredoc_text, join_lines,
                                launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
                                split_commands, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
                                comment_readings, uncommented)
@@ -277,13 +278,13 @@ def launched(a, cwd, roots, depth, git_env, whole):
 
 
 def classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk=False, written=None, outer=None):
-    found = []
+    found, text = [], heredoc_text(body, expands)  # читателю — тело после раскрытия `\` (SE-83)
     for r in readers:
         if r[0] in SHELLS and not any(re.fullmatch(r"-[a-z]*c[a-z]*", x) for x in r[1:]):
-            found += classify_bash(body, cwd, roots, depth + 1, git_env, disk, written, outer)
+            found += classify_bash(text, cwd, roots, depth + 1, git_env, disk, written, outer)
         elif is_interp(r[0]):
-            found += interp_found(body, cwd, roots)
-    if expands:  # метка без кавычек: $(…) и `…` в теле shell выполнит, кто бы ни читал
+            found += interp_found(text, cwd, roots)
+    if expands:  # метка без кавычек: $(…) и `…` в теле shell выполнит, кто бы ни читал; `\\$(…)` — тоже: тело как есть
         for inner in cut_substitutions(body, quotes=False)[1]:
             found += classify_bash(inner, cwd, roots, depth + 1, git_env, disk, written, outer)
     return found
@@ -358,9 +359,8 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
     if fresh:  # все записи команды — до разбора `$(…)` и heredoc (они разбираются раньше); вложенным — уже от родителя
         written.update(command_writes(cmd, keep=keep) | ({CHANGED} if keep else set()))  # keep — и для `eval` в скрипте
     cmd, bodies = (cmd, []) if alt else cut_heredocs(cmd)  # до снятия комментариев; alt — уже снят (comment_readings)
-    bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd, other = (cmd.replace("\\\n", " "), None) if raw else comment_readings(cmd, None if part else FALLBACK.search, alt)  # SE-77, SE-82
-    whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
+    cmd, other = (join_lines(cmd), None) if raw else comment_readings(cmd, None if part else FALLBACK.search, alt)  # SE-77, SE-82, SE-83
+    whole = (cmd, "\n".join([cmd] + [join_lines(heredoc_text(b, e)) for _, b, e in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
     procs = {f"{PROC}{k}": proc_files(body, cwd) for k, body in enumerate(inner) if f"{PROC}{k}" in cmd}

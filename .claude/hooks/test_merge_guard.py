@@ -2,7 +2,7 @@
 """
 Проверка merge-guard (pre-tool-use-merge-guard.py): кому отказ, кому проход, что не путается с упоминанием; git, API,
 MCP, защищённые файлы, реестр, список Контроля, matcher и формат ответа. Формы shell — test_merge_guard_shell.py,
-защищённые ветки — test_merge_guard_branches.py; они
+защищённые ветки — test_merge_guard_branches.py, склейка строк — test_merge_guard_lines.py; они
 запускаются отсюда же; общее — merge_guard_testkit.py.
 
 Запуск: python3 -I .claude/hooks/test_merge_guard.py  (все проверки; exit 1 при расхождении)
@@ -425,6 +425,7 @@ bash("$PWD с пробелом, через переменную", "X=$PWD; git -
 
 import test_merge_guard_shell  # noqa: E402,F401  — формы shell, те же счётчики
 import test_merge_guard_branches  # noqa: E402,F401  — защищённые ветки (origin/HEAD, protected)
+import test_merge_guard_lines  # noqa: E402,F401  — склейка строк `\`⏎ (SE-83)
 
 # --- бюджет git ---
 mg_git = sys.modules["merge_guard_git"]
