@@ -1,10 +1,5 @@
 import { byLaw } from "./plan-due";
-import {
-  type BoardCard,
-  cardRef,
-  cardUid,
-  DEFAULT_PLAN_PRODUCT,
-} from "./plan-types";
+import { type BoardCard, cardRef, cardUid, itemTag } from "./plan-types";
 import type { QueueDoc } from "./queue-client";
 
 // TB-107: the owner's item of a day with a move, after the 13.11 one
@@ -19,8 +14,7 @@ const LABELS: Record<string, string> = { "hr-helper": "HR", taibe: "tAIBE" };
 
 export const FOCUS_SOURCE = "t-boards (TB-107)";
 // Every focus decision of the product starts so, the hand-filed one too.
-const focusItemPrefix = (product: string) =>
-  `d-${product === DEFAULT_PLAN_PRODUCT ? "hr" : product}-focus-`;
+const focusItemPrefix = (product: string) => `d-${itemTag(product)}-focus-`;
 export const focusItemId = (product: string, today: string) =>
   `${focusItemPrefix(product)}${today.replaceAll("-", "")}`;
 

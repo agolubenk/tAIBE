@@ -1,6 +1,12 @@
 import { rankRows } from "./plan-eta";
 import { focusItemData, focusItemId, type ItemFocus } from "./plan-focus-item";
-import { INPUT_MS, inputsRowId, type Named } from "./plan-inputs";
+import {
+  INPUT_MS,
+  inputsRowId,
+  type Named,
+  namedAt,
+  sharedKeys,
+} from "./plan-inputs";
 import { refreshOffPlan } from "./plan-off-plan";
 import {
   type BoardCard,
@@ -163,7 +169,7 @@ type Input = {
   // Plan rows (no kind, not archived) with this run's patches.
   rows: PlanRow[];
   board: ReadonlyMap<string, BoardCard>;
-  // The named cards that the board knows.
+  // The named cards that the board knows, of every product.
   cards: RecentCard[];
   named: Named;
   // When the owner last pressed «Вернуть» on a focus item of this product, in
@@ -185,7 +191,15 @@ export function focusPlan(input: Input): FocusPlan | { missing: string } {
   const inputsId = inputsRowId(input.product);
   const inputsRow = input.rows.find((row) => row.id === inputsId);
   if (!inputsRow) return { missing: inputsId };
-  const mine = input.cards.filter((card) => card.product === input.product);
+  // A key on the cards of 2+ products is this product's input only from a
+  // text on this product's item (namedAt): neither its row nor its order.
+  const shared = sharedKeys(input.cards);
+  const namedOf = (key: string) =>
+    namedAt(input.named, shared, input.product, key);
+  const mine = input.cards.filter(
+    (card) =>
+      card.product === input.product && namedOf(card.key) !== undefined,
+  );
   const board = new Map(input.board);
   for (const card of mine) board.set(cardUid(card.ws, card.key), card);
   const planned = new Set(
@@ -211,7 +225,7 @@ export function focusPlan(input: Input): FocusPlan | { missing: string } {
     at !== undefined && (!reverted || at > revertAt);
   const freshCards = new Map(
     mine
-      .filter((card) => fresh(input.named.keys.get(card.key)))
+      .filter((card) => fresh(namedOf(card.key)))
       .map((card) => [cardUid(card.ws, card.key), card.key]),
   );
   const named = (row: PlanRow) =>

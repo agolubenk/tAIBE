@@ -7,7 +7,13 @@ import {
   revertedDoc,
 } from "./plan-focus";
 import { isFocusItem, readItemFocus } from "./plan-focus-item";
-import { INPUT_MS, type Named, namedIn, ownerTexts } from "./plan-inputs";
+import {
+  INPUT_MS,
+  type Named,
+  namedIn,
+  ownerTexts,
+  sharedKeys,
+} from "./plan-inputs";
 import type { RowWrite } from "./plan-rows";
 import {
   type BoardCard,
@@ -114,7 +120,7 @@ export async function readOwnerInputs(
     listAll(client, "checks", deadline),
   ]);
   return {
-    named: namedIn(ownerTexts(items.docs, checks.docs, now)),
+    named: namedIn(ownerTexts(items.docs, checks.docs, products, now)),
     reverts: ownerReverts(items.docs, checks.docs, products, now),
     truncated: items.truncated || checks.truncated,
   };
@@ -135,6 +141,18 @@ export function focusPlans(input: {
 }): FocusPlan[] {
   const plans: FocusPlan[] = [];
   const missing: string[] = [];
+  // A shared key named only where no product is said (the inbox) moves no
+  // card: the owner names it on the product's item.
+  const unsaid = [...sharedKeys(input.cards)].filter(
+    (key) =>
+      input.named.keys.has(key) &&
+      ![...input.named.byProduct.values()].some((keys) => keys.has(key)),
+  );
+  if (unsaid.length > 0) {
+    console.warn(
+      `owner-queue plan focus: ${unsaid.join(", ")} is on cards of 2+ products and named without a product; skipped`,
+    );
+  }
   for (const product of input.products) {
     const plan = focusPlan({
       ...input,

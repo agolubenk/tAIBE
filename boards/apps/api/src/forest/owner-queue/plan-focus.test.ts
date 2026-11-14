@@ -37,8 +37,16 @@ const card = (key: string, extra: Partial<RecentCard> = {}): RecentCard => ({
   closedAt: null,
   ...extra,
 });
-const named = (keys: [string, number][], rows: [string, number][] = []) =>
-  ({ keys: new Map(keys), rows: new Map(rows) }) satisfies Named;
+const named = (
+  keys: [string, number][],
+  rows: [string, number][] = [],
+  byProduct: [string, [string, number][]][] = [],
+) =>
+  ({
+    keys: new Map(keys),
+    rows: new Map(rows),
+    byProduct: new Map(byProduct.map(([product, own]) => [product, new Map(own)])),
+  }) satisfies Named;
 const focusDoc = (data: FocusDoc): QueueDoc => ({
   id: "focus-hr-helper",
   data,
@@ -109,6 +117,44 @@ describe("focusPlan (TB-107)", () => {
     });
     if ("missing" in result) throw new Error("no inputs row");
     expect(keysOf(result.inputs?.cards)).toEqual(["APP-9"]);
+  });
+
+  it("takes a key of two products only for the product of the owner's item (OPS, IDEA)", () => {
+    const rows = ROWS.map((one) =>
+      one.id === "w-n-a" ? { ...one, data: { ...one.data, cards: [entry("OPS-67")] } } : one,
+    );
+    const cards = [
+      card("OPS-67"),
+      card("OPS-67", { product: "taibe", ws: "taibe-ws" }),
+      card("APP-9"),
+    ];
+    const step = (given: Named) => {
+      const result = plan({ rows, cards, named: given });
+      if ("missing" in result) throw new Error("no inputs row");
+      return {
+        inputs: keysOf(result.inputs?.cards),
+        rows: result.focus?.data.rows ?? [],
+      };
+    };
+    // On a d-taibe-… item: the tAIBE card; the HR row with OPS-67 stays.
+    expect(step(named([["OPS-67", T1]], [], [["taibe", [["OPS-67", T1]]]]))).toEqual({
+      inputs: [],
+      rows: [],
+    });
+    // In the inbox: no product, skipped; a key of one product counts.
+    expect(
+      step(
+        named([
+          ["OPS-67", T1],
+          ["APP-9", T1],
+        ]),
+      ),
+    ).toEqual({ inputs: ["APP-9"], rows: ["w-n-inputs"] });
+    // On a d-hr-… item: the HR row goes up.
+    expect(step(named([["OPS-67", T1]], [], [["hr-helper", [["OPS-67", T1]]]]))).toEqual({
+      inputs: [],
+      rows: ["w-n-inputs", "w-n-a"],
+    });
   });
 
   it("removes a card closed more than 14 days ago or now held by another row", () => {
