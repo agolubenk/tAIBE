@@ -105,6 +105,7 @@ function page(overrides: Partial<OwnerQueuePage>): OwnerQueuePage {
     docs: [row({})],
     page: 1,
     pageSize: 50,
+    order: "oldest",
     total: 1,
     products: ["hr-helper", "taibe"],
     truncated: false,
@@ -139,6 +140,16 @@ describe("OwnerQueueTab (TB-156)", () => {
       }),
     );
     expect(state.filters.at(-1)).toMatchObject({ state: "answered", page: 1 });
+  });
+
+  it("names the order the server sorted by", () => {
+    state.error = null;
+    state.filters = [];
+    state.page = page({ order: "newest" });
+    render(<OwnerQueueTab workspaceId="ws" />);
+    expect(
+      screen.getByText(/workspace:forest\.queue\.order\.newest/),
+    ).toBeTruthy();
   });
 
   it("drops the state filter for the answers collection", () => {

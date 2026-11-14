@@ -54,6 +54,12 @@ export type ForestTab = (typeof FOREST_TABS)[number];
 // answers 403 to everyone else, so the tab does not show to them.
 const OWNER_ONLY_TABS: readonly ForestTab[] = ["queue"];
 
+// The API's owner rule, not the instance-admin one: the forest actor is
+// «owner-ui» only for the role "admin" itself (apps/api/src/forest/actor.ts:69),
+// while hasInstanceAdminRole also takes "user,admin". Such a user would see
+// the tab and get 403.
+export const isForestOwnerRole = (role: unknown) => role === "admin";
+
 export function visibleForestTabs(isOwner: boolean): readonly ForestTab[] {
   return isOwner
     ? FOREST_TABS

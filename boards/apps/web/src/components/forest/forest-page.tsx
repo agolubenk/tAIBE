@@ -4,9 +4,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs";
 import useApprovals from "@/hooks/queries/forest/use-approvals";
 import { authClient } from "@/lib/auth-client";
-import { hasInstanceAdminRole } from "@/lib/instance-admin";
 import { ApprovalsTab } from "./approvals-tab";
-import { type ForestTab, isForestTab, visibleForestTabs } from "./forest-types";
+import {
+  type ForestTab,
+  isForestOwnerRole,
+  isForestTab,
+  visibleForestTabs,
+} from "./forest-types";
 import { JournalTab } from "./journal-tab";
 import { LeasesTab } from "./leases-tab";
 import { LogsTab } from "./logs-tab";
@@ -58,7 +62,7 @@ export function ForestPage({
   const { data: pending } = useApprovals(workspaceId, "pending");
   const pendingCount = pending?.items.length ?? 0;
   const { data: session } = authClient.useSession();
-  const isOwner = hasInstanceAdminRole(session?.user?.role);
+  const isOwner = isForestOwnerRole(session?.user?.role);
   const tabs = visibleForestTabs(isOwner);
   // A shared link to the queue tab opens the pulse for everyone else.
   const tab = tabs.includes(requested) ? requested : "pulse";

@@ -40,6 +40,9 @@ export type QueueDoc = {
   data: Record<string, unknown>;
   version: number;
   updatedAt: number;
+  // Creation time (ms); the console sends it since #154. It never changes on
+  // an edit, so the owner's order «oldest first» holds.
+  createdAt?: number;
   product?: string;
 };
 

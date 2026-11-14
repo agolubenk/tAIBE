@@ -129,16 +129,17 @@ describe("owner queue list (TB-156)", () => {
   const checks = [doc("d-3", 250, { choice: "a", at: "2026-11-14T10:00:00Z" })];
   const openIds = ["d-1", "d-2", "i-4"];
 
-  it("shows open items of both products by default, newest first, without bodies", async () => {
+  it("shows open items of both products by default, oldest first, without bodies", async () => {
     const { client } = fakeConsole({ items, checks, openIds });
     const page = await listOwnerQueue(client, new OwnerQueueListCache(), {
       collection: "items",
       state: "open",
       page: 1,
     });
-    expect(page.docs.map((row) => row.id)).toEqual(["i-4", "d-2", "d-1"]);
+    expect(page.docs.map((row) => row.id)).toEqual(["d-1", "d-2", "i-4"]);
+    expect(page.order).toBe("oldest");
     expect(page.docs.every((row) => row.state === "open")).toBe(true);
-    expect(page.docs[0]).toMatchObject({
+    expect(page.docs[2]).toMatchObject({
       title: "Inbox text",
       inboxType: "bug",
     });
@@ -192,6 +193,64 @@ describe("owner queue list (TB-156)", () => {
     expect(page.docs).toHaveLength(10);
     expect(page.docs.every((row) => row.product === "taibe")).toBe(true);
     expect(page.docs[0]?.updatedAt).toBe(19);
+  });
+
+  it("orders open items as the console's /queue: added, then creation time, then id (#154)", async () => {
+    const steps = [
+      // Step 1 was edited after step 2: its creation time keeps it first.
+      {
+        ...doc("s-token", 9000, { kind: "deploy", added: "2026-11-14" }),
+        createdAt: 1000,
+      },
+      {
+        ...doc("s-keychain", 2500, { kind: "deploy", added: "2026-11-14" }),
+        createdAt: 2000,
+      },
+      // An older console sends no createdAt: updatedAt stands in.
+      doc("s-copy", 3000, { kind: "deploy", added: "2026-11-14" }),
+      {
+        ...doc("d-old", 99_000, { kind: "decision", added: "2026-11-13" }),
+        createdAt: 50_000,
+      },
+    ];
+    const { client } = fakeConsole({
+      items: steps,
+      checks: [],
+      openIds: steps.map((entry) => entry.id),
+    });
+    const page = await listOwnerQueue(client, new OwnerQueueListCache(), {
+      collection: "items",
+      state: "open",
+      page: 1,
+    });
+    expect(page.docs.map((row) => row.id)).toEqual([
+      "d-old",
+      "s-token",
+      "s-keychain",
+      "s-copy",
+    ]);
+  });
+
+  it("puts the newest answer first for answered items", async () => {
+    const answered = [
+      doc("d-a", 10, { kind: "decision" }),
+      doc("d-b", 20, { kind: "decision" }),
+    ];
+    const { client } = fakeConsole({
+      items: answered,
+      checks: [
+        doc("d-a", 30, { choice: "a", ownerAt: "2026-11-14T12:00:00Z" }),
+        doc("d-b", 40, { choice: "b", ownerAt: "2026-11-14T09:00:00Z" }),
+      ],
+      openIds: [],
+    });
+    const page = await listOwnerQueue(client, new OwnerQueueListCache(), {
+      collection: "items",
+      state: "answered",
+      page: 1,
+    });
+    expect(page.order).toBe("newest");
+    expect(page.docs.map((row) => row.id)).toEqual(["d-a", "d-b"]);
   });
 
   it("takes the product from the item id: d-taibe-… comes as hr-helper from the console", async () => {

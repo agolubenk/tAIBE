@@ -3,11 +3,11 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import {
   type ForestTab,
+  isForestOwnerRole,
   visibleForestTabs,
 } from "@/components/forest/forest-types";
 import useSectors from "@/hooks/queries/forest/use-sectors";
 import { authClient } from "@/lib/auth-client";
-import { hasInstanceAdminRole } from "@/lib/instance-admin";
 import type { PaletteGroup } from "./palette-filter";
 
 // The forest's tabs and sectors as jump targets (R-090). Sectors load only once
@@ -22,7 +22,7 @@ export function useForestGroups(
   const { data: sectors } = useSectors(typed && workspaceId ? workspaceId : "");
   // The owner queue tab is the owner's alone (TB-156).
   const { data: session } = authClient.useSession();
-  const isOwner = hasInstanceAdminRole(session?.user?.role);
+  const isOwner = isForestOwnerRole(session?.user?.role);
 
   return useMemo<PaletteGroup[]>(() => {
     if (!workspaceId) return [];

@@ -49,6 +49,10 @@ export const ownerQueueListSchema = z
     docs: z.array(ownerQueueRowSchema),
     page: z.number().int(),
     pageSize: z.number().int(),
+    order: z.enum(["oldest", "newest"]).openapi({
+      description:
+        "oldest — open items, oldest first as on the console's /queue (added, creation time, id); newest — the newest answer first (answered, all, checks).",
+    }),
     total: z.number().int(),
     products: z.array(z.string()),
     truncated: z.boolean(),
@@ -67,6 +71,7 @@ const queueDocSchema = z.object({
   data: z.record(z.string(), z.unknown()),
   version: z.number().int(),
   updatedAt: z.number(),
+  createdAt: z.number().optional(),
   product: z.string().optional(),
 });
 

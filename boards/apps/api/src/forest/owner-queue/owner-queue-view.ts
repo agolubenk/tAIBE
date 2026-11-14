@@ -132,6 +132,35 @@ export function toOwnerQueueRow(
   };
 }
 
+// Open items: oldest first, the console's own order on /queue (#154
+// orderItems: added, then creation time, then id; the owner's request). An
+// answered item, the whole list and the checks: the newest answer first.
+export type OwnerQueueOrder = "oldest" | "newest";
+
+const positive = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+function oldestFirst(a: QueueDoc, b: QueueDoc) {
+  const added = (doc: QueueDoc) =>
+    typeof doc.data.added === "string" ? doc.data.added : "";
+  const created = (doc: QueueDoc) =>
+    positive(doc.createdAt) || positive(doc.updatedAt);
+  return (
+    compare(added(a), added(b)) ||
+    created(a) - created(b) ||
+    compare(a.id, b.id)
+  );
+}
+
+// The owner's answer time (ownerAt, else at), else the last write.
+function answeredAt(answer: QueueDoc | null, doc: QueueDoc) {
+  const at = Date.parse(
+    text(answer?.data.ownerAt) ?? text(answer?.data.at) ?? "",
+  );
+  return Number.isFinite(at) ? at : doc.updatedAt;
+}
+
 export type OwnerQueueListQuery = {
   collection: OwnerQueueCollection;
   state: OwnerQueueState;
@@ -182,7 +211,17 @@ export async function listOwnerQueue(
     const wantOpen = state === "open";
     docs = docs.filter((doc) => openIds.has(doc.id) === wantOpen);
   }
-  docs = [...docs].sort((a, b) => b.updatedAt - a.updatedAt);
+  const order: OwnerQueueOrder =
+    items && state === "open" ? "oldest" : "newest";
+  const answerOf = (doc: QueueDoc) =>
+    answers ? (answers.get(doc.id) ?? null) : doc;
+  docs = [...docs].sort(
+    order === "oldest"
+      ? oldestFirst
+      : (a, b) =>
+          answeredAt(answerOf(b), b) - answeredAt(answerOf(a), a) ||
+          compare(a.id, b.id),
+  );
   const start = (page - 1) * OWNER_QUEUE_PAGE;
   return {
     docs: docs
@@ -191,12 +230,13 @@ export async function listOwnerQueue(
         toOwnerQueueRow(
           doc,
           openIds,
-          answers ? (answers.get(doc.id) ?? null) : doc,
+          answerOf(doc),
           productOf.get(doc.id) ?? null,
         ),
       ),
     page,
     pageSize: OWNER_QUEUE_PAGE,
+    order,
     total: docs.length,
     products,
     truncated: all.truncated,

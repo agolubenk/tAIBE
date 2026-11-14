@@ -5659,6 +5659,14 @@
           "pageSize": {
             "type": "integer"
           },
+          "order": {
+            "type": "string",
+            "enum": [
+              "oldest",
+              "newest"
+            ],
+            "description": "oldest — open items, oldest first as on the console's /queue (added, creation time, id); newest — the newest answer first (answered, all, checks)."
+          },
           "total": {
             "type": "integer"
           },
@@ -5687,6 +5695,7 @@
           "docs",
           "page",
           "pageSize",
+          "order",
           "total",
           "products",
           "truncated",
@@ -5711,6 +5720,9 @@
                 "type": "integer"
               },
               "updatedAt": {
+                "type": "number"
+              },
+              "createdAt": {
                 "type": "number"
               },
               "product": {
@@ -5741,6 +5753,9 @@
                 "type": "integer"
               },
               "updatedAt": {
+                "type": "number"
+              },
+              "createdAt": {
                 "type": "number"
               },
               "product": {

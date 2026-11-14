@@ -177,6 +177,9 @@ export function OwnerQueueTab({ workspaceId }: { workspaceId: string }) {
               last,
               total: data?.total ?? 0,
             })}
+            {data?.order
+              ? ` · ${t(`workspace:forest.queue.order.${data.order}`)}`
+              : null}
           </span>
           {pages > 1 ? (
             <div className="flex items-center gap-1">

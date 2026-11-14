@@ -1219,6 +1219,10 @@
 				"truncatedNoTotal": "The console capped the list; the oldest documents are not shown.",
 				"empty": "Nothing here.",
 				"range": "{{first}}–{{last}} of {{total}}",
+				"order": {
+					"oldest": "oldest first",
+					"newest": "newest answer first"
+				},
 				"previous": "Previous",
 				"next": "Next",
 				"rowState": {
