@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_alias import (ANY_TOOL, HIDDEN, MARK, PATH_KEY, alias_kind, copy_marks, identify, members,  # noqa: E402
-                               note_path)
+from merge_guard_alias import (ANY_TOOL, HIDDEN, MARK, PATH_KEY, WROTE, alias_kind, copy_marks, identify,  # noqa: E402
+                               members, note_path)
 from merge_guard_testkit import bash, check, finish, repo_on, same  # noqa: E402
 
 real = {t: p for t, p, *_ in reversed(members())}  # первый путь каждого инструмента
@@ -29,6 +29,8 @@ except OSError:  # другой том или запрет — жёсткую с
 (d / "notes.txt").write_text("x\n")
 (d / "run.sh").write_text("#!/bin/sh\necho ok\n")
 (d / "run.sh").chmod(0o755)
+# Скрипт с диска без записей зовёт программу, которой на машине нет (SE-78 typecheck.sh без Xcode, ubuntu CI) — проход.
+(d / "tc.sh").write_text("swiftc=/nonexistent/se90/usr/bin/swiftc\n\"$swiftc\" -typecheck \"$@\" 2>/dev/null\n")
 push, bare = "push origin HEAD:main", "push"
 deny = [f"bin/swiftc {push}", f"bin/swiftc {bare}", f"./hl {push}", f"./cpgit {push}",
         f"ln -s {git} t1; ./t1 {push}", f'cp "$(command -v git)" t2; ./t2 {push}', f"install -m 755 {git} t3 && ./t3 {bare}",
@@ -52,7 +54,9 @@ for form in deny:
 for form in ("bin/swiftc status", "./cpgit log -1", "PATH=bin:$PATH swiftc log -1", "PATH=/opt/x:$PATH ls",
              "ln -s /bin/echo t9; ./t9 hi", "PATH=$D:$PATH npm test", 'cp "$X" o.txt; cat o.txt', f"swiftc {push}",
              "./notes.txt", "env PATH=bin:$PATH swiftc log -1", "./run.sh push", "env FOO=1 ./run.sh",
-             "printf '#!/bin/sh\\necho ok\\n' > build.sh; chmod +x build.sh; ./build.sh test"):
+             "printf '#!/bin/sh\\necho ok\\n' > build.sh; chmod +x build.sh; ./build.sh test", "bash tc.sh",
+             "bash tc.sh push origin HEAD:main 2>/dev/null", "/nonexistent/se90/swiftc \"$@\" 2>/dev/null",
+             "PATH=/nonexistent/se90:$PATH swiftc \"$@\""):
     bash(f"SE-90 п.1–4: проход: {form!r}", form, False, cwd=d)
 # Модуль: идентичность, метки копирования, папки PATH.
 for path, want in ((d / "bin" / "swiftc", "git"), (d / "cpgit", "git"), (d / "hl", "git"), (d / "notes.txt", None),
@@ -74,11 +78,15 @@ for argv, want in ((["PATH=bin:$PATH"], ["bin"]), (["export", "PATH=/x:$PATH"], 
     env = {}
     note_path(argv, env)
     check(f"SE-90 note_path({argv!r})", same(env.get(PATH_KEY), want), False)
-# Файла нет или его переписывает тот же текст — догадка; файл виден и не переписан — нет.
-for exe, written, dirs, want in (("./nope", set(), (), (None, True)), ("./notes.txt", set(), (), (None, False)),
-                                 ("./notes.txt", {"notes.txt"}, (), (None, True)), ("bin/swiftc", set(), (), ("git", False)),
-                                 ("n5", set(), ("bin",), (None, True)), ("swiftc", set(), ("bin",), ("git", False)),
-                                 ("notes.txt", set(), (".", "bin"), (None, False))):
+check("SE-90 copy_marks: интерпретатор — WROTE", same(copy_marks(["python3", "-c", "x"]), {WROTE}), False)
+check("SE-90 copy_marks: bash -c — без WROTE (разбирается)", same(copy_marks(["bash", "-c", "x"]), set()), False)
+# Тот же текст переписывает файл — догадка; файла нет — догадка, только если текст что-то пишет (не `2>/dev/null`).
+for exe, written, dirs, want in (("./nope", set(), (), (None, False)), ("./nope", {"null"}, (), (None, False)),
+                                 ("./nope", {"x.txt"}, (), (None, True)), ("./nope", {WROTE}, (), (None, True)),
+                                 ("./notes.txt", set(), (), (None, False)), ("./notes.txt", {"notes.txt"}, (), (None, True)),
+                                 ("bin/swiftc", set(), (), ("git", False)), ("n5", set(), ("bin",), (None, False)),
+                                 ("n5", {"log.txt"}, ("bin",), (None, True)), ("swiftc", set(), ("bin",), ("git", False)),
+                                 ("notes.txt", {"x"}, (".", "bin"), (None, False))):
     check(f"SE-90 alias_kind({exe!r}, {sorted(written)}, {dirs})", same(alias_kind(exe, str(d), written, dirs), want), False)
 
 if __name__ == "__main__":

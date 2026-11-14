@@ -20,7 +20,7 @@ import stat
 import sys
 
 from merge_guard_files import open_regular, rewritten
-from merge_guard_shell import command_name as _name, strip_prefix  # shell импортирует files, files этот модуль — лениво
+from merge_guard_shell import command_name as _name, launcher, strip_prefix  # shell импортирует files, files — лениво
 from merge_guard_vars import ASSIGN, DECLARE, SUBST, substitute, words
 
 TOOLS = ("git", "gh", "curl", "wget", "http", "xh")
@@ -30,6 +30,8 @@ PATH_KEY = "\0path"  # ключ env: папки PATH, заданные текс�
 HIDDEN = "\0hidden"  # папка PATH, которую разбор не видит
 COPIERS = {"ln", "cp", "install", "ditto", "rsync", "mv", "gln", "gcp", "ginstall"}
 ENV_VALUED = {"-u", "-P", "-C", "-S"}  # опции env со значением в следующем слове (BSD и GNU)
+WROTE = "\0wrote"  # в written: текст запускает интерпретатор — его записей разбор не видит
+DEVICES = {"null", "zero", "stdin", "stdout", "stderr", "tty"}  # имена из `2>/dev/null`, `>/dev/stderr`: не запись файла
 VALUED = {"-m", "-o", "-g", "-B", "-S", "-M", "-e", "-f", "--arch", "--mode", "--owner", "--group", "--rsh", "--chmod",
           "--suffix", "--exclude", "--include", "--filter"}  # значение — следующий аргумент, не источник
 GIT_HOMES = ("/Library/Developer/CommandLineTools/usr/bin/git", "/Applications/Xcode.app/Contents/Developer/usr/bin/git")
@@ -120,9 +122,10 @@ def _operands(v):
 
 def copy_marks(v, cwd=None, marks=()):
     """Метки written у копирования (п. 3): источник — инструмент по имени, по идентичности, невидимый или уже
-    помеченный (`ln -s …/git a; mv a b`) — имя цели получает догадку; имя не видно — ANY_TOOL."""
+    помеченный (`ln -s …/git a; mv a b`) — имя цели получает догадку; имя не видно — ANY_TOOL. Интерпретатор (python,
+    node, perl…) пишет то, чего разбор не видит, — WROTE (см. _unseen)."""
     if v[0] not in COPIERS:
-        return set()
+        return {WROTE} if launcher(v[0]) not in (None, "sh") else set()
     sources, target, into = _operands(v)
     tooly = [s for s in sources if _hidden(s) or _name(s) in TOOLS or MARK + _name(s) in marks or (
         _path(s, cwd) and identify(_path(s, cwd)))]
@@ -164,10 +167,11 @@ def note_path(argv, env):
         env[PATH_KEY] = env.get(PATH_KEY, []) + dirs
 
 
-def _unseen(path, word, written):
-    """Файла path при решении хука нет или тот же текст переписывает word (путь, как написан): запустится то, чего хук не
-    видел."""
-    return not os.path.exists(path) or rewritten([word], written)
+def _unseen(here, word, written):
+    """Тот же текст переписывает word (путь, как написан) или файла нет (here — есть ли), а текст что-то пишет:
+    запустится то, чего хук не видел. Файла нет и текст ничего не пишет (скрипт с диска зовёт программу, которой нет
+    на этой машине, — SE-78 `typecheck.sh` без Xcode) — shell ответит «not found», это не копия инструмента."""
+    return rewritten([word], written) or not here and any(n not in DEVICES and not n.isdigit() for n in written)
 
 
 def alias_kind(exe, cwd, written, dirs):
@@ -183,14 +187,15 @@ def alias_kind(exe, cwd, written, dirs):
     if "/" in exe:  # `cat G > n; ./n …`, `dd of=n`, python: файла нет или его переписывают — содержимое не видно
         p = _path(exe, cwd)
         tool = identify(p) if p else None
-        return tool, guess or ANY_TOOL in written or not tool and (not p or _unseen(p, exe, written))
+        return tool, guess or ANY_TOOL in written or not tool and (not p or _unseen(os.path.exists(p), exe, written))
     tool, guess = None, guess or ANY_TOOL in written
     for d in dirs:
         home = None if d == HIDDEN else _path(d or ".", cwd)
         p = os.path.join(home, exe) if home else None
         tool = identify(p) if p else None
-        unseen = not p or _unseen(p, os.path.join(d, exe), written)
+        here = bool(p) and os.path.exists(p)
+        unseen = not p or _unseen(here, os.path.join(d, exe), written)
         guess = guess or not tool and unseen
-        if tool or not unseen:  # первый файл, который хук видит, — его shell и запустит
+        if tool or here and not unseen:  # первый файл, который хук видит, — его shell и запустит; нет файла — дальше
             break
     return tool, guess
