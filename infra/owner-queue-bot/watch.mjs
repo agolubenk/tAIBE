@@ -6,7 +6,11 @@ import { agentNotice, backNotice, localNotice, menuFingerprint, menuView, newIte
 const RELOAD_MS = 3600_000;
 const LOCAL_BACKOFF_MS = [60_000, 120_000, 300_000, 600_000, 1_800_000]; // перезагрузка, пока страница без базы
 
-export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hint, log, isStandby }) {
+// Выкатка консоли — 1–2 мин без ответа: страница сама возвращается к общей базе (подмена базы повторяет снимок), и
+// владельцу молчим. Связи нет дольше — сигнал; консоль не приняла токен (401/403) — сразу: сам он не вернётся.
+export const LOCAL_GRACE_MS = 180_000;
+
+export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hint, log, isStandby, now = Date.now }) {
   let failStreak = 0;
   let lastMode = null;
   let lastGen = 0;
@@ -39,14 +43,16 @@ export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hin
    * паузой.
    */
   async function onLocal(s) {
-    if (!alerted.local) {
-      alerted.local = true;
-      localSince = Date.now();
-      localReloads = 0;
-      await broadcast(localNotice(s.conn, { now: localSince, nextReloadMs: LOCAL_BACKOFF_MS[0], hint }));
-    }
+    const t = now();
+    if (!localSince) { localSince = t; localReloads = 0; }
     const wait = LOCAL_BACKOFF_MS[Math.min(localReloads, LOCAL_BACKOFF_MS.length - 1)];
-    if (Date.now() - localSince >= wait * (localReloads + 1)) {
+    const auth = !!s.conn && (s.conn.status === 401 || s.conn.status === 403);
+    if (!alerted.local && (auth || t - localSince >= LOCAL_GRACE_MS)) {
+      alerted.local = true;
+      const nextReloadMs = Math.max(LOCAL_BACKOFF_MS[0], localSince + wait * (localReloads + 1) - t);
+      await broadcast(localNotice(s.conn, { now: t, nextReloadMs, hint }));
+    }
+    if (t - localSince >= wait * (localReloads + 1)) {
       localReloads++;
       await mirror.reload().catch((e) => log('перезагрузка:', e));
     }
@@ -54,7 +60,7 @@ export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hin
   }
 
   async function tick() {
-    if (Date.now() - mirror.openedAt > RELOAD_MS) await mirror.reload().catch((e) => log('перезагрузка:', e));
+    if (now() - mirror.openedAt > RELOAD_MS) await mirror.reload().catch((e) => log('перезагрузка:', e));
     let s;
     try {
       s = await snap();
@@ -73,9 +79,9 @@ export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hin
     if (isStandby()) return; // этого бота опрашивает другой процесс — уведомления шлёт он
     if (alerted.ready) { alerted.ready = false; await broadcast({ text: '✅ Связь с артефактом восстановлена.' }); }
     if (s.mode === 'local') return onLocal(s);
-    if (alerted.local && s.mode === 'shared') {
-      alerted.local = false;
-      await broadcast(backNotice(Date.now() - localSince));
+    if (localSince && s.mode === 'shared') {
+      if (alerted.local) { alerted.local = false; await broadcast(backNotice(now() - localSince)); }
+      localSince = 0;
     }
     if (s.mode !== 'shared') return;
 

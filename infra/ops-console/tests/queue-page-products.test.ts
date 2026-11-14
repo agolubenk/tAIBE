@@ -400,6 +400,33 @@ describe('отбор снимков по продукту в подмене ба
     expect(s.win.__oqViewOf()).toBe('taibe')
   })
 
+  it('связь вернулась после трёх сбоев, а снимок не изменился (304) — подмена отдаёт его заново: страница выходит из «только в браузере»', async () => {
+    const win = { addEventListener() {} } as unknown as {
+      claude: { use: (cap: string) => Promise<{ collection: (c: string) => { onSnapshot: (ok: (d: unknown[]) => void, err?: () => void) => void } }> }
+    }
+    const timers: Array<() => void> = []
+    const seq = [200, 502, 502, 502, 304, 304]
+    const reply = (status: number) => Promise.resolve({
+      ok: status < 300, status, headers: { get: () => '"e1"' },
+      json: () => Promise.resolve({ docs: [{ id: 'd-1', data: { done: true }, version: 1 }] }),
+    })
+    runInNewContext(SHIM_JS, {
+      window: win, location: { hash: '' }, console, clearTimeout: () => {},
+      setTimeout: (fn: () => void) => { timers.push(fn); return timers.length },
+      document: { hidden: false, addEventListener() {} }, localStorage: { getItem: () => null },
+      fetch: (url: string) => reply(url.endsWith('/db/checks') ? seq.shift() ?? 304 : 200),
+    })
+    const db = await win.claude.use('db')
+    const ok: number[] = [], err: number[] = []
+    db.collection('checks').onSnapshot((d) => ok.push(d.length), () => err.push(1))
+    const flush = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)) }
+    await flush()
+    // Таймеры подмены — опросы по очереди: 3 × 502, затем 304.
+    for (let i = 0; i < 5; i++) { timers.splice(0).forEach((f) => f()); await flush() }
+    expect(err).toEqual([1])
+    expect(ok).toEqual([1, 1])
+  })
+
   it('связь с консолью для бота (window.__oqConn): удачный опрос — okAt, ошибка — статус, текст и счёт подряд (просьба владельца 14.11)', async () => {
     type Conn = { okAt: number; errAt: number; err: string; status: number; fails: number }
     const win = { addEventListener() {} } as unknown as {

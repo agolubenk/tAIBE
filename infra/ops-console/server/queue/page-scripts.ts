@@ -81,9 +81,12 @@ export const SHIM_JS = String.raw`(function () {
         return res.json();
       })
       .then(function (j) {
+        // Связь вернулась после сбоя (выкатка консоли, сеть): снимок не изменился (304), но страница уже ушла в «только в
+        // этом браузере» — отдаём последний снимок заново, и она возвращается к общей базе без перезагрузки.
+        var recovered = (s.fail || 0) >= 3;
         s.fail = 0;
         noteConn(col, null);
-        if (!j) return;
+        if (!j) { if (recovered) deliver(col); return; }
         // version — чтобы страница отличала снимок, снятый до своего сохранения (ревью #324, minor).
         // product — продукт документа (v2-lite): метка и фильтр страницы (page-products.ts), рядом с data.
         // createdAt — время создания (мс): порядок пунктов страницы при равной дате added; updatedAt — запасной ключ.

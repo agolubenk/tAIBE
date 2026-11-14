@@ -1104,3 +1104,9 @@ describe('раскладка «Одной очередью» / «По разде
     expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .list, #sec-queue .list')")
   })
 })
+
+describe('связь вернулась — страница снова «Ответы сохраняются» сама (14.11: пара 🟠/🟢 на каждой выкатке)', () => {
+  it('снимок после сбоя возвращает страницу к общей базе без перезагрузки', () => {
+    expect(html).toContain("if (remote && modeEl.dataset.mode === 'local') setMode('shared');")
+  })
+})
