@@ -6997,6 +6997,10 @@
           "embedded": {
             "type": "integer"
           },
+          "searchable": {
+            "type": "integer",
+            "description": "Embedded chunks the meaning-based search holds. Fewer than embedded past the index budget: the freshest stay."
+          },
           "llm": {
             "type": "object",
             "properties": {
@@ -7035,6 +7039,7 @@
           "sources",
           "chunks",
           "embedded",
+          "searchable",
           "llm"
         ]
       },

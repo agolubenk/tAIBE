@@ -26,6 +26,15 @@ export function NotebookStatusBar({ workspaceId }: { workspaceId: string }) {
           embedded: data.embedded,
         })}
       </span>
+      {/* TB-76: past the index budget the oldest chunks are not searched by meaning. */}
+      {data.searchable < data.embedded && (
+        <Badge variant="warning">
+          {t("workspace:notebook.status.indexCapped", {
+            searchable: data.searchable,
+            embedded: data.embedded,
+          })}
+        </Badge>
+      )}
       <span>
         {data.llm.configured
           ? t("workspace:notebook.status.model", {

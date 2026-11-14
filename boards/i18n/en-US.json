@@ -4022,6 +4022,7 @@
 				"workerOnline": "Worker online",
 				"workerOffline": "Worker offline: search by words only",
 				"counts": "{{sources}} sources · {{chunks}} chunks · {{embedded}} with vectors",
+				"indexCapped": "{{searchable}} of {{embedded}} in meaning-based search: the index is full, the freshest stay",
 				"model": "Model {{model}} · {{calls}} of {{max}} answers today",
 				"noModel": "No model connected: answers come as sources without text"
 			},

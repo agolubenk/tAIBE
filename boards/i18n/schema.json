@@ -16043,6 +16043,9 @@
 								"counts": {
 									"type": "string"
 								},
+								"indexCapped": {
+									"type": "string"
+								},
 								"model": {
 									"type": "string"
 								},
@@ -16054,6 +16057,7 @@
 								"workerOnline",
 								"workerOffline",
 								"counts",
+								"indexCapped",
 								"model",
 								"noModel"
 							]

@@ -4,6 +4,7 @@ import {
   buildVectorIndex,
   evictOverBudget,
   nearestChunks,
+  searchableChunks,
   VECTOR_BYTES_MAX,
   type VectorIndex,
   vectorRowsMax,
@@ -46,6 +47,13 @@ describe("vector index", () => {
     );
     expect(vectorRowsMax(0)).toBeGreaterThan(0);
     expect(vectorRowsMax(VECTOR_BYTES_MAX * 2)).toBe(1);
+    expect(vectorRowsMax(8, 16)).toBe(2);
+  });
+
+  it("counts the chunks meaning-based search holds (TB-76)", () => {
+    expect(searchableChunks(0, null)).toBe(0);
+    expect(searchableChunks(9028, 768 * 4)).toBe(9028);
+    expect(searchableChunks(12_000, 768 * 4)).toBe(10_922);
   });
 
   it("drops the oldest indexes past the byte budget and keeps the newest", () => {
