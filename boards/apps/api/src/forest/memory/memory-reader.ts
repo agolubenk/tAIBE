@@ -5,6 +5,7 @@ import {
   resolveWorkerUrl,
   withCache,
 } from "@kaneo/claude-mem-reader";
+import { withRedaction } from "./redacting-reader";
 
 let reader: CachedClaudeMemReader | undefined;
 
@@ -13,12 +14,16 @@ let reader: CachedClaudeMemReader | undefined;
 // Read-only: the worker's GET endpoints, never claude-mem.db (R-040).
 // The proxy token file (CLAUDE_MEM_PROXY_TOKEN_FILE, OPS-19) is read on every
 // request; without it the reader goes without the header.
+// The only reader of the API: observations leave it through `redact`
+// (TB-137); a test keeps every other module from building its own.
 export function getMemoryReader(): CachedClaudeMemReader {
-  reader ??= withCache(
-    createClaudeMemReader({
-      baseUrl: resolveWorkerUrl(),
-      proxyToken: () => resolveProxyToken(),
-    }),
+  reader ??= withRedaction(
+    withCache(
+      createClaudeMemReader({
+        baseUrl: resolveWorkerUrl(),
+        proxyToken: () => resolveProxyToken(),
+      }),
+    ),
   );
   return reader;
 }
