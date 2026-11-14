@@ -153,8 +153,8 @@ class WorktreeAndMergeTest(unittest.TestCase):
         merged = []
 
         def fake_gh(repo, *args, check=True):
-            if args[:2] == ('pr', 'list'):
-                return json.dumps(prs)
+            if args[:2] == ('pr', 'list'):  # GitHub gives the newest `--limit` rows
+                return json.dumps(prs[:int(args[args.index('--limit') + 1])])
             if args[:2] == ('pr', 'checks'):
                 return json.dumps([{'name': 'kit-tests', 'bucket': 'pass'}])
             return ''
@@ -178,6 +178,15 @@ class WorktreeAndMergeTest(unittest.TestCase):
         self.assertTrue(rows[0]['merged'], rows)
         self.assertEqual(merged[0][merged[0].index('--match-head-commit') + 1], 'f00')
         self.assertIn('--auto', merged[0])
+
+    def test_the_runs_pr_behind_many_open_prs_still_merges(self):
+        """SE-107: 14.11 — 109 open PRs; the run's data PR #141 was the oldest, and a list of 50 never showed it."""
+        others = [dict(self.PR, number=n, headRefName='fix/x-%d' % n, url='u%d' % n) for n in range(300, 192, -1)]
+        records = {'evolve/data-x': {'head': 'f00', 'run': 'r1', 'kind': 'data'}}
+        rows, merged = self.gate(others + [self.PR], records)
+        self.assertEqual([r['pr'] for r in rows], ['u7'])
+        self.assertTrue(rows[0]['merged'], rows)
+        self.assertEqual(len(merged), 1)
 
     def test_every_gate_closes(self):
         records = {'evolve/data-x': {'head': 'f00', 'run': 'r1', 'kind': 'data'}}
