@@ -174,7 +174,8 @@ def config_moved(argv):
     rest = list(itertools.dropwhile(lambda x: ASSIGN.fullmatch(x) or x in ("command", "builtin", "noglob", "exec"), w))
     head = rest[0] if rest else ""
     own = itertools.takewhile(lambda x: x.startswith("-") or "=" in x, rest[1:])  # слова env до команды
-    return any(CONFIG_NAMED.search(x) for x in w) or bool(RUNNERS & {command_name(x) for x in w}) or computed(rest) or (
+    low = {x.rpartition("/")[2].lower().lstrip("=`") for x in w}  # как command_name, но дешевле: слово каждой команды
+    return any(CONFIG_NAMED.search(x) for x in w) or bool(RUNNERS & low) or computed(rest) or (
         head in DECLARE and any(re.fullmatch(r"-\w*n\w*", x) for x in rest)) or (
         command_name(head) == "env" and any(x.startswith("-") for x in own))
 
@@ -190,17 +191,19 @@ def opaque(paths, written):
     return ANY in written or any(ANY + n in written for n in path_names(paths))
 
 
-def command_writes(text, depth=0, alt=False, keep=False, raw=False):
+def command_writes(text, depth=0, alt=False, keep=False, raw=False, cwd=None):
     """Имена файлов, которые пишет команда целиком — с подстановками, heredoc и `bash -c`, без учёта порядка. Хук
     разбирает `$(…)` и heredoc раньше основной команды, а shell выполняет их после записи в той же строке
     (`printf … > m.sh; echo $(bash m.sh)`). Лишнее имя — лишь грубая проверка вместо разбора; что не разобрать — без имён.
     Кавычки не сошлись — имена из слов до ошибки: bash их выполнит (SE-76). Имена и из второго прочтения комментариев
     (comment_readings, SE-82; alt — оно само): запись, спрятанная `"` комментария, иначе не попала бы в имена, и хук
     прочёл бы с диска старый файл. Знак комментария мог смениться (keep — до текста, или текст называет настройку —
-    comment_char_may_change, SE-77) — имена и из прочтения без снятия комментариев (raw), в том числе у `eval`/`-c`."""
+    comment_char_may_change, SE-77) — имена и из прочтения без снятия комментариев (raw), в том числе у `eval`/`-c`.
+    Копирование инструмента под другим именем — метки copy_marks (SE-90 п. 3); cwd — папка для источников-путей."""
     from merge_guard_shell import (SHELLS, command_name, comment_char_may_change, comment_readings, cut_heredocs,  # shell
                                    cut_substitutions, expand_vars, heredoc_text, join_lines, note_vars,  # импортирует
                                    split_commands, strip_prefix, substitute, tokens_before_error)  # этот модуль
+    from merge_guard_alias import copy_marks  # alias импортирует этот модуль
     if depth > 3:
         return set()
     source, keep = text, keep or comment_char_may_change(text)  # `histchars='!^%'; echo a # ; echo … > m.sh`
@@ -219,10 +222,10 @@ def command_writes(text, depth=0, alt=False, keep=False, raw=False):
             note_vars(argv, env)
             for r in filter(None, (strip_prefix(v) for v in expand_vars(argv, env)[0])):
                 v = [command_name(r[0])] + r[1:]
-                names |= written_names(v)
+                names |= written_names(v) | copy_marks(v, cwd, names)  # имя цели — инструмент (SE-90 п. 3)
                 more += v[1:] if v[0] == "eval" else v[v.index("-c") + 1:][:1] if v[0] in SHELLS and "-c" in v else []
     except Exception:
         pass
-    names |= command_writes(other, depth, True, keep) if other else set()
-    names |= command_writes(source, depth, alt, keep, True) if keep and not raw else set()
-    return names.union(*(command_writes(m, depth + 1, keep=keep) for m in more))
+    names |= command_writes(other, depth, True, keep, cwd=cwd) if other else set()
+    names |= command_writes(source, depth, alt, keep, True, cwd) if keep and not raw else set()
+    return names.union(*(command_writes(m, depth + 1, keep=keep, cwd=cwd) for m in more))

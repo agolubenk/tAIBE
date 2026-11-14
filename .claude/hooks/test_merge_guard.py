@@ -429,6 +429,7 @@ import test_merge_guard_branches  # noqa: E402,F401  — защищённые в
 import test_merge_guard_lines  # noqa: E402,F401  — склейка строк `\`⏎ (SE-83)
 import test_merge_guard_zsh  # noqa: E402,F401  — интерактивный zsh, `-oимя` (SE-85)
 import test_merge_guard_alias  # noqa: E402,F401  — инструмент под другим именем: регистр, ссылка, копия (SE-90)
+import test_merge_guard_identity  # noqa: E402,F401  — то же по содержимому: ссылка, копия, PATH (SE-90 п. 1–4)
 
 # --- бюджет git ---
 mg_git = sys.modules["merge_guard_git"]

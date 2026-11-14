@@ -41,6 +41,12 @@ def check(label, got, want_deny):
         failures.append(f"{label}: ждали {'отказ' if want_deny else 'проход'}, получили {got!r}")
 
 
+def same(got, want):
+    """Для check(…, same(f(x), want), False): None, только если got == want; иначе repr(got) — и неожиданный None тоже
+    провал (`None if f(x) == want else f(x)` его пропускал)."""
+    return None if got == want else repr(got)
+
+
 def bash(label, cmd, want_deny, **kw):
     check(label, run("Bash", {"command": cmd}, **kw), want_deny)
 

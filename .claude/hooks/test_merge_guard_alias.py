@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_files import GH_MOVED, GH_WRITTEN, command_writes  # noqa: E402
 from merge_guard_shell import command_name, exact_name, launcher  # noqa: E402
-from merge_guard_testkit import bash, check, finish, repo_on  # noqa: E402
+from merge_guard_testkit import bash, check, finish, repo_on, same  # noqa: E402
 
 se90 = repo_on("main", "se90")
 (se90 / "x.sh").write_text("gh pr merge 1\n")
@@ -28,11 +28,11 @@ for form in ("Gh pr merge 1", "GH pr merge 1", "GIT push origin HEAD:main", "/us
 for form in ("cd sub; bash x.sh", "Echo gh pr merge 1", "GIT status", "Gh pr view 1", "CD sub; echo ok"):
     bash(f"SE-90: регистр — проход: {form!r}", form, False, cwd=se90)
 for word, want in (("GIT", "git"), ("/usr/bin/Gh", "gh"), ("=ZSH", "zsh"), ("`Bash", "bash")):
-    check(f"SE-90 command_name({word!r})", None if command_name(word) == want else command_name(word), False)
+    check(f"SE-90 command_name({word!r})", same(command_name(word), want), False)
 for word, want in (("CD", "CD"), ("/usr/bin/cd", "cd")):
-    check(f"SE-90 exact_name({word!r})", None if exact_name(word) == want else exact_name(word), False)
+    check(f"SE-90 exact_name({word!r})", same(exact_name(word), want), False)
 for word, want in (("BASH", "sh"), ("Python3.12", "python"), ("NODE", "node"), ("swiftc", None)):
-    check(f"SE-90 launcher({word!r})", None if launcher(word) == want else launcher(word), False)
+    check(f"SE-90 launcher({word!r})", same(launcher(word), want), False)
 # Слова перед `cd` (dir_words, линза Контроля на 22ae0a3f3): внешняя обёртка или другой регистр — папка shell та же,
 # `command`, `time -p` и zsh-модификаторы — bash и zsh расходятся (сверено exec), папка неизвестна. Голый push из main.
 se90f = repo_on("feature/x", "se90f")
