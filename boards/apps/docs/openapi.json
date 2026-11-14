@@ -5283,9 +5283,13 @@
             "items": {
               "type": "object",
               "properties": {
+                "actorId": {
+                  "type": "string",
+                  "description": "Who called, one per key and session: agent:<user id> for a session's agent, bearer:<user id>[:<label>] or key:<key id>[:<label>] otherwise."
+                },
                 "actor": {
                   "type": "string",
-                  "description": "Who called: bearer:<user id> for a remote MCP client."
+                  "description": "The caller's name: the agent's name, or the session label the client gave."
                 },
                 "calls": {
                   "type": "integer"
@@ -5301,6 +5305,7 @@
                 }
               },
               "required": [
+                "actorId",
                 "actor",
                 "calls",
                 "tokens",
@@ -6767,6 +6772,81 @@
           "header",
           "extraMax",
           "roles"
+        ]
+      },
+      "AgentJournalMcpCallsResult": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "integer"
+          },
+          "journaled": {
+            "type": "integer",
+            "description": "New rows. Calls already journaled under the same id are not counted again."
+          }
+        },
+        "required": [
+          "received",
+          "journaled"
+        ]
+      },
+      "AgentJournalMcpCalls": {
+        "type": "object",
+        "properties": {
+          "calls": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The caller's id for this call. The same id sent again (a batch retried after a lost answer) adds no second row."
+                },
+                "tool": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                  "description": "The MCP tool that was called."
+                },
+                "args": {
+                  "description": "The arguments as sent. Secrets are replaced by a label and the text is cut before it is stored."
+                },
+                "ok": {
+                  "type": "boolean",
+                  "description": "False when the tool refused."
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000
+                },
+                "tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000,
+                  "description": "Tokens of the answer, counted with o200k_base (D-018)."
+                },
+                "ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400000
+                }
+              },
+              "required": [
+                "id",
+                "tool",
+                "ok",
+                "bytes",
+                "tokens",
+                "ms"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "calls"
         ]
       },
       "NotebookSources": {
@@ -27754,6 +27834,61 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/McpToolSets"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/agent-journal/mcp-calls": {
+      "post": {
+        "operationId": "recordMcpCalls",
+        "tags": [
+          "Agents"
+        ],
+        "summary": "Journal MCP calls made by a local MCP server",
+        "description": "A stdio MCP server sends the calls it served, in batches of up to 50, so they count in a card's spend like calls to the remote /mcp (R-036, TB-135). Each row goes under the actor of the sending key — the session's agent when it has one; the x-t-boards-session label never changes whose key it is. A call that names a card the actor cannot open is filed under the tool. A one-workspace key is refused (R-002): the rows belong to no workspace.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentJournalMcpCalls"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The calls are journaled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentJournalMcpCallsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a batch of 1 to 50 calls",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

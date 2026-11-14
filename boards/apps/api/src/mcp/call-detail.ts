@@ -21,7 +21,9 @@ function cut(text: string) {
 // a label before the row is written and before the cut, so a cut never splits
 // a secret past the detector (D-011). The tool is named here because a call
 // about a card is filed under the card (callTarget).
-export function callDetail(call: ToolCall) {
+export function callDetail(
+  call: Pick<ToolCall, "tool" | "args" | "bytes" | "tokens" | "ms">,
+) {
   const args = cut(redact(JSON.stringify(call.args ?? null)).text);
   return JSON.stringify({
     tool: call.tool,
@@ -39,10 +41,16 @@ const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 // TB-44: an answered call that names a card by taskId is filed under the card,
 // so its tokens add up per card. A refused call, or one without a taskId
 // (search, list_tasks, get_task_by_ticket_id), stays under the tool.
-export function callTarget(call: ToolCall) {
+type CallFacts = Pick<ToolCall, "tool" | "args" | "ok">;
+
+export function toolTarget(call: Pick<ToolCall, "tool">) {
+  return { targetType: "mcp_tool", targetId: call.tool };
+}
+
+export function callTarget(call: CallFacts) {
   const taskId = (call.args as { taskId?: unknown } | null)?.taskId;
   if (call.ok && typeof taskId === "string" && TASK_ID.test(taskId)) {
     return { targetType: "task", targetId: taskId };
   }
-  return { targetType: "mcp_tool", targetId: call.tool };
+  return toolTarget(call);
 }

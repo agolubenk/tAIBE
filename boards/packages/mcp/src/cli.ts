@@ -1,7 +1,7 @@
 import { stdin as input } from "node:process";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { runInstall } from "./install/index.js";
-import { createMcpServer } from "./server.js";
+import { createStdioServer } from "./server.js";
 
 const SERVE_ALIASES = new Set(["serve", "server", "stdio", "run"]);
 
@@ -32,10 +32,22 @@ export async function runCli(): Promise<void> {
   await startMcpServer();
 }
 
+// TB-135: the journal's last batch goes out before the process ends. A
+// signal gets 3 s for it; when stdin ends the process ends on its own once the
+// batch has its answer. SIGKILL loses what is held: under 20 calls, 15 s.
+const LAST_BATCH_MS = 3_000;
+
 async function startMcpServer(): Promise<void> {
-  const server = createMcpServer();
+  const { server, close } = createStdioServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  const onSignal = (code: number) => () => {
+    const deadline = new Promise((done) => setTimeout(done, LAST_BATCH_MS));
+    void Promise.race([close(), deadline]).finally(() => process.exit(code));
+  };
+  process.once("SIGTERM", onSignal(143));
+  process.once("SIGINT", onSignal(130));
+  input.once("end", () => void close());
 }
 
 function printMainHelp(): void {
