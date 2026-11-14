@@ -32,22 +32,22 @@ export async function runCli(): Promise<void> {
   await startMcpServer();
 }
 
-// TB-135: the journal's last batch goes out before the process ends. A
-// signal gets 3 s for it; when stdin ends the process ends on its own once the
-// batch has its answer. SIGKILL loses what is held: under 20 calls, 15 s.
+// TB-135: the journal's last batch goes out before the process ends. A signal
+// or the end of stdin gives it 3 s, then the process exits whatever the API
+// does. SIGKILL loses what is held: under 20 calls, 15 s.
 const LAST_BATCH_MS = 3_000;
 
 async function startMcpServer(): Promise<void> {
   const { server, close } = createStdioServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  const onSignal = (code: number) => () => {
+  const shutdown = (code: number) => () => {
     const deadline = new Promise((done) => setTimeout(done, LAST_BATCH_MS));
     void Promise.race([close(), deadline]).finally(() => process.exit(code));
   };
-  process.once("SIGTERM", onSignal(143));
-  process.once("SIGINT", onSignal(130));
-  input.once("end", () => void close());
+  process.once("SIGTERM", shutdown(143));
+  process.once("SIGINT", shutdown(130));
+  input.once("end", shutdown(0));
 }
 
 function printMainHelp(): void {
