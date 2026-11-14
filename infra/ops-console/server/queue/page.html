@@ -709,7 +709,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 
   <details class="agent-howto">
     <summary>Для агентов: как добавить пункт владельцу и отметить свою работу</summary>
-    <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd без basePlanEnd — 409.</p>
+    <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd позже без ответа владельца «перенести» (dueRef) — 409.</p>
     <pre>items/&lt;id&gt;  пункт владельцу (id: d-… решение, m-… мёрж, s-… сервер, c-… ручная проверка)
   Продукт — hr-helper (Lavaeon (HR Helper): id без префикса) или taibe (tAIBE: id начинается с «taibe-», taibe-m-93).
   Продукт пункта меняет только владелец (выбор «Продукт:» у пункта).
@@ -727,8 +727,11 @@ work/&lt;id&gt;  задача агента для отчёта, Ганта и р
    session, planStart, planEnd, start, end ('YYYY-MM-DD'), milestone: bool, note, link, linkText, order,
    cards: [{key: '&lt;ключ карточки t-boards, OPS-34&gt;', ws: '&lt;slug пространства, aiboards-eval&gt;', t: заголовок, k: 'bug'|'task',
             s: severity|priority, st: статус (колонка), c: код}]}
-  planEnd не переписывать: от него считается отставание. Сдвиг плана — новый planEnd
-  и basePlanEnd = прежняя дата, причина — в note. В строку коллеги — только своё поле (oq_patch, ifVersion).
+  planEnd позже — только по ответу владельца «перенести» в решении d-&lt;продукт&gt;-due[-&lt;тема&gt;]
+  (rows, moveTo: {строка: дата}, та же дата — в тексте: DD.MM или YYYY-MM-DD; вариант move подписан «Перенести…»).
+  id решения — в поле dueRef записи строки (dueRefs не слать: его ведёт сервер, как и basePlanEnd); срок не позже moveTo.
+  Ответ годен, пока пункт не меняли после него: сначала сдвинуть все строки, потом писать в пункт. Один ответ — один
+  сдвиг, у строки до 50 сдвигов, дальше — владелец. Снять planEnd может только владелец. Раньше срок — свободно. В строку коллеги — только своё поле (oq_patch, ifVersion).
 
 work/track-&lt;id&gt;  направление «Хода работ» {kind: 'track', name, color: 'var(--c1)'…'var(--c6)', order, archived}
   Пять базовых направлений вшиты в страницу, документ с их id меняет имя и порядок.

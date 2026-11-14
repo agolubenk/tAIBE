@@ -2,7 +2,8 @@
  * Документы очереди владельца (checks · items · work) и правила записи — то, что в артефакте держалось
  * на дисциплине агентов, здесь проверяет сервер:
  *  - ответ владельца (done, choice, note, at) пишет только владелец; агент — только agentStatus/agentNote;
- *  - planEnd задачи агент не переписывает без basePlanEnd (от planEnd считается отставание);
+ *  - planEnd задачи агент сдвигает позже только по ответу владельца «перенести» и не позже названной в решении даты
+ *    (dueRef, plan-end.ts); basePlanEnd и dueRefs ведёт сервер;
  *  - ifVersion — защита от одновременной правки (409 вместо молчаливой перезаписи).
  * Каждое изменение — строка журнала oq_events.
  */
@@ -12,6 +13,7 @@ import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
 import { removeItemFiles } from './files/remove'
+import { guardPlanEnd, moveToUnseen } from './plan-end'
 import { canSee, DEFAULT_PRODUCT, listProducts, namespaceOf, notFound, productForNew, type Product, type Visibility } from './products'
 
 export const COLLECTIONS = ['checks', 'items', 'work'] as const
@@ -71,6 +73,8 @@ const inboxSchema = z
   .strict()
   .refine((d) => !d.severity || d.type === 'bug' || d.type === 'alert', { message: 'Важность (severity) — только у ошибки и алерта' })
 // Формат пунктов — протокол «Для агентов» со страницы артефакта; лишние поля (pr, deploy и будущие) допускаются.
+// Настоящий день календаря: 2026-13-01 и 2026-02-30 — не дата.
+const realDay = (v: string): boolean => !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v
 const itemSchema = z
   .object({
     kind: z.enum(['decision', 'merge', 'server', 'check', 'inbox']),
@@ -99,10 +103,18 @@ const itemSchema = z
     mergeMethod: z.enum(['merge', 'squash']).optional(),
     subject: z.string().min(1).max(300).regex(/^[^\r\n]+$/, 'subject — заголовок коммита одной строкой').optional(),
     inbox: inboxSchema.optional(),
+    // Решение о сроках d-…-due… (TB-112): дата переноса каждой строки из rows. Её видит владелец; позже неё агент
+    // срок строки не сдвинет (plan-end.ts).
+    moveTo: z.record(z.string().regex(DOC_ID), z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(realDay, { message: 'moveTo — дата календаря (YYYY-MM-DD)' }))
+      .refine((m) => Object.keys(m).length <= 100, { message: 'moveTo — не больше 100 строк' }).optional(),
   })
   .passthrough()
   .refine((d) => d.kind !== 'decision' || (d.options?.length ?? 0) > 0, { message: 'У решения должны быть варианты (options)' })
   .refine((d) => (d.kind === 'inbox') === (d.inbox !== undefined), { message: 'Поле inbox — у пункта kind: inbox, и только у него' })
+  .superRefine((d, ctx) => {
+    const unseen = moveToUnseen(d.moveTo, `${d.title}\n${d.body ?? ''}`)
+    if (unseen) ctx.addIssue({ code: 'custom', path: ['moveTo', unseen.row], message: `впиши дату переноса строки ${unseen.row} в текст (${unseen.date.slice(8, 10)}.${unseen.date.slice(5, 7)} или ${unseen.date}): владелец видит текст, не moveTo` })
+  })
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}/).max(30)
 // Документ work может быть частичной правкой задачи из базового плана страницы (WORK_SEED): страница
@@ -258,12 +270,6 @@ function authorize(actor: Actor, collection: Collection, before: Record<string, 
   if (collection === 'items' && (after.kind === 'inbox' || before?.kind === 'inbox') && !owner) {
     throw apiError(403, 'Входящие (kind: inbox) пишет только владелец через бота; агенту — свой статус в checks (oq_agent_status)')
   }
-  if (collection === 'work' && !actor.scopes.includes('owner') && before) {
-    const prev = before.planEnd
-    if (typeof prev === 'string' && after.planEnd !== prev && after.basePlanEnd !== prev && before.basePlanEnd === undefined) {
-      throw apiError(409, `planEnd не переписывается: от него считается отставание. Сдвиг — новый planEnd и basePlanEnd = «${prev}», причина в note`)
-    }
-  }
 }
 
 export interface WriteOptions {
@@ -339,6 +345,12 @@ export async function writeDoc(actor: Actor, collection: Collection, id: string,
     // Отпуск снимает только держателя: статус и заметка («передано <сессия>») остаются — страница и бот показывают, кому
     // передано; пункт берёт названная живая сессия. Автопередача сама его не предложит: у него есть статус.
     if (collection === 'checks' && opts.release) delete merged.agentBy
+    if (collection === 'work' && !owner) {
+      await guardPlanEnd(id, before, merged, (c, docId) => tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, c), eq(oqDocs.id, docId)) }),
+        (r) => canSee(actor.products, r.product))
+    } else if (collection === 'work') {
+      delete merged.dueRef
+    }
     const parsed = SCHEMAS[collection].safeParse(merged)
     if (!parsed.success) throw apiError(422, `Неверный документ: ${parsed.error.issues.map((i) => `${i.path.join('.') || '—'}: ${i.message}`).join('; ').slice(0, 400)}`)
     const json = JSON.stringify(parsed.data)
