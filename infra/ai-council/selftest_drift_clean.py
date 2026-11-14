@@ -108,9 +108,17 @@ def tree() -> dict[str, str]:
     return files
 
 
+# Читатели корня хоста названы здесь, а не взяты из selftest_tree.READERS. Если модуль пропадёт из READERS, CI без
+# TAIBE_HOST_ROOT этого не увидит: в checkout tAIBE есть те же файлы, что в фикстуре (линза boards на #258).
+HOST_READERS = ("verifier", "council_rounds", "council_clean")
+
+
 def run(tmp: Path, check) -> None:
+    import importlib
     import council_clean as cc
     from selftest_tree import host_tree
-    with host_tree(tmp, tree(), name="m7-host"):
+    with host_tree(tmp, tree(), name="m7-host") as root:
+        lost = [m for m in HOST_READERS if importlib.import_module(m).REPO_ROOT != root]
+        check("M7: verifier, council_rounds и council_clean читают дерево-фикстуру, а не checkout", not lost, str(lost))
         _units(check, cc)
         _council_paths(check, tmp, cc)
