@@ -47,6 +47,40 @@ const PYTHONS = ['/Library/Frameworks/Python.framework/Versions/Current/bin/pyth
 export const findPython = (candidates = PYTHONS) => candidates.find((p) => existsSync(p)) || 'python3'
 
 const bool = (v, def) => (v === undefined || v === '' ? def : /^(1|true|yes|on)$/i.test(v))
+const num = (v, def) => {
+  const n = Number.parseFloat(v ?? '')
+  return Number.isFinite(n) && n >= 0 ? n : def
+}
+
+// L-тир локальных моделей — по правилу консилиума (`OllamaClient.is_large`, OPS-29): модель из `[models.large]` его
+// config.toml или модель не легче `models.large_threshold_gb` (ГиБ, размер из /api/tags). Шлюз читает тот же файл, а
+// не свою копию списка: иначе списки разойдутся, и шлюз загрузит L-модель мимо лока (OPS-59). Читаются только эти два
+// ключа; TOML-библиотеки нет, поэтому разбор построчный. Нет файла — пустой список и порог 9 ГиБ, как у консилиума.
+export const COUNCIL_CONFIG = join(CODE_DIR, '..', 'ai-council', 'config.toml')
+export function councilLargeTier(file = COUNCIL_CONFIG) {
+  const out = { models: [], thresholdGb: 9 }
+  let text = ''
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch {
+    return out
+  }
+  let section = ''
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/\s+#.*$/, '').trim()
+    if (!line || line.startsWith('#')) continue
+    const head = /^\[([^\][]+)\]$/.exec(line)
+    if (head) section = head[1].trim()
+    else if (section === 'models.large') {
+      const m = /^"([^"]+)"\s*=/.exec(line) || /^([A-Za-z0-9_-]+)\s*=/.exec(line)
+      if (m) out.models.push(m[1])
+    } else if (section === 'models') {
+      const m = /^large_threshold_gb\s*=\s*([0-9.]+)$/.exec(line)
+      if (m) out.thresholdGb = num(m[1], out.thresholdGb)
+    }
+  }
+  return out
+}
 
 // Токен клиентов: без него любой сайт в браузере мог бы слать POST на localhost и тратить ключи.
 function ensureToken(env) {
@@ -108,6 +142,9 @@ export function loadConfig({ envFile = join(PKG_DIR, '.env'), env = process.env 
     if (m && list(v).length) aliases[m[1].toLowerCase().replace(/_/g, '-')] = list(v)
   }
 
+  const localLock = e.GW_LOCAL_LOCK === 'off' ? '' : e.GW_LOCAL_LOCK || MACHINE_LOCK
+  const council = councilLargeTier(e.GW_COUNCIL_CONFIG || COUNCIL_CONFIG)
+
   const host = e.GW_HOST || '127.0.0.1'
   // Шлюз тратит чужие ключи по одному токену — наружу его не выставляем ни при какой настройке.
   if (!/^(127\.0\.0\.1|localhost|::1)$/.test(host)) throw new Error(`GW_HOST=${host}: шлюз слушает только loopback`)
@@ -145,7 +182,12 @@ export function loadConfig({ envFile = join(PKG_DIR, '.env'), env = process.env 
     autoFreeCount: int(e.GW_AUTO_FREE_COUNT, 8),
     localMaxWaitMs: int(e.GW_LOCAL_MAX_WAIT_MS, 180_000),
     // Машинный замок локального инференса, общий с консилиумом (OPS-27). `off` — только семафор процесса.
-    localLock: e.GW_LOCAL_LOCK === 'off' ? '' : e.GW_LOCAL_LOCK || MACHINE_LOCK,
+    localLock,
+    // Машинный лок L-модели, общий с консилиумом (OPS-29, OPS-59): файл рядом с замком инференса, как
+    // MACHINE_MODEL_LOCK в ollama.py. Без замка инференса (`GW_LOCAL_LOCK=off`) нет и его.
+    localLargeLock: localLock ? join(dirname(localLock), 'large-model.lock') : '',
+    localLarge: e.GW_LOCAL_LARGE !== undefined ? list(e.GW_LOCAL_LARGE) : council.models,
+    localLargeGb: num(e.GW_LOCAL_LARGE_GB, council.thresholdGb),
     python: e.GW_PYTHON || findPython(),
     streamCommitMs: int(e.GW_STREAM_COMMIT_MS, 8_000),
     maxAttempts: int(e.GW_MAX_ATTEMPTS, 8),
