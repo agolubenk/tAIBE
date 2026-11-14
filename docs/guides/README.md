@@ -13,4 +13,4 @@
 | Запуск досок локально и на VPS | [`boards/README.md`](../../boards/README.md), [`boards/deploy/vps/README.md`](../../boards/deploy/vps/README.md) |
 | Нерв: установка, команды, откат | [`eval/nerve/README.md`](../../eval/nerve/README.md) |
 | Переезд очереди владельца | [`docs/ops/owner-queue-cutover.md`](../ops/owner-queue-cutover.md) |
-| Запуск команды ролей Т3 | [`eval/prompts/launch-3010/README.md`](../../eval/prompts/launch-3010/README.md) |
+| Запуск команды ролей Т3 | `eval/tools/spawn_session.sh` выбирает промпты по продукту (`:115-119`, OPS-25 Ф3): продукт по умолчанию (HR) — [`eval/prompts/launch-3010/README.md`](../../eval/prompts/launch-3010/README.md), tAIBE — `eval/prompts/taibe/` ([`COMMON.md`](../../eval/prompts/taibe/COMMON.md), `roles/`) |
