@@ -9,6 +9,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"default": "./dist/index.js"
+		},
+		"./restore": {
+			"types": "./dist/restore.d.ts",
+			"default": "./dist/restore.js"
 		}
 	},
 	"license": "MIT",
