@@ -371,6 +371,7 @@ def cmd_doctor(cfg, _args) -> int:
         checks.append(("ключ t-boards продукта", True, f"«{key['name'] or key['slug']}» · {key['url']} · 0600"))
     except tboards.TBoardsError as exc:
         checks.append(("ключ t-boards продукта", False, str(exc)))
+    checks.extend(_council_checks(getattr(_args, "product", "") or ""))
 
     rag = cfg.path_of("sources.rag.db")
     checks.append(("DAMS RAG-индекс", rag.is_file(),
@@ -379,7 +380,7 @@ def cmd_doctor(cfg, _args) -> int:
 
     graph = cfg.path_of("sources.graph.path")
     checks.append(("graphify-граф", graph.is_file(),
-                   str(graph) if graph.is_file() else
+                   _rel(graph) if graph.is_file() else
                    "нет graph.json — python3 infra/ai-council/graph_build.py"
                    " (или UI консилиума → «Собрать граф проекта»: AST + слой Prisma)"))
 
@@ -427,6 +428,44 @@ def cmd_doctor(cfg, _args) -> int:
         print(f"  {'✓' if ok else '✗'} {name.ljust(width)}  {detail}")
     print(f"\n{len(checks) - failed}/{len(checks)} проверок пройдено")
     return 0
+
+
+def _rel(path: Path) -> str:
+    """Путь для отчёта doctor — от корня хоста, без локальной части (публичный вид, Ф2 OPS-23)."""
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return path.name
+
+
+def _council_checks(slug: str) -> list[tuple[str, bool, str]]:
+    """Поля council продукта (Ф2 OPS-23): стек, модули, корни поиска, схема Prisma. `--product` сверяет пути с
+    `repo_root` этого продукта. В отчёте только slug и пути от корня продукта."""
+    import product as product_mod
+    try:
+        if slug:
+            council = product_mod.load(REPO_ROOT, env={product_mod.ENV: slug})
+            root = product_mod.product_root(slug)
+        else:
+            council, root = product_mod.current(), REPO_ROOT
+    except product_mod.ProductError as exc:
+        return [("продукт консилиума", False, str(exc))]
+    if not council.slug:
+        return [("продукт консилиума", False,
+                 f"не определён — {product_mod.ENV}=<slug> или repo_root хоста в instances/<slug>.json")]
+    paths = sorted({p for group in council.modules.values() for p in group})
+    missing = [p for p in paths if not (root / p).exists()]
+    roots = [r for r in council.default_roots if (root / r).is_dir()]
+    return [
+        ("продукт консилиума", True, f"{council.slug} ({'--product' if slug else council.how})"),
+        ("стек в промпте ревью", bool(council.stack), council.stack or "нет council.stack — промпт без стека"),
+        ("модули → код", len(missing) < len(paths),
+         f"{len(council.modules)} модулей, путей есть {len(paths) - len(missing)}/{len(paths)}"
+         + (f"; нет: {', '.join(missing)}" if missing else "")),
+        ("корни поиска по умолчанию", bool(roots), ", ".join(roots) or "нет — поиск от корня"),
+        ("схема Prisma", not council.prisma_schema or (root / council.prisma_schema).is_file(),
+         council.prisma_schema or "у продукта нет — слоя Prisma в графе нет"),
+    ]
 
 
 def _tboards_line() -> str:
@@ -559,7 +598,8 @@ def main() -> int:
     p_restart = sub.add_parser("restart")
     p_restart.add_argument("--foreground", action="store_true")
     sub.add_parser("status")
-    sub.add_parser("doctor")
+    p_doctor = sub.add_parser("doctor")
+    p_doctor.add_argument("--product", default="", help="slug продукта из instances/ (по умолчанию — продукт хоста)")
 
     p_run = sub.add_parser("run")
     p_run.add_argument("--card", required=True, help="ключ t-boards (OPS-26), id t-boards или id черновика")

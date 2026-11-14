@@ -33,6 +33,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import config as config_mod  # noqa: E402  — кладёт .claude/scripts слоя в sys.path
+import product  # noqa: E402  — словарь модулей продукта (Ф2 OPS-23)
 import pipeline_settings  # noqa: E402  — доверенные хосты и CA системы: одно место на слой
 
 KEY_FILE_REL = ".claude/council/tboards.json"
@@ -347,7 +348,7 @@ def task_to_card(task: dict, meta: dict, labels: list, comments: list, project: 
     notes = [{"id": str(c.get("id") or ""), "text": scrub(str(c.get("content") or "")),
               "at": str(c.get("createdAt") or "")} for c in comments if isinstance(c, dict)]
     names = {str(lb.get("name") or "").strip().lower() for lb in labels if isinstance(lb, dict)}
-    modules = sorted(names & config_mod.CANONICAL_MODULES)
+    modules = sorted(names & set(product.current().modules))  # словарь продукта (Ф2 OPS-23)
     priority = PRIORITY.get(str(task.get("priority") or ""))
     severity = str(meta.get("severity") or "") or None
     half_baked = 1 if meta.get("halfBaked") else 0

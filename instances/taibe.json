@@ -195,5 +195,19 @@
       ]
     ],
     "match": "-taibe-"
+  },
+  "council": {
+    "stack": "aiBoards&eval (tAIBE: доски — Hono + Drizzle + PostgreSQL, React + Vite; eval и слой — Python stdlib)",
+    "default_roots": ["boards", "eval"],
+    "modules": {
+      "boards": ["boards/apps/api/src", "boards/apps/web/src", "boards/packages"],
+      "kanban": ["boards/apps/api/src", "boards/apps/web/src", "boards/packages"],
+      "eval": ["eval"],
+      "pipeline": ["eval", "infra/ai-council"],
+      "process": ["process", ".claude"],
+      "ai-tooling/mcp": ["infra/ai-council", "boards/packages/mcp"],
+      "ops/ci": ["infra"],
+      "docs": ["docs"]
+    }
   }
 }

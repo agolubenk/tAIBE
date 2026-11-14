@@ -37,6 +37,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1] / ".claude/scripts"))
 
 from config import REPO_ROOT  # noqa: E402 — поиск идёт по коду хоста
+import product  # noqa: E402 — поля council продукта хоста
 
 try:
     import dams_common                       # переиспользуем поиск DAMS, не копируем
@@ -246,8 +247,8 @@ class Retriever:
 
     @staticmethod
     def _default_roots() -> list[str]:
-        # Корни кода по умолчанию: монорепо продукта-хоста (apps/, packages/) или дом слоя (boards/, eval/).
-        return [r for r in ("apps", "packages", "boards", "eval") if (REPO_ROOT / r).is_dir()] or ["."]
+        # Корни кода по умолчанию — поле `council.default_roots` продукта (Ф2 OPS-23); нет поля или папок — корень.
+        return [r for r in product.current().default_roots if (REPO_ROOT / r).is_dir()] or ["."]
 
     def _roots_for(self, modules: list[str]) -> list[str]:
         roots: list[str] = []
@@ -377,30 +378,8 @@ class Retriever:
     # DAMS-индекс покрывает роуты/Prisma/proto/правила/спеки, но НЕ фронтовые компоненты
     # и не произвольный код. Для карточки про UI в нём нет ни одного релевантного
     # документа — без этого источника «улики» для фронта были бы бэкендовым шумом.
-    MODULE_PATHS = {
-        "frontend": ["apps/frontend/src"],
-        "backend": ["apps/backend/src"],
-        "telegram": ["apps/backend/src/modules/integrations/telegram",
-                     "apps/telegram-sessions/src", "apps/frontend/src/features/telegram"],
-        "extension": ["apps/extension"],
-        "mobile": ["apps/mobile", "apps/mobile-android", "apps/mobile-ios"],
-        "recruiting/ats": ["apps/backend/src/modules/recruiting",
-                           "apps/frontend/src/features/recruiting"],
-        "security/auth": ["apps/backend/src/modules/auth", "apps/backend/src/common/guards"],
-        "db/queues": ["apps/backend/prisma", "apps/backend/src/common/queues"],
-        "realtime": ["apps/backend/src/modules/realtime"],
-        "ai-tooling/mcp": ["apps/backend/src/modules/mcp", "infra/ai-council"],
-        "huntflow": ["apps/backend/src/modules/integrations/huntflow"],
-        "hh.ru": ["apps/backend/src/modules/integrations/hh"],
-        "i18n": ["apps/frontend/src/shared/i18n"],
-        "ops/ci": ["infra"],
-        "docs": ["docs"],
-        "ux": ["apps/frontend/src/shared/components"],
-        # Канонический дом слоя (tAIBE): доски, eval-пайплайн, сам слой.
-        "boards": ["boards/apps/api/src", "boards/apps/web/src", "boards/packages"],
-        "eval": ["eval"],
-        "process": ["process", ".claude"],
-    }
+    # Карта «модуль → корни кода» — поле `council.modules` продукта (Ф2 OPS-23, infra/ai-council/product.py).
+    MODULE_PATHS = {name: list(paths) for name, paths in product.current().modules.items()}
 
     def file_evidence(self, terms: list[str], modules: list[str], limit: int = 6) -> list[Evidence]:
         import subprocess
