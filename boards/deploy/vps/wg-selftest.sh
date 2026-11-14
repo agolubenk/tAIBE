@@ -105,7 +105,7 @@ setup "$k2" phone full
 grep -q "^PresharedKey" /tmp/out && fail "re-run printed the PresharedKey again"
 echo "ok: re-run changes nothing, new peers get a PresharedKey and MTU 1380"
 
-redirects="$(iptables -t nat -S PREROUTING | grep -c REDIRECT)"
+redirects="$(iptables -t nat -S PREROUTING | grep -c REDIRECT || true)"
 [ "$redirects" = 1 ] || fail "redirects: $redirects"
 iptables -t nat -C PREROUTING -i wg0 -d 10.77.0.1/32 -p tcp --dport 443 -j REDIRECT --to-ports 8443 || fail "redirect not bound to the tunnel address"
 chain() {
@@ -250,7 +250,7 @@ issue laptop split
 bash /kit/wg-issue.sh --revoke tablet >/dev/null 2>&1 </dev/null || fail "revoke tablet"
 grep -qF "$tablet_psk" /etc/wireguard/wg0.conf && fail "revoked device left its PresharedKey"
 [ "$(psk_of mac)" = "$mac_psk" ] || fail "revoke changed the mac PresharedKey"
-backups="$(ls /etc/wireguard | grep -c "^wg0.conf.bak-")"
+backups="$(ls /etc/wireguard | grep -c "^wg0.conf.bak-" || true)"
 [ "$backups" = 3 ] || fail "backups kept: $backups"
 # At least one real backup is newer than the five planted ones, so the three oldest must be gone.
 ls /etc/wireguard | grep -q "^wg0.conf.bak-20200101-00000[123]$" && fail "oldest backups kept"
@@ -305,7 +305,8 @@ held; issue locked split; [ -f /tmp/held ] || fail "wg-issue.sh did not wait for
 bash /kit/wg-issue.sh --revoke locked >/dev/null 2>&1 </dev/null || fail "revoke locked"
 
 # wg-psk.sh changes one peer, live and in the file; the key shows up in no output.
-mac_pub="$(grep -A2 "^# mac (" /etc/wireguard/wg0.conf | sed -n "s/^PublicKey = //p")"
+mac_pub="$(grep -A2 "^# mac (" /etc/wireguard/wg0.conf | sed -n "s/^PublicKey = //p" || true)"
+[ -n "$mac_pub" ] || fail "mac peer not found in wg0.conf"
 new_psk="$(wg genpsk)"
 held
 printf %s "$new_psk" | bash /kit/wg-psk.sh 10.77.0.2 >/tmp/out 2>&1 || { cat /tmp/out; fail "wg-psk.sh set"; }

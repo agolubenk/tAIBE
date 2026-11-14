@@ -86,7 +86,7 @@ admins="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -Atc \
 log "seed: one admin after two runs"
 
 "${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1
-again="$("${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1)"
+again="$("${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1)" || fail "second products seed failed: $again"
 printf '%s\n' "$again"
 [[ "$again" == "products: +0 "*"cards: +0 "*"links: +0 "* ]] || fail "second products seed changed something: $again"
 log "seed: products and links added once, kept on the second run"
@@ -97,7 +97,7 @@ eval "$(grep -E '^(MIRROR_SLUG|OWNED_SQL|PRODUCT_SQL)=' "$vps/mirror-setup.sh")"
 if [ -z "${PRODUCT_SQL:-}" ] || [ -z "${OWNED_SQL:-}" ]; then fail "lookup SQL not found in mirror-setup.sh"; fi
 product="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -At -F ' | ' -c "$PRODUCT_SQL")"
 [[ "$product" =~ ^[a-z0-9]+\ \|\ HR\ Helper\ /\ Lavaeon$ ]] || fail "mirror-setup product lookup returned: $product"
-owned="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -At -F ' | ' -c "$OWNED_SQL" | grep -c .)"
+owned="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -At -F ' | ' -c "$OWNED_SQL" | grep -c . || true)"
 [ "$owned" = 3 ] || fail "admin owns $owned workspaces, expected the 3 products"
 log "mirror-setup lookup: HR Helper product, admin owns 3 products"
 
@@ -134,7 +134,7 @@ log "backup: $(wc -c <"$root/backups/latest.dump" | tr -d ' ') bytes"
 restored="$(sh "$vps/mac/restore-check.sh" "$root/backups/latest.dump")" || fail "restore-check"
 printf '%s\n' "$restored"
 printf '%s\n' "$restored" | grep -qx "migrations $journal" || fail "restored dump lacks $journal migrations"
-cards="$(grep -c -E '"key": "[A-Z]{2,5}-[0-9]{3}"' "$vps/seed/products.json")"
+cards="$(grep -c -E '"key": "[A-Z]{2,5}-[0-9]{3}"' "$vps/seed/products.json" || true)"
 for row in "users 1" "workspaces 3" "tasks $cards"; do
   printf '%s\n' "$restored" | grep -qx "$row" || fail "restored dump lacks $row"
 done
