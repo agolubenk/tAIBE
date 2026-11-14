@@ -98,7 +98,7 @@ describe("fetchLink", () => {
     const baseFetch = vi.fn<Fetch>(async () => page("secret"));
 
     await expect(fetchLink(new URL(url), { baseFetch })).rejects.toEqual(
-      refused(422, "LINK_PRIVATE_DESTINATION"),
+      refused(422, "LINK_UNREACHABLE"),
     );
     expect(baseFetch).not.toHaveBeenCalled();
   });
@@ -109,7 +109,7 @@ describe("fetchLink", () => {
     );
 
     await expect(fetchLink(PAGE, { baseFetch })).rejects.toEqual(
-      refused(422, "LINK_PRIVATE_DESTINATION"),
+      refused(422, "LINK_UNREACHABLE"),
     );
     expect(baseFetch).toHaveBeenCalledTimes(1);
   });
@@ -120,7 +120,7 @@ describe("fetchLink", () => {
     });
 
     await expect(fetchLink(PAGE, { baseFetch })).rejects.toEqual(
-      refused(422, "LINK_PRIVATE_DESTINATION"),
+      refused(422, "LINK_UNREACHABLE"),
     );
   });
 
@@ -130,7 +130,7 @@ describe("fetchLink", () => {
 
     await expect(
       fetchLink(new URL("https://10.0.0.5/"), { baseFetch }),
-    ).rejects.toEqual(refused(422, "LINK_PRIVATE_DESTINATION"));
+    ).rejects.toEqual(refused(422, "LINK_UNREACHABLE"));
     expect(baseFetch).not.toHaveBeenCalled();
   });
 
@@ -216,5 +216,89 @@ describe("fetchLink", () => {
       fetchLink(new URL("https://nowhere.example.com/"), { baseFetch: down }),
     ).rejects.toEqual(refused(422, "LINK_UNREACHABLE"));
     expect(down).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a private address and an unknown name alike (TB-132)", async () => {
+    const baseFetch = vi.fn<Fetch>(async () => page("secret"));
+    const answer = async (url: string) => {
+      const error = await fetchLink(new URL(url), { baseFetch }).catch(
+        (e: unknown) => e,
+      );
+      const { status, code, message } = error as {
+        status: number;
+        code: string;
+        message: string;
+      };
+      return { status, code, message };
+    };
+
+    const known = await answer("https://intranet.example.com/");
+    const unknown = await answer("https://nowhere.example.com/");
+
+    expect(known).toEqual(unknown);
+    expect(known).toEqual({
+      status: 422,
+      code: "LINK_UNREACHABLE",
+      message: "The page could not be reached.",
+    });
+    expect(baseFetch).not.toHaveBeenCalled();
+
+    const viaRedirect = vi.fn<Fetch>(async () =>
+      redirect("https://intranet.example.com/admin"),
+    );
+    await expect(fetchLink(PAGE, { baseFetch: viaRedirect })).rejects.toEqual(
+      expect.objectContaining(unknown),
+    );
+  });
+
+  it("reads the charset from <meta> when the header has none (TB-132)", async () => {
+    const cp1251 = [0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]; // «Привет»
+    const html = (head: string) =>
+      new Uint8Array([
+        ...new TextEncoder().encode(`<html><head>${head}</head><body>`),
+        ...cp1251,
+      ]);
+    const fetched = async (body: Uint8Array<ArrayBuffer>, type = "text/html") =>
+      (
+        await fetchLink(PAGE, {
+          baseFetch: vi.fn<Fetch>(async () =>
+            page(body, { "content-type": type }),
+          ),
+        })
+      ).body;
+
+    expect(await fetched(html('<meta charset="windows-1251">'))).toContain(
+      "Привет",
+    );
+    expect(
+      await fetched(
+        html(
+          '<meta http-equiv="Content-Type" content="text/html; charset=windows-1251">',
+        ),
+      ),
+    ).toContain("Привет");
+    // The header wins over <meta>.
+    expect(
+      await fetched(
+        html('<meta charset="utf-8">'),
+        "text/html; charset=windows-1251",
+      ),
+    ).toContain("Привет");
+    // <meta> past the prescan window and in plain text is not read.
+    const late = html(
+      `<!--${"x".repeat(1100)}--><meta charset="windows-1251">`,
+    );
+    expect(await fetched(late)).not.toContain("Привет");
+    expect(
+      await fetched(html('<meta charset="windows-1251">'), "text/plain"),
+    ).not.toContain("Привет");
+    // A byte-order mark wins over <meta>.
+    const bom = new Uint8Array([
+      0xef,
+      0xbb,
+      0xbf,
+      ...new TextEncoder().encode('<meta charset="windows-1251">Привет'),
+    ]);
+    expect(await fetched(bom)).toContain("Привет");
   });
 });
