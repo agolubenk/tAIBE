@@ -194,6 +194,41 @@ describe("owner queue list (TB-156)", () => {
     expect(page.docs[0]?.updatedAt).toBe(19);
   });
 
+  it("takes the product from the item id: d-taibe-… comes as hr-helper from the console", async () => {
+    const mixed = [
+      doc("d-taibe-x", 30, { kind: "decision", title: "tAIBE" }, "hr-helper"),
+      doc("s-restart-4-taibe-1211", 20, { kind: "deploy" }, "hr-helper"),
+      doc("d-hr-focus-1311", 10, { kind: "decision" }, "hr-helper"),
+      doc("d-1", 5, { kind: "decision" }, "hr-helper"),
+    ];
+    const { client } = fakeConsole({
+      items: mixed,
+      checks: [],
+      openIds: mixed.map((entry) => entry.id),
+    });
+    const cache = new OwnerQueueListCache();
+    const query = {
+      collection: "items" as const,
+      state: "all" as const,
+      page: 1,
+      knownProducts: ["hr-helper", "taibe"],
+    };
+    const taibe = await listOwnerQueue(client, cache, {
+      ...query,
+      product: "taibe",
+    });
+    expect(taibe.docs.map((row) => [row.id, row.product])).toEqual([
+      ["d-taibe-x", "taibe"],
+      ["s-restart-4-taibe-1211", "taibe"],
+    ]);
+    expect(taibe.products).toEqual(["hr-helper", "taibe"]);
+    const hr = await listOwnerQueue(client, cache, {
+      ...query,
+      product: "hr-helper",
+    });
+    expect(hr.docs.map((row) => row.id)).toEqual(["d-hr-focus-1311", "d-1"]);
+  });
+
   it("revalidates each list with its ETag and reuses the body on 304", async () => {
     const { client, calls } = fakeConsole({ items, checks, openIds });
     const cache = new OwnerQueueListCache();

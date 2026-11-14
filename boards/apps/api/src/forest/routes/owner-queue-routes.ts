@@ -71,7 +71,18 @@ function queueOrOff() {
       message: "owner_queue_off: the owner queue is not configured",
     });
   }
-  return { client: httpQueueClient(config), queueUrl: `${config.url}/queue` };
+  return {
+    client: httpQueueClient(config),
+    queueUrl: `${config.url}/queue`,
+    // Queue and plan products of the mapped workspaces: the ones an item id
+    // may name (d-taibe-… → taibe).
+    knownProducts: [
+      ...new Set([
+        ...config.products.values(),
+        ...config.plan.products.values(),
+      ]),
+    ],
+  };
 }
 
 // A console failure is a 502 with the request and status only: no token, no body.
@@ -94,13 +105,14 @@ export const ownerQueueRoutes = apiRouter<
     assertOwnerQueueReader(resolveForestActor(c));
     const { collection } = c.req.valid("param");
     const { state, product, page } = c.req.valid("query");
-    const { client, queueUrl } = queueOrOff();
+    const { client, queueUrl, knownProducts } = queueOrOff();
     const list = await fromConsole(() =>
       listOwnerQueue(client, cache, {
         collection,
         state: state ?? "open",
         product,
         page: page ?? 1,
+        knownProducts,
       }),
     );
     return c.json({ ...list, queueUrl }, 200);

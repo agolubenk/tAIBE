@@ -1,6 +1,7 @@
 import { HTTPException } from "hono/http-exception";
 import type { ForestActor } from "../actor";
 import { ForestError } from "../forest-error";
+import { productOfItemId } from "./item-product";
 import type {
   QueueClient,
   QueueDoc,
@@ -101,6 +102,7 @@ export function toOwnerQueueRow(
   doc: QueueDoc,
   openIds: Set<string> | null,
   answer: QueueDoc | null,
+  product: string | null,
 ) {
   const data = doc.data;
   const inbox =
@@ -115,7 +117,7 @@ export function toOwnerQueueRow(
     : null;
   return {
     id: doc.id,
-    product: text(doc.product),
+    product,
     kind: text(data.kind),
     title: text(data.title) ?? text(inbox?.text)?.slice(0, 300) ?? doc.id,
     added: text(data.added),
@@ -135,12 +137,15 @@ export type OwnerQueueListQuery = {
   state: OwnerQueueState;
   product?: string;
   page: number;
+  // The board's products (OQ_WORKSPACE_PRODUCTS and OQ_PLAN_PRODUCTS): the
+  // ones an item id may name (productOfItemId).
+  knownProducts?: readonly string[];
 };
 
 export async function listOwnerQueue(
   client: QueueClient,
   cache: OwnerQueueListCache,
-  { collection, state, product, page }: OwnerQueueListQuery,
+  { collection, state, product, page, knownProducts = [] }: OwnerQueueListQuery,
 ) {
   const items = collection === "items";
   // Three lists at most, each one console call that answers 304 while
@@ -155,11 +160,23 @@ export async function listOwnerQueue(
   const answers = checks
     ? new Map(checks.docs.map((doc) => [doc.id, doc]))
     : null;
+  // The product by the item id first (d-taibe-… comes as hr-helper from the
+  // console), else the console's field.
+  const named = [
+    ...knownProducts,
+    ...all.docs.flatMap((doc) => (doc.product ? [doc.product] : [])),
+  ];
+  const productOf = new Map(
+    all.docs.map((doc) => [
+      doc.id,
+      productOfItemId(doc.id, named) ?? text(doc.product),
+    ]),
+  );
   const products = [
-    ...new Set(all.docs.flatMap((doc) => (doc.product ? [doc.product] : []))),
+    ...new Set([...productOf.values()].filter((one) => one !== null)),
   ].sort();
   let docs = product
-    ? all.docs.filter((doc) => doc.product === product)
+    ? all.docs.filter((doc) => productOf.get(doc.id) === product)
     : all.docs;
   if (openIds && state !== "all") {
     const wantOpen = state === "open";
@@ -175,6 +192,7 @@ export async function listOwnerQueue(
           doc,
           openIds,
           answers ? (answers.get(doc.id) ?? null) : doc,
+          productOf.get(doc.id) ?? null,
         ),
       ),
     page,
