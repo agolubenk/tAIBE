@@ -45,6 +45,15 @@ def fake_gh(*answers, calls=None):
     return call
 
 
+def limited_gh(prs):
+    """A fake `gh pr list` that gives only the newest `--limit` rows, as GitHub does."""
+    def call(repo, *args, check=True):
+        if args[:2] != ('pr', 'list'):
+            raise AssertionError('only `gh pr list` is expected, got %s' % (args,))
+        return json.dumps(prs[:int(args[args.index('--limit') + 1])])
+    return call
+
+
 class OpenDataCasesTest(unittest.TestCase):
     def test_only_cases_of_open_evolve_data_prs(self):
         answer = pr_list((128, 'evolve/data-2026-11-12', ['eval/evolve/cases/card-infra.jsonl']),
@@ -72,6 +81,15 @@ class OpenDataCasesTest(unittest.TestCase):
         with mock.patch.object(g, 'gh', fake_gh(RuntimeError('gh pr list: HTTP 502'), answer, calls=calls)):
             found = g.open_data_cases('/repo', 'board-agents', sleep=pauses.append)
         self.assertEqual((found, len(calls), len(pauses)), ({'card-infra.jsonl': 124}, 2, 1))
+
+    def test_many_open_prs_do_not_hide_the_oldest_data_pr(self):
+        """SE-107: 14.11 — 109 open PRs, the data PR #141 the oldest. A list of 50 was full and closed cases every night."""
+        rows = [{'number': n, 'headRefName': 'fix/x-%d' % n, 'files': []} for n in range(300, 192, -1)]
+        rows.append({'number': 141, 'headRefName': 'evolve/data-2026-11-13',
+                     'files': [{'path': 'eval/evolve/cases/card-infra.jsonl'}]})
+        with mock.patch.object(g, 'gh', limited_gh(rows)):
+            found = g.open_data_cases('/repo', 'board-agents', sleep=lambda s: None)
+        self.assertEqual(found, {'card-infra.jsonl': 141})
 
     def test_a_full_list_may_hide_a_pr(self):
         full = pr_list(*[(n, 'fix/x-%d' % n, []) for n in range(g.OPEN_PRS_LIMIT)])
