@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import db from "../../database";
 import { notebookChunkTable } from "../../database/notebook-schema";
 import { decodeEmbedding, dot, normalize } from "../embed/embedding-codec";
@@ -10,6 +10,9 @@ import { decodeEmbedding, dot, normalize } from "../embed/embedding-codec";
 // drops the least recently used workspaces past its total.
 export const VECTOR_BYTES_MAX = 32 * 1024 * 1024;
 export const CACHE_BYTES_MAX = 64 * 1024 * 1024;
+
+// TB-76: tests shrink the budget to overflow it with a few rows.
+let vectorBudgetBytes = VECTOR_BYTES_MAX;
 
 export type VectorIndex = {
   stamp: string;
@@ -50,14 +53,33 @@ export async function loadVectorIndex(
     return cached;
   }
 
+  // TB-76: past the budget the newest chunks stay in and /status shows how
+  // many; a bare LIMIT kept whichever rows PostgreSQL returned first. Only
+  // the narrow (id, embedded_at) pairs are sorted, so the vectors themselves
+  // never go through a sort.
+  const rowsMax = vectorRowsMax(state.width);
+  const newest = db
+    .select({ id: notebookChunkTable.id })
+    .from(notebookChunkTable)
+    .where(scope)
+    .orderBy(desc(notebookChunkTable.embeddedAt), desc(notebookChunkTable.id))
+    .limit(rowsMax);
   const rows = await db
     .select({
       id: notebookChunkTable.id,
       embedding: notebookChunkTable.embedding,
     })
     .from(notebookChunkTable)
-    .where(scope)
-    .limit(vectorRowsMax(state.width));
+    .where(
+      state.count > rowsMax
+        ? and(scope, inArray(notebookChunkTable.id, newest))
+        : scope,
+    );
+  if (state.count > rowsMax) {
+    console.warn(
+      `Notebook vector index of workspace ${workspaceId} holds the newest ${rowsMax} of ${state.count} chunks; older ones are found by words only`,
+    );
+  }
   const index = buildVectorIndex(stamp, rows);
   if (!index) return null;
   cache.delete(key);
@@ -67,8 +89,23 @@ export async function loadVectorIndex(
 }
 
 // The widest row decides, so a half-finished model switch cannot overrun.
-export function vectorRowsMax(widthBytes: number): number {
-  return Math.max(1, Math.floor(VECTOR_BYTES_MAX / Math.max(4, widthBytes)));
+export function vectorRowsMax(
+  widthBytes: number,
+  budgetBytes = vectorBudgetBytes,
+): number {
+  return Math.max(1, Math.floor(budgetBytes / Math.max(4, widthBytes)));
+}
+
+// How many embedded chunks meaning-based search holds (/status, TB-76). Rows
+// of another width in a half-finished model switch are left out later, so in
+// that state this is an upper bound.
+export function indexedChunks(embedded: number, widthBytes: number): number {
+  return embedded > 0 ? Math.min(embedded, vectorRowsMax(widthBytes)) : 0;
+}
+
+export function setVectorBudgetForTests(bytes: number | null) {
+  vectorBudgetBytes = bytes ?? VECTOR_BYTES_MAX;
+  cache.clear();
 }
 
 // Oldest first (Map keeps insertion order); the newest index always stays.

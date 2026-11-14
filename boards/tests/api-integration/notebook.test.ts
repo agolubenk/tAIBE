@@ -4,7 +4,11 @@ import db, { schema } from "../../apps/api/src/database";
 import { encodeEmbedding } from "../../apps/api/src/notebook/embed/embedding-codec";
 import { resetEmbedQueueForTests } from "../../apps/api/src/notebook/embed/embed-queue";
 import { SEARCH_BODY_BYTES } from "../../apps/api/src/notebook/routes/schema";
-import { clearVectorCacheForTests } from "../../apps/api/src/notebook/search/vector-index";
+import {
+  clearVectorCacheForTests,
+  setVectorBudgetForTests,
+} from "../../apps/api/src/notebook/search/vector-index";
+import { eq } from "drizzle-orm";
 import { createApp } from "../../apps/api/src/index";
 import { mockAuthenticatedSession } from "./helpers/auth";
 import { resetTestDatabase } from "./helpers/database";
@@ -47,7 +51,10 @@ describe("API integration: notebook", () => {
     await resetTestDatabase();
     clearVectorCacheForTests();
   });
-  afterEach(resetEmbedQueueForTests);
+  afterEach(() => {
+    resetEmbedQueueForTests();
+    setVectorBudgetForTests(null);
+  });
 
   it("stores a source once, chunks it by headings and lists its sha", async () => {
     const nb = await notebookFixture();
@@ -176,6 +183,69 @@ describe("API integration: notebook", () => {
       heading: "Лес › Рубка",
       matchedBy: ["vector"],
     });
+  });
+
+  it("keeps the newest vectors past the index budget and says how many (TB-76)", async () => {
+    const nb = await notebookFixture();
+    await nb.owner("PUT", "/sources", {
+      kind: "repo-doc",
+      ref: "docs/forest.md",
+      title: "Лес",
+      text: `${LEASE_DOC}\n\n## Семена\n\nСемена падают на поляну.`,
+    });
+    const chunks: Item[] = (await nb.worker("GET", "/embed/work?wait=0")).body
+      .items;
+    expect(chunks).toHaveLength(3);
+    await nb.worker("POST", "/embed/results", {
+      model: "nomic-embed-text",
+      items: chunks.map((item) => ({
+        kind: item.kind,
+        id: item.id,
+        embedding: vectorFor(item.text),
+      })),
+    });
+    // Room for two 2-dim vectors: one of the three stays out.
+    setVectorBudgetForTests(2 * 2 * 4);
+    const felling = chunks.find((item) => item.text.includes("Рубка"));
+    const embeddedAt = (at: number) =>
+      db
+        .update(schema.notebookChunkTable)
+        .set({ embeddedAt: new Date(at) })
+        .where(eq(schema.notebookChunkTable.id, felling?.id ?? ""));
+
+    const byMeaning = async () => {
+      const search = nb.owner("POST", "/search", {
+        query: "чем заканчивается история",
+      });
+      const [query] = (await nb.worker("GET", "/embed/work?wait=5")).body
+        .items as Item[];
+      await nb.worker("POST", "/embed/results", {
+        model: "nomic-embed-text",
+        items: [
+          {
+            kind: "query",
+            id: query?.id,
+            embedding: encodeEmbedding([0.1, 1]).toString("base64"),
+          },
+        ],
+      });
+      const { body } = await search;
+      return (body.results as { heading: string; matchedBy: string[] }[])
+        .filter((hit) => hit.matchedBy.includes("vector"))
+        .map((hit) => hit.heading);
+    };
+
+    // The only chunk close to the query is the oldest: it is out of the index.
+    await embeddedAt(Date.now() - 3_600_000);
+    expect((await nb.owner("GET", "/status")).body).toMatchObject({
+      embedded: 3,
+      indexed: 2,
+    });
+    expect(await byMeaning()).not.toContain("Лес › Рубка");
+
+    // Re-embedded, it is the newest and comes back in.
+    await embeddedAt(Date.now() + 3_600_000);
+    expect((await byMeaning())[0]).toBe("Лес › Рубка");
   });
 
   it("refuses vectors from another model and skips broken ones", async () => {

@@ -196,6 +196,10 @@ export const notebookStatusSchema = z
     sources: z.number().int(),
     chunks: z.number().int(),
     embedded: z.number().int(),
+    indexed: z.number().int().openapi({
+      description:
+        "Embedded chunks that meaning-based search holds, newest first up to its memory budget. Below embedded, the older chunks are found by words only.",
+    }),
     llm: z.object({
       configured: z.boolean().openapi({
         description: "False: answers carry sources without written text.",
