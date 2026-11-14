@@ -18,10 +18,12 @@ const INBOX = (id, product) => ({
   data: { kind: 'inbox', title: `Задача ${id}`, added: '2026-11-13', inbox: { type: 'task', urgency: 'now', receivedAt: new Date().toISOString() } },
 });
 
-async function consoleFake() {
-  const seen = { auth: [], beats: [] };
+// delta — консоль с /changes (OPS-50): тогда полный /db/items отвечает 500, чтобы тест видел, что автопередача на дельте.
+async function consoleFake({ delta = false } = {}) {
+  const seen = { auth: [], beats: [], paths: [] };
   const srv = createServer((req, res) => {
     seen.auth.push(req.headers.authorization);
+    seen.paths.push(req.url);
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
@@ -30,6 +32,14 @@ async function consoleFake() {
         seen.beats.push(JSON.parse(body));
         return res.end('{"alive":true,"sessions":[],"relayed":{},"products":{}}');
       }
+      if (delta && req.url.startsWith('/api/oq/v1/changes')) {
+        const items = [INBOX('i-hr'), INBOX('i-hr2', 'hr-helper'), INBOX('i-tb', 'taibe')];
+        const none = { docs: [], removed: [] };
+        return res.end(JSON.stringify(req.url.includes('since=')
+          ? { cursor: 'b1.2', changes: { checks: none, items: none, work: none } }
+          : { full: true, cursor: 'b1.1', collections: { checks: { docs: [] }, items: { docs: items }, work: { docs: [] } } }));
+      }
+      if (delta && req.url.startsWith('/api/oq/v1/db/')) { res.statusCode = 500; return res.end('{"error":"полный список в тесте дельты"}'); }
       if (req.url.startsWith('/api/oq/v1/db/items')) {
         return res.end(JSON.stringify({ docs: [INBOX('i-hr'), INBOX('i-hr2', 'hr-helper'), INBOX('i-tb', 'taibe')] }));
       }
@@ -162,4 +172,17 @@ test('--relay --product taibe: будит сессию только входящ
   for (let i = 0; i < 50 && !fake.seen.beats.length; i++) await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(fake.seen.beats[0], { session: 'taibe-coord-1', relayed: ['i-tb'], product: 'taibe' });
   assert.ok(fake.seen.auth.every((a) => a === 'Bearer tb-token'));
+});
+
+test('--relay на дельте /changes (карточка HR Q-38): входящие передаются, полный /db/* не читается', { timeout: 15_000 }, async (t) => {
+  const fake = await consoleFake({ delta: true });
+  t.after(fake.close);
+  const child = spawn(process.execPath, [SERVER, '--relay', 'hr-coord-1'], { env: env(fake.port, {}), stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => child.kill());
+  const lines = createInterface({ input: child.stdout });
+  const got = [];
+  await new Promise((resolve) => { lines.on('line', (l) => { got.push(l); if (got.length === 2) resolve(); }); });
+  assert.deepEqual(got.map((l) => l.split(' ')[2]).sort(), ['i-hr', 'i-hr2']);
+  assert.ok(fake.seen.paths.some((p) => p.startsWith('/api/oq/v1/changes?col=checks,items,work')));
+  assert.ok(!fake.seen.paths.some((p) => p.startsWith('/api/oq/v1/db/')), 'полный список не запрошен');
 });
