@@ -1,7 +1,10 @@
 import { KeyRoundIcon, Trash2Icon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ApiKeyItem } from "@/components/settings/api-keys/api-key-item";
-import { readApiKeyWorkspace } from "@/components/settings/api-keys/api-key-workspace";
+import {
+  isReadOnlyApiKey,
+  readApiKeyWorkspace,
+} from "@/components/settings/api-keys/api-key-workspace";
 import { getApiKeyExpiry } from "@/components/settings/api-keys/get-api-key-expiry";
 import { RowActionsMenu } from "@/components/settings/row-actions-menu";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -21,6 +24,7 @@ export function ApiKeyRow({ apiKey, onDelete }: ApiKeyRowProps) {
   const expiry = getApiKeyExpiry(apiKey.expiresAt);
   const expired = expiry.status === "expired";
   const workspaceId = readApiKeyWorkspace(apiKey.metadata);
+  const readOnly = isReadOnlyApiKey(apiKey.metadata);
   const workspaceName = workspaceId
     ? workspaces?.find((workspace) => workspace.id === workspaceId)?.name
     : undefined;
@@ -47,14 +51,23 @@ export function ApiKeyRow({ apiKey, onDelete }: ApiKeyRowProps) {
           <StatusBadge tone="destructive">
             {t("settings:apiKey.row.expiredBadge")}
           </StatusBadge>
-        ) : workspaceId !== null ? (
-          <StatusBadge tone="neutral">
-            {workspaceName
-              ? t("settings:apiKey.row.workspaceBadge", {
-                  workspace: workspaceName,
-                })
-              : t("settings:apiKey.row.workspaceUnknown")}
-          </StatusBadge>
+        ) : workspaceId !== null || readOnly ? (
+          <>
+            {workspaceId !== null ? (
+              <StatusBadge tone="neutral">
+                {workspaceName
+                  ? t("settings:apiKey.row.workspaceBadge", {
+                      workspace: workspaceName,
+                    })
+                  : t("settings:apiKey.row.workspaceUnknown")}
+              </StatusBadge>
+            ) : null}
+            {readOnly ? (
+              <StatusBadge tone="neutral">
+                {t("settings:apiKey.row.readOnlyBadge")}
+              </StatusBadge>
+            ) : null}
+          </>
         ) : null
       }
       description={

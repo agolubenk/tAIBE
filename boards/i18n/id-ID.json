@@ -804,6 +804,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Hanya baca",
+				"readOnlyDescription": "Kunci ini bisa membaca, tetapi tidak bisa mengubah apa pun.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -814,7 +816,8 @@
 				"expires": "Kedaluwarsa {{date}}",
 				"neverExpires": "Tidak pernah kedaluwarsa",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Hanya baca"
 			}
 		},
 		"workspaceGeneral": {

@@ -804,6 +804,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "只读",
+				"readOnlyDescription": "此密钥只能读取，不能更改任何内容。",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -814,7 +816,8 @@
 				"expires": "{{date}} 到期",
 				"neverExpires": "永不过期",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "只读"
 			}
 		},
 		"workspaceGeneral": {

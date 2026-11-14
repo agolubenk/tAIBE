@@ -812,6 +812,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Salt okunur",
+				"readOnlyDescription": "Anahtar okuyabilir ama hiçbir şeyi değiştiremez.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -822,7 +824,8 @@
 				"expires": "{{date}} tarihinde sona erer",
 				"neverExpires": "Süresi dolmaz",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Salt okunur"
 			}
 		},
 		"workspaceGeneral": {

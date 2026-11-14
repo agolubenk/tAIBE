@@ -828,7 +828,9 @@
 				},
 				"workspaceLabel": "Продукт",
 				"workspaceAll": "Все мои продукты",
-				"workspaceDescription": "Ключ для одного продукта не видит другие продукты, уведомления и настройки аккаунта."
+				"workspaceDescription": "Ключ для одного продукта не видит другие продукты, уведомления и настройки аккаунта.",
+				"readOnlyLabel": "Только чтение",
+				"readOnlyDescription": "Ключ может читать, но ничего не меняет."
 			},
 			"row": {
 				"actions": "Действия для {{name}}",
@@ -838,7 +840,8 @@
 				"expires": "Истекает {{date}}",
 				"neverExpires": "Бессрочный",
 				"workspaceBadge": "Только {{workspace}}",
-				"workspaceUnknown": "Один продукт"
+				"workspaceUnknown": "Один продукт",
+				"readOnlyBadge": "Только чтение"
 			}
 		},
 		"workspaceGeneral": {

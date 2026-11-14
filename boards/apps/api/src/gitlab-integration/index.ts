@@ -19,10 +19,8 @@ import {
 } from "../plugins/gitlab/config";
 import { tokenTypeOf } from "../plugins/gitlab/utils/gitlab-api";
 import { handleGitlabWebhookRequest } from "../plugins/gitlab/webhook-handler";
-import {
-  hasWorkspacePermission,
-  requireWorkspacePermission,
-} from "../utils/require-workspace-permission";
+import { mayReadSecrets } from "../utils/may-read-secrets";
+import { requireWorkspacePermission } from "../utils/require-workspace-permission";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createGitlabIntegration from "./controllers/create-gitlab-integration";
 import deleteGitlabIntegration from "./controllers/delete-gitlab-integration";
@@ -110,7 +108,7 @@ const getIntegrationRoute = createRoute({
   tags: ["GitLab"],
   summary: "Get GitLab integration",
   description:
-    "Get the GitLab integration for a project, or null when none is configured. The masked access token and the webhook secret are included only for callers with workspace:manage_settings.",
+    "Get the GitLab integration for a project, or null when none is configured. The masked access token and the webhook secret are included only for callers with workspace:manage_settings, and never for a read-only API key.",
   middleware: [workspaceAccess.fromProject("projectId")] as const,
   request: { params: projectIdParam },
   responses: {
@@ -245,9 +243,7 @@ const gitlabIntegration = apiRouter<BaseVariables & { workspaceId: string }>()
   })
   .openapi(getIntegrationRoute, async (c) => {
     const { projectId } = c.req.valid("param");
-    const includeSecrets = await hasWorkspacePermission(c, {
-      workspace: ["manage_settings"],
-    });
+    const includeSecrets = await mayReadSecrets(c);
     const integration = await getGitlabIntegration(projectId, includeSecrets);
     if (!integration) {
       return c.json(null, 200);

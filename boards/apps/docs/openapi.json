@@ -21423,7 +21423,7 @@
           "Gitea"
         ],
         "summary": "Get Gitea integration",
-        "description": "Get the Gitea integration for a project, or null when none is configured. The webhook secret is included only for callers with workspace:manage_settings.",
+        "description": "Get the Gitea integration for a project, or null when none is configured. The webhook secret is included only for callers with workspace:manage_settings, and never for a read-only API key.",
         "parameters": [
           {
             "schema": {
@@ -22051,7 +22051,7 @@
           "GitLab"
         ],
         "summary": "Get GitLab integration",
-        "description": "Get the GitLab integration for a project, or null when none is configured. The masked access token and the webhook secret are included only for callers with workspace:manage_settings.",
+        "description": "Get the GitLab integration for a project, or null when none is configured. The masked access token and the webhook secret are included only for callers with workspace:manage_settings, and never for a read-only API key.",
         "parameters": [
           {
             "schema": {

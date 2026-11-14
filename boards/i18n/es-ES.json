@@ -695,6 +695,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Solo lectura",
+				"readOnlyDescription": "La clave puede leer, pero no puede cambiar nada.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -705,7 +707,8 @@
 				"expires": "Caduca el {{date}}",
 				"neverExpires": "No caduca nunca",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Solo lectura"
 			}
 		},
 		"workspaceGeneral": {
