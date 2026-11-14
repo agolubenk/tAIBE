@@ -177,5 +177,14 @@
     "pattern": "\"timeout_ms\":\\s{0,3}\"?(?:330000[1-9]|33000[1-9]\\d|3300[1-9]\\d{2}|330[1-9]\\d{3}|33[1-9]\\d{4}|3[4-9]\\d{5}|[4-9]\\d{6}|[1-9]\\d{7})|\"persistent\":\\s{0,3}true|\"delaySeconds\":\\s{0,3}\"?(?:330[1-9]|33[1-9]\\d|3[4-9]\\d{2}|[4-9]\\d{3}|[1-9]\\d{4})",
     "lesson": "Ожидание дольше 55 минут: кэш живёт час, и ход после паузы перепишет всё окно по цене 2× входа (замер 07.11: паузы больше часа — 4,1 % денег). Норма d-f63b-economy-0711: Monitor — timeout_ms не больше 3300000 и без persistent, ScheduleWakeup — не больше 3300 с; по таймауту — один голый перевзвод, без oq_list, work_state и текста.",
     "memory": ""
+  },
+  {
+    "id": "gh-list-limit",
+    "tool": "Bash",
+    "field": "command",
+    "pattern": "{CMD}gh\\s+(?:-R\\s+\\S{1,200}\\s+|--repo[ =]\\S{1,200}\\s+)?(?:pr|issue|run)\\s+list\\b",
+    "unless": "gh[ \\t][^\\n;&|]{0,400}?[ \\t](?:--limit|--head|--search|--author|--label|--branch|--workflow|--commit|-[LHSAlbwc])(?=[ \\t=\\d]|$)",
+    "lesson": "gh pr list and gh issue list give 30 rows by default (gh run list: 20) and do not tell you that the list is cut. On 14.11, 143 PRs were open, and in 3 days 110 full-list calls in 45 sessions saw only 30 of them. For a full list, add --limit 500. A narrow filter (--head, --search, --author, --label) is OK as it is.",
+    "memory": ""
   }
 ]
