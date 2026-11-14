@@ -838,6 +838,50 @@ class ProductsTest(unittest.TestCase):
         self.assertEqual(sorted(r["kind"] for r in self.records("taibe")), ["owner.inbox", "owner.stop"])
         self.assertEqual(self.records(), [], "входящее tAIBE не будит coord HR")
 
+    def test_queue_match_is_a_regex(self):
+        """SE-109: `queue.match` — регулярное выражение. `m-taibe310-1411` (метка без дефиса после продукта) — tAIBE,
+        а не координатору HR; HR-пункты и чужие слова с `taibe` внутри — продукту по умолчанию."""
+        self.taibe["queue"] = dict(CFG["queue"], match=r"-taibe(-|\d|$)", source_roles=[["taibe-310", "release"]])
+        ctx = self.peered()
+        for item_id in ("m-taibe310-1411", "d-taibe-x", "s-restart-4-taibe-1211", "m-taibe-79", "s-restart-taibe"):
+            self.assertIs(ctx.for_item(item_id, "hr-helper"), ctx.peers["taibe"], item_id)
+        self.assertIs(ctx.for_item("taibe-m-93", "taibe"), ctx.peers["taibe"], "начало id — полем product")
+        for item_id in ("d-hr-x-1411", "d-1", "m-465", "d-taibeta-1", "taibe-m-93"):
+            self.assertIs(ctx.for_item(item_id, "hr-helper"), ctx, item_id)
+        items = [{"id": "m-taibe310-1411", "product": "hr-helper", "data": {"kind": "merge", "source": "taibe-310"}}]
+        checks = [{"id": "m-taibe310-1411", "data": {"done": True, "at": "2026-11-14T18:00:00Z"}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            sources.poll_queue(ctx)
+        self.assertEqual([(r["kind"], r["to"]) for r in self.records("taibe")], [("owner.answer", ["release"])])
+        self.assertEqual([r for r in self.records() if r["kind"] == "owner.answer"], [])
+
+    def test_answer_in_another_journal_is_not_repeated(self):
+        """SE-109, линза boards: ответ, уже записанный в журнал HR по старому правилу, после смены `queue.match` в
+        журнал tAIBE не идёт; новый ответ на тот же пункт (другое `at`) — идёт."""
+        self.taibe["queue"] = dict(CFG["queue"], match=r"-taibe(-|\d|$)", source_roles=[["taibe-310", "release"]])
+        ctx = self.peered()
+        old_at, new_at = "2026-11-14T13:41:36.560Z", "2026-11-14T19:00:00Z"
+        ctx.journal.emit(f"oq:answer:m-taibe310-1411:{old_at}", "owner.answer", NERVOUS, ["coord"], "старое", "queue")
+        items = [{"id": "m-taibe310-1411", "product": "hr-helper", "data": {"kind": "merge", "source": "taibe-310"}}]
+        checks = [{"id": "m-taibe310-1411", "data": {"done": True, "at": old_at}}]
+        poll = lambda: sources.poll_queue(ctx)  # noqa: E731
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            poll()
+        self.assertEqual([r for r in self.records("taibe") if r["kind"] == "owner.answer"], [])
+        self.assertEqual(len([r for r in self.records() if r["kind"] == "owner.answer"]), 1, "в HR — только старое")
+        checks = [{"id": "m-taibe310-1411", "data": {"done": True, "at": new_at}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            poll()
+        self.assertEqual([r["key"] for r in self.records("taibe") if r["kind"] == "owner.answer"],
+                         [f"oq:answer:m-taibe310-1411:{new_at}"])
+
+    def test_broken_queue_match_falls_back_to_substring(self):
+        """SE-109: битое выражение (минуя проверку `products.py`) не роняет обход очереди — сравнение подстрокой."""
+        self.taibe["queue"] = dict(CFG["queue"], match="-taibe[")
+        ctx = self.peered()
+        self.assertIs(ctx.for_item("d-taibe[-1"), ctx.peers["taibe"])
+        self.assertIs(ctx.for_item("d-taibe-1"), ctx)
+
     def test_broken_instances_keeps_last_good_products(self):
         """Линза 1: сбой instances/ на проходе — событие release и продукты последней удачной загрузки."""
         self.peered()

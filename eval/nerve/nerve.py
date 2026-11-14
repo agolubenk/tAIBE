@@ -20,6 +20,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -54,6 +55,14 @@ def local_tz():
     return datetime.now().astimezone().tzinfo
 
 
+def _id_matches(pattern, item_id):
+    """`queue.match` (SE-109) — `re.search` по id пункта; битое выражение не роняет проход: тогда подстрока."""
+    try:
+        return re.search(pattern, item_id) is not None
+    except re.error:
+        return pattern in item_id
+
+
 class Ctx:
     def __init__(self, cfg, state_dir, deliver=True):
         self.cfg = cfg
@@ -74,16 +83,17 @@ class Ctx:
         return ok
 
     def for_item(self, item_id, product=None):
-        """R-6: продукт пункта очереди. Поле `product` документа с продуктом из peers — он. Иначе — `queue.match`
-        (id содержит `-taibe-`), даже если поле называет продукт по умолчанию (SE-88): консоль заполняет поле сама по
-        началу id (`products.ts` namespaceOf: `taibe-…` → taibe, иначе HR), поэтому `d-taibe-…` приходит с HR. Нет
-        совпадения — продукт по умолчанию."""
+        """R-6: продукт пункта очереди. Поле `product` документа с продуктом из peers — он. Иначе — `queue.match`,
+        даже если поле называет продукт по умолчанию (SE-88): консоль заполняет поле сама по началу id (`products.ts`
+        namespaceOf: `taibe-…` → taibe, иначе HR), поэтому `d-taibe-…` приходит с HR. `queue.match` — регулярное
+        выражение для `re.search` по id (SE-109: `-taibe(-|\\d|$)` ловит и `m-taibe310-1411`). `products.py`
+        проверяет его при загрузке, битое здесь сравнивается как подстрока. Нет совпадения — продукт по умолчанию."""
         peers = self.peers or {}
         if product in peers:
             return peers[product]
         for peer in peers.values():
             match = (peer.cfg.get("queue") or {}).get("match")
-            if match and match in str(item_id):
+            if match and _id_matches(match, str(item_id)):
                 return peer
         return self
 

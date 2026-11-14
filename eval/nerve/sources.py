@@ -335,10 +335,14 @@ def poll_queue(ctx):
             continue
         opt = next((o for o in it.get("options") or [] if o.get("id") == a.get("choice")), None)
         label = (opt or {}).get("label", "")[:60] or str(a.get("choice") or ("сделано" if a.get("done") else "—"))
-        # R-6: продукт пункта — по `queue.match` (id содержит `-taibe-`), не по папке сессии-автора; роль — его правилами.
+        # R-6: продукт пункта — по `queue.match` (регулярное выражение по id, SE-109), не по папке сессии-автора; роль —
+        # его правилами.
+        key = f"oq:answer:{c['id']}:{a['at']}"
+        if _delivered(ctx, key):
+            continue
         target = ctx.for_item(c["id"], product.get(c["id"]))
         role = route_source(str(it.get("source", "")), target.cfg["queue"]["source_roles"])
-        _emit_to(ctx, target, f"oq:answer:{c['id']}:{a['at']}", "owner.answer", NERVOUS, [role],
+        _emit_to(ctx, target, key, "owner.answer", NERVOUS, [role],
                  f"ответ владельца {c['id']}: {label}{' · есть заметка' if a.get('note') else ''}", "queue")
     for iid, it in items.items():
         if it.get("kind") != "inbox" or it.get("archived"):
@@ -356,6 +360,12 @@ def poll_queue(ctx):
                          f"входящее {iid}: стоп/откат от владельца — прочитать oq_get", "queue")
         _emit_to(ctx, own or ctx, f"oq:inbox:{iid}", "owner.inbox", NERVOUS if urgent else DIGEST, ["coord"],
                  f"входящее {iid} ({meta})", "queue")
+
+
+def _delivered(ctx, key):
+    """SE-109: ответ, уже записанный в журнал любого продукта, второй раз не идёт. Повтор ключа отсекает только свой
+    журнал, а смена правила маршрута (`queue.match`) перевела бы старые ответы в другой журнал."""
+    return key in ctx.journal.keys or any(key in peer.journal.keys for peer in (ctx.peers or {}).values())
 
 
 def _emit_to(ctx, target, *args):

@@ -194,6 +194,6 @@
         "plan"
       ]
     ],
-    "match": "-taibe-"
+    "match": "-taibe(-|\\d|$)"
   }
 }
