@@ -41,7 +41,10 @@ TB «t-boards» `mf6jpr5wftbgr3z93lvw807v`, SE «supertick-eval» `tl3j7yc2mc7ly
 - Work in `worktrees/<track>/<topic>`. Do not commit in the main checkout.
 - Next card: when your card goes to review or merges, run `python3 -I eval/tools/queue_focus.py --plan --product
   taibe`. Take the first item and its lease (`forest_acquire_lease`). If the lease is taken, take the next item.
-  After a merge, request the card's close in the same step.
+  After a merge, send the done line to role 2 in the same step:
+  `python3 -I eval/nerve/nerve.py emit plan --product taibe "done #<n> <KEY> — <what is done, max 200 chars>"`. This
+  message type is allowed in addition to TEAM-0 §10.3. Do not open a done PR and do not request the close: role 2
+  does both, once a day (SE-61, `docs/plans/DONE.md`).
 - Switch your lane only for an owner inbox item with `urgency: now`, an inbox alert (always), a production failure
   or an owner stop. Put any other signal (a Nerve digest, a finding, an idea, an inbox item with `urgency: queue`) as
   a card in the plan's backlog row and continue your card.
