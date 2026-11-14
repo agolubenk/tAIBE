@@ -20,8 +20,9 @@ import { getGithubSettings } from '../settings/store'
 import { decryptSecret } from '../lib/crypto'
 import { httpRequest } from '../lib/http'
 import { apiError } from '../http-types'
-import { DEFAULT_PRODUCT } from './products'
-import { getDoc, logEvent, writeDoc, type Actor } from './store'
+import { oqWrite } from './oq-write'
+import { DEFAULT_PRODUCT, listProducts } from './products'
+import { eventJson, getDoc, logEvent, writeDocIn, type Actor } from './store'
 
 export interface GithubResponse {
   status: number
@@ -448,10 +449,21 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
   const merged = JSON.parse(res.text) as { sha?: string }
   const consequence = info.skipCi ? 'без деплоя ([skip ci])' : info.deploys && info.baseRef === 'main' ? 'запущен деплой прода' : 'деплой не ожидается'
   const message = `Влит PR #${info.pr} (${sha.slice(0, 7)}, ${info.method}), ${consequence}`
-  const prevNote = (await getDoc('checks', itemId, '*'))?.data.note
-  const note = typeof prevNote === 'string' && prevNote.trim() ? `${prevNote}\n${message}` : message
-  await writeDoc({ name: actor.name, scopes: ['owner'], products: '*' }, 'checks', itemId, { done: true, note: note.slice(-20_000), at: new Date().toISOString() }, { merge: true })
-  await logEvent(actor.name, 'items', itemId, 'merge', { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi, method: info.method, repo }, DEFAULT_PRODUCT)
+  // Ответ и событие мёржа — одной транзакцией (TB-153): заметка дописывается к сохранённой на момент записи.
+  const all = await listProducts()
+  await oqWrite(async (w) => {
+    const prev = await w.doc('checks', itemId)
+    const prevNote = prev ? (JSON.parse(prev.dataJson) as Record<string, unknown>).note : undefined
+    const note = typeof prevNote === 'string' && prevNote.trim() ? `${prevNote}\n${message}` : message
+    const owner: Actor = { name: actor.name, scopes: ['owner'], products: '*' }
+    await writeDocIn(w, owner, 'checks', itemId, { done: true, note: note.slice(-20_000), at: w.now.toISOString() }, { merge: true }, all)
+    // Продукт события — продукт пункта, а не продукт по умолчанию: дельта /changes (queue/changes.ts) показывает id по
+    // продукту события, и чужой пункт попал бы в removed у токена HR (линза Контроля #623). Сейчас mergeInfo пропускает
+    // только пункты HR (:382) — правка на день, когда мёрж подключат другим продуктам.
+    const itemProduct = (await w.doc('items', itemId))?.product ?? DEFAULT_PRODUCT
+    const after = { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi, method: info.method, repo }
+    await w.event({ actor: actor.name, collection: 'items', docId: itemId, action: 'merge', afterJson: eventJson(after), product: itemProduct })
+  })
   return { sha: merged.sha ?? '', message }
 }
 
