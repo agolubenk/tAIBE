@@ -8689,12 +8689,32 @@
                 },
                 "calls": {
                   "type": "integer"
+                },
+                "withUsage": {
+                  "type": "integer",
+                  "description": "Calls of today whose provider reported token usage; the token sums are over these calls only."
+                },
+                "input": {
+                  "type": "integer",
+                  "description": "Prompt tokens the provider reported today, the cached part included (D-018)."
+                },
+                "output": {
+                  "type": "integer",
+                  "description": "Completion tokens the provider reported today."
+                },
+                "cached": {
+                  "type": "integer",
+                  "description": "The part of input the provider read from its cache; priced lower."
                 }
               },
               "required": [
                 "workspaceId",
                 "name",
-                "calls"
+                "calls",
+                "withUsage",
+                "input",
+                "output",
+                "cached"
               ]
             }
           }

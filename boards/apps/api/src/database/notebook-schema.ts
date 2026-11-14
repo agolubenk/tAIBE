@@ -158,6 +158,16 @@ export type NotebookCitation = {
   heading: string;
 };
 
+// D-018 (owner, d-0111-d18; storage d-taibe-tb134-usage-1411 = A): the tokens
+// the provider reported for one model call. input is the provider's prompt
+// count and holds cached, as OpenAI-style prompt_tokens does; cached is the
+// part of input read from the provider's cache.
+export type NotebookUsage = {
+  input: number;
+  output: number;
+  cached: number;
+};
+
 export const notebookMessageTable = pgTable(
   "notebook_message",
   {
@@ -185,6 +195,8 @@ export const notebookMessageTable = pgTable(
       .default([]),
     // Set only when a cloud model answered: the daily cap counts these.
     model: text("model"),
+    // Null when no model answered or the provider sent no usage.
+    usage: jsonb("usage").$type<NotebookUsage>(),
     createdBy: text("created_by").references(() => userTable.id, {
       onDelete: "set null",
       onUpdate: "cascade",

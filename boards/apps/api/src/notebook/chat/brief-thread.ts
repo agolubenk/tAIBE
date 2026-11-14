@@ -52,6 +52,9 @@ export async function briefThread(input: {
       status: brief ? "brief" : "brief-failed",
       content: brief ?? "",
       model,
+      // D-018: a brief the model wrote but parseBrief refused still spent
+      // the tokens, so its usage is kept.
+      usage: reply.ok ? reply.usage : null,
       createdBy: input.userId,
     })
     .returning()

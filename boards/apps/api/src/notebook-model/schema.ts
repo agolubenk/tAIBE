@@ -30,6 +30,21 @@ export const notebookModelSchema = z
         workspaceId: z.string(),
         name: z.string(),
         calls: z.number().int(),
+        withUsage: z.number().int().openapi({
+          description:
+            "Calls of today whose provider reported token usage; the token sums are over these calls only.",
+        }),
+        input: z.number().int().openapi({
+          description:
+            "Prompt tokens the provider reported today, the cached part included (D-018).",
+        }),
+        output: z.number().int().openapi({
+          description: "Completion tokens the provider reported today.",
+        }),
+        cached: z.number().int().openapi({
+          description:
+            "The part of input the provider read from its cache; priced lower.",
+        }),
       }),
     ),
   })
