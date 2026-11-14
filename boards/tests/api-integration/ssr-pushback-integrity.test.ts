@@ -27,7 +27,7 @@ const sha256 = (text: string) =>
 const path = ".claude/skills/integrity/NOTE.md";
 const text = "approved bytes";
 const repair =
-  "the next Mac sync uploads the bytes again; a file that left the checkout needs its version rolled back";
+  "run the Mac sync by hand (node boards/deploy/vps/mac/ssr-sync.mjs) to upload the bytes again; a file that left the checkout needs its version rolled back";
 const originalToken = process.env.SSR_PUSH_GITHUB_TOKEN;
 
 let forest: Awaited<ReturnType<typeof createForest>>;

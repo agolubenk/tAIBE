@@ -39,8 +39,8 @@ export function blobIntegrityFailures(changeset: ChangesetEntry[]): string[] {
 }
 
 // TB-147. A blob row whose bytes do not hash to its sha is deleted, so the sha
-// reads as missing: known-shas stops naming it and the next Mac sync uploads
-// the bytes again (sync.ts never replaces a stored row). The DELETE checks the
+// reads as missing: known-shas stops naming it and the next Mac sync (run by
+// hand, ssr-sync.mjs) uploads the bytes again (sync.ts never replaces a stored row). The DELETE checks the
 // hash once more, so a row that holds the right bytes by then stays.
 export async function dropDamagedBlobs(shas: string[]): Promise<number> {
   if (shas.length === 0) return 0;
@@ -58,7 +58,7 @@ export async function dropDamagedBlobs(shas: string[]): Promise<number> {
 
 // What makes the next push pass, in the push result and the server log.
 const BLOB_REPAIR =
-  "the next Mac sync uploads the bytes again; a file that left the checkout needs its version rolled back";
+  "run the Mac sync by hand (node boards/deploy/vps/mac/ssr-sync.mjs) to upload the bytes again; a file that left the checkout needs its version rolled back";
 
 export type PushResult = {
   pushed: boolean;
