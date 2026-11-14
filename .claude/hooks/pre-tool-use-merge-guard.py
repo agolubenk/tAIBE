@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
-from merge_guard_gh import classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
+from merge_guard_gh import VISIBILITY, classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts, read_names,  # noqa: E402
                                 syntax_only)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
@@ -458,6 +458,9 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
     if files:
         return (f"merge-guard: {files[0]} — законы, настройки хуков или реестр сессий. Правка только с «да» владельца: "
                 "через PR из worktree или руками владельца.")
+    owner = [d for k, d in found if k == VISIBILITY]
+    if owner:  # IS-124: не мёрж и не деплой — Контролю тоже нет
+        return f"merge-guard: {VISIBILITY} — только руками владельца, и Контролю тоже нет (IS-124). Команда: {owner[0]}"
     ops = [(k, d) for k, d in found if k != "file"]
     if not ops:
         return None
