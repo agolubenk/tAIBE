@@ -8,6 +8,8 @@
 //   node ssr-sync.mjs [--dry-run]
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { extraRoots, loadConfig, mapRef } from "./notebook-client.mjs";
 
 const PATHSPECS = [
@@ -31,6 +33,21 @@ const PATHSPECS = [
 ];
 
 const FILE_MAX = 600_000;
+
+// The most shas that one known-shas request takes (apps/api/src/ssr/routes/index.ts).
+export const KNOWN_SHAS_MAX = 1000;
+
+// TB-95. Asks the server which shas it already stores, in requests of at most
+// `size` distinct shas, one after another; `ask(shas)` answers `{ shas }`.
+export async function knownShasInBatches(ask, shas, size = KNOWN_SHAS_MAX) {
+  const unique = [...new Set(shas)];
+  const known = new Set();
+  for (let start = 0; start < unique.length; start += size) {
+    const answer = await ask(unique.slice(start, start + size));
+    for (const sha of answer?.shas ?? []) known.add(sha);
+  }
+  return known;
+}
 
 // The eval tree the host lost at the split, read from the product home at its
 // HEAD under the old supertick-eval/ paths: the server archives whatever a
@@ -127,12 +144,9 @@ async function main() {
   }
 
   // Ask which shas the server already stores so only new content uploads.
-  const known = new Set(
-    (
-      await ssrApi(config, "/known-shas", "POST", {
-        shas: files.map((file) => file.sha256),
-      })
-    ).shas ?? [],
+  const known = await knownShasInBatches(
+    (shas) => ssrApi(config, "/known-shas", "POST", { shas }),
+    files.map((file) => file.sha256),
   );
   const payload = {
     commitSha,
@@ -154,7 +168,14 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+// Runs only as a script, not on import (tests import knownShasInBatches). The
+// realpath keeps a start through a symlink working: HR's t-boards/app leads here.
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
