@@ -12,6 +12,7 @@ import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
 import { removeItemFiles } from './files/remove'
+import { oqWrite, type OqWriter } from './oq-write'
 import { canSee, DEFAULT_PRODUCT, listProducts, namespaceOf, notFound, productForNew, type Product, type Visibility } from './products'
 
 export const COLLECTIONS = ['checks', 'items', 'work'] as const
@@ -287,77 +288,80 @@ export interface WriteOptions {
 }
 
 export async function writeDoc(actor: Actor, collection: Collection, id: string, data: Record<string, unknown>, opts: WriteOptions): Promise<Doc> {
+  // Справочник продуктов — до транзакции: внутри неё все чтения только через w (см. productForNew).
+  const all = await listProducts()
+  return oqWrite((w) => writeDocIn(w, actor, collection, id, data, opts, all))
+}
+
+/** Запись документа внутри уже открытой транзакции oqWrite: мёрж (queue/github.ts) пишет ответ и событие одной. */
+export async function writeDocIn(
+  w: OqWriter,
+  actor: Actor,
+  collection: Collection,
+  id: string,
+  data: Record<string, unknown>,
+  opts: WriteOptions,
+  all: readonly Product[],
+): Promise<Doc> {
   if (!DOC_ID.test(id)) throw apiError(422, 'Недопустимый id документа')
   // Имя сессии — не пустое; проверяется присланное, а не сохранённое: старый документ с пустым именем не блокирует ответ.
   if (collection === 'checks' && 'agentBy' in data && !(typeof data.agentBy === 'string' && /\S/.test(data.agentBy))) {
     throw apiError(422, 'agentBy — имя сессии (линия), не пустое')
   }
-  const db = getDb()
-  // Справочник продуктов — до транзакции: внутри неё все чтения только через tx (см. productForNew).
-  const all = await listProducts()
-  return db.transaction(async (tx) => {
-    const row = await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
-    // Чужой продукт — 404 до любых других проверок: ни версия, ни права по полям не раскрывают, что документ есть.
-    if (row && !canSee(actor.products, row.product)) notFound(actor.products, all)
-    // Пункт items/<id> для checks: продукт ответа — продукт пункта; входящее ли это — для захвата сессией.
-    const itemRow = collection === 'checks'
-      ? await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'items'), eq(oqDocs.id, id)) })
-      : undefined
-    if (itemRow && !canSee(actor.products, itemRow.product)) notFound(actor.products, all)
-    // Новый пункт при уже существующем ответе (пункт удалили и создают заново) — продукт ответа: пара не расходится.
-    const checkRow = collection === 'items' && !row
-      ? await tx.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, 'checks'), eq(oqDocs.id, id)) })
-      : undefined
-    if (checkRow && !canSee(actor.products, checkRow.product)) notFound(actor.products, all)
-    const product = productOf(actor, id, row, itemRow ?? checkRow, all)
-    const before = row ? (JSON.parse(row.dataJson) as Record<string, unknown>) : null
-    // Продукт — столбец, не поле data. Документ, где поле осталось с прежних времён (passthrough), полный PUT его копией
-    // не ломает: отказ — только новому или изменённому полю.
-    if ('product' in data && JSON.stringify(data.product) !== JSON.stringify(before?.product)) {
-      throw apiError(422, 'product — не поле документа: продукт нового пункта — пространство его id')
+  const row = await w.doc(collection, id)
+  // Чужой продукт — 404 до любых других проверок: ни версия, ни права по полям не раскрывают, что документ есть.
+  if (row && !canSee(actor.products, row.product)) notFound(actor.products, all)
+  // Пункт items/<id> для checks: продукт ответа — продукт пункта; входящее ли это — для захвата сессией.
+  const itemRow = collection === 'checks' ? await w.doc('items', id) : undefined
+  if (itemRow && !canSee(actor.products, itemRow.product)) notFound(actor.products, all)
+  // Новый пункт при уже существующем ответе (пункт удалили и создают заново) — продукт ответа: пара не расходится.
+  const checkRow = collection === 'items' && !row ? await w.doc('checks', id) : undefined
+  if (checkRow && !canSee(actor.products, checkRow.product)) notFound(actor.products, all)
+  const product = productOf(actor, id, row, itemRow ?? checkRow, all)
+  const before = row ? (JSON.parse(row.dataJson) as Record<string, unknown>) : null
+  // Продукт — столбец, не поле data. Документ, где поле осталось с прежних времён (passthrough), полный PUT его копией
+  // не ломает: отказ — только новому или изменённому полю.
+  if ('product' in data && JSON.stringify(data.product) !== JSON.stringify(before?.product)) {
+    throw apiError(422, 'product — не поле документа: продукт нового пункта — пространство его id')
+  }
+  if (opts.ifVersion !== undefined && (row?.version ?? 0) !== opts.ifVersion) {
+    throw apiError(409, `Документ изменился (версия ${row?.version ?? 0}, у вас ${opts.ifVersion}) — перечитайте и повторите`)
+  }
+  const owner = actor.scopes.includes('owner')
+  // Агент по checks — только слиянием своих полей: set затёр бы ответ владельца.
+  if (collection === 'checks' && !opts.merge && !owner) throw apiError(403, 'Агенту по checks — только update полей agentStatus/agentNote')
+  if (collection === 'checks' && owner && opts.ifAnswerAt !== undefined) {
+    const stored = typeof before?.at === 'string' ? before.at : ''
+    if (stored !== opts.ifAnswerAt) {
+      throw apiError(409, 'Ответ уже изменён в другом месте (другая вкладка, телефон или бот) — показан сохранённый')
     }
-    if (opts.ifVersion !== undefined && (row?.version ?? 0) !== opts.ifVersion) {
-      throw apiError(409, `Документ изменился (версия ${row?.version ?? 0}, у вас ${opts.ifVersion}) — перечитайте и повторите`)
-    }
-    const owner = actor.scopes.includes('owner')
-    // Агент по checks — только слиянием своих полей: set затёр бы ответ владельца.
-    if (collection === 'checks' && !opts.merge && !owner) throw apiError(403, 'Агенту по checks — только update полей agentStatus/agentNote')
-    if (collection === 'checks' && owner && opts.ifAnswerAt !== undefined) {
-      const stored = typeof before?.at === 'string' ? before.at : ''
-      if (stored !== opts.ifAnswerAt) {
-        throw apiError(409, 'Ответ уже изменён в другом месте (другая вкладка, телефон или бот) — показан сохранённый')
-      }
-    }
-    const merged: Record<string, unknown> = opts.merge ? { ...(before ?? {}), ...data } : { ...data }
-    for (const [k, v] of Object.entries(merged)) if (v === null && collection !== 'checks') delete merged[k]
-    const at = new Date()
-    if (collection === 'checks') stampCheck(merged, before, data, { owner, merge: opts.merge, at: at.toISOString() })
-    // Входящее ли это — по пункту items/<id>: захват сессией действует только на входящие.
-    const inboxItem = !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
-    const inbox = !owner && inboxItem
-    // Отпуск — только у входящих: у обычных пунктов захвата нет, а agentBy — подпись, кто вёл пункт; без проверки
-    // держателя (она — только у входящих) любая сессия стирала бы чужую подпись.
-    if (collection === 'checks' && opts.release && !itemRow) throw apiError(404, `Нет пункта items/${id}: отпускать нечего`)
-    if (collection === 'checks' && opts.release && !inboxItem) {
-      throw apiError(422, 'release — только у входящих (kind: inbox): у других пунктов захвата нет. Статус и заметка не сохранены — повторите без release')
-    }
-    // Отпуск снимает только держателя: статус и заметка («передано <сессия>») остаются — страница и бот показывают, кому
-    // передано; пункт берёт названная живая сессия. Автопередача сама его не предложит: у него есть статус.
-    if (collection === 'checks' && opts.release) delete merged.agentBy
-    const parsed = SCHEMAS[collection].safeParse(merged)
-    if (!parsed.success) throw apiError(422, `Неверный документ: ${parsed.error.issues.map((i) => `${i.path.join('.') || '—'}: ${i.message}`).join('; ').slice(0, 400)}`)
-    const json = JSON.stringify(parsed.data)
-    if (Buffer.byteLength(json) > MAX_DOC_BYTES) throw apiError(422, 'Документ больше 48 КБ')
-    authorize(actor, collection, before, parsed.data as Record<string, unknown>, data, { inbox, now: at.getTime(), takeover: opts.takeover, release: opts.release })
-    const version = (row?.version ?? 0) + 1
-    if (row) {
-      await tx.update(oqDocs).set({ dataJson: json, version, updatedAt: at, updatedBy: actor.name }).where(and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)))
-    } else {
-      await tx.insert(oqDocs).values({ collection, id, dataJson: json, version, createdAt: at, updatedAt: at, updatedBy: actor.name, product })
-    }
-    await tx.insert(oqEvents).values({ at, actor: actor.name, collection, docId: id, action: opts.merge ? 'update' : 'set', beforeJson: row?.dataJson ?? null, afterJson: json, product })
-    return { id, data: parsed.data as Record<string, unknown>, version, updatedAt: at.getTime(), createdAt: (row?.createdAt ?? at).getTime(), product }
-  })
+  }
+  const merged: Record<string, unknown> = opts.merge ? { ...(before ?? {}), ...data } : { ...data }
+  for (const [k, v] of Object.entries(merged)) if (v === null && collection !== 'checks') delete merged[k]
+  const at = w.now
+  if (collection === 'checks') stampCheck(merged, before, data, { owner, merge: opts.merge, at: at.toISOString() })
+  // Входящее ли это — по пункту items/<id>: захват сессией действует только на входящие.
+  const inboxItem = !!itemRow && (JSON.parse(itemRow.dataJson) as Record<string, unknown>).kind === 'inbox'
+  const inbox = !owner && inboxItem
+  // Отпуск — только у входящих: у обычных пунктов захвата нет, а agentBy — подпись, кто вёл пункт; без проверки
+  // держателя (она — только у входящих) любая сессия стирала бы чужую подпись.
+  if (collection === 'checks' && opts.release && !itemRow) throw apiError(404, `Нет пункта items/${id}: отпускать нечего`)
+  if (collection === 'checks' && opts.release && !inboxItem) {
+    throw apiError(422, 'release — только у входящих (kind: inbox): у других пунктов захвата нет. Статус и заметка не сохранены — повторите без release')
+  }
+  // Отпуск снимает только держателя: статус и заметка («передано <сессия>») остаются — страница и бот показывают, кому
+  // передано; пункт берёт названная живая сессия. Автопередача сама его не предложит: у него есть статус.
+  if (collection === 'checks' && opts.release) delete merged.agentBy
+  const parsed = SCHEMAS[collection].safeParse(merged)
+  if (!parsed.success) throw apiError(422, `Неверный документ: ${parsed.error.issues.map((i) => `${i.path.join('.') || '—'}: ${i.message}`).join('; ').slice(0, 400)}`)
+  const json = JSON.stringify(parsed.data)
+  if (Buffer.byteLength(json) > MAX_DOC_BYTES) throw apiError(422, 'Документ больше 48 КБ')
+  authorize(actor, collection, before, parsed.data as Record<string, unknown>, data, { inbox, now: at.getTime(), takeover: opts.takeover, release: opts.release })
+  const version = (row?.version ?? 0) + 1
+  if (row) await w.updateDoc(collection, id, { dataJson: json, version, updatedBy: actor.name })
+  else await w.insertDoc({ collection, id, dataJson: json, version, updatedBy: actor.name, product })
+  await w.event({ actor: actor.name, collection, docId: id, action: opts.merge ? 'update' : 'set', beforeJson: row?.dataJson ?? null, afterJson: json, product })
+  return { id, data: parsed.data as Record<string, unknown>, version, updatedAt: at.getTime(), createdAt: (row?.createdAt ?? at).getTime(), product }
 }
 
 type Row = typeof oqDocs.$inferSelect
@@ -376,11 +380,14 @@ function productOf(actor: Actor, id: string, row: Row | undefined, pair: Row | u
 
 export async function deleteDoc(actor: Actor, collection: Collection, id: string): Promise<void> {
   if (!actor.scopes.includes('owner')) throw apiError(403, 'Удаляет только владелец; агенту — archived: true')
-  const db = getDb()
-  const row = await db.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
-  if (!row || !canSee(actor.products, row.product)) throw apiError(404, 'Нет такого документа')
-  await db.delete(oqDocs).where(and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)))
-  await db.insert(oqEvents).values({ actor: actor.name, collection, docId: id, action: 'delete', beforeJson: row.dataJson, product: row.product })
+  // Документ и событие — одной транзакцией: дельта /changes (queue/changes.ts) узнаёт об удалении только по событию.
+  // Строка читается в той же транзакции: событие несёт тело, которое удалено, а не прочитанное до чужой правки.
+  await oqWrite(async (w) => {
+    const row = await w.doc(collection, id)
+    if (!row || !canSee(actor.products, row.product)) throw apiError(404, 'Нет такого документа')
+    await w.deleteDoc(collection, id)
+    await w.event({ actor: actor.name, collection, docId: id, action: 'delete', beforeJson: row.dataJson, product: row.product })
+  })
   // Вложения удалённого пункта: строки — сразу, файлы — следом (уборщик — только подстраховка). Сбой диска здесь
   // не превращает уже выполненное удаление в 500: файлы подберёт уборка (линза GLM #313).
   if (collection === 'items') {
@@ -393,7 +400,7 @@ export async function deleteDoc(actor: Actor, collection: Collection, id: string
  * История читает NULL как продукт по умолчанию — так помечены и события образа до v2-lite.
  */
 export async function logEvent(actor: string, collection: string, docId: string, action: string, after: unknown, product: string | null): Promise<void> {
-  await getDb().insert(oqEvents).values({ actor, collection, docId, action, afterJson: eventAfterJson(after), product })
+  await oqWrite((w) => w.event({ actor, collection, docId, action, afterJson: eventAfterJson(after), product }))
 }
 
 /** Предел after события в журнале, символов. */
@@ -432,7 +439,7 @@ export async function docHistory(collection: Collection, id: string, products: V
     .select()
     .from(oqEvents)
     .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own))
-    .orderBy(desc(oqEvents.at))
+    .orderBy(desc(oqEvents.at), desc(oqEvents.id))
     .limit(Math.min(limit, 100))
   const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson), raw: r.afterJson }))
   // Смена продукта пишет событие в оба продукта; кто видит оба (владелец), получает одно.
@@ -456,14 +463,17 @@ export async function importDoc(collection: Collection, id: string, data: Record
   if (!DOC_ID.test(id)) return 'invalid'
   const parsed = SCHEMAS[collection].safeParse(data)
   if (!parsed.success) return 'invalid'
-  const db = getDb()
-  const exists = await db.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
-  if (exists) return 'kept'
   const json = JSON.stringify(parsed.data)
   const pairCol = collection === 'checks' ? 'items' : collection === 'items' ? 'checks' : null
-  const pair = pairCol ? await db.query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, pairCol), eq(oqDocs.id, id)) }) : undefined
-  const product = pair?.product ?? namespaceOf(id, all ?? (await listProducts()))
-  await db.insert(oqDocs).values({ collection, id, dataJson: json, version: 1, updatedBy: source, product })
-  await db.insert(oqEvents).values({ actor: source, collection, docId: id, action: 'import', afterJson: json, product })
-  return 'added'
+  // Справочник — до транзакции (внутри неё чтения только через w); проверка «уже есть» — внутри, рядом со вставкой.
+  const products = all ?? (await listProducts())
+  // Одной транзакцией с событием — как deleteDoc: дельта /changes видит документ по событию журнала.
+  return oqWrite<'added' | 'kept'>(async (w) => {
+    if (await w.doc(collection, id)) return 'kept'
+    const pair = pairCol ? await w.doc(pairCol, id) : undefined
+    const product = pair?.product ?? namespaceOf(id, products)
+    await w.insertDoc({ collection, id, dataJson: json, version: 1, updatedBy: source, product })
+    await w.event({ actor: source, collection, docId: id, action: 'import', afterJson: json, product })
+    return 'added'
+  })
 }
