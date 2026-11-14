@@ -29,6 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import actions  # noqa: E402
+import budget  # noqa: E402
 import sources  # noqa: E402
 from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
 
@@ -440,6 +441,7 @@ def cmd_status(cfg, a):
     b = st.get("budget", {})
     print(f"пульс: {st.get('heartbeat', '—')}")
     print(f"режим: {json.dumps(mode, ensure_ascii=False)}")
+    print(budget.shares_text(mode))
     print(f"лимит: {json.dumps(b.get('limit'), ensure_ascii=False)}")
     waves = b.get("waves", [])
     print(f"волн лимита окна: {len(waves)}; последние: " +
