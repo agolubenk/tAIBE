@@ -574,5 +574,26 @@ check("SE-82 comment_readings: второе прочтение — без ком
 check("SE-82 comment_readings: в самом втором прочтении третьего нет",
       comment_readings('echo `a`\n# say "hi\nb', NONE, True)[1], False)
 
+# --- SE-78: путь команды из переменной, имя видно (`"$D/swiftc"`): догадки «это git» нет — `$` в аргументах не отказ ---
+se78 = repo_on("main", "se78")
+(se78 / "tc.sh").write_text(  # apps/mobile-ios/scripts/typecheck.sh (HR_Helper-v2): ложная «запись в main»
+    "# Calls the toolchain's swiftc directly; the shims don't run before the license.\n"
+    "dev=\"${DEVELOPER_DIR:-$(xcode-select -p 2>/dev/null || true)}\"\n"
+    "if [[ -z \"$dev\" ]]; then\n  dev=/Applications/Xcode.app/Contents/Developer\nfi\n"
+    "swiftc=\"$dev/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc\"\nsdk=\"$dev/Platforms/x.sdk\"\nsources=()\n"
+    "while IFS= read -r -d '' file; do sources+=(\"$file\"); done < <(find . -name '*.swift' -print0)\n"
+    "\"$swiftc\" -typecheck -sdk \"$sdk\" -swift-version 5 \"${sources[@]}\" \"$@\"\n")
+for form in ("bash tc.sh", "\"$D/swiftc\" -typecheck \"$@\"", "\"$DEVELOPER_DIR/usr/bin/swiftc\" -sdk \"$sdk\" \"${src[@]}\" \"$@\"",
+             "$D/bin/x.sh \"$1\" \"$2\" \"$3\""):
+    bash(f"SE-78: имя команды видно — не git: {form!r}", form, False, cwd=se78)
+# Значение невидимо (`read D`, `$(…)` в команде, не в скрипте с диска): `D="git -c a.b="` без кавычек делится на слова,
+# и видимое имя становится значением опции — догадка остаётся. Кавычек хук на этом шаге уже не видит.
+for form in ("$D/git push origin HEAD:main", "\"$D/gh\" pr merge 1", "$D/GIT push origin HEAD:main", "$D/Gh pr merge 1",
+             "$D/$(echo gh) pr merge 1", "$D/g* push origin HEAD:main", "$D/swiftc gh pr merge 1",
+             "read D < d.txt; $D/swiftc push origin HEAD:main", "D=$(cat d.txt); \"$D/swiftc\" \"$1\" \"$2\" \"$3\"",
+             "\"$D/curl\" -X PUT https://api.github.com/repos/o/r/pulls/1/merge", "\"$S\" -sdk \"$K\" \"$1\" \"$@\"",
+             "S=\"${DEV:-$(xcode-select -p)}/usr/bin/swiftc\"; \"$S\" -sdk \"$K\" \"$@\""):
+    bash(f"SE-78: имя git/gh/curl, не видно или значение невидимо — догадка: {form!r}", form, True, cwd=se78)
+
 if __name__ == "__main__":
     finish(" — формы shell")

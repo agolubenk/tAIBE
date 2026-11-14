@@ -212,6 +212,7 @@ def classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk=Fa
 
 
 FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
+GUESSED = {"git", "gh", "curl", "wget", "http", "xh"}  # имена догадки: `$D/GIT` на macOS — тот же git (регистр)
 
 
 def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, ("", "")), exe="", stdin_files=(), procs=None,
@@ -250,8 +251,10 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
             found += more + (classify_argv(normalize(b), cwd, roots, depth + 1, git_env, whole, b[0], stdin_files, procs,
                                            hid) if b else [])
         g = "blind" if hidden else True  # имя задано невидимо: голый push на main — тоже отказ (classify_git)
-        kind = kind or (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
-                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd))
+        base = exe.rpartition("/")[2] if "/" in exe else ""  # `"$D/swiftc"`: имя видно — не git (SE-78)
+        named = not hidden and re.fullmatch(r"[\w.+-]+", base) and SUBST not in base and base.lower() not in GUESSED
+        kind = kind or (None if named else (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
+                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd)))
         tail = strip_prefix(a[1:])  # `$X` раскроется и в пусто, и в префикс (`$SUDO`, `${DRY:+echo}`): `$X gh pr merge 1`
         if tail:
             found += classify_argv(normalize(tail), cwd, roots, depth, git_env, whole, tail[0], stdin_files, procs, hid)
