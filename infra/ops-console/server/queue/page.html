@@ -1338,6 +1338,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         key: board ? c.key : '', ws: board ? c.ws : '', archived: old,
         t: typeof c.t === 'string' ? c.t.slice(0, 160) : '', k: c.k === 'bug' ? 'bug' : 'task',
         s: typeof c.s === 'string' ? c.s.slice(0, 12) : '', st: st, c: typeof c.c === 'string' ? c.c.slice(0, 24) : '',
+        mark: typeof c.mark === 'string' ? c.mark.slice(0, 24) : '',
         closed: !!CARD_DONE[st], review: !!CARD_REVIEW[st],
       };
     }).filter(Boolean).sort(function (a, b) {
@@ -1435,7 +1436,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return '<li' + (c.closed ? ' class="is-closed"' : '') + '><span class="sev sev-' + esc(c.s || 'none') + '">' + esc(c.s || kind) + '</span>' +
       (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc((c.key + ' ' + (c.t || '')).trim()) + '</a>'
         : '<span>' + esc(c.t || 'карточка') + ' (архив)</span>') +
-      '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + '</small></li>';
+      '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + (c.mark ? ' · ' + esc(c.mark) : '') + '</small></li>';
   }
   function statsFromDb(d) {
     if (!d || d.kind !== 'stats') return null;

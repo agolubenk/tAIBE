@@ -73,25 +73,38 @@ const TIMEOUT_MS = 15_000;
 export const LIST_PAGE = 500;
 const LIST_PAGES_MAX = 20;
 
+export type ListResult = {
+  docs: QueueDoc[];
+  truncated: boolean;
+  // One page: the console reads the whole visible collection in one query
+  // (ops-console GET /db/:col ignores limit and offset), so the list is one
+  // snapshot. A paged walk has no snapshot (the HTTP API has no as_of): a
+  // write between pages can shift a doc out of the walk.
+  snapshot: boolean;
+};
+
 // The whole collection page by page; a page that does not move the offset
-// forward ends the walk, so a faulty next_offset cannot loop.
+// forward ends the walk, so a faulty next_offset cannot loop. Past the
+// deadline (ms since epoch) no next page is read and the list is truncated.
 export async function listAll(
   client: QueueClient,
   collection: QueueCollection,
-): Promise<{ docs: QueueDoc[]; truncated: boolean }> {
+  deadline = Number.POSITIVE_INFINITY,
+): Promise<ListResult> {
   const docs: QueueDoc[] = [];
   let truncated = false;
   let offset = 0;
   for (let page = 0; page < LIST_PAGES_MAX; page += 1) {
+    if (page > 0 && Date.now() > deadline) break;
     const next = await client.list(collection, offset);
     docs.push(...next.docs);
     truncated ||= next.truncated;
     if (next.nextOffset === null || next.nextOffset <= offset) {
-      return { docs, truncated };
+      return { docs, truncated, snapshot: page === 0 };
     }
     offset = next.nextOffset;
   }
-  return { docs, truncated: true };
+  return { docs, truncated: true, snapshot: false };
 }
 
 export function httpQueueClient(config: OwnerQueueConfig): QueueClient {

@@ -23,15 +23,29 @@ const entry = (key: string, st = "in-progress") => ({ key, ws: WS, st });
 const keys = (cards: unknown[]) =>
   cards.map((card) => (card as { key?: string }).key ?? card);
 
+// The board has every row card (as plan-pass.ts resolves them) unless the
+// test names it gone or gives it another state.
 function refresh(input: {
   cards?: unknown[];
   board?: [string, BoardCard][];
+  gone?: string[];
   planned?: string[];
   recent?: RecentCard[];
 }) {
+  const board = new Map<string, BoardCard>();
+  for (const card of input.cards ?? []) {
+    const { key, st } = (card ?? {}) as { key?: unknown; st?: unknown };
+    if (typeof key !== "string" || input.gone?.includes(key)) continue;
+    board.set(`${WS}/${key.toUpperCase()}`, {
+      status: typeof st === "string" ? st : "in-progress",
+      final: false,
+      closedAt: null,
+    });
+  }
+  for (const [uid, card] of input.board ?? []) board.set(uid, card);
   return refreshOffPlan({
     cards: input.cards ?? [],
-    board: new Map(input.board ?? []),
+    board,
     planned: new Set(input.planned ?? []),
     recent: input.recent ?? [],
     now: NOW,
@@ -100,6 +114,23 @@ describe("refreshOffPlan (TB-106 F8)", () => {
       ],
     });
     expect(keys(cards)).toEqual(["TB-2"]);
+  });
+
+  it("removes a card the board no longer has (deleted) and keeps the rest", () => {
+    const cards = refresh({
+      cards: [entry("TB-1"), entry("TB-2"), entry("TB-3")],
+      gone: ["TB-2"],
+    });
+    expect(keys(cards)).toEqual(["TB-1", "TB-3"]);
+  });
+
+  it("keeps a card that only the recent list knows", () => {
+    const cards = refresh({
+      cards: [entry("TB-1")],
+      gone: ["TB-1"],
+      recent: [recent("TB-1")],
+    });
+    expect(keys(cards)).toEqual(["TB-1"]);
   });
 
   it("keeps legacy entries it cannot resolve", () => {

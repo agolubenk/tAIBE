@@ -184,6 +184,14 @@ describe('карточки t-boards в строке плана', () => {
     // Ключ в обход cleanCards — ссылка и подпись тоже текстом: без esc(url) тест падает (линза #111).
     expect(cardRowHtml({ id: hex(3), key: '"><img src=y>', ws: 'w', k: 'task' })).not.toContain('"><img')
   })
+
+  it('метка «без аренды» из cards[].mark — в подписи карточки, текстом (TB-106 F9)', () => {
+    const { cleanCards, cardRowHtml } = pure()
+    const [card] = cleanCards([{ key: 'TB-3', ws: 'aiboards-eval', k: 'task', st: 'in-progress', mark: 'без аренды' }])
+    expect(card).toMatchObject({ mark: 'без аренды' })
+    expect(cardRowHtml(card as unknown as Record<string, unknown>)).toContain('<small>задача · in-progress · без аренды</small>')
+    expect(cardRowHtml({ key: 'TB-4', ws: 'w', k: 'task', st: 'to-do', mark: '<b>m</b>' })).toContain('· &lt;b&gt;m&lt;/b&gt;</small>')
+  })
 })
 
 describe('карточки в плане: со сроком, без срока, ждут владельца', () => {
