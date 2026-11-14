@@ -73,7 +73,8 @@ async function consoleFake(files, state) {
 
 function mcp(port) {
   const child = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, OQ_URL: `http://127.0.0.1:${port}`, OQ_TOKEN: 'test-token', OQ_FILES_DIR: '' },
+    // OQ_PRODUCT — основной: в сессии tAIBE TAIBE_PRODUCT=taibe, и сервер пошёл бы в Keychain за настоящим токеном.
+    env: { ...process.env, OQ_URL: `http://127.0.0.1:${port}`, OQ_TOKEN: 'test-token', OQ_PRODUCT: 'hr-helper', OQ_FILES_DIR: '' },
     stdio: ['pipe', 'pipe', 'ignore'],
   });
   const waiting = new Map();

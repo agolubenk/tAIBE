@@ -138,7 +138,8 @@ export const PRODUCTS_JS = String.raw`(function () {
   }
   function decorate() {
     indexDocs();
-    document.querySelectorAll('section[data-section] .item[data-id]').forEach(decorateItem);
+    // Пункты разделов и общего списка «одной очередью» (#sec-queue, без data-section).
+    document.querySelectorAll('section[data-section] .item[data-id], #sec-queue .item[data-id]').forEach(decorateItem);
   }
   var queued = false;
   function schedule() {
@@ -165,7 +166,7 @@ export const PRODUCTS_JS = String.raw`(function () {
       decorate();
       // Списки разделов — новые и перемонтированные пункты; снимок items — новый продукт без смены разметки.
       var mo = new MutationObserver(schedule);
-      document.querySelectorAll('section[data-section] .list').forEach(function (l) { mo.observe(l, { childList: true }); });
+      document.querySelectorAll('section[data-section] .list, #sec-queue .list').forEach(function (l) { mo.observe(l, { childList: true }); });
       if (window.claude) window.claude.use('db').then(function (db) { if (db) db.collection('items').onSnapshot(schedule); });
     }, function () { setView(''); /* без справочника — страница как до v2-lite */ });
 })();`
