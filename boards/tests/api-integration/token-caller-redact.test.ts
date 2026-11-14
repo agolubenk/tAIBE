@@ -268,6 +268,47 @@ describe("API integration: free text for callers with a token (TB-143)", () => {
     expect(read.body.description).toBe(masked);
   });
 
+  // Claude lens on e4e66d156: B1 (a value that loses its label) and B2
+  // (equal marker blocks with different values change places).
+  it("refuses with 409 a write-back that unmasks a value or swaps equal marker blocks", async () => {
+    const { forest, agentCard, agentCardWrite } = await setup();
+    const pw = join("hunter", "2-Staging!");
+    const other = join("gh", "p_", "Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2");
+    const cases: [string, string, string][] = [
+      [
+        `Staging DB password:\n\n${pw}`,
+        "Staging DB credentials\n\n[REDACTED:password_assignment]",
+        "would no longer hide them",
+      ],
+      [
+        `## Prod\n\n${SECRET}\n\n## Staging\n\n${other}`,
+        `## Staging\n\n${KEY_MARK}\n\n## Prod\n\n${KEY_MARK}`,
+        "Equal blocks",
+      ],
+    ];
+    for (const [stored, writeBack, why] of cases) {
+      const put = await agentCardWrite(
+        "PUT",
+        `/task/description/${agentCard}`,
+        { description: stored },
+      );
+      expect(put.status).toBe(200);
+
+      const res = await agentCardWrite(
+        "PUT",
+        `/task/description/${agentCard}`,
+        { description: writeBack },
+      );
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe("REDACTED_MARKERS_MISMATCH");
+      expect(res.body.message).toContain(why);
+      expect((await storedTask(agentCard))?.description).toBe(stored);
+    }
+    const read = await forest.agentApi("GET", `/task/${agentCard}`);
+    expect(read.body.description).not.toContain(other);
+    expect(read.body.description).not.toContain(SECRET);
+  });
+
   it("writes text without markers as before", async () => {
     const { agentCard, agentCardWrite } = await setup();
     const res = await agentCardWrite("PUT", `/task/description/${agentCard}`, {

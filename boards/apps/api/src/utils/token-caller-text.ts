@@ -31,8 +31,17 @@ function mismatchMessage(result: Exclude<RestoreResult, { ok: true }>): string {
   if (result.reason === "count") {
     return `The text has ${result.received} [REDACTED:${result.kind}] markers; the stored text has ${result.expected} values of that kind. ${KEEP_BLOCKS}`;
   }
+  if (result.reason === "size") {
+    return `A text with [REDACTED:…] markers may be at most ${result.max} characters long. Shorten it, or ask a person to edit it in the web app.`;
+  }
   if (result.reason === "context") {
     return `The text above a block with a [REDACTED:…] marker changed and holds raw HTML, a code fence or $$. Keep that text as you read it or remove them. ${KEEP_BLOCKS}`;
+  }
+  if (result.reason === "ambiguous") {
+    return `Equal blocks with [REDACTED:…] markers stand for different values, so they keep their places: keep the text above them as you read it. ${KEEP_BLOCKS}`;
+  }
+  if (result.reason === "mask") {
+    return `With the stored values put back, the text would no longer hide them: a marker's block or the text that labels its value (such as "password:") changed. Keep it as you read it. ${KEEP_BLOCKS}`;
   }
   return `A block with a [REDACTED:…] marker differs from the stored text, or a marker moved. ${KEEP_BLOCKS}`;
 }
