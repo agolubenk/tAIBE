@@ -12,6 +12,11 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)"
 dir="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)" || exit 0
 [ -n "$cmd" ] || exit 0
 case "$cmd" in *WT_DEPS_CHECK=0*) exit 0 ;; esac
+# Установка зависимостей — это сама починка, её не останавливаем (SE-124): иначе после правки lockfile хук держит и
+# гейт, и свою команду починки. Слово `install`/`i`/`ci` — подкоманда pnpm|npm (флаги вроде -C X, --dir X допустимы).
+if printf '%s' "$cmd" | grep -qE '(^|[;&|(][[:space:]]*|[[:space:]])(pnpm|npm)([[:space:]]+(-C|--dir|--prefix)([[:space:]]+|=)[^[:space:]]+)*([[:space:]]+-[-A-Za-z]+)*[[:space:]]+(install|i|ci)([[:space:]]|$)'; then
+  exit 0
+fi
 
 # Ведущий `cd X &&` меняет каталог гейта; относительный X — от cwd.
 lead="$(printf '%s' "$cmd" | sed -nE 's/^[[:space:]]*cd[[:space:]]+("([^"]+)"|'"'"'([^'"'"']+)'"'"'|([^[:space:]&;|]+))[[:space:]]*(&&|;).*/\2\3\4/p')"
