@@ -988,6 +988,8 @@ describe('порядок пунктов: от старых к новым (про
       // живая ссылка: видно, какой updatedAt у пункта на странице после каждого снимка
       mount: (it: { id: string; updatedAt?: number }) => mounted.push(it),
       render: () => {}, showTarget: () => {},
+      // Таяние ответа (#337): тающих пунктов нет — applyItems перемонтирует все, как раньше.
+      MELT: {}, itemEl: () => null,
     })
     runInContext(fnSource('itemFromDb'), ctx)
     runInContext(fnSource('applyItems'), ctx)
