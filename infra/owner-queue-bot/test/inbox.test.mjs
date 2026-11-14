@@ -266,12 +266,26 @@ test('автопередача: процесс сессии жив — «пер�
   // Консоль без /relay или сбой — как раньше, без слов об автопередаче.
   const unknown = sentView(d, item, null).text;
   assert.match(unknown, /⚡ Агент сам не стартует/);
+  // Сессия без поля product — основной продукт: входящее taibe она не передаёт (ревью #173, цепочка).
+  assert.match(sentView(d, { ...item, product: 'taibe' }, live).text, /Автопередача сейчас не работает/);
   assert.doesNotMatch(unknown, /Автопередача/);
   // «В очередь» при живой автопередаче — карточку заведёт та же сессия.
   const q = { ...d, urgency: 'queue' };
   assert.match(sentView(q, itemOf(q), live).text, /возьмёт в течение минуты и заведёт карточку/);
   // Имя сессии — в разметке Telegram экранировано.
   assert.match(sentView(d, item, { ...live, sessions: [{ session: '<b>x</b>', at: live.sessions[0].at, alive: true }] }).text, /&lt;b&gt;x/);
+});
+
+test('автопередача по продуктам (OPS-51): живая сессия taibe не «берёт» входящее HR из бота', () => {
+  const d = { ...draftFrom({ text: 'На проде 502 у всех' }), urgency: 'now' };
+  const item = itemOf(d);
+  const at = '2026-10-23T00:10:00.000Z';
+  const onlyTaibe = { alive: true, sessions: [{ session: 'taibe-coord-1', at, alive: true, product: 'taibe' }], relayed: {} };
+  const text = sentView(d, item, onlyTaibe).text;
+  assert.doesNotMatch(text, /taibe-coord-1/);
+  assert.match(text, /Автопередача сейчас не работает/);
+  const both = { alive: true, sessions: [onlyTaibe.sessions[0], { session: 'hr-helper-v2-43', at, alive: true, product: 'hr-helper' }], relayed: {} };
+  assert.match(sentView(d, item, both).text, /Передаю сессии <b>hr-helper-v2-43<\/b>/);
 });
 
 test('автопередача в отправке: статус берётся у консоли; сбой статуса — ответ как раньше', async () => {

@@ -1585,11 +1585,19 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // Автопередача у входящего без статуса агента (relay — ответ GET /relay консоли; null — старая консоль, молчим):
   // wait — передано, ждём «взял»; sending — процесс жив, ещё не передал; stuck — передано, но «взял» нет 10 минут или
   // процесс с тех пор умер (Monitor сессии истёк): ждать некого, команда руками; off — автопередачи нет.
+  // product — продукт входящего (OPS-51): живой считается только сессия его продукта. Сессия без поля product — ответ
+  // консоли до автопередачи по продуктам, она про основной продукт: другому продукту не подходит (ревью #173, цепочка).
   var RELAY_SLOW_MS = 10 * 60000;
-  function relayItemState(relay, id, now) {
+  // Основной продукт: на странице его ставит page-scripts.ts; в чистом контексте (тесты блока) window нет.
+  function relayDefaultProduct() { return (typeof window !== 'undefined' && window.__oqDefaultProduct) || 'hr-helper'; }
+  function relaySessionFits(s, product) { return !!s && (!product || (s.product || relayDefaultProduct()) === product); }
+  function relayItemState(relay, id, now, product) {
     if (!relay || !Array.isArray(relay.sessions) || !relay.relayed || typeof relay.relayed !== 'object') return null;
-    var live = relay.sessions.filter(function (s) { return s && s.alive; })[0] || null;
+    var live = relay.sessions.filter(function (s) { return relaySessionFits(s, product) && s.alive; })[0] || null;
     var r = Object.prototype.hasOwnProperty.call(relay.relayed, id) ? relay.relayed[id] : null;
+    // Передача сессией другого продукта (пункт перенесли, или процесс прежней версии без фильтра) — не «передано»:
+    // ждём сессию своего продукта (ревью #173).
+    if (r && product && r.product && r.product !== product) r = null;
     if (r && (!live || now - Date.parse(r.at) > RELAY_SLOW_MS)) return { k: 'stuck', session: r.session, at: r.at, dead: !live };
     if (r) return { k: 'wait', session: r.session, at: r.at };
     if (live) return { k: 'sending', session: live.session };
@@ -2536,11 +2544,16 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // Автопередача входящих сессии (server/queue/relay.ts, входящее владельца 9654): процесс под Monitor сессии
   // отмечается раз в минуту. Жив — «Возьми входящее» владельцу вставлять не нужно; нет — говорим прямо и даём команду.
   // Опрос — раз в минуту (вкладка в фоне — раз в 5 минут), ответ — меньше килобайта; старая консоль без /relay — молчим.
+  // По продуктам (OPS-51): у каждого продукта своя сессия автопередачи; без product — основной продукт.
   var relay = null, relayTimer = null;
-  function relayLive() { return relay ? relay.sessions.filter(function (s) { return s.alive; })[0] || null : null; }
+  function relayOf(product) {
+    var p = product || window.__oqDefaultProduct;
+    return relay ? relay.sessions.filter(function (s) { return relaySessionFits(s, p); }) : [];
+  }
+  function relayLive(product) { return relayOf(product).filter(function (s) { return s.alive; })[0] || null; }
   function relayCmd(id) { return '<span><code>Возьми входящее ' + esc(id) + '</code> <button type="button" class="copy">Копировать</button></span>'; }
-  function relayHtml(id) {
-    var x = relayItemState(relay, id, Date.now());
+  function relayHtml(id, product) {
+    var x = relayItemState(relay, id, Date.now(), product);
     if (!x) return '';
     if (x.k === 'wait') return '📨 Передано сессии ' + esc(x.session) + ' в ' + esc(fmtTime(x.at)) + ' — ждём «взял»';
     if (x.k === 'sending') return '📨 Передаётся сессии ' + esc(x.session) + '…';
@@ -2551,20 +2564,40 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function paintRelayItem(el, it, e, d) {
     var rl = el.querySelector('.relay-st');
     if (!rl) return;
-    var other = window.__oqProductOf && window.__oqProductOf(it.id) !== window.__oqDefaultProduct;
-    var html = d || e.agentStatus ? '' : other ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id);
+    var product = window.__oqProductOf ? window.__oqProductOf(it.id) : window.__oqDefaultProduct;
+    // Консоль до автопередачи по продуктам (в ответе нет products) передаёт только входящие основного продукта.
+    // relay null — ответа /relay ещё нет или консоль без него: молчим, а не «никто не возьмёт» (ревью #173).
+    var old = !!relay && product !== window.__oqDefaultProduct && !relay.products;
+    var html = d || e.agentStatus || !relay ? '' : old ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id, product);
     if (rl.innerHTML !== html) rl.innerHTML = html;
     rl.hidden = !html;
   }
+  // Продукты строки «Автопередача»: выбранный в фильтре, иначе все продукты владельца (основной — первым).
+  function relayProducts() {
+    var def = window.__oqDefaultProduct, view = window.__oqViewOf ? window.__oqViewOf() : '';
+    if (view) return [view];
+    var names = relay && relay.products ? productNames() : null, list = [def];
+    if (names) Object.keys(names).forEach(function (p) { if (p !== def) list.push(p); });
+    return list;
+  }
+  function relayLine(product, named) {
+    var live = relayLive(product), last = relayOf(product)[0];
+    var names = named ? productNames() || {} : {}, who = named ? (names[product] || product) + ': ' : '';
+    // Консоль до автопередачи по продуктам (нет products): её сессии — только основного продукта (ревью #173).
+    if (!relay.products && product !== window.__oqDefaultProduct) return { ok: false, text: '⚠️ ' + who + 'автопередачи для этого продукта пока нет' };
+    if (live) return { ok: true, text: '🔁 ' + who + (named ? 'н' : 'Н') + 'овые входящие сами уходят сессии ' + live.session + ' (отметка в ' + fmtTime(live.at) + ')' };
+    return { ok: false, text: '⚠️ ' + who + (last ? (named ? 'а' : 'А') + 'втопередача не работает: сессия ' + last.session + ' не отмечалась с ' + fmtDT(new Date(last.at)) : (named ? 'а' : 'А') + 'втопередача не включена') };
+  }
   function paintRelay() {
     var note = document.getElementById('relay-note');
-    var live = relayLive(), last = relay && relay.sessions[0];
+    var list = relayProducts(), named = list.length > 1 || list[0] !== window.__oqDefaultProduct;
+    var lines = relay ? list.map(function (p) { return relayLine(p, named); }) : [];
+    var allOk = lines.every(function (l) { return l.ok; });
     note.hidden = !relay;
-    note.classList.toggle('warn', !!relay && !live);
-    note.textContent = !relay ? '' : live
-      ? '🔁 Новые входящие сами уходят сессии ' + live.session + ' (отметка в ' + fmtTime(live.at) + '): «Возьми входящее» вставлять не нужно.'
-      : (last ? '⚠️ Автопередача не работает: сессия ' + last.session + ' не отмечалась с ' + fmtDT(new Date(last.at)) + '.' : 'Автопередача входящих не включена.') +
-        ' Чтобы агент взял задачу сейчас, вставьте в сессию «Возьми входящее» с номером — команда и «Копировать» есть у пункта.';
+    note.classList.toggle('warn', !!relay && !allOk);
+    note.textContent = !relay ? '' : lines.map(function (l) { return l.text; }).join(' · ') + (allOk
+      ? ': «Возьми входящее» вставлять не нужно.'
+      : '. Чтобы агент взял задачу сейчас, вставьте в сессию «Возьми входящее» с номером — команда и «Копировать» есть у пункта.');
     allItems().forEach(function (it) {
       if (it.kind !== 'inbox') return;
       var el = document.querySelector('.item[data-id="' + it.id + '"]'), e = state[it.id] || {};
