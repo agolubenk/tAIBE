@@ -9,6 +9,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import products as P  # noqa: E402
+import sources  # noqa: E402
 
 
 def copy_instances():
@@ -43,6 +44,18 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(cfg["github"]["repo"], "agolubenk/tAIBE")
         self.assertEqual(cfg["team"]["projects_root"], shared["team"]["projects_root"], "слияние не теряет общий лист")
         self.assertEqual(cfg["queue"]["match"], "-taibe-")
+
+    def test_taibe_answer_on_a_role_6_item_goes_to_boards(self):
+        """SE-99: «boards» и «роль 6» в source — роль boards, если раньше не совпало слово другой роли (правило
+        последнее). Источники — из живой очереди 14.11; прочие — как до правки."""
+        rules = P.config_for("taibe")["queue"]["source_roles"]
+        cases = {"boards (роль 6)": "boards", "taibe boards r.37tl": "boards", "Инструменты — boards": "boards",
+                 "роль 6 boards, r.7hxk.2y32": "boards", "backup-pull-mac-12 (роль 6, автор #544)": "boards",
+                 "t-boards (роль 6)": "boards",
+                 "coord r.sio1 / boards r.ngjc (APP-580)": "coord", "t3-coord (роль 1) по просьбе t3-boards": "coord",
+                 "copilot-tboards-migration": "coord", "Координатор r.x": "coord", "release r.x": "release",
+                 "backend r.x": "backend", "frontend r.x": "frontend", "plan r.x": "plan", "taibe-59": "coord"}
+        self.assertEqual({s: sources.route_source(s, rules) for s in cases}, cases)
 
 
 class GetTest(unittest.TestCase):
