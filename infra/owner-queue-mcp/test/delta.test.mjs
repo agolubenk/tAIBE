@@ -8,7 +8,7 @@ import { BACKOFF_MS, FULL_EVERY_MS, createDeltaMirror } from '../delta.mjs';
  * Поддельная консоль по контракту /changes (queue/changes.ts HR): без since — full, cursor и collections; с since —
  * changes {docs, removed} и новый cursor; курсор старой загрузки — 410. mode 'old' — маршрута нет (404).
  */
-function fakeConsole({ mode = 'ok', truncatedWork = false } = {}) {
+function fakeConsole({ mode = 'ok', truncatedWork = false, cols = 'checks,items,work' } = {}) {
   const c = { boot: 'b1', seq: 0, cols: { checks: new Map(), items: new Map(), work: new Map() }, log: [], reqs: [], bytes: [], mode };
   const put = (col, id, data, at) => {
     c.seq += 1;
@@ -23,12 +23,13 @@ function fakeConsole({ mode = 'ok', truncatedWork = false } = {}) {
     if (c.mode === 'down') fail(503, 'Service Unavailable');
     const u = new URL(path, 'http://x');
     assert.equal(u.pathname, '/changes');
-    assert.equal(u.searchParams.get('col'), 'checks,items,work');
+    assert.equal(u.searchParams.get('col'), cols);
+    const want = cols.split(',');
     const since = u.searchParams.get('since');
     let out;
     if (!since) {
       const collections = {};
-      for (const [col, m] of Object.entries(c.cols)) {
+      for (const [col, m] of Object.entries(c.cols).filter(([k]) => want.includes(k))) {
         collections[col] = { docs: [...m.values()].sort((a, b) => b.updatedAt - a.updatedAt),
           ...(col === 'work' && truncatedWork ? { truncated: true, total: 7, limit: m.size } : {}) };
       }
@@ -37,7 +38,7 @@ function fakeConsole({ mode = 'ok', truncatedWork = false } = {}) {
       const [boot, n] = since.split('.');
       if (boot !== c.boot) fail(410, 'курсор другой загрузки консоли');
       const changes = {};
-      for (const col of Object.keys(c.cols)) {
+      for (const col of want) {
         const ids = [...new Set(c.log.filter((e) => e.seq > Number(n) && e.col === col).map((e) => e.id))];
         changes[col] = { docs: ids.filter((id) => c.cols[col].has(id)).map((id) => c.cols[col].get(id)), removed: ids.filter((id) => !c.cols[col].has(id)) };
       }
@@ -49,11 +50,11 @@ function fakeConsole({ mode = 'ok', truncatedWork = false } = {}) {
   return { c, put, del, get, restart: () => { c.boot = `b${Number(c.boot.slice(1)) + 1}`; } };
 }
 
-function rig(opts) {
+function rig(opts = {}) {
   const f = fakeConsole(opts);
   let t = 1_000_000;
   const logs = [];
-  const m = createDeltaMirror({ get: f.get, now: () => t, log: (s) => logs.push(s) });
+  const m = createDeltaMirror({ get: f.get, now: () => t, log: (s) => logs.push(s), ...(opts.cols ? { cols: opts.cols.split(',') } : {}) });
   return { ...f, m, logs, tick: (ms) => { t += ms; } };
 }
 
@@ -140,4 +141,15 @@ test('потолок консоли у коллекции (truncated, total, lim
   r.put('work', 'w-2', { title: 'строка 2' });
   assert.deepEqual(await r.m.list('work').then(({ docs: _d, ...meta }) => meta), { truncated: true, total: 7, limit: 2 });
   assert.equal(await r.m.list('history'), null);
+});
+
+test('cols — только нужные коллекции (автопередача: checks и items, линза «Контроля» #353, п. 2)', async () => {
+  const r = rig({ cols: 'checks,items' });
+  r.put('items', 'i-1', { kind: 'inbox' });
+  r.put('work', 'w-1', { title: 'строка' });
+  assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['i-1']);
+  assert.equal(await r.m.list('work'), null, 'work не держим — прежний путь');
+  r.put('work', 'w-2', { title: 'ещё' });
+  await r.m.list('checks');
+  assert.equal(r.c.bytes.at(-1) < 120, true, 'изменения work в дельту не попадают');
 });

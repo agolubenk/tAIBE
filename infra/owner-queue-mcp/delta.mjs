@@ -17,9 +17,11 @@ const byFresh = (a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0
 /**
  * get(path) → JSON ответа консоли; ошибка HTTP — исключение с полем status (как apiWith в server.mjs).
  * list(col) → { docs, truncated?, total?, limit? } в форме GET /db/:col, или null — читать прежним путём.
+ * cols — какие коллекции держать: автопередаче хватает items и checks (линза «Контроля» #353, п. 2).
+ * Потолок консоли (truncated, total, limit) — из последнего полного списка; дельта его не пересчитывает.
  */
-export function createDeltaMirror({ get, now = Date.now, log = () => {}, fullEveryMs = FULL_EVERY_MS, backoffMs = BACKOFF_MS }) {
-  const base = `/changes?col=${DELTA_COLS.join(',')}`;
+export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log = () => {}, fullEveryMs = FULL_EVERY_MS, backoffMs = BACKOFF_MS }) {
+  const base = `/changes?col=${cols.join(',')}`;
   let st = null; // { cursor, fullAt, docs: { col: Map<id, doc> }, meta: { col: { truncated, total, limit } } }
   let restUntil = 0;
   let inflight = null;
@@ -29,7 +31,7 @@ export function createDeltaMirror({ get, now = Date.now, log = () => {}, fullEve
     if (j?.full !== true || typeof j.cursor !== 'string' || !j.collections) throw new Error('ответ без full, cursor и collections');
     const docs = {};
     const meta = {};
-    for (const col of DELTA_COLS) {
+    for (const col of cols) {
       const c = j.collections[col];
       if (!Array.isArray(c?.docs)) throw new Error(`в полном списке нет коллекции ${col}`);
       docs[col] = new Map(c.docs.map((d) => [d.id, d]));
@@ -47,7 +49,7 @@ export function createDeltaMirror({ get, now = Date.now, log = () => {}, fullEve
       throw e;
     }
     if (typeof j?.cursor !== 'string' || !j.changes) throw new Error('ответ без cursor и changes');
-    for (const col of DELTA_COLS) {
+    for (const col of cols) {
       const ch = j.changes[col];
       if (!ch) throw new Error(`в дельте нет коллекции ${col}`);
       for (const id of ch.removed || []) st.docs[col].delete(id);
@@ -65,7 +67,7 @@ export function createDeltaMirror({ get, now = Date.now, log = () => {}, fullEve
   }
 
   async function list(col) {
-    if (!DELTA_COLS.includes(col) || now() < restUntil) return null;
+    if (!cols.includes(col) || now() < restUntil) return null;
     try {
       await sync();
     } catch (e) {

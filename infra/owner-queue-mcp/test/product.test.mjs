@@ -183,6 +183,7 @@ test('--relay на дельте /changes (карточка HR Q-38): входя�
   const got = [];
   await new Promise((resolve) => { lines.on('line', (l) => { got.push(l); if (got.length === 2) resolve(); }); });
   assert.deepEqual(got.map((l) => l.split(' ')[2]).sort(), ['i-hr', 'i-hr2']);
-  assert.ok(fake.seen.paths.some((p) => p.startsWith('/api/oq/v1/changes?col=checks,items,work')));
+  assert.ok(fake.seen.paths.some((p) => p.startsWith('/api/oq/v1/changes?col=checks,items')), 'автопередаче — только checks и items');
+  assert.ok(!fake.seen.paths.some((p) => p.includes('work')));
   assert.ok(!fake.seen.paths.some((p) => p.startsWith('/api/oq/v1/db/')), 'полный список не запрошен');
 });

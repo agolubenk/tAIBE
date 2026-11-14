@@ -97,7 +97,7 @@ export async function relayLoop(session, { BASE, TOKEN, api, product = DEFAULT_P
   };
   // Дельта /changes (delta.mjs, карточка HR Q-38): ETag экономил только проход без изменений, а любая запись в checks
   // (статусы агентов — постоянно) или items заново тянула всю коллекцию. /changes нет или сбой — прежний опрос с ETag.
-  const mirror = createDeltaMirror({ get: (p) => api('GET', p), log: (s) => process.stderr.write(`[owner-queue-relay] ${s}\n`) });
+  const mirror = createDeltaMirror({ get: (p) => api('GET', p), cols: ['checks', 'items'], log: (s) => process.stderr.write(`[owner-queue-relay] ${s}\n`) });
   const etag = {}, last = {};
   const docsOf = async (col) => (await mirror.list(col))?.docs ?? poll(col);
   async function poll(col) {
