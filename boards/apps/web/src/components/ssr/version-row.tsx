@@ -1,0 +1,193 @@
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  approveSsrDraft,
+  getSsrDiff,
+  rejectSsrDraft,
+  rollbackSsrEntity,
+  type SsrEntity,
+  type SsrVersionSummary,
+} from "@/fetchers/ssr/ssr-fetchers";
+import { Button } from "@/components/ui/button";
+import { DiffBlock } from "./diff-block";
+
+// One version of a registry entity: the diff opens before any owner
+// decision — approve and rollback stay disabled until the diff is on screen.
+export function VersionRow({
+  workspaceId,
+  entity,
+  version,
+  latestNumber,
+}: {
+  workspaceId: string;
+  entity: SsrEntity;
+  version: SsrVersionSummary;
+  latestNumber: number | null;
+}) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [fromVersion, setFromVersion] = useState<number | null>(null);
+  const [diffOpen, setDiffOpen] = useState(false);
+
+  const diff = useQuery({
+    queryKey: [
+      "ssr",
+      "diff",
+      workspaceId,
+      entity.id,
+      version.number,
+      fromVersion,
+    ],
+    queryFn: () =>
+      getSsrDiff(
+        workspaceId,
+        entity.id,
+        fromVersion ? String(fromVersion) : "latest",
+        String(version.number),
+      ),
+    enabled: diffOpen,
+  });
+
+  // The matching bar counts open drafts, so a single decision refreshes it too.
+  const invalidate = () =>
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["ssr", "entities", workspaceId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["ssr", "drafts", workspaceId],
+      }),
+    ]);
+
+  const approve = useMutation({
+    mutationFn: () => approveSsrDraft(workspaceId, entity.id, version.id),
+    onSuccess: invalidate,
+  });
+  const reject = useMutation({
+    mutationFn: () => rejectSsrDraft(workspaceId, entity.id, version.id),
+    onSuccess: invalidate,
+  });
+  const rollback = useMutation({
+    mutationFn: () => rollbackSsrEntity(workspaceId, entity.id, version.number),
+    onSuccess: invalidate,
+  });
+
+  const isLatest = latestNumber === version.number;
+  const fromOptions = entity.versions
+    .filter((candidate) => candidate.number !== version.number)
+    .map((candidate) => candidate.number);
+
+  return (
+    <li className="border-border border-t px-4 py-3 first:border-t-0">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <span className="font-mono text-sm">v{version.number}</span>
+          <span className="text-muted-foreground text-xs">
+            {version.status} · {version.origin}
+          </span>
+          <time
+            className="text-muted-foreground text-xs"
+            dateTime={version.createdAt}
+          >
+            {new Date(version.createdAt).toLocaleString()}
+          </time>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-muted-foreground flex items-center gap-1 text-xs">
+            {t("workspace:ssr.diffFrom")}
+            <select
+              className="bg-background border-input rounded-md border px-1 py-0.5 text-xs"
+              value={fromVersion ?? ""}
+              onChange={(event) =>
+                setFromVersion(
+                  event.target.value ? Number(event.target.value) : null,
+                )
+              }
+            >
+              <option value="">latest</option>
+              {fromOptions.map((number) => (
+                <option key={number} value={number}>
+                  v{number}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setDiffOpen((open) => !open)}
+          >
+            {diffOpen
+              ? t("workspace:ssr.diffHide")
+              : t("workspace:ssr.diffShow")}
+          </Button>
+          {version.status === "draft" ? (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!diffOpen || diff.isPending}
+                onClick={() => approve.mutate()}
+              >
+                {t("workspace:ssr.approve")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!diffOpen || diff.isPending}
+                onClick={() => reject.mutate()}
+              >
+                {t("workspace:ssr.reject")}
+              </Button>
+            </>
+          ) : null}
+          {!isLatest &&
+          version.status !== "draft" &&
+          version.status !== "rejected" ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!diffOpen || diff.isPending || rollback.isPending}
+              onClick={() => rollback.mutate()}
+            >
+              {t("workspace:ssr.rollback")}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      {diffOpen ? (
+        <div className="mt-3 flex flex-col gap-2">
+          {diff.isPending ? (
+            <p className="text-muted-foreground text-xs">
+              {t("common:loading")}
+            </p>
+          ) : null}
+          {diff.isError ? (
+            <p className="text-destructive text-xs">
+              {t("workspace:ssr.loadError")}
+            </p>
+          ) : null}
+          {diff.data
+            ? diff.data.files.map((file) => (
+                <div key={file.path}>
+                  <p className="text-muted-foreground mb-1 font-mono text-xs">
+                    {file.path} (v{diff.data?.from} → v{diff.data?.to})
+                  </p>
+                  <DiffBlock diff={file.diff} />
+                </div>
+              ))
+            : null}
+        </div>
+      ) : null}
+      {approve.isError || reject.isError || rollback.isError ? (
+        <p className="text-destructive mt-2 text-xs">
+          {t("workspace:ssr.loadError")}
+        </p>
+      ) : null}
+    </li>
+  );
+}
