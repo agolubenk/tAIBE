@@ -86,7 +86,7 @@ admins="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -Atc \
 log "seed: one admin after two runs"
 
 "${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1
-again="$("${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1)"
+again="$("${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1)" || fail "second products seed failed: $again"
 printf '%s\n' "$again"
 [[ "$again" == "products: +0 "*"cards: +0 "*"links: +0 "* ]] || fail "second products seed changed something: $again"
 log "seed: products and links added once, kept on the second run"
