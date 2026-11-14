@@ -26,6 +26,9 @@ GH_UNKNOWN = ("подкоманда gh не встроенная и не про�
               "меняет та же команда, shell-псевдоним, расширение, опечатка) — что выполнит gh, не видно")
 GH_KEY = r"[A-Za-z0-9_][\w.-]*"
 UNSEEN_BODY = "запрос GraphQL, тело которого не видно (stdin, файла ещё нет или он больше 1 МБ)"
+VISIBILITY = "смена видимости репозитория (код, история и docs открываются разом и необратимо)"  # IS-124
+VIS_JSON_KEY = r"\b(visibility|private)\b[\"']?\s*[:=]"
+API_REPO = r"api\.github\.com/repos/[^/\s\"'?]+/[^/\s\"'?]+(?=[\s\"'?]|$)"  # сам репозиторий, не его ресурсы
 
 
 def field_file(path, cwd=".", written=()):
@@ -78,6 +81,17 @@ def contents_branch(fields):
     return branch
 
 
+def repo_visibility(fields):
+    """`PATCH repos/<o>/<r>` меняет видимость: поле visibility или private (`-f`, `-F`), такой ключ в теле `--input`
+    или тело `--input` не видно (stdin, файла нет, больше 1 МБ)."""
+    for flag, raw, body in fields:
+        if flag == "--input" and (not body or re.search(VIS_JSON_KEY, body)):
+            return True
+        if flag != "--input" and raw.partition("=")[0] in ("visibility", "private"):
+            return True
+    return False
+
+
 def classify_gh_api(a, cwd=".", written=()):
     a = a[:2] + api_args(a[2:])
     method, path, fields, unseen = None, None, [], False
@@ -106,6 +120,8 @@ def classify_gh_api(a, cwd=".", written=()):
     if p == "graphql" or p.endswith("/graphql"):
         if unseen:
             return UNSEEN_BODY
+        if re.search(r"\bupdateRepository\b", blob) and re.search(r"\bvisibility\b", blob):
+            return VISIBILITY
         if re.search(r"\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b", blob):
             return MERGE
         if re.search(r"\b(createCommitOnBranch|updateRefs?|deleteRef)\b", blob) and mentions_protected(blob, cwd):
@@ -115,6 +131,8 @@ def classify_gh_api(a, cwd=".", written=()):
         return None
     if (method or ("POST" if fields else "GET")) == "GET":
         return None
+    if re.search(r"(?:^|/)repos/[^/]+/[^/]+$", p) and repo_visibility(fields):
+        return VISIBILITY
     if re.search(r"/pulls/\d+/merge$", p) or p.endswith("/merges"):
         return MERGE
     if re.search(r"/dispatches$|/actions/runs/\d+/rerun(-failed-jobs)?$|/actions/jobs/\d+/rerun$", p):
@@ -263,6 +281,9 @@ def classify_gh(a, cwd=".", written=(), depth=0, guess=False):
             return None if guess and exp is False else GH_UNKNOWN
         tokens = None if depth > 2 else alias_tokens(exp, args[:k] + args[k + 1:])  # cobra отдаёт и то, что до имени
         return GH_UNKNOWN if tokens is None else classify_gh(["gh"] + tokens, cwd, written, depth + 1)
+    if words[:2] == ["repo", "edit"] and any(re.match(r"--(visibility|accept-visibility-change-consequences)(=|$)", x)
+                                             for x in args):
+        return VISIBILITY
     if words[:2] == ["pr", "merge"]:
         return MERGE
     if words[:1] in (["pr"], ["workflow"], ["run"], ["alias"]) and re.search(rf"\$|{SUBST}", words[1] if words[1:] else ""):
@@ -281,6 +302,8 @@ def classify_interp(a, cwd="."):
     """Защищённая команда, запущенная из python/node/… списком аргументов или строкой."""
     blob = " ".join(a[1:])
     q = r"[\"',\s\]\[]+"
+    if re.search(rf"\bgh{q}repo{q}edit\b", blob) and "visibility" in blob:
+        return VISIBILITY
     if re.search(rf"\bgh{q}pr{q}merge\b|mergePullRequest|/pulls/\d+/merge\b", blob):
         return MERGE
     if re.search(rf"\bgh{q}(workflow{q}run|run{q}rerun)\b|/dispatches\b", blob):
@@ -295,6 +318,10 @@ def classify_http(a, cwd="."):
     blob = " ".join(a)
     if "api.github.com" not in blob:
         return None
+    if re.search(API_REPO, blob) and re.search(VIS_JSON_KEY, blob):
+        return VISIBILITY
+    if re.search(r"\bupdateRepository\b", blob) and re.search(r"\bvisibility\b", blob):
+        return VISIBILITY
     if re.search(r"/pulls/\d+/merge\b|/merges\b|mergePullRequest", blob):
         return MERGE
     if re.search(r"/dispatches\b|/rerun", blob):
