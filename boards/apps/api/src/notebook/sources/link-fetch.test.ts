@@ -300,5 +300,70 @@ describe("fetchLink", () => {
       ...new TextEncoder().encode('<meta charset="windows-1251">Привет'),
     ]);
     expect(await fetched(bom)).toContain("Привет");
+    // <meta> inside a comment is not read.
+    expect(
+      await fetched(html('<!-- <meta charset="windows-1251"> -->')),
+    ).not.toContain("Привет");
+  });
+
+  it("lets a UTF-16 byte-order mark win over the header and <meta> (TB-132)", async () => {
+    const utf16le = (text: string) =>
+      new Uint8Array([
+        0xff,
+        0xfe,
+        ...[...text].flatMap((ch) => {
+          const code = ch.charCodeAt(0);
+          return [code & 0xff, code >> 8];
+        }),
+      ]);
+    const utf16be = (text: string) =>
+      new Uint8Array([
+        0xfe,
+        0xff,
+        ...[...text].flatMap((ch) => {
+          const code = ch.charCodeAt(0);
+          return [code >> 8, code & 0xff];
+        }),
+      ]);
+    const read = async (body: Uint8Array<ArrayBuffer>, type: string) =>
+      (
+        await fetchLink(PAGE, {
+          baseFetch: vi.fn<Fetch>(async () =>
+            page(body, { "content-type": type }),
+          ),
+        })
+      ).body;
+
+    expect(await read(utf16le("<p>Привет</p>"), "text/html")).toBe(
+      "<p>Привет</p>",
+    );
+    expect(
+      await read(utf16be("<p>Привет</p>"), "text/html; charset=windows-1251"),
+    ).toBe("<p>Привет</p>");
+    expect(await read(utf16le("Привет"), "text/plain")).toBe("Привет");
+  });
+
+  it("maps <meta> labels the prescan cannot mean (TB-132)", async () => {
+    const read = async (head: string, tail: number[]) =>
+      (
+        await fetchLink(PAGE, {
+          baseFetch: vi.fn<Fetch>(async () =>
+            page(new Uint8Array([...new TextEncoder().encode(head), ...tail]), {
+              "content-type": "text/html",
+            }),
+          ),
+        })
+      ).body;
+    const utf8 = [...new TextEncoder().encode("Привет")];
+
+    // An ASCII-compatible page that says utf-16 is read as UTF-8.
+    expect(await read('<meta charset="utf-16">', utf8)).toBe(
+      '<meta charset="utf-16">Привет',
+    );
+    expect(await read('<meta charset="UTF-16LE">', utf8)).toContain("Привет");
+    // x-user-defined is read as windows-1252.
+    expect(await read('<meta charset="x-user-defined">', [0xe9])).toContain(
+      "é",
+    );
   });
 });

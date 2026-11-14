@@ -75,27 +75,31 @@ function isLinkMime(mime: string): mime is LinkMime {
   return (LINK_MIME_TYPES as readonly string[]).includes(mime);
 }
 
-// TB-132: HTML without a charset in the header names it in <meta charset> or
-// <meta http-equiv content="…; charset=…"> within the first 1024 bytes (the
-// WHATWG prescan window). A byte-order mark wins over both.
+// TB-132, the WHATWG order: a byte-order mark names the encoding and wins over
+// the header and <meta>; then the header; then, for HTML, <meta charset> or
+// <meta http-equiv content="…; charset=…"> within the first 1024 bytes.
 const META_PRESCAN_BYTES = 1024;
 const META_CHARSET = /<meta\s[^>]*?charset\s*=\s*["']?\s*([\w.:-]+)/i;
+const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
 
-function hasBom(bytes: Uint8Array) {
+function bomCharset(bytes: Uint8Array) {
   const [a, b, c] = bytes;
-  return (
-    (a === 0xef && b === 0xbb && c === 0xbf) ||
-    (a === 0xfe && b === 0xff) ||
-    (a === 0xff && b === 0xfe)
-  );
+  if (a === 0xef && b === 0xbb && c === 0xbf) return "utf-8";
+  if (a === 0xff && b === 0xfe) return "utf-16le";
+  if (a === 0xfe && b === 0xff) return "utf-16be";
+  return undefined;
 }
 
 function metaCharset(bytes: Uint8Array) {
-  if (hasBom(bytes)) return undefined;
-  const head = new TextDecoder("latin1").decode(
-    bytes.subarray(0, META_PRESCAN_BYTES),
-  );
-  return head.match(META_CHARSET)?.[1];
+  const head = new TextDecoder("latin1")
+    .decode(bytes.subarray(0, META_PRESCAN_BYTES))
+    .replace(HTML_COMMENT, "");
+  const label = head.match(META_CHARSET)?.[1];
+  // The prescan reads ASCII-compatible bytes, so a page that got this far is
+  // not UTF-16 whatever its <meta> says; WHATWG maps the label to UTF-8.
+  if (label && /^utf-16/i.test(label)) return "utf-8";
+  if (label && /^x-user-defined$/i.test(label)) return "windows-1252";
+  return label;
 }
 
 function decode(bytes: Uint8Array, charset: string | undefined) {
@@ -190,7 +194,9 @@ export async function fetchLink(
     }
     const body = bytes.subarray(0, size);
     const declared =
-      charset ?? (mime === "text/html" ? metaCharset(body) : undefined);
+      bomCharset(body) ??
+      charset ??
+      (mime === "text/html" ? metaCharset(body) : undefined);
     return { mime, body: decode(body, declared) };
   };
 
