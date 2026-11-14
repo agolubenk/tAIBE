@@ -10,9 +10,11 @@ const MAX_ACTORS = 50;
 // written before TB-44 are filed under the tool and are not counted.
 export async function cardCost(taskId: string) {
   const journal = agentJournalTable;
-  // Every mcp.call detail is JSON (callDetail); the check keeps one broken
-  // row from failing the whole sum.
-  const tokens = sql<number>`coalesce(sum(case when pg_input_is_valid(${journal.detail}, 'jsonb') then (${journal.detail}::jsonb ->> 'tokens')::int end), 0)::int`;
+  // Every mcp.call detail is JSON with numeric tokens (callDetail); the
+  // checks keep one broken row from failing the whole sum. The CASEs are
+  // nested because Postgres does not promise the order of an AND.
+  const detail = sql`${journal.detail}::jsonb`;
+  const tokens = sql<number>`coalesce(sum(case when pg_input_is_valid(${journal.detail}, 'jsonb') then case when jsonb_typeof(${detail} -> 'tokens') = 'number' then (${detail} ->> 'tokens')::numeric end end), 0)::int`;
   const calls = sql<number>`count(*)::int`;
   const first = sql<Date>`min(${journal.createdAt})`;
   const last = sql<Date>`max(${journal.createdAt})`;

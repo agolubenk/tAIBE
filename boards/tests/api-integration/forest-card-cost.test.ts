@@ -147,7 +147,7 @@ describe("API integration: card cost from the MCP journal (TB-44)", () => {
     expect(otherCost.body).toMatchObject({ calls: 1, card: { tokens: null } });
   });
 
-  it("counts neither rows written before TB-44 nor refused ones, and keeps one broken row from failing the sum", async () => {
+  it("counts neither rows written before TB-44 nor refused ones, and keeps a broken row or a non-numeric tokens from failing the sum", async () => {
     const forest = await createForest();
     const card = await addTask(forest.project.id);
     const actor = {
@@ -178,11 +178,12 @@ describe("API integration: card cost from the MCP journal (TB-44)", () => {
     );
     await row("task", card!.id, '{"tool":"get_task","tokens":5}');
     await row("task", card!.id, '{"tool":"get_task","tokens":');
+    await row("task", card!.id, '{"tool":"get_task","tokens":"many"}');
     await row("task", card!.id, '{"tool":"get_task","tokens":100}', "denied");
 
     const cost = await forest.owner(`/cards/${card!.id}/cost`);
     expect(cost.status).toBe(200);
-    expect(cost.body).toMatchObject({ calls: 2, tokens: 5 });
+    expect(cost.body).toMatchObject({ calls: 3, tokens: 5 });
   });
 
   it("answers only those who may open the card's project", async () => {
