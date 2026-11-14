@@ -490,10 +490,12 @@ export function createApp() {
     const apiKeyResult = await verifyApiKey(apiKeyHeader, { consume: false });
     if (apiKeyResult?.status !== "valid") throw apiKeyRejection(apiKeyResult);
     const scope = apiKeyResult.key.workspaceScope;
+    // TB-96: the read check first, so a write by a read-only key answers
+    // API_KEY_READ_ONLY and not one of the checks below.
+    assertKeyAccessAllowsMethod(apiKeyResult.key.access, c.req.method);
     assertScopedKeyAuthRoute(scope, c.req.method, c.req.path);
     assertAgentAuthRoute(apiKeyResult.key.agent, c.req.method, c.req.path);
     assertApiKeyAuthRoute(c.req.method, c.req.path);
-    assertKeyAccessAllowsMethod(apiKeyResult.key.access, c.req.method);
     await next();
     c.res = await limitAuthResponseToScope(scope, c.req.path, c.res);
     c.set(
@@ -820,10 +822,10 @@ export function createApp() {
       const apiKeyResult = await verifyApiKey(bearerToken, { consume: false });
       if (apiKeyResult?.status !== "valid") throw apiKeyRejection(apiKeyResult);
       const scope: ApiKeyWorkspaceScope = apiKeyResult.key.workspaceScope;
+      assertKeyAccessAllowsMethod(apiKeyResult.key.access, c.req.method);
       assertScopedKeyAuthRoute(scope, c.req.method, c.req.path);
       assertAgentAuthRoute(apiKeyResult.key.agent, c.req.method, c.req.path);
       assertApiKeyAuthRoute(c.req.method, c.req.path);
-      assertKeyAccessAllowsMethod(apiKeyResult.key.access, c.req.method);
 
       // Better Auth API key plugin validates from x-api-key by default.
       headers.set("x-api-key", bearerToken);

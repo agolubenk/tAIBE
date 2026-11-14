@@ -25,14 +25,15 @@ function outOfScope() {
 
 // Runs after authenticateApiRequest on the regular API routes.
 export async function scopedApiKeyGuard(c: Context, next: Next) {
+  // TB-96: a read-only key, scoped or not, only reads. The check runs first,
+  // so every write by such a key answers API_KEY_READ_ONLY.
+  assertKeyAccessAllowsMethod(requestKeyAccess(c), c.req.method);
   if (
     isWorkspaceScoped(requestWorkspaceScope(c)) &&
     !scopedKeyMayCall(c.req.method, c.req.path)
   ) {
     throw outOfScope();
   }
-  // TB-96: a read-only key, scoped or not, only reads.
-  assertKeyAccessAllowsMethod(requestKeyAccess(c), c.req.method);
   return next();
 }
 

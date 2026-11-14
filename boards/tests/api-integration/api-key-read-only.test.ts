@@ -160,10 +160,115 @@ describe("API integration: read-only API keys (TB-96)", () => {
       body: JSON.stringify({ name: "wider key" }),
     });
     expect(minted.status).toBe(403);
+    expect((await readErrorBody(minted)).code).toBe("API_KEY_READ_ONLY");
     const keys = await db
       .select({ id: schema.apikeyTable.id })
       .from(schema.apikeyTable);
     expect(keys).toHaveLength(1);
+  });
+
+  it("answers API_KEY_READ_ONLY before the scope and session checks", async () => {
+    const { user, workspace, project } = await seed();
+    const unscoped = await createKey(user.id, { access: "read" });
+    const scoped = await createKey(user.id, {
+      access: "read",
+      workspaceId: workspace.id,
+    });
+    const writes: Array<[string, string, string]> = [
+      // Account management: SESSION_REQUIRED came first before.
+      ["unscoped", unscoped, "/api/auth/api-key/create"],
+      ["bearer", unscoped, "/api/auth/api-key/create"],
+      // Outside the key's workspace routes: API_KEY_WORKSPACE_SCOPE came first.
+      ["scoped", scoped, "/api/auth/organization/create"],
+      ["scoped", scoped, `/api/gitlab-integration/project/${project.id}`],
+    ];
+    for (const [kind, key, path] of writes) {
+      const response = await call(path, key, {
+        method: "POST",
+        headers:
+          kind === "bearer"
+            ? { "x-api-key": "", authorization: `Bearer ${key}` }
+            : {},
+        body: "{}",
+      });
+      const label = `${kind} POST ${path}`;
+      expect(response.status, label).toBe(403);
+      expect((await readErrorBody(response)).code, label).toBe(
+        "API_KEY_READ_ONLY",
+      );
+    }
+  });
+
+  it("does not give a read-only key the GitLab or Gitea webhook secret (R-017)", async () => {
+    const { user, project } = await seed();
+    const webhookSecret = ["tb96", "webhook", "secret"].join("-");
+    await db.insert(schema.integrationTable).values([
+      {
+        projectId: project.id,
+        type: "gitlab",
+        isActive: true,
+        config: JSON.stringify({
+          baseUrl: "https://gitlab.example",
+          projectPath: "group/project",
+          accessToken: "fake-gitlab-test-token",
+          webhookSecret,
+        }),
+      },
+      {
+        projectId: project.id,
+        type: "gitea",
+        isActive: true,
+        config: JSON.stringify({
+          baseUrl: "https://gitea.example",
+          repositoryOwner: "group",
+          repositoryName: "project",
+          accessToken: "fake-gitea-test-token",
+          webhookSecret,
+        }),
+      },
+    ]);
+    const read = async (key: string, kind: "gitlab" | "gitea") => {
+      const response = await call(
+        `/api/${kind}-integration/project/${project.id}`,
+        key,
+      );
+      expect(response.status, kind).toBe(200);
+      return (await response.json()) as {
+        webhookSecret: string;
+        maskedAccessToken: string;
+      };
+    };
+
+    const full = await createKey(user.id, { access: "full" });
+    expect((await read(full, "gitlab")).webhookSecret).toBe(webhookSecret);
+    expect((await read(full, "gitea")).webhookSecret).toBe(webhookSecret);
+
+    const readOnly = await createKey(user.id, { access: "read" });
+    const gitlab = await read(readOnly, "gitlab");
+    expect(gitlab.webhookSecret).toBe("");
+    expect(gitlab.maskedAccessToken).toBe("");
+    expect((await read(readOnly, "gitea")).webhookSecret).toBe("");
+  });
+
+  it("refuses agent keys and the agent list to a read-only key (R-016)", async () => {
+    const { user } = await seed();
+    const key = await createKey(user.id, { access: "read" });
+    const list = await call("/api/agent-identity", key);
+    expect(list.status).toBe(403);
+    expect(((await list.json()) as { message: string }).message).toContain(
+      "agent_forbidden",
+    );
+    const issue = await call("/api/agent-identity/session", key, {
+      method: "POST",
+      body: JSON.stringify({ harness: "claude-code", session: "tb96" }),
+    });
+    expect(issue.status).toBe(403);
+    expect((await readErrorBody(issue)).code).toBe("API_KEY_READ_ONLY");
+    const agents = await db
+      .select({ id: schema.userTable.id })
+      .from(schema.userTable)
+      .where(eq(schema.userTable.role, "agent"));
+    expect(agents).toEqual([]);
   });
 
   it("does not open MCP to a read-only key as a bearer or x-api-key", async () => {

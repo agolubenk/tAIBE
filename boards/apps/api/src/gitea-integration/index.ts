@@ -15,10 +15,8 @@ import {
 } from "../openapi";
 import { type GiteaConfig, validateGiteaConfig } from "../plugins/gitea/config";
 import { handleGiteaWebhookRequest } from "../plugins/gitea/webhook-handler";
-import {
-  hasWorkspacePermission,
-  requireWorkspacePermission,
-} from "../utils/require-workspace-permission";
+import { mayReadSecrets } from "../utils/may-read-secrets";
+import { requireWorkspacePermission } from "../utils/require-workspace-permission";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createGiteaIntegration from "./controllers/create-gitea-integration";
 import deleteGiteaIntegration from "./controllers/delete-gitea-integration";
@@ -105,7 +103,7 @@ const getIntegrationRoute = createRoute({
   tags: ["Gitea"],
   summary: "Get Gitea integration",
   description:
-    "Get the Gitea integration for a project, or null when none is configured. The webhook secret is included only for callers with workspace:manage_settings.",
+    "Get the Gitea integration for a project, or null when none is configured. The webhook secret is included only for callers with workspace:manage_settings, and never for a read-only API key.",
   middleware: [workspaceAccess.fromProject("projectId")] as const,
   request: { params: projectIdParam },
   responses: {
@@ -231,9 +229,7 @@ const giteaIntegration = apiRouter<BaseVariables & { workspaceId: string }>()
   })
   .openapi(getIntegrationRoute, async (c) => {
     const { projectId } = c.req.valid("param");
-    const includeWebhookSecret = await hasWorkspacePermission(c, {
-      workspace: ["manage_settings"],
-    });
+    const includeWebhookSecret = await mayReadSecrets(c);
     const integration = await getGiteaIntegration(
       projectId,
       includeWebhookSecret,
