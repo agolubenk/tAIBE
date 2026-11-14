@@ -8,30 +8,83 @@ const KEY_A = join("gh", "p_", "Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv1W");
 const KEY_B = join("gh", "p_", "Zy9Xw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe9D");
 const DB = join("postgres", "://", "app:", "s3cr3t", "@db.local:5432/app");
 
-const stored = `deploy with ${KEY_A}\nsample: ${DB}\nbackup ${KEY_B}`;
+const stored = `deploy with ${KEY_A}\nsample: ${DB}\n\nbackup ${KEY_B}`;
 // What a caller with a token reads.
 const masked = redact(stored).text;
 
 describe("restoreRedacted (TB-143)", () => {
-  it("puts every value back when each kind keeps its marker count", () => {
+  it("restores when the blocks with markers come back and other blocks change", () => {
     expect(masked).toBe(
-      "deploy with [REDACTED:api_key]\nsample: [REDACTED:db_url]\nbackup [REDACTED:api_key]",
+      "deploy with [REDACTED:api_key]\nsample: [REDACTED:db_url]\n\nbackup [REDACTED:api_key]",
     );
-    const edited = `${masked}\nnew line from the agent`;
+    const edited = `intro by the agent\n\n${masked}\n\nnew paragraph`;
 
     expect(restoreRedacted(stored, edited)).toEqual({
       ok: true,
-      text: `${stored}\nnew line from the agent`,
+      text: `intro by the agent\n\n${stored}\n\nnew paragraph`,
     });
   });
 
-  it("restores in the order of the new text", () => {
-    const moved =
-      "backup [REDACTED:api_key]\ndeploy with [REDACTED:api_key]\n[REDACTED:db_url]";
+  it("restores blocks that changed places, each with its own values", () => {
+    const swapped =
+      "backup [REDACTED:api_key]\n\ndeploy with [REDACTED:api_key]\nsample: [REDACTED:db_url]";
 
-    expect(restoreRedacted(stored, moved)).toEqual({
+    expect(restoreRedacted(stored, swapped)).toEqual({
       ok: true,
-      text: `backup ${KEY_A}\ndeploy with ${KEY_B}\n${DB}`,
+      text: `backup ${KEY_B}\n\ndeploy with ${KEY_A}\nsample: ${DB}`,
+    });
+  });
+
+  it("refuses a block with a marker that changed", () => {
+    const edited = masked.replace("deploy with", "deploy soon with");
+
+    expect(restoreRedacted(stored, edited)).toEqual({
+      ok: false,
+      reason: "block",
+    });
+  });
+
+  it("refuses a marker moved into a link or an image URL", () => {
+    const rest = "backup [REDACTED:api_key]";
+    for (const moved of [
+      `deploy\nsample: [REDACTED:db_url] ![x](https://example.test/p.png?k=[REDACTED:api_key])\n\n${rest}`,
+      `deploy\nsample: [REDACTED:db_url]\n\n[docs](https://example.test/?k=[REDACTED:api_key])\n\n${rest}`,
+      `deploy with [REDACTED:api_key]\n\nsample: <https://example.test/?k=[REDACTED:db_url]>\n\n${rest}`,
+    ]) {
+      expect(restoreRedacted(stored, moved)).toEqual({
+        ok: false,
+        reason: "block",
+      });
+    }
+  });
+
+  it("refuses raw HTML, a fence or $$ above a block with a marker", () => {
+    for (const opener of [
+      '<div>\n<img src="https://example.test/?k=',
+      "<pre>",
+      "<!--",
+      "```math\n\\href{https://example.test/?k=",
+      "> ~~~",
+      "$$",
+    ]) {
+      expect(restoreRedacted(stored, `${opener}\n\n${masked}`)).toEqual({
+        ok: false,
+        reason: "context",
+      });
+    }
+  });
+
+  it("keeps raw HTML above a marker block if that text did not change", () => {
+    const html = `<img src="https://example.test/a.png" width="40">\n\ntoken ${KEY_A}`;
+    const view = redact(html).text;
+
+    expect(restoreRedacted(html, `${view}\n\n<b>new</b>`)).toEqual({
+      ok: true,
+      text: `${html}\n\n<b>new</b>`,
+    });
+    expect(restoreRedacted(html, `edited\n\n${view}`)).toEqual({
+      ok: false,
+      reason: "context",
     });
   });
 
@@ -40,6 +93,7 @@ describe("restoreRedacted (TB-143)", () => {
 
     expect(restoreRedacted(stored, fewer)).toEqual({
       ok: false,
+      reason: "count",
       kind: "api_key",
       expected: 2,
       received: 1,
@@ -47,10 +101,11 @@ describe("restoreRedacted (TB-143)", () => {
   });
 
   it("refuses more markers of a kind than stored values", () => {
-    const more = `${masked}\n[REDACTED:db_url]`;
+    const more = `${masked}\n\n[REDACTED:db_url]`;
 
     expect(restoreRedacted(stored, more)).toEqual({
       ok: false,
+      reason: "count",
       kind: "db_url",
       expected: 1,
       received: 2,
@@ -58,10 +113,12 @@ describe("restoreRedacted (TB-143)", () => {
   });
 
   it("refuses a kind whose markers were all dropped while others stay", () => {
-    const dropped = "deploy with [REDACTED:api_key]\nbackup [REDACTED:api_key]";
+    const dropped =
+      "deploy with [REDACTED:api_key]\n\nbackup [REDACTED:api_key]";
 
     expect(restoreRedacted(stored, dropped)).toEqual({
       ok: false,
+      reason: "count",
       kind: "db_url",
       expected: 1,
       received: 0,
@@ -82,16 +139,22 @@ describe("restoreRedacted (TB-143)", () => {
       "the API shows [REDACTED:api_key] in place of [REDACTED:api_key]",
     );
 
-    expect(restoreRedacted(docs, `${view}.`)).toEqual({
+    expect(restoreRedacted(docs, `${view}\n\nmore.`)).toEqual({
       ok: true,
-      text: `${docs}.`,
+      text: `${docs}\n\nmore.`,
     });
   });
 
   it("treats a kind it does not know as a marker too", () => {
     expect(
       restoreRedacted("plain", "plain [REDACTED:url_credentials]"),
-    ).toEqual({ ok: false, kind: "url_credentials", expected: 0, received: 1 });
+    ).toEqual({
+      ok: false,
+      reason: "count",
+      kind: "url_credentials",
+      expected: 0,
+      received: 1,
+    });
   });
 
   it("does not read $ patterns in a restored value", () => {

@@ -163,7 +163,7 @@ describe("API integration: free text for callers with a token (TB-143)", () => {
     expect(edit.body.message).toContain("N-004");
   });
 
-  it("restores the stored values when a write-back keeps every marker", async () => {
+  it("restores the stored values when the block with a marker comes back and another block changes", async () => {
     const { forest, agentCard, agentCardWrite } = await setup();
     const read = await forest.agentApi("GET", `/task/${agentCard}`);
     expect(read.body.description).toBe(`token ${KEY_MARK}\nsample ${DB_MARK}`);
@@ -171,19 +171,19 @@ describe("API integration: free text for callers with a token (TB-143)", () => {
     const description = await agentCardWrite(
       "PUT",
       `/task/description/${agentCard}`,
-      { description: `${read.body.description}\nadded by the agent` },
+      { description: `${read.body.description}\n\nadded by the agent` },
     );
     expect(description.status).toBe(200);
     expect(JSON.stringify(description.body)).not.toContain(SECRET);
     expect((await storedTask(agentCard))?.description).toBe(
-      `${DESCRIPTION}\nadded by the agent`,
+      `${DESCRIPTION}\n\nadded by the agent`,
     );
 
     const title = await agentCardWrite("PUT", `/task/title/${agentCard}`, {
-      title: `${read.body.title} (v2)`,
+      title: read.body.title,
     });
     expect(title.status).toBe(200);
-    expect((await storedTask(agentCard))?.title).toBe(`${TITLE} (v2)`);
+    expect((await storedTask(agentCard))?.title).toBe(TITLE);
 
     const whole = await agentCardWrite("PUT", `/task/${agentCard}`, {
       title: read.body.title,
@@ -215,7 +215,7 @@ describe("API integration: free text for callers with a token (TB-143)", () => {
       );
       expect(res.status).toBe(409);
       expect(res.body.message).toContain(
-        "Keep the [REDACTED:…] markers in place; a person removes a secret in the web app.",
+        "a person removes a secret in the web app.",
       );
     }
     const title = await agentCardWrite("PUT", `/task/title/${agentCard}`, {
@@ -226,6 +226,46 @@ describe("API integration: free text for callers with a token (TB-143)", () => {
       title: TITLE,
       description: DESCRIPTION,
     });
+  });
+
+  it("refuses with 409 a marker block that changed, a marker moved into a URL, or HTML above it", async () => {
+    const { forest, agentCard, agentCardWrite } = await setup();
+    const masked = `token ${KEY_MARK}\nsample ${DB_MARK}`;
+    const cases: [string, string][] = [
+      [`token ${KEY_MARK} (rotated)\nsample ${DB_MARK}`, "differs"],
+      [
+        `token\nsample ${DB_MARK}\n\n![x](https://example.test/p.png?k=${KEY_MARK})`,
+        "differs",
+      ],
+      [
+        `token\nsample ${DB_MARK}\n\n[docs](https://example.test/?k=${KEY_MARK})`,
+        "differs",
+      ],
+      [
+        `<div>\n<img src="https://example.test/?k=\n\n${masked}\n\n">`,
+        "raw HTML",
+      ],
+    ];
+    for (const [description, why] of cases) {
+      const res = await agentCardWrite(
+        "PUT",
+        `/task/description/${agentCard}`,
+        { description },
+      );
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe("REDACTED_MARKERS_MISMATCH");
+      expect(res.body.message).toContain(why);
+    }
+    const title = await agentCardWrite("PUT", `/task/title/${agentCard}`, {
+      title: `Deploy soon ${KEY_MARK}`,
+    });
+    expect(title.status).toBe(409);
+    expect(await storedTask(agentCard)).toEqual({
+      title: TITLE,
+      description: DESCRIPTION,
+    });
+    const read = await forest.agentApi("GET", `/task/${agentCard}`);
+    expect(read.body.description).toBe(masked);
   });
 
   it("writes text without markers as before", async () => {
@@ -248,24 +288,24 @@ describe("API integration: free text for callers with a token (TB-143)", () => {
     expect(masked).toBe(`note ${KEY_MARK}`);
 
     const edited = await agentWrite("PUT", `/comment/${commentId}`, {
-      content: `${masked} edited`,
+      content: `${masked}\n\nedited`,
     });
     expect(edited.status).toBe(200);
     expect(JSON.stringify(edited.body)).not.toContain(SECRET);
-    expect(await storedComment(commentId)).toBe(`${NOTE} edited`);
+    expect(await storedComment(commentId)).toBe(`${NOTE}\n\nedited`);
 
     const legacy = await agentWrite("PUT", "/activity/comment", {
       activityId: commentId,
-      comment: `${masked} twice`,
+      comment: `${masked}\n\ntwice`,
     });
     expect(legacy.status).toBe(200);
-    expect(await storedComment(commentId)).toBe(`${NOTE} twice`);
+    expect(await storedComment(commentId)).toBe(`${NOTE}\n\ntwice`);
 
     const lost = await agentWrite("PUT", `/comment/${commentId}`, {
       content: `${KEY_MARK} ${KEY_MARK}`,
     });
     expect(lost.status).toBe(409);
-    expect(await storedComment(commentId)).toBe(`${NOTE} twice`);
+    expect(await storedComment(commentId)).toBe(`${NOTE}\n\ntwice`);
   });
 
   it("leaves a browser session's write as it is, markers included", async () => {

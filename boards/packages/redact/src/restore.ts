@@ -8,6 +8,18 @@ import { redact } from "./index";
 // Kinds are not listed here: a kind that redact adds later is a marker too.
 const MARKER = /\[REDACTED:([a-z0-9_]+)\]/g;
 
+// Blocks are split on blank lines. In CommonMark a blank line ends every
+// inline construct (link, image, autolink, inline HTML), so a block that
+// comes back byte for byte cannot move its secret into a URL.
+const BLOCK_SEPARATOR = /(\r?\n[ \t]*\r?\n)/;
+
+// What can run across blank lines and pull a later block into a URL:
+// - raw HTML: a renderer copies an HTML block as is, and the browser reads
+//   an open attribute (`<div>` + `<img src="https://x/?k=`) on into the next
+//   blocks, whatever the markdown block boundaries are;
+// - a code fence (```math, diagram fences) and a `$$` math block.
+const OPENS_CONTEXT = /<[a-z!?/]|^[ \t>*+\-0-9.)]*(?:`{3,}|~{3,})|\$\$/im;
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;
   const proto = Object.getPrototypeOf(value);
@@ -35,16 +47,19 @@ export function hasRedactionMarker(text: string): boolean {
   return /\[REDACTED:[a-z0-9_]+\]/.test(text);
 }
 
-type Original = { start: number; end: number; kind: string; value: string };
+type Marker = { kind: string; original: string };
+type Item = { start: number; end: number; marker: Marker; hit: boolean };
 
-// What each marker of the masked view stands for, per kind, in text order:
-// the secret for a redact hit, the marker itself for a marker that the
-// stored text already holds literally.
-function originalsByKind(stored: string): Map<string, string[]> {
+// The masked view of the stored text, as a caller with a token reads it,
+// and what each of its markers stands for, in text order: the secret for a
+// redact hit, the marker itself for a marker the stored text holds literally.
+function maskedView(stored: string): { text: string; markers: Marker[] } {
   const { hits } = redact(stored);
-  const items: Original[] = hits.map((hit) => ({
-    ...hit,
-    value: stored.slice(hit.start, hit.end),
+  const items: Item[] = hits.map((hit) => ({
+    start: hit.start,
+    end: hit.end,
+    hit: true,
+    marker: { kind: hit.kind, original: stored.slice(hit.start, hit.end) },
   }));
   // Hits are sorted and do not overlap; a literal marker inside a hit is
   // part of that hit's value, not a marker of the masked view.
@@ -55,28 +70,78 @@ function originalsByKind(stored: string): Map<string, string[]> {
     while (next < hits.length && (hits[next]?.end ?? 0) <= start) next++;
     const hit = hits[next];
     if (hit && hit.start < end) continue;
-    items.push({ start, end, kind: match[1] ?? "", value: match[0] });
+    items.push({
+      start,
+      end,
+      hit: false,
+      marker: { kind: match[1] ?? "", original: match[0] },
+    });
   }
   items.sort((a, b) => a.start - b.start);
 
-  const byKind = new Map<string, string[]>();
+  let text = "";
+  let cursor = 0;
   for (const item of items) {
-    const list = byKind.get(item.kind) ?? [];
-    list.push(item.value);
-    byKind.set(item.kind, list);
+    text += stored.slice(cursor, item.start);
+    text += item.hit ? `[REDACTED:${item.marker.kind}]` : item.marker.original;
+    cursor = item.end;
   }
-  return byKind;
+  text += stored.slice(cursor);
+  return { text, markers: items.map((item) => item.marker) };
+}
+
+function countKinds(kinds: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const kind of kinds) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  return counts;
+}
+
+const markerKinds = (text: string) =>
+  [...text.matchAll(MARKER)].map((match) => match[1] ?? "");
+
+type StoredBlock = { offset: number; markers: Marker[] };
+
+// Each block of the masked view that holds markers: where it starts and
+// what its markers stand for. Equal blocks are kept in text order.
+function markerBlocks(view: {
+  text: string;
+  markers: Marker[];
+}): Map<string, StoredBlock[]> {
+  const blocks = new Map<string, StoredBlock[]>();
+  let offset = 0;
+  let index = 0;
+  for (const part of view.text.split(BLOCK_SEPARATOR)) {
+    const count = markerKinds(part).length;
+    if (count > 0) {
+      const list = blocks.get(part) ?? [];
+      list.push({ offset, markers: view.markers.slice(index, index + count) });
+      blocks.set(part, list);
+      index += count;
+    }
+    offset += part.length;
+  }
+  return blocks;
 }
 
 export type RestoreResult =
   | { ok: true; text: string }
-  | { ok: false; kind: string; expected: number; received: number };
+  | {
+      ok: false;
+      reason: "count";
+      kind: string;
+      expected: number;
+      received: number;
+    }
+  | { ok: false; reason: "block" | "context" };
 
 /**
  * Puts the stored values back in place of the markers in `incoming`.
- * Text without markers is returned as is. If, for any kind, the number of
- * markers differs from the number of stored values, the order is ambiguous
- * and nothing is restored.
+ * Text without markers is returned as is. Otherwise, nothing is restored if:
+ * - a kind has a different number of markers than stored values (`count`);
+ * - a block (paragraph) that holds a marker is not byte for byte a block of
+ *   the masked stored text: the marker moved or its block changed (`block`);
+ * - the text above a block with a marker is not the stored text above it and
+ *   holds raw HTML, a code fence or `$$` (`context`).
  */
 export function restoreRedacted(
   stored: string,
@@ -84,25 +149,46 @@ export function restoreRedacted(
 ): RestoreResult {
   if (!hasRedactionMarker(incoming)) return { ok: true, text: incoming };
 
-  const originals = originalsByKind(stored);
-  const received = new Map<string, number>();
-  for (const match of incoming.matchAll(MARKER)) {
-    const kind = match[1] ?? "";
-    received.set(kind, (received.get(kind) ?? 0) + 1);
-  }
-  for (const kind of new Set([...originals.keys(), ...received.keys()])) {
-    const expected = originals.get(kind)?.length ?? 0;
+  const view = maskedView(stored);
+  const expected = countKinds(view.markers.map((marker) => marker.kind));
+  const received = countKinds(markerKinds(incoming));
+  for (const kind of new Set([...expected.keys(), ...received.keys()])) {
+    const want = expected.get(kind) ?? 0;
     const count = received.get(kind) ?? 0;
-    if (expected !== count) {
-      return { ok: false, kind, expected, received: count };
+    if (want !== count) {
+      return {
+        ok: false,
+        reason: "count",
+        kind,
+        expected: want,
+        received: count,
+      };
     }
   }
 
-  const used = new Map<string, number>();
-  const text = incoming.replace(MARKER, (marker, kind: string) => {
-    const index = used.get(kind) ?? 0;
-    used.set(kind, index + 1);
-    return originals.get(kind)?.[index] ?? marker;
-  });
-  return { ok: true, text };
+  const blocks = markerBlocks(view);
+  let out = "";
+  let offset = 0;
+  for (const part of incoming.split(BLOCK_SEPARATOR)) {
+    if (hasRedactionMarker(part)) {
+      const block = blocks.get(part)?.shift();
+      if (!block) return { ok: false, reason: "block" };
+      const above = incoming.slice(0, offset);
+      if (
+        above !== view.text.slice(0, block.offset) &&
+        OPENS_CONTEXT.test(above)
+      ) {
+        return { ok: false, reason: "context" };
+      }
+      let used = 0;
+      out += part.replace(
+        MARKER,
+        (marker) => block.markers[used++]?.original ?? marker,
+      );
+    } else {
+      out += part;
+    }
+    offset += part.length;
+  }
+  return { ok: true, text: out };
 }

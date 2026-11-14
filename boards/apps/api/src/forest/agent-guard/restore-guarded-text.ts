@@ -4,7 +4,7 @@ import type { CurrentTask } from "./decide-task-write";
 
 function restore(incoming: string, stored: string | null): string {
   const result = restoreRedacted(stored ?? "", incoming);
-  // A count mismatch stays a change here; the route answers it with 409.
+  // A refused restore stays a change here; the route answers it with 409.
   return result.ok ? result.text : incoming;
 }
 

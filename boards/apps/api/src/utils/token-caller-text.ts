@@ -1,5 +1,6 @@
 import {
   hasRedactionMarker,
+  type RestoreResult,
   redactDeep,
   restoreRedacted,
 } from "@kaneo/redact/restore";
@@ -23,11 +24,25 @@ export function maskForTokenCaller<T>(c: Context, value: T): T {
   return isTokenCaller(c) ? redactDeep(value) : value;
 }
 
+const KEEP_BLOCKS =
+  "Send each block (paragraph) with a [REDACTED:…] marker back exactly as you read it and edit the other blocks; a person removes a secret in the web app.";
+
+function mismatchMessage(result: Exclude<RestoreResult, { ok: true }>): string {
+  if (result.reason === "count") {
+    return `The text has ${result.received} [REDACTED:${result.kind}] markers; the stored text has ${result.expected} values of that kind. ${KEEP_BLOCKS}`;
+  }
+  if (result.reason === "context") {
+    return `The text above a block with a [REDACTED:…] marker changed and holds raw HTML, a code fence or $$. Keep that text as you read it or remove them. ${KEEP_BLOCKS}`;
+  }
+  return `A block with a [REDACTED:…] marker differs from the stored text, or a marker moved. ${KEEP_BLOCKS}`;
+}
+
 /**
  * A caller with a token writes back text it read masked: the markers get
- * the stored values back. If a kind has a different number of markers than
- * stored values, the write is refused (409): the order is ambiguous, and a
- * wrong value in the wrong place is worse than a refusal.
+ * the stored values back. The write is refused (409) if a kind has a
+ * different number of markers than stored values, if a block with a marker
+ * changed (a moved marker could put the secret into a URL), or if changed
+ * text above such a block holds raw HTML, a code fence or `$$`.
  */
 export async function restoreForTokenCaller(
   c: Context,
@@ -39,6 +54,6 @@ export async function restoreForTokenCaller(
   if (result.ok) return result.text;
   throw new ApiError(409, {
     code: "REDACTED_MARKERS_MISMATCH",
-    message: `The text has ${result.received} [REDACTED:${result.kind}] markers; the stored text has ${result.expected} values of that kind. Keep the [REDACTED:…] markers in place; a person removes a secret in the web app.`,
+    message: mismatchMessage(result),
   });
 }
