@@ -122,7 +122,7 @@ class PlanTest(unittest.TestCase):
 
     def test_next_skips_held_cards_takes_abandoned_first_and_a_card_once(self):
         rows = [('w-t-1', {'cards': [card('TB-1', st='in-progress'), card('TB-2', s='low'),
-                                     card('TB-3', st='in-progress', c='без аренды'), card('TB-4', st='done')]}),
+                                     card('TB-3', st='in-progress', mark='без аренды', c='Q-17'), card('TB-4', st='done')]}),
                 ('w-t-2', {'cards': [card('TB-2'), card('SE-9', k='bug', s='high')]})]
         out = q.plan_next(rows)
         self.assertEqual([i['key'] for i in out], ['TB-3', 'TB-2', 'SE-9'])
