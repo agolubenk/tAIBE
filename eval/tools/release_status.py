@@ -87,8 +87,7 @@ def build_rows(pulls, comments_by_pr, oq_docs, min_lenses):
         base = (pr.get("base") or {}).get("ref", "")
         merged = bool(pr.get("merged_at"))
         lenses = lenses_on_head(comments_by_pr.get(n, []), head)
-        approved = sorted(k for k, v in lenses.items() if v == "approve")
-        changes = sorted(k for k, v in lenses.items() if v == "changes")
+        approved, changes = quorum.tally(lenses)   # approve — по базовой роли, как кворум Нерва (#324)
         open_m = [it["id"] for it in items if n in it["prs"] and it["open"]]
         state = "влит" if merged else pr.get("state", "?")
         rows.append((n, head[:9], base, state, len(approved), ",".join(changes) or "—", ",".join(open_m) or "—"))

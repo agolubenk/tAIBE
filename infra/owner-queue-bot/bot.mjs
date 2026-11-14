@@ -147,7 +147,7 @@ async function sendCharts(chatId) {
   const shots = await mirror.screenshots();
   if (!shots.length) return send(chatId, { text: 'На странице нет графиков.' });
   await tg.sendPhotos(chatId, shots.map((s) => ({ buf: s.buf, caption: s.caption })));
-  return send(chatId, { text: '📈 Графики, Гант и роадмап — как на странице артефакта.', keyboard: [[btn('📊 Ход работ текстом', 'w'), btn('🏠 Меню', 'm')]] });
+  return send(chatId, { text: '📈 Графики, Гант и роадмап — как на странице /queue.', keyboard: [[btn('📊 Ход работ текстом', 'w'), btn('🏠 Меню', 'm')]] });
 }
 
 // ── Действия владельца ──────────────────────────────────────────────────────
@@ -456,7 +456,7 @@ async function main() {
     if (stalled > STALL_MS) { log(`работа встала на ${Math.round(stalled / 60000)} мин — перезапуск процесса`); stop(1); }
   }, 60_000).unref();
 
-  log('старт: открываю артефакт в браузере бота…');
+  log('старт: открываю страницу очереди в браузере бота…');
   // Сбой первого запуска браузера не фатален: очередь зеркала перезапустит его на следующей операции.
   await mirror.start().catch((e) => { mirror.broken = true; log('браузер не поднялся с первого раза:', e); });
   const me = await tg.call('getMe');
