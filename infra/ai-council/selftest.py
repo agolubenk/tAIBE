@@ -1977,7 +1977,23 @@ def _drift_payload(goal: str, files: list[str]) -> dict:
     return payload
 
 
+DRIFT_TREE = {"infra/ai-council/council.py": "", "infra/ai-council/learning.py": "", "docs/README.md": ""}
+
+
 def test_drift_part2(tmp: Path) -> None:
+    """Файлы постановки и сверки M2 — из дерева-фикстуры, а не из checkout хоста (OPS-48)."""
+    import council_rounds as rounds
+    from selftest_tree import host_tree
+
+    text = "Поправить infra/ai-council/council.py и docs/README.md."
+    with host_tree(tmp, {}, name="drift-empty"):
+        check("постановка: файлы сверяются с деревом хоста, а не с checkout (пустое дерево — ни одного)",
+              rounds.statement_files(text) == set())
+    with host_tree(tmp, DRIFT_TREE, name="drift-tree"):
+        _drift_part2(tmp)
+
+
+def _drift_part2(tmp: Path) -> None:
     """Консилиум, часть 2 (2026-10-15): M2 сверка вместо воздержания при расхождении, M3 дожим 7–8/15, M6 языковой
     гейт, бюджет доп. раунда. Плюс инварианты ревью #159: незавершённый раунд откатывается, авторы видят исходные
     версии друг друга, потерявшие все файлы постановки исключаются из ворот и арбитража, переписанное перезаписано."""
@@ -1988,7 +2004,7 @@ def test_drift_part2(tmp: Path) -> None:
     from types import SimpleNamespace
 
     Proposal = council_mod.Proposal
-    F1, F2 = "infra/ai-council/council.py", "infra/ai-council/learning.py"     # существуют в репозитории
+    F1, F2 = "infra/ai-council/council.py", "infra/ai-council/learning.py"     # есть в DRIFT_TREE, apps/ — нет
     check("доп. раунд: вид воздержания по причине",
           rounds.abstain_kind("модели поняли задачу по-разному (совпадение файлов 0.20 < 0.25)") == "divergence"
           and rounds.abstain_kind("модели разошлись в понимании ЦЕЛИ (совпадение goal 0.1)") == "divergence"
