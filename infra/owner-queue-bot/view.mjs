@@ -298,6 +298,40 @@ export function agentNotice(it) {
   };
 }
 
+const mskTime = (ms) => new Date(ms).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
+const minutes = (ms) => Math.max(0, Math.round(ms / 60_000));
+
+/** Причина, по которой страница бота осталась без базы, — по записи связи страницы (snapshotPage conn). */
+export function connReason(conn) {
+  if (!conn || (!conn.errAt && !conn.okAt)) return 'страница не получила доступ к базе консоли (опроса не было)';
+  if (!conn.errAt) return 'страница потеряла общую базу, хотя консоль отвечала';
+  const s = conn.status;
+  if (s === 401 || s === 403) return `консоль не приняла токен бота (ответ ${s}): токен отозван или истёк`;
+  if (s >= 500) return `консоль ответила ошибкой ${s} — так бывает, пока консоль перезапускается при выкатке`;
+  if (s) return `консоль ответила ${s}${conn.err && conn.err !== `HTTP ${s}` ? `: ${conn.err}` : ''}`;
+  return `консоль не ответила по сети${conn.err ? ` (${conn.err})` : ''}`;
+}
+
+/**
+ * Сигнал «страница без базы» с подробностями (просьба владельца 14.11): причина, последний удачный ответ консоли,
+ * что бот сделает дальше и что проверить, если связь не вернётся. now и nextReloadMs — мс.
+ */
+export function localNotice(conn, { now, nextReloadMs, hint }) {
+  const lines = ['🟠 <b>Очередь не подключилась к консоли</b> — ответы не сохраняются.', `Причина: ${esc(connReason(conn))}.`];
+  lines.push(conn?.okAt
+    ? `Последний удачный ответ консоли — ${mskTime(conn.okAt)} МСК (${minutes(now - conn.okAt)} мин назад).`
+    : 'Удачных ответов консоли с открытия страницы не было.');
+  if (conn?.fails > 1) lines.push(`Неудачных опросов подряд: ${conn.fails}.`);
+  lines.push(`Бот перезагрузит страницу через ${Math.max(1, minutes(nextReloadMs))} мин и напишет, когда связь вернётся.`);
+  if (hint) lines.push(`Если связь не вернётся: ${esc(hint)}`);
+  return { text: lines.join('\n') };
+}
+
+/** Связь вернулась: сколько её не было (с первого сигнала). */
+export function backNotice(downMs) {
+  return { text: `🟢 Страница снова подключена к общей базе — ответы сохраняются. Связи не было около ${Math.max(1, minutes(downMs))} мин.` };
+}
+
 export const HELP = [
   '<b>Бот «Очередь владельца»</b> повторяет артефакт: те же пункты, кнопки и ответы, сохранение в ту же базу.',
   '',

@@ -1,5 +1,5 @@
 // Фон: новые пункты и статусы агентов → уведомления; связь со страницей → предупреждения; живая сводка.
-import { agentNotice, esc, menuFingerprint, menuView, newItemsNotice } from './view.mjs';
+import { agentNotice, backNotice, localNotice, menuFingerprint, menuView, newItemsNotice } from './view.mjs';
 
 // Раз в час — свежая вкладка (mirror.freshPage): за час опросов Playwright копит ~3 тыс. объектов запросов
 // вместо потолка в 10 тыс. Сама загрузка — пара секунд, действия владельца ждут её в общей очереди.
@@ -34,15 +34,16 @@ export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hin
   }
 
   /**
-   * Страница без базы — консоль не ответила на опрос (недоступна, токен отозван). Владельцу — одно
-   * сообщение; страница перезагружается с нарастающей паузой.
+   * Страница без базы — консоль не ответила на опрос (недоступна, токен отозван, перезапуск при выкатке). Владельцу —
+   * одно сообщение с причиной и временем последнего удачного ответа (s.conn); страница перезагружается с нарастающей
+   * паузой.
    */
   async function onLocal(s) {
     if (!alerted.local) {
       alerted.local = true;
       localSince = Date.now();
       localReloads = 0;
-      await broadcast({ text: `🟠 <b>Очередь не подключилась к консоли</b> — ответы не сохраняются.\n${esc(hint)}` });
+      await broadcast(localNotice(s.conn, { now: localSince, nextReloadMs: LOCAL_BACKOFF_MS[0], hint }));
     }
     const wait = LOCAL_BACKOFF_MS[Math.min(localReloads, LOCAL_BACKOFF_MS.length - 1)];
     if (Date.now() - localSince >= wait * (localReloads + 1)) {
@@ -74,7 +75,7 @@ export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hin
     if (s.mode === 'local') return onLocal(s);
     if (alerted.local && s.mode === 'shared') {
       alerted.local = false;
-      await broadcast({ text: '🟢 Страница снова подключена к общей базе — ответы сохраняются.' });
+      await broadcast(backNotice(Date.now() - localSince));
     }
     if (s.mode !== 'shared') return;
 

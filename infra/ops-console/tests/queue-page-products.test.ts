@@ -400,6 +400,34 @@ describe('отбор снимков по продукту в подмене ба
     expect(s.win.__oqViewOf()).toBe('taibe')
   })
 
+  it('связь с консолью для бота (window.__oqConn): удачный опрос — okAt, ошибка — статус, текст и счёт подряд (просьба владельца 14.11)', async () => {
+    type Conn = { okAt: number; errAt: number; err: string; status: number; fails: number }
+    const win = { addEventListener() {} } as unknown as {
+      claude: { use: (cap: string) => Promise<{ collection: (c: string) => { onSnapshot: (ok: () => void, err?: () => void) => void } }> }
+      __oqConn: Record<string, Conn>
+    }
+    const replies: Record<string, () => Promise<unknown>> = {
+      items: () => Promise.resolve({ ok: true, status: 200, headers: { get: () => '"e1"' }, json: () => Promise.resolve({ docs: [] }) }),
+      checks: () => Promise.resolve({ ok: false, status: 502, headers: { get: () => null }, json: () => Promise.resolve({}) }),
+      work: () => Promise.reject(new TypeError('Failed to fetch')),
+    }
+    runInNewContext(SHIM_JS, {
+      window: win, location: { hash: '' }, console, setTimeout: () => 0, clearTimeout: () => {},
+      document: { hidden: false, addEventListener() {} }, localStorage: { getItem: () => null },
+      // Прочие запросы подмены (например, /products) — пустой удачный ответ.
+      fetch: (url: string) => (replies[url.replace('/api/oq/v1/db/', '')] ?? replies.items!)(),
+    })
+    const db = await win.claude.use('db')
+    for (const col of Object.keys(replies)) db.collection(col).onSnapshot(() => {}, () => {})
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0))
+    const c = win.__oqConn
+    expect(c.items).toMatchObject({ errAt: 0, status: 0, fails: 0 })
+    expect(c.items!.okAt).toBeGreaterThan(0)
+    expect(c.checks).toMatchObject({ okAt: 0, err: 'HTTP 502', status: 502, fails: 1 })
+    expect(c.checks!.errAt).toBeGreaterThan(0)
+    expect(c.work).toMatchObject({ okAt: 0, err: 'Failed to fetch', status: 0, fails: 1 })
+  })
+
   it('без продукта у строки — HR; смена выбора отдаёт снимки заново без запроса; «» — все', async () => {
     const s = shim(null)
     await s.subscribe()

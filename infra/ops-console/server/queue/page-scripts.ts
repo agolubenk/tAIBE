@@ -61,18 +61,28 @@ export const SHIM_JS = String.raw`(function () {
     if (!res.ok) return res.text().then(function (t) { var m = ''; try { m = JSON.parse(t).error || ''; } catch (e) {} var err = new Error(m || ('HTTP ' + res.status)); err.status = res.status; throw err; });
     return res.status === 204 ? null : res.json();
   }
+  // Связь с консолью по коллекции — для бота очереди (window.__oqConn, читает frame-scripts.mjs snapshotPage): время
+  // последнего удачного опроса, последняя ошибка и её HTTP-статус (0 — сеть). Бот пишет причину в сигнал «Очередь не
+  // подключилась к консоли» (просьба владельца 14.11). Только числа и текст ошибки — без токенов и данных пунктов.
+  var conn = window.__oqConn = window.__oqConn || {};
+  function noteConn(col, e) {
+    var c = conn[col] || (conn[col] = { okAt: 0, errAt: 0, err: '', status: 0, fails: 0 });
+    if (!e) { c.okAt = Date.now(); c.fails = 0; return; }
+    c.errAt = Date.now(); c.err = String((e && e.message) || e).slice(0, 200); c.status = (e && e.status) || 0; c.fails++;
+  }
   function poll(col) {
     var s = subs[col];
     clearTimeout(s.timer);
     fetch(BASE + col, { credentials: 'same-origin', headers: s.etag ? { 'If-None-Match': s.etag } : {} })
       .then(function (res) {
         if (res.status === 304) return null;
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) { var err = new Error('HTTP ' + res.status); err.status = res.status; throw err; }
         s.etag = res.headers.get('ETag');
         return res.json();
       })
       .then(function (j) {
         s.fail = 0;
+        noteConn(col, null);
         if (!j) return;
         // version — чтобы страница отличала снимок, снятый до своего сохранения (ревью #324, minor).
         // product — продукт документа (v2-lite): метка и фильтр страницы (page-products.ts), рядом с data.
@@ -82,6 +92,7 @@ export const SHIM_JS = String.raw`(function () {
       })
       .catch(function (e) {
         s.fail = (s.fail || 0) + 1;
+        noteConn(col, e);
         if (s.fail === 3) s.cbs.forEach(function (cb) { if (cb.err) cb.err(e); });
       })
       .then(function () { s.timer = setTimeout(function () { poll(col); }, document.hidden ? 30000 : 4000); });
