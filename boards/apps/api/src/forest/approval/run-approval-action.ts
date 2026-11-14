@@ -14,6 +14,8 @@ import {
   approvalParamsHash,
   isGrantApprovalAction,
 } from "./approval-params";
+import { applyBatchClose } from "./batch-close-apply";
+import { isBatchClose } from "./batch-close-params";
 import {
   attachLabelGrant,
   createLabelGrant,
@@ -183,6 +185,10 @@ export async function runApprovalAction(
   }
   switch (action) {
     case "close_task":
+      // TB-108: a list of cards, each to its project's final column.
+      return isBatchClose(action, approval.params)
+        ? applyBatchClose(tx, approval, actor)
+        : applyStatus(tx, approval, actor);
     case "reopen_task":
       return applyStatus(tx, approval, actor);
     case "set_priority":

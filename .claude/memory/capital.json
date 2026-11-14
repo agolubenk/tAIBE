@@ -188,6 +188,18 @@
       "last_updated": "2026-10-08",
       "provenance": "канон процесса; корневой CLAUDE.md §Адверсариальная проверка + линзы в карточках ролей",
       "relevance_boost": -0.5
+    },
+    {
+      "id": "process-executors",
+      "title": "Исполнители: Claude — разработка, opencode — ревью и мелкие правки, GLM — блокнот и идеи; проработка через блокнот",
+      "path": ".claude/memory/chunks/process/executors.md",
+      "tags": ["process", "review", "opencode", "glm", "notebook", "ideas", "spec"],
+      "status": "active",
+      "version": 1,
+      "token_estimate": 750,
+      "load_condition": "task_contains:!ревью|!review|!opencode|!опенкод|!glm|!блокнот|!notebook|!идея|!идеи|!идею|!исследова|!спеку|!спеки|!спека|!spec|!прожар|!grill|мелкая правк|мелкую правк",
+      "last_updated": "2026-11-13",
+      "provenance": "решение владельца 13.11 (сессия agolubenko primary); канон ревью — process-adversarial-review"
     }
   ]
 }

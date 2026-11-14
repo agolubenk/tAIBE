@@ -1,6 +1,7 @@
 import { journalQueue } from "./queue-actor";
 import type { QueueClient } from "./queue-client";
-import { type ApprovalRow, saveItemState } from "./sync-store";
+import { isBatchClose } from "../approval/batch-close-params";
+import { type ApprovalRow, batchReportOf, saveItemState } from "./sync-store";
 
 function moscow(date: Date | null): string {
   if (!date) return "";
@@ -84,6 +85,11 @@ export async function showOutcome(client: QueueClient, row: ApprovalRow) {
             /\s+\./,
             ".",
           );
+  // TB-108: a consumed batch says how many cards closed and which were not.
+  if (row.status === "consumed" && isBatchClose(row.action, row.params)) {
+    const report = await batchReportOf(row.id);
+    if (report) note = `${note} Итог: ${report}`.slice(0, 2000);
+  }
   if (!answeredHere && row.status !== "failed") {
     const check = await client.get("checks", itemId);
     const choice = check?.data.choice;

@@ -12,7 +12,10 @@ import {
   or,
 } from "drizzle-orm";
 import db from "../../database";
-import { ownerApprovalTable } from "../../database/forest-schema";
+import {
+  agentJournalTable,
+  ownerApprovalTable,
+} from "../../database/forest-schema";
 import {
   projectTable,
   taskTable,
@@ -145,8 +148,14 @@ export async function saveItemState(
 }
 
 // The cards a label grant names, as keys (KEY-12) for the queue item.
+// A batch close shows its first 10 cards (TB-108 R-5), a label grant all of
+// its cards (at most 20).
 export async function taskKeys(approval: ApprovalRow): Promise<string[]> {
-  const ids = (approval.params?.taskIds ?? "").split(",").filter(Boolean);
+  const shown = approval.action === "close_task" ? 10 : 20;
+  const ids = (approval.params?.taskIds ?? "")
+    .split(",")
+    .filter(Boolean)
+    .slice(0, shown);
   if (ids.length === 0) return [];
   const rows = await db
     .select({
@@ -157,9 +166,9 @@ export async function taskKeys(approval: ApprovalRow): Promise<string[]> {
     })
     .from(taskTable)
     .innerJoin(projectTable, eq(taskTable.projectId, projectTable.id))
-    .where(inArray(taskTable.id, ids.slice(0, 20)));
+    .where(inArray(taskTable.id, ids));
   const byId = new Map(rows.map((row) => [row.id, row]));
-  return ids.slice(0, 20).map((id) => {
+  return ids.map((id) => {
     const row = byId.get(id);
     return row ? `${row.slug}-${row.number ?? "?"} «${row.title}»` : id;
   });
@@ -214,4 +223,23 @@ export async function itemCard(approval: ApprovalRow): Promise<ItemCard> {
     title: row.title,
     current,
   };
+}
+
+// TB-108: what a batch close did, written by applyBatchClose in the same
+// transaction as the outcome.
+export async function batchReportOf(
+  approvalId: string,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ detail: agentJournalTable.detail })
+    .from(agentJournalTable)
+    .where(
+      and(
+        eq(agentJournalTable.targetType, "approval"),
+        eq(agentJournalTable.targetId, approvalId),
+        eq(agentJournalTable.action, "approval.batch_report"),
+      ),
+    )
+    .limit(1);
+  return row?.detail ?? null;
 }

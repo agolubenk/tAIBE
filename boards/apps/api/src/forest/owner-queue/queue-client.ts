@@ -27,6 +27,17 @@ export class QueueConflict extends Error {
   }
 }
 
+// 400 or 422 from the queue: it refused this document (schema, size). Only
+// this item is wrong; the next ones may pass (TB-110).
+export class QueueRejected extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "QueueRejected";
+    this.status = status;
+  }
+}
+
 // The queue as the sync sees it (F17, F18); tests use an in-memory fake with
 // the same version rules.
 export interface QueueClient {
@@ -71,9 +82,12 @@ export function httpQueueClient(config: OwnerQueueConfig): QueueClient {
       throw new QueueConflict(String(json.error ?? "version conflict"));
     }
     if (!response.ok) {
-      throw new Error(
-        `owner queue ${method} ${path}: HTTP ${response.status} ${String(json.error ?? "")}`.trim(),
-      );
+      const message =
+        `owner queue ${method} ${path}: HTTP ${response.status} ${String(json.error ?? "")}`.trim();
+      if (response.status === 400 || response.status === 422) {
+        throw new QueueRejected(message, response.status);
+      }
+      throw new Error(message);
     }
     return json;
   }

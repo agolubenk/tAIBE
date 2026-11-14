@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import db from "../../apps/api/src/database";
-import { ssrConflictTable } from "../../apps/api/src/database/ssr-schema";
+import {
+  ssrBlobTable,
+  ssrConflictTable,
+} from "../../apps/api/src/database/ssr-schema";
 import { syncCorpus } from "../../apps/api/src/ssr/sync";
 import { resetTestDatabase } from "./helpers/database";
 import { createForest } from "./helpers/forest";
@@ -148,6 +151,37 @@ describe("API integration: SSR workspace scope", () => {
       { shas: [sha256("theirs")] },
     );
     expect(known.body.shas).toEqual([]);
+  });
+
+  // TB-92: blobs are shared, so bytes under a wrong sha would reach every
+  // workspace that names that sha.
+  it("sync refuses content that does not match its sha256", async () => {
+    const here = await createForest();
+    const other = await createForest();
+    const forged = await here.ownerApi(
+      "POST",
+      `/ssr/${here.workspace.id}/sync`,
+      {
+        commitSha,
+        files: [
+          {
+            path: ".claude/skills/probe/NOTE.md",
+            sha256: sha256("theirs"),
+            content: "forged",
+          },
+        ],
+      },
+    );
+    expect(forged.status).toBe(409);
+    expect(forged.body.message).toContain("sha256");
+    expect(forged.body.message).toContain(".claude/skills/probe/NOTE.md");
+
+    await syncText(other.workspace.id, other.ownerId, ["theirs"]);
+    const [blob] = await db
+      .select({ content: ssrBlobTable.content })
+      .from(ssrBlobTable)
+      .where(eq(ssrBlobTable.sha256, sha256("theirs")));
+    expect(blob?.content).toBe("theirs");
   });
 
   it("known-shas answers an empty list for an empty request", async () => {

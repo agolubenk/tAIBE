@@ -108,6 +108,51 @@ describe("API integration: owner-queue sync (TB-102)", () => {
     });
   });
 
+  // TB-108 R-3, R-5: one item for a batch; after «Да» it shows the report.
+  it("puts one item for a batch close and shows the report after «Да»", async () => {
+    const forest = await createForest();
+    const cards = await Promise.all(
+      ["One", "Two", "Three"].map((title) => addTask(forest.project.id, title)),
+    );
+    const ids = cards.map((card) => String(card?.id));
+    const { queue, deps } = setup(forest);
+    const asked = await forest.agent("/approvals", {
+      action: "close_task",
+      targetId: forest.workspace.id,
+      taskIds: ids,
+      doneReason: "import",
+      reason: "закрыты в Notion",
+    });
+    expect(asked.status).toBe(200);
+
+    await syncPass(deps);
+    expect(queue.itemIds()).toHaveLength(1);
+    const [itemId] = queue.itemIds();
+    const item = queue.doc("items", itemId as string);
+    expect(String(item?.data.title)).toContain("закрыть карточки (3)");
+    expect(String(item?.data.body)).toContain("Карточек: 3");
+    expect(String(item?.data.body)).toContain("Все карточки заявки:");
+
+    await db
+      .update(schema.taskTable)
+      .set({ status: "in-progress" })
+      .where(eq(schema.taskTable.id, ids[2] as string));
+    await queue
+      .as("owner")
+      .patch("checks", itemId as string, { done: true, choice: "yes" });
+    await syncPass(deps);
+    await syncPass(deps);
+
+    expect((await approval(String(asked.body.id)))?.status).toBe("consumed");
+    expect(await taskStatus(ids[0] as string)).toBe("done");
+    expect(await taskStatus(ids[2] as string)).toBe("in-progress");
+    const check = queue.doc("checks", itemId as string)?.data;
+    expect(check?.agentStatus).toBe("done");
+    expect(String(check?.agentNote)).toContain(
+      "Итог: закрыто 2 из 3; пропущено 1:",
+    );
+  });
+
   // Gate (3), AC-23: the creation is claimed by a conditional update.
   it("puts exactly one item when two instances run the pass at once (AC-23)", async () => {
     const forest = await createForest();

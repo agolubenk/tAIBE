@@ -200,3 +200,5 @@ def run(tmp: Path, check) -> None:
     _generated_only(check, gr, tmp)
     _retries(check)
     _review(check, gr)
+    import selftest_review_chain
+    selftest_review_chain.run(tmp, check)

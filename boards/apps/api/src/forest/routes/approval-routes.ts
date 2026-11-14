@@ -16,6 +16,7 @@ import {
   isTaskApprovalAction,
 } from "../approval/approval-params";
 import { decideApproval } from "../approval/decide-approval";
+import { batchCloseTarget } from "../approval/batch-close-target";
 import { closingDoneRef } from "../approval/done-ref";
 import { fellTargets } from "../approval/fell-targets";
 import { grantApprovalTarget } from "../approval/grant-target";
@@ -40,7 +41,7 @@ const requestApprovalRoute = createRoute({
   tags: ["Forest"],
   summary: "Ask the owner for a «да»",
   description:
-    "Records a pending approval for felling a tree or a sector, for an agent to close, reopen or reprioritise a card (R-022), or for a one-time grant: create_label, attach_label, set_assignee (TB-102 R-10). The server fixes what it covers and applies it itself on the owner's «да» — in t-boards or in the owner queue; the agent does not repeat the write. close_task needs doneRef or doneReason (R-9). Felling needs task:delete.",
+    "Records a pending approval for felling a tree or a sector, for an agent to close, reopen or reprioritise a card (R-022), to close a list of cards at once (close_task with taskIds, targetId the workspace id, up to 250 cards, each to its project's final column — TB-108), or for a one-time grant: create_label, attach_label, set_assignee (TB-102 R-10). The server fixes what it covers and applies it itself on the owner's «да» — in t-boards or in the owner queue; the agent does not repeat the write. close_task needs doneRef or doneReason (R-9). Felling needs task:delete.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["update"] }),
@@ -159,26 +160,29 @@ export const approvalRoutes = apiRouter<
     const body = c.req.valid("json");
     const userId = c.get("userId");
     const done = closingDoneRef(body.action, body.doneRef, body.doneReason);
-    const target = isTaskApprovalAction(body.action)
-      ? {
-          targetType: "task" as const,
-          ...(await taskApprovalTarget(
-            workspaceId,
-            userId,
-            body.action,
-            body.targetId,
-            body.value,
-          )),
-        }
-      : isGrantApprovalAction(body.action)
-        ? await grantApprovalTarget(workspaceId, userId, body.action, body)
-        : await fellApprovalTarget(
-            c,
-            workspaceId,
-            userId,
-            body.action,
-            body.targetId,
-          );
+    const target =
+      body.action === "close_task" && body.taskIds
+        ? await batchCloseTarget(workspaceId, userId, body)
+        : isTaskApprovalAction(body.action)
+          ? {
+              targetType: "task" as const,
+              ...(await taskApprovalTarget(
+                workspaceId,
+                userId,
+                body.action,
+                body.targetId,
+                body.value,
+              )),
+            }
+          : isGrantApprovalAction(body.action)
+            ? await grantApprovalTarget(workspaceId, userId, body.action, body)
+            : await fellApprovalTarget(
+                c,
+                workspaceId,
+                userId,
+                body.action,
+                body.targetId,
+              );
     const approval = await requestApproval({
       ...done,
       workspaceId,
