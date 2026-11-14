@@ -1887,9 +1887,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // нужно ~84 px — тогда шкала подписывается месяцами, а недели остаются линиями.
   var RM_WEEK_LABEL_PX = 84;
   // Окно роадмапа в неделях для полосы шириной laneW: столько недель, сколько помещается с недельной подписью
-  // (RM_WEEK_LABEL_PX на неделю), от 4 до 10; назад — до 2 (четверть окна), остальное — вперёд от текущей недели.
+  // (RM_WEEK_LABEL_PX на неделю), от 3 до 10: на самой узкой полосе (300 px) 3 недели по 100 px — подписи недельные;
+  // назад — до 2 (четверть окна), остальное — вперёд от текущей недели.
   function rmWindowWeeks(laneW) {
-    var total = Math.max(4, Math.min(10, Math.floor(laneW / RM_WEEK_LABEL_PX)));
+    var total = Math.max(3, Math.min(10, Math.floor(laneW / RM_WEEK_LABEL_PX)));
     return { total: total, back: Math.min(2, Math.floor(total / 4)) };
   }
   function roadmapLabelMode(pxPerWeek) { return pxPerWeek >= RM_WEEK_LABEL_PX ? 'weeks' : 'months'; }
@@ -2551,7 +2552,11 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       var late = list.filter(function (w) { return w.status !== 'done' && lagOf(w, t) > 0; });
       var msAll = list.filter(function (w) { return w.milestone && (dParse(w.end) || planEndOf(w)); });
       var ms = msAll.filter(function (w) { return inWin(dParse(w.end) || planEndOf(w)); });
-      var away = msAll.length - ms.length;
+      // Просрочено до начала окна (линза фронтенда #347, решение продукта): в окне такой задачи не видно, а просрочка —
+      // главный красный сигнал. Число — у названия полосы, названия, план и отставание — в подсказке. Просроченную веху
+      // считаем здесь, а не во «вне окна».
+      var before = win ? late.filter(function (w) { var d = planEndOf(w); return !!d && d < a; }) : [];
+      var away = msAll.filter(function (w) { return !inWin(dParse(w.end) || planEndOf(w)) && before.indexOf(w) < 0; }).length;
       var marks = ms.map(function (w) {
         var at = dParse(w.end) || planEndOf(w), isLate = w.status !== 'done' && lagOf(w, t) > 0;
         return { w: w, at: at, isLate: isLate, x: (diffD(at, a) + 0.5) * dx, prio: isLate ? 0 : w.status === 'done' ? 2 : 1 };
@@ -2575,6 +2580,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
       o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small>' +
         (hidden.length ? '<br><small class="rm-hidden"' + tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); })) + '>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>' : '') +
+        (before.length ? '<br><small class="rm-before"' + tipAttr(before.map(function (w) { return w.title + ' — план ' + fmtD(planEndOf(w)) + ', отставание ' + lagOf(w, t) + ' дн.'; })) + '>' + before.length + ' просрочено до окна</small>' : '') +
         (away ? '<br><small class="rm-away">' + away + ' ' + plural(away, 'веха', 'вехи', 'вех') + ' вне окна</small>' : '') + '</span></div><div class="rm-lane">' + lane + now + '</div></div>';
     });
     host.innerHTML = ws.length ? o : '<p class="empty" style="padding:10px">' + noRows('Нет задач.') + '</p>';
@@ -2670,13 +2676,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
       : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
   }
-  // Переключатель окна роадмапа: подпись — что покажет нажатие; перерисовывается только роадмап.
+  // Переключатель окна роадмапа: подпись постоянная — «Весь горизонт», состояние — aria-pressed (линза фронтенда #347:
+  // меняющаяся подпись вместе с aria-pressed читалась диктором наоборот). Перерисовывается только роадмап.
   var rmRangeBtn = document.getElementById('rm-range');
-  function paintRmRange() {
-    var all = RM_RANGE === 'all';
-    rmRangeBtn.setAttribute('aria-pressed', String(all));
-    rmRangeBtn.textContent = all ? 'Ближайшие недели' : 'Весь горизонт';
-  }
+  function paintRmRange() { rmRangeBtn.setAttribute('aria-pressed', String(RM_RANGE === 'all')); }
   if (rmRangeBtn) {
     paintRmRange();
     rmRangeBtn.addEventListener('click', function () {

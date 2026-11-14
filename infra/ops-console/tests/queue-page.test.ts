@@ -813,6 +813,13 @@ describe('роадмап по неделям: подписи не налезаю
 
   it('окно ближайших недель по умолчанию, «Весь горизонт» — переключателем; выбор в этом браузере; телефон — весь горизонт (карточка HR vb1ea4jq)', () => {
     expect(html).toContain('<button class="toggle rm-range" id="rm-range" type="button" aria-pressed="false">Весь горизонт</button>')
+    // a11y: подпись постоянная, состояние — только aria-pressed (линза фронтенда #347, п. 3).
+    expect(html).toContain("function paintRmRange() { rmRangeBtn.setAttribute('aria-pressed', String(RM_RANGE === 'all')); }")
+    expect(html).not.toContain("'Ближайшие недели'")
+    // Просроченное до начала окна не пропадает: число у полосы, названия и отставание — в подсказке (решение продукта).
+    expect(html).toContain('var before = win ? late.filter(function (w) { var d = planEndOf(w); return !!d && d < a; }) : [];')
+    expect(html).toContain("'>' + before.length + ' просрочено до окна</small>'")
+    expect(html).toContain('&& before.indexOf(w) < 0; }).length;')
     expect(html).toContain("var RM_RANGE_KEY = 'oq-roadmap-range', RM_RANGE = 'window';")
     expect(html).toContain("function rmWindowOn() { return RM_RANGE !== 'all' && !(window.matchMedia && window.matchMedia('(max-width: 640px)').matches); }")
     expect(html).toContain('var wa = addD(m0, -7 * wk.back), wb = addD(m0, 7 * (wk.total - wk.back) - 1);')
@@ -824,8 +831,9 @@ describe('роадмап по неделям: подписи не налезаю
     const { rmWindowWeeks, roadmapLabelMode } = pure()
     expect(rmWindowWeeks(620)).toEqual({ total: 7, back: 1 })
     expect(rmWindowWeeks(1100)).toEqual({ total: 10, back: 2 })
-    expect(rmWindowWeeks(300)).toEqual({ total: 4, back: 1 })
-    for (const w of [340, 620, 900, 1100]) expect(roadmapLabelMode((w / rmWindowWeeks(w).total))).toBe('weeks')
+    expect(rmWindowWeeks(300)).toEqual({ total: 3, back: 0 })
+    // На любой ширине полосы (от 300 px, laneW = max(300, …)) окно подписано неделями (линза фронтенда #347, п. 2).
+    for (const w of [300, 320, 335, 340, 620, 900, 1100]) expect(roadmapLabelMode((w / rmWindowWeeks(w).total))).toBe('weeks')
   })
 
   it('месяц — коротко, год — у первой подписи и у января', () => {
