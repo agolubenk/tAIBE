@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { redact } from "./index";
-import { hasRedactionMarker, redactDeep, restoreRedacted } from "./restore";
+import {
+  hasRedactionMarker,
+  RESTORE_MAX_CHARS,
+  redactDeep,
+  restoreRedacted,
+} from "./restore";
 
 // Fake secrets assembled at runtime, so this file holds no key-shaped literal.
 const join = (...parts: string[]) => parts.join("");
@@ -163,6 +168,96 @@ describe("restoreRedacted (TB-143)", () => {
     expect(view).toBe("password=[REDACTED:password_assignment] rest");
 
     expect(restoreRedacted(dollar, view)).toEqual({ ok: true, text: dollar });
+  });
+
+  // B1 (Claude lens on e4e66d156): `\s*` in the password, SECRET= and bearer
+  // rules spans a blank line, so the label can stand in the block above.
+  it("refuses a write-back that would leave a restored value unmasked", () => {
+    const pw = join("hunter", "2-Staging!");
+    for (const [label, edited] of [
+      ["Staging DB password:", "Staging DB credentials"],
+      ["SECRET=", "SECRET is below"],
+      ["Authorization: Bearer", "Authorization header"],
+    ] as const) {
+      const text = `${label}\n\n${pw}`;
+      const view = redact(text).text;
+      expect(view).not.toContain(pw);
+
+      expect(restoreRedacted(text, view.replace(label, edited))).toEqual({
+        ok: false,
+        reason: "mask",
+      });
+    }
+  });
+
+  it("keeps a raw secret the caller types next to the markers", () => {
+    const text = `deploy with ${KEY_A}`;
+    const incoming = `deploy with [REDACTED:api_key]\n\nnew key ${KEY_B}`;
+
+    expect(restoreRedacted(text, incoming)).toEqual({
+      ok: true,
+      text: `deploy with ${KEY_A}\n\nnew key ${KEY_B}`,
+    });
+  });
+
+  // B2: equal blocks with markers are matched in text order.
+  it("refuses moving equal marker blocks that stand for different values", () => {
+    const sections = `## Prod\n\n${KEY_A}\n\n## Staging\n\n${KEY_B}`;
+    const view = redact(sections).text;
+    const swapped =
+      "## Staging\n\n[REDACTED:api_key]\n\n## Prod\n\n[REDACTED:api_key]";
+
+    expect(restoreRedacted(sections, swapped)).toEqual({
+      ok: false,
+      reason: "ambiguous",
+    });
+    expect(restoreRedacted(sections, `${view}\n\nnote`)).toEqual({
+      ok: true,
+      text: `${sections}\n\nnote`,
+    });
+  });
+
+  it("lets equal marker blocks with the same value move", () => {
+    const twice = `## Prod\n\n${KEY_A}\n\n## Staging\n\n${KEY_A}`;
+    const swapped =
+      "## Staging\n\n[REDACTED:api_key]\n\n## Prod\n\n[REDACTED:api_key]";
+
+    expect(restoreRedacted(twice, swapped)).toEqual({
+      ok: true,
+      text: `## Staging\n\n${KEY_A}\n\n## Prod\n\n${KEY_A}`,
+    });
+  });
+
+  // B3: the old loop compared and scanned the whole text above every marker
+  // block (7000 blocks, 238 KiB: 983 ms); now it is one pass (24 ms, same Mac).
+  it("restores many marker blocks in linear time", () => {
+    const blocks = Array.from(
+      { length: 7000 },
+      (_, i) =>
+        `step ${i} uses ${join("s", "k-A", String(i).padStart(8, "0"), "bCdEfGhIjKlMnOpQrStU")}`,
+    );
+    const text = ["intro", ...blocks].join("\n\n");
+    const incoming = redact(text).text.replace(/^intro/, "intro edited");
+
+    const start = performance.now();
+    const result = restoreRedacted(text, incoming);
+    const elapsed = performance.now() - start;
+
+    expect(result).toEqual({
+      ok: true,
+      text: text.replace(/^intro/, "intro edited"),
+    });
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it("refuses a text with markers longer than the limit", () => {
+    const long = `${"x".repeat(RESTORE_MAX_CHARS)} [REDACTED:api_key]`;
+
+    expect(restoreRedacted(`y ${KEY_A}`, long)).toEqual({
+      ok: false,
+      reason: "size",
+      max: RESTORE_MAX_CHARS,
+    });
   });
 
   it("finds markers", () => {
