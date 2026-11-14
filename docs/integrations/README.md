@@ -5,7 +5,8 @@
 > вариантов и предложений — ниже, подробный разбор — в папке инструмента. Адверсариальная проверка разборов — пока
 > только авторская (по три линзы в каждом файле); прогон линз консилиума — следующий шаг.
 > **14.11:** вторая волна — инструменты ревью этапа 2 (TB-167, S23-1): abide — взята идея (решение владельца
-> F-S23-1 = A); react-doctor и checkov — ждут прогона release; review_ducktective — позже, hetty — живость для S24-1.
+> F-S23-1 = A); react-doctor — берём узким набором правил, checkov — не берём (замер release 14.11);
+> review_ducktective — позже; hetty — не берём, локальный прокси — mitmproxy (решение владельца, S24-1).
 
 ## Главный принцип
 
@@ -48,10 +49,10 @@
 | [i-have-adhd](i-have-adhd/README.md) | [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd) | ✅ идея взята частично | eval: слепое A/B-сравнение ответов «со скиллом / без» (stdlib Python, MIT) — фитнес промптов — ✅ своя реализация идеи в `eval/evolve/ab.py` (01.11); формат пунктов очереди «действие первым, один следующий шаг» | скилл always-on — нет: спорит с DoD, ~1,7K токенов на сессию |
 | [codebase-memory-mcp](codebase-memory-mcp/README.md) | [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) | 💡 идея + пилот | `scout`, консилиум: `detect_changes` (дифф → затронутые символы, «радиус поражения»), экономный вывод курсором с лимитом; пилот MCP против Serena с замером | MIT, локально; заявленное «в 10 раз меньше токенов» — цифра авторов, проверить замером |
 | [abide](abide/README.md) | [coldteadotai/abide](https://github.com/coldteadotai/abide) | 💡 взять идею | ревью (R-070, R-074): идея «правило → проверка правки»; правила R-074 (2, 4, 7) — проверками без модели в CI (S23-3, TB-169) | инструмент — нет: хук агента и внешняя модель TypeSafe по платному ключу, дифф уходит наружу; решение владельца F-S23-1 = A (14.11); пилот хука — только после замера |
-| [react-doctor](react-doctor/README.md) | [millionco/react-doctor](https://github.com/millionco/react-doctor) | 🔍 разбирается | ревью web: плагин oxlint, отдельный шаг `boards-ci` отчётом, метка `react-doctor/` (N-005) | решение — после прогона release: настоящих находок ≥ 5 и ложных ≤ 30 % в выборке 20; Modified MIT (TB-167, 14.11) |
-| [checkov](checkov/README.md) | [bridgecrewio/checkov](https://github.com/bridgecrewio/checkov) | 🔍 разбирается | ревью инфраструктуры: только dockerfile и openapi; compose не разбирает, github_actions и secrets дублируют actionlint и `infra/checks` | решение — после прогона release, тот же порог; Apache-2.0 (TB-167, 14.11) |
+| [react-doctor](react-doctor/README.md) | [millionco/react-doctor](https://github.com/millionco/react-doctor) | ✅ берём (A) | ревью web: плагин oxlint, отдельный шаг `boards-ci` отчётом (S23-2), метка `react-doctor/` (N-005) | замер 14.11: 6 настоящих и 2 ложных в выборке 20; набор узкий — доступность, ошибки, `use-lazy-motion`; Modified MIT (TB-167) |
+| [checkov](checkov/README.md) | [bridgecrewio/checkov](https://github.com/bridgecrewio/checkov) | ❌ не берём сейчас | ревью инфраструктуры: dockerfile и openapi | замер 14.11: 4 находки, настоящих 0 (порог ≥ 5); вернуться при новых образах прода или чарте Kubernetes; Apache-2.0 (TB-167) |
 | review_ducktective | [PavelShaura/review_ducktective](https://github.com/PavelShaura/review_ducktective) | ⏸ вернуться позже | LLM-ревью по кнопке (R-070) | F-23-1 = цепочка opencode → GLM → Claude (#169); проект молодой: v0.1.0, 20 звёзд (14.11); вернуться, если цепочка не даёт находок, которые даёт он |
-| hetty | [dstotijn/hetty](https://github.com/dstotijn/hetty) | — используется как инструмент (R-075) | локальный HTTP-прокси для проверок безопасности (S24-1) | последний релиз v0.7.0 — 2022-03-29, 7 коммитов с 2025-01-01, последний 2026-06-27 (14.11): закреплять v0.7.0 с проверкой sha256; риск — сопровождение |
+| hetty | [dstotijn/hetty](https://github.com/dstotijn/hetty) | ❌ не берём | локальный HTTP-прокси для проверок безопасности (S24-1) | последний релиз v0.7.0 — 2022-03-29, 7 коммитов с 2025-01-01 (14.11); решение владельца 14.11 — mitmproxy через brew, закреплённая версия (S24-1, TB-164); разбор пишет release |
 | [openproject](openproject/README.md) | [opf/openproject](https://github.com/opf/openproject) | ✅ идея взята частично | доски: правила целостности графа связей при записи (`relatable.rb`): без циклов — внедрено; один родитель, без связей «предок–потомок» — решение владельца (E7) | сервис и код — нет: GPLv3, Rails + 4 GB RAM; только идеи |
 
 Статусы: 🔲 не разобран · 🔍 разбирается · ✅ взято (что именно — в столбце «Решение») · 💡 взята идея ·
