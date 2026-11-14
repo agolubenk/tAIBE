@@ -91,7 +91,7 @@ class ChecksTest(unittest.TestCase):
     def test_secrets_hostile_lines_stay_linear(self):
         # TB-136 security lens: a rule that may restart at every character and scan to the end of the line is
         # quadratic. On 64 000 characters each line takes up to 14 ms linear and 2.4-12 s quadratic.
-        for unit in ('_', 'A_', 'API_KEY', 'TOKEN_', 'a.', 'a-', 'a+', 'eyJa.', 'sk-', 'Ab3+'):
+        for unit in ('_', 'A_', 'a_', 'a_A', 'API_KEY', 'TOKEN_', 'a.', 'a-', 'a+', 'eyJa.', 'sk-', 'Ab3+'):
             line = unit * (64000 // len(unit))
             with self.subTest(unit=unit):
                 started = time.perf_counter()

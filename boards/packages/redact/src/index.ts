@@ -155,11 +155,12 @@ const credentialAssignment = collectGroup(
 // Environment style, uppercase only: any NAME ending in API_KEY, TOKEN,
 // SECRET or PASSWORD (GITHUB_TOKEN=, CLIENT_SECRET=). Prose like
 // "the secret: ..." is lowercase and stays. The name starts after a
-// non-name character and has at most 64 characters before the suffix: an
+// non-name character or after "<lowercase>_" (foo_GITHUB_TOKEN) and has at
+// most 64 characters before the suffix: an
 // open [A-Z0-9_]* that may start after every "_" made a run of "_" quadratic
 // (64 000 characters: 2 s, TB-136 security lens).
 const secretAssignment = collectGroup(
-  /(?<![A-Za-z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/g,
+  /(?:(?<![A-Za-z0-9_])|(?<=[a-z]_))[A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,

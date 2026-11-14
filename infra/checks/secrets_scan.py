@@ -38,10 +38,10 @@ ASSIGNED = re.compile(r'(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]
                       r'\b["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s]{12,})')
 # Environment style, uppercase only: any NAME ending in API_KEY, TOKEN, SECRET or PASSWORD (T_BOARDS_API_KEY=,
 # GITHUB_TOKEN:). `\b` does not fire after `_`, so ASSIGNED misses these names. The name starts after a non-name
-# character and has at most 64 characters before the suffix: an open [A-Z0-9_]* that may start after every `_` made
+# character or after `<lowercase>_` (foo_GITHUB_TOKEN) and has at most 64 characters before the suffix: an open [A-Z0-9_]* that may start after every `_` made
 # a long run of `_` quadratic (64 000 characters: 12 s, TB-136 security lens).
-ENV_ASSIGNED = re.compile(r'(?<![A-Za-z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))["\']?[ \t]*[:=][ \t]*'
-                          r'["\'`]?([^"\'`\s]{12,})')
+ENV_ASSIGNED = re.compile(r'(?:(?<![A-Za-z0-9_])|(?<=[a-z]_))([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))'
+                          r'["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s]{12,})')
 # Long runs of the base64 alphabet mixing upper, lower and digits with high entropy: encoded key material. The same
 # thresholds as the base64 rule in redact; hex digests are single-case and never reach it.
 BASE64 = re.compile(r'[A-Za-z0-9+/]{64,}={0,2}')

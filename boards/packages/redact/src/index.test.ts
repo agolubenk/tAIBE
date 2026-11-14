@@ -347,6 +347,8 @@ describe("@kaneo/redact", () => {
   it.each([
     "_",
     "A_",
+    "a_",
+    "a_A",
     "API_KEY",
     "TOKEN_",
     "a.",
