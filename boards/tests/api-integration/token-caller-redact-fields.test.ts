@@ -459,5 +459,25 @@ describe("API integration: label, field and link routes for callers with a token
 
     const owner = await forest.ownerApi("GET", "/notification");
     expect(JSON.stringify(owner.body)).toContain(SECRET);
+
+    // The graph cursor is base64url; it comes back raw, so page 2 works.
+    const pages: unknown[] = [];
+    let cursor: string | null = null;
+    do {
+      const query: string = cursor
+        ? `?take=1&cursor=${encodeURIComponent(cursor)}`
+        : "?take=1";
+      const page = await forest.agent(`/graph${query}`);
+      expect({ page: pages.length, status: page.status }).toEqual({
+        page: pages.length,
+        status: 200,
+      });
+      pages.push(page.body);
+      cursor = page.body.nextCursor;
+    } while (cursor && pages.length < 5);
+    const graph = JSON.stringify(pages);
+    expect(pages.length).toBe(3);
+    expect(graph.includes(SECRET)).toBe(false);
+    expect(graph).toContain(MARK);
   });
 });

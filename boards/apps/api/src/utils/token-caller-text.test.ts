@@ -4,6 +4,7 @@ import { type Context, Hono } from "hono";
 import { describe, expect, it } from "vite-plus/test";
 import { ApiError } from "../errors/api-error";
 import {
+  maskForTokenCaller,
   refuseMarkerForTokenCaller,
   restoreEachForTokenCaller,
 } from "./token-caller-text";
@@ -129,6 +130,27 @@ describe("restoreEachForTokenCaller (TB-144)", () => {
     );
     expect(plain.value).toEqual(["a", "b"]);
     expect(loads).toBe(0);
+  });
+});
+
+describe("maskForTokenCaller keep (TB-178)", () => {
+  it("masks the text and returns a kept key byte for byte", async () => {
+    const cursor = Buffer.from(
+      "2026-11-14T15:00:00.000Z|k3x9q2m7v1z8p4r6t0w5y2bn",
+    ).toString("base64url");
+    const page = { title: `env ${SECRET}`, nextCursor: cursor };
+    const agent = await inRequest(true, (c) =>
+      maskForTokenCaller(c, page, ["nextCursor"]),
+    );
+    expect(agent.value).toEqual({ title: `env ${MARK}`, nextCursor: cursor });
+    expect(page.title).toBe(`env ${SECRET}`);
+    // Without keep, redact takes the cursor for a secret.
+    const whole = await inRequest(true, (c) => maskForTokenCaller(c, page));
+    expect(whole.value?.nextCursor).not.toBe(cursor);
+    const browser = await inRequest(false, (c) =>
+      maskForTokenCaller(c, page, ["nextCursor"]),
+    );
+    expect(browser.value).toBe(page);
   });
 });
 

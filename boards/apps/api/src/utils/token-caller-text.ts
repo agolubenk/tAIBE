@@ -19,9 +19,23 @@ export function isTokenCaller(c: Context): boolean {
   );
 }
 
-/** For a caller with a token, every string of the response goes through redact. */
-export function maskForTokenCaller<T>(c: Context, value: T): T {
-  return isTokenCaller(c) ? redactDeep(value) : value;
+/**
+ * For a caller with a token, every string of the response goes through redact.
+ * `keep` names top-level keys that hold no card text and must come back byte
+ * for byte: a base64url page cursor looks like a secret to redact (TB-178).
+ */
+export function maskForTokenCaller<T>(
+  c: Context,
+  value: T,
+  keep: readonly Extract<keyof T, string>[] = [],
+): T {
+  if (!isTokenCaller(c)) return value;
+  const masked = redactDeep(value);
+  if (masked === value || !masked || typeof masked !== "object") return masked;
+  const raw = value as Record<string, unknown>;
+  const out = masked as Record<string, unknown>;
+  for (const key of keep) if (key in raw) out[key] = raw[key];
+  return masked;
 }
 
 const KEEP_BLOCKS =

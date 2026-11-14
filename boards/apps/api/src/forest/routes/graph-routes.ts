@@ -41,6 +41,7 @@ export const graphRoutes = apiRouter<
     maskForTokenCaller(
       c,
       await listGraph({ workspaceId, userId: c.get("userId"), cursor, take }),
+      ["nextCursor"],
     ),
     200,
   );
