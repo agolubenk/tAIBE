@@ -38,6 +38,28 @@ export function blobIntegrityFailures(changeset: ChangesetEntry[]): string[] {
     .map((file) => file.path);
 }
 
+// TB-147. A blob row whose bytes do not hash to its sha is deleted, so the sha
+// reads as missing: known-shas stops naming it and the next Mac sync uploads
+// the bytes again (sync.ts never replaces a stored row). The DELETE checks the
+// hash once more, so a row that holds the right bytes by then stays.
+export async function dropDamagedBlobs(shas: string[]): Promise<number> {
+  if (shas.length === 0) return 0;
+  const dropped = await db
+    .delete(ssrBlobTable)
+    .where(
+      and(
+        inArray(ssrBlobTable.sha256, shas),
+        sql`encode(sha256(convert_to(${ssrBlobTable.content}, 'UTF8')), 'hex') <> ${ssrBlobTable.sha256}`,
+      ),
+    )
+    .returning({ sha256: ssrBlobTable.sha256 });
+  return dropped.length;
+}
+
+// What makes the next push pass, in the push result and the server log.
+const BLOB_REPAIR =
+  "the next Mac sync uploads the bytes again; a file that left the checkout needs its version rolled back";
+
 export type PushResult = {
   pushed: boolean;
   commitSha: string | null;
@@ -184,17 +206,25 @@ export async function pushChangeset(
 
   // Integrity guard (TB-94): one bad blob aborts the whole push before any
   // GitHub call, like the allowlist guard; the paths go to the server log.
+  // Damaged rows are dropped here so that a sync can store them again (TB-147).
   const broken = blobIntegrityFailures(changeset);
   if (broken.length > 0) {
+    const brokenPaths = new Set(broken);
+    const damaged = new Set(
+      changeset
+        .filter((file) => brokenPaths.has(file.path) && file.content !== null)
+        .map((file) => file.sha256),
+    );
+    const dropped = await dropDamagedBlobs([...damaged]);
     console.error(
-      `SSR push-back workspace ${workspaceId}: blob integrity failed, push aborted: ${broken.slice(0, 5).join(", ")}`,
+      `SSR push-back workspace ${workspaceId}: blob integrity failed, push aborted: ${broken.slice(0, 5).join(", ")}; ${dropped} damaged blob(s) dropped, ${BLOB_REPAIR}`,
     );
     return {
       pushed: false,
       commitSha: null,
       files: [],
       conflicts: [],
-      reason: `blob_integrity: ${broken.length} file(s), first ${broken[0]}`,
+      reason: `blob_integrity: ${broken.length} file(s), first ${broken[0]}; ${dropped} damaged blob(s) dropped, ${BLOB_REPAIR}`,
     };
   }
   const files = changeset.filter(
