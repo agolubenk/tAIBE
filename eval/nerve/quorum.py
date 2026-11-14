@@ -18,8 +18,8 @@ SHA — токен сразу за словом (между ними — «с у
 Ключ линзы — роль команды: N-я роль team.roles, если подпись называет «роль N» (нумерация spawn_session.sh), иначе
 роль по github.lens_roles, иначе имя линзы. Так «Линза корректности (роль 4)» и «Линза «корректность и отказы» (роль 4)»
 — одна линза backend. Предел: подпись без номера и без имени из lens_roles даёт отдельный ключ.
-Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, CI ok — проверки прошли или
-их нет (ci_state). Висящий или упавший CI кворум не собирает (SE-86).
+Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, CI ok — каждая проверка
+SUCCESS, NEUTRAL или SKIPPED, или проверок нет (ci_state). Висящий, упавший или неизвестный CI кворум не собирает (SE-86).
 """
 import re
 
@@ -100,14 +100,19 @@ def on_head(sha, head):
     return bool(sha) and bool(head) and head.lower().startswith(sha.lower())
 
 
+CI_OK = ("SUCCESS", "NEUTRAL", "SKIPPED")
+CI_FAILED = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
+
+
 def ci_state(checks):
-    """checks — список статусов/выводов. pending, если что-то не завершено; failure, если есть провал; иначе ok."""
+    """checks — выводы и статусы проверок (CheckConclusionState, CheckStatusState, StatusState GitHub). failure — есть
+    провал из CI_FAILED (он окончателен, даже если другие ещё идут); ok — каждая проверка в CI_OK или проверок нет;
+    иначе pending: идёт, ждёт, REQUESTED, COMPLETED без вывода, пусто, неизвестное значение. Список разрешённых — новое
+    значение GitHub не даст ни ложного кворума, ни ложного pr.ci_failed (SE-86)."""
     states = [str(c or "").upper() for c in checks]
-    if any(s in ("PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING") for s in states):
-        return "pending"
-    if any(s in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED") for s in states):
+    if any(s in CI_FAILED for s in states):
         return "failure"
-    return "ok"
+    return "ok" if all(s in CI_OK for s in states) else "pending"
 
 
 def quorum(verdicts, head, checks, min_lenses=3):

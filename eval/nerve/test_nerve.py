@@ -166,6 +166,17 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual(quorum.quorum(vs, head, ["SUCCESS", "CANCELLED"])[::3], (False, "failure"))
         self.assertTrue(quorum.quorum(vs, head, ["SUCCESS", "SKIPPED", "NEUTRAL"])[0], "пропущенные проверки — ok")
 
+    def test_ci_state_allow_list(self):
+        """SE-86, линза Контроля: ok — только из списка разрешённых; перечисления GitHub на 14.11."""
+        cs = quorum.ci_state
+        self.assertEqual(cs([]), "ok", "проверок нет — ok, как раньше")
+        for bad in ("STARTUP_FAILURE", "STALE", "FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"):
+            self.assertEqual(cs(["SUCCESS", bad]), "failure", bad)
+        for wait in ("REQUESTED", "COMPLETED", None, "", "QUEUED", "IN_PROGRESS", "WAITING", "PENDING", "EXPECTED",
+                     "NEW_GITHUB_VALUE"):
+            self.assertEqual(cs(["SUCCESS", wait]), "pending", repr(wait))
+        self.assertEqual(cs(["IN_PROGRESS", "FAILURE"]), "failure", "провал окончателен, даже если другие идут")
+
     def test_pr_event_by_ci(self):
         """SE-86: линзы собраны — событие решает CI; ключ один на голову."""
         ev = lambda ci, approved=("a", "b", "c"), changes=(): quorum.pr_event(  # noqa: E731
@@ -176,6 +187,9 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual(ev("pending"), (None, True), "ждёт только CI")
         self.assertEqual(ev("failure", approved=("a", "b")), (None, False), "линз мало — ни события, ни ожидания")
         self.assertEqual(ev("pending", changes=("d",)), (None, False))
+        self.assertEqual(ev(quorum.ci_state(["STARTUP_FAILURE"]))[0][1], "pr.ci_failed", "YAML workflow с ошибкой")
+        for wait in (["REQUESTED"], [None]):
+            self.assertEqual(ev(quorum.ci_state(wait)), (None, True), f"{wait}: ждёт CI, событий нет")
 
     def test_later_verdict_of_a_lens_overrides(self):
         head = "abcdef1234"
