@@ -35,7 +35,7 @@ from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
                                CHANGED, comment_char_may_change, comment_char_seen, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
-                               heredoc_text, join_lines, comments_off,
+                               heredoc_text, join_lines, comments_off, exact_name,
                                launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
                                split_commands, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
                                comment_readings, uncommented)
@@ -329,8 +329,9 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         stdin_files = [x for f in sources or (cat_files(*prev, cwd) if piped else []) for x in procs.get(f, [f])]
         stdin_files = stdin_files or ([HEREDOC] if argv in fed else [])
         prev = ([v for v, _ in variants], stdin_files)
-        if any(v[0] in DIR_CMDS for v, _ in variants):
-            new = dir_step([v for v, _ in variants], st, piped)
+        steps = [v if exact_name(e) == v[0] else [] for v, e in variants]  # `CD x` — /usr/bin/cd, папка та же (SE-90)
+        if any(v and v[0] in DIR_CMDS for v in steps):
+            new = dir_step(steps, st, piped)
             if disk and is_lost(new):  # в скрипте с диска `cd "$ROOT"` в функциях и циклах обычен — папка прежняя
                 st.update(new_state(cwd))
             else:
