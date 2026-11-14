@@ -135,15 +135,20 @@ def _check_roles(slug, cfg):
 
 
 def _check_match(name, match):
-    """`queue.match` — регулярное выражение `re.search` по id пункта очереди (SE-109); битое — ошибка загрузки."""
+    """`queue.match` — регулярное выражение `re.search` по id пункта очереди (SE-109); битое — ошибка загрузки.
+    Выражение, совпадающее с пустой строкой (`taibe|`, `(-taibe)?`), совпадает с любым id: все пункты очереди ушли бы
+    в этот продукт (SE-117)."""
     if match is None:
         return
     if not isinstance(match, str) or not match:
         raise ProductError(f"instances/{name}: queue.match — нужна непустая строка (регулярное выражение)")
     try:
-        re.compile(match)
+        rx = re.compile(match)
     except re.error as e:
         raise ProductError(f"instances/{name}: queue.match «{match}» — не регулярное выражение ({e})") from None
+    if rx.search(""):
+        raise ProductError(f"instances/{name}: queue.match «{match}» совпадает с пустой строкой — с ним любой id "
+                           "пункта очереди ушёл бы в этот продукт")
 
 
 def load(instances=INSTANCES):

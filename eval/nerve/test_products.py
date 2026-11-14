@@ -103,6 +103,15 @@ class ErrorsTest(unittest.TestCase):
         edit(self.d, "taibe.json", lambda d: d["queue"].update(match="-taibe("))
         self.fails("queue.match")
 
+    def test_queue_match_matching_the_empty_string_is_refused(self):
+        """SE-117: такое выражение совпадает с любым id — все пункты очереди ушли бы в tAIBE."""
+        for match in ("taibe|", "(-taibe)?", "^", "-taibe|$"):
+            with self.subTest(match=match):
+                edit(self.d, "taibe.json", lambda d, m=match: d["queue"].update(match=m))
+                self.fails("совпадает с пустой строкой")
+        edit(self.d, "taibe.json", lambda d: d["queue"].update(match="-taibe(-|\\d|$)"))
+        P.load(self.d)
+
     def test_queue_match_must_be_a_string(self):
         edit(self.d, "taibe.json", lambda d: d["queue"].update(match=["-taibe-"]))
         self.fails("queue.match")
