@@ -4293,6 +4293,7 @@
 				},
 				"addedByAgent": "Кто добавил: агент {{name}}",
 				"addedByPerson": "Кто добавил: {{name}}",
+				"addedByMember": "Кто добавил: участник",
 				"addedByUnknown": "Кто добавил: неизвестно"
 			}
 		},

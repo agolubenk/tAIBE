@@ -28,6 +28,13 @@ describe("SourceAuthor (TB-115)", () => {
     ).toBeTruthy();
   });
 
+  it("says «a member» for a member without a name, not their email", () => {
+    render(<SourceAuthor kind="person" name={null} />);
+    expect(
+      screen.getByText("workspace:notebook.sources.addedByMember"),
+    ).toBeTruthy();
+  });
+
   it("says unknown for a source added before authors were kept", () => {
     render(<SourceAuthor kind={null} name={null} />);
     expect(

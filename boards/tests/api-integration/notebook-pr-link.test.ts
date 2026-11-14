@@ -423,6 +423,46 @@ describe("API integration: notebook PR and link sources", () => {
     });
   });
 
+  it("stores a member without a name as a nameless person, never their email", async () => {
+    // The member's actor name falls back to the email (forest/actor.ts);
+    // GET /sources shows the author to every member and agent.
+    const nb = await notebook();
+    const member = await addMember(nb.workspace.id, false);
+    await db
+      .update(schema.workspaceUserTable)
+      .set({ role: "admin" })
+      .where(eq(schema.workspaceUserTable.userId, member.id));
+    const [nameless] = await db
+      .update(schema.userTable)
+      .set({ name: "  " })
+      .where(eq(schema.userTable.id, member.id))
+      .returning();
+    if (!nameless) throw new Error("user not updated");
+    await linkRepo(nb.project.id, nb.ownerId);
+    mocks.pullsGet.mockResolvedValue(pullRequest("Аренда истекает через час."));
+    mockAuthenticatedSession(nameless);
+    const { app } = createApp();
+    const added = await app.request(`/api${nb.path("/sources/github-pr")}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: PR_URL }),
+    });
+    expect(added.status).toBe(200);
+
+    const listed = await nb.owner("GET", "/sources");
+    const source = (
+      listed.body.sources as {
+        ref: string;
+        addedByKind: string | null;
+        addedBy: string | null;
+      }[]
+    ).find((row) => row.ref === "example/repo#7");
+    expect(
+      source && { kind: source.addedByKind, name: source.addedBy },
+    ).toEqual({ kind: "person", name: null });
+    expect(JSON.stringify(listed.body)).not.toContain(member.email);
+  });
+
   it("needs manage_settings to add a link or a PR", async () => {
     const nb = await notebook();
     const member = await addMember(nb.workspace.id, false);
