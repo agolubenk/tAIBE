@@ -37,6 +37,10 @@ expect 0 "cd boards && pnpm install --frozen-lockfile"
 # Слово install не подкомандой — гейт остаётся гейтом.
 expect 2 "pnpm run install-check"
 expect 2 "pnpm test -- --grep install"
+# Установка не первой командой не снимает стоп с гейта перед ней (линза backend #352).
+expect 2 "pnpm typecheck; pnpm install"
+expect 2 "pnpm typecheck && pnpm i"
+expect 0 "pnpm install --frozen-lockfile && pnpm typecheck"
 # Прежний обход работает.
 expect 0 "WT_DEPS_CHECK=0 pnpm typecheck"
 

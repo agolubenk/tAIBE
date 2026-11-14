@@ -15,7 +15,9 @@ case "$cmd" in *WT_DEPS_CHECK=0*) exit 0 ;; esac
 # Установка зависимостей — это сама починка, её не останавливаем (SE-124): иначе после правки lockfile хук держит и
 # гейт, и свою команду починки. Слово `install`/`i`/`ci` — подкоманда pnpm (флаги вроде -C X, --dir X допустимы).
 # `npm ci` хоста фильтр хука в settings.json и так не ловит.
-if printf '%s' "$cmd" | grep -qE '(^|[;&|(][[:space:]]*|[[:space:]])pnpm([[:space:]]+(-C|--dir)([[:space:]]+|=)[^[:space:]]+)*([[:space:]]+-[-A-Za-z]+)*[[:space:]]+(install|i|ci)([[:space:]]|$)'; then
+# Только первой командой (можно после `cd X &&` или в `( … )`): в `pnpm typecheck; pnpm install` гейт идёт раньше
+# установки, на старых зависимостях (линза backend #352).
+if printf '%s' "$cmd" | grep -qE '^[[:space:]]*\(?[[:space:]]*(cd[[:space:]]+[^&;|()]+&&[[:space:]]*)?pnpm([[:space:]]+(-C|--dir)([[:space:]]+|=)[^[:space:]]+)*([[:space:]]+-[-A-Za-z]+)*[[:space:]]+(install|i|ci)([[:space:]]|$)'; then
   exit 0
 fi
 
