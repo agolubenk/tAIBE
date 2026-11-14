@@ -61,9 +61,18 @@ cleanup() {
   id="$(docker ps -aq --filter "label=it-pg.run=${run_id}" 2>/dev/null || true)"
   if [ -n "$id" ]; then docker rm -f "$id" >/dev/null 2>&1 || true; fi
 }
+# A signal to the script alone stops the test run at once, not after it.
+child=""
+stop() {
+  if [ -n "$child" ]; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+  fi
+  exit "$1"
+}
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'stop 130' INT
+trap 'stop 143' TERM
 
 container="$(docker run -d --rm --name "$name" --label "it-pg.run=${run_id}" \
   -e POSTGRES_USER=kaneo -e POSTGRES_PASSWORD="$password" -e POSTGRES_DB=kaneo_test \
@@ -87,4 +96,7 @@ done
 echo "it-pg: $name on 127.0.0.1:${port}" >&2
 cd "$(dirname "${BASH_SOURCE[0]}")/../apps/api"
 DATABASE_URL="postgresql://kaneo:${password}@127.0.0.1:${port}/kaneo_test" \
-  npx vp test run --config vitest.integration.config.ts "$@"
+  npx vp test run --config vitest.integration.config.ts "$@" &
+child=$!
+# set -e: a red run exits here with the test exit code, the trap removes the container.
+wait "$child"

@@ -45,7 +45,7 @@ exit 1
 `,
   npx: `#!/usr/bin/env bash
 echo "npx $* DATABASE_URL=$DATABASE_URL" >> "$STUB/log"
-[ -z "\${STUB_TEST_SLEEP:-}" ] || sleep "$STUB_TEST_SLEEP"
+[ -z "\${STUB_TEST_SLEEP:-}" ] || exec sleep "$STUB_TEST_SLEEP"
 exit "\${STUB_TEST_EXIT:-0}"
 `,
 };
@@ -63,7 +63,11 @@ beforeEach(() => {
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-function run(args, env = {}, { interruptAfter } = {}) {
+function run(
+  args,
+  env = {},
+  { interruptAfter, signal = "SIGINT", group = true } = {},
+) {
   return new Promise((resolve) => {
     const child = spawn("bash", [script, ...args], {
       env: {
@@ -81,7 +85,10 @@ function run(args, env = {}, { interruptAfter } = {}) {
       stderr += chunk;
     });
     if (interruptAfter) {
-      setTimeout(() => process.kill(-child.pid, "SIGINT"), interruptAfter);
+      setTimeout(
+        () => process.kill(group ? -child.pid : child.pid, signal),
+        interruptAfter,
+      );
     }
     child.on("close", (code, signal) => resolve({ code, signal, stderr }));
   });
@@ -126,6 +133,20 @@ test("Ctrl-C during the run removes the container", async () => {
     res.code === 130 || res.signal === "SIGINT",
     `${res.code} ${res.signal}`,
   );
+  assert.match(log(), /docker rm -f cid1/);
+  assert.equal(running(), false);
+});
+
+test("TERM to the script alone stops the test run at once and removes the container", async () => {
+  const started = Date.now();
+  const res = await run(
+    ["tb145"],
+    { STUB_TEST_SLEEP: "20" },
+    { interruptAfter: 800, signal: "SIGTERM", group: false },
+  );
+
+  assert.equal(res.code, 143, res.stderr);
+  assert.ok(Date.now() - started < 8000, `took ${Date.now() - started} ms`);
   assert.match(log(), /docker rm -f cid1/);
   assert.equal(running(), false);
 });
