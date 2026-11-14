@@ -1,7 +1,7 @@
 // TB-145: scripts/it-pg.sh with docker, lsof and npx replaced by stubs in PATH.
 // Run: node --test scripts/it-pg.test.mjs (from boards/).
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -178,5 +178,17 @@ test("a name outside a-z, 0-9, «.», «_», «-» is refused", async () => {
   const res = await run(["../x"]);
 
   assert.equal(res.code, 2);
+  assert.equal(log(), "");
+});
+
+test("tools/run-int.sh is retired: it stops before any database and points to it-pg.sh", () => {
+  const runInt = join(dirname(script), "..", "tools", "run-int.sh");
+  const res = spawnSync("zsh", [runInt, "health"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, STUB: dir },
+  });
+
+  assert.equal(res.status, 2);
+  assert.match(res.stderr, /scripts\/it-pg\.sh <name>/);
   assert.equal(log(), "");
 });
