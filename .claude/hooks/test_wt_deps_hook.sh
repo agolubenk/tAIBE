@@ -31,8 +31,8 @@ expect 0 "pnpm install --frozen-lockfile"
 expect 0 "pnpm -C boards install --frozen-lockfile"
 expect 0 "pnpm --dir=boards install"
 expect 0 "pnpm i"
-expect 0 "npm ci"
-expect 0 "npm --prefix boards ci"
+expect 0 "pnpm ci"
+expect 0 "(cd boards && pnpm install --frozen-lockfile)" # точная команда починки из wt-deps.sh
 expect 0 "cd boards && pnpm install --frozen-lockfile"
 # Слово install не подкомандой — гейт остаётся гейтом.
 expect 2 "pnpm run install-check"
