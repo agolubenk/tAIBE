@@ -1104,3 +1104,11 @@ describe('раскладка «Одной очередью» / «По разде
     expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .list, #sec-queue .list')")
   })
 })
+
+describe('роадмап: вехи без подписи видны на снимке бота (карточка HR u68lwzb1)', () => {
+  it('у полосы — «+N вех без подписи», названия и даты — в её подсказке', () => {
+    expect(html).toContain('var hidden = marks.filter(function (m, i) { return !levels[i]; });')
+    expect(html).toContain("'>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>'")
+    expect(html).toContain("tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); }))")
+  })
+})

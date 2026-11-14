@@ -2417,6 +2417,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         return { w: w, at: at, isLate: isLate, x: (diffD(at, a) + 0.5) * dx, prio: isLate ? 0 : w.status === 'done' ? 2 : 1 };
       });
       var levels = placeRoadmapLabels(marks, laneW, 112, 8);
+      // Вехи без подписи (не влезли рядом с соседями): их название — только в подсказке, а на снимке бота (/charts)
+      // подсказок нет. Число — у названия полосы, названия и даты — в её подсказке (карточка HR u68lwzb1).
+      var hidden = marks.filter(function (m, i) { return !levels[i]; });
       marks.forEach(function (m, i) {
         var w = m.w;
         lane += '<span class="rm-ms' + (w.status === 'done' ? ' done' : '') + (m.isLate ? ' late' : '') + '" style="left:' + P(m.at, true) + ';color:' + tr.c + '"' + tipAttr([w.title, (w.status === 'done' ? 'достигнута ' : 'план ') + fmtD(m.at), w.note]) + '></span>';
@@ -2429,7 +2432,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         });
         lane += '<span class="rm-lbl dn" style="left:' + PL(planEndOf(late[0])) + '">просрочено: ' + late.length + '<small>с ' + esc(fmtD(planEndOf(late[late.length - 1]))) + '</small></span>';
       }
-      o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small></span></div><div class="rm-lane">' + lane + now + '</div></div>';
+      o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small>' +
+        (hidden.length ? '<br><small class="rm-hidden"' + tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); })) + '>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>' : '') + '</span></div><div class="rm-lane">' + lane + now + '</div></div>';
     });
     host.innerHTML = ws.length ? o : '<p class="empty" style="padding:10px">' + noRows('Нет задач.') + '</p>';
   }
