@@ -130,8 +130,20 @@ def _lock_and_mismatch(check, gr, tmp: Path) -> None:
           and gr.resume_mismatch({"_meta": {"pr": "7"}}, "7", "abc") and not gr.resume_mismatch(prior, "7", "abc"))
 
 
+def _timeouts(check, gr) -> None:
+    import opencode_client as oc
+    t = {b: gr._parse_args(["1", "o.json", "--backend", b]).attempt_timeout for b in ("glm", "opencode")}
+    check("OPS-53: таймаут попытки по рецензенту — GLM 330, opencode свой и дольше; клиент opencode — тот же",
+          t == {"glm": 330, "opencode": oc.ATTEMPT_TIMEOUT} and oc.ATTEMPT_TIMEOUT > 330
+          and oc.OpencodeClient().timeout == oc.ATTEMPT_TIMEOUT, t)
+    explicit = {b: gr._parse_args(["1", "o.json", "--backend", b, "--attempt-timeout", "120"]).attempt_timeout
+                for b in ("glm", "opencode")}
+    check("OPS-53: --attempt-timeout задан — он у обоих рецензентов", explicit == {"glm": 120, "opencode": 120}, explicit)
+
+
 def run(tmp: Path, check) -> None:
     import glm_pr_review as gr
     _opencode(check, gr, tmp)
     _resume(check, gr)
     _lock_and_mismatch(check, gr, tmp)
+    _timeouts(check, gr)
