@@ -18,7 +18,9 @@
       "frontend",
       "backend",
       "release",
-      "boards"
+      "boards",
+      "backend-2",
+      "frontend-2"
     ],
     "active_hours": 8
   },

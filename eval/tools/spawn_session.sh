@@ -6,6 +6,9 @@
 #   bash eval/tools/spawn_session.sh --launch --roles all|coord,release,…   несколько ролей, по порядку 1→5→4→3→2→6
 #   bash eval/tools/spawn_session.sh --status | --stop                 роли продукта и пульс нерва | команды kill для владельца
 #
+# Вторая сессия роли — backend-2 (роль 7) и frontend-2 (роль 8), номера — по team.roles: свой ключ в Нерве, тапе,
+# work_state и метке session, а геном и пусковой файл — базовой роли (4-backend.md). --roles all их не открывает:
+# --roles backend-2,frontend-2.
 # --launch идемпотентен (OPS-24): сначала поднимает нерв (не загружен → bootstrap, молчит → kickstart), живую роль
 # продукта пропускает («жива: …»), после открытия ждёт сессию новой линии до SPAWN_WAIT с (90), затем следующую роль;
 # в конце печатает итог. --force — открыть и при живой роли. Продукт — основной checkout папки --cwd (team_status.py).
@@ -119,12 +122,17 @@ else
 fi
 case "$TERMINAL" in terminal|iterm|print) ;; *) die "--terminal: terminal, iterm или print" ;; esac
 
+# Номер — место ключа в team.roles instances/<slug>.json (тест сверяет): так роль 7 и в Нерве (emit 7), и в подписи линзы.
+ROLE_LIST="coord plan frontend backend release boards backend-2 frontend-2"
 role_num() {
   case "$1" in
     coord) echo 1 ;; plan) echo 2 ;; frontend) echo 3 ;; backend) echo 4 ;; release) echo 5 ;; boards) echo 6 ;;
+    backend-2) echo 7 ;; frontend-2) echo 8 ;;
     *) return 1 ;;
   esac
 }
+# Базовая роль второй сессии: backend-2 → backend (то же правило — base_role в eval/nerve/products.py).
+role_base() { case "$1" in *-[2-9]) printf '%s' "${1%-*}" ;; *) printf '%s' "$1" ;; esac; }
 
 # Линия потомков: у каждой новой сессии свой id — id родителя (TAIBE_LINEAGE, корень «r») + 4 случайных символа;
 # поколение — число точек. Один шаблон запуска делает сессии единообразными, id — различимыми в журналах, на
@@ -142,24 +150,34 @@ generation() { printf '%s' "$1" | tr -cd '.' | wc -c | tr -d ' '; }
 
 # Первое сообщение новой сессии → stdout. $2 — id линии новой сессии.
 first_message() {
-  local role="$1" lineage="$2" num file tag
+  local role="$1" lineage="$2" num file tag base
   tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди."
   if [ -n "$HANDOFF" ]; then
     # Квитанция — последним шагом приёма: по ней сторож снимает предшественника, Monitor и кроны к этому времени свои.
     tag="$tag Последним шагом приёма (после Monitor, если ты его взводишь) выполни: python3 -I $TOOLS/lineage.py ack — по этой квитанции предшественник закроется сам."
     if [ -n "$role" ]; then
-      num="$(role_num "$role")" || die "неизвестная роль: $role (coord plan frontend backend release boards)"
-      printf 'Сборка Т3, ключ реестра %s, роль %s, наследник. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику не пиши: квитанция приёма — lineage.py ack (SE-41).%s' "$role" "$num" "$HANDOFF" "$tag"
+      num="$(role_num "$role")" || die "неизвестная роль: $role ($ROLE_LIST)"
+      printf 'Сборка Т3, ключ реестра %s, роль %s, наследник. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику не пиши: квитанция приёма — lineage.py ack (SE-41).%s%s' "$role" "$num" "$HANDOFF" "$(alias_note "$role")" "$tag"
     else
       printf 'Наследник сессии. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику не пиши: квитанция приёма — lineage.py ack (SE-41).%s' "$HANDOFF" "$tag"
     fi
     return
   fi
-  num="$(role_num "$role")" || die "неизвестная роль: $role (coord plan frontend backend release boards)"
-  file="$PROMPT_DIR/$num-$role.md"
+  num="$(role_num "$role")" || die "неизвестная роль: $role ($ROLE_LIST)"
+  base="$(role_base "$role")"
+  file="$PROMPT_DIR/$(role_num "$base")-$base.md"
   [ -f "$file" ] || die "нет пускового файла $file"
-  printf 'Сборка Т3, ключ реестра %s, роль %s. Пусковой файл: %s — прочитай его первым и действуй по нему.%s' \
-    "$role" "$num" "$file" "$tag"
+  printf 'Сборка Т3, ключ реестра %s, роль %s. Пусковой файл: %s — прочитай его первым и действуй по нему.%s%s' \
+    "$role" "$num" "$file" "$(alias_note "$role")" "$tag"
+}
+
+# Вторая сессия читает пусковой файл базовой роли: в нём ключ базовой роли, а тап, work_state и метка — свои.
+alias_note() {
+  local role="$1" base
+  base="$(role_base "$role")"
+  [ "$base" != "$role" ] || return 0
+  printf ' Ты — вторая сессия роли %s (роль %s): пусковой файл и геном общие с ней. Где в пусковых файлах ключ %s, бери свой ключ %s — тап Нерва, work_state, метка session; подпись линзы — «(роль %s)». Списки work_state и карточки роли %s — первой сессии: карточки бери только по назначению координатора.' \
+    "$base" "$(role_num "$base")" "$base" "$role" "$(role_num "$role")" "$base"
 }
 
 # Одна сессия: пусковой скрипт в $TMPDIR, затем окно терминала (или печать команды).
@@ -170,7 +188,7 @@ spawn_one() {
   SPAWNED_TTY=""
   msg="$(first_message "$role" "$lineage")"
   if [ -n "$role" ]; then
-    genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$role.json")"
+    genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$(role_base "$role").json")"
     [ -f "$genome" ] || die "нет генома $genome (build.py собирает его из roles.json)"
   fi
   if [ "$TERMINAL" != print ] && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
@@ -260,7 +278,7 @@ SUMMARY=""
 note() { SUMMARY="$SUMMARY$(printf '\n  %s' "$*")"; }
 launch_role() {
   local r="$1" live rc got
-  role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
+  role_num "$r" >/dev/null || die "неизвестная роль: $r ($ROLE_LIST)"
   if [ "$FORCE" = 0 ]; then
     rc=0; live="$(python3 -I "$TOOLS/team_status.py" live --role "$r" --cwd "$CWD" ${PRODUCT:+--product "$PRODUCT"} 2>&1)" || rc=$?
     if [ "$rc" = 0 ]; then echo "жива: $r · $live"; note "$r — жива, не открывал: $live"; return; fi
@@ -319,7 +337,7 @@ elif [ "$LAUNCH" = 1 ]; then
   fi
   # Весь список — до нерва и первой роли: опечатка в третьей не должна срывать запуск после двух открытых.
   for r in $(echo "$ROLES" | tr ',' ' '); do
-    role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
+    role_num "$r" >/dev/null || die "неизвестная роль: $r ($ROLE_LIST)"
   done
   # Сначала нерв: роли без него не получают назначений. Сбой — в итог, запуск ролей не останавливает.
   if [ "$DRY" = 1 ]; then nerve="$(python3 -I "$TOOLS/team_status.py" nerve 2>&1)" || true

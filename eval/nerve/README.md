@@ -54,16 +54,19 @@ python3 -I $N/nerve.py tap <роль>          # ← Monitor роли, timeout_m
 python3 -I $N/nerve.py tap <роль> --product taibe   # роль другого продукта (OPS-25); иначе TAIBE_PRODUCT, иначе по умолчанию
                                           # в журнал продукта: его PR; события аккаунта (budget.warn, limit.hit — coord,
                                           # limit.resume — живые роли); ответы на пункты с `-taibe-`; owner.stop (Ф2b)
-python3 -I $N/nerve.py emit <роль> "текст" # назначение вручную (Координатор), класс nervous; роль — ключ, номер 1–6
-                                          # (1 coord … 6 boards, порядок team.roles), all или список через запятую;
+python3 -I $N/nerve.py emit <роль> "текст" # назначение вручную (Координатор), класс nervous; роль — ключ, номер 1–8
+                                          # (1 coord … 6 boards, 7 backend-2, 8 frontend-2, порядок team.roles), all или список через запятую;
                                           # неизвестное имя — код 2 и ничего не записано (иначе запись не слышит никто)
 python3 -I $N/nerve.py once [--seed]       # один проход руками (демон держит замок — once его не берёт)
 python3 -I -m unittest discover -s $N -p 'test_*.py'
 ```
 
 Роли — `team.roles` в `config.json`, по порядку номеров реестра Т3: 1 `coord`, 2 `plan`, 3 `frontend`, 4 `backend`,
-5 `release`, 6 `boards`; ещё `supertick` и `tboards` (по `source` пунктов). `emit` и `tap` принимают ключ или номер
-1–6. Номер вне диапазона и неизвестное имя у `emit` дают код 2.
+5 `release`, 6 `boards`, 7 `backend-2`, 8 `frontend-2`; ещё `supertick` и `tboards` (по `source` пунктов). `emit` и
+`tap` принимают ключ или номер 1–8. Номер вне диапазона и неизвестное имя у `emit` дают код 2.
+Вторая сессия роли (`backend-2`, `frontend-2`, решения владельца 14.11) — свой ключ и свой курсор: `emit backend` до
+`backend-2` не доходит, `all` — доходит обеим. Геном и пусковой файл у неё — базовой роли (`products.base_role`,
+`spawn_session.sh`), отдельного генома нет.
 Сессия роли ставит **один** Monitor: `python3 -I eval/nerve/nerve.py tap <роль>` — фильтр внутри, без `| grep`
 (память `feedback_monitor_no_pipe_filters`). Курсор тапа — `state/tap-<роль>.json`, первый запуск начинает с конца журнала.
 Пульс (`coord`, `release`) считается устаревшим через два цикла демона, но не раньше `heartbeat_stale_min`. Цикл

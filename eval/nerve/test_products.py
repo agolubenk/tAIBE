@@ -85,6 +85,14 @@ class ErrorsTest(unittest.TestCase):
         edit(self.d, "taibe.json", lambda d: d["github"]["path_roles"].append(["x/", "chef"]))
         self.fails("chef")
 
+    def test_second_session_needs_its_base_role(self):
+        edit(self.d, "taibe.json", lambda d: d["team"]["roles"].remove("backend"))
+        self.fails("вторая сессия «backend-2» без роли «backend»")
+
+    def test_second_session_of_unknown_role(self):
+        edit(self.d, "taibe.json", lambda d: d["team"]["roles"].append("chef-2"))
+        self.fails("chef")
+
     def test_bad_slug(self):
         os.rename(os.path.join(self.d, "taibe.json"), os.path.join(self.d, "HR_Helper.json"))
         self.fails("slug")
@@ -95,6 +103,18 @@ class ErrorsTest(unittest.TestCase):
 
     def test_paths_are_not_secrets(self):
         self.assertIsNone(P.SECRET_RE.search("/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state"))
+
+
+class BaseRoleTest(unittest.TestCase):
+    def test_second_session_maps_to_base_role(self):
+        self.assertEqual([P.base_role(r) for r in ("backend-2", "frontend-2", "backend", "boards", "a-1", "x-10", "")],
+                         ["backend", "frontend", "backend", "boards", "a-1", "x-10", ""])
+
+    def test_both_products_have_second_sessions_after_the_six(self):
+        """Решения владельца 14.11: backend-2 (роль 7) и frontend-2 (роль 8) у tAIBE и HR."""
+        _, products = P.load()
+        for slug in ("taibe", "hr-helper"):
+            self.assertEqual(products[slug]["team"]["roles"][6:], ["backend-2", "frontend-2"], slug)
 
 
 class ProductDirTest(unittest.TestCase):

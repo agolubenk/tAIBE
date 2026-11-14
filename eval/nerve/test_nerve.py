@@ -600,16 +600,38 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "emit", "backend, release,4", "двум").returncode, 0)
             self.assertEqual(self.nerve(d, "emit", "plan,frontend,backend,release,boards", "пятерым").returncode, 0)
             to = [sorted(r["to"]) for r in self.records(d)]
-            self.assertEqual(to, [["boards"], ["backend", "release"], sorted(CFG["team"]["roles"][1:])])
+            self.assertEqual(to, [["boards"], ["backend", "release"], ["backend", "boards", "frontend", "plan", "release"]])
             out = self.nerve(d, "tap", "boards", "--once").stdout
             self.assertIn("роль 6: одна", out, "tap 6 и tap boards — один курсор")
             self.assertIn("пятерым", out)
             self.assertNotIn("двум", out)
 
+    def test_second_session_has_its_own_cursor(self):
+        """backend-2 (роль 7): emit «backend» до неё не доходит (нет двойной работы), «all» — доходит обеим."""
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            wj(os.path.join(d, "state.json"), {"heartbeat": datetime.now(timezone.utc).isoformat()})
+            for role in ("backend", "backend-2"):
+                self.assertEqual(self.nerve(d, "tap", role, "--once").stdout, "")  # курсоры — с конца журнала
+            self.assertEqual(self.nerve(d, "emit", "backend", "только первой").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "7", "только второй").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "frontend-2,backend-2", "вторым").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "all", "всем").returncode, 0)
+            self.assertEqual([sorted(r["to"]) for r in self.records(d)][1:3], [["backend-2"], ["backend-2", "frontend-2"]])
+            first = self.nerve(d, "tap", "backend", "--once").stdout
+            second = self.nerve(d, "tap", "backend-2", "--once").stdout
+            self.assertIn("только первой", first)
+            self.assertNotIn("только второй", first)
+            self.assertNotIn("только первой", second)
+            self.assertIn("только второй", second)
+            self.assertIn("вторым", second)
+            self.assertIn("всем", first)
+            self.assertIn("всем", second)
+
     def test_emit_refuses_unknown_role(self):
         with tempfile.TemporaryDirectory() as d:
             open(os.path.join(d, "journal.jsonl"), "w").close()
-            for target in ("tboards", "7", "backend,review", ","):
+            for target in ("tboards", "9", "backend-3", "backend,review", ","):
                 p = self.nerve(d, "emit", target, "никому")
                 self.assertEqual(p.returncode, 2, target)
                 self.assertIn("ничего не записано", p.stderr, target)
@@ -621,7 +643,7 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "tap", "backend,release", "--once").returncode, 2)
             self.assertEqual(self.nerve(d, "tap", "selftest", "--once").returncode, 0, "split/6-verify.sh")
             self.assertTrue(os.path.exists(os.path.join(d, "tap-selftest.json")))
-            for n in ("0", "7", "99"):
+            for n in ("0", "9", "99"):
                 self.assertEqual(self.nerve(d, "tap", n, "--once").returncode, 2, f"emit не запишет «{n}»")
                 self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
 
@@ -925,7 +947,7 @@ class RoleNumberingTest(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             body = re.search(r"^role_num\(\) \{\n(.*?)^\}", f.read(), re.S | re.M)
         self.assertIsNotNone(body, f"role_num() not found in {path}")
-        numbered = {key: int(n) for key, n in re.findall(r"(\w+)\) echo (\d+)", body.group(1))}
+        numbered = {key: int(n) for key, n in re.findall(r"([\w-]+)\) echo (\d+)", body.group(1))}
         expected = {key: i for i, key in enumerate(CFG["team"]["roles"], 1)}
         self.assertEqual(numbered, expected)
 
