@@ -22,6 +22,8 @@ SHA — токен сразу за словом (между ними — «с у
 """
 import re
 
+import products
+
 _G = r"[\s*_`]*"  # пробелы и разметка между словами
 _P = r"[\s*_`(\[,@]*"  # то же, плюс скобки, запятая и @ между словом вердикта и SHA
 VERDICT_RE = re.compile(
@@ -111,12 +113,14 @@ def ci_state(checks):
 
 def quorum(verdicts, head, checks, min_lenses=3):
     """verdicts — разобранные вердикты по порядку. Последний вердикт линзы на голову перекрывает её прежние.
-    Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI)."""
+    Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI).
+    Линза — роль: approve второй сессии (backend-2) и основной (backend) — одна линза, геном и пусковой файл у них
+    общие. changes — по точному ключу: newhead и changes_by адресуют ту сессию, что просила правку."""
     last = {}
     for v in verdicts:
         if v and on_head(v["sha"], head):
             last[v["lens"]] = v["verdict"]
-    approved = sorted(k for k, x in last.items() if x == "approve")
+    approved = sorted({products.base_role(k) for k, x in last.items() if x == "approve"})
     changes = sorted(k for k, x in last.items() if x == "changes")
     ci = ci_state(checks)
     return (len(approved) >= min_lenses and not changes and ci != "pending"), approved, changes, ci

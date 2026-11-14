@@ -163,6 +163,22 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
 
+    def test_second_session_is_the_same_lens(self):
+        """Линза backend #324: approve от backend и backend-2 — одна линза. Кворум трёх линз — от трёх ролей."""
+        head = "abd008c5c" + "0" * 31
+        vs = [pv(f"{l}: approve на abd008c5c") for l in ("Бэкенд (роль 4)", "Бэкенд (роль 7)", "Линза плана (роль 2)")]
+        self.assertEqual([v["lens"] for v in vs], ["backend", "backend-2", "plan"])
+        ok, approved, _, _ = quorum.quorum(vs, head, ["SUCCESS"])
+        self.assertEqual((ok, approved), (False, ["backend", "plan"]))
+        ok, approved, _, ci = quorum.quorum(vs, head, ["IN_PROGRESS"])
+        self.assertLess(len(approved), 3, "await_ci (sources.py) считает те же approved")
+        ok, approved, _, _ = quorum.quorum(vs + [pv("Данные (роль 6): approve на abd008c5c")], head, ["SUCCESS"])
+        self.assertEqual((ok, approved), (True, ["backend", "boards", "plan"]))
+        ch = vs + [pv("Данные (роль 6): approve на abd008c5c"), pv("Бэкенд (роль 7): changes на abd008c5c")]
+        ok, approved, changes, _ = quorum.quorum(ch, head, ["SUCCESS"])
+        self.assertEqual((ok, approved, changes), (False, ["backend", "boards", "plan"], ["backend-2"]),
+                         "changes второй сессии блокирует и адресован ей")
+
     def test_later_verdict_of_a_lens_overrides(self):
         head = "abcdef1234"
         vs = [pv(x) for x in (
@@ -367,6 +383,21 @@ class GithubPollTest(unittest.TestCase):
         self.assertNotIn("pr.changes", kinds)
         self.assertIn("pr.quorum", kinds)
         self.assertEqual(self.ctx.state["github"]["prs"]["478"]["changes_by"], [])
+
+    def test_second_session_approve_does_not_make_quorum(self):
+        """Линза backend #324: backend + backend-2 + plan — две линзы: ни pr.quorum, ни await_ci."""
+        head = "abd008c5c" + "0" * 31
+        three = ["Бэкенд (роль 4): approve на abd008c5c", "Бэкенд (роль 7): approve на abd008c5c",
+                 "Линза плана (роль 2): approve на abd008c5c"]
+        sources.run = FakeGh([_pr(324, head)], comments={324: three})
+        sources.poll_github(self.ctx)
+        p = self.ctx.state["github"]["prs"]["324"]
+        self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+        self.assertFalse(p["await_ci"])
+        sources.run = FakeGh([_pr(324, head, "2026-11-04T11:00:00Z")], etag='W/"e2"',
+                             comments={324: three + ["Данные (роль 6): approve на abd008c5c"]})
+        sources.poll_github(self.ctx)
+        self.assertIn(("pr.quorum", "#324 собран: approve backend, boards, plan на abd008c5c, CI ok"), self.kinds())
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
