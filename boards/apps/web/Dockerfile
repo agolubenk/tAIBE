@@ -76,8 +76,9 @@ RUN chown appuser:appuser /usr/share/nginx/html
 
 # Copy nginx configuration and public runtime configuration renderer
 COPY --chown=appuser:appuser apps/web/nginx.conf /etc/nginx/conf.d/default.conf
-# env.sh rewrites this list at start; it must exist even if env.sh is skipped.
-RUN touch /etc/nginx/conf.d/kaneo-env-assets.inc && chown -R appuser:appuser /etc/nginx/conf.d
+# env.sh rewrites these includes at start (the asset list and the OPS-65 CSP
+# header); they must exist even if env.sh is skipped.
+RUN touch /etc/nginx/conf.d/kaneo-env-assets.inc /etc/nginx/conf.d/kaneo-csp.inc && chown -R appuser:appuser /etc/nginx/conf.d
 
 # Copy and set permissions for environment script
 COPY --chown=appuser:appuser apps/web/env.sh /docker-entrypoint.d/env.sh

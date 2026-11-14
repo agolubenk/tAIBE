@@ -125,8 +125,9 @@ RUN cd /app/apps/api && node -e "const fs=require('fs');for(const m of ['bcryptj
 
 COPY --from=web-builder --chown=appuser:appuser /app/apps/web/dist /usr/share/nginx/html
 COPY --chown=appuser:appuser apps/web/nginx.kaneo.conf /etc/nginx/conf.d/default.conf
-# env.sh rewrites this list at start; it must exist even if env.sh is skipped.
-RUN touch /etc/nginx/conf.d/kaneo-env-assets.inc && chown -R appuser:appuser /etc/nginx/conf.d
+# env.sh rewrites these includes at start (the asset list and the OPS-65 CSP
+# header); they must exist even if env.sh is skipped.
+RUN touch /etc/nginx/conf.d/kaneo-env-assets.inc /etc/nginx/conf.d/kaneo-csp.inc && chown -R appuser:appuser /etc/nginx/conf.d
 COPY --chown=appuser:appuser apps/web/env.sh /docker-entrypoint.d/env.sh
 COPY --chown=appuser:appuser apps/web/env.awk /docker-entrypoint.d/env.awk
 COPY --chown=appuser:appuser deploy/kaneo-entrypoint.sh /usr/local/bin/kaneo-entrypoint.sh

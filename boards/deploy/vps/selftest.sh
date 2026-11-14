@@ -122,7 +122,10 @@ health="$(curl -sk --resolve "$domain:18443:127.0.0.1" "https://$domain:18443/ap
 [ -n "$health" ] || fail "no answer through tls"
 hsts="$(curl -skI --resolve "$domain:18443:127.0.0.1" "https://$domain:18443/" | grep -ci '^strict-transport-security' || true)"
 [ "$hsts" -ge 1 ] || fail "no HSTS header"
-log "tls proxy: $health, HSTS present"
+# OPS-65: env.sh renders the CSP at start; the tls proxy passes it through.
+csp="$(curl -skI --resolve "$domain:18443:127.0.0.1" "https://$domain:18443/" | grep -ci "^content-security-policy-report-only: default-src 'self'" || true)"
+[ "$csp" -ge 1 ] || fail "no Content-Security-Policy-Report-Only header"
+log "tls proxy: $health, HSTS and CSP (report-only) present"
 
 "${compose[@]}" up -d backup 2>&1 | tail -1 || true
 for _ in $(seq 1 30); do
