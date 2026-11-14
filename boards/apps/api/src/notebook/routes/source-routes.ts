@@ -128,7 +128,7 @@ const addLinkRoute = createRoute({
   tags: ["Notebook"],
   summary: "Add or refresh a web page in the notebook",
   description:
-    "Fetches one https page a member asked for: every redirect hop and the connected address must be public, whatever KANEO_ALLOW_PRIVATE_WEBHOOK_DESTINATIONS says. HTML, Markdown and plain text only, up to 2 MB and 10 seconds. Each refusal carries its own code (LINK_*).",
+    "Fetches one https page a member asked for: every redirect hop and the connected address must be public, whatever KANEO_ALLOW_PRIVATE_WEBHOOK_DESTINATIONS says. HTML, Markdown and plain text only, up to 2 MB and 10 seconds. Two links load at a time per workspace and eight per API process; beyond that 429 LINK_BUSY. Each refusal carries its own code (LINK_*).",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ workspace: ["manage_settings"] }),
@@ -149,6 +149,9 @@ const addLinkRoute = createRoute({
     415: errorResponse("Not HTML, Markdown or plain text; PDF is refused"),
     422: errorResponse(
       "Private address, unreachable, timed out, error status or no text",
+    ),
+    429: errorResponse(
+      "Two links of this workspace or eight on the server are already loading",
     ),
   },
 });
