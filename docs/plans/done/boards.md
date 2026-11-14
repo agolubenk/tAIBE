@@ -39,5 +39,6 @@
 - **OPS-15 — WireGuard: PresharedKey и MTU** (2026-10-30 · `d9f1063` · OPS-15) — новые устройства получают PresharedKey и MTU 1380; install.sh ставит wg-issue.sh и wg-psk.sh. #bug #infra
 - **OPS-17 — WireGuard: файрвол d4dev** (2026-10-30 · `304e8b4` · OPS-17) — правила wg0 вынесены в t-boards-rules.sh, приложение слышит прокси памяти Mac через туннель. #bug #infra
 - **TB-103 — одобренная заявка close_task на «Брёвна» была неисполнима из не-Done** (2026-11-13 · `04f9903ad`, tAIBE #133 · TB-103) — закрыта TB-102 (R-8): одно «да» на `closed` сервер проводит одной транзакцией через Done (`forest/approval/status-path.ts`; тесты `status-path.test.ts`, `approval-migrate-stuck.test.ts`). На d4dev с 04f9903-tb102; OPS-37, TB-73, OPS-26, OPS-38 закрыты 10.11. #bug
+- **SE-95 — селфтесты VPS молча выходили на нуле совпадений grep** (2026-11-14 · `038a19596`, tAIBE #281 · SE-95) — под `set -euo pipefail` `x="$(… | grep -c …)"` падал до своей `fail`: `|| true` у `owned`, `cards` (`selftest.sh`), `redirects`, `backups`, `mac_pub` (`wg-selftest.sh`, плюс проверка «mac peer not found»). На базе 5/5 строк выходили молча, на ветке 5/5 печатают сообщение. IDEA-60 — дубль. #bug #infra
 
 Ход реализации до переноса (шаги S1–S6, R-…, B-…) — [`boards/docs/impl-progress.md`](../../../boards/docs/impl-progress.md).
