@@ -7,10 +7,28 @@
 import os
 import re
 
-from merge_guard_shell import CURRENT, LOST, SUBST, is_lost
+from merge_guard_shell import ASSIGN, CURRENT, LOST, SHELL_WORDS, SUBST, exact_name, is_lost
 
 DIR_CMDS = {"cd", "pushd", "popd", "dirs"}
 NUM = re.compile(r"[+-]\d+")
+SAME_SHELL = {"builtin", "time"}  # перед `cd` — встроенная `cd` этого shell и в bash, и в zsh
+SPLIT_SHELL = {"command", "noglob", "nocorrect", "-", "repeat"}  # bash и zsh расходятся (сверено exec): папка неизвестна
+
+
+def dir_words(prefix, v, exe):
+    """Слова для dir_step: v — папку shell меняет встроенная `cd` (перед ней только присваивания, ключевые слова и точные
+    `builtin`/`time`); [] — папка та же: внешняя обёртка (`env`, `nohup`, `sudo`…) или имя в другом регистре (`CD`,
+    `Builtin cd`) запускают /usr/bin/cd в подпроцессе; None — неизвестна: `command cd` и `time -p cd` bash выполнит
+    встроенной, zsh — нет, а `noglob`/`nocorrect`/`-`/`repeat` в bash — «command not found». prefix — слова, снятые
+    strip_prefix (None — не срез argv: `env -S 'cd x'`). SE-90."""
+    if v[0] not in DIR_CMDS or exact_name(exe) != v[0] or prefix is None:
+        return []
+    for k, t in enumerate(prefix):
+        if t in SPLIT_SHELL or t.startswith("-") and prefix[k - 1:k] == ["time"]:
+            return None
+        if not (t in SHELL_WORDS or ASSIGN.fullmatch(t) or t in SAME_SHELL):
+            return []
+    return v
 
 
 def new_state(cwd):
@@ -102,10 +120,10 @@ def _step(a, st):
 def dir_step(variants, st, piped=False):
     """Применить `cd`/`pushd`/`popd`/`dirs` ко всем вариантам подстановки (argv); прочие команды папку не меняют.
     Варианты разошлись или команда — последняя стадия конвейера (`… | cd x`: zsh сменит папку, bash — нет) — папка
-    неизвестна. Возвращает новую папку shell."""
+    неизвестна; вариант None — папка неизвестна сама (dir_words: `command cd`). Возвращает новую папку shell."""
     results = []
     for a in variants:
-        s = copy_state(st)
+        s = copy_state(st) if a is not None else {"ds": [LOST], "old": None, "lost": True}
         if a and a[0] in DIR_CMDS:
             _step(a, s)
         results.append(s)

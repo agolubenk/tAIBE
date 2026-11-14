@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from merge_guard_files import GH_MOVED, GH_WRITTEN, command_writes  # noqa: E402
 from merge_guard_shell import command_name, exact_name, launcher  # noqa: E402
 from merge_guard_testkit import bash, check, finish, repo_on  # noqa: E402
 
@@ -32,6 +33,24 @@ for word, want in (("CD", "CD"), ("/usr/bin/cd", "cd")):
     check(f"SE-90 exact_name({word!r})", None if exact_name(word) == want else exact_name(word), False)
 for word, want in (("BASH", "sh"), ("Python3.12", "python"), ("NODE", "node"), ("swiftc", None)):
     check(f"SE-90 launcher({word!r})", None if launcher(word) == want else launcher(word), False)
+# Слова перед `cd` (dir_words, линза Контроля на 22ae0a3f3): внешняя обёртка или другой регистр — папка shell та же,
+# `command`, `time -p` и zsh-модификаторы — bash и zsh расходятся (сверено exec), папка неизвестна. Голый push из main.
+se90f = repo_on("feature/x", "se90f")
+for pre in ("Builtin", "Command", "Time", "Nohup", "Env", "Sudo", "Nice", "nohup", "env", "exec", "command", "time -p",
+            "noglob", "nocorrect", "-", "repeat 1"):
+    bash(f"SE-90: `{pre} cd` к ветке feature — папка shell та же или неизвестна", f"{pre} cd {se90f}; git push", True,
+         cwd=se90)
+for pre in ("", "builtin ", "time ", "A=1 ", "! "):
+    bash(f"SE-90: `{pre}cd` к ветке feature — папка сменилась, проход", f"{pre}cd {se90f}; git push", False, cwd=se90)
+# Записи команды (merge_guard_files): имя сравнивается свёрнутым — запись видна и у имени в другом регистре.
+for text, want in (("CP a.sh b.sh", {"a.sh", "b.sh"}), ("NPM pkg set scripts.t=x", {"package.json"}),
+                   ("TAR -xf a.tar -C ~/.config/gh", {GH_WRITTEN}), ("UNZIP -o a.zip -d ~/.config/gh", {GH_WRITTEN}),
+                   ("BASH -c 'echo x > m.sh'", {"m.sh"}), ("EVAL 'echo x > m.sh'", {"m.sh"}),
+                   ("ENV -i gh pr view 1", {GH_MOVED}), ("SUDO gh pr view 1", {GH_MOVED}),
+                   ("/usr/bin/Sudo gh pr view 1", {GH_MOVED})):
+    got = command_writes(text)
+    check(f"SE-90 command_writes({text!r})", None if want <= got else sorted(got), False)
+bash("SE-90: запись `CP` видна — скрипт переписан той же командой", "CP x.sh sub/x.sh; bash sub/x.sh", True, cwd=se90)
 
 if __name__ == "__main__":
     finish(" — инструмент под другим именем")

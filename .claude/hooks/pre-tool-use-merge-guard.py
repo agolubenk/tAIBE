@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, start_budget  # noqa: E402
-from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
+from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, dir_words, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
 from merge_guard_gh import classify_gh, classify_http, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts, read_names,  # noqa: E402
@@ -35,7 +35,7 @@ from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
                                CHANGED, comment_char_may_change, comment_char_seen, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
-                               heredoc_text, join_lines, comments_off, exact_name,
+                               heredoc_text, join_lines, comments_off,
                                launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
                                split_commands, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
                                comment_readings, uncommented)
@@ -324,13 +324,14 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         for v in implied_commands(expanded):  # `BASH_ENV=m.sh bash -c true`, `NODE_OPTIONS='-r ./m.js' npm test`
             found += classify_argv(normalize(v), cwd, roots, depth, git_env, whole[:2] + (True,) + whole[3:],
                                   strip_prefix(v)[0])
-        raws = [r for r in (strip_prefix(v) for v in expanded) if r]
-        variants = [([command_name(r[0])] + r[1:], r[0]) for r in raws]
+        cut = [(v, strip_prefix(v)) for v in expanded]  # снятые слова решают, сменит ли `cd` папку (dir_words)
+        prefixes = [v[:len(v) - len(r)] if v[len(v) - len(r):] == r else None for v, r in cut if r]
+        variants = [([command_name(r[0])] + r[1:], r[0]) for _, r in cut if r]
         stdin_files = [x for f in sources or (cat_files(*prev, cwd) if piped else []) for x in procs.get(f, [f])]
         stdin_files = stdin_files or ([HEREDOC] if argv in fed else [])
         prev = ([v for v, _ in variants], stdin_files)
-        steps = [v if exact_name(e) == v[0] else [] for v, e in variants]  # `CD x` — /usr/bin/cd, папка та же (SE-90)
-        if any(v and v[0] in DIR_CMDS for v in steps):
+        steps = [dir_words(p, v, e) for p, (v, e) in zip(prefixes, variants)]  # `CD x`, `nohup cd x` — папка та же (SE-90)
+        if any(v is None or v and v[0] in DIR_CMDS for v in steps):
             new = dir_step(steps, st, piped)
             if disk and is_lost(new):  # в скрипте с диска `cd "$ROOT"` в функциях и циклах обычен — папка прежняя
                 st.update(new_state(cwd))
