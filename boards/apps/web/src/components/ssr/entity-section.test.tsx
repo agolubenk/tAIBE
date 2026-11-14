@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   getSsrDiff,
@@ -74,10 +80,14 @@ describe("EntitySection", () => {
       version(12 - index),
     );
     renderSection(entity("skill", versions), 12);
-    // The "diff from" select still offers every version; rows stop at ten.
+    // The "diff from" select still offers every version (as <option>); rows
+    // stop at ten. The row number is the only span that reads "v<n>".
     const rows = screen
       .getAllByRole("listitem")
-      .map((row) => row.querySelector(".font-mono.text-sm")?.textContent);
+      .map(
+        (row) =>
+          within(row).getByText(/^v\d+$/, { selector: "span" }).textContent,
+      );
     expect(rows).toEqual(versions.slice(0, 10).map((v) => `v${v.number}`));
   });
 
