@@ -491,4 +491,4 @@ xlsx, текст и логи, до 20 МБ и до 5 файлов на зада�
 
 `infra/ops-console/` (README, `server/telegram`, `server/deploys`, `server/reports`) · `infra/owner-queue-bot/`
 (PR #213 — отрисовка, белый список HTML, ввод текста) · протокол сессий — память `feedback_closeout_owner_checklist`
-· `infra/mcp-hub/README.md`.
+· `infra/mcp-hub/README.md` · переезд хранилища в доски — [`owner-queue-move.md`](owner-queue-move.md) (TB-28).
