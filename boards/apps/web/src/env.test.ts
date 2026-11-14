@@ -131,6 +131,7 @@ describe("Content-Security-Policy (OPS-65)", () => {
       "https://challenges.cloudflare.com",
     ]);
     expect(policy["object-src"]).toEqual(["'none'"]);
+    expect(policy["frame-ancestors"]).toEqual(["'none'"]);
     expect(policy["connect-src"]).toEqual(["'self'"]);
   });
 

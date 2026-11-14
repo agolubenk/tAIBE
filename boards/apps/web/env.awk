@@ -44,7 +44,8 @@ function csp(    connect, api, socket, storage, policy) {
     policy = policy "; frame-src https://www.youtube.com https://challenges.cloudflare.com"
     policy = policy "; worker-src 'self' blob:"
     policy = policy "; manifest-src 'self'"
-    policy = policy "; frame-ancestors 'self'"
+    # Nothing frames the app (no iframe of it in boards or infra).
+    policy = policy "; frame-ancestors 'none'"
     policy = policy "; base-uri 'self'"
     policy = policy "; form-action 'self'"
     return policy "; object-src 'none'"
