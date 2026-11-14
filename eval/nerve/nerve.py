@@ -74,11 +74,13 @@ class Ctx:
         return ok
 
     def for_item(self, item_id, product=None):
-        """R-6: продукт пункта очереди. Сначала поле `product` документа (владелец выбирает продукт пункта, v2-lite
-        #95): продукт из peers — он, иной — продукт по умолчанию. Поля нет — по `queue.match` (id содержит `-taibe-`)."""
+        """R-6: продукт пункта очереди. Поле `product` документа с продуктом из peers — он. Иначе — `queue.match`
+        (id содержит `-taibe-`), даже если поле называет продукт по умолчанию (SE-88): консоль заполняет поле сама по
+        началу id (`products.ts` namespaceOf: `taibe-…` → taibe, иначе HR), поэтому `d-taibe-…` приходит с HR. Нет
+        совпадения — продукт по умолчанию."""
         peers = self.peers or {}
-        if product:
-            return peers.get(product, self)
+        if product in peers:
+            return peers[product]
         for peer in peers.values():
             match = (peer.cfg.get("queue") or {}).get("match")
             if match and match in str(item_id):
