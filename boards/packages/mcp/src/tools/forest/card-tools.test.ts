@@ -131,6 +131,9 @@ describe("card tokens rule (D-018)", () => {
     expect(CARD_TOKENS_RULE).toMatch(/o200k_base/);
     // D-018 names cache: it is priced, not dropped.
     expect(CARD_TOKENS_RULE).toMatch(/Cache counts in costUsd/);
+    // One count for every provider: OpenAI-style prompt_tokens holds cache.
+    expect(CARD_TOKENS_RULE).toMatch(/input without cache \+ output/);
+    expect(CARD_TOKENS_RULE).toMatch(/o200k_base of input \+ output text/);
   });
 
   // The rule rides in every tools/list of a session that sees the tool.
