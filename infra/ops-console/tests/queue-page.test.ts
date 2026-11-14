@@ -1163,6 +1163,8 @@ describe('таяние ответа и якорь прокрутки (прось
     expect(html).toContain('new ResizeObserver(function () { restoreAnchor(); })')
     expect(html).toMatch(/scheduleDash\(\);\n {4}restoreAnchor\(\);\n {2}\}/)
     expect(html).toContain("if (ev.pointerType === 'touch') return;")
+  })
+})
 
 describe('роадмап: вехи без подписи видны на снимке бота (карточка HR u68lwzb1)', () => {
   it('у полосы — «+N вех без подписи», названия и даты — в её подсказке', () => {
