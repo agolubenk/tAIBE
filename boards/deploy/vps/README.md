@@ -187,10 +187,16 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
 - **Backup key:** `sed -i '/t-boards-backup$/d' /root/.ssh/authorized_keys`.
 - **Restore from a dump** (since migration 0084, TB-28): roles are cluster-wide and a dump does not carry them, so
   create `oq_owner` and `oq_console` first (`NOLOGIN`, the `DO … IF NOT EXISTS` block of
-  `apps/api/drizzle/0084_t_boards_oq_schema.sql`, also in `mac/restore-check.sh`), then `pg_restore --no-owner`. A full
-  restore loads data before it creates the triggers. A data-only restore of the schema `oq` needs
-  `--disable-triggers`: its triggers refuse every writer but `oq_console`. Then the runbook step of card (c) gives
-  `oq_console` its `LOGIN` and password again.
+  `apps/api/drizzle/0084_t_boards_oq_schema.sql`, also in `mac/restore-check.sh`), then `pg_restore` **without**
+  `--no-owner`, so the schema `oq`, its tables and its function stay `oq_owner`'s. With `--no-owner` (as
+  `mac/restore-check.sh` does on a throwaway container) they become `t_boards`'; the write guards still hold, since
+  they check `session_user`. A full restore loads data before it creates the triggers. A data-only restore of the
+  schema `oq` needs `--disable-triggers`: its triggers refuse every writer but `oq_console`. Then the runbook step of
+  card (c) gives `oq_console` its `LOGIN` and password again.
+- **The owner queue in the backups** (from phase 2, TB-28): the boards dump carries `oq.*` — the owner's items, notes
+  and answers. The Mac keeps the pulled dumps for 14 days (`mac/pull-backup.sh`), the same Mac and owner as the
+  console's `ops.db` (assumed acceptable, coordinator 14.11). A rehearsal uses a synthetic base, never a copy of a prod
+  dump (`docs/specs/owner-queue-move.md` §7).
 - **Migration 0084 on a release rollback:** the previous image keeps the schema `oq` (drizzle has no down
   migrations). An empty `oq` is harmless; with data it stays the console's, and the previous image never reads it.
 

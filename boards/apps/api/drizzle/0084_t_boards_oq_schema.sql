@@ -11,15 +11,26 @@
 -- identity BY DEFAULT, because the copy inserts events with their ids.
 --
 -- Roles are cluster-wide, so a second database on the same cluster (tests, a
--- rehearsal) must not fail on "role already exists". LOGIN and the password of
+-- rehearsal) must not fail on "role already exists". Two databases that
+-- migrate at the same time can both pass IF NOT EXISTS; the later CREATE ROLE
+-- then fails (duplicate_object, or unique_violation on pg_authid), and the
+-- handler takes that as "the role is there". LOGIN and the password of
 -- oq_console are a runbook step (card (c)); no secret is in git.
 DO $$
 BEGIN
 	IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'oq_owner') THEN
-		CREATE ROLE oq_owner NOLOGIN;
+		BEGIN
+			CREATE ROLE oq_owner NOLOGIN;
+		EXCEPTION WHEN duplicate_object OR unique_violation THEN
+			NULL;
+		END;
 	END IF;
 	IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'oq_console') THEN
-		CREATE ROLE oq_console NOLOGIN;
+		BEGIN
+			CREATE ROLE oq_console NOLOGIN;
+		EXCEPTION WHEN duplicate_object OR unique_violation THEN
+			NULL;
+		END;
 	END IF;
 END
 $$;--> statement-breakpoint
