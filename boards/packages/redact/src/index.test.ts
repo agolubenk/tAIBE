@@ -1,5 +1,24 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
-import { redact } from "./index";
+import { looksLikeSecret, redact } from "./index";
+
+// TB-136: one corpus for both rule sets. infra/checks/test_checks.py reads the
+// same file and expects the scanner rule `scan` on every case.
+type CorpusCase = {
+  id: string;
+  kind: string;
+  before: string;
+  value: string[];
+  after: string;
+  redact: string;
+  scan: string;
+};
+const corpus = JSON.parse(
+  readFileSync(
+    new URL("../fixtures/secrets-corpus.json", import.meta.url),
+    "utf8",
+  ),
+) as { cases: CorpusCase[] };
 
 // Test secrets are assembled at runtime from fragments so this file carries
 // no string that a secret scanner could mistake for live material.
@@ -185,10 +204,111 @@ describe("@kaneo/redact", () => {
     });
   });
 
-  // AC-023 known miss, pinned by this test: an unprefixed key in YAML
-  // (no known prefix, plain alnum so the base64-blob detector skips it)
-  // is intentionally NOT redacted. Widening coverage here is a spec
-  // decision, not a drive-by fix.
+  describe("shared corpus (TB-136)", () => {
+    it("holds every AC-023 kind and every kind added by TB-136", () => {
+      const kinds = new Set(corpus.cases.map((c) => c.kind));
+      for (const kind of [
+        "api_key",
+        "jwt",
+        "pem",
+        "db_url",
+        "base64",
+        "nonstandard",
+        "bearer",
+        "tbk",
+        "telegram",
+        "stripe",
+        "aws-session",
+        "github",
+        "slack",
+        "assignment",
+        "env",
+        "url_credentials",
+        "pgp",
+      ]) {
+        expect(kinds).toContain(kind);
+      }
+    });
+
+    it.each(corpus.cases.map((c) => [c.id, c] as const))(
+      "redacts %s and nothing else",
+      (_id, c) => {
+        const value = c.value.join("");
+        const result = expectSingleHit(
+          `${c.before}${value}${c.after}`,
+          c.redact,
+          value,
+        );
+        expect(redact(result.text).hits).toHaveLength(0);
+      },
+    );
+  });
+
+  describe("credential names in code stay readable (TB-136)", () => {
+    it.each([
+      ["a property", "apiKey: options.apiKey,"],
+      ["a schema", "api_key: z.string(),"],
+      ["a dotted name", "access_token = settings.accessToken"],
+      ["an env reference", "GITHUB_TOKEN=$GITHUB_TOKEN"],
+      ["a braced reference", `API_KEY="${"$"}{API_KEY}"`],
+      ["a header reference", "x-api-key: $T_BOARDS_API_KEY"],
+      ["a password reference", "password: $DB_PASSWORD"],
+      ["joined words", "DEPLOY_TOKEN: replace_with_deploy_token"],
+      ["a translated label", '"api_key": "APIキーを入力してください"'],
+    ])("leaves %s untouched", (_name, input) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(0);
+      expect(result.text).toBe(input);
+    });
+
+    it("looksLikeSecret keeps a key and drops code-shaped values", () => {
+      expect(looksLikeSecret(join("Zq8fK2mP", "9xL4vB7nR1tY"))).toBe(true);
+      for (const value of [
+        "short",
+        "options.apiKey",
+        "z.string()",
+        "apiKeyValue",
+        "your_secure_password",
+        "パスワードを入力",
+        "%s\\nX-GitHub",
+      ]) {
+        expect(looksLikeSecret(value)).toBe(false);
+      }
+    });
+  });
+
+  describe("base64 runs that are not key material (TB-136)", () => {
+    const ids = [
+      join("Ab3dE5fG7h", "J9kL1mN3pQ5r"),
+      join("St7uV9wX1y", "Z3aB5cD7eF9g"),
+      join("Hj2kL4mN6p", "Q8rS0tU2vW4x"),
+    ];
+
+    it("still redacts the same ids joined without path words", () => {
+      const run = ids.join("/");
+      expectSingleHit(`id ${run} end`, "base64_blob", run);
+    });
+
+    it.each([
+      [
+        "a PascalCase name",
+        "import { Route as LayoutAuthenticatedWorkspaceSlugTaskTicketIdChar123TitleChar125RouteImport }",
+      ],
+      ["a data: URI", `src="data:image/png;base64,${secrets.base64Blob}"`],
+      ["an SRI hash", `integrity="sha384-${secrets.base64Blob}"`],
+      [
+        "a URL path",
+        `/dashboard/workspace/${ids[0]}/project/${ids[1]}/task/${ids[2]}`,
+      ],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+  });
+
+  // AC-023 known miss, pinned by this test: an unprefixed key under a name
+  // with no credential word (openaiKey; api_key, *_TOKEN and x-api-key are
+  // caught since TB-136) and plain alnum, so the base64-blob detector skips
+  // it, is NOT redacted. Widening coverage here is a spec decision.
   it("known miss: unprefixed key in YAML is not redacted", () => {
     const unprefixed = "openaiKey: z9y8x7w6v5u4t3s2r1q0p9o8n7m6l5k4";
     const result = redact(unprefixed);
@@ -198,5 +318,63 @@ describe("@kaneo/redact", () => {
 
   it("handles empty input", () => {
     expect(redact("")).toEqual({ text: "", hits: [] });
+  });
+
+  // TB-136 security lens: an env name after a lowercase prefix is still a
+  // credential name (the base rule caught app_CLIENT_SECRET=).
+  it.each(["foo_API_KEY", "my_TOKEN", "app_CLIENT_SECRET", "db_PASSWORD"])(
+    "redacts the value of %s= after a lowercase prefix",
+    (name) => {
+      const value = join("Qz8Lm4", "Rt7Wx2Ny5Kp9Bv3");
+      expect(redact(`${name}=${value}`).text).toBe(
+        `${name}=[REDACTED:password_assignment]`,
+      );
+    },
+  );
+
+  describe("pem without one lazy regex (TB-136)", () => {
+    const begin = join("-----BEGIN ", "PRIVATE KEY-----");
+
+    it("redacts two blocks as two hits and the text between them stays", () => {
+      const result = redact(`${secrets.pem}\nnext\n${secrets.pem}`);
+      expect(result.text).toBe("[REDACTED:pem]\nnext\n[REDACTED:pem]");
+    });
+
+    it("leaves a BEGIN line with no END line as is", () => {
+      const lone = `${begin}\nMIIEvwIBADANBgkq`;
+      expect(redact(lone).text).toBe(lone);
+    });
+
+    it("joins a broken BEGIN with the block after it, as the lazy regex did", () => {
+      const result = redact(`${begin} cut\n${secrets.pem}`);
+      expect(result.text).toBe("[REDACTED:pem]");
+    });
+  });
+
+  // TB-136 security lens: a rule that may restart at every character and
+  // scan to the end of the text is quadratic. MCP call arguments go through
+  // redact before they are cut (api/src/mcp/call-detail.ts), so such a rule
+  // holds the API event loop. On 256 000 characters each run takes up to
+  // 26 ms linear and 1.3–60 s quadratic; the bound sits between them.
+  it.each([
+    "_",
+    "A_",
+    "a_",
+    "a_A",
+    "API_KEY",
+    "TOKEN_",
+    "a.",
+    "a-",
+    "a+",
+    "eyJa.",
+    "sk-",
+    "Ab3+",
+    "postgres://a:",
+    "-----BEGIN KEY-----",
+  ])("redacts 256 000 characters of %j in linear time", (unit) => {
+    const text = unit.repeat(Math.ceil(256_000 / unit.length));
+    const started = performance.now();
+    redact(text);
+    expect(performance.now() - started).toBeLessThan(250);
   });
 });

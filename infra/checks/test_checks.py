@@ -9,11 +9,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import run  # noqa: E402
+import secrets_scan  # noqa: E402
+
+# TB-136: one corpus for both rule sets; boards/packages/redact/src/index.test.ts reads the same file.
+CORPUS = os.path.join(HERE, '..', '..', 'boards', 'packages', 'redact', 'fixtures', 'secrets-corpus.json')
 
 # Fake values assembled at runtime, so this file itself holds no key-shaped literal.
 GH = 'gh' + 'p_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0'
@@ -56,6 +61,49 @@ class ChecksTest(unittest.TestCase):
         self.assertIn(('secrets', 'warning', 'src/app.test.ts', 'github-token'), got)
         self.assertIn(('secrets', 'error', 'src/literal.py', 'literal api_key'), got)
         self.assertFalse(any(p == 'src/ok.ts' for _, _, p, _ in got))
+
+    def test_secrets_shared_corpus(self):
+        with open(CORPUS, encoding='utf-8') as f:
+            cases = json.load(f)['cases']
+        self.assertGreaterEqual(len(cases), 30)
+        for case in cases:
+            with self.subTest(case['id']):
+                text = case['before'] + ''.join(case['value']) + case['after']
+                found = secrets_scan.scan_text('src/corpus.txt', text)
+                self.assertIn(case['scan'], {f.message.split(':')[0] for f in found if f.level == 'error'})
+        with open(CORPUS, encoding='utf-8') as f:
+            self.assertEqual(secrets_scan.scan_text('src/corpus.json', f.read()), [], 'the corpus file is key-shaped')
+
+    def test_secrets_code_and_placeholders_stay_quiet(self):
+        quiet = [
+            'apiKey: options.apiKey,', 'api_key: z.string(),', 'access_token = settings.accessToken',
+            'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'T_BOARDS_API_KEY=$T_BOARDS_API_KEY',
+            'POSTGRES_PASSWORD: your_secure_password_here', '- Password: `kaneo_password` (change this!)',
+            '"password": "パスワードを入力してください"', 'hdr = f"Authorization: Bearer {self.token()}\\n"',
+            'import { Route as LayoutAuthenticatedWorkspaceSlugTaskTicketIdChar123TitleChar125RouteImport }',
+            '`http://localhost:5173/dashboard/workspace/' + 'Ab3dE5fG7hJ9kL1mN3pQ5r/project/St7uV9wX1yZ3aB5cD7eF9g/'
+            'task/Hj2kL4mN6pQ8rS0tU2vW4x`',
+        ]
+        for line in quiet:
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_env_name_after_lowercase_prefix(self):
+        # TB-136 security lens: found on b3e63b792, missed on 6ff80cf69.
+        value = 'Qz8Lm4' + 'Rt7Wx2Ny5Kp9Bv3'
+        for name in ('foo_API_KEY', 'my_TOKEN', 'app_CLIENT_SECRET', 'db_PASSWORD'):
+            with self.subTest(name):
+                self.assertNotEqual(secrets_scan.scan_line(f'{name}={value}'), [])
+
+    def test_secrets_hostile_lines_stay_linear(self):
+        # TB-136 security lens: a rule that may restart at every character and scan to the end of the line is
+        # quadratic. On 64 000 characters each line takes up to 14 ms linear and 2.4-12 s quadratic.
+        for unit in ('_', 'A_', 'a_', 'a_A', 'API_KEY', 'TOKEN_', 'a.', 'a-', 'a+', 'eyJa.', 'sk-', 'Ab3+'):
+            line = unit * (64000 // len(unit))
+            with self.subTest(unit=unit):
+                started = time.perf_counter()
+                secrets_scan.scan_line(line)
+                self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_hygiene(self):
         write(self.root, '.env', 'A=1\n')
