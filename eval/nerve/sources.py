@@ -335,7 +335,8 @@ def poll_queue(ctx):
             continue
         opt = next((o for o in it.get("options") or [] if o.get("id") == a.get("choice")), None)
         label = (opt or {}).get("label", "")[:60] or str(a.get("choice") or ("сделано" if a.get("done") else "—"))
-        # R-6: продукт пункта — по `queue.match` (id содержит `-taibe-`), не по папке сессии-автора; роль — его правилами.
+        # R-6: продукт пункта — по `queue.match` (регулярное выражение по id, SE-109), не по папке сессии-автора; роль —
+        # его правилами.
         target = ctx.for_item(c["id"], product.get(c["id"]))
         role = route_source(str(it.get("source", "")), target.cfg["queue"]["source_roles"])
         _emit_to(ctx, target, f"oq:answer:{c['id']}:{a['at']}", "owner.answer", NERVOUS, [role],
