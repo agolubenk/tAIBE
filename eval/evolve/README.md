@@ -105,7 +105,10 @@ verdict brak; a revert PR whose verdict was superseded is closed, not merged. No
 Every `claude:<model>` id goes to `judges.claude_call`: `claude -p --model <model> --output-format json`, the same
 prompt and last-line format as `ab.py`, no tools, no MCP, no hooks (`disableAllHooks`), no session file, an empty
 folder. The answering model is checked in `modelUsage` (a dated build or a `[1m]` variant is the same model), and the
-real tokens are charged to the night's budget; the worst ratio of real to estimated tokens scales the next estimates.
+real tokens are charged to the night's budget. The largest excess of real over estimated tokens of one call is added to
+every next call's estimate (SE-49: the excess is about the same per call, 3946 tokens on 14.11; a ratio learned on
+small calls priced big artifacts 3.5 times too high). The report gives the budget with `overhead` and the tokens by
+kind (`usage`: input, output, cache reads and writes).
 A full first night with two artifacts is about 137 calls. Nightly judges are off until the owner turns them on: the
 switch on the board (Pipeline & evolution; the deployed board has no such switch yet), or the local file
 `touch ~/.claude/evolve/abJudgeClaude.on` (remove it to turn them off). `TAIBE_PIPELINE=abJudgeClaude=off` turns them
