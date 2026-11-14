@@ -7,9 +7,10 @@ import { forestCall, id } from "./request.js";
 const text = (max: number) => z.string().trim().min(1).max(max);
 
 // D-018 (owner, d-0111-d18): actual provider numbers first, o200k_base only
-// where the provider gives none. Cache stays out: it would swamp the work.
+// where the provider gives none. Cache reads would swamp the work in tokens,
+// so cache counts in costUsd at the provider's price instead.
 export const CARD_TOKENS_RULE =
-  "Tokens spent on the card, from provider usage: input + output, no cache. Without usage: the o200k_base count of the text (D-018).";
+  "Tokens spent on the card, from provider usage: input + output. Cache counts in costUsd at provider price. Without usage: the o200k_base count of the text (D-018).";
 
 // The same limits as apps/api/src/forest/card/card-patch.ts; the API decides.
 const cardFields = {

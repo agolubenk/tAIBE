@@ -115,7 +115,7 @@ describe("forest card tools", () => {
 });
 
 describe("card tokens rule (D-018)", () => {
-  it("tells the writer to use provider usage and o200k only without it", () => {
+  it("tells the writer to use provider usage, price cache in costUsd, o200k only without usage", () => {
     const configs = new Map<string, { inputSchema: z.ZodObject }>();
     const server = {
       registerTool: vi.fn((name: string, config: never) => {
@@ -129,10 +129,12 @@ describe("card tokens rule (D-018)", () => {
     expect(tokens?.description).toBe(CARD_TOKENS_RULE);
     expect(CARD_TOKENS_RULE).toMatch(/provider usage/);
     expect(CARD_TOKENS_RULE).toMatch(/o200k_base/);
+    // D-018 names cache: it is priced, not dropped.
+    expect(CARD_TOKENS_RULE).toMatch(/Cache counts in costUsd/);
   });
 
   // The rule rides in every tools/list of a session that sees the tool.
-  it("costs at most 35 tokens", () => {
-    expect(defaultCounter.count(CARD_TOKENS_RULE)).toBeLessThanOrEqual(35);
+  it("costs at most 42 tokens", () => {
+    expect(defaultCounter.count(CARD_TOKENS_RULE)).toBeLessThanOrEqual(42);
   });
 });
