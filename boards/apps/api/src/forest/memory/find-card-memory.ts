@@ -4,6 +4,7 @@ import {
   matchObservationToCards,
   type Observation,
 } from "@kaneo/claude-mem-reader";
+import { redact } from "@kaneo/redact";
 
 export const MEMORY_PAGE_SIZE = 100;
 export const MEMORY_PAGES = 2;
@@ -34,6 +35,12 @@ const UNAVAILABLE: CardMemory = {
   scanned: 0,
   items: [],
 };
+
+// TB-192: the claude-mem summarizer can copy a secret into a title. The card
+// UI and MCP forest_get_card_memory both read this answer, so the mask goes
+// here once. Matching above still reads the raw text.
+const masked = (value: string | null) =>
+  value === null ? null : redact(value).text;
 
 // The card's observations among the worker's latest ones. Scans a bounded
 // window instead of searching: the worker has no filter by card, and a card
@@ -73,8 +80,8 @@ export async function findCardMemory(
     items.push({
       id: observation.id,
       type: observation.type,
-      title: observation.title,
-      subtitle: observation.subtitle,
+      title: masked(observation.title),
+      subtitle: masked(observation.subtitle),
       createdAt: observation.createdAt,
       matchedOn: best.matchedOn,
       matchedValue: best.matchedValue,

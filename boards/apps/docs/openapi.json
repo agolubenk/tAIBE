@@ -5213,13 +5213,15 @@
                   "type": [
                     "string",
                     "null"
-                  ]
+                  ],
+                  "description": "The observation's title; a secret in it reads [REDACTED:<kind>]."
                 },
                 "subtitle": {
                   "type": [
                     "string",
                     "null"
-                  ]
+                  ],
+                  "description": "Masked the same way as title."
                 },
                 "createdAt": {
                   "type": "string"

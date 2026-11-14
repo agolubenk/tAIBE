@@ -5,8 +5,13 @@ import { nullableResponseTimestamp, z } from "../../openapi";
 const memoryItemSchema = z.object({
   id: z.number().int(),
   type: z.string(),
-  title: z.string().nullable(),
-  subtitle: z.string().nullable(),
+  title: z.string().nullable().openapi({
+    description:
+      "The observation's title; a secret in it reads [REDACTED:<kind>].",
+  }),
+  subtitle: z.string().nullable().openapi({
+    description: "Masked the same way as title.",
+  }),
   createdAt: z.string(),
   matchedOn: z.enum(["branch", "task-id"]),
   matchedValue: z.string().openapi({

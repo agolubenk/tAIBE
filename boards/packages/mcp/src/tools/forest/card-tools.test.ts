@@ -109,4 +109,47 @@ describe("forest card tools", () => {
     };
     expect(data.comments.map((comment) => comment.id)).toEqual(["c2"]);
   });
+
+  // TB-192: the mask is put by the API (findCardMemory). The tool reads only
+  // that route and passes its answer on, so the agent gets the same masked
+  // titles as the card UI.
+  it("returns the card memory as the API masked it, from the one route", async () => {
+    const answer = {
+      available: true,
+      stale: false,
+      fetchedAt: "2026-11-15T00:00:00.000Z",
+      scanned: 1,
+      items: [
+        {
+          id: 7,
+          type: "change",
+          title: "t1: rotated [REDACTED:api_key]",
+          subtitle: null,
+          createdAt: "2026-11-15T00:00:00.000Z",
+          matchedOn: "task-id",
+          matchedValue: "t1",
+          source: "text",
+        },
+      ],
+    };
+    const { client, call } = setup(answer);
+
+    const result = await call("forest_get_card_memory", {
+      workspaceId: "ws1",
+      taskId: "t1",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(client.json).toHaveBeenCalledTimes(1);
+    expect(client.json).toHaveBeenCalledWith(
+      "/api/forest/ws1/cards/t1/memory",
+      {
+        method: "GET",
+        headers: {},
+      },
+    );
+    expect(decodeWire(result.content[0]?.text ?? "")).toMatchObject({
+      data: answer,
+    });
+  });
 });

@@ -122,4 +122,37 @@ describe("findCardMemory", () => {
     expect(memory.available).toBe(true);
     expect(memory.items.map(({ id }) => id)).toEqual([1]);
   });
+
+  // TB-192: the card UI and MCP forest_get_card_memory read this answer.
+  it("masks secrets in the title and subtitle, keeps the match and clean text", async () => {
+    const key = `tbk_${"a1B2c3D4".repeat(4)}`;
+    const token = "x9Y8w7V6".repeat(4);
+    const { reader } = fakeReader([
+      page(
+        [
+          {
+            ...observation(1, `B-12: rotated ${key}`),
+            subtitle: `curl -H "Authorization: Bearer ${token}"`,
+          },
+          observation(2, "Fixed B-12 on staging"),
+        ],
+        false,
+      ),
+    ]);
+
+    const memory = await findCardMemory(reader, BINDING);
+
+    expect(memory.items).toMatchObject([
+      {
+        id: 1,
+        title: "B-12: rotated [REDACTED:api_key]",
+        subtitle: 'curl -H "Authorization: Bearer [REDACTED:bearer]"',
+        matchedOn: "task-id",
+        matchedValue: "B-12",
+      },
+      { id: 2, title: "Fixed B-12 on staging", subtitle: null },
+    ]);
+    expect(JSON.stringify(memory)).not.toContain(key);
+    expect(JSON.stringify(memory)).not.toContain(token);
+  });
 });
