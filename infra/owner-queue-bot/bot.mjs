@@ -12,7 +12,7 @@ import { createNotes } from './notes.mjs';
 import { createWatcher } from './watch.mjs';
 import { createInbox } from './inbox.mjs';
 import { createFiles } from './files-setup.mjs';
-import { createCards } from './cards.mjs';
+import { createCards, telegramCardOps } from './cards.mjs';
 /** id входящего, как его даёт черновик бота и форма /queue: i-<дата>-<время>-<4 hex>. */
 const INBOX_ID = /^i-\d{8}-\d{6}-[0-9a-f]{4}$/;
 import { hasMediaOf, isForwarded } from './classify.mjs';
@@ -91,10 +91,7 @@ async function show(chatId, msg, editId) {
 
 const sendAll = async (chatId, msgs) => { for (const m of msgs) await send(chatId, m); };
 // Карточки пунктов: бот помнит все их сообщения, 🔄 и итог действия обновляют все (cards.mjs, карточка HR nc8uj786).
-const cards = createCards({
-  store, send,
-  edit: (chatId, id, msg) => tg.edit(chatId, id, msg.text, markup(msg.keyboard)).then(() => true, (e) => { log('правка карточки:', e.message); return false; }),
-});
+const cards = createCards({ store, send, ...telegramCardOps({ tg, markup, toPlain, sleep, log }) });
 async function broadcast(msg) {
   for (const id of store.config.owners) await send(id, msg).catch((e) => log('уведомление не ушло:', e.message));
 }
