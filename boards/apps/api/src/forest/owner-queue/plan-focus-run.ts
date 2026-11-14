@@ -1,4 +1,4 @@
-import { archiveItem } from "./plan-due-apply";
+import { answeredAfter, archiveItem } from "./plan-due-apply";
 import {
   type FocusPlan,
   focusDocId,
@@ -6,20 +6,43 @@ import {
   readFocus,
   revertedDoc,
 } from "./plan-focus";
-import { type Named, namedIn, ownerTexts } from "./plan-inputs";
+import { isFocusItem, readItemFocus } from "./plan-focus-item";
+import { INPUT_MS, type Named, namedIn, ownerTexts } from "./plan-inputs";
 import type { RowWrite } from "./plan-rows";
-import type { BoardCard, PlanRow, RecentCard } from "./plan-types";
+import {
+  type BoardCard,
+  type PlanRow,
+  type RecentCard,
+  rowProduct,
+} from "./plan-types";
 import type { PlanWriter } from "./plan-writer";
 import { listAll, type QueueClient, type QueueDoc } from "./queue-client";
 
+// What one product's open day decides: null — the owner has not answered
+// (nothing to do yet); a revert — the item to restore from (offered null:
+// nothing to restore, the day only closes).
+async function dayAnswer(writer: PlanWriter, itemId: string, product: string) {
+  const item = await writer.client.get("items", itemId);
+  const archived = item?.data.archived === true;
+  const offered = archived ? null : readItemFocus(item, product);
+  if (!item || !offered) return { item: null, offered: null };
+  const check = await writer.client.get("checks", item.id);
+  if (check?.data.choice !== "revert") return null;
+  // The item changed after the answer: the owner did not see this order.
+  return { item, offered: answeredAfter(check, item) ? offered : null };
+}
+
 // TB-107, every run: the owner's «Вернуть» on the day's focus item is applied
-// once (the item already reverted by hand is only marked), then the item is
-// archived. Returns whether a doc changed.
+// once, then the item is archived. Everything it restores comes from the item
+// the owner answered, never from the doc: the doc only points to the item. A
+// doc that points to a missing or archived item, or to one that is not a
+// focus item of this server (the 13.11 one filed by hand), restores nothing
+// and only closes the day. Returns whether a doc changed.
 export async function applyReverts(
   writer: PlanWriter,
   docs: QueueDoc[],
+  rows: PlanRow[],
   products: string[],
-  now: Date,
 ) {
   const before = writer.written;
   for (const product of products) {
@@ -27,34 +50,74 @@ export async function applyReverts(
     const focus = readFocus(doc?.data);
     const day = focus?.day;
     if (!doc || !focus || !day || day.applied) continue;
-    if (focus.reverted?.item === day.item) continue;
-    const check = await writer.client.get("checks", day.item);
-    if (check?.data.choice !== "revert") continue;
-    const at = [check.data.ownerAt, check.data.at].find(
-      (value): value is string =>
-        typeof value === "string" && Number.isFinite(Date.parse(value)),
+    const answer = await dayAnswer(writer, day.item, product);
+    if (!answer) continue;
+    const own = new Set(
+      rows
+        .filter((row) => rowProduct(row.id, products) === product)
+        .map((row) => row.id),
     );
     const put = await writer.write(() =>
       writer.client.put(
         "work",
         doc.id,
-        { ...doc.data, ...revertedDoc(focus, day, at ?? now.toISOString()) },
+        revertedDoc(focus, day, answer.offered, own),
         doc.version,
       ),
     );
-    if (typeof put !== "string") await archiveItem(writer, day.item);
+    if (answer.item && typeof put !== "string") {
+      await archiveItem(writer, answer.item.id);
+    }
   }
   return writer.written > before;
 }
 
-// The texts are read once a day: items and checks are the largest
-// collections of the queue.
-export async function readNamed(client: QueueClient, now: Date) {
+// When the owner last pressed «Вернуть» on a focus item of each product, in
+// the last 7 days (ms). Only the owner's answer sets choice and ownerAt (the
+// queue server), so an agent can neither start nor move this window; the item
+// is archived after the revert and still counts. An answer on an item changed
+// after it restores nothing but still stops the older inputs: fewer moves,
+// never more.
+export function ownerReverts(
+  items: QueueDoc[],
+  checks: QueueDoc[],
+  products: string[],
+  now: Date,
+): Map<string, number> {
+  const since = now.getTime() - INPUT_MS;
+  const itemOf = new Map(items.map((item) => [item.id, item]));
+  const reverts = new Map<string, number>();
+  for (const check of checks) {
+    if (check.data.choice !== "revert") continue;
+    const at =
+      typeof check.data.ownerAt === "string"
+        ? Date.parse(check.data.ownerAt)
+        : Number.NaN;
+    if (!Number.isFinite(at) || at < since) continue;
+    const item = itemOf.get(check.id);
+    const product = products.find((one) => isFocusItem(item, one));
+    if (product) reverts.set(product, Math.max(reverts.get(product) ?? at, at));
+  }
+  return reverts;
+}
+
+// Read once a day: items and checks are the largest collections of the
+// queue. truncated — a list was cut: an owner's revert may be missing.
+export async function readOwnerInputs(
+  client: QueueClient,
+  products: string[],
+  now: Date,
+  deadline: number,
+) {
   const [items, checks] = await Promise.all([
-    listAll(client, "items"),
-    listAll(client, "checks"),
+    listAll(client, "items", deadline),
+    listAll(client, "checks", deadline),
   ]);
-  return namedIn(ownerTexts(items.docs, checks.docs, now));
+  return {
+    named: namedIn(ownerTexts(items.docs, checks.docs, now)),
+    reverts: ownerReverts(items.docs, checks.docs, products, now),
+    truncated: items.truncated || checks.truncated,
+  };
 }
 
 // Every product's daily step; a product without its inputs row is logged.
@@ -64,6 +127,7 @@ export function focusPlans(input: {
   board: ReadonlyMap<string, BoardCard>;
   cards: RecentCard[];
   named: Named;
+  reverts: ReadonlyMap<string, number>;
   products: string[];
   url: string;
   today: string;
@@ -75,6 +139,7 @@ export function focusPlans(input: {
     const plan = focusPlan({
       ...input,
       product,
+      revertAt: input.reverts.get(product),
       focusDoc: input.docs.find((doc) => doc.id === focusDocId(product)),
     });
     if ("missing" in plan) missing.push(plan.missing);

@@ -5,7 +5,7 @@ import { PACE_DAYS } from "./plan-eta";
 import {
   applyReverts,
   focusPlans,
-  readNamed,
+  readOwnerInputs,
   withInputs,
   writeFocus,
 } from "./plan-focus-run";
@@ -192,13 +192,14 @@ export async function planPass(
   const planProducts = deps.config.plan.products;
   const products = [...new Set(planProducts.values())];
   let list = await listAll(deps.client, "work", readBy);
+  const planned = planRows(list.docs, products);
   const answers = await applyAnswers(writer, {
     docs: list.docs,
-    rows: planRows(list.docs, products),
+    rows: planned,
     products,
     now,
   });
-  const back = await applyReverts(writer, list.docs, products, now);
+  const back = await applyReverts(writer, list.docs, planned, products);
   if (answers.changed || back) {
     list = await listAll(deps.client, "work", readBy);
   }
@@ -260,19 +261,27 @@ export async function planPass(
       now,
     });
     // TB-107 after the eta step: the owner's inputs into the plan and the
-    // focus order.
-    const named = await readNamed(deps.client, now);
-    focus = focusPlans({
-      docs: list.docs,
-      rows: current,
-      board,
-      cards: await deps.store.named(planProducts, [...named.keys.keys()]),
-      named,
-      products,
-      url: deps.config.url,
-      today: localDate(now),
-      now,
-    });
+    // focus order. A cut items or checks list may miss the owner's «Вернуть»:
+    // no focus step then.
+    const owner = await readOwnerInputs(deps.client, products, now, readBy);
+    if (owner.truncated) {
+      console.warn("owner-queue plan focus: items or checks list is truncated");
+    } else {
+      focus = focusPlans({
+        docs: list.docs,
+        rows: current,
+        board,
+        cards: await deps.store.named(planProducts, [
+          ...owner.named.keys.keys(),
+        ]),
+        named: owner.named,
+        reverts: owner.reverts,
+        products,
+        url: deps.config.url,
+        today: localDate(now),
+        now,
+      });
+    }
     ordered = withInputs(withEta(writes, rows, daily), rows, focus);
   }
   for (const write of ordered) {

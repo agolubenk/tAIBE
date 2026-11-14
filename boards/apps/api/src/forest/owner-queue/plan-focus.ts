@@ -1,5 +1,9 @@
 import { rankRows } from "./plan-eta";
-import { focusItemData, focusItemId } from "./plan-focus-item";
+import {
+  focusItemData,
+  focusItemId,
+  type ItemFocus,
+} from "./plan-focus-item";
 import { INPUT_MS, inputsRowId, type Named } from "./plan-inputs";
 import { refreshOffPlan } from "./plan-off-plan";
 import {
@@ -16,7 +20,11 @@ import type { QueueDoc } from "./queue-client";
 // TB-107: the owner's inputs go into the plan and to the front. work/focus-<P>
 // keeps the order the lanes take rows in (eval/tools/queue_focus.py rank_rows:
 // the focus rows first, then planStart); the owner gets one item on a day
-// with a move, «вернуть» puts the order back, silence is consent.
+// with a move, «вернуть» puts the order back, silence is consent. The agents
+// write the work collection, so the doc holds no state the owner's answer
+// depends on: the order before the day and the offered order live in the
+// day's item (plan-focus-item.ts), the revert time is the ownerAt of the
+// owner's «Вернуть» (plan-focus-run.ts ownerReverts).
 
 export type FocusMove = {
   row: string;
@@ -24,30 +32,18 @@ export type FocusMove = {
   to: number;
   why: string;
 };
+// item — the day's decision; applied — the owner's answer on it is handled.
 export type FocusDay = {
   date: string;
   moved: FocusMove[];
   item: string;
-  // The order and the card keys the item offered (docs of this server).
-  rows?: string[];
-  keys?: string[];
   applied?: boolean;
-};
-// After «вернуть» the same inputs move nothing: only an input that arrived
-// after `at` puts a row to the front.
-export type Reverted = {
-  at: string;
-  rows: string[];
-  keys: string[];
-  item: string;
 };
 export type FocusDoc = {
   kind: "focus";
   rows: string[];
-  prev: string[];
   at: string;
   day?: FocusDay;
-  reverted?: Reverted;
 };
 
 export type FocusPlan = {
@@ -76,28 +72,33 @@ const ids = (value: unknown) =>
 const same = (a: string[] | undefined, b: string[]) =>
   JSON.stringify(a) === JSON.stringify(b);
 
+// Only the fields this module reads; an older doc's prev and reverted are
+// dropped at the next write.
 export function readFocus(data: Record<string, unknown> | undefined) {
   if (!data || data.kind !== "focus" || !Array.isArray(data.rows)) return null;
-  const day = data.day as FocusDay | undefined;
-  const reverted = data.reverted as Reverted | undefined;
+  const day = data.day as Record<string, unknown> | undefined;
   return {
     kind: "focus",
-    rows: ids(data.rows),
-    prev: ids(data.prev),
+    rows: ids(data.rows).slice(0, ROWS_MAX),
     at: String(data.at ?? ""),
-    ...(day && typeof day.item === "string" ? { day } : {}),
-    ...(reverted && typeof reverted.at === "string" ? { reverted } : {}),
+    ...(day && typeof day.item === "string"
+      ? {
+          day: {
+            date: typeof day.date === "string" ? day.date : "",
+            moved: Array.isArray(day.moved) ? (day.moved as FocusMove[]) : [],
+            item: day.item,
+            ...(day.applied === true ? { applied: true } : {}),
+          },
+        }
+      : {}),
   } satisfies FocusDoc;
 }
 
-// The doc stays ≤ 3 KB: the old order goes first, then the keys and the
-// moves, then the tail of the order (a row out of it ranks by planStart).
+// The doc stays ≤ 3 KB: the moves go first, then the tail of the order (a
+// row out of it ranks by planStart).
 function fitted(doc: FocusDoc): FocusDoc {
   const next: FocusDoc = structuredClone(doc);
   const cuts: (() => boolean)[] = [
-    () => next.prev.pop() !== undefined,
-    () => next.day?.keys?.pop() !== undefined,
-    () => next.reverted?.keys.pop() !== undefined,
     () => next.day?.moved.pop() !== undefined,
     () => next.rows.length > 1 && next.rows.pop() !== undefined,
   ];
@@ -107,26 +108,23 @@ function fitted(doc: FocusDoc): FocusDoc {
   return next;
 }
 
-// «Вернуть», once per item. A doc whose order is still the day's goes back
-// to the order before it; a doc changed since (by hand, or a later run) keeps
-// its rows. Either way the day's inputs move nothing again.
+// The owner's answer on the day's item, once. offered — what the item offered
+// when the owner answered it; null — nothing to restore (the item is not a
+// focus item of this server, archived, missing, or changed after the answer).
+// A doc whose order is still the offered one goes back to the item's order
+// before it, kept to the open plan rows of the product (own); a doc changed
+// since (by hand, or a later run) keeps its rows.
 export function revertedDoc(
   doc: FocusDoc,
   day: FocusDay,
-  answeredAt: string,
+  offered: ItemFocus | null,
+  own: ReadonlySet<string>,
 ): FocusDoc {
-  const ours = Array.isArray(day.rows);
-  return fitted({
-    ...doc,
-    rows: ours && same(doc.rows, day.rows ?? []) ? doc.prev : doc.rows,
-    day: { ...day, applied: true },
-    reverted: {
-      at: answeredAt,
-      rows: ours ? (day.rows ?? []) : day.moved.map((move) => move.row),
-      keys: (day.keys ?? []).slice(0, KEYS_MAX),
-      item: day.item,
-    },
-  });
+  const back =
+    offered && same(doc.rows, offered.rows)
+      ? offered.prev.filter((id) => own.has(id)).slice(0, ROWS_MAX)
+      : doc.rows;
+  return fitted({ ...doc, rows: back, day: { ...day, applied: true } });
 }
 
 const uidsOf = (row: PlanRow) =>
@@ -172,6 +170,9 @@ type Input = {
   // The named cards that the board knows.
   cards: RecentCard[];
   named: Named;
+  // When the owner last pressed «Вернуть» on a focus item of this product, in
+  // the last 7 days (ms): the owner's answer, never the doc.
+  revertAt: number | undefined;
   focusDoc: QueueDoc | undefined;
   url: string;
   today: string;
@@ -208,7 +209,7 @@ export function focusPlan(input: Input): FocusPlan | { missing: string } {
   });
   const doc = readFocus(input.focusDoc?.data);
   const prev = doc?.rows ?? [];
-  const revertAt = doc?.reverted ? Date.parse(doc.reverted.at) : Number.NaN;
+  const revertAt = input.revertAt ?? Number.NaN;
   const reverted = input.now.getTime() - revertAt < INPUT_MS;
   const fresh = (at: number | undefined) =>
     at !== undefined && (!reverted || at > revertAt);
@@ -265,7 +266,7 @@ export function focusPlan(input: Input): FocusPlan | { missing: string } {
   const moved = movesOf(prev, rows, why);
   // A row that left the order moves nothing: the doc follows, no item.
   if (moved.length === 0) {
-    const base: FocusDoc = doc ?? { kind: "focus", rows, prev: [], at: "" };
+    const base: FocusDoc = doc ?? { kind: "focus", rows, at: "" };
     plan.focus = {
       ...focus,
       data: fitted({ ...base, rows, at: input.now.toISOString() }),
@@ -286,6 +287,11 @@ export function focusPlan(input: Input): FocusPlan | { missing: string } {
       frontTitles: front.map((row) => String(row.data.title ?? row.id)),
       url: input.url,
       today: input.today,
+      offered: {
+        rows,
+        prev: prev.slice(0, ROWS_MAX),
+        keys: [...new Set(freshCards.values())].slice(0, KEYS_MAX),
+      },
     }),
   };
   plan.focus = {
@@ -293,16 +299,8 @@ export function focusPlan(input: Input): FocusPlan | { missing: string } {
     data: fitted({
       kind: "focus",
       rows,
-      prev,
       at: input.now.toISOString(),
-      day: {
-        date: input.today,
-        moved,
-        item: itemId,
-        rows,
-        keys: [...new Set(freshCards.values())].slice(0, KEYS_MAX),
-      },
-      ...(doc?.reverted ? { reverted: doc.reverted } : {}),
+      day: { date: input.today, moved, item: itemId },
     }),
   };
   return plan;

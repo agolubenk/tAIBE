@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { type FocusDoc, focusPlan, revertedDoc } from "./plan-focus";
+import {
+  type FocusDoc,
+  focusPlan,
+  readFocus,
+  revertedDoc,
+} from "./plan-focus";
+import { type ItemFocus, readItemFocus } from "./plan-focus-item";
 import type { Named } from "./plan-inputs";
 import type { BoardCard, PlanRow, RecentCard } from "./plan-types";
 import type { QueueDoc } from "./queue-client";
@@ -72,6 +78,7 @@ function plan(input: {
   doc?: FocusDoc;
   board?: [string, BoardCard][];
   product?: string;
+  revertAt?: number;
 }) {
   return focusPlan({
     product: input.product ?? "hr-helper",
@@ -80,6 +87,7 @@ function plan(input: {
     board: new Map(input.board ?? []),
     cards: input.cards ?? [],
     named: input.named,
+    revertAt: input.revertAt,
     focusDoc: input.doc ? focusDoc(input.doc) : undefined,
     url: "https://ops.test",
     today: TODAY,
@@ -150,7 +158,7 @@ describe("focusPlan (TB-107)", () => {
         ],
         [["w-n-c", T1]],
       ),
-      doc: { kind: "focus", rows: ["w-n-b"], prev: [], at: "" },
+      doc: { kind: "focus", rows: ["w-n-b"], at: "" },
     });
     if ("missing" in result) throw new Error("no inputs row");
     expect(result.focus?.data.rows).toEqual([
@@ -159,18 +167,28 @@ describe("focusPlan (TB-107)", () => {
       "w-n-a",
       "w-n-c",
     ]);
-    expect(result.focus?.data.prev).toEqual(["w-n-b"]);
     expect(result.focus?.version).toBe(3);
-    expect(result.focus?.data.day).toMatchObject({
-      date: TODAY,
-      item: "d-hr-focus-20261114",
+    // The doc only points to the day's item; the orders are in the item.
+    expect(result.focus?.data).toEqual({
+      kind: "focus",
       rows: ["w-n-inputs", "w-n-b", "w-n-a", "w-n-c"],
-      keys: ["APP-1", "APP-2", "APP-9"],
+      at: NOW.toISOString(),
+      day: {
+        date: TODAY,
+        moved: expect.any(Array),
+        item: "d-hr-focus-20261114",
+      },
     });
     expect(result.item?.data).toMatchObject({
       kind: "decision",
+      source: "t-boards (TB-107)",
       options: [{ id: "revert", label: "Вернуть прежний порядок" }],
       chips: [["молчание = согласны", ""]],
+      focus: {
+        rows: ["w-n-inputs", "w-n-b", "w-n-a", "w-n-c"],
+        prev: ["w-n-b"],
+        keys: ["APP-1", "APP-2", "APP-9"],
+      },
     });
     expect(String(result.item?.data.title)).toContain(
       "1 карточка: 0 сделаны, 0 на ревью, 1 ждут",
@@ -190,7 +208,7 @@ describe("focusPlan (TB-107)", () => {
         ["APP-1", T1],
         ["APP-9", T1],
       ]),
-      doc: { kind: "focus", rows: ["w-n-inputs", "w-n-a"], prev: [], at: "" },
+      doc: { kind: "focus", rows: ["w-n-inputs", "w-n-a"], at: "" },
     });
     expect(result).toEqual({
       product: "hr-helper",
@@ -208,7 +226,6 @@ describe("focusPlan (TB-107)", () => {
       doc: {
         kind: "focus",
         rows: ["w-n-inputs"],
-        prev: [],
         at: "",
         day: { date: "2026-11-13", moved: [], item: "d-hr-focus-20261113" },
       },
@@ -219,50 +236,87 @@ describe("focusPlan (TB-107)", () => {
   });
 });
 
+describe("readItemFocus (TB-107)", () => {
+  const offered = () => {
+    const result = plan({
+      cards: [card("APP-2")],
+      named: named([["APP-2", T1]]),
+    });
+    if ("missing" in result || !result.item) throw new Error("no item");
+    return { id: result.item.id, data: result.item.data, version: 1, updatedAt: 0 };
+  };
+
+  it("reads the order the item offered", () => {
+    expect(readItemFocus(offered(), "hr-helper")).toEqual({
+      rows: ["w-n-inputs", "w-n-b"],
+      prev: [],
+      keys: ["APP-2"],
+    });
+  });
+
+  it("refuses an item of another product, another source or a broken one", () => {
+    const item = offered();
+    expect(readItemFocus(item, "taibe")).toBeNull();
+    expect(
+      readItemFocus({ ...item, data: { ...item.data, source: "agent" } }, "hr-helper"),
+    ).toBeNull();
+    expect(
+      readItemFocus(
+        { ...item, data: { ...item.data, focus: { rows: [1], prev: [], keys: [] } } },
+        "hr-helper",
+      ),
+    ).toBeNull();
+    expect(readItemFocus(null, "hr-helper")).toBeNull();
+  });
+});
+
 describe("after «вернуть» (TB-107)", () => {
   const day = {
     date: "2026-11-13",
     moved: [{ row: "w-n-inputs", from: null, to: 1, why: "вбросы" }],
     item: "d-hr-focus-20261113",
+  };
+  // The item's order before the day; w-taibe-x is another product's row and
+  // w-n-gone is no open plan row.
+  const offered: ItemFocus = {
     rows: ["w-n-inputs", "w-n-a"],
+    prev: ["w-n-c", "w-taibe-x", "w-n-gone"],
     keys: ["APP-1", "APP-9"],
   };
-  const doc: FocusDoc = {
-    kind: "focus",
-    rows: day.rows,
-    prev: [],
-    at: "",
-    day,
-  };
-  const back = revertedDoc(doc, day, REVERT);
+  const own = new Set(["w-n-inputs", "w-n-a", "w-n-b", "w-n-c"]);
+  const doc: FocusDoc = { kind: "focus", rows: offered.rows, at: "", day };
+  const back = revertedDoc(doc, day, offered, own);
+  const revertAt = Date.parse(REVERT);
 
-  it("puts the order back once and keeps the day's rows and keys", () => {
-    expect(back).toMatchObject({
-      rows: [],
-      prev: [],
-      day: { applied: true },
-      reverted: {
-        at: REVERT,
-        rows: ["w-n-inputs", "w-n-a"],
-        keys: ["APP-1", "APP-9"],
-        item: "d-hr-focus-20261113",
-      },
+  it("puts the item's order back once, only the product's open rows", () => {
+    expect(back).toEqual({
+      kind: "focus",
+      rows: ["w-n-c"],
+      at: "",
+      day: { ...day, applied: true },
     });
   });
 
-  it("keeps an order changed by hand", () => {
-    const legacy = {
-      date: "2026-11-13",
-      moved: [{ row: "w-n-inputs", from: 1, to: 0, why: "владелец: revert" }],
-      item: "d-hr-focus-1311",
-    };
-    const done = revertedDoc(
-      { kind: "focus", rows: [], prev: ["w-n-inputs"], at: "", day: legacy },
-      legacy,
-      REVERT,
+  it("keeps an order changed since, and restores nothing without the item's order", () => {
+    expect(revertedDoc({ ...doc, rows: ["w-n-b"] }, day, offered, own).rows).toEqual(
+      ["w-n-b"],
     );
-    expect(done.rows).toEqual([]);
-    expect(done.reverted).toMatchObject({ rows: ["w-n-inputs"], keys: [] });
+    const closed = revertedDoc(doc, day, null, own);
+    expect(closed.rows).toEqual(offered.rows);
+    expect(closed.day?.applied).toBe(true);
+  });
+
+  it("reads no prev and no reverted from an older doc", () => {
+    expect(
+      readFocus({
+        kind: "focus",
+        rows: ["w-n-a"],
+        prev: ["w-taibe-x"],
+        at: "",
+        reverted: { at: NOW.toISOString(), rows: [], keys: [], item: "x" },
+        day: { ...day, rows: ["w-n-b"], keys: ["APP-1"] },
+      }),
+    ).toEqual({ kind: "focus", rows: ["w-n-a"], at: "", day });
   });
 
   it("the same inputs next day give no move and no item, cards still go in", () => {
@@ -273,11 +327,26 @@ describe("after «вернуть» (TB-107)", () => {
         ["APP-9", T1],
       ]),
       doc: back,
+      revertAt,
     });
     if ("missing" in result) throw new Error("no inputs row");
     expect(result.focus).toBeNull();
     expect(result.item).toBeNull();
     expect(keysOf(result.inputs?.cards)).toEqual(["APP-9"]);
+  });
+
+  it("without the owner's revert the same inputs move the rows again", () => {
+    const result = plan({
+      cards: [card("APP-1"), card("APP-9")],
+      named: named([
+        ["APP-1", T1],
+        ["APP-9", T1],
+      ]),
+      doc: back,
+    });
+    if ("missing" in result) throw new Error("no inputs row");
+    expect(result.focus?.data.rows).toEqual(["w-n-inputs", "w-n-a"]);
+    expect(result.item?.id).toBe("d-hr-focus-20261114");
   });
 
   it("a new input after the revert moves its row in front of the owner's order", () => {
@@ -287,19 +356,21 @@ describe("after «вернуть» (TB-107)", () => {
         ["APP-1", T1],
         ["APP-2", T2],
       ]),
-      doc: { ...back, rows: ["w-n-c"] },
+      doc: back,
+      revertAt,
     });
     if ("missing" in result) throw new Error("no inputs row");
     expect(result.focus?.data.rows).toEqual(["w-n-b", "w-n-c"]);
-    expect(result.focus?.data.reverted?.at).toBe(REVERT);
     expect(result.item?.id).toBe("d-hr-focus-20261114");
+    expect(result.item?.data.focus).toMatchObject({ prev: ["w-n-c"] });
   });
 
   it("a new card without a row after the revert puts the inputs row first", () => {
     const result = plan({
       cards: [card("APP-9")],
       named: named([["APP-9", T2]]),
-      doc: back,
+      doc: { ...back, rows: [] },
+      revertAt,
     });
     if ("missing" in result) throw new Error("no inputs row");
     expect(result.focus?.data.rows).toEqual(["w-n-inputs"]);

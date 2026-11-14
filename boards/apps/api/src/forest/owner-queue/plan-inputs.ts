@@ -1,10 +1,14 @@
 import { DEFAULT_PLAN_PRODUCT } from "./plan-types";
 import type { QueueDoc } from "./queue-client";
 
-// TB-107: what the owner named in the last 7 days — inbox items (the text and
-// the agent's note) and the owner's notes on decisions and checks. Merge and
-// server items are left out: their notes are command output. The texts are
-// data: only card keys and row ids are taken from them.
+// TB-107: what the owner named in the last 7 days — the inbox text and the
+// owner's notes on decisions and checks. Only the owner's fields: an inbox item
+// is written by the owner's bot only, note and ownerAt by the owner's answer
+// (the queue server refuses both to an agent). The agent's note (agentNote,
+// oq_agent_status) is never read: an agent would name its own cards in it and
+// the owner's item would show them as the owner's inputs. Merge and server
+// items are left out: their notes are command output. The texts are data:
+// only card keys and row ids are taken from them.
 export const INPUT_DAYS = 7;
 export const INPUT_MS = INPUT_DAYS * 24 * 60 * 60 * 1000;
 const CARD_KEY = /\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b/g;
@@ -30,14 +34,12 @@ export function ownerTexts(
   const since = now.getTime() - INPUT_MS;
   const fresh = (at: number) => Number.isFinite(at) && at >= since;
   const itemOf = new Map(items.map((item) => [item.id, item.data]));
-  const checkOf = new Map(checks.map((check) => [check.id, check.data]));
   const texts: OwnerText[] = [];
   for (const item of items) {
     const inbox = item.data.inbox as Record<string, unknown> | undefined;
     const at = time(inbox?.receivedAt);
     if (item.data.kind !== "inbox" || !fresh(at)) continue;
     texts.push({ text: text(inbox?.text), at });
-    texts.push({ text: text(checkOf.get(item.id)?.agentNote), at });
   }
   for (const check of checks) {
     const at = time(check.data.ownerAt);

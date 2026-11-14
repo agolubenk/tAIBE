@@ -24,21 +24,31 @@ describe("ownerTexts (TB-107)", () => {
   ];
   const checks = [
     doc("i-1", { agentNote: "карточка IS-61" }),
-    doc("d-1", { note: "и ещё GLOB-35", ownerAt: "2026-11-13T09:00:00Z" }),
+    doc("d-1", {
+      note: "и ещё GLOB-35",
+      ownerAt: "2026-11-13T09:00:00Z",
+      agentNote: "беру TB-77, w-taibe-agent",
+    }),
     doc("c-1", { note: "проверил APP-590", ownerAt: "2026-11-13T09:00:00Z" }),
     doc("m-1", { note: "APP-7 merged", ownerAt: "2026-11-13T09:00:00Z" }),
     doc("s-1", { note: "OPS-9 ok", ownerAt: "2026-11-13T09:00:00Z" }),
     doc("d-old", { note: "APP-2", ownerAt: "2026-11-02T09:00:00Z" }),
   ];
 
-  it("takes inbox texts with the agent's note and notes on decisions and checks", () => {
+  it("takes the inbox text and the owner's notes on decisions and checks", () => {
     const texts = ownerTexts(items, checks, NOW).map((one) => one.text);
     expect(texts).toEqual([
       "сломалось APP-584",
-      "карточка IS-61",
       "и ещё GLOB-35",
       "проверил APP-590",
     ]);
+  });
+
+  it("never reads the agent's note: an agent's keys are not the owner's inputs", () => {
+    const named = namedIn(ownerTexts(items, checks, NOW));
+    expect([...named.keys.keys()]).not.toContain("IS-61");
+    expect([...named.keys.keys()]).not.toContain("TB-77");
+    expect([...named.rows.keys()]).toEqual([]);
   });
 
   it("ignores merge and server notes and inputs older than 7 days", () => {

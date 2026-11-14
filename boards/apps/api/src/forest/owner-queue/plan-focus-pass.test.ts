@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { ownerReverts } from "./plan-focus-run";
 import { type PlanStore, planPass } from "./plan-pass";
 import { cardUid, type RecentCard } from "./plan-types";
 import {
@@ -156,10 +157,12 @@ describe("TB-107 in the plan pass", () => {
     expect(queue.data("work", "focus-hr-helper")).toMatchObject({
       kind: "focus",
       rows: ["w-n-inputs", "w-n-a"],
-      prev: [],
       day: { item: "d-hr-focus-20261114" },
     });
-    expect(queue.data("items", "d-hr-focus-20261114").kind).toBe("decision");
+    expect(queue.data("items", "d-hr-focus-20261114")).toMatchObject({
+      kind: "decision",
+      focus: { rows: ["w-n-inputs", "w-n-a"], prev: [], keys: ["APP-1", "APP-9"] },
+    });
 
     queue.writes.length = 0;
     await run(queue, DAY1, true);
@@ -169,8 +172,10 @@ describe("TB-107 in the plan pass", () => {
     await run(queue, DAY2, true);
     expect(queue.data("work", "focus-hr-helper")).toMatchObject({
       rows: ["w-n-inputs", "w-n-a", "w-n-b"],
-      prev: ["w-n-inputs", "w-n-a"],
       day: { item: "d-hr-focus-20261115" },
+    });
+    expect(queue.data("items", "d-hr-focus-20261115").focus).toMatchObject({
+      prev: ["w-n-inputs", "w-n-a"],
     });
     expect(queue.data("items", "d-hr-focus-20261114").archived).toBe(true);
   });
@@ -185,12 +190,15 @@ describe("TB-107 in the plan pass", () => {
       ownerAt: "2026-11-14T07:00:00.000Z",
     });
     await run(queue, new Date("2026-11-14T07:05:00Z"), false);
-    expect(queue.data("work", "focus-hr-helper")).toMatchObject({
+    expect(queue.data("work", "focus-hr-helper")).toEqual({
+      kind: "focus",
       rows: [],
-      day: { applied: true },
-      reverted: {
-        at: "2026-11-14T07:00:00.000Z",
-        rows: ["w-n-inputs", "w-n-a"],
+      at: DAY1.toISOString(),
+      day: {
+        date: "2026-11-14",
+        moved: expect.any(Array),
+        item: "d-hr-focus-20261114",
+        applied: true,
       },
     });
     expect(queue.data("items", "d-hr-focus-20261114").archived).toBe(true);
@@ -206,7 +214,7 @@ describe("TB-107 in the plan pass", () => {
     expect(queue.data("items", "d-hr-focus-20261115").kind).toBe("decision");
   });
 
-  it("marks a revert made by hand without moving its rows again", async () => {
+  it("closes the hand-made day of 13.11: restores nothing, its revert still holds the inputs", async () => {
     const queue = setup();
     queue.set("work", "focus-hr-helper", {
       kind: "focus",
@@ -221,24 +229,136 @@ describe("TB-107 in the plan pass", () => {
         item: "d-hr-focus-1311",
       },
     });
+    queue.set("items", "d-hr-focus-1311", {
+      kind: "decision",
+      title: "План HR: фокус",
+      options: [{ id: "revert", label: "Вернуть" }],
+    });
     queue.set("checks", "d-hr-focus-1311", {
       done: true,
       choice: "revert",
       ownerAt: "2026-11-13T12:17:02.153Z",
     });
+    inbox(queue, "i-1", "сделайте APP-1", "2026-11-13T10:00:00Z");
     await run(queue, DAY1, false);
-    expect(queue.data("work", "focus-hr-helper")).toMatchObject({
+    expect(queue.data("work", "focus-hr-helper")).toEqual({
+      kind: "focus",
       rows: [],
-      prev: ["w-n-inputs"],
-      day: { applied: true },
-      reverted: {
-        at: "2026-11-13T12:17:02.153Z",
-        rows: ["w-n-inputs"],
-        keys: [],
+      at: "2026-11-13T14:06:24Z",
+      day: {
+        date: "2026-11-13",
+        moved: expect.any(Array),
+        item: "d-hr-focus-1311",
+        applied: true,
       },
     });
+    // Not an item of this server: the pass does not archive it.
+    expect(queue.data("items", "d-hr-focus-1311").archived).toBeUndefined();
     queue.writes.length = 0;
-    await run(queue, new Date("2026-11-14T06:10:00Z"), false);
-    expect(queue.writes).toEqual([]);
+    await run(queue, new Date("2026-11-14T06:10:00Z"), true);
+    expect(queue.writes.filter((id) => id.includes("focus"))).toEqual([]);
+  });
+
+  it("an agent's focus doc neither stops the owner's inputs nor chooses what «Вернуть» restores", async () => {
+    const queue = setup();
+    // An agent writes a fresh revert and its own order into the work doc.
+    queue.set("work", "focus-hr-helper", {
+      kind: "focus",
+      rows: [],
+      prev: ["w-n-b"],
+      at: "",
+      reverted: {
+        at: DAY1.toISOString(),
+        rows: [],
+        keys: ["APP-1"],
+        item: "d-hr-focus-20261114",
+      },
+    });
+    inbox(queue, "i-1", "сделайте APP-1", "2026-11-13T10:00:00Z");
+    await run(queue, DAY1, true);
+    expect(queue.data("work", "focus-hr-helper").rows).toEqual([
+      "w-n-inputs",
+      "w-n-a",
+    ]);
+    expect(queue.data("items", "d-hr-focus-20261114").kind).toBe("decision");
+
+    queue.set("work", "focus-hr-helper", {
+      ...queue.data("work", "focus-hr-helper"),
+      prev: ["w-n-b"],
+    });
+    queue.set("checks", "d-hr-focus-20261114", {
+      choice: "revert",
+      ownerAt: "2026-11-14T07:00:00.000Z",
+    });
+    await run(queue, new Date("2026-11-14T07:05:00Z"), false);
+    // The item's order before the day, not the agent's prev.
+    expect(queue.data("work", "focus-hr-helper").rows).toEqual([]);
+  });
+
+  it("an item changed after the owner's answer restores nothing and closes", async () => {
+    const queue = setup();
+    inbox(queue, "i-1", "сделайте APP-9 и APP-1", "2026-11-13T10:00:00Z");
+    await run(queue, DAY1, true);
+    const item = queue.docs.get("items/d-hr-focus-20261114") as QueueDoc;
+    item.updatedAt = Date.parse("2026-11-14T07:01:00Z");
+    queue.set("checks", "d-hr-focus-20261114", {
+      choice: "revert",
+      ownerAt: "2026-11-14T07:00:00.000Z",
+    });
+    await run(queue, new Date("2026-11-14T07:05:00Z"), false);
+    expect(queue.data("work", "focus-hr-helper")).toMatchObject({
+      rows: ["w-n-inputs", "w-n-a"],
+      day: { applied: true },
+    });
+    expect(queue.data("items", "d-hr-focus-20261114").archived).toBe(true);
+  });
+
+  it("skips the focus step when the checks list is cut", async () => {
+    const queue = setup();
+    inbox(queue, "i-1", "сделайте APP-9 и APP-1", "2026-11-13T10:00:00Z");
+    const client = queue.client();
+    const list = client.list;
+    client.list = async (collection, offset) => {
+      const page = await list(collection, offset);
+      return collection === "checks" ? { ...page, truncated: true } : page;
+    };
+    await planPass(
+      { client, config, store, now: () => DAY1 },
+      { hourly: false, daily: true },
+    );
+    expect(queue.data("work", "focus-hr-helper")).toEqual({});
+    expect(queue.data("items", "d-hr-focus-20261114")).toEqual({});
+  });
+});
+
+describe("ownerReverts (TB-107)", () => {
+  const doc = (id: string, data: Record<string, unknown>): QueueDoc => ({
+    id,
+    data,
+    version: 1,
+    updatedAt: 0,
+  });
+  const decision = (id: string) =>
+    doc(id, { kind: "decision", title: "x", archived: true });
+
+  it("takes the owner's latest «Вернуть» on a focus item of each product, 7 days back", () => {
+    const items = [
+      decision("d-hr-focus-20261112"),
+      decision("d-hr-focus-20261113"),
+      decision("d-taibe-focus-20261113"),
+      decision("d-hr-due-20261113"),
+      decision("d-hr-focus-20261101"),
+    ];
+    const checks = [
+      doc("d-hr-focus-20261112", { choice: "revert", ownerAt: "2026-11-12T09:00:00Z" }),
+      doc("d-hr-focus-20261113", { choice: "revert", ownerAt: "2026-11-13T09:00:00Z" }),
+      doc("d-taibe-focus-20261113", { agentNote: "revert", agentStatus: "done" }),
+      doc("d-hr-due-20261113", { choice: "revert", ownerAt: "2026-11-13T10:00:00Z" }),
+      doc("d-hr-focus-20261101", { choice: "revert", ownerAt: "2026-11-01T09:00:00Z" }),
+      doc("d-hr-focus-20261199", { choice: "revert", ownerAt: "2026-11-13T11:00:00Z" }),
+    ];
+    expect(ownerReverts(items, checks, ["hr-helper", "taibe"], DAY1)).toEqual(
+      new Map([["hr-helper", Date.parse("2026-11-13T09:00:00Z")]]),
+    );
   });
 });
