@@ -53,7 +53,8 @@ def session():
         {"type": "user", "timestamp": iso(T0 + timedelta(minutes=30)), "message": {"content": [
             {"type": "tool_result", "content": f"d-taibe-x2 answered {SECRET} d-taibe-x30"}]}},
         {"type": "attachment", "timestamp": iso(T0 + timedelta(minutes=31)), "attachment": {
-            "type": "queued_command", "commandMode": "prompt", "prompt": "<cross-session-message>hi</cross-session-message>"}},
+            "type": "queued_command", "commandMode": "prompt",
+            "prompt": "<cross-session-message>hi</cross-session-message>"}},
         {"type": "attachment", "timestamp": iso(T0 + timedelta(minutes=32)), "attachment": {
             "type": "queued_command", "commandMode": "task-notification", "prompt": note("НЕРВ 01:02 assign: x")}},
         {"type": "user", "timestamp": iso(T0 + timedelta(minutes=33)), "isMeta": True,
@@ -82,7 +83,7 @@ class Base(unittest.TestCase):
         self.write("-Users-x--claude-mem-observer-sessions/o.jsonl",
                    [turn(T0, "peer", "<cross-session-message>наблюдатель</cross-session-message>")])
         self.write("p-other/s2.jsonl", [turn(T0, "human", "просто вопрос"),
-                                        turn(T0 + timedelta(minutes=2), "peer", "<cross-session-message>x</cross-session-message>")])
+                                        turn(T0 + timedelta(minutes=2), "peer", "<cross-session-message>x")])
         with open(os.path.join(self.nerve, "journal.jsonl"), "w") as f:
             f.write("\n".join([journal_line(f"oq:answer:d-taibe-x1:{iso(T0)}"),
                                journal_line(f"oq:answer:d-taibe-x2:{iso(T0)}"),
@@ -110,7 +111,8 @@ class Turns(Base):
     def test_kinds_of_turns(self):
         t3 = self.run_pt()["команды"]["Т3"]
         self.assertEqual({k: t3[k] for k in PT.KINDS},
-                         {"пир": 1, "нерв": 2, "монитор истёк": 1, "монитор": 1, "человек": 1, "сжатие": 1, "прочее": 0})
+                         {"пир": 1, "нерв": 2, "монитор истёк": 1, "монитор": 1, "человек": 1, "сжатие": 1,
+                          "прочее": 0})
         self.assertEqual(t3["ходов"], 7, "результат инструмента, вставки, тело навыка и ход до окна — не ходы")
         self.assertEqual((t3["доля_пир"], t3["доля_пир_и_нерв"]), (round(1 / 7, 3), round(3 / 7, 3)))
         self.assertEqual((t3["вставок_пир"], t3["вставок_нерв"]), (1, 1))
@@ -128,7 +130,7 @@ class Turns(Base):
 class OwnerAnswers(Base):
     def test_late_and_unread(self):
         a = self.run_pt()["ответы_владельца"]
-        self.assertEqual((a["в_окне"], a["к_сроку"]), (4, 3), "x4 моложе 15 мин, x9 до окна, inbox и manual — не ответы")
+        self.assertEqual((a["в_окне"], a["к_сроку"]), (4, 3), "x4 моложе 15 мин, x9 до окна, inbox, manual — нет")
         self.assertEqual(a["без_прочтения_дольше_15_мин"], 2, "x2 прочитан через 30 мин, x3 — никогда")
         self.assertEqual(a["не_прочитано"], 1, "выход сессии и d-taibe-x30 — не прочтение x3")
         self.assertEqual((a["медиана_мин"], a["p90_мин"]), (30.0, 30.0))
