@@ -2,11 +2,14 @@
 
 usage: python3 -I context_audit.py "<с YYYY-MM-DD HH:MM>" "<по YYYY-MM-DD HH:MM>" [--json out.json] [--match "<строка>"]
        python3 -I context_audit.py --hours 24 --all [--json out.json]     # ежедневная эволюция (daily_steps)
+       ... [--product <slug>]                                              # только один продукт (SE-36)
 
 Время — местное (Минск). Журналы — сессии команды: первое сообщение содержит «ключ реестра» (или строку --match:
 у пилота с геномом ключа реестра нет, его первое сообщение — «…ты — автор t-boards…»). `--all` — все сессии хоста и
 слоя (repo_root и layer_home из eval/nerve/config.json): их папки проектов, папки worktree и субагенты
 `<sid>/subagents/*.jsonl`, без фильтра по первому сообщению; запрос, записанный в двух файлах, считается один раз.
+`--product <slug>` — только папка проекта этого продукта (`team.project_dir` из instances/<slug>.json) и её worktree:
+сессия продукта открыта в его основном checkout (как в team_status.py). Наблюдатель claude-mem (раздел 7) общий.
 1. Деньги по статьям: вход, запись кэша (5 мин / 1 ч), чтение кэша, выход. Холодный вызов — запись кэша больше
    половины контекста (от 30K), то есть контекст переписан целиком. Причина (d-f63b-economy-0711), по порядку:
    старт, сжатие, пауза ≥ 60 мин, ToolSearch с прошлого вызова, запись отложенных инструментов без ToolSearch,
@@ -35,6 +38,7 @@ from datetime import datetime, timedelta
 HOME_CLAUDE = os.path.expanduser('~/.claude/')
 ROOT = HOME_CLAUDE + 'projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2'
 OBSERVER_GLOB = HOME_CLAUDE + 'projects/*observer*/*.jsonl'
+NERVE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'nerve')
 PRICES = {'fable': (10, 50, 0.25), 'opus-5-5': (4, 20, 0.2), 'opus-5': (5, 25, 0.5), 'sonnet': (2, 10, 0.2),
           'haiku-5-5': (0.1, 0.5, 0.01)}
 COMPACTED = 'This session is being continued'
@@ -44,8 +48,9 @@ pos = [a for a in sys.argv[1:] if not a.startswith('--')]
 out_json = sys.argv[sys.argv.index('--json') + 1] if '--json' in sys.argv else None
 match = sys.argv[sys.argv.index('--match') + 1] if '--match' in sys.argv else 'ключ реестра'
 hours = sys.argv[sys.argv.index('--hours') + 1] if '--hours' in sys.argv else None
+product = sys.argv[sys.argv.index('--product') + 1] if '--product' in sys.argv else None
 all_dirs = '--all' in sys.argv
-for flag_value in (out_json, match, hours):
+for flag_value in (out_json, match, hours, product):
     if flag_value in pos:
         pos.remove(flag_value)
 if hours:
@@ -56,8 +61,26 @@ else:
     until = datetime.strptime(pos[1], '%Y-%m-%d %H:%M')
 
 
-def project_prefixes(config=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'nerve', 'config.json')):
+def product_dir(slug):
+    """Claude project-dir name of one product: the base name of team.project_dir in instances/<slug>.json."""
+    sys.path.append(NERVE)
+    import products
+    try:
+        cfg = products.config_for(slug)
+    except products.ProductError as e:
+        sys.exit(f'--product: {e}')
+    return os.path.basename(os.path.expanduser(cfg['team']['project_dir']).rstrip('/'))
+
+
+PRODUCT_DIR = product_dir(product) if product else None
+if PRODUCT_DIR:
+    ROOT = HOME_CLAUDE + 'projects/' + PRODUCT_DIR
+
+
+def project_prefixes(config=os.path.join(NERVE, 'config.json')):
     """Claude project-dir names of the host and the layer checkouts; worktree dirs start with the same name."""
+    if PRODUCT_DIR:
+        return [PRODUCT_DIR]
     try:
         with open(config, encoding='utf-8') as f:
             cfg = json.load(f)
@@ -73,7 +96,8 @@ def transcripts():
         return [(p, False) for p in glob.glob(os.path.join(ROOT, '*.jsonl'))]
     prefixes, out = project_prefixes(), []
     for d in glob.glob(HOME_CLAUDE + 'projects/*'):
-        if any(os.path.basename(d).startswith(p) for p in prefixes):
+        name = os.path.basename(d)
+        if any(name == p or name.startswith(p + '-') for p in prefixes):   # not «…-tAIBE2» for «…-tAIBE»
             out += [(p, False) for p in glob.glob(os.path.join(d, '*.jsonl'))]
             out += [(p, True) for p in glob.glob(os.path.join(d, '*', 'subagents', '*.jsonl'))]
 
@@ -400,7 +424,7 @@ for path in glob.glob(OBSERVER_GLOB):
 
 total = sum(money.values())
 pct = (lambda v: f'{v / total:5.1%}') if total else (lambda _v: '-')
-print(f'Окно {since:%d.%m %H:%M} – {until:%d.%m %H:%M}: сессий {sessions} (+ субагентов {subagent_files}), вызовов {calls_total}, ${total:,.1f}, '
+print((f'Продукт {product}. ' if product else '') + f'Окно {since:%d.%m %H:%M} – {until:%d.%m %H:%M}: сессий {sessions} (+ субагентов {subagent_files}), вызовов {calls_total}, ${total:,.1f}, '
       f'средний контекст {ctx_sum // max(calls_total, 1):,}; модели: ' + ', '.join(f'{k} {v}' for k, v in models.most_common(4)))
 print('1. Деньги: ' + ' · '.join(f'{k} ${v:,.1f} ({pct(v).strip()})' for k, v in money.most_common()))
 print('   Холодные вызовы по причине: ' + ' · '.join(
@@ -424,7 +448,7 @@ if base:
     base.sort()
     print(f'6. Первый вызов сессии: мин {base[0]:,} · медиана {base[len(base) // 2]:,} · макс {base[-1]:,} (сессий {len(base)})')
 obs_total = sum(obs_money.values())
-print(f'7. Наблюдатель claude-mem: сессий {obs_files}, вызовов {obs_calls}, ${obs_total:,.1f} по прайсу; модели: '
+print('7. Наблюдатель claude-mem' + (' (общий для продуктов)' if product else '') + f': сессий {obs_files}, вызовов {obs_calls}, ${obs_total:,.1f} по прайсу; модели: '
       + (', '.join(f'{k} {v}' for k, v in obs_models.most_common(3)) or '—'))
 bands = cg.generation_bands(gens)
 print('8. Поколение по окну (наибольший контекст сессии без субагентов): ' + (' · '.join(
@@ -432,7 +456,7 @@ print('8. Поколение по окну (наибольший контекс�
     f'ход ${v["call_usd"]}, передача ' + (f'{v["handoff_share"]:.0%}' if v['handoff_share'] is not None else '—')
     for k, v in bands.items()) or '—'))
 if out_json:
-    json.dump({'window': [f'{since:%Y-%m-%d %H:%M}', f'{until:%Y-%m-%d %H:%M}'], 'all': all_dirs,
+    json.dump({'window': [f'{since:%Y-%m-%d %H:%M}', f'{until:%Y-%m-%d %H:%M}'], 'all': all_dirs, 'product': product,
                'total': round(total, 2), 'generations': bands,
                'money': money, 'cold': cold, 'held': held, 'ups_by_wake': ups_by_wake,
                'hook_src': {f'{e}/{tag}': v for (e, tag), v in hook_src.items()}, 'nested': nested, 'instr': instr,

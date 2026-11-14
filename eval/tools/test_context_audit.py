@@ -121,6 +121,78 @@ class ContextAuditAllTest(unittest.TestCase):
         self.assertEqual(bands['≤ 250K']['with_handoff'], 0)   # the fork has no ack and no handoff write
 
 
+def product_project_dir(slug):
+    sys.path.insert(0, os.path.join(HERE, '..', 'nerve'))
+    import products
+    return os.path.basename(os.path.expanduser(products.config_for(slug)['team']['project_dir']).rstrip('/'))
+
+
+class ProductFilterTest(unittest.TestCase):
+    """SE-36: --product counts one product apart — its project dir and its worktrees, not the other product's."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.home = cls.tmp.name
+        projects = os.path.join(cls.home, '.claude', 'projects')
+        taibe, hr = product_project_dir('taibe'), product_project_dir('hr-helper')
+        files = {os.path.join(projects, taibe, 'a.jsonl'): MAIN,
+                 os.path.join(projects, taibe + '-worktrees-fix-x', 'b.jsonl'): [prompt('x', 0),
+                                                                              call('t1', 0, 50_000, 40_000)],
+                 os.path.join(projects, taibe + '2', 'c.jsonl'): [prompt('x', 0), call('n1', 0, 90_000, 80_000)],
+                 os.path.join(projects, hr, 'd.jsonl'): [prompt('x', 0), call('h1', 0, 70_000, 50_000),
+                                                         call('h2', 1, 71_000, 1_000)]}
+        for path, rows in files.items():
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(json.dumps(r, ensure_ascii=False) for r in rows) + '\n')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def run_audit(self, *args, all_dirs=True):
+        out = os.path.join(self.home, 'out.json')
+        if os.path.exists(out):
+            os.remove(out)
+        res = subprocess.run([sys.executable, '-I', TOOL, '--hours', '24', *(['--all'] if all_dirs else []), *args,
+                              '--json', out],
+                             capture_output=True, text=True, env=dict(os.environ, HOME=self.home), timeout=60)
+        data = None
+        if os.path.exists(out):
+            with open(out, encoding='utf-8') as f:
+                data = json.load(f)
+        return res, data
+
+    def test_taibe_reads_its_dir_and_worktrees_only(self):
+        res, data = self.run_audit('--product', 'taibe')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(data['product'], 'taibe')
+        self.assertEqual((data['sessions'], data['calls']), (2, 8 + 1))   # not «…tAIBE2», not HR
+        self.assertEqual(sorted(data['base']), [50_000, 60_000])
+        self.assertTrue(res.stdout.startswith('Продукт taibe. '))
+        self.assertIn('7. Наблюдатель claude-mem (общий для продуктов)', res.stdout)
+
+    def test_hr_reads_only_its_dir(self):
+        _res, data = self.run_audit('--product', 'hr-helper')
+        self.assertEqual((data['product'], data['sessions'], data['calls'], data['base']), ('hr-helper', 1, 2, [70_000]))
+
+    def test_without_product_both_products(self):
+        _res, data = self.run_audit()
+        self.assertEqual((data['product'], data['sessions'], data['calls']), (None, 3, 8 + 1 + 2))
+
+    def test_team_dir_mode_reads_the_product_main_dir(self):
+        _res, data = self.run_audit('--product', 'taibe', '--match', 'Handoff', all_dirs=False)
+        self.assertEqual((data['sessions'], data['calls']), (1, 8))   # main dir only, as without --product
+
+    def test_unknown_product_stops_with_the_known_list(self):
+        res, data = self.run_audit('--product', 'nope')
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIsNone(data)
+        self.assertIn('nope', res.stderr)
+        self.assertIn('taibe', res.stderr)
+
+
 class HandoffMarkersTest(unittest.TestCase):
     """Review of #105: live sessions had a commit message with «lineage.py ack» (intake 80 %) and a grep or a dry run
     of spawn_session.sh (outtake 57–79 %); lowercase handoff files were missed."""
