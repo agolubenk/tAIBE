@@ -150,6 +150,18 @@ def _check_roles(slug, cfg):
             raise ProductError(f"{slug}: github.quorum_to — роль «{role}», её нет у продукта")
 
 
+def _check_match(name, match):
+    """`queue.match` — регулярное выражение `re.search` по id пункта очереди (SE-109); битое — ошибка загрузки."""
+    if match is None:
+        return
+    if not isinstance(match, str) or not match:
+        raise ProductError(f"instances/{name}: queue.match — нужна непустая строка (регулярное выражение)")
+    try:
+        re.compile(match)
+    except re.error as e:
+        raise ProductError(f"instances/{name}: queue.match «{match}» — не регулярное выражение ({e})") from None
+
+
 def load(instances=INSTANCES):
     """→ (shared, {slug: product}). Проверяет каждый файл; ошибка — ProductError с файлом и полем."""
     shared = _read(os.path.join(instances, "_shared.json"))
@@ -166,6 +178,7 @@ def load(instances=INSTANCES):
         for path in REQUIRED:
             if _get(data, path) is None:
                 raise ProductError(f"instances/{name}: нет обязательного поля {path}")
+        _check_match(name, _get(data, "queue.match"))
         products[slug] = data
     default = shared.get("default_product")
     if not isinstance(default, str) or default not in products:

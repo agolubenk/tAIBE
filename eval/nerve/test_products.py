@@ -1,6 +1,7 @@
 """OPS-25 Ф1: instances/ → config.json байт-в-байт; поля на своих местах; ошибки с файлом и полем."""
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -42,7 +43,15 @@ class RenderTest(unittest.TestCase):
         cfg = P.config_for("taibe", shared, products)
         self.assertEqual(cfg["github"]["repo"], "agolubenk/tAIBE")
         self.assertEqual(cfg["team"]["projects_root"], shared["team"]["projects_root"], "слияние не теряет общий лист")
-        self.assertEqual(cfg["queue"]["match"], "-taibe-")
+        self.assertEqual(cfg["queue"]["match"], r"-taibe(-|\d|$)")
+
+    def test_taibe_match_catches_label_without_hyphen(self):
+        """SE-109: `m-taibe310-1411` — пункт tAIBE; `d-hr-…`, `d-taibeta-1` — нет."""
+        match = re.compile(P.config_for("taibe")["queue"]["match"])
+        for item_id in ("m-taibe310-1411", "d-taibe-x", "s-restart-4-taibe-1211", "s-restart-taibe"):
+            self.assertTrue(match.search(item_id), item_id)
+        for item_id in ("d-hr-x-1411", "d-1", "d-taibeta-1", "taibe-m-93"):
+            self.assertFalse(match.search(item_id), item_id)
 
 
 class GetTest(unittest.TestCase):
@@ -96,6 +105,15 @@ class ErrorsTest(unittest.TestCase):
     def test_bad_slug(self):
         os.rename(os.path.join(self.d, "taibe.json"), os.path.join(self.d, "HR_Helper.json"))
         self.fails("slug")
+
+    def test_queue_match_must_be_a_regex(self):
+        """SE-109: битое `queue.match` — ошибка загрузки с файлом и полем, а не тихий обход маршрута."""
+        edit(self.d, "taibe.json", lambda d: d["queue"].update(match="-taibe("))
+        self.fails("queue.match")
+
+    def test_queue_match_must_be_a_string(self):
+        edit(self.d, "taibe.json", lambda d: d["queue"].update(match=["-taibe-"]))
+        self.fails("queue.match")
 
     def test_unknown_default(self):
         edit(self.d, "_shared.json", lambda d: d.update(default_product="nope"))
