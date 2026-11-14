@@ -101,10 +101,11 @@ describe("ownerTexts (TB-107)", () => {
 });
 
 describe("itemProduct", () => {
-  it("reads the plan product from d-<tag>-…; hr is the default product", () => {
+  it("reads the plan product from d-<tag>-… or <product>-…; hr is the default product", () => {
     expect(itemProduct("d-taibe-gl10-sessions-1411", PRODUCTS)).toBe("taibe");
     expect(itemProduct("d-hr-focus-1311", PRODUCTS)).toBe("hr-helper");
     expect(itemProduct("c-hr-helper-x", PRODUCTS)).toBe("hr-helper");
+    expect(itemProduct("taibe-m-93", PRODUCTS)).toBe("taibe");
     for (const id of [
       "d-1",
       "d-20261114-135d8d",

@@ -28,11 +28,20 @@ const time = (value: unknown) =>
   typeof value === "string" ? Date.parse(value) : Number.NaN;
 
 // The plan product of a queue item by its id: d-taibe-…, c-hr-… (hr — the
-// default product). The queue product does not tell them apart: both boards'
-// items are hr-helper there. null — no product of these in the id.
+// default product), or the queue's own form taibe-m-93 (oq_put; namespaceOf
+// in infra/ops-console/server/queue/products.ts). The queue product of the
+// d-… items does not tell the boards apart: both are hr-helper there. null —
+// no product of these in the id.
 export function itemProduct(id: string, products: string[]): string | null {
   const tag = /^[a-z]-([a-z0-9]+)-/.exec(id)?.[1];
-  return products.find((product) => itemTag(product) === tag) ?? null;
+  return (
+    products.find((product) => itemTag(product) === tag) ??
+    products.find(
+      (product) =>
+        product !== DEFAULT_PLAN_PRODUCT && id.startsWith(`${product}-`),
+    ) ??
+    null
+  );
 }
 
 export function ownerTexts(
