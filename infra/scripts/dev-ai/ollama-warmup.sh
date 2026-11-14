@@ -5,7 +5,8 @@ OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Каждый вызов модели — под машинным замком локального инференса, общим с консилиумом и шлюзом моделей (OPS-33):
 # раньше прогрев шёл параллельно с их инференсом. Замок — на одну модель, а не на весь прогрев. Ждать замок —
-# не дольше OLLAMA_WARMUP_LOCK_WAIT секунд; не дождались — модель пропускается.
+# не дольше OLLAMA_WARMUP_LOCK_WAIT секунд; не дождались — модель пропускается. L-модель (tiel-coder) — ещё и под локом
+# L-модели (OPS-59): пока консилиум держит свою L-модель, прогрев не грузит вторую рядом.
 LOCK_WAIT="${OLLAMA_WARMUP_LOCK_WAIT:-300}"
 LOCK_BUSY=75
 
@@ -30,7 +31,7 @@ command -v python3 >/dev/null || { echo "Нужен python3: он держит �
 locked() {
   local model="$1"
   shift
-  python3 -I "$HERE/ollama-locked.py" --who "warmup $model" --wait "$LOCK_WAIT" -- "$@"
+  python3 -I "$HERE/ollama-locked.py" --who "warmup $model" --wait "$LOCK_WAIT" --model "$model" -- "$@"
 }
 
 warm_llm() {
@@ -49,7 +50,7 @@ warm_llm() {
     }" >/dev/null || rc=$?
   case "$rc" in
     0) ;;
-    "$LOCK_BUSY") echo "⚠ $model: замок локального инференса занят дольше ${LOCK_WAIT} с — пропуск" ;;
+    "$LOCK_BUSY") echo "⚠ $model: замок локальной модели занят дольше ${LOCK_WAIT} с — пропуск" ;;
     *) echo "⚠ $model не установлена/не отвечает — пропуск (не фатально)" ;;
   esac
 }
@@ -65,7 +66,7 @@ warm_embed() {
       \"prompt\": \"warmup\"
     }" >/dev/null || rc=$?
   if [[ "$rc" == "$LOCK_BUSY" ]]; then
-    echo "⚠ $model: замок локального инференса занят дольше ${LOCK_WAIT} с — пропуск"
+    echo "⚠ $model: замок локальной модели занят дольше ${LOCK_WAIT} с — пропуск"
   elif [[ "$rc" != 0 ]]; then
     return "$rc"
   fi
