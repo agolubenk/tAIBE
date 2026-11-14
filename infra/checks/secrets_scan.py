@@ -29,15 +29,18 @@ PATTERNS = [
     # The board's own API keys since TB-136 (`defaultPrefix` in boards/apps/api/src/auth.ts): tbk_ + 64 letters.
     ('t-boards-key', re.compile(r'\btbk_[A-Za-z0-9]{32,}\b')),
     ('jwt', re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}')),
-    ('url-credentials', re.compile(r'\b[a-z][a-z0-9+.-]*://[^/\s:@"\'`]+:([^@\s/"\'`]{6,})@[^\s"\'`]+', re.I)),
+    # A scheme has at most 32 characters: an open one scanned from every word of a long `a.a.a…` line.
+    ('url-credentials', re.compile(r'\b[a-z][a-z0-9+.-]{0,31}://[^/\s:@"\'`]+:([^@\s/"\'`]{6,})@[^\s"\'`]+', re.I)),
     ('bearer-token', re.compile(r'(?i)\bAuthorization["\']?[ \t]*:[ \t]*["\']?Bearer[ \t]+([^\s"\'`]{12,})')),
 ]
 # A credential name in any case, also as the end of a longer name (x-api-key, "api_key" in JSON); quotes optional.
 ASSIGNED = re.compile(r'(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)'
                       r'\b["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s]{12,})')
 # Environment style, uppercase only: any NAME ending in API_KEY, TOKEN, SECRET or PASSWORD (T_BOARDS_API_KEY=,
-# GITHUB_TOKEN:). `\b` does not fire after `_`, so ASSIGNED misses these names.
-ENV_ASSIGNED = re.compile(r'(?<![A-Za-z0-9])([A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD))["\']?[ \t]*[:=][ \t]*'
+# GITHUB_TOKEN:). `\b` does not fire after `_`, so ASSIGNED misses these names. The name starts after a non-name
+# character and has at most 64 characters before the suffix: an open [A-Z0-9_]* that may start after every `_` made
+# a long run of `_` quadratic (64 000 characters: 12 s, TB-136 security lens).
+ENV_ASSIGNED = re.compile(r'(?<![A-Za-z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))["\']?[ \t]*[:=][ \t]*'
                           r'["\'`]?([^"\'`\s]{12,})')
 # Long runs of the base64 alphabet mixing upper, lower and digits with high entropy: encoded key material. The same
 # thresholds as the base64 rule in redact; hex digests are single-case and never reach it.

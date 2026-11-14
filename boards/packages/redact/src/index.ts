@@ -46,13 +46,29 @@ function collectGroup(
 }
 
 // PEM blocks end in "KEY-----", PGP key blocks in "KEY BLOCK-----".
-const pem = collect(
-  /-----BEGIN [A-Z0-9 ]*KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z0-9 ]*KEY(?: BLOCK)?-----/g,
-  "pem",
-);
+// A BEGIN line up to the nearest END line. Not one lazy regex: from every
+// BEGIN without an END it scans to the end of the text, so 256 KB of BEGIN
+// lines took 1.3 s (TB-136 security lens). If a BEGIN has no END after it, a
+// later BEGIN has none either, so the scan stops there.
+const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]*KEY(?: BLOCK)?-----/g;
+const PEM_END = /-----END [A-Z0-9 ]*KEY(?: BLOCK)?-----/g;
 
+const pem: Detector = (text) => {
+  const hits: RedactHit[] = [];
+  PEM_BEGIN.lastIndex = 0;
+  for (let begin = PEM_BEGIN.exec(text); begin; begin = PEM_BEGIN.exec(text)) {
+    PEM_END.lastIndex = PEM_BEGIN.lastIndex;
+    if (!PEM_END.exec(text)) break;
+    hits.push({ kind: "pem", start: begin.index, end: PEM_END.lastIndex });
+    PEM_BEGIN.lastIndex = PEM_END.lastIndex;
+  }
+  return hits;
+};
+
+// The password part has at most 256 characters: unbounded, it ran to the end
+// of the text from every scheme of a "postgres://a:" run.
 const dbUrl = collect(
-  /(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^\s"'`/]*:[^\s@"'`]+@[^\s"'`]+/gi,
+  /(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^\s"'`/]*:[^\s@"'`]{1,256}@[^\s"'`]+/gi,
   "db_url",
 );
 
@@ -73,9 +89,10 @@ export function looksLikeSecret(value: string): boolean {
 
 // TB-136: credentials in a URL of any other scheme (https, smtp, ftp): only
 // the password goes, the user and the host stay readable. A database URL is
-// one db_url hit already and wins the overlap.
+// one db_url hit already and wins the overlap. A scheme has at most 32
+// characters: an open one scanned from every word of a long "a.a.a…" run.
 const urlCredentials = collectGroup(
-  /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'`/:@]+:(?!\[REDACTED)([^\s@"'`/]{6,})@[^\s"'`/]/gi,
+  /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s"'`/:@]+:(?!\[REDACTED)([^\s@"'`/]{6,})@[^\s"'`/]/gi,
   "url_credentials",
   1,
 );
@@ -137,9 +154,12 @@ const credentialAssignment = collectGroup(
 
 // Environment style, uppercase only: any NAME ending in API_KEY, TOKEN,
 // SECRET or PASSWORD (GITHUB_TOKEN=, CLIENT_SECRET=). Prose like
-// "the secret: ..." is lowercase and stays.
+// "the secret: ..." is lowercase and stays. The name starts after a
+// non-name character and has at most 64 characters before the suffix: an
+// open [A-Z0-9_]* that may start after every "_" made a run of "_" quadratic
+// (64 000 characters: 2 s, TB-136 security lens).
 const secretAssignment = collectGroup(
-  /(?<![A-Za-z0-9])[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/g,
+  /(?<![A-Za-z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,

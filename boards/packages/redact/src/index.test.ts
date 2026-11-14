@@ -319,4 +319,48 @@ describe("@kaneo/redact", () => {
   it("handles empty input", () => {
     expect(redact("")).toEqual({ text: "", hits: [] });
   });
+
+  describe("pem without one lazy regex (TB-136)", () => {
+    const begin = join("-----BEGIN ", "PRIVATE KEY-----");
+
+    it("redacts two blocks as two hits and the text between them stays", () => {
+      const result = redact(`${secrets.pem}\nnext\n${secrets.pem}`);
+      expect(result.text).toBe("[REDACTED:pem]\nnext\n[REDACTED:pem]");
+    });
+
+    it("leaves a BEGIN line with no END line as is", () => {
+      const lone = `${begin}\nMIIEvwIBADANBgkq`;
+      expect(redact(lone).text).toBe(lone);
+    });
+
+    it("joins a broken BEGIN with the block after it, as the lazy regex did", () => {
+      const result = redact(`${begin} cut\n${secrets.pem}`);
+      expect(result.text).toBe("[REDACTED:pem]");
+    });
+  });
+
+  // TB-136 security lens: a rule that may restart at every character and
+  // scan to the end of the text is quadratic. MCP call arguments go through
+  // redact before they are cut (api/src/mcp/call-detail.ts), so such a rule
+  // holds the API event loop. On 256 000 characters each run takes up to
+  // 26 ms linear and 1.3–60 s quadratic; the bound sits between them.
+  it.each([
+    "_",
+    "A_",
+    "API_KEY",
+    "TOKEN_",
+    "a.",
+    "a-",
+    "a+",
+    "eyJa.",
+    "sk-",
+    "Ab3+",
+    "postgres://a:",
+    "-----BEGIN KEY-----",
+  ])("redacts 256 000 characters of %j in linear time", (unit) => {
+    const text = unit.repeat(Math.ceil(256_000 / unit.length));
+    const started = performance.now();
+    redact(text);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
 });
