@@ -98,6 +98,9 @@ h1 { font-family: var(--font-display); font-weight: 600; font-size: clamp(22px, 
    «Отчёты» (телефон) и тема. Липкая до 1400 px окна и в две колонки (@container выше); бот снимает карточки в
    1260 px при окне 1400 — там шапка не липнет и на кадр не ложится. --bar-h — её высота, считает скрипт. */
 html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + var(--bar-h, 0px) + 8px); }
+/* Якорь прокрутки ставит скрипт (keepAnchor, просьба владельца 15.11): браузерный держит верхний видимый узел, а не
+   карточку под курсором, и вместе со скриптом сдвигал бы страницу дважды. */
+html { overflow-anchor: none; }
 .head-bar { z-index: 15; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -16px -16px 0; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .hb-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .hb-btn { font: inherit; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
@@ -166,8 +169,29 @@ h2.sec { font-size: 18px; font-weight: 700; margin: 0; }
 .sec-note { margin: 0; color: var(--muted); font-size: 14px; max-width: 72ch; }
 .item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
 .item.is-done { background: transparent; }
-.item.is-done .item-body { display: none; }
-body.hide-done .item.is-done { display: none; }
+.item.is-done:not(.is-melting) .item-body { display: none; }
+body.hide-done .item.is-done:not(.is-melting) { display: none; }
+/* Таяние ответа (просьба владельца 15.11): пункт, на который владелец ответил на этой странице, 10 с остаётся на месте
+   раскрытым — ответ можно поменять — и медленно тает. Курсор на карточке (или фокус клавиатуры в ней) — таяние стоит и
+   карточка снова плотная; ушли — 10 с заново. Конец анимации убирает пункт (animationend → endMelt). «Показать
+   выполненные» — пункт не тает (oq-melt-keep: та же длина, без смены вида) и после 10 с уходит к выполненным. */
+@keyframes oq-melt { 0% { opacity: 1; filter: none; } 55% { opacity: .6; filter: saturate(.7); } 100% { opacity: 0; filter: saturate(0) blur(1.5px); } }
+@keyframes oq-melt-flat { from { opacity: 1; } to { opacity: 0; } }
+@keyframes oq-melt-keep { from { opacity: 1; } to { opacity: 1; } }
+.item.is-melting { animation: oq-melt 10s cubic-bezier(.45, 0, .85, .55) forwards; }
+body:not(.hide-done) .item.is-melting { animation-name: oq-melt-keep; }
+/* !important — пауза сильнее правил вида выше и ниже (oq-melt-keep, oq-melt-flat): иначе их специфичность её перебьёт. */
+.item.is-melting:has(:focus-visible) { animation: none !important; }
+@media (hover: hover) { .item.is-melting:hover { animation: none !important; } }
+/* Касание (наведения нет): тап по тающей карточке держит её, тап вне карточки отпускает — 10 с заново (линза coord #337). */
+.item.is-melting.is-held { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { body.hide-done .item.is-melting { animation-name: oq-melt-flat; } }
+/* Пока тает, высота карточки та же, что до ответа: ответ виден по нажатому варианту или галочке, строки «✓ …» и
+   «Изменить ответ» появятся после таяния (правила .item.is-done:not(.is-melting) ниже). Подсказка — в строке «Сохранено»:
+   её высота — строка и до ответа (min-height 1lh). Генерируемый текст не попадает в textContent, и бот очереди не
+   перескажет подсказку в Telegram. */
+body.hide-done .item.is-melting .saved:not(:empty)::after { content: " · уберётся через 10 с — наведите курсор, чтобы поменять ответ"; }
+body.hide-done .item.is-melting .saved:empty::after { content: "Уберётся через 10 с — наведите курсор, чтобы поменять ответ"; }
 /* Переход по ссылке «#item=<id>» (колонка «Связь» на /deploys): пункт выделен и раскрыт, даже если выполнен. */
 .item.is-target { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 body.hide-done .item.is-target.is-done { display: grid; }
@@ -268,18 +292,18 @@ textarea.field { min-height: 84px; font-family: var(--font-mono); font-size: 12.
 .oqf-note { margin: 0; color: var(--muted); }
 .oqf-warn { color: var(--warn); }
 .oqf-card .oqf-add, .oqf-card .oqf-more { justify-self: start; }
-.item.is-done .oqf-add { display: none; }
+.item.is-done:not(.is-melting) .oqf-add { display: none; }
 .oqf-usage { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .oqf-usage.warn { color: var(--warn); }
 .oqf-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.saved { font-size: 12px; color: var(--muted); min-height: 1em; }
+.saved { font-size: 12px; color: var(--muted); min-height: 1.6em; min-height: 1lh; }
 .saved.err { color: var(--warn); }
-.item.is-done .answer { border-top: 0; padding-top: 0; }
-.item.is-done .answer .field, .item.is-done .answer .options { display: none; }
+.item.is-done:not(.is-melting) .answer { border-top: 0; padding-top: 0; }
+.item.is-done:not(.is-melting) .answer .field, .item.is-done:not(.is-melting) .answer .options { display: none; }
 .summary-answer { font-size: 13px; color: var(--done); display: none; }
-.item.is-done .summary-answer { display: block; }
+.item.is-done:not(.is-melting) .summary-answer { display: block; }
 .reopen { font: inherit; font-size: 12px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; width: fit-content; display: none; }
-.item.is-done .reopen { display: inline; }
+.item.is-done:not(.is-melting) .reopen { display: inline; }
 .agent-status { font-size: 13px; display: none; gap: 6px; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
 .agent-status > span { min-width: 0; }
 .agent-status.on { display: flex; }
@@ -1012,7 +1036,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       if (byId[it.id]) (groups[key] = groups[key] || []).push(it);
     });
     var active = document.activeElement;
-    var doneOf = function (it) { return isDone(it, state[it.id]); };
+    // Тающий пункт — на месте открытого: «одной очередью» он не уезжает к выполненным, пока тает.
+    var doneOf = function (it) { return isDone(it, state[it.id]) && !MELT[it.id]; };
     Object.keys(groups).forEach(function (key) {
       var list = document.querySelector('#sec-' + key + ' .list');
       if (!list) return;
@@ -1082,6 +1107,79 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (el) el.classList.add('is-target');
     showTarget();
   });
+  // Таяние ответа (просьба владельца 15.11): MELT[id] — пункт, на который владелец только что ответил на этой странице.
+  // Пока он тает, он не прячется к выполненным и стоит на месте открытого; вид и 10 с — CSS (.is-melting, oq-melt),
+  // конец — animationend. Ответ с другого устройства или от агента не тает: при загрузке страницы выполненных много.
+  var MELT = {};
+  function itemEl(id) { return id ? document.querySelector('.item[data-id="' + id + '"]') : null; }
+  function itemById(id) { var all = allItems(); for (var i = 0; i < all.length; i++) if (all[i].id === id) return all[i]; return null; }
+  // Вызывать до render(): иначе render сначала спрячет выполненный пункт, и карточка мигнёт. Новый ответ на тающий
+  // пункт — 10 с заново (снять класс и пересчитать стиль — анимация начнётся сначала, класс вернёт render).
+  function markMelt(id) {
+    var it = itemById(id);
+    if (!it || !isDone(it, state[id])) { delete MELT[id]; return; }
+    var el = itemEl(id);
+    if (MELT[id] && el) { el.classList.remove('is-melting'); void el.offsetWidth; }
+    MELT[id] = true;
+  }
+  document.addEventListener('animationend', function (ev) {
+    var id = ev.target && ev.target.dataset ? ev.target.dataset.id : '';
+    if (!/^oq-melt/.test(ev.animationName) || !id || !MELT[id]) return;
+    delete MELT[id];
+    render();
+  });
+
+  // Якорь прокрутки (просьба владельца 15.11): новые пункты, ответы с других устройств, конец таяния и графики выше не
+  // сдвигают карточку под курсором (или с фокусом); без них — верхнюю видимую. ANCHOR — где она была после последней
+  // прокрутки; после изменений страницы она возвращается туда же. Браузерный якорь выключен (overflow-anchor у html):
+  // он держит верхний видимый узел, теряет его, когда пункты базы перемонтируются, а в Safari его нет.
+  var HOVER = null, ANCHOR = { id: null, top: 0 };
+  function shown(el) { return !!el && el.isConnected && el.getClientRects().length > 0; }
+  function anchorPick() {
+    var vh = window.innerHeight;
+    var inView = function (el) { if (!shown(el)) return false; var r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < vh; };
+    var h = itemEl(HOVER); if (inView(h)) return h;
+    var a = document.activeElement, f = a && a.closest ? a.closest('.item[data-id]') : null; if (inView(f)) return f;
+    var all = document.querySelectorAll('section .list > .item[data-id]'), part = null;
+    for (var i = 0; i < all.length; i++) {
+      if (!inView(all[i])) continue;
+      if (all[i].getBoundingClientRect().top >= 0) return all[i];
+      part = part || all[i];
+    }
+    return part;
+  }
+  function rememberAnchor() {
+    var el = anchorPick();
+    ANCHOR.id = el ? el.dataset.id : null;
+    ANCHOR.top = el ? el.getBoundingClientRect().top : 0;
+  }
+  function restoreAnchor() {
+    var el = itemEl(ANCHOR.id);
+    if (shown(el)) {
+      var d = el.getBoundingClientRect().top - ANCHOR.top;
+      if (Math.abs(d) >= 1) window.scrollBy(0, d);
+    }
+    rememberAnchor();
+  }
+  // Прокрутка — синхронно, без отложенного кадра: изменение страницы до кадра вернуло бы её к старому месту.
+  window.addEventListener('scroll', rememberAnchor, { passive: true });
+  document.addEventListener('pointerover', function (ev) {
+    if (ev.pointerType === 'touch') return; // у касания нет наведения
+    var id = itemOf(ev.target);
+    if (id !== HOVER) { HOVER = id; rememberAnchor(); }
+  });
+  document.addEventListener('pointerout', function (ev) { if (!ev.relatedTarget) { HOVER = null; rememberAnchor(); } });
+  // Касание: тап по тающей карточке держит её (.is-held), тап в другом месте отпускает — таяние начинается заново.
+  document.addEventListener('pointerdown', function (ev) {
+    if (ev.pointerType !== 'touch') return;
+    var id = itemOf(ev.target);
+    document.querySelectorAll('.item.is-held').forEach(function (el) { if (el.dataset.id !== id) el.classList.remove('is-held'); });
+    var el = MELT[id] && itemEl(id);
+    if (el) el.classList.add('is-held');
+  }, { passive: true });
+  // Страница поменяла высоту не через render (отчёты и графики дорисовались) — тот же возврат после раскладки, до кадра.
+  if (window.ResizeObserver) new ResizeObserver(function () { restoreAnchor(); }).observe(document.querySelector('main.wrap') || document.body);
+
   ITEMS.forEach(function (it) { mount(it, false); });
   placeItems();
   showTarget();
@@ -1106,6 +1204,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       var st = itemState(it, e), d = st === 'done', again = st === 'again';
       el.classList.toggle('is-done', d);
       el.classList.toggle('is-again', again);
+      if (!d) delete MELT[it.id]; // ответ снят или «ждёт вас снова» — таять нечему
+      el.classList.toggle('is-melting', !!MELT[it.id]);
       markAgain(el, again);
       el.querySelectorAll('.opt').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.opt === e.choice)); });
       // «Ждёт вас снова» — галочка снята: одно нажатие «Сделано» и есть новый ответ (at позже записи агента).
@@ -1157,6 +1257,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       : (queueStale() ? 'Снимок 16.10, нет связи · сделано ' : 'Сделано ') + done + ' из ' + total;
     document.getElementById('bar').style.width = (queueReady() && total ? Math.round(done * 100 / total) : 0) + '%';
     scheduleDash();
+    restoreAnchor();
   }
 
   // Сбой сохранения — повтор сам, с паузой 5 → 10 → … → 60 с, пока не сохранится (линза GLM #214): иначе ответ живёт
@@ -1220,13 +1321,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (opt) {
       var id = itemOf(opt); if (!id) return;
       var e = entry(id); e.choice = opt.dataset.opt; e.done = true; e.at = new Date().toISOString();
-      render(); persist(id); return;
+      markMelt(id); persist(id); render(); return;
     }
     var re = t.closest && t.closest('.reopen');
     if (re) {
       var rid = itemOf(re); if (!rid) return;
       var r = entry(rid); r.choice = null; r.done = false; r.at = new Date().toISOString();
-      render(); persist(rid); return;
+      persist(rid); render(); return;
     }
     var b = t.closest && t.closest('.copy');
     if (b) {
@@ -1244,7 +1345,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (t.classList.contains('cb')) { e.done = t.checked; e.at = new Date().toISOString(); }
     else if (t.classList.contains('field')) { e.note = t.value.slice(0, 20000); e.at = new Date().toISOString(); }
     else return;
-    render(); persist(id);
+    // persist до render: строка «Сохранено» показывает «Сохраняю…» (pending), а не время до записи (Claude-линза #337).
+    markMelt(id); persist(id); render();
   });
 
   var hideBtn = document.getElementById('hide-done');
@@ -1374,9 +1476,17 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (key === dbItemsKey) return;
     dbItemsKey = key;
     list.forEach(function (it) { it.createdAt = at[it.id].createdAt; it.updatedAt = at[it.id].updatedAt; });
-    document.querySelectorAll('.item[data-src="db"]').forEach(function (el) { el.remove(); });
+    // Тающий пункт не перемонтируется: иначе таяние началось бы заново, а курсор и фокус потеряли бы карточку.
+    var inList = {};
+    list.forEach(function (it) { inList[it.id] = true; });
+    document.querySelectorAll('.item[data-src="db"]').forEach(function (el) {
+      var id = el.dataset.id;
+      if (MELT[id] && inList[id]) return;
+      delete MELT[id];
+      el.remove();
+    });
     DB_ITEMS = list;
-    list.forEach(function (it) { mount(it, true); });
+    list.forEach(function (it) { if (!MELT[it.id] || !itemEl(it.id)) mount(it, true); });
     render(); // порядок в списках ставит placeItems в начале render
     showTarget();
     if (FILES) FILES.itemsChanged();

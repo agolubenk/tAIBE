@@ -988,6 +988,8 @@ describe('порядок пунктов: от старых к новым (про
       // живая ссылка: видно, какой updatedAt у пункта на странице после каждого снимка
       mount: (it: { id: string; updatedAt?: number }) => mounted.push(it),
       render: () => {}, showTarget: () => {},
+      // Таяние ответа (#337): тающих пунктов нет — applyItems перемонтирует все, как раньше.
+      MELT: {}, itemEl: () => null,
     })
     runInContext(fnSource('itemFromDb'), ctx)
     runInContext(fnSource('applyItems'), ctx)
@@ -1108,5 +1110,58 @@ describe('раскладка «Одной очередью» / «По разде
 describe('связь вернулась — страница снова «Ответы сохраняются» сама (14.11: пара 🟠/🟢 на каждой выкатке)', () => {
   it('снимок после сбоя возвращает страницу к общей базе без перезагрузки', () => {
     expect(html).toContain("if (remote && modeEl.dataset.mode === 'local') setMode('shared');")
+  })
+})
+
+describe('таяние ответа и якорь прокрутки (просьба владельца 15.11)', () => {
+  it('ответ на странице: пункт 10 с тает на месте, раскрытым; курсор или фокус клавиатуры — пауза', () => {
+    expect(html).toContain('.item.is-melting { animation: oq-melt 10s')
+    expect(html).toContain('body.hide-done .item.is-done:not(.is-melting) { display: none; }')
+    expect(html).toContain('.item.is-done:not(.is-melting) .item-body { display: none; }')
+    // Пауза сильнее правил вида: !important.
+    expect(html).toContain('@media (hover: hover) { .item.is-melting:hover { animation: none !important; } }')
+    expect(html).toContain('.item.is-melting:has(:focus-visible) { animation: none !important; }')
+    expect(html).toContain('@media (prefers-reduced-motion: reduce) { body.hide-done .item.is-melting { animation-name: oq-melt-flat; } }')
+    // «Показать выполненные» — без смены вида, та же длина.
+    expect(html).toContain('body:not(.hide-done) .item.is-melting { animation-name: oq-melt-keep; }')
+  })
+
+  it('высота карточки не меняется, пока она тает: «✓ …» и «Изменить ответ» — после таяния, подсказка — в строке «Сохранено»', () => {
+    expect(html).toContain('.item.is-done:not(.is-melting) .summary-answer { display: block; }')
+    expect(html).toContain('.item.is-done:not(.is-melting) .reopen { display: inline; }')
+    expect(html).toContain('.saved { font-size: 12px; color: var(--muted); min-height: 1.6em; min-height: 1lh; }')
+    expect(html).toContain('body.hide-done .item.is-melting .saved:empty::after')
+    // Подсказка — генерируемый текст: бот очереди читает textContent «.saved» и не перескажет её.
+    expect(html).not.toContain('class="melt-hint"')
+  })
+
+  it('таяние начинает только свой ответ, до render(); конец — animationend; тающий пункт не уезжает и не перемонтируется', () => {
+    // persist до render (Claude-линза #337): до записи строка «Сохранено» показывает «Сохраняю…», а не время.
+    expect(html).toContain('markMelt(id); persist(id); render(); return;')
+    expect(html).toContain('markMelt(id); persist(id); render();\n')
+    expect(html).toContain('persist(rid); render(); return;')
+    expect(html).not.toContain('render(); persist(')
+    expect(html).toContain("if (!/^oq-melt/.test(ev.animationName) || !id || !MELT[id]) return;")
+    expect(html).toContain('var doneOf = function (it) { return isDone(it, state[it.id]) && !MELT[it.id]; };')
+    expect(html).toContain("el.classList.toggle('is-melting', !!MELT[it.id]);")
+    expect(html).toContain('if (MELT[id] && inList[id]) return;')
+    expect(html).toContain('list.forEach(function (it) { if (!MELT[it.id] || !itemEl(it.id)) mount(it, true); });')
+    // MELT объявлен до первого placeItems: иначе doneOf упал бы на undefined.
+    expect(html.indexOf('var MELT = {};')).toBeGreaterThan(0)
+    expect(html.indexOf('var MELT = {};')).toBeLessThan(html.indexOf('ITEMS.forEach(function (it) { mount(it, false); });'))
+  })
+
+  it('касание без наведения: тап держит тающую карточку, тап вне — отпускает (линза coord #337)', () => {
+    expect(html).toContain('.item.is-melting.is-held { animation: none !important; }')
+    expect(html).toContain("if (ev.pointerType !== 'touch') return;")
+    expect(html).toContain("if (el) el.classList.add('is-held');")
+  })
+
+  it('якорь прокрутки — скриптом: карточка под курсором (или с фокусом), без них — верхняя видимая; браузерный выключен', () => {
+    expect(html).toContain('html { overflow-anchor: none; }')
+    expect(html).toContain("window.addEventListener('scroll', rememberAnchor, { passive: true });")
+    expect(html).toContain('new ResizeObserver(function () { restoreAnchor(); })')
+    expect(html).toMatch(/scheduleDash\(\);\n {4}restoreAnchor\(\);\n {2}\}/)
+    expect(html).toContain("if (ev.pointerType === 'touch') return;")
   })
 })
