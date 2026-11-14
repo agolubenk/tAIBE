@@ -11,7 +11,12 @@ const MARKER = /\[REDACTED:([a-z0-9_]+)\]/g;
 // Blocks are split on blank lines. In CommonMark a blank line ends every
 // inline construct (link, image, autolink, inline HTML), so a block that
 // comes back byte for byte cannot move its secret into a URL.
-const BLOCK_SEPARATOR = /(\r?\n[ \t]*\r?\n)/;
+// A separator takes a whole run of blank lines, and a blank first line or a
+// line break at the end of the text: a caller that trims the text or writes
+// one blank line in place of two keeps its blocks equal. Spaces and tabs in
+// a block stay part of it: without its indent, an inert code block with a
+// URL becomes a link or an image.
+const BLOCK_SEPARATOR = /(\r?\n(?:[ \t]*\r?\n)+|^[ \t]*\r?\n|\r?\n[ \t]*$)/;
 
 // What can run across blank lines and pull a later block into a URL:
 // - raw HTML: a renderer copies an HTML block as is, and the browser reads
@@ -214,8 +219,8 @@ export function restoreRedacted(
   // Computed once (TB-143 B3): the text above a block at `offset` is the
   // stored text above it if both start there and the texts agree up to it;
   // it holds raw HTML, a fence or `$$` if the first of them starts before
-  // it. No match crosses a block boundary: the separator ends with a line
-  // break, which none of them holds.
+  // it. No match crosses a block boundary: a separator ends with a line
+  // break (which none of them holds) or with the text.
   const unchangedUpTo = commonPrefixLength(incoming, view.text);
   const context = incoming.search(OPENS_CONTEXT);
   const contextAt = context === -1 ? Number.POSITIVE_INFINITY : context;
