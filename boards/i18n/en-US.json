@@ -841,7 +841,11 @@
 				"total": "{{count}} of {{max}} model requests today",
 				"calls_one": "{{count}} request",
 				"calls_other": "{{count}} requests",
-				"empty": "No requests to the model yet today."
+				"empty": "No requests to the model yet today.",
+				"tokens": "Tokens: {{input}} in ({{cached}} cached) · {{output}} out",
+				"coverage_one": "over {{withUsage}} of {{count}} request",
+				"coverage_other": "over {{withUsage}} of {{count}} requests",
+				"noProviderData": "No token data from the provider"
 			},
 			"validation": {
 				"baseUrl": "Enter a full https address, for example https://openrouter.ai/api/v1.",

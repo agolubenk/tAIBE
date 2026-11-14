@@ -3677,6 +3677,12 @@
 				"calls_one": "{{count}} request",
 				"calls_other": "{{count}} requests",
 				"empty": "No requests to the model yet today.",
+				"tokens": "Tokens: {{input}} in ({{cached}} cached) · {{output}} out",
+				"coverage_few": "over {{withUsage}} of {{count}} requests",
+				"coverage_many": "over {{withUsage}} of {{count}} requests",
+				"coverage_one": "over {{withUsage}} of {{count}} request",
+				"coverage_other": "over {{withUsage}} of {{count}} requests",
+				"noProviderData": "No token data from the provider",
 				"title": "Today",
 				"total": "{{count}} of {{max}} model requests today"
 			},

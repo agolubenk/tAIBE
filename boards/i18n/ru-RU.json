@@ -2112,7 +2112,13 @@
 				"calls_few": "{{count}} запроса",
 				"calls_many": "{{count}} запросов",
 				"calls_other": "{{count}} запроса",
-				"empty": "Сегодня запросов к модели ещё не было."
+				"empty": "Сегодня запросов к модели ещё не было.",
+				"tokens": "Токены: {{input}} на входе (из них {{cached}} из кэша) · {{output}} на выходе",
+				"coverage_one": "по {{withUsage}} из {{count}} запроса",
+				"coverage_few": "по {{withUsage}} из {{count}} запросов",
+				"coverage_many": "по {{withUsage}} из {{count}} запросов",
+				"coverage_other": "по {{withUsage}} из {{count}} запроса",
+				"noProviderData": "Нет данных провайдера о токенах"
 			},
 			"validation": {
 				"baseUrl": "Введите полный адрес https, например https://openrouter.ai/api/v1.",
