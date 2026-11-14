@@ -131,6 +131,8 @@ class PollBodyTest(unittest.TestCase):
         self.ctx = FakeCtx(self.d)
         self._run = sources.run
         self.addCleanup(setattr, sources, "run", self._run)
+        gh_poll._PAGES.clear()
+        self.addCleanup(gh_poll._PAGES.clear)
 
     def kinds(self):
         return [e["kind"] for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0]]

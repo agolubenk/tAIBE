@@ -12,9 +12,21 @@ import sources
 from journal import DIGEST, NERVOUS
 
 
-def _gh_list(repo, etag):
-    """Открытые PR с условным запросом. Возвращает (список | None при 304, новый etag)."""
-    cmd = ["gh", "api", "-i", f"repos/{repo}/pulls?state=open&per_page=50"]
+PAGE = 50  # размер прежний: при 100 страница tAIBE весит 1,9 МБ (в каждом PR полный repo), а меняется обычно одна
+MAX_PAGES = 20  # 1000 открытых PR: дальше список считается неполным, а не «остальные закрыты»
+# Последний чистый проход по репозиторию: {страница: (etag, урезанные PR)}. В памяти процесса, как sources._OQ_CACHE:
+# после рестарта — один полный список. Пишется только после прохода без сбоев (SE-92) — как прежний st["etag"].
+_PAGES = {}
+
+
+def _slim(pr):
+    return {"number": pr["number"], "title": pr.get("title") or "", "updated_at": pr["updated_at"],
+            "head": {"sha": pr["head"]["sha"]}, "body": pr.get("body") or ""}
+
+
+def _gh_page(repo, page, etag):
+    """Одна страница открытых PR с условным запросом. Возвращает (список | None при 304, новый etag)."""
+    cmd = ["gh", "api", "-i", f"repos/{repo}/pulls?state=open&per_page={PAGE}&page={page}"]
     if etag:
         cmd[2:2] = ["-H", f"If-None-Match: {etag}"]
     code, out, err = sources.run(cmd)
@@ -22,9 +34,32 @@ def _gh_list(repo, etag):
     if " 304 " in head.split("\n", 1)[0]:
         return None, etag
     if code != 0:
-        raise RuntimeError(f"gh pulls: {(err or head).strip()[:200]}")
+        raise RuntimeError(f"gh pulls page {page}: {(err or head).strip()[:200]}")
     m = re.search(r"(?im)^etag:\s*(.+?)\s*$", head)
     return json.loads(body), (m.group(1) if m else "")
+
+
+def _gh_list(repo, cache):
+    """Все открытые PR страницами по PAGE до неполной (SE-92: раньше читалась только первая, PR после 50-го ложно
+    «закрыт» и без кворума). cache — страницы прошлого чистого прохода. Возвращает (список | None, если ни одна
+    страница не менялась, новые страницы). Между запросами страницы могут сдвинуться: повтор номера разбор пропускает
+    (updated и head уже записаны), пропавший живой PR остаётся в состоянии (цикл закрытых спрашивает его state)."""
+    fresh, changed = {}, False
+    for page in range(1, MAX_PAGES + 1):
+        etag, old = cache.get(page, ("", []))
+        items, etag = _gh_page(repo, page, etag)
+        if items is None:
+            items = old
+        else:
+            items, changed = [_slim(pr) for pr in items], True
+        fresh[page] = (etag, items)
+        if len(items) < PAGE:
+            break
+    else:
+        raise RuntimeError(f"gh pulls {repo}: больше {PAGE * MAX_PAGES} открытых PR, список неполный")
+    if not changed:
+        return None, fresh
+    return [pr for _, items in fresh.values() for pr in items], fresh
 
 
 def _gh_comments(repo, n):
@@ -46,21 +81,22 @@ def _gh_view(repo, n):
 
 
 # rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. rev 3 (SE-50): у PR нет
-# вердиктов тела. При первом проходе нового кода etag сбрасывается: полный список разбирает их заново.
+# вердиктов тела. Первый проход нового кода идёт без кэша страниц (он в памяти процесса): полный список разбирает их
+# заново.
 GH_STATE_REV = 3
 
 
 def poll_github(ctx):
     g = ctx.cfg["github"]
-    st = ctx.state.setdefault("github", {"etag": "", "prs": {}})
-    if st.get("rev") != GH_STATE_REV:
-        st["etag"], st["rev"] = "", GH_STATE_REV
-    prs, etag = _gh_list(g["repo"], st.get("etag", ""))
+    st = ctx.state.setdefault("github", {"prs": {}})
+    st.pop("etag", None)  # до SE-92 — etag единственной страницы в состоянии; теперь страницы в _PAGES
+    st["rev"] = GH_STATE_REV
+    prs, pages = _gh_list(g["repo"], _PAGES.get(g["repo"], {}))
     known = st["prs"]
     fails = []
     if prs is None:
         # 304: список не менялся, но CI мог доехать у PR, ждущего только CI. Сбой — повтор на следующем проходе
-        # сам (await_ci не снят), etag не трогаем.
+        # сам (await_ci не снят), кэш страниц не трогаем.
         for n, p in known.items():
             if p.get("await_ci"):
                 try:
@@ -95,15 +131,20 @@ def poll_github(ctx):
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     for n in [k for k in known if k not in open_now]:
         try:
-            _, _, _, merged = _gh_view(g["repo"], int(n))
+            _, _, state, merged = _gh_view(g["repo"], int(n))
         except Exception as e:  # noqa: BLE001 — PR остаётся в prs, повтор на следующем проходе
             fails.append(f"#{n}: {e}")
+            continue
+        if state == "OPEN":  # страницы сдвинулись между запросами (SE-92): PR жив, он придёт в следующем списке
             continue
         word = "влит" if merged else "закрыт"
         ctx.emit(f"gh:closed:{n}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}", "github")
         del known[n]
-    # etag — только после чистого прохода: иначе 304 спрячет недоразобранные PR до следующего изменения списка.
-    st["etag"] = "" if fails else etag
+    # Кэш страниц — только после чистого прохода: иначе 304 спрячет недоразобранные PR до следующего изменения списка.
+    if fails:
+        _PAGES.pop(g["repo"], None)
+    else:
+        _PAGES[g["repo"]] = pages
     _raise_fails(fails)
 
 

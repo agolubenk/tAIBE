@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -292,20 +293,29 @@ class FakeCtx:
 
 
 class FakeGh:
-    """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
+    """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом, closed —
+    закрытые без мёржа. Список PR — страницами по gh_poll.PAGE из open_prs (или готовые pages), etag у страницы свой:
+    etags[страница], иначе «<etag>#<страница>»."""
     REPO = CFG["github"]["repo"]
 
-    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None):
+    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None, closed=(), pages=None, etags=None):
         self.open_prs, self.merged, self.broken, self.etag = open_prs, set(merged), set(broken), etag
-        self.comments = comments or {}
+        self.comments, self.closed, self.pages, self.etags = comments or {}, set(closed), pages, etags or {}
         self.calls = []
+
+    def page(self, n):
+        if self.pages is not None:
+            return self.pages.get(n, [])
+        return self.open_prs[(n - 1) * gh_poll.PAGE:n * gh_poll.PAGE]
 
     def __call__(self, cmd, stdin=None, timeout=30):
         self.calls.append(list(cmd))
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/pulls"):
-            if "-H" in cmd and self.etag in cmd[cmd.index("-H") + 1]:
+            page = int(re.search(r"[?&]page=(\d+)", cmd[-1]).group(1))
+            tag = self.etags.get(page, f"{self.etag}#{page}")
+            if "-H" in cmd and cmd[cmd.index("-H") + 1] == f"If-None-Match: {tag}":
                 return 1, "HTTP/2.0 304 Not Modified\r\n\r\n", ""
-            return 0, f"HTTP/2.0 200 OK\r\nEtag: {self.etag}\r\n\r\n" + json.dumps(self.open_prs), ""
+            return 0, f"HTTP/2.0 200 OK\r\nEtag: {tag}\r\n\r\n" + json.dumps(self.page(page)), ""
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
             n = int(cmd[-1].split("/")[4])
             return 0, json.dumps([{"id": i, "body": b} for i, b in enumerate(self.comments.get(n, []))]), ""
@@ -315,9 +325,9 @@ class FakeGh:
                 return 1, "", f"GraphQL: Could not resolve to a PullRequest with the number of {n}."
             if n in self.broken:
                 return 1, "", "HTTP 502"
+            state = "MERGED" if n in self.merged else "CLOSED" if n in self.closed else "OPEN"
             d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": "SUCCESS"}],
-                 "state": "MERGED" if n in self.merged else "OPEN", "mergedAt": "2026-11-04T15:55:00Z"
-                 if n in self.merged else None}
+                 "state": state, "mergedAt": "2026-11-04T15:55:00Z" if n in self.merged else None}
             return 0, json.dumps(d), ""
         raise AssertionError(f"неожиданный вызов: {cmd}")
 
@@ -334,6 +344,8 @@ class GithubPollTest(unittest.TestCase):
         self.ctx = FakeCtx(self.d)
         self._run = sources.run
         self.addCleanup(setattr, sources, "run", self._run)
+        gh_poll._PAGES.clear()
+        self.addCleanup(gh_poll._PAGES.clear)
 
     def kinds(self):
         return [(e["kind"], e["text"]) for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0]]
@@ -379,16 +391,20 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual([e["to"] for e in rec], [["backend"]])
 
     def test_stuck_merged_pr_is_reported_once_after_upgrade(self):
-        # Состояние rev 1: #457 влит, но остался в prs; etag живой — без сброса 304 спрятал бы его навсегда.
-        self.ctx.state["github"] = {"etag": 'W/"e1"', "prs": {"457": {"head": "b" * 40, "updated": "x",
-                                                                       "seen": [], "changes_by": []}}}
-        sources.run = FakeGh([], merged={457})
+        # Состояние rev 1: #457 влит, но остался в prs; etag живой — 304 спрятал бы его навсегда. С SE-92 etag из
+        # состояния не читается: первый проход процесса идёт без кэша страниц.
+        self.ctx.state["github"] = {"etag": 'W/"e1"#1', "prs": {"457": {"head": "b" * 40, "updated": "x",
+                                                                         "seen": [], "changes_by": []}}}
+        sources.run = fake = FakeGh([], merged={457})
         gh_poll.poll_github(self.ctx)
         st = self.ctx.state["github"]
         self.assertNotIn("457", st["prs"])
         self.assertIn(("pr.closed", "#457 влит"), self.kinds())
-        self.assertEqual((st["rev"], st["etag"]), (gh_poll.GH_STATE_REV, 'W/"e1"'))
+        self.assertEqual(st["rev"], gh_poll.GH_STATE_REV)
+        self.assertNotIn("etag", st, "etag единственной страницы (до SE-92) из состояния убран")
+        self.assertEqual(gh_poll._PAGES[FakeGh.REPO], {1: ('W/"e1"#1', [])})
         gh_poll.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
+        self.assertEqual(fake.calls[-1][2:4], ["-H", 'If-None-Match: W/"e1"#1'])
         self.assertEqual(self.kinds().count(("pr.closed", "#457 влит")), 1)
 
     def test_stuck_open_pr_without_author_is_resolved_after_upgrade(self):
@@ -412,11 +428,11 @@ class GithubPollTest(unittest.TestCase):
         self.assertIn("author", st["prs"]["2"], "#2 разобран, хотя #1 упал раньше")
         self.assertNotIn("9", st["prs"], "цикл закрытых прошёл")
         self.assertEqual((st["prs"]["1"]["head"], st["prs"]["1"]["updated"]), ("", ""), "#1 не считается увиденным")
-        self.assertEqual(st["etag"], "", "без etag следующий проход берёт полный список, а не 304")
+        self.assertNotIn(FakeGh.REPO, gh_poll._PAGES, "без кэша страниц следующий проход берёт полный список, а не 304")
         sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)])
         gh_poll.poll_github(self.ctx)
         self.assertIn("author", st["prs"]["1"])
-        self.assertEqual(st["etag"], 'W/"e1"')
+        self.assertIn(FakeGh.REPO, gh_poll._PAGES)
         self.assertEqual(self.kinds().count(("pr.new", "#1 открыт: PR 1")), 1, "повтор не дублирует событие")
 
     def test_closed_pr_that_fails_stays_for_retry(self):
