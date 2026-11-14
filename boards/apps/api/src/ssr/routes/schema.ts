@@ -15,14 +15,19 @@ const versionSpec = z.union([
   z.string().regex(/^\d+$/),
 ]);
 
+const commitSha = z.string().regex(/^[0-9a-f]{6,40}$/i);
+
 export const syncBody = z.object({
-  commitSha: z.string().regex(/^[0-9a-f]{6,40}$/i),
+  commitSha,
   files: z
     .array(
       z.object({
         path: z.string().min(1).max(500),
         sha256: z.string().regex(/^[0-9a-f]{64}$/),
         content: z.string().max(600_000).optional(),
+        // TB-98: the commit of the checkout this file was read from, when it
+        // is not the sync's own (a product home's file read by its host).
+        commitSha: commitSha.optional(),
       }),
     )
     .max(400),

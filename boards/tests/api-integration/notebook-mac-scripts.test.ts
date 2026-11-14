@@ -13,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { auth } from "../../apps/api/src/auth";
 import db, { schema } from "../../apps/api/src/database";
@@ -244,6 +245,61 @@ describe("API integration: notebook Mac scripts", () => {
       (error: { stderr: string }) => error,
     );
     expect(broken?.stderr).toContain("SSR sync stopped, nothing sent");
+  });
+
+  it("signs each SSR version with the commit of the checkout its file came from (TB-98)", async () => {
+    const { repo, node, workspace } = await setup();
+    mkdirSync(join(repo, ".claude/rules"), { recursive: true });
+    writeFileSync(join(repo, ".claude/rules/01-base.md"), "# Правила\n");
+    await git(repo, "add", ".claude/rules/01-base.md");
+    await git(repo, "commit", "-q", "-m", "host");
+    const home = join(dir, "tAIBE");
+    mkdirSync(join(home, "eval/nerve"), { recursive: true });
+    mkdirSync(join(home, "boards"), { recursive: true });
+    writeFileSync(join(home, "eval/nerve/README.md"), "# Нерв\n");
+    writeFileSync(join(home, "boards/README.md"), "# Доски\n");
+    await git(home, "init", "-q");
+    await git(home, "add", "-A");
+    await git(home, "commit", "-q", "-m", "home");
+    mkdirSync(join(repo, "t-boards"), { recursive: true });
+    symlinkSync(join(home, "boards"), join(repo, "t-boards/app"));
+    const head = async (cwd: string) =>
+      (await git(cwd, "rev-parse", "HEAD")).stdout.trim();
+    const hostHead = await head(repo);
+    const homeHead = await head(home);
+
+    // The host's branch tracks one that is a commit ahead: the sync warns.
+    await git(repo, "branch", "ahead");
+    await git(repo, "checkout", "-q", "ahead");
+    await git(repo, "commit", "-q", "--allow-empty", "-m", "upstream only");
+    await git(repo, "checkout", "-q", "-");
+    await git(repo, "branch", "-q", "--set-upstream-to=ahead");
+
+    const synced = await node("ssr-sync.mjs");
+    expect(synced.stdout).toContain(
+      `warning: ${repo} is behind its upstream by 1 commit(s)`,
+    );
+    expect(synced.stdout).not.toContain(`warning: ${home}`);
+
+    const versions = await db
+      .select({
+        path: schema.ssrEntityTable.path,
+        commitSha: schema.ssrVersionTable.commitSha,
+      })
+      .from(schema.ssrVersionTable)
+      .innerJoin(
+        schema.ssrEntityTable,
+        eq(schema.ssrVersionTable.entityId, schema.ssrEntityTable.id),
+      )
+      .where(eq(schema.ssrEntityTable.workspaceId, workspace.id));
+    const byPath = Object.fromEntries(
+      versions.map((version) => [version.path, version.commitSha]),
+    );
+    expect(byPath).toEqual({
+      ".claude/rules/01-base.md": hostHead,
+      ".claude/skills/review": hostHead,
+      "supertick-eval/nerve/README.md": homeHead,
+    });
   });
 
   it("adds agents, memory chunks, nested docs and the home's way of working, without mirrors (TB-66)", async () => {

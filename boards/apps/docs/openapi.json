@@ -29255,6 +29255,10 @@
                         "content": {
                           "type": "string",
                           "maxLength": 600000
+                        },
+                        "commitSha": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{6,40}$/i"
                         }
                       },
                       "required": [
