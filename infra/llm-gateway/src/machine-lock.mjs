@@ -4,6 +4,7 @@
 // процесс выходит, ядро снимает flock. Шлюз умер (kill -9) — stdin закрылся сам, итог тот же. Держатель умер во время
 // вызова — `onLost`, вызов обрывается: без замка инференс не продолжается.
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -42,6 +43,21 @@ except OSError:
     pass
 `
 const BUSY = 3
+
+// Кто держит замок — для текста 503 (OPS-33): первая строка файла «pid кто», её пишет держатель (OPS-31): консилиум —
+// «council», прогрев и установка моделей — «warmup <модель>», «setup <модель>», другой шлюз — «gateway <ppid>».
+// Нет файла или отметки — так и сказано; чтение не бросает и идёт только на пути 503.
+export function lockHolder(path) {
+  let line = ''
+  try {
+    line = readFileSync(path, 'utf8').split('\n')[0].trim()
+  } catch {
+    return 'держатель неизвестен (файл замка не прочитать)'
+  }
+  const m = /^(\d+) (.+)$/.exec(line)
+  if (!m) return 'держатель не записал себя'
+  return /^gateway \d+$/.test(m[2]) ? `pid ${m[1]} (другой шлюз моделей)` : `pid ${m[1]} (${m[2].slice(0, 80)})`
+}
 
 // → { held: true, release(), onLost(cb) } | { busy: true } | { failed: '<причина>' }. Никогда не бросает.
 // busy — замок не освободился за waitMs или клиент ушёл; failed — держатель не запустился или упал до замка.

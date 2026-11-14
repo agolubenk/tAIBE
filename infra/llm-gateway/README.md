@@ -42,12 +42,50 @@
 | любой другой id | модель OpenRouter с этим id; за ней запасные из `free` (снятая или упёршаяся в лимит модель не роняет запрос, подмена видна в `x-gateway-model`; пауза выбранной до 10 с — шлюз ждёт её, а не подменяет). Платный id при `GW_OPENROUTER_FREE_ONLY=1` (по умолчанию) в OpenRouter не уходит: вместо него `:free`-вариант, если он есть, иначе пул `free` |
 
 Автокомплит и эмбеддинги Continue идут не через шлюз, а прямо в Ollama: `tiel-coder-fim:latest` и
-`nomic-embed-text:latest` (`GW_CONTINUE_AUTOCOMPLETE`/`GW_CONTINUE_EMBED`). FIM-эндпоинта `/completions` у Z.AI нет —
+`nomic-embed-text:latest` (`GW_CONTINUE_AUTOCOMPLETE`/`GW_CONTINUE_EMBED`) — исключения из замка, см. «Мимо замка». FIM-эндпоинта `/completions` у Z.AI нет —
 облачный GLM в роли autocomplete давал `HTTP 404 … api.z.ai/api/paas/v4/completions`. Шлюз запрос на
 `/v1/completions` в GLM не отправляет и не подменяет локальной чатовой моделью (та вернула бы текст вместо
 дополнения кода и на каждой паузе набора меняла бы модель в памяти Ollama): GLM-модель на этом пути — сразу 503 с причиной. FIM-модель (`fim` в имени или `num_predict` ≤ 256) в чатовые пулы не входит.
-Прямой путь в Ollama обходит очередь шлюза: строгую последовательность для всех клиентов держит только сам Ollama
-с `OLLAMA_MAX_LOADED_MODELS=1` (`infra/scripts/dev-ai/ollama-setup-models.sh`).
+Прямой путь в Ollama обходит очередь шлюза и машинный замок: `OLLAMA_MAX_LOADED_MODELS=1`
+(`infra/scripts/dev-ai/ollama-setup-models.sh`) держит одну модель в памяти, но не один инференс.
+
+## Continue и замок
+
+Правило владельца — локальные модели строго последовательно. Поэтому chat, edit и apply Continue на локальных моделях
+идут только через шлюз (OPS-33). В рабочем профиле `.continue/agents/config.yaml` это `local/glm46v:24k` и
+`local/glm4:latest` с ключом `${{ secrets.LLM_GATEWAY_TOKEN }}`; в профиле `llm-gateway.yaml` через шлюз идут все
+чатовые модели.
+
+1. Запустите шлюз: `npm run llm-gateway:start`. Проверка — `npm run llm-gateway:status`.
+2. Запустите `npm run llm-gateway:sync`. Он пишет токен шлюза в `.continue/.env` (`LLM_GATEWAY_TOKEN`).
+3. Перезагрузите окно редактора.
+
+Что видит пользователь:
+
+| Состояние | Ответ Continue |
+|---|---|
+| Шлюз не запущен | сразу ошибка соединения с `127.0.0.1:8789`, без ожидания |
+| Нет токена в `.continue/.env` | 401: «нужен токен шлюза … npm run llm-gateway:sync …» |
+| Замок занят (консилиум, прогрев) | ожидание до `GW_LOCAL_MAX_WAIT_MS` (180 с; в потоке — SSE-комментарии), затем 503: «занята другим процессом … дольше 180 с: pid N (council)» |
+
+Автозапуска у шлюза нет: `bin/llm-gateway.sh` запускает его через `nohup` до перезагрузки Mac (LaunchAgent — отдельная
+задача, OPS-33).
+
+### Мимо замка
+
+Замок берут консилиум (`ollama.local_inference_slot`), шлюз и скрипты под `infra/scripts/dev-ai/ollama-locked.py`:
+прогрев `ollama-warmup.sh` (замок на каждую модель) и тестовая генерация `ollama-setup-tiel-coder.sh`. Без замка в
+Ollama на Mac ходят только эти клиенты:
+
+| Клиент | Почему без замка |
+|---|---|
+| Автокомплит Continue (`tiel-coder-fim:latest`) | подсказка на каждой паузе набора; ждать вызов консилиума нельзя (`modelTimeout` 15 с) |
+| Эмбеддинги Continue (`nomic-embed-text:latest`, индексация) | малая модель, малые пачки (`maxBatchSize` 8) |
+| Воркер блокнота t-boards (`boards/deploy/vps/mac/notebook-worker.mjs`, `/api/embed`) | эмбеддинги, вызовы по одному в процессе |
+| Backend продукта в docker | OPS-28 |
+| Ручные команды в терминале (`ollama run`, `curl`), Strix профиль A (`infra/scripts/security/.env.strix.example`) | запускает человек, видит очередь сам |
+
+Метаданные (`/api/tags`, `/api/ps`, `/api/show`) — не инференс, замок им не нужен.
 
 ## Как работает ротация
 
@@ -76,9 +114,8 @@
   `GW_PYTHON`, иначе первый существующий из Python.framework, Homebrew, `/usr/local/bin`, `/usr/bin` (путь — в
   строке старта). Ожидание семафора и замка — один дедлайн `GW_LOCAL_MAX_WAIT_MS` (180 с); не дождались — 503 и
   следующая модель. Ждёт шлюз блокирующим flock, консилиум — опросом раз в 0,25 с, поэтому вызов шлюза получает
-  следующий свободный слот. Мимо замка в Ollama идут: роли Continue напрямую (`.continue/agents/config.yaml` —
-  chat, edit, apply, автокомплит, эмбеддинги), прогрев `infra/scripts/dev-ai/ollama-warmup.sh` (OPS-33), backend продукта в
-  docker (OPS-28). Прежнего замка хоста `<хост>/.claude/council/ollama-local.lock` больше нет: старая копия
+  следующий свободный слот. Кто ещё берёт замок и кто ходит мимо — «Continue и замок». В 503 шлюз называет
+  держателя из файла замка («pid N council», «warmup <модель>»). Прежнего замка хоста `<хост>/.claude/council/ollama-local.lock` больше нет: старая копия
   консилиума в HR удалена, консилиум берёт только машинный файл (OPS-30). Модели без `thinking` в возможностях
   Ollama поля рассуждений (`reasoning_effort`, `reasoning`, `include_reasoning`) не передаются: Ollama отвечает на них
   400 «does not support thinking», а расширение OpenRouter for Copilot шлёт `reasoning_effort: max` в каждом запросе.

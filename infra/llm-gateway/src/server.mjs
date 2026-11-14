@@ -55,7 +55,8 @@ function authHint(req) {
   const h = String(req.headers.authorization || req.headers['x-api-key'] || '')
   return /^(Bearer\s+)?sk-or-/i.test(h)
     ? 'gateway: пришёл ключ OpenRouter, а нужен токен шлюза — pbcopy < infra/llm-gateway/.state/token, затем «OpenRouter: Set API Key»'
-    : 'gateway: нужен токен (Authorization: Bearer …)'
+    : 'gateway: нужен токен шлюза (Authorization: Bearer …). Continue: npm run llm-gateway:sync пишет его в .continue/.env'
+      + ' (LLM_GATEWAY_TOKEN), затем перезагрузите окно; файл токена — infra/llm-gateway/.state/token'
 }
 
 // Защита от DNS rebinding: чужой домен, указывающий на 127.0.0.1, приходит со своим Host.

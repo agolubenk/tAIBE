@@ -28,12 +28,22 @@ models:
     requestOptions:
       timeout: 120000
 
+  # Локальные chat, edit и apply идут через шлюз моделей (OPS-33, правило владельца «локальные модели строго
+  # последовательно»): шлюз берёт машинный замок локального инференса, общий с консилиумом. Прямой путь в Ollama
+  # шёл мимо замка — параллельно с консилиумом.
+  # Перед работой: npm run llm-gateway:start, затем npm run llm-gateway:sync — он пишет LLM_GATEWAY_TOKEN в
+  # .continue/.env. Шлюз не запущен — Continue сразу показывает ошибку соединения с 127.0.0.1:8789.
+  # Замок занят — шлюз ждёт до 180 с (GW_LOCAL_MAX_WAIT_MS), затем отвечает 503 и называет, кто держит замок.
+  # Подробно — infra/llm-gateway/README.md, «Continue и замок».
+
   # Основная локальная рабочая модель:
   # чат, edit/apply, Agent mode, UI/скриншоты/документы.
-  - name: GLM-4.6V Flash 9B — Local Vision 24k
-    provider: ollama
-    model: glm46v:24k
-    apiBase: http://localhost:11434
+  # Окно — num_ctx тега :24k (24576): длиннее Ollama обрезала молча, а шлюз такой запрос не берёт.
+  - name: GLM-4.6V Flash 9B — Local Vision 24k (через шлюз)
+    provider: openai
+    model: local/glm46v:24k
+    apiBase: http://127.0.0.1:8789/v1/
+    apiKey: ${{ secrets.LLM_GATEWAY_TOKEN }}
     roles:
       - chat
       - edit
@@ -42,18 +52,19 @@ models:
       - image_input
       - tool_use
     defaultCompletionOptions:
-      contextLength: 80000
+      contextLength: 24576
       maxTokens: 4096
       temperature: 0.2
     requestOptions:
-      timeout: 300000
+      timeout: 480000
 
   # Быстрый локальный текстовый помощник.
   # Оставлен активным как ручной выбор для быстрых коротких задач.
-  - name: GLM 4 — Fast Local
-    provider: ollama
-    model: glm4:latest
-    apiBase: http://localhost:11434
+  - name: GLM 4 — Fast Local (через шлюз)
+    provider: openai
+    model: local/glm4:latest
+    apiBase: http://127.0.0.1:8789/v1/
+    apiKey: ${{ secrets.LLM_GATEWAY_TOKEN }}
     roles:
       - chat
       - edit
@@ -65,9 +76,10 @@ models:
       maxTokens: 2048
       temperature: 0.1
     requestOptions:
-      timeout: 180000
+      timeout: 360000
 
   # Локальная embedding-модель для codebase retrieval.
+  # Напрямую в Ollama, мимо замка — исключение, названное в README шлюза («Мимо замка»).
   - name: Nomic Embed — Local
     provider: ollama
     model: nomic-embed-text:latest
@@ -91,6 +103,8 @@ models:
   # ЦЕНА на 24-ГБ машине: ~16 ГБ под веса. Холодная загрузка 7–10 с (первая подсказка
   # после простоя может опоздать — modelTimeout покрывает), тёплая ~0.8 с. Когда
   # консилиум держит L-модель (17–19 ГБ VRAM) — автокомплит просто ждёт таймаут.
+  # Напрямую в Ollama, мимо замка — исключение, названное в README шлюза («Мимо замка»): подсказка на каждой паузе
+  # набора не может ждать вызов консилиума.
   - name: Tiel-Coder FIM — Local Autocomplete
     provider: ollama
     model: tiel-coder-fim:latest

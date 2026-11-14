@@ -19,8 +19,9 @@ Python-сервис вне npm workspaces: `supervisor.py` (оркестраци
   железо разработчика этого не выдерживает (memory-guard откладывает прогон, а не грузит модель в своп). Между
   процессами — файловый лок `ollama.local_inference_slot` на каждый вызов, один на машину для всех хостов
   (`~/.local/state/taibe/council/ollama-local.lock`; переходного второго у хоста нет с OPS-30). Тот же машинный файл берёт шлюз моделей (`infra/llm-gateway/src/machine-lock.mjs`,
-  OPS-27). Мимо замка в Ollama хоста ходят backend продукта в docker (OPS-28), роли Continue напрямую и прогрев
-  (OPS-33), поэтому вместе с ними два инференса параллельно ещё возможны. Кто держит замок — строка «лок Ollama» в
+  OPS-27), с ним — chat, edit и apply Continue, а прогрев и установка моделей — через `infra/scripts/dev-ai/ollama-locked.py`
+  (OPS-33). Мимо замка — только клиенты из списка «Мимо замка» в `infra/llm-gateway/README.md` (автокомплит и
+  эмбеддинги, backend продукта в docker — OPS-28). Кто держит замок — строка «лок Ollama» в
   `supervisor.py status`: держатель пишет «pid кто» в файл замка (flock на macOS не виден в lsof), состояние `T` —
   процесс остановлен Ctrl+Z или SIGSTOP (OPS-31). Одна L-модель на Mac — машинный лок `large-model.lock` рядом
   (внешний, на блок `large_model`; лок инференса — внутренний, на вызов), лок в `council.db` — под ним (OPS-29); его
