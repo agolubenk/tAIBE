@@ -539,6 +539,26 @@ describe("@kaneo/redact", () => {
       expect(redact(input).hits).toHaveLength(0);
     });
 
+    // Release #392 B1: `==` glued to the value is an assignment of a value
+    // that starts with `=`; the base masked it.
+    it.each([
+      `PASSWORD==${value}`,
+      `DB_PASSWORD==${value}`,
+      `A_TOKEN==${value}`,
+      `api_key===${value}`,
+      `password==${value}`,
+    ])("masks the value after a glued == in %s", (input) => {
+      expect(redact(input).text).not.toContain(value);
+    });
+
+    it.each([
+      `password == ${value}`,
+      `password=="${value}"`,
+      `A_TOKEN== '${value}'`,
+    ])("leaves the comparison %j with a space or a quote readable", (input) => {
+      expect(redact(input).text).toContain(value);
+    });
+
     it.each([
       ["password: pass", `password: ${hidden}`],
       ["password=sword", `password=${hidden}`],
@@ -592,12 +612,24 @@ describe("@kaneo/redact", () => {
       "A_TOKEN==(",
       "A_TOKEN=x(B_TOKEN=>",
       "A_TOKEN=(=>",
+      "password==",
     ])("redacts 256 000 characters of %j in linear time", (unit) => {
       const text = unit.repeat(Math.ceil(256_000 / unit.length));
       const started = performance.now();
       redact(text);
       expect(performance.now() - started).toBeLessThan(250);
     });
+
+    // The lookahead after `=` reads the run of `=` once per name.
+    it.each(["A_TOKEN", "password", "api_key"])(
+      "redacts %s with 256 000 = after it in linear time",
+      (name) => {
+        const text = `${name}${"=".repeat(256_000)} x`;
+        const started = performance.now();
+        redact(text);
+        expect(performance.now() - started).toBeLessThan(250);
+      },
+    );
   });
 
   // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the

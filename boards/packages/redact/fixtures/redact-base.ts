@@ -1,9 +1,6 @@
 // Frozen copy of src/index.ts at 2dd520685 (board-agents before TB-198).
 // The reference of src/superset.test.ts: src/index.ts masks every character
-// that this copy masks. Edit it only for a mask that a PR removes on
-// purpose, and list the removed masks in that PR:
-// - TB-199: the separators `:=`, `=>`, `=` but not `==`, and the position of
-//   the value from flag `d`.
+// that this copy masks. Do not edit; do not import outside tests.
 export type SecretKind =
   | "api_key"
   | "jwt"
@@ -39,14 +36,13 @@ function collectGroup(
   group: number,
   accept: (value: string, next: string) => boolean = () => true,
 ): Detector {
-  const search = new RegExp(pattern, `${pattern.flags.replace("d", "")}d`);
   return (text) => {
     const hits: RedactHit[] = [];
-    search.lastIndex = 0;
-    for (const match of text.matchAll(search)) {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
       const value = match[group];
-      const start = match.indices?.[group]?.[0];
-      if (value === undefined || start === undefined) continue;
+      if (value === undefined) continue;
+      const start = match.index + match[0].indexOf(value);
       if (!accept(value, text.charAt(start + value.length))) continue;
       hits.push({ kind, start, end: start + value.length });
     }
@@ -196,7 +192,7 @@ const telegramToken = collect(
 // stays on the same line; a reference ($VAR, ${VAR}, $(cmd)) is not a secret
 // and stays readable.
 const passwordAssignment = collectGroup(
-  /["']?(?:password|passwd|pwd)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
+  /["']?(?:password|passwd|pwd)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
   "password_assignment",
   1,
 );
@@ -208,7 +204,7 @@ const passwordAssignment = collectGroup(
 // dropped the key (Claude lens #283 B2). A password keeps them (it may hold
 // them), so passwordAssignment above does not stop there.
 const credentialAssignment = collectGroup(
-  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
+  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
   "password_assignment",
   1,
   looksLikeSecret,
@@ -225,13 +221,13 @@ const credentialAssignment = collectGroup(
 // pattern with the passphrase filter (TB-195): a name has one suffix, so a
 // value is never found by both.
 const secretAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,
 );
 const passphraseAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikePassphrase,

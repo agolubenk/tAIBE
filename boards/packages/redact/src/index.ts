@@ -309,11 +309,14 @@ const telegramToken = collect(
 // and stays readable.
 //
 // TB-199: the separator is `=`, `:`, `:=` (Go, Pascal) or `=>` (PHP, Ruby,
-// Perl) in this and the three patterns below. `==` and `===` compare and
-// stay readable. Before, `:=` and `=>` gave `=` or `>` as the value, and
-// the real value was left open.
+// Perl) in this and the three patterns below. Before, `:=` and `=>` gave `=`
+// or `>` as the value, and the real value was left open. `==` and `===`
+// with a space, a quote or the end after them compare and stay readable
+// (`password === true`); glued to a value they are an assignment of a
+// value that starts with `=`, masked as the base masked it
+// (`DB_PASSWORD==<v>`, release #392 B1).
 const passwordAssignment = collectGroup(
-  /["']?(?:password|passwd|pwd)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
+  /["']?(?:password|passwd|pwd)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
   "password_assignment",
   1,
 );
@@ -325,7 +328,7 @@ const passwordAssignment = collectGroup(
 // dropped the key (Claude lens #283 B2). A password keeps them (it may hold
 // them), so passwordAssignment above does not stop there.
 const credentialAssignment = collectGroup(
-  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
+  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
   "password_assignment",
   1,
   looksLikeSecret,
@@ -342,13 +345,13 @@ const credentialAssignment = collectGroup(
 // pattern with the passphrase filter (TB-195): a name has one suffix, so a
 // value is never found by both.
 const secretAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,
 );
 const passphraseAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikePassphrase,
