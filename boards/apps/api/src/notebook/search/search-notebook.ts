@@ -1,4 +1,4 @@
-import { type RedactHit, redact } from "@kaneo/redact";
+import { redact } from "@kaneo/redact";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import db from "../../database";
 import {
@@ -12,6 +12,8 @@ import { notebookEmbedModel } from "../../notebook-model/effective-notebook-mode
 import { fuseRanks, type RankedList } from "./fuse-ranks";
 import { loadVectorIndex, nearestChunks } from "./vector-index";
 
+// A marker of redact; in the checked text it is a space (backend #388 B1).
+const MARKER = /\[REDACTED:[a-z0-9_]+\]/g;
 const CANDIDATES = 20;
 // TB-196: keyword candidates a token caller's search reads and ranks by the
 // text it reads. Hidden chunks are rare (27 of 6612 in the synced docs);
@@ -116,13 +118,18 @@ type Candidate = Awaited<ReturnType<typeof indexableCandidates>>[number];
 async function visibleRanked(rows: Candidate[], query: string) {
   const checked = rows.flatMap(
     (row): { id: string; masked: string | null }[] => {
-      // The same text as the stored tsvector: heading, a space, text.
-      const seen = `${row.heading} ${row.text}`;
-      const { hits } = redact(seen);
-      if (!hits.length) return [{ id: row.id, masked: null }];
-      return row.negationsOnly
-        ? []
-        : [{ id: row.id, masked: spaced(seen, hits) }];
+      // The text as the caller reads it: the route masks each field on its
+      // own. Masked joined, a heading that ends with a label ("Staging
+      // password:") took the first word of the text as its value, and the
+      // secret after the text's own label stayed open (Claude #388 B1).
+      const heading = redact(row.heading);
+      const text = redact(row.text);
+      if (!heading.hits.length && !text.hits.length) {
+        return [{ id: row.id, masked: null }];
+      }
+      if (row.negationsOnly) return [];
+      const seen = `${heading.text} ${text.text}`;
+      return [{ id: row.id, masked: seen.replace(MARKER, " ") }];
     },
   );
   if (!checked.length) return [];
@@ -151,17 +158,6 @@ async function visibleRanked(rows: Candidate[], query: string) {
     LIMIT ${CANDIDATES}
   `);
   return result.rows.map((row) => row.id);
-}
-
-// The text with each hit a space: no marker words.
-function spaced(text: string, hits: RedactHit[]) {
-  let result = "";
-  let cursor = 0;
-  for (const hit of hits) {
-    result += `${text.slice(cursor, hit.start)} `;
-    cursor = hit.end;
-  }
-  return result + text.slice(cursor);
 }
 
 // A token caller's candidates with their text, one row past the cap.

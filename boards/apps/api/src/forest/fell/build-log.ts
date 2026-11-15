@@ -19,6 +19,21 @@ export type LogDraft = {
   searchText: string;
 };
 
+// The fields that searchText glues, in order: the title, the description and
+// the comments of the history. list-logs checks a match in each of them on
+// its own (Claude #388 B1).
+export function searchFields(
+  title: string,
+  description: string | null,
+  contents: (string | null | undefined)[],
+): string[] {
+  return [
+    title,
+    description ?? "",
+    ...contents.map((content) => content ?? ""),
+  ].filter(Boolean);
+}
+
 // The log keeps the root's fields and history as they were (R-028); the
 // branches below it go to seeds. Nothing here can be appended to later.
 export function buildLog(material: TreeMaterial): LogDraft {
@@ -58,12 +73,11 @@ export function buildLog(material: TreeMaterial): LogDraft {
     historyDropped: rootActivities.length - kept.length,
   };
 
-  const searchText = [
+  const searchText = searchFields(
     root.title,
-    root.description ?? "",
-    ...kept.map((activity) => activity.content ?? ""),
-  ]
-    .filter(Boolean)
+    root.description,
+    kept.map((activity) => activity.content),
+  )
     .join("\n")
     .slice(0, SEARCH_TEXT_CHARS);
 
