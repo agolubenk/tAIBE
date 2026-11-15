@@ -473,5 +473,49 @@ for form in ("eval -- echo hi", "eval -- \"$(cat ok.sh)\"", "emulate sh -c -- \"
     bash(f"r24, `--` на ветке или безвредно на main: {form!r}", form, False,
          cwd=e_branch if form.startswith("builtin") else e_main)
 
+# --- SE-105: грубый признак Makefile — рецепты целей команды, их пререквизитов и вложенного make, а не весь файл ---
+mk = TMP / "se105"
+REAL_MAKEFILE = Path(__file__).resolve().parents[2] / "Makefile"
+MERGE = "\tgh pr merge 1\n"
+for name, text in (
+        ("real/Makefile", REAL_MAKEFILE.read_text() if REAL_MAKEFILE.is_file() else ""),
+        ("Makefile", "# Worktrees — .claude/rules/07-worktrees.md; gh pr merge 1 тут не запускается\nNAME ?=\n"
+                     ".PHONY: all wt-fix wt-add rel\nall:\n\techo ok\nwt-fix:\n\t$(MAKE) wt-add NAME=$(NAME)\n"
+                     "wt-add:\n\tgit worktree add \"w/$(NAME)\"\n\t@echo \"дальше: make wt-deps NAME=$(NAME)\"\n"
+                     "wt-deps:\n\techo deps\ncheck: check-layer\ncheck-layer:\n"
+                     "\t@for t in .claude/hooks/test_*.py; do python3 \"$$t\"; done\nrel: pre\n" + MERGE +
+                     "pre:\n\techo\nvia:\n\t$(MAKE) -s rel\ndyn:\n\t$(MAKE) $(T)\nlong:\n\techo a \\\n"
+                     "git push origin main\nlate: | rel\n\techo\nboth::\n\techo\nboth::\n" + MERGE),
+        ("cond/Makefile", "x:\n\techo\nifeq (1,1)\n" + MERGE + "endif\n"),
+        ("inc/Makefile", "include extra.mk\nall:\n\techo\nrel:\n" + MERGE), ("inc/extra.mk", "all: rel\n"),
+        ("remake/Makefile", "-include gen.mk\nall:\n\techo\ngen.mk:\n" + MERGE),
+        ("eval/Makefile", "all:\n\techo\nrel:\n" + MERGE + "$(eval all: rel)\n"),
+        ("tab/Makefile", "\t$(eval all: rel)\nall:\n\techo\nrel:\n" + MERGE),
+        ("sub/Makefile", "SUB = $(MAKE)\nall:\n\t$(SUB) rel\nrel:\n" + MERGE),
+        ("pat/Makefile", "%.done:\n" + MERGE + "all: x.done\n\techo\n"),
+        ("static/Makefile", "all: a.o\na.o: %.o: %.c\n" + MERGE),
+        ("dflt/Makefile", ".DEFAULT:\n" + MERGE + "all: missing\n\techo\n"),
+        ("prefix/Makefile", ".RECIPEPREFIX = >\nall:\n>echo\nrel:\n>gh pr merge 1\n"),
+        ("define/Makefile", "define R\n" + MERGE + "endef\nall:\n\techo\n"),
+        ("goal/Makefile", ".DEFAULT_GOAL := rel\nall:\n\techo\nrel:\n" + MERGE)):
+    (mk / name).parent.mkdir(parents=True, exist_ok=True)
+    (mk / name).write_text(text)
+for form in ("make", "make all", "make wt-fix NAME=x", "make wt-add NAME=x", "make pre", "make -j 4 all",
+             "make -C . all NAME=y", "make -s -f Makefile wt-deps", "make -n all"):
+    bash(f"SE-105, цель без признака: {form!r}", form, False, cwd=mk)
+for form in ("make rel", "make pre rel", "make via", "make dyn", "make check", "make long", "make late", "make both",
+             "make --eval='all: rel' all", "make -E 'all: rel' all", "MAKEFLAGS=--eval=all:rel make all",
+             "MAKEFILES=x.mk make all", "make -f Makefile rel"):
+    bash(f"SE-105, признак в рецепте цели или цели не видны: {form!r}", form, True, cwd=mk)
+for d, form in (("cond", "make x"), ("inc", "make all"), ("remake", "make all"), ("eval", "make all"),
+                ("tab", "make all"), ("sub", "make all"), ("pat", "make all"), ("static", "make all"),
+                ("dflt", "make all"), ("prefix", "make all"), ("define", "make all"), ("goal", "make")):
+    bash(f"SE-105, {d}: правило не разобрать — весь текст: {form!r}", form, True, cwd=mk / d)
+bash("SE-105, .DEFAULT_GOAL не мешает названной цели", "make all", False, cwd=mk / "goal")
+for form in ("make wt-fix NAME=x", "make wt-list", "make wt-help", "make check-eval", "make check-repo"):
+    bash(f"SE-105, Makefile репозитория: {form!r}", form, False, cwd=mk / "real")
+bash("SE-105, Makefile репозитория: check-layer запускает .claude/hooks/test_*.py — признак остаётся", "make check",
+     True, cwd=mk / "real")
+
 if __name__ == "__main__":
     finish(" — формы shell")
