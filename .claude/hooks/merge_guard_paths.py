@@ -151,7 +151,20 @@ SELF_REF = {"HEAD", "@", "+HEAD", "+@", ":", "+:"}  # `:` — matching: все �
 # выбирает и состояние git — refmap, symref, upstream, include, — а способов его задать больше, чем перечислишь (B2–B4).
 # Чистый текст (clean): git — только push и команды для чтения, нет окружения, записи в файл и следов настройки git.
 READ_ONLY = {"push", "status", "log", "diff", "show", "rev-parse", "ls-files"}
-GIT_CALL = re.compile(rf"\bgit\b(?:{INTERP_SEP}([\w-]+))?")  # без подкоманды — `.git/`, `"git"` в переменной, `git -c`
+# Без подкоманды — `.git/`, `"git"` в переменной, `git -c`. Без регистра: `GIT` на APFS — тот же git (K2 backend).
+GIT_CALL = re.compile(rf"\bgit\b(?:{INTERP_SEP}([\w-]+))?", re.I)
+GIT_PART = re.compile(r"\Bgit|git\B", re.I)  # git внутри слова: `"xgit"[1:]`, `s.strip("x")`
+# Имя из частей (K3 backend): разбор видит только целое слово `git`, а склейку, сборку и выборку строки — нет.
+# Код без строк и комментариев: `+`, `%`, срез `[a:b]`, `\`, `$`, dunder, функции сборки и декодеры.
+BUILD = re.compile(
+    r"[+%$\\]|\[[^\]\n]*:|__(?!name__|main__|file__|init__)\w+__"
+    r"|(?:join|format\w*|replace\w*|translate|maketrans|sub|subn|decode|concat|reduce|reversed?|repeat|slice"
+    r"|substr\w*|charAt|chr|bytes|bytearray|fromCharCode|fromCodePoint|eval|exec|compile|getattr|getvalue)\s*\("
+    r"|\b(?:codecs|base64|binascii|importlib|operator|atob|Buffer|Function|StringIO|__import__)\b")
+# Литерал: escape (`\x67`, `\u0067`, `\147`), кавычки shell внутри слова (`g''it`), подстановка shell (`$(…)`)
+LIT_BUILD = re.compile(r"\\(?![ntr])|\w['\"]|['\"]\w|" + SHELL_SUB.pattern)
+PREFIX = re.compile(r"(?<!\w)[rRbBuUfF]{1,2}\Z")  # префикс строки python: `r"…"`, `b"…"`, `f"…"`
+NEXT = re.compile(r"\s*[+.\[%'\"`]|\w")  # после литерала: склейка, метод, индекс, формат, другой литерал, слово
 STATE = re.compile(
     r"\bGIT_[A-Z0-9_]+|\benviron\b|\bputenv\b|\bprocess\.env\b|\benv\s*=|\bHOME\b|gitconfig|\[remote\b|\bref:\s*refs/"
     r"|\bopen\([^,)]*,(?!\s*(?:mode\s*=\s*)?['\"][rbt]*['\"]|\s*(?:encoding|errors|newline)\s*=)"
@@ -170,7 +183,21 @@ def clean(text):
     нет окружения, записи в файл (код и shell в строках) и следов настройки (`[remote`, `ref: refs/`)."""
     if any(m.group(1) not in READ_ONLY for m in GIT_CALL.finditer(text)) or STATE.search(text):
         return False
-    return not any(SHELL_WRITE.search(m.group(0)) for m in STRINGS.finditer(text))
+    lits = list(STRINGS.finditer(text))
+    code = re.sub(r"#[^\n]*", "", STRINGS.sub(" Q ", text))
+    return not (BUILD.search(code) or GIT_PART.search(code) or any(built(text, m) for m in lits))
+
+
+def built(text, m):
+    """Литерал m — часть имени (K3 backend): за ним `+`, `.`, `[`, `%` или другой литерал, вплотную слово (не префикс
+    python), f-строка; внутри — git частью слова, escape, кавычки и подстановка shell, запись из shell."""
+    s = m.group(0)
+    body = s[3:-3] if s[:3] in ('"""', "'''") else s[1:-1]
+    before = text[max(0, m.start() - 3):m.start()]
+    prefix = PREFIX.search(before)
+    return bool(NEXT.match(text, m.end()) or re.search(r"\w\Z", before) and not prefix
+                or prefix and "f" in prefix.group(0).lower()
+                or GIT_PART.search(body) or LIT_BUILD.search(body) or SHELL_WRITE.search(s))
 
 
 def push_words(unit):
@@ -195,14 +222,20 @@ def implicit(unit):
     """У git push в unit нет назначения или назначение — `HEAD`/`@`/`:`: ветку задаёт состояние git (checkout,
     switch, upstream в git config другим оператором), а не текст команды (линза Контроля на b5d5a4168 и 60a54f72a)."""
     words = push_words(unit)
-    return words is not None and (len(words) < 2 or bool(SELF_REF & set(words[1:])))
+    if words is None:
+        return False
+    dsts = [w.lstrip("+").split(":", 1)[-1] for w in words[1:]]  # маска и dst `HEAD`/`@`/пустой — тоже (K1 backend)
+    return len(words) < 2 or bool(SELF_REF & set(words[1:])) or any(not d or "*" in d or d in ("HEAD", "@")
+                                                                     for d in dsts)
 
 
 def explicit(unit):
-    """Каждое назначение git push в unit — явное `src:dst` с непустым dst: его не меняют ни refmap, ни symref, ни
-    upstream. Защищённый dst сюда не доходит — это цель в операторе (push_target)."""
+    """Каждое назначение git push в unit — явное `src:dst`: его не меняют ни refmap, ни symref, ни upstream. dst не
+    пустой, без маски `*` и не `HEAD`/`@` (K1 backend; как hits_main). Защищённый dst — цель в операторе
+    (push_target)."""
     words = push_words(unit)
-    return bool(words) and len(words) >= 2 and all(":" in w and w.split(":", 1)[1] for w in words[1:])
+    dsts = [w.split(":", 1)[1] if ":" in w else "" for w in (words or [])[1:]]
+    return len(dsts) >= 1 and all(d and "*" not in d and d not in ("HEAD", "@") for d in dsts)
 
 
 def mask(s):

@@ -1048,6 +1048,28 @@ B4_STATE = (
     ("push_heredoc_bare.py", 'import subprocess\n# release to main\nscript = """\ngit push\n"""\n'
                              'subprocess.run(script, shell=True)\n'),
 )
+# Линза backend на ac20a38f3 (K1–K3): маска и dst `HEAD` — не явное назначение, и в чистом тексте тоже; `GIT` на APFS —
+# тот же git; имя git из частей — склейка, join, f-строка, escape, срез, кавычки shell. На base каждая — отказ.
+K_CFG = ('"config", "remote.origin.push", "refs/heads/feat:refs/heads/main"])\n'
+         'subprocess.run(["git", "push", "origin", "feat"])\n')
+B4_K = (
+    ("push_glob.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                     'subprocess.run(["git", "push", "origin", "refs/heads/*:refs/heads/*"])\n'),
+    ("push_glob_tidy.py", 'import subprocess\nBASE = "main"\nprint(BASE)\n'
+                          'subprocess.run(["git", "push", "origin", "refs/heads/*:refs/heads/*"])\n'),
+    ("push_dst_head.py", 'import subprocess\nBASE = "main"\nprint(BASE)\n'
+                         'subprocess.run(["git", "push", "origin", "feat:HEAD"])\n'),
+    ("push_git_shell.py", 'import subprocess\n'
+                          'subprocess.run("g\'\'it config remote.origin.push refs/heads/feat:refs/heads/main", shell=True)\n'
+                          'subprocess.run(["git", "push", "origin", "feat"])\n'),
+) + tuple((name, f"import subprocess\n{pre}subprocess.run([{tool}, {K_CFG}") for name, pre, tool in (
+    ("push_git_upper.py", "", '"GIT"'),
+    ("push_git_parts.py", "", '"g" + "it"'),
+    ("push_git_vars.py", 'a = "g"\nb = "it"\n', "a + b"),
+    ("push_git_join.py", "", '"".join(["g", "it"])'),
+    ("push_git_fstr.py", 'a = "g"\n', 'f"{a}it"'),
+    ("push_git_escape.py", "", '"\\x67it"'),
+    ("push_git_slice.py", 's = "tig"\n', "s[::-1]")))
 # Проход: назначение явное `src:dst` — его не меняют ни refmap, ни symref, ни upstream, даже если текст их меняет.
 B4_PASS = (
     ("push_explicit.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
@@ -1057,10 +1079,13 @@ B4_PASS = (
                               'subprocess.run(["git", "config", "user.name", "x"])\n'
                               'subprocess.run("git push -u origin HEAD:refs/heads/feat", shell=True)\n'),
 )
-for name, text in B1_PUSH + B1_PASS + B1_ENV + B2_IMPLICIT + B3_MAP + B4_STATE + B4_PASS + (TMP_COMMENT,):
+for name, text in B1_PUSH + B1_PASS + B1_ENV + B2_IMPLICIT + B3_MAP + B4_STATE + B4_K + B4_PASS + (TMP_COMMENT,):
     (fp / name).write_text(text)
 for name, _ in B4_STATE:
     bash(f"SE-138 B4, состояние git без слов команды — отказ: {name}", f"python3 -I {fp / name}", True, cwd=on_branch)
+for name, _ in B4_K:
+    bash(f"SE-138 K1–K3, маска, dst HEAD, имя git из частей — отказ: {name}", f"python3 -I {fp / name}", True,
+         cwd=on_branch)
 for name, _ in B4_PASS:
     bash(f"SE-138 B4, явное src:dst — проход: {name}", f"python3 -I {fp / name}", False, cwd=on_branch)
 for name, _ in B3_MAP:
