@@ -13,13 +13,15 @@ import tempfile
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "spawn_session.sh"
+sys.path.insert(0, str(SCRIPT.parent))
+from test_lineage import clean_env  # noqa: E402  # без TAIBE_PRODUCT/TAIBE_LINEAGE живой сессии (SE-130)
 
 
 def dry_run(env_extra):
     with tempfile.TemporaryDirectory() as tmp:
         handoff = Path(tmp) / "handoff.md"
         handoff.write_text("продолжай по handoff\n", encoding="utf-8")
-        env = {**os.environ, **env_extra, "TMPDIR": tmp}
+        env = clean_env(**{**env_extra, "TMPDIR": tmp})
         return subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp],
                               capture_output=True, text=True, env=env, timeout=30)
 
@@ -57,8 +59,8 @@ for name, ok in [
 
 # OPS-24: --launch в пустом каталоге сессий открывает роли по порядку и печатает итог; --status — «нет» у каждой роли.
 with tempfile.TemporaryDirectory() as tmp:
-    env = {**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
-           "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"), "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+    env = clean_env(TMPDIR=tmp, CLAUDE_SESSIONS_DIR=os.path.join(tmp, "sess"),
+                    TAIBE_LINEAGE_DIR=os.path.join(tmp, "lin"), NERVE_PLIST=os.path.join(tmp, "none.plist"))
     launch = subprocess.run(["bash", str(SCRIPT), "--launch", "--roles", "plan,coord", "--dry-run", "--cwd", tmp],
                             capture_output=True, text=True, env=env, timeout=60)
     status = subprocess.run(["bash", str(SCRIPT), "--status", "--cwd", tmp], capture_output=True, text=True, env=env,
@@ -88,8 +90,8 @@ with tempfile.TemporaryDirectory() as tmp:
         (tools / f).write_bytes((SCRIPT.parent / f).read_bytes())
     (tools.parent / "pipeline").mkdir()
     (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
-    env = {**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
-           "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"), "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+    env = clean_env(TMPDIR=tmp, CLAUDE_SESSIONS_DIR=os.path.join(tmp, "sess"),
+                    TAIBE_LINEAGE_DIR=os.path.join(tmp, "lin"), NERVE_PLIST=os.path.join(tmp, "none.plist"))
     prompts = str(SCRIPT.parent.parent / "prompts" / "launch-3010" / "roles")
     broken = subprocess.run(["bash", str(tools / "spawn_session.sh"), "--launch", "--role", "coord", "--dry-run",
                              "--prompt-dir", prompts, "--cwd", tmp], capture_output=True, text=True, env=env, timeout=60)
@@ -112,7 +114,7 @@ def launcher_lines(*flags):
         handoff = Path(tmp) / "handoff.md"
         handoff.write_text("x\n", encoding="utf-8")
         run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp, *flags],
-                             capture_output=True, text=True, env={**os.environ, "TMPDIR": tmp}, timeout=30)
+                             capture_output=True, text=True, env=clean_env(TMPDIR=tmp), timeout=30)
         return run.returncode, run.stdout.splitlines()
 
 
@@ -129,7 +131,7 @@ def product_run(env_extra, *flags):
     with tempfile.TemporaryDirectory() as tmp:
         handoff = Path(tmp) / "handoff.md"
         handoff.write_text("x\n", encoding="utf-8")
-        env = {**os.environ, "TMPDIR": tmp, **env_extra}
+        env = clean_env(**{"TMPDIR": tmp, **env_extra})
         run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--role", "boards", "--dry-run",
                               "--cwd", tmp, *flags], capture_output=True, text=True, env=env, timeout=30)
         return run.returncode, run.stdout + run.stderr
@@ -196,8 +198,8 @@ def osa_run(terminal, rc, start, launch=False):
         handoff = Path(tmp) / "h.md"
         handoff.write_text("x\n", encoding="utf-8")
         log = Path(tmp) / "fake.log"
-        env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "TMPDIR": tmp, "TAIBE_LINEAGE": "r.ab12",
-               "FAKE_RC": str(rc), "FAKE_START": "1" if start else "0", "FAKE_LOG": str(log), "SPAWN_START_WAIT": "1"}
+        env = clean_env(PATH=f"{fake_bin}:{os.environ['PATH']}", TMPDIR=tmp, TAIBE_LINEAGE="r.ab12", FAKE_RC=str(rc),
+                        FAKE_START="1" if start else "0", FAKE_LOG=str(log), SPAWN_START_WAIT="1")
         if launch:
             args = ["--launch", "--roles", "plan,coord", "--force", "--prompt-dir",
                     str(SCRIPT.parent.parent / "prompts" / "launch-3010" / "roles")]
@@ -241,6 +243,51 @@ if not (rc == 4 and calls.count("osascript") == 1 and "plan — НЕ откры�
         and "дальше не открывал: окно plan не открылось" in out and "coord —" not in out and "wait" not in calls):
     failed += 1
     print("FAIL: --launch stops after the first window that did not open", rc, calls)
+    print(out)
+
+# Вторая сессия роли (решения владельца 14.11): ключ backend-2 и роль 7, а геном и пусковой файл — базовой роли.
+def second_run(product, *flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = clean_env(TMPDIR=tmp, TAIBE_LINEAGE="r.ab12", CLAUDE_SESSIONS_DIR=os.path.join(tmp, "sess"),
+                        TAIBE_LINEAGE_DIR=os.path.join(tmp, "lin"), NERVE_PLIST=os.path.join(tmp, "none.plist"))
+        flags = [str(handoff) if a == "HANDOFF" else a for a in flags]
+        run = subprocess.run(["bash", str(SCRIPT), *flags, "--product", product, "--dry-run", "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+        return run.returncode, run.stdout + run.stderr
+
+
+for name, product, flags, want in [
+    ("tAIBE backend-2: own key, base genome and launch file", "taibe", ["--launch", "--role", "backend-2"],
+     ["ключ реестра backend-2, роль 7. Пусковой файл: ", "/prompts/taibe/roles/4-backend.md",
+      "/genome/taibe/backend.json", "вторая сессия роли backend (роль 4)", "тап Нерва", "source пунктов очереди", "«(роль 7)»",
+      "backend-2 — команда напечатана"]),
+    ("HR frontend-2: base genome and launch file of frontend", "hr-helper", ["--launch", "--role", "frontend-2"],
+     ["ключ реестра frontend-2, роль 8.", "/prompts/launch-3010/roles/3-frontend.md", "/genome/frontend.json",
+      "вторая сессия роли frontend (роль 3)"]),
+    ("successor of backend-2 keeps the key and the alias note", "hr-helper",
+     ["--handoff", "HANDOFF", "--role", "backend-2", "--no-retire"],
+     ["ключ реестра backend-2, роль 7, наследник", "/genome/backend.json", "вторая сессия роли backend"]),
+    ("base role has no alias note", "taibe", ["--launch", "--role", "backend"],
+     ["ключ реестра backend, роль 4. Пусковой файл: ", "/prompts/taibe/roles/4-backend.md"]),
+]:
+    rc, out = second_run(product, *flags)
+    missing = [w for w in want if w not in out]
+    if rc != 0 or missing or (flags[-1] == "backend" and "вторая сессия" in out):
+        failed += 1
+        print("FAIL:", name, rc, missing)
+        print(out)
+for bad in ("backend-3", "boards-2"):
+    rc, out = second_run("taibe", "--launch", "--role", bad)
+    if rc == 0 or f"неизвестная роль: {bad}" not in out:
+        failed += 1
+        print("FAIL: unknown second session refused:", bad)
+        print(out)
+rc, out = second_run("taibe", "--launch", "--roles", "all")
+if rc != 0 or "backend-2" in out or "boards — команда напечатана" not in out:
+    failed += 1
+    print("FAIL: --roles all opens the six base roles only")
     print(out)
 
 print("spawn_session: %d failed" % failed)
