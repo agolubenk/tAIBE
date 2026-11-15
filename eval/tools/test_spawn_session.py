@@ -214,11 +214,11 @@ def sha12(data):
     return hashlib.sha256(data).hexdigest()[:12]
 
 
-def launch_run(*flags):
+def launch_run(*flags, lineage="r.ab12"):
     with tempfile.TemporaryDirectory() as tmp:
         handoff = Path(tmp) / "handoff.md"
         handoff.write_text("x\n", encoding="utf-8")
-        env = {**os.environ, "TMPDIR": tmp, "TAIBE_PRODUCT": "", "TAIBE_LINEAGE": "r.ab12",
+        env = {**os.environ, "TMPDIR": tmp, "TAIBE_PRODUCT": "", "TAIBE_LINEAGE": lineage,
                "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"), "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"),
                "NERVE_PLIST": os.path.join(tmp, "none.plist")}
         flags = [str(handoff) if a == "HANDOFF" else a for a in flags]
@@ -229,14 +229,18 @@ def launch_run(*flags):
     return run.returncode, msg, genome.group(1) if genome else None, run.stdout + run.stderr
 
 
-for name, flags, wake, has_genome in [
-    ("launch: wake human by default", ["--launch", "--role", "backend", "--product", "taibe"], "human", True),
-    ("launch --wake timer", ["--launch", "--role", "backend", "--product", "taibe", "--wake", "timer"], "timer", True),
+# Корень «r» — не сессия: у поколения 1 (r.xxxx) parent «-».
+for name, flags, wake, has_genome, lineage, parent in [
+    ("launch: wake human by default", ["--launch", "--role", "backend", "--product", "taibe"], "human", True,
+     "r.ab12", "r.ab12"),
+    ("launch --wake timer", ["--launch", "--role", "backend", "--product", "taibe", "--wake", "timer"], "timer", True,
+     "r.ab12", "r.ab12"),
     ("handoff with a role: wake peer by default", ["--handoff", "HANDOFF", "--role", "boards", "--no-retire"], "peer",
-     True),
-    ("handoff without a role: no genome", ["--handoff", "HANDOFF", "--no-retire"], "peer", False),
+     True, "r.ab12", "r.ab12"),
+    ("handoff without a role: no genome", ["--handoff", "HANDOFF", "--no-retire"], "peer", False, "r.ab12", "r.ab12"),
+    ("generation 1: no parent session", ["--launch", "--role", "backend", "--product", "taibe"], "human", True, "r", "-"),
 ]:
-    rc, msg, genome, out = launch_run(*flags)
+    rc, msg, genome, out = launch_run(*flags, lineage=lineage)
     m = LAUNCH_RE.search(msg)
     problems = []
     if rc != 0 or not m:
@@ -244,13 +248,11 @@ for name, flags, wake, has_genome in [
     else:
         if "в очереди." + m.group(0) not in msg:
             problems.append("launch line is not right after the lineage tag")
-        if m.group(1) != "r.ab12":
-            problems.append("parent " + m.group(1))
+        if m.group(1) != parent:
+            problems.append("parent %s, want %s" % (m.group(1), parent))
         want_genome = sha12(Path(genome).read_bytes()) if (has_genome and genome) else "-"
         if m.group(2) != want_genome:
             problems.append("genome %s, want %s" % (m.group(2), want_genome))
-        if m.group(3) != sha12(msg.replace(m.group(0), "", 1).encode("utf-8")):
-            problems.append("prompt hash is not the hash of the message without the launch line")
         if m.group(4) != wake:
             problems.append("wake " + m.group(4))
         if len(m.group(0)) > 120:
@@ -259,11 +261,46 @@ for name, flags, wake, has_genome in [
         failed += 1
         print("FAIL:", name, problems)
         print(out)
-rc, msg, _, out = launch_run("--launch", "--role", "backend", "--product", "taibe", "--wake", "cron")
-if rc == 0 or "--wake: human, peer или timer" not in out:
-    failed += 1
-    print("FAIL: unknown --wake is refused")
-    print(out)
+for bad in (["--wake", "cron"], ["--wake"]):
+    rc, msg, _, out = launch_run("--launch", "--role", "backend", "--product", "taibe", *bad)
+    if rc == 0 or "--wake: human, peer или timer" not in out:
+        failed += 1
+        print("FAIL: --wake refused:", bad)
+        print(out)
+
+# prompt — версия входа, а не сессии (линзы release и plan #381): sha12(пусковой файл + "\n" + шаблон сообщения, где
+# линия «-», поколение 0, пути — <file> и <tools>). Одна роль и файл — один prompt; правка файла — другой.
+with tempfile.TemporaryDirectory() as pdir:
+    launch_file = Path(pdir) / "4-backend.md"
+
+    def prompt_of(lineage, role="backend"):
+        rc, msg, _, out = launch_run("--launch", "--role", role, "--product", "taibe", "--prompt-dir", pdir,
+                                     lineage=lineage)
+        m = LAUNCH_RE.search(msg)
+        return (m.group(3) if rc == 0 and m else None), msg, m, out
+
+    launch_file.write_text("пусковой файл v1\n", encoding="utf-8")
+    p1, msg1, m1, out1 = prompt_of("r.ab12")
+    p2, _, _, _ = prompt_of("r.cd34")
+    p_alias, _, _, _ = prompt_of("r.ab12", role="backend-2")
+    launch_file.write_text("пусковой файл v2\n", encoding="utf-8")
+    p3, _, _, _ = prompt_of("r.ab12")
+    want = None
+    if m1:
+        line = re.search(r"Линия: (r\.ab12\.[a-z0-9]{4}) \(поколение 2\)", msg1).group(0)
+        tmpl = (msg1.replace(m1.group(0), "", 1).replace(line, "Линия: - (поколение 0)", 1)
+                .replace(str(launch_file), "<file>").replace(str(SCRIPT.parent), "<tools>"))
+        want = sha12("пусковой файл v1\n".encode("utf-8") + b"\n" + tmpl.encode("utf-8"))
+    for name, ok in [
+        ("prompt: two sessions of one role and file share it", p1 is not None and p1 == p2),
+        ("prompt: an edit of the launch file changes it", p1 is not None and p3 is not None and p1 != p3),
+        ("prompt: the alias note of backend-2 changes it", p_alias is not None and p_alias != p1),
+        ("prompt = sha12(file + \\n + template)", want is not None and p1 == want),
+    ]:
+        if not ok:
+            failed += 1
+            print("FAIL:", name, p1, p2, p3, p_alias, want)
+            print(out1)
 
 print("spawn_session: %d failed" % failed)
 sys.exit(1 if failed else 0)
