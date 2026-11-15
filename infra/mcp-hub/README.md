@@ -313,9 +313,9 @@ Code. context7 работает без авторизации (анонимны�
 | Клиент | Где | Запись |
 |---|---|---|
 | Copilot Chat | `~/Library/Application Support/Code/User/mcp.json` | `"hr-helper-hub": {"type": "http", "url": "http://127.0.0.1:3050/mcp?app=vscode&tags=oauth,connector,boards"}` |
-| Continue | `.continue/config.yaml`, `.continue/agents/glm-only.yaml`, `.continue/mcpServers/new-mcp-server.yaml` | `type: streamable-http`, `url: …/mcp?app=continue&tags=…` |
+| Continue | `.continue/config.yaml`, `.continue/agents/glm-only.yaml` | `type: streamable-http`, `url: …/mcp?app=continue&tags=…`. Вторую запись хаба (`.continue/mcpServers/*.yaml`) не заводите: Continue подключит хаб дважды, и схемы инструментов уйдут к модели два раза |
 | Roo Code | `…/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json` | `{"type": "streamable-http", "url": "…/mcp?app=roo&tags=oauth,connector,boards"}` |
-| Kimi Code | `~/.kimi-code/mcp.json` | `{"url": "…/mcp?app=kimi"}` |
+| Kimi Code | `~/.kimi-code/mcp.json` | `{"url": "…/mcp?app=kimi&tags=oauth,connector,boards"}` |
 | Codex | `codex mcp add hr-helper-hub --url "…/mcp?app=codex&tags=oauth,connector,boards"` (`~/.codex/config.toml`) | — |
 | Claude Code | `claude mcp add -s user -t http serena http://127.0.0.1:9121/mcp`; OAuth-серверы и t-boards — `claude mcp add -s local -t http hub "http://127.0.0.1:3050/mcp?app=claude-code&tags=oauth,connector,boards"` | serena; notion, sentry, cloudflare, context7, t-boards и подключённые коннекторы (по желанию, см. ниже). Отдельной записи `t-boards` (`/api/mcp`, OAuth) у Claude Code нет: один маршрут — через хаб. Запись `hub` добавлена раньше, без `boards`, — t-boards в ней молча нет: `claude mcp remove hub -s local` и добавить заново командой слева |
 
@@ -325,10 +325,11 @@ owner-queue, dams-rag), `context` (headroom), `docs` (markitdown, context7), `gi
 (postgres-readonly), `infra` (docker), `remote` (github, sentry, cloudflare, t-boards), `oauth` (sentry, cloudflare,
 context7), `connector` (коннекторы, по умолчанию выключены), `boards` (t-boards), `memory` (mcp-search).
 
-Codex, Copilot Chat и Roo берут срез как у Claude Code — `tags=oauth,connector,boards`: sentry, cloudflare, context7,
-t-boards и включённые коннекторы. Очереди владельца, github с токеном и записи в память в нём нет, а описаний
+Codex, Copilot Chat, Roo и Kimi Code берут срез как у Claude Code — `tags=oauth,connector,boards`: sentry, cloudflare,
+context7, t-boards и включённые коннекторы. Очереди владельца, github с токеном и записи в память в нём нет, а описаний
 инструментов в каждой сессии меньше (без среза — 277 инструментов, около 855 КБ). Решение владельца 15.11
-(`taibe-d-ops21-1511` = a, OPS-21). Клиент без `tags=` получает весь хаб.
+(`taibe-d-ops21-1511` = a, OPS-21) для Codex, Copilot Chat и Roo; Kimi Code — по той же причине, решение координатора
+15.11. Клиент без `tags=` получает весь хаб.
 
 Срез — не граница доверия (OPS-21): auth у хаба выключен, вход по токену не включаем (`d-taibe-tb77-hubkey-1311`). Копию сервера под продукт (`git-taibe` и т. п.) заводите
 только по факту вызовов — замер `python3 -I infra/mcp-hub/usage_by_server.py --days 7` (транскрипты Claude Code по
