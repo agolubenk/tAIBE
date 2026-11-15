@@ -309,6 +309,7 @@ class DrainTest(Base):
         self.drain(FakePost((403, None)), after=300)
         self.assertEqual(self.kinds(), [("guard.denied", NERVOUS, ["coord", "release"])])
         self.assertIn("401", self.ctx.events[0][4])
+        self.assertIn("чтение идёт", self.ctx.events[0][4])   # курсор не стоит: read_results не ждёт досок
         self.drain(FakePost(), after=600)
         self.assertEqual(self.st["outbox"], [])
         self.assertNotIn("denied", self.st)

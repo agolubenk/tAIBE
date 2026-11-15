@@ -225,7 +225,8 @@ def _denied(ctx, st, code):
     st["denied"] = {"since": _iso(ctx.now), "code": code}
     what = "неизвестное пространство" if code == 404 else "ключ записи прогонов отклонён"
     ctx.emit(f"guard:denied:{st['denied']['since']}", "guard.denied", NERVOUS, DENIED[code],
-             f"сторожа: доски ответили {code} — {what}; {len(st['outbox'])} прогонов ждут в ящике, курсор стоит",
+             f"сторожа: доски ответили {code} — {what}; {len(st['outbox'])} прогонов ждут в ящике (до {OUTBOX_MAX}), "
+             f"чтение идёт — новые прогоны тоже ложатся в ящик",
              "guard")
 
 
