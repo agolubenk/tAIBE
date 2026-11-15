@@ -356,6 +356,44 @@ for form in ("MAKEFLAGS='-j4 -s' make -C sub x", "MAKEFLAGS+=-k make -C sub x"):
     bash(f"SE-133 линза 2, без признака: {form!r}", form, False, cwd=o)
 why = run("Bash", {"command": "MAKEFLAGS=\"-s 'a -Iinc'\" make x"}, cwd=o) or ""
 check(f"SE-133 линза 2: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# --- SE-135: старые пробелы make (линза Claude #396). Сверено с make 3.81: `-l` берёт остаток связки (`-lf ok.mk` —
+# ./Makefile), `-f -` и `-f /dev/stdin` читают stdin, MAKEFILES (окружение и строка) — от папки после `-C`,
+# `SHELL=` в строке — shell рецептов. `--eval` — make 4.x (assumed, по документации).
+o = TMP / "se135"
+for name, text in (("Makefile", "x:\n\techo\n"), ("ok.mk", "x:\n\techo\n"), ("sub/Makefile", "x:\n\techo\n"),
+                   ("sub/mk", "x:\n\tgh pr merge 1\n"), ("s.sh", "gh pr merge 1\n"), ("inc/lib.mk", "y:\n\techo\n"),
+                   ("sub/inc/lib.mk", "x:\n\tgh pr merge 1\n"), ("l/Makefile", "x:\n\tgh pr merge 1\n"),
+                   ("l/ok.mk", "x:\n\techo\n"), ("l/ok/Makefile", "x:\n\techo\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+(o / "in.mk").symlink_to("/dev/stdin")
+os.mkfifo(o / "p.mk")
+for form in ("make -lf ok.mk x", "make -klC ok x", "make -l2f ok.mk x"):  # 1: связка с `-l`
+    bash(f"SE-135 связка, отказ: {form!r}", form, True, cwd=o / "l")
+for form in ("make -l -f ok.mk x", "make -l 2 -f ok.mk x", "make -j4 -f ok.mk x", "make -sl -f ok.mk x", "make -C ok x"):
+    bash(f"SE-135 связка, без признака: {form!r}", form, False, cwd=o / "l")
+for form in ("make -f - x", "make --file=- x", "make --fil=- x", "make -f /dev/stdin x", "make -f /dev/fd/0 x",
+             "cat ok.mk | make -f - x", "make -f in.mk x", "make -f p.mk x", "make -C sub -f ../in.mk x",
+             "make --eval 'include /dev/stdin' x", "make -E '-include /dev/fd/0' x",  # 2: Makefile из stdin
+             "make X=sub/mk --eval 'include $(X)' x", "make --eval '$(eval include sub/mk)' x",  # 3: `$` в --eval
+             "make --eval='x:;bash s.sh' x", "make -E 'x: ; bash s.sh' x", "make --eval 'x:\n\tbash s.sh' x",
+             "make --eval '.RECIPEPREFIX=>' x", "make --eval 'A != bash s.sh' x",  # 4: рецепт и запуск в --eval
+             "make --eval 'SHELL=./s.sh' x", "make --eval 'x: SHELL=./s.sh' x", "make --eval 'MAKEFILES=sub/mk' x",
+             "make --eval 'override .SHELLFLAGS=-c ./s.sh' x", "make --eval 'export BASH_ENV=./s.sh' x",
+             "make --eval 'define SHELL\n./s.sh\nendef' x",
+             "make SHELL=./s.sh x", "make SHELL:=./s.sh x", "make .SHELLFLAGS=-ec x",  # SHELL=/MAKEFILES= в строке
+             "make -C sub MAKEFILES=inc/lib.mk x", "MAKEFILES=inc/lib.mk make -C sub x",
+             "env MAKEFILES=inc/lib.mk make -C sub x", "export MAKEFILES=inc/lib.mk; make -C sub x"):
+    bash(f"SE-135, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -f ok.mk x", "make -f sub/Makefile x", "make -n -f /dev/null x", "make --eval 'include ok.mk' x",
+             "make --eval 'V=1' x", "make --eval 'x: y' x", "make V=1 x", "make CC=clang -C sub x",
+             "MAKEFLAGS=-s make -C sub x"):
+    bash(f"SE-135, без признака: {form!r}", form, False, cwd=o)
+for form, part in (("make -f - x", "Makefile из stdin"), ("make --eval 'include $(X)' x", "строка `--eval`"),
+                   ("make SHELL=./s.sh x", "переменная make в командной строке"),
+                   ("MAKEFILES=inc/lib.mk make -C sub x", "MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS")):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"SE-135: причина {form!r}: {why[:90]!r}", why if part in why else None, True)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
