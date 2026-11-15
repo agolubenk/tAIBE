@@ -317,15 +317,23 @@ for form in ("make x", "make --dir=ok x", "make --fil=ok.mk x", "make -C j -f ok
     bash(f"SE-128, без признака: {form!r}", form, False, cwd=o)
 why = run("Bash", {"command": "make --o -f ok.mk x"}, cwd=o) or ""
 check(f"SE-128: причина — опция make, а не папка: {why[:90]!r}", why if "длинная опция make" in why else None, True)
-# SE-133: MAKEFLAGS/GNUMAKEFLAGS — опции make из окружения (`-I` сверено с make 3.81); первое слово без `-` — связка
+# SE-133: MAKEFLAGS/GNUMAKEFLAGS — опции make из окружения (`-I`, `MAKEFILES=` сверены с make 3.81); первое слово без
+# `-` — связка. Папку make разбор не знает (`-C` команды, `cd`), поэтому опция чтения или MAKEFILES=/SHELL= — отказ.
 for form in ("MAKEFLAGS='-I inc' make x", "MAKEFLAGS=-Iinc make x", "MAKEFLAGS=Iinc make x", "MAKEFLAGS=sIinc make x",
              "GNUMAKEFLAGS=--include-dir=inc make x", "env MAKEFLAGS=--incl=inc make x", "export MAKEFLAGS=-Iinc; make x",
              "MAKEFLAGS='--eval=x:;gh\\ pr\\ merge\\ 1' make x", "MAKEFLAGS='-sE x:;gh\\ pr\\ merge\\ 1' make x",
-             "MAKEFLAGS=-Cj make x", "MAKEFLAGS=--frob make x"):  # -C из окружения make не слушает — с запасом
-    bash(f"SE-133, видно: {form!r}", form, True, cwd=o)
-for form in ("MAKEFLAGS=-s make x", "MAKEFLAGS='-j4 --no-print-directory' make x", "MAKEFLAGS=-Iok make x",
-             "GNUMAKEFLAGS=-k make x", "MAKEFLAGS= make x", "MAKEFLAGS='-- V=1' make x"):
+             "MAKEFLAGS=-Cj make x", "MAKEFLAGS=--frob make x",  # -C из окружения make не слушает — с запасом
+             "MAKEFLAGS=-Iok make x", "MAKEFLAGS=-Iinc make -C sub x", "export MAKEFLAGS=-Iinc; cd sub; make x",
+             "MAKEFLAGS='MAKEFILES=ok.mk' make x", "MAKEFLAGS='-- MAKEFILES=ok.mk' make x",
+             "GNUMAKEFLAGS=MAKEFILES=ok.mk make x", "MAKEFLAGS='-s SHELL=./ok.sh' make x",
+             "MAKEFLAGS='-- SHELL=./ok.sh' make x", "MAKEFLAGS='-- .SHELLFLAGS=-ec' make x",
+             "make MAKEFLAGS=-Iinc x"):
+    bash(f"SE-133, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS=-s make x", "MAKEFLAGS='-j4 --no-print-directory' make x", "GNUMAKEFLAGS=-k make x",
+             "MAKEFLAGS= make x", "MAKEFLAGS='-- V=1' make x", "MAKEFLAGS='-s -- CFLAGS=-O2' make x"):
     bash(f"SE-133, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS='-- MAKEFILES=ok.mk' make x"}, cwd=o) or ""
+check(f"SE-133: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
