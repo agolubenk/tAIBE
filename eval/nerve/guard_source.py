@@ -15,8 +15,9 @@ If-None-Match: пока прогоны не менялись, GitHub отвеч�
 Прочитанный результат ложится в ящик (`outbox`) — часть state.json, его пишет тот же проход, что двигает курсор.
 Поэтому курсор и ETag двигаются сразу: прогон, который доски ещё не приняли, ждёт в ящике, а не в повторном чтении
 (иначе после 429 или 401 тот же запрос с If-None-Match получил бы 304, и неотправленное ждало бы следующего push).
-Прогон покидает ящик только по 2xx или по коду, который повтор не исправит (400, 413, 422). Правило v0.8 «пока
-ящик не пуст, чтение без If-None-Match» здесь не нужно: ответ 304 не прячет неотправленное, оно уже в ящике.
+Прогон покидает ящик только по 2xx или по коду, который повтор не исправит (4xx, кроме 401, 403, 404, 408 и 429).
+Правило v0.8 «пока ящик не пуст, чтение без If-None-Match» здесь не нужно: ответ 304 не прячет неотправленное, оно
+уже в ящике. Сбой чтения (gh) не останавливает ящик: проход отправляет его и потом пробрасывает исключение.
 """
 import json
 import re
@@ -35,9 +36,7 @@ OUTBOX_MAX = 200                     # тел в ящике (~0,5 КБ кажд�
 DRAIN_MAX = 50                       # POST за проход (60 с): лимит ключа — 100 запросов в минуту (auth.ts:742-746)
 GREEN, RED = {"success"}, {"failure", "timed_out", "startup_failure"}
 # cancelled, skipped, neutral, action_required, stale — не результат проверки: такой прогон не шлётся.
-DROP = {400, 413, 422}               # тело не исправит повтор: прогон отбрасывается, событие координатору
 DENIED = {401: ["coord", "release"], 403: ["coord", "release"], 404: ["coord"]}   # эпизод отказа, ящик ждёт
-ANSWERED = DROP | set(DENIED) | {429}  # доски ответили: 429 — повтор позже; прочее не 2xx — сбой (5xx, сеть, неожиданный)
 FAILS_MAX = 2                        # сбой дольше FAILS_MAX чтений подряд — событие координатору, одно на эпизод
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 _HEAD_BODY = re.compile(r"\r?\n\r?\n")
@@ -45,6 +44,25 @@ _HEAD_BODY = re.compile(r"\r?\n\r?\n")
 
 def _iso(dt):
     return dt.astimezone(timezone.utc).strftime(ISO)
+
+
+def verdict(code):
+    """Ответ досок → ok (2xx), denied (401, 403, 404 — эпизод отказа), later (429), drop (прочий 4xx: 400, 413, 422 из
+    спеки, 409 и неперечисленные — повтор не исправит, а голова держала бы ящик; M3 v0.8), fail (5xx, 408, сеть — 0,
+    неожиданный код)."""
+    if 200 <= code < 300:
+        return "ok"
+    if code in DENIED:
+        return "denied"
+    if code == 429:
+        return "later"
+    return "drop" if 400 <= code < 500 and code != 408 else "fail"
+
+
+def _matched(data):
+    """`matched` из тела 2xx: целое из словаря, иначе 0 — битое тело не роняет проход."""
+    m = data.get("matched") if isinstance(data, dict) else None
+    return m if isinstance(m, int) and not isinstance(m, bool) else 0
 
 
 def _day(ctx):
@@ -140,12 +158,13 @@ def _queue(st, run, repo, branch):
 def read_results(ctx, repo, branch):
     """Страница прогонов ветки → ящик: (число новых результатов, число прогонов вне страницы).
 
-    Сбой gh — исключение, состояние не меняется: следующий проход прочитает то же."""
+    Время попытки (`at`) пишется до вызова gh: сбой gh — исключение, остальное состояние не меняется, и следующая
+    попытка — через GUARD_EVERY, а не каждый проход."""
     st = _state(ctx)
     since = st.get("since") or _iso(ctx.now - FIRST_LOOKBACK)
     etag = st.get("etag", "") if st.get("etag_since") == since else ""
-    got = _gh_runs(repo, branch, since, etag)
     st["at"] = _iso(ctx.now)
+    got = _gh_runs(repo, branch, since, etag)
     if got is None:
         return 0, 0
     new_etag, total, runs = got
@@ -172,9 +191,12 @@ def recheck(ctx, repo, branch):
             continue
         red["etag"], d = got
         run = _parse(d)
-        if run["attempt"] > red.get("queued", red["attempt"]) and _queue(st, run, repo, branch):
-            red["queued"] = run["attempt"]     # attempt — принятая досками попытка, queued — уже в ящике
-            queued += 1
+        if run["attempt"] <= red.get("queued", red["attempt"]) or run["status"] != "completed":
+            continue
+        # attempt — принятая досками попытка, queued — завершённая попытка, уже взятая. Ставится и тогда, когда
+        # _queue её не положил (повтор «id:попытка» после чтения страницы): иначе после чистки seen — второе тело.
+        red["queued"] = run["attempt"]
+        queued += _queue(st, run, repo, branch)
     return queued
 
 
@@ -251,8 +273,8 @@ def _answered(ctx, st):
 
 def drain(ctx, post):
     """Шлёт ящик по порядку пары, не больше DRAIN_MAX за проход. post(body) → (код HTTP, 0 — нет ответа; JSON или
-    None). Отказ, 429, 5xx, сеть и неожиданный код — повтор через GUARD_EVERY; ящик ждёт, исключения нет.
-    Возвращает число принятых досками прогонов."""
+    None). Отказ, 429, 5xx, сеть и неожиданный код — повтор через GUARD_EVERY; ящик ждёт, исключения нет:
+    исключение клиента считается ответом 0. Возвращает число принятых досками прогонов."""
     st = _state(ctx)
     if st.get("retry_at", "") > _iso(ctx.now):
         return 0
@@ -260,13 +282,17 @@ def drain(ctx, post):
     done = 0
     while st["outbox"] and done < DRAIN_MAX:
         entry = st["outbox"][0]
-        code, data = post(entry["body"])
-        if not 200 <= code < 300 and code not in ANSWERED:
+        try:
+            code, data = post(entry["body"])
+        except Exception:  # noqa: BLE001 — любой сбой клиента досок — «нет ответа», иначе retry_at не встанет
+            code, data = 0, None
+        answer = verdict(code)
+        if answer == "fail":
             _failed(ctx, st, code)
             st["retry_at"] = _iso(ctx.now + timedelta(seconds=GUARD_EVERY))
             return done
         _answered(ctx, st)
-        if 200 <= code < 300:
+        if answer == "ok":
             st["outbox"].pop(0)
             done += 1
             if st.get("denied"):
@@ -274,14 +300,14 @@ def drain(ctx, post):
                 ctx.emit(f"guard:denied:ok:{was['since']}", "guard.denied", DIGEST, DENIED[was["code"]],
                          f"сторожа: доски снова принимают прогоны (отказ {was['code']} с {was['since'][11:16]})",
                          "guard")
-            _accepted(ctx, st, entry, int((data or {}).get("matched") or 0))
-        elif code in DROP:
+            _accepted(ctx, st, entry, _matched(data))
+        elif answer == "drop":
             st["outbox"].pop(0)
             ctx.emit(f"guard:drop:{code}:{_day(ctx)}", "guard.drop", NERVOUS, ["coord"],
                      f"сторожа: доски ответили {code} на прогон {entry['body']['runUrl']} — прогон отброшен, повтор "
                      f"не исправит тело: {json.dumps(data, ensure_ascii=False)[:200]}", "guard")
         else:
-            if code in DENIED:
+            if answer == "denied":
                 _denied(ctx, st, code)
             st["retry_at"] = _iso(ctx.now + timedelta(seconds=GUARD_EVERY))
             return done
@@ -300,17 +326,21 @@ def _trim(ctx, st):
 
 def poll(ctx, repo, branch, post):
     """Проход читателя: раз в GUARD_EVERY — страница прогонов ветки и перечитывание красных; каждый проход —
-    дайджест прошлых суток и ящик."""
+    дайджест прошлых суток и ящик. Сбой чтения (gh) не останавливает ящик (S45-4b): предел, дайджест и отправка идут
+    в finally, потом исключение уходит в цикл Нерва."""
     st = _state(ctx)
     at = st.get("at")
-    if not at or (ctx.now - datetime.strptime(at, ISO).replace(tzinfo=timezone.utc)).total_seconds() >= GUARD_EVERY:
-        since = st.get("since") or _iso(ctx.now - FIRST_LOOKBACK)
-        _, skipped = read_results(ctx, repo, branch)
-        if skipped:
-            ctx.emit(f"guard:skipped:{since}", "guard.skipped", DIGEST, ["coord"],
-                     f"сторожа: {skipped} прогонов {branch} с {since} не вошли в страницу {GUARD_PER_PAGE} — "
-                     f"не отправлены (долгий простой Mac?)", "guard")
-        recheck(ctx, repo, branch)
+    try:
+        if not at or (ctx.now - datetime.strptime(at, ISO).replace(tzinfo=timezone.utc)).total_seconds() >= GUARD_EVERY:
+            since = st.get("since") or _iso(ctx.now - FIRST_LOOKBACK)
+            _, skipped = read_results(ctx, repo, branch)
+            if skipped:
+                ctx.emit(f"guard:skipped:{since}", "guard.skipped", DIGEST, ["coord"],
+                         f"сторожа: {skipped} прогонов {branch} с {since} не вошли в страницу {GUARD_PER_PAGE} — "
+                         f"не отправлены (долгий простой Mac?)", "guard")
+            recheck(ctx, repo, branch)
+    finally:
         _trim(ctx, st)
-    flush_quiet(ctx)
-    return drain(ctx, post)
+        flush_quiet(ctx)
+        sent = drain(ctx, post)
+    return sent

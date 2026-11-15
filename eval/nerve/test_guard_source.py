@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Читатель прогонов сторожей (TB-45, S45-4b, спека v0.8): курсор, 304, ящик, порядок пары, коды ответа досок,
 перечитывание красных, дайджест и события."""
+import contextlib
 import json
 import os
 import sys
@@ -196,12 +197,12 @@ class ReadResultsTest(Base):
         self.assertEqual(self.outbox(), [("7", "red"), ("7/attempts/2", "green")])
         self.assertEqual(self.st["outbox"][1]["body"]["attempt"], 2)
 
-    def test_gh_failure_raises_and_keeps_state(self):
+    def test_gh_failure_raises_and_keeps_state_but_the_attempt_time(self):
         self.read(FakeGh([_run(1, "2026-11-15T00:05:00Z")]))
-        before = json.dumps(self.st, sort_keys=True)
+        before = dict(self.st, at=guard_source._iso(T0 + timedelta(seconds=300)))
         with self.assertRaises(RuntimeError):
             self.read(FakeGh([], fail=True), after=300)
-        self.assertEqual(json.dumps(self.st, sort_keys=True), before)
+        self.assertEqual(json.dumps(self.st, sort_keys=True), json.dumps(before, sort_keys=True))
 
     def test_stuck_pending_run_does_not_hold_the_cursor(self):
         self.read(FakeGh([_run(2, "2026-11-15T00:20:00Z"), _run(1, "2026-11-14T17:00:00Z", status="queued")]))
@@ -300,6 +301,32 @@ class DrainTest(Base):
         self.assertEqual(self.outbox(), [])
         self.assertEqual(self.kinds(), [("guard.drop", NERVOUS, ["coord"])])
 
+    def test_409_and_unlisted_4xx_are_dropped_not_held(self):
+        """M3 v0.8: 4xx, который повтор не исправит, не держит голову ящика (линза Claude #373, координатор)."""
+        post = FakePost((409, {"error": "conflict"}), (405, None), (200, {"matched": 1}))
+        self.assertEqual(self.drain(post), 1)
+        self.assertEqual(self.st["outbox"], [])
+        self.assertEqual([e[0] for e in self.ctx.events], ["guard:drop:409:2026-11-15", "guard:drop:405:2026-11-15"])
+        self.assertNotIn("retry_at", self.st)
+        self.assertEqual([guard_source.verdict(c) for c in (204, 401, 403, 404, 408, 429, 400, 409, 451, 500, 0, 302)],
+                         ["ok", "denied", "denied", "denied", "fail", "later", "drop", "drop", "drop", "fail", "fail",
+                          "fail"])
+
+    def test_client_exception_is_no_answer(self):
+        def boom(body):
+            raise OSError("connection reset")
+        self.assertEqual(self.drain(boom), 0)
+        self.assertEqual((len(self.st["outbox"]), self.st["fail"]["n"]), (3, 1))
+        self.assertIn("retry_at", self.st)
+        post = FakePost()
+        self.drain(post, after=GUARD_EVERY_MINUS_1)
+        self.assertEqual(post.bodies, [])
+
+    def test_broken_2xx_body_counts_as_unmatched(self):
+        self.assertEqual(self.drain(FakePost((200, ["x"]), (201, {"matched": "1"}), (200, {"matched": True}))), 3)
+        self.assertEqual((self.st["outbox"], self.st["hit"], self.st["reds"]), ([], {}, {}))
+        self.assertEqual(len(self.st["quiet"]["paths"]), 2)
+
     def test_denied_key_keeps_the_outbox_with_one_event_per_episode(self):
         post = FakePost((401, None))
         self.assertEqual(self.drain(post), 0)
@@ -322,7 +349,7 @@ class DrainTest(Base):
         self.assertEqual(len(self.st["outbox"]), 3)
 
     def test_transient_failure_retries_later_without_raising(self):
-        for answer in ((429, None), (502, None), (0, None), (409, None)):
+        for answer in ((429, None), (502, None), (0, None), (408, None)):
             self.st.pop("retry_at", None)
             self.st.pop("fail", None)
             post = FakePost(answer)
@@ -341,9 +368,9 @@ class DrainTest(Base):
         self.assertEqual((self.st["fail"]["n"], self.ctx.events), (1, []))
         self.drain(FakePost((502, None)), after=3 * every)
         self.assertEqual(self.ctx.events, [])
-        self.drain(FakePost((409, None)), after=4 * every)
+        self.drain(FakePost((408, None)), after=4 * every)
         self.assertEqual(self.kinds(), [("guard.fail", NERVOUS, ["coord"])])
-        self.assertIn("3 чтения подряд с 00:40 (последний ответ: 409); 2 прогонов", self.ctx.events[0][4])
+        self.assertIn("3 чтения подряд с 00:40 (последний ответ: 408); 2 прогонов", self.ctx.events[0][4])
         self.drain(FakePost((0, None)), after=5 * every)                            # тот же эпизод
         self.assertEqual(len(self.ctx.events), 1)
         self.drain(FakePost(), after=6 * every)
@@ -368,6 +395,7 @@ class DrainTest(Base):
 
 
 GUARD_EVERY_MINUS_1 = guard_source.GUARD_EVERY - 1
+_no_raise = contextlib.nullcontext
 
 
 class RecheckTest(Base):
@@ -397,6 +425,21 @@ class RecheckTest(Base):
         self.assertEqual(guard_source.recheck(self.ctx, REPO, BRANCH), 1)
         self.drain(FakePost())
         self.assertEqual(self.st["reds"][EVAL]["attempt"], 2)
+
+    def test_rerun_already_read_from_the_page_is_not_queued_again(self):
+        """Линза Claude #373 (G): попытка пришла страницей, перечитывание её не кладёт, но запоминает — иначе после
+        чистки seen то же «id:попытка» ушло бы второй раз."""
+        self.red_accepted()
+        sources.run = FakeGh([_run(7, "2026-11-15T00:05:00Z", attempt=2)],
+                             single={7: (_run(7, "2026-11-15T00:05:00Z", attempt=2), 'W/"r2"')})
+        self.at(300)
+        guard_source.read_results(self.ctx, REPO, BRANCH)
+        self.assertEqual(guard_source.recheck(self.ctx, REPO, BRANCH), 0)
+        self.assertEqual(self.st["reds"][EVAL]["queued"], 2)
+        self.st["seen"].clear()
+        self.st["reds"][EVAL].pop("etag")                            # новый ответ, а не 304
+        self.assertEqual(guard_source.recheck(self.ctx, REPO, BRANCH), 0)
+        self.assertEqual(self.outbox(), [("7/attempts/2", "green")])
 
     def test_old_red_is_not_reread(self):
         self.red_accepted()
@@ -442,6 +485,31 @@ class PollTest(Base):
         post = FakePost()
         self.assertEqual(self.poll(fake, post), 2)
         self.assertEqual([b["runUrl"].split("/runs/")[1] for b in post.bodies], ["7/attempts/2", "11"])
+
+    def test_gh_failure_still_drains_and_reads_once_per_guard_every(self):
+        """Линза Claude #373 (B1, симуляция F): час простоя GitHub — ящик уходит каждый проход, gh — раз в 5 минут."""
+        self.queue(_run(1, "2026-11-15T00:05:00Z"))
+        fake, post = FakeGh(fail=True), FakePost()
+        for minute in range(60):
+            if minute == 30:
+                self.queue(_run(2, "2026-11-15T00:20:00Z"))          # то, что прочитано раньше, тоже уходит
+            with self.assertRaises(RuntimeError) if minute % 5 == 0 else _no_raise():
+                self.poll(fake, post, after=60 * minute)
+        self.assertEqual(len(fake.calls), 12)
+        self.assertEqual([b["runUrl"][-1] for b in post.bodies], ["1", "2"])
+        self.assertEqual(self.st["outbox"], [])
+
+    def test_gh_failure_in_recheck_still_trims_and_drains(self):
+        self.queue(*[_run(100 + i, "2026-11-15T00:20:00Z") for i in range(guard_source.OUTBOX_MAX + 1)])
+        self.st["reds"][EVAL] = {"id": 7, "attempt": 1, "created": "2026-11-15T00:05:00Z",
+                                 "ranAt": "2026-11-15T00:05:59Z"}
+        fake = FakeGh([], single={})                              # страница пуста, GET runs/7 — KeyError, как сбой gh
+        post = FakePost()
+        with self.assertRaises(KeyError):
+            self.poll(fake, post)
+        self.assertEqual(len(post.bodies), guard_source.DRAIN_MAX)
+        self.assertEqual(len(self.st["outbox"]), guard_source.OUTBOX_MAX - guard_source.DRAIN_MAX)
+        self.assertIn("guard.overflow", [e[1] for e in self.ctx.events])
 
 
 if __name__ == "__main__":
