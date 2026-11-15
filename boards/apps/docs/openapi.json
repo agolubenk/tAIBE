@@ -2283,7 +2283,7 @@
           },
           "totalCount": {
             "type": "number",
-            "description": "Total matches found before the `limit` slice, so a caller can tell that more exist."
+            "description": "Total matches found before the `limit` slice, so a caller can tell that more exist. For a caller with an API key it counts only the matches in the newest candidates that it scans (see the endpoint description)."
           },
           "searchQuery": {
             "type": "string",
@@ -13819,6 +13819,7 @@
           "Tasks"
         ],
         "summary": "Search descriptions omitted from task lists",
+        "description": "Follow `nextCursor` as `after` until it is null. A caller with an API key reads descriptions with secrets masked, so a match counts only outside a secret and a query with `[REDACTED:` finds nothing; its pages are windows of omitted descriptions, so a page can have no `ids` and still have a `nextCursor`.",
         "parameters": [
           {
             "schema": {
@@ -19620,7 +19621,7 @@
           "Search"
         ],
         "summary": "Global search",
-        "description": "Search across tasks, projects, workspaces, comments, and activities in one workspace. Results are ranked by relevance and returned as a single flat list, each entry tagged with its `type`.",
+        "description": "Search across tasks, projects, workspaces, comments, and activities in one workspace. Results are ranked by relevance and returned as a single flat list, each entry tagged with its `type`.\n\nA caller with an API key reads text with secrets masked, so a match counts only in that text: a query found only inside a secret returns nothing, and a query with a `[REDACTED:` marker returns an empty list. Such a caller gets the matches among the 200 newest candidates of each type, at most 1 MiB of their text, so a page shorter than `limit` does not mean that no other matches exist; narrow the query to find older ones.",
         "parameters": [
           {
             "schema": {
