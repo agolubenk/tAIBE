@@ -165,6 +165,24 @@ describe("redact masks a superset of the base", () => {
     },
   );
 
+  // TB-201 (Claude lens #392, 3): text is masked again on its way to a
+  // model (maskChunkEdges, then scrub in build-prompt). A second pass found
+  // the rest of a separator before a mask (`password:=[REDACTED…]`, `=` of
+  // `:=`; `C_PASSWORD => [REDACTED…]`, `>` of `=>`): 65 375 of 600 000
+  // cases changed, no value opened.
+  it(`changes nothing on a second pass over ${CASES} seeded chains`, () => {
+    const next = generator(SEED);
+    const unstable: string[] = [];
+    let masked = 0;
+    for (let index = 0; index < CASES; index += 1) {
+      const once = redact(next().text);
+      if (once.hits.length) masked += 1;
+      if (redact(once.text).text !== once.text) unstable.push(once.text);
+    }
+    expect(unstable.slice(0, 5)).toEqual([]);
+    expect(masked).toBeGreaterThan(CASES / 4);
+  });
+
   // TB-199 drops these masks of 221e381b4 on purpose; none covers a value.
   // [start, text] of each run that the base masks and the head does not.
   const value = VALUES[0] as string;
