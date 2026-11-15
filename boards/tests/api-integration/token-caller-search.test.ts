@@ -153,4 +153,61 @@ describe("API integration: search for callers with a token (TB-191)", () => {
     expect(hidden).toEqual(await walk("no such text"));
     expect(hidden.map((page) => page.ids)).toEqual([[], []]);
   });
+
+  it("matches an activity for an API key in the text it reads, not in the stored JSON", async () => {
+    const { forest, longVisible, search } = await setup();
+    // In the JSON text the quotes around the value are escaped, so redact
+    // sees no assignment there; the rendered text masks it.
+    const value = join("Zq8", "Wn4", "Tk7", "Rb2", "Mf5", "Lp1");
+    const [renamed] = await db
+      .insert(schema.activityTable)
+      .values({
+        taskId: longVisible.id,
+        type: "title_changed",
+        userId: forest.ownerId,
+        content: null,
+        eventData: {
+          oldTitle: `Set GITHUB_TOKEN="${value}"`,
+          newTitle: "Renamed plain",
+        },
+      })
+      .returning();
+    if (!renamed) throw new Error("fixture");
+    const ids = (body: unknown) =>
+      (body as Search).results.map((result) => result.id);
+
+    const prefix = await search(forest.agentApi, value.slice(0, 9));
+    expect(prefix.status).toBe(200);
+    expect(ids(prefix.body)).not.toContain(renamed.id);
+    const owner = await search(forest.ownerApi, value.slice(0, 9));
+    expect(ids(owner.body)).toContain(renamed.id);
+
+    const visible = await search(forest.agentApi, "renamed plain");
+    expect(ids(visible.body)).toContain(renamed.id);
+    expect(JSON.stringify(visible.body)).not.toContain(value);
+  });
+
+  it("does not let one activity over the byte budget hide older ones from an API key", async () => {
+    const { forest, longVisible, search } = await setup();
+    const insert = (content: string, createdAt: Date) =>
+      db
+        .insert(schema.activityTable)
+        .values({
+          taskId: longVisible.id,
+          type: "comment",
+          userId: forest.ownerId,
+          content,
+          createdAt,
+        })
+        .returning();
+    const [older] = await insert("zqv small", new Date(Date.now() - 60_000));
+    const [huge] = await insert(`zqv ${"y ".repeat(600 * 1024)}`, new Date());
+    if (!older || !huge) throw new Error("fixture");
+
+    const res = await search(forest.agentApi, "zqv");
+    expect(res.status).toBe(200);
+    const ids = (res.body as Search).results.map((result) => result.id);
+    expect(ids).toContain(older.id);
+    expect(ids).not.toContain(huge.id);
+  });
 });

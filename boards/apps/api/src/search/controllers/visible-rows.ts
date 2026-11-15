@@ -70,17 +70,20 @@ export function searchWindow(
     order: (score: SQL, createdAt: AnyColumn) =>
       tokenCaller ? [desc(createdAt)] : [desc(score), desc(createdAt)],
     /**
-     * `fits`: the candidate and all newer ones hold no more than the scan
-     * budget in `sizes`. `text`: a field, null for a candidate that does not
-     * fit. For the owner both leave the query as it was.
+     * `fits`: the candidate, with all newer candidates that fit, holds no
+     * more than the scan budget in `sizes`. A candidate bigger than the
+     * budget alone does not fit and is not counted, so older ones still can.
+     * `text`: a field, null for a candidate that does not fit. For the owner
+     * both leave the query as it was.
      */
     budget: (createdAt: AnyColumn, sizes: SQLWrapper[]) => {
-      const size = sql.join(
+      const size = sql`(${sql.join(
         sizes.map((field) => sql`coalesce(octet_length(${field}), 0)`),
         sql` + `,
-      );
+      )})`;
+      const max = TOKEN_CALLER_SCAN_BYTES;
       const fits = tokenCaller
-        ? sql<boolean>`sum(${size}) over (order by ${createdAt} desc rows unbounded preceding) <= ${TOKEN_CALLER_SCAN_BYTES}`
+        ? sql<boolean>`(${size} <= ${max} and sum(case when ${size} <= ${max} then ${size} else 0 end) over (order by ${createdAt} desc rows unbounded preceding) <= ${max})`
         : sql<boolean>`true`;
       const text = <T>(field: SQLWrapper) =>
         tokenCaller

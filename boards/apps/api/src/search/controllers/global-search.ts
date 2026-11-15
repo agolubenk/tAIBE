@@ -375,8 +375,12 @@ async function globalSearch(params: SearchParams): Promise<{
       END
     `;
 
+    // The event is shown only when the activity has no text of its own
+    // (getActivitySearchContent), so it is read, and counted, only then.
+    const shownEventData = sql`CASE WHEN COALESCE(${activityTable.content}, '') = '' THEN ${activityTable.eventData} END`;
     const activitiesFit = budget(activityTable.createdAt, [
-      searchableActivityText,
+      activityTable.content,
+      sql`CAST(${shownEventData} AS text)`,
       taskTable.title,
     ]);
     const activityQuery = db
@@ -384,7 +388,7 @@ async function globalSearch(params: SearchParams): Promise<{
         id: activityTable.id,
         type: activityTable.type,
         content: activitiesFit.text<string>(activityTable.content),
-        eventData: activitiesFit.text<unknown>(activityTable.eventData),
+        eventData: activitiesFit.text<unknown>(shownEventData),
         taskId: activityTable.taskId,
         taskTitle: taskTable.title,
         taskNumber: taskTable.number,
@@ -396,7 +400,6 @@ async function globalSearch(params: SearchParams): Promise<{
         userId: activityTable.userId,
         userName: userTable.name,
         createdAt: activityTable.createdAt,
-        searchText: activitiesFit.text<string>(searchableActivityText),
         relevanceScore: activityRelevanceScore.as("relevanceScore"),
         fits: activitiesFit.fits,
       })
@@ -421,8 +424,10 @@ async function globalSearch(params: SearchParams): Promise<{
 
     const activities = await activityQuery;
 
+    // A caller with a token reads the rendered text, not the stored JSON: in
+    // the JSON a quoted secret is escaped and redact does not see it (TB-191).
     for (const activity of pick(activities, (a) => [
-      [a.searchText, 2],
+      [getActivitySearchContent(a.type, a.content, a.eventData), 2],
       [a.taskTitle, 1],
     ])) {
       const isComment = activity.type === "comment";
