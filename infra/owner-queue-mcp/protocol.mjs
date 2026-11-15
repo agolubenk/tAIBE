@@ -28,7 +28,7 @@ export const protocolText = (note = '') => 'Очередь владельца (o
   + 'chips[[текст, deploy|ssh|wait|""]], links[{href https, text}], added YYYY-MM-DD, source <имя сессии>, archived, pr (номер PR), deploy deploy|skip|none, sha + base (мёрж, вердикт «Контроля»: полный 40-символьный SHA головы PR и ветка-база, для которой он дан; без обоих «Влить» неактивна, голова или база PR другие — сервер откажет), repo owner/name (мёрж: PR не из репозитория консоли — «Влить» откажет, вливать в терминале), mergeMethod merge|squash, subject (мёрж: заголовок коммита одной строкой, до 300)}. '
   + 'checks/<id> — ответ владельца {done, choice, note, at}: читать, НЕ менять (сервер ответит 403); свой статус — oq_agent_status. '
   + 'work/<id> — задача агента {title, track tails|providers|council|secfront|ops|<id из work/track-<id>>, status, who agent|owner, session, planStart, planEnd, start, end, milestone, note, link, linkText, order, '
-  + 'cards[{key ключ карточки t-boards (OPS-34), ws slug пространства (aiboards-eval), t, k bug|task, s, st, c}]}; work/track-<id> — направление {kind:"track", name, color, order}; '
+  + 'cards[{key ключ карточки t-boards (OPS-34), ws slug пространства (aiboards-eval), t, k bug|task, s, st, c}]}; work/track-<id> — направление {kind:"track", name, color (только var(--c1)…var(--c6), иначе 422), order}; '
   + 'work/cards-stats — сводка сверки с досками {kind:"stats"}. '
   + 'В oq_list у work поле cards заменено на cardsCount — полный документ через oq_get; свои поля в чужой строке — только oq_patch. '
   + 'planEnd не переписывать: сдвиг — новый planEnd и basePlanEnd = прежняя дата, причина в note (иначе 409). Перед правкой существующего документа — oq_get и if_version. '
