@@ -71,9 +71,9 @@ const createTemplateRoute = createRoute({
   description:
     "Store a form template version in a workspace. A version does not change: send the next version for a change.",
   middleware: [
+    limit(TEMPLATE_BODY_MAX),
     workspaceAccess.fromParam("workspaceId"),
     requireWorkspacePermission({ task: ["create"] }),
-    limit(TEMPLATE_BODY_MAX),
   ] as const,
   request: {
     params: workspaceIdParam,
@@ -141,11 +141,13 @@ const saveAnswersRoute = createRoute({
   summary: "Save form answers",
   description:
     "Save a draft (submit false) or submit the answers (submit true). rowVersion is the version the client read. Only a person in the web app answers: a token caller gets 403.",
+  // The limit goes first: fromTaskForm reads the JSON body (a lookup source
+  // also accepts the id from the body), which locks the stream for bodyLimit.
   middleware: [
+    limit(ANSWERS_BODY_MAX),
     workspaceAccess.fromTaskForm("id"),
     requireWorkspacePermission({ task: ["update"] }),
     personOnly,
-    limit(ANSWERS_BODY_MAX),
   ] as const,
   request: {
     params: taskFormIdParam,
