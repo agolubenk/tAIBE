@@ -130,8 +130,85 @@ def _lock_and_mismatch(check, gr, tmp: Path) -> None:
           and gr.resume_mismatch({"_meta": {"pr": "7"}}, "7", "abc") and not gr.resume_mismatch(prior, "7", "abc"))
 
 
+# Держатель замка в отдельном процессе: настоящий opencode не вызывается (OPS-61), runner-заглушка держит замок
+# HOLD с и пишет имя процесса в журнал под замком — журнал и есть порядок захватов.
+_CHAIN = """
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import opencode_client as oc
+lock, log, go, name, mg = Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5], Path(sys.argv[6])
+oc.MEMGUARD_STATE, oc.LOCK_POLL = mg, 0.02
+class Held:
+    returncode, pid = 0, 0
+    def communicate(self, timeout=None):
+        time.sleep(0.15)
+        return '{"verdict": "accept"}', ""
+def runner(argv, **kw):
+    with open(log, "a") as f:
+        f.write(name + "\\n")
+    return Held()
+client = oc.OpencodeClient(binary=sys.executable, timeout=30, lock_path=lock, runner=runner, killer=lambda _p: None)
+while not os.path.exists(go):
+    time.sleep(0.005)
+for _ in range(4):
+    assert client.chat("pr-" + name, "r", "m", [{"role": "user", "content": "p"}]).ok
+"""
+
+
+def _fair_queue(check, tmp: Path) -> None:
+    import os
+    import time
+    import opencode_client as oc
+    here, lock, log, go = Path(__file__).resolve().parent, tmp / "fair.lock", tmp / "fair.log", tmp / "fair.go"
+    script, mg = tmp / "chain.py", tmp / "memguard.json"
+    script.write_text(_CHAIN)
+    mg.write_text(json.dumps({"level": "ok"}))
+    procs = [subprocess.Popen([sys.executable, "-I", str(script), str(here), str(lock), str(log), str(go), name,
+                               str(mg)]) for name in "AB"]
+    time.sleep(0.3)
+    go.touch()
+    codes = [p.wait(timeout=60) for p in procs]
+    order = log.read_text().split() if log.exists() else []
+    repeats = sum(a == b for a, b in zip(order, order[1:]))
+    check("opencode: две цепочки в отдельных процессах чередуются 1:1 по вызовам, без паузы в раннере (OPS-61)",
+          codes == [0, 0] and sorted(order) == list("AAAABBBB") and repeats == 0, f"{codes} {''.join(order)}")
+    check("opencode: после захватов очередь ждущих пуста", not any(lock.with_suffix(".waiters").iterdir()))
+
+    queue = tmp / "dead.waiters"
+    queue.mkdir()
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    dead = queue / f"{1:020d}-{gone.pid}"
+    dead.touch()
+    client = oc.OpencodeClient(binary=sys.executable, timeout=5, lock_path=tmp / "dead.lock",
+                               runner=_runner(_Proc(0, "{}"), []), killer=lambda _p: None)
+    began = time.monotonic()
+    res = client.chat("pr-1", "r", "m", [{"role": "user", "content": "p"}])
+    check("opencode: метка мёртвого процесса не держит замок и убирается",
+          res.ok and time.monotonic() - began < oc.LOCK_POLL and not dead.exists(), res.error)
+
+    queue = tmp / "stale.waiters"
+    queue.mkdir()
+    alive = queue / f"{1:020d}-{os.getpid()}"
+    alive.touch()
+    ticks, poll = iter([0, 0, oc.YIELD_MAX + 1]), oc.LOCK_POLL
+    oc.LOCK_POLL = 0.001
+    try:
+        seen: list = []
+        client = oc.OpencodeClient(binary=sys.executable, timeout=oc.YIELD_MAX * 3, lock_path=tmp / "stale.lock",
+                                   clock=lambda: next(ticks), runner=_runner(_Proc(0, "{}"), seen),
+                                   killer=lambda _p: None)
+        res = client.chat("pr-1", "r", "m", [{"role": "user", "content": "p"}])
+    finally:
+        oc.LOCK_POLL = poll
+    check("opencode: живая чужая метка (переиспользованный pid) задерживает не дольше YIELD_MAX",
+          res.ok and len(seen) == 1 and alive.exists(), res.error)
+
+
 def run(tmp: Path, check) -> None:
     import glm_pr_review as gr
     _opencode(check, gr, tmp)
     _resume(check, gr)
     _lock_and_mismatch(check, gr, tmp)
+    _fair_queue(check, tmp)
