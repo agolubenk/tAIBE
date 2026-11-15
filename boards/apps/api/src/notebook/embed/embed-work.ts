@@ -2,6 +2,7 @@ import { redact } from "@kaneo/redact";
 import { and, eq, isNull, ne, notInArray, or } from "drizzle-orm";
 import db from "../../database";
 import { notebookChunkTable } from "../../database/notebook-schema";
+import { maskChunkEdges, textNear } from "../chunk/mask-chunk-edges";
 import {
   leaseChunks,
   leasedChunkIds,
@@ -28,10 +29,22 @@ export type EmbedResult = {
 };
 
 // TB-196: the embedding worker is a token caller and its model may run at an
-// outside provider, so a chunk goes to it masked. Vectors embedded before
-// this change stay until their chunk changes or the model does.
-const chunkPassage = (heading: string, text: string) =>
-  redact(heading ? `${heading}\n\n${text}` : text).text;
+// outside provider, so a chunk goes to it masked, also a secret cut at its
+// edge (TB-203). Vectors embedded before this change stay until their chunk
+// changes or the model does.
+const chunkPassage = (chunk: {
+  heading: string;
+  text: string;
+  before: string | null;
+  after: string | null;
+}) => {
+  const { text } = maskChunkEdges(
+    chunk.text,
+    chunk.before ?? "",
+    chunk.after ?? "",
+  );
+  return redact(chunk.heading ? `${chunk.heading}\n\n${text}` : text).text;
+};
 
 // Search queries first: someone is waiting on them.
 export async function claimEmbedWork(
@@ -50,6 +63,8 @@ export async function claimEmbedWork(
       id: notebookChunkTable.id,
       heading: notebookChunkTable.heading,
       text: notebookChunkTable.text,
+      before: textNear(-1),
+      after: textNear(1),
     })
     .from(notebookChunkTable)
     .where(
@@ -72,7 +87,7 @@ export async function claimEmbedWork(
     items.push({
       kind: "chunk",
       id: chunk.id,
-      text: chunkPassage(chunk.heading, chunk.text),
+      text: chunkPassage(chunk),
     });
   }
   return items;

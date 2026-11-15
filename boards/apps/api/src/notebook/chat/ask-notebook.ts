@@ -142,6 +142,8 @@ export async function askNotebook(input: {
     mode: "hybrid",
     embedModel: settings.embedModel,
     tokenCaller: input.tokenCaller,
+    // The sources go to a model, maybe at an outside provider (TB-203).
+    masked: true,
   });
   const citations: NotebookCitation[] = hits.map((hit, i) => ({
     n: i + 1,
