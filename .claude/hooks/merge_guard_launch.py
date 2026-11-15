@@ -47,6 +47,8 @@ MAKE_VALUED = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin"
 MAKE_OPTIONAL = {"-j", "-l", "-O"}  # необязательное значение: в связке — её остаток (`-lf ok.mk` — `-l f`, make 3.81)
 MAKEFILES = ("GNUmakefile", "makefile", "Makefile")
 MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$")
+# `\` + перевод строки make склеивает раньше комментариев: нечётное число `\` — продолжение, чётное — нет (make 3.81).
+MAKE_CONT = re.compile(r"(?<!\\)((?:\\\\)*)\\\n[ \t]*")
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
@@ -289,15 +291,15 @@ def make_files(a, cwd, streams=None):
         [d] if is_lost(d) else [next((p for p in (os.path.join(d, m) for m in MAKEFILES) if os.path.lexists(p)), "")])
 
     def includes(_, text):
-        found = []
+        found, text = [], re.sub(r"#.*", "", MAKE_CONT.sub(r"\1 ", text))
         for name in (n for m in MAKE_INCLUDE.finditer(text) for n in m.group(1).split() if "$" not in n):
             found += next((h for h in (sorted(glob.glob(os.path.join(x, os.path.expanduser(name)))) for x in dirs)
                            if h), [])
         return found
 
-    roots = [p for p in paths if p] + [h for _, t in evals for h in includes(None, re.sub(r"#.*", "", t))]
+    roots = [p for p in paths if p] + [h for _, t in evals for h in includes(None, t)]
     return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t))
-            for p, t in _read_tree(roots, lambda p, t: includes(p, re.sub(r"#.*", "", t)), streams)] + evals
+            for p, t in _read_tree(roots, includes, streams)] + evals
 
 
 # Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
