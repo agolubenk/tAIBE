@@ -6,7 +6,7 @@ paths:
 
 # Git worktrees + Claude Code
 
-> **Sync:** `Makefile`, `worktrees/README.md`, прямые формы целей — `.claude/hooks/merge_guard_launch.py` (`_direct`)
+> **Sync:** `Makefile`, `worktrees/README.md`, прямые формы целей — `.claude/hooks/merge_guard_make.py` (`_direct`)
 
 ## Схема путей
 
