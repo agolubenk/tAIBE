@@ -6,9 +6,10 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createDeltaMirror } from './delta.mjs';
 
 // ── Автопередача входящих (--relay <сессия>, входящее владельца 9654) ────────────────────────────────────────
-// Процесс под Monitor сессии: раз в 20 с — очередь (ETag: без изменений ответ 304 почти бесплатен), каждое новое
+// Процесс под Monitor сессии: раз в 20 с — очередь (дельта /changes, без неё — ETag и 304), каждое новое
 // входящее без статуса агента — одной строкой в stdout (её Monitor отдаёт сессии), раз в минуту — отметка в консоли
 // (PUT /relay: страница и бот по ней говорят владельцу, жива ли автопередача). Что уже передано — в журнале
 // ~/.hr-owner-queue-bot/relay/<сессия>.json: перезапуск и перевзвод Monitor дублей не шлют.
@@ -94,7 +95,11 @@ export async function relayLoop(session, { BASE, TOKEN, api, product = DEFAULT_P
     writeFileSync(`${file}.tmp`, JSON.stringify({ relayed: relayPrune(relayed, Date.now()), unacked }));
     renameSync(`${file}.tmp`, file);
   };
+  // Дельта /changes (delta.mjs, карточка HR Q-38): ETag экономил только проход без изменений, а любая запись в checks
+  // (статусы агентов — постоянно) или items заново тянула всю коллекцию. /changes нет или сбой — прежний опрос с ETag.
+  const mirror = createDeltaMirror({ get: (p) => api('GET', p), cols: ['checks', 'items'], log: (s) => process.stderr.write(`[owner-queue-relay] ${s}\n`) });
   const etag = {}, last = {};
+  const docsOf = async (col) => (await mirror.list(col))?.docs ?? poll(col);
   async function poll(col) {
     const res = await fetch(`${BASE}/db/${col}`, { headers: { Authorization: `Bearer ${TOKEN}`, ...(etag[col] ? { 'If-None-Match': etag[col] } : {}) }, signal: AbortSignal.timeout(20_000) });
     if (res.status === 304 && last[col]) return last[col];
@@ -108,7 +113,7 @@ export async function relayLoop(session, { BASE, TOKEN, api, product = DEFAULT_P
   let beat = 0;
   for (;;) {
     try {
-      const [items, checks] = await Promise.all([poll('items'), poll('checks')]);
+      const [items, checks] = await Promise.all([docsOf('items'), docsOf('checks')]);
       const now = Date.now();
       const r = relayPass(items, checks, relayed, now, first, product);
       for (const line of r.lines) process.stdout.write(`${line}\n`);
