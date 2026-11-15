@@ -54,6 +54,28 @@ export default defineConfig({
     tailwindcss(),
     react(),
     babel({ presets: [reactCompilerPreset()] }),
+    // TEMP TB-173 (#357): module sizes of three chunks in the CI build log
+    // for the bundle check; removed before the PR leaves draft.
+    {
+      name: "tb173-chunk-report",
+      apply: "build",
+      generateBundle(_options, bundle) {
+        const chunks = new Set([
+          "index",
+          "task-shortcuts",
+          "task-forms-section",
+        ]);
+        for (const file of Object.values(bundle)) {
+          if (file.type !== "chunk" || !chunks.has(file.name)) continue;
+          for (const [id, info] of Object.entries(file.modules ?? {})) {
+            const name = id
+              .replace(/^.*node_modules\//, "")
+              .replace(/^.*\/boards\//, "");
+            console.log(`[tb173] ${file.name} ${info.renderedLength} ${name}`);
+          }
+        }
+      },
+    },
     // Hidden when Sentry env vars are absent so local dev does not depend on it.
     ...(uploadSourceMaps
       ? [
