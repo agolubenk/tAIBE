@@ -255,14 +255,17 @@ class ChecksTest(unittest.TestCase):
                 self.assertEqual(secrets_scan.scan_line(f'k {line}'), [])
 
     def test_secrets_password_type_name(self):
-        # TB-200 item 3, the context rule of redact (TB-193): after a password name a type name is a type before `,`,
-        # `;` or `)`. Elsewhere it may be a passphrase.
+        # TB-200 item 3, the context rule of redact (TB-193): after a password name a type name is a type in an
+        # annotation, after a bare `:` and before `,`, `;` or `)`. Elsewhere it may be a passphrase: after `=` the
+        # same shape before `;` is a password in a connection string or a shell line (backend lens #408 B1).
         upper = ''.join(('Correct', 'Horse', 'Battery', 'Staple'))
         for line in ('password: PasswordCredential;', '(password: PasswordCredential, next: Next)',
                      '{ secret: SecretManagerServiceClient; }', 'type A = { pwd: PasswordHashOptions, b: B };'):
             with self.subTest(line):
                 self.assertEqual(secrets_scan.scan_line(line), [])
-        for line in (f'password: {upper}', f'secret = "{upper}";', f'{{"password": "{upper}", "n": 1}}'):
+        for line in (f'password: {upper}', f'secret = "{upper}";', f'{{"password": "{upper}", "n": 1}}',
+                     f'Server=db;User Id=sa;Password={upper};Database=app', f'DB_PASSWORD={upper}; ./run',
+                     f'"Password={upper},Timeout=30"'):
             with self.subTest(line):
                 self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [upper])
 

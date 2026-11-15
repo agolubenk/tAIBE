@@ -83,8 +83,10 @@ TYPE_NAME = re.compile(r'^(?:[A-Z][a-z]+)+$')
 # same code.
 PASSWORD_NAME = re.compile(r'(?i)(?:password|passwd|pwd|secret)$')
 HUMPED_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)+$')
-# TB-200: for these names a type name is a type only before `,`, `;` or `)`, the context rule of redact (TB-193):
-# password: PasswordCredential;. The value pattern keeps `)` in the value, and CODE_CHARS drops it there.
+# TB-200: for these names a type name is a type only in an annotation: after a bare `:` and before `,`, `;` or `)`
+# (password: PasswordCredential;), the context rule of redact (TB-193) narrowed by the separator. After `=` the same
+# shape is a passphrase (Password=<words>;Database=app, DB_PASSWORD=<words>; ./run). The value pattern keeps `)` in
+# the value, and CODE_CHARS drops it there.
 TYPE_CONTEXT = (',', ';', ')')
 # TB-200: Laravel validation rules, lowercase words joined by `|`, each with an optional `:argument`
 # ('password' => 'required|string|min:8|confirmed').
@@ -125,8 +127,9 @@ def looks_like_secret(value):
 
 def looks_like_password(value, after=''):
     """TB-193 B, TB-195: the filter for password and secret names, as `looksLikePassphrase` of redact. Code stays
-    out (a camelCase name with a capital inside, `undefined`, a dotted name, code punctuation, a type name before
-    `,` or `;` (`after`, TB-200)); capitalized or lowercase words are caught."""
+    out (a camelCase name with a capital inside, `undefined`, a dotted name, code punctuation, a type name in an
+    annotation: `after` is the character after the value, empty when the separator is not a bare `:` (TB-200));
+    capitalized or lowercase words are caught."""
     if not secret_chars(value) or value == 'undefined':
         return False
     if len(value) >= 32:
@@ -216,7 +219,8 @@ def scan_line(line):
         while m:
             value = m.group(2)
             if PASSWORD_NAME.search(m.group(1)):
-                after = line[m.end(2):m.end(2) + 1]
+                annotation = line[m.end(1):m.start(2)].strip() == ':'
+                after = line[m.end(2):m.end(2) + 1] if annotation else ''
                 shaped, floor = looks_like_password(value, after), 3.0 if PASSPHRASE.match(value) else 3.5
             else:
                 shaped, floor = looks_like_secret(value), 3.5
