@@ -48,11 +48,15 @@ const realTransport: Transport = async (method, path, token, body) => {
 let transport: Transport = realTransport
 const MERGE_GAP_MS = 30_000
 let lastMergeAt = 0
+// Мёрж идёт (Q-35): занимается синхронно сразу после проверки интервала, до первого await, — второй POST, пришедший,
+// пока первый ждёт GitHub (двойной клик, страница и бот), получает 429. Консоль — один процесс на базу (changes.ts).
+let mergeInFlight = false
 
 /** Подмена транспорта в тестах; заодно сбрасывает паузу между мёржами, чтобы тесты не зависели от порядка. */
 export function setGithubTransportForTests(t: Transport | null): void {
   transport = t ?? realTransport
   lastMergeAt = 0
+  mergeInFlight = false
 }
 
 const prSchema = z.object({
@@ -418,7 +422,18 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
   if (version === undefined) {
     throw apiError(422, 'Нужна версия пункта с экрана подтверждения — откройте мёрж заново (на странице — после обновления; в Telegram — после обновления бота очереди)')
   }
+  if (mergeInFlight) throw apiError(429, 'Мёрж уже идёт — дождитесь его итога')
   if (Date.now() - lastMergeAt < MERGE_GAP_MS) throw apiError(429, 'Мёржи не чаще раза в 30 секунд — подождите')
+  mergeInFlight = true
+  try {
+    return await mergeChecked(actor, itemId, sha, version)
+  } finally {
+    mergeInFlight = false
+  }
+}
+
+/** Мёрж после проверок входа и интервала; слот mergeInFlight держит вызывающий mergeItem. */
+async function mergeChecked(actor: Actor, itemId: string, sha: string, version: number): Promise<{ sha: string; message: string }> {
   const info = await mergeInfo(itemId, version)
   if (info.state !== 'open') throw apiError(409, info.state === 'merged' ? `PR #${info.pr} уже влит` : `PR #${info.pr} закрыт`)
   if (info.approval === 'missing') {
@@ -434,7 +449,7 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
   if (info.mergeable === false) throw apiError(409, `GitHub не даёт влить: ${info.mergeableState || 'конфликт'}`)
   if (info.deploys && !info.skipCi && info.deployRunning && info.baseRef === 'main') throw apiError(409, 'Сейчас идёт деплой — дождитесь его окончания, затем вливайте')
   const { repo, token } = await settings()
-  // До чтения коммитов: окно, в котором второй POST проходит интервал, не шире прежнего (гонка целиком — карточка Q-35).
+  // До чтения коммитов: интервал считается от попытки мёржа; отказ до PUT его снимает.
   lastMergeAt = Date.now()
   const commits = info.method === 'squash'
     ? await prCommits(repo, info.pr as number, token).catch((e: unknown) => { lastMergeAt = 0; throw e })

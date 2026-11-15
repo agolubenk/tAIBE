@@ -37,6 +37,14 @@ async function consoleFake(files, state) {
       req.on('end', () => { state.patches = [...(state.patches ?? []), JSON.parse(raw)]; json(200, { id: 'x', version: 2, data: {} }); });
       return;
     }
+    // Дельта /changes (OPS-50) — только если тест её включил (state.delta); иначе 404, как у старой консоли.
+    if (pathname === '/api/oq/v1/changes' && state.delta) {
+      state.changesReqs = [...(state.changesReqs ?? []), searchParams.get('since') ? 'since' : 'full'];
+      const items = [{ id: 'd-hr-1', version: 1, updatedAt: 2, product: 'hr-helper', data: { kind: 'decision', title: 'HR' } },
+        { id: 'taibe-d-1', version: 1, updatedAt: 1, product: 'taibe', data: { kind: 'decision', title: 'tAIBE' } }];
+      if (searchParams.get('since')) return json(200, { cursor: 'b1.1', changes: { checks: { docs: [], removed: [] }, items: { docs: [], removed: [] }, work: { docs: [], removed: [] } } });
+      return json(200, { full: true, cursor: 'b1.1', collections: { checks: { docs: [] }, items: { docs: items }, work: { docs: [] } } });
+    }
     // Список пунктов с продуктом рядом с data; ?product= фильтрует консоль, MCP передаёт его как есть.
     if (pathname === '/api/oq/v1/db/items') {
       state.itemsQueries = [...(state.itemsQueries ?? []), searchParams.toString()];
@@ -219,4 +227,17 @@ test('oq_list: серверный потолок списка — serverCapped �
   assert.equal(capped.truncated, undefined, 'окно ответа не урезано');
   assert.deepEqual(capped.docs.map((d) => d.id), ['w-cap-1', 'w-cap-2']);
   assert.equal(body(await m.call('oq_list', { collection: 'checks', limit: 1 })).serverCapped, undefined, 'без обрезки консоли — поля нет');
+});
+
+test('oq_list через дельту /changes (карточка HR Q-38): коллекция — полный список раз, дальше since; open_only — сервер, как раньше', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  m.state.delta = true;
+  const first = body(await m.call('oq_list', { collection: 'items' }));
+  assert.deepEqual(first.docs.map((d) => d.id), ['d-hr-1', 'taibe-d-1']);
+  const own = body(await m.call('oq_list', { collection: 'items', product: 'taibe' }));
+  assert.deepEqual(own.docs.map((d) => d.id), ['taibe-d-1'], 'продукт — фильтром здесь, по полю product');
+  assert.deepEqual(m.state.changesReqs, ['full', 'since']);
+  assert.equal(m.state.itemsQueries, undefined, 'полный /db/items не читали ни разу');
+  await m.call('oq_list', { collection: 'items', open_only: true });
+  assert.deepEqual(m.state.itemsQueries, ['open=1'], 'открытые — серверным правилом open-rule.ts');
 });

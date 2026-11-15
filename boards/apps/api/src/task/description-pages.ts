@@ -1,8 +1,10 @@
 import { redact } from "@kaneo/redact";
-import { and, asc, eq, gt, type SQL, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, type SQL, sql } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import { projectTable, taskTable } from "../database/schema";
+import { isMarkerQuery, matchesVisibleText } from "../utils/visible-match";
 import { boundedTaskRead } from "./bounded-read";
+import { maskedMatchPage } from "./masked-match-page";
 
 export const BOARD_DESCRIPTION_MAX_BYTES = 64 * 1024;
 export const DESCRIPTION_CHUNK_CHARACTERS = 32 * 1024;
@@ -127,6 +129,63 @@ export async function getDeferredDescriptionMatches(
         rows.length > DESCRIPTION_MATCH_PAGE_SIZE
           ? (matches.at(-1)?.id ?? null)
           : null,
+    };
+  });
+}
+
+// TB-191: a caller with a token reads descriptions masked, so a match counts
+// only outside secrets. The page is a window of deferred rows by id, cut by
+// row count and stored size, never by matches: so the cursor does not show
+// where a match inside a secret was. A page can hold no ids and still have a
+// cursor. The query is searched only in the rows of the page (boards cost
+// lens #350: the window has up to 101 rows, a page of 1 MiB at most 15), and
+// only rows whose stored text holds it are loaded and masked.
+export async function getVisibleDeferredDescriptionMatches(
+  projectId: string,
+  query: string,
+  after?: string,
+) {
+  if (isMarkerQuery(query)) return { ids: [], nextCursor: null };
+  return boundedTaskRead(async (tx) => {
+    const window = await tx
+      .select({
+        id: taskTable.id,
+        bytes: sql<number>`octet_length(${taskTable.description})`,
+      })
+      .from(taskTable)
+      .where(
+        and(
+          eq(taskTable.projectId, projectId),
+          descriptionDeferred,
+          after ? gt(taskTable.id, after) : undefined,
+        ),
+      )
+      .orderBy(asc(taskTable.id))
+      .limit(DESCRIPTION_MATCH_PAGE_SIZE + 1);
+    const page = maskedMatchPage(window, DESCRIPTION_MATCH_PAGE_SIZE);
+    const texts = page.length
+      ? await tx
+          .select({ id: taskTable.id, description: taskTable.description })
+          .from(taskTable)
+          .where(
+            and(
+              inArray(
+                taskTable.id,
+                page.map((row) => row.id),
+              ),
+              sql`strpos(lower(${taskTable.description}), lower(${query})) > 0`,
+            ),
+          )
+      : [];
+    const visible = new Set(
+      texts
+        .filter((row) => matchesVisibleText(row.description, query))
+        .map((row) => row.id),
+    );
+    return {
+      ids: page.filter((row) => visible.has(row.id)).map((row) => row.id),
+      nextCursor:
+        page.length < window.length ? (page.at(-1)?.id ?? null) : null,
     };
   });
 }
