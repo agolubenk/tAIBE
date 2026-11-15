@@ -25,6 +25,7 @@ import { LabelFilterDot } from "./label-filter-dot";
 import { MemberFilterAvatar } from "./member-filter-avatar";
 import { operatorLabels } from "./operator-labels";
 import type { TaskFilterOptions } from "./use-task-filter-options";
+import { getStatusDisplayLabel } from "@/lib/i18n/domain";
 
 const PRIORITIES = ["urgent", "high", "medium", "low"];
 
@@ -99,7 +100,7 @@ export function useFilterSubjects({
             icon: <CircleDashed />,
             options: columns.map((column) => ({
               value: column.id,
-              label: column.name,
+              label: getStatusDisplayLabel(column.id, column.name),
               icon: getColumnIcon(column.id, column.isFinal, column.icon),
               count: counts.status[column.id],
             })),
