@@ -4,7 +4,11 @@
 // Ответ инструмента — не больше OUT_MAX символов. Список урезается по документам, а не по символам: обрезанный
 // посередине JSON клиенты не разбирают (строки «Хода работ» несут списки карточек досок).
 export const OUT_MAX = 95_000;
-export const LIMIT_MAX = 500;
+// SE-45: без limit — 20, потолок — 30. Замер 11–13.11: крупные ответы (26–34 тыс. символов) — checks с limit 60 и без
+// limit; их перечитывание — основная цена oq_list. С ids агент назвал документы сам — окно до IDS_MAX.
+export const LIMIT_DEFAULT = 20;
+export const LIMIT_MAX = 30;
+export const IDS_MAX = 500;
 const BRIEF_TEXT = 200;
 // Отметки времени в данных документов: checks — ответ и записи агента, items — added, work — факт начала и конца.
 const TIME_FIELDS = ['at', 'ownerAt', 'agentAt', 'blockedAt', 'added', 'start', 'end'];
@@ -53,10 +57,11 @@ export function filterDocs(collection, docs, { ids, prefix, kind, session, since
   });
 }
 
-/** Окно списка: offset — с какого документа, limit — сколько (1…LIMIT_MAX, по умолчанию 50). */
-export function pageList(list, { offset, limit } = {}) {
+/** Окно списка: offset — с какого документа, limit — сколько (1…LIMIT_MAX, по умолчанию LIMIT_DEFAULT; с ids — до IDS_MAX). */
+export function pageList(list, { offset, limit, ids } = {}) {
   const from = Math.max(0, Math.floor(Number(offset) || 0));
-  const n = limit === undefined ? 50 : Math.min(Math.max(1, Math.floor(Number(limit) || 1)), LIMIT_MAX);
+  const max = Array.isArray(ids) && ids.length ? IDS_MAX : LIMIT_MAX;
+  const n = limit === undefined ? (max === IDS_MAX ? max : LIMIT_DEFAULT) : Math.min(Math.max(1, Math.floor(Number(limit) || 1)), max);
   return { from, docs: list.slice(from, from + n) };
 }
 
@@ -115,7 +120,8 @@ export function fitList(total, docs, from = 0, extra = {}) {
       ...(from ? { offset: from } : {}),
       ...(k < docs.length ? { shown: k, truncated: true } : {}),
       ...(oversized ? { oversized: [docs[0].id] } : {}),
-      ...(next < total ? { next_offset: next } : {}),
+      // «ещё N»: агент видит, что список не весь, не считая total − offset сам.
+      ...(next < total ? { next_offset: next, more: `ещё ${total - next}` } : {}),
       ...extra,
       docs: docs.slice(0, k),
     };
