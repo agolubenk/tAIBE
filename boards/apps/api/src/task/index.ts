@@ -31,6 +31,7 @@ import {
   hasWorkspacePermission,
   requireWorkspacePermission,
 } from "../utils/require-workspace-permission";
+import { isTokenCaller, maskForTokenCaller } from "../utils/token-caller-text";
 import {
   validateAndParseDate,
   validateDateRange,
@@ -67,7 +68,9 @@ import updateTaskStatus from "./controllers/update-task-status";
 import updateTaskTitle from "./controllers/update-task-title";
 import {
   getDeferredDescriptionMatches,
+  getVisibleDeferredDescriptionMatches,
   getDescriptionPage,
+  getMaskedDescriptionPage,
 } from "./description-pages";
 import {
   assignedTasksSchema,
@@ -84,6 +87,7 @@ import {
   taskSchema,
   taskWithAssigneeSchema,
 } from "./response";
+import { restoreTaskText } from "./restore-task-text";
 import {
   assignedTasksQuery,
   bulkUpdateBody,
@@ -439,6 +443,9 @@ const updateTaskRoute = createRoute({
       "No access to the project, or missing task:update or task:assign permission",
     ),
     404: errorResponse("Task not found"),
+    409: errorResponse(
+      "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+    ),
   },
 });
 
@@ -657,6 +664,9 @@ const updateTaskTitleRoute = createRoute({
       "No access to the project, or missing task:update permission",
     ),
     404: errorResponse("Task not found"),
+    409: errorResponse(
+      "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+    ),
   },
 });
 
@@ -749,6 +759,9 @@ const updateTaskDescriptionRoute = createRoute({
       "No access to the project, or missing task:update permission",
     ),
     404: errorResponse("Task not found"),
+    409: errorResponse(
+      "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+    ),
   },
 });
 
@@ -775,6 +788,8 @@ const descriptionMatchesRoute = createRoute({
   path: "/description-matches/{projectId}",
   tags: ["Tasks"],
   summary: "Search descriptions omitted from task lists",
+  description:
+    "Follow `nextCursor` as `after` until it is null. A caller with an API key reads descriptions with secrets masked, so a match counts only outside a secret and a query with `[REDACTED:` finds nothing; its pages are windows of omitted descriptions, so a page can have no `ids` and still have a `nextCursor`.",
   middleware: [workspaceAccess.fromProject("projectId")] as const,
   request: { params: projectIdParam, query: descriptionMatchesQuery },
   responses: {
@@ -787,19 +802,25 @@ const descriptionMatchesRoute = createRoute({
 });
 
 const task = apiRouter<BaseVariables & { workspaceId: string }>()
-  .openapi(descriptionPageRoute, async (c) =>
-    c.json(
-      await getDescriptionPage(c.req.valid("param").id, c.req.valid("query")),
-      200,
-    ),
-  )
+  .openapi(descriptionPageRoute, async (c) => {
+    const { id } = c.req.valid("param");
+    // TB-143: a caller with a token pages the masked text, so no secret is
+    // cut in two at a page edge and slips past redact.
+    const page = isTokenCaller(c)
+      ? await getMaskedDescriptionPage(id, c.req.valid("query"))
+      : await getDescriptionPage(id, c.req.valid("query"));
+    return c.json(maskForTokenCaller(c, page), 200);
+  })
   .openapi(descriptionMatchesRoute, async (c) => {
     const { query, after } = c.req.valid("query");
     return c.json(
-      await getDeferredDescriptionMatches(
-        c.req.valid("param").projectId,
-        query,
-        after,
+      maskForTokenCaller(
+        c,
+        await (
+          isTokenCaller(c)
+            ? getVisibleDeferredDescriptionMatches
+            : getDeferredDescriptionMatches
+        )(c.req.valid("param").projectId, query, after),
       ),
       200,
     );
@@ -808,10 +829,13 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listAssignedTasksRoute, async (c) => {
     const { workspaceId, countOnly } = c.req.valid("query");
     return c.json(
-      await getAssignedTasks(
-        workspaceId,
-        c.get("userId"),
-        countOnly === "true",
+      maskForTokenCaller(
+        c,
+        await getAssignedTasks(
+          workspaceId,
+          c.get("userId"),
+          countOnly === "true",
+        ),
       ),
       200,
     );
@@ -822,7 +846,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
 
     const tasks = await getTasks(projectId, filters, c.get("userId"));
 
-    return c.json(tasks, 200);
+    return c.json(maskForTokenCaller(c, tasks), 200);
   })
   .openapi(bulkUpdateTasksRoute, async (c) => {
     const { taskIds, operation, value } = c.req.valid("json");
@@ -849,7 +873,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       userId,
     });
 
-    return c.json(result, 200);
+    return c.json(maskForTokenCaller(c, result), 200);
   })
   .openapi(stagedUploadRoute, async (c) =>
     c.json(
@@ -875,7 +899,10 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(reorderTasksRoute, async (c) => {
     const { projectId, tasks, expectedTasks } = c.req.valid("json");
     return c.json(
-      await reorderTasks(projectId, tasks, c.get("userId"), expectedTasks),
+      maskForTokenCaller(
+        c,
+        await reorderTasks(projectId, tasks, c.get("userId"), expectedTasks),
+      ),
       200,
     );
   })
@@ -919,19 +946,24 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       author: writerKind(c),
     });
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   })
   .openapi(duplicateTaskRoute, async (c) => {
     const { id } = c.req.valid("param");
     const { title } = c.req.valid("json");
     return c.json(
-      await duplicateTask({
-        taskId: id,
-        title,
-        currentUserId: c.get("userId"),
-        canUpdateTasks: await hasWorkspacePermission(c, { task: ["update"] }),
-        author: writerKind(c) === "agent" ? "agent" : await taskAuthor(id),
-      }),
+      maskForTokenCaller(
+        c,
+        await duplicateTask({
+          taskId: id,
+          title,
+          currentUserId: c.get("userId"),
+          canUpdateTasks: await hasWorkspacePermission(c, {
+            task: ["update"],
+          }),
+          author: writerKind(c) === "agent" ? "agent" : await taskAuthor(id),
+        }),
+      ),
       200,
     );
   })
@@ -942,7 +974,10 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       apiKeyScope: requestWorkspaceScope(c),
     });
     // TB-83: who created it, for the reader's trust.
-    return c.json({ ...task, author: await taskAuthor(task.id) }, 200);
+    return c.json(
+      maskForTokenCaller(c, { ...task, author: await taskAuthor(task.id) }),
+      200,
+    );
   })
   .openapi(getTaskRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -953,7 +988,10 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       c.get("userId"),
     );
 
-    return c.json({ ...task, author: await taskAuthor(id) }, 200);
+    return c.json(
+      maskForTokenCaller(c, { ...task, author: await taskAuthor(id) }),
+      200,
+    );
   })
   .openapi(moveTaskRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -967,7 +1005,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       currentUserId,
     });
 
-    return c.json(result, 200);
+    return c.json(maskForTokenCaller(c, result), 200);
   })
   .openapi(updateTaskRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -996,28 +1034,30 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
 
     validateDateRange(parsedStartDate, parsedDueDate);
 
+    const text = await restoreTaskText(c, id, { title, description });
+
     const task = await updateTask(
       id,
-      title,
+      text.title,
       status,
       parsedStartDate,
       parsedDueDate,
       projectId,
-      description,
+      text.description,
       priority,
       position,
       userId,
       currentUserId,
     );
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   })
   .openapi(exportTasksRoute, async (c) => {
     const { projectId } = c.req.valid("param");
 
     const exportData = await exportTasks(projectId);
 
-    return c.json(exportData, 200);
+    return c.json(maskForTokenCaller(c, exportData), 200);
   })
   .openapi(importTasksRoute, async (c) => {
     const { projectId } = c.req.valid("param");
@@ -1026,7 +1066,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
 
     const result = await importTasks(projectId, tasks, currentUserId);
 
-    return c.json(result, 200);
+    return c.json(maskForTokenCaller(c, result), 200);
   })
   .openapi(deleteTaskRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -1034,7 +1074,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
     const currentUserId = c.get("userId");
     const task = await deleteTask(id, currentUserId);
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   })
   .openapi(updateTaskStatusRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -1043,7 +1083,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
 
     const task = await updateTaskStatus({ id, status, currentUserId });
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   })
   .openapi(updateTaskPriorityRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -1052,7 +1092,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
 
     const task = await updateTaskPriority({ id, priority, currentUserId });
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   })
   .openapi(updateTaskAssigneeRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -1061,7 +1101,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
 
     const task = await updateTaskAssignee({ id, userId, currentUserId });
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   })
   .openapi(updateTaskDueDateRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -1074,16 +1114,21 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       currentUserId,
     });
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   })
   .openapi(updateTaskTitleRoute, async (c) => {
     const { id } = c.req.valid("param");
     const { title } = c.req.valid("json");
     const currentUserId = c.get("userId");
 
-    const task = await updateTaskTitle({ id, title, currentUserId });
+    const restored = await restoreTaskText(c, id, { title });
+    const task = await updateTaskTitle({
+      id,
+      title: restored.title,
+      currentUserId,
+    });
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   })
   .openapi(createTaskImageUploadRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -1282,13 +1327,14 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
     const { description } = c.req.valid("json");
     const currentUserId = c.get("userId");
 
+    const restored = await restoreTaskText(c, id, { description });
     const task = await updateTaskDescription({
       id,
-      description,
+      description: restored.description,
       currentUserId,
     });
 
-    return c.json(task, 200);
+    return c.json(maskForTokenCaller(c, task), 200);
   });
 
 export default task;

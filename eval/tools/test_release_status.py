@@ -43,6 +43,25 @@ class ReleaseStatusTest(unittest.TestCase):
     def test_quorum_pr_needs_nothing(self):
         self.assertFalse(any("PR #440" in t for t in self.todo))
 
+    def test_second_session_is_the_same_lens(self):
+        """#324 B3: approve backend и backend-2 — одна линза, как в кворуме Нерва (quorum.tally)."""
+        pr = {"number": 450, "state": "open", "merged_at": None, "head": {"sha": "3" * 40}, "base": {"ref": "main"}}
+        labels = ("Бэкенд (роль 4)", "Бэкенд (роль 7)", "Линза плана (роль 2)")
+        rows, todo = rs.build_rows([pr], {450: [{"body": f"{x}: approve на 3333333"} for x in labels]}, [], 3)
+        self.assertEqual(rows[0][4], 2)
+        self.assertIn("PR #450 голова 333333333: линз 2/3", todo)
+
+    def test_author_approve_is_not_counted(self):
+        """SE-121: как у Нерва — approve выпадает, только если тело называет автора строкой «роль N — автор»."""
+        labels = ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")
+        comments = {n: [{"body": f"{x}: approve на 4444444"} for x in labels] for n in (451, 452)}
+        pr = {"state": "open", "merged_at": None, "head": {"sha": "4" * 40}, "base": {"ref": "main"}}
+        pulls = [dict(pr, number=451, body="Линзы: роль 6 — автор."), dict(pr, number=452, body="Без строки.")]
+        rows, todo = rs.build_rows(pulls, comments, [], 3)
+        self.assertEqual({r[0]: r[4] for r in rows}, {451: 2, 452: 3})
+        self.assertIn("PR #451 голова 444444444: линз 2/3, approve автора boards не засчитан", todo)
+        self.assertFalse(any("PR #452" in t for t in todo))
+
     def test_render(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
