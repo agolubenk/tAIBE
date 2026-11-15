@@ -50,6 +50,12 @@ MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$"
 # `\` + перевод строки make склеивает раньше комментариев: нечётное число `\` — продолжение, чётное — нет (make 3.81).
 MAKE_CONT = re.compile(r"(?<!\\)((?:\\\\)*)\\\n[ \t]*")
 INCLUDE_ESCAPE = "\0INCLUDE"  # метка в streams: строка include с `\` или `#` — экранирование make разбор не сводит
+# Правило coord 12:06/12:07 (#402): в Makefile дерева — слово include в любой строке, `$(eval`, `$(file`, `$(shell`
+# (и `${…}`), `/dev/` в начале слова-пути; метка MAKE_TEXT в streams — и для Makefile, который разбор не прочёл.
+MAKE_TOKENS = re.compile(r"\$[({](?:eval|file|shell)|(?:^|[^A-Za-z0-9_.~/-])/dev/"
+                         r"|(?<![A-Za-z0-9_-])(?:-?include|sinclude)(?![A-Za-z0-9_-])", re.M)
+MAKE_TEXT = "\0MAKETEXT"
+NOT_ASCII = re.compile(r"[^\x20-\x7e\t]")  # make делит слова по isblank локали: в kk_KZ.PT154 0xA0 — пробел
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
@@ -258,6 +264,8 @@ def _read_tree(paths, includes, streams=None):
         if t is not None or is_lost(p):
             out.append((p, t))
             queue += includes(p, t) if t is not None else []
+        elif streams is not None and os.path.lexists(p):
+            streams.append(MAKE_TEXT)  # make прочтёт, разбор — нет (права, больше TEXT_MAX): coord 12:06 (#402)
     return out
 
 
@@ -278,8 +286,8 @@ def make_files(a, cwd, streams=None):
     """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый
     существующий из GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не
     исключение: `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). Строка `--eval`/`-E` — тоже
-    текст Makefile (путь `--eval`), её include читаются. Пути-потоки дерева и метка INCLUDE_ESCAPE — в streams
-    (make_option). Длинные опции — как у getopt_long (SE-128); неоднозначная или неизвестная — папка не видна
+    текст Makefile (путь `--eval`), её include читаются. Пути-потоки дерева, метки INCLUDE_ESCAPE и MAKE_TEXT — в
+    streams (make_option). Длинные опции — как у getopt_long (SE-128); неоднозначная или неизвестная — папка не видна
     (LOST): у make 3.81 `--o` — это `--old-file`, и его значение `-f` уже не опция."""
     if a[0] not in MAKES:
         return []
@@ -301,8 +309,10 @@ def make_files(a, cwd, streams=None):
         return found
 
     roots = [p for p in paths if p] + [h for _, t in evals for h in includes(None, t)]
-    return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t))
-            for p, t in _read_tree(roots, includes, streams)] + evals
+    tree = _read_tree(roots, includes, streams)
+    if streams is not None and any(t is not None and MAKE_TOKENS.search(t) for _, t in tree):
+        streams.append(MAKE_TEXT)  # по сырому тексту: строка-комментарий тоже (coord 12:06, #402)
+    return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t)) for p, t in tree] + evals
 
 
 # Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
@@ -324,6 +334,11 @@ MAKE_INCLUDE_WHY = ("строка include с `\\` или `#` (экраниров
                     "сводит — уберите их из строки include или запустите команды цели напрямую")
 MAKE_SUBST = ("подстановка shell в слове make (`$(…)`, `` `…` ``, `<(…)`, `>(…)`, `=(…)`): что она даст make — путь, "
               "строку `--eval`, опцию, — разбор не видит; запишите значение в команду или в Makefile-файл (`-f`)")
+MAKE_ASCII = ("знак вне печатного ASCII, кроме таба, в слове make (аргумент, `-f`, `--eval`): make делит слова по "
+              "своей локали (в kk_KZ.PT154 байт 0xA0 — пробел), разбор так не делит — запишите слово в ASCII")
+MAKE_TEXT_WHY = ("Makefile со словом include, с `$(eval`, `$(file`, `$(shell` (и `${…}`), с путём `/dev/` или "
+                 "Makefile, который разбор не прочёл (права, больше 4 МБ): что make прочтёт и запустит, разбор не "
+                 "сводит — запустите команды цели напрямую")
 MAKE_VAR_WHY = ("переменная make в командной строке, от которой зависит, чем make запустит рецепты и что прочтёт "
                 "(`SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` — от папки после `-C`): разбор этого не видит — уберите её, "
                 "файл make передайте через `-f`")
@@ -340,14 +355,17 @@ def make_option(a, cwd):
     длинная опция, которую getopt_long не раскроет однозначно (`--d`, `--o`, `--frob`, SE-128); Makefile из потока
     где угодно в дереве make_files (`-f -`, устройство, FIFO, Makefile по умолчанию — ссылка на поток, `include
     /dev/stdin` в Makefile или `--eval`); строка `--eval` с EVAL_RUNS; `SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` в строке
-    make (SE-135). То, что разбор не сводит, — отказ (coord, #402): подстановка shell в любом слове make, строка
-    include с `\\` или `#`. Рецепты Makefile на диске — предел дизайна: только грубый признак (хук)."""
+    make (SE-135). То, что разбор не сводит, — отказ (coord, #402): подстановка shell и знак вне печатного ASCII в
+    любом слове make, строка include с `\\` или `#`, Makefile дерева с MAKE_TOKENS или нечитаемый. Рецепты Makefile
+    на диске — предел дизайна: только грубый признак (хук)."""
     if a[0] not in MAKES:
         return ""
     if MAKEFLAGS_ARG in a:
         return MAKEFLAGS_WHY
     if any(SUBST in w or CURRENT in w for w in a):  # правило coord 11:47 (#402): один раз на все слова make
         return MAKE_SUBST
+    if any(NOT_ASCII.search(w) for w in a):  # правило coord 11:55 (#402): аргумент, `-f`, `--eval`
+        return MAKE_ASCII
     values, rest = _make_opts(a)
     if "?" in values:
         return MAKE_OPTION
@@ -356,8 +374,10 @@ def make_option(a, cwd):
     make_files(a, cwd, streams)
     if INCLUDE_ESCAPE in streams:
         return MAKE_INCLUDE_WHY
-    if "-" in named or streams:
+    if "-" in named or set(streams) - {MAKE_TEXT}:
         return MAKE_STDIN
+    if MAKE_TEXT in streams:
+        return MAKE_TEXT_WHY
     if any(map(EVAL_RUNS.search, evals)):
         return MAKE_EVAL
     return MAKE_VAR_WHY if any(map(MAKE_VAR.match, rest)) else ""
@@ -430,7 +450,7 @@ def make_flags(val):
     локали kk_KZ.PT154 make 3.81 считает 0xA0 пробелом), и метка подстановки shell (`$(…)`, `` `…` `` разбор уже
     заменил меткой без `$`). Опция make 4.x со значением (MAKE_4X_VALUED) и `-O` в связке — отказ (линза Claude
     #398)."""
-    if re.search(r"[\"'\\$]|[^\x20-\x7e\t]", val) or SUBST in val or CURRENT in val:
+    if re.search(r"[\"'\\$]", val) or NOT_ASCII.search(val) or SUBST in val or CURRENT in val:
         return [["make", MAKEFLAGS_ARG]]
     ws = [w for w in re.split(r"[ \t]+", val) if w]
     if ws and not ws[0].startswith("-") and "=" not in ws[0]:
