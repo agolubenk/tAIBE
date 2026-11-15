@@ -383,6 +383,28 @@ describe("@kaneo/redact", () => {
       expectSingleHit(`x-api-key: x(x-api-key:${value}`, "api_key", value);
     });
 
+    // Claude lens and Control on #375: the inner match ends after the outer
+    // value, and the next search skipped C_TOKEN. The base masked these.
+    it.each([
+      `A_TOKEN=x(B_TOKEN = C_TOKEN = ${value}`,
+      `A_TOKEN=x(B_TOKEN = GITHUB_TOKEN = ${value}`,
+      `A_TOKEN=x(B_TOKEN"=C_TOKEN" = "${value}"`,
+      `A_TOKEN=x(B_TOKEN" = "GH2_TOKEN" = "${value}"`,
+      `A_TOKEN=x(B_TOKEN = "C_TOKEN" = "${value}"`,
+      `api_key=x(api_key = api_key = ${value}`,
+      `x-api-key: x(x-api-key: x-api-key: ${value}`,
+      `A_SECRET=x(B_SECRET = C_SECRET = ${value}`,
+      `A_SECRET=y(B_SECRET : C_SECRET : ${value}`,
+      `A_SECRET=éB_SECRET = C_SECRET = ${value}`,
+    ])(
+      "masks the value after an inner match past the outer value: %s",
+      (input) => {
+        const result = redact(input);
+        expect(result.text).not.toContain(value);
+        expect(result.hits.length).toBeGreaterThan(0);
+      },
+    );
+
     // The restart rests on one property of both filters: a value with `=` or
     // `:` and no DROPS_VALUE character is accepted from 8 characters on, so
     // the value is masked whole with the name inside it.
@@ -471,6 +493,8 @@ describe("@kaneo/redact", () => {
       "A_SECRET=fooB_SECRET: ",
       "password=xpassword ",
       "A_TOKEN=a=B_TOKEN ",
+      "A_TOKEN=x(B_TOKEN = ",
+      "A_SECRET=x(B_SECRET : ",
     ])("redacts 256 000 characters of %j in linear time", (unit) => {
       const text = unit.repeat(Math.ceil(256_000 / unit.length));
       const started = performance.now();

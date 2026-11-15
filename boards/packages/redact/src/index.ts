@@ -59,8 +59,11 @@ function trailingName(value: string): number {
 // - otherwise at the run of name characters that ends the value: that name
 //   has its separator after the value, past a space or a quote
 //   (A_TOKEN=x.B_TOKEN = <v>, A_SECRET=fooB_SECRET: <v>, Control #375).
-// An inner value ends with the outer one or starts after it, so the match
-// starts only grow and each value is read again at most once.
+// An inner match can end after the outer value: its separator crosses the
+// space or the quote that ends the outer value
+// (A_TOKEN=x(B_TOKEN = C_TOKEN = <v>). Then the next search starts at the
+// end of the outer value (`limit`) at the latest, as without the rewind.
+// Each search starts after the start of the last match.
 function collectGroup(
   pattern: RegExp,
   kind: SecretKind,
@@ -69,6 +72,7 @@ function collectGroup(
 ): Detector {
   return (text) => {
     const hits: RedactHit[] = [];
+    let limit = -1;
     pattern.lastIndex = 0;
     for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
       const value = match[group];
@@ -77,9 +81,13 @@ function collectGroup(
       const accepted = accept(value, text.charAt(start + value.length));
       if (accepted) hits.push({ kind, start, end: start + value.length });
       const dropping = accepted ? -1 : lastDropping(value);
+      if (dropping >= 0) limit = Math.max(limit, pattern.lastIndex);
       const resume = dropping >= 0 ? dropping + 1 : trailingName(value);
       if (resume >= 0) {
         pattern.lastIndex = Math.max(match.index + 1, start + resume);
+      }
+      if (match.index < limit && pattern.lastIndex > limit) {
+        pattern.lastIndex = limit;
       }
     }
     return hits;
