@@ -106,9 +106,11 @@ def same_blob(path, data):
 # Тесты слоя (SE-127, решение владельца A, taibe-d-se127-hooktests-1511): в их тексте — образцы защищённых команд,
 # грубый признак их не отличает от запуска. Хук пускает тест без разбора текста, только если прошли ревью его папка и
 # всё, что тесты слоя запускают и импортируют: `.claude/scripts` (dams_common), `eval/tools` (ctx_budget.py,
-# spawn_session.sh из context-threshold) — линза Claude к #419.
-LAYER_DIRS = (".claude/hooks", ".claude/scripts")
-TRUST_DIRS = LAYER_DIRS + ("eval/tools",)
+# spawn_session.sh из context-threshold) — линза Claude к #419. Тесты `eval/tools` — тоже тесты слоя (SE-138): CI
+# гоняет их вместе с тестами хуков, и в их тексте те же образцы. Папки тестов и папки, которые должны быть чисты, —
+# одни и те же.
+LAYER_DIRS = (".claude/hooks", ".claude/scripts", "eval/tools")
+TRUST_DIRS = LAYER_DIRS
 PY_TEST_OPTS = {"-I", "-B", "-u"}  # `-W`, `-X`, `-m`, аргументы тоже исполняют код (категория `-W` — импорт модуля)
 FILE_MAX = 4 * 1024 * 1024
 CODE_EXT = (".py", ".pyc", ".pyo", ".pth", ".so", ".sh")  # новое имя рядом с тестом: `json.py` в той же команде

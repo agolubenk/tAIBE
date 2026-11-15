@@ -200,7 +200,7 @@ def launched(a, cwd, roots, depth, git_env, whole):
     found, files = ([(why, a[0])], []) if why else ([], make_files(a, cwd) + awk_programs(a, cwd))
     for d, text in package_scripts(a, cwd):  # текст None — папка пакета не видна (LOST)
         found += [(LOST_DIR, d)] if text is None else classify_bash(text, d, roots, depth + 1, git_env, disk=True)
-    read = read_names(a) | {p for p, _ in files}
+    read = read_names(a) | {p for p, _ in files if p != "awk"}  # "awk" — метка программы из слов команды, не файл
     if rewritten(read, whole[3] or ()):
         found += ([(NOT_YET, a[0])] if FALLBACK.search(whole[4][1]) else [] if whole[2] else
                   [(BLIND_RUN, a[0])] if opaque(read, whole[3]) else named_found(whole[4][1], cwd))
@@ -327,7 +327,8 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
             expanded, overflow = expanded + more, overflow or over
         if overflow and FALLBACK.search(" ".join(argv)):
             found.append(("больше 16 вариантов подстановки с признаком защищённого действия", " ".join(argv)[:120]))
-        for v in implied_commands(expanded):  # `BASH_ENV=m.sh bash -c true`, `NODE_OPTIONS='-r ./m.js' npm test`
+        # `BASH_ENV=m.sh bash -c true`, `NODE_OPTIONS='-r ./m.js' npm test`; argv как есть — make_flags видит `$`
+        for v in implied_commands([argv] + expanded):
             found += classify_argv(normalize(v), cwd, roots, depth, git_env, whole[:2] + (True,) + whole[3:],
                                   strip_prefix(v)[0])
         raws = [r for r in (strip_prefix(v) for v in expanded) if r]

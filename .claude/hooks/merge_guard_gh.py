@@ -277,16 +277,25 @@ def classify_gh(a, cwd=".", written=(), depth=0, guess=False):
     return None
 
 
-def classify_interp(a, cwd="."):
-    """Защищённая команда, запущенная из python/node/… списком аргументов или строкой."""
+INTERP_SEP = r"[\"',\s\]\[]+"  # между словами команды в коде: кавычки, запятые, скобки списка, пробелы
+GIT_PUSH = re.compile(rf"\bgit{INTERP_SEP}push\b")
+
+
+def push_target(text, cwd):
+    """В тексте — цель push, которую правило git push не пускает: `--all`/`--mirror` или защищённая ветка словом."""
+    return bool(re.search(r"(?<![\w-])--(all|mirror)\b", text)) or mentions_protected(text, cwd)
+
+
+def classify_interp(a, cwd=".", push=True):
+    """Защищённая команда, запущенная из python/node/… списком аргументов или строкой. push=False — без правила
+    git push: скрипт с диска оно проверяет по операторам (merge_guard_paths.push_found)."""
     blob = " ".join(a[1:])
-    q = r"[\"',\s\]\[]+"
+    q = INTERP_SEP
     if re.search(rf"\bgh{q}pr{q}merge\b|mergePullRequest|/pulls/\d+/merge\b", blob):
         return MERGE
     if re.search(rf"\bgh{q}(workflow{q}run|run{q}rerun)\b|/dispatches\b", blob):
         return DEPLOY
-    if re.search(rf"\bgit{q}push\b", blob) and (re.search(r"(?<![\w-])--(all|mirror)\b", blob) or
-                                                 mentions_protected(blob, cwd)):
+    if push and GIT_PUSH.search(blob) and push_target(blob, cwd):
         return MAIN_WRITE
     return None
 

@@ -146,11 +146,18 @@ def substitute(t, env):
 
 def expand_vars(argv, env):
     """Варианты argv после подстановки известных переменных (цикл даёт по варианту на значение) и признак, что
-    вариантов больше 16 и часть отброшена. Подставленное делится на слова, как без кавычек: `C="gh pr merge"; $C 1`."""
-    out, overflow = [[]], False
+    вариантов больше 16 и часть отброшена. Подставленное делится на слова, как без кавычек: `C="gh pr merge"; $C 1`, —
+    кроме присваиваний: `NAME=…` в начале команды и после export/local/declare/readonly/typeset shell на слова не
+    делит (`A="x y"; B=$A gh pr merge 1` запускает gh, а не `y`, SE-138) — слова значения склеиваются пробелом
+    (кавычки shlex у $PWD снимаются, см. dir_vars). У прочих команд (и `env A=…`) — делится."""
+    out, overflow, lead, declare = [[]], False, True, False
     for t in argv:
+        assign = bool(ASSIGN.fullmatch(t)) and (lead or declare)
+        if lead and not assign and t not in SHELL_WORDS:
+            lead, declare = False, t in DECLARE
         texts = substitute(t, env)
-        opts = [words(o) for o in texts] if texts != [t] else [[t]]
+        opts = [[o] for o in texts] if texts == [t] else [[" ".join(words(o))] for o in texts] if assign else [
+            words(o) for o in texts]
         out = [x + o for x in out for o in opts]
         if len(out) > MAX_VARIANTS:
             out, overflow = out[:MAX_VARIANTS], True
