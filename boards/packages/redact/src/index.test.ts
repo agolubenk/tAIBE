@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
+import { growth, MAX_GROWTH } from "../fixtures/linear-time";
 import { looksLikePassphrase, looksLikeSecret, redact } from "./index";
 
 // TB-136: one corpus for both rule sets. infra/checks/test_checks.py reads the
@@ -24,6 +25,16 @@ const corpus = JSON.parse(
 // no string that a secret scanner could mistake for live material.
 function join(...parts: string[]): string {
   return parts.join("");
+}
+
+// TB-205, TB-209: redact of 256 000 characters against redact of a quarter of
+// them in the same run, not a limit in milliseconds (fixtures/linear-time.ts).
+const CHARS = 256_000;
+function repeated(unit: string, end = ""): (n: number) => string {
+  return (n) => unit.repeat(Math.ceil(n / unit.length)) + end;
+}
+function expectLinear(make: (n: number) => string): void {
+  expect(growth(make, redact, CHARS)).toBeLessThan(MAX_GROWTH);
 }
 
 const secrets = {
@@ -502,10 +513,7 @@ describe("@kaneo/redact", () => {
       "A_TOKEN=x(B_TOKEN = ",
       "A_SECRET=x(B_SECRET : ",
     ])("redacts 256 000 characters of %j in linear time", (unit) => {
-      const text = unit.repeat(Math.ceil(256_000 / unit.length));
-      const started = performance.now();
-      redact(text);
-      expect(performance.now() - started).toBeLessThan(250);
+      expectLinear(repeated(unit));
     });
   });
 
@@ -614,20 +622,14 @@ describe("@kaneo/redact", () => {
       "A_TOKEN=(=>",
       "password==",
     ])("redacts 256 000 characters of %j in linear time", (unit) => {
-      const text = unit.repeat(Math.ceil(256_000 / unit.length));
-      const started = performance.now();
-      redact(text);
-      expect(performance.now() - started).toBeLessThan(250);
+      expectLinear(repeated(unit));
     });
 
     // The lookahead after `=` reads the run of `=` once per name.
     it.each(["A_TOKEN", "password", "api_key"])(
       "redacts %s with 256 000 = after it in linear time",
       (name) => {
-        const text = `${name}${"=".repeat(256_000)} x`;
-        const started = performance.now();
-        redact(text);
-        expect(performance.now() - started).toBeLessThan(250);
+        expectLinear((n) => `${name}${"=".repeat(n)} x`);
       },
     );
   });
@@ -756,7 +758,8 @@ describe("@kaneo/redact", () => {
   // scan to the end of the text is quadratic. MCP call arguments go through
   // redact before they are cut (api/src/mcp/call-detail.ts), so such a rule
   // holds the API event loop. On 256 000 characters each run takes up to
-  // 26 ms linear and 1.3–60 s quadratic; the bound sits between them.
+  // 26 ms linear and 1.3–60 s quadratic. A quarter of the text takes a
+  // quarter of the time if the work is linear, a sixteenth if quadratic.
   it.each([
     "_",
     "A_",
@@ -773,10 +776,7 @@ describe("@kaneo/redact", () => {
     "postgres://a:",
     "-----BEGIN KEY-----",
   ])("redacts 256 000 characters of %j in linear time", (unit) => {
-    const text = unit.repeat(Math.ceil(256_000 / unit.length));
-    const started = performance.now();
-    redact(text);
-    expect(performance.now() - started).toBeLessThan(250);
+    expectLinear(repeated(unit));
   });
 
   // Claude lens #283 B1: a run of a key prefix that fails only at its last
@@ -807,18 +807,12 @@ describe("@kaneo/redact", () => {
   )(
     "redacts 256 000 characters of %j and a final %j in linear time",
     (unit, stop) => {
-      const text = unit.repeat(Math.ceil(256_000 / unit.length)) + stop;
-      const started = performance.now();
-      redact(text);
-      expect(performance.now() - started).toBeLessThan(250);
+      expectLinear(repeated(unit, stop));
     },
   );
 
   it("redacts one 256 000-character key body with a failing end in linear time", () => {
-    const text = `${join("gh", "p_")}${"a".repeat(256_000)}_`;
-    const started = performance.now();
-    redact(text);
-    expect(performance.now() - started).toBeLessThan(250);
+    expectLinear((n) => `${join("gh", "p_")}${"a".repeat(n)}_`);
   });
 
   // Frontend lens #283: a key with an alphanumeric body or a fixed length may

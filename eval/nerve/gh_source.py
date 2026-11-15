@@ -5,7 +5,9 @@
 точка подмены в тестах.
 """
 import json
+import os
 import re
+import sys
 from datetime import datetime, timezone
 
 import quorum
@@ -13,7 +15,8 @@ import sources
 from journal import DIGEST, NERVOUS
 
 GH_LIMIT = 1000        # не больше 1000 открытых PR за проход
-GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title"
+# headRefName, baseRefName, isCrossRepository — уборка worktree после мёржа (OPS-52): ветка и база PR из этого репозитория.
+GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title,headRefName,baseRefName,isCrossRepository"
 GH_NEW_PER_PASS = 20   # новых для Нерва PR за проход: догон не задерживает очередь владельца на минуты
 NO_CHECKS_AFTER = 1800  # с после головы без единой проверки — событие координатору (SE-126)
 NO_CHECKS_EVERY = 900   # с: дальше такой PR перечитывается раз в 15 мин, а не каждый проход
@@ -30,8 +33,11 @@ def _gh_list(repo):
                                   "--json", GH_FIELDS])
     if code != 0:
         raise RuntimeError(f"gh pr list {repo}: {err.strip()[:200]}")
+    # PR из форка — не наша ветка, даже при том же имени: ветки для уборки worktree нет.
     return [{"number": d["number"], "title": d.get("title") or "", "updated_at": d["updatedAt"],
-             "created_at": d.get("createdAt") or "", "head": {"sha": d["headRefOid"]}} for d in json.loads(out)]
+             "created_at": d.get("createdAt") or "", "head": {"sha": d["headRefOid"]},
+             "branch": "" if d.get("isCrossRepository") else (d.get("headRefName") or ""),
+             "base": d.get("baseRefName") or ""} for d in json.loads(out)]
 
 
 def _gh_comments(repo, n):
@@ -90,7 +96,37 @@ def _gh_closed(ctx, repo, known, open_now, fails):
         word = "влит" if merged else "закрыт"
         ctx.emit(f"gh:closed:{n}:{merged or closed or state}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}",
                  "github")
+        if merged and known[n].get("branch"):
+            _gc_worktree(ctx, n, known[n]["branch"], known[n].get("head", ""), known[n].get("base", ""))
         del known[n]
+
+
+WT_GC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "wt_gc.py")
+
+
+def _gc_worktree(ctx, n, branch, head="", base=""):
+    """OPS-52 (решение владельца 13.11 «после мёржа»): worktree влитой ветки удаляется, если копия чистая, всё на
+    remote и в ней никто не работает (eval/tools/wt_gc.py). Удалён — запись в журнал без доставки; оставлен —
+    координатору с причиной. Сбой уборки не мешает проходу GitHub: PR уже снят, повтор — `wt_gc.py sweep`."""
+    try:
+        cmd = [sys.executable, "-I", WT_GC, "branch", ctx.cfg["repo_root"], branch, "--json"]
+        # Голова и база PR: worktree удаляется, только если его HEAD — голова влитого PR, а база — основная ветка.
+        cmd += (["--head", head] if head else []) + (["--base", base] if base else [])
+        code, out, err = sources.run(cmd, timeout=300)
+        res = json.loads(out) if code == 0 and out else None
+    except Exception as e:  # noqa: BLE001 — таймаут или сбой разбора: только запись
+        code, res, err = 1, None, str(e)
+    if res is None:
+        # Сбой — координатору: повтора нет (PR уже снят), worktree занимает место в пределе, пока его не уберёт sweep.
+        ctx.emit(f"wt:gc:{n}", "wt.gc", DIGEST, ["coord"],
+                 f"#{n}: уборка worktree {branch} не удалась: {(err or '')[:120]} — wt_gc.py sweep", "github")
+        return
+    for r in res:
+        if r["removed"]:
+            ctx.emit(f"wt:gc:{n}:{r['path']}", "wt.gc", DIGEST, [], f"#{n}: worktree {r['path']} удалён", "github")
+        else:
+            ctx.emit(f"wt:gc:{n}:{r['path']}", "wt.gc", DIGEST, ["coord"],
+                     f"#{n} влит, worktree {r['path']} оставлен — {r['reason']}", "github")
 
 
 def _backfill_since(known):
@@ -165,6 +201,8 @@ def poll_github(ctx):
                 continue
             fresh += 1
         p = known.setdefault(str(n), {"head": "", "updated": "", "seen": [], "changes_by": []})
+        if pr.get("branch"):
+            p["branch"], p["base"] = pr["branch"], pr.get("base", "")   # до проверки «не менялся»: и у давних PR
         # «author» — признак разобранного PR: в rev 1 head и updated писались до сбоя _gh_view (SE-40).
         if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"] and "author" in p:
             if p.get("await_ci"):
