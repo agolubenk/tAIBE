@@ -2603,7 +2603,8 @@
 			"invitePeople": "Invite people",
 			"myTasks": "My tasks",
 			"forest": "Forest",
-			"notebook": "SSR (sessions, skills & rules)"
+			"notebook": "SSR (sessions, skills & rules)",
+			"skipToContent": "Skip to content"
 		},
 		"projectList": {
 			"viewProject": "Projekt ansehen",
@@ -3606,7 +3607,17 @@
 				"sector": "Sector",
 				"subcards": "Subcards",
 				"tree": "Whole tree"
+			},
+			"forest": {
+				"openPage": "Forest — on the full page",
+				"title": "Forest"
 			}
+		},
+		"severity": {
+			"critical": "Critical",
+			"high": "High",
+			"low": "Low",
+			"medium": "Medium"
 		}
 	},
 	"invitations": {
