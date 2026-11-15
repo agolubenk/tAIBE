@@ -96,7 +96,7 @@ describe("API integration: task forms (TB-173)", () => {
       rowVersion: 0,
     });
     expect(draft.status).toBe(200);
-    expect(draft.body.saved).toMatchObject({ status: "draft", rowVersion: 1 });
+    expect(draft.body).toMatchObject({ status: "draft", rowVersion: 1 });
 
     const missing = await save({
       answers: doc({ agree: true }),
@@ -131,11 +131,11 @@ describe("API integration: task forms (TB-173)", () => {
       rowVersion: 1,
     });
     expect(submitted.status).toBe(200);
-    expect(submitted.body.saved).toMatchObject({
+    expect(submitted.body).toMatchObject({
       status: "submitted",
       rowVersion: 2,
     });
-    expect(submitted.body.saved.submittedAt).toEqual(expect.any(String));
+    expect(submitted.body.submittedAt).toEqual(expect.any(String));
   });
 
   it("lets only a person answer; a token caller reads masked text", async () => {

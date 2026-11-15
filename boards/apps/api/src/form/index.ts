@@ -226,7 +226,7 @@ const form = apiRouter()
         422,
       );
     }
-    return c.json(result, 200);
+    return c.json(result.saved, 200);
   })
   .openapi(exportFormRoute, async (c) =>
     c.json(
