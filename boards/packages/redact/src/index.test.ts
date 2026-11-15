@@ -273,11 +273,51 @@ describe("@kaneo/redact", () => {
         "your_secure_password",
         "パスワードを入力",
         "%s\\nX-GitHub",
-        "ApiKeyUsageRow",
-        "SecretStr",
       ]) {
         expect(looksLikeSecret(value)).toBe(false);
       }
+    });
+
+    // TB-193: a type name is code only with `,`, `;` or `)` right after it.
+    it("looksLikeSecret drops a type name only in a type context", () => {
+      for (const next of [",", ";", ")"]) {
+        expect(looksLikeSecret("ApiKeyUsageRow", next)).toBe(false);
+        expect(looksLikeSecret("SecretStr", next)).toBe(false);
+      }
+      for (const next of ["", " ", "\n", '"', "|"]) {
+        expect(looksLikeSecret("ApiKeyUsageRow", next)).toBe(true);
+      }
+    });
+  });
+
+  // TB-193: capitalized words with no digit, shorter than 32 characters, were
+  // read as a type name everywhere after #283, so a passphrase stayed open.
+  describe("a passphrase of capitalized words (TB-193)", () => {
+    const phrase = join("Correct", "Horse", "Battery", "Staple");
+    const short = join("Open", "Sesame", "Now");
+
+    it.each([
+      ["an env line at the end of the text", `CLIENT_SECRET=${phrase}`, phrase],
+      ["an env line before the next one", `GITHUB_TOKEN=${short}\nX=1`, short],
+      ["a YAML key", `api_key: ${phrase}\nregion: eu`, phrase],
+      ["a JSON value", `{"access_token": "${phrase}", "n": 1}`, phrase],
+      ["a header", `x-api-key: ${phrase}`, phrase],
+      ["a markdown table cell", `| \`GITHUB_TOKEN=${short}\` | prod |`, short],
+    ])("masks %s", (_name, input, value) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(1);
+      expect(result.text).not.toContain(value);
+    });
+
+    it.each([
+      [
+        "a type before a comma",
+        "function f(apiKey: ApiKeyUsageRow, now: Date)",
+      ],
+      ["a type before a semicolon", "{ access_token: AccessTokenPayload; }"],
+      ["a type before a parenthesis", "function f(apiKey: ApiKeyUsageRow)"],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
     });
   });
 

@@ -153,4 +153,17 @@ describe("validateAnswers", () => {
     const submit = validateAnswers(template, doc(hidden));
     expect(Object.keys(submit.answers)).toEqual(["a"]);
   });
+
+  it("takes a half-filled required matrix in a draft, not on submit", () => {
+    const half = {
+      form: template.form,
+      version: template.version,
+      answers: { a: { v: false }, m: { v: [0, null] } },
+    };
+
+    expect(validateAnswers(template, half, { draft: true }).ok).toBe(true);
+    expect(validateAnswers(template, half).issues).toEqual([
+      { fieldId: "m", code: "required" },
+    ]);
+  });
 });

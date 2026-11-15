@@ -50,6 +50,9 @@ describe("form template schema", () => {
     expect(codes([{ ...choice, options: six }])).not.toEqual([]);
     expect(codes([{ ...oneColumn, cols: ["c"] }])).not.toEqual([]);
     expect(codes([{ ...yesno, id: "a b" }])).not.toEqual([]);
+    for (const id of ["__proto__", "constructor", "prototype"]) {
+      expect(codes([{ ...yesno, id }])).not.toEqual([]);
+    }
     expect(codes([{ ...yesno, q: "   " }])).not.toEqual([]);
     expect(codes(many)).not.toEqual([]);
   });

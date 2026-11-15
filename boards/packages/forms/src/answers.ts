@@ -96,7 +96,7 @@ export function validateAnswers(
         issues.push({ fieldId: field.id, code: "required" });
       }
     } else {
-      const code = valueIssue(field, answer?.v);
+      const code = valueIssue(field, answer?.v, draft);
       if (code) issues.push({ fieldId: field.id, code });
     }
     if (answer && (!empty || answer.note)) kept[field.id] = answer;
@@ -114,9 +114,11 @@ export function isEmptyValue(field: FormField, value: unknown): boolean {
 }
 
 /** The issue of one non-empty value, or null when it fits the field. */
+/** `draft`: an empty matrix row is not `required` yet (autosave). */
 export function valueIssue(
   field: FormField,
   value: unknown,
+  draft = false,
 ): AnswerIssueCode | null {
   switch (field.type) {
     case "scale":
@@ -138,7 +140,7 @@ export function valueIssue(
     case "text":
       return textIssue(value, LIMITS.text);
     case "matrix":
-      return matrixIssue(field, value, field.required === true);
+      return matrixIssue(field, value, field.required === true && !draft);
   }
 }
 

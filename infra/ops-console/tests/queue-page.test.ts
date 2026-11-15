@@ -47,6 +47,7 @@ type Pure = {
   rmWindowWeeks: (laneW: number) => { total: number; back: number }
   roadmapMonthLabel: (d: Date, first: boolean) => string
   placeRoadmapLabels: (items: { x: number; prio: number }[], laneW: number, labelW: number, gap: number) => ('up' | 'dn' | null)[]
+  roadmapBefore: <T extends Row>(late: T[], ms: T[], a: Date) => T[]
   targetFromHash: (hash: string) => string
 }
 type FakeDb = { doc: (path: string) => { set: (data: unknown, opts?: { ifVersion?: number }) => Promise<unknown>; get: () => Promise<unknown> } }
@@ -77,7 +78,7 @@ function pure(): Pure {
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
     itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
     tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), rmWindowWeeks: fn('rmWindowWeeks'), roadmapMonthLabel: fn('roadmapMonthLabel'),
-    placeRoadmapLabels: fn('placeRoadmapLabels'), targetFromHash: fn('targetFromHash'),
+    placeRoadmapLabels: fn('placeRoadmapLabels'), roadmapBefore: fn('roadmapBefore'), targetFromHash: fn('targetFromHash'),
   }
 }
 
@@ -817,8 +818,12 @@ describe('роадмап по неделям: подписи не налезаю
     expect(html).toContain("function paintRmRange() { rmRangeBtn.setAttribute('aria-pressed', String(RM_RANGE === 'all')); }")
     expect(html).not.toContain("'Ближайшие недели'")
     // Просроченное до начала окна не пропадает: число у полосы, названия и отставание — в подсказке (решение продукта).
-    expect(html).toContain('var before = win ? late.filter(function (w) { var d = planEndOf(w); return !!d && d < a; }) : [];')
+    expect(html).toContain('var before = win ? roadmapBefore(late, ms, a) : [];')
     expect(html).toContain("'>' + before.length + ' просрочено до окна</small>'")
+    // Цвет просрочки — текстовый токен списков (.is-late, var(--warn)), а не графический --late: на белом у --late
+    // 3,95:1, ниже AA для мелкого текста (линза фронтенда #347, 23:19Z).
+    expect(html).toContain(`'<br><small class="rm-before is-late"'`)
+    expect(html).toContain('.is-late { color: var(--warn); font-weight: 600; }')
     expect(html).toContain('&& before.indexOf(w) < 0; }).length;')
     expect(html).toContain("var RM_RANGE_KEY = 'oq-roadmap-range', RM_RANGE = 'window';")
     expect(html).toContain("function rmWindowOn() { return RM_RANGE !== 'all' && !(window.matchMedia && window.matchMedia('(max-width: 640px)').matches); }")
@@ -834,6 +839,20 @@ describe('роадмап по неделям: подписи не налезаю
     expect(rmWindowWeeks(300)).toEqual({ total: 3, back: 0 })
     // На любой ширине полосы (от 300 px, laneW = max(300, …)) окно подписано неделями (линза фронтенда #347, п. 2).
     for (const w of [300, 320, 335, 340, 620, 900, 1100]) expect(roadmapLabelMode((w / rmWindowWeeks(w).total))).toBe('weeks')
+  })
+
+  it('«просрочено до окна»: план раньше окна; веха с меткой в окне считается один раз — меткой (линза фронтенда #347)', () => {
+    const { roadmapBefore } = pure()
+    const a = new Date(2026, 10, 9) // начало окна — пн 9 ноя
+    const old = { id: 'old', status: 'doing', planEnd: '2026-11-02' } // план до окна, факта нет — только в счётчике
+    const msIn = { id: 'ms-in', status: 'doing', planEnd: '2026-11-03', end: '2026-11-12' } // план до окна, факт в окне
+    const inWin = { id: 'in', status: 'doing', planEnd: '2026-11-10' } // план в окне — не «до окна»
+    const base = { id: 'base', status: 'doing', basePlanEnd: '2026-11-01', planEnd: '2026-11-20' } // сдвинут: считаем по исходному плану
+    const noPlan = { id: 'np', status: 'doing' }
+    const late = [old, msIn, inWin, base, noPlan]
+    expect(roadmapBefore(late, [msIn], a).map((w) => w.id)).toEqual(['old', 'base'])
+    // Без метки в окне (веха вне ms) — снова в счётчике: просрочка не пропадает.
+    expect(roadmapBefore(late, [], a).map((w) => w.id)).toEqual(['old', 'ms-in', 'base'])
   })
 
   it('месяц — коротко, год — у первой подписи и у января', () => {
@@ -1136,6 +1155,12 @@ describe('раскладка «Одной очередью» / «По разде
   it('подпись продукта и отбор по продукту — и у пунктов общего списка', () => {
     expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .item[data-id], #sec-queue .item[data-id]').forEach(decorateItem);")
     expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .list, #sec-queue .list')")
+  })
+})
+
+describe('связь вернулась — страница снова «Ответы сохраняются» сама (14.11: пара 🟠/🟢 на каждой выкатке)', () => {
+  it('снимок после сбоя возвращает страницу к общей базе без перезагрузки', () => {
+    expect(html).toContain("if (remote && modeEl.dataset.mode === 'local') setMode('shared');")
   })
 })
 
