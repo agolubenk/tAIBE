@@ -265,7 +265,7 @@ def launched(a, cwd, roots, depth, git_env, whole):
     """Код из файла, который команда не называет скриптом (merge_guard_launch): скрипты package.json — как команды
     shell из папки пакета, Makefile и awk — грубым признаком. Этот файл переписывает та же команда
     (`printf … > package.json; npm run x`) — ещё и грубый признак, как у скрипта, которого нет (runs_code)."""
-    why = make_option(a)  # длинная опция make без однозначного раскрытия или MAKEFLAGS с опцией чтения
+    why = make_option(a, cwd)  # опция make, MAKEFLAGS, Makefile из потока, `--eval`, `SHELL=` (SE-128, 133, 135)
     found, files = ([(why, a[0])], []) if why else ([], make_files(a, cwd) + awk_programs(a, cwd))
     for d, text in package_scripts(a, cwd):  # текст None — папка пакета не видна (LOST)
         found += [(LOST_DIR, d)] if text is None else classify_bash(text, d, roots, depth + 1, git_env, disk=True)
