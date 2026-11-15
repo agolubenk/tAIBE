@@ -102,9 +102,11 @@ def on_head(sha, head):
 
 
 def ci_state(checks):
-    """checks — список статусов/выводов. pending, если что-то не завершено; failure, если есть провал; иначе ok."""
+    """checks — список статусов/выводов. pending, если что-то не завершено или проверок ещё нет; failure, если есть
+    провал; иначе ok. Пустой список — не «ok»: сразу после push GitHub какое-то время не отдаёт ни одной проверки,
+    и кворум ушёл бы Контролю раньше CI (SE-126)."""
     states = [str(c or "").upper() for c in checks]
-    if any(s in ("PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING") for s in states):
+    if not states or any(s in ("PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING") for s in states):
         return "pending"
     if any(s in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED") for s in states):
         return "failure"

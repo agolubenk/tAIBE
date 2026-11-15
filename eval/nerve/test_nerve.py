@@ -129,9 +129,9 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual((v["verdict"], v["sha"]), ("approve", "76183ab0d"))
         head = "76183ab0d" + "0" * 31
         vs = [pv(f"Линза «{l}» (роль {n}) — ACCEPT на 76183ab0d") for l, n in (("qa", 1), ("продукт", 2), ("к", 4))]
-        self.assertTrue(quorum.quorum(vs, head, [])[0])
+        self.assertTrue(quorum.quorum(vs, head, ["SUCCESS"])[0])
         vs.append(pv("Поправка к линзе корректности (роль 4) — мой ACCEPT на 76183ab0d отменяю"))
-        self.assertFalse(quorum.quorum(vs, head, [])[0], "отозванный ACCEPT не считается")
+        self.assertFalse(quorum.quorum(vs, head, ["SUCCESS"])[0], "отозванный ACCEPT не считается")
 
     def test_quoted_line_is_skipped(self):
         """Ответ с цитатой: вердикт — первая строка вне «>»."""
@@ -146,7 +146,7 @@ class QuorumTest(unittest.TestCase):
                               "**Линза «корректность и отказы» (роль 4) — ACCEPT на 76183ab0d**",
                               "## Продуктовая линза (роль 2) — ACCEPT на 76183ab0d",
                               "**Линза «продукт и простота» — ACCEPT на 76183ab0d**")]
-        ok, approved, _, _ = quorum.quorum(vs, head, [])
+        ok, approved, _, _ = quorum.quorum(vs, head, ["SUCCESS"])
         self.assertEqual((ok, approved), (False, ["backend", "plan"]))
 
     def test_odd_unicode_does_not_raise(self):
@@ -157,14 +157,16 @@ class QuorumTest(unittest.TestCase):
         head = "46b9f87e1aaaabbbbcccc"
         vs = [pv(f"{l}: approve на 46b9f87e1") for l in ("QA", "Бэкенд", "Контроль")]
         self.assertTrue(quorum.quorum(vs, head, ["SUCCESS"])[0])
-        self.assertFalse(quorum.quorum(vs[:2], head, [])[0])
+        self.assertFalse(quorum.quorum(vs[:2], head, ["SUCCESS"])[0])
         old = [pv(f"{l}: approve на 1111111") for l in ("QA", "Бэкенд", "Контроль")]
-        self.assertFalse(quorum.quorum(old, head, [])[0], "вердикт на старую голову не считается")
+        self.assertFalse(quorum.quorum(old, head, ["SUCCESS"])[0], "вердикт на старую голову не считается")
         ch = vs + [pv("Линза «корректность и отказы»: changes на 46b9f87e1 — секрет в логе")]
-        ok, _, changes, _ = quorum.quorum(ch, head, [])
+        ok, _, changes, _ = quorum.quorum(ch, head, ["SUCCESS"])
         self.assertFalse(ok)
         self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
+        self.assertEqual(quorum.quorum(vs, head, [])[::3], (False, "pending"), "проверок ещё нет — не ok (SE-126)")
+        self.assertEqual(quorum.ci_state([]), "pending")
 
     def test_author_roles_add_second_sessions(self):
         roles = CFG["team"]["roles"]
@@ -194,7 +196,7 @@ class QuorumTest(unittest.TestCase):
         vs = [pv(x) for x in (
             "QA: changes на abcdef1", "QA: approve на abcdef1", "Бэкенд: approve на abcdef1",
             "Контроль: approve на abcdef1")]
-        self.assertTrue(quorum.quorum(vs, head, [])[0])
+        self.assertTrue(quorum.quorum(vs, head, ["SUCCESS"])[0])
 
     def test_author_role_by_files(self):
         pr = CFG["github"]["path_roles"]
@@ -356,7 +358,8 @@ class FakeGh:
             if n in self.broken:
                 return 1, "", "HTTP 502"
             state = "MERGED" if n in self.merged else "CLOSED" if n in self.closed else "OPEN"
-            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": self.ci.get(n, "SUCCESS")}],
+            ci = self.ci.get(n, "SUCCESS")          # "" — у головы ещё нет ни одной проверки (SE-126)
+            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": ci}] if ci else [],
                  "state": state, "mergedAt": "2026-11-04T15:55:00Z" if state == "MERGED" else None,
                  "closedAt": None if state == "OPEN" else "2026-11-04T15:55:00Z"}
             return 0, json.dumps(d), ""
@@ -550,6 +553,20 @@ class GithubPollTest(unittest.TestCase):
         self.assertFalse(self.ctx.state["github"]["prs"]["481"]["await_ci"])
         gh_source.poll_github(self.ctx)
         self.assertEqual(len([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]), 1, "CI доехал: дальше без view")
+
+    def test_head_without_checks_waits_for_ci(self):
+        """SE-126: сразу после push у головы нет ни одной проверки. Три approve — ожидание CI, а не pr.quorum с «CI ok»."""
+        head = "e" * 40
+        three = [f"{x}: approve на eeeeeee" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        sources.run = FakeGh([_pr(482, head)], comments={482: three}, ci={482: ""})
+        gh_source.poll_github(self.ctx)
+        p = self.ctx.state["github"]["prs"]["482"]
+        self.assertEqual((p["checks"], p["await_ci"]), ([], True))
+        self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+        sources.run = FakeGh([_pr(482, head)], comments={482: three})
+        gh_source.poll_github(self.ctx)
+        self.assertIn(("pr.quorum", "#482 собран: approve backend, boards, plan на eeeeeeeee, CI ok"), self.kinds())
+        self.assertFalse(p["await_ci"])
 
     def test_upgrade_backfill_is_capped_and_says_open_only_for_new_prs(self):
         old = [_pr(n, "b" * 40, created="2026-11-01T10:00:00Z") for n in range(1, 26)]
