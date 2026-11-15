@@ -12,22 +12,29 @@ import re
 
 from common import Finding
 
+# A provider key also starts after `_` or `-` (TOKEN_glpat-…, x_sk-ant-…): `\b` does not fire after `_`, so these
+# rules start where no letter or digit precedes, as the live rules of `boards/packages/redact` do (OPS-71). A start
+# after `_` stays linear: a body has no `_`, no end check or a fixed length, and in `xox…-` the `-` gives `\b` a place
+# to stop. `github_pat_` keeps `\b`: its body is word characters only, so before `é` the end fails at every length,
+# and a start after every `_` of a long `github_pat_github_pat_…` rescans it to the end (16 s on 256 000 characters).
+START = r'(?<![A-Za-z0-9])'
+
 PATTERNS = [
-    ('aws-access-key', re.compile(r'\b(?:AKIA|ASIA)[0-9A-Z]{16}\b')),
-    ('github-token', re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})\b')),
-    ('gitlab-token', re.compile(r'\bglpat-[A-Za-z0-9_-]{20,}')),
-    ('slack-token', re.compile(r'\bxox[abposr]-[A-Za-z0-9-]{10,}\b')),
+    ('aws-access-key', re.compile(START + r'(?:AKIA|ASIA)[0-9A-Z]{16}\b')),
+    ('github-token', re.compile(r'(?:' + START + r'gh[pousr]_[A-Za-z0-9]{36,}|\bgithub_pat_[A-Za-z0-9_]{60,})\b')),
+    ('gitlab-token', re.compile(START + r'glpat-[A-Za-z0-9_-]{20,}')),
+    ('slack-token', re.compile(START + r'xox[abposr]-[A-Za-z0-9-]{10,}\b')),
     # PEM ends in "KEY-----", a PGP key block in "KEY BLOCK-----".
     ('private-key', re.compile(r'-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----')),
-    ('anthropic-key', re.compile(r'\bsk-ant-[A-Za-z0-9_-]{20,}')),
-    ('openrouter-key', re.compile(r'\bsk-or-v1-[a-f0-9]{40,}')),
-    ('openai-key', re.compile(r'\bsk-(?:proj-)?[A-Za-z0-9]{32,}\b')),
-    ('google-api-key', re.compile(r'\bAIza[0-9A-Za-z_-]{35}\b')),
+    ('anthropic-key', re.compile(START + r'sk-ant-[A-Za-z0-9_-]{20,}')),
+    ('openrouter-key', re.compile(START + r'sk-or-v1-[a-f0-9]{40,}')),
+    ('openai-key', re.compile(START + r'sk-(?:proj-)?[A-Za-z0-9]{32,}\b')),
+    ('google-api-key', re.compile(START + r'AIza[0-9A-Za-z_-]{35}\b')),
     # Also inside a Bot API URL (.../bot<token>/...): only a digit may not precede it.
     ('telegram-bot-token', re.compile(r'(?<![0-9])\d{8,10}:AA[A-Za-z0-9_-]{33}(?![A-Za-z0-9_-])')),
-    ('stripe-key', re.compile(r'\b[sr]k_live_[A-Za-z0-9]{20,}\b')),
+    ('stripe-key', re.compile(START + r'[sr]k_live_[A-Za-z0-9]{20,}\b')),
     # The board's own API keys since TB-136 (`defaultPrefix` in boards/apps/api/src/auth.ts): tbk_ + 64 letters.
-    ('t-boards-key', re.compile(r'\btbk_[A-Za-z0-9]{32,}\b')),
+    ('t-boards-key', re.compile(START + r'tbk_[A-Za-z0-9]{32,}\b')),
     ('jwt', re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}')),
     # A scheme has at most 32 characters: an open one scanned from every word of a long `a.a.a…` line.
     ('url-credentials', re.compile(r'\b[a-z][a-z0-9+.-]{0,31}://[^/\s:@"\'`]+:([^@\s/"\'`]{6,})@[^\s"\'`]+', re.I)),
