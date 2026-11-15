@@ -4,6 +4,7 @@ import {
   errorResponse,
   jsonResponse,
 } from "../openapi";
+import { maskForTokenCaller } from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import globalSearch from "./controllers/global-search";
 import { searchResponseSchema } from "./response";
@@ -33,15 +34,18 @@ const search = apiRouter().openapi(globalSearchRoute, async (c) => {
     c.req.valid("query");
 
   return c.json(
-    await globalSearch({
-      query: q,
-      userId: c.get("userId"),
-      userEmail,
-      type,
-      workspaceId,
-      projectId,
-      limit,
-    }),
+    maskForTokenCaller(
+      c,
+      await globalSearch({
+        query: q,
+        userId: c.get("userId"),
+        userEmail,
+        type,
+        workspaceId,
+        projectId,
+        limit,
+      }),
+    ),
     200,
   );
 });
