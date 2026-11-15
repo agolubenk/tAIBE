@@ -23,6 +23,13 @@ import team_status as TS  # noqa: E402
 from test_lineage import ST, TERMINAL, Base, FakeSys, P  # noqa: E402
 
 NOW = 1.8e9  # часы FakeSys: startedAt/updatedAt в sessions/*.json — мс от эпохи
+# Продукт и линия живой сессии роли не идут в подпроцессы теста: spawn взял бы продукт сессии и её линию как
+# родителя, ps -E увидел бы их у поддельного coord (SE-129).
+SESSION_ENV = ("TAIBE_PRODUCT", "TAIBE_LINEAGE")
+
+
+def clean_env(**extra):
+    return {**{k: v for k, v in os.environ.items() if k not in SESSION_ENV}, **extra}
 
 
 class TeamSys(FakeSys):
@@ -271,7 +278,7 @@ class SpawnLaunchTest(Base):
         self.root.mkdir()
         real = subprocess.run(["ps", "-o", "comm=", "-p", str(os.getpid())], capture_output=True, text=True).stdout.strip()
         self.p = subprocess.Popen(["claude", "-I", "-c", "import time; time.sleep(60)", "--settings", "/x/genome/coord.json"],
-                                  executable=real, env={**os.environ, "TAIBE_LINEAGE": "r.t1"}, start_new_session=True,
+                                  executable=real, env=clean_env(TAIBE_LINEAGE="r.t1"), start_new_session=True,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         start = L.Sys().procs()[self.p.pid].start
         L.write_json(L.sessions_dir() / f"{self.p.pid}.json", {
@@ -285,7 +292,7 @@ class SpawnLaunchTest(Base):
         super().tearDown()
 
     def launch(self, *extra):
-        env = {**os.environ, "TMPDIR": str(self.dir)}
+        env = clean_env(TMPDIR=str(self.dir))
         return subprocess.run(["bash", os.path.join(HERE, "spawn_session.sh"), "--launch", "--roles", "coord,plan",
                                "--dry-run", "--cwd", str(self.root), *extra], capture_output=True, text=True, env=env,
                               timeout=60)

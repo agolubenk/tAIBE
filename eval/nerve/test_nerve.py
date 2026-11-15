@@ -26,6 +26,15 @@ import sources  # noqa: E402
 from journal import DIGEST, NERVOUS, Journal, read_from  # noqa: E402
 
 MSK = timezone(timedelta(hours=3))
+# Окружение живой сессии роли (геном ставит продукт и линию): подпроцесс nerve.py без них, иначе журнал уходит в
+# папку продукта, а тест читает NERVE_STATE_DIR (SE-129).
+SESSION_ENV = ("TAIBE_PRODUCT", "TAIBE_LINEAGE")
+
+
+def clean_env(**extra):
+    return {**{k: v for k, v in os.environ.items() if k not in SESSION_ENV}, **extra}
+
+
 with open(os.path.join(HERE, "config.json"), encoding="utf-8") as _f:
     CFG = json.load(_f)
 # Дельта /changes (OPS-50) ходит в консоль через sources.run — у неё свои тесты с фальшивой консолью
@@ -833,7 +842,7 @@ class LimitActionTest(unittest.TestCase):
 
 class TapTest(unittest.TestCase):
     def run_tap(self, d, role):
-        env = dict(os.environ, NERVE_STATE_DIR=d)
+        env = clean_env(NERVE_STATE_DIR=d)
         return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), "tap", role, "--once"],
                               capture_output=True, text=True, env=env, timeout=30).stdout
 
@@ -971,7 +980,7 @@ class TapTest(unittest.TestCase):
 
 class EmitTest(unittest.TestCase):
     def nerve(self, d, *args):
-        env = dict(os.environ, NERVE_STATE_DIR=d)
+        env = clean_env(NERVE_STATE_DIR=d)
         return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), *args],
                               capture_output=True, text=True, env=env, timeout=30)
 
