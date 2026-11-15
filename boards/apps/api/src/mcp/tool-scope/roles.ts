@@ -37,6 +37,7 @@ export const ROLE_TOOLS = {
     "list_project_columns",
     "forest_set_card_meta",
     "forest_request_approval",
+    "get_form_responses",
   ],
   reviewer: [
     ...READ,
@@ -46,6 +47,7 @@ export const ROLE_TOOLS = {
     "get_task_relations",
     "list_task_activity",
     "forest_request_approval",
+    "get_form_responses",
   ],
   planner: [
     ...READ,
@@ -67,6 +69,10 @@ export const ROLE_TOOLS = {
     "forest_request_approval",
     "forest_list_approvals",
     "forest_list_sectors",
+    // TB-173: the planner sets up a card's questions; others read the answers.
+    "create_form",
+    "attach_form",
+    "get_form_responses",
   ],
   forester: [
     ...READ,

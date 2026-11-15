@@ -54,6 +54,7 @@ const READ_TOOLS = new Set([
   "forest_get_card_memory",
   "forest_list_work_state",
   "notebook_search",
+  "get_form_responses",
 ]);
 
 export function isReadTool(name: string) {

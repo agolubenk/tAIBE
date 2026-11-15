@@ -28,6 +28,7 @@ const AGENT_WRITE_TOOLS = new Set([
   "update_task_assignee",
   "update_task_due_date",
   "forest_set_card_meta",
+  "attach_form",
 ]);
 
 export function isAgentWriteTool(name: string) {

@@ -12,6 +12,7 @@ import {
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
 import { isTokenCaller, maskForTokenCaller } from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
+import { withAttachLease } from "./attach-lease";
 import attachForm from "./controllers/attach-form";
 import createTemplate from "./controllers/create-template";
 import exportForm from "./controllers/export-form";
@@ -96,7 +97,8 @@ const attachFormRoute = createRoute({
   path: "/task/{taskId}",
   tags: TAG,
   summary: "Attach a form to a task",
-  description: "Attach a template of the task's workspace to the task.",
+  description:
+    "Attach a template of the task's workspace to the task. An agent attaches only under its lease on the task (AC-010): the lease token goes in x-t-boards-fence.",
   middleware: [
     workspaceAccess.fromTaskId("taskId"),
     requireWorkspacePermission({ task: ["update"] }),
@@ -109,7 +111,9 @@ const attachFormRoute = createRoute({
     201: jsonResponse("The attached form", taskFormSchema),
     403: errorResponse("No access to the task, or no update permission"),
     404: errorResponse("Task or template not found"),
-    409: errorResponse("This template is already on the task"),
+    409: errorResponse(
+      "This template is already on the task, or an agent has no live lease on it",
+    ),
   },
 });
 
@@ -199,11 +203,14 @@ const form = apiRouter<BaseVariables & { workspaceId: string }>()
     return c.json(row, 201);
   })
   .openapi(attachFormRoute, async (c) => {
-    const attached = await attachForm(
-      c.req.valid("param").taskId,
-      c.get("workspaceId"),
-      c.req.valid("json").templateId,
-      resolveForestActor(c).id,
+    const { taskId } = c.req.valid("param");
+    const workspaceId = c.get("workspaceId");
+    const { templateId } = c.req.valid("json");
+    const actor = resolveForestActor(c);
+    const attached = await withAttachLease(
+      c,
+      { actor, taskId, workspaceId },
+      () => attachForm(taskId, workspaceId, templateId, actor.id),
     );
     return c.json(maskForTokenCaller(c, attached), 201);
   })

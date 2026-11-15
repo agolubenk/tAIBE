@@ -1,5 +1,8 @@
+import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import db, { schema } from "../../apps/api/src/database";
+import { agentJournalTable } from "../../apps/api/src/database/forest-schema";
+import { ATTACH_FORM_ACTION } from "../../apps/api/src/form/attach-lease";
 import { resetTestDatabase } from "./helpers/database";
 import { createWorkspaceMember } from "./helpers/fixtures";
 import { addTask, createForest } from "./helpers/forest";
@@ -189,6 +192,53 @@ describe("API integration: task forms (TB-173)", () => {
       answered: 2,
       total: 2,
     });
+  });
+
+  it("lets an agent create a template and attach it only under its lease (F-24-1, AC-010)", async () => {
+    const forest = await createForest();
+    const task = await addTask(forest.project.id);
+    if (!task) throw new Error("fixture");
+    const agent = (path: string, body: unknown, fence?: string) =>
+      forest.agentApi(
+        "POST",
+        path,
+        body,
+        fence ? { "x-t-boards-fence": fence } : {},
+        "plan-1",
+      );
+
+    const created = await agent(`/form/template/${forest.workspace.id}`, {
+      template: TEMPLATE,
+    });
+    expect(created.status).toBe(201);
+    const body = { templateId: created.body.id };
+
+    const noLease = await agent(`/form/task/${task.id}`, body);
+    expect(noLease.status).toBe(409);
+    expect(noLease.body.message).toContain("lease_missing");
+
+    const lease = await forest.agent("/leases", { taskId: task.id }, "plan-1");
+    expect(lease.status).toBe(200);
+    const attached = await agent(
+      `/form/task/${task.id}`,
+      body,
+      String(lease.body.fencingToken),
+    );
+    expect(attached.status).toBe(201);
+
+    const journal = await db
+      .select({ outcome: agentJournalTable.outcome })
+      .from(agentJournalTable)
+      .where(
+        and(
+          eq(agentJournalTable.action, ATTACH_FORM_ACTION),
+          eq(agentJournalTable.targetId, task.id),
+        ),
+      );
+    expect(journal.map((row) => row.outcome).sort()).toEqual([
+      "allowed",
+      "denied",
+    ]);
   });
 
   it("refuses a body above the limit before it parses it", async () => {
