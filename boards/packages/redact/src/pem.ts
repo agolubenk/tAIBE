@@ -37,7 +37,27 @@ function nextFrom(stop: number, next: RegExpExecArray | null | undefined) {
   return next && next.index < stop ? next.index : stop;
 }
 
-export const pem: Detector = (text) => {
+// Coord 11:05 (boards #400 N1): the blocks of the detector before TB-203
+// are masked too. Its form is the same in be1b3ffe1, 2dd520685 and
+// 221e381b4. So every block that it masks stays masked, whatever pairing the
+// search above reads in glued lines. redact() merges overlapping hits. One
+// more linear pass: each search goes on after the last END.
+function pairedBlocks(text: string): RedactHit[] {
+  const hits: RedactHit[] = [];
+  PEM_BEGIN.lastIndex = 0;
+  for (let begin = PEM_BEGIN.exec(text); begin; begin = PEM_BEGIN.exec(text)) {
+    PEM_END.lastIndex = PEM_BEGIN.lastIndex;
+    if (!PEM_END.exec(text)) break;
+    hits.push({ kind: "pem", start: begin.index, end: PEM_END.lastIndex });
+    PEM_BEGIN.lastIndex = PEM_END.lastIndex;
+  }
+  return hits;
+}
+
+export const pem: Detector = (text) =>
+  cutBlocks(text).concat(pairedBlocks(text));
+
+function cutBlocks(text: string): RedactHit[] {
   const hits: RedactHit[] = [];
   let at = 0;
   let begin: RegExpExecArray | null | undefined;
@@ -65,7 +85,19 @@ export const pem: Detector = (text) => {
     }
     if (!begin) break;
     const start = begin.index;
-    const opened = start + begin[0].length;
+    let opened = start + begin[0].length;
+    // A BEGIN can start inside this BEGIN line, on its dashes
+    // (`KEY-----BEGIN`). Then the block opens at the end of the last such
+    // BEGIN: an END glued to it was not its END, and the body after it
+    // stayed open (role 4 #400 B1).
+    for (
+      let glued = matchFrom(PEM_BEGIN, text, begin.index + 1, begin);
+      glued && glued.index < opened;
+      glued = matchFrom(PEM_BEGIN, text, glued.index + 1, glued)
+    ) {
+      opened = Math.max(opened, glued.index + glued[0].length);
+      begin = glued;
+    }
     // An END that starts inside the BEGIN line is not its END.
     end = matchFrom(PEM_END, text, opened, end);
     if (end) {
@@ -80,4 +112,4 @@ export const pem: Detector = (text) => {
     }
   }
   return hits;
-};
+}

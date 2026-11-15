@@ -18,6 +18,47 @@ export function maskChunkEdges(
   before = "",
   after = "",
 ): { text: string; hidden: boolean } {
+  const all = edgeHits(text, before, after);
+  return { text: masked(text, all), hidden: all.length > 0 };
+}
+
+// TB-196 (boards #388 N1, coord 10:56): the passage of the embedding worker
+// is the heading and the text glued by a blank line. It masks every
+// character that one of two readings masks: the glue read whole (#388 before
+// B1), and the glue read again over the text masked first, with its
+// neighbours (Claude #388 B1). On the redact of #388 each reading alone
+// opened a value that the other masked.
+export function maskPassage(
+  heading: string,
+  text: string,
+  before = "",
+  after = "",
+): string {
+  const own = edgeHits(text, before, after);
+  if (!heading) return masked(text, own);
+  const from = heading.length + 2;
+  const passage = `${heading}\n\n${text}`;
+  const again = redact(`${heading}\n\n${masked(text, own)}`).hits.map(
+    (hit) => ({
+      kind: hit.kind,
+      start: inPassage(hit.start, from, own).start,
+      end: inPassage(hit.end - 1, from, own).end,
+    }),
+  );
+  const shifted = own.map((hit) => ({
+    ...hit,
+    start: hit.start + from,
+    end: hit.end + from,
+  }));
+  return masked(
+    passage,
+    merged([...redact(passage).hits, ...shifted, ...again]),
+  );
+}
+
+// The chunk's own hits and the hits of its glue with the neighbours that
+// touch it, merged, in its offsets.
+function edgeHits(text: string, before: string, after: string): RedactHit[] {
   const hits = redact(text).hits;
   if (before || after) {
     for (const glue of GLUES) {
@@ -30,8 +71,35 @@ export function maskChunkEdges(
       );
     }
   }
-  const all = merged(hits);
-  return { text: masked(text, all), hidden: all.length > 0 };
+  return merged(hits);
+}
+
+// The passage characters that the character `at` of the heading glued to
+// the masked text stands for: a marker stands for the whole hit it
+// replaced. `hits` are the merged hits of the text.
+function inPassage(
+  at: number,
+  from: number,
+  hits: RedactHit[],
+): { start: number; end: number } {
+  if (at < from) return { start: at, end: at + 1 };
+  const index = at - from;
+  let inMasked = 0;
+  let inText = 0;
+  for (const hit of hits) {
+    const plain = hit.start - inText;
+    if (index < inMasked + plain) {
+      const char = from + inText + index - inMasked;
+      return { start: char, end: char + 1 };
+    }
+    inMasked += plain + marker(hit.kind).length;
+    if (index < inMasked) {
+      return { start: from + hit.start, end: from + hit.end };
+    }
+    inText = hit.end;
+  }
+  const char = from + inText + index - inMasked;
+  return { start: char, end: char + 1 };
 }
 
 // The text of the chunk before (-1) or after (1) a chunk in the same
@@ -92,11 +160,13 @@ function merged(hits: RedactHit[]): RedactHit[] {
 }
 
 // The marker format of redact.
+const marker = (kind: string) => `[REDACTED:${kind}]`;
+
 function masked(text: string, hits: RedactHit[]): string {
   let result = "";
   let cursor = 0;
   for (const hit of hits) {
-    result += `${text.slice(cursor, hit.start)}[REDACTED:${hit.kind}]`;
+    result += `${text.slice(cursor, hit.start)}${marker(hit.kind)}`;
     cursor = hit.end;
   }
   return result + text.slice(cursor);

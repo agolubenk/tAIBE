@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { redact as baseRedact } from "../fixtures/redact-base";
 import { redact as base378Redact } from "../fixtures/redact-base-221e381b4";
+import { redact as baseBoardRedact } from "../fixtures/redact-base-be1b3ffe1";
 import { redact, type RedactHit } from "./index";
 
 // Coord, #375 (TB-198): a change of the search may only add masks. Every
@@ -126,7 +127,10 @@ function generator(seed: number): () => Case {
 // Tools lens #400 B1: texts of 2-9 PEM pieces, also an END and a BEGIN glued
 // by shared dashes (`KEY-----BEGIN`, 5-9 dashes). Every character that a base
 // masks, the head masks too. Measured on seeds 11-13: without the fix the
-// head loses a mask in 78-102 of 20 000 texts, with it in none.
+// head loses a mask in 78-102 of 20 000 texts, with it in none. Role 4 #400
+// B1 and coord 11:05 add a third base, be1b3ffe1 (src/index.ts of the base
+// of this PR, byte for byte), pieces of other names and glued lines:
+// BEGIN+BEGIN+END, END+BEGIN, BEGIN+END.
 const PEM_PIECES = [
   "-----BEGIN A KEY-----",
   "-----END A KEY-----",
@@ -139,6 +143,12 @@ const PEM_PIECES = [
   "\n",
   "\n\n",
   " ",
+  "-----BEGIN RSA PUBLIC KEY-----",
+  "END B KEY-----",
+  "KEY BLOCK-----",
+  "-----BEGIN B KEY-----BEGIN B KEY-----END B KEY-----",
+  "-----END A KEY-----BEGIN B KEY-----",
+  "-----BEGIN B KEY-----END A KEY-----",
 ];
 
 function pemGenerator(seed: number): () => string {
@@ -163,6 +173,9 @@ const BASES = [
   { name: "2dd520685", redact: baseRedact },
   { name: "221e381b4", redact: base378Redact },
 ];
+// The value search of be1b3ffe1 is the one of this PR: only its PEM masks
+// are compared.
+const PEM_BASES = [...BASES, { name: "be1b3ffe1", redact: baseBoardRedact }];
 
 describe("redact masks a superset of the base", () => {
   it.each(BASES)(
@@ -195,7 +208,7 @@ describe("redact masks a superset of the base", () => {
     },
   );
 
-  it.each(BASES)(
+  it.each(PEM_BASES)(
     `keeps every $name PEM mask on ${CASES} seeded glued blocks`,
     (b) => {
       const next = pemGenerator(SEED);

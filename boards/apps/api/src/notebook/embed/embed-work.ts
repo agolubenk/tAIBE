@@ -1,8 +1,7 @@
-import { redact } from "@kaneo/redact";
 import { and, eq, isNull, ne, notInArray, or } from "drizzle-orm";
 import db from "../../database";
 import { notebookChunkTable } from "../../database/notebook-schema";
-import { maskChunkEdges, textNear } from "../chunk/mask-chunk-edges";
+import { maskPassage, textNear } from "../chunk/mask-chunk-edges";
 import {
   leaseChunks,
   leasedChunkIds,
@@ -31,23 +30,17 @@ export type EmbedResult = {
 // TB-196: the embedding worker is a token caller and its model may run at an
 // outside provider, so a chunk goes to it masked, also a secret cut at its
 // edge (TB-203). Vectors embedded before this change stay until their chunk
-// changes or the model does. The text is masked before the heading is
-// glued to it: a heading that ends with a label ("Authorization: Bearer")
-// took the first word of the text as its value, and the secret after the
-// text's own label stayed open (Claude #388 B1).
+// changes or the model does. A heading that ends with a label
+// ("Authorization: Bearer") took the first word of the text as its value,
+// and the secret after the text's own label stayed open (Claude #388 B1):
+// maskPassage reads the text on its own too.
 const chunkPassage = (chunk: {
   heading: string;
   text: string;
   before: string | null;
   after: string | null;
-}) => {
-  const { text } = maskChunkEdges(
-    chunk.text,
-    chunk.before ?? "",
-    chunk.after ?? "",
-  );
-  return redact(chunk.heading ? `${chunk.heading}\n\n${text}` : text).text;
-};
+}) =>
+  maskPassage(chunk.heading, chunk.text, chunk.before ?? "", chunk.after ?? "");
 
 // Search queries first: someone is waiting on them.
 export async function claimEmbedWork(

@@ -1,7 +1,7 @@
 import { redact } from "@kaneo/redact";
 import { describe, expect, it } from "vite-plus/test";
 import { CHUNK_MAX_CHARS, chunkMarkdown } from "./chunk-markdown";
-import { maskChunkEdges } from "./mask-chunk-edges";
+import { maskChunkEdges, maskPassage } from "./mask-chunk-edges";
 
 // Fake secrets assembled at runtime, so this file holds no key-shaped
 // literal. The filler is Cyrillic, so a visible run of 3 characters of a
@@ -126,5 +126,53 @@ describe("maskChunkEdges (TB-203)", () => {
       text: "слово",
       hidden: false,
     });
+  });
+});
+
+describe("maskPassage (boards #388 N1)", () => {
+  const LABELS = [
+    "Authorization: Bearer",
+    "Authorization: Bearer ",
+    "DB_PASSWORD=",
+    "password: ",
+    "Staging password:",
+    "api_key=",
+    "x(",
+    " ",
+    "\n",
+    '"',
+  ];
+  const secret = value(16, 5);
+
+  // The glue of heading and text read whole, and read again over the text
+  // masked first: a value that one of them hides stays hidden.
+  it("hides every value that one of the two readings hides", () => {
+    let state = 11;
+    const pick = <T>(items: readonly T[]): T => {
+      state = (state * 48_271) % 2_147_483_647;
+      return items[state % items.length] as T;
+    };
+    const run = (n: number) =>
+      Array.from({ length: n }, () => pick(LABELS)).join("");
+    let hidden = 0;
+    for (let index = 0; index < 5_000; index += 1) {
+      const heading = run(pick([1, 2]));
+      const text = `${run(pick([1, 2, 3, 4]))}${pick(["", " "])}${secret}`;
+      const whole = redact(`${heading}\n\n${text}`).text;
+      const again = redact(`${heading}\n\n${maskChunkEdges(text).text}`).text;
+      if (whole.includes(secret) && again.includes(secret)) continue;
+      hidden += 1;
+      expect(maskPassage(heading, text)).not.toContain(secret);
+    }
+    expect(hidden).toBeGreaterThan(1_000);
+  });
+
+  it("hides the value after a label heading and a chain of labels", () => {
+    const passage = maskPassage(
+      "Authorization: Bearer",
+      `Authorization: Bearer DB_PASSWORD=Authorization: Bearer ${secret} для бота`,
+    );
+    expect(passage).not.toContain(secret);
+    expect(passage).toContain("для бота");
   });
 });

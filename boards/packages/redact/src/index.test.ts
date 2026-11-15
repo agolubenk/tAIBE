@@ -777,6 +777,35 @@ describe("@kaneo/redact", () => {
       },
     );
 
+    // Role 4 #400 B1: a BEGIN glued inside a BEGIN line and an END glued to
+    // the second one. That END starts inside the second BEGIN line, so it is
+    // not its END. The base masked the body after a block before it; alone,
+    // the base left it open too.
+    it.each([
+      ["alone", ""],
+      [
+        "after a block",
+        `${join("-----BEGIN ", "A KEY-----")}\nAAAA\n${join("-----END ", "A KEY")}`,
+      ],
+    ])(
+      "masks the body after two glued BEGINs and an END glued to the second, %s",
+      (_, before) => {
+        const body = join("SECRET", "BODY1234");
+        const text = `${before}${join("-----BEGIN ", "B KEY-----")}${join("BEGIN ", "B KEY-----")}${join("END ", "B KEY-----")}${body}x\n\n${join("-----END ", "B KEY-----")}`;
+        expect(redact(text).text).not.toContain(body);
+      },
+    );
+
+    // Boards #400 N1: the search pairs the BEGIN at 56 with an END in the
+    // dashes of the BEGIN line at 77; the detector before TB-203 masked the
+    // block from 77, so its blocks are masked too.
+    it("keeps every block of the detector before TB-203 masked", () => {
+      const body = join("S3CR", "3T");
+      const text = `BEGIN B KEY---------------BEGIN A KEY----------END B KEY-----BEGIN B KEY----------BEGIN B KEY-----END A KEY-----${body}-----BEGIN A KEY----------END B KEY-----`;
+      expect(text.indexOf(body)).toBe(112);
+      expect(redact(text).text).not.toContain(body);
+    });
+
     it("joins a broken BEGIN with the block after it, as the lazy regex did", () => {
       const result = redact(`${begin} cut\n${secrets.pem}`);
       expect(result.text).toBe("[REDACTED:pem]");
