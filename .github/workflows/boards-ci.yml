@@ -83,6 +83,9 @@ jobs:
           cache-dependency-path: boards/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # The image runs dist under plain Node: an extensionless relative import crash-loops the API (TB-143, TB-173).
+      - name: dist loads as ESM under plain Node
+        run: node deploy/check-dist-esm.mjs
 
   i18n:
     runs-on: ubuntu-latest
