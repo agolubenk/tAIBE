@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/tooltip";
 import useGetProject from "@/hooks/queries/project/use-get-project";
 import useGetTask from "@/hooks/queries/task/use-get-task";
+import { useBelowLg } from "@/hooks/use-media-query";
 import { useProjectWebSocket } from "@/hooks/use-project-websocket";
 import { getProjectUnavailableReason } from "@/lib/project-unavailable-reason";
 import ProjectUnavailable from "./project-unavailable";
@@ -42,6 +43,7 @@ export default function TaskLayout({
   });
   const { data: task } = useGetTask(taskId);
   const unavailableReason = getProjectUnavailableReason(projectError);
+  const isBelowLg = useBelowLg();
 
   useProjectWebSocket(unavailableReason ? "" : projectId);
 
@@ -122,7 +124,8 @@ export default function TaskLayout({
             )}
           </Layout.Content>
         </div>
-        {unavailableReason ? null : (
+        {/* Below lg the rail is not mounted: hidden by CSS, its panels would still fetch. */}
+        {unavailableReason || isBelowLg ? null : (
           <div className="hidden border-border/80 border-l lg:flex lg:h-full lg:overflow-y-auto">
             {rail}
           </div>
