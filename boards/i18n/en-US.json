@@ -3905,6 +3905,7 @@
 				"targetUnknown": "The card is gone or you cannot open its project.",
 				"action": {
 					"closeTask": "Close the card as «{{status}}»",
+					"closeTasks": "Close {{count}} cards, each into its project's final column: {{keys}}",
 					"reopenTask": "Reopen the card as «{{status}}»",
 					"setPriority": "Set priority «{{priority}}»",
 					"fellTree": "Fell the tree",
