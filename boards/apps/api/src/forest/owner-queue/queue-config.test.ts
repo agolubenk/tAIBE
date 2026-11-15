@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { rowProduct } from "./plan-types";
-import {
-  itemIdPrefix,
-  planDocId,
-  readOwnerQueueConfig,
-} from "./queue-config";
+import { itemIdPrefix, planDocId, readOwnerQueueConfig } from "./queue-config";
 
 const base = {
   OQ_URL: "https://ops.test",
