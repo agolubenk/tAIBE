@@ -111,7 +111,8 @@ function tree(parts: {
   };
 }
 
-const seedBody = (material: TreeMaterial) => buildSeeds(material)[0].body;
+const seedBody = (material: TreeMaterial) =>
+  buildSeeds(material)[0]?.body ?? "";
 
 // Each clip of felling, with the secret `shift` characters before its cut.
 const CLIPS: {
@@ -154,7 +155,7 @@ describe("uncutText (TB-203)", () => {
       for (let shift = 1; shift < secret.length; shift++) {
         const rootComment = `${filler(HISTORY_CONTENT_CHARS - shift)}${secret} хвост`;
         const [entry] = buildLog(tree({ rootComment })).history;
-        const content = entry.content as string;
+        const content = String(entry?.content ?? "");
         expect(content).toHaveLength(HISTORY_CONTENT_CHARS);
         if (visible(redact(content).text, shown)) leakedAlone++;
         const read = redact(uncutText(content, HISTORY_CONTENT_CHARS)).text;
