@@ -7,8 +7,11 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const root = resolve(process.argv[2] ?? join(import.meta.dirname, "..", "packages"));
-const SPEC = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.{1,2}\/[^"'\n]*)\1/g;
+const root = resolve(
+  process.argv[2] ?? join(import.meta.dirname, "..", "packages"),
+);
+const SPEC =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.{1,2}\/[^"'\n]*)\1/g;
 const problems = [];
 let checked = 0;
 
@@ -26,7 +29,8 @@ function entries(exp, main) {
     if (typeof value === "string") {
       if (/\.m?js$/.test(value)) out.add(join(value));
     } else if (value && typeof value === "object") {
-      for (const [key, sub] of Object.entries(value)) if (key !== "types") walk(sub);
+      for (const [key, sub] of Object.entries(value))
+        if (key !== "types") walk(sub);
     }
   };
   walk(exp);
@@ -47,7 +51,9 @@ for (const name of readdirSync(root).sort()) {
       checked++;
       for (const m of readFileSync(file, "utf8").matchAll(SPEC)) {
         if (!isFile(resolve(dirname(file), m[2]))) {
-          problems.push(`${name}/${relative(dir, file)}: "${m[2]}" names no file`);
+          problems.push(
+            `${name}/${relative(dir, file)}: "${m[2]}" names no file`,
+          );
         }
       }
     }
@@ -56,7 +62,9 @@ for (const name of readdirSync(root).sort()) {
     try {
       await import(pathToFileURL(join(dir, entry)).href);
     } catch (err) {
-      problems.push(`${name}/${entry}: import fails: ${err.code ?? ""} ${String(err.message).split("\n")[0]}`);
+      problems.push(
+        `${name}/${entry}: import fails: ${err.code ?? ""} ${String(err.message).split("\n")[0]}`,
+      );
     }
   }
 }
@@ -64,7 +72,9 @@ for (const name of readdirSync(root).sort()) {
 if (problems.length) {
   console.error(`dist ESM check: ${problems.length} problem(s) in ${root}`);
   for (const p of problems) console.error(`  ${p}`);
-  console.error('Fix: write relative imports with ".js" (module and moduleResolution "NodeNext" make tsc enforce it).');
+  console.error(
+    'Fix: write relative imports with ".js" (module and moduleResolution "NodeNext" make tsc enforce it).',
+  );
   process.exit(1);
 }
 console.log(`dist ESM check: ok, ${checked} files`);
