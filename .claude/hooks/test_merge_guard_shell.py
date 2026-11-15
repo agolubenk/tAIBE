@@ -473,49 +473,63 @@ for form in ("eval -- echo hi", "eval -- \"$(cat ok.sh)\"", "emulate sh -c -- \"
     bash(f"r24, `--` на ветке или безвредно на main: {form!r}", form, False,
          cwd=e_branch if form.startswith("builtin") else e_main)
 
-# --- SE-105: грубый признак Makefile — рецепты целей команды, их пререквизитов и вложенного make, а не весь файл ---
-mk = TMP / "se105"
+# --- SE-105: Makefile без грубого признака — только разрешённая цель при Makefile, как в origin/board-agents ---
 REAL_MAKEFILE = Path(__file__).resolve().parents[2] / "Makefile"
-MERGE = "\tgh pr merge 1\n"
-for name, text in (
-        ("real/Makefile", REAL_MAKEFILE.read_text() if REAL_MAKEFILE.is_file() else ""),
-        ("Makefile", "# Worktrees — .claude/rules/07-worktrees.md; gh pr merge 1 тут не запускается\nNAME ?=\n"
-                     ".PHONY: all wt-fix wt-add rel\nall:\n\techo ok\nwt-fix:\n\t$(MAKE) wt-add NAME=$(NAME)\n"
-                     "wt-add:\n\tgit worktree add \"w/$(NAME)\"\n\t@echo \"дальше: make wt-deps NAME=$(NAME)\"\n"
-                     "wt-deps:\n\techo deps\ncheck: check-layer\ncheck-layer:\n"
-                     "\t@for t in .claude/hooks/test_*.py; do python3 \"$$t\"; done\nrel: pre\n" + MERGE +
-                     "pre:\n\techo\nvia:\n\t$(MAKE) -s rel\ndyn:\n\t$(MAKE) $(T)\nlong:\n\techo a \\\n"
-                     "git push origin main\nlate: | rel\n\techo\nboth::\n\techo\nboth::\n" + MERGE),
-        ("cond/Makefile", "x:\n\techo\nifeq (1,1)\n" + MERGE + "endif\n"),
-        ("inc/Makefile", "include extra.mk\nall:\n\techo\nrel:\n" + MERGE), ("inc/extra.mk", "all: rel\n"),
-        ("remake/Makefile", "-include gen.mk\nall:\n\techo\ngen.mk:\n" + MERGE),
-        ("eval/Makefile", "all:\n\techo\nrel:\n" + MERGE + "$(eval all: rel)\n"),
-        ("tab/Makefile", "\t$(eval all: rel)\nall:\n\techo\nrel:\n" + MERGE),
-        ("sub/Makefile", "SUB = $(MAKE)\nall:\n\t$(SUB) rel\nrel:\n" + MERGE),
-        ("pat/Makefile", "%.done:\n" + MERGE + "all: x.done\n\techo\n"),
-        ("static/Makefile", "all: a.o\na.o: %.o: %.c\n" + MERGE),
-        ("dflt/Makefile", ".DEFAULT:\n" + MERGE + "all: missing\n\techo\n"),
-        ("prefix/Makefile", ".RECIPEPREFIX = >\nall:\n>echo\nrel:\n>gh pr merge 1\n"),
-        ("define/Makefile", "define R\n" + MERGE + "endef\nall:\n\techo\n"),
-        ("goal/Makefile", ".DEFAULT_GOAL := rel\nall:\n\techo\nrel:\n" + MERGE)):
-    (mk / name).parent.mkdir(parents=True, exist_ok=True)
-    (mk / name).write_text(text)
-for form in ("make", "make all", "make wt-fix NAME=x", "make wt-add NAME=x", "make pre", "make -j 4 all",
-             "make -C . all NAME=y", "make -s -f Makefile wt-deps", "make -n all"):
-    bash(f"SE-105, цель без признака: {form!r}", form, False, cwd=mk)
-for form in ("make rel", "make pre rel", "make via", "make dyn", "make check", "make long", "make late", "make both",
-             "make --eval='all: rel' all", "make -E 'all: rel' all", "MAKEFLAGS=--eval=all:rel make all",
-             "MAKEFILES=x.mk make all", "make -f Makefile rel"):
-    bash(f"SE-105, признак в рецепте цели или цели не видны: {form!r}", form, True, cwd=mk)
-for d, form in (("cond", "make x"), ("inc", "make all"), ("remake", "make all"), ("eval", "make all"),
-                ("tab", "make all"), ("sub", "make all"), ("pat", "make all"), ("static", "make all"),
-                ("dflt", "make all"), ("prefix", "make all"), ("define", "make all"), ("goal", "make")):
-    bash(f"SE-105, {d}: правило не разобрать — весь текст: {form!r}", form, True, cwd=mk / d)
-bash("SE-105, .DEFAULT_GOAL не мешает названной цели", "make all", False, cwd=mk / "goal")
-for form in ("make wt-fix NAME=x", "make wt-list", "make wt-help", "make check-eval", "make check-repo"):
-    bash(f"SE-105, Makefile репозитория: {form!r}", form, False, cwd=mk / "real")
-bash("SE-105, Makefile репозитория: check-layer запускает .claude/hooks/test_*.py — признак остаётся", "make check",
-     True, cwd=mk / "real")
+BASE_REF = "refs/remotes/origin/board-agents"
+
+
+def git_t(d, *args):
+    subprocess.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True,
+                   capture_output=True)
+
+
+def commit_makefile(d, text, ref=BASE_REF):
+    (d / "Makefile").write_text(text)
+    git_t(d, "add", "Makefile")
+    git_t(d, "commit", "-q", "-m", "m")
+    git_t(d, "update-ref", ref, "HEAD")
+
+
+real = REAL_MAKEFILE.read_text()
+check("SE-105: в Makefile репозитория есть признак", None if ".claude/hooks/" in real else "нет", False)
+mk = repo_on("fix/x", "se105")
+commit_makefile(mk, real)
+for form in ("make wt-fix NAME=x", "make wt-feature NAME=a.b-c_1", "make wt-list", "make wt-help", "make check-eval",
+             "make check-repo", "make wt-deps TRACK=fix NAME=x", "make wt-check TRACK=fix NAME=x",
+             "make wt-rm TRACK=fix NAME=x", "make wt-fix NAME=x WT_DEPS=0", "  make  wt-list  "):
+    bash(f"SE-105, разрешённая цель, Makefile как в board-agents: {form!r}", form, False, cwd=mk)
+for form in ("make", "make check", "make check-layer", "make help", "make wt-add TRACK=fix NAME=x",
+             "make wt-list wt-help", "make ./check", "make ./wt-list", "make 'wt-list'", 'make "$G"',
+             "make $(echo wt-list)", "make `echo wt-list`", "make wt-lis?", "make {wt-list,check}", "make wt-*",
+             "/usr/bin/make wt-list", "gmake wt-list", "command make wt-list", "env make wt-list", "\\make wt-list",
+             "make -s wt-list", "make --ev=x wt-list", "make --eval='wt-list: check-layer' wt-list",
+             "make -f Makefile wt-list", "make -C . wt-list", "make wt-list -n",
+             "MAKEFLAGS=--eval=wt-list:check-layer make wt-list", "MAKEFILES=x.mk make wt-list", "X=1 make wt-list",
+             "make wt-list SHELL=/bin/sh", "make wt-fix NAME='x;y'", "make wt-fix NAME=x/y", "make wt-fix NAME=$X",
+             "make wt-list; true", "true && make wt-list", "cd . && make wt-list", "make wt-list | cat",
+             "(make wt-list)", "export MAKEFLAGS=x; make wt-list", "make wt-list &", "make wt-list > o.txt",
+             "make wt-list <<EOF\nx\nEOF"):
+    bash(f"SE-105, форма не из списка — весь текст: {form!r}", form, True, cwd=mk)
+(mk / "Makefile").write_text(real + "# правка\n")
+bash("SE-105, Makefile отличается от board-agents (даже комментарием) — весь текст", "make wt-list", True, cwd=mk)
+(mk / "Makefile").write_text(real)
+(mk / "GNUmakefile").write_text(real)
+bash("SE-105, make читает GNUmakefile, его нет в board-agents — весь текст", "make wt-list", True, cwd=mk)
+(mk / "GNUmakefile").unlink()
+bash("SE-105, Makefile снова как в board-agents", "make wt-list", False, cwd=mk)
+commit_makefile(mk, real + "# ветка origin/board-agents в refs/heads\n", "refs/heads/origin/board-agents")
+bash("SE-105, локальная ветка origin/board-agents не подменяет remote-ветку", "make wt-list", True, cwd=mk)
+no_ref = repo_on("fix/x", "se105n")
+commit_makefile(no_ref, real, "refs/heads/other")
+bash("SE-105, нет origin/board-agents — весь текст", "make wt-list", True, cwd=no_ref)
+syn = TMP / "se105syn"
+for name, text in (("Makefile", "go: ./rel\nrel:\n\tgh pr merge 1\n-include ./gen.mk\ngen.mk:\n\tgh pr merge 1\n"),
+                   ("c/Makefile", "# .claude/rules/x и gh pr merge 1 — только комментарий\nall:\n\techo ok\n")):
+    (syn / name).parent.mkdir(parents=True, exist_ok=True)
+    (syn / name).write_text(text)
+for form in ("make ./rel", "make go", "make wt-list", 'make "$G"', "make $(echo rel)", "make re?"):
+    bash(f"SE-105, Makefile не из board-agents (Control B1/B2): {form!r}", form, True, cwd=syn)
+bash("SE-105, признак только в комментарии — не отказ (как до SE-105)", "make all", False, cwd=syn / "c")
 
 if __name__ == "__main__":
     finish(" — формы shell")

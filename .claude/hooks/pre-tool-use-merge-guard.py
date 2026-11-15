@@ -264,7 +264,7 @@ def launched(a, cwd, roots, depth, git_env, whole):
     """Код из файла, который команда не называет скриптом (merge_guard_launch): скрипты package.json — как команды
     shell из папки пакета, Makefile и awk — грубым признаком. Этот файл переписывает та же команда
     (`printf … > package.json; npm run x`) — ещё и грубый признак, как у скрипта, которого нет (runs_code)."""
-    found, files = [], make_files(a, cwd, whole[1]) + awk_programs(a, cwd)
+    found, files = [], make_files(a, cwd, None if depth or whole[2] else whole[1]) + awk_programs(a, cwd)
     for d, text in package_scripts(a, cwd):  # текст None — папка пакета не видна (LOST)
         found += [(LOST_DIR, d)] if text is None else classify_bash(text, d, roots, depth + 1, git_env, disk=True)
     read = read_names(a) | {p for p, _ in files}

@@ -1,16 +1,19 @@
 """
 Код, который команда запускает из файла, не названного как скрипт (для pre-tool-use-merge-guard.py): `npm run X`,
-`npm install`, `turbo run X` — скрипты package.json (с хуками жизненного цикла и пакетами workspaces), `make` — Makefile
-и его include, из рецептов — только достижимые из целей команды (make_scope, SE-105), `awk -f F` — программа awk и её @include; `BASH_ENV=F`, `NODE_OPTIONS='-r F'`, `MAKEFILES=F`,
-`--script-shell F` — файл, который команда запустит сама (implied_commands). Решений не принимает: отдаёт тексты и
-команды, разбирает их хук. Текст None — папка не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
+`npm install`, `turbo run X` — скрипты package.json (с хуками жизненного цикла и пакетами workspaces), `make` — рецепты
+Makefile и его include (разрешённые цели при Makefile, как в MAKE_BASE, — без текста, SE-105), `awk -f F` — программа
+awk и её @include; `BASH_ENV=F`, `NODE_OPTIONS='-r F'`, `MAKEFILES=F`, `--script-shell F` — файл, который команда
+запустит сама (implied_commands). Решений не принимает: отдаёт тексты и команды, разбирает их хук. Текст None — папка
+не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
 """
 import glob
+import hashlib
 import json
 import os
 import re
 
 from merge_guard_files import open_regular
+from merge_guard_git import GitTimeout, git_out
 from merge_guard_shell import is_lost, words
 
 PKG_TOOLS = {"npm", "pnpm", "yarn", "bun", "turbo"}
@@ -34,17 +37,10 @@ NPM_CALL = {"-c", "--call"}  # `npm exec -c '…'`, `npx -c '…'`; у pnpm `-c`
 MAKES = {"make", "gmake"}
 MAKEFILES = ("GNUmakefile", "makefile", "Makefile")
 MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$")
-MAKE_ENV = re.compile(r"\b(?:MAKEFILES|MAKEFLAGS|GNUMAKEFLAGS|MFLAGS)\b")  # файлы и опции make из окружения
-MAKE_ASSIGN = re.compile(r"[ \t]*(?:(?:override|export|private)[ \t]+)*[^\s:#=]+[ \t]*(?::::=|::=|:=|[?+!]?=)")
-MAKE_DIRECTIVE = re.compile(r"[ \t]*(?:-?include|sinclude|ifn?eq|ifn?def|else|endif|export|unexport|override|private"
-                            r"|vpath|undefine|load)(?![^ \t(])")
-MAKE_DEFINE = re.compile(r"[ \t]*(?:(?:override|export|private)[ \t]+)*define(?![^ \t])")
-MAKE_ENDEF = re.compile(r"[ \t]*endef(?![^ \t])")
-MAKE_RULE = re.compile(r"([^:=]+?)[ \t]*::?(?!=)(.*)", re.S)
-MAKE_SUB = re.compile(r"\$[({]MAKE[)}]|(?<![\w./$-])g?make(?![\w./-])")  # вложенный make в рецепте
-MAKE_SPECIAL = {".PHONY", ".SUFFIXES", ".PRECIOUS", ".INTERMEDIATE", ".NOTINTERMEDIATE", ".SECONDARY",
-                ".SECONDEXPANSION", ".DELETE_ON_ERROR", ".IGNORE", ".LOW_RESOLUTION_TIME", ".SILENT",
-                ".EXPORT_ALL_VARIABLES", ".NOTPARALLEL", ".ONESHELL", ".POSIX", ".WAIT"}
+# SE-105: вся команда — ровно эта строка: одна цель из списка, переменные NAME/TRACK/WT_DEPS без знаков shell
+MAKE_TRUSTED = re.compile(r"make[ \t]+(?:wt-(?:fix|feature|refactor|spike|review|deps|check|list|help|rm)"
+                          r"|check-(?:eval|repo))(?:[ \t]+(?:NAME|TRACK|WT_DEPS)=[A-Za-z0-9._-]+)*")
+MAKE_BASE = "refs/remotes/origin/board-agents"  # полное имя: локальная ветка `origin/board-agents` его не перекроет
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
@@ -223,17 +219,16 @@ def _read_tree(paths, includes):
     return out
 
 
-def make_files(a, cwd, command=""):
+def make_files(a, cwd, command=None):
     """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый из
     GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не исключение:
-    `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). Рецепты — только достижимых из целей
-    команды правил (make_scope); весь текст — если правила может добавить то, чего хук не видит: `--eval`/`-E` или
-    MAKEFILES/MAKEFLAGS в команде command."""
+    `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). command — вся команда Bash (None —
+    make не на верхнем уровне): если это MAKE_TRUSTED и каждый файл make — тот же blob, что в MAKE_BASE, тексты пустые:
+    рецепты прошли ревью и мёрж, грубый признак не нужен (SE-105)."""
     if a[0] not in MAKES:
         return []
-    values, rest = _options(a, {"-C", "--directory", "-f", "--file", "--makefile", "-I", "--include-dir", "-o",
-                                "--old-file", "--assume-old", "-W", "--what-if", "--new-file", "--assume-new", "--eval",
-                                "-E"}, short=True)
+    values, _ = _options(a, {"-C", "--directory", "-f", "--file", "--makefile", "-I", "--include-dir", "-o",
+                             "--old-file", "--assume-old", "-W", "--what-if", "--new-file", "--assume-new"}, short=True)
     d = os.path.join(cwd, *[os.path.expanduser(x) for x in values.get("-C", []) + values.get("--directory", [])])
     named = sum((values.get(k, []) for k in ("-f", "--file", "--makefile")), [])
     paths = [os.path.join(d, os.path.expanduser(f)) for f in named] or (
@@ -249,127 +244,47 @@ def make_files(a, cwd, command=""):
 
     files = [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t))
              for p, t in _read_tree([p for p in paths if p], lambda p, t: includes(p, re.sub(r"#.*", "", t)))]
-    if values.get("--eval") or values.get("-E") or MAKE_ENV.search(command):
-        return files
-    return make_scope(files, [w for w in rest if "=" not in w])
+    if command and MAKE_TRUSTED.fullmatch(command.strip()) and _as_base(files, cwd):
+        return [(p, "") for p, _ in files]
+    return files
 
 
-class _Whole(Exception):
-    """Makefile не разобрать однозначно: грубый признак — по всему тексту, как до SE-105."""
-
-
-def _make_logical(text):
-    """Логические строки make: физические, склеенные по `\\` в конце (нечётное число обратных слэшей)."""
-    out, cur = [], []
-    for line in text.split("\n"):
-        cur.append(line)
-        if (len(line) - len(line.rstrip("\\"))) % 2 == 0:
-            out.append(cur)
-            cur = []
-    return out + ([cur] if cur else [])
-
-
-def _make_line(first, line, rules):
-    """Строка вне рецепта: правило — его номер в rules ([(цели, пререквизиты)]), иначе None. Правила, которых не видно
-    без запуска make (`$`, `%`, `.DEFAULT`, суффиксные, include с `$`), — _Whole."""
-    if MAKE_DEFINE.match(first) or MAKE_ASSIGN.match(line):
+def _exact(cwd, path):
+    """Путь от cwd с именами, как в папке, или None: файла нет или он вне cwd. APFS не различает регистр: make
+    откроет `makefile`, а в git — `Makefile`."""
+    rel, d, out = os.path.relpath(path, cwd), cwd, []
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
         return None
-    if MAKE_DIRECTIVE.match(line):
-        if MAKE_INCLUDE.match(line) and "$" in line:
-            raise _Whole
+    for part in rel.split(os.sep):
+        names = os.listdir(d)
+        name = part if part in names else next((n for n in names if n.lower() == part.lower()), None)
+        if name is None:
+            return None
+        out.append(name)
+        d = os.path.join(d, name)
+    return "/".join(out)
+
+
+def _blob(path):
+    """Хеш blob git для файла или None. Как `git hash-object`, но без фильтров: их git берёт из конфига."""
+    f = open_regular(path)
+    if f is None:
         return None
-    m = MAKE_RULE.fullmatch(line)
-    if m is None:
-        if "$" in line:  # `$(eval x: y)`, `$(call …)`, `$(R)` — правило из переменной
-            raise _Whole
-        return None
-    if MAKE_ASSIGN.match(m.group(2)):  # переменная цели: `t: X = 1`
-        return None
-    targets, part = m.group(1).split(), m.group(2).split(";", 1)[0]
-    if re.search(r"[$%:]", m.group(1) + part) or any(t.startswith(".") and "/" not in t and t not in MAKE_SPECIAL
-                                                     for t in targets):
-        raise _Whole
-    rules.append((targets, [p for p in re.split(r"[\s|]+", part) if p]))
-    return len(rules) - 1
+    with f:
+        data = f.read(TEXT_MAX + 1)
+    return None if len(data) > TEXT_MAX else hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
-def _make_parse(text, rules):
-    """[(номер правила рецепта или None, физические строки)] файла; правила дописываются в rules. Рецепт — строка с
-    табом в контексте правила: после заголовка, его рецепта и пустых строк (как у GNU make). Строка с табом вне
-    правила — обычная строка make; тело define — не рецепт. make вне рецепта (`SUB = $(MAKE)`, define) — _Whole:
-    цели такого вызова не видны."""
-    out, cur, depth = [], None, 0
-    for lines in _make_logical(text):
-        first, line = lines[0], " ".join(x.rstrip("\\") for x in lines).strip()
-        if first.startswith("\t") and cur is not None and not depth:
-            out.append((cur, lines))
-            continue
-        if MAKE_SUB.search(line):
-            raise _Whole
-        if depth:
-            depth += bool(MAKE_DEFINE.match(first)) - bool(MAKE_ENDEF.match(first))
-        elif line:
-            cur, depth = _make_line(first, line, rules), int(bool(MAKE_DEFINE.match(first)))
-        out.append((None, lines))
-    return out
-
-
-def _sub_goals(line):
-    """Цели вложенного make в строке рецепта (`$(MAKE) wt-add NAME=x`, `make check`) до конца команды; цель с `$` —
-    _Whole: её не видно."""
-    goals = []
-    for m in MAKE_SUB.finditer(line):
-        for w in re.split(r"[;|&)\"'`<>\n]", line[m.end():], maxsplit=1)[0].split():
-            if w.startswith("-") or "=" in w:
-                continue
-            if "$" in w:
-                raise _Whole
-            goals.append(w)
-    return goals
-
-
-def _make_reach(rules, recipes, names):
-    """Номера правил, которые make может выполнить для имён names: их пререквизиты и цели вложенного make."""
-    by_target = {}
-    for i, (targets, _) in enumerate(rules):
-        for t in targets:
-            by_target.setdefault(t, []).append(i)
-    reached, seen, queue = set(), set(), list(names)
-    while queue:
-        name = queue.pop()
-        if name in seen:
-            continue
-        seen.add(name)
-        for i in by_target.get(name, []):
-            if i not in reached:
-                reached.add(i)
-                queue += rules[i][1] + [g for line in recipes.get(i, []) for g in _sub_goals(line)]
-    return reached
-
-
-def make_scope(files, goals):
-    """SE-105: тексты make_files, где из рецептов остались только те, что make может выполнить для целей goals (без
-    целей — первая цель файла). Всё вне рецептов остаётся: переменные, `$(shell …)`, define, заголовки с рецептом после
-    `;`. Достижимы и пересборка Makefile и include (make строит их до целей), и правила специальных целей. Не разобрать
-    однозначно — весь текст: `.RECIPEPREFIX`, `.DEFAULT_GOAL` или несколько файлов без целей, см. _make_line."""
-    texts = [t for _, t in files]
-    flag = lambda name: any(re.search(rf"(?m)^[ \t]*(?:override[ \t]+)?\.{name}\b", t) for t in texts)
-    if None in texts or not files or flag("RECIPEPREFIX") or not goals and (len(files) > 1 or flag("DEFAULT_GOAL")):
-        return files
-    rules = []
+def _as_base(files, cwd):
+    """Каждый файл make есть в MAKE_BASE под тем же путём от cwd и с тем же содержимым. Нет, не прочесть или git
+    не ответил — нет: тогда грубый признак, как раньше."""
     try:
-        parsed = [_make_parse(t, rules) for t in texts]
-        recipes = {}
-        for i, lines in (x for p in parsed for x in p if x[0] is not None):
-            recipes.setdefault(i, []).append(" ".join(lines))
-        names = list(goals) or [next((t for ts, _ in rules for t in ts if not t.startswith(".") or "/" in t), "")]
-        names += [os.path.basename(p) for p, _ in files] + [w for t in texts for m in MAKE_INCLUDE.finditer(t)
-                                                            for w in m.group(1).split()]
-        reached = _make_reach(rules, recipes, names)
-    except _Whole:
-        return files
-    keep = lambda i: i is None or i in reached or any(t in MAKE_SPECIAL for t in rules[i][0])
-    return [(path, "\n".join(x for i, lines in p if keep(i) for x in lines)) for (path, _), p in zip(files, parsed)]
+        rels, want = [_exact(cwd, p) for p, _ in files], [_blob(p) for p, _ in files]
+        if not files or None in rels or None in want:
+            return False
+        return git_out(cwd, "rev-parse", *[f"{MAKE_BASE}:./{r}" for r in rels]).split() == want
+    except (OSError, GitTimeout):
+        return False
 
 
 def _awk_file(name, cwd):
