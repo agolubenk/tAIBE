@@ -1,6 +1,7 @@
 """OPS-25 Ф1: instances/ → config.json байт-в-байт; поля на своих местах; ошибки с файлом и полем."""
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -35,14 +36,22 @@ class RenderTest(unittest.TestCase):
     def test_check_passes_on_the_repo(self):
         self.assertEqual(P.main(["render", "--check"]), 0)
 
-    def test_taibe_is_inactive_until_f4(self):
+    def test_taibe_is_active_since_f4(self):
         shared, products = P.load()
         self.assertEqual(shared["default_product"], "hr-helper")
-        self.assertIs(products["taibe"]["active"], False)
+        self.assertIs(products["taibe"]["active"], True)
         cfg = P.config_for("taibe", shared, products)
         self.assertEqual(cfg["github"]["repo"], "agolubenk/tAIBE")
         self.assertEqual(cfg["team"]["projects_root"], shared["team"]["projects_root"], "слияние не теряет общий лист")
-        self.assertEqual(cfg["queue"]["match"], "-taibe-")
+        self.assertEqual(cfg["queue"]["match"], r"-taibe(-|\d|$)")
+
+    def test_taibe_match_catches_label_without_hyphen(self):
+        """SE-109: `m-taibe310-1411` — пункт tAIBE; `d-hr-…`, `d-taibeta-1` — нет."""
+        match = re.compile(P.config_for("taibe")["queue"]["match"])
+        for item_id in ("m-taibe310-1411", "d-taibe-x", "s-restart-4-taibe-1211", "s-restart-taibe"):
+            self.assertTrue(match.search(item_id), item_id)
+        for item_id in ("d-hr-x-1411", "d-1", "d-taibeta-1", "taibe-m-93"):
+            self.assertFalse(match.search(item_id), item_id)
 
 
 class GetTest(unittest.TestCase):
@@ -54,7 +63,7 @@ class GetTest(unittest.TestCase):
             self.assertEqual(P.main(["get", "default", "slug"]), 0)
             self.assertEqual(P.main(["get", "taibe", "github.repo"]), 0)
             self.assertEqual(P.main(["get", "taibe", "active"]), 0)
-        self.assertEqual(out.getvalue().split(), ["hr-helper", "agolubenk/tAIBE", "false"])
+        self.assertEqual(out.getvalue().split(), ["hr-helper", "agolubenk/tAIBE", "true"])
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(P.main(["get", "taibe", "no.such"]), 1)
 
@@ -85,9 +94,26 @@ class ErrorsTest(unittest.TestCase):
         edit(self.d, "taibe.json", lambda d: d["github"]["path_roles"].append(["x/", "chef"]))
         self.fails("chef")
 
+    def test_second_session_needs_its_base_role(self):
+        edit(self.d, "taibe.json", lambda d: d["team"]["roles"].remove("backend"))
+        self.fails("вторая сессия «backend-2» без роли «backend»")
+
+    def test_second_session_of_unknown_role(self):
+        edit(self.d, "taibe.json", lambda d: d["team"]["roles"].append("chef-2"))
+        self.fails("chef")
+
     def test_bad_slug(self):
         os.rename(os.path.join(self.d, "taibe.json"), os.path.join(self.d, "HR_Helper.json"))
         self.fails("slug")
+
+    def test_queue_match_must_be_a_regex(self):
+        """SE-109: битое `queue.match` — ошибка загрузки с файлом и полем, а не тихий обход маршрута."""
+        edit(self.d, "taibe.json", lambda d: d["queue"].update(match="-taibe("))
+        self.fails("queue.match")
+
+    def test_queue_match_must_be_a_string(self):
+        edit(self.d, "taibe.json", lambda d: d["queue"].update(match=["-taibe-"]))
+        self.fails("queue.match")
 
     def test_unknown_default(self):
         edit(self.d, "_shared.json", lambda d: d.update(default_product="nope"))
@@ -95,6 +121,18 @@ class ErrorsTest(unittest.TestCase):
 
     def test_paths_are_not_secrets(self):
         self.assertIsNone(P.SECRET_RE.search("/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state"))
+
+
+class BaseRoleTest(unittest.TestCase):
+    def test_second_session_maps_to_base_role(self):
+        self.assertEqual([P.base_role(r) for r in ("backend-2", "frontend-2", "backend", "boards", "a-1", "x-10", "")],
+                         ["backend", "frontend", "backend", "boards", "a-1", "x-10", ""])
+
+    def test_both_products_have_second_sessions_after_the_six(self):
+        """Решения владельца 14.11: backend-2 (роль 7) и frontend-2 (роль 8) у tAIBE и HR."""
+        _, products = P.load()
+        for slug in ("taibe", "hr-helper"):
+            self.assertEqual(products[slug]["team"]["roles"][6:], ["backend-2", "frontend-2"], slug)
 
 
 class ProductDirTest(unittest.TestCase):

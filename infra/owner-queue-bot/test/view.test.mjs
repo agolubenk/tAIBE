@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sanitizeTg } from '../tg-html.mjs';
 import {
-  itemMessages, keyOf, menuFingerprint, menuView, nextOpen, optKey, pack, searchView, sectionView, verOf, workMessages,
+  backNotice, connReason, itemMessages, keyOf, localNotice, menuFingerprint, menuView, nextOpen, optKey, pack, searchView,
+  sectionView, verOf, workMessages,
 } from '../view.mjs';
 
 const item = (over = {}) => ({
@@ -168,4 +169,35 @@ test('у открытого пункта мёржа — «Влить сейча�
   assert.ok(!callbacks(done.at(-1).keyboard).some((c) => c.startsWith('M:')));
   const s = snapOf([item({ id: 'm1', kind: 'merge', options: [] })]);
   assert.ok(callbacks(sectionView(s, 'merge').keyboard).includes('RD'));
+});
+
+test('сигнал «страница без базы»: причина по ответу консоли (просьба владельца 14.11)', () => {
+  assert.match(connReason({ okAt: 1, errAt: 2, status: 401, err: 'HTTP 401', fails: 3 }), /не приняла токен бота \(ответ 401\)/);
+  assert.match(connReason({ okAt: 1, errAt: 2, status: 403, err: 'HTTP 403', fails: 3 }), /токен отозван или истёк/);
+  assert.match(connReason({ okAt: 1, errAt: 2, status: 502, err: 'HTTP 502', fails: 3 }), /ошибкой 502 — .*выкатке/);
+  assert.match(connReason({ okAt: 0, errAt: 2, status: 0, err: 'Failed to fetch', fails: 3 }), /не ответила по сети \(Failed to fetch\)/);
+  assert.equal(connReason({ okAt: 1, errAt: 2, status: 429, err: 'HTTP 429', fails: 3 }), 'консоль ответила 429');
+  assert.equal(connReason({ okAt: 1, errAt: 2, status: 409, err: 'конфликт', fails: 3 }), 'консоль ответила 409: конфликт');
+  assert.match(connReason(null), /опроса не было/);
+  assert.match(connReason({ okAt: 5, errAt: 0, status: 0, err: '', fails: 0 }), /хотя консоль отвечала/);
+});
+
+test('сигнал «страница без базы»: последний удачный ответ по Москве, следующая перезагрузка, подсказка; HTML валиден', () => {
+  const okAt = Date.UTC(2026, 10, 14, 14, 2); // 17:02 МСК
+  const n = localNotice({ okAt, errAt: okAt + 60_000, status: 502, err: 'HTTP 502', fails: 3 }, { now: okAt + 3 * 60_000, nextReloadMs: 60_000, hint: 'token-list <на сервере>' });
+  assert.match(n.text, /^🟠 <b>Очередь не подключилась к консоли<\/b>/);
+  assert.match(n.text, /Последний удачный ответ консоли — 17:02 МСК \(3 мин назад\)/);
+  assert.match(n.text, /Неудачных опросов подряд: 3/);
+  assert.match(n.text, /перезагрузит страницу через 1 мин/);
+  assert.match(n.text, /token-list &lt;на сервере&gt;/);
+  assertTelegramHtml(n.text);
+  const never = localNotice(null, { now: okAt, nextReloadMs: 60_000, hint: '' });
+  assert.match(never.text, /Удачных ответов консоли с открытия страницы не было/);
+  assert.doesNotMatch(never.text, /Если связь не вернётся/);
+  assertTelegramHtml(never.text);
+});
+
+test('связь вернулась: сколько её не было, не меньше минуты', () => {
+  assert.match(backNotice(4 * 60_000).text, /^🟢 .*Связи не было около 4 мин\.$/);
+  assert.match(backNotice(5_000).text, /около 1 мин/);
 });
