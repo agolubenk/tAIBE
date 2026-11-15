@@ -775,6 +775,12 @@ describe('мёрж из очереди', () => {
     expect(plan('gh pr merge 41 --squash', { cmd2: 'gh pr merge 41 --subject "see -R other/repo" --squash' })).toMatchObject({ repo: null, problem: null })
     expect(plan('cp -R src/x dst/ && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
     expect(plan('gh pr checks 41 -R && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    // GH_REPO= — только присваивание в начале команды (Контроль #363, п. 1–2): в значении и у echo — текст.
+    expect(plan('gh pr merge 41 --squash --body "GH_REPO=evil/x"')).toMatchObject({ repo: null, problem: null })
+    expect(plan('echo GH_REPO=x/y; gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    expect(plan('echo GH_REPO=x/y && gh pr merge 41 -R agolubenk/tAIBE')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('env GH_REPO=agolubenk/tAIBE gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan("cd ~/x && GH_REPO='agolubenk/tAIBE' gh pr merge 41")).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
   })
 
   it('перенаправления shell (2>&1, 2>/dev/null, > файл, &>) — не аргументы мёржа (ревью «Контроля» #114, F1)', () => {

@@ -127,8 +127,8 @@ export function mergeFlags(cmd: string): MergeFlags {
       else out.problems.repo ??= `аргумент «${word.slice(0, 80)}» консоль не разбирает — нужен номер PR`
     } else out.problems.repo ??= 'в команде мёржа больше одного аргумента'
   }
-  const env = [...before.matchAll(/\bGH_REPO=("[^"]*"|'[^']*'|[^\s;&|]+)/g)].pop()?.[1]
-  if (env) repos.push(repoName(env.replace(/^["']|["']$/g, '')))
+  const env = envRepos(before).pop()
+  if (env) repos.push(env)
   const distinct = [...new Set(repos.map((r) => r.toLowerCase()))]
   if (distinct.length > 1) out.problems.repo = `команда называет разные репозитории: ${[...new Set(repos)].join(', ')}`
   else if (repos[0]) out.repo = repos[0]
@@ -143,14 +143,35 @@ export function mergeFlags(cmd: string): MergeFlags {
 const REPO = /^[\w.-]+\/[\w.-]+$/
 /** Любая команда gh до разделителя — то же правило слов и перенаправлений, что у GH_PR. */
 const GH_ANY = /\bgh\b(?:\\[\s\S]|[<>]&|&>|[^\n;&|"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')*/g
+/** Команда shell до разделителя (\n ; & |), разделитель в кавычках не режет. */
+const SEGMENT = /(?:\\[\s\S]|[<>]&|&>|[^\n;&|"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+/g
 const repoOf = (v: string): string | null => {
   const name = repoName(v.split(/[;&|)]/)[0] ?? '')
   return REPO.test(name) ? name : null
 }
+
+/**
+ * Репозитории из присваивания GH_REPO= в начале команды shell (`GH_REPO=x gh …`, `export GH_REPO="x"`, `env GH_REPO=x`),
+ * по порядку. Имя переменной — без кавычек: `--body "GH_REPO=x"` и `echo GH_REPO=x` — текст, а не окружение gh
+ * (Контроль #363, п. 1–2).
+ */
+function envRepos(cmd: string): string[] {
+  const out: string[] = []
+  for (const m of cmd.matchAll(SEGMENT)) {
+    for (const w of commandWords(m[0])) {
+      if (w === 'export' || w === 'env') continue
+      if (!/^[A-Za-z_]\w*=/.test(w)) break
+      const name = w.startsWith('GH_REPO=') ? repoOf(unquote(w.slice('GH_REPO='.length))) : null
+      if (name) out.push(name)
+    }
+  }
+  return out
+}
+
 /**
  * Репозитории из -R/--repo любой команды gh строки (не только команды мёржа) и из GH_REPO= — по словам shell: «-R x/y»
  * внутри значения в кавычках (`--body "see -R x/y"`) — текст, а не флаг; `cp -R a/b c/` — не gh. Не похожее на
- * `owner/name` не берётся; хвост `;gh …` без пробела у GH_REPO= отрезается.
+ * `owner/name` не берётся.
  */
 export function looseRepos(cmd: string): string[] {
   const out: string[] = []
@@ -163,9 +184,5 @@ export function looseRepos(cmd: string): string[] {
       if (name) out.push(name)
     }
   }
-  for (const w of commandWords(cmd).map(unquote)) {
-    const name = w.startsWith('GH_REPO=') ? repoOf(w.slice('GH_REPO='.length)) : null
-    if (name) out.push(name)
-  }
-  return out
+  return [...out, ...envRepos(cmd)]
 }
