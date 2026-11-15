@@ -759,6 +759,67 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual((q["head"], q["updated"]), ("", ""), "не разобран: следующий проход — по новой голове")
         self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
 
+    def _red_pr(self, n, head):
+        """Шаг по времени для PR n с тремя approve на голову: at(минуты, ci, sha) — проход, ответ — число gh pr view."""
+        t0 = self.ctx.now
+        three = [f"{x}: approve на {{}}" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+
+        def at(minutes, ci="FAILURE", sha=head):
+            self.ctx.now = t0 + timedelta(minutes=minutes)
+            fake = FakeGh([_pr(n, sha)], comments={n: [c.format(sha[:7]) for c in three]}, ci={n: ci})
+            sources.run = fake
+            gh_source.poll_github(self.ctx)
+            return sum(c[:3] == ["gh", "pr", "view"] for c in fake.calls)
+        return at
+
+    def test_red_ci_is_reread_every_pass_for_30_min_then_every_15_min(self):
+        """SE-134 (линзы #397): красный PR с полным кворумом перечитывался каждый проход до перезапуска — до 60 gh pr
+        view в час. Теперь как «CI: none»: 30 мин от первого провала на голове — каждый проход, дальше раз в 15 мин.
+        Не провал (перезапуск идёт) и новая голова сбрасывают отсчёт."""
+        at = self._red_pr(496, "d1" * 20)
+        views = [at(m) for m in (0, 1, 29, 31, 35, 45, 47)]
+        self.assertEqual(views, [1, 1, 1, 1, 0, 0, 1], "провал: до 30 мин — каждый проход, дальше раз в 15 мин")
+        views = [at(62, "IN_PROGRESS"), at(63, "IN_PROGRESS"), at(64), at(65), at(93), at(95), at(100)]
+        self.assertEqual(views, [1, 1, 1, 1, 1, 1, 0], "перезапуск: отсчёт заново от нового провала (64)")
+        new = "d2" * 20
+        self.assertEqual([at(101, sha=new), at(102, sha=new)], [1, 1], "новая голова: снова каждый проход")
+        self.assertTrue(self.ctx.state["github"]["prs"]["496"]["await_ci"])
+
+    def test_green_rerun_in_the_throttle_window_gives_quorum_ok_on_the_next_allowed_read(self):
+        """SE-134: перезапуск позеленел между чтениями раз в 15 мин — «CI ok» приходит один раз, на следующем
+        разрешённом чтении."""
+        at = self._red_pr(497, "d3" * 20)
+        ok = ("pr.quorum", "#497 собран: approve backend, boards, plan на d3d3d3d3d, CI ok")
+        self.assertEqual([at(0), at(31), at(40, "SUCCESS")], [1, 1, 0])
+        self.assertNotIn(ok, self.kinds())
+        self.assertEqual([at(46, "SUCCESS"), at(47, "SUCCESS")], [1, 0], "15 мин от чтения в 31: дальше без view")
+        self.assertEqual(self.kinds().count(ok), 1)
+        self.assertFalse(self.ctx.state["github"]["prs"]["497"]["await_ci"])
+
+    def test_stale_head_for_5_passes_in_a_row_gives_one_coord_event_per_head(self):
+        """SE-134: gh pr view отдаёт не ту голову, что список, — PR пропускается молча (SE-131). Пять проходов подряд —
+        одно событие координатору на голову списка; удачное чтение обнуляет счёт."""
+        old, new, newer = "d4" * 20, "d5" * 20, "d6" * 20
+        three = [f"{x}: approve на d4d4d4d" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+
+        def passes(count, listed=old, heads=None, upd="2026-11-04T10:00:00Z"):
+            for _ in range(count):
+                sources.run = FakeGh([_pr(498, listed, upd=upd)], comments={498: three}, ci={498: "IN_PROGRESS"},
+                                     heads={498: heads} if heads else None)
+                gh_source.poll_github(self.ctx)
+            return [t for k, t in self.kinds() if k == "pr.stale"]
+
+        passes(1)
+        self.assertTrue(self.ctx.state["github"]["prs"]["498"]["await_ci"])
+        passes(4, heads=new)
+        self.assertEqual(passes(1), [], "четыре подряд, потом удачное чтение — счёт с нуля")
+        self.assertEqual(passes(4, heads=new), [])
+        self.assertEqual(passes(1, heads=new),
+                         ["#498: 5 проходов подряд gh pr view отдаёт голову d5d5d5d5d, а список — d4d4d4d4d; "
+                          "PR не разбирается"])
+        self.assertEqual(len(passes(3, heads=new)), 1, "одно событие на голову списка")
+        self.assertEqual(len(passes(5, listed=new, heads=newer, upd="2026-11-04T10:05:00Z")), 2, "новая голова списка")
+
     def test_head_without_checks_waits_for_ci(self):
         """SE-126: сразу после push у головы нет ни одной проверки. Три approve — ожидание CI, а не pr.quorum с «CI ok»."""
         head = "e" * 40
