@@ -92,10 +92,42 @@ describe('документы и права', () => {
     expect((await bearer(reader).get('/db/items')).status).toBe(200)
     const noScope = await createToken('agent-only', ['agent'])
     expect((await bearer(noScope.token).get('/db/items')).status).toBe(200)
+    await revokeToken(noScope.id) // токен теста не переживает тест (GLM-ревью #221)
     expect((await app.request('/api/oq/v1/db/items/d-test', { method: 'DELETE', headers: { Authorization: `Bearer ${agent}` } })).status).toBe(403)
     const t = await createToken('temp', ['agent'])
     await revokeToken(t.id)
     expect((await bearer(t.token).get('/db/items')).status).toBe(401)
+  })
+
+  it('пустая правка (GLM-ревью #221): 422 — ни нового документа, ни роста версии; правка со своими полями и release работают', async () => {
+    const a = bearer(agent)
+    expect((await a.patch('/db/checks/d-empty-agent', { data: {} })).status).toBe(422)
+    expect((await a.get('/db/checks/d-empty-agent')).status).toBe(404)
+    // Только серверные поля (их значения не принимаются) — тоже пусто.
+    expect((await a.patch('/db/checks/d-empty-agent', { data: { agentAt: '2026-01-01T00:00:00Z' } })).status).toBe(422)
+    expect((await a.get('/db/checks/d-empty-agent')).status).toBe(404)
+    const before = (await a.get('/db/items/d-test')).json.version as number
+    const empty = await a.patch('/db/items/d-test', { data: {} })
+    expect(empty.status).toBe(422)
+    expect(empty.json.error).toContain('Пустая правка')
+    expect((await a.get('/db/items/d-test')).json.version).toBe(before)
+    // oq_agent_status на пункт без ответа владельца — как раньше: создаёт checks/<id> со своими полями.
+    const status = await a.patch('/db/checks/d-empty-agent', { data: { agentStatus: 'planned', agentNote: 'возьму утром' } })
+    expect(status.status).toBe(200)
+    expect(status.json.data).toMatchObject({ agentStatus: 'planned', agentNote: 'возьму утром' })
+  })
+
+  it('лимит записи (120 в минуту) не съедают отказы 4xx: 130 ответов 409 подряд, затем запись — 200 (GLM-ревью #221)', async () => {
+    const t = await createToken('quota-4xx', ['read', 'agent'])
+    const a = bearer(t.token)
+    expect((await a.put('/db/items/d-quota', { data: decision })).status).toBe(200)
+    for (let i = 0; i < 130; i++) expect((await a.patch('/db/items/d-quota', { data: { title: `x${i}` }, ifVersion: 99 })).status).toBe(409)
+    expect((await a.patch('/db/items/d-quota', { data: { title: 'после отказов' } })).status).toBe(200)
+    // Успешные записи по-прежнему считаются: 120-я в минуту — последняя, 121-я — 429.
+    let last = 0
+    for (let i = 0; i < 125 && last !== 429; i++) last = (await a.patch('/db/items/d-quota', { data: { title: `y${i}` } })).status
+    expect(last).toBe(429)
+    await revokeToken(t.id)
   })
 
   it('createdAt пункта не меняется при правке, updatedAt — растёт: порядок /queue «от старых к новым» (замечание владельца 14.11)', async () => {
