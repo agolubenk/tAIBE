@@ -11,6 +11,13 @@ import {
   registerMcpTools,
 } from "../../apps/api/src/mcp/tools";
 
+// TB-232: the call journal is fire-and-forget (mcp/tools.ts). Without a
+// database its insert fails after this file ends, and the late console.error
+// fails the vitest worker teardown. The journal is not under test here.
+vi.mock("../../apps/api/src/forest/journal", () => ({
+  writeJournal: vi.fn(async () => undefined),
+}));
+
 type ToolCallback = (args: unknown) => Promise<{
   content: Array<{ text: string }>;
   isError?: boolean;
