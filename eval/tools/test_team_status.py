@@ -20,17 +20,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lineage as L  # noqa: E402
 import team_status as TS  # noqa: E402
-from test_lineage import ST, TERMINAL, Base, FakeSys, P  # noqa: E402
+from test_lineage import ST, TERMINAL, Base, FakeSys, P, clean_env  # noqa: E402
 
 NOW = 1.8e9  # часы FakeSys: startedAt/updatedAt в sessions/*.json — мс от эпохи
-# Продукт и линия живой сессии роли не идут в подпроцессы теста: spawn взял бы продукт сессии и её линию как
-# родителя, ps -E увидел бы их у поддельного coord (SE-129).
-SESSION_ENV = ("TAIBE_PRODUCT", "TAIBE_LINEAGE")
-
-
-def clean_env(**extra):
-    return {**{k: v for k, v in os.environ.items() if k not in SESSION_ENV}, **extra}
-
 
 class TeamSys(FakeSys):
     def __init__(self, procs, env=None, launchctl=None):
