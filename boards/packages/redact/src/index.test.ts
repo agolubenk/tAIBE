@@ -509,6 +509,129 @@ describe("@kaneo/redact", () => {
     });
   });
 
+  // TB-199: `:=` and `=>` gave `=` or `>` as the value, a comparison was
+  // masked, and the mask could land on the name.
+  describe("separators and the position of the value (TB-199)", () => {
+    const value = join("Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv3");
+    const hidden = "[REDACTED:password_assignment]";
+
+    it.each([
+      ["password := <v>", `password := ${hidden}`],
+      ['api_key := "<v>"', `api_key := "${hidden}"`],
+      ['GITHUB_TOKEN := "<v>"', `GITHUB_TOKEN := "${hidden}"`],
+      ['CLIENT_SECRET := "<v>"', `CLIENT_SECRET := "${hidden}"`],
+      ["'password' => '<v>'", `'password' => '${hidden}'`],
+      [':api_key => "<v>"', `:api_key => "${hidden}"`],
+      ['"DB_PASSWORD" => "<v>",', `"DB_PASSWORD" => "${hidden}",`],
+      // TB-201 part C: a bare value after a spaced separator.
+      ["B_TOKEN := <v>", `B_TOKEN := ${hidden}`],
+      ["B_TOKEN => <v>", `B_TOKEN => ${hidden}`],
+    ])("masks the value in %s", (input, expected) => {
+      expect(redact(input.replace("<v>", value)).text).toBe(expected);
+    });
+
+    it.each([
+      "if (password === true) run()",
+      "x.password == y",
+      "const m = data.must_change_password === true",
+      `A_TOKEN === "${value}"`,
+    ])("leaves the comparison %j untouched", (input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    // Release #392 B1: `==` glued to the value is an assignment of a value
+    // that starts with `=`; the base masked it.
+    it.each([
+      `PASSWORD==${value}`,
+      `DB_PASSWORD==${value}`,
+      `A_TOKEN==${value}`,
+      `api_key===${value}`,
+      `password==${value}`,
+    ])("masks the value after a glued == in %s", (input) => {
+      expect(redact(input).text).not.toContain(value);
+    });
+
+    it.each([
+      `password == ${value}`,
+      `password=="${value}"`,
+      `A_TOKEN== '${value}'`,
+    ])("leaves the comparison %j with a space or a quote readable", (input) => {
+      expect(redact(input).text).toContain(value);
+    });
+
+    it.each([
+      ["password: pass", `password: ${hidden}`],
+      ["password=sword", `password=${hidden}`],
+      ["{ password: password }", `{ password: ${hidden} }`],
+    ])("masks the value, not the name, in %j", (input, expected) => {
+      expect(redact(input).text).toBe(expected);
+    });
+
+    // A rejected value that ends in `name=><v>` goes on at the name; a hit
+    // that starts inside the previous one widens it.
+    it.each([
+      `A_TOKEN=x(B_TOKEN=>${value}`,
+      `A_TOKEN=x(y=>C_TOKEN=${value}`,
+      `api_key=x(api_key=>${value}`,
+      ` A_SECRET => password:x;passwd=>${value}`,
+      `A_SECRET => password:x;passwd=${value}`,
+    ])("masks the value in %s", (input) => {
+      expect(redact(input).text).not.toContain(value);
+    });
+
+    // Coord 15.11: the base took the `=` of a glued `:=` into the value and
+    // masked any value long enough. A value right after `:=` or `=>` keeps
+    // that mask.
+    const phrase = join("correct", "horse", "battery", "staple");
+    const camel = join("Correct", "Horse", "Battery", "Staple");
+    it.each([
+      [`GH2_TOKEN:=${phrase};`, phrase],
+      [`api_key:=${camel};`, camel],
+      [`x-api-key:=${phrase}`, phrase],
+      [`A_SECRET:=${camel};`, camel],
+      [`T_ACCESS_TOKEN=>${phrase}`, phrase],
+    ])("masks a word value after a glued operator: %s", (input, secret) => {
+      expect(redact(input).text).not.toContain(secret);
+    });
+
+    // TB-202 superset test against 221e381b4: a name with a glued `:=`
+    // after `=>` was accepted as the value, and the search stopped before
+    // the real value. Now it goes on at that name.
+    it.each([
+      [`X1_TOKEN=>A_TOKEN=>A_TOKEN:="${value}"`, value],
+      [`x-api-key"=api_key=>k1_api_key:="${camel}"`, camel],
+      [`X1_TOKEN=>A_TOKEN=>${value}`, value],
+    ])("masks the value after a chain of glued names: %s", (input, secret) => {
+      expect(redact(input).text).not.toContain(secret);
+    });
+
+    it.each([
+      "password===",
+      "A_TOKEN:=",
+      "password=>",
+      "A_TOKEN==(",
+      "A_TOKEN=x(B_TOKEN=>",
+      "A_TOKEN=(=>",
+      "password==",
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      const text = unit.repeat(Math.ceil(256_000 / unit.length));
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
+    });
+
+    // The lookahead after `=` reads the run of `=` once per name.
+    it.each(["A_TOKEN", "password", "api_key"])(
+      "redacts %s with 256 000 = after it in linear time",
+      (name) => {
+        const text = `${name}${"=".repeat(256_000)} x`;
+        const started = performance.now();
+        redact(text);
+        expect(performance.now() - started).toBeLessThan(250);
+      },
+    );
+  });
+
   // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the
   // Authorization header as a JSON key, an empty x-api-key header.
   describe("values next to code punctuation and JSON headers (#283)", () => {
