@@ -317,6 +317,15 @@ for form in ("make x", "make --dir=ok x", "make --fil=ok.mk x", "make -C j -f ok
     bash(f"SE-128, без признака: {form!r}", form, False, cwd=o)
 why = run("Bash", {"command": "make --o -f ok.mk x"}, cwd=o) or ""
 check(f"SE-128: причина — опция make, а не папка: {why[:90]!r}", why if "длинная опция make" in why else None, True)
+# SE-133: MAKEFLAGS/GNUMAKEFLAGS — опции make из окружения (`-I` сверено с make 3.81); первое слово без `-` — связка
+for form in ("MAKEFLAGS='-I inc' make x", "MAKEFLAGS=-Iinc make x", "MAKEFLAGS=Iinc make x", "MAKEFLAGS=sIinc make x",
+             "GNUMAKEFLAGS=--include-dir=inc make x", "env MAKEFLAGS=--incl=inc make x", "export MAKEFLAGS=-Iinc; make x",
+             "MAKEFLAGS='--eval=x:;gh\\ pr\\ merge\\ 1' make x", "MAKEFLAGS='-sE x:;gh\\ pr\\ merge\\ 1' make x",
+             "MAKEFLAGS=-Cj make x", "MAKEFLAGS=--frob make x"):  # -C из окружения make не слушает — с запасом
+    bash(f"SE-133, видно: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS=-s make x", "MAKEFLAGS='-j4 --no-print-directory' make x", "MAKEFLAGS=-Iok make x",
+             "GNUMAKEFLAGS=-k make x", "MAKEFLAGS= make x", "MAKEFLAGS='-- V=1' make x"):
+    bash(f"SE-133, без признака: {form!r}", form, False, cwd=o)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
