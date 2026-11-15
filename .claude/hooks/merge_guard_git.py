@@ -5,17 +5,19 @@
 Учитывает `-C`, `-c` (push.default, remote.*.push, remote.*.mirror, alias.*), явные refspec с `+`, `:`, `HEAD`,
 масками, голый `git push` по push.default/upstream/remote.*.push/mirror, `send-pack` и псевдонимы git — свои и
 заводимые `git config alias.*`. На все вызовы git у одного решения — общий бюджет времени: исчерпан — GitTimeout,
-и хук решает по грубому признаку (push — отказ).
+и хук решает по грубому признаку (push — отказ). Доверие к тексту с основной ветки origin: same_blob — Makefile (#402),
+reviewed_test и clean_dir — тесты слоя из папки, равной её дереву на ветке (SE-127).
 """
 import hashlib
 import os
 import re
 import shlex
+import stat
 import subprocess
 import time
 
 import merge_guard_identity as identity
-from merge_guard_shell import CURRENT, SUBST, is_lost
+from merge_guard_shell import CURRENT, SUBST, expand_word, is_lost
 
 MAIN_WRITE = "запись в защищённую ветку (main, основная ветка remote) мимо PR"
 PROTECTED_BRANCHES = {"main", "master"}
@@ -84,14 +86,122 @@ def same_blob(path, data):
     """Байты data, которые хук прочёл по пути path (realpath — его папка и имя), — блоб того же пути на основной
     ветке origin (`refs/remotes/origin/HEAD`, у tAIBE — board-agents) репозитория хука или его worktree: текст прошёл
     ревью (coord 12:36, #402). Хеш — от тех же байтов, второго чтения нет (coord 12:59). Нет — путь вне репозитория,
-    в другом (вложенный, чужой), пути на ветке нет, git не ответил вовремя (GitTimeout)."""
+    в другом (вложенный, чужой), пути на ветке нет, git не ответил вовремя (GitTimeout). Имя — как на диске: на APFS
+    без учёта регистра make открывает `makefile`, а файл и путь на ветке — `Makefile` (SE-127, замер)."""
     d, base = os.path.split(path)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        names = []
+    hits = [n for n in names if n.casefold() == base.casefold()]
+    base = base if base in names or len(hits) != 1 else hits[0]  # оба имени (регистр различается) — то, что назвали
     try:
         want = git_out(d, "rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD:./" + base)
         home = {c for c in map(_common_dir, HOME_REPOS) if c}
         return bool(want) and _common_dir(d) in home and want == blob_id(data, len(want))
     except GitTimeout:
         return False
+
+
+# Тесты слоя (SE-127, решение владельца A, taibe-d-se127-hooktests-1511): в их тексте — образцы защищённых команд,
+# грубый признак их не отличает от запуска. Хук пускает тест без разбора текста, только если вся его папка прошла ревью.
+LAYER_DIRS = (".claude/hooks", ".claude/scripts")
+PY_TEST_OPTS = {"-I", "-B", "-u"}  # `-W`, `-X`, `-m`, аргументы тоже исполняют код (категория `-W` — импорт модуля)
+FILE_MAX = 4 * 1024 * 1024
+CODE_EXT = (".py", ".pyc", ".pyo", ".pth", ".so", ".sh")  # новое имя рядом с тестом: `json.py` в той же команде
+_clean = {}  # (папка, ls-tree, lstat имён) → чиста ли: цикл `for t in …` спрашивает о той же папке на каждый тест
+
+
+def _ref_entries(d):
+    """{имя: блоб} папки d на `refs/remotes/origin/HEAD` (ls-tree из самой папки, без пути); None — папки на ветке нет,
+    в ней подпапка, ссылка, подмодуль или режим не 100644/100755."""
+    listing = git_out(d, "ls-tree", "-z", "refs/remotes/origin/HEAD")
+    out = {}
+    for entry in filter(None, listing.split("\0")):
+        meta, _, name = entry.partition("\t")
+        mode, kind, oid = (meta.split() + ["", "", ""])[:3]
+        if kind != "blob" or mode not in ("100644", "100755"):
+            return None
+        out[name] = oid
+    return out or None
+
+
+def _read_regular(p):
+    """Байты обычного файла p (не ссылки, не FIFO, не больше FILE_MAX) или None — тот же дескриптор, что проверен."""
+    try:
+        fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        return f.read() if stat.S_ISREG(st.st_mode) and st.st_size <= FILE_MAX else None
+
+
+def clean_dir(d):
+    """Папка d (realpath) — ровно её дерево на основной ветке origin репозитория хука или его worktree (как same_blob):
+    имена папки без `__pycache__` — имена на `refs/remotes/origin/HEAD`, каждый — обычный файл с тем же блобом;
+    `__pycache__` — папка, в ней только обычные файлы. Нет — лишний, изменённый или удалённый файл, ссылка, подпапка,
+    папки нет на ветке, репозиторий чужой, git не ответил вовремя (GitTimeout), ошибка чтения."""
+    try:
+        home = {c for c in map(_common_dir, HOME_REPOS) if c}
+        if _common_dir(d) not in home:
+            return False
+        names = sorted(os.listdir(d))
+        sig = (d, git_out(d, "ls-tree", "-z", "refs/remotes/origin/HEAD"),
+               tuple((n, _sig(os.lstat(os.path.join(d, n)))) for n in names))
+        if sig not in _clean:
+            _clean[sig] = _clean_now(d, names)
+        return _clean[sig]
+    except (GitTimeout, OSError):
+        return False
+
+
+def _sig(st):  # без atime: чтение для хеша его меняет
+    return st.st_mode, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+
+
+def _clean_now(d, names):
+    ref, cache = _ref_entries(d), os.path.join(d, "__pycache__")
+    if ref is None or set(names) - {"__pycache__"} != set(ref):
+        return False
+    if "__pycache__" in names and not (stat.S_ISDIR(os.lstat(cache).st_mode) and all(
+            stat.S_ISREG(os.lstat(os.path.join(cache, n)).st_mode) for n in os.listdir(cache))):
+        return False
+    for name, oid in ref.items():
+        data = _read_regular(os.path.join(d, name))
+        if data is None or blob_id(data, len(oid)) != oid:
+            return False
+    return True
+
+
+def reviewed_test(path, a, cwd, written=()):
+    """Скрипт path (realpath, см. read_script) из команды a — тест слоя, текст которого хук не разбирает (SE-127):
+    ровно `python3 [-I] [-B] [-u] <путь>/test_*.py` или `bash|sh <путь>/test_*.sh` — путь (или маска, которая его
+    даёт: `"$t"` цикла `for t in …/test_*.py` разбор подставляет словом списка) последним словом, других слов нет;
+    лишние файлы маски — аргументы, их имена тоже с ветки; папка — LAYER_DIRS от корня репозитория и чиста
+    (clean_dir); команда не пишет имени, которое ляжет в эту папку или будет импортировано (written — базовые имена:
+    имя её файла, код — CODE_EXT, имя папки или предка, невидимая запись — ANY). Иначе — обычный разбор."""
+    d, name = os.path.split(path)
+    if re.fullmatch(r"python[\d.]*", a[0]) and len(a) >= 2 and set(a[1:-1]) <= PY_TEST_OPTS:
+        ext = ".py"
+    elif a[0] in ("bash", "sh") and len(a) == 2:
+        ext = ".sh"
+    else:
+        return False
+    if not (name.startswith("test_") and name.endswith(ext)) or path not in {
+            os.path.realpath(os.path.join(cwd, os.path.expanduser(w))) for w in expand_word(a[-1], cwd)}:
+        return False
+    try:
+        near = set(os.listdir(d)) | set(d.split("/")) | {".", "..", "__pycache__"}
+    except OSError:
+        return False
+    if any(w.startswith("/") or w in near or w.endswith(CODE_EXT) for w in written):  # "/" — ANY merge_guard_files
+        return False
+    try:
+        top = git_out(d, "rev-parse", "--show-toplevel")
+    except GitTimeout:
+        return False
+    return bool(top) and os.path.relpath(d, os.path.realpath(top)) in LAYER_DIRS and clean_dir(d)
 
 
 def conf_get(gdir, conf, key):

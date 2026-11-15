@@ -73,12 +73,15 @@ for form in ("python3 .claude/hooks/test_x.py", "python3 -I .claude/hooks/test_x
              "make check check-layer"):
     bash(f"чистая папка слоя, проход: {form!r}", form, False, cwd=ok)
 
-for form in ("python3 .claude/hooks/test_x.py; gh pr merge 1", "bash .claude/hooks/test_x.py",
+# `python3 test_y.sh` — расширение не того запуска: доверия нет, решает разбор текста (`bash test_x.py` прошёл бы и
+# до SE-127: текст Python в bash мёрж не запускает).
+for form in ("python3 .claude/hooks/test_x.py; gh pr merge 1", "python3 .claude/hooks/test_y.sh",
              "python3 -W ignore .claude/hooks/test_x.py", "python3 -X dev .claude/hooks/test_x.py",
              "python3 .claude/hooks/test_x.py x", "python3 < .claude/hooks/test_x.py",
              "cat .claude/hooks/test_x.py | python3", "source .claude/hooks/test_y.sh", "bash -x .claude/hooks/test_y.sh",
              "bash .claude/hooks/test_y.sh x", "python3 sub/.claude/hooks/test_x.py", "python3 tools/test_z.py",
              "echo 1 > .claude/hooks/merge_guard_helper.py; python3 .claude/hooks/test_x.py",
+             "echo 1 > json.py && python3 .claude/hooks/test_x.py",
              "cp a.pyc .claude/hooks/__pycache__/merge_guard_helper.cpython-313.pyc && python3 .claude/hooks/test_x.py",
              "cp -R ev/. .claude/hooks && python3 .claude/hooks/test_x.py",
              "git checkout -- .claude/hooks && python3 .claude/hooks/test_x.py",
@@ -144,7 +147,8 @@ if rt:
         expect(f"reviewed_test {a} → {want}", rt(path, a, str(ok)) is want)
     for written, want in (({"out.txt"}, True), ({"merge_guard_helper.py"}, False), ({"/"}, False), ({"/x.py"}, False),
                           ({"m.cpython-313.pyc"}, False), ({"hooks"}, False), ({".claude"}, False), ({"."}, False),
-                          ({"__pycache__"}, False), ({ok.name}, False)):
+                          ({"__pycache__"}, False), ({ok.name}, False), ({"json.py"}, False), ({"lib.sh"}, False),
+                          ({"x.pth"}, False)):
         expect(f"reviewed_test: запись {written} → {want}", rt(px, ["python3", ".claude/hooks/test_x.py"], str(ok), written)
                is want)
     sub = os.path.realpath(ok / "sub" / ".claude" / "hooks" / "test_x.py")
