@@ -42,6 +42,8 @@ type Pure = {
   layoutOf: (saved: unknown) => 'one' | 'sections'
   relayItemState: (relay: unknown, id: string, now: number, product?: string) => null | { k: 'wait' | 'sending' | 'stuck' | 'off'; session?: string; at?: string; dead?: boolean }
   ownerSnapshotApplies: (local: Record<string, unknown> | undefined, snap: Record<string, unknown> | undefined, pending: boolean) => boolean
+  holderState: (relay: unknown, e: Record<string, unknown> | undefined, now: number, product?: string) => null | { k: 'online' | 'silent'; session: string; hours?: number }
+  agentFieldsInto: (e: Record<string, unknown>, data: Record<string, unknown>) => Record<string, unknown>
   tipHtml: (s: string) => string
   roadmapLabelMode: (pxPerWeek: number) => 'weeks' | 'months'
   rmWindowWeeks: (laneW: number) => { total: number; back: number }
@@ -76,7 +78,7 @@ function pure(): Pure {
     classifyOwnText: fn('classifyOwnText'), inboxTitleOf: fn('inboxTitleOf'), inboxDraftId: fn('inboxDraftId'), inboxItemOf: fn('inboxItemOf'),
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
-    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
+    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), holderState: fn('holderState'), agentFieldsInto: fn('agentFieldsInto'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
     tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), rmWindowWeeks: fn('rmWindowWeeks'), roadmapMonthLabel: fn('roadmapMonthLabel'),
     placeRoadmapLabels: fn('placeRoadmapLabels'), roadmapBefore: fn('roadmapBefore'), targetFromHash: fn('targetFromHash'),
   }
@@ -1230,5 +1232,69 @@ describe('роадмап: вехи без подписи видны на сни�
     expect(html).toContain('var hidden = marks.filter(function (m, i) { return !levels[i]; });')
     expect(html).toContain("'>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>'")
     expect(html).toContain("tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); }))")
+  })
+})
+
+describe('держатель входящего (карточка HR xuc5csrv, d-silent-holder-1511 «a»): «в сети» или «молчит N ч»', () => {
+  const NOW = Date.parse('2026-11-15T12:00:00.000Z')
+  const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString()
+  const live = (session: string, product?: string) => ({ session, at: ago(0.01), alive: true, ...(product ? { product } : {}) })
+  const dead = (session: string) => ({ session, at: ago(1), alive: false })
+  const relay = (...sessions: unknown[]) => ({ alive: sessions.length > 0, sessions, relayed: {} })
+
+  it('живая автопередача держателя или его наследника по линии — «в сети», сколько бы ни молчал агент', () => {
+    const { holderState } = pure()
+    expect(holderState(relay(live('r.ab12')), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+    expect(holderState(relay(live('r.ab12.cd34')), { agentStatus: 'taken', agentBy: 'r.ab12', agentAt: ago(1) }, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+    // Похожее имя — не наследник: r.ab123 не продолжает линию r.ab12.
+    expect(holderState(relay(live('r.ab123')), { agentStatus: 'blocked', agentBy: 'r.ab12', agentAt: ago(5) }, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 5 })
+  })
+
+  it('пульса нет и последняя запись старше 4 ч — «молчит N ч»; моложе 4 ч — ничего', () => {
+    const { holderState } = pure()
+    expect(holderState(relay(dead('r.ab12')), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(4.5) }, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 4 })
+    expect(holderState(relay(), { agentStatus: 'taken', agentBy: 'r.ab12', agentAt: ago(13) }, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 13 })
+    expect(holderState(relay(dead('r.ab12')), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(3.9) }, NOW)).toBeNull()
+    // Без agentBy (запись прежней версии) — по времени, но «в сети» не бывает.
+    expect(holderState(relay(live('x')), { agentStatus: 'doing', agentAt: ago(6) }, NOW)).toEqual({ k: 'silent', session: '', hours: 6 })
+  })
+
+  it('метка только у «взял / в работе / ждёт»; без ответа /relay, без статуса или времени — ничего', () => {
+    const { holderState } = pure()
+    for (const agentStatus of ['done', 'planned', undefined]) {
+      expect(holderState(relay(), { agentStatus, agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toBeNull()
+    }
+    expect(holderState(null, { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toBeNull()
+    expect(holderState({ sessions: 'x' }, { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toBeNull()
+    expect(holderState(relay(), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: 'нет' }, NOW)).toBeNull()
+    expect(holderState(relay(), undefined, NOW)).toBeNull()
+  })
+
+  it('release (сервер убрал agentBy, статус оставил) — снимок стирает держателя, метка не называет отпустившую сессию (линза #414, N1)', () => {
+    const { holderState, agentFieldsInto } = pure()
+    const e: Record<string, unknown> = {}
+    agentFieldsInto(e, { agentStatus: 'doing', agentNote: 'беру', agentBy: 'r.ab12', agentAt: ago(1) })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+    agentFieldsInto(e, { agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0) })
+    expect(e).toEqual({ agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0) })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toBeNull()
+    // Поля статуса, заметки и времени без значения в снимке не стираются — как было.
+    agentFieldsInto(e, { agentBy: 'r.cd34' })
+    expect(e).toEqual({ agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0), agentBy: 'r.cd34' })
+    expect(html).toContain('agentFieldsInto(e, r.data);')
+  })
+
+  it('сравнение строкой: session в oq_agent_status и --relay с разными значениями (линия и имя) — не «в сети» (линза backend #414)', () => {
+    const { holderState } = pure()
+    const e = { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(5) }
+    expect(holderState(relay(live('taibe-89')), e, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 5 })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+  })
+
+  it('по продуктам (OPS-51): живая сессия другого продукта с тем же именем держателя не делает его «в сети»', () => {
+    const { holderState } = pure()
+    const e = { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(6) }
+    expect(holderState(relay(live('r.ab12', 'taibe')), e, NOW, 'hr-helper')).toEqual({ k: 'silent', session: 'r.ab12', hours: 6 })
+    expect(holderState(relay(live('r.ab12', 'taibe')), e, NOW, 'taibe')).toEqual({ k: 'online', session: 'r.ab12' })
   })
 })
