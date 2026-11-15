@@ -1,7 +1,7 @@
 """
 Код, который команда запускает из файла, не названного как скрипт (для pre-tool-use-merge-guard.py): `npm run X`,
 `npm install`, `turbo run X` — скрипты package.json (с хуками жизненного цикла и пакетами workspaces), `make` — рецепты
-Makefile и его include (разрешённые цели при Makefile, как в MAKE_BASE, — без текста, SE-105), `awk -f F` — программа
+Makefile и его include (разрешённые цели при Makefile из MAKE_BLOBS — без текста, SE-105), `awk -f F` — программа
 awk и её @include; `BASH_ENV=F`, `NODE_OPTIONS='-r F'`, `MAKEFILES=F`, `--script-shell F` — файл, который команда
 запустит сама (implied_commands). Решений не принимает: отдаёт тексты и команды, разбирает их хук. Текст None — папка
 не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
@@ -13,7 +13,6 @@ import os
 import re
 
 from merge_guard_files import open_regular
-from merge_guard_git import GitTimeout, git_out
 from merge_guard_shell import is_lost, words
 
 PKG_TOOLS = {"npm", "pnpm", "yarn", "bun", "turbo"}
@@ -40,7 +39,9 @@ MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$"
 # SE-105: вся команда — ровно эта строка: одна цель из списка, переменные NAME/TRACK/WT_DEPS без знаков shell
 MAKE_TRUSTED = re.compile(r"make[ \t]+(?:wt-(?:fix|feature|refactor|spike|review|deps|check|list|help|rm)"
                           r"|check-(?:eval|repo))(?:[ \t]+(?:NAME|TRACK|WT_DEPS)=[A-Za-z0-9._-]+)*")
-MAKE_BASE = "refs/remotes/origin/board-agents"  # полное имя: локальная ветка `origin/board-agents` его не перекроет
+# Blob Makefile репозитория (`git hash-object --no-filters Makefile`), прошедший ревью. Не ссылка git: её сессия
+# сдвинет сама (update-ref, fetch с refspec). Правка Makefile — новый хеш здесь, до того make — весь текст.
+MAKE_BLOBS = frozenset({"cbb705a76c7fe50e287d96fc2d83d8682b4302db"})
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
@@ -223,8 +224,8 @@ def make_files(a, cwd, command=None):
     """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый из
     GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не исключение:
     `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). command — вся команда Bash (None —
-    make не на верхнем уровне): если это MAKE_TRUSTED и каждый файл make — тот же blob, что в MAKE_BASE, тексты пустые:
-    рецепты прошли ревью и мёрж, грубый признак не нужен (SE-105)."""
+    make не на верхнем уровне): если это MAKE_TRUSTED и каждый файл make — blob из MAKE_BLOBS, тексты пустые: рецепты
+    прошли ревью, грубый признак не нужен (SE-105)."""
     if a[0] not in MAKES:
         return []
     values, _ = _options(a, {"-C", "--directory", "-f", "--file", "--makefile", "-I", "--include-dir", "-o",
@@ -244,25 +245,10 @@ def make_files(a, cwd, command=None):
 
     files = [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t))
              for p, t in _read_tree([p for p in paths if p], lambda p, t: includes(p, re.sub(r"#.*", "", t)))]
-    if command and MAKE_TRUSTED.fullmatch(command.strip()) and _as_base(files, cwd):
+    trusted = command and MAKE_TRUSTED.fullmatch(command.strip()) and files
+    if trusted and all(t is not None and _blob(p) in MAKE_BLOBS for p, t in files):  # None — папка не видна (LOST)
         return [(p, "") for p, _ in files]
     return files
-
-
-def _exact(cwd, path):
-    """Путь от cwd с именами, как в папке, или None: файла нет или он вне cwd. APFS не различает регистр: make
-    откроет `makefile`, а в git — `Makefile`."""
-    rel, d, out = os.path.relpath(path, cwd), cwd, []
-    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
-        return None
-    for part in rel.split(os.sep):
-        names = os.listdir(d)
-        name = part if part in names else next((n for n in names if n.lower() == part.lower()), None)
-        if name is None:
-            return None
-        out.append(name)
-        d = os.path.join(d, name)
-    return "/".join(out)
 
 
 def _blob(path):
@@ -273,18 +259,6 @@ def _blob(path):
     with f:
         data = f.read(TEXT_MAX + 1)
     return None if len(data) > TEXT_MAX else hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
-
-
-def _as_base(files, cwd):
-    """Каждый файл make есть в MAKE_BASE под тем же путём от cwd и с тем же содержимым. Нет, не прочесть или git
-    не ответил — нет: тогда грубый признак, как раньше."""
-    try:
-        rels, want = [_exact(cwd, p) for p, _ in files], [_blob(p) for p, _ in files]
-        if not files or None in rels or None in want:
-            return False
-        return git_out(cwd, "rev-parse", *[f"{MAKE_BASE}:./{r}" for r in rels]).split() == want
-    except (OSError, GitTimeout):
-        return False
 
 
 def _awk_file(name, cwd):

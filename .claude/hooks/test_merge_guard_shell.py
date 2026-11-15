@@ -4,6 +4,7 @@
 
 Запуск: python3 -I .claude/hooks/test_merge_guard_shell.py  (только эти формы; все проверки — test_merge_guard.py)
 """
+import hashlib
 import os
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
+from merge_guard_launch import MAKE_BLOBS  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
 
@@ -473,27 +475,17 @@ for form in ("eval -- echo hi", "eval -- \"$(cat ok.sh)\"", "emulate sh -c -- \"
     bash(f"r24, `--` на ветке или безвредно на main: {form!r}", form, False,
          cwd=e_branch if form.startswith("builtin") else e_main)
 
-# --- SE-105: Makefile без грубого признака — только разрешённая цель при Makefile, как в origin/board-agents ---
+# --- SE-105: Makefile без грубого признака — только разрешённая цель при Makefile из MAKE_BLOBS ---
 REAL_MAKEFILE = Path(__file__).resolve().parents[2] / "Makefile"
-BASE_REF = "refs/remotes/origin/board-agents"
-
-
-def git_t(d, *args):
-    subprocess.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True,
-                   capture_output=True)
-
-
-def commit_makefile(d, text, ref=BASE_REF):
-    (d / "Makefile").write_text(text)
-    git_t(d, "add", "Makefile")
-    git_t(d, "commit", "-q", "-m", "m")
-    git_t(d, "update-ref", ref, "HEAD")
-
-
-real = REAL_MAKEFILE.read_text()
+real_bytes = REAL_MAKEFILE.read_bytes()
+real = real_bytes.decode()
+real_blob = hashlib.sha1(b"blob %d\0" % len(real_bytes) + real_bytes).hexdigest()
+check(f"SE-105: Makefile репозитория изменён — его blob {real_blob} добавить в MAKE_BLOBS (merge_guard_launch.py)",
+      None if real_blob in MAKE_BLOBS else real_blob, False)
 check("SE-105: в Makefile репозитория есть признак", None if ".claude/hooks/" in real else "нет", False)
-mk = repo_on("fix/x", "se105")
-commit_makefile(mk, real)
+mk = TMP / "se105"
+mk.mkdir(parents=True, exist_ok=True)
+(mk / "Makefile").write_bytes(real_bytes)
 for form in ("make wt-fix NAME=x", "make wt-feature NAME=a.b-c_1", "make wt-list", "make wt-help", "make check-eval",
              "make check-repo", "make wt-deps TRACK=fix NAME=x", "make wt-check TRACK=fix NAME=x",
              "make wt-rm TRACK=fix NAME=x", "make wt-fix NAME=x WT_DEPS=0", "  make  wt-list  ",
@@ -512,24 +504,26 @@ for form in ("make", "make check", "make check-layer", "make help", "make wt-add
              "make wt-list <<EOF\nx\nEOF"):
     bash(f"SE-105, форма не из списка — весь текст: {form!r}", form, True, cwd=mk)
 (mk / "Makefile").write_text(real + "# правка\n")
-bash("SE-105, Makefile отличается от board-agents (даже комментарием) — весь текст", "make wt-list", True, cwd=mk)
-(mk / "Makefile").write_text(real)
-(mk / "GNUmakefile").write_text(real)
-bash("SE-105, make читает GNUmakefile, его нет в board-agents — весь текст", "make wt-list", True, cwd=mk)
+bash("SE-105, Makefile отличается от закреплённого (даже комментарием) — весь текст", "make wt-list", True, cwd=mk)
+(mk / "Makefile").write_bytes(real_bytes)
+(mk / "GNUmakefile").write_text("wt-list:\n\tgh pr merge 1\n")
+bash("SE-105, make читает GNUmakefile, а не закреплённый Makefile — его текст", "make wt-list", True, cwd=mk)
 (mk / "GNUmakefile").unlink()
-bash("SE-105, Makefile снова как в board-agents", "make wt-list", False, cwd=mk)
-commit_makefile(mk, real + "# ветка origin/board-agents в refs/heads\n", "refs/heads/origin/board-agents")
-bash("SE-105, локальная ветка origin/board-agents не подменяет remote-ветку", "make wt-list", True, cwd=mk)
-no_ref = repo_on("fix/x", "se105n")
-commit_makefile(no_ref, real, "refs/heads/other")
-bash("SE-105, нет origin/board-agents — весь текст", "make wt-list", True, cwd=no_ref)
+bash("SE-105, снова закреплённый Makefile", "make wt-list", False, cwd=mk)
+forged = repo_on("fix/x", "se105f")
+(forged / "Makefile").write_text(real + "# подделка\n")
+for args in (["add", "Makefile"], ["commit", "-q", "-m", "m"],
+             ["update-ref", "refs/remotes/origin/board-agents", "HEAD"]):
+    subprocess.run(["git", "-C", str(forged), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True)
+bash("SE-105, origin/board-agents сдвинут на правленый Makefile (update-ref) — весь текст", "make wt-list", True,
+     cwd=forged)
 syn = TMP / "se105syn"
 for name, text in (("Makefile", "go: ./rel\nrel:\n\tgh pr merge 1\n-include ./gen.mk\ngen.mk:\n\tgh pr merge 1\n"),
                    ("c/Makefile", "# .claude/rules/x и gh pr merge 1 — только комментарий\nall:\n\techo ok\n")):
     (syn / name).parent.mkdir(parents=True, exist_ok=True)
     (syn / name).write_text(text)
 for form in ("make ./rel", "make go", "make wt-list", 'make "$G"', "make $(echo rel)", "make re?"):
-    bash(f"SE-105, Makefile не из board-agents (Control B1/B2): {form!r}", form, True, cwd=syn)
+    bash(f"SE-105, Makefile не закреплён (Control B1/B2): {form!r}", form, True, cwd=syn)
 bash("SE-105, признак только в комментарии — не отказ (как до SE-105)", "make all", False, cwd=syn / "c")
 
 if __name__ == "__main__":
