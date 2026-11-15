@@ -43,6 +43,7 @@ export function SectorsTab({ workspaceId, sectorId }: SectorsTabProps) {
       <ForestListState
         isLoading={sectors.isLoading}
         isError={sectors.isError}
+        onRetry={() => void sectors.refetch()}
         isEmpty={!sectors.data?.length}
         empty={t("workspace:forest.sectors.empty")}
       >
