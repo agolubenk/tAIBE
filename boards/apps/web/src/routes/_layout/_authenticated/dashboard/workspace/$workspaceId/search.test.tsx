@@ -112,3 +112,22 @@ it("TB-226: back and forward change the address, the field follows", () => {
   );
   expect(m.queries.at(-1)).toBe("дерево");
 });
+
+it("TB-226: a suggestion clicked within the pause is not overwritten by the typed text", () => {
+  render(<SearchPage />);
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "ab" } });
+  fireEvent.click(
+    screen.getByRole("button", { name: "workspace:search.suggestionBug" }),
+  );
+  act(() => {
+    vi.advanceTimersByTime(300);
+  });
+
+  expect(m.navigate).toHaveBeenCalledTimes(1);
+  expect(m.navigate).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      search: { q: "workspace:search.suggestionBug" },
+    }),
+  );
+});
