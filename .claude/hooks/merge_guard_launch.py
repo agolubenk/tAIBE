@@ -51,7 +51,8 @@ MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$"
 MAKE_CONT = re.compile(r"(?<!\\)((?:\\\\)*)\\\n[ \t]*")
 INCLUDE_ESCAPE = "\0INCLUDE"  # метка в streams: строка include с `\` или `#` — экранирование make разбор не сводит
 # Правило coord 12:06/12:07 (#402): в Makefile дерева — слово include в любой строке, `$(eval`, `$(file`, `$(shell`
-# (и `${…}`), `/dev/` в начале слова-пути; метка MAKE_TEXT в streams — и для Makefile, который разбор не прочёл.
+# (и `${…}`), `/dev/` в начале слова-пути; метка MAKE_TEXT в streams — и для Makefile, который разбор не прочёл,
+# и для пересборки встроенным правилом (coord 12:19): рядом `имя.*`, `имя,v`, `s.имя`, RCS/, SCCS/; Makefile нет.
 MAKE_TOKENS = re.compile(r"\$[({](?:eval|file|shell)|(?:^|[^A-Za-z0-9_.~/-])/dev/"
                          r"|(?<![A-Za-z0-9_-])(?:-?include|sinclude)(?![A-Za-z0-9_-])", re.M)
 MAKE_TEXT = "\0MAKETEXT"
@@ -264,7 +265,7 @@ def _read_tree(paths, includes, streams=None):
         if t is not None or is_lost(p):
             out.append((p, t))
             queue += includes(p, t) if t is not None else []
-        elif streams is not None and os.path.lexists(p):
+        elif streams is not None and os.path.lexists(p) and os.path.realpath(p) != os.devnull:
             streams.append(MAKE_TEXT)  # make прочтёт, разбор — нет (права, больше TEXT_MAX): coord 12:06 (#402)
     return out
 
@@ -304,14 +305,27 @@ def make_files(a, cwd, streams=None):
         if streams is not None and any(re.search(r"[\\#]", x) for x in lines):
             streams.append(INCLUDE_ESCAPE)  # правило coord 11:46 (#402): `\#`, `\ `, комментарий — отказ
         for name in (n for x in lines for n in re.sub(r"#.*", "", x).split() if "$" not in n):
-            found += next((h for h in (sorted(glob.glob(os.path.join(x, os.path.expanduser(name)))) for x in dirs)
-                           if h), [])
+            hits = next((h for h in (sorted(glob.glob(os.path.join(x, os.path.expanduser(name)))) for x in dirs)
+                         if h), [])
+            found += hits
+            if not hits and streams is not None:
+                streams.append(MAKE_TEXT)  # недостающий include make пересоберёт (coord 12:19, #402)
         return found
+
+    def remade(p):  # рядом исходник встроенного правила make (`.sh` сверено с make 3.81), регистр — как у APFS
+        folder, base = os.path.split(p)
+        b = base.casefold()
+        try:
+            return any(n.startswith((b + ".", b + ",")) or n in ("s." + b, "rcs", "sccs")
+                       for n in (x.casefold() for x in os.listdir(folder or ".")))
+        except OSError:
+            return True
 
     roots = [p for p in paths if p] + [h for _, t in evals for h in includes(None, t)]
     tree = _read_tree(roots, includes, streams)
-    if streams is not None and any(t is not None and MAKE_TOKENS.search(t) for _, t in tree):
-        streams.append(MAKE_TEXT)  # по сырому тексту: строка-комментарий тоже (coord 12:06, #402)
+    if streams is not None and (any(t is not None and (MAKE_TOKENS.search(t) or remade(p)) for p, t in tree)
+                                or any(not p or not is_lost(p) and not os.path.lexists(p) for p in paths)):
+        streams.append(MAKE_TEXT)  # сырой текст (и строка-комментарий), пересборка, Makefile нет (coord 12:06, 12:19)
     return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t)) for p, t in tree] + evals
 
 
@@ -336,9 +350,10 @@ MAKE_SUBST = ("подстановка shell в слове make (`$(…)`, `` `�
               "строку `--eval`, опцию, — разбор не видит; запишите значение в команду или в Makefile-файл (`-f`)")
 MAKE_ASCII = ("знак вне печатного ASCII, кроме таба, в слове make (аргумент, `-f`, `--eval`): make делит слова по "
               "своей локали (в kk_KZ.PT154 байт 0xA0 — пробел), разбор так не делит — запишите слово в ASCII")
-MAKE_TEXT_WHY = ("Makefile со словом include, с `$(eval`, `$(file`, `$(shell` (и `${…}`), с путём `/dev/` или "
-                 "Makefile, который разбор не прочёл (права, больше 4 МБ): что make прочтёт и запустит, разбор не "
-                 "сводит — запустите команды цели напрямую")
+MAKE_TEXT_WHY = ("Makefile со словом include, с `$(eval`, `$(file`, `$(shell` (и `${…}`), с путём `/dev/`, Makefile, "
+                 "который разбор не прочёл (права, больше 4 МБ), или make его пересоберёт (рядом `имя.sh`, `имя,v`, "
+                 "RCS/, SCCS/; Makefile нет): что make прочтёт и запустит, разбор не сводит — запустите команды цели "
+                 "напрямую")
 MAKE_VAR_WHY = ("переменная make в командной строке, от которой зависит, чем make запустит рецепты и что прочтёт "
                 "(`SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` — от папки после `-C`): разбор этого не видит — уберите её, "
                 "файл make передайте через `-f`")
@@ -356,8 +371,8 @@ def make_option(a, cwd):
     где угодно в дереве make_files (`-f -`, устройство, FIFO, Makefile по умолчанию — ссылка на поток, `include
     /dev/stdin` в Makefile или `--eval`); строка `--eval` с EVAL_RUNS; `SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` в строке
     make (SE-135). То, что разбор не сводит, — отказ (coord, #402): подстановка shell и знак вне печатного ASCII в
-    любом слове make, строка include с `\\` или `#`, Makefile дерева с MAKE_TOKENS или нечитаемый. Рецепты Makefile
-    на диске — предел дизайна: только грубый признак (хук)."""
+    любом слове make, строка include с `\\` или `#`, Makefile дерева с MAKE_TOKENS, нечитаемый или такой, что make
+    его пересоберёт (coord 12:19). Рецепты Makefile на диске — предел дизайна: только грубый признак (хук)."""
     if a[0] not in MAKES:
         return ""
     if MAKEFLAGS_ARG in a:
