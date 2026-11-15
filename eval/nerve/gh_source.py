@@ -110,21 +110,23 @@ def _recheck_ci(ctx, n, p):
     """PR ждёт только CI: сначала статус проверок, комментарии — когда CI доехал. Пока CI идёт, комментарии не
     читаются: у большого PR это десятки КБ за проход (#292 — 54 КБ). Новый вердикт меняет updated PR — его разбирает
     основной путь прохода."""
-    if _no_checks(ctx, p):
+    slow = _no_checks(ctx, p)
+    if slow:
         # CI у PR нет: перечитывать раз в NO_CHECKS_EVERY, а не каждый проход (до 1 440 gh pr view в сутки на PR) —
         # только чтобы заметить проверки, если их всё же запустят
         last = sources._ts(p.get("ci_at"))
         if last and (ctx.now - last).total_seconds() < NO_CHECKS_EVERY:
             return
-        p["ci_at"] = _iso_now(ctx)
     _, checks, _, _, _ = _gh_view(ctx.cfg["github"]["repo"], n)
+    if slow:
+        p["ci_at"] = _iso_now(ctx)   # после удачного чтения: сбой gh повторяется следующим проходом, а не через 15 мин
     p["checks"] = checks
     ci = quorum.ci_state(_quorum_checks(ctx, p))
     if ci == "pending" or (ci == "none" and p.get("none_head") == p["head"]):
         return   # «CI: none» уже разобран на этой голове: комментарии не перечитываются раз в 15 мин (HR #774 — 23 КБ)
+    _check_pr(ctx, n, p, p["head"], viewed=True)
     if ci == "none":
-        p["none_head"] = p["head"]
-    _check_pr(ctx, n, p, p["head"])
+        p["none_head"] = p["head"]   # после разбора: упавшее чтение комментариев не теряет кворум «CI: none»
 
 
 def poll_github(ctx):
@@ -182,15 +184,18 @@ def _raise_fails(fails):
         raise RuntimeError(f"PR с ошибкой: {len(fails)}; " + "; ".join(fails))
 
 
-def _check_pr(ctx, n, p, head):
+def _check_pr(ctx, n, p, head, viewed=False):
+    """Разбор PR: комментарии, вердикты, кворум. viewed — проверки только что прочитаны (_recheck_ci)."""
     g = ctx.cfg["github"]
     head_changed = p["head"] != head
     comments = _gh_comments(g["repo"], n)
-    if head_changed or "author" not in p:
+    # Пустой список перечитывается: CI регистрируется позже push, и старый [] через 30 мин дал бы ложный «CI: none»
+    if head_changed or "author" not in p or not (p.get("checks") or viewed):
         files, checks, _, _, _ = _gh_view(g["repo"], n)
         p["author"] = quorum.author_role(files, g["path_roles"])
         p["checks"] = checks
-        p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — от новой головы
+    if head_changed:
+        p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
     verdicts = []
     for c in comments:

@@ -335,8 +335,9 @@ class FakeGh:
     """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
     REPO = CFG["github"]["repo"]
 
-    def __init__(self, open_prs, merged=(), broken=(), comments=None, closed=(), ci=None):
+    def __init__(self, open_prs, merged=(), broken=(), comments=None, closed=(), ci=None, mute=()):
         self.open_prs, self.merged, self.broken = open_prs, set(merged), set(broken)
+        self.mute = set(mute)       # номера, у которых падает чтение комментариев
         self.ci = ci or {}          # номер → статус CI в gh pr view; по умолчанию SUCCESS
         self.closed = set(closed)   # закрыты без мёржа; остальные номера вне merged — OPEN
         self.comments = comments or {}
@@ -353,6 +354,8 @@ class FakeGh:
                                   for p in self.open_prs[:limit]]), ""
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
             n = int(cmd[-1].split("/")[4])
+            if n in self.mute:
+                return 1, "", "HTTP 502"
             return 0, json.dumps([{"id": i, "body": b} for i, b in enumerate(self.comments.get(n, []))]), ""
         if cmd[:3] == ["gh", "pr", "view"]:
             n = int(cmd[3])
@@ -614,6 +617,51 @@ class GithubPollTest(unittest.TestCase):
         at(94, new)
         self.assertEqual(len(events("pr.quorum")), 3)
         self.assertEqual(len(events("pr.nochecks")), 2)
+
+    def test_ci_registered_after_the_first_view_gives_normal_quorum_not_none(self):
+        """Линза Claude #371, B1: первое чтение после push видит [] (CI ещё не зарегистрирован), две линзы — без
+        ожидания CI; третья через 40 мин. Старый [] не даёт «CI: none»: пустой список перечитывается."""
+        head, t0 = "a1" * 20, self.ctx.now
+        lens = [f"{x}: approve на a1a1a1a" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        sources.run = FakeGh([_pr(484, head)], comments={484: lens[:2]}, ci={484: ""})
+        gh_source.poll_github(self.ctx)
+        p = self.ctx.state["github"]["prs"]["484"]
+        self.assertEqual((p["checks"], p["await_ci"]), ([], False))
+        self.ctx.now = t0 + timedelta(minutes=40)
+        sources.run = FakeGh([_pr(484, head, upd="2026-11-04T10:40:00Z")], comments={484: lens}, ci={484: "FAILURE"})
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([t for k, t in self.kinds() if k in ("pr.quorum", "pr.nochecks")],
+                         ["#484 собран: approve backend, boards, plan на a1a1a1a1a, CI failure"])
+        self.assertEqual(p["head_at"], t0.strftime("%Y-%m-%dT%H:%M:%SZ"), "head_at — только от новой головы")
+
+    def test_failed_reads_on_ci_none_do_not_lose_the_quorum(self):
+        """Линза Claude #371: B2 — упавшее чтение комментариев не ставит none_head, «CI: none» приходит на следующей
+        перепроверке; ci_at — после удачного gh pr view: сбой view повторяется следующим проходом, а не через 15 мин."""
+        head, t0 = "b2" * 20, self.ctx.now
+        lens = [f"{x}: approve на b2b2b2b" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+
+        def at(minutes, **kw):
+            self.ctx.now = t0 + timedelta(minutes=minutes)
+            fake = FakeGh([_pr(485, head)], comments={485: lens}, ci={485: ""}, **kw)
+            sources.run = fake
+            try:
+                gh_source.poll_github(self.ctx)
+            except RuntimeError:
+                pass
+            return [c[:3] for c in fake.calls if c[:3] != ["gh", "pr", "list"]]
+
+        def none():
+            return [t for k, t in self.kinds() if k == "pr.quorum"]
+
+        at(0)
+        self.assertEqual(at(31, broken=(485,)), [["gh", "pr", "view"]])
+        self.assertEqual(at(32, mute=(485,)),
+                         [["gh", "pr", "view"], ["gh", "api", f"repos/{FakeGh.REPO}/issues/485/comments?per_page=100"]])
+        self.assertEqual(none(), [])
+        self.assertEqual(at(40), [], "после удачного чтения — раз в 15 мин")
+        at(47)
+        self.assertEqual(none(), ["#485 собран: approve backend, boards, plan на b2b2b2b2b, CI: none (проверок нет 30 мин)"])
+        self.assertEqual(at(63), [["gh", "pr", "view"]], "«CI: none» разобран: комментарии больше не читаются")
 
     def test_upgrade_backfill_is_capped_and_says_open_only_for_new_prs(self):
         old = [_pr(n, "b" * 40, created="2026-11-01T10:00:00Z") for n in range(1, 26)]
