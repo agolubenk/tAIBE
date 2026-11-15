@@ -4,6 +4,8 @@ import { cn } from "@/lib/cn";
 import type { GraphNode } from "./graph-model";
 
 // A wider transparent circle under each node: a finger hits it on a phone.
+// The SVG shrinks to the screen (×0.56 at 390 px), so a phone gets r 22:
+// 24 px on screen (WCAG 2.5.8, TB-223). Layout keeps nodes ~60 apart.
 const HIT_RADIUS = 14;
 const LABEL_MAX = 18;
 
@@ -85,7 +87,7 @@ export function GraphNodeShape({
         }
       }}
     >
-      <circle r={HIT_RADIUS} className="fill-transparent" />
+      <circle r={HIT_RADIUS} className="fill-transparent max-sm:[r:22px]" />
       <g
         className={cn(
           "node-shape fill-current stroke-background stroke-2",

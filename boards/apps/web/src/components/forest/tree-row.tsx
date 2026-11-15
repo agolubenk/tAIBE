@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { getStatusLabel } from "@/lib/i18n/domain";
 import { FellDialog } from "./fell-dialog";
 import { ForestTaskLink } from "./forest-task-link";
 import type { ForestTree } from "./forest-types";
@@ -52,7 +53,7 @@ export function TreeRow({ workspaceId, tree, sectorNames }: TreeRowProps) {
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="outline">{tree.projectName}</Badge>
           <Badge variant={tree.isCompleted ? "success" : "secondary"}>
-            {tree.status}
+            {getStatusLabel(tree.status)}
           </Badge>
           <Badge variant="outline">
             <GitBranch aria-hidden="true" />
@@ -73,10 +74,12 @@ export function TreeRow({ workspaceId, tree, sectorNames }: TreeRowProps) {
             </Badge>
           ) : null}
           {tree.sectorIds.map((sectorId) => (
-            <Badge key={sectorId} variant="info">
-              {t("workspace:forest.trees.sector", {
-                name: sectorNames.get(sectorId) ?? "…",
-              })}
+            <Badge key={sectorId} variant="info" className="max-w-full">
+              <span className="truncate">
+                {t("workspace:forest.trees.sector", {
+                  name: sectorNames.get(sectorId) ?? "…",
+                })}
+              </span>
             </Badge>
           ))}
           <Button size="xs" variant="ghost" onClick={() => setFelling(true)}>

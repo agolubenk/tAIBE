@@ -91,10 +91,10 @@ export function CardPlaceRows({ workspaceId, taskId }: CardPlaceRowsProps) {
                   to="/dashboard/workspace/$workspaceId/forest"
                   params={{ workspaceId }}
                   search={{ tab: "sectors" }}
-                  className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-normal text-xs outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-normal text-xs outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <Layers aria-hidden="true" />
-                  {sector.name}
+                  <span className="truncate">{sector.name}</span>
                 </Link>
               ))
             : null}

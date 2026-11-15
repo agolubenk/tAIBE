@@ -12278,6 +12278,28 @@
 						"urgent"
 					]
 				},
+				"severity": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"label": {
+							"type": "string"
+						},
+						"critical": {
+							"type": "string"
+						},
+						"high": {
+							"type": "string"
+						},
+						"medium": {
+							"type": "string"
+						},
+						"low": {
+							"type": "string"
+						}
+					},
+					"required": ["label", "critical", "high", "medium", "low"]
+				},
 				"view": {
 					"type": "object",
 					"additionalProperties": false,
@@ -14946,6 +14968,7 @@
 				"title",
 				"status",
 				"priority",
+				"severity",
 				"view",
 				"common",
 				"detail",
