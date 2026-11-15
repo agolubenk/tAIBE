@@ -2,7 +2,7 @@
 // сбой — без потери данных и без шторма полных списков.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BACKOFF_MS, FULL_EVERY_MS, createDeltaMirror } from '../delta.mjs';
+import { BACKOFF_MS, FULL_EVERY_MS, RETRY_MS, createDeltaMirror } from '../delta.mjs';
 
 /**
  * Поддельная консоль по контракту /changes (queue/changes.ts HR): без since — full, cursor и collections; с since —
@@ -21,6 +21,11 @@ function fakeConsole({ mode = 'ok', truncatedWork = false, cols = 'checks,items,
     c.reqs.push(path);
     if (c.mode === 'old') fail(404, 'Not Found');
     if (c.mode === 'down') fail(503, 'Service Unavailable');
+    if (c.mode === 'busy') fail(429, 'Too Many Requests');
+    // Ответ пришёл (200), но вложенная форма битая: docs не массив, документ null, removed не массив.
+    if (c.mode === 'badDocs') return { full: true, cursor: 'b1.0', collections: { checks: { docs: 5 }, items: { docs: [] }, work: { docs: [] } } };
+    if (c.mode === 'nullDoc') return { full: true, cursor: 'b1.0', collections: { checks: { docs: [null] }, items: { docs: [] }, work: { docs: [] } } };
+    if (c.mode === 'badDelta' && path.includes('since=')) return { cursor: 'b1.99', changes: { checks: { docs: [], removed: [] }, items: { docs: [{ id: 'x' }], removed: 7 }, work: { docs: [], removed: [] } } };
     const u = new URL(path, 'http://x');
     assert.equal(u.pathname, '/changes');
     assert.equal(u.searchParams.get('col'), cols);
@@ -111,17 +116,56 @@ test('старая консоль без /changes (404) — null: oq_list чит
   assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['d-1'], 'пауза кончилась — снова дельта');
 });
 
-test('сбой посреди работы (503) — зеркало сброшено, прежний путь, после паузы — свежий полный список', async () => {
+test('выкатка консоли посреди работы (503) — прежний путь, зеркало и курсор целы; через минуту — дельта, а не полный список (линза Claude #353, п. 1)', async () => {
   const r = rig();
   r.put('items', 'd-1', { title: 'один' });
   await r.m.list('items');
   r.c.mode = 'down';
   assert.equal(await r.m.list('items'), null);
+  assert.match(r.logs[0], /повтор дельты через 60 с/);
+  r.tick(RETRY_MS - 1);
+  assert.equal(await r.m.list('items'), null);
+  assert.equal(r.c.reqs.length, 2, 'до повтора консоль не дёргаем');
   r.c.mode = 'ok';
   r.put('items', 'd-2', { title: 'два' });
-  r.tick(BACKOFF_MS);
+  r.tick(1);
   assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['d-2', 'd-1']);
-  assert.equal(r.c.reqs.at(-1).includes('since='), false, 'после сбоя — полный список, а не дельта от старого курсора');
+  assert.equal(r.c.reqs.at(-1).includes('since='), true, 'после выкатки — дельта от курсора');
+  assert.equal(r.c.reqs.filter((p) => !p.includes('since=')).length, 1, 'полный список — один раз за всё время');
+});
+
+test('сеть (ошибка без status) — как выкатка: повтор через минуту; консоль за это время перезапустилась — 410 и один полный список', async () => {
+  const f = fakeConsole();
+  f.put('items', 'd-1', { title: 'один' });
+  let t = 1_000_000;
+  let net = false;
+  const logs = [];
+  const m = createDeltaMirror({ get: async (p) => { if (net) throw new TypeError('fetch failed'); return f.get(p); }, now: () => t, log: (s) => logs.push(s) });
+  await m.list('items');
+  net = true;
+  assert.equal(await m.list('items'), null);
+  assert.match(logs[0], /fetch failed.*повтор дельты через 60 с/);
+  net = false;
+  f.restart();
+  f.put('items', 'd-2', { title: 'два' });
+  t += RETRY_MS;
+  assert.deepEqual((await m.list('items')).docs.map((d) => d.id), ['d-2', 'd-1']);
+  assert.deepEqual(f.c.reqs.slice(-2).map((p) => p.includes('since=')), [true, false], 'дельта от курсора → 410 → полный список');
+});
+
+test('ответ не по контракту и 4xx (кроме 410, 429) — зеркало сброшено, пауза 30 мин, потом свежий полный список', async () => {
+  const r = rig();
+  r.put('items', 'd-1', { title: 'один' });
+  await r.m.list('items');
+  r.c.mode = 'old';
+  assert.equal(await r.m.list('items'), null);
+  assert.match(r.logs[0], /30 мин прежний полный список/);
+  r.c.mode = 'ok';
+  r.tick(RETRY_MS);
+  assert.equal(await r.m.list('items'), null, 'не минутный повтор: 404 сам не пройдёт');
+  r.tick(BACKOFF_MS);
+  await r.m.list('items');
+  assert.equal(r.c.reqs.at(-1).includes('since='), false, 'после 404 — полный список, курсор сброшен');
 });
 
 test('одновременные вызовы — один запрос к консоли; полный список ещё и раз в 12 ч', async () => {
@@ -159,4 +203,41 @@ test('порядок при равном updatedAt — по id убыванию,
   for (const id of ['d-a', 'd-c', 'd-b']) r.put('items', id, { title: id }, 500);
   r.put('items', 'd-z', { title: 'старый' }, 100);
   assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['d-c', 'd-b', 'd-a', 'd-z']);
+});
+
+test('429 (консоль просит подождать) — как выкатка: зеркало и курсор целы, повтор через минуту, дальше дельта (линза Claude #370, N3)', async () => {
+  const r = rig();
+  r.put('items', 'd-1', { title: 'один' });
+  await r.m.list('items');
+  r.c.mode = 'busy';
+  assert.equal(await r.m.list('items'), null);
+  assert.match(r.logs[0], /Too Many Requests.*повтор дельты через 60 с/);
+  r.c.mode = 'ok';
+  r.put('items', 'd-2', { title: 'два' });
+  r.tick(RETRY_MS);
+  assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['d-2', 'd-1']);
+  assert.equal(r.c.reqs.filter((p) => !p.includes('since=')).length, 1, 'полный список — один раз');
+});
+
+test('ответ пришёл, но вложенная форма битая (docs: 5, docs: [null]) — нарушение контракта: пауза 30 мин, а не полный список каждую минуту (линза Claude #370, N2)', async () => {
+  for (const mode of ['badDocs', 'nullDoc']) {
+    const r = rig({ mode });
+    assert.equal(await r.m.list('items'), null, mode);
+    assert.match(r.logs[0], /дельта \/changes не работает .*30 мин прежний полный список/, mode);
+    for (let i = 0; i < 29; i++) { r.tick(60_000); assert.equal(await r.m.list('items'), null); }
+    assert.equal(r.c.reqs.length, 1, `${mode}: за 29 мин — один запрос, а не 30 полных списков`);
+  }
+});
+
+test('дельта с битой формой (removed: 7) — зеркало не применяется наполовину: сброс, пауза 30 мин, потом свежий полный список', async () => {
+  const r = rig();
+  r.put('items', 'd-1', { title: 'один' });
+  await r.m.list('items');
+  r.c.mode = 'badDelta';
+  assert.equal(await r.m.list('items'), null);
+  assert.match(r.logs[0], /ответ не по контракту/);
+  r.c.mode = 'ok';
+  r.tick(BACKOFF_MS);
+  assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['d-1'], 'документа x из битой дельты нет');
+  assert.equal(r.c.reqs.at(-1).includes('since='), false, 'после сброса — полный список');
 });

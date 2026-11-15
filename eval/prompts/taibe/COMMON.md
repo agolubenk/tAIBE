@@ -15,7 +15,8 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
 4. Board rules: `eval/prompts/launch-3010/T-BOARDS.md`, only the sections «Цикл работы с карточкой», «Что сервер
    требует при смене статуса» and «PR и линзы». A lens verdict: the first non-empty line has the lens name, the word
    `approve` or `changes`, and the head SHA after it (`Бэкенд: approve на 46b9f87e1`) — the Nerve quorum
-   (`eval/nerve/quorum.py`) reads only this line.
+   (`eval/nerve/quorum.py`) reads only this line. A PR body has one line «роль N — автор» (your role number from
+   `instances/<slug>.json` `team.roles`); the Nerve quorum drops the author's approve only by this line (SE-121).
 5. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
 
 ## Board

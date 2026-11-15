@@ -11,6 +11,7 @@ m-пункты очереди по уже влитым PR. Только stdlib; 
 body, status|done}}`, как отдаёт `oq_list items`). m-пункт относится к PR, если в id, заголовке или тексте есть
 `#<номер>` или `m-<номер>`.
 Выход: таблица и сводка «что сделать» — головы без нужного числа линз, открытые m-пункты по влитым PR. Код 0.
+Approve автора PR не считается, как у Нерва (SE-121), если тело PR называет автора строкой «роль N — автор».
 """
 import argparse
 import json
@@ -50,11 +51,7 @@ def lenses_on_head(comments, head, lens_roles=None, team_roles=None):
     if lens_roles is None:
         lens_roles, team_roles = team_config()
     verdicts = [quorum.parse_verdict(c.get("body"), lens_roles, team_roles or ()) for c in comments]
-    last = {}
-    for v in verdicts:
-        if v and quorum.on_head(v["sha"], head):
-            last[v["lens"]] = v["verdict"]
-    return last
+    return quorum.last_on_head(verdicts, head)
 
 
 def pr_refs(text):
@@ -80,6 +77,7 @@ def merge_items(oq_docs):
 
 def build_rows(pulls, comments_by_pr, oq_docs, min_lenses):
     items = merge_items(oq_docs)
+    team_roles = team_config()[1]
     rows, todo = [], []
     for pr in sorted(pulls, key=lambda p: -p["number"]):
         n = pr["number"]
@@ -87,7 +85,9 @@ def build_rows(pulls, comments_by_pr, oq_docs, min_lenses):
         base = (pr.get("base") or {}).get("ref", "")
         merged = bool(pr.get("merged_at"))
         lenses = lenses_on_head(comments_by_pr.get(n, []), head)
-        approved, changes = quorum.tally(lenses)   # approve — по базовой роли, как кворум Нерва (#324)
+        author = quorum.body_author(pr.get("body"), team_roles)
+        # approve — по базовой роли, как кворум Нерва (#324); approve автора не считается (SE-121)
+        approved, changes = quorum.tally(lenses, author)
         open_m = [it["id"] for it in items if n in it["prs"] and it["open"]]
         state = "влит" if merged else pr.get("state", "?")
         rows.append((n, head[:9], base, state, len(approved), ",".join(changes) or "—", ",".join(open_m) or "—"))
@@ -95,6 +95,8 @@ def build_rows(pulls, comments_by_pr, oq_docs, min_lenses):
             todo.append(f"закрыть {', '.join(open_m)}: PR #{n} уже влит")
         if not merged and pr.get("state") == "open" and (len(approved) < min_lenses or changes):
             need = f"changes от {', '.join(changes)}" if changes else f"линз {len(approved)}/{min_lenses}"
+            if quorum.author_approved(lenses, author):
+                need += f", approve автора {author} не засчитан"
             todo.append(f"PR #{n} голова {head[:9]}: {need}")
     return rows, todo
 

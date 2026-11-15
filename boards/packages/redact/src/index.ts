@@ -188,10 +188,15 @@ const dbUrl = collect(
 // (your_secure_password), not a secret. Measured on this repo: without this
 // filter 95% of the new assignment hits were such code. A key has 8+
 // printable ASCII characters, no code punctuation, and is not a dotted name,
-// words joined by _ or -, or a short camelCase name. `looks_like_secret` in
-// infra/checks/secrets_scan.py has the same rules except the type name
-// below and the passphrase rule (TB-195): the scanner drops a type name in
-// any context (TB-193) and lowercase words after any name.
+// words joined by _ or -, or a short camelCase name. The CI scanner
+// (infra/checks/secrets_scan.py) is a gate and this is a mask, so they
+// differ on purpose:
+// - `looks_like_secret` (key and token names) has these rules, but drops a
+//   type name in any context, not only before `,`, `;` or `)` (TB-193):
+//   with the context rule a locale label and a type line became CI errors;
+// - `looks_like_password` (password and secret names) is
+//   `looksLikePassphrase` below with no type name rule (TB-195). A
+//   letters-only value of 20+ characters needs entropy 3.0, others 3.5.
 //
 // A type name is capitalized words with no digit. Since the value ends at `,`
 // and `;` (#283 B2), the comma no longer drops `apiKey: ApiKeyUsageRow,`.

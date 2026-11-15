@@ -86,11 +86,16 @@ export function createWatcher({ store, tg, mirror, snap, broadcast, errText, hin
     }
     failStreak = 0;
     if (s.mode !== lastMode) { log(`режим страницы: ${s.mode}`); lastMode = s.mode; }
+    // Время удачного ответа — только настоящее: страница ставит shared, как только есть база, ещё до первого удачного
+    // опроса (okAt: 0) — тогда «удачных ответов не было», а не время старта бота. Без __oqConn (консоль старее) — сейчас.
+    // До проверки резерва: бот, который станет активным, знает время (линза Claude #319, пп. 1, 3).
+    if (s.mode === 'shared') lastOkAt = Math.max(lastOkAt, s.conn ? s.conn.okAt || 0 : now());
     if (isStandby()) return; // этого бота опрашивает другой процесс — уведомления шлёт он
     if (alerted.ready) { alerted.ready = false; await broadcast({ text: '✅ Связь со страницей очереди восстановлена.' }); }
-    if (s.mode === 'shared') lastOkAt = Math.max(lastOkAt, s.conn?.okAt || now());
     if (s.mode === 'local') return onLocal(s);
-    if (localSince && s.mode === 'shared') {
+    // Связь вернулась — только если после начала сбоя был удачный опрос: ранний shared новой вкладки при лежащем API —
+    // ещё не возврат, иначе пары 🟠/🟢 шли бы каждые несколько минут (линза Claude #319, п. 2).
+    if (localSince && s.mode === 'shared' && (!s.conn || s.conn.okAt > localSince)) {
       if (alerted.local) { alerted.local = false; await broadcast(backNotice(now() - localSince)); }
       localSince = 0;
     }
