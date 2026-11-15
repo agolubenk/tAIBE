@@ -3,6 +3,7 @@ import db from "../../database";
 import { sectorTable, sectorTreeTable } from "../../database/forest-schema";
 import { projectTable, taskTable } from "../../database/schema";
 import { projectAccessCondition } from "../../project-access/project-access-condition";
+import { sectorName } from "../sector/sector-name";
 
 const DEPTH_MAX = 20;
 
@@ -104,7 +105,7 @@ export async function getCardPlace(
   });
   const rootVisible = rootId === taskId || visible.has(rootId);
 
-  const sectors = rootVisible
+  const sectorRows = rootVisible
     ? await db
         .select({ id: sectorTable.id, name: sectorTable.name })
         .from(sectorTreeTable)
@@ -118,6 +119,10 @@ export async function getCardPlace(
         )
         .orderBy(sectorTable.name)
     : [];
+  const sectors = sectorRows.map((sector) => ({
+    ...sector,
+    name: sectorName(sector.name),
+  }));
 
   return {
     rootId: rootVisible ? rootId : null,
