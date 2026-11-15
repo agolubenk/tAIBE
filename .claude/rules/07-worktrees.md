@@ -51,7 +51,9 @@ make wt-rm TRACK=fix NAME=candidate-merge-n-plus-one
 `make` с этим Makefile у агентской сессии (не Контроль) останавливает merge-guard: в Makefile есть путь
 `.claude/hooks/` (цель `check-layer`), а make хук разбирает по всему тексту Makefile. Агент запускает те же команды
 рецептов напрямую: их хук разбирает как любые команды, Makefile при них не читается. Отказ на `make <цель>` печатает
-эти команды с подставленными `TRACK`/`NAME`.
+эти команды с подставленными `TRACK`/`NAME` (без них — чего не хватает). Подсказки нет при опции кроме `-s`/`-k`/`-j`:
+`-C`/`-f` меняют папку и Makefile, `-n`/`-q`/`-t` рецепт не выполняют. Переменные окружения перед `make` подсказка не
+видит.
 
 ```bash
 mkdir -p worktrees/fix                                                    # make wt-fix NAME=<topic>
@@ -59,7 +61,7 @@ git worktree add "worktrees/fix/<topic>" -b "fix/<topic>" board-agents    # ве
 infra/scripts/dev/wt-deps.sh install "worktrees/fix/<topic>"              # зависимости (make wt-deps); WT_DEPS=0 — пропустить
 infra/scripts/dev/wt-deps.sh check "worktrees/fix/<topic>/boards"         # make wt-check
 git worktree list                                                         # make wt-list
-git worktree remove "worktrees/fix/<topic>"                               # make wt-rm
+git worktree remove "worktrees/fix/<topic>"                               # make wt-rm — только с «да» владельца
 python3 -I infra/checks/test_checks.py && python3 -I infra/checks/run.py  # make check-repo
 python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'              # make check-eval: ещё eval/pipeline,
 # eval/pipeline/reflex, eval/pipeline/genome, eval/swarm, eval/evolve — каждая папка своей командой

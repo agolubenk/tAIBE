@@ -16,14 +16,23 @@ argument-hint: [refactor-topic] [fix-topic] [spike-topic] — kebab-case
 Из **корня основного репозитория**:
 
 ```bash
+BASE="$(sed -n 's/^WT_BASE ?= //p' Makefile 2>/dev/null)"; BASE="${BASE:-main}"
 for pair in "refactor:<refactor-topic>" "fix:<fix-topic>" "spike:<spike-topic>"; do
-  make wt-add TRACK="${pair%%:*}" NAME="${pair#*:}"
+  t="${pair%%:*}"; n="${pair#*:}"
+  mkdir -p "worktrees/$t"
+  if git show-ref --verify --quiet "refs/heads/$t/$n"; then
+    git worktree add "worktrees/$t/$n" "$t/$n"
+  else
+    git worktree add "worktrees/$t/$n" -b "$t/$n" "$BASE"
+  fi
+  infra/scripts/dev/wt-deps.sh install "worktrees/$t/$n"   # без зависимостей (документы, eval, слой) — пропустить
 done
 git worktree list
 ```
 
-`make wt-add` создаёт ветку `<track>/<topic>` от `WT_BASE` (или берёт существующую) и ставит worktree свои
-зависимости (`infra/scripts/dev/wt-deps.sh install`); без зависимостей — `WT_DEPS=0`.
+Цикл повторяет рецепт `make wt-add`: ветка `<track>/<topic>` от `WT_BASE` (или существующая) и свои зависимости
+worktree. Агентская сессия зовёт команды напрямую: `make` с этим Makefile останавливает merge-guard (SE-105, прямые
+формы — `.claude/rules/07-worktrees.md`, «Агентская сессия — прямые формы»).
 
 ## После создания
 
@@ -33,4 +42,5 @@ git worktree list
 - Зависимости у каждого worktree свои; общий `node_modules` через симлинк делает общими и кэши сборки (`.tmp`,
   `.vite`, `.vite-temp`, `.cache`) — результаты tsc и vite одного worktree подмешиваются в другой.
 - Локальные env копируются через `.worktreeinclude`.
-- Удаление: `make wt-rm TRACK=... NAME=...` или `git worktree remove <path>`.
+- Удаление: `git worktree remove <path>` — только с «да» владельца (`make wt-rm` агентской сессии останавливает
+  merge-guard).

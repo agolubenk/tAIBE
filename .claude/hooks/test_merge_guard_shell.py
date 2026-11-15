@@ -484,25 +484,39 @@ WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" "board-agents"'
 DEPS_FIX = 'infra/scripts/dev/wt-deps.sh install "worktrees/fix/x"'
 EVAL_NERVE = "python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"
 NO_HINT = ["прямые команды"]
+ENV_NOTE, OWNER_YES, REMOVE = "Переменные окружения перед make", "«да» владельца", "git worktree remove"
 for form, want, absent in (
-        ("make wt-fix NAME=x", ['mkdir -p "worktrees/fix"', WT_FIX, DEPS_FIX], []),
+        ("make wt-fix NAME=x", ['mkdir -p "worktrees/fix"', WT_FIX, DEPS_FIX, ENV_NOTE], [OWNER_YES]),
         ("make wt-fix NAME=x WT_DEPS=0", [WT_FIX], [DEPS_FIX]),
         ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" "board-agents"'], []),
         ("make wt-feature NAME=x", ['"worktrees/feature/x"'], []), ("make wt-refactor NAME=x", ['"refactor/x"'], []),
         ("make wt-spike NAME=x", ['"spike/x"'], []), ("make wt-review NAME=x", ['"review/x"'], []),
-        ("make wt-fix NAME='x;y'", ['"worktrees/fix/<NAME>"'], ["x;y"]),
+        ("make wt-fix NAME='x;y'", ["не хватает NAME"], ["x;y", "<NAME>", "git worktree add"]),
         ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" "main"'], []),
         ("make wt-list", ["git worktree list"], []), ("make wt-help", ["cat worktrees/README.md"], []),
-        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []), ("make wt-rm TRACK=fix NAME=x", ['git worktree remove "worktrees/fix/x"'], []),
+        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []),
+        ("make wt-rm TRACK=fix NAME=x", [f'{REMOVE} "worktrees/fix/x"', OWNER_YES], []),  # frontend #385
         ("make wt-check TRACK=fix NAME=x", ['infra/scripts/dev/wt-deps.sh check "worktrees/fix/x/boards"'], []),
         ("make check-repo", ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"], []),
         ("make check-eval", [EVAL_NERVE, "-s eval/pipeline/reflex ", "-s eval/evolve "], []),
         ("make -s wt-list check-repo", ["git worktree list", "infra/checks/run.py"], []),
         ("make -j4 -k wt-list", ["git worktree list"], []),
-        ("make check-layer", [], NO_HINT), ("make", [], NO_HINT),  # Контроль #385: -C/-f — пути не от корня
+        ("make check-layer", [], NO_HINT),
+        ("make", ["вместо `make` —", "cat worktrees/README.md"], []), ("make help", ["cat worktrees/README.md"], []),
+        # Контроль #385: -C/-f — пути не от корня
         ("make -C . wt-list", [], NO_HINT), ("make -f Makefile wt-fix NAME=x", [], NO_HINT),
         ("make --directory=. wt-list", [], NO_HINT), ("make -sfMakefile wt-list", [], NO_HINT),
-        ("make --dir=. wt-list", [], NO_HINT), ("make -n wt-list", [], NO_HINT)):
+        ("make --dir=. wt-list", [], NO_HINT), ("make -n wt-list", [], NO_HINT),
+        # Claude #385, ниты 1–5: значения опций — не цели, пробный прогон рецепт не выполняет, у переменной —
+        # последнее значение, без TRACK/NAME — чего не хватает, окружение перед make подсказка не видит
+        ("make -o wt-rm wt-list TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make -W wt-rm wt-list TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make -sn wt-list", [], NO_HINT), ("make --just-print wt-rm TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make --dry-run wt-list", [], NO_HINT), ("make -q wt-list", [], NO_HINT), ("make -t wt-list", [], NO_HINT),
+        ("make wt-add TRACK=spike TRACK=fix NAME=x", ['"worktrees/fix/x"'], ['"worktrees/spike/x"']),
+        ("make wt-add TRACK=fix 'TRACK=a b' NAME=x", ["не хватает TRACK"], ["git worktree add"]),
+        ("make wt-rm", ["не хватает NAME, TRACK"], [REMOVE]), ("make wt-fix NAME:=x", [WT_FIX], []),
+        ("WT_BASE=main make wt-fix NAME=x", [WT_FIX, ENV_NOTE], [])):
     got = run("Bash", {"command": form}, cwd=mk) or ""
     check(f"SE-105, make под отказом, как в board-agents: {form!r}", got or None, True)
     lost = [w for w in want if w not in got] + [w for w in absent if w in got]

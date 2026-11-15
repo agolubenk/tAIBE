@@ -38,6 +38,7 @@ WT_TRACKS = ("feature", "fix", "refactor", "spike", "review")
 EVAL_SUITES = ("nerve", "pipeline", "pipeline/reflex", "pipeline/genome", "swarm", "evolve")
 MAKE_VALUE = re.compile(r"[A-Za-z0-9._-]+\Z")
 MAKE_QUIET = re.compile(r"(?:-s|--silent|--quiet|-k|--keep-going|-j[0-9]*)\Z")  # опции, при которых подсказка верна
+MAKE_DEFAULT = re.compile(r"(?m)^([A-Za-z0-9][\w.-]*)[ \t]*:(?![:=])")  # первая цель — цель голого `make`
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
@@ -251,7 +252,7 @@ def _direct(goal, var):
         return [f'mkdir -p "worktrees/{t}"', f"git worktree add {p} -b {b} \"{var['WT_BASE']}\""
                 f"  # ветка {b} уже есть — git worktree add {p} {b}"] + (
             [] if var.get("WT_DEPS") == "0" else [f"infra/scripts/dev/wt-deps.sh install {p}"])
-    return {"wt-help": ["cat worktrees/README.md"], "wt-list": ["git worktree list"],
+    return {"help": ["cat worktrees/README.md"], "wt-help": ["cat worktrees/README.md"], "wt-list": ["git worktree list"],
             "wt-deps": [f"infra/scripts/dev/wt-deps.sh install {p}"],
             "wt-check": [f'infra/scripts/dev/wt-deps.sh check "worktrees/{t}/{n}/boards"'],
             "wt-rm": [f"git worktree remove {p}"],
@@ -264,18 +265,32 @@ def make_hint(a, text):
     """SE-105: make с признаком в Makefile — отказ, его решает хук, здесь он не меняется. Для целей worktree и
     проверок, которые есть в прочтённом Makefile (text), — строка с прямыми командами рецепта для сообщения об
     отказе: их хук разбирает как любые команды, Makefile при них не читается. "" — не make, целей из списка нет или
-    опция не из MAKE_QUIET: `-C`/`-f` сменят папку или Makefile, а пути команд — от корня репозитория."""
+    опция не из MAKE_QUIET: `-C`/`-f` сменят папку или Makefile (пути команд — от корня репозитория), `-n`/`-q`/`-t`
+    не выполняют рецепт, значения `-o`/`-W`/`-I` — не цели. Без голых целей — цель по умолчанию (первая в Makefile).
+    Переменная — последнее значение из argv, как у make; значение не из MAKE_VALUE — переменной нет. Без
+    TRACK/NAME — строка о том, чего не хватает (Makefile остановится так же), команд с заглушками нет."""
     if a[0] not in MAKES or not text or any(w.startswith("-") and not MAKE_QUIET.match(w) for w in a[1:]):
         return ""
-    var = {k: v for k, _, v in (w.partition("=") for w in a[1:] if "=" in w and not w.startswith("-"))
-           if MAKE_VALUE.match(v)}
+    var = {k.rstrip(":"): v for k, _, v in (w.partition("=") for w in a[1:] if "=" in w and not w.startswith("-"))}
+    var = {k: v for k, v in var.items() if MAKE_VALUE.match(v)}
     base = re.search(r"(?m)^WT_BASE[ \t]*\??=[ \t]*([A-Za-z0-9._/-]+)[ \t]*$", text)
     var.setdefault("WT_BASE", base.group(1) if base else "<WT_BASE>")
-    goals = [w for w in dict.fromkeys(a[1:]) if not w.startswith("-") and "=" not in w and _direct(w, var)
-             and re.search(rf"(?m)^{re.escape(w)}:", text)]
+    named = [w for w in dict.fromkeys(a[1:]) if not w.startswith("-") and "=" not in w]
+    first = MAKE_DEFAULT.search(text)
+    goals = [w for w in named or ([first.group(1)] if first else [])
+             if _direct(w, var) and re.search(rf"(?m)^{re.escape(w)}:", text)]
     lines = [c for g in goals for c in _direct(g, var)]
-    return ("\nАгентской сессии вместо `make " + " ".join(goals) + "` — прямые команды рецепта: их хук разбирает "
-            "как обычные, Makefile не читается (SE-105):\n" + "\n".join("  " + c for c in lines)) if lines else ""
+    if not lines:
+        return ""
+    head = "\nАгентской сессии вместо `" + " ".join(["make"] + (goals if named else [])) + "` — "
+    missing = sorted({m for c in lines for m in re.findall(r"<([A-Z_]+)>", c)})
+    if missing:
+        return (head + "не хватает " + ", ".join(missing) + " (Makefile остановится так же: «… required»). Повтори "
+                "make с ними — отказ напечатает прямые команды рецепта (SE-105).")
+    notes = ["Удаление worktree — только с «да» владельца."] if "wt-rm" in goals else []
+    return (head + "прямые команды рецепта: их хук разбирает как обычные, Makefile не читается (SE-105):\n"
+            + "\n".join("  " + c for c in lines) + "\n" + "\n".join(notes + [
+                "Переменные окружения перед make (`WT_BASE=… make`) здесь не видны — подставь их в команды."]))
 
 
 def _awk_file(name, cwd):

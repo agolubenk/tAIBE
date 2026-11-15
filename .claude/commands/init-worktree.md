@@ -40,7 +40,8 @@ git worktree add "${WT_PATH}" "${BRANCH}"
 1. Напомни: Claude Code скопирует файлы из `.worktreeinclude` (локальные `.env`).
 2. Зависимости — свои: `infra/scripts/dev/wt-deps.sh install "${WT_PATH}"`. В доме слоя — `pnpm install --frozen-lockfile` в `boards/`; в npm-монорепо хоста скрипт делает `npm ci` с заглушкой
    `DATABASE_URL` для postinstall бэкенда, смотрит код возврата самого `npm ci`, собирает `packages/*` и проверяет,
-   что `@hr-helper/*` ведут внутрь worktree. `make wt-add` зовёт его сам. Пропустить можно только без гейтов (документы,
+   что `@hr-helper/*` ведут внутрь worktree. `make wt-add` зовёт его сам, но агентской сессии `make` с этим Makefile
+   останавливает merge-guard (SE-105) — ей эта команда напрямую. Пропустить можно только без гейтов (документы,
    чтение): первый гейт без установки остановит хук `pre-tool-use-wt-deps.sh` с командой починки. Ссылка
    `node_modules` на основной checkout — не установка: `@hr-helper/*` молча берутся из его сборки.
 3. До первой правки — базовая линия гейтов: прогнать typecheck, lint и test нужных пакетов и записать число ошибок.
