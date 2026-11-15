@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { growth, MAX_GROWTH } from "../fixtures/linear-time";
 import { redact } from "./index";
 import {
   hasRedactionMarker,
@@ -229,25 +230,34 @@ describe("restoreRedacted (TB-143)", () => {
   });
 
   // B3: the old loop compared and scanned the whole text above every marker
-  // block (7000 blocks, 238 KiB: 983 ms); now it is one pass (24 ms, same Mac).
+  // block (7000 blocks, 238 KiB: 983 ms on a Mac), so its time grew with the
+  // square of the block count; now it is one pass. TB-209: the time of 7000
+  // blocks is checked against 1750 blocks in the same run, not against a
+  // limit in milliseconds (fixtures/linear-time.ts).
   it("restores many marker blocks in linear time", () => {
-    const blocks = Array.from(
-      { length: 7000 },
-      (_, i) =>
-        `step ${i} uses ${join("s", "k-A", String(i).padStart(8, "0"), "bCdEfGhIjKlMnOpQrStU")}`,
-    );
-    const text = ["intro", ...blocks].join("\n\n");
-    const incoming = redact(text).text.replace(/^intro/, "intro edited");
+    const edit = (blocks: number) => {
+      const text = [
+        "intro",
+        ...Array.from(
+          { length: blocks },
+          (_, i) =>
+            `step ${i} uses ${join("s", "k-A", String(i).padStart(8, "0"), "bCdEfGhIjKlMnOpQrStU")}`,
+        ),
+      ].join("\n\n");
+      return {
+        text,
+        incoming: redact(text).text.replace(/^intro/, "intro edited"),
+      };
+    };
+    const { text, incoming } = edit(7000);
 
-    const start = performance.now();
-    const result = restoreRedacted(text, incoming);
-    const elapsed = performance.now() - start;
-
-    expect(result).toEqual({
+    expect(restoreRedacted(text, incoming)).toEqual({
       ok: true,
       text: text.replace(/^intro/, "intro edited"),
     });
-    expect(elapsed).toBeLessThan(500);
+    expect(
+      growth(edit, (pair) => restoreRedacted(pair.text, pair.incoming), 7000),
+    ).toBeLessThan(MAX_GROWTH);
   });
 
   it("refuses a text with markers longer than the limit", () => {
