@@ -24,12 +24,12 @@ const shift = (dueRef: string, before: Record<string, unknown>) => {
 }
 
 describe('guardPlanEnd (TB-112)', () => {
-  it('id решения: «due» — отдельное слово; id плана досок d-<продукт>-due-YYYYMMDD проходит', async () => {
+  it('id решения: «due» — отдельное слово; hr-helper — d-<продукт>-due-YYYYMMDD, другой продукт — <продукт>-d-due-YYYYMMDD', async () => {
     const before = { planEnd: '2026-11-20' }
-    for (const ok of ['d-taibe-due-20261113', 'd-hr-helper-due-20261113', 'd-t-due', 'd-t-due-plan']) {
+    for (const ok of ['d-taibe-due-20261113', 'd-hr-helper-due-20261113', 'd-t-due', 'd-t-due-plan', 'taibe-d-due-20261115', 'taibe-d-due']) {
       expect((await shift(ok, before)).dueRefs).toEqual([ok])
     }
-    for (const bad of ['d-taibe-overdue-1', 'd-due-1', 'd-taibedue-1', 'x-taibe-due-1', 'd-taibe-dues']) {
+    for (const bad of ['d-taibe-overdue-1', 'd-due-1', 'd-taibedue-1', 'x-taibe-due-1', 'd-taibe-dues', 'taibe-d-overdue-1', 'taibe-d-dues', 'Taibe-d-due-1', '-d-due-1']) {
       await expect(shift(bad, before)).rejects.toMatchObject({ status: 409 })
     }
   })

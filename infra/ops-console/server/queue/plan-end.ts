@@ -11,8 +11,10 @@ type Find = (collection: Collection, id: string) => Promise<Row | undefined>
 
 /** Вариант решения d-…-due…, который разрешает сдвиг срока (TB-112: «держать срок» keep · «перенести» move · «оставить красными» red). */
 export const DUE_MOVE = 'move'
-// d-<продукт>-due[-<тема>]: «due» — отдельное слово id (d-taibe-due-20261113 от плана досок, #159), не часть другого.
-const DUE_REF = /^d-[A-Za-z0-9_.~:@+-]*-due(-[A-Za-z0-9_.~:@+-]*)?$/
+// Две формы id решения: у продукта по умолчанию (hr-helper) — d-<продукт>-due[-<тема>] (d-hr-helper-due-20261115);
+// у другого продукта id начинается с его slug (PRODUCT_SLUG, иначе очередь положит пункт в HR): <продукт>-d-due[-<тема>]
+// (taibe-d-due-20261115 от плана досок, линза release #159). «due» — отдельное слово id, не часть другого.
+const DUE_REF = /^(?:d-[A-Za-z0-9_.~:@+-]*-due|[a-z][a-z0-9-]{1,30}-d-due)(-[A-Za-z0-9_.~:@+-]*)?$/
 /** Сколько ответов «перенести» помнит строка. Дальше — 409: срок строки решает владелец сам, ссылки не теряются. */
 const DUE_REFS_MAX = 50
 
@@ -86,7 +88,7 @@ async function allowShift(
   visible: (row: Row) => boolean,
 ): Promise<void> {
   if (!next) throw apiError(409, `Снять planEnd («${prev}») может только владелец`)
-  const how = `Сдвиг срока позже «${prev}» — только по ответу владельца: решение d-<продукт>-due[-<тема>] с rows: [«${rowId}»], moveTo: {«${rowId}»: дата} и вариантом id «${DUE_MOVE}» («перенести»); его id — в dueRef этой записи. Раньше срок — без ответа`
+  const how = `Сдвиг срока позже «${prev}» — только по ответу владельца: решение d-<продукт>-due[-<тема>] (hr-helper) или <продукт>-d-due[-<тема>] (другой продукт) с rows: [«${rowId}»], moveTo: {«${rowId}»: дата} и вариантом id «${DUE_MOVE}» («перенести»); его id — в dueRef этой записи. Раньше срок — без ответа`
   if (typeof dueRef !== 'string' || !DUE_REF.test(dueRef)) throw apiError(409, `planEnd не переписывается. ${how}`)
   const item = await find('items', dueRef)
   if (!item || !visible(item)) throw apiError(409, `Нет решения items/${dueRef}. ${how}`)

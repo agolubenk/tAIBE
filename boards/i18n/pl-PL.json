@@ -991,6 +991,7 @@
 			"approvals": {
 				"action": {
 					"closeTask": "Close the card as «{{status}}»",
+					"closeTasks": "Close {{count}} cards, each into its project's final column: {{keys}}",
 					"fellSector": "Fell the sector",
 					"fellTree": "Fell the tree",
 					"setPriority": "Set priority «{{priority}}»",

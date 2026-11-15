@@ -30,6 +30,22 @@ Claude Code в tAIBE ──────► 127.0.0.1:9122/mcp  (serena-taibe п�
 (`disabledMcpjsonServers` + `enabledPlugins."context7@claude-plugins-official": false`). Хаб не
 запущен — этих четырёх у Claude Code нет, как и serena.
 
+## Хост и продукты
+
+Хаб один на Mac владельца (`:3050`) для всех продуктов; код и эксплуатация — tAIBE, роль ops слоя (`infra/CLAUDE.md`).
+Команды — из основной папки tAIBE (`npm run mcp-hub:*`). В HR те же `npm run mcp-hub:*` — алиасы (решение владельца):
+обёртка HR `infra/scripts/dev-ai/taibe-dev-ai.sh` зовёт код tAIBE с хостом — основной папкой HR (OPS-42).
+
+- **Хост** — продукт, чьи пути получают серверы с хостом (serena `:9121`, git, dams-rag, postgres-readonly, ai-council); сейчас HR.
+  Как выбирается — абзац «Хост» в «Две serena». serena tAIBE (`:9122`) — по требованию, с 08.11 выключена.
+- **Продукт** видит хаб через свой срез `?tags=` у клиента; срез — не граница доверия, копии серверов под продукт —
+  только по замеру (раздел «Подключение клиентов», OPS-43).
+- **Не менять реальный путь папки состояния** `~/.config/hr-helper-mcp-hub/`: 1mcp привязывает хранилище OAuth к
+  realpath этой папки (`auth/storage/protectedRecordStorage.js`, `canonicalPath` → `fs.realpathSync`, 1mcp 0.39.3).
+  Перенос или переименование — повторный вход во все OAuth-серверы и клиенты. Имена с `hr-helper` (папка, логи
+  `~/Library/Logs/hr-helper-mcp-hub/`, LaunchAgent `space.hrhelper.mcp-hub`) остаются; новое имя — только ссылкой на
+  старую папку, не наоборот (OPS-46, отложено).
+
 ## Запуск
 
 В VS Code всё делает задача **«MCP: старт и авторизация»** (`.vscode/tasks.json`, `runOn: folderOpen`):
@@ -307,6 +323,11 @@ Code. context7 работает без авторизации (анонимны�
 модели (у Continue на GLM). Теги серверов: `code` (serena, dams-rag), `project` (ai-council,
 dams-rag), `context` (headroom), `docs` (markitdown, context7), `git` (git), `db`
 (postgres-readonly), `infra` (docker), `remote` (github, notion, sentry, cloudflare, t-boards), `boards` (t-boards), `memory` (mcp-search).
+
+Срез — не граница доверия (OPS-21): auth у хаба выключен. Копию сервера под продукт (`git-taibe` и т. п.) заводите
+только по факту вызовов — замер `python3 -I infra/mcp-hub/usage_by_server.py --days 7` (транскрипты Claude Code по
+серверу и продукту + `tool.routed` журнала хаба; клиента 1mcp в журнал не пишет). Замер 13.11 (OPS-43): через хаб
+вызывают только t-boards, копии не нужны.
 
 ## Что какой сервер даёт
 

@@ -15,7 +15,8 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
 4. Board rules: `eval/prompts/launch-3010/T-BOARDS.md`, only the sections «Цикл работы с карточкой», «Что сервер
    требует при смене статуса» and «PR и линзы». A lens verdict: the first non-empty line has the lens name, the word
    `approve` or `changes`, and the head SHA after it (`Бэкенд: approve на 46b9f87e1`) — the Nerve quorum
-   (`eval/nerve/quorum.py`) reads only this line.
+   (`eval/nerve/quorum.py`) reads only this line. A PR body has one line «роль N — автор» (your role number from
+   `instances/<slug>.json` `team.roles`); the Nerve quorum drops the author's approve only by this line (SE-121).
 5. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
 
 ## Board
@@ -39,6 +40,12 @@ TB «t-boards» `mf6jpr5wftbgr3z93lvw807v`, SE «supertick-eval» `tl3j7yc2mc7ly
 
 - After each step: `work_state_write <key>-taibe` and `forest_set_work_state`.
 - Work in `worktrees/<track>/<topic>`. Do not commit in the main checkout.
+- Next card: when your card goes to review or merges, run `python3 -I eval/tools/queue_focus.py --plan --product
+  taibe`. Take the first item and its lease (`forest_acquire_lease`). If the lease is taken, take the next item.
+  After a merge, request the card's close in the same step.
+- Switch your lane only for an owner inbox item with `urgency: now`, an inbox alert (always), a production failure
+  or an owner stop. Put any other signal (a Nerve digest, a finding, an idea, an inbox item with `urgency: queue`) as
+  a card in the plan's backlog row and continue your card.
 - Every owner-queue item of the tAIBE team has `-taibe-` in its id (`m-taibe-91`, `d-taibe-…`). Without it, the
   owner's answer goes to the HR team.
 - Every decision gets 3 or more independent lenses (`.claude/memory/chunks/process/adversarial-review.md`).
