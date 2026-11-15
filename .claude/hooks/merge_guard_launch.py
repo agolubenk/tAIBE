@@ -53,9 +53,12 @@ WS_MAX = 256
 TEXT_MAX = 4 * 1024 * 1024
 IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"
                          r"|(?i:npm_config_node_options|npm_config_script_shell))=(.*)", re.S)
-# Опции make, от которых зависит, какой текст make прочтёт (make_files): их в MAKEFLAGS разбор читает (SE-133)
+# Опции make, от которых зависит, какой текст make прочтёт (make_files), и переменные, от которых — что прочтёт и
+# запустит: в MAKEFLAGS они — отказ (SE-133). Метка — слово, которого shell не передаст (в словах нет NUL).
 MAKE_READS = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin", "-I", "--include-dir", "-E", "--eval",
               "?"}
+MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
+MAKEFLAGS_ARG = "\0MAKEFLAGS"
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
 
@@ -272,14 +275,21 @@ def make_files(a, cwd):
             for p, t in _read_tree(roots, lambda p, t: includes(p, re.sub(r"#.*", "", t)))] + evals
 
 
-# Причина отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
+# Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
 MAKE_OPTION = ("длинная опция make, которую разбор не раскрывает однозначно (`--d`, `--frob`): какой Makefile make "
                "прочтёт, не видно — напишите опцию полностью (`--directory=…`)")
+MAKEFLAGS_WHY = ("MAKEFLAGS или GNUMAKEFLAGS с опцией или переменной, от которой зависит, что make прочтёт и запустит "
+                 "(`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`): папку make (`-C`, `cd`) разбор с ними не сводит "
+                 "— передайте их в командной строке make")
 
 
 def make_option(a):
-    """Длинная опция make, которую getopt_long не раскроет однозначно (`--d`, `--o`, `--frob`), иначе "" (SE-128)."""
-    return (_options(a, MAKE_VALUED, short=True, names=MAKE_LONG)[0].get("?") or [""])[0] if a[0] in MAKES else ""
+    """Причина, по которой разбор не видит, что прочтёт make, иначе "": длинная опция, которую getopt_long не раскроет
+    однозначно (`--d`, `--o`, `--frob`, SE-128), или метка make_flags (SE-133)."""
+    if a[0] not in MAKES:
+        return ""
+    return MAKEFLAGS_WHY if MAKEFLAGS_ARG in a else MAKE_OPTION if "?" in _options(
+        a, MAKE_VALUED, short=True, names=MAKE_LONG)[0] else ""
 
 
 def _awk_file(name, cwd):
@@ -310,7 +320,7 @@ def awk_programs(a, cwd):
 def implied_commands(argvs):
     """Команды, которые запустит сама команда, по её словам (префикс, `env …`, `export …`, опция): `BASH_ENV=F`/`ENV=F`
     — bash и sh выполнят F до своей команды, в том числе внутри `npm run`; `MAKEFILES=F` — make прочтёт F;
-    `MAKEFLAGS=-Idir` — make возьмёт опции (make_flags);
+    `MAKEFLAGS=-Idir`, `MAKEFLAGS='MAKEFILES=F'` — отказ с причиной (make_flags);
     `NODE_OPTIONS='-r F'` (`--require`, `--import`, `--loader`) — node загрузит F; `--script-shell F` и
     `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске."""
     out = []
@@ -336,15 +346,18 @@ def implied_commands(argvs):
 
 
 def make_flags(val):
-    """`MAKEFLAGS=…`, `GNUMAKEFLAGS=…` — опции make из окружения: `-I` make слушает (сверено с make 3.81), `--eval`/`-E`
-    и GNUMAKEFLAGS — make 4.x (assumed, по документации). Команда `make` с ними — если они меняют прочитанный текст
-    (MAKE_READS); `-C`/`-f` make из окружения не слушает, но разбор читает и их — с запасом. Первое слово без `-` и
-    без `=` make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`)."""
+    """`MAKEFLAGS=…`, `GNUMAKEFLAGS=…` — опции и переменные make из окружения: `-I` и `MAKEFILES=` (в том числе после
+    `--`) make слушает (сверено с make 3.81), `--eval`/`-E` и GNUMAKEFLAGS — make 4.x (assumed, по документации).
+    Путь из них make берёт от своей папки после `-C` команды или `cd` раньше в строке — разбор их не сводит. Поэтому
+    опция чтения (MAKE_READS; `-C`/`-f` make из окружения не слушает — с запасом) или MAKEFILES=, SHELL=, .SHELLFLAGS=
+    дают команду `make` с меткой: хук отказывает с причиной MAKEFLAGS_WHY (make_option). Прочие переменные (`CC=`)
+    — как в командной строке make: рецепты разбор проверяет только грубым признаком. Первое слово без `-` и без `=`
+    make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`)."""
     ws = words(val)
     if ws and not ws[0].startswith("-") and "=" not in ws[0]:
         ws[0] = "-" + ws[0]
-    values, _ = _options(["make"] + ws, MAKE_VALUED, short=True, names=MAKE_LONG)
-    return [["make"] + ws] if MAKE_READS & set(values) else []
+    values, rest = _options(["make"] + ws, MAKE_VALUED, short=True, names=MAKE_LONG)
+    return [["make", MAKEFLAGS_ARG]] if MAKE_READS & set(values) or any(map(MAKEFLAGS_DEF.match, rest)) else []
 
 
 def syntax_only(opts):
