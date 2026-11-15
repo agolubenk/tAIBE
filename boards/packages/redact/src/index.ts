@@ -37,14 +37,30 @@ function lastDropping(value: string): number {
 
 const NAME_CHAR = /[A-Za-z0-9_-]/;
 
+// The start of the run of name characters that ends at `end`.
+function nameStart(value: string, end: number): number {
+  let start = end;
+  while (start > 0 && NAME_CHAR.test(value.charAt(start - 1))) start -= 1;
+  return start;
+}
+
 // The start of the run of name characters that ends the value (a final `:`
 // or `=` aside), or -1.
 function trailingName(value: string): number {
   const last = value.charAt(value.length - 1);
   const end = last === ":" || last === "=" ? value.length - 1 : value.length;
-  let start = end;
-  while (start > 0 && NAME_CHAR.test(value.charAt(start - 1))) start -= 1;
+  const start = nameStart(value, end);
   return start < end ? start : -1;
+}
+
+// Where the search goes on in a rejected value: after its last DROPS_VALUE
+// character. If that character is the `>` of `=>`, at the name before it:
+// the name has its value after `=>` (x(B_TOKEN=><v>, TB-199).
+function afterDropping(value: string, dropping: number): number {
+  const arrow = value.charAt(dropping) === ">";
+  return arrow && value.charAt(dropping - 1) === "="
+    ? nameStart(value, dropping - 1)
+    : dropping + 1;
 }
 
 // Replaces only group 1 of each match, keeping the surrounding context
@@ -85,7 +101,8 @@ function collectGroup(
       if (accepted) hits.push({ kind, start, end: start + value.length });
       const dropping = accepted ? -1 : lastDropping(value);
       if (dropping >= 0) limit = Math.max(limit, search.lastIndex);
-      const resume = dropping >= 0 ? dropping + 1 : trailingName(value);
+      const resume =
+        dropping >= 0 ? afterDropping(value, dropping) : trailingName(value);
       if (resume >= 0) {
         search.lastIndex = Math.max(match.index + 1, start + resume);
       }
@@ -373,16 +390,21 @@ export function redact(text: string): { text: string; hits: RedactHit[] } {
   }
   accepted.sort((a, b) => a.start - b.start || b.end - a.end);
 
+  // A hit that starts inside the previous one and ends after it widens it:
+  // dropped, its tail stayed in the text (A_SECRET => password:x;passwd=><v>,
+  // TB-199).
   const hits: RedactHit[] = [];
-  let cursor = 0;
   for (const hit of accepted) {
-    if (hit.start < cursor) continue;
+    const last = hits.at(-1);
+    if (last && hit.start < last.end) {
+      if (hit.end > last.end) hits[hits.length - 1] = { ...last, end: hit.end };
+      continue;
+    }
     hits.push(hit);
-    cursor = hit.end;
   }
 
   let result = "";
-  cursor = 0;
+  let cursor = 0;
   for (const hit of hits) {
     result += text.slice(cursor, hit.start);
     result += `[REDACTED:${hit.kind}]`;

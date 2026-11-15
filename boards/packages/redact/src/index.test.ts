@@ -538,7 +538,26 @@ describe("@kaneo/redact", () => {
       expect(redact(input).text).toBe(expected);
     });
 
-    it.each(["password===", "A_TOKEN:=", "password=>", "A_TOKEN==("])(
+    // A rejected value that ends in `name=><v>` goes on at the name; a hit
+    // that starts inside the previous one widens it.
+    it.each([
+      `A_TOKEN=x(B_TOKEN=>${value}`,
+      `A_TOKEN=x(y=>C_TOKEN=${value}`,
+      `api_key=x(api_key=>${value}`,
+      ` A_SECRET => password:x;passwd=>${value}`,
+      `A_SECRET => password:x;passwd=${value}`,
+    ])("masks the value in %s", (input) => {
+      expect(redact(input).text).not.toContain(value);
+    });
+
+    it.each([
+      "password===",
+      "A_TOKEN:=",
+      "password=>",
+      "A_TOKEN==(",
+      "A_TOKEN=x(B_TOKEN=>",
+      "A_TOKEN=(=>",
+    ])(
       "redacts 256 000 characters of %j in linear time",
       (unit) => {
         const text = unit.repeat(Math.ceil(256_000 / unit.length));
