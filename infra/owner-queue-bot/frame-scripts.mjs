@@ -8,8 +8,11 @@ export function isQueueFrame() {
   return !!document.getElementById('sec-decision') && !!document.getElementById('mode');
 }
 
-/** Снимок страницы: шапка, разделы, пункты с ответами и статусами агентов, «Ход работ». */
-export function snapshotPage() {
+/**
+ * Снимок страницы: шапка, разделы, пункты с ответами и статусами агентов, «Ход работ».
+ * ids — только эти пункты (снимок после ответа), без него — все. Тела пунктов — самая дорогая часть снимка.
+ */
+export function snapshotPage(ids) {
   const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
 
@@ -58,7 +61,11 @@ export function snapshotPage() {
     return out;
   }
 
-  const items = Array.from(document.querySelectorAll('.item[data-id]')).map((el) => {
+  const only = Array.isArray(ids) ? ids : null;
+  const els = only
+    ? only.map((id) => document.querySelector('.item[data-id="' + CSS.escape(String(id)) + '"]')).filter(Boolean)
+    : Array.from(document.querySelectorAll('.item[data-id]'));
+  const items = els.map((el) => {
     const sec = el.closest('section[data-section]');
     const body = el.querySelector('.item-body');
     const field = el.querySelector('.field');
@@ -89,6 +96,8 @@ export function snapshotPage() {
       agentStatus: st ? (Array.from(st.classList).find((c) => c.indexOf('st-') === 0) || '').slice(3) : '',
       agentStatusText: txt(st),
       agentNote: st && agSpans[1] ? txt(agSpans[1]).replace(/^Агент:\s*/, '') : '',
+      // Метка держателя входящего (карточка HR xuc5csrv): «🟢 … в сети» или «🔇 … молчит N ч»; страница без неё — ''.
+      holder: txt(el.querySelector('.holder-st:not([hidden])')),
       saved: txt(saved),
       saveErr: !!saved && saved.classList.contains('err'),
     };
@@ -116,7 +125,14 @@ export function snapshotPage() {
   const modeEl = document.getElementById('mode');
   const howto = document.querySelector('header .howto');
   const ssh = document.getElementById('ssh-howto');
+  // Связь страницы с консолью (window.__oqConn ставит подмена базы консоли, page-scripts.ts): причина для сигнала
+  // «Очередь не подключилась к консоли». null — только старая консоль без записи. Запись есть, а опроса checks ещё не
+  // было — okAt 0: «удачного опроса не было», а не «связь вернулась» (линза Claude #370, N1: ложный 🟢 новой вкладки).
+  const oq = window.__oqConn;
+  const c = oq && (oq.checks || {});
+  const conn = c ? { okAt: +c.okAt || 0, errAt: +c.errAt || 0, err: String(c.err || '').slice(0, 200), status: +c.status || 0, fails: +c.fails || 0 } : null;
   return {
+    conn,
     title: txt(document.querySelector('h1')),
     lede: txt(document.querySelector('.lede')),
     guide: howto ? tidy(conv(howto)) : '',
@@ -173,48 +189,13 @@ export function actOnItem({ id, op, value }) {
   return { ok: true };
 }
 
-/**
- * Своя подписка на checks/: подтверждает, что ответ дошёл до общей базы, а не только до страницы.
- * Ставится только в режиме shared, подключение к базе — не дольше 5 с; сбойная подписка ставится заново.
- * Каждый снимок коллекции заменяет кэш целиком (удалённые документы не «залипают»).
- */
-export async function installChecksWatch(key) {
-  const mode = document.getElementById('mode');
-  if (!mode || mode.dataset.mode !== 'shared' || !window.claude || !window.claude.use) return false;
-  const prev = window[key];
-  if (prev && (prev.ok || (!prev.err && Date.now() - prev.since < 10000))) return prev.ok;
-  const st = (window[key] = { checks: {}, ok: false, err: '', since: Date.now() });
-  try {
-    const db = await Promise.race([
-      window.claude.use('db'),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('база не ответила за 5 с')), 5000)),
-    ]);
-    db.collection('checks').onSnapshot((snap) => {
-      let list = Array.isArray(snap) ? snap : (snap && (snap.docs || snap.items || snap.rows || snap.results)) || [];
-      if (!Array.isArray(list) && typeof list === 'object') list = Object.keys(list).map((k) => ({ id: k, data: list[k] }));
-      const next = {};
-      list.forEach((d) => {
-        const id = d.id || d.key || d.doc_id || (typeof d.path === 'string' ? d.path.split('/').pop() : '');
-        const data = typeof d.data === 'function' ? d.data() : (d.data || d.value || d.fields || d);
-        if (id && data && typeof data === 'object') next[id] = data;
-      });
-      st.checks = next;
-      st.ok = true;
-      st.err = '';
-    }, (e) => { st.ok = false; st.err = String((e && e.message) || e); });
-  } catch (e) { st.err = String((e && e.message) || e); }
-  return st.ok;
-}
-
-export function readCheck({ key, id }) {
-  const st = window[key];
-  return st ? { ready: st.ok, err: st.err, data: st.checks[id] || null } : { ready: false, err: 'нет подписки', data: null };
-}
-
-/** Текст метки, если сохранение ответа не удалось или ответ изменён в другом месте; '' — всё в порядке. */
-export function saveErrorOf(id) {
-  const el = document.querySelector('.item[data-id="' + CSS.escape(id) + '"] .saved');
-  return el && el.classList.contains('err') ? (el.textContent || 'err') : '';
+/** Страница доделала задачи после ответа консоли (перерисовка пункта): следующий кадр и задача после него. */
+export function settled() {
+  return new Promise((resolve) => {
+    const next = () => setTimeout(resolve, 0);
+    if (typeof requestAnimationFrame === 'function' && !document.hidden) requestAnimationFrame(next);
+    else next();
+  });
 }
 
 /** На время скриншотов — шире колонка, чтобы Гант и роадмап влезли без прокрутки. */
