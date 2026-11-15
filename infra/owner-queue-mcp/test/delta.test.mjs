@@ -153,3 +153,10 @@ test('cols — только нужные коллекции (автоперед�
   await r.m.list('checks');
   assert.equal(r.c.bytes.at(-1) < 120, true, 'изменения work в дельту не попадают');
 });
+
+test('порядок при равном updatedAt — по id убыванию, как orderBy(desc(updatedAt), desc(id)) консоли (#344)', async () => {
+  const r = rig();
+  for (const id of ['d-a', 'd-c', 'd-b']) r.put('items', id, { title: id }, 500);
+  r.put('items', 'd-z', { title: 'старый' }, 100);
+  assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['d-c', 'd-b', 'd-a', 'd-z']);
+});

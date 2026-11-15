@@ -11,8 +11,8 @@ export const DELTA_COLS = ['checks', 'items', 'work'];
 export const FULL_EVERY_MS = 12 * 3600_000;
 export const BACKOFF_MS = 30 * 60_000;
 
-/** Порядок консоли (queue/list.ts listDocs): самые свежие первыми — по updatedAt. */
-const byFresh = (a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0);
+/** Порядок консоли (queue/list.ts listDocs, с #344): самые свежие первыми — по updatedAt, при равном — по id убыванию. */
+const byFresh = (a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 
 /**
  * get(path) → JSON ответа консоли; ошибка HTTP — исключение с полем status (как apiWith в server.mjs).
