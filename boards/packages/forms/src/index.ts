@@ -17,7 +17,7 @@ export {
   type ValidateOptions,
   validateAnswers,
   valueIssue,
-} from "./answers";
+} from "./answers.js";
 export {
   type AnswerLabels,
   type ExportEntry,
@@ -25,7 +25,7 @@ export {
   type FormExport,
   humanAnswer,
   RU_LABELS,
-} from "./export";
+} from "./export.js";
 export {
   FIELD_TYPES,
   type FieldOf,
@@ -41,5 +41,5 @@ export {
   type TemplateIssue,
   type TemplateIssueCode,
   templateIssues,
-} from "./schema";
-export { findShowIfCycle, visibleFieldIds } from "./show-if";
+} from "./schema.js";
+export { findShowIfCycle, visibleFieldIds } from "./show-if.js";

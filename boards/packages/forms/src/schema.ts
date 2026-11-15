@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { findShowIfCycle } from "./show-if";
+import { findShowIfCycle } from "./show-if.js";
 
 // R-027 (TB-173): a form template is JSON that agents send through MCP and
 // the web renders. Every text in it is plain text: the web shows it as text,

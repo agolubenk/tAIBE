@@ -5,8 +5,8 @@ import {
   type FormField,
   type FormTemplate,
   LIMITS,
-} from "./schema";
-import { visibleFieldIds } from "./show-if";
+} from "./schema.js";
+import { visibleFieldIds } from "./show-if.js";
 
 // Every field starts empty: a new answer set is `{}`. An empty answer is
 // null, "", an absent key, or an interval/matrix with no part filled.
