@@ -445,8 +445,49 @@ describe("@kaneo/redact", () => {
       expect(redact(input).hits).toHaveLength(0);
     });
 
-    // The search goes on after the last rejecting character, not after each
-    // inner name: 256 000 characters take ~4 ms, as before the fix.
+    // Control #375: an inner name may end where the outer value ends, with
+    // its separator after a space or a quote. The search goes on at the
+    // start of that name, whether the outer value was rejected or masked.
+    const hidden = "[REDACTED:password_assignment]";
+
+    it.each([
+      [
+        "a rejected dotted value",
+        `A_TOKEN=x.B_TOKEN = ${value}`,
+        `A_TOKEN=x.B_TOKEN = ${hidden}`,
+      ],
+      [
+        "a rejected value before a quote",
+        `A_TOKEN="abcdefB_TOKEN" = "${value}"`,
+        `A_TOKEN="abcdefB_TOKEN" = "${hidden}"`,
+      ],
+      [
+        "a masked value ending in a colon",
+        `A_SECRET=fooB_SECRET: ${value}`,
+        `A_SECRET=${hidden} ${hidden}`,
+      ],
+      [
+        "a masked dotted value ending in a colon",
+        `A_TOKEN=myApp.B_TOKEN: ${value}`,
+        `A_TOKEN=${hidden} ${hidden}`,
+      ],
+      [
+        "a masked value without a final separator",
+        `A_TOKEN=a=B_TOKEN = ${value}`,
+        `A_TOKEN=${hidden} = ${hidden}`,
+      ],
+      [
+        "a password value",
+        `password=foopassword = ${value}`,
+        `password=${hidden} = ${hidden}`,
+      ],
+    ])("masks the next value after %s", (_name, input, expected) => {
+      expect(redact(input).text).toBe(expected);
+    });
+
+    // The search goes on after the last rejecting character or at the name
+    // that ends the value, never at or before the previous match start:
+    // 256 000 characters take under 10 ms.
     it.each([
       "A_SECRET=(",
       "A_SECRET=x(",
@@ -454,6 +495,10 @@ describe("@kaneo/redact", () => {
       "A_TOKEN=(",
       "x-api-key:(",
       "A_SECRET=é",
+      "A_TOKEN=x.B_TOKEN ",
+      "A_SECRET=fooB_SECRET: ",
+      "password=xpassword ",
+      "A_TOKEN=a=B_TOKEN ",
       "A_TOKEN=x(B_TOKEN = ",
       "A_SECRET=x(B_SECRET : ",
     ])("redacts 256 000 characters of %j in linear time", (unit) => {
