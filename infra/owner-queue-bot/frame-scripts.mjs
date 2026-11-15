@@ -96,6 +96,8 @@ export function snapshotPage(ids) {
       agentStatus: st ? (Array.from(st.classList).find((c) => c.indexOf('st-') === 0) || '').slice(3) : '',
       agentStatusText: txt(st),
       agentNote: st && agSpans[1] ? txt(agSpans[1]).replace(/^Агент:\s*/, '') : '',
+      // Метка держателя входящего (карточка HR xuc5csrv): «🟢 … в сети» или «🔇 … молчит N ч»; страница без неё — ''.
+      holder: txt(el.querySelector('.holder-st:not([hidden])')),
       saved: txt(saved),
       saveErr: !!saved && saved.classList.contains('err'),
     };

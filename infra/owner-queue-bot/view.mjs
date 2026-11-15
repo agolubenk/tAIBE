@@ -118,8 +118,11 @@ function plainSafe(html) {
   return html.length <= 1400 ? html : esc(cut(plain(html), 1400));
 }
 
+/** Держатель входящего молчит (метка страницы «🔇 …», карточка HR xuc5csrv) — знак в списке открытых входящих. */
+const silentHolder = (it) => typeof it.holder === 'string' && it.holder.startsWith('🔇');
+
 function itemMarks(it) {
-  return (it.done ? '✅ ' : '') + (it.agentStatus ? (ST_ICON[it.agentStatus] || '🤖') + ' ' : '') + (it.src === 'db' ? '🆕 ' : '');
+  return (it.done ? '✅ ' : '') + (it.agentStatus ? (ST_ICON[it.agentStatus] || '🤖') + ' ' : '') + (silentHolder(it) ? '🔇 ' : '') + (it.src === 'db' ? '🆕 ' : '');
 }
 
 function listKeyboard(list) {
@@ -216,6 +219,7 @@ function answerBlock(it) {
   if (it.done) lines.push(`✅ <b>${esc(cut(it.summary.replace(/^✓\s*/, ''), 300) || 'Сделано')}</b>`);
   else lines.push(it.kind === 'decision' ? '⏳ <b>Ждёт вашего выбора</b>' : `⏳ <b>Ждёт отметки «${esc(it.doneLabel || 'Сделано')}»</b>`);
   if (it.agentStatus) lines.push(`${ST_ICON[it.agentStatus] || '🤖'} Агент: <b>${esc(it.agentStatusText)}</b>${it.agentNote ? ' — ' + esc(cut(it.agentNote, 400)) : ''}`);
+  if (it.holder) lines.push(silentHolder(it) ? `<b>${esc(cut(it.holder, 200))}</b>` : esc(cut(it.holder, 200)));
   if (it.note) lines.push(`📝 ${esc(it.fieldLabel || 'Комментарий')}: <i>${esc(cut(it.note, 600))}</i>`);
   if (it.saveErr) lines.push('⚠️ Не сохранилось у агента — повторите');
   else if (it.saved) lines.push(`<i>${esc(it.saved)}</i>`);

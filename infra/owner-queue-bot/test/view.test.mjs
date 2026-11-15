@@ -241,3 +241,22 @@ test('snapshotPage(ids) разбирает только эти пункты, б�
     globalThis.CSS = saved.CSS;
   }
 });
+
+test('держатель входящего (карточка HR xuc5csrv): «молчит» — 🔇 в списке открытых и жирная строка в карточке; «в сети» — строка без знака', () => {
+  const silent = item({ id: 'i-1', kind: 'inbox', title: 'Входящее 1', options: [], agentStatus: 'doing', agentStatusText: 'в работе',
+    holder: '🔇 Держатель r.ab12 молчит 5 ч — координатор передаст пункт живой сессии (проверка в 09:30)' });
+  const online = item({ id: 'i-2', kind: 'inbox', title: 'Входящее 2', options: [], agentStatus: 'taken', agentStatusText: 'взял',
+    holder: '🟢 Держатель r.cd34 в сети' });
+  const plain = item({ id: 'i-3', kind: 'inbox', title: 'Входящее 3', options: [] });
+  const s = { ...snapOf([silent, online, plain]), sections: [{ kind: 'inbox', title: 'Входящие', count: '3', note: '' }] };
+  const labels = sectionView(s, 'inbox').keyboard.flat().map((b) => b.text);
+  assert.ok(labels.some((t) => t.includes('🔇') && t.includes('Входящее 1')), labels.join(' | '));
+  assert.ok(labels.some((t) => !t.includes('🔇') && t.includes('Входящее 2')));
+  assert.ok(labels.some((t) => !t.includes('🔇') && t.includes('Входящее 3')));
+  const card = (it) => itemMessages(it).map((m) => m.text).join('\n');
+  assert.match(card(silent), /<b>🔇 Держатель r\.ab12 молчит 5 ч/);
+  assert.match(card(online), /🟢 Держатель r\.cd34 в сети/);
+  assert.doesNotMatch(card(online), /<b>🟢/);
+  assert.doesNotMatch(card(plain), /Держатель/);
+  for (const it of [silent, online, plain]) for (const m of itemMessages(it)) assertTelegramHtml(m.text);
+});
