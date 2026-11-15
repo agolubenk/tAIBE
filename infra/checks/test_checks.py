@@ -108,6 +108,25 @@ class ChecksTest(unittest.TestCase):
             with self.subTest(line):
                 self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [secret])
 
+    def test_secrets_password_words(self):
+        # TB-193 B, TB-195: a password or a secret may be words; for these names the type name and the camelCase rule
+        # do not drop it. Key and token names keep both: there they are code (2 false errors in HR without them).
+        lower = ''.join(('correct', 'horse', 'battery', 'staple'))
+        upper = ''.join(('Correct', 'Horse', 'Battery', 'Staple'))
+        for line, value in ((f'CLIENT_SECRET={lower}', lower), (f'JWT_SECRET: {lower}', lower),
+                            (f'{{"CLIENT_SECRET": "{lower}", "n": 1}}', lower), (f'REDIS_PASSWORD={lower}', lower),
+                            (f'password: {lower}', lower), (f'CLIENT_SECRET={upper}', upper),
+                            (f'password: {upper}', upper), (f'secret = "{upper}"', upper)):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [value])
+        quiet = [f'GITHUB_TOKEN={lower}', f'api_key: {upper}', f'GITHUB_TOKEN={upper}',
+                 'JWT_SECRET: jwtSecretFromConfig', 'CLIENT_SECRET=your_client_secret',
+                 # Short words stay at the floor 3.5 (2.86); a long run of one letter has no entropy.
+                 'password: passwordhash', 'secret: ' + 'a' * 24]
+        for line in quiet:
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
     def test_secrets_key_after_underscore_or_dash(self):
         # OPS-71 (Claude lens #283): `\b` does not fire after `_`, so these keys passed; redact masks them.
         ant = 'sk-' + 'ant-' + 'Qz8Lm4Rt7Wx2Ny5Kp9Bv3Hd'

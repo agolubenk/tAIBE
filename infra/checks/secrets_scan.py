@@ -65,8 +65,19 @@ DOTTED_NAME = re.compile(r'^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$')
 JOINED_WORDS = re.compile(r'^[A-Za-z]+(?:[_-][A-Za-z]+)+$')
 CAMEL_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)*$')
 # A type name: capitalized words, no digit (apiKey: ApiKeyUsageRow,). Since the value ends at `,` and `;` (#283 B2),
-# the comma no longer drops it.
+# the comma no longer drops it. Unlike redact, the scanner drops it in any context for key and token names: with the
+# context rule of redact (TB-193) a locale label ("accessToken": "<one German word>",) and a type line with no `;`
+# (apiKey: <type>) became two new errors in HR_Helper-v2 (measured on 15.11).
 TYPE_NAME = re.compile(r'^(?:[A-Z][a-z]+)+$')
+# TB-193 B, TB-195: a password or a secret is chosen by a person and may be words, capitalized
+# (CorrectHorseBatteryStaple) or lowercase (correcthorsebatterystaple). For these names neither the type name nor
+# lowercase words drop the value; a camelCase name with a capital inside (jwtSecret) and `undefined` stay code. The
+# passwordAssignment of redact has no filter, its passphrase rule drops the same code.
+PASSWORD_NAME = re.compile(r'(?i)(?:password|passwd|pwd|secret)$')
+HUMPED_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)+$')
+# Words carry less entropy than a key (correcthorsebatterystaple: 3.36). After a password name a letters-only value of
+# 20+ characters needs 3.0; a shorter one is mostly a word or a placeholder (passwordhash: 2.86) and needs 3.5.
+PASSPHRASE = re.compile(r'^[A-Za-z]{20,}$')
 PLACEHOLDER = re.compile(r'(?i)example|changeme|change-me|placeholder|dummy|sample|your[_-]|xxx|\*\*\*|<[^>]*>|\$\{|'
                          r'\{\{|\[[^\]]*\]|redacted|test|fake|ci-only|not-a-|secret123|password123|^\$|'
                          r'^(?:pass(?:word)?|secret|postgres|root|admin|user|kaneo)$')
@@ -87,11 +98,25 @@ def looks_like_secret(value):
     """`looksLikeSecret` of redact: a value given to a credential name in code is mostly code (options.apiKey,
     z.string(), apiKey) or a placeholder (your_secure_password). A key has 8+ printable ASCII characters, no code
     punctuation, and is not a dotted name, words joined by _ or -, or a short camelCase or type name."""
-    if len(value) < 8 or not PRINTABLE.match(value) or CODE_CHARS.search(value):
-        return False
-    if DOTTED_NAME.match(value) or JOINED_WORDS.match(value):
+    if not secret_chars(value):
         return False
     return not (len(value) < 32 and (CAMEL_WORD.match(value) or TYPE_NAME.match(value)))
+
+
+def looks_like_password(value):
+    """TB-193 B, TB-195: the filter for password and secret names, as `looksLikePassphrase` of redact but with no
+    type name rule. Code stays out (a camelCase name with a capital inside, `undefined`, a dotted name, code
+    punctuation); capitalized or lowercase words are caught."""
+    if not secret_chars(value) or value == 'undefined':
+        return False
+    return len(value) >= 32 or not HUMPED_WORD.match(value)
+
+
+def secret_chars(value):
+    """8+ printable ASCII characters, no code punctuation, not a dotted name or words joined by _ or -."""
+    if len(value) < 8 or not PRINTABLE.match(value) or CODE_CHARS.search(value):
+        return False
+    return not (DOTTED_NAME.match(value) or JOINED_WORDS.match(value))
 
 
 def is_base64_key(line, m):
@@ -127,8 +152,11 @@ def scan_line(line):
     for rx in (ASSIGNED, ENV_ASSIGNED):
         for m in rx.finditer(line):
             value = m.group(2)
-            if (covered(m, 2) or PLACEHOLDER.search(value) or not looks_like_secret(value)
-                    or entropy(value) < 3.5):
+            if PASSWORD_NAME.search(m.group(1)):
+                shaped, floor = looks_like_password(value), 3.0 if PASSPHRASE.match(value) else 3.5
+            else:
+                shaped, floor = looks_like_secret(value), 3.5
+            if covered(m, 2) or PLACEHOLDER.search(value) or not shaped or entropy(value) < floor:
                 continue
             found.append(('literal %s' % m.group(1).lower(), value))
             spans.append(m.span(2))
