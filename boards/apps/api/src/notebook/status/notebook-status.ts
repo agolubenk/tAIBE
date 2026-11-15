@@ -6,7 +6,10 @@ import {
 } from "../../database/notebook-schema";
 import { isWorkerOnline, workerLastSeen } from "../embed/embed-queue";
 import { cloudCallsToday } from "../chat/call-budget";
-import { effectiveNotebookModel } from "../../notebook-model/effective-notebook-model";
+import {
+  effectiveNotebookModel,
+  modelChain,
+} from "../../notebook-model/effective-notebook-model";
 
 export async function notebookStatus(workspaceId: string) {
   const [settings, callsToday] = await Promise.all([
@@ -28,6 +31,8 @@ export async function notebookStatus(workspaceId: string) {
       .where(eq(notebookChunkTable.workspaceId, workspaceId)),
   ]);
   const seen = workerLastSeen(workspaceId);
+  // The model named is the one the next question goes to first (TB-159).
+  const points = modelChain(settings);
   return {
     model,
     workerOnline: isWorkerOnline(workspaceId),
@@ -36,10 +41,10 @@ export async function notebookStatus(workspaceId: string) {
     chunks: chunks?.count ?? 0,
     embedded: chunks?.embedded ?? 0,
     llm: {
-      configured: settings.model !== null && settings.key !== null,
-      model: settings.model,
+      configured: points !== null,
+      model: points ? points[0].model : settings.model,
       callsToday,
-      dailyMax: settings.model ? settings.dailyMax : null,
+      dailyMax: points || settings.model ? settings.dailyMax : null,
     },
   };
 }

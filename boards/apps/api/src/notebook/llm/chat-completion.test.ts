@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  answeredModel,
   answerText,
   chatCompletion,
   LlmError,
@@ -15,10 +16,19 @@ const CONFIG = {
 const KEY = "sk-secret-never-in-errors";
 const ASK = [{ role: "user" as const, content: "Что такое аренда?" }];
 
-const reply = (content: unknown) =>
-  new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
-    headers: { "content-type": "application/json" },
-  });
+const reply = (content: unknown, model?: string) =>
+  new Response(
+    JSON.stringify({
+      ...(model ? { model } : {}),
+      choices: [{ message: { content } }],
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+
+const sentBodies = (fetch: { mock: { calls: unknown[] } }) =>
+  (fetch.mock.calls as [string, RequestInit][]).map(([, init]) =>
+    JSON.parse(String(init.body)),
+  );
 
 async function failure(call: Promise<unknown>) {
   const error = await call.then(
@@ -65,6 +75,33 @@ describe("answerText", () => {
   });
 });
 
+describe("answeredModel", () => {
+  const config = {
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "a/free:free",
+    models: ["b/fallback:free", "c/other"],
+  };
+
+  it("names the listed model that answered", () => {
+    expect(answeredModel({ model: "b/fallback:free" }, config)).toBe(
+      "b/fallback:free",
+    );
+    expect(answeredModel({ model: "c/other" }, config)).toBe("c/other");
+  });
+
+  it("matches a name sent without its :variant suffix", () => {
+    expect(answeredModel({ model: "b/fallback" }, config)).toBe(
+      "b/fallback:free",
+    );
+  });
+
+  it("keeps the point's model for any other name or none", () => {
+    expect(answeredModel({ model: "x/unlisted" }, config)).toBe("a/free:free");
+    expect(answeredModel({ model: 7 }, config)).toBe("a/free:free");
+    expect(answeredModel(null, config)).toBe("a/free:free");
+  });
+});
+
 describe("chatCompletion", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -74,7 +111,10 @@ describe("chatCompletion", () => {
     const fetch = vi.fn(async () => reply("Ответ [1]"));
     vi.stubGlobal("fetch", fetch);
 
-    expect(await chatCompletion(CONFIG, KEY, ASK)).toBe("Ответ [1]");
+    expect(await chatCompletion(CONFIG, KEY, ASK)).toEqual({
+      content: "Ответ [1]",
+      model: "test-model",
+    });
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("http://llm.test/v1/chat/completions");
     expect(init).toMatchObject({ method: "POST", redirect: "error" });
@@ -93,11 +133,49 @@ describe("chatCompletion", () => {
 
     await chatCompletion(CONFIG, KEY, ASK);
     await chatCompletion({ ...CONFIG, thinking: "disabled" }, KEY, ASK);
-    const bodies = (fetch.mock.calls as unknown as [string, RequestInit][]).map(
-      ([, init]) => JSON.parse(String(init.body)),
-    );
+    const bodies = sentBodies(fetch);
     expect(bodies[0]).not.toHaveProperty("thinking");
     expect(bodies[1].thinking).toEqual({ type: "disabled" });
+  });
+
+  it("sends OpenRouter's fallbacks and short hidden reasoning only to openrouter.ai", async () => {
+    const fetch = vi.fn(async () => reply("Ответ", "b/fallback"));
+    vi.stubGlobal("fetch", fetch);
+    const models = ["b/fallback:free"];
+
+    const routed = await chatCompletion(
+      { baseUrl: "https://openrouter.ai/api/v1", model: "a/free:free", models },
+      KEY,
+      ASK,
+    );
+    await chatCompletion({ ...CONFIG, models }, KEY, ASK);
+    await chatCompletion(
+      { baseUrl: "https://openrouter.ai.evil.test/api/v1", model: "a", models },
+      KEY,
+      ASK,
+    );
+    const [openrouter, plain, lookalike] = sentBodies(fetch);
+    expect(openrouter).toMatchObject({
+      model: "a/free:free",
+      models,
+      reasoning: { effort: "low", exclude: true },
+    });
+    expect(routed).toEqual({ content: "Ответ", model: "b/fallback:free" });
+    for (const body of [plain, lookalike]) {
+      expect(body).not.toHaveProperty("models");
+      expect(body).not.toHaveProperty("reasoning");
+    }
+  });
+
+  it("leaves out an empty fallback list", async () => {
+    const fetch = vi.fn(async () => reply("Ответ"));
+    vi.stubGlobal("fetch", fetch);
+    await chatCompletion(
+      { baseUrl: "https://openrouter.ai/api/v1", model: "a", models: [] },
+      KEY,
+      ASK,
+    );
+    expect(sentBodies(fetch)[0]).not.toHaveProperty("models");
   });
 
   it("reports a rate limit with the time to wait", async () => {
