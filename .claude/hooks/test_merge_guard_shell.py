@@ -902,5 +902,56 @@ check("SE-105, отказ на make в checkout даёт прямые коман
 for form in direct:
     check(f"SE-105, прямая форма проходит в чистом checkout: {form!r}", in_checkout(form), False)
 
+# --- SE-138: ложные отказы. Скрипт с диска: git push и цель (защищённая ветка, --all/--mirror) — в одном операторе,
+# цель в переменной — тоже цель; `.claude/…` от временной папки теста — не настройки папки; присваивание shell не
+# делит подставленное на слова (B1, SE-143); программа awk из слов команды — не файл, который команда переписала.
+fp = TMP / "se138"
+fp.mkdir()
+for name, text in (
+        ("push_data.py", 'import subprocess\nimport sys\nimport unittest\n\n\nclass T(unittest.TestCase):\n'
+                         '    @classmethod\n    def setUpClass(cls):\n'
+                         '        cls.res = subprocess.run([sys.executable, "-I", "tool.py", "--hours", "24",'
+                         ' "--all"],\n'
+                         '                                 capture_output=True, text=True)\n\n'
+                         '    def test_marks(self):  # main sessions only\n'
+                         '        self.assertEqual(self.marks(("Bash", {"command": "git push -q origin x"})), 0)\n\n\n'
+                         'if __name__ == "__main__":\n    unittest.main()\n'),
+        ("tmp_settings.py", 'import os\nimport tempfile\nimport unittest\nfrom pathlib import Path\n\n\n'
+                            'class T(unittest.TestCase):\n    def setUp(self):\n'
+                            '        self.tmp = tempfile.TemporaryDirectory()\n\n    def test_window(self):\n'
+                            '        proj = Path(self.tmp.name) / "proj"\n'
+                            '        (proj / ".claude/settings.json").write_text("{}", encoding="utf-8")\n\n'
+                            '    def test_join(self):\n        d = tempfile.mkdtemp()\n'
+                            '        open(os.path.join(d, ".claude/settings.json"), "w").write("{}")\n'),
+        ("push_one.py", 'import subprocess\nsubprocess.run(["git", "push", "origin", "main"])\n'),
+        ("push_split.py", 'import subprocess\nsubprocess.run([\n    "git", "push",\n    "origin",\n    "main",\n])\n'),
+        ("push_var.py", 'import subprocess\nb = "main"\nsubprocess.run(["git", "push", "origin", b])\n'),
+        ("push_cmd.py", 'import subprocess\ncmd = ["git", "push", "origin"]\nsubprocess.run(cmd + ["main"])\n'),
+        ("open_settings.py", 'open(".claude/settings.json", "w").write("{}")\n'),
+        ("repo_settings.py", 'from pathlib import Path\nREPO = Path(__file__).resolve().parent\n'
+                             '(REPO / ".claude/settings.json").write_text("{}")\n'),
+        ("tmp_other.py", 'import tempfile\nfrom pathlib import Path\nroot = Path(tempfile.mkdtemp())\n'
+                         'root = Path.cwd()\n(root / ".claude/settings.json").write_text("{}")\n'),
+        ("p.awk", 'BEGIN { print "ok" }\n')):
+    (fp / name).write_text(text)
+for name, where in (("push_data.py", on_main), ("tmp_settings.py", ROOT)):
+    bash(f"SE-138, скрипт с диска — проход: {name}", f"python3 -I {fp / name}", False, cwd=where)
+for name, where in (("push_one.py", on_main), ("push_split.py", on_main), ("push_var.py", on_main),
+                    ("push_cmd.py", on_main), ("open_settings.py", ROOT), ("repo_settings.py", ROOT),
+                    ("tmp_other.py", ROOT)):
+    bash(f"SE-138, скрипт с диска — отказ: {name}", f"python3 -I {fp / name}", True, cwd=where)
+for form in ('cur=""; for n in 1 2; do s=$(gh pr view $n); cur="$cur#$n: $s"; done',
+             's=$(gh pr view 1); cur="a: $s $s"', 'A="x y"; export C=$A; local D=${A}; echo "$C"'):
+    bash(f"SE-138, присваивание не делится на слова, main — проход: {form!r}", form, False, cwd=on_main)
+for form in ('A="x y"; B=${A} gh pr merge 1', 'A="x y"; B=$A C=1 gh pr merge 1', 'X="gh pr merge 1"; $X',
+             'MAKEFLAGS="-s --"; MAKEFLAGS=${MAKEFLAGS}include-dir=inc make -C sub x',
+             'F="-s --"; MAKEFLAGS=${F}include-dir=inc make x'):
+    bash(f"SE-138 B1, отказ: {form!r}", form, True, cwd=fp)
+bash("SE-138, awk из слов команды после записи в $S — проход",
+     'S=$(mktemp -d); git merge-file -p "$S/o" "$S/b" "$S/h" > "$S/m"; '
+     "awk '/^<<<<<<</{p=1} p{print NR\": \"$0} /^>>>>>>>/{p=0}' \"$S/m\" | head -60", False, cwd=fp)
+why = run("Bash", {"command": "git checkout x && awk -f p.awk y"}, cwd=fp) or ""
+check(f"SE-138, awk -f после git checkout — вслепую: {why[:90]!r}", why if "вслепую" in why else None, True)
+
 if __name__ == "__main__":
     finish(" — формы shell")

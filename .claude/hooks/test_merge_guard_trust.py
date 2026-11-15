@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Проверка merge-guard: тесты слоя из чистой папки (SE-127, решение владельца A, taibe-d-se127-hooktests-1511).
-Тест из .claude/hooks или .claude/scripts хук пускает без разбора текста, только если папка — ровно её дерево на
-основной ветке origin и команда — простой запуск теста; `make check`/`make check-layer` — по командам рецептов.
+Тест из .claude/hooks, .claude/scripts или eval/tools (SE-138) хук пускает без разбора текста, только если папка —
+ровно её дерево на основной ветке origin и команда — простой запуск теста; `make check`/`make check-layer` — по
+командам рецептов.
 Запуск: python3 -I .claude/hooks/test_merge_guard_trust.py
 """
 import os
@@ -150,6 +151,13 @@ for label, change, kw in (
 # проверен (линза Claude #419, B1). Гейт — CI.
 no_tools = layer_repo("trust-notools-", drop=("eval/",))
 bash("нет eval/tools ни на диске, ни на ветке: отказ", "python3 .claude/hooks/test_x.py", True, cwd=no_tools)
+
+# Тесты eval/tools — тоже тесты слоя (SE-138): CI гоняет их с тестами хуков, в тексте — те же образцы команд.
+ev = layer_repo("trust-eval-", extra=(("eval/tools/test_t.py", MERGE),))
+for form in ("python3 -I eval/tools/test_t.py", 'for t in eval/tools/test_*.py; do python3 -I "$t" || exit 1; done'):
+    bash(f"SE-138, тест eval/tools из чистой папки — проход: {form!r}", form, False, cwd=ev)
+(ev / "eval" / "tools" / "test_t.py").write_text(MERGE + "\n")
+bash("SE-138, тест eval/tools с правкой — отказ", "python3 -I eval/tools/test_t.py", True, cwd=ev)
 
 # Разбор: формы запуска и запись команды — без хука, функция целиком.
 rt = getattr(merge_guard_git, "reviewed_test", None)
