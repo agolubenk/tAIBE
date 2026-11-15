@@ -305,6 +305,20 @@ class JournalTest(unittest.TestCase):
                               ("Бэкенд r.f93t", "backend"), ("Фронтенд (роль 3)", "frontend")):
                 self.assertEqual(sources.route_source(src, rules), role, (slug, src))
 
+    def test_route_source_qa_and_second_session_spellings(self):
+        """SE-122: «QA» — отдельным словом, буквы qa в метке линии (r.qa3f, .9qa1) не уводят ответ координатору.
+        Вторая сессия — и без дефиса (backend2, «Бэкенд–2»), а backend-20 и «роль 70» — не она."""
+        shared, prods = products.load()
+        for slug in ("taibe", "hr-helper"):
+            rules = products.config_for(slug, shared, prods)["queue"]["source_roles"]
+            for src, role in (("backend r.qa3f", "backend"), ("backend-2 r.qa3f", "backend-2"),
+                              ("backend-2 r.ab12.9qa1", "backend-2"), ("frontend r.aqa1", "frontend"),
+                              ("QA", "coord"), ("hr-helper-v2-85 (QA)", "coord"), ("qa-сессия", "coord"),
+                              ("backend2 r.ab12", "backend-2"), ("backend 2", "backend-2"), ("Бэкенд–2", "backend-2"),
+                              ("Фронтенд 2 r.cd34", "frontend-2"), ("backend-20", "backend"),
+                              ("Бэкенд (роль 70)", "backend")):
+                self.assertEqual(sources.route_source(src, rules), role, (slug, src))
+
 
 class FakeCtx:
     def __init__(self, d):
