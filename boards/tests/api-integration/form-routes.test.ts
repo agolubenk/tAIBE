@@ -18,10 +18,13 @@ const TEMPLATE = {
   ],
 };
 
-const doc = (answers: Record<string, unknown>, version = 1) => ({
+// An answer is `{ v, note? }` (answerSchema of @kaneo/forms), not a bare value.
+const doc = (values: Record<string, unknown>, version = 1) => ({
   form: "demo",
   version,
-  answers,
+  answers: Object.fromEntries(
+    Object.entries(values).map(([id, v]) => [id, { v }]),
+  ),
 });
 
 async function setup() {
