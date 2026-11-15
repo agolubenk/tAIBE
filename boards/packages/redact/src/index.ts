@@ -24,9 +24,28 @@ function collect(pattern: RegExp, kind: SecretKind): Detector {
   };
 }
 
+// A character that drops every value holding it in `secretShaped`: code
+// punctuation or a character outside printable ASCII.
+const DROPS_VALUE = /[(){}[\];,<>\\]|[^\x21-\x7e]/;
+
+function lastDropping(value: string): number {
+  for (let i = value.length - 1; i >= 0; i--) {
+    if (DROPS_VALUE.test(value.charAt(i))) return i;
+  }
+  return -1;
+}
+
 // Replaces only group 1 of each match, keeping the surrounding context
 // (header name, assignment key, quotes) readable. `accept` also gets the
 // character after the value ("" at the end of the text).
+//
+// TB-198: a rejected value may hold another name with its own value
+// (B_SECRET="x(=C_SECRET=<v>): the search goes on inside it. A value with
+// `=` or `:` in it is not a name of any shape, so a filter rejects it only
+// for its length or for a DROPS_VALUE character, and then every value that
+// holds that character too. An inner value ends where the outer one ends, so
+// the search goes on after the last such character: no character is scanned
+// more than twice.
 function collectGroup(
   pattern: RegExp,
   kind: SecretKind,
@@ -36,12 +55,16 @@ function collectGroup(
   return (text) => {
     const hits: RedactHit[] = [];
     pattern.lastIndex = 0;
-    for (const match of text.matchAll(pattern)) {
+    for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
       const value = match[group];
       if (value === undefined) continue;
       const start = match.index + match[0].indexOf(value);
-      if (!accept(value, text.charAt(start + value.length))) continue;
-      hits.push({ kind, start, end: start + value.length });
+      if (accept(value, text.charAt(start + value.length))) {
+        hits.push({ kind, start, end: start + value.length });
+      } else {
+        const dropping = lastDropping(value);
+        if (dropping >= 0) pattern.lastIndex = start + dropping + 1;
+      }
     }
     return hits;
   };
@@ -101,8 +124,7 @@ const CAMEL_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)*$/;
 const HUMPED_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
 
 function secretShaped(value: string, next: string, name: RegExp): boolean {
-  if (value.length < 8 || !/^[\x21-\x7e]+$/.test(value)) return false;
-  if (/[(){}[\];,<>\\]/.test(value)) return false;
+  if (value.length < 8 || DROPS_VALUE.test(value)) return false;
   if (/^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$/.test(value)) return false;
   if (/^[A-Za-z]+(?:[_-][A-Za-z]+)+$/.test(value)) return false;
   if (value.length >= 32) return true;

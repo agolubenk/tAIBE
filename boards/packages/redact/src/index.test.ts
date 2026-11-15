@@ -358,6 +358,56 @@ describe("@kaneo/redact", () => {
     });
   });
 
+  // TB-198 (Claude lens #368, item 1): a value the filter rejected was
+  // consumed whole, so a name inside it was never read and its value leaked.
+  describe("a name inside a rejected value (TB-198)", () => {
+    const value = join("Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv3");
+    const phrase = join("correct", "horse", "battery", "staple");
+
+    it.each([
+      ["a quoted code value", `B_SECRET" = "x(=C_SECRET=${value}`, value],
+      [
+        "a template value",
+        `CLIENT_SECRET = "{{vault}}/APP_SECRET=${value}"`,
+        value,
+      ],
+      ["a passphrase", `B_SECRET=x(=C_SECRET=${phrase}`, phrase],
+      ["a TOKEN name", `A_TOKEN=x(=B_TOKEN=${value}`, value],
+      ["a credential name", `api_key=x(api_key=${value}`, value],
+      ["a non-ASCII character", `A_SECRET=é=B_SECRET=${value}`, value],
+    ])("masks the inner value after %s", (_name, input, secret) => {
+      expectSingleHit(input, "password_assignment", secret);
+    });
+
+    it("masks the inner value of a header", () => {
+      expectSingleHit(`x-api-key: x(x-api-key:${value}`, "api_key", value);
+    });
+
+    it.each([
+      ["code in the inner value", "A_SECRET=x=B_SECRET=abc(def"],
+      ["a call", "JWT_SECRET: getSecret(config)"],
+      ["a short inner value", "A_SECRET=x(=B_SECRET=abc"],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    // The search goes on after the last rejecting character, not after each
+    // inner name: 256 000 characters take ~4 ms, as before the fix.
+    it.each([
+      "A_SECRET=(",
+      "A_SECRET=x(",
+      "api_key=(",
+      "A_TOKEN=(",
+      "x-api-key:(",
+      "A_SECRET=é",
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      const text = unit.repeat(Math.ceil(256_000 / unit.length));
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
+    });
+  });
+
   // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the
   // Authorization header as a JSON key, an empty x-api-key header.
   describe("values next to code punctuation and JSON headers (#283)", () => {
