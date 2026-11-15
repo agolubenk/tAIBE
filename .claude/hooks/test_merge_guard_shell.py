@@ -296,6 +296,28 @@ for form in ("bash -n +o noexec noexec", "bash -n +n -- +n", "bash -o noexec +o 
 for form in ("bash -n noexec", "bash -n -- +n", "bash -o noexec noexec", "bash +n -n -- -n"):
     bash(f"r10, только синтаксис: {form!r}", form, False, cwd=o)
 
+# --- SE-128: длинные опции make — как у getopt_long (точное имя или однозначный префикс); строка --eval/-E ---
+o = TMP / "se128"
+for name, text in (("Makefile", "-include lib.mk\nall:\n\techo\n"), ("sub/Makefile", "x:\n\tgh pr merge 1\n"),
+                   ("sub/mk", "x:\n\tgh pr merge 1\n"), ("inc/lib.mk", "x:\n\tgh pr merge 1\n"),
+                   ("ok/Makefile", "x:\n\techo\n"), ("ok.mk", "x:\n\techo\n"), ("--dir", "x:\n\tgh pr merge 1\n"),
+                   ("j/Makefile", "x:\n\tgh pr merge 1\n"), ("j/ok.mk", "x:\n\techo\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make --dir=sub x", "make --direc sub x", "make --fil=sub/mk x", "make --makef=sub/mk x",
+             "make --include=inc x", "gmake --ev 'x:;gh pr merge 1' x", "make --eval='x:;gh pr merge 1'",
+             "make -E 'x:;gh pr merge 1' x", "make -sE'x:;gh pr merge 1'", "make --eval 'include sub/mk' x",
+             "make -C j --jobserver-auth -f ok.mk x", "make --d x", "make --o -f ok.mk x", "make --frob x",
+             # как сейчас: целые опции и значение `-f`, похожее на опцию (файл `--dir`), не раскрывается
+             "make -C sub x", "make --directory=sub x", "make --directory sub x", "make -f --dir x"):
+    bash(f"SE-128, видно: {form!r}", form, True, cwd=o)
+for form in ("make x", "make --dir=ok x", "make --fil=ok.mk x", "make -C j -f ok.mk x", "make --no-print x",
+             "make --jobs=4 --keep x", "gmake --eval='x: y' x", "make --ev 'x: y' x", "make -- --dir=sub",
+             "make --dry-run x"):
+    bash(f"SE-128, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "make --o -f ok.mk x"}, cwd=o) or ""
+check(f"SE-128: причина — опция make, а не папка: {why[:90]!r}", why if "длинная опция make" in why else None, True)
+
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
 o.mkdir()
