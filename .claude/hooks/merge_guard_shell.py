@@ -244,9 +244,11 @@ def normalize(argv):
 
 
 def command_name(word):
-    """Имя команды без пути: `/opt/homebrew/bin/gh` → `gh`; zsh `=gh` (EQUALS) — путь к gh, тоже `gh`."""
+    """Имя команды без пути: `/opt/homebrew/bin/gh` → `gh`; zsh `=gh` (EQUALS) — путь к gh, тоже `gh`. Без регистра:
+    на APFS `GIT` и `Gh` — те же git и gh (SE-145). Имя с `$` и подстановкой — как есть: в нём имя переменной."""
     w = word.lstrip("`")
-    return os.path.basename(w[1:] if w.startswith("=") and len(w) > 1 else w)
+    base = os.path.basename(w[1:] if w.startswith("=") and len(w) > 1 else w)
+    return base.lower() if re.fullmatch(r"[\w.+-]+", base) and SUBST not in base else base
 
 
 def strip_prefix(argv):
