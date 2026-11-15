@@ -689,6 +689,8 @@ describe('мёрж из очереди', () => {
     // Карточка HR c1nr0ih5: репозиторий назван вне команды мёржа — в cmd2 или в другой команде строки.
     await bearer(agent).put('/db/items/m-taibe-168', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr merge 162 --squash', cmd2: 'gh pr merge 162 -R agolubenk/tAIBE --squash' } })
     await bearer(agent).put('/db/items/m-taibe-169', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr checks 162 -R agolubenk/tAIBE && gh pr merge 162 --squash' } })
+    // Свой PR: cmd2 — следующий шаг о другом репозитории, а не вариант мёржа (линза Claude #363, п. 3) — не отказ.
+    await bearer(agent).put('/db/items/m-179', { data: { kind: 'merge', title: '#162 — и шаг после', sha: SHA, base: 'main', mergeMethod: 'squash', subject: 'feat(oq): пункт мёржа (#162)', cmd: 'gh pr merge 162 --squash', cmd2: 'gh workflow run mirror.yml -R agolubenk/tAIBE' } })
   })
 
   it('PR другого репозитория (-R в команде или поле repo) — 409 до запроса к GitHub, а не одноимённый PR консоли (Q-29)', async () => {
@@ -707,6 +709,9 @@ describe('мёрж из очереди', () => {
     expect(cd.json.error).toContain('(cd)')
     expect(calls).toEqual([])
     expect(lastPut).toBeNull()
+    const step = await bearer(owner).get('/merge/m-179')
+    expect(step.status).toBe(200)
+    expect(step.json).toMatchObject({ repo: 'agolubenk/HR_Helper-v2', approval: 'ok' })
     const own = await bearer(owner).get('/merge/m-177')
     expect(own.status).toBe(200)
     expect(own.json).toMatchObject({ repo: 'agolubenk/HR_Helper-v2', method: 'squash', subject: 'feat(oq): пункт мёржа (#162)', approval: 'ok' })
@@ -781,6 +786,35 @@ describe('мёрж из очереди', () => {
     expect(plan('echo GH_REPO=x/y && gh pr merge 41 -R agolubenk/tAIBE')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
     expect(plan('env GH_REPO=agolubenk/tAIBE gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
     expect(plan("cd ~/x && GH_REPO='agolubenk/tAIBE' gh pr merge 41")).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+  })
+
+  it('вне команды мёржа в счёт только `gh pr … <тот же PR>` и GH_REPO= — следующий шаг о другом не даёт отказа (линзы #363, PR B)', () => {
+    const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
+    // cmd2 — следующий шаг, а не вариант мёржа: другая команда gh или другой PR — не репозиторий этого PR.
+    expect(plan('gh pr merge 41 --squash', { cmd2: 'gh workflow run deploy.yml -R agolubenk/tAIBE' })).toMatchObject({ repo: null, problem: null })
+    expect(plan('gh pr merge 41 --squash', { cmd2: 'gh pr view 42 -R agolubenk/tAIBE' })).toMatchObject({ repo: null, problem: null })
+    expect(plan('GH_REPO=agolubenk/tAIBE gh workflow run d.yml && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    expect(plan('gh pr list -R agolubenk/tAIBE && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    // Тот же PR: URL PR в другой команде, связка -wR, gh по полному пути.
+    expect(plan('gh pr view https://github.com/agolubenk/tAIBE/pull/41 && gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr view https://github.com/agolubenk/tAIBE/pull/42 && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    expect(plan('gh pr checks 41 -wR agolubenk/tAIBE && gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('/usr/local/bin/gh pr checks 41 -R agolubenk/tAIBE && gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    // gh — только первое слово команды shell: gh-pages и текст echo — не gh.
+    expect(plan('git push origin gh-pages -R a/b && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    expect(plan('echo "gh pr view 41 -R a/b" && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    // Репозиторий не ясен: подстановка shell — отказ, пока не назван полем repo; HOST/OWNER/REPO — чужой репозиторий.
+    expect(plan('gh pr checks 41 -R "$REPO" && gh pr merge 41')).toMatchObject({ repo: null, problem: expect.stringContaining('подстановка') })
+    expect(plan('gh pr checks 41 -R "$REPO" && gh pr merge 41', { repo: 'agolubenk/HR_Helper-v2' }).problem).toBeNull()
+    expect(plan('GH_REPO=$REPO gh pr merge 41')).toMatchObject({ repo: null, problem: expect.stringContaining('подстановка') })
+    expect(plan('export GH_REPO=$R; gh pr merge 41').problem).toContain('подстановка')
+    expect(plan('gh pr checks 41 -R ghe.io/o/r && gh pr merge 41')).toMatchObject({ repo: 'ghe.io/o/r' })
+    // Команда мёржа в cmd2 с неясным репозиторием (cd, два репозитория) — отказ, как у cmd; поле repo его снимает.
+    const both = plan('gh pr merge 41', { cmd2: 'gh pr merge 41 -R a/b https://github.com/c/d/pull/41' })
+    expect(both).toMatchObject({ repo: null, problem: expect.stringContaining('вне команды мёржа названы разные репозитории') })
+    expect(both.problem).toMatch(/a\/b, c\/d|c\/d, a\/b/)
+    expect(plan('gh pr merge 41', { cmd2: 'cd ~/x && gh pr merge 41' }).problem).toContain('(cd)')
+    expect(plan('gh pr merge 41', { cmd2: 'cd ~/x && gh pr merge 41', repo: 'agolubenk/HR_Helper-v2' }).problem).toBeNull()
   })
 
   it('перенаправления shell (2>&1, 2>/dev/null, > файл, &>) — не аргументы мёржа (ревью «Контроля» #114, F1)', () => {

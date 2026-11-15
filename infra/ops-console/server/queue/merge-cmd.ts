@@ -127,8 +127,10 @@ export function mergeFlags(cmd: string): MergeFlags {
       else out.problems.repo ??= `аргумент «${word.slice(0, 80)}» консоль не разбирает — нужен номер PR`
     } else out.problems.repo ??= 'в команде мёржа больше одного аргумента'
   }
-  const env = envRepos(before).pop()
-  if (env) repos.push(env)
+  const env = envRepos(before, out.pr)
+  if (env.problems[0]) out.problems.repo ??= env.problems[0]
+  const last = env.repos.pop() // присваивания подряд — действует последнее
+  if (last) repos.push(last)
   const distinct = [...new Set(repos.map((r) => r.toLowerCase()))]
   if (distinct.length > 1) out.problems.repo = `команда называет разные репозитории: ${[...new Set(repos)].join(', ')}`
   else if (repos[0]) out.repo = repos[0]
@@ -140,49 +142,84 @@ export function mergeFlags(cmd: string): MergeFlags {
   return out
 }
 
-const REPO = /^[\w.-]+\/[\w.-]+$/
-/** Любая команда gh до разделителя — то же правило слов и перенаправлений, что у GH_PR. */
-const GH_ANY = /\bgh\b(?:\\[\s\S]|[<>]&|&>|[^\n;&|"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')*/g
-/** Команда shell до разделителя (\n ; & |), разделитель в кавычках не режет. */
-const SEGMENT = /(?:\\[\s\S]|[<>]&|&>|[^\n;&|"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+/g
-const repoOf = (v: string): string | null => {
-  const name = repoName(v.split(/[;&|)]/)[0] ?? '')
-  return REPO.test(name) ? name : null
+/** Репозитории, названные в строке, и причины, по которым репозиторий из неё не ясен (подстановка shell). */
+export interface FoundRepos {
+  repos: string[]
+  problems: string[]
 }
 
-/**
- * Репозитории из присваивания GH_REPO= в начале команды shell (`GH_REPO=x gh …`, `export GH_REPO="x"`, `env GH_REPO=x`),
- * по порядку. Имя переменной — без кавычек: `--body "GH_REPO=x"` и `echo GH_REPO=x` — текст, а не окружение gh
- * (Контроль #363, п. 1–2).
- */
-function envRepos(cmd: string): string[] {
-  const out: string[] = []
-  for (const m of cmd.matchAll(SEGMENT)) {
-    for (const w of commandWords(m[0])) {
-      if (w === 'export' || w === 'env') continue
-      if (!/^[A-Za-z_]\w*=/.test(w)) break
-      const name = w.startsWith('GH_REPO=') ? repoOf(unquote(w.slice('GH_REPO='.length))) : null
-      if (name) out.push(name)
-    }
+/** `owner/name` и `HOST/OWNER/REPO` (GitHub Enterprise — чужой консоли репозиторий, отказ 409, а не пропуск). */
+const REPO = /^(?:[\w-]+\.[\w.-]+\/)?[\w.-]+\/[\w.-]+$/
+/** Команда shell до разделителя (\n ; & |), разделитель в кавычках не режет. */
+const SEGMENT = /(?:\\[\s\S]|[<>]&|&>|[^\n;&|"'\\]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+/g
+const PR_URL = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#]\S*)?$/i
+/** $ и ` вне одинарных кавычек и без \ перед ними shell подставит; <( и >( — подстановка процесса. */
+const expandsRaw = (raw: string) => /[$`]|[<>]\(/.test(raw.replace(/'[^']*'|\\[\s\S]/g, ''))
+
+/** Значение -R, --repo, GH_REPO= или URL PR: имя — в repos; подстановка shell — в problems; не имя репозитория — мимо. */
+function addRepo(out: FoundRepos, raw: string, value: string, what: string): void {
+  if (expandsRaw(raw)) {
+    out.problems.push(`в значении ${what} подстановка shell ($, \` или <(…)) — консоль её не выполнит`)
+    return
+  }
+  const name = repoName(value.split(/[;&|)]/)[0] ?? '')
+  if (REPO.test(name)) out.repos.push(name)
+}
+
+/** -R/--repo и URL PR команды `gh pr <что-то> …`; same — команда о PR с номером pr. */
+function ghPrFlags(raw: string[], words: string[], from: number, pr: number | null): FoundRepos & { same: boolean } {
+  const out = { repos: [] as string[], problems: [] as string[], same: false }
+  for (let k = from; k < words.length; k++) {
+    const w = words[k] ?? ''
+    if (/\s/.test(w)) continue // значение в кавычках с пробелом (--body "… -R x/y …") — текст, а не флаг
+    const bundle = w.startsWith('--') ? null : /^-[A-Za-z]*R=?(.*)$/.exec(w) // -R x, -Rx, -R=x, связка -wR x
+    if (w === '--repo' || (bundle && !bundle[1])) { addRepo(out, raw[k + 1] ?? '', words[k + 1] ?? '', w); k++; continue }
+    if (bundle || w.startsWith('--repo=')) { addRepo(out, raw[k] ?? '', bundle ? bundle[1] ?? '' : w.slice(7), '-R'); continue }
+    const url = PR_URL.exec(w)
+    if (url && Number(url[2]) === pr) { out.same = true; addRepo(out, raw[k] ?? '', url[1] ?? '', 'URL PR') }
+    else if (/^#?\d+$/.test(w) && Number(w.replace('#', '')) === pr) out.same = true
   }
   return out
 }
 
 /**
- * Репозитории из -R/--repo любой команды gh строки (не только команды мёржа) и из GH_REPO= — по словам shell: «-R x/y»
- * внутри значения в кавычках (`--body "see -R x/y"`) — текст, а не флаг; `cp -R a/b c/` — не gh. Не похожее на
- * `owner/name` не берётся.
+ * Репозитории, названные в строке о PR `pr`, по командам shell. Программа — первое слово команды после присваиваний
+ * и export/env: `git push origin gh-pages -R x` и `echo "gh -R x"` — не gh. В счёт идут:
+ *  - env: GH_REPO= через export и в команде из одних присваиваний (в том числе обрезанной перед командой мёржа);
+ *  - prs: -R/--repo и URL PR команд `gh pr <что-то>` о том же PR и GH_REPO= перед ними. `gh workflow run -R x` и
+ *    `gh pr view 42 -R x` — о другом, не в счёт: cmd2 бывает следующим шагом, а не вариантом мёржа (линза Claude #363).
+ * Имя переменной без кавычек: `--body "GH_REPO=x"` и `echo GH_REPO=x` — текст (Контроль #363, п. 1–2).
  */
-export function looseRepos(cmd: string): string[] {
-  const out: string[] = []
-  for (const m of cmd.matchAll(GH_ANY)) {
-    const words = commandWords(m[0]).map(unquote)
-    for (let i = 1; i < words.length; i++) {
+function scanRepos(cmd: string, pr: number | null): { env: FoundRepos; prs: FoundRepos } {
+  const env: FoundRepos = { repos: [], problems: [] }
+  const prs: FoundRepos = { repos: [], problems: [] }
+  for (const m of cmd.matchAll(SEGMENT)) {
+    const raw = commandWords(m[0])
+    const words = raw.map(unquote)
+    const prefix: FoundRepos = { repos: [], problems: [] }
+    let i = 0
+    let exported = false
+    for (; i < words.length; i++) {
       const w = words[i] ?? ''
-      const v = w === '-R' || w === '--repo' ? (words[++i] ?? '') : (/^(?:-R=?|--repo=)(\S+)$/.exec(w)?.[1] ?? '')
-      const name = repoOf(v)
-      if (name) out.push(name)
+      const r = raw[i] ?? ''
+      if (w === 'export' || w === 'env') { exported ||= w === 'export'; continue }
+      if (!/^[A-Za-z_]\w*=/.test(r)) break
+      if (r.startsWith('GH_REPO=')) addRepo(exported ? env : prefix, r.slice(8), w.slice(8), 'GH_REPO=')
     }
+    const into = (to: FoundRepos, from: FoundRepos) => { to.repos.push(...from.repos); to.problems.push(...from.problems) }
+    if (i >= words.length) { into(env, prefix); continue }
+    if (!/(?:^|\/)gh$/.test(words[i] ?? '') || words[i + 1] !== 'pr') continue
+    const flags = ghPrFlags(raw, words, i + 2, pr)
+    if (flags.same) { into(prs, prefix); into(prs, flags) }
   }
-  return [...out, ...envRepos(cmd)]
+  return { env, prs }
+}
+
+/** GH_REPO= для команды мёржа: из строки перед ней (export или присваивания перед самой командой). */
+const envRepos = (before: string, pr: number | null): FoundRepos => scanRepos(before, pr).env
+
+/** Репозитории, названные вне команды мёржа о том же PR: GH_REPO= и `gh pr … <pr>` с -R/--repo или URL PR. */
+export function looseRepos(cmd: string, pr: number | null): FoundRepos {
+  const { env, prs } = scanRepos(cmd, pr)
+  return { repos: [...prs.repos, ...env.repos], problems: [...prs.problems, ...env.problems] }
 }

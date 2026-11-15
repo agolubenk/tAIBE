@@ -120,14 +120,19 @@ export function mergePlan(item: Record<string, unknown>): MergePlan {
   const approvedBase = typeof item.base === 'string' && BRANCH_NAME.test(item.base) ? item.base : null
   // Поле пункта главнее команды; противоречие команде — отказ, а не выбор одного из двух.
   const itemRepo = str(item.repo)
-  // Репозиторий, названный вне команды мёржа: в cmd2 (вариант той же команды) и флагом -R/--repo, GH_REPO в другой
-  // команде строки. Без него GET /merge читал бы PR консоли с тем же номером (карточка HR c1nr0ih5, F4). Репозиторий
-  // самой команды мёржа сюда не входит: его противоречие полю repo — отказ выше, а не второй такой же.
+  // Репозиторий, названный вне команды мёржа о том же PR: команда мёржа в cmd2, `gh pr … <pr>` с -R/--repo или URL PR,
+  // GH_REPO= (merge-cmd.ts looseRepos). Без него GET /merge читал бы PR консоли с тем же номером (карточка HR c1nr0ih5,
+  // F4). Репозиторий самой команды мёржа сюда не входит: его противоречие полю repo — отказ выше, а не второй такой же.
   const cmd2 = typeof item.cmd2 === 'string' ? item.cmd2 : ''
-  const elsewhere = [...new Map([mergeFlags(cmd2).repo, ...looseRepos(cmd), ...looseRepos(cmd2)]
+  const flags2 = mergeFlags(cmd2)
+  const loose = [looseRepos(cmd, pr), looseRepos(cmd2, pr)]
+  const elsewhere = [...new Map([flags2.repo, ...loose.flatMap((l) => l.repos)]
     .filter((r): r is string => !!r && r.toLowerCase() !== flags.repo?.toLowerCase())
     .map((r) => [r.toLowerCase(), r])).values()]
   const named = itemRepo ?? flags.repo
+  // Вне команды мёржа репозиторий не ясен (подстановка shell, cd или два репозитория в команде мёржа cmd2) — отказ,
+  // пока его не назвали полем repo или в самой команде мёржа.
+  const unclear = named ? [] : [...loose.flatMap((l) => l.problems), flags2.segment ? flags2.problems.repo : undefined]
   const stray = elsewhere.filter((r) => !named || r.toLowerCase() !== named.toLowerCase())
   // Не проверяем формат здесь: кривое имя не совпадёт с репозиторием консоли, и mergeInfo откажет (fail-closed).
   const repo = named ?? (elsewhere.length === 1 ? elsewhere[0]! : null)
@@ -137,6 +142,7 @@ export function mergePlan(item: Record<string, unknown>): MergePlan {
       : itemRepo ? null : flags.problems.repo,
     named && stray.length ? `репозиторий PR — ${named}, а вне команды мёржа (cmd2, -R, GH_REPO) назван ${stray.join(', ')}` : null,
     !named && elsewhere.length > 1 ? `вне команды мёржа названы разные репозитории: ${elsewhere.join(', ')}` : null,
+    ...unclear.map((p) => (p ? `вне команды мёржа: ${p}` : null)),
     item.mergeMethod === undefined ? flags.problems.method : null,
     str(item.subject) ? null : flags.problems.subject,
     flags.problems.other,

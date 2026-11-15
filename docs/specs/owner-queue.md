@@ -68,7 +68,7 @@
 
 | Таблица | Поля | Заметки |
 |---|---|---|
-| `oq_items` | `id` (PK, `^[A-Za-z0-9_.~:@+-]{1,80}$`), `kind` (decision · merge · server · check), `title` ≤300, `body` ≤12000 (простой текст, формат артефакта: абзацы, «- », «1. »), `cmd`/`cmd2` ≤8000, `after`, `field`, `placeholder`, `options` (json `[{id,label,hint}]`, только decision), `chips`, `links` (только https), `added`, `source`, `archived`, `version` | Для мёржа: `pr` (номер), `deploy` (`deploy` · `skip` · `separate`), `after` (зависимость от другого пункта), `sha` + `base` (вердикт «Контроля»: полный SHA головы PR и база, для которой он дан, — без обоих «Влить» неактивна) |
+| `oq_items` | `id` (PK, `^[A-Za-z0-9_.~:@+-]{1,80}$`), `kind` (decision · merge · server · check), `title` ≤300, `body` ≤12000 (простой текст, формат артефакта: абзацы, «- », «1. »), `cmd`/`cmd2` ≤8000, `after`, `field`, `placeholder`, `options` (json `[{id,label,hint}]`, только decision), `chips`, `links` (только https), `added`, `source`, `archived`, `version` | Для мёржа: `pr` (номер), `repo` (`owner/name`, необязательно), `mergeMethod`, `subject` — снимают неоднозначность команды, `deploy` (`deploy` · `skip` · `separate`), `after` (зависимость от другого пункта), `sha` + `base` (вердикт «Контроля»: полный SHA головы PR и база, для которой он дан, — без обоих «Влить» неактивна) |
 | `oq_answers` | `itemId` (PK), `done`, `choice`, `note` ≤20000, `at`, `answeredBy` · `agentStatus` (taken · doing · blocked · done · planned), `agentNote`, `agentAt`, `agentBy` | Поля владельца пишет только владелец; поля агента — только агент |
 | `oq_work` | `id`, `title`, `track`, `status`, `who`, `session`, `planStart`, `planEnd`, `basePlanEnd`, `start`, `end`, `milestone`, `note`, `link`, `linkText`, `order`, `archived`, `version` | Сдвиг `planEnd` назад без `basePlanEnd` — отказ API |
 | `oq_tracks` | `id`, `name`, `color`, `order` | Направления «Хода работ» данными, а не кодом страницы |
@@ -152,6 +152,14 @@
   - `sha` = SHA, показанный владельцу. Если в ветку успели допушить, GitHub откажет, и владелец увидит причину.
   - Для `deploy=skip` в `commit_title` добавляется `[skip ci]`.
   - Пока идёт деплой, мёрж с деплоем запрещён: деплои идут по одному, влитые подряд схлопываются.
+  - Репозиторий PR: поле `repo`; иначе `-R`/`--repo` или URL PR у команды мёржа; иначе один репозиторий, названный
+    о том же PR вне неё — команда мёржа в `cmd2`, `gh pr <что-то> <номер PR>` с `-R`/`--repo` или URL PR в `cmd`/`cmd2`,
+    `GH_REPO=` в начале команды (присваивание shell перед `gh` или `export`; внутри кавычек — текст, не репозиторий).
+    Другие команды (`gh workflow run -R …`, `gh pr view <другой PR> -R …`) не в счёт: `cmd2` бывает следующим шагом.
+    Не репозиторий консоли → 409 «влейте командой из пункта в терминале» (Q-29); два разных репозитория, спор с полем
+    `repo` или подстановка shell в значении → 409. Команда, которую консоль не повторит как терминал (`cd`, `$(…)`,
+    rebase, флаг без значения), → 409; поля пункта снимают отказ. Пункт PR другого репозитория не связывается с
+    деплоем консоли (карточка HR c1nr0ih5).
 - «Перезапустить деплой» — `workflow_dispatch` для `deploy-contabo.yml` на `main`, с подтверждением.
 - Токен GitHub — fine-grained PAT, выданный владельцем только на этот репозиторий: `contents:write`,
   `pull_requests:write`, `actions:write`. Хранится как остальные секреты консоли и в ответах API не возвращается.
