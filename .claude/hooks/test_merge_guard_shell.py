@@ -356,6 +356,24 @@ for form in ("MAKEFLAGS='-j4 -s' make -C sub x", "MAKEFLAGS+=-k make -C sub x"):
     bash(f"SE-133 линза 2, без признака: {form!r}", form, False, cwd=o)
 why = run("Bash", {"command": "MAKEFLAGS=\"-s 'a -Iinc'\" make x"}, cwd=o) or ""
 check(f"SE-133 линза 2: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# Линза Claude (#398, issuecomment-6891590096). B1: `$(…)` и `` `…` `` в значении разбор режет в метку без `$`.
+# B2: make делит слова только по пробелу и табу (`isblank`), `\v`, `\f`, `\r`, `\n` — часть слова. B3: опции make 4.x
+# со значением, которых нет в 3.81: getopt 3.81 следующее слово не забирает, и `-I` проходит.
+for form in ("MAKEFLAGS=\"-s $(printf %s -Iinc)\" make -C sub x", "MAKEFLAGS=\"-s `printf %s -Iinc`\" make -C sub x",
+             "MAKEFLAGS=\"-s $(git branch --show-current)\" make -C sub x",
+             "export MAKEFLAGS=\"-s $(cat f)\"; make -C sub x", "GNUMAKEFLAGS=\"-s $(cat f)\" make -C sub x",
+             "MAKEFLAGS=-s\vIinc make -C sub x", "MAKEFLAGS='-s\fIinc' make -C sub x",
+             "MAKEFLAGS='-s\rIinc' make -C sub x", "MAKEFLAGS='-s\nIinc' make -C sub x",
+             "MAKEFLAGS='-s -Iinc' make -C sub x",
+             "MAKEFLAGS='--jobserver-auth -Iinc' make -C sub x", "MAKEFLAGS='--jobserver-style -Iinc' make -C sub x",
+             "MAKEFLAGS='--sync-mutex -Iinc' make -C sub x", "MAKEFLAGS='--sync -Iinc' make -C sub x"):
+    bash(f"SE-133 линза Claude, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS='-s\t-k' make -C sub x", "MAKEFLAGS='  -s  -k ' make -C sub x",
+             "MAKEFLAGS='--jobserver-fds=3,4 -s' make -C sub x"):
+    bash(f"SE-133 линза Claude, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s $(printf %s -Iinc)\" make -C sub x"}, cwd=o) or ""
+check(f"SE-133 линза Claude: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None,
+      True)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
