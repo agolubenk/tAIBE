@@ -1,6 +1,7 @@
 import { byLaw } from "./plan-due";
 import { type BoardCard, cardRef, cardUid, itemTag } from "./plan-types";
 import type { QueueDoc } from "./queue-client";
+import { planDocId } from "./queue-config";
 
 // TB-107: the owner's item of a day with a move, after the 13.11 one
 // (d-hr-focus-1311): counts in the title, the cards by state, one option
@@ -13,10 +14,21 @@ import type { QueueDoc } from "./queue-client";
 const LABELS: Record<string, string> = { "hr-helper": "HR", taibe: "tAIBE" };
 
 export const FOCUS_SOURCE = "t-boards (TB-107)";
-// Every focus decision of the product starts so, the hand-filed one too.
-const focusItemPrefix = (product: string) => `d-${itemTag(product)}-focus-`;
+// The queue files an item under the product of its id prefix (planDocId):
+// hr-helper keeps d-hr-focus-<date>, another product writes
+// <product>-d-focus-<date> (plan lens #162: d-taibe-focus-… went to the HR
+// lane).
+const focusItemPrefix = (product: string) =>
+  planDocId(product, `d-${itemTag(product)}-focus-`, "d-focus-");
 export const focusItemId = (product: string, today: string) =>
   `${focusItemPrefix(product)}${today.replaceAll("-", "")}`;
+// Every focus decision of the product starts with one of these: the form the
+// server writes, and d-<tag>-focus- (the hand-filed d-hr-focus-1311, and a
+// taibe item filed by hand before the prefix).
+const focusItemPrefixes = (product: string) => [
+  focusItemPrefix(product),
+  `d-${itemTag(product)}-focus-`,
+];
 
 // The day's order as the item offered it: rows — the new order, prev — the
 // order before it (what «Вернуть» restores), keys — the named cards that moved
@@ -32,7 +44,7 @@ export function isFocusItem(
 ): item is QueueDoc {
   return (
     !!item &&
-    item.id.startsWith(focusItemPrefix(product)) &&
+    focusItemPrefixes(product).some((prefix) => item.id.startsWith(prefix)) &&
     item.data.kind === "decision"
   );
 }

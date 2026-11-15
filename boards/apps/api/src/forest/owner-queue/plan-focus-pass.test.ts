@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { focusItemId, isFocusItem } from "./plan-focus-item";
 import { ownerReverts } from "./plan-focus-run";
 import { type PlanStore, planPass } from "./plan-pass";
 import { cardUid, type RecentCard } from "./plan-types";
@@ -350,7 +351,8 @@ describe("ownerReverts (TB-107)", () => {
       decision("d-hr-focus-20261112"),
       decision("d-hr-focus-20261113"),
       decision("d-taibe-focus-20261113"),
-      decision("d-taibe-focus-20261114"),
+      decision("taibe-d-focus-20261114"),
+      decision("taibe-d-focus-20261112"),
       decision("d-hr-due-20261113"),
       decision("d-hr-focus-20261101"),
     ];
@@ -368,9 +370,14 @@ describe("ownerReverts (TB-107)", () => {
         agentNote: "revert",
         agentStatus: "done",
       }),
-      doc("d-taibe-focus-20261114", {
+      doc("taibe-d-focus-20261114", {
         note: "ок",
         ownerAt: "2026-11-13T12:00:00Z",
+      }),
+      // A taibe focus item in the form the server writes (plan lens #162).
+      doc("taibe-d-focus-20261112", {
+        choice: "revert",
+        ownerAt: "2026-11-12T10:00:00Z",
       }),
       doc("d-hr-due-20261113", {
         choice: "revert",
@@ -386,7 +393,36 @@ describe("ownerReverts (TB-107)", () => {
       }),
     ];
     expect(ownerReverts(items, checks, ["hr-helper", "taibe"], DAY1)).toEqual(
-      new Map([["hr-helper", Date.parse("2026-11-13T09:00:00Z")]]),
+      new Map([
+        ["hr-helper", Date.parse("2026-11-13T09:00:00Z")],
+        ["taibe", Date.parse("2026-11-12T10:00:00Z")],
+      ]),
     );
+  });
+});
+
+// The queue files an item under the product of its id prefix (plan lens #162).
+describe("focus item ids", () => {
+  const item = (id: string): QueueDoc => ({
+    id,
+    data: { kind: "decision" },
+    version: 1,
+    updatedAt: 0,
+  });
+
+  it("prefixes a non-default product and keeps the hr-helper id", () => {
+    expect(focusItemId("taibe", "2026-11-16")).toBe("taibe-d-focus-20261116");
+    expect(focusItemId("hr-helper", "2026-11-16")).toBe("d-hr-focus-20261116");
+  });
+
+  it("knows both forms of its own product only", () => {
+    expect(isFocusItem(item("taibe-d-focus-20261116"), "taibe")).toBe(true);
+    expect(isFocusItem(item("d-taibe-focus-20261113"), "taibe")).toBe(true);
+    expect(isFocusItem(item("taibe-d-focus-20261116"), "hr-helper")).toBe(
+      false,
+    );
+    expect(isFocusItem(item("d-hr-focus-1311"), "hr-helper")).toBe(true);
+    expect(isFocusItem(item("d-hr-focus-1311"), "taibe")).toBe(false);
+    expect(isFocusItem(item("taibe-d-due-20261116"), "taibe")).toBe(false);
   });
 });
