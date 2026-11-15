@@ -17,8 +17,31 @@ import time
 import lineage as L
 import lineage_retire as LR
 
+_NERVE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "nerve")
+if _NERVE not in sys.path:
+    sys.path.append(_NERVE)  # в конец: свои модули eval/tools не подменяются
+from products import base_role  # noqa: E402
+
 # genome/<роль>.json — продукт по умолчанию, genome/<slug>/<роль>.json — другие продукты (OPS-25).
 ROLE_RE = re.compile(r"/genome/(?:([a-z][a-z0-9-]*[a-z0-9])/)?([a-z]+)\.json")
+KEY_RE = re.compile(r"ключ реестра ([\w-]+)")  # как sources.KEY_RE Нерва: ключ роли в первом сообщении
+
+
+def role_of(command, line=None):
+    """(продукт, роль) сессии по геному в argv; ("", None) — не роль. У второй сессии (backend-2) геном базовой
+    роли, ключ — из первого сообщения в argv, после --resume — из записи линии (spawn_session.sh пишет --role).
+    Иначе reap и ростер считали бы backend и backend-2 одной ролью и сочли бы одну из сессий сменённой."""
+    m = ROLE_RE.search(command)
+    if not m:
+        return "", None
+    product, role = m.group(1) or "", m.group(2)
+    k = KEY_RE.search(command)
+    key = k.group(1) if k else None
+    if key is None and line and L.valid_line(line):
+        key = (L.read_json(L.lfile(line, ".json")) or {}).get("role")
+    if isinstance(key, str) and key != role and base_role(key) == role:
+        role = key
+    return product, role
 
 
 def add_reap_args(p):
@@ -134,11 +157,11 @@ def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
         if p is None or L.argv0(p) != "claude" or L.norm(p.start) != L.norm(d.get("procStart")):
             continue  # файл от завершённой сессии или pid уже у другого процесса
         line = L.session_line(sx, p)
-        m = ROLE_RE.search(p.command)
+        product, role = role_of(p.command, line)
         last = max(d.get("updatedAt") or 0, d.get("statusUpdatedAt") or 0) / 1000.0
         status = d.get("status") or "?"
         rows.append({"pid": p.pid, "start": p.start, "proc": p, "name": d.get("name") or "", "status": status,
-                     "cwd": d.get("cwd") or "", "line": line, "role": m.group(2) if m else None, "product": (m.group(1) or "") if m else "",
+                     "cwd": d.get("cwd") or "", "line": line, "role": role, "product": product,
                      "age_h": max(0.0, now - (d.get("startedAt") or 0) / 1000.0) / 3600,
                      "idle_h": 0.0 if status == "busy" else max(0.0, now - last) / 3600})
     current = {}   # (продукт, роль) → текущая сессия: роль одного продукта не делает чужую «вытесненной»
