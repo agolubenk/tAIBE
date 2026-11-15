@@ -11,7 +11,7 @@ import os
 import re
 
 from merge_guard_files import open_regular
-from merge_guard_shell import LOST, is_lost, words
+from merge_guard_shell import CURRENT, LOST, SUBST, is_lost, words
 
 PKG_TOOLS = {"npm", "pnpm", "yarn", "bun", "turbo"}
 RUN = {"run", "run-script", "rum", "urn"}
@@ -54,8 +54,18 @@ AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
 WS_MAX = 256
 TEXT_MAX = 4 * 1024 * 1024
-IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|NODE_OPTIONS|(?i:npm_config_node_options|npm_config_script_shell))"
-                         r"=(.*)", re.S)
+IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"  # `ИМЯ+=` shell тоже экспортирует
+                         r"|(?i:npm_config_node_options|npm_config_script_shell))\+?=(.*)", re.S)
+# Опции make, от которых зависит, какой текст make прочтёт (make_files), и переменные, от которых — что прочтёт и
+# запустит: в MAKEFLAGS они — отказ (SE-133). Метка — слово, которого shell не передаст (в словах нет NUL).
+MAKE_READS = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin", "-I", "--include-dir", "-E", "--eval",
+              "?"}
+# Опции make 4.x со значением, которых нет в make 3.81 (main.c:361-433): getopt 3.81 вернёт `?`, а следующее слово не
+# заберёт, и `-I` после них make применит. В MAKEFLAGS они — отказ, как `?` (линза Claude #398, B3).
+MAKE_4X_VALUED = {"--jobserver-auth", "--jobserver-style", "--sync-mutex"}
+MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
+MAKEFLAGS_ARG = "\0MAKEFLAGS"
+APPEND_ARG = "\0append"  # `ИМЯ+=…` у IMPLIED_VAR: прежнее значение по слову не видно (линза backend #398)
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
 
@@ -272,14 +282,25 @@ def make_files(a, cwd):
             for p, t in _read_tree(roots, lambda p, t: includes(p, re.sub(r"#.*", "", t)))] + evals
 
 
-# Причина отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
+# Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
 MAKE_OPTION = ("длинная опция make, которую разбор не раскрывает однозначно (`--d`, `--frob`): какой Makefile make "
                "прочтёт, не видно — напишите опцию полностью (`--directory=…`)")
+MAKEFLAGS_WHY = ("MAKEFLAGS или GNUMAKEFLAGS с опцией или переменной, от которой зависит, что make прочтёт и запустит "
+                 "(`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`, `--jobserver-auth` make 4.x), или с кавычкой, "
+                 "`\\`, `$`, `$(…)`, знаком вне печатного ASCII, кроме таба (слова и подстановки make делит иначе, "
+                 "чем shell): папку make (`-C`, `cd`) разбор с ними не сводит — передайте их в командной строке make")
+APPEND_WHY = ("`ИМЯ+=…` у MAKEFLAGS, GNUMAKEFLAGS, MAKEFILES, BASH_ENV, ENV, NODE_OPTIONS, npm_config_node_options, "
+              "npm_config_script_shell: shell склеит значение с прежним (слово раньше в строке или окружение), и make, "
+              "bash или node получат склейку, которую разбор по словам не видит — задайте значение целиком через `=`")
 
 
 def make_option(a):
-    """Длинная опция make, которую getopt_long не раскроет однозначно (`--d`, `--o`, `--frob`), иначе "" (SE-128)."""
-    return (_options(a, MAKE_VALUED, short=True, names=MAKE_LONG)[0].get("?") or [""])[0] if a[0] in MAKES else ""
+    """Причина, по которой разбор не видит, что прочтёт make, иначе "": длинная опция, которую getopt_long не раскроет
+    однозначно (`--d`, `--o`, `--frob`, SE-128), метка make_flags (SE-133) или `ИМЯ+=` (implied_commands)."""
+    if a[0] not in MAKES:
+        return ""
+    return APPEND_WHY if APPEND_ARG in a else MAKEFLAGS_WHY if MAKEFLAGS_ARG in a else MAKE_OPTION if "?" in _options(
+        a, MAKE_VALUED, short=True, names=MAKE_LONG)[0] else ""
 
 
 def _direct(goal, var):
@@ -346,17 +367,24 @@ def awk_programs(a, cwd):
 def implied_commands(argvs):
     """Команды, которые запустит сама команда, по её словам (префикс, `env …`, `export …`, опция): `BASH_ENV=F`/`ENV=F`
     — bash и sh выполнят F до своей команды, в том числе внутри `npm run`; `MAKEFILES=F` — make прочтёт F;
+    `MAKEFLAGS=-Idir`, `MAKEFLAGS='MAKEFILES=F'` — отказ с причиной (make_flags);
     `NODE_OPTIONS='-r F'` (`--require`, `--import`, `--loader`) — node загрузит F; `--script-shell F` и
-    `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске."""
+    `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске.
+    `ИМЯ+=…` с непустым значением — отказ с причиной APPEND_WHY: shell склеивает с прежним значением без пробела
+    (`MAKEFLAGS="-s --"; MAKEFLAGS+="include-dir=inc"` — make 3.81 читает inc/), а части по отдельности чисты."""
     out = []
     for a in argvs:
         for k, x in enumerate(a):
             m = IMPLIED_VAR.fullmatch(x)
             name, val = (m.group(1), m.group(2)) if m else ("", "")
-            if name in ("BASH_ENV", "ENV") and val:
+            if name and val and x[len(name)] == "+":
+                out.append(["make", APPEND_ARG])
+            elif name in ("BASH_ENV", "ENV") and val:
                 out.append(["bash", val])
             elif name == "MAKEFILES":
                 out += [["make", "-f", f] for f in val.split()]
+            elif name.endswith("MAKEFLAGS"):
+                out += make_flags(val)
             elif name.lower() in ("node_options", "npm_config_node_options"):
                 ws = words(val) + [""]
                 out += [["node", ws[j + 1] if w in NODE_PRELOAD else w.partition("=")[2]] for j, w in enumerate(ws)
@@ -366,6 +394,28 @@ def implied_commands(argvs):
             if x == "--script-shell" and k + 1 < len(a) or x.startswith("--script-shell="):
                 out.append([a[k + 1] if x == "--script-shell" else x.partition("=")[2], "-c", "true"])
     return [list(v) for v in dict.fromkeys(tuple(v) for v in out if v[0] and v[-1])]
+
+
+def make_flags(val):
+    """`MAKEFLAGS=…`, `GNUMAKEFLAGS=…` — опции и переменные make из окружения: `-I` и `MAKEFILES=` (в том числе после
+    `--`) make слушает (сверено с make 3.81), `--eval`/`-E` и GNUMAKEFLAGS — make 4.x (assumed, по документации).
+    Путь из них make берёт от своей папки после `-C` команды или `cd` раньше в строке — разбор их не сводит. Поэтому
+    опция чтения (MAKE_READS; `-C`/`-f` make из окружения не слушает — с запасом) или MAKEFILES=, SHELL=, .SHELLFLAGS=
+    дают команду `make` с меткой: хук отказывает с причиной MAKEFLAGS_WHY (make_option). Прочие переменные (`CC=`)
+    — как в командной строке make: рецепты разбор проверяет только грубым признаком. Первое слово без `-` и без `=`
+    make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`). Слова make делит только по пробелу и табу
+    (`isblank`): кавычка для него — обычный символ, `\\ ` склеивает слова, `$(Y)` раскрывается из окружения (make
+    3.81) — такое значение тоже отказ, как и знак вне \\x20-\\x7e, кроме таба (`\\v`, `\\n`, NBSP; `à` — C3 A0, а в
+    локали kk_KZ.PT154 make 3.81 считает 0xA0 пробелом), и метка подстановки shell (`$(…)`, `` `…` `` разбор уже
+    заменил меткой без `$`). Опция make 4.x со значением (MAKE_4X_VALUED) — отказ (линза Claude #398)."""
+    if re.search(r"[\"'\\$]|[^\x20-\x7e\t]", val) or SUBST in val or CURRENT in val:
+        return [["make", MAKEFLAGS_ARG]]
+    ws = [w for w in re.split(r"[ \t]+", val) if w]
+    if ws and not ws[0].startswith("-") and "=" not in ws[0]:
+        ws[0] = "-" + ws[0]
+    values, rest = _options(["make"] + ws, MAKE_VALUED, short=True, names=MAKE_LONG)
+    deny = (MAKE_READS | MAKE_4X_VALUED) & set(values) or any(map(MAKEFLAGS_DEF.match, rest))
+    return [["make", MAKEFLAGS_ARG]] if deny else []
 
 
 def syntax_only(opts):
