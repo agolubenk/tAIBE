@@ -45,8 +45,8 @@ from merge_guard_paths import interp_found, protected_path  # noqa: E402
 # Если разбор упал — защищённой считается команда, где есть хоть один из этих признаков.
 FALLBACK = re.compile(
     r"gh\s+pr\s+merge|gh\s+workflow\s+run|gh\s+run\s+rerun|\bgit\b[^\n;|&]*\bpush\b|/merge\b|mergePullRequest"
-    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)"
-)
+    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)", re.I
+)  # re.I: APFS не различает регистр — `.CLAUDE/rules` (SE-94, HR IS-245)
 # Конфиг git из окружения: его содержимое хук не видит.
 GIT_ENV = re.compile(r"\b(GIT_CONFIG\w*|GIT_DIR|GIT_COMMON_DIR|HOME|XDG_CONFIG_HOME)=")
 

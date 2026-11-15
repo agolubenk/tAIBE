@@ -23,16 +23,17 @@ def protected_path(path_str, cwd, roots):
     if is_lost(p):  # `cd "$X" && echo > 01-base.md`: папка может оказаться .claude/rules — по имени файла не понять
         return f"{path_str} после cd в папку, которую разбор не видит (пишите по абсолютному пути),"
     p = os.path.realpath(p)
-    home = os.path.realpath(HOME_CLAUDE)
-    if p == os.path.join(home, "sessions") or p.startswith(os.path.join(home, "sessions") + "/"):
+    f = p.casefold()  # APFS: `.CLAUDE/settings.json` — тот же файл (SE-94, HR IS-245); на Linux худшее — ложный отказ
+    home = os.path.realpath(HOME_CLAUDE).casefold()
+    if f == os.path.join(home, "sessions") or f.startswith(os.path.join(home, "sessions") + "/"):
         return p
-    if p in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
+    if f in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
         return p
     for root in roots:
-        claude = os.path.join(os.path.realpath(root), ".claude")
-        if os.path.dirname(p) == claude and os.path.basename(p) in GUARDED_CLAUDE_FILES:
+        claude = os.path.join(os.path.realpath(root), ".claude").casefold()
+        if os.path.dirname(f) == claude and os.path.basename(f) in GUARDED_CLAUDE_FILES:
             return p
-        if any(p == os.path.join(claude, d) or p.startswith(os.path.join(claude, d) + "/")
+        if any(f == os.path.join(claude, d) or f.startswith(os.path.join(claude, d) + "/")
                for d in GUARDED_CLAUDE_DIRS):
             return p
     return None
@@ -42,13 +43,13 @@ INTERP_WRITE = re.compile(r"""open\([^\n]*?,\s*(mode\s*=\s*)?['"][wax][+bt]*['"]
                           r"""|appendFile|unlink|remove\(|rename|replace\(|rmSync|rmtree""")
 # Путь собран из частей: '.claude' и защищённое имя отдельными строками (os.path.join, Path / …).
 JOINED_CLAUDE = re.compile(r"""['"]\.claude['"].{0,80}?['"]"""
-                           r"""(rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S)
+                           r"""(rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S | re.I)
 
 
 # Присваивание пути переменной (python, js, perl): `p = '.claude/settings.json'`, `const S = path.join(…)`.
 PATH_VAR = re.compile(r"\s*(?:(?:const|let|var|my|our)\s+)?\$?([A-Za-z_]\w*)\s*(?::[^=\n]*)?=(?!=)")
 READS = re.compile(r"\.read|read_text|readFile|load|open\(|glob|listdir|scandir|walk|exists|is_?file|stat\(")
-CLAUDE_LITERAL = re.compile(r"[\w./~-]*\.claude/[\w./-]+")
+CLAUDE_LITERAL = re.compile(r"[\w./~-]*\.claude/[\w./-]+", re.I)  # SE-94: `.CLAUDE/rules` — тот же путь на APFS
 # Временная папка теста (SE-138): `.claude/…` от неё — не законы и настройки папки, от которой путь разрешил бы cwd.
 TEMP = re.compile(r"tempfile|mkdtemp|TemporaryDirectory|gettempdir|tmp_path|tmpdir|self\.tmp\b")
 WITH_AS = re.compile(r"\bas\s+([A-Za-z_]\w*)")
