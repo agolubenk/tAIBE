@@ -5,6 +5,7 @@
 usage: python3 -I eval/tools/spend.py --hours 24 [--json out.json]
        python3 -I eval/tools/spend.py "<с YYYY-MM-DD HH:MM>" "<по YYYY-MM-DD HH:MM>" [--json out.json]
        [--instances <папка>]   # другие instances/*.json — для тестов и другой установки
+       [--attribution [--prs <файл>]]   # цель каждого вызова; --prs — список PR из файла вместо gh pr list
 
 Определения (план v1.1 на карточке GL-1; здесь — чтобы наследник их не искал):
 - Вызов — один ответ модели (один requestId). Запрос из возобновлённой или скопированной сессии считается один раз,
@@ -22,7 +23,8 @@ usage: python3 -I eval/tools/spend.py --hours 24 [--json out.json]
   продукта из instances/*.json, иначе папка проекта сессии, иначе unattributed. Сессия, сменившая cwd на чужой репо,
   делится между продуктами так же, как в budget.py: одна сессия — одна разбивка в обоих.
 - День — местная дата вызова; окно [с, по] — по местному времени.
-Привязка к задачам и PR — PR 2, ночной прогон и строка в сводке — PR 3.
+- Цель вызова (PR, карточка или unattributed) — `--attribution`, правила в attribution.py (PR 2). Ночной прогон и
+  строка в сводке — PR 3.
 """
 import collections
 import json
@@ -139,8 +141,9 @@ def add_call(r, u, model, is_sub, first):
         r['first_ctx'] = ctx
 
 
-def scan(since, until, home=None, instances=INSTANCES):
-    """{(sid, день, продукт): свёртка} за окно [since, until] и число файлов субагентов с вызовами в окне."""
+def scan(since, until, home=None, instances=INSTANCES, sink=None):
+    """{(sid, день, продукт): свёртка} за окно [since, until] и число файлов субагентов с вызовами в окне.
+    sink (attribution.Ledger) получает каждую запись с временем до отсева повторов и каждый вызов в окне."""
     prods = Products(roots(instances))
     prefixes = [project_dir_name(root) for _, root in prods.roots] or tr.project_prefixes()
     seen, meta, roll, subs = set(), {}, {}, 0
@@ -162,6 +165,8 @@ def scan(since, until, home=None, instances=INSTANCES):
             in_window = since <= t <= until
             key = (sid, t.date().isoformat(), prods.of(o.get('cwd'), project))
             m = o.get('message') if isinstance(o.get('message'), dict) else {}
+            if sink:
+                sink.record(sid, path, is_sub, o, t)
             if not is_sub and in_window and is_text_message(o) and tr.COMPACTED in tr.text_of(m.get('content')):
                 roll.setdefault(key, new_roll(key, meta[sid]))['compactions'] += 1
             if o.get('type') != 'assistant' or not isinstance(m.get('usage'), dict) or m.get('model') == '<synthetic>':
@@ -175,6 +180,8 @@ def scan(since, until, home=None, instances=INSTANCES):
                 continue
             add_call(roll.setdefault(key, new_roll(key, meta[sid])), m['usage'], m.get('model') or '', is_sub,
                      file_calls == 1)
+            if sink:
+                sink.call(sid, path, is_sub, t, key[2], prices.call_usd(m['usage'], m.get('model') or ''))
             used = True
         subs += is_sub and used
     return roll, subs
@@ -262,7 +269,7 @@ def window(argv, now=None):
     def value(flag):
         return argv[argv.index(flag) + 1] if flag in argv and argv.index(flag) + 1 < len(argv) else None
     out, inst, hours = value('--json'), value('--instances'), value('--hours')
-    pos = [a for a in argv if not a.startswith('--') and a not in (out, inst, hours)]
+    pos = [a for a in argv if not a.startswith('--') and a not in (out, inst, hours, value('--prs'))]
     if hours:
         until = (now or datetime.now()).replace(second=0, microsecond=0)
         return until - timedelta(hours=float(hours)), until, out, inst
@@ -275,9 +282,18 @@ def main(argv):
     except (IndexError, ValueError):
         print(__doc__.split('\n\n')[1], file=sys.stderr)
         return 2
-    roll, subagents = scan(since, until, instances=inst or INSTANCES)
+    sink = None
+    if '--attribution' in argv:
+        import attribution
+        prs = argv[argv.index('--prs') + 1] if '--prs' in argv and argv.index('--prs') + 1 < len(argv) else None
+        by_slug = attribution.repos(inst or INSTANCES)
+        sink = attribution.Ledger(by_slug, attribution.load_prs(by_slug, prs))
+    roll, subagents = scan(since, until, instances=inst or INSTANCES, sink=sink)
     rep = report(roll, subagents, since, until)
     print(text(rep))
+    if sink:
+        rep['attribution'] = attribution.rows(sink.resolve())
+        print('\n' + attribution.text(rep['attribution'], rep['usd']))
     if out:
         with open(out, 'w', encoding='utf-8') as f:
             json.dump(rep, f, ensure_ascii=False, indent=1)
