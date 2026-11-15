@@ -815,6 +815,11 @@ describe('мёрж из очереди', () => {
     expect(both.problem).toMatch(/a\/b, c\/d|c\/d, a\/b/)
     expect(plan('gh pr merge 41', { cmd2: 'cd ~/x && gh pr merge 41' }).problem).toContain('(cd)')
     expect(plan('gh pr merge 41', { cmd2: 'cd ~/x && gh pr merge 41', repo: 'agolubenk/HR_Helper-v2' }).problem).toBeNull()
+    // Команда мёржа в cmd2 о другом PR (мёрж зеркала следующим шагом) — не в счёт; без номера — в счёт (линза backend #364, M1).
+    expect(plan('gh pr merge 41 --squash', { cmd2: 'gh pr merge 42 -R agolubenk/tAIBE --squash' })).toMatchObject({ repo: null, problem: null })
+    expect(plan('gh pr merge 41', { cmd2: 'cd ~/x && gh pr merge 42' })).toMatchObject({ repo: null, problem: null })
+    expect(plan('gh pr merge 41', { repo: 'agolubenk/HR_Helper-v2', cmd2: 'gh pr merge 360 -R agolubenk/tAIBE' }).problem).toBeNull()
+    expect(plan('gh pr merge 41', { cmd2: 'gh pr merge feat/x -R agolubenk/tAIBE' }).problem).toContain('вне команды мёржа')
   })
 
   it('перенаправления shell (2>&1, 2>/dev/null, > файл, &>) — не аргументы мёржа (ревью «Контроля» #114, F1)', () => {

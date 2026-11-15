@@ -124,7 +124,10 @@ export function mergePlan(item: Record<string, unknown>): MergePlan {
   // GH_REPO= (merge-cmd.ts looseRepos). Без него GET /merge читал бы PR консоли с тем же номером (карточка HR c1nr0ih5,
   // F4). Репозиторий самой команды мёржа сюда не входит: его противоречие полю repo — отказ выше, а не второй такой же.
   const cmd2 = typeof item.cmd2 === 'string' ? item.cmd2 : ''
-  const flags2 = mergeFlags(cmd2)
+  // Команда мёржа в cmd2 о другом PR — следующий шаг (мёрж зеркала), не вариант этой: её репозиторий и отказы не в счёт.
+  // Без номера (ветка) — в счёт: репозиторий не ясен, отказ — безопасная сторона (линза backend #364, M1).
+  const parsed2 = mergeFlags(cmd2)
+  const flags2 = parsed2.pr === null || parsed2.pr === pr ? parsed2 : mergeFlags('')
   const loose = [looseRepos(cmd, pr), looseRepos(cmd2, pr)]
   const elsewhere = [...new Map([flags2.repo, ...loose.flatMap((l) => l.repos)]
     .filter((r): r is string => !!r && r.toLowerCase() !== flags.repo?.toLowerCase())
