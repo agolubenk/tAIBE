@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
-from merge_guard_testkit import ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
+from merge_guard_testkit import C4, CONTROL, D9, ROOT, SESSIONS, TMP, bash, check, finish, mg, repo_on, run  # noqa: E402
 
 on_main, on_branch = repo_on("main"), repo_on("fix/a")
 # Псевдонимы gh — из своего конфига, а не с машины: на раннере ~/.config/gh нет, и `gh co` (псевдоним gh по
@@ -472,6 +472,54 @@ for form in ("eval -- echo hi", "eval -- \"$(cat ok.sh)\"", "emulate sh -c -- \"
              "eval -- -- git push", "builtin eval -- git push"):  # второй `--` shell запустит как команду `--`
     bash(f"r24, `--` на ветке или безвредно на main: {form!r}", form, False,
          cwd=e_branch if form.startswith("builtin") else e_main)
+
+# --- SE-105: make с признаком в Makefile — отказ, как в board-agents; в отказе — прямые команды цели ---
+CHECKOUT = Path(__file__).resolve().parents[2]  # чистый checkout ветки: Makefile и скрипты, которые зовут его цели
+mk = TMP / "se105"
+mk.mkdir(parents=True, exist_ok=True)
+(mk / "Makefile").write_bytes((CHECKOUT / "Makefile").read_bytes())
+WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" board-agents'
+DEPS_FIX = 'infra/scripts/dev/wt-deps.sh install "worktrees/fix/x"'
+EVAL_NERVE = "python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"
+for form, want, absent in (
+        ("make wt-fix NAME=x", ["mkdir -p worktrees/fix", WT_FIX, DEPS_FIX], []),
+        ("make wt-fix NAME=x WT_DEPS=0", [WT_FIX], [DEPS_FIX]),
+        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" board-agents'], []),
+        ("make wt-feature NAME=x", ['"worktrees/feature/x"'], []), ("make wt-refactor NAME=x", ['"refactor/x"'], []),
+        ("make wt-spike NAME=x", ['"spike/x"'], []), ("make wt-review NAME=x", ['"review/x"'], []),
+        ("make wt-fix NAME='x;y'", ['"worktrees/fix/<NAME>"'], ["x;y"]),
+        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" main'], []),
+        ("make wt-list", ["git worktree list"], []), ("make wt-help", ["cat worktrees/README.md"], []),
+        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []), ("make wt-rm TRACK=fix NAME=x", ['git worktree remove "worktrees/fix/x"'], []),
+        ("make wt-check TRACK=fix NAME=x", ['infra/scripts/dev/wt-deps.sh check "worktrees/fix/x/boards"'], []),
+        ("make check-repo", ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"], []),
+        ("make check-eval", [EVAL_NERVE, "-s eval/pipeline/reflex ", "-s eval/evolve "], []),
+        ("make -s wt-list check-repo", ["git worktree list", "infra/checks/run.py"], []),
+        ("make check-layer", [], ["прямые команды"]), ("make", [], ["прямые команды"])):
+    got = run("Bash", {"command": form}, cwd=mk) or ""
+    check(f"SE-105, make под отказом, как в board-agents: {form!r}", got or None, True)
+    lost = [w for w in want if w not in got] + [w for w in absent if w in got]
+    check(f"SE-105, прямые команды в отказе: {form!r}", None if not lost else f"{lost!r} в {got!r}", False)
+bash("SE-105, make у Контроля — как в board-agents", "make wt-fix NAME=x", False, who=D9, cwd=mk)
+(mk / "Makefile").write_text("wt-fix:\n\tgh pr merge 1\n")
+(mk / "m.awk").write_text('BEGIN { system("gh pr merge 1") }\n')
+for form in ("make wt-list", "awk -f m.awk"):
+    got = run("Bash", {"command": form}, cwd=mk) or ""
+    check(f"SE-105, отказ без подсказки (цели нет в Makefile, не make): {form!r}",
+          None if got and "прямые команды" not in got else got or "проход", False)
+
+
+def in_checkout(cmd):  # корень для защиты — сам checkout, как у живого хука в основном checkout
+    data = {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": C4["sessionId"], "cwd": str(CHECKOUT)}
+    return mg.decide(data, lambda: SESSIONS, lambda: CONTROL, roots=[str(CHECKOUT)])
+
+
+hint = in_checkout("make wt-fix NAME=x check-repo check-eval") or ""
+direct = [ln.strip().split("  #")[0] for ln in hint.splitlines() if ln.startswith("  ")]
+check("SE-105, отказ на make в checkout даёт прямые команды (в Makefile нет признака — make проходит, поправить "
+      "проверку)", None if WT_FIX in direct and EVAL_NERVE in direct else hint or "проход", False)
+for form in direct:
+    check(f"SE-105, прямая форма проходит в чистом checkout: {form!r}", in_checkout(form), False)
 
 if __name__ == "__main__":
     finish(" — формы shell")
