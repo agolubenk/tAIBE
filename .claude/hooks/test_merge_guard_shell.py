@@ -317,6 +317,86 @@ for form in ("make x", "make --dir=ok x", "make --fil=ok.mk x", "make -C j -f ok
     bash(f"SE-128, без признака: {form!r}", form, False, cwd=o)
 why = run("Bash", {"command": "make --o -f ok.mk x"}, cwd=o) or ""
 check(f"SE-128: причина — опция make, а не папка: {why[:90]!r}", why if "длинная опция make" in why else None, True)
+# SE-133: MAKEFLAGS/GNUMAKEFLAGS — опции make из окружения (`-I`, `MAKEFILES=` сверены с make 3.81); первое слово без
+# `-` — связка. Папку make разбор не знает (`-C` команды, `cd`), поэтому опция чтения или MAKEFILES=/SHELL= — отказ.
+for form in ("MAKEFLAGS='-I inc' make x", "MAKEFLAGS=-Iinc make x", "MAKEFLAGS=Iinc make x", "MAKEFLAGS=sIinc make x",
+             "GNUMAKEFLAGS=--include-dir=inc make x", "env MAKEFLAGS=--incl=inc make x", "export MAKEFLAGS=-Iinc; make x",
+             "MAKEFLAGS='--eval=x:;gh\\ pr\\ merge\\ 1' make x", "MAKEFLAGS='-sE x:;gh\\ pr\\ merge\\ 1' make x",
+             "MAKEFLAGS=-Cj make x", "MAKEFLAGS=--frob make x",  # -C из окружения make не слушает — с запасом
+             "MAKEFLAGS=-Iok make x", "MAKEFLAGS=-Iinc make -C sub x", "export MAKEFLAGS=-Iinc; cd sub; make x",
+             "MAKEFLAGS='MAKEFILES=ok.mk' make x", "MAKEFLAGS='-- MAKEFILES=ok.mk' make x",
+             "GNUMAKEFLAGS=MAKEFILES=ok.mk make x", "MAKEFLAGS='-s SHELL=./ok.sh' make x",
+             "MAKEFLAGS='-- SHELL=./ok.sh' make x", "MAKEFLAGS='-- .SHELLFLAGS=-ec' make x",
+             "make MAKEFLAGS=-Iinc x"):
+    bash(f"SE-133, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS=-s make x", "MAKEFLAGS='-j4 --no-print-directory' make x", "GNUMAKEFLAGS=-k make x",
+             "MAKEFLAGS= make x", "MAKEFLAGS='-- V=1' make x", "MAKEFLAGS='-s -- CFLAGS=-O2' make x"):
+    bash(f"SE-133, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS='-- MAKEFILES=ok.mk' make x"}, cwd=o) or ""
+check(f"SE-133: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# B2 (backend, #398): `-I` из MAKEFLAGS make берёт от папки после `-C`/`cd` — признак только в sub/inc/lib.mk
+o = TMP / "se133"
+for name, text in (("Makefile", "-include lib.mk\nx:\n\techo\n"), ("inc/lib.mk", "y:\n\techo\n"),
+                   ("sub/Makefile", "-include lib.mk\nx:\n\techo\n"), ("sub/inc/lib.mk", "x:\n\tgh pr merge 1\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("MAKEFLAGS=-Iinc make -C sub x", "export MAKEFLAGS=-Iinc; cd sub; make x",
+             "cd sub; MAKEFLAGS=-Iinc make x"):
+    bash(f"SE-133 B2, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C sub x", "make -Iinc x"):
+    bash(f"SE-133 B2, без признака: {form!r}", form, False, cwd=o)
+# Вторая линза backend (#398, 9c8f9f02e): make делит MAKEFLAGS только по пробелам (кавычка — обычный символ, `\ ` —
+# склейка) и раскрывает `$(Y)` из окружения — сверено с make 3.81; `ИМЯ+=` shell тоже отдаёт в окружение
+for form in ("MAKEFLAGS=\"-s 'a MAKEFILES=ok.mk'\" make x", "MAKEFLAGS=\"-s 'a -Iinc'\" make -C sub x",
+             "Y=-Iinc MAKEFLAGS='$(Y)' make -C sub x", "MAKEFLAGS='-s\\ Iinc' make -C sub x",
+             "MAKEFLAGS+=-Iinc make -C sub x", "export MAKEFLAGS+='MAKEFILES=ok.mk'; make x",
+             "MAKEFILES+=sub/inc/lib.mk make x"):
+    bash(f"SE-133 линза 2, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS='-j4 -s' make -C sub x", "MAKEFLAGS+= make -C sub x"):
+    bash(f"SE-133 линза 2, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s 'a -Iinc'\" make x"}, cwd=o) or ""
+check(f"SE-133 линза 2: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# Линза backend (#398, cc5db25db): `ИМЯ+=` склеивает с прежним значением без пробела, части по отдельности чисты —
+# make 3.81 читает inc/ (sub/inc/lib.mk). Любое `ИМЯ+=` с непустым значением у этих имён — отказ (APPEND_WHY).
+for form in ("MAKEFLAGS=\"-s --\"; MAKEFLAGS+=\"include-dir=inc\" make -C sub x",
+             "MAKEFLAGS=\"-s MAKEFI\"; MAKEFLAGS+=\"LES=inc/lib.mk\" make -C sub x", "MAKEFLAGS+=-k make -C sub x",
+             "GNUMAKEFLAGS+=-k make x", "MAKEFILES=sub/inc/li; MAKEFILES+=b.mk make x",
+             "BASH_ENV=a; BASH_ENV+=b.sh bash -c true", "export ENV+=b.sh; sh -c true",
+             "NODE_OPTIONS+=' -r ./m.js' node -e 1", "npm_config_script_shell+=sh npm test"):
+    bash(f"SE-133 линза backend +=, отказ: {form!r}", form, True, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s --\"; MAKEFLAGS+=\"include-dir=inc\" make -C sub x"}, cwd=o) or ""
+check(f"SE-133 +=: причина — склейка: {why[:90]!r}", why if "ИМЯ+=" in why else None, True)
+# Линза Claude (#398, issuecomment-6891590096). B1: `$(…)` и `` `…` `` в значении разбор режет в метку без `$`.
+# B2: make делит слова только по пробелу и табу (`isblank`), `\v`, `\f`, `\r`, `\n` — часть слова. B3: опции make 4.x
+# со значением, которых нет в 3.81: getopt 3.81 следующее слово не забирает, и `-I` проходит.
+for form in ("MAKEFLAGS=\"-s $(printf %s -Iinc)\" make -C sub x", "MAKEFLAGS=\"-s `printf %s -Iinc`\" make -C sub x",
+             "MAKEFLAGS=\"-s $(git branch --show-current)\" make -C sub x",
+             "export MAKEFLAGS=\"-s $(cat f)\"; make -C sub x", "GNUMAKEFLAGS=\"-s $(cat f)\" make -C sub x",
+             "MAKEFLAGS=-s\vIinc make -C sub x", "MAKEFLAGS='-s\fIinc' make -C sub x",
+             "MAKEFLAGS='-s\rIinc' make -C sub x", "MAKEFLAGS='-s\nIinc' make -C sub x",
+             "MAKEFLAGS='-s -Iinc' make -C sub x",
+             "MAKEFLAGS='--jobserver-auth -Iinc' make -C sub x", "MAKEFLAGS='--jobserver-style -Iinc' make -C sub x",
+             "MAKEFLAGS='--sync-mutex -Iinc' make -C sub x", "MAKEFLAGS='--sync -Iinc' make -C sub x"):
+    bash(f"SE-133 линза Claude, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS='-s\t-k' make -C sub x", "MAKEFLAGS='  -s  -k ' make -C sub x",
+             "MAKEFLAGS='--jobserver-fds=3,4 -s' make -C sub x"):
+    bash(f"SE-133 линза Claude, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s $(printf %s -Iinc)\" make -C sub x"}, cwd=o) or ""
+check(f"SE-133 линза Claude: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None,
+      True)
+# `-O` (make 4.x) в связке: разбор отдаёт ему остаток (`Iinc`), а make 3.81 `-O` не знает, пропускает букву и
+# применяет `-I inc` (сверено: `MAKEFLAGS=-OIinc make y` читает inc/lib.mk). В командной строке make 3.81 на `-O` падает.
+for form in ("MAKEFLAGS=-OIinc make -C sub x", "MAKEFLAGS=-sOIinc make -C sub x", "MAKEFLAGS=OIinc make -C sub x",
+             "GNUMAKEFLAGS=-OIinc make -C sub x"):
+    bash(f"SE-133 -O в связке, отказ: {form!r}", form, True, cwd=o)
+# Линза Claude (#398, issuecomment-6891964594), остаток B2: make 3.81 зовёт setlocale, и в локали kk_KZ.PT154 байт
+# 0xA0 — пробел; `à` (C3 A0) Python пробелом не считает. Правило (coord 11:55): знак вне \x20-\x7e и таба — отказ.
+for form in ("MAKEFLAGS='-sà--include-dir=inc' make -C sub x", "MAKEFLAGS=-sà-Iinc make -C sub x",
+             "GNUMAKEFLAGS='-sà--include-dir=inc' make -C sub x", "MAKEFLAGS='-s\x7f-Iinc' make -C sub x",
+             "MAKEFLAGS='-s\x01-Iinc' make -C sub x"):
+    bash(f"SE-133 не ASCII в MAKEFLAGS, отказ: {form!r}", form, True, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS='-sà--include-dir=inc' make -C sub x"}, cwd=o) or ""
+check(f"SE-133 не ASCII в MAKEFLAGS: причина: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"

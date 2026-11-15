@@ -71,7 +71,7 @@ export function ApprovalItem({
           href={approval.doneRef}
           target="_blank"
           rel="noreferrer"
-          className="break-all text-primary text-xs underline-offset-2 hover:underline"
+          className="break-all text-primary text-xs underline-offset-2 hover:underline max-sm:py-1"
         >
           {approval.doneRef}
         </a>

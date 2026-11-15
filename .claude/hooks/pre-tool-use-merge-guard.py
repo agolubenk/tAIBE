@@ -39,7 +39,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
                                strip_prefix, subst_code, SUBST_AT, tokenize, uncommented)
-from merge_guard_launch import MAKE_OPTION, make_option  # noqa: E402
+from merge_guard_launch import make_option  # noqa: E402
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -48,8 +48,8 @@ GUARDED_CLAUDE_DIRS = ("rules", "hooks")
 # Если разбор упал — защищённой считается команда, где есть хоть один из этих признаков.
 FALLBACK = re.compile(
     r"gh\s+pr\s+merge|gh\s+workflow\s+run|gh\s+run\s+rerun|\bgit\b[^\n;|&]*\bpush\b|/merge\b|mergePullRequest"
-    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)"
-)
+    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)", re.I
+)  # re.I: APFS не различает регистр — `.CLAUDE/rules` (SE-94, HR IS-245)
 # Конфиг git из окружения: его содержимое хук не видит.
 GIT_ENV = re.compile(r"\b(GIT_CONFIG\w*|GIT_DIR|GIT_COMMON_DIR|HOME|XDG_CONFIG_HOME)=")
 
@@ -69,23 +69,24 @@ def protected_path(path_str, cwd, roots):
     if is_lost(p):  # `cd "$X" && echo > 01-base.md`: папка может оказаться .claude/rules — по имени файла не понять
         return f"{path_str} после cd в папку, которую разбор не видит (пишите по абсолютному пути),"
     p = os.path.realpath(p)
-    home = os.path.realpath(HOME_CLAUDE)
-    if p == os.path.join(home, "sessions") or p.startswith(os.path.join(home, "sessions") + "/"):
+    f = p.casefold()  # APFS: `.CLAUDE/settings.json` — тот же файл (SE-94, HR IS-245); на Linux худшее — ложный отказ
+    home = os.path.realpath(HOME_CLAUDE).casefold()
+    if f == os.path.join(home, "sessions") or f.startswith(os.path.join(home, "sessions") + "/"):
         return p
-    if p in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
+    if f in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
         return p
     for root in roots:
-        claude = os.path.join(os.path.realpath(root), ".claude")
-        if os.path.dirname(p) == claude and os.path.basename(p) in GUARDED_CLAUDE_FILES:
+        claude = os.path.join(os.path.realpath(root), ".claude").casefold()
+        if os.path.dirname(f) == claude and os.path.basename(f) in GUARDED_CLAUDE_FILES:
             return p
-        if any(p == os.path.join(claude, d) or p.startswith(os.path.join(claude, d) + "/") for d in GUARDED_CLAUDE_DIRS):
+        if any(f == os.path.join(claude, d) or f.startswith(os.path.join(claude, d) + "/") for d in GUARDED_CLAUDE_DIRS):
             return p
     return None
 
 
 INTERP_WRITE = re.compile(r"""open\([^\n]*?,\s*(mode\s*=\s*)?['"][wax][+bt]*['"]|write_text|write_bytes|writeFile|appendFile|unlink|remove\(|rename|replace\(|rmSync|rmtree""")
 # Путь собран из частей: '.claude' и защищённое имя отдельными строками (os.path.join, Path / …).
-JOINED_CLAUDE = re.compile(r"""['"]\.claude['"].{0,80}?['"](rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S)
+JOINED_CLAUDE = re.compile(r"""['"]\.claude['"].{0,80}?['"](rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S | re.I)
 
 
 # ---------- решение ----------
@@ -105,7 +106,7 @@ def path_vars(lines, cwd, roots):
     for ln in lines:
         m = PATH_VAR.match(ln)
         if m and not READS.search(ln) and (JOINED_CLAUDE.search(ln) or any(
-                protected_path(x.group(0), cwd, roots) for x in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", ln))):
+                protected_path(x.group(0), cwd, roots) for x in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", ln, re.I))):
             names.add(m.group(1))
     return names
 
@@ -126,7 +127,7 @@ def interp_found(text, cwd, roots, by_line=False):
         hit = next((n for n in names if re.search(rf"(?<![\w.]){re.escape(n)}\b", chunk)), None)
         if hit:
             found.append(("file", f".claude/… (путь в переменной {hit} — правьте через Edit)"))
-        for m in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", chunk):
+        for m in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", chunk, re.I):
             p = protected_path(m.group(0), cwd, roots)
             if p:
                 found.append(("file", p))
@@ -266,7 +267,8 @@ def launched(a, cwd, roots, depth, git_env, whole):
     """Код из файла, который команда не называет скриптом (merge_guard_launch): скрипты package.json — как команды
     shell из папки пакета, Makefile и awk — грубым признаком. Этот файл переписывает та же команда
     (`printf … > package.json; npm run x`) — ещё и грубый признак, как у скрипта, которого нет (runs_code)."""
-    found, files = ([(MAKE_OPTION, a[0])], []) if make_option(a) else ([], make_files(a, cwd) + awk_programs(a, cwd))
+    why = make_option(a)  # длинная опция make без однозначного раскрытия или MAKEFLAGS с опцией чтения
+    found, files = ([(why, a[0])], []) if why else ([], make_files(a, cwd) + awk_programs(a, cwd))
     for d, text in package_scripts(a, cwd):  # текст None — папка пакета не видна (LOST)
         found += [(LOST_DIR, d)] if text is None else classify_bash(text, d, roots, depth + 1, git_env, disk=True)
     read = read_names(a) | {p for p, _ in files}
