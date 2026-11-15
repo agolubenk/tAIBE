@@ -721,7 +721,10 @@ describe("@kaneo/redact", () => {
     // found it already.
     it.each([
       ["glued", "Authorization: Bearer abcAuthorization:Bearer <v>"],
-      ["glued, a newline", "Authorization: Bearer abcAuthorization:Bearer\n<v>"],
+      [
+        "glued, a newline",
+        "Authorization: Bearer abcAuthorization:Bearer\n<v>",
+      ],
       ["after a comma", "Authorization: Bearer x,Authorization:Bearer <v>"],
       ["any case", "authorization: bearer abcAUTHORIZATION:BEARER <v>"],
       ["the header alone", "Authorization: Bearer Authorization:Bearer <v>"],
@@ -736,6 +739,18 @@ describe("@kaneo/redact", () => {
       const result = redact(text);
       expect(result.text).not.toContain(value);
       expect(result.text.endsWith("[REDACTED:bearer]")).toBe(true);
+    });
+
+    it.each([
+      "Authorization: Bearer ",
+      "aAuthorization:Bearer",
+      "Authorization:Bearer x,",
+      "authorization: bearer authorization",
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      const text = `Authorization: Bearer ${unit.repeat(Math.ceil(256_000 / unit.length))} x`;
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
     });
 
     it("leaves the next header alone after an empty x-api-key", () => {

@@ -69,21 +69,30 @@ function afterDropping(value: string, dropping: number): number {
     : dropping + 1;
 }
 
+// TB-201 (Claude lens #392, 3): text is masked twice on its way to a model.
+// In `password:=[REDACTED…]` the pattern fell back from `:=` to `:` with the
+// value `=[REDACTED…]` (`>` of `=>` the same): the rest of a separator
+// before a mask is a part of it. The first pass sees no mask: no change.
+const SEPARATOR_BEFORE_MASK = /^[=>:]+[ \t]*["'`]?\[REDACTED:[a-z_]+\]/;
+
 // TB-199: before the new separators the base took the `=` of a glued `:=`
 // into the value (A_TOKEN:=<v>), and a filter accepts any value with `=` in
-// it that is long enough. A value right after `:=` or `=>` is also judged as
-// the base judged it, so no value that the base masked loses its mask
-// (coord, 15.11).
+// it that is long enough. A value right after `:=` is also judged as the base
+// judged it, so no value that the base masked loses its mask (coord, 15.11).
+// Not after `=>`: the base read it as `=` and a value that starts with `>`, a
+// DROPS_VALUE character, so it masked no such value, and the re-check masked
+// code (GITHUB_TOKEN=>githubToken, TB-201, Claude lens #392, 1).
 function accepts(
   accept: (value: string, next: string) => boolean,
   text: string,
   start: number,
   value: string,
 ): boolean {
+  if (SEPARATOR_BEFORE_MASK.test(text.slice(start, start + 64))) return false;
   const next = text.charAt(start + value.length);
   if (accept(value, next)) return true;
   const operator = text.slice(Math.max(0, start - 2), start);
-  return (operator === ":=" || operator === "=>") && accept(`=${value}`, next);
+  return operator === ":=" && accept(`=${value}`, next);
 }
 
 // Replaces only group 1 of each match, keeping the surrounding context
@@ -103,12 +112,14 @@ function accepts(
 // The second search may pair a name with another value than the plain one
 // (A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = X1_TOKEN = <v>), so it only
 // adds hits: the plain search runs as before, and redact() merges
-// overlapping hits (coord, #375).
+// overlapping hits (coord, #375). `resumeIn` gives where it goes on in an
+// accepted value (-1: after the match).
 function collectGroup(
   pattern: RegExp,
   kind: SecretKind,
   group: number,
   accept: (value: string, next: string) => boolean = () => true,
+  resumeIn: (value: string) => number = trailingName,
 ): Detector {
   // Flag `d` gives the group's own position. The first equal text in the
   // match may sit in the name: `password: pass` (TB-199).
@@ -123,7 +134,7 @@ function collectGroup(
       if (!accepts(accept, text, start, value)) continue;
       hits.push({ kind, start, end: start + value.length });
     }
-    return hits.concat(innerHits(text, search, kind, group, accept));
+    return hits.concat(innerHits(text, search, kind, group, accept, resumeIn));
   };
 }
 
@@ -138,6 +149,7 @@ function innerHits(
   kind: SecretKind,
   group: number,
   accept: (value: string, next: string) => boolean,
+  resumeIn: (value: string) => number,
 ): RedactHit[] {
   const hits: RedactHit[] = [];
   let limit = -1;
@@ -151,7 +163,7 @@ function innerHits(
     const dropping = accepted ? -1 : lastDropping(value);
     if (dropping >= 0) limit = Math.max(limit, pattern.lastIndex);
     const resume =
-      dropping >= 0 ? afterDropping(value, dropping) : trailingName(value);
+      dropping >= 0 ? afterDropping(value, dropping) : resumeIn(value);
     if (resume >= 0) {
       pattern.lastIndex = Math.max(match.index + 1, start + resume);
     }
@@ -256,10 +268,20 @@ const urlCredentials = collectGroup(
 // The header also as a JSON key ("Authorization": "Bearer …", Claude lens
 // #283 B3). `\s*` stays: a token in the block below its header is still
 // masked, and restore (#292) relies on that.
+//
+// TB-201 (Claude lens #378): in `abcAuthorization:Bearer <v>` the header is
+// in the token's value, and the second search went on after its name. It
+// goes on at the first header name in the value: linear.
+const headerIn = (value: string) => {
+  const at = value.search(/authorization/i);
+  return at >= 0 ? at : trailingName(value);
+};
 const bearer = collectGroup(
   /Authorization["']?\s*:\s*["']?Bearer\s+(?!\[REDACTED)([^\s"']+)/gi,
   "bearer",
   1,
+  () => true,
+  headerIn,
 );
 
 // TB-136: the header of the board's own API keys, like `bearer`. Keys issued
@@ -315,6 +337,10 @@ const telegramToken = collect(
 // (`password === true`); glued to a value they are an assignment of a
 // value that starts with `=`, masked as the base masked it
 // (`DB_PASSWORD==<v>`, release #392 B1).
+//
+// A known cost (TB-201, Claude lens #392, 2): code after `=>` is masked as
+// after `:` (`password => password.length`, `'password' => 'required'`).
+// On `git ls-files` of tAIBE and HR_Helper-v2 (19 084 files): 0 such masks.
 const passwordAssignment = collectGroup(
   /["']?(?:password|passwd|pwd)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
   "password_assignment",
