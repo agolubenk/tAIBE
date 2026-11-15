@@ -12,6 +12,7 @@ import { createNotes } from './notes.mjs';
 import { createWatcher } from './watch.mjs';
 import { createInbox } from './inbox.mjs';
 import { createFiles } from './files-setup.mjs';
+import { createCards, telegramCardOps } from './cards.mjs';
 /** id входящего, как его даёт черновик бота и форма /queue: i-<дата>-<время>-<4 hex>. */
 const INBOX_ID = /^i-\d{8}-\d{6}-[0-9a-f]{4}$/;
 import { hasMediaOf, isForwarded } from './classify.mjs';
@@ -89,6 +90,8 @@ async function show(chatId, msg, editId) {
 }
 
 const sendAll = async (chatId, msgs) => { for (const m of msgs) await send(chatId, m); };
+// Карточки пунктов: бот помнит все их сообщения, 🔄 и итог действия обновляют все (cards.mjs, карточка HR nc8uj786).
+const cards = createCards({ store, send, ...telegramCardOps({ tg, markup, toPlain, sleep, log }) });
 async function broadcast(msg) {
   for (const id of store.config.owners) await send(id, msg).catch((e) => log('уведомление не ушло:', e.message));
 }
@@ -132,8 +135,8 @@ async function openItem(chatId, key, editId) {
   const it = byKey(s, key);
   if (!it) return send(chatId, { text: 'Пункт не найден — возможно, его убрали из очереди.', keyboard: [[btn('🏠 Меню', 'm')]] });
   const msgs = cardOf(s, it);
-  if (editId) return show(chatId, msgs[msgs.length - 1], editId); // 🔄 на карточке — обновить ответ на месте
-  return sendAll(chatId, msgs);
+  if (editId) return cards.refreshCard(chatId, editId, msgs); // 🔄 на карточке — все её сообщения, не только последнее
+  return cards.sendCard(chatId, msgs);
 }
 
 async function sendCharts(chatId) {
@@ -141,7 +144,7 @@ async function sendCharts(chatId) {
   const shots = await mirror.screenshots();
   if (!shots.length) return send(chatId, { text: 'На странице нет графиков.' });
   await tg.sendPhotos(chatId, shots.map((s) => ({ buf: s.buf, caption: s.caption })));
-  return send(chatId, { text: '📈 Графики, Гант и роадмап — как на странице артефакта.', keyboard: [[btn('📊 Ход работ текстом', 'w'), btn('🏠 Меню', 'm')]] });
+  return send(chatId, { text: '📈 Графики, Гант и роадмап — как на странице /queue.', keyboard: [[btn('📊 Ход работ текстом', 'w'), btn('🏠 Меню', 'm')]] });
 }
 
 // ── Действия владельца ──────────────────────────────────────────────────────
@@ -157,8 +160,8 @@ async function doAction(q, key, op, arg, ver) {
   if (!it || (ver && verOf(it) !== ver)) { s = await snap(); it = byKey(s, key); }
   if (!it) return send(chatId, { text: 'Пункт не найден — возможно, его убрали из очереди.' });
   if (ver && verOf(it) !== ver) {
-    await send(chatId, { text: '⚠️ Пункт изменился с тех пор, как был показан, — ответ не записан. Вот свежая версия:' });
-    return sendAll(chatId, cardOf(s, it));
+    await send(chatId, { text: '⚠️ Пункт изменился с тех пор, как был показан, — ответ не записан. Карточка обновлена.' });
+    return cards.refreshCard(chatId, q.message.message_id, cardOf(s, it));
   }
   let value = arg;
   let expect;
@@ -178,20 +181,20 @@ async function doAction(q, key, op, arg, ver) {
     const msgs = cardOf(s2, fresh);
     const lastMsg = msgs[msgs.length - 1];
     const status = res.confirmed ? '' : '\n\n⏳ <i>Отправлено; подтверждение из общей базы ещё не пришло — нажмите 🔄 чуть позже.</i>';
-    await show(chatId, { ...lastMsg, text: lastMsg.text + status }, q.message.message_id);
+    await cards.refreshCard(chatId, q.message.message_id, [...msgs.slice(0, -1), { ...lastMsg, text: lastMsg.text + status }]);
   }
   await watcher.refreshMenus(s2);
 }
 
 // ── Мёрж из очереди ─────────────────────────────────────────────────────────
 /** Экран подтверждения: PR, SHA, последствие (деплой или нет), идёт ли деплой сейчас. */
-async function mergeConfirm(chatId, key, ver) {
+async function mergeConfirm(chatId, key, ver, msgId) {
   const s = await snap();
   const it = byKey(s, key);
   if (!it) return send(chatId, { text: 'Пункт не найден — возможно, его убрали из очереди.' });
   if (ver && verOf(it) !== ver) {
-    await send(chatId, { text: '⚠️ Пункт изменился с тех пор, как был показан. Вот свежая версия:' });
-    return sendAll(chatId, cardOf(s, it));
+    await send(chatId, { text: '⚠️ Пункт изменился с тех пор, как был показан. Карточка обновлена.' });
+    return msgId ? cards.refreshCard(chatId, msgId, cardOf(s, it)) : cards.sendCard(chatId, cardOf(s, it));
   }
   const m = await queueApi.mergeInfo(it.id);
   // Консоль до проверки одобренной головы поля approval не отдаёт — тогда решает только сервер при мёрже.
@@ -351,7 +354,7 @@ async function onCallback(q) {
       }
       case 'h': await ack(); return await sendAll(chatId, sshMessages(await snap()));
       case 'v': await ack(); return await sendAll(chatId, guideMessages(await snap()));
-      case 'M': await ack('Спрашиваю GitHub…'); return await mergeConfirm(chatId, a, b);
+      case 'M': await ack('Спрашиваю GitHub…'); return await mergeConfirm(chatId, a, b, msgId);
       case 'MY': await ack('Вливаю…'); return await mergeRun(chatId, a, b, c);
       case 'MN': case 'RN': await ack('Отменено'); return await show(chatId, { text: 'Отменено.' }, msgId);
       case 'RD':
@@ -450,7 +453,7 @@ async function main() {
     if (stalled > STALL_MS) { log(`работа встала на ${Math.round(stalled / 60000)} мин — перезапуск процесса`); stop(1); }
   }, 60_000).unref();
 
-  log('старт: открываю артефакт в браузере бота…');
+  log('старт: открываю страницу очереди в браузере бота…');
   // Сбой первого запуска браузера не фатален: очередь зеркала перезапустит его на следующей операции.
   await mirror.start().catch((e) => { mirror.broken = true; log('браузер не поднялся с первого раза:', e); });
   const me = await tg.call('getMe');
