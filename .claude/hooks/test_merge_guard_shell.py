@@ -14,7 +14,13 @@ from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
+import merge_guard_git  # noqa: E402
+import merge_guard_launch as launch  # noqa: E402
 
+# Правило блоба make (coord 12:36, #402) проверяет свой блок на настоящем репозитории git; фикстуры остальных форм make
+# лежат в TMP вне git, поэтому их разбор идёт без правила. До правки (тест до правки) атрибута ещё нет.
+blob_rule = getattr(launch, "same_blob", None)
+launch.same_blob = lambda p: True
 on_main, on_branch = repo_on("main"), repo_on("fix/a")
 # Псевдонимы gh — из своего конфига, а не с машины: на раннере ~/.config/gh нет, и `gh co` (псевдоним gh по
 # умолчанию) там не прочитать — r21 «не запись» падали бы только в CI.
@@ -572,6 +578,78 @@ for form in ("MAKEFLAGS='-sà--include-dir=inc' make -C sub x", "MAKEFLAGS=-sà-
     bash(f"SE-133 не ASCII в MAKEFLAGS, отказ: {form!r}", form, True, cwd=o)
 why = run("Bash", {"command": "MAKEFLAGS='-sà--include-dir=inc' make -C sub x"}, cwd=o) or ""
 check(f"SE-133 не ASCII в MAKEFLAGS: причина: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+
+
+# --- Решение coord 12:35, 12:36, 12:38 (#402): make — только по тексту, который прошёл ревью. Каждый Makefile дерева
+# совпадает с блобом того же пути на основной ветке origin (refs/remotes/origin/HEAD) репозитория хука; VPATH, GPATH,
+# MAKEFILES нет ни в окружении, ни в строке make. Формы линзы backend (issuecomment-6892387638, сверено на make 3.81):
+# make пересобирает Makefile через VPATH и через правило с целью Makefile, потом читает текст, которого разбор не видел.
+def git(d, *args):
+    subprocess.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True,
+                   capture_output=True)
+
+
+def put(d, files, commit=None):
+    for name, text in files:
+        (d / name).parent.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(text)
+    if commit:
+        git(d, "add", "-A")
+        git(d, "commit", "-q", "-m", commit)
+
+
+def origin_here(d):  # основная ветка origin — текущий HEAD, как после fetch
+    git(d, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(d, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+
+launch.same_blob = blob_rule
+o, noo, other = repo_on("main", prefix="blob-"), repo_on("main", prefix="blob-noo-"), repo_on("main", prefix="blob-o-")
+merge_guard_git.HOME_REPOS = [str(o), str(noo)]
+ROOT_MK = (Path(__file__).resolve().parents[2] / "Makefile").read_text(encoding="utf-8")
+put(o, (("Makefile", "x: ; @true\n"), ("ok/Makefile", "x: ; @true\n"), ("mod/Makefile", "x: ; @true\n"),
+        ("root/Makefile", ROOT_MK)), commit="base")
+origin_here(o)
+put(o, (("br/Makefile", "x: ; @true\n"),), commit="только в ветке")  # линза backend 12:34: закоммичен, не на origin
+git(o, "worktree", "add", "-q", str(TMP / "blob-wt"))
+put(o, (("vp/a/Makefile", "VPATH = ../src\nall: ; @echo original\n"), ("vp/src/Makefile.sh", "all: ; @echo REMADE\n"),
+        ("ex/Makefile", "Makefile: stamp\n\tcp new.mk Makefile\nstamp: ;\nall: ; @echo original\n"),
+        ("ex/new.mk", "all: ; @echo REMADE\n"), ("extra.mk", "x: ; @true\n"), ("mod/Makefile", "x: ; @echo changed\n"),
+        ("nest/Makefile", "x: ; @true\n")))
+git(o / "nest", "init", "-q", "-b", "main")  # вложенный репозиторий со своей основной веткой
+git(o / "nest", "add", "-A")
+git(o / "nest", "commit", "-q", "-m", "nest")
+origin_here(o / "nest")
+put(noo, (("Makefile", "x: ; @true\n"),), commit="без origin")
+put(other, (("Makefile", "x: ; @true\n"),), commit="другой репозиторий")
+origin_here(other)
+for form in ("make x", "make -C ok x", f"make -C {TMP / 'blob-wt'} x", "make -f ok/Makefile x", "make -n -f /dev/null x",
+             "make -C ok V=1 x"):
+    bash(f"блоб, без признака: {form!r}", form, False, cwd=o)
+for form in ("make -C vp/a all", "make -C ex all", "make -C mod x", "make -C br x", "make -f extra.mk x",
+             "make -f ok/Makefile -f extra.mk x", "make -C nest x", f"make -C {other} x", f"make -C {noo} x",
+             "make VPATH=src x", "make GPATH=src x", "make -C ok VPATH:=../vp/src x", "VPATH=src make x",
+             "export VPATH=src; make x", "env GPATH=src make x", "VPATH+=src make x", "make --eval 'VPATH=src' x",
+             "make --eval 'vpath %.sh src' x", "MAKEFLAGS='VPATH=src' make x", "MAKEFLAGS='-- GPATH=src' make x"):
+    bash(f"блоб, отказ: {form!r}", form, True, cwd=o)
+for form, part in (("make -C ex all", "отличается от основной ветки origin"),
+                   ("make -C vp/a all", "отличается от основной ветки origin"),
+                   ("make VPATH=src x", "переменная make в командной строке"),
+                   ("VPATH=src make x", "MAKEFLAGS или GNUMAKEFLAGS")):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"блоб: причина {form!r}: {why[:90]!r}", why if part in why else None, True)
+for name in ("VPATH", "GPATH", "MAKEFILES"):  # окружение самого хука: его наследует shell команды
+    os.environ[name] = "src"
+    why = run("Bash", {"command": "make x"}, cwd=o) or ""
+    os.environ.pop(name)
+    check(f"блоб: {name} в окружении — отказ: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# Приёмка coord 12:36: корневой Makefile, который совпадает с основной веткой, правило блоба не задевает. Вызов и так
+# отказывает по грубому признаку (FALLBACK, `.claude/rules` и `.claude/hooks` в тексте) — это не причина правила.
+for form in ("make check", "make wt-add TRACK=fix NAME=x", "make wt-check TRACK=fix NAME=x"):
+    why = run("Bash", {"command": form}, cwd=o / "root") or ""
+    check(f"блоб: корневой Makefile, не правило блоба: {form!r}: {why[:90]!r}",
+          why if "отличается от основной ветки" in why or "Makefile со словом include" in why else None, False)
+launch.same_blob = lambda p: True
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
