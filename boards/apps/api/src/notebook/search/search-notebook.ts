@@ -14,6 +14,11 @@ import { matchesVisibleText } from "../../utils/visible-match";
 import { loadVectorIndex, nearestChunks } from "./vector-index";
 
 const CANDIDATES = 20;
+// TB-196: keyword pages a token caller's search reads past hidden chunks.
+// Hidden chunks are rare (27 of 6612 in the synced docs), so a search
+// reads one page, seldom two; the cap stops planted secret chunks from
+// making one search read the whole corpus.
+const HIDDEN_PAGES_MAX = 10;
 // Longer than one worker batch, short enough that a stuck worker costs the
 // reader a few seconds of keyword-only results, not a hang.
 export const QUERY_EMBED_WAIT_MS = 4_000;
@@ -43,9 +48,9 @@ export async function searchNotebook(input: {
   const wantVectors =
     input.mode === "hybrid" && isWorkerOnline(input.workspaceId);
   const [keywordIds, vectorIds] = await Promise.all([
-    keywordCandidates(input.workspaceId, input.query).then((ids) =>
-      input.tokenCaller ? visibleKeywordIds(ids, input.query) : ids,
-    ),
+    input.tokenCaller
+      ? visibleKeywordCandidates(input.workspaceId, input.query)
+      : keywordCandidates(input.workspaceId, input.query),
     wantVectors
       ? vectorCandidates(input.workspaceId, input.query, input.embedModel)
       : Promise.resolve(null),
@@ -72,6 +77,27 @@ export async function searchNotebook(input: {
 // ranks of the hits after it would tell that a secret holds the word
 // (backend lens #388 B2). Chunks with no secret keep the stemmed match (the
 // stored tsvector finds `ключ` for `ключами`, a substring test would not).
+// The search reads rank pages until it has 20 visible chunks or no rows:
+// with only the first 20 ranks, a hidden chunk that holds a guessed word
+// would push a visible one out, and the shorter list would confirm the
+// guess (release lens #388).
+async function visibleKeywordCandidates(workspaceId: string, query: string) {
+  const visible: string[] = [];
+  for (let page = 0; page < HIDDEN_PAGES_MAX; page += 1) {
+    const ids = await keywordCandidates(workspaceId, query, page * CANDIDATES);
+    visible.push(...(await visibleKeywordIds(ids, query)));
+    if (visible.length >= CANDIDATES || ids.length < CANDIDATES) {
+      return visible.slice(0, CANDIDATES);
+    }
+  }
+  // The query is not logged: it can hold a guess at a secret.
+  console.warn("Notebook search stopped at the page cap past hidden chunks", {
+    workspaceId,
+    pages: HIDDEN_PAGES_MAX,
+  });
+  return visible.slice(0, CANDIDATES);
+}
+
 async function visibleKeywordIds(ids: string[], query: string) {
   if (!ids.length) return ids;
   const rows = await db
@@ -108,7 +134,12 @@ function queryWords(query: string): string[] {
     .filter(Boolean);
 }
 
-async function keywordCandidates(workspaceId: string, query: string) {
+// The id after the rank keeps the order the same from page to page.
+async function keywordCandidates(
+  workspaceId: string,
+  query: string,
+  offset = 0,
+) {
   const tsquery = sql`websearch_to_tsquery('russian', ${query})`;
   const rows = await db
     .select({ id: notebookChunkTable.id })
@@ -119,8 +150,12 @@ async function keywordCandidates(workspaceId: string, query: string) {
         sql`${notebookChunkTable.search} @@ ${tsquery}`,
       ),
     )
-    .orderBy(sql`ts_rank(${notebookChunkTable.search}, ${tsquery}) desc`)
-    .limit(CANDIDATES);
+    .orderBy(
+      sql`ts_rank(${notebookChunkTable.search}, ${tsquery}) desc`,
+      notebookChunkTable.id,
+    )
+    .limit(CANDIDATES)
+    .offset(offset);
   return rows.map(({ id }) => id);
 }
 

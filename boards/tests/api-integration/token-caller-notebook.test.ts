@@ -42,12 +42,12 @@ type Forest = Awaited<ReturnType<typeof createForest>>;
 type Hit = { heading: string; score: number; matchedBy: string[] };
 
 // A finished tree of one card, felled by the owner into one log.
-async function fellCard(forest: Forest, title: string) {
+async function fellCard(forest: Forest, title: string, description?: string) {
   const card = await addTask(forest.project.id, title);
   if (!card) throw new Error("fixture");
   await db
     .update(schema.taskTable)
-    .set({ status: "done" })
+    .set({ status: "done", description })
     .where(inArray(schema.taskTable.id, [card.id]));
   const felled = await forest.owner("/fell", {
     kind: "tree",
@@ -163,6 +163,48 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(second.body.nextCursor).toBeNull();
   });
 
+  it("matches a log cut inside a secret only before the cut", async () => {
+    const forest = await createForest();
+    // searchText is "Cut\n" + description, cut at 100 000 characters: the
+    // secret starts at 99 980, so its first 20 characters stay in the text
+    // (redact masks no prefix of this token shorter than 24).
+    const log = await fellCard(
+      forest,
+      "Cut",
+      `${"x ".repeat(49_988)}${SECRET} tail`,
+    );
+
+    expect((await forest.agent(`/logs?q=${PART}`)).body.items).toEqual([]);
+    expect(
+      (await forest.agent("/logs?q=cut")).body.items.map(
+        (item: { id: string }) => item.id,
+      ),
+    ).toEqual([log]);
+  });
+
+  it("cuts the logs window for an API key at 1 MiB of text", async () => {
+    const forest = await createForest();
+    // Each log holds about 183 000 bytes: five fit in 1 MiB, six do not.
+    const body = "слово ".repeat(16_667);
+    const word = encodeURIComponent("слово");
+    const ids: string[] = [];
+    for (const index of [1, 2, 3, 4, 5, 6]) {
+      ids.unshift(await fellCard(forest, `Log ${index}`, body));
+    }
+
+    const first = await forest.agent(`/logs?q=${word}&take=100`);
+    const shown = first.body.items.map((item: { id: string }) => item.id);
+    expect(shown).toEqual(ids.slice(0, 5));
+    expect(cursorId(first.body.nextCursor)).toBe(ids[4]);
+    const second = await forest.agent(
+      `/logs?q=${word}&take=100&cursor=${first.body.nextCursor}`,
+    );
+    expect(second.body).toEqual({
+      items: [expect.objectContaining({ id: ids[5] })],
+      nextCursor: null,
+    });
+  });
+
   it("fuses notebook ranks for an API key without hidden keyword hits", async () => {
     const nb = await notebookFixture();
 
@@ -207,6 +249,77 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
       ["Ключи › Аренда", ["vector"]],
     ]);
     expect((hybrid.body.results as Hit[])[0]?.score).toBe(1 / 61);
+  });
+
+  it("keeps 20 visible keyword hits for an API key past hidden ones", async () => {
+    const nb = await notebookFixture();
+    // 19 visible sections here and «Аренда» in the keys doc give 20 visible
+    // hits; «Секрет» holds both query words and has the first rank.
+    const sections = Array.from({ length: 19 }, (_, index) => [
+      `## Срок ${index + 1}`,
+      "",
+      `Аренда карточки ${index + 1} истекает через час.`,
+      "",
+    ]).flat();
+    const stored = await nb.owner("PUT", "/sources", {
+      kind: "repo-doc",
+      ref: "docs/leases.md",
+      title: "Аренды",
+      text: [
+        "# Аренды",
+        "",
+        ...sections,
+        "## Секрет",
+        "",
+        `Аренда ключа ${SECRET} истекает через час.`,
+      ].join("\n"),
+    });
+    expect(stored.status).toBe(200);
+
+    // A hidden chunk must not push a visible one out of the 20: a shorter
+    // list would confirm a guessed word (release lens #388).
+    const found = await nb.agent("POST", "/search", {
+      query: `аренда or ${SECRET}`,
+      limit: 20,
+      mode: "keyword",
+    });
+    const headings = (found.body.results as Hit[]).map((hit) => hit.heading);
+    expect(headings).toHaveLength(20);
+    expect(
+      headings.filter((heading) => /Секрет|Ротация/.test(heading)),
+    ).toEqual([]);
+  });
+
+  it("stops at the page cap past hidden keyword hits and logs no query", async () => {
+    const nb = await notebookFixture();
+    // 200 hidden chunks (10 pages) rank above the visible «Аренда».
+    const hidden = Array.from({ length: 200 }, (_, index) => [
+      `## Секрет ${index + 1}`,
+      "",
+      `Аренда ключа ${SECRET} истекает через час.`,
+      "",
+    ]).flat();
+    const stored = await nb.owner("PUT", "/sources", {
+      kind: "repo-doc",
+      ref: "docs/planted.md",
+      title: "Секреты",
+      text: ["# Секреты", "", ...hidden].join("\n"),
+    });
+    expect(stored.status).toBe(200);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const found = await nb.agent("POST", "/search", {
+      query: `аренда or ${SECRET}`,
+      limit: 20,
+      mode: "keyword",
+    });
+    expect(found.body.results).toEqual([]);
+    const capped = warn.mock.calls.filter(([message]) =>
+      String(message).includes("page cap"),
+    );
+    expect(capped).toHaveLength(1);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(PART);
+    warn.mockRestore();
   });
 
   it("masks notebook search and sources for an API key", async () => {

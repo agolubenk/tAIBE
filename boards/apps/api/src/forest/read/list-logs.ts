@@ -1,7 +1,9 @@
-import { and, desc, eq, ilike, inArray, lt, or } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, lt, or, sql } from "drizzle-orm";
 import db from "../../database";
 import { timberLogTable } from "../../database/forest-schema";
+import { maskedMatchPage } from "../../task/masked-match-page";
 import { isMarkerQuery, matchesVisibleText } from "../../utils/visible-match";
+import { SEARCH_TEXT_CHARS } from "../fell/build-log";
 import {
   decodeCursor,
   encodeCursor,
@@ -93,6 +95,8 @@ export async function listLogs({
 // descriptions): it ends at the `limit`-th visible match or at the window's
 // end, so the cursor never names a log whose only match is inside a secret.
 // A page can hold fewer logs than `limit`, or none, and still have a cursor.
+// The window is cut by row count and by 1 MiB of stored text, as TB-191
+// (backend lens #388, N2): a log's searchText is up to 100 000 characters.
 async function listVisibleLogs(
   workspaceId: string,
   search: string,
@@ -101,12 +105,15 @@ async function listVisibleLogs(
 ) {
   if (isMarkerQuery(search)) return { items: [], nextCursor: null };
   const window = await db
-    .select(listColumns)
+    .select({
+      ...listColumns,
+      bytes: sql<number>`octet_length(${timberLogTable.searchText})`,
+    })
     .from(timberLogTable)
     .where(inWorkspaceAfter(workspaceId, after))
     .orderBy(desc(timberLogTable.felledAt), desc(timberLogTable.id))
     .limit(PAGE_MAX + 1);
-  const scanned = window.slice(0, PAGE_MAX);
+  const scanned = maskedMatchPage(window, PAGE_MAX);
   // Only logs whose stored text holds the query are loaded and masked.
   const texts = scanned.length
     ? await db
@@ -127,10 +134,10 @@ async function listVisibleLogs(
     : [];
   const visible = new Set(
     texts
-      .filter((row) => matchesVisibleText(row.searchText, search))
+      .filter((row) => matchesVisibleText(uncutText(row.searchText), search))
       .map((row) => row.id),
   );
-  const items: typeof scanned = [];
+  const items: (typeof scanned)[number][] = [];
   let end = scanned.length;
   for (const [index, row] of scanned.entries()) {
     if (!visible.has(row.id)) continue;
@@ -141,10 +148,20 @@ async function listVisibleLogs(
     }
   }
   const last = scanned[end - 1];
-  const more = end < scanned.length || window.length > PAGE_MAX;
+  const more = end < scanned.length || window.length > scanned.length;
   return {
-    items,
+    items: items.map(({ bytes: _bytes, ...row }) => row),
     nextCursor:
       more && last ? encodeCursor({ at: last.felledAt, id: last.id }) : null,
   };
+}
+
+// searchText is cut at SEARCH_TEXT_CHARS, maybe inside a secret, and redact
+// does not know a secret without its end. A cut text is matched only up to
+// its last whitespace (backend lens #388, R2); logs felled before this rule
+// are covered too.
+function uncutText(text: string) {
+  if (text.length < SEARCH_TEXT_CHARS) return text;
+  const lastSpace = text.search(/\s\S*$/);
+  return lastSpace < 0 ? "" : text.slice(0, lastSpace);
 }
