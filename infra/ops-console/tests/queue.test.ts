@@ -822,6 +822,26 @@ describe('мёрж из очереди', () => {
     expect(plan('gh pr merge 41', { cmd2: 'gh pr merge feat/x -R agolubenk/tAIBE' }).problem).toContain('вне команды мёржа')
   })
 
+  it('GH_REPO= самой команды мёржа и -R того же PR не теряются за переносом строки, обёрткой и группой shell (линза Claude #364, B1, B2, N1)', () => {
+    const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
+    // B1: окружение самой команды мёржа — как в #363 (репозиторий x/y, дальше 409 «вливать в терминале»).
+    for (const cmd of ['GH_REPO=x/y \\\ngh pr merge 5', 'GH_REPO=x/y command gh pr merge 5', 'GH_REPO=x/y nohup gh pr merge 5', 'GH_REPO=x/y sudo gh pr merge 5', 'GH_REPO=x/y gh pr merge 5']) {
+      expect(plan(cmd), cmd).toMatchObject({ pr: 5, repo: 'x/y', problem: null })
+    }
+    expect(plan('GH_REPO=x/y \\\n  gh pr merge 5 -R a/b').problem).toContain('разные репозитории')
+    // B2: gh — программа, но не первое слово: подоболочка, группа, if/then, обёртки.
+    for (const cmd of ['(gh pr checks 5 -R x/y) && gh pr merge 5', '( gh pr checks 5 -R x/y ) && gh pr merge 5', '{ gh pr checks 5 -R x/y; } && gh pr merge 5',
+      'if gh pr checks 5 -R x/y; then gh pr merge 5; fi', 'command gh pr view 5 -R x/y && gh pr merge 5', 'time gh pr checks 5 -R x/y && gh pr merge 5',
+      '! gh pr checks 5 -R x/y || gh pr merge 5', 'gh pr checks 5 \\\n  -R x/y && gh pr merge 5']) {
+      expect(plan(cmd), cmd).toMatchObject({ repo: 'x/y', problem: null })
+    }
+    // Слово после обёртки, не gh, — не gh: репозитория нет.
+    expect(plan('command git push origin gh-pages -R a/b && gh pr merge 5')).toMatchObject({ repo: null, problem: null })
+    // N1: -RRedHat/x — значение RedHat/x, а не edHat/x: у самой команды мёржа нет ложного «вне команды мёржа назван».
+    expect(plan('gh pr merge 5 -RRedHat/x')).toMatchObject({ repo: 'RedHat/x', problem: null })
+    expect(plan('gh pr checks 5 -wRRedHat/x && gh pr merge 5')).toMatchObject({ repo: 'RedHat/x', problem: null })
+  })
+
   it('перенаправления shell (2>&1, 2>/dev/null, > файл, &>) — не аргументы мёржа (ревью «Контроля» #114, F1)', () => {
     const plan = (cmd: string) => mergePlan({ kind: 'merge', cmd })
     const sha = 'a'.repeat(40)
