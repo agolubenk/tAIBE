@@ -523,6 +523,9 @@ describe("@kaneo/redact", () => {
       ["'password' => '<v>'", `'password' => '${hidden}'`],
       [':api_key => "<v>"', `:api_key => "${hidden}"`],
       ['"DB_PASSWORD" => "<v>",', `"DB_PASSWORD" => "${hidden}",`],
+      // TB-201 part C: a bare value after a spaced separator.
+      ["B_TOKEN := <v>", `B_TOKEN := ${hidden}`],
+      ["B_TOKEN => <v>", `B_TOKEN => ${hidden}`],
     ])("masks the value in %s", (input, expected) => {
       expect(redact(input.replace("<v>", value)).text).toBe(expected);
     });
