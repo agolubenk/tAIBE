@@ -10,6 +10,17 @@ export function ApprovalSummary({ action, params }: ApprovalSummaryProps) {
   const { t } = useTranslation();
   switch (action) {
     case "close_task":
+      // TB-108: a batch names its cards; each goes to its project's final column.
+      if (params?.taskIds) {
+        return (
+          <>
+            {t("workspace:forest.approvals.action.closeTasks", {
+              count: params.taskIds.split(",").filter(Boolean).length,
+              keys: (params.keys ?? "").split(",").filter(Boolean).join(", "),
+            })}
+          </>
+        );
+      }
       return (
         <>
           {t("workspace:forest.approvals.action.closeTask", {

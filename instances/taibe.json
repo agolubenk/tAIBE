@@ -1,7 +1,7 @@
 {
   "slug": "taibe",
   "title": "aiBoards&eval (tAIBE)",
-  "active": false,
+  "active": true,
   "repo_root": "/Users/agolubenko/Desktop/Development/tAIBE",
   "product_tree": "eval",
   "team": {
@@ -12,7 +12,9 @@
       "frontend",
       "backend",
       "release",
-      "boards"
+      "boards",
+      "backend-2",
+      "frontend-2"
     ],
     "active_hours": 8
   },
@@ -174,12 +176,20 @@
         "boards"
       ],
       [
-        "Связь|Координатор|Менеджер|Ноушен|QA|Тестировщик|Проверка|coord",
+        "Связь|Координатор|Менеджер|Ноушен|(?<![a-z0-9])QA(?![a-z0-9])|Тестировщик|Проверка|coord",
         "coord"
       ],
       [
         "Контроль|DevOps|Выпуск|Безопасность|release",
         "release"
+      ],
+      [
+        "backend[- –]?2(?!\\d)|Бэкенд[- –]?2(?!\\d)|роль 7(?!\\d)",
+        "backend-2"
+      ],
+      [
+        "frontend[- –]?2(?!\\d)|Фронтенд[- –]?2(?!\\d)|роль 8(?!\\d)",
+        "frontend-2"
       ],
       [
         "Бэкенд|backend|Данные",
@@ -194,6 +204,6 @@
         "plan"
       ]
     ],
-    "match": "-taibe-"
+    "match": "-taibe(-|\\d|$)"
   }
 }

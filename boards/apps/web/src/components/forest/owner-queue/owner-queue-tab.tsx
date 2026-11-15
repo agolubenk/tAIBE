@@ -156,6 +156,7 @@ export function OwnerQueueTab({ workspaceId }: { workspaceId: string }) {
         isEmpty={!docs.length}
         empty={t("workspace:forest.queue.empty")}
         error={ownerQueueErrorText(queue.error, t)}
+        onRetry={() => void queue.refetch()}
       >
         <ul
           className="flex flex-col gap-2 transition-opacity aria-busy:opacity-60"
