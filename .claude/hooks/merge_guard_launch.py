@@ -11,7 +11,7 @@ import os
 import re
 
 from merge_guard_files import open_regular
-from merge_guard_shell import LOST, device, is_lost, words
+from merge_guard_shell import CURRENT, LOST, SUBST, device, is_lost, words
 
 PKG_TOOLS = {"npm", "pnpm", "yarn", "bun", "turbo"}
 RUN = {"run", "run-script", "rum", "urn"}
@@ -58,6 +58,9 @@ IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|(?:GNU)?MAKEFLAGS|NODE_OPTION
 # запустит: в MAKEFLAGS они — отказ (SE-133). Метка — слово, которого shell не передаст (в словах нет NUL).
 MAKE_READS = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin", "-I", "--include-dir", "-E", "--eval",
               "?"}
+# Опции make 4.x со значением, которых нет в make 3.81 (main.c:361-433): getopt 3.81 вернёт `?`, а следующее слово не
+# заберёт, и `-I` после них make применит. В MAKEFLAGS они — отказ, как `?` (линза Claude #398, B3).
+MAKE_4X_VALUED = {"--jobserver-auth", "--jobserver-style", "--sync-mutex"}
 MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
 MAKEFLAGS_ARG = "\0MAKEFLAGS"
 # Строка --eval, которая запускает или читает то, чего разбор не видит (SE-135): подстановка `$`, рецепт (`;`,
@@ -301,9 +304,11 @@ def make_files(a, cwd, streams=None):
 MAKE_OPTION = ("длинная опция make, которую разбор не раскрывает однозначно (`--d`, `--frob`): какой Makefile make "
                "прочтёт, не видно — напишите опцию полностью (`--directory=…`)")
 MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS из окружения: файлы MAKEFILES, опция или переменная в MAKEFLAGS, "
-                 "от которой зависит, что make прочтёт и запустит (`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`), "
-                 "или кавычка, `\\`, `$` в MAKEFLAGS (слова и подстановки make делит иначе, чем shell): папку make "
-                 "(`-C`, `cd`) разбор с ними не сводит — передайте опции в командной строке make, файлы — через `-f`")
+                 "от которой зависит, что make прочтёт и запустит (`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`, "
+                 "`.SHELLFLAGS=`, неизвестная длинная опция `--frob`, `--jobserver-auth` make 4.x), или кавычка, `\\`, "
+                 "`$`, `$(…)`, пробельный символ, кроме пробела и таба, в MAKEFLAGS (слова и подстановки make делит "
+                 "иначе, чем shell): папку make (`-C`, `cd`) разбор с ними не сводит — передайте опции в командной "
+                 "строке make, файлы — через `-f`")
 MAKE_STDIN = ("Makefile из потока, а не из файла (`-f -`, `-f /dev/stdin`, FIFO, ссылка на устройство, "
               "`include /dev/stdin` в Makefile или `--eval`, Makefile по умолчанию — ссылка на поток): его текст "
               "разбор не видит — запишите Makefile в файл и передайте `-f`")
@@ -405,16 +410,18 @@ def make_flags(val):
     опция чтения (MAKE_READS; `-C`/`-f` make из окружения не слушает — с запасом) или MAKEFILES=, SHELL=, .SHELLFLAGS=
     дают команду `make` с меткой: хук отказывает с причиной MAKEFLAGS_WHY (make_option). Прочие переменные (`CC=`)
     — как в командной строке make: рецепты разбор проверяет только грубым признаком. Первое слово без `-` и без `=`
-    make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`). Слова make делит только по пробелам:
-    кавычка для него — обычный символ, `\\ ` склеивает слова, `$(Y)` раскрывается из окружения (make 3.81) — такое
-    значение тоже отказ."""
-    if re.search(r"[\"'\\$]", val):
+    make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`). Слова make делит только по пробелу и табу
+    (`isblank`): кавычка для него — обычный символ, `\\ ` склеивает слова, `$(Y)` раскрывается из окружения (make
+    3.81) — такое значение тоже отказ, как и `\\v`, `\\f`, `\\r`, `\\n` и метка подстановки shell (`$(…)`, `` `…` ``
+    разбор уже заменил меткой без `$`). Опция make 4.x со значением (MAKE_4X_VALUED) — отказ (линза Claude #398)."""
+    if re.search(r"[\"'\\$]|[^\S \t]", val) or SUBST in val or CURRENT in val:
         return [["make", MAKEFLAGS_ARG]]
-    ws = val.split()
+    ws = [w for w in re.split(r"[ \t]+", val) if w]
     if ws and not ws[0].startswith("-") and "=" not in ws[0]:
         ws[0] = "-" + ws[0]
     values, rest = _make_opts(["make"] + ws)
-    return [["make", MAKEFLAGS_ARG]] if MAKE_READS & set(values) or any(map(MAKEFLAGS_DEF.match, rest)) else []
+    deny = (MAKE_READS | MAKE_4X_VALUED) & set(values) or any(map(MAKEFLAGS_DEF.match, rest))
+    return [["make", MAKEFLAGS_ARG]] if deny else []
 
 
 def syntax_only(opts):
