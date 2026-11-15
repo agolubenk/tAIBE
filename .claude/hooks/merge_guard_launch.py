@@ -49,6 +49,7 @@ MAKEFILES = ("GNUmakefile", "makefile", "Makefile")
 MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$")
 # `\` + перевод строки make склеивает раньше комментариев: нечётное число `\` — продолжение, чётное — нет (make 3.81).
 MAKE_CONT = re.compile(r"(?<!\\)((?:\\\\)*)\\\n[ \t]*")
+INCLUDE_ESCAPE = "\0INCLUDE"  # метка в streams: строка include с `\` или `#` — экранирование make разбор не сводит
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
@@ -277,9 +278,9 @@ def make_files(a, cwd, streams=None):
     """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый
     существующий из GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не
     исключение: `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). Строка `--eval`/`-E` — тоже
-    текст Makefile (путь `--eval`), её include читаются. Пути-потоки дерева — в streams (make_option). Длинные опции —
-    как у getopt_long (SE-128); неоднозначная или неизвестная — папка не видна (LOST): у make 3.81 `--o` — это
-    `--old-file`, и его значение `-f` уже не опция."""
+    текст Makefile (путь `--eval`), её include читаются. Пути-потоки дерева и метка INCLUDE_ESCAPE — в streams
+    (make_option). Длинные опции — как у getopt_long (SE-128); неоднозначная или неизвестная — папка не видна
+    (LOST): у make 3.81 `--o` — это `--old-file`, и его значение `-f` уже не опция."""
     if a[0] not in MAKES:
         return []
     values, _ = _make_opts(a)
@@ -291,8 +292,10 @@ def make_files(a, cwd, streams=None):
         [d] if is_lost(d) else [next((p for p in (os.path.join(d, m) for m in MAKEFILES) if os.path.lexists(p)), "")])
 
     def includes(_, text):
-        found, text = [], re.sub(r"#.*", "", MAKE_CONT.sub(r"\1 ", text))
-        for name in (n for m in MAKE_INCLUDE.finditer(text) for n in m.group(1).split() if "$" not in n):
+        found, lines = [], [m.group(1) for m in MAKE_INCLUDE.finditer(MAKE_CONT.sub(r"\1 ", text))]
+        if streams is not None and any(re.search(r"[\\#]", x) for x in lines):
+            streams.append(INCLUDE_ESCAPE)  # правило coord 11:46 (#402): `\#`, `\ `, комментарий — отказ
+        for name in (n for x in lines for n in re.sub(r"#.*", "", x).split() if "$" not in n):
             found += next((h for h in (sorted(glob.glob(os.path.join(x, os.path.expanduser(name)))) for x in dirs)
                            if h), [])
         return found
@@ -317,6 +320,10 @@ MAKE_STDIN = ("Makefile из потока, а не из файла (`-f -`, `-f 
 MAKE_EVAL = ("строка `--eval`/`-E` с `$`, рецептом (`;`, табуляция, `.RECIPEPREFIX`), `!=`, `define`, `export` или "
              "`SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=`: что она прочтёт и запустит, разбор не видит — передайте это "
              "Makefile-файлом (`-f`)")
+MAKE_INCLUDE_WHY = ("строка include с `\\` или `#` (экранирование, комментарий): какой файл make прочтёт, разбор не "
+                    "сводит — уберите их из строки include или запустите команды цели напрямую")
+MAKE_SUBST = ("подстановка shell в слове make (`$(…)`, `` `…` ``, `<(…)`, `>(…)`, `=(…)`): что она даст make — путь, "
+              "строку `--eval`, опцию, — разбор не видит; запишите значение в команду или в Makefile-файл (`-f`)")
 MAKE_VAR_WHY = ("переменная make в командной строке, от которой зависит, чем make запустит рецепты и что прочтёт "
                 "(`SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` — от папки после `-C`): разбор этого не видит — уберите её, "
                 "файл make передайте через `-f`")
@@ -333,17 +340,22 @@ def make_option(a, cwd):
     длинная опция, которую getopt_long не раскроет однозначно (`--d`, `--o`, `--frob`, SE-128); Makefile из потока
     где угодно в дереве make_files (`-f -`, устройство, FIFO, Makefile по умолчанию — ссылка на поток, `include
     /dev/stdin` в Makefile или `--eval`); строка `--eval` с EVAL_RUNS; `SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` в строке
-    make (SE-135). Рецепты Makefile на диске — предел дизайна: только грубый признак (хук)."""
+    make (SE-135). То, что разбор не сводит, — отказ (coord, #402): подстановка shell в любом слове make, строка
+    include с `\\` или `#`. Рецепты Makefile на диске — предел дизайна: только грубый признак (хук)."""
     if a[0] not in MAKES:
         return ""
     if MAKEFLAGS_ARG in a:
         return MAKEFLAGS_WHY
+    if any(SUBST in w or CURRENT in w for w in a):  # правило coord 11:47 (#402): один раз на все слова make
+        return MAKE_SUBST
     values, rest = _make_opts(a)
     if "?" in values:
         return MAKE_OPTION
     _, named, evals, _ = _make_where(values, cwd)
     streams = []
     make_files(a, cwd, streams)
+    if INCLUDE_ESCAPE in streams:
+        return MAKE_INCLUDE_WHY
     if "-" in named or streams:
         return MAKE_STDIN
     if any(map(EVAL_RUNS.search, evals)):
