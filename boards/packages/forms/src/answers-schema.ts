@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { LIMITS } from "./limits";
-import { fieldIdSchema } from "./schema";
+import { LIMITS } from "./limits.js";
+import { fieldIdSchema } from "./schema.js";
 
 // The zod schemas of an answer and an answer document, for the API. The
 // answer checks in answers.ts use only the types, so the web, which never
