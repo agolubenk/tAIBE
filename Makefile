@@ -1,6 +1,6 @@
 # tAIBE — команды слоя: git worktrees, проверки, ИИ-контур разработки.
 # Worktrees — worktrees/README.md, .claude/rules/07-worktrees.md. Usage: make wt-fix NAME=notion-5xx-retry
-# Прямые формы целей wt-*/check-repo/check-eval для отказа merge-guard — .claude/hooks/merge_guard_launch.py
+# Прямые формы целей wt-*/check-repo/check-eval для отказа merge-guard — .claude/hooks/merge_guard_make.py
 # (_direct): правка рецепта — правка там (SE-105).
 
 WT_BASE ?= board-agents
