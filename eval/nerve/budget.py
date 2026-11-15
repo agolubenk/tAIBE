@@ -93,8 +93,9 @@ def limit_text(o):
 
 
 def scan_increments(path, offset, last_rids, limits=None):
-    """Как scan_usage, но отдаёт приращения [(ts, usd)] — для поминутных корзин счётчика. Отказы по лимиту из тех же
-    строк дописываются в limits [(ts, text)]: счётчик читает каждую новую строку, так что отказ не теряется."""
+    """Как scan_usage, но отдаёт приращения [(ts, usd, cwd)] — для поминутных корзин счётчика; cwd записи — для
+    продукта (SE-66). Отказы по лимиту из тех же строк дописываются в limits [(ts, text)]: счётчик читает каждую новую
+    строку, так что отказ не теряется."""
     try:
         with open(path, "rb") as f:
             f.seek(offset)
@@ -128,18 +129,61 @@ def scan_increments(path, offset, last_rids, limits=None):
         if rid:
             rids.append(rid)
             rids = rids[-64:]
-        out.append((ts, call_usd(u, m.get("model"))))
+        out.append((ts, call_usd(u, m.get("model")), o.get("cwd")))
     return out, offset + end + 1, rids
 
 
-class Meter:
-    """Поминутные корзины расхода аккаунта ($ по прайсу) за последние keep_days. Состояние — в dict демона."""
+OVERHEAD, UNATTRIBUTED = "overhead", "unattributed"
+PRODUCT_STEP_MIN = 5                       # корзины продуктов — по 5 мин: окно 5 ч = 60 ключей на продукт
+PRODUCT_KEEP = timedelta(hours=5, minutes=PRODUCT_STEP_MIN)
 
-    def __init__(self, state, keep_days=8):
+
+def project_dir_name(path):
+    """Имя папки проекта Claude Code для пути: каждый знак, кроме буквы и цифры, — «-»."""
+    return re.sub(r"[^A-Za-z0-9]", "-", path)
+
+
+class Products:
+    """Чей расход (SE-66): cwd записи под repo_root продукта (самый длинный корень, по границе пути); иначе папка, в
+    которой сессия запущена (имя папки транскрипта); иначе unattributed. Так смена cwd внутри транскрипта
+    (/private/tmp, чужой репо) не теряет продукт сессии, а запись в чужом репо уходит этому репо."""
+
+    def __init__(self, roots):
+        self.roots = sorted(((slug, os.path.normpath(os.path.expanduser(r))) for slug, r in roots.items() if r),
+                            key=lambda sr: -len(sr[1]))
+
+    def of_cwd(self, cwd):
+        p = os.path.normpath(cwd) if isinstance(cwd, str) and cwd else ""
+        return next((slug for slug, root in self.roots if p == root or p.startswith(root + os.sep)), None)
+
+    def of_project(self, name):
+        for slug, root in self.roots:
+            enc = project_dir_name(root)
+            if name == enc or name.startswith(enc + "-"):
+                return slug
+        return None
+
+    def of(self, cwd, project):
+        return self.of_cwd(cwd) or self.of_project(project) or UNATTRIBUTED
+
+
+def _product_key(ts):
+    t = ts.astimezone(timezone.utc)
+    return t.replace(minute=t.minute - t.minute % PRODUCT_STEP_MIN).strftime("%Y-%m-%dT%H:%M")
+
+
+class Meter:
+    """Поминутные корзины расхода аккаунта ($ по прайсу) за последние keep_days. Состояние — в dict демона.
+    С products — ещё корзины по продуктам за последние 5 ч (SE-66; state.json не раздувается: ≈ 60 ключей)."""
+
+    def __init__(self, state, keep_days=8, products=None):
         self.st = state
         self.st.setdefault("files", {})
         self.st.setdefault("buckets", {})
         self.keep = timedelta(days=keep_days)
+        self.products = products
+        if products is not None:
+            self.st.setdefault("products", {})
 
     def update(self, projects_root, now):
         """Досчитывает новые строки всех транскриптов. Возвращает отказы по лимиту из них: [(ts, text)]."""
@@ -148,6 +192,9 @@ class Meter:
             glob.glob(os.path.join(projects_root, "*", "*", "subagents", "*.jsonl"))
         seen = set()
         limits = []
+        if self.products is not None and "products_from" not in self.st:
+            # Смещения файлов уже в конце: корзины продуктов копятся с этого прохода, полное окно — через 5 ч.
+            self.st["products_from"] = now.astimezone(timezone.utc).isoformat(timespec="minutes")
         for p in files:
             try:
                 if os.path.getmtime(p) < floor.timestamp():
@@ -158,22 +205,106 @@ class Meter:
             f = self.st["files"].get(p) or {"offset": 0, "rids": []}
             inc, f["offset"], f["rids"] = scan_increments(p, f["offset"], f["rids"], limits)
             self.st["files"][p] = f
-            for ts, usd in inc:
+            project = os.path.relpath(p, projects_root).split(os.sep)[0]
+            for ts, usd, cwd in inc:
                 if ts < floor:
                     continue
                 k = ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M")
                 self.st["buckets"][k] = self.st["buckets"].get(k, 0.0) + usd
+                if self.products is not None and ts >= now - PRODUCT_KEEP:
+                    cell = self.st["products"].setdefault(_product_key(ts), {})
+                    slug = self.products.of(cwd, project)
+                    cell[slug] = round(cell.get(slug, 0.0) + usd, 4)
         for p in [k for k in self.st["files"] if k not in seen]:
             del self.st["files"][p]
         lo = floor.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M")
         for k in [k for k in self.st["buckets"] if k < lo]:
             del self.st["buckets"][k]
+        if self.products is not None:
+            lo5 = _product_key(now - PRODUCT_KEEP)
+            for k in [k for k in self.st["products"] if k < lo5]:
+                del self.st["products"][k]
         return sorted(limits)
+
+    def by_product(self, t_from, t_to=None):
+        """{продукт: $} за [t_from, t_to] с точностью до 5 мин (корзина, в которую попал t_from, — целиком)."""
+        lo = _product_key(t_from)
+        hi = t_to.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M") if t_to else "9999"
+        out = {}
+        for k, cell in self.st.get("products", {}).items():
+            if lo <= k <= hi:
+                for slug, usd in cell.items():
+                    out[slug] = out.get(slug, 0.0) + usd
+        return out
 
     def total(self, t_from, t_to=None):
         lo = t_from.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M")
         hi = t_to.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M") if t_to else "9999"
         return sum(v for k, v in self.st["buckets"].items() if lo <= k <= hi)
+
+
+def _load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def evolve_overhead(evolve_dir, t_from, t_to):
+    """$ ночной эволюции (eval/evolve) в [t_from, t_to] — накладные (SE-66). Её вызовы Claude идут с
+    --no-session-persistence, в транскриптах их нет. Судьи — budget.tokens отчёта runs/<дата>.json по цене входа
+    sonnet (оценка: разбивки токенов в отчёте нет), сессия — usd из runs/session-latest.json; обе — в момент finished.
+    Файл прогона назван днём старта: прогон, начатый накануне, мог закончиться в окне — день до t_from тоже читается.
+    → (usd, unknown): unknown — части, которые закончились в окне, но $ не дали (сессия без total_cost_usd)."""
+    usd, unknown = 0.0, []
+
+    def inside(v):  # строка ISO с поясом и внутри окна; прочее (нет, не строка, без пояса) — нет
+        at = parse_ts(v) if isinstance(v, str) else None
+        return at is not None and at.tzinfo is not None and t_from <= at <= t_to
+
+    for day in sorted({t_from.date() - timedelta(days=1), t_from.date(), t_to.date()}):
+        r = _load(os.path.join(evolve_dir, "runs", f"{day.isoformat()}.json"))
+        tokens = r.get("budget").get("tokens") if isinstance(r.get("budget"), dict) else 0
+        if isinstance(tokens, (int, float)) and tokens > 0 and inside(r.get("finished")):
+            usd += tokens * PRICES["sonnet"][0] / 1e6
+    s = _load(os.path.join(evolve_dir, "runs", "session-latest.json"))
+    if inside(s.get("finished")):
+        if isinstance(s.get("usd"), (int, float)) and not isinstance(s.get("usd"), bool):
+            usd += s["usd"]
+        else:
+            unknown.append("сессия")
+    return usd, unknown
+
+
+def shares(share5, by, overhead_usd, quota):
+    """Доли окна 5 ч по продуктам (SE-66): продукты из транскриптов делят share5 в пропорции своих $; накладные —
+    overhead / квота окна, сверх share5 (share5 по-прежнему считает только транскрипты)."""
+    total = sum(by.values())
+    out = {slug: round(share5 * usd / total, 3) for slug, usd in sorted(by.items())} \
+        if share5 is not None and total > 0 else {}
+    if quota and overhead_usd:
+        out[OVERHEAD] = round(overhead_usd / quota, 3)
+    return out
+
+
+SHARE_LABELS = {OVERHEAD: "накладные", UNATTRIBUTED: "не отнесено"}
+
+
+def shares_text(mode):
+    """Строка статуса и сводки: «share5 0.63: hr-helper 0.41 · taibe 0.17 · не отнесено 0.05 · накладные 0.02»."""
+    by = mode.get("share5_by")
+    if not by:
+        err = mode.get("share5_by_error")
+        return "share5 по продуктам: нет данных" + (f" (сбой: {err[:80]})" if err else "")
+    order = sorted((k for k in by if k not in SHARE_LABELS), key=lambda k: -by[k]) + \
+        [k for k in (UNATTRIBUTED, OVERHEAD) if k in by]
+    parts = " · ".join(f"{SHARE_LABELS.get(k, k)} {by[k]:.2f}" for k in order)
+    tail = f" (продукты — с {mode['products_from'][11:16]})" if mode.get("products_partial") else ""
+    head = f"share5 {mode['share5']:.2f}" if mode.get("share5") is not None else "share5"
+    gap = f", без $: {', '.join(mode['overhead_unknown'])}" if mode.get("overhead_unknown") else ""
+    return f"{head}: {parts}{tail}; накладные — сверх share5{gap}"
 
 
 def median(xs):
