@@ -686,12 +686,15 @@ describe('мёрж из очереди', () => {
     await bearer(agent).put('/db/items/m-taibe-165', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'GH_REPO=agolubenk/tAIBE gh pr merge 162 --squash' } })
     await bearer(agent).put('/db/items/m-taibe-166', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr merge https://github.com/agolubenk/tAIBE/pull/162 --squash' } })
     await bearer(agent).put('/db/items/m-taibe-167', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr merge 162 -Ragolubenk/tAIBE -ds' } })
+    // Карточка HR c1nr0ih5: репозиторий назван вне команды мёржа — в cmd2 или в другой команде строки.
+    await bearer(agent).put('/db/items/m-taibe-168', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr merge 162 --squash', cmd2: 'gh pr merge 162 -R agolubenk/tAIBE --squash' } })
+    await bearer(agent).put('/db/items/m-taibe-169', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr checks 162 -R agolubenk/tAIBE && gh pr merge 162 --squash' } })
   })
 
   it('PR другого репозитория (-R в команде или поле repo) — 409 до запроса к GitHub, а не одноимённый PR консоли (Q-29)', async () => {
     setGithubTransportForTests(github)
     calls.length = 0
-    for (const id of ['m-taibe-162', 'm-taibe-163', 'm-taibe-165', 'm-taibe-166', 'm-taibe-167']) {
+    for (const id of ['m-taibe-162', 'm-taibe-163', 'm-taibe-165', 'm-taibe-166', 'm-taibe-167', 'm-taibe-168', 'm-taibe-169']) {
       const info = await bearer(owner).get(`/merge/${id}`)
       expect(info.status, id).toBe(409)
       expect(info.json.error).toContain('в репозитории agolubenk/tAIBE')
@@ -748,6 +751,36 @@ describe('мёрж из очереди', () => {
     expect(plan('GH_REPO=a/b gh pr merge 41 -R c/d').problem).toContain('разные репозитории')
     // Тело (--body) с «-R x/y» — значение, не флаг.
     expect(plan('gh pr merge 41 -b "see -R other/repo" --squash')).toMatchObject({ repo: null, method: 'squash', problem: null })
+  })
+
+  it('репозиторий, названный вне команды мёржа (cmd2, -R/--repo или GH_REPO= другой команды), — репозиторий PR или отказ (карточка HR c1nr0ih5)', () => {
+    const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
+    expect(plan('gh pr merge 41 --squash', { cmd2: 'gh pr merge 41 -R agolubenk/tAIBE --squash' })).toMatchObject({ pr: 41, repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr merge 41', { cmd2: 'gh pr merge https://github.com/agolubenk/tAIBE/pull/41' })).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr checks 41 -R agolubenk/tAIBE && gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr view 41 --repo=agolubenk/tAIBE; gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('export GH_REPO="agolubenk/tAIBE"; gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr checks 41 -R agolubenk/tAIBE;gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    // Тот же репозиторий в другом регистре — не противоречие; -R самой команды мёржа не даёт второго отказа.
+    expect(plan('gh pr merge 41 -R agolubenk/tAIBE', { cmd2: 'gh pr merge 41 -R AGOLUBENK/taibe' }).problem).toBeNull()
+    expect(plan('gh pr merge 41 -R agolubenk/tAIBE', { repo: 'agolubenk/HR_Helper-v2' }).problem).not.toContain('вне команды мёржа')
+    // Разные репозитории — отказ, а не выбор одного из двух.
+    expect(plan('gh pr merge 41', { repo: 'agolubenk/HR_Helper-v2', cmd2: 'gh pr merge 41 -R agolubenk/tAIBE' }).problem).toContain('вне команды мёржа')
+    expect(plan('gh pr merge 41 -R agolubenk/HR_Helper-v2', { cmd2: 'GH_REPO=agolubenk/tAIBE gh pr merge 41' }).problem).toContain('назван agolubenk/tAIBE')
+    const two = plan('gh pr view 41 -R a/b && gh pr merge 41', { cmd2: 'gh pr merge 41 -R c/d' })
+    expect(two).toMatchObject({ repo: null, problem: expect.stringContaining('вне команды мёржа названы разные репозитории') })
+    expect(two.problem).toMatch(/a\/b/)
+    expect(two.problem).toMatch(/c\/d/)
+    // «-R x/y» в значении в кавычках, -R не у gh и не похожее на owner/name — не репозиторий.
+    expect(plan('gh pr merge 41 --squash', { cmd2: 'gh pr merge 41 --subject "see -R other/repo" --squash' })).toMatchObject({ repo: null, problem: null })
+    expect(plan('cp -R src/x dst/ && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    expect(plan('gh pr checks 41 -R && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    // GH_REPO= — только присваивание в начале команды (Контроль #363, п. 1–2): в значении и у echo — текст.
+    expect(plan('gh pr merge 41 --squash --body "GH_REPO=evil/x"')).toMatchObject({ repo: null, problem: null })
+    expect(plan('echo GH_REPO=x/y; gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    expect(plan('echo GH_REPO=x/y && gh pr merge 41 -R agolubenk/tAIBE')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('env GH_REPO=agolubenk/tAIBE gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan("cd ~/x && GH_REPO='agolubenk/tAIBE' gh pr merge 41")).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
   })
 
   it('перенаправления shell (2>&1, 2>/dev/null, > файл, &>) — не аргументы мёржа (ревью «Контроля» #114, F1)', () => {
