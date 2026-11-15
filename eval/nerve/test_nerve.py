@@ -564,7 +564,7 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         gh_source.poll_github(self.ctx)
         views = [c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]]
-        self.assertEqual(views, ["files,statusCheckRollup,body", "statusCheckRollup"])
+        self.assertEqual(views, ["files,statusCheckRollup,body,headRefOid", "statusCheckRollup,headRefOid"])
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
@@ -699,14 +699,15 @@ class GithubPollTest(unittest.TestCase):
         self.assertIn(("pr.quorum", "#486 собран: approve backend, boards, plan на fffffffff, CI ok"), self.kinds())
         self.assertFalse(self.ctx.state["github"]["prs"]["486"]["await_ci"])
         self.assertEqual([c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]],
-                         ["statusCheckRollup"], "только проверки: без файлов и тела PR")
+                         ["statusCheckRollup,headRefOid"], "только проверки и голова: без файлов и тела PR")
 
     def test_ci_rerun_after_failure_on_the_same_head_gives_quorum_ok_once(self):
         """SE-131 N2: CI упал, задачу перезапустили на той же голове (#392). Раньше после провала проверки не
         перечитывались, await_ci снимался, а «собран … CI ok» имел тот же ключ, что «собран … CI failure»."""
         head = "c1c1c1c1c" + "0" * 31
         three = [f"{x}: approve на c1c1c1c1c" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
-        event = lambda ci: ("pr.quorum", f"#492 собран: approve backend, boards, plan на c1c1c1c1c, CI {ci}")  # noqa: E731
+        event = lambda ci: ("pr.quorum",  # noqa: E731
+                            f"#492 собран: approve backend, boards, plan на c1c1c1c1c, CI {ci}")
         sources.run = FakeGh([_pr(492, head)], comments={492: three}, ci={492: "FAILURE"})
         gh_source.poll_github(self.ctx)
         self.assertEqual(self.kinds().count(event("failure")), 1)
