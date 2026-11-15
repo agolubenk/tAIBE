@@ -39,6 +39,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
                                strip_prefix, subst_code, SUBST_AT, tokenize, uncommented)
+from merge_guard_launch import MAKE_OPTION, make_option  # noqa: E402
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -264,7 +265,7 @@ def launched(a, cwd, roots, depth, git_env, whole):
     """Код из файла, который команда не называет скриптом (merge_guard_launch): скрипты package.json — как команды
     shell из папки пакета, Makefile и awk — грубым признаком. Этот файл переписывает та же команда
     (`printf … > package.json; npm run x`) — ещё и грубый признак, как у скрипта, которого нет (runs_code)."""
-    found, files = [], make_files(a, cwd) + awk_programs(a, cwd)
+    found, files = ([(MAKE_OPTION, a[0])], []) if make_option(a) else ([], make_files(a, cwd) + awk_programs(a, cwd))
     for d, text in package_scripts(a, cwd):  # текст None — папка пакета не видна (LOST)
         found += [(LOST_DIR, d)] if text is None else classify_bash(text, d, roots, depth + 1, git_env, disk=True)
     read = read_names(a) | {p for p, _ in files}
