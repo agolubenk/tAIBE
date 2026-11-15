@@ -138,6 +138,9 @@ importers:
       '@kaneo/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@kaneo/forms':
+        specifier: workspace:*
+        version: link:../../packages/forms
       '@kaneo/importers':
         specifier: workspace:*
         version: link:../../packages/importers

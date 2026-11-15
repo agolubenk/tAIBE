@@ -36,6 +36,7 @@
     "@hono/zod-openapi": "^1.6.3",
     "@kaneo/claude-mem-reader": "workspace:*",
     "@kaneo/email": "workspace:*",
+    "@kaneo/forms": "workspace:*",
     "@kaneo/importers": "workspace:*",
     "@kaneo/mcp": "workspace:*",
     "@kaneo/permissions": "workspace:*",

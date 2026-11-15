@@ -1,3 +1,4 @@
+import type { AnswersDoc, FormTemplate } from "@kaneo/forms";
 import { createId } from "@paralleldrive/cuid2";
 import { relations, sql } from "drizzle-orm";
 import {
@@ -1520,6 +1521,89 @@ export const customFieldValueTable = pgTable(
     unique("custom_field_value_task_field_unique").on(
       table.taskId,
       table.fieldId,
+    ),
+  ],
+);
+
+// R-027 (TB-173): a form template (@kaneo/forms) is immutable: a change of
+// fields is a new row with the next version, because a choice answer is an
+// option index of one version.
+export const formTemplateTable = pgTable(
+  "form_template",
+  {
+    id: text("id")
+      .$defaultFn(() => createId())
+      .primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaceTable.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      }),
+    slug: text("slug").notNull(),
+    version: integer("version").notNull(),
+    title: text("title").notNull(),
+    template: jsonb("template").$type<FormTemplate>().notNull(),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { mode: "date" })
+      .default(utcNow)
+      .notNull(),
+  },
+  (table) => [
+    unique("form_template_workspace_slug_version_unique").on(
+      table.workspaceId,
+      table.slug,
+      table.version,
+    ),
+  ],
+);
+
+// One form on one card: the answers and their status. The template key is
+// NO ACTION DEFERRABLE INITIALLY DEFERRED by a hand line in the migration
+// drizzle/*_t_boards_forms.sql: a workspace delete reaches the template
+// and the form by two cascades, and an immediate check (RESTRICT or plain
+// NO ACTION) fails before the form is gone (TB-173 probe, PostgreSQL 16).
+// A direct template delete still fails, so answers are never cascaded away.
+// drizzle-kit does not keep DEFERRABLE: a future change of this key must
+// add the line again; tests/api-integration/form-delete.test.ts catches it.
+export const taskFormTable = pgTable(
+  "task_form",
+  {
+    id: text("id")
+      .$defaultFn(() => createId())
+      .primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => taskTable.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      }),
+    templateId: text("template_id")
+      .notNull()
+      .references(() => formTemplateTable.id),
+    answers: jsonb("answers").$type<AnswersDoc>(),
+    status: text("status")
+      .$type<"draft" | "submitted">()
+      .default("draft")
+      .notNull(),
+    rowVersion: integer("row_version").default(0).notNull(),
+    submittedAt: timestamp("submitted_at", { mode: "date" }),
+    submittedBy: text("submitted_by"),
+    updatedBy: text("updated_by"),
+    attachedBy: text("attached_by"),
+    createdAt: timestamp("created_at", { mode: "date" })
+      .default(utcNow)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { mode: "date" })
+      .default(utcNow)
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  // The unique key starts with task_id, so it also serves the card's list.
+  (table) => [
+    unique("task_form_task_template_unique").on(
+      table.taskId,
+      table.templateId,
     ),
   ],
 );
