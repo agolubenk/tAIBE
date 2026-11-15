@@ -166,7 +166,7 @@ def scan(since, until, home=None, instances=INSTANCES, sink=None):
             key = (sid, t.date().isoformat(), prods.of(o.get('cwd'), project))
             m = o.get('message') if isinstance(o.get('message'), dict) else {}
             if sink:
-                sink.record(sid, path, is_sub, o, t)
+                sink.record(sid, path, is_sub, o, t, key[2])
             if not is_sub and in_window and is_text_message(o) and tr.COMPACTED in tr.text_of(m.get('content')):
                 roll.setdefault(key, new_roll(key, meta[sid]))['compactions'] += 1
             if o.get('type') != 'assistant' or not isinstance(m.get('usage'), dict) or m.get('model') == '<synthetic>':

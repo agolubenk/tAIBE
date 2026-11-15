@@ -4,9 +4,11 @@
 
 Определения (план v1.1 на карточке GL-1):
 - События — из блоков tool_use всех записей файла, до отсева повторов requestId:
-  `*forest_set_work_state` — карточка (taskId) и ветка (branch); `*forest_acquire_lease` — арендованная карточка;
+  `*forest_set_work_state` — карточка (taskId) и ветка (branch): состояние заменяется целиком, опущенное поле —
+  нет карточки или ветки; `*forest_acquire_lease` — арендованная карточка;
   текст команды (Bash `command`, ctx_execute `code`, ctx_batch_execute `commands[].command`) —
-  `gh pr view|diff|checkout|comment|review N`, репозиторий — из `-R`/`--repo`, иначе репозиторий продукта вызова.
+  `gh pr view|diff|checkout|comment|review N` в начале команды (после `;`, `&&`, `|`, `(`, `do`, `then`, перевода
+  строки), репозиторий — из `-R`/`--repo`, иначе репозиторий продукта записи с командой.
 - Время события — время первой записи его requestId; сравнение со временем вызова — включительно.
 - Окно линзы PR N — от первого view/diff/checkout N до comment/review N. Окно без comment/review отбрасывается.
   Окна пересекаются — побеждает открытое позже.
@@ -15,7 +17,8 @@
   карточки → только карточка → карточка аренды (если сессия арендовала ровно одну) → «не отнесено».
   Из нескольких PR с одной веткой или карточкой берётся PR, не влитый до вызова, с большим номером.
 - Список PR: `gh pr list -R <github.repo из instances> --state all --limit 1000` (414 PR tAIBE — 42 КБ, 6 с;
-  797 PR HR — 84 КБ, 14 с; 15.11), для тестов — `--prs <файл>`.
+  797 PR HR — 84 КБ, 14 с; 15.11), для тестов — `--prs <файл>`. Список равен пределу — предупреждение в stderr:
+  старые PR за пределом не видны.
 """
 import bisect
 import json
@@ -29,9 +32,12 @@ import transcript as tr  # noqa: E402
 
 UNATTRIBUTED = 'unattributed'
 OPEN, CLOSE = frozenset(('view', 'diff', 'checkout')), frozenset(('comment', 'review'))
-GH_PR_RE = re.compile(r'\bgh\s+pr\s+(view|diff|checkout|comment|review)\s+#?(\d+)\b([^\n;&|]*)')
+# Команда gh pr, а не текст внутри аргумента другой команды (`nerve.py emit "… gh pr diff 163"`, backend #417).
+GH_PR_RE = re.compile(r'(?:^|[;&|(`\n]|\b(?:do|then|else)\s)\s*(?:\w+=\S*\s+)*gh\s+pr\s+'
+                      r'(view|diff|checkout|comment|review)\s+#?(\d+)\b([^\n;&|]*)')
 REPO_RE = re.compile(r'(?:^|\s)(?:-R|--repo)(?:\s+|=)([\w.-]+/[\w.-]+)')
 CARD_RE = r'\b[a-z][a-z0-9]{23}\b'
+PR_LIMIT = 1000
 PR_JQ = '[.[] | {number, headRefName, mergedAt, cards: [.body | scan("%s")] | unique}]' % CARD_RE.replace('\\', '\\\\')
 
 
@@ -59,11 +65,14 @@ def load_prs(by_slug, path=None):
             return json.load(f)
     out = {}
     for repo in sorted(set(by_slug.values())):
-        r = subprocess.run(['gh', 'pr', 'list', '-R', repo, '--state', 'all', '--limit', '1000', '--json',
+        r = subprocess.run(['gh', 'pr', 'list', '-R', repo, '--state', 'all', '--limit', str(PR_LIMIT), '--json',
                             'number,headRefName,mergedAt,body', '--jq', PR_JQ], capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError(f'gh pr list -R {repo}: {r.stderr.strip()}')
         out[repo] = json.loads(r.stdout or '[]')
+        if len(out[repo]) >= PR_LIMIT:
+            print(f'attribution: {repo} — {len(out[repo])} PR, это предел --limit {PR_LIMIT}: старые PR не видны',
+                  file=sys.stderr)
     return out
 
 
@@ -83,13 +92,13 @@ def commands(block):
 
 
 def block_events(block):
-    """[(вид, значение)] одного блока tool_use: open/close (репозиторий или None, N), task, branch, lease."""
+    """[(вид, значение)] одного блока tool_use: open/close (репозиторий или None, N), state (карточка или None,
+    ветка или None), lease."""
     name, inp = block.get('name') or '', block.get('input') if isinstance(block.get('input'), dict) else {}
     out = []
     if name.endswith('forest_set_work_state'):
-        for kind, field in (('task', 'taskId'), ('branch', 'branch')):
-            if isinstance(inp.get(field), str) and inp[field]:
-                out.append((kind, inp[field]))
+        out.append(('state', tuple(inp[f] if isinstance(inp.get(f), str) and inp[f] else None
+                                   for f in ('taskId', 'branch'))))
     elif name.endswith('forest_acquire_lease') and isinstance(inp.get('taskId'), str):
         out.append(('lease', inp['taskId']))
     for text in commands(block):
@@ -110,17 +119,16 @@ class Timeline:
 
     def build(self, own=None):
         """Окна линз, состояние work_state и аренды по времени. own — события субагента поверх событий родителя."""
-        evs = sorted(self.events + (own.events if own else []))
+        # По (время, порядок): значения разных видов не сравнимы; при равенстве родитель раньше субагента.
+        evs = sorted(self.events + (own.events if own else []), key=lambda e: e[:2])
         opened, windows, states, leases = {}, [], [], set()
-        task = branch = None
         for t, _, kind, value in evs:
             if kind == 'open':
                 opened.setdefault(value, t)
             elif kind == 'close' and value in opened:
                 windows.append((opened.pop(value), t, value))
-            elif kind in ('task', 'branch'):
-                task, branch = (value, branch) if kind == 'task' else (task, value)
-                states.append((t, task, branch))
+            elif kind == 'state':
+                states.append((t,) + value)
             elif kind == 'lease':
                 leases.add(value)
         self.windows = sorted(windows)
@@ -168,8 +176,9 @@ class Ledger:
         self.first = {}         # requestId → время первой записи
         self.calls = []         # (sid, путь субагента или None, t, продукт, $)
 
-    def record(self, sid, path, is_sub, o, t):
-        """Каждая запись файла с временем, до отсева повторов: время requestId и события tool_use."""
+    def record(self, sid, path, is_sub, o, t, product=None):
+        """Каждая запись файла с временем, до отсева повторов: время requestId и события tool_use. Окно линзы без
+        `-R` — в репозитории продукта записи (product), чтобы `gh pr view 7 -R <он>` закрывал `gh pr comment 7`."""
         m = o.get('message') if isinstance(o.get('message'), dict) else {}
         rid = o.get('requestId') or m.get('id')
         when = self.first.setdefault(rid, t) if rid is not None else t
@@ -177,9 +186,12 @@ class Ledger:
         if o.get('type') != 'assistant' or not isinstance(content, list):
             return
         line = self.lines.setdefault((sid, path if is_sub else None), Timeline())
+        home = self.by_slug.get(product)
         for block in content:
             if isinstance(block, dict) and block.get('type') == 'tool_use':
                 for kind, value in block_events(block):
+                    if kind in ('open', 'close') and value[0] is None:
+                        value = (home, value[1])
                     line.add(when, kind, value)
 
     def call(self, sid, path, is_sub, t, product, usd):

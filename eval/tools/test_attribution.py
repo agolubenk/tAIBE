@@ -2,9 +2,12 @@
 import json
 import os
 import sys
+import contextlib
+import io
 import tempfile
 import unittest
 from datetime import datetime
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -56,7 +59,14 @@ class EventsTest(unittest.TestCase):
             (tool('mcp__plugin_context-mode_context-mode__ctx_batch_execute',
                   commands=[{'label': 'a', 'command': 'gh pr view 1'}, {'label': 'b'}, 'x']), [('open', (None, 1))]),
             (tool('mcp__hub__t-boards_1mcp_forest_set_work_state', step='s', taskId=CARD, branch='fix/a'),
-             [('task', CARD), ('branch', 'fix/a')]),
+             [('state', (CARD, 'fix/a'))]),
+            (tool('mcp__hub__t-boards_1mcp_forest_set_work_state', step='s'), [('state', (None, None))]),
+            # gh pr — только в начале команды, не в тексте аргумента (backend #417, п. 4)
+            (bash('python3 -I eval/nerve/nerve.py emit coord "verified: gh pr diff 163 --name-only"'), []),
+            (bash("gh pr comment 9 --body 'см. gh pr view 5'"), [('close', (None, 9))]),
+            (bash('cd w && gh pr view 5; x=$(gh pr diff 6 --name-only) | wc -l'), [('open', (None, 5)), ('open', (None, 6))]),
+            (bash('for n in 1; do gh pr view 7; done\nGH_PAGER= gh pr review 8 --approve'),
+             [('open', (None, 7)), ('close', (None, 8))]),
             (tool('mcp__hub__t-boards_1mcp_forest_acquire_lease', taskId=CARD), [('lease', CARD)]),
             (tool('Read', file_path='gh pr view 3'), []),
         ]
@@ -87,9 +97,18 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual([tl.lens(x) for x in (t(10, 5), t(10, 15), t(10, 25))], [(None, 1), (None, 2), (None, 1)])
 
     def test_state_is_last_work_state(self):
-        tl = self.line((t(10), 'task', CARD), (t(10), 'branch', 'fix/a'), (t(11), 'branch', 'fix/b'))
+        tl = self.line((t(10), 'state', (CARD, 'fix/a')), (t(11), 'state', (CARD, 'fix/b')))
         self.assertEqual([tl.state(x) for x in (t(9), t(10), t(11, 1))],
                          [(None, None), (CARD, 'fix/a'), (CARD, 'fix/b')])
+
+    def test_parent_and_subagent_events_with_unlike_values_sort(self):
+        """Равные (время, порядок, вид) у родителя и субагента, значения (None, N) и (репозиторий, N) — без TypeError
+        (backend #417, п. 2); при равенстве родитель раньше."""
+        parent, own = at.Timeline(), at.Timeline()
+        parent.add(t(10), 'open', (None, 5))
+        own.add(t(10), 'open', (REPO, 5))
+        own.add(t(10, 5), 'close', (REPO, 5))
+        self.assertEqual(parent.build(own).lens(t(10, 1)), (REPO, 5))
 
     def test_lease_only_when_one_card(self):
         self.assertEqual(self.line((t(9), 'lease', CARD), (t(10), 'lease', CARD)).lease, CARD)
@@ -111,18 +130,18 @@ class LedgerTest(unittest.TestCase):
 
     def test_order(self):
         lens = [(t(10), 'open', (None, 415)), (t(10, 30), 'close', (None, 415))]
-        state = [(t(9), 'task', CARD), (t(9), 'branch', 'fix/se122-qa-anchor')]
+        state = [(t(9), 'state', (CARD, 'fix/se122-qa-anchor'))]
         self.assertEqual(self.target(lens + state, t(10, 10)), ('pr', REPO, 415), 'окно линзы первым')
         self.assertEqual(self.target(lens + state, t(11)), ('pr', REPO, 377), 'затем ветка')
-        self.assertEqual(self.target([(t(9), 'task', CARD), (t(9), 'branch', 'feat/none')], t(11)),
+        self.assertEqual(self.target([(t(9), 'state', (CARD, 'feat/none'))], t(11)),
                          ('pr', REPO, 202), 'затем PR с id карточки в теле')
-        self.assertEqual(self.target([(t(9), 'task', 'abcdefghijklmnopqrstuvwx')], t(11)),
+        self.assertEqual(self.target([(t(9), 'state', ('abcdefghijklmnopqrstuvwx', None))], t(11)),
                          ('task', 'abcdefghijklmnopqrstuvwx'), 'затем только карточка')
         self.assertEqual(self.target([(t(9), 'lease', CARD2)], t(11)), ('task', CARD2), 'затем аренда')
         self.assertEqual(self.target([], t(11)), at.UNATTRIBUTED)
 
     def test_branch_prefers_open_pr(self):
-        self.assertEqual(self.target([(t(9), 'branch', 'fix/se74-nerve-lens-names')], t(11)), ('pr', REPO, 202))
+        self.assertEqual(self.target([(t(9), 'state', (None, 'fix/se74-nerve-lens-names'))], t(11)), ('pr', REPO, 202))
         self.assertEqual(at.pick([{'number': 1, 'mergedAt': '2026-11-13T10:00:00Z'},
                                   {'number': 2, 'mergedAt': '2026-11-14T10:00:00Z'}], t(11)), 2)
 
@@ -130,6 +149,37 @@ class LedgerTest(unittest.TestCase):
         hr = 'agolubenk/HR_Helper-v2'
         lens = [(t(10), 'open', (hr, 12)), (t(10, 30), 'close', (hr, 12))]
         self.assertEqual(self.target(lens, t(10, 10)), ('pr', hr, 12))
+
+    def test_work_state_replaces_whole_state(self):
+        """forest_set_work_state заменяет состояние целиком (backend #417, B1): новая карточка без ветки и state только
+        со step не оставляют прежнюю ветку."""
+        a, b = 'aaaaaaaaaaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbbbbbbbbbb'
+        lg = at.Ledger({'taibe': REPO}, {REPO: [{'number': 10, 'headRefName': 'fix/a', 'mergedAt': None, 'cards': [a]},
+                                                {'number': 20, 'headRefName': 'fix/b', 'mergedAt': None, 'cards': [b]}]})
+        first = tool('mcp__hub__t-boards_1mcp_forest_set_work_state', step='s', taskId=a, branch='fix/a')
+        for then, want in ((tool('mcp__hub__t-boards_1mcp_forest_set_work_state', step='s', taskId=b), ('pr', REPO, 20)),
+                           (tool('mcp__hub__t-boards_1mcp_forest_set_work_state', step='s'), at.UNATTRIBUTED)):
+            with self.subTest(then['input']):
+                tl = at.Timeline()
+                for when, block in ((t(9), first), (t(10), then)):
+                    for kind, value in at.block_events(block):
+                        tl.add(when, kind, value)
+                self.assertEqual(lg.target(at.Timeline().build(tl), t(11), REPO), want)
+
+    def test_lens_without_repo_flag_closes_window_opened_with_it(self):
+        """`gh pr view 7 -R <репозиторий продукта>` и `gh pr comment 7` — одно окно (backend #417, п. 3)."""
+        lg = ledger()
+        lg.record('s', 'p', False, act('r1', 10, 0, bash(f'gh pr view 7 -R {REPO}')), t(10), 'taibe')
+        lg.record('s', 'p', False, act('r2', 10, 10, bash('gh pr comment 7 --body-file x')), t(10, 10), 'taibe')
+        lg.call('s', 'p', False, t(10, 5), 'taibe', 1.0)
+        self.assertEqual(lg.resolve(), {('pr', REPO, 7): {'calls': 1, 'usd': 1.0}})
+
+    def test_pr_list_at_limit_warns(self):
+        done = mock.Mock(returncode=0, stdout=json.dumps([{'number': n} for n in range(at.PR_LIMIT)]), stderr='')
+        err = io.StringIO()
+        with mock.patch.object(at.subprocess, 'run', return_value=done), contextlib.redirect_stderr(err):
+            self.assertEqual(len(at.load_prs({'taibe': REPO})[REPO]), at.PR_LIMIT)
+        self.assertIn(f'предел --limit {at.PR_LIMIT}', err.getvalue())
 
     def test_subagent_sees_parent_events(self):
         parent = [(t(10), 'open', (None, 415)), (t(10, 30), 'close', (None, 415))]
