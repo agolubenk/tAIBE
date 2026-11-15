@@ -3,7 +3,7 @@
 `npm install`, `turbo run X` — скрипты package.json (с хуками жизненного цикла и пакетами workspaces), `make` — рецепты
 Makefile и его include, `awk -f F` — программа awk и её @include; `BASH_ENV=F`, `NODE_OPTIONS='-r F'`, `MAKEFILES=F`,
 `--script-shell F` — файл, который команда запустит сама (implied_commands). Решений не принимает: отдаёт тексты и
-команды, разбирает их хук. Текст None — папка не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
+команды, разбирает их хук; make_hint — прямые команды целей Makefile для сообщения об отказе (SE-105). Текст None — папка не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
 """
 import glob
 import json
@@ -48,6 +48,9 @@ MAKE_VALUED = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin"
 MAKE_OPTIONAL = {"-j", "-l", "-O"}  # необязательное значение: в связке — её остаток (`-lf ok.mk` — `-l f`, make 3.81)
 MAKEFILES = ("GNUmakefile", "makefile", "Makefile")
 MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$")
+WT_TRACKS = ("feature", "fix", "refactor", "spike", "review")
+EVAL_SUITES = ("nerve", "pipeline", "pipeline/reflex", "pipeline/genome", "swarm", "evolve")
+MAKE_VALUE = re.compile(r"[A-Za-z0-9._-]+\Z")
 # `\` + перевод строки make склеивает раньше комментариев: нечётное число `\` — продолжение, чётное — нет (make 3.81).
 MAKE_CONT = re.compile(r"(?<!\\)((?:\\\\)*)\\\n[ \t]*")
 INCLUDE_ESCAPE = "\0INCLUDE"  # метка в streams: строка include с `\` или `#` — экранирование make разбор не сводит
@@ -415,6 +418,42 @@ def make_option(a, cwd):
     if any(map(EVAL_RUNS.search, evals)):
         return MAKE_EVAL
     return MAKE_VAR_WHY if any(map(MAKE_VAR.match, rest)) else ""
+
+
+def _direct(goal, var):
+    """Команды рецепта цели worktree или проверок (Makefile команды) с TRACK/NAME/WT_BASE/WT_DEPS из var;
+    [] — цели нет в списке."""
+    track = goal[3:] if goal.startswith("wt-") and goal[3:] in WT_TRACKS else None
+    t, n = track or var.get("TRACK", "<TRACK>"), var.get("NAME", "<NAME>")
+    p, b = f'"worktrees/{t}/{n}"', f'"{t}/{n}"'
+    if track or goal == "wt-add":
+        return [f"mkdir -p worktrees/{t}", f"git worktree add {p} -b {b} {var['WT_BASE']}"
+                f"  # ветка {b} уже есть — git worktree add {p} {b}"] + (
+            [] if var.get("WT_DEPS") == "0" else [f"infra/scripts/dev/wt-deps.sh install {p}"])
+    return {"wt-help": ["cat worktrees/README.md"], "wt-list": ["git worktree list"],
+            "wt-deps": [f"infra/scripts/dev/wt-deps.sh install {p}"],
+            "wt-check": [f'infra/scripts/dev/wt-deps.sh check "worktrees/{t}/{n}/boards"'],
+            "wt-rm": [f"git worktree remove {p}"],
+            "check-repo": ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"],
+            "check-eval": [f"python3 -I -m unittest discover -s eval/{s} -p 'test_*.py'" for s in EVAL_SUITES],
+            }.get(goal, [])
+
+
+def make_hint(a, text):
+    """SE-105: make с признаком в Makefile — отказ, его решает хук, здесь он не меняется. Для целей worktree и
+    проверок, которые есть в прочтённом Makefile (text), — строка с прямыми командами рецепта для сообщения об
+    отказе: их хук разбирает как любые команды, Makefile при них не читается. "" — не make или целей из списка нет."""
+    if a[0] not in MAKES or not text:
+        return ""
+    var = {k: v for k, _, v in (w.partition("=") for w in a[1:] if "=" in w and not w.startswith("-"))
+           if MAKE_VALUE.match(v)}
+    base = re.search(r"(?m)^WT_BASE[ \t]*\??=[ \t]*([A-Za-z0-9._/-]+)[ \t]*$", text)
+    var.setdefault("WT_BASE", base.group(1) if base else "<WT_BASE>")
+    goals = [w for w in dict.fromkeys(a[1:]) if not w.startswith("-") and "=" not in w and _direct(w, var)
+             and re.search(rf"(?m)^{re.escape(w)}:", text)]
+    lines = [c for g in goals for c in _direct(g, var)]
+    return ("\nАгентской сессии вместо `make " + " ".join(goals) + "` — прямые команды рецепта: их хук разбирает "
+            "как обычные, Makefile не читается (SE-105):\n" + "\n".join("  " + c for c in lines)) if lines else ""
 
 
 def _awk_file(name, cwd):

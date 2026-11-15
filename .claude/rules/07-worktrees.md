@@ -6,7 +6,7 @@ paths:
 
 # Git worktrees + Claude Code
 
-> **Sync:** `Makefile`, `worktrees/README.md`
+> **Sync:** `Makefile`, `worktrees/README.md`, прямые формы целей — `.claude/hooks/merge_guard_launch.py` (`_direct`)
 
 ## Схема путей
 
@@ -46,6 +46,27 @@ make wt-rm TRACK=fix NAME=candidate-merge-n-plus-one
 
 Или slash-команды Claude: `/init-worktree`, `/init-parallel-worktrees`
 
+### Агентская сессия — прямые формы (SE-105)
+
+`make` с этим Makefile у агентской сессии (не Контроль) останавливает merge-guard: в Makefile есть путь
+`.claude/hooks/` (цель `check-layer`), а make хук разбирает по всему тексту Makefile. Агент запускает те же команды
+рецептов напрямую: их хук разбирает как любые команды, Makefile при них не читается. Отказ на `make <цель>` печатает
+эти команды с подставленными `TRACK`/`NAME`.
+
+```bash
+mkdir -p worktrees/fix                                                    # make wt-fix NAME=<topic>
+git worktree add "worktrees/fix/<topic>" -b "fix/<topic>" board-agents    # ветка есть: git worktree add "worktrees/fix/<topic>" "fix/<topic>"
+infra/scripts/dev/wt-deps.sh install "worktrees/fix/<topic>"              # зависимости (make wt-deps); WT_DEPS=0 — пропустить
+infra/scripts/dev/wt-deps.sh check "worktrees/fix/<topic>/boards"         # make wt-check
+git worktree list                                                         # make wt-list
+git worktree remove "worktrees/fix/<topic>"                               # make wt-rm
+python3 -I infra/checks/test_checks.py && python3 -I infra/checks/run.py  # make check-repo
+python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'              # make check-eval: ещё eval/pipeline,
+# eval/pipeline/reflex, eval/pipeline/genome, eval/swarm, eval/evolve — каждая папка своей командой
+```
+
+Другой трек — свой каталог и ветка (`worktrees/spike/<topic>`, `spike/<topic>`); база — `WT_BASE` из `Makefile`.
+
 ## .worktreeinclude
 
 При создании worktree Claude Code копирует локальные файлы из списка (`.env` и т.д.) — не коммитятся, но нужны для dev.
@@ -64,7 +85,8 @@ make wt-rm TRACK=fix NAME=candidate-merge-n-plus-one
    typecheck и сборки (2026-10-08; 30.10 — «EXTENSION_AUTH_CODES is not iterable»). Гейт (`npm run …`, `npx …`) в
    worktree без своих зависимостей останавливает хук `.claude/hooks/pre-tool-use-wt-deps.sh` с командой починки.
    Обход для команды, которой зависимости не нужны, — `WT_DEPS_CHECK=0` в её начале; для всей сессии —
-   `WT_DEPS_CHECK=0` в окружении, с которым запущен `claude` (хук и проверка Stop-typecheck молчат).
+   `WT_DEPS_CHECK=0` в окружении, с которым запущен `claude` (хук и проверка Stop-typecheck молчат). Установку
+   (`pnpm install|i|ci`) хук пропускает: это и есть починка (SE-124).
 3. Проверить локальные `.env` из `.worktreeinclude` (у досок — `boards/.env`)
 4. Одна задача на worktree — один PR
 
