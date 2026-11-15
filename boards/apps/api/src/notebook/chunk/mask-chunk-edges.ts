@@ -1,6 +1,5 @@
 import { type RedactHit, redact } from "@kaneo/redact";
-import { sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
+import { type AnyColumn, getTableName, sql } from "drizzle-orm";
 import { notebookChunkTable } from "../../database/notebook-schema";
 
 // TB-203: hardSplit cuts a long paragraph every CHUNK_MAX_CHARS characters,
@@ -38,16 +37,20 @@ export function maskChunkEdges(
 // The text of the chunk before (-1) or after (1) a chunk of
 // notebookChunkTable in the same section of its source, or null. A subquery
 // of the same statement, so the neighbours are of the same sync as the
-// chunk; with ORDER BY and LIMIT it runs only for the rows returned.
+// chunk. Every name is written in full: drizzle prints an alias without its
+// table and leaves columns of a one-table select unqualified, and inside the
+// subquery those would name the neighbour.
 export function textNear(step: -1 | 1) {
-  const near = alias(
-    notebookChunkTable,
-    step < 0 ? "chunk_before" : "chunk_after",
-  );
-  return sql<string | null>`(SELECT ${near.text} FROM ${near}
-    WHERE ${near.sourceId} = ${notebookChunkTable.sourceId}
-      AND ${near.ordinal} = ${notebookChunkTable.ordinal} + ${sql.raw(String(step))}
-      AND ${near.heading} = ${notebookChunkTable.heading})`;
+  const near = step < 0 ? "chunk_before" : "chunk_after";
+  const chunk = getTableName(notebookChunkTable);
+  const column = (of: string, { name }: AnyColumn) =>
+    sql`${sql.identifier(of)}.${sql.identifier(name)}`;
+  const { heading, ordinal, sourceId, text } = notebookChunkTable;
+  return sql<string | null>`(SELECT ${column(near, text)}
+    FROM ${notebookChunkTable} AS ${sql.identifier(near)}
+    WHERE ${column(near, sourceId)} = ${column(chunk, sourceId)}
+      AND ${column(near, ordinal)} = ${column(chunk, ordinal)} + ${sql.raw(String(step))}
+      AND ${column(near, heading)} = ${column(chunk, heading)})`;
 }
 
 // Hits of the glued text that touch `text`, in its offsets.
