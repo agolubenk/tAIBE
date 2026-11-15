@@ -114,9 +114,9 @@ CI_FAILED = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "S
 
 def ci_state(checks):
     """checks — выводы и статусы проверок (CheckConclusionState, CheckStatusState, StatusState GitHub). none — маркер
-    NONE от gh_source: у головы нет проверок дольше NO_CHECKS_AFTER. failure — есть провал из CI_FAILED (он окончателен,
-    даже если другие ещё идут); ok — каждая проверка в CI_OK; иначе pending: идёт, ждёт, REQUESTED, COMPLETED без
-    вывода, неизвестное значение. Пустой список — тоже pending: сразу после push GitHub какое-то время не отдаёт ни
+    NONE от gh_source: у головы нет проверок дольше NO_CHECKS_AFTER. failure — есть провал из CI_FAILED (он побеждает,
+    даже если другие ещё идут; повтор job на той же голове gh_source замечает сам); ok — каждая проверка в CI_OK;
+    иначе pending: идёт, ждёт, REQUESTED, COMPLETED без вывода, неизвестное значение. Пустой список — тоже pending: сразу после push GitHub какое-то время не отдаёт ни
     одной проверки, и кворум ушёл бы Контролю раньше CI (SE-126). Список разрешённых — новое значение GitHub не даст ни
     ложного кворума, ни ложного pr.ci_failed (SE-86)."""
     states = [str(c or "").upper() for c in checks]

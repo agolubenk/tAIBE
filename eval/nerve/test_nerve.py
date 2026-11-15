@@ -786,7 +786,7 @@ class GithubPollTest(unittest.TestCase):
                          [(quorum.author_roles("backend", CFG["team"]["roles"]), "nervous",
                            "#487: линзы собраны (backend, boards, plan), CI упал на eeeeeeeee — кворума нет")],
                          "автору PR, сразу")
-        self.assertFalse(self.ctx.state["github"]["prs"]["487"]["await_ci"], "провал окончателен: CI не опрашивается")
+        self.assertTrue(self.ctx.state["github"]["prs"]["487"]["await_ci"], "ждёт повтора упавшего job")
         comments = self.lenses(487, head)
         comments[487].append("комментарий без вердикта")   # PR изменился, голова та же
         sources.run = FakeGh([_pr(487, head, "2026-11-04T10:30:00Z")], comments=comments,
@@ -804,7 +804,50 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         kinds = [k for k, _ in self.kinds()]
         self.assertEqual((kinds.count("pr.quorum"), kinds.count("pr.ci_failed")), (0, 1))
-        self.assertFalse(self.ctx.state["github"]["prs"]["488"]["await_ci"])
+        self.assertTrue(self.ctx.state["github"]["prs"]["488"]["await_ci"], "ждёт повтора упавшего job")
+
+    def test_green_rerun_on_a_quiet_pr_gives_one_quorum(self):
+        """SE-86, линза backend #252: повтор упавшего job зеленеет на той же голове, PR не меняется. Проверки — раз в
+        FAILED_CI_EVERY, комментарии при провале не читаются; зелёный повтор — один pr.quorum, pr.ci_failed — один."""
+        head, t0 = "c" * 40, self.ctx.now
+        views, reads = [], []
+
+        def at(seconds, ci):
+            self.ctx.now = t0 + timedelta(seconds=seconds)
+            fake = FakeGh([_pr(490, head)], comments=self.lenses(490, head), ci={490: ci})
+            sources.run = fake
+            gh_source.poll_github(self.ctx)
+            views.append(len([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]))
+            reads.append(len([c for c in fake.calls if c[:2] == ["gh", "api"]]))
+
+        every = gh_source.FAILED_CI_EVERY
+        for s in (0, 15, 30, every):
+            at(s, ("SUCCESS", "FAILURE"))
+        at(every + 15, ("SUCCESS", "IN_PROGRESS"))      # Контроль запустил повтор упавшего job
+        at(every + 30, ("SUCCESS", "SUCCESS"))
+        at(every + 45, ("SUCCESS", "SUCCESS"))
+        self.assertEqual(views, [1, 1, 0, 0, 1, 1, 0], "провал — раз в FAILED_CI_EVERY, повтор идёт — каждый проход")
+        self.assertEqual(reads, [1, 0, 0, 0, 0, 1, 0], "комментарии — на голове и когда CI зелёный")
+        kinds = [k for k, _ in self.kinds()]
+        self.assertEqual((kinds.count("pr.quorum"), kinds.count("pr.ci_failed")), (1, 1))
+        self.assertIn(("pr.quorum", "#490 собран: approve backend, boards, plan на ccccccccc, CI ok"), self.kinds())
+        self.assertFalse(self.ctx.state["github"]["prs"]["490"]["await_ci"])
+
+    def test_cached_failure_is_reread_when_the_pr_changes(self):
+        """SE-86, линза Контроля #252 (проход 4): кэш failure, затем новый комментарий и зелёный CI на той же голове —
+        pr.quorum сразу, без ожидания FAILED_CI_EVERY."""
+        head = "d" * 40
+        sources.run = FakeGh([_pr(491, head)], comments=self.lenses(491, head), ci={491: ("SUCCESS", "FAILURE")})
+        gh_source.poll_github(self.ctx)
+        comments = self.lenses(491, head)
+        comments[491].append("повтор unit зелёный")   # PR изменился, голова та же
+        self.ctx.now += timedelta(seconds=15)
+        sources.run = FakeGh([_pr(491, head, upd="2026-11-04T10:05:00Z")], comments=comments,
+                             ci={491: ("SUCCESS", "SUCCESS")})
+        gh_source.poll_github(self.ctx)
+        kinds = [k for k, _ in self.kinds()]
+        self.assertEqual((kinds.count("pr.quorum"), kinds.count("pr.ci_failed")), (1, 1))
+        self.assertIn(("pr.quorum", "#491 собран: approve backend, boards, plan на ddddddddd, CI ok"), self.kinds())
 
     def test_unknown_ci_value_waits_without_events(self):
         """SE-86: незнакомое значение GitHub — не ok и не провал: PR ждёт CI, событий нет."""

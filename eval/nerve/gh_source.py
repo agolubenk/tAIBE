@@ -20,6 +20,7 @@ GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title,headRefName,baseRefName
 GH_NEW_PER_PASS = 20   # новых для Нерва PR за проход: догон не задерживает очередь владельца на минуты
 NO_CHECKS_AFTER = 1800  # с после головы без единой проверки — событие координатору (SE-126)
 NO_CHECKS_EVERY = 900   # с: дальше такой PR перечитывается раз в 15 мин, а не каждый проход
+FAILED_CI_EVERY = 300   # с: CI упал при собранных линзах — проверки раз в 5 мин: повтор job зеленеет на той же голове
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
@@ -163,19 +164,24 @@ def _recheck_ci(ctx, n, p):
     читаются: у большого PR это десятки КБ за проход (#292 — 54 КБ). Новый вердикт меняет updated PR — его разбирает
     основной путь прохода."""
     slow = _no_checks(ctx, p)
-    if slow:
+    # Упавший CI ждёт повтора job (Контроль, gh run rerun): голова та же, PR не меняется. Без чтения кворум после
+    # зелёного повтора не пришёл бы до новой головы; каждый проход — до 5 760 gh pr view в сутки на PR (SE-86)
+    failed = not slow and quorum.ci_state(p.get("checks") or []) == "failure"
+    if slow or failed:
         # CI у PR нет: перечитывать раз в NO_CHECKS_EVERY, а не каждый проход (до 1 440 gh pr view в сутки на PR) —
         # только чтобы заметить проверки, если их всё же запустят
         last = sources._ts(p.get("ci_at"))
-        if last and (ctx.now - last).total_seconds() < NO_CHECKS_EVERY:
+        if last and (ctx.now - last).total_seconds() < (NO_CHECKS_EVERY if slow else FAILED_CI_EVERY):
             return
     checks = _gh_checks(ctx.cfg["github"]["repo"], n)
-    if slow:
+    if slow or failed:
         p["ci_at"] = _iso_now(ctx)   # после удачного чтения: сбой gh повторяется следующим проходом, а не через 15 мин
     p["checks"] = checks
     ci = quorum.ci_state(_quorum_checks(ctx, p))
-    if ci == "pending" or (ci == "none" and p.get("none_head") == p["head"]):
-        return   # «CI: none» уже разобран на этой голове: комментарии не перечитываются раз в 15 мин (HR #774 — 23 КБ)
+    if ci == "pending" or (ci == "failure" and failed) or (ci == "none" and p.get("none_head") == p["head"]):
+        # провал и до чтения: pr.ci_failed на этой голове уже ушёл (gh:cifail) — комментарии не читаются.
+        # «CI: none» уже разобран на этой голове: комментарии не перечитываются раз в 15 мин (HR #774 — 23 КБ)
+        return
     _check_pr(ctx, n, p, p["head"], viewed=True)
     if ci == "none":
         p["none_head"] = p["head"]   # после разбора: упавшее чтение комментариев не теряет кворум «CI: none»
@@ -253,8 +259,9 @@ def _check_pr(ctx, n, p, head, viewed=False):
         p["author"] = quorum.pr_author(body, files, g["path_roles"], ctx.cfg["team"]["roles"])   # адресат changes
         p["author_line"] = quorum.body_author(body, ctx.cfg["team"]["roles"])   # автор для кворума — только строка
         p["checks"] = checks
-    elif not viewed and quorum.ci_state(p["checks"]) == "pending":
-        # PR меняется каждый проход (комментарии) — _recheck_ci его не видит: CI перечитывается здесь (SE-123)
+    elif not viewed and quorum.ci_state(p["checks"]) in ("pending", "failure"):
+        # PR меняется каждый проход (комментарии) — _recheck_ci его не видит: CI перечитывается здесь (SE-123).
+        # failure — тоже: повтор упавшего job зеленеет на той же голове (SE-86)
         p["checks"] = _gh_checks(g["repo"], n)
     if head_changed:
         p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
@@ -273,8 +280,9 @@ def _check_pr(ctx, n, p, head, viewed=False):
     ok, approved, changes, ci = quorum.quorum(verdicts, head, _quorum_checks(ctx, p), g["min_lenses"], author)
     own = quorum.author_approved(quorum.last_on_head(verdicts, head), author)
     p["changes_by"] = changes
-    # CI нет (none) — ожидание не снимается: если проверки всё же запустят, кворум по ним — обычным правилом (SE-126)
-    p["await_ci"] = len(approved) >= g["min_lenses"] and not changes and ci in ("pending", "none")
+    # CI нет (none) — ожидание не снимается: если проверки всё же запустят, кворум по ним — обычным правилом (SE-126).
+    # failure — тоже: ждём повтора job, проверки раз в FAILED_CI_EVERY (SE-86)
+    p["await_ci"] = len(approved) >= g["min_lenses"] and not changes and ci in ("pending", "none", "failure")
     note = f"; approve автора {author} не засчитан" if own else ""
     if own and not changes and len(approved) + 1 == g["min_lenses"]:
         # кворум ждёт только из-за approve автора: Контроль видит причину один раз на голову (SE-121)
