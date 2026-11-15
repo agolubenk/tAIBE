@@ -8,6 +8,7 @@ import { insertProject } from "../../project/controllers/insert-project";
 import { claimTaskNumber } from "../../task/controllers/claim-task-numbers";
 import { nextTaskPosition } from "../../task/controllers/next-task-position";
 import type { ForestActor } from "../actor";
+import { uncutClips } from "../read/uncut-text";
 import { writeJournal } from "../journal";
 
 export const GROW_SEED_LIMIT = 100;
@@ -85,7 +86,9 @@ export async function growForest(input: GrowInput) {
         .values({
           projectId: project.id,
           title: seed.title,
-          description: seed.body,
+          // TB-203: a word cut by a clip of felling is a fragment, maybe of a
+          // secret that redact would not know in the live card.
+          description: uncutClips(seed.body),
           status: START_STATUS,
           columnId: column?.id ?? null,
           priority: "no-priority",

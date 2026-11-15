@@ -4,6 +4,7 @@ import { timberLogTable } from "../../database/forest-schema";
 import { maskedMatchPage } from "../../task/masked-match-page";
 import { isMarkerQuery, matchesVisibleText } from "../../utils/visible-match";
 import { SEARCH_TEXT_CHARS } from "../fell/build-log";
+import { uncutText } from "./uncut-text";
 import {
   decodeCursor,
   encodeCursor,
@@ -134,7 +135,12 @@ async function listVisibleLogs(
     : [];
   const visible = new Set(
     texts
-      .filter((row) => matchesVisibleText(uncutText(row.searchText), search))
+      .filter((row) =>
+        matchesVisibleText(
+          uncutText(row.searchText, SEARCH_TEXT_CHARS),
+          search,
+        ),
+      )
       .map((row) => row.id),
   );
   const items: (typeof scanned)[number][] = [];
@@ -154,14 +160,4 @@ async function listVisibleLogs(
     nextCursor:
       more && last ? encodeCursor({ at: last.felledAt, id: last.id }) : null,
   };
-}
-
-// searchText is cut at SEARCH_TEXT_CHARS, maybe inside a secret, and redact
-// does not know a secret without its end. A cut text is matched only up to
-// its last whitespace (backend lens #388, R2); logs felled before this rule
-// are covered too.
-function uncutText(text: string) {
-  if (text.length < SEARCH_TEXT_CHARS) return text;
-  const lastSpace = text.search(/\s\S*$/);
-  return lastSpace < 0 ? "" : text.slice(0, lastSpace);
 }
