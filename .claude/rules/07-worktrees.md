@@ -64,7 +64,8 @@ make wt-rm TRACK=fix NAME=candidate-merge-n-plus-one
    typecheck и сборки (2026-10-08; 30.10 — «EXTENSION_AUTH_CODES is not iterable»). Гейт (`npm run …`, `npx …`) в
    worktree без своих зависимостей останавливает хук `.claude/hooks/pre-tool-use-wt-deps.sh` с командой починки.
    Обход для команды, которой зависимости не нужны, — `WT_DEPS_CHECK=0` в её начале; для всей сессии —
-   `WT_DEPS_CHECK=0` в окружении, с которым запущен `claude` (хук и проверка Stop-typecheck молчат).
+   `WT_DEPS_CHECK=0` в окружении, с которым запущен `claude` (хук и проверка Stop-typecheck молчат). Установку
+   (`pnpm install|i|ci`) хук пропускает: это и есть починка (SE-124).
 3. Проверить локальные `.env` из `.worktreeinclude` (у досок — `boards/.env`)
 4. Одна задача на worktree — один PR
 
