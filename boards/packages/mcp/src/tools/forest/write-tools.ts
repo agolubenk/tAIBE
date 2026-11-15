@@ -48,7 +48,7 @@ export function registerForestWriteTools(
     "forest_request_approval",
     {
       description:
-        "Ask the owner for a «да»: fell a tree (root task with its subtasks) or a sector, close a task (move it to a final column or archived), reopen a done or archived one (a card in «Брёвна», status closed, is terminal), change its priority, or a one-time grant: create_label, attach_label, set_assignee. Only the owner answers — in the t-boards UI or in the owner queue, where the server puts the request itself (never add a queue item for it). On «да» the server applies the action itself, the whole path to the target status included; do not repeat the write. Read the outcome with forest_list_approvals: consumed (applied), rejected, failed (failReason) or expired. close_task needs doneRef or doneReason.",
+        "Ask the owner for a «да»: fell a tree (root task with its subtasks) or a sector, close a task (move it to a final column or archived), reopen a done or archived one (a card in «Брёвна», status closed, is terminal), change its priority, or a one-time grant: create_label, attach_label, set_assignee. Only the owner answers — in the t-boards UI or in the owner queue, where the server puts the request itself (never add a queue item for it). On «да» the server applies the action itself, the whole path to the target status included; do not repeat the write. Read the outcome with forest_list_approvals: consumed (applied), rejected, failed (failReason) or expired. close_task needs doneRef or doneReason; with taskIds it closes a list of cards at once (targetId = workspace id).",
       inputSchema: z.object({
         workspaceId: id,
         action: z.enum([
@@ -62,7 +62,7 @@ export function registerForestWriteTools(
           "set_assignee",
         ]),
         targetId: id.describe(
-          "Root task id, sector id, the task to close, reopen, reprioritize or assign; create_label: the workspace id; attach_label: the workspace label id.",
+          "Root task id, sector id, the task to close, reopen, reprioritize or assign; create_label and close_task with taskIds: the workspace id; attach_label: the workspace label id.",
         ),
         value: z
           .string()
@@ -83,10 +83,10 @@ export function registerForestWriteTools(
         taskIds: z
           .array(id)
           .min(1)
-          .max(20)
+          .max(250)
           .optional()
           .describe(
-            "create_label, attach_label: the cards that get the label.",
+            "create_label, attach_label: the cards that get the label (up to 20). close_task: up to 250 cards closed by one «да», without value — each goes to its project's final column; a card that changed, moved to another project, is leased, locked or already closed is skipped. The owner's queue item shows the report; the cards left open keep their status, so read them back with list_tasks.",
           ),
         doneRef: z
           .string()

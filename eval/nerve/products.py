@@ -113,6 +113,18 @@ def merge(shared, product):
     return out
 
 
+# Вторая сессия роли (backend-2): свой ключ в Нерве и team.roles, геном и пусковой файл — базовой роли (решения
+# владельца d-taibe-gl10-sessions-1411, d-lavaeon-presentations = A). Без своей копии генома: правка базового
+# генома доходит до обеих сессий. То же правило — role_base в eval/tools/spawn_session.sh (bash 3.2).
+SECOND_RE = re.compile(r"^([a-z]+)-([2-9])$")
+
+
+def base_role(role):
+    """backend-2 → backend; ключ без суффикса «-N» — как есть."""
+    m = SECOND_RE.match(role or "")
+    return m.group(1) if m else role
+
+
 def _roles_known():
     try:
         return set(_read(ROLES_TABLE)["roles"])
@@ -123,8 +135,12 @@ def _roles_known():
 def _check_roles(slug, cfg):
     roles = cfg["team"]["roles"]
     known = _roles_known()
-    if known is not None and not set(roles) <= known:
-        raise ProductError(f"{slug}: роли {sorted(set(roles) - known)} нет в eval/pipeline/genome/roles.json")
+    bases = {base_role(r) for r in roles}
+    if known is not None and not bases <= known:
+        raise ProductError(f"{slug}: роли {sorted(bases - known)} нет в eval/pipeline/genome/roles.json")
+    for role in roles:
+        if base_role(role) != role and base_role(role) not in roles:
+            raise ProductError(f"{slug}: вторая сессия «{role}» без роли «{base_role(role)}» в team.roles")
     for field in ("github.path_roles", "github.lens_roles", "queue.source_roles"):
         for pair in _get(cfg, field) or []:
             if pair[1] not in roles:
@@ -132,6 +148,18 @@ def _check_roles(slug, cfg):
     for role in cfg["github"].get("quorum_to") or []:
         if role not in roles:
             raise ProductError(f"{slug}: github.quorum_to — роль «{role}», её нет у продукта")
+
+
+def _check_match(name, match):
+    """`queue.match` — регулярное выражение `re.search` по id пункта очереди (SE-109); битое — ошибка загрузки."""
+    if match is None:
+        return
+    if not isinstance(match, str) or not match:
+        raise ProductError(f"instances/{name}: queue.match — нужна непустая строка (регулярное выражение)")
+    try:
+        re.compile(match)
+    except re.error as e:
+        raise ProductError(f"instances/{name}: queue.match «{match}» — не регулярное выражение ({e})") from None
 
 
 def load(instances=INSTANCES):
@@ -150,6 +178,7 @@ def load(instances=INSTANCES):
         for path in REQUIRED:
             if _get(data, path) is None:
                 raise ProductError(f"instances/{name}: нет обязательного поля {path}")
+        _check_match(name, _get(data, "queue.match"))
         products[slug] = data
     default = shared.get("default_product")
     if not isinstance(default, str) or default not in products:
