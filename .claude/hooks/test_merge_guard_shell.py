@@ -496,7 +496,8 @@ mk = repo_on("fix/x", "se105")
 commit_makefile(mk, real)
 for form in ("make wt-fix NAME=x", "make wt-feature NAME=a.b-c_1", "make wt-list", "make wt-help", "make check-eval",
              "make check-repo", "make wt-deps TRACK=fix NAME=x", "make wt-check TRACK=fix NAME=x",
-             "make wt-rm TRACK=fix NAME=x", "make wt-fix NAME=x WT_DEPS=0", "  make  wt-list  "):
+             "make wt-rm TRACK=fix NAME=x", "make wt-fix NAME=x WT_DEPS=0", "  make  wt-list  ",
+             "make wt-refactor NAME=x", "make wt-spike NAME=x", "make wt-review NAME=x"):
     bash(f"SE-105, разрешённая цель, Makefile как в board-agents: {form!r}", form, False, cwd=mk)
 for form in ("make", "make check", "make check-layer", "make help", "make wt-add TRACK=fix NAME=x",
              "make wt-list wt-help", "make ./check", "make ./wt-list", "make 'wt-list'", 'make "$G"',
