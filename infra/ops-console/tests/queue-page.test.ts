@@ -1276,6 +1276,13 @@ describe('держатель входящего (карточка HR xuc5csrv, d
     expect(html).toContain('agentFieldsInto(e, r.data);')
   })
 
+  it('сравнение строкой: session в oq_agent_status и --relay с разными значениями (линия и имя) — не «в сети» (линза backend #414)', () => {
+    const { holderState } = pure()
+    const e = { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(5) }
+    expect(holderState(relay(live('taibe-89')), e, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 5 })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+  })
+
   it('по продуктам (OPS-51): живая сессия другого продукта с тем же именем держателя не делает его «в сети»', () => {
     const { holderState } = pure()
     const e = { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(6) }
