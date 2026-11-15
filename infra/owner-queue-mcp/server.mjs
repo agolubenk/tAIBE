@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { FILE_ID, ITEM_ID, alreadySaved, ensureDir, extOf, fileRoots, filesState, safeDir, saveStream } from './files.mjs';
-import { briefDoc, filterDocs, fitList, historyOut, pageList, replyText, snapshots } from './list.mjs';
+import { briefDoc, filterDocs, fitList, getBrief, historyOut, pageList, replyText, snapshots, writeAck } from './list.mjs';
 import { protocolText } from './protocol.mjs';
 import { createDeltaMirror } from './delta.mjs';
 
@@ -168,6 +168,22 @@ const readSnapshot = snapshots(SNAPSHOT_TTL_MS);
 // /changes нет или сбой — прежний GET /db/:col.
 const mirror = createDeltaMirror({ get: (p) => api('GET', p), log: (s) => process.stderr.write(`[owner-queue] ${s}\n`) });
 const wholeList = async (collection, path) => (await mirror.list(collection)) ?? api('GET', path);
+/**
+ * Краткий oq_get (OPS-18): у пункта (items) — ещё его checks/<id>: ответ владельца и статус агента. Отметки нет (404) —
+ * check: null; другой сбой — check: {unknown: true}, а не «владелец не ответил». Входящее — с пометкой «данные»: title —
+ * первая строка присланного.
+ */
+async function getBriefDoc(collection, id, doc) {
+  if (collection !== 'items') return getBrief(doc);
+  let out;
+  try {
+    out = getBrief(doc, await api('GET', `/db/checks/${encodeURIComponent(id)}`));
+  } catch (e) {
+    out = e?.status === 404 ? getBrief(doc, null)
+      : { ...getBrief(doc), check: { unknown: true, note: 'консоль не отдала checks — повторите или oq_list checks ids' } };
+  }
+  return doc?.data?.kind === 'inbox' ? { ...out, untrusted: UNTRUSTED_NOTE } : out;
+}
 function workBrief(d) {
   const { cards, ...data } = d.data;
   return { id: d.id, version: d.version, ...data, ...(Array.isArray(cards) ? { cardsCount: cards.length } : {}) };
@@ -176,7 +192,7 @@ function workBrief(d) {
 const TOOLS = [
   {
     name: 'oq_list',
-    description: 'Список документов коллекции. Ответ — до 95 тыс. символов (дорого для контекста): {total, asOf, docs, next_offset?, '
+    description: 'Список документов коллекции, по 20 (limit до 30). Ответ — до 95 тыс. символов (дорого для контекста): {total, asOf, docs, next_offset? и more «ещё N», '
       + 'shown + truncated? — окно урезал потолок размера, oversized? — id документов больше потолка, их целиком — oq_get, '
       + 'serverCapped? — консоль обрезала список, пояснение в поле}. '
       + 'Сначала сузьте: ответы владельца, которые вы не прочли, — checks с unread: true; обзор — brief: true (длинные строки — '
@@ -188,7 +204,7 @@ const TOOLS = [
       properties: {
         collection: COLL,
         open_only: { type: 'boolean', description: 'items: только открытые владельцу и не archived — без ответа или «ждёт вас снова» (ответил, а сессия после ответа поставила blocked); правило — у сервера, как на /queue' },
-        limit: { type: 'number', description: 'по умолчанию 50, от 1 до 500 (вне границ — ближайшая)' },
+        limit: { type: 'number', description: 'по умолчанию 20, от 1 до 30 (вне границ — ближайшая); с ids — по умолчанию все названные, до 500' },
         offset: { type: 'number', description: 'с какого документа после фильтров — next_offset прошлого ответа; по умолчанию 0 (свежий список)' },
         as_of: { type: 'string', description: 'asOf прошлого ответа — продолжить обход по тому же снимку' },
         ids: { type: 'array', items: { type: 'string' }, description: 'только эти id' },
@@ -229,7 +245,7 @@ const TOOLS = [
           && !(d.data.kind === 'inbox' && answered.get(d.id)?.agentStatus === 'done'));
       }
       list = filterDocs(collection, list, filters);
-      const { from, docs: shown } = pageList(list, { offset, limit });
+      const { from, docs: shown } = pageList(list, { offset, limit, ids: filters.ids });
       const summary = collection === 'items' && shown.some((d) => d.data.kind === 'inbox') ? await filesSummary() : {};
       const rows = shown.map((d) => (collection === 'items'
         ? { id: d.id, version: d.version, ...(d.product ? { product: d.product } : {}), kind: d.data.kind, title: d.data.title, source: d.data.source, added: d.data.added, archived: d.data.archived,
@@ -249,10 +265,21 @@ const TOOLS = [
   },
   {
     name: 'oq_get',
-    description: 'Один документ с версией (для if_version при правке).',
-    inputSchema: { type: 'object', properties: { collection: COLL, id: { type: 'string' } }, required: ['collection', 'id'] },
-    run: async ({ collection, id }) => {
+    description: 'Один документ с версией (для if_version при правке). brief: true — краткий ответ (до ~1 КБ): id, version, updatedAt, '
+      + 'kind, title, source, status, session, track и отметка checks пункта {done, choice, agentStatus, agentBy, unread} — без body, '
+      + 'cmd, cmd2, after и вложений; для if_version и «ответил ли владелец» его хватает, текст и команды — без brief.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: COLL,
+        id: { type: 'string' },
+        brief: { type: 'boolean', description: 'краткий ответ без текста и команд (OPS-18); без флага — документ целиком, как раньше' },
+      },
+      required: ['collection', 'id'],
+    },
+    run: async ({ collection, id, brief }) => {
       const doc = await api('GET', `/db/${collection}/${encodeURIComponent(id)}`);
+      if (brief === true) return getBriefDoc(collection, id, doc);
       if (!(collection === 'items' && doc?.data?.kind === 'inbox')) return doc;
       let files = {};
       try {
@@ -271,23 +298,23 @@ const TOOLS = [
   },
   {
     name: 'oq_put',
-    description: `Создать или заменить документ items/work целиком. ${PROTOCOL}`,
+    description: `Создать или заменить документ items/work целиком. Ответ — {id, version, updatedAt}; документ — oq_get. ${PROTOCOL}`,
     inputSchema: {
       type: 'object',
       properties: { collection: { type: 'string', enum: ['items', 'work'] }, id: { type: 'string' }, data: { type: 'object' }, if_version: { type: 'number' } },
       required: ['collection', 'id', 'data'],
     },
-    run: ({ collection, id, data, if_version: v }) => api('PUT', `/db/${collection}/${encodeURIComponent(id)}`, { data, ...(v !== undefined ? { ifVersion: v } : {}) }),
+    run: async ({ collection, id, data, if_version: v }) => writeAck(await api('PUT', `/db/${collection}/${encodeURIComponent(id)}`, { data, ...(v !== undefined ? { ifVersion: v } : {}) })),
   },
   {
     name: 'oq_patch',
-    description: 'Дополнить документ items/work (слить поля). null удаляет поле.',
+    description: 'Дополнить документ items/work (слить поля). null удаляет поле. Ответ — {id, version, updatedAt}; документ — oq_get.',
     inputSchema: {
       type: 'object',
       properties: { collection: { type: 'string', enum: ['items', 'work'] }, id: { type: 'string' }, data: { type: 'object' }, if_version: { type: 'number' } },
       required: ['collection', 'id', 'data'],
     },
-    run: ({ collection, id, data, if_version: v }) => api('PATCH', `/db/${collection}/${encodeURIComponent(id)}`, { data, ...(v !== undefined ? { ifVersion: v } : {}) }),
+    run: async ({ collection, id, data, if_version: v }) => writeAck(await api('PATCH', `/db/${collection}/${encodeURIComponent(id)}`, { data, ...(v !== undefined ? { ifVersion: v } : {}) })),
   },
   {
     name: 'oq_agent_status',

@@ -13,8 +13,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
-from merge_guard_testkit import ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
+from merge_guard_testkit import C4, CONTROL, D9, ROOT, SESSIONS, TMP, bash, check, finish, mg, repo_on, run  # noqa: E402
+import merge_guard_git  # noqa: E402
+import merge_guard_launch as mg_launch  # noqa: E402
 
+# Правило блоба make (coord 12:36, #402) проверяет свой блок на настоящем репозитории git; фикстуры остальных форм make
+# лежат в TMP вне git, поэтому их разбор идёт без правила. До правки (тест до правки) атрибута ещё нет.
+blob_rule = getattr(mg_launch, "same_blob", None)
+mg_launch.same_blob = lambda p, data: True
 on_main, on_branch = repo_on("main"), repo_on("fix/a")
 # Псевдонимы gh — из своего конфига, а не с машины: на раннере ~/.config/gh нет, и `gh co` (псевдоним gh по
 # умолчанию) там не прочитать — r21 «не запись» падали бы только в CI.
@@ -264,7 +270,8 @@ for form in ("cd sub && cd - && bash merge9.sh", "cd sub; cd -; bash merge9.sh",
              "cd ws && npm run build -w packages/a", "cd ws && pnpm -r build", "cd ws && yarn workspaces foreach run build",
              "cd tw && turbo run deploy", "cd tw && turbo deploy", "NODE_OPTIONS='-r ./m.js' npm run lint",
              'NODE_OPTIONS="--require=./m.js" node -e 1', "NODE_OPTIONS='--import ./m.js' node -e 1",
-             "MAKEFILES=m.mk make -C inc2", "npm --script-shell ./merge9.sh run lint",
+             "MAKEFILES=m.mk make -C inc2", "make -C inc2", "make -j4 -C inc2",  # include в Makefile — coord 12:06
+             "npm --script-shell ./merge9.sh run lint",
              "npm_config_script_shell=./merge9.sh npm run lint", "NPM_CONFIG_SCRIPT_SHELL=./merge9.sh npm test",
              "bash -ni merge9.sh", "bash tools/hub.sh", "cd gt/deep && bash t.sh", "command node; cat merge9.sh",
              'cd gt/deep && cd "$(git rev-parse --show-toplevel)" && bash merge9.sh',
@@ -276,10 +283,10 @@ for form in ("cd sub && cd - && bash merge9.sh", "cd sub; cd -; bash merge9.sh",
     bash(f"r9, видно: {form!r}", form, True, cwd=w)
 for form in ("cd sub && cd - && bash ok.sh", 'cd "$X" && ls', f'cd "$X" && bash {w}/ok.sh', f'cd "$X"; cd {w}; bash ok.sh',
              "(cd sub); bash ../merge9.sh", "(cd sub) && bash ok.sh", "pushd sub; popd; bash ok.sh",
-             f'cd "$X" && echo 1 > {w}/out.txt', "node --run lint", "make -C inc2", "awk -F: '{ print $1 }' /etc/passwd",
+             f'cd "$X" && echo 1 > {w}/out.txt', "node --run lint", "awk -F: '{ print $1 }' /etc/passwd",
              "cd pub && npm version patch", "cd ws && npm run build", "cd tw && turbo run lint",
              "NODE_OPTIONS=--max-old-space-size=6144 npm run lint", "NODE_OPTIONS='--import tsx' node -e 1",
-             "bash -n merge9.sh", "bash -n -c 'gh pr merge 1'", "bash -o noexec merge9.sh", "make -j4 -C inc2",
+             "bash -n merge9.sh", "bash -n -c 'gh pr merge 1'", "bash -o noexec merge9.sh",
              "cd life && npm run lint", "bash tools/hubok.sh", "bash tools/lost.sh", "node --version; cat merge9.sh",
              "command -v node; cat merge9.sh", "python3 -V; cat merge9.sh", "perl -v < merge9.sh",
              "bash +n -n merge9.sh", "bash -no noexec merge9.sh", 'D=$(cd sub 2>/dev/null && pwd); bash "$D/../ok.sh"',
@@ -295,6 +302,380 @@ for form in ("bash -n +o noexec noexec", "bash -n +n -- +n", "bash -o noexec +o 
     bash(f"r10, видно: {form!r}", form, True, cwd=o)
 for form in ("bash -n noexec", "bash -n -- +n", "bash -o noexec noexec", "bash +n -n -- -n"):
     bash(f"r10, только синтаксис: {form!r}", form, False, cwd=o)
+
+# --- SE-128: длинные опции make — как у getopt_long (точное имя или однозначный префикс); строка --eval/-E ---
+o = TMP / "se128"
+for name, text in (("Makefile", "all:\n\techo\n"), ("sub/Makefile", "x:\n\tgh pr merge 1\n"),
+                   ("i/Makefile", "-include lib.mk\nall:\n\techo\n"), ("i/inc/lib.mk", "x:\n\tgh pr merge 1\n"),
+                   ("sub/mk", "x:\n\tgh pr merge 1\n"), ("inc/lib.mk", "x:\n\tgh pr merge 1\n"),
+                   ("ok/Makefile", "x:\n\techo\n"), ("ok.mk", "x:\n\techo\n"), ("--dir", "x:\n\tgh pr merge 1\n"),
+                   ("j/Makefile", "x:\n\tgh pr merge 1\n"), ("j/ok.mk", "x:\n\techo\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make --dir=sub x", "make --direc sub x", "make --fil=sub/mk x", "make --makef=sub/mk x",
+             "make -C i --include=inc x", "gmake --ev 'x:;gh pr merge 1' x", "make --eval='x:;gh pr merge 1'",
+             "make -E 'x:;gh pr merge 1' x", "make -sE'x:;gh pr merge 1'", "make --eval 'include sub/mk' x",
+             "make -C j --jobserver-auth -f ok.mk x", "make --d x", "make --o -f ok.mk x", "make --frob x",
+             # как сейчас: целые опции и значение `-f`, похожее на опцию (файл `--dir`), не раскрывается
+             "make -C sub x", "make --directory=sub x", "make --directory sub x", "make -f --dir x"):
+    bash(f"SE-128, видно: {form!r}", form, True, cwd=o)
+for form in ("make x", "make --dir=ok x", "make --fil=ok.mk x", "make -C j -f ok.mk x", "make --no-print x",
+             "make --jobs=4 --keep x", "gmake --eval='x: y' x", "make --ev 'x: y' x", "make -- --dir=sub",
+             "make --dry-run x"):
+    bash(f"SE-128, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "make --o -f ok.mk x"}, cwd=o) or ""
+check(f"SE-128: причина — опция make, а не папка: {why[:90]!r}", why if "длинная опция make" in why else None, True)
+# SE-133: MAKEFLAGS/GNUMAKEFLAGS — опции make из окружения (`-I`, `MAKEFILES=` сверены с make 3.81); первое слово без
+# `-` — связка. Папку make разбор не знает (`-C` команды, `cd`), поэтому опция чтения или MAKEFILES=/SHELL= — отказ.
+for form in ("MAKEFLAGS='-I inc' make x", "MAKEFLAGS=-Iinc make x", "MAKEFLAGS=Iinc make x", "MAKEFLAGS=sIinc make x",
+             "GNUMAKEFLAGS=--include-dir=inc make x", "env MAKEFLAGS=--incl=inc make x", "export MAKEFLAGS=-Iinc; make x",
+             "MAKEFLAGS='--eval=x:;gh\\ pr\\ merge\\ 1' make x", "MAKEFLAGS='-sE x:;gh\\ pr\\ merge\\ 1' make x",
+             "MAKEFLAGS=-Cj make x", "MAKEFLAGS=--frob make x",  # -C из окружения make не слушает — с запасом
+             "MAKEFLAGS=-Iok make x", "MAKEFLAGS=-Iinc make -C sub x", "export MAKEFLAGS=-Iinc; cd sub; make x",
+             "MAKEFLAGS='MAKEFILES=ok.mk' make x", "MAKEFLAGS='-- MAKEFILES=ok.mk' make x",
+             "GNUMAKEFLAGS=MAKEFILES=ok.mk make x", "MAKEFLAGS='-s SHELL=./ok.sh' make x",
+             "MAKEFLAGS='-- SHELL=./ok.sh' make x", "MAKEFLAGS='-- .SHELLFLAGS=-ec' make x",
+             "make MAKEFLAGS=-Iinc x"):
+    bash(f"SE-133, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS=-s make x", "MAKEFLAGS='-j4 --no-print-directory' make x", "GNUMAKEFLAGS=-k make x",
+             "MAKEFLAGS= make x", "MAKEFLAGS='-- V=1' make x", "MAKEFLAGS='-s -- CFLAGS=-O2' make x"):
+    bash(f"SE-133, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS='-- MAKEFILES=ok.mk' make x"}, cwd=o) or ""
+check(f"SE-133: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# B2 (backend, #398): `-I` из MAKEFLAGS make берёт от папки после `-C`/`cd` — признак только в sub/inc/lib.mk
+o = TMP / "se133"
+for name, text in (("Makefile", "-include lib.mk\nx:\n\techo\n"), ("inc/lib.mk", "y:\n\techo\n"),
+                   ("sub/Makefile", "-include lib.mk\nx:\n\techo\n"), ("sub/inc/lib.mk", "x:\n\tgh pr merge 1\n"),
+                   ("ok/Makefile", "x:\n\techo\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("MAKEFLAGS=-Iinc make -C sub x", "export MAKEFLAGS=-Iinc; cd sub; make x",
+             "cd sub; MAKEFLAGS=-Iinc make x"):
+    bash(f"SE-133 B2, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C sub x", "make -Iinc x"):  # coord 12:06 (#402): include в Makefile — отказ, папка `-I` не важна
+    bash(f"SE-133 B2, include в Makefile — отказ: {form!r}", form, True, cwd=o)
+bash("SE-133 B2, без признака: Makefile без include", "make -C ok x", False, cwd=o)
+# Вторая линза backend (#398, 9c8f9f02e): make делит MAKEFLAGS только по пробелам (кавычка — обычный символ, `\ ` —
+# склейка) и раскрывает `$(Y)` из окружения — сверено с make 3.81; `ИМЯ+=` shell тоже отдаёт в окружение
+for form in ("MAKEFLAGS=\"-s 'a MAKEFILES=ok.mk'\" make x", "MAKEFLAGS=\"-s 'a -Iinc'\" make -C sub x",
+             "Y=-Iinc MAKEFLAGS='$(Y)' make -C sub x", "MAKEFLAGS='-s\\ Iinc' make -C sub x",
+             "MAKEFLAGS+=-Iinc make -C sub x", "export MAKEFLAGS+='MAKEFILES=ok.mk'; make x",
+             "MAKEFILES+=sub/inc/lib.mk make x"):
+    bash(f"SE-133 линза 2, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS='-j4 -s' make -C ok x", "MAKEFLAGS+= make -C ok x"):
+    bash(f"SE-133 линза 2, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s 'a -Iinc'\" make x"}, cwd=o) or ""
+check(f"SE-133 линза 2: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# Линза backend (#398, cc5db25db): `ИМЯ+=` склеивает с прежним значением без пробела, части по отдельности чисты —
+# make 3.81 читает inc/ (sub/inc/lib.mk). Любое `ИМЯ+=` с непустым значением у этих имён — отказ (APPEND_WHY).
+for form in ("MAKEFLAGS=\"-s --\"; MAKEFLAGS+=\"include-dir=inc\" make -C sub x",
+             "MAKEFLAGS=\"-s MAKEFI\"; MAKEFLAGS+=\"LES=inc/lib.mk\" make -C sub x", "MAKEFLAGS+=-k make -C ok x",
+             "GNUMAKEFLAGS+=-k make -C ok x", "MAKEFILES=sub/inc/li; MAKEFILES+=b.mk make x",
+             "BASH_ENV=a; BASH_ENV+=b.sh bash -c true", "export ENV+=b.sh; sh -c true",
+             "NODE_OPTIONS+=' -r ./m.js' node -e 1", "npm_config_script_shell+=sh npm test"):
+    bash(f"SE-133 линза backend +=, отказ: {form!r}", form, True, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s --\"; MAKEFLAGS+=\"include-dir=inc\" make -C sub x"}, cwd=o) or ""
+check(f"SE-133 +=: причина — склейка: {why[:90]!r}", why if "ИМЯ+=" in why else None, True)
+# --- SE-135: старые пробелы make (линза Claude #396). Сверено с make 3.81: `-l` берёт остаток связки (`-lf ok.mk` —
+# ./Makefile), `-f -` и `-f /dev/stdin` читают stdin, MAKEFILES (окружение и строка) — от папки после `-C`,
+# `SHELL=` в строке — shell рецептов. `--eval` — make 4.x (assumed, по документации).
+o = TMP / "se135"
+for name, text in (("Makefile", "x:\n\techo\n"), ("ok.mk", "x:\n\techo\n"), ("sub/Makefile", "x:\n\techo\n"),
+                   ("sub/mk", "x:\n\tgh pr merge 1\n"), ("s.sh", "gh pr merge 1\n"), ("inc/lib.mk", "y:\n\techo\n"),
+                   ("sub/inc/lib.mk", "x:\n\tgh pr merge 1\n"), ("l/Makefile", "x:\n\tgh pr merge 1\n"),
+                   ("l/ok.mk", "x:\n\techo\n"), ("l/ok/Makefile", "x:\n\techo\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+(o / "in.mk").symlink_to("/dev/stdin")
+os.mkfifo(o / "p.mk")
+for form in ("make -lf ok.mk x", "make -klC ok x", "make -l2f ok.mk x"):  # 1: связка с `-l`
+    bash(f"SE-135 связка, отказ: {form!r}", form, True, cwd=o / "l")
+for form in ("make -l -f ok.mk x", "make -l 2 -f ok.mk x", "make -j4 -f ok.mk x", "make -sl -f ok.mk x", "make -C ok x"):
+    bash(f"SE-135 связка, без признака: {form!r}", form, False, cwd=o / "l")
+for form in ("make -f - x", "make --file=- x", "make --fil=- x", "make -f /dev/stdin x", "make -f /dev/fd/0 x",
+             "cat ok.mk | make -f - x", "make -f in.mk x", "make -f p.mk x", "make -C sub -f ../in.mk x",
+             "make --eval 'include /dev/stdin' x", "make -E '-include /dev/fd/0' x",  # 2: Makefile из stdin
+             "make X=sub/mk --eval 'include $(X)' x", "make --eval '$(eval include sub/mk)' x",  # 3: `$` в --eval
+             "make --eval='x:;bash s.sh' x", "make -E 'x: ; bash s.sh' x", "make --eval 'x:\n\tbash s.sh' x",
+             "make --eval '.RECIPEPREFIX=>' x", "make --eval 'A != bash s.sh' x",  # 4: рецепт и запуск в --eval
+             "make --eval 'SHELL=./s.sh' x", "make --eval 'x: SHELL=./s.sh' x", "make --eval 'MAKEFILES=sub/mk' x",
+             "make --eval 'override .SHELLFLAGS=-c ./s.sh' x", "make --eval 'export BASH_ENV=./s.sh' x",
+             "make --eval 'define SHELL\n./s.sh\nendef' x",
+             "make SHELL=./s.sh x", "make SHELL:=./s.sh x", "make .SHELLFLAGS=-ec x",  # SHELL=/MAKEFILES= в строке
+             "make -C sub MAKEFILES=inc/lib.mk x", "MAKEFILES=inc/lib.mk make -C sub x",
+             "env MAKEFILES=inc/lib.mk make -C sub x", "export MAKEFILES=inc/lib.mk; make -C sub x"):
+    bash(f"SE-135, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -f ok.mk x", "make -f sub/Makefile x", "make -n -f /dev/null x", "make --eval 'include ok.mk' x",
+             "make --eval 'V=1' x", "make --eval 'x: y' x", "make V=1 x", "make CC=clang -C sub x",
+             "MAKEFLAGS=-s make -C sub x"):
+    bash(f"SE-135, без признака: {form!r}", form, False, cwd=o)
+for form, part in (("make -f - x", "Makefile из потока"), ("make --eval 'include $(X)' x", "строка `--eval`"),
+                   ("make SHELL=./s.sh x", "переменная make в командной строке"),
+                   ("MAKEFILES=inc/lib.mk make -C sub x", "MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS")):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"SE-135: причина {form!r}: {why[:90]!r}", why if part in why else None, True)
+# SE-135 линза backend (B1, issuecomment-6891500801): поток за файлом на диске — include в Makefile и Makefile по
+# умолчанию как ссылка на /dev/stdin или FIFO. make 3.81 читает stdin в обоих случаях (проба линзы).
+for name, text in (("d1/Makefile", "include /dev/stdin\nall: ; @true\n"), ("d2/Makefile", "-include /dev/fd/0\n"),
+                   ("d3/Makefile", "sinclude /dev/stdin\n"), ("d4/Makefile", "include two.mk\nall: ; @true\n"),
+                   ("d4/two.mk", "include /dev/stdin\n"), ("d7/Makefile", "all: ; @true\n"),
+                   ("d8/Makefile", "include in.mk\nall: ; @true\n"), ("n1/Makefile", "all: ; @true\n"),
+                   ("n2/Makefile", "include /dev/null\nall: ; @true\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for name in ("d5/Makefile", "d7/GNUmakefile", "d8/in.mk"):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).symlink_to("/dev/stdin")
+(o / "d6").mkdir(exist_ok=True)
+os.mkfifo(o / "d6" / "Makefile")
+for form in ("make -C d1 all", "make -C d2 all", "make -C d3 all", "make -C d4 all", "make -C d5 all", "make -C d6 all",
+             "make -C d7 all", "make -C d8 all", "make -f d1/Makefile all", "cd d5 && make all",
+             "make -C n2 all"):  # n2: `include /dev/null` — отказ по правилу coord 12:06 (#402)
+    bash(f"SE-135 B1, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C n1 all", "make -C sub x"):
+    bash(f"SE-135 B1, без признака: {form!r}", form, False, cwd=o)
+for form in ("make -C d1 all", "make -C d5 all", "make -C d6 all"):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"SE-135 B1: причина {form!r}: {why[:90]!r}", why if "Makefile из потока" in why else None, True)
+# SE-135 линза backend (#402, Нерв 11:35): `\` + перевод строки продолжает строку include. Сверено с make 3.81:
+# нечётное число `\` — продолжение, чётное и `\#` — нет; комментарий с `\` в конце глотает следующую строку.
+for name, text in (("c1/Makefile", "include \\\n/dev/stdin\nall: ; @true\n"),
+                   ("c2/Makefile", "-include \\\n   \\\n/dev/stdin\nall: ; @true\n"),
+                   ("c3/Makefile", "foo = a\\\\\ninclude /dev/stdin\nall: ; @true\n"),
+                   ("c4/Makefile", "foo = a\\#\ninclude /dev/stdin\nall: ; @true\n"),
+                   ("c5/Makefile", "sinclude \\\n  lib.mk\nall: ; @true\n"), ("c5/lib.mk", "x:\n\tgh pr merge 1\n"),
+                   ("c6/Makefile", "# c \\\ninclude /dev/stdin\nall: ; @true\n"),
+                   ("c7/Makefile", "foo = a\\\\\\\ninclude /dev/stdin\nall: ; @true\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make -C c1 all", "make -C c2 all", "make -C c3 all", "make -C c4 all", "make -C c5 x",
+             "make -C c6 all", "make -C c7 all"):  # c6, c7 make не читает stdin, но слово include — отказ (coord 12:06)
+    bash(f"SE-135 продолжение строки, отказ: {form!r}", form, True, cwd=o)
+# Правило coord 11:46 (#402): экранирование make разбор не моделирует — строка include с `\` или `#` после склейки
+# продолжений — отказ. Форма линзы backend (issuecomment-6891872344, make 3.81): `-include x\#y /dev/stdin` читает stdin.
+for name, text in (("e1/Makefile", "-include x\\#y /dev/stdin\nall: ; @true\n"),
+                   ("e2/Makefile", "include a.mk # note\nall: ; @true\n"), ("e2/a.mk", "y: ; @true\n"),
+                   ("e3/Makefile", "include a\\ b.mk\nall: ; @true\n"),
+                   ("e4/Makefile", "# include x\\#y /dev/stdin\nall: ; @true\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make -C e1 all", "make -C e2 all", "make -C e3 all", "make -C n1 --eval 'include x\\#y' all",
+             "make -C e4 all"):  # e4 — строка-комментарий: слово include в любой строке — отказ (coord 12:06)
+    bash(f"SE-135 include с \\ или #, отказ: {form!r}", form, True, cwd=o)
+why = run("Bash", {"command": "make -C e1 all"}, cwd=o) or ""
+check(f"SE-135 include с \\ или #: причина: {why[:90]!r}", why if "строка include" in why else None, True)
+# Правило coord 11:47 (#402): подстановка shell в любом слове make — отказ всего вызова. Линза release
+# (issuecomment-6891879848): B1 `--eval "$(cat evil.mk)"` — метка без `$`, EVAL_RUNS её не видит; B2 `-f <(…)` — пути
+# нет на диске, _read_tree его молча отбрасывает.
+for form in ('make --eval "$(cat evil.mk)" all', "make -f <(printf 'x: ; @true') x", 'make -f "$(echo Makefile)" all',
+             "make -C $(git branch --show-current) all", "make -f =(printf x) x", "make -C n1 X=$(date) all",
+             "make -C n1 -I `cat f` all", "make -C n1 all >(cat)"):
+    bash(f"SE-135 подстановка в слове make, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C n1 V=1 all", "make -C $(pwd)/n1 all"):  # `$(pwd)` разбор сводит к ${PWD} — не метка
+    bash(f"SE-135 подстановка в слове make, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "make -f <(printf 'x: ; @true') x"}, cwd=o) or ""
+check(f"SE-135 подстановка в слове make: причина: {why[:90]!r}",
+      why if "подстановка shell в слове make" in why else None, True)
+# Правило coord 11:55 (#402): знак вне \x20-\x7e, кроме таба, в слове make (аргумент, `-f`, `--eval`) и в строке
+# include — отказ. Линза Claude #398: в локали kk_KZ.PT154 make 3.81 считает 0xA0 пробелом, `à` — C3 A0, поэтому
+# `-include xà/dev/stdin` для него — два слова, и второе — поток.
+for name, text in (("a1/Makefile", "-include xà/dev/stdin\nall: ; @true\n"),
+                   ("a2/Makefile", "all: ; @echo à\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+# Байт 0xA0 сам по себе: разбор читает Makefile как UTF-8 с заменой (U+FFFD), и MAKE_INCLUDE строку не находит —
+# нет `[ \t]` после слова или перед ним, а make в kk_KZ.PT154 видит `include /dev/stdin`.
+for name, raw in (("a3/Makefile", b"include\xa0/dev/stdin\nall: ; @true\n"),
+                  ("a4/Makefile", b"\xa0include /dev/stdin\nall: ; @true\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_bytes(raw)
+for form in ("make -C n1 V=à all", "make -C n1 --eval 'V=à' all", "make -f n1/Mà all", "make -C dà all",
+             "make -C a1 all", "make -C a3 all", "make -C a4 all"):
+    bash(f"SE-135 не ASCII в слове make, отказ: {form!r}", form, True, cwd=o)
+bash("SE-135 не ASCII вне include, без признака: рецепт с à", "make -C a2 all", False, cwd=o)
+for form, part in (("make -C n1 V=à all", "вне печатного ASCII"), ("make -C a1 all", "Makefile со словом include")):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"SE-135 не ASCII: причина {form!r}: {why[:90]!r}", why if part in why else None, True)
+# Правило coord 12:06/12:07 (#402): Makefile, который make прочтёт (`-f`, по умолчанию от `-C` или cwd, их include), со
+# словом include/-include/sinclude в любой строке, с `$(eval`, `${eval`, `$(file`, `${file`, `$(shell`, `${shell` или
+# с `/dev/` в начале слова-пути — отказ; Makefile, который разбор не прочёл, — тоже. Формы backend (Нерв 12:02, 12:03,
+# make 3.81): `$(eval -include /dev/stdin)` читает stdin из группы, подоболочки, цикла и fd 3.
+for name, text in (("evl/Makefile", "$(eval -include /dev/stdin)\nall: ; @true\n"),
+                   ("fd3/Makefile", "$(eval -include /dev/fd/3)\nx: ; @true\n"),
+                   ("t1/Makefile", "$(eval X := 1)\nall: ; @true\n"), ("t2/Makefile", "${eval X := 1}\nall: ; @true\n"),
+                   ("t3/Makefile", "X := $(file <f)\nall: ; @true\n"),
+                   ("t4/Makefile", "X := ${shell true}\nall: ; @true\n"),
+                   ("t5/Makefile", "X := $(wildcard /dev/fd/*)\nall: ; @true\n"),
+                   ("t6/Makefile", "all: ; @true\n# sinclude x.mk\n"), ("t7/two.mk", "include x.mk\n"),
+                   ("t7/Makefile", "all: ; @true\n"), ("evil.mk", "x: ; @echo FROM_STREAM\n"),
+                   ("p1/Makefile", "X := scripts/dev/a.sh infra/scripts/dev/*.sh $(SHELL) --include-dir includes\n"
+                    "all: ; @echo $(X)\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+(o / "big").mkdir(exist_ok=True)
+(o / "big" / "Makefile").write_text("all: ; @true\n" + "#" * (4 * 1024 * 1024))  # больше TEXT_MAX — разбор не читает
+for form in ("make -C evl x", "{ make -C evl x; } < evil.mk", "cat evil.mk | (cd evl && make x)",
+             "for i in 1; do make -C evl x; done < evil.mk", "make -C fd3 x 3<evil.mk", "make -C t1 all",
+             "make -C t2 all", "make -C t3 all", "make -C t4 all", "make -C t5 all", "make -C t6 all",
+             "make -f t7/two.mk -f t7/Makefile all", "make -f t1/Makefile all", "make -C n1 -f ../t4/Makefile all",
+             "make -C big all"):
+    bash(f"SE-135 текст Makefile, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C p1 all", "make -C t7 all", "make -C n1 --eval 'include ../t7/Makefile' all"):
+    bash(f"SE-135 текст Makefile, без признака: {form!r}", form, False, cwd=o)
+for form in ("make -C evl x", "make -C big all"):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"SE-135 текст Makefile: причина {form!r}: {why[:90]!r}",
+          why if "Makefile со словом include" in why else None, True)
+# Приёмка coord 12:07: правило текста не задевает корневой Makefile репозитория (копия в папке теста). Сам вызов
+# отказывает и на board-agents: грубый признак (FALLBACK) находит `.claude/rules` (строка 2) и `.claude/hooks` (строка
+# 90) — это не причина этого правила.
+(o / "root").mkdir(exist_ok=True)
+(o / "root" / "Makefile").write_text((Path(__file__).resolve().parents[2] / "Makefile").read_text(encoding="utf-8"))
+for form in ("make check", "make wt-add TRACK=fix NAME=x", "make wt-deps TRACK=fix NAME=x",
+             "make wt-check TRACK=fix NAME=x"):
+    why = run("Bash", {"command": form}, cwd=o / "root") or ""
+    check(f"SE-135 корневой Makefile, не правило текста: {form!r}: {why[:90]!r}",
+          why if "Makefile со словом include" in why else None, False)
+# Решение coord 12:19 (#402): make пересобирает Makefile встроенными правилами. Сверено на make 3.81: Makefile старше
+# Makefile.sh — make делает `cat Makefile.sh >Makefile` и читает новый текст; без Makefile — так же. Отказ: рядом с
+# Makefile дерева `имя.*`, `имя,v`, `s.имя`, папка RCS/ или SCCS/; make не находит Makefile (`-f`, по умолчанию,
+# include из `--eval`).
+for name, text in (("r1/Makefile", "x: ; @true\n"), ("r1/Makefile.sh", "x: ; @echo FROM_SH\n"),
+                   ("r2/Makefile.sh", "x: ; @echo FROM_SH\n"), ("r3/Makefile", "x: ; @true\n"), ("r3/RCS/.keep", ""),
+                   ("r4/Makefile", "x: ; @true\n"), ("r4/SCCS/.keep", ""), ("r5/Makefile", "x: ; @true\n"),
+                   ("r5/Makefile,v", ""), ("r6/Makefile", "x: ; @true\n"), ("r6/s.Makefile", ""),
+                   ("r7/mk.mk", "x: ; @true\n"), ("r7/mk.mk.sh", "x: ; @echo FROM_SH\n"), ("r8/.keep", ""),
+                   ("r9/Makefile", "x: ; @true\n"), ("r9/Makefile-old", "x: ; @true\n"), ("r9/README", "x\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make -C r1 x", "make -C r2 x", "make -C r3 x", "make -C r4 x", "make -C r5 x", "make -C r6 x",
+             "make -C r7 -f mk.mk x", "make -C r8 x", "make -C n1 -f missing.mk all",
+             "make -C n1 --eval 'include missing.mk' all"):
+    bash(f"SE-135 пересборка Makefile, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C r9 x", "make -C n1 all", "make -n -f /dev/null x"):
+    bash(f"SE-135 пересборка Makefile, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "make -C r1 x"}, cwd=o) or ""
+check(f"SE-135 пересборка Makefile: причина: {why[:90]!r}", why if "пересоберёт" in why else None, True)
+o = TMP / "se133"
+# Линза Claude (#398, issuecomment-6891590096). B1: `$(…)` и `` `…` `` в значении разбор режет в метку без `$`.
+# B2: make делит слова только по пробелу и табу (`isblank`), `\v`, `\f`, `\r`, `\n` — часть слова. B3: опции make 4.x
+# со значением, которых нет в 3.81: getopt 3.81 следующее слово не забирает, и `-I` проходит.
+for form in ("MAKEFLAGS=\"-s $(printf %s -Iinc)\" make -C sub x", "MAKEFLAGS=\"-s `printf %s -Iinc`\" make -C sub x",
+             "MAKEFLAGS=\"-s $(git branch --show-current)\" make -C sub x",
+             "export MAKEFLAGS=\"-s $(cat f)\"; make -C sub x", "GNUMAKEFLAGS=\"-s $(cat f)\" make -C sub x",
+             "MAKEFLAGS=-s\vIinc make -C sub x", "MAKEFLAGS='-s\fIinc' make -C sub x",
+             "MAKEFLAGS='-s\rIinc' make -C sub x", "MAKEFLAGS='-s\nIinc' make -C sub x",
+             "MAKEFLAGS='-s -Iinc' make -C sub x",
+             "MAKEFLAGS='--jobserver-auth -Iinc' make -C sub x", "MAKEFLAGS='--jobserver-style -Iinc' make -C sub x",
+             "MAKEFLAGS='--sync-mutex -Iinc' make -C sub x", "MAKEFLAGS='--sync -Iinc' make -C sub x"):
+    bash(f"SE-133 линза Claude, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS='-s\t-k' make -C ok x", "MAKEFLAGS='  -s  -k ' make -C ok x",  # ok — без include (coord 12:06)
+             "MAKEFLAGS='--jobserver-fds=3,4 -s' make -C ok x"):
+    bash(f"SE-133 линза Claude, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s $(printf %s -Iinc)\" make -C sub x"}, cwd=o) or ""
+check(f"SE-133 линза Claude: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None,
+      True)
+# `-O` (make 4.x) в связке: разбор отдаёт ему остаток (`Iinc`), а make 3.81 `-O` не знает, пропускает букву и
+# применяет `-I inc` (сверено: `MAKEFLAGS=-OIinc make y` читает inc/lib.mk). В командной строке make 3.81 на `-O` падает.
+for form in ("MAKEFLAGS=-OIinc make -C sub x", "MAKEFLAGS=-sOIinc make -C sub x", "MAKEFLAGS=OIinc make -C sub x",
+             "GNUMAKEFLAGS=-OIinc make -C sub x"):
+    bash(f"SE-133 -O в связке, отказ: {form!r}", form, True, cwd=o)
+# Линза Claude (#398, issuecomment-6891964594), остаток B2: make 3.81 зовёт setlocale, и в локали kk_KZ.PT154 байт
+# 0xA0 — пробел; `à` (C3 A0) Python пробелом не считает. Правило (coord 11:55): знак вне \x20-\x7e и таба — отказ.
+for form in ("MAKEFLAGS='-sà--include-dir=inc' make -C sub x", "MAKEFLAGS=-sà-Iinc make -C sub x",
+             "GNUMAKEFLAGS='-sà--include-dir=inc' make -C sub x", "MAKEFLAGS='-s\x7f-Iinc' make -C sub x",
+             "MAKEFLAGS='-s\x01-Iinc' make -C sub x"):
+    bash(f"SE-133 не ASCII в MAKEFLAGS, отказ: {form!r}", form, True, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS='-sà--include-dir=inc' make -C sub x"}, cwd=o) or ""
+check(f"SE-133 не ASCII в MAKEFLAGS: причина: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+
+
+# --- Решение coord 12:35, 12:36, 12:38 (#402): make — только по тексту, который прошёл ревью. Каждый Makefile дерева
+# совпадает с блобом того же пути на основной ветке origin (refs/remotes/origin/HEAD) репозитория хука; VPATH, GPATH,
+# MAKEFILES нет ни в окружении, ни в строке make. Формы линзы backend (issuecomment-6892387638, сверено на make 3.81):
+# make пересобирает Makefile через VPATH и через правило с целью Makefile, потом читает текст, которого разбор не видел.
+def git(d, *args):
+    subprocess.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True,
+                   capture_output=True)
+
+
+def put(d, files, commit=None):
+    for name, text in files:
+        (d / name).parent.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(text)
+    if commit:
+        git(d, "add", "-A")
+        git(d, "commit", "-q", "-m", commit)
+
+
+def origin_here(d):  # основная ветка origin — текущий HEAD, как после fetch
+    git(d, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(d, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+
+mg_launch.same_blob = blob_rule
+o, noo, other = repo_on("main", prefix="blob-"), repo_on("main", prefix="blob-noo-"), repo_on("main", prefix="blob-o-")
+merge_guard_git.HOME_REPOS = [str(o), str(noo)]
+ROOT_MK = (Path(__file__).resolve().parents[2] / "Makefile").read_text(encoding="utf-8")
+put(o, (("Makefile", "x: ; @true\n"), ("ok/Makefile", "x: ; @true\n"), ("mod/Makefile", "x: ; @true\n"),
+        ("root/Makefile", ROOT_MK)), commit="base")
+origin_here(o)
+put(o, (("br/Makefile", "x: ; @true\n"),), commit="только в ветке")  # линза backend 12:34: закоммичен, не на origin
+git(o, "worktree", "add", "-q", str(TMP / "blob-wt"))
+put(o, (("vp/a/Makefile", "VPATH = ../src\nall: ; @echo original\n"), ("vp/src/Makefile.sh", "all: ; @echo REMADE\n"),
+        ("ex/Makefile", "Makefile: stamp\n\tcp new.mk Makefile\nstamp: ;\nall: ; @echo original\n"),
+        ("ex/new.mk", "all: ; @echo REMADE\n"), ("extra.mk", "x: ; @true\n"), ("mod/Makefile", "x: ; @echo changed\n"),
+        ("nest/Makefile", "x: ; @true\n")))
+git(o / "nest", "init", "-q", "-b", "main")  # вложенный репозиторий со своей основной веткой
+git(o / "nest", "add", "-A")
+git(o / "nest", "commit", "-q", "-m", "nest")
+origin_here(o / "nest")
+put(noo, (("Makefile", "x: ; @true\n"),), commit="без origin")
+put(other, (("Makefile", "x: ; @true\n"),), commit="другой репозиторий")
+origin_here(other)
+for form in ("make x", "make -C ok x", f"make -C {TMP / 'blob-wt'} x", "make -f ok/Makefile x", "make -n -f /dev/null x",
+             "make -C ok V=1 x"):
+    bash(f"блоб, без признака: {form!r}", form, False, cwd=o)
+for form in ("make -C vp/a all", "make -C ex all", "make -C mod x", "make -C br x", "make -f extra.mk x",
+             "make -f ok/Makefile -f extra.mk x", "make -C nest x", f"make -C {other} x", f"make -C {noo} x",
+             "make VPATH=src x", "make GPATH=src x", "make -C ok VPATH:=../vp/src x", "VPATH=src make x",
+             "export VPATH=src; make x", "env GPATH=src make x", "VPATH+=src make x", "make --eval 'VPATH=src' x",
+             "make --eval 'vpath %.sh src' x", "MAKEFLAGS='VPATH=src' make x", "MAKEFLAGS='-- GPATH=src' make x"):
+    bash(f"блоб, отказ: {form!r}", form, True, cwd=o)
+for form, part in (("make -C ex all", "отличается от основной ветки origin"),
+                   ("make -C vp/a all", "отличается от основной ветки origin"),
+                   ("make VPATH=src x", "переменная make в командной строке"),
+                   ("VPATH=src make x", "MAKEFLAGS или GNUMAKEFLAGS")):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"блоб: причина {form!r}: {why[:90]!r}", why if part in why else None, True)
+for name in ("VPATH", "GPATH", "MAKEFILES"):  # окружение самого хука: его наследует shell команды
+    os.environ[name] = "src"
+    why = run("Bash", {"command": "make x"}, cwd=o) or ""
+    os.environ.pop(name)
+    check(f"блоб: {name} в окружении — отказ: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# Линза backend B1 (#402, 6892659274), правило coord 12:59: блоб — того файла, что прочёл хук, по realpath. `link/..`
+# ядро проходит по ссылке (папка вне репозитория), а abspath убрал бы его по тексту — к корневому Makefile.
+OUT = TMP / "blob-out"
+(OUT / "d").mkdir(parents=True)
+(OUT / "Makefile").write_text("x: ; @true\n")
+(o / "link").symlink_to(OUT / "d")
+for form in ("make -C link/.. x", "make -f link/../Makefile x"):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"блоб: ссылка из репозитория наружу {form!r}: {why[:90]!r}",
+          why if "отличается от основной ветки origin" in why else None, True)
+bash("блоб, без признака: 'make -C ok/../ok x'", "make -C ok/../ok x", False, cwd=o)
+RAW = b"x: ; @true\n# \xff\xfe\r\n"  # не UTF-8: хеш — от байтов, а не от текста после decode
+GIT_ID = subprocess.run(["git", "hash-object", "--no-filters", "--stdin"], input=RAW, capture_output=True,
+                        check=True).stdout.decode().strip()
+check("блоб: blob_id = git hash-object --no-filters --stdin",
+      None if merge_guard_git.blob_id(RAW) == GIT_ID else (merge_guard_git.blob_id(RAW), GIT_ID), False)
+# Приёмка coord 12:36: корневой Makefile, который совпадает с основной веткой, правило блоба не задевает. Вызов и так
+# отказывает по грубому признаку (FALLBACK, `.claude/rules` и `.claude/hooks` в тексте) — это не причина правила.
+for form in ("make check", "make wt-add TRACK=fix NAME=x", "make wt-check TRACK=fix NAME=x"):
+    why = run("Bash", {"command": form}, cwd=o / "root") or ""
+    check(f"блоб: корневой Makefile, не правило блоба: {form!r}: {why[:90]!r}",
+          why if "отличается от основной ветки" in why or "Makefile со словом include" in why else None, False)
+mg_launch.same_blob = lambda p, data: True
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
@@ -472,6 +853,54 @@ for form in ("eval -- echo hi", "eval -- \"$(cat ok.sh)\"", "emulate sh -c -- \"
              "eval -- -- git push", "builtin eval -- git push"):  # второй `--` shell запустит как команду `--`
     bash(f"r24, `--` на ветке или безвредно на main: {form!r}", form, False,
          cwd=e_branch if form.startswith("builtin") else e_main)
+
+# --- SE-105: make с признаком в Makefile — отказ, как в board-agents; в отказе — прямые команды цели ---
+CHECKOUT = Path(__file__).resolve().parents[2]  # чистый checkout ветки: Makefile и скрипты, которые зовут его цели
+mk = TMP / "se105"
+mk.mkdir(parents=True, exist_ok=True)
+(mk / "Makefile").write_bytes((CHECKOUT / "Makefile").read_bytes())
+WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" board-agents'
+DEPS_FIX = 'infra/scripts/dev/wt-deps.sh install "worktrees/fix/x"'
+EVAL_NERVE = "python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"
+for form, want, absent in (
+        ("make wt-fix NAME=x", ["mkdir -p worktrees/fix", WT_FIX, DEPS_FIX], []),
+        ("make wt-fix NAME=x WT_DEPS=0", [WT_FIX], [DEPS_FIX]),
+        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" board-agents'], []),
+        ("make wt-feature NAME=x", ['"worktrees/feature/x"'], []), ("make wt-refactor NAME=x", ['"refactor/x"'], []),
+        ("make wt-spike NAME=x", ['"spike/x"'], []), ("make wt-review NAME=x", ['"review/x"'], []),
+        ("make wt-fix NAME='x;y'", ['"worktrees/fix/<NAME>"'], ["x;y"]),
+        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" main'], []),
+        ("make wt-list", ["git worktree list"], []), ("make wt-help", ["cat worktrees/README.md"], []),
+        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []), ("make wt-rm TRACK=fix NAME=x", ['git worktree remove "worktrees/fix/x"'], []),
+        ("make wt-check TRACK=fix NAME=x", ['infra/scripts/dev/wt-deps.sh check "worktrees/fix/x/boards"'], []),
+        ("make check-repo", ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"], []),
+        ("make check-eval", [EVAL_NERVE, "-s eval/pipeline/reflex ", "-s eval/evolve "], []),
+        ("make -s wt-list check-repo", ["git worktree list", "infra/checks/run.py"], []),
+        ("make check-layer", [], ["прямые команды"]), ("make", [], ["прямые команды"])):
+    got = run("Bash", {"command": form}, cwd=mk) or ""
+    check(f"SE-105, make под отказом, как в board-agents: {form!r}", got or None, True)
+    lost = [w for w in want if w not in got] + [w for w in absent if w in got]
+    check(f"SE-105, прямые команды в отказе: {form!r}", None if not lost else f"{lost!r} в {got!r}", False)
+bash("SE-105, make у Контроля — как в board-agents", "make wt-fix NAME=x", False, who=D9, cwd=mk)
+(mk / "Makefile").write_text("wt-fix:\n\tgh pr merge 1\n")
+(mk / "m.awk").write_text('BEGIN { system("gh pr merge 1") }\n')
+for form in ("make wt-list", "awk -f m.awk"):
+    got = run("Bash", {"command": form}, cwd=mk) or ""
+    check(f"SE-105, отказ без подсказки (цели нет в Makefile, не make): {form!r}",
+          None if got and "прямые команды" not in got else got or "проход", False)
+
+
+def in_checkout(cmd):  # корень для защиты — сам checkout, как у живого хука в основном checkout
+    data = {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": C4["sessionId"], "cwd": str(CHECKOUT)}
+    return mg.decide(data, lambda: SESSIONS, lambda: CONTROL, roots=[str(CHECKOUT)])
+
+
+hint = in_checkout("make wt-fix NAME=x check-repo check-eval") or ""
+direct = [ln.strip().split("  #")[0] for ln in hint.splitlines() if ln.startswith("  ")]
+check("SE-105, отказ на make в checkout даёт прямые команды (в Makefile нет признака — make проходит, поправить "
+      "проверку)", None if WT_FIX in direct and EVAL_NERVE in direct else hint or "проход", False)
+for form in direct:
+    check(f"SE-105, прямая форма проходит в чистом checkout: {form!r}", in_checkout(form), False)
 
 if __name__ == "__main__":
     finish(" — формы shell")

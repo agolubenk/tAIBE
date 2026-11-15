@@ -80,8 +80,14 @@ export const sourcesSchema = z
         kind: sourceKind,
         ref: z.string(),
         title: z.string(),
-        contentSha256: z.string(),
-        chars: z.number().int(),
+        contentSha256: z.string().optional().openapi({
+          description:
+            "sha256 of the stored text. Absent for a caller with a token, except for repo-doc.",
+        }),
+        chars: z.number().int().optional().openapi({
+          description:
+            "Length of the stored text. Absent for a caller with a token, except for repo-doc.",
+        }),
         updatedAt: responseTimestamp,
         chunks: z.number().int(),
         embedded: z.number().int().openapi({
@@ -96,6 +102,16 @@ export const pruneSourcesBody = z.object({
   kind: uploadKind,
   keep: z.array(z.string().min(1).max(512)).max(20_000).openapi({
     description: "Every ref of this kind that still exists; the rest goes.",
+  }),
+});
+
+// TB-132: one source a member added by hand. The synced kinds (cards, docs,
+// uploads) come back on their next sync, so this route does not take them.
+export const removeSourceBody = z.object({
+  kind: z.enum(["link", "github-pr"]),
+  ref: z.string().min(1).max(SOURCE_URL_MAX).openapi({
+    description:
+      "The ref the sources list shows: the URL of a page or owner/repo#n of a pull request.",
   }),
 });
 

@@ -1,5 +1,5 @@
-import type { AnswerMap } from "./answers";
-import type { FormTemplate } from "./schema";
+import type { AnswerMap } from "./answers.js";
+import type { FormTemplate } from "./schema.js";
 
 interface RuleNode {
   id: string;
