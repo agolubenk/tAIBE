@@ -234,6 +234,10 @@ function SearchComponent() {
                       variant="outline"
                       size="sm"
                       onClick={() => {
+                        // A pending write of the typed text would overwrite the suggestion.
+                        if (debounceRef.current) {
+                          clearTimeout(debounceRef.current);
+                        }
                         setSearchInput(suggestion);
                         writeQuery(suggestion);
                       }}

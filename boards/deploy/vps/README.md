@@ -66,7 +66,7 @@ the tunnel:
 | `backup-key.sh` | VPS | Adds the Mac pull key with `restrict`, `from="10.77.0.2"` and `command="cat latest.dump"` |
 | `mac/backup-agent.sh` | Mac | `key` / `install` / `remove` for the pull key and the LaunchAgent, which runs every 2 h |
 | `mac/pull-backup.sh` | Mac, launchd | Pulls `latest.dump`, checks the `PGDMP` header, skips duplicates, keeps 14 days |
-| `mac/restore-check.sh` | Mac | AC-004: restores a dump into a throwaway Postgres and prints the row counts |
+| `mac/restore-check.sh` | Mac | AC-004: restores a dump into a throwaway Postgres and prints the row counts. It creates the roles `oq_owner` and `oq_console` before `pg_restore` (a dump does not carry roles) and prints `oq_guards` — the owner-queue write triggers that came back (3 since migration 0085) |
 | `mac/memory-agent.sh` | Mac | `token` / `install` / `check` / `remove` for the read-only claude-mem proxy `mac/memory-proxy.mjs` (LaunchAgent). `token` makes `~/.t-boards-memory/proxy_token` once (600, directory 700) and never prints it. `check` expects 401 without the header, 200 with it and 405 for POST; without the token file, 200 and 405 |
 | `mac/memory-token-push.sh` | Mac | `memory-token-push.sh <vps host>` sends that token to `secrets/claude_mem_proxy_token` on ssh's stdin (never argv, stdout or history), then `up -d app` |
 | `selftest.sh` | Mac | Proves the whole kit locally before a delivery |
@@ -187,6 +187,20 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
   `wg0.conf.bak-<time>`; only the newest three stay, since they hold the server PrivateKey. A re-run that changes nothing makes no copy. The three scripts take one
   lock, `wg0.conf.lock`, so they never rewrite the file over each other.
 - **Backup key:** `sed -i '/t-boards-backup$/d' /root/.ssh/authorized_keys`.
+- **Restore from a dump** (since migration 0085, TB-28): roles are cluster-wide and a dump does not carry them, so
+  create `oq_owner` and `oq_console` first (`NOLOGIN`, the `DO … IF NOT EXISTS` block of
+  `apps/api/drizzle/0085_t_boards_oq_schema.sql`, also in `mac/restore-check.sh`), then `pg_restore` **without**
+  `--no-owner`, so the schema `oq`, its tables and its function stay `oq_owner`'s. With `--no-owner` (as
+  `mac/restore-check.sh` does on a throwaway container) they become `t_boards`'; the write guards still hold, since
+  they check `session_user`. A full restore loads data before it creates the triggers. A data-only restore of the
+  schema `oq` needs `--disable-triggers`: its triggers refuse every writer but `oq_console`. Then the runbook step of
+  card (c) gives `oq_console` its `LOGIN` and password again.
+- **The owner queue in the backups** (from phase 2, TB-28): the boards dump carries `oq.*` — the owner's items, notes
+  and answers. The Mac keeps the pulled dumps for 14 days (`mac/pull-backup.sh`), the same Mac and owner as the
+  console's `ops.db` (assumed acceptable, coordinator 14.11). A rehearsal uses a synthetic base, never a copy of a prod
+  dump (`docs/specs/owner-queue-move.md` §7).
+- **Migration 0085 on a release rollback:** the previous image keeps the schema `oq` (drizzle has no down
+  migrations). An empty `oq` is harmless; with data it stays the console's, and the previous image never reads it.
 
 ## Known limits
 
