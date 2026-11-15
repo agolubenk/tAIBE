@@ -15,8 +15,8 @@ export {
   type ValidateOptions,
   validateAnswers,
   valueIssue,
-} from "./answers";
-export { answerSchema, answersDocSchema } from "./answers-schema";
+} from "./answers.js";
+export { answerSchema, answersDocSchema } from "./answers-schema.js";
 export {
   type AnswerLabels,
   type ExportEntry,
@@ -24,7 +24,7 @@ export {
   type FormExport,
   humanAnswer,
   RU_LABELS,
-} from "./export";
+} from "./export.js";
 export {
   FIELD_TYPES,
   type FieldOf,
@@ -39,6 +39,6 @@ export {
   type TemplateIssue,
   type TemplateIssueCode,
   templateIssues,
-} from "./schema";
-export { LIMITS } from "./limits";
-export { findShowIfCycle, visibleFieldIds } from "./show-if";
+} from "./schema.js";
+export { LIMITS } from "./limits.js";
+export { findShowIfCycle, visibleFieldIds } from "./show-if.js";

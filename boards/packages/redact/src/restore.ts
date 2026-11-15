@@ -1,4 +1,4 @@
-import { redact } from "./index";
+import { redact } from "./index.js";
 
 // TB-143: a caller that feeds a model (API key, agent key, MCP bearer) reads
 // free text through redact. When it writes that text back, the markers are
