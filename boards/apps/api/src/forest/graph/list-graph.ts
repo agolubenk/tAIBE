@@ -1,4 +1,5 @@
 import { decodeCursor, encodeCursor, pageSize } from "../read/page-cursor";
+import { sectorName } from "../sector/sector-name";
 import { fitNodeBudget } from "./fit-node-budget";
 import { graphCards } from "./graph-cards";
 import { cardLinks } from "./graph-links";
@@ -96,7 +97,7 @@ export async function listGraph({
       ...new Map(
         sectors.map((row) => [
           row.sector_id,
-          { id: row.sector_id, name: row.name },
+          { id: row.sector_id, name: sectorName(row.name) },
         ]),
       ).values(),
     ],
