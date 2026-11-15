@@ -6,7 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
-import { maskForTokenCaller } from "../../utils/token-caller-text";
+import { maskPageForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { listGraph } from "../graph/list-graph";
 import { graphSchema } from "./graph-schema";
@@ -38,7 +38,7 @@ export const graphRoutes = apiRouter<
   const { workspaceId } = c.req.valid("param");
   const { cursor, take } = c.req.valid("query");
   return c.json(
-    maskForTokenCaller(
+    maskPageForTokenCaller(
       c,
       await listGraph({ workspaceId, userId: c.get("userId"), cursor, take }),
     ),

@@ -103,6 +103,43 @@ describe("API integration: forest text for callers with a token (TB-204)", () =>
     }
   });
 
+  it("keeps the page cursor readable, so the agent reads the next pages", async () => {
+    const { forest } = await setup();
+    const second = await addTask(forest.project.id, "Second");
+    if (!second) throw new Error("fixture");
+    const asked = await forest.agent("/approvals", {
+      action: "close_task",
+      targetId: second.id,
+      value: "done",
+      reason: `Closes ${SECRET}`,
+      doneRef: "https://github.com/agolubenk/tAIBE/pull/2",
+    });
+    expect(asked.status).toBe(200);
+
+    const routes = [
+      "/journal?actor=all&take=1",
+      "/approvals?take=1",
+      "/graph?take=1",
+    ];
+    for (const route of routes) {
+      const own = await forest.owner(route);
+      const read = await forest.agent(route);
+      expect({ route, status: read.status }).toEqual({ route, status: 200 });
+      expect({ route, cursor: read.body.nextCursor }).toEqual({
+        route,
+        cursor: own.body.nextCursor,
+      });
+      expect(read.body.nextCursor).toEqual(expect.any(String));
+
+      const next = await forest.agent(
+        `${route}&cursor=${read.body.nextCursor}`,
+      );
+      const leaks = JSON.stringify(next.body).includes(SECRET);
+      expect({ route, status: next.status }).toEqual({ route, status: 200 });
+      expect({ route, leaks }).toEqual({ route, leaks: false });
+    }
+  });
+
   it("gives the stored value back to a marker the agent writes back", async () => {
     const { forest, taskId } = await setup();
     const ws = forest.workspace.id;

@@ -3,8 +3,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 // TB-204: every forest response reaches a caller with a token through
-// maskForTokenCaller, as the task routes do (TB-143). A new route file or
+// maskForTokenCaller, as the task routes do (TB-143), or a page through
+// maskPageForTokenCaller (its cursor stays readable). A new route file or
 // handler joins the check by itself.
+const MASKED = /^mask(Page)?ForTokenCaller\(/;
 //
 // No stored text: a lease answers ids, a fence and times; a started mirror
 // run answers its id.
@@ -38,9 +40,7 @@ describe("forest responses for callers with a token go through the mask (TB-204)
           calls: [...handler.matchAll(/c\.json\(\s*(\S+)/g)].map((m) => m[1]),
         }))
         .filter(({ route }) => !NO_TEXT.has(route))
-        .filter(({ calls }) =>
-          calls.some((arg) => !arg?.startsWith("maskForTokenCaller(")),
-        )
+        .filter(({ calls }) => calls.some((arg) => !MASKED.test(arg ?? "")))
         .map(({ route }) => route);
 
       expect(unmasked).toEqual([]);
