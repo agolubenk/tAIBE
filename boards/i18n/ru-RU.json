@@ -2705,7 +2705,8 @@
 			"invitePeople": "Пригласить людей",
 			"myTasks": "Мои задачи",
 			"forest": "Лес",
-			"notebook": "SSR (сессии, скиллы и правила)"
+			"notebook": "SSR (сессии, скиллы и правила)",
+			"skipToContent": "Перейти к содержимому"
 		},
 		"projectList": {
 			"viewProject": "Открыть проект",

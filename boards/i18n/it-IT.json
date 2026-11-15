@@ -2650,7 +2650,8 @@
 			"invitePeople": "Invite people",
 			"myTasks": "My tasks",
 			"forest": "Forest",
-			"notebook": "SSR (sessions, skills & rules)"
+			"notebook": "SSR (sessions, skills & rules)",
+			"skipToContent": "Skip to content"
 		},
 		"projectList": {
 			"viewProject": "Vedi Progetto",

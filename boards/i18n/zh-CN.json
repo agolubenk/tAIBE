@@ -2556,7 +2556,8 @@
 			"invitePeople": "邀请成员",
 			"myTasks": "我的任务",
 			"forest": "Forest",
-			"notebook": "SSR (sessions, skills & rules)"
+			"notebook": "SSR (sessions, skills & rules)",
+			"skipToContent": "Skip to content"
 		},
 		"projectList": {
 			"viewProject": "查看项目",

@@ -10688,6 +10688,9 @@
 						},
 						"notebook": {
 							"type": "string"
+						},
+						"skipToContent": {
+							"type": "string"
 						}
 					},
 					"required": [
@@ -10701,7 +10704,8 @@
 						"myTasks",
 						"invitePeople",
 						"forest",
-						"notebook"
+						"notebook",
+						"skipToContent"
 					]
 				},
 				"projectList": {
