@@ -1,4 +1,4 @@
-import { redact } from "@kaneo/redact";
+import { type RedactHit, redact } from "@kaneo/redact";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import db from "../../database";
 import {
@@ -90,6 +90,13 @@ export async function searchNotebook(input: {
 // <guess>` would put a chunk whose secret holds the guess first, and with
 // only the first ranks read, a hidden chunk would push a visible one out
 // (release lens #388).
+//
+// The masked text must hold no word that the stored text has not: else
+// `redacted or <guess>` passes the check by the marker (`redact`, `password`,
+// `assign`) only for a chunk that the guess made a candidate (backend lens
+// #388 B1). So a marker is a space, and the checked tsvector keeps only the
+// lexemes of the stored one: a chunk that can pass the check is already a
+// candidate.
 async function visibleKeywordCandidates(workspaceId: string, query: string) {
   const rows = await indexableCandidates(workspaceId, query);
   if (rows.length > KEYWORD_SCAN_MAX) {
@@ -110,9 +117,12 @@ async function visibleRanked(rows: Candidate[], query: string) {
   const checked = rows.flatMap(
     (row): { id: string; masked: string | null }[] => {
       // The same text as the stored tsvector: heading, a space, text.
-      const masked = redact(`${row.heading} ${row.text}`);
-      if (!masked.hits.length) return [{ id: row.id, masked: null }];
-      return row.negationsOnly ? [] : [{ id: row.id, masked: masked.text }];
+      const seen = `${row.heading} ${row.text}`;
+      const { hits } = redact(seen);
+      if (!hits.length) return [{ id: row.id, masked: null }];
+      return row.negationsOnly
+        ? []
+        : [{ id: row.id, masked: spaced(seen, hits) }];
     },
   );
   if (!checked.length) return [];
@@ -124,7 +134,14 @@ async function visibleRanked(rows: Candidate[], query: string) {
     )}) AS t(id, masked)
     JOIN ${notebookChunkTable} c ON c.id = t.id
     CROSS JOIN LATERAL (
-      SELECT coalesce(to_tsvector('russian', t.masked), c.search) AS seen
+      SELECT to_tsvector('russian', t.masked) AS raw
+    ) m
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN t.masked IS NULL THEN c.search
+        ELSE ts_delete(m.raw, ARRAY(
+          SELECT unnest(tsvector_to_array(m.raw))
+          EXCEPT SELECT unnest(tsvector_to_array(c.search))))
+      END AS seen
     ) v
     CROSS JOIN LATERAL (
       SELECT websearch_to_tsquery('russian', ${query}) AS q
@@ -134,6 +151,17 @@ async function visibleRanked(rows: Candidate[], query: string) {
     LIMIT ${CANDIDATES}
   `);
   return result.rows.map((row) => row.id);
+}
+
+// The text with each hit a space: no marker words.
+function spaced(text: string, hits: RedactHit[]) {
+  let result = "";
+  let cursor = 0;
+  for (const hit of hits) {
+    result += `${text.slice(cursor, hit.start)} `;
+    cursor = hit.end;
+  }
+  return result + text.slice(cursor);
 }
 
 // A token caller's candidates with their text, one row past the cap.
