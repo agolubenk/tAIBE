@@ -394,6 +394,27 @@ for form, part in (("make -f - x", "Makefile из потока"), ("make --eval 
                    ("MAKEFILES=inc/lib.mk make -C sub x", "MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS")):
     why = run("Bash", {"command": form}, cwd=o) or ""
     check(f"SE-135: причина {form!r}: {why[:90]!r}", why if part in why else None, True)
+# SE-135 линза backend (B1, issuecomment-6891500801): поток за файлом на диске — include в Makefile и Makefile по
+# умолчанию как ссылка на /dev/stdin или FIFO. make 3.81 читает stdin в обоих случаях (проба линзы).
+for name, text in (("d1/Makefile", "include /dev/stdin\nall: ; @true\n"), ("d2/Makefile", "-include /dev/fd/0\n"),
+                   ("d3/Makefile", "sinclude /dev/stdin\n"), ("d4/Makefile", "include two.mk\nall: ; @true\n"),
+                   ("d4/two.mk", "include /dev/stdin\n"), ("d7/Makefile", "all: ; @true\n"),
+                   ("d8/Makefile", "include in.mk\nall: ; @true\n"), ("n1/Makefile", "include /dev/null\nall: ; @true\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for name in ("d5/Makefile", "d7/GNUmakefile", "d8/in.mk"):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).symlink_to("/dev/stdin")
+(o / "d6").mkdir(exist_ok=True)
+os.mkfifo(o / "d6" / "Makefile")
+for form in ("make -C d1 all", "make -C d2 all", "make -C d3 all", "make -C d4 all", "make -C d5 all", "make -C d6 all",
+             "make -C d7 all", "make -C d8 all", "make -f d1/Makefile all", "cd d5 && make all"):
+    bash(f"SE-135 B1, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C n1 all", "make -C sub x"):
+    bash(f"SE-135 B1, без признака: {form!r}", form, False, cwd=o)
+for form in ("make -C d1 all", "make -C d5 all", "make -C d6 all"):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"SE-135 B1: причина {form!r}: {why[:90]!r}", why if "Makefile из потока" in why else None, True)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
