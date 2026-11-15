@@ -543,7 +543,7 @@ class GithubPollTest(unittest.TestCase):
         self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
 
     def test_ci_recheck_does_not_read_the_body(self):
-        """SE-121: тело PR — только при разборе автора; перепроверка CI читает прежние поля без тела."""
+        """SE-121: тело PR — только при разборе автора; SE-123: перепроверка CI читает только проверки."""
         head = "f1f1f1f1f" + "0" * 31
         lens = [f"{x}: approve на f1f1f1f1f" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
         fake = FakeGh([_pr(488, head)], comments={488: lens}, ci={488: "IN_PROGRESS"})
@@ -551,7 +551,7 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         gh_source.poll_github(self.ctx)
         views = [c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]]
-        self.assertEqual(views, ["files,statusCheckRollup,body", "files,statusCheckRollup,state,mergedAt,closedAt"])
+        self.assertEqual(views, ["files,statusCheckRollup,body", "statusCheckRollup"])
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
@@ -671,6 +671,22 @@ class GithubPollTest(unittest.TestCase):
         self.assertFalse(self.ctx.state["github"]["prs"]["481"]["await_ci"])
         gh_source.poll_github(self.ctx)
         self.assertEqual(len([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]), 1, "CI доехал: дальше без view")
+
+    def test_ci_is_reread_while_comments_keep_changing_the_pr(self):
+        """SE-123: PR ждёт только CI, а updatedAt меняется каждый проход (комментарии) — его разбирает основной путь,
+        а не _recheck_ci. Раньше проверки при той же голове не перечитывались: «pending» держался до тихого прохода."""
+        head = "f" * 40
+        three = [f"{x}: approve на fffffff" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        sources.run = FakeGh([_pr(486, head)], comments={486: three}, ci={486: "IN_PROGRESS"})
+        gh_source.poll_github(self.ctx)
+        self.assertTrue(self.ctx.state["github"]["prs"]["486"]["await_ci"])
+        fake = FakeGh([_pr(486, head, upd="2026-11-04T10:05:00Z")], comments={486: three + ["вопрос по ходу"]})
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        self.assertIn(("pr.quorum", "#486 собран: approve backend, boards, plan на fffffffff, CI ok"), self.kinds())
+        self.assertFalse(self.ctx.state["github"]["prs"]["486"]["await_ci"])
+        self.assertEqual([c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]],
+                         ["statusCheckRollup"], "только проверки: без файлов и тела PR")
 
     def test_head_without_checks_waits_for_ci(self):
         """SE-126: сразу после push у головы нет ни одной проверки. Три approve — ожидание CI, а не pr.quorum с «CI ok»."""
@@ -803,6 +819,20 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], ["#2 открыт: PR 2"])
         self.assertEqual(sorted(self.ctx.state["github"]["prs"]), ["1", "2", "3"])
+
+    def test_empty_list_does_not_end_the_backfill(self):
+        """SE-123: `gh pr list` с кодом 0 отдал [] или часть списка — проход без ошибок, но известный PR вне списка
+        ещё открыт. Раньше догон на этом кончался, и давние PR потом шли «открыт» (линза #340: 112 ложных pr.new)."""
+        self.ctx.state["github"] = {"rev": gh_source.GH_STATE_REV, "backfill": "2026-11-05T00:00:00Z",
+                                    "prs": self._known(1)}
+        sources.run = FakeGh([])
+        gh_source.poll_github(self.ctx)
+        st = self.ctx.state["github"]
+        self.assertEqual((st.get("backfill"), sorted(st["prs"])), ("2026-11-05T00:00:00Z", ["1"]))
+        sources.run = FakeGh([_pr(1, "a" * 40), _pr(2, "b" * 40, created="2026-11-04T10:00:00Z")])
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], [], "давний PR из догона — без «открыт»")
+        self.assertNotIn("backfill", st, "список полон — догон окончен")
 
     def test_backfill_boundary_ignores_bad_dates_and_the_future(self):
         p = lambda u: {"updated": u}  # noqa: E731

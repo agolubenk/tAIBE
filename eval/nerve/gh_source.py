@@ -56,6 +56,11 @@ def _gh_view(repo, n):
     return files, checks, d.get("state"), d.get("mergedAt"), d.get("closedAt")
 
 
+def _gh_checks(repo, n):
+    """Только статусы проверок головы — перечитать CI без списка файлов и тела PR (SE-123)."""
+    return _gh_pr(repo, n, "statusCheckRollup")[2]
+
+
 def _gh_author_view(repo, n):
     """Файлы, проверки и тело PR — для автора (SE-121). Тело (несколько КБ) читается только здесь, а не на каждой
     перепроверке CI: строку «роль N — автор» пишут при открытии PR."""
@@ -72,7 +77,7 @@ GH_STATE_REV = 3
 
 def _gh_closed(ctx, repo, known, open_now, fails):
     """PR, которых нет в списке открытых: «влит» или «закрыт» — по самому PR. Открытый PR (список неполон — потолок
-    страниц) остаётся в prs без события. Ключ — с временем мёржа или закрытия: ложное «закрыт» rev 2 не прячет
+    GH_LIMIT или неполный ответ gh с кодом 0) остаётся в prs без события. Ключ — с временем мёржа или закрытия: ложное «закрыт» rev 2 не прячет
     настоящее, а закрытие после переоткрытия — новое событие."""
     for n in [k for k in known if k not in open_now]:
         try:
@@ -128,7 +133,7 @@ def _recheck_ci(ctx, n, p):
         last = sources._ts(p.get("ci_at"))
         if last and (ctx.now - last).total_seconds() < NO_CHECKS_EVERY:
             return
-    _, checks, _, _, _ = _gh_view(ctx.cfg["github"]["repo"], n)
+    checks = _gh_checks(ctx.cfg["github"]["repo"], n)
     if slow:
         p["ci_at"] = _iso_now(ctx)   # после удачного чтения: сбой gh повторяется следующим проходом, а не через 15 мин
     p["checks"] = checks
@@ -185,8 +190,10 @@ def poll_github(ctx):
             continue
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     _gh_closed(ctx, g["repo"], known, open_now, fails)
-    if not fails and not deferred:
-        st.pop("backfill", None)   # догон окончен: дальше каждый новый PR — «открыт»
+    # Догон окончен, только если список полон: открытый известный PR вне списка (пустой или частичный ответ gh с
+    # кодом 0) оставил бы следующие проходы без границы — каждый давний PR пошёл бы «открыт» (SE-123).
+    if not fails and not deferred and open_now >= set(known):
+        st.pop("backfill", None)   # дальше каждый новый PR — «открыт»
     _raise_fails(fails)
 
 
@@ -207,6 +214,9 @@ def _check_pr(ctx, n, p, head, viewed=False):
         p["author"] = quorum.pr_author(body, files, g["path_roles"], ctx.cfg["team"]["roles"])   # адресат changes
         p["author_line"] = quorum.body_author(body, ctx.cfg["team"]["roles"])   # автор для кворума — только строка
         p["checks"] = checks
+    elif not viewed and quorum.ci_state(p["checks"]) == "pending":
+        # PR меняется каждый проход (комментарии) — _recheck_ci его не видит: CI перечитывается здесь (SE-123)
+        p["checks"] = _gh_checks(g["repo"], n)
     if head_changed:
         p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
