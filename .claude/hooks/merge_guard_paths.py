@@ -160,9 +160,17 @@ BUILD = re.compile(
     r"[+%$\\]|\[[^\]\n]*:|__(?!name__|main__|file__|init__)\w+__"
     r"|(?:join|format\w*|replace\w*|translate|maketrans|sub|subn|decode|concat|reduce|reversed?|repeat|slice"
     r"|substr\w*|charAt|chr|bytes|bytearray|fromCharCode|fromCodePoint|eval|exec|compile|getattr|getvalue)\s*\("
-    r"|\b(?:codecs|base64|binascii|importlib|operator|atob|Buffer|Function|StringIO|__import__)\b")
-# Литерал: escape (`\x67`, `\u0067`, `\147`), кавычки shell внутри слова (`g''it`), подстановка shell (`$(…)`)
-LIT_BUILD = re.compile(r"\\(?![ntr])|\w['\"]|['\"]\w|" + SHELL_SUB.pattern)
+    r"|\b(?:codecs|base64|binascii|importlib|operator|atob|Buffer|Function|StringIO|__import__)\b"
+    r"|\bexecutable\s*=|\bshell\s*:\s*Q\b")  # программа в опции запуска: `executable=p`, `{shell: "…"}` (K5 backend)
+# Литерал: escape (`\x67`, `\u0067`, `\147`), кавычки shell внутри слова (`g''it`), подстановка shell (`$(…)`),
+# маска и скобки shell у слова (`/usr/bin/g?t`, `{g,}it`) — K3–K5 backend
+LIT_BUILD = re.compile(r"\\(?![ntr])|\w['\"]|['\"]\w|\w[?*\[]|[?*\]]\w|\{[^}\s]*,|" + SHELL_SUB.pattern)
+# Запуск программы (K5 backend): программа — литерал (`Q`) или интерпретатор (`sys.executable`, `process.execPath`).
+# Имя из glob, argv, stdin или файла разбор не видит, а белый список узнаёт git только по имени в тексте.
+SPAWN = re.compile(r"\b(?:run|call|check_call|check_output|Popen|system|popen|getoutput|getstatusoutput"
+                   r"|exec(?!utable\b|Path\b)\w*|spawn\w*|posix_spawn\w*|create_subprocess_\w+|fork)\b")
+PROGRAM = re.compile(r"\s*\(\s*\[?\s*(?:Q\b|sys\.executable\b|process\.execPath\b)")
+IMPORT_LINE = re.compile(r"\s*(?:from\s+[\w.]+\s+import\b|import\b|(?:const|let|var)\b[^\n]*\brequire\s*\()")
 PREFIX = re.compile(r"(?<!\w)[rRbBuUfF]{1,2}\Z")  # префикс строки python: `r"…"`, `b"…"`, `f"…"`
 NEXT = re.compile(r"\s*[+.\[%'\"`]|\w")  # после литерала: склейка, метод, индекс, формат, другой литерал, слово
 STATE = re.compile(
@@ -185,7 +193,24 @@ def clean(text):
         return False
     lits = list(STRINGS.finditer(text))
     code = re.sub(r"#[^\n]*", "", STRINGS.sub(" Q ", text))
-    return not (BUILD.search(code) or GIT_PART.search(code) or any(built(text, m) for m in lits))
+    return not (BUILD.search(code) or GIT_PART.search(code) or any(built(text, m) for m in lits)
+                or not programs_seen(code))
+
+
+def programs_seen(code):
+    """Каждый запуск в коде (строки — `Q`) — с программой-литералом или интерпретатором (K5 backend). Имя запуска без
+    вызова — псевдоним (`r = subprocess.run`, `partial(run, …)`) — тоже нет; в строке импорта можно, но без `as` и
+    `:` (переименование: `from subprocess import run as r`, `{ execSync: e }`)."""
+    for m in SPAWN.finditer(code):
+        if re.match(r"\s*\(", code[m.end():m.end() + 16]):
+            if not PROGRAM.match(code, m.end()):
+                return False
+            continue
+        start, end = code.rfind("\n", 0, m.start()) + 1, code.find("\n", m.end())
+        line = code[start:end if end >= 0 else len(code)]
+        if not IMPORT_LINE.match(line) or re.search(r"\bas\b|:", line):
+            return False
+    return True
 
 
 def built(text, m):
@@ -219,8 +244,9 @@ def push_words(unit):
 
 
 def implicit(unit):
-    """У git push в unit нет назначения или назначение — `HEAD`/`@`/`:`: ветку задаёт состояние git (checkout,
-    switch, upstream в git config другим оператором), а не текст команды (линза Контроля на b5d5a4168 и 60a54f72a)."""
+    """У git push в unit нет назначения, назначение — `HEAD`/`@`/`:`, маска `*` или dst `HEAD`/`@`/пустой: ветку
+    задаёт состояние git (checkout, switch, upstream в git config другим оператором) или набор веток, а не текст
+    команды (линзы Контроля на b5d5a4168 и 60a54f72a, K1 backend на ac20a38f3)."""
     words = push_words(unit)
     if words is None:
         return False
@@ -322,9 +348,16 @@ def allowed(s, pos, tidy):
     Push-текст (строка shell на несколько строк, docstring) — тоже: без назначения или с `$B` — отказ."""
     a, b, _ = push_unit(s, mask(s), pos)
     unit = s[a:b]
-    if implicit(unit) or SHELL_SUB.search(unit) or opaque(s, pos):
+    if implicit(unit) or SHELL_SUB.search(unit) or opaque(s, pos) or escaped(unit):
         return False
     return tidy or explicit(unit)
+
+
+def escaped(unit):
+    """В push escape, кавычка shell внутри слова или маска shell (K4 backend): `feat:refs/heads/ma\\x69n` разбор
+    читает как не защищённое назначение, а git получит `main`."""
+    return bool(re.search(r"\\(?![ntr])", unit)) or any(LIT_BUILD.search(m.group(0)[1:-1])
+                                                        for m in LITERAL.finditer(unit))
 
 
 def push_found(lines, cwd):

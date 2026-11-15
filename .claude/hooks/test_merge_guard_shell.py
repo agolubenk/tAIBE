@@ -1069,7 +1069,25 @@ B4_K = (
     ("push_git_join.py", "", '"".join(["g", "it"])'),
     ("push_git_fstr.py", 'a = "g"\n', 'f"{a}it"'),
     ("push_git_escape.py", "", '"\\x67it"'),
-    ("push_git_slice.py", 's = "tig"\n', "s[::-1]")))
+    ("push_git_slice.py", 's = "tig"\n', "s[::-1]"),
+    # K5 (линза backend на e73c3e418): программа из данных — glob, argv, stdin, файл
+    ("push_prog_glob.py", "import glob\n", 'glob.glob("/usr/bin/g?t")[0]'),
+    ("push_prog_argv.py", "import sys\n", "sys.argv[1]"),
+    ("push_prog_input.py", "", "input()"),
+    ("push_prog_file.py", "", 'open("tool.txt").read().strip()'))) + (
+    # K4: escape в назначении push — разбор видит не защищённый dst, git получит main; K5: псевдоним запуска, маска shell
+    ("push_dst_escape.py", 'import subprocess\nsubprocess.run(["git", "log", "--oneline", "main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat:refs/heads/ma\\x69n"])\n'),
+    ("push_dst_octal.py", 'import subprocess\nsubprocess.run(["git", "log", "--oneline", "main"])\n'
+                          'subprocess.run("git push origin feat:refs/heads/ma\\151n", shell=True)\n'),
+    ("push_prog_alias.py", 'import subprocess\nimport sys\nr = subprocess.run\n'
+                           f'r([sys.argv[1], {K_CFG}'),
+    ("push_prog_as.py", 'import subprocess\nimport sys\nfrom subprocess import run as r\n'
+                        f'r([sys.argv[1], {K_CFG}'),
+    ("push_prog_shell_glob.py", 'import subprocess\nsubprocess.run("/usr/bin/g?t config remote.origin.push '
+                                'refs/heads/feat:refs/heads/main", shell=True)\n'
+                                'subprocess.run(["git", "push", "origin", "feat"])\n'),
+)
 # Проход: назначение явное `src:dst` — его не меняют ни refmap, ни symref, ни upstream, даже если текст их меняет.
 B4_PASS = (
     ("push_explicit.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
