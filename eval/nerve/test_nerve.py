@@ -98,7 +98,27 @@ class QuorumTest(unittest.TestCase):
         vs = [pv(x) for x in ("Продукт (план, роль 2): approve на b78da37c7",
                               "ресурсы сервер→браузер (роль 4): approve на b78da37c7",
                               "корректность: approve на b78da37c7")]
-        self.assertEqual(quorum.quorum(vs, head, [])[:2], (True, ["backend", "plan", "корректность"]))
+        # Пустой список проверок — pending (SE-126): кворум считается на зелёном CI.
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS"])[:2], (True, ["backend", "plan", "корректность"]))
+
+    def test_role_number_signs_a_verdict(self):
+        """SE-139: «Роль 2: approve на <sha>» и «Инструменты (роль 6): …» нерв не засчитывал — у #406 одна линза
+        из трёх. «роль N» из team.roles — линза этой роли; подпись со словом «автор» — не линза (SE-121)."""
+        sha = "2448b3ee10a04288828c83fc6be0bade9870484d"
+        for body, want in {f"Роль 2: approve на {sha}": "plan",
+                           f"Инструменты (роль 6): approve на {sha}": "boards",
+                           f"Инструменты (роль 6, линия r.37tl): approve на {sha} · дельта = слияние": "boards",
+                           f"Линза «инструменты» (роль 6, линия r.37tl.37uf): approve на {sha} — перенос": "boards",
+                           f"**Роль 5:** changes на {sha}": "release"}.items():
+            v = pv(body)
+            self.assertEqual((v["lens"], v["sha"]) if v else None, (want, sha), body)
+        for body in (f"роль 3 — автор: approve на {sha}", f"Роль 3, автор: approve на {sha}",
+                     f"Роль {len(TEAM) + 1}: approve на {sha}"):
+            self.assertIsNone(pv(body), body)
+        head = sha
+        vs = [pv(x) for x in (f"Роль 2: approve на {sha}", f"Инструменты (роль 6): approve на {sha}",
+                              f"Контроль (роль 5): approve на {sha}")]
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS"])[:2], (True, ["boards", "plan", "release"]))
 
     def test_old_approve_sha_still_counts(self):
         """Прежний формат: «approve <sha>», «approve на <sha>», «approve @<sha>», «changes at <sha>»."""
