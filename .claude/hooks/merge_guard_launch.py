@@ -448,7 +448,7 @@ def implied_commands(argvs):
             name, val = (m.group(1), m.group(2)) if m else ("", "")
             if name in ("BASH_ENV", "ENV") and val:
                 out.append(["bash", val])
-            elif name in MAKE_ENV:
+            elif name in MAKE_ENV and a[0] not in MAKES:  # в строке make это переменная make: MAKE_VAR_WHY
                 out += [["make", MAKEFLAGS_ARG]] if val.split() else []
             elif name.endswith("MAKEFLAGS"):
                 out += make_flags(val)
