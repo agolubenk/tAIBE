@@ -479,6 +479,52 @@ describe("@kaneo/redact", () => {
     });
   });
 
+  // TB-199: `:=` and `=>` gave `=` or `>` as the value, a comparison was
+  // masked, and the mask could land on the name.
+  describe("separators and the position of the value (TB-199)", () => {
+    const value = join("Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv3");
+    const hidden = "[REDACTED:password_assignment]";
+
+    it.each([
+      ["password := <v>", `password := ${hidden}`],
+      ['api_key := "<v>"', `api_key := "${hidden}"`],
+      ['GITHUB_TOKEN := "<v>"', `GITHUB_TOKEN := "${hidden}"`],
+      ['CLIENT_SECRET := "<v>"', `CLIENT_SECRET := "${hidden}"`],
+      ["'password' => '<v>'", `'password' => '${hidden}'`],
+      [':api_key => "<v>"', `:api_key => "${hidden}"`],
+      ['"DB_PASSWORD" => "<v>",', `"DB_PASSWORD" => "${hidden}",`],
+    ])("masks the value in %s", (input, expected) => {
+      expect(redact(input.replace("<v>", value)).text).toBe(expected);
+    });
+
+    it.each([
+      "if (password === true) run()",
+      "x.password == y",
+      "const m = data.must_change_password === true",
+      `A_TOKEN === "${value}"`,
+    ])("leaves the comparison %j untouched", (input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    it.each([
+      ["password: pass", `password: ${hidden}`],
+      ["password=sword", `password=${hidden}`],
+      ["{ password: password }", `{ password: ${hidden} }`],
+    ])("masks the value, not the name, in %j", (input, expected) => {
+      expect(redact(input).text).toBe(expected);
+    });
+
+    it.each(["password===", "A_TOKEN:=", "password=>", "A_TOKEN==("])(
+      "redacts 256 000 characters of %j in linear time",
+      (unit) => {
+        const text = unit.repeat(Math.ceil(256_000 / unit.length));
+        const started = performance.now();
+        redact(text);
+        expect(performance.now() - started).toBeLessThan(250);
+      },
+    );
+  });
+
   // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the
   // Authorization header as a JSON key, an empty x-api-key header.
   describe("values next to code punctuation and JSON headers (#283)", () => {

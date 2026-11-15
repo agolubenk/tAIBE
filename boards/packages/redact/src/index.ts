@@ -67,19 +67,22 @@ function collectGroup(
   group: number,
   accept: (value: string, next: string) => boolean = () => true,
 ): Detector {
+  // Flag `d` gives the group's own position. The first equal text in the
+  // match may sit in the name: `password: pass` (TB-199).
+  const search = new RegExp(pattern, `${pattern.flags.replace("d", "")}d`);
   return (text) => {
     const hits: RedactHit[] = [];
-    pattern.lastIndex = 0;
-    for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    search.lastIndex = 0;
+    for (let match = search.exec(text); match; match = search.exec(text)) {
       const value = match[group];
-      if (value === undefined) continue;
-      const start = match.index + match[0].indexOf(value);
+      const start = match.indices?.[group]?.[0];
+      if (value === undefined || start === undefined) continue;
       const accepted = accept(value, text.charAt(start + value.length));
       if (accepted) hits.push({ kind, start, end: start + value.length });
       const dropping = accepted ? -1 : lastDropping(value);
       const resume = dropping >= 0 ? dropping + 1 : trailingName(value);
       if (resume >= 0) {
-        pattern.lastIndex = Math.max(match.index + 1, start + resume);
+        search.lastIndex = Math.max(match.index + 1, start + resume);
       }
     }
     return hits;
@@ -226,8 +229,13 @@ const telegramToken = collect(
 // A value given to a password name, in any case (JSON, YAML, code). The value
 // stays on the same line; a reference ($VAR, ${VAR}, $(cmd)) is not a secret
 // and stays readable.
+//
+// TB-199: the separator is `=`, `:`, `:=` (Go, Pascal) or `=>` (PHP, Ruby,
+// Perl) in this and the three patterns below. `==` and `===` compare and
+// stay readable. Before, `:=` and `=>` gave `=` or `>` as the value, and
+// the real value was left open.
 const passwordAssignment = collectGroup(
-  /["']?(?:password|passwd|pwd)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
+  /["']?(?:password|passwd|pwd)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
   "password_assignment",
   1,
 );
@@ -239,7 +247,7 @@ const passwordAssignment = collectGroup(
 // dropped the key (Claude lens #283 B2). A password keeps them (it may hold
 // them), so passwordAssignment above does not stop there.
 const credentialAssignment = collectGroup(
-  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
+  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
   "password_assignment",
   1,
   looksLikeSecret,
@@ -256,13 +264,13 @@ const credentialAssignment = collectGroup(
 // pattern with the passphrase filter (TB-195): a name has one suffix, so a
 // value is never found by both.
 const secretAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,
 );
 const passphraseAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*(?::=|=>|=(?!=)|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikePassphrase,
