@@ -3,7 +3,11 @@ import db from "../../database";
 import { timberLogTable } from "../../database/forest-schema";
 import { maskedMatchPage } from "../../task/masked-match-page";
 import { isMarkerQuery, matchesVisibleText } from "../../utils/visible-match";
-import { SEARCH_TEXT_CHARS, searchFields } from "../fell/build-log";
+import {
+  HISTORY_CONTENT_CHARS,
+  SEARCH_TEXT_CHARS,
+  searchFields,
+} from "../fell/build-log";
 import {
   decodeCursor,
   encodeCursor,
@@ -12,6 +16,7 @@ import {
   pageSize,
 } from "./page-cursor";
 import { searchedParts } from "./searched-parts";
+import { uncutText } from "./uncut-text";
 
 // The comments of a log's history up to the cut of its searchText: those
 // that start past SEARCH_TEXT_CHARS of it are not read (up to 500 comments
@@ -155,12 +160,21 @@ async function listVisibleLogs(
           ),
         )
     : [];
+  // A comment is checked as the log shows it (read-routes.ts): kept cut at
+  // HISTORY_CONTENT_CHARS, it ends before its cut word. Checked whole, the
+  // cut word answered a guess that the log hides (Claude lens #400 B1).
   const visible = new Set(
     texts
       .filter((row) =>
         searchedParts(
           row.searchText,
-          searchFields(row.title, row.description, row.contents),
+          searchFields(
+            row.title,
+            row.description,
+            row.contents.map(
+              (content) => content && uncutText(content, HISTORY_CONTENT_CHARS),
+            ),
+          ),
         ).some((part) => matchesVisibleText(part, search)),
       )
       .map((row) => row.id),

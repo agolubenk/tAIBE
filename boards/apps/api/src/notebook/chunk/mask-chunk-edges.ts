@@ -27,7 +27,10 @@ export function maskChunkEdges(
 // character that one of two readings masks: the glue read whole (#388 before
 // B1), and the glue read again over the text masked first, with its
 // neighbours (Claude #388 B1). On the redact of #388 each reading alone
-// opened a value that the other masked.
+// opened a value that the other masked. Without a heading the passage is the
+// text, and it is read again too: the passage before TB-203 was
+// redact(redact(text).text), and a marker lifts the `-` lookaround of a
+// detector (a token glued to a PEM block, Claude lens #400 B2).
 export function maskPassage(
   heading: string,
   text: string,
@@ -35,25 +38,22 @@ export function maskPassage(
   after = "",
 ): string {
   const own = edgeHits(text, before, after);
-  if (!heading) return masked(text, own);
-  const from = heading.length + 2;
-  const passage = `${heading}\n\n${text}`;
-  const again = redact(`${heading}\n\n${masked(text, own)}`).hits.map(
-    (hit) => ({
-      kind: hit.kind,
-      start: inPassage(hit.start, from, own).start,
-      end: inPassage(hit.end - 1, from, own).end,
-    }),
-  );
+  const from = heading ? heading.length + 2 : 0;
+  const glued = (body: string) => (heading ? `${heading}\n\n${body}` : body);
+  const passage = glued(text);
+  // Without a heading the passage is the text: its hits are in `own`.
+  const whole = heading ? redact(passage).hits : [];
+  const again = redact(glued(masked(text, own))).hits.map((hit) => ({
+    kind: hit.kind,
+    start: inPassage(hit.start, from, own).start,
+    end: inPassage(hit.end - 1, from, own).end,
+  }));
   const shifted = own.map((hit) => ({
     ...hit,
     start: hit.start + from,
     end: hit.end + from,
   }));
-  return masked(
-    passage,
-    merged([...redact(passage).hits, ...shifted, ...again]),
-  );
+  return masked(passage, merged([...whole, ...shifted, ...again]));
 }
 
 // The chunk's own hits and the hits of its glue with the neighbours that

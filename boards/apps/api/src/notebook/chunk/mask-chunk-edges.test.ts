@@ -175,4 +175,23 @@ describe("maskPassage (boards #388 N1)", () => {
     expect(passage).not.toContain(secret);
     expect(passage).toContain("для бота");
   });
+
+  // Claude lens #400 B2: without a heading the passage is the text. The
+  // passage before TB-203 read it twice, redact(redact(text).text): a marker
+  // lifts the `-` lookaround of a detector, so the second reading finds a
+  // token glued to a PEM block.
+  it("reads a text without a heading twice, as the passage before TB-203", () => {
+    const family = (name: string) =>
+      FAMILIES.find((item) => item.name === name) as (typeof FAMILIES)[number];
+    const token = family("ghp_ token");
+    const jwt = family("JWT");
+    const pem = family("PEM block").secret;
+    for (const [text, hidden] of [
+      [`token ${token.secret}${pem}`, token.value],
+      [`${pem}${jwt.secret} хвост`, jwt.value],
+    ] as const) {
+      expect(redact(redact(text).text).text).not.toContain(hidden);
+      expect(maskPassage("", text)).not.toContain(hidden);
+    }
+  });
 });

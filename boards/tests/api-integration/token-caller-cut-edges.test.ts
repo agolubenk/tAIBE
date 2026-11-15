@@ -203,4 +203,29 @@ describe("API integration: secrets cut by a fixed length, for callers with a tok
       .toBe(false);
     expect(cards.every((card) => card.description?.includes("…"))).toBe(true);
   });
+
+  // Claude lens #400 B1: the list checked the stored comment, cut at
+  // HISTORY_CONTENT_CHARS, with the cut word that the log hides: a right
+  // guess at the token's head found the log, a wrong one did not.
+  it("answers a guess at the cut word in the log list as any other word", async () => {
+    const forest = await createForest();
+    const logId = await fellCutTree(forest);
+    const found = async (query: string) => {
+      const list = await forest.agent(`/logs?q=${encodeURIComponent(query)}`);
+      expect(list.status).toBe(200);
+      return (list.body.items as { id: string }[]).map((item) => item.id);
+    };
+
+    // The owner finds the log by the cut head: it is in the stored text.
+    const owner = await forest.owner(`/logs?q=${HEAD}`);
+    expect(owner.body.items).toHaveLength(1);
+
+    for (const guess of [HEAD, HEAD.slice(0, 12)]) {
+      expect
+        .soft(await found(guess), guess.length.toString())
+        .toEqual(await found(`${guess.slice(0, -1)}0`));
+    }
+    // A visible word of the same comment still finds it.
+    expect(await found("слово")).toEqual([logId]);
+  });
 });

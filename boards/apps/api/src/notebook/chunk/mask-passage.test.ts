@@ -32,7 +32,12 @@ describe("maskPassage maps the second reading back (boards #388 N1)", () => {
     expect(maskPassage("H", "xSEC2 c")).toBe("H\n\n[REDACTED:api_key] c");
   });
 
-  it("masks a text without a heading as maskChunkEdges does", () => {
-    expect(maskPassage("", "a SEC1 next")).toBe("a [REDACTED:api_key] next");
+  // Claude lens #400 B2: without a heading the text was read once, and the
+  // base read it twice (redact(redact(text).text)).
+  it("reads a text without a heading twice too", () => {
+    expect(maskPassage("", "a SEC1 next")).toBe(
+      "a [REDACTED:api_key] [REDACTED:api_key]",
+    );
+    expect(maskPassage("", "xSEC2 c")).toBe("[REDACTED:api_key] c");
   });
 });
