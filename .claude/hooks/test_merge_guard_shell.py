@@ -389,7 +389,7 @@ for form in ("make -f ok.mk x", "make -f sub/Makefile x", "make -n -f /dev/null 
              "make --eval 'V=1' x", "make --eval 'x: y' x", "make V=1 x", "make CC=clang -C sub x",
              "MAKEFLAGS=-s make -C sub x"):
     bash(f"SE-135, без признака: {form!r}", form, False, cwd=o)
-for form, part in (("make -f - x", "Makefile из stdin"), ("make --eval 'include $(X)' x", "строка `--eval`"),
+for form, part in (("make -f - x", "Makefile из потока"), ("make --eval 'include $(X)' x", "строка `--eval`"),
                    ("make SHELL=./s.sh x", "переменная make в командной строке"),
                    ("MAKEFILES=inc/lib.mk make -C sub x", "MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS")):
     why = run("Bash", {"command": form}, cwd=o) or ""
