@@ -42,10 +42,14 @@ type Pure = {
   layoutOf: (saved: unknown) => 'one' | 'sections'
   relayItemState: (relay: unknown, id: string, now: number, product?: string) => null | { k: 'wait' | 'sending' | 'stuck' | 'off'; session?: string; at?: string; dead?: boolean }
   ownerSnapshotApplies: (local: Record<string, unknown> | undefined, snap: Record<string, unknown> | undefined, pending: boolean) => boolean
+  holderState: (relay: unknown, e: Record<string, unknown> | undefined, now: number, product?: string) => null | { k: 'online' | 'silent'; session: string; hours?: number }
+  agentFieldsInto: (e: Record<string, unknown>, data: Record<string, unknown>) => Record<string, unknown>
   tipHtml: (s: string) => string
   roadmapLabelMode: (pxPerWeek: number) => 'weeks' | 'months'
+  rmWindowWeeks: (laneW: number) => { total: number; back: number }
   roadmapMonthLabel: (d: Date, first: boolean) => string
   placeRoadmapLabels: (items: { x: number; prio: number }[], laneW: number, labelW: number, gap: number) => ('up' | 'dn' | null)[]
+  roadmapBefore: <T extends Row>(late: T[], ms: T[], a: Date) => T[]
   targetFromHash: (hash: string) => string
 }
 type FakeDb = { doc: (path: string) => { set: (data: unknown, opts?: { ifVersion?: number }) => Promise<unknown>; get: () => Promise<unknown> } }
@@ -74,9 +78,9 @@ function pure(): Pure {
     classifyOwnText: fn('classifyOwnText'), inboxTitleOf: fn('inboxTitleOf'), inboxDraftId: fn('inboxDraftId'), inboxItemOf: fn('inboxItemOf'),
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
-    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
-    tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), roadmapMonthLabel: fn('roadmapMonthLabel'),
-    placeRoadmapLabels: fn('placeRoadmapLabels'), targetFromHash: fn('targetFromHash'),
+    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), holderState: fn('holderState'), agentFieldsInto: fn('agentFieldsInto'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
+    tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), rmWindowWeeks: fn('rmWindowWeeks'), roadmapMonthLabel: fn('roadmapMonthLabel'),
+    placeRoadmapLabels: fn('placeRoadmapLabels'), roadmapBefore: fn('roadmapBefore'), targetFromHash: fn('targetFromHash'),
   }
 }
 
@@ -188,6 +192,14 @@ describe('карточки t-boards в строке плана', () => {
     expect(archived).not.toContain('<a ')
     // Ключ в обход cleanCards — ссылка и подпись тоже текстом: без esc(url) тест падает (линза #111).
     expect(cardRowHtml({ id: hex(3), key: '"><img src=y>', ws: 'w', k: 'task' })).not.toContain('"><img')
+  })
+
+  it('метка «без аренды» из cards[].mark — в подписи карточки, текстом (TB-106 F9)', () => {
+    const { cleanCards, cardRowHtml } = pure()
+    const [card] = cleanCards([{ key: 'TB-3', ws: 'aiboards-eval', k: 'task', st: 'in-progress', mark: 'без аренды' }])
+    expect(card).toMatchObject({ mark: 'без аренды' })
+    expect(cardRowHtml(card as unknown as Record<string, unknown>)).toContain('<small>задача · in-progress · без аренды</small>')
+    expect(cardRowHtml({ key: 'TB-4', ws: 'w', k: 'task', st: 'to-do', mark: '<b>m</b>' })).toContain('· &lt;b&gt;m&lt;/b&gt;</small>')
   })
 })
 
@@ -804,6 +816,55 @@ describe('роадмап по неделям: подписи не налезаю
     expect(roadmapLabelMode((1200 * 7) / 266)).toBe('months')
   })
 
+  it('заголовок столбца — по подписям шкалы: «Неделя» над неделями, «Месяц» над месяцами (карточка HR epz36yxj)', () => {
+    expect(html).toContain("var byWeeks = roadmapLabelMode(dx * 7) === 'weeks';")
+    expect(html).toContain(`'<div class="rm-row rm-head"><div class="rm-name">' + (byWeeks ? 'Неделя' : 'Месяц') + '</div>`)
+    expect(html).not.toContain('<div class="rm-name">Неделя</div>')
+  })
+
+  it('окно ближайших недель по умолчанию, «Весь горизонт» — переключателем; выбор в этом браузере; телефон — весь горизонт (карточка HR vb1ea4jq)', () => {
+    expect(html).toContain('<button class="toggle rm-range" id="rm-range" type="button" aria-pressed="false">Весь горизонт</button>')
+    // a11y: подпись постоянная, состояние — только aria-pressed (линза фронтенда #347, п. 3).
+    expect(html).toContain("function paintRmRange() { rmRangeBtn.setAttribute('aria-pressed', String(RM_RANGE === 'all')); }")
+    expect(html).not.toContain("'Ближайшие недели'")
+    // Просроченное до начала окна не пропадает: число у полосы, названия и отставание — в подсказке (решение продукта).
+    expect(html).toContain('var before = win ? roadmapBefore(late, ms, a) : [];')
+    expect(html).toContain("'>' + before.length + ' просрочено до окна</small>'")
+    // Цвет просрочки — текстовый токен списков (.is-late, var(--warn)), а не графический --late: на белом у --late
+    // 3,95:1, ниже AA для мелкого текста (линза фронтенда #347, 23:19Z).
+    expect(html).toContain(`'<br><small class="rm-before is-late"'`)
+    expect(html).toContain('.is-late { color: var(--warn); font-weight: 600; }')
+    expect(html).toContain('&& before.indexOf(w) < 0; }).length;')
+    expect(html).toContain("var RM_RANGE_KEY = 'oq-roadmap-range', RM_RANGE = 'window';")
+    expect(html).toContain("function rmWindowOn() { return RM_RANGE !== 'all' && !(window.matchMedia && window.matchMedia('(max-width: 640px)').matches); }")
+    expect(html).toContain('var wa = addD(m0, -7 * wk.back), wb = addD(m0, 7 * (wk.total - wk.back) - 1);')
+    expect(html).toContain('var ms = msAll.filter(function (w) { return inWin(dParse(w.end) || planEndOf(w)); });')
+    expect(html).toContain("try { localStorage.setItem(RM_RANGE_KEY, RM_RANGE); } catch (e)")
+    // Состояние окна — вне блока чистых функций (localStorage и window там недоступны в тесте).
+    expect(html.indexOf("var RM_RANGE_KEY = 'oq-roadmap-range'")).toBeGreaterThan(html.indexOf('/* oq-pure:end */'))
+    // Окно — столько недель, сколько помещается с недельной подписью: от 4 до 10, назад — до 2.
+    const { rmWindowWeeks, roadmapLabelMode } = pure()
+    expect(rmWindowWeeks(620)).toEqual({ total: 7, back: 1 })
+    expect(rmWindowWeeks(1100)).toEqual({ total: 10, back: 2 })
+    expect(rmWindowWeeks(300)).toEqual({ total: 3, back: 0 })
+    // На любой ширине полосы (от 300 px, laneW = max(300, …)) окно подписано неделями (линза фронтенда #347, п. 2).
+    for (const w of [300, 320, 335, 340, 620, 900, 1100]) expect(roadmapLabelMode((w / rmWindowWeeks(w).total))).toBe('weeks')
+  })
+
+  it('«просрочено до окна»: план раньше окна; веха с меткой в окне считается один раз — меткой (линза фронтенда #347)', () => {
+    const { roadmapBefore } = pure()
+    const a = new Date(2026, 10, 9) // начало окна — пн 9 ноя
+    const old = { id: 'old', status: 'doing', planEnd: '2026-11-02' } // план до окна, факта нет — только в счётчике
+    const msIn = { id: 'ms-in', status: 'doing', planEnd: '2026-11-03', end: '2026-11-12' } // план до окна, факт в окне
+    const inWin = { id: 'in', status: 'doing', planEnd: '2026-11-10' } // план в окне — не «до окна»
+    const base = { id: 'base', status: 'doing', basePlanEnd: '2026-11-01', planEnd: '2026-11-20' } // сдвинут: считаем по исходному плану
+    const noPlan = { id: 'np', status: 'doing' }
+    const late = [old, msIn, inWin, base, noPlan]
+    expect(roadmapBefore(late, [msIn], a).map((w) => w.id)).toEqual(['old', 'base'])
+    // Без метки в окне (веха вне ms) — снова в счётчике: просрочка не пропадает.
+    expect(roadmapBefore(late, [], a).map((w) => w.id)).toEqual(['old', 'ms-in', 'base'])
+  })
+
   it('месяц — коротко, год — у первой подписи и у января', () => {
     const { roadmapMonthLabel } = pure()
     expect(roadmapMonthLabel(new Date(2026, 10, 1), false)).toBe('ноя')
@@ -988,6 +1049,8 @@ describe('порядок пунктов: от старых к новым (про
       // живая ссылка: видно, какой updatedAt у пункта на странице после каждого снимка
       mount: (it: { id: string; updatedAt?: number }) => mounted.push(it),
       render: () => {}, showTarget: () => {},
+      // Таяние ответа (#337): тающих пунктов нет — applyItems перемонтирует все, как раньше.
+      MELT: {}, itemEl: () => null,
     })
     runInContext(fnSource('itemFromDb'), ctx)
     runInContext(fnSource('applyItems'), ctx)
@@ -1102,5 +1165,136 @@ describe('раскладка «Одной очередью» / «По разде
   it('подпись продукта и отбор по продукту — и у пунктов общего списка', () => {
     expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .item[data-id], #sec-queue .item[data-id]').forEach(decorateItem);")
     expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .list, #sec-queue .list')")
+  })
+})
+
+describe('связь вернулась — страница снова «Ответы сохраняются» сама (14.11: пара 🟠/🟢 на каждой выкатке)', () => {
+  it('снимок после сбоя возвращает страницу к общей базе без перезагрузки', () => {
+    expect(html).toContain("if (remote && modeEl.dataset.mode === 'local') setMode('shared');")
+  })
+})
+
+describe('таяние ответа и якорь прокрутки (просьба владельца 15.11)', () => {
+  it('ответ на странице: пункт 10 с тает на месте, раскрытым; курсор или фокус клавиатуры — пауза', () => {
+    expect(html).toContain('.item.is-melting { animation: oq-melt 10s')
+    expect(html).toContain('body.hide-done .item.is-done:not(.is-melting) { display: none; }')
+    expect(html).toContain('.item.is-done:not(.is-melting) .item-body { display: none; }')
+    // Пауза сильнее правил вида: !important.
+    expect(html).toContain('@media (hover: hover) { .item.is-melting:hover { animation: none !important; } }')
+    expect(html).toContain('.item.is-melting:has(:focus-visible) { animation: none !important; }')
+    expect(html).toContain('@media (prefers-reduced-motion: reduce) { body.hide-done .item.is-melting { animation-name: oq-melt-flat; } }')
+    // «Показать выполненные» — без смены вида, та же длина.
+    expect(html).toContain('body:not(.hide-done) .item.is-melting { animation-name: oq-melt-keep; }')
+  })
+
+  it('высота карточки не меняется, пока она тает: «✓ …» и «Изменить ответ» — после таяния, подсказка — в строке «Сохранено»', () => {
+    expect(html).toContain('.item.is-done:not(.is-melting) .summary-answer { display: block; }')
+    expect(html).toContain('.item.is-done:not(.is-melting) .reopen { display: inline; }')
+    expect(html).toContain('.saved { font-size: 12px; color: var(--muted); min-height: 1.6em; min-height: 1lh; }')
+    expect(html).toContain('body.hide-done .item.is-melting .saved:empty::after')
+    // Подсказка — генерируемый текст: бот очереди читает textContent «.saved» и не перескажет её.
+    expect(html).not.toContain('class="melt-hint"')
+  })
+
+  it('таяние начинает только свой ответ, до render(); конец — animationend; тающий пункт не уезжает и не перемонтируется', () => {
+    // persist до render (Claude-линза #337): до записи строка «Сохранено» показывает «Сохраняю…», а не время.
+    expect(html).toContain('markMelt(id); persist(id); render(); return;')
+    expect(html).toContain('markMelt(id); persist(id); render();\n')
+    expect(html).toContain('persist(rid); render(); return;')
+    expect(html).not.toContain('render(); persist(')
+    expect(html).toContain("if (!/^oq-melt/.test(ev.animationName) || !id || !MELT[id]) return;")
+    expect(html).toContain('var doneOf = function (it) { return isDone(it, state[it.id]) && !MELT[it.id]; };')
+    expect(html).toContain("el.classList.toggle('is-melting', !!MELT[it.id]);")
+    expect(html).toContain('if (MELT[id] && inList[id]) return;')
+    expect(html).toContain('list.forEach(function (it) { if (!MELT[it.id] || !itemEl(it.id)) mount(it, true); });')
+    // MELT объявлен до первого placeItems: иначе doneOf упал бы на undefined.
+    expect(html.indexOf('var MELT = {};')).toBeGreaterThan(0)
+    expect(html.indexOf('var MELT = {};')).toBeLessThan(html.indexOf('ITEMS.forEach(function (it) { mount(it, false); });'))
+  })
+
+  it('касание без наведения: тап держит тающую карточку, тап вне — отпускает (линза coord #337)', () => {
+    expect(html).toContain('.item.is-melting.is-held { animation: none !important; }')
+    expect(html).toContain("if (ev.pointerType !== 'touch') return;")
+    expect(html).toContain("if (el) el.classList.add('is-held');")
+  })
+
+  it('якорь прокрутки — скриптом: карточка под курсором (или с фокусом), без них — верхняя видимая; браузерный выключен', () => {
+    expect(html).toContain('html { overflow-anchor: none; }')
+    expect(html).toContain("window.addEventListener('scroll', rememberAnchor, { passive: true });")
+    expect(html).toContain('new ResizeObserver(function () { restoreAnchor(); })')
+    expect(html).toMatch(/scheduleDash\(\);\n {4}restoreAnchor\(\);\n {2}\}/)
+    expect(html).toContain("if (ev.pointerType === 'touch') return;")
+  })
+})
+
+describe('роадмап: вехи без подписи видны на снимке бота (карточка HR u68lwzb1)', () => {
+  it('у полосы — «+N вех без подписи», названия и даты — в её подсказке', () => {
+    expect(html).toContain('var hidden = marks.filter(function (m, i) { return !levels[i]; });')
+    expect(html).toContain("'>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>'")
+    expect(html).toContain("tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); }))")
+  })
+})
+
+describe('держатель входящего (карточка HR xuc5csrv, d-silent-holder-1511 «a»): «в сети» или «молчит N ч»', () => {
+  const NOW = Date.parse('2026-11-15T12:00:00.000Z')
+  const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString()
+  const live = (session: string, product?: string) => ({ session, at: ago(0.01), alive: true, ...(product ? { product } : {}) })
+  const dead = (session: string) => ({ session, at: ago(1), alive: false })
+  const relay = (...sessions: unknown[]) => ({ alive: sessions.length > 0, sessions, relayed: {} })
+
+  it('живая автопередача держателя или его наследника по линии — «в сети», сколько бы ни молчал агент', () => {
+    const { holderState } = pure()
+    expect(holderState(relay(live('r.ab12')), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+    expect(holderState(relay(live('r.ab12.cd34')), { agentStatus: 'taken', agentBy: 'r.ab12', agentAt: ago(1) }, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+    // Похожее имя — не наследник: r.ab123 не продолжает линию r.ab12.
+    expect(holderState(relay(live('r.ab123')), { agentStatus: 'blocked', agentBy: 'r.ab12', agentAt: ago(5) }, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 5 })
+  })
+
+  it('пульса нет и последняя запись старше 4 ч — «молчит N ч»; моложе 4 ч — ничего', () => {
+    const { holderState } = pure()
+    expect(holderState(relay(dead('r.ab12')), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(4.5) }, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 4 })
+    expect(holderState(relay(), { agentStatus: 'taken', agentBy: 'r.ab12', agentAt: ago(13) }, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 13 })
+    expect(holderState(relay(dead('r.ab12')), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(3.9) }, NOW)).toBeNull()
+    // Без agentBy (запись прежней версии) — по времени, но «в сети» не бывает.
+    expect(holderState(relay(live('x')), { agentStatus: 'doing', agentAt: ago(6) }, NOW)).toEqual({ k: 'silent', session: '', hours: 6 })
+  })
+
+  it('метка только у «взял / в работе / ждёт»; без ответа /relay, без статуса или времени — ничего', () => {
+    const { holderState } = pure()
+    for (const agentStatus of ['done', 'planned', undefined]) {
+      expect(holderState(relay(), { agentStatus, agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toBeNull()
+    }
+    expect(holderState(null, { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toBeNull()
+    expect(holderState({ sessions: 'x' }, { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toBeNull()
+    expect(holderState(relay(), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: 'нет' }, NOW)).toBeNull()
+    expect(holderState(relay(), undefined, NOW)).toBeNull()
+  })
+
+  it('release (сервер убрал agentBy, статус оставил) — снимок стирает держателя, метка не называет отпустившую сессию (линза #414, N1)', () => {
+    const { holderState, agentFieldsInto } = pure()
+    const e: Record<string, unknown> = {}
+    agentFieldsInto(e, { agentStatus: 'doing', agentNote: 'беру', agentBy: 'r.ab12', agentAt: ago(1) })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+    agentFieldsInto(e, { agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0) })
+    expect(e).toEqual({ agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0) })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toBeNull()
+    // Поля статуса, заметки и времени без значения в снимке не стираются — как было.
+    agentFieldsInto(e, { agentBy: 'r.cd34' })
+    expect(e).toEqual({ agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0), agentBy: 'r.cd34' })
+    expect(html).toContain('agentFieldsInto(e, r.data);')
+  })
+
+  it('сравнение строкой: session в oq_agent_status и --relay с разными значениями (линия и имя) — не «в сети» (линза backend #414)', () => {
+    const { holderState } = pure()
+    const e = { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(5) }
+    expect(holderState(relay(live('taibe-89')), e, NOW)).toEqual({ k: 'silent', session: 'r.ab12', hours: 5 })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+  })
+
+  it('по продуктам (OPS-51): живая сессия другого продукта с тем же именем держателя не делает его «в сети»', () => {
+    const { holderState } = pure()
+    const e = { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(6) }
+    expect(holderState(relay(live('r.ab12', 'taibe')), e, NOW, 'hr-helper')).toEqual({ k: 'silent', session: 'r.ab12', hours: 6 })
+    expect(holderState(relay(live('r.ab12', 'taibe')), e, NOW, 'taibe')).toEqual({ k: 'online', session: 'r.ab12' })
   })
 })
