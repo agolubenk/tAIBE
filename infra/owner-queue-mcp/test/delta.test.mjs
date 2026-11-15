@@ -2,7 +2,7 @@
 // сбой — без потери данных и без шторма полных списков.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BACKOFF_MS, FULL_EVERY_MS, createDeltaMirror } from '../delta.mjs';
+import { BACKOFF_MS, FULL_EVERY_MS, RETRY_MS, createDeltaMirror } from '../delta.mjs';
 
 /**
  * Поддельная консоль по контракту /changes (queue/changes.ts HR): без since — full, cursor и collections; с since —
@@ -111,17 +111,56 @@ test('старая консоль без /changes (404) — null: oq_list чит
   assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['d-1'], 'пауза кончилась — снова дельта');
 });
 
-test('сбой посреди работы (503) — зеркало сброшено, прежний путь, после паузы — свежий полный список', async () => {
+test('выкатка консоли посреди работы (503) — прежний путь, зеркало и курсор целы; через минуту — дельта, а не полный список (линза Claude #353, п. 1)', async () => {
   const r = rig();
   r.put('items', 'd-1', { title: 'один' });
   await r.m.list('items');
   r.c.mode = 'down';
   assert.equal(await r.m.list('items'), null);
+  assert.match(r.logs[0], /повтор дельты через 60 с/);
+  r.tick(RETRY_MS - 1);
+  assert.equal(await r.m.list('items'), null);
+  assert.equal(r.c.reqs.length, 2, 'до повтора консоль не дёргаем');
   r.c.mode = 'ok';
   r.put('items', 'd-2', { title: 'два' });
-  r.tick(BACKOFF_MS);
+  r.tick(1);
   assert.deepEqual((await r.m.list('items')).docs.map((d) => d.id), ['d-2', 'd-1']);
-  assert.equal(r.c.reqs.at(-1).includes('since='), false, 'после сбоя — полный список, а не дельта от старого курсора');
+  assert.equal(r.c.reqs.at(-1).includes('since='), true, 'после выкатки — дельта от курсора');
+  assert.equal(r.c.reqs.filter((p) => !p.includes('since=')).length, 1, 'полный список — один раз за всё время');
+});
+
+test('сеть (ошибка без status) — как выкатка: повтор через минуту; консоль за это время перезапустилась — 410 и один полный список', async () => {
+  const f = fakeConsole();
+  f.put('items', 'd-1', { title: 'один' });
+  let t = 1_000_000;
+  let net = false;
+  const logs = [];
+  const m = createDeltaMirror({ get: async (p) => { if (net) throw new TypeError('fetch failed'); return f.get(p); }, now: () => t, log: (s) => logs.push(s) });
+  await m.list('items');
+  net = true;
+  assert.equal(await m.list('items'), null);
+  assert.match(logs[0], /fetch failed.*повтор дельты через 60 с/);
+  net = false;
+  f.restart();
+  f.put('items', 'd-2', { title: 'два' });
+  t += RETRY_MS;
+  assert.deepEqual((await m.list('items')).docs.map((d) => d.id), ['d-2', 'd-1']);
+  assert.deepEqual(f.c.reqs.slice(-2).map((p) => p.includes('since=')), [true, false], 'дельта от курсора → 410 → полный список');
+});
+
+test('ответ не по контракту и 4xx (кроме 410, 429) — зеркало сброшено, пауза 30 мин, потом свежий полный список', async () => {
+  const r = rig();
+  r.put('items', 'd-1', { title: 'один' });
+  await r.m.list('items');
+  r.c.mode = 'old';
+  assert.equal(await r.m.list('items'), null);
+  assert.match(r.logs[0], /30 мин прежний полный список/);
+  r.c.mode = 'ok';
+  r.tick(RETRY_MS);
+  assert.equal(await r.m.list('items'), null, 'не минутный повтор: 404 сам не пройдёт');
+  r.tick(BACKOFF_MS);
+  await r.m.list('items');
+  assert.equal(r.c.reqs.at(-1).includes('since='), false, 'после 404 — полный список, курсор сброшен');
 });
 
 test('одновременные вызовы — один запрос к консоли; полный список ещё и раз в 12 ч', async () => {
