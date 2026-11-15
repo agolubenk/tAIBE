@@ -34,7 +34,8 @@
 # Не вышло — Контроль и предшественник остаются как были, владельцу — прежний s-пункт (lineage_guard.py, IS-233).
 # Роль Т3 получает свой геном (--settings genome/<ключ>.json; в нём модель opus[1m] и сжатие на 300K без наследника —
 # SE-62, SE-55; обёртка CLAUDE_BIN для окна не нужна) и первое сообщение «Сборка Т3, ключ реестра <ключ>…» —
-# по нему включается правило 90 и Нерв узнаёт роль. Окно открывает osascript: первый раз macOS спросит разрешение
+# по нему включается правило 90 и Нерв узнаёт роль. Каждая сессия получает имя claude --name <продукт>-<роль>-<хвост
+# линии> (session_name): оно в заголовке окна терминала, в строке ввода и в ListAgents. Окно открывает osascript: первый раз macOS спросит разрешение
 # на управление Terminal. Только bash 3.2 (системный на macOS): без ассоциативных массивов.
 set -euo pipefail
 
@@ -150,10 +151,26 @@ child_lineage() {
 }
 generation() { printf '%s' "$1" | tr -cd '.' | wc -c | tr -d ' '; }
 
-# Первое сообщение новой сессии → stdout. $2 — id линии новой сессии.
+# Имя сессии для claude --name: продукт, роль и хвост линии (hr-helper-boards-ab12, taibe-coord-k3z4). Claude Code
+# показывает его в заголовке окна терминала, в строке ввода и в ListAgents: владелец видит, кто в окне, как его зовут
+# и к какому продукту он относится (15.11; без имени заголовок — тема разговора, у двух продуктов одинаковая).
+# Хвост линии свой у каждой сессии, поэтому предшественник и наследник одной роли не путаются. Наследник без роли
+# получает тему по папке handoff (…/queue-lane/HANDOFF-….md → queue-lane), папка-дата или пусто — «session».
+session_name() {
+  local role="$1" lineage="$2" who
+  who="$role"
+  if [ -z "$who" ]; then
+    who="$(basename "$(dirname "${HANDOFF:-/}")")"
+    case "$who" in ''|.|/|[0-9][0-9][0-9][0-9]-[0-9]*) who=session ;; esac
+  fi
+  printf '%s-%s-%s' "${PRODUCT:-$(basename "$CWD")}" "$who" "${lineage##*.}" \
+    | tr 'A-Z_ ' 'a-z--' | LC_ALL=C tr -cd 'a-z0-9.-'
+}
+
+# Первое сообщение новой сессии → stdout. $2 — id линии новой сессии, $3 — её имя (session_name).
 first_message() {
-  local role="$1" lineage="$2" num file tag base
-  tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди."
+  local role="$1" lineage="$2" name="$3" num file tag base
+  tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди. Твоё имя в списке сессий и в заголовке окна — $name."
   if [ -n "$HANDOFF" ]; then
     # Квитанция — последним шагом приёма: по ней сторож снимает предшественника, Monitor и кроны к этому времени свои.
     tag="$tag Последним шагом приёма (после Monitor, если ты его взводишь) выполни: python3 -I $TOOLS/lineage.py ack — по этой квитанции предшественник закроется сам."
@@ -184,14 +201,17 @@ alias_note() {
 
 # Одна сессия: пусковой скрипт в $TMPDIR, затем окно терминала (или печать команды).
 spawn_one() {
-  local role="$1" msg genome="" dir launcher cmd lineage out="" wid tty osa
+  local role="$1" msg genome="" dir launcher cmd lineage out="" wid tty osa name args
   lineage="$(child_lineage)"
   SPAWNED_LINE="$lineage"
   SPAWNED_TTY=""
-  msg="$(first_message "$role" "$lineage")"
+  name="$(session_name "$role" "$lineage")"
+  msg="$(first_message "$role" "$lineage" "$name")"
+  args="--name $(sq "$name")"
   if [ -n "$role" ]; then
     genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$(role_base "$role").json")"
     [ -f "$genome" ] || die "нет генома $genome (build.py собирает его из roles.json)"
+    args="--settings $(sq "$genome") $args"
   fi
   if [ "$TERMINAL" != print ] && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
     echo "# osascript нет (Linux/SSH) — окно не открыть, команда ниже (и без autoclose)" >&2
@@ -223,11 +243,7 @@ spawn_one() {
       # Ctrl-C и сторож retire снимают его группу. Код ≠ 0 (сбой, KILL) — окно остаётся, видна причина. Закрывает
       # отцепленный lineage.py autoclose после выхода скрипта: только окно этой линии и только если в нём один shell.
       echo "set -m"
-      if [ -n "$genome" ]; then
-        echo "\"\${CLAUDE_BIN:-claude}\" --settings $(sq "$genome") \"\$m\"; rc=\$?"
-      else
-        echo "\"\${CLAUDE_BIN:-claude}\" \"\$m\"; rc=\$?"
-      fi
+      echo "\"\${CLAUDE_BIN:-claude}\" $args \"\$m\"; rc=\$?"
       # Код выхода — в запись линии: автоуборка закрывает только окна с кодом 0 и не раньше чем через 10 мин.
       echo "L=$(sq "$TOOLS/lineage.py")"
       echo "python3 -I \"\$L\" exited --rc \"\$rc\" >/dev/null 2>&1 </dev/null || true"
@@ -236,10 +252,8 @@ spawn_one() {
       echo "if read -r -t $DELAY _; then python3 -I \"\$L\" exited --rc 0 --keep >/dev/null 2>&1 </dev/null || true; echo \"окно оставлено\"; exit 0; fi"
       echo "python3 -I \"\$L\" autoclose --tty \"\$(tty)\" --pid \$\$ >/dev/null 2>&1 </dev/null || true"
       echo "exit 0"
-    elif [ -n "$genome" ]; then
-      echo "exec \"\${CLAUDE_BIN:-claude}\" --settings $(sq "$genome") \"\$m\""
     else
-      echo "exec \"\${CLAUDE_BIN:-claude}\" \"\$m\""
+      echo "exec \"\${CLAUDE_BIN:-claude}\" $args \"\$m\""
     fi
   } > "$launcher"
   chmod 700 "$launcher"
@@ -280,7 +294,7 @@ spawn_one() {
     record "$lineage" terminal "$wid" "$tty" "$role"
     SPAWNED_TTY="$tty"
   fi
-  echo "открыто: ${role:-наследник} → $launcher"
+  echo "открыто: ${role:-наследник} ($name) → $launcher"
 }
 
 # Пусковой скрипт стартовал: прочитав текст, он удаляет свою папку. Ждём до SPAWN_START_WAIT с (30).
