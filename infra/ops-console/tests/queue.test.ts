@@ -130,6 +130,20 @@ describe('документы и права', () => {
     await revokeToken(t.id)
   })
 
+  it('все попытки записи, отказы тоже, — не больше 600 в минуту: цикл 409 упирается в 429 (линзы backend и Контроля #361)', async () => {
+    const t = await createToken('attempts-4xx', ['read', 'agent'])
+    const a = bearer(t.token)
+    expect((await a.put('/db/items/d-attempts', { data: decision })).status).toBe(200)
+    const codes: number[] = []
+    for (let i = 0; i < 600; i++) codes.push((await a.patch('/db/items/d-attempts', { data: { title: `x${i}` }, ifVersion: 99 })).status)
+    expect(codes.slice(0, 599).every((c) => c === 409)).toBe(true) // 1 запись + 599 отказов — в пределе 600
+    expect(codes[599]).toBe(429)
+    const over = await a.patch('/db/items/d-attempts', { data: { title: 'после' } })
+    expect(over.status).toBe(429)
+    expect(over.json.error).toContain('попыток записи')
+    await revokeToken(t.id)
+  })
+
   it('createdAt пункта не меняется при правке, updatedAt — растёт: порядок /queue «от старых к новым» (замечание владельца 14.11)', async () => {
     const a = bearer(agent)
     const put = await a.put('/db/items/d-created', { data: decision })
