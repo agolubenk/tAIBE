@@ -1,5 +1,6 @@
 import { HTTPException } from "hono/http-exception";
 import { activitySchema } from "../activity/response";
+import { storedCommentContent } from "../activity/stored-comment-content";
 import {
   apiRouter,
   createRoute,
@@ -10,6 +11,10 @@ import {
   hasWorkspacePermission,
   requireWorkspacePermission,
 } from "../utils/require-workspace-permission";
+import {
+  maskForTokenCaller,
+  restoreForTokenCaller,
+} from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
@@ -92,6 +97,9 @@ const updateTaskCommentRoute = createRoute({
     400: errorResponse("Invalid body"),
     403: errorResponse("Not the author, or missing task:update permission"),
     404: errorResponse("Comment not found"),
+    409: errorResponse(
+      "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+    ),
   },
 });
 
@@ -116,7 +124,10 @@ const deleteTaskCommentRoute = createRoute({
 
 const comment = apiRouter()
   .openapi(getTaskCommentsRoute, async (c) =>
-    c.json(await getComments(c.req.valid("param").taskId), 200),
+    c.json(
+      maskForTokenCaller(c, await getComments(c.req.valid("param").taskId)),
+      200,
+    ),
   )
   .openapi(createTaskCommentRoute, async (c) => {
     const { taskId } = c.req.valid("param");
@@ -138,17 +149,32 @@ const comment = apiRouter()
         ? { userName: externalUserName, source: externalSource }
         : undefined;
     return c.json(
-      await createComment(taskId, c.get("userId"), content, external),
+      maskForTokenCaller(
+        c,
+        await createComment(taskId, c.get("userId"), content, external),
+      ),
       200,
     );
   })
   .openapi(updateTaskCommentRoute, async (c) => {
     const { id } = c.req.valid("param");
     const { content } = c.req.valid("json");
-    return c.json(await updateComment(c.get("userId"), id, content), 200);
+    const restored = await restoreForTokenCaller(c, content, () =>
+      storedCommentContent(id),
+    );
+    return c.json(
+      maskForTokenCaller(c, await updateComment(c.get("userId"), id, restored)),
+      200,
+    );
   })
   .openapi(deleteTaskCommentRoute, async (c) =>
-    c.json(await deleteComment(c.get("userId"), c.req.valid("param").id), 200),
+    c.json(
+      maskForTokenCaller(
+        c,
+        await deleteComment(c.get("userId"), c.req.valid("param").id),
+      ),
+      200,
+    ),
   );
 
 export default comment;

@@ -1,5 +1,24 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
-import { redact } from "./index";
+import { looksLikePassphrase, looksLikeSecret, redact } from "./index";
+
+// TB-136: one corpus for both rule sets. infra/checks/test_checks.py reads the
+// same file and expects the scanner rule `scan` on every case.
+type CorpusCase = {
+  id: string;
+  kind: string;
+  before: string;
+  value: string[];
+  after: string;
+  redact: string;
+  scan: string;
+};
+const corpus = JSON.parse(
+  readFileSync(
+    new URL("../fixtures/secrets-corpus.json", import.meta.url),
+    "utf8",
+  ),
+) as { cases: CorpusCase[] };
 
 // Test secrets are assembled at runtime from fragments so this file carries
 // no string that a secret scanner could mistake for live material.
@@ -185,10 +204,389 @@ describe("@kaneo/redact", () => {
     });
   });
 
-  // AC-023 known miss, pinned by this test: an unprefixed key in YAML
-  // (no known prefix, plain alnum so the base64-blob detector skips it)
-  // is intentionally NOT redacted. Widening coverage here is a spec
-  // decision, not a drive-by fix.
+  describe("shared corpus (TB-136)", () => {
+    it("holds every AC-023 kind and every kind added by TB-136", () => {
+      const kinds = new Set(corpus.cases.map((c) => c.kind));
+      for (const kind of [
+        "api_key",
+        "jwt",
+        "pem",
+        "db_url",
+        "base64",
+        "nonstandard",
+        "bearer",
+        "tbk",
+        "telegram",
+        "stripe",
+        "aws-session",
+        "github",
+        "slack",
+        "assignment",
+        "env",
+        "url_credentials",
+        "pgp",
+      ]) {
+        expect(kinds).toContain(kind);
+      }
+    });
+
+    it.each(corpus.cases.map((c) => [c.id, c] as const))(
+      "redacts %s and nothing else",
+      (_id, c) => {
+        const value = c.value.join("");
+        const result = expectSingleHit(
+          `${c.before}${value}${c.after}`,
+          c.redact,
+          value,
+        );
+        expect(redact(result.text).hits).toHaveLength(0);
+      },
+    );
+  });
+
+  describe("credential names in code stay readable (TB-136)", () => {
+    it.each([
+      ["a property", "apiKey: options.apiKey,"],
+      ["a schema", "api_key: z.string(),"],
+      ["a dotted name", "access_token = settings.accessToken"],
+      ["an env reference", "GITHUB_TOKEN=$GITHUB_TOKEN"],
+      ["a braced reference", `API_KEY="${"$"}{API_KEY}"`],
+      ["a header reference", "x-api-key: $T_BOARDS_API_KEY"],
+      ["a password reference", "password: $DB_PASSWORD"],
+      ["joined words", "DEPLOY_TOKEN: replace_with_deploy_token"],
+      ["a translated label", '"api_key": "APIキーを入力してください"'],
+      ["a type annotation", "function f(apiKey: ApiKeyUsageRow, now: Date)"],
+      ["a type in a literal", "{ access_token: AccessTokenPayload; }"],
+    ])("leaves %s untouched", (_name, input) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(0);
+      expect(result.text).toBe(input);
+    });
+
+    it("looksLikeSecret keeps a key and drops code-shaped values", () => {
+      expect(looksLikeSecret(join("Zq8fK2mP", "9xL4vB7nR1tY"))).toBe(true);
+      for (const value of [
+        "short",
+        "options.apiKey",
+        "z.string()",
+        "apiKeyValue",
+        "your_secure_password",
+        "パスワードを入力",
+        "%s\\nX-GitHub",
+      ]) {
+        expect(looksLikeSecret(value)).toBe(false);
+      }
+    });
+
+    // TB-193: a type name is code only with `,`, `;` or `)` right after it.
+    it("looksLikeSecret drops a type name only in a type context", () => {
+      for (const next of [",", ";", ")"]) {
+        expect(looksLikeSecret("ApiKeyUsageRow", next)).toBe(false);
+        expect(looksLikeSecret("SecretStr", next)).toBe(false);
+      }
+      for (const next of ["", " ", "\n", '"', "|"]) {
+        expect(looksLikeSecret("ApiKeyUsageRow", next)).toBe(true);
+      }
+    });
+  });
+
+  // TB-193: capitalized words with no digit, shorter than 32 characters, were
+  // read as a type name everywhere after #283, so a passphrase stayed open.
+  describe("a passphrase of capitalized words (TB-193)", () => {
+    const phrase = join("Correct", "Horse", "Battery", "Staple");
+    const short = join("Open", "Sesame", "Now");
+
+    it.each([
+      ["an env line at the end of the text", `CLIENT_SECRET=${phrase}`, phrase],
+      ["an env line before the next one", `GITHUB_TOKEN=${short}\nX=1`, short],
+      ["a YAML key", `api_key: ${phrase}\nregion: eu`, phrase],
+      ["a JSON value", `{"access_token": "${phrase}", "n": 1}`, phrase],
+      ["a header", `x-api-key: ${phrase}`, phrase],
+      ["a markdown table cell", `| \`GITHUB_TOKEN=${short}\` | prod |`, short],
+    ])("masks %s", (_name, input, value) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(1);
+      expect(result.text).not.toContain(value);
+    });
+
+    it.each([
+      [
+        "a type before a comma",
+        "function f(apiKey: ApiKeyUsageRow, now: Date)",
+      ],
+      ["a type before a semicolon", "{ access_token: AccessTokenPayload; }"],
+      ["a type before a parenthesis", "function f(apiKey: ApiKeyUsageRow)"],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+  });
+
+  // TB-195: lowercase words joined together, shorter than 32 characters, were
+  // read as a camelCase name after a SECRET or PASSWORD name too.
+  describe("a passphrase of lowercase words (TB-195)", () => {
+    const phrase = join("correct", "horse", "battery", "staple");
+
+    it.each([
+      ["an env line at the end of the text", `CLIENT_SECRET=${phrase}`],
+      ["an env line before the next one", `JWT_SECRET=${phrase}\nX=1`],
+      ["a YAML key", `CLIENT_SECRET: ${phrase}\nregion: eu`],
+      ["a JSON value", `{"CLIENT_SECRET": "${phrase}", "n": 1}`],
+      ["a PASSWORD name", `REDIS_PASSWORD=${phrase}`],
+      ["a lowercase password key", `password: ${phrase}`],
+    ])("masks %s", (_name, input) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(1);
+      expect(result.text).not.toContain(phrase);
+    });
+
+    it.each([
+      ["a camelCase variable", "{ JWT_SECRET: jwtSecret, ttl: 60 }"],
+      ["the literal undefined", "JWT_SECRET: undefined"],
+      ["joined words", "CLIENT_SECRET=your_client_secret"],
+      ["a TOKEN name", `GITHUB_TOKEN=${phrase}`],
+      ["a lowercase secret key in prose", `secret: ${phrase}`],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    it("looksLikePassphrase keeps lowercase words and drops code", () => {
+      expect(looksLikePassphrase(phrase)).toBe(true);
+      expect(looksLikeSecret(phrase)).toBe(false);
+      for (const value of ["jwtSecret", "undefined", "short", "a.b.c.d.e"]) {
+        expect(looksLikePassphrase(value)).toBe(false);
+      }
+    });
+  });
+
+  // TB-198 (Claude lens #368, item 1): a value the filter rejected was
+  // consumed whole, so a name inside it was never read and its value leaked.
+  describe("a name inside a rejected value (TB-198)", () => {
+    const value = join("Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv3");
+    const phrase = join("correct", "horse", "battery", "staple");
+
+    it.each([
+      ["a quoted code value", `B_SECRET" = "x(=C_SECRET=${value}`, value],
+      [
+        "a template value",
+        `CLIENT_SECRET = "{{vault}}/APP_SECRET=${value}"`,
+        value,
+      ],
+      ["a passphrase", `B_SECRET=x(=C_SECRET=${phrase}`, phrase],
+      ["a TOKEN name", `A_TOKEN=x(=B_TOKEN=${value}`, value],
+      ["a credential name", `api_key=x(api_key=${value}`, value],
+      ["a non-ASCII character", `A_SECRET=é=B_SECRET=${value}`, value],
+    ])("masks the inner value after %s", (_name, input, secret) => {
+      expectSingleHit(input, "password_assignment", secret);
+    });
+
+    it("masks the inner value of a header", () => {
+      expectSingleHit(`x-api-key: x(x-api-key:${value}`, "api_key", value);
+    });
+
+    // Claude lens and Control on #375: the inner match ends after the outer
+    // value, and the next search skipped C_TOKEN. The base masked these.
+    it.each([
+      `A_TOKEN=x(B_TOKEN = C_TOKEN = ${value}`,
+      `A_TOKEN=x(B_TOKEN = GITHUB_TOKEN = ${value}`,
+      `A_TOKEN=x(B_TOKEN"=C_TOKEN" = "${value}"`,
+      `A_TOKEN=x(B_TOKEN" = "GH2_TOKEN" = "${value}"`,
+      `A_TOKEN=x(B_TOKEN = "C_TOKEN" = "${value}"`,
+      `api_key=x(api_key = api_key = ${value}`,
+      `x-api-key: x(x-api-key: x-api-key: ${value}`,
+      `A_SECRET=x(B_SECRET = C_SECRET = ${value}`,
+      `A_SECRET=y(B_SECRET : C_SECRET : ${value}`,
+      `A_SECRET=éB_SECRET = C_SECRET = ${value}`,
+      // Claude lens on #375 2a50b88f4: nested rewinds paired a name with
+      // another value than the plain search (B1), and the overlap rule
+      // dropped a hit that ended after the previous one (B2).
+      `A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = X1_TOKEN = ${value}`,
+      `api_key=x(api_key : y(api_key : k1_api_key : x1_api_key : ${value}`,
+      `A_SECRET=x(B_SECRET:C_PASSWORD:q;${value}`,
+    ])(
+      "masks the value after an inner match past the outer value: %s",
+      (input) => {
+        const result = redact(input);
+        expect(result.text).not.toContain(value);
+        expect(result.hits.length).toBeGreaterThan(0);
+      },
+    );
+
+    // The restart rests on one property of both filters: a value with `=` or
+    // `:` and no DROPS_VALUE character is accepted from 8 characters on, so
+    // the value is masked whole with the name inside it.
+    it("accepts every value with = or : from 8 characters on", () => {
+      const alphabet = "aAzZqQ09_-.$/+@!~=:";
+      let seed = 1;
+      const random = () => {
+        seed = (seed * 48_271) % 2_147_483_647;
+        return seed;
+      };
+      for (let i = 0; i < 5000; i++) {
+        let candidate = "";
+        const length = 8 + (random() % 40);
+        while (candidate.length < length) {
+          candidate += alphabet.charAt(random() % alphabet.length);
+        }
+        if (!/[=:]/.test(candidate)) continue;
+        for (const next of ["", ",", ";", ")"]) {
+          expect(looksLikeSecret(candidate, next)).toBe(true);
+          expect(looksLikePassphrase(candidate, next)).toBe(true);
+        }
+      }
+      const outer = `A_TOKEN=aaaa/B_TOKEN=${value}`;
+      expect(redact(outer).text).toBe("A_TOKEN=[REDACTED:password_assignment]");
+    });
+
+    it.each([
+      ["code in the inner value", "A_SECRET=x=B_SECRET=abc(def"],
+      ["a call", "JWT_SECRET: getSecret(config)"],
+      ["a short inner value", "A_SECRET=x(=B_SECRET=abc"],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    // Control #375: an inner name may end where the outer value ends, with
+    // its separator after a space or a quote. The search goes on at the
+    // start of that name, whether the outer value was rejected or masked.
+    const hidden = "[REDACTED:password_assignment]";
+
+    it.each([
+      [
+        "a rejected dotted value",
+        `A_TOKEN=x.B_TOKEN = ${value}`,
+        `A_TOKEN=x.B_TOKEN = ${hidden}`,
+      ],
+      [
+        "a rejected value before a quote",
+        `A_TOKEN="abcdefB_TOKEN" = "${value}"`,
+        `A_TOKEN="abcdefB_TOKEN" = "${hidden}"`,
+      ],
+      [
+        "a masked value ending in a colon",
+        `A_SECRET=fooB_SECRET: ${value}`,
+        `A_SECRET=${hidden} ${hidden}`,
+      ],
+      [
+        "a masked dotted value ending in a colon",
+        `A_TOKEN=myApp.B_TOKEN: ${value}`,
+        `A_TOKEN=${hidden} ${hidden}`,
+      ],
+      [
+        "a masked value without a final separator",
+        `A_TOKEN=a=B_TOKEN = ${value}`,
+        `A_TOKEN=${hidden} = ${hidden}`,
+      ],
+      [
+        "a password value",
+        `password=foopassword = ${value}`,
+        `password=${hidden} = ${hidden}`,
+      ],
+    ])("masks the next value after %s", (_name, input, expected) => {
+      expect(redact(input).text).toBe(expected);
+    });
+
+    // The search goes on after the last rejecting character or at the name
+    // that ends the value, never at or before the previous match start:
+    // 256 000 characters take under 10 ms.
+    it.each([
+      "A_SECRET=(",
+      "A_SECRET=x(",
+      "api_key=(",
+      "A_TOKEN=(",
+      "x-api-key:(",
+      "A_SECRET=é",
+      "A_TOKEN=x.B_TOKEN ",
+      "A_SECRET=fooB_SECRET: ",
+      "password=xpassword ",
+      "A_TOKEN=a=B_TOKEN ",
+      "A_TOKEN=x(B_TOKEN = ",
+      "A_SECRET=x(B_SECRET : ",
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      const text = unit.repeat(Math.ceil(256_000 / unit.length));
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
+    });
+  });
+
+  // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the
+  // Authorization header as a JSON key, an empty x-api-key header.
+  describe("values next to code punctuation and JSON headers (#283)", () => {
+    const value = join("Zq8fK2mP", "9xL4vB7nR1tY");
+    const boardKey = "PlVrNsKtWqZmXbHc".repeat(4);
+
+    it.each([
+      [
+        "an env line with a command after it",
+        `export OPENAI_API_KEY=${value}; python app.py`,
+        value,
+      ],
+      ["an object literal", `{api_key: ${value}, region: eu}`, value],
+      ["a connection string", `Server=x;ApiKey=${value};Db=y`, value],
+      [
+        "a board key before a command",
+        `export T_BOARDS_API_KEY=${boardKey}; curl`,
+        boardKey,
+      ],
+    ])(
+      "redacts the value in %s and keeps the punctuation",
+      (_name, input, secret) => {
+        const result = redact(input);
+        expect(result.text).toBe(
+          input.replace(secret, "[REDACTED:password_assignment]"),
+        );
+        expect(result.text).not.toContain(secret);
+      },
+    );
+
+    it.each([
+      ["double quotes", `{"Authorization": "Bearer ${value}Qz8Lm4Rt7Wx2"}`],
+      ["single quotes", `{'Authorization': 'Bearer ${value}Qz8Lm4Rt7Wx2'}`],
+    ])("redacts a bearer token under a JSON key in %s", (_name, input) => {
+      const token = `${value}Qz8Lm4Rt7Wx2`;
+      expectSingleHit(input, "bearer", token);
+    });
+
+    it("leaves the next header alone after an empty x-api-key", () => {
+      const input = "x-api-key:\nContent-Type: application/json";
+      const result = redact(input);
+      expect(result.hits).toHaveLength(0);
+      expect(result.text).toBe(input);
+    });
+  });
+
+  describe("base64 runs that are not key material (TB-136)", () => {
+    const ids = [
+      join("Ab3dE5fG7h", "J9kL1mN3pQ5r"),
+      join("St7uV9wX1y", "Z3aB5cD7eF9g"),
+      join("Hj2kL4mN6p", "Q8rS0tU2vW4x"),
+    ];
+
+    it("still redacts the same ids joined without path words", () => {
+      const run = ids.join("/");
+      expectSingleHit(`id ${run} end`, "base64_blob", run);
+    });
+
+    it.each([
+      [
+        "a PascalCase name",
+        "import { Route as LayoutAuthenticatedWorkspaceSlugTaskTicketIdChar123TitleChar125RouteImport }",
+      ],
+      ["a data: URI", `src="data:image/png;base64,${secrets.base64Blob}"`],
+      ["an SRI hash", `integrity="sha384-${secrets.base64Blob}"`],
+      [
+        "a URL path",
+        `/dashboard/workspace/${ids[0]}/project/${ids[1]}/task/${ids[2]}`,
+      ],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+  });
+
+  // AC-023 known miss, pinned by this test: an unprefixed key under a name
+  // with no credential word (openaiKey; api_key, *_TOKEN and x-api-key are
+  // caught since TB-136) and plain alnum, so the base64-blob detector skips
+  // it, is NOT redacted. Widening coverage here is a spec decision.
   it("known miss: unprefixed key in YAML is not redacted", () => {
     const unprefixed = "openaiKey: z9y8x7w6v5u4t3s2r1q0p9o8n7m6l5k4";
     const result = redact(unprefixed);
@@ -198,5 +596,128 @@ describe("@kaneo/redact", () => {
 
   it("handles empty input", () => {
     expect(redact("")).toEqual({ text: "", hits: [] });
+  });
+
+  // TB-136 security lens: an env name after a lowercase prefix is still a
+  // credential name (the base rule caught app_CLIENT_SECRET=).
+  it.each(["foo_API_KEY", "my_TOKEN", "app_CLIENT_SECRET", "db_PASSWORD"])(
+    "redacts the value of %s= after a lowercase prefix",
+    (name) => {
+      const value = join("Qz8Lm4", "Rt7Wx2Ny5Kp9Bv3");
+      expect(redact(`${name}=${value}`).text).toBe(
+        `${name}=[REDACTED:password_assignment]`,
+      );
+    },
+  );
+
+  describe("pem without one lazy regex (TB-136)", () => {
+    const begin = join("-----BEGIN ", "PRIVATE KEY-----");
+
+    it("redacts two blocks as two hits and the text between them stays", () => {
+      const result = redact(`${secrets.pem}\nnext\n${secrets.pem}`);
+      expect(result.text).toBe("[REDACTED:pem]\nnext\n[REDACTED:pem]");
+    });
+
+    it("leaves a BEGIN line with no END line as is", () => {
+      const lone = `${begin}\nMIIEvwIBADANBgkq`;
+      expect(redact(lone).text).toBe(lone);
+    });
+
+    it("joins a broken BEGIN with the block after it, as the lazy regex did", () => {
+      const result = redact(`${begin} cut\n${secrets.pem}`);
+      expect(result.text).toBe("[REDACTED:pem]");
+    });
+  });
+
+  // TB-136 security lens: a rule that may restart at every character and
+  // scan to the end of the text is quadratic. MCP call arguments go through
+  // redact before they are cut (api/src/mcp/call-detail.ts), so such a rule
+  // holds the API event loop. On 256 000 characters each run takes up to
+  // 26 ms linear and 1.3–60 s quadratic; the bound sits between them.
+  it.each([
+    "_",
+    "A_",
+    "a_",
+    "a_A",
+    "API_KEY",
+    "TOKEN_",
+    "a.",
+    "a-",
+    "a+",
+    "eyJa.",
+    "sk-",
+    "Ab3+",
+    "postgres://a:",
+    "-----BEGIN KEY-----",
+  ])("redacts 256 000 characters of %j in linear time", (unit) => {
+    const text = unit.repeat(Math.ceil(256_000 / unit.length));
+    const started = performance.now();
+    redact(text);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  // Claude lens #283 B1: a run of a key prefix that fails only at its last
+  // character (one the key class does not take, but the end check does).
+  // A start after every `-` or `_` of the run scanned to the end again.
+  // Frontend lens #283: every provider prefix with every kind of end, also
+  // for the group that may start after `_` or `-`.
+  const prefixUnits = [
+    join("xox", "b-"),
+    join("gh", "p_"),
+    join("gh", "o_a"),
+    "sk-",
+    join("sk", "-ant-"),
+    join("github", "_pat_"),
+    join("gl", "pat-"),
+    join("AI", "za"),
+    join("AK", "IA"),
+    "tbk_",
+    join("sk", "_live_"),
+    "_",
+    "-",
+    "a",
+  ];
+  it.each(
+    prefixUnits.flatMap((unit) =>
+      ["", "_", "-", "!"].map((stop) => [unit, stop] as const),
+    ),
+  )(
+    "redacts 256 000 characters of %j and a final %j in linear time",
+    (unit, stop) => {
+      const text = unit.repeat(Math.ceil(256_000 / unit.length)) + stop;
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
+    },
+  );
+
+  it("redacts one 256 000-character key body with a failing end in linear time", () => {
+    const text = `${join("gh", "p_")}${"a".repeat(256_000)}_`;
+    const started = performance.now();
+    redact(text);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  // Frontend lens #283: a key with an alphanumeric body or a fixed length may
+  // follow `_` or `-` (masked on board-agents before B1).
+  it.each([
+    ["after a dash", "id-", secrets.ghp],
+    ["after an env-name underscore", "TOKEN_", secrets.ghp],
+    ["after an underscore", "x_", secrets.aws],
+    ["sk-ant- after a dash", "foo-", secrets.anthropic],
+    ["sk- after an underscore", "x_", secrets.openai],
+    ["glpat- after a dash", "id-", secrets.gitlab],
+  ])("redacts a provider key %s", (_name, before, secret) => {
+    expectSingleHit(`${before}${secret} `, "api_key", secret);
+  });
+
+  // Claude lens #283 N1: markdown emphasis around a key. The body of sk-ant-
+  // takes `_`, so the hit ends after the closing `_`, as on board-agents.
+  it("redacts an sk-ant- key in markdown emphasis", () => {
+    const input = `_${secrets.anthropic}_`;
+    const result = redact(input);
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.kind).toBe("api_key");
+    expect(result.text).toBe("_[REDACTED:api_key]");
   });
 });

@@ -15,7 +15,8 @@ checkout is touched), runs `catalog.py` and `dupes.py`, and takes the layer file
 (`~/.claude/evolve/state.json`). For each one with cases (`cases/*.jsonl`, naming below) it judges the version
 before its last edit against the current one. Judges: `--judges`, else the Claude candidates (`judges.py`) when
 `abJudgeClaude` is on — the board, closed on doubt, or the owner's file `~/.claude/evolve/abJudgeClaude.on`. They are
-calibrated first; with fewer than two that pass, nothing is judged and the artifacts stay pending. Artifacts are
+calibrated first; with fewer than two that pass, nothing is judged and the artifacts stay pending (an insufficient
+line each; none when no candidate answered at all — an account limit is not a measurement, SE-125). Artifacts are
 judged one at a time by every judge, at most `resources.MAX_ARTIFACTS` a night, and only while the night's budget
 covers the whole artifact. Every verdict passes `quality.py`. An accepted loss opens a revert PR of that edit; an
 accepted win is pinned in `verdicts.jsonl`; brak and insufficient verdicts are written there as well and never act.
@@ -171,14 +172,18 @@ def verdict_line(it, status, reasons, pick, per_judge):
             'judges': judges}
 
 
-def no_judge_line(it, calibration):
-    """A night with fewer than two calibrated judges: insufficient, nothing acts, the artifact stays pending."""
-    tried = ', '.join('%s (%s)' % (r['model'], r['reasons'][0][:80]) for r in calibration['rows'])
+def no_judge_lines(items, calibration, judged):
+    """A night with fewer than two calibrated judges: an insufficient line per artifact, nothing acts, the artifacts
+    stay pending. No candidate answered at all (account limit, CLI error, deadline) is not a measurement: no line,
+    «not measured» in the report `judged`, as judges unreachable in A/B (SE-125)."""
+    tried = ', '.join('%s (%s)' % (r['model'], r['reasons'][0][:200]) for r in calibration['rows'])
     why = 'no judge: %d of %d candidates passed calibration (need %d) — %s' % (
         len(calibration['passed']), len(calibration['rows']), judging.WANT_JUDGES, tried or 'no candidates')
-    v = verdict_line(it, 'insufficient', [why], None, [])
-    v['calibration'] = [r['model'] for r in calibration['rows']]
-    return v
+    if all(r['reasons'][0].startswith('unavailable') for r in calibration['rows']):
+        judged += [{'path': it['path'], 'status': 'not measured', 'reasons': [why]} for it in items]
+        return []
+    return [dict(verdict_line(it, 'insufficient', [why], None, []),
+                 calibration=[r['model'] for r in calibration['rows']]) for it in items]
 
 
 def judge_names(args, code_root):
@@ -293,7 +298,7 @@ def cmd_run(args):
                 verdicts, pending = judge(items, passed, args.factory or judge_factory(args.budget), args.budget,
                                           deadline)
             else:  # fewer than two judges: a verdict could never be accepted — no A/B, the artifacts stay pending
-                verdicts, pending = [no_judge_line(it, calibration) for it in items], list(items)
+                verdicts, pending = no_judge_lines(items, calibration, t['judged']), list(items)
                 if not posted and not args.no_card:
                     posted = steps.post_card('evolve %s: нет годного судьи — калибровку прошли %d из %d кандидатов '
                                              '(нужно 2: %s); A/B не выполнен, корректировок нет, артефакты ждут.' % (

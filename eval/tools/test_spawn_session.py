@@ -159,5 +159,51 @@ if rc == 0 or "нет продукта nope" not in out:
     print("FAIL: unknown product is refused")
     print(out)
 
+# Вторая сессия роли (решения владельца 14.11): ключ backend-2 и роль 7, а геном и пусковой файл — базовой роли.
+def second_run(product, *flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = {**os.environ, "TMPDIR": tmp, "TAIBE_PRODUCT": "", "TAIBE_LINEAGE": "r.ab12",
+               "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"), "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"),
+               "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+        flags = [str(handoff) if a == "HANDOFF" else a for a in flags]
+        run = subprocess.run(["bash", str(SCRIPT), *flags, "--product", product, "--dry-run", "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+        return run.returncode, run.stdout + run.stderr
+
+
+for name, product, flags, want in [
+    ("tAIBE backend-2: own key, base genome and launch file", "taibe", ["--launch", "--role", "backend-2"],
+     ["ключ реестра backend-2, роль 7. Пусковой файл: ", "/prompts/taibe/roles/4-backend.md",
+      "/genome/taibe/backend.json", "вторая сессия роли backend (роль 4)", "тап Нерва", "source пунктов очереди", "«(роль 7)»",
+      "backend-2 — команда напечатана"]),
+    ("HR frontend-2: base genome and launch file of frontend", "hr-helper", ["--launch", "--role", "frontend-2"],
+     ["ключ реестра frontend-2, роль 8.", "/prompts/launch-3010/roles/3-frontend.md", "/genome/frontend.json",
+      "вторая сессия роли frontend (роль 3)"]),
+    ("successor of backend-2 keeps the key and the alias note", "hr-helper",
+     ["--handoff", "HANDOFF", "--role", "backend-2", "--no-retire"],
+     ["ключ реестра backend-2, роль 7, наследник", "/genome/backend.json", "вторая сессия роли backend"]),
+    ("base role has no alias note", "taibe", ["--launch", "--role", "backend"],
+     ["ключ реестра backend, роль 4. Пусковой файл: ", "/prompts/taibe/roles/4-backend.md"]),
+]:
+    rc, out = second_run(product, *flags)
+    missing = [w for w in want if w not in out]
+    if rc != 0 or missing or (flags[-1] == "backend" and "вторая сессия" in out):
+        failed += 1
+        print("FAIL:", name, rc, missing)
+        print(out)
+for bad in ("backend-3", "boards-2"):
+    rc, out = second_run("taibe", "--launch", "--role", bad)
+    if rc == 0 or f"неизвестная роль: {bad}" not in out:
+        failed += 1
+        print("FAIL: unknown second session refused:", bad)
+        print(out)
+rc, out = second_run("taibe", "--launch", "--roles", "all")
+if rc != 0 or "backend-2" in out or "boards — команда напечатана" not in out:
+    failed += 1
+    print("FAIL: --roles all opens the six base roles only")
+    print(out)
+
 print("spawn_session: %d failed" % failed)
 sys.exit(1 if failed else 0)

@@ -9,11 +9,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import run  # noqa: E402
+import secrets_scan  # noqa: E402
+
+# TB-136: one corpus for both rule sets; boards/packages/redact/src/index.test.ts reads the same file.
+CORPUS = os.path.join(HERE, '..', '..', 'boards', 'packages', 'redact', 'fixtures', 'secrets-corpus.json')
 
 # Fake values assembled at runtime, so this file itself holds no key-shaped literal.
 GH = 'gh' + 'p_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0'
@@ -56,6 +61,193 @@ class ChecksTest(unittest.TestCase):
         self.assertIn(('secrets', 'warning', 'src/app.test.ts', 'github-token'), got)
         self.assertIn(('secrets', 'error', 'src/literal.py', 'literal api_key'), got)
         self.assertFalse(any(p == 'src/ok.ts' for _, _, p, _ in got))
+
+    def test_secrets_shared_corpus(self):
+        with open(CORPUS, encoding='utf-8') as f:
+            cases = json.load(f)['cases']
+        self.assertGreaterEqual(len(cases), 30)
+        for case in cases:
+            with self.subTest(case['id']):
+                text = case['before'] + ''.join(case['value']) + case['after']
+                found = secrets_scan.scan_text('src/corpus.txt', text)
+                self.assertIn(case['scan'], {f.message.split(':')[0] for f in found if f.level == 'error'})
+        with open(CORPUS, encoding='utf-8') as f:
+            self.assertEqual(secrets_scan.scan_text('src/corpus.json', f.read()), [], 'the corpus file is key-shaped')
+
+    def test_secrets_code_and_placeholders_stay_quiet(self):
+        quiet = [
+            'apiKey: options.apiKey,', 'api_key: z.string(),', 'access_token = settings.accessToken',
+            'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'T_BOARDS_API_KEY=$T_BOARDS_API_KEY',
+            'POSTGRES_PASSWORD: your_secure_password_here', '- Password: `kaneo_password` (change this!)',
+            '"password": "パスワードを入力してください"', 'hdr = f"Authorization: Bearer {self.token()}\\n"',
+            'import { Route as LayoutAuthenticatedWorkspaceSlugTaskTicketIdChar123TitleChar125RouteImport }',
+            '`http://localhost:5173/dashboard/workspace/' + 'Ab3dE5fG7hJ9kL1mN3pQ5r/project/St7uV9wX1yZ3aB5cD7eF9g/'
+            'task/Hj2kL4mN6pQ8rS0tU2vW4x`',
+            'function currentWindow(apiKey: ApiKeyUsageRow, now: Date): RateWindow {',
+            '{ access_token: AccessTokenPayload; }',
+        ]
+        for line in quiet:
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_env_name_after_lowercase_prefix(self):
+        # TB-136 security lens: found on b3e63b792, missed on 6ff80cf69.
+        value = 'Qz8Lm4' + 'Rt7Wx2Ny5Kp9Bv3'
+        for name in ('foo_API_KEY', 'my_TOKEN', 'app_CLIENT_SECRET', 'db_PASSWORD'):
+            with self.subTest(name):
+                self.assertNotEqual(secrets_scan.scan_line(f'{name}={value}'), [])
+
+    def test_secrets_value_ends_at_comma_or_semicolon(self):
+        # Claude lens #283 B2: with `;` or `,` glued on, looks_like_secret dropped the key.
+        value = 'Zq8fK2mP' + '9xL4vB7nR1tY'
+        board_key = 'PlVrNsKtWqZmXbHc' * 4
+        for line, secret in ((f'export OPENAI_API_KEY={value}; python app.py', value),
+                             (f'{{api_key: {value}, region: eu}}', value),
+                             (f'Server=x;ApiKey={value};Db=y', value),
+                             (f'export T_BOARDS_API_KEY={board_key}; curl', board_key)):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [secret])
+
+    def test_secrets_password_words(self):
+        # TB-193 B, TB-195: a password or a secret may be words; for these names the type name and the camelCase rule
+        # do not drop it. Key and token names keep both: there they are code (2 false errors in HR without them).
+        lower = ''.join(('correct', 'horse', 'battery', 'staple'))
+        upper = ''.join(('Correct', 'Horse', 'Battery', 'Staple'))
+        for line, value in ((f'CLIENT_SECRET={lower}', lower), (f'JWT_SECRET: {lower}', lower),
+                            (f'{{"CLIENT_SECRET": "{lower}", "n": 1}}', lower), (f'REDIS_PASSWORD={lower}', lower),
+                            (f'password: {lower}', lower), (f'CLIENT_SECRET={upper}', upper),
+                            (f'password: {upper}', upper), (f'secret = "{upper}"', upper)):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [value])
+        quiet = [f'GITHUB_TOKEN={lower}', f'api_key: {upper}', f'GITHUB_TOKEN={upper}',
+                 'JWT_SECRET: jwtSecretFromConfig', 'CLIENT_SECRET=your_client_secret',
+                 # Short words stay at the floor 3.5 (2.86); a long run of one letter has no entropy.
+                 'password: passwordhash', 'secret: ' + 'a' * 24]
+        for line in quiet:
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_key_after_underscore_or_dash(self):
+        # OPS-71 (Claude lens #283): `\b` does not fire after `_`, so these keys passed; redact masks them.
+        ant = 'sk-' + 'ant-' + 'Qz8Lm4Rt7Wx2Ny5Kp9Bv3Hd'
+        glpat = 'glp' + 'at-' + 'Rt7Wx2Ny5Kp9Bv3HdQz8Lm'
+        cases = [
+            (f'x_{ant} end', 'anthropic-key', ant),
+            (f'x_{glpat} end', 'gitlab-token', glpat),
+            (f'TOKEN_{ant} end', 'anthropic-key', ant),
+            (f'_{ant}_', 'anthropic-key', ant + '_'),
+            (f'TOKEN_{glpat} end', 'gitlab-token', glpat),
+        ]
+        # The rest of the rules that redact starts after `_` too.
+        for prefix, body, rule in (
+                ('sk-' + 'proj-', 'Wx2Ny5Kp9Bv3HdQz8Lm4Rt7Xc6Fj1Gs0Ue', 'openai-key'),
+                ('sk-' + 'or-v1-', 'a3f91c7e' * 6, 'openrouter-key'),
+                ('gh' + 'p_', 'Ny5Kp9Bv3HdQz8Lm4Rt7Wx2Xc6Fj1Gs0Ue7Ia', 'github-token'),
+                ('AK' + 'IA', 'Q7W2N5K9B3HD8L4R', 'aws-access-key'),
+                ('AI' + 'za', 'Kp9Bv3HdQz8Lm4Rt7Wx2Ny5Xc6Fj1Gs0Ue7', 'google-api-key'),
+                ('sk' + '_live_', 'Bv3HdQz8Lm4Rt7Wx2Ny5', 'stripe-key'),
+                ('tb' + 'k_', 'Hd' + 'Qz8Lm4Rt7Wx2Ny5Kp9Bv3Xc6Fj1Gs0Ue', 't-boards-key'),
+                ('xo' + 'xb-', '8312904756-Lm4Rt7Wx2Ny5', 'slack-token')):
+            cases.append((f'id_{prefix}{body} end', rule, prefix + body))
+            cases.append((f'id-{prefix}{body} end', rule, prefix + body))
+        for line, rule, value in cases:
+            with self.subTest(line):
+                self.assertIn((rule, value), secrets_scan.scan_line(line))
+        # A letter or a digit before the prefix is still a longer word, not a key.
+        self.assertEqual(secrets_scan.scan_line(f'ask-{ant[3:]} x9{glpat}'), [])
+
+    def test_secrets_starts_after_underscore_stay_linear(self):
+        # OPS-71: a start after every `_`/`-` must not rescan a long run to its end. Each unit is repeated to 256 000
+        # characters and closed by every end the rule bodies treat differently. With `github_pat_` started after `_`,
+        # the `é` end takes 16 s.
+        units = ('_sk-ant-', 'x_glpat-', '_sk-', '_sk-proj-', '_sk-or-v1-', '_ghp_', '_AKIA', '_AIza', '_sk_live_',
+                 '_tbk_', 'github_pat_', 'xoxb-', 'xoxb_', '_xoxb-', '-xoxb', 'xoxb--')
+        for unit in units:
+            for end in ('', '_', '-', '!', 'é'):
+                line = unit * (256000 // len(unit)) + end
+                with self.subTest(unit=unit, end=end):
+                    started = time.perf_counter()
+                    secrets_scan.scan_line(line)
+                    self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_secrets_hostile_lines_stay_linear(self):
+        # TB-136 security lens: a rule that may restart at every character and scan to the end of the line is
+        # quadratic. On 64 000 characters each line takes up to 14 ms linear and 2.4-12 s quadratic.
+        for unit in ('_', 'A_', 'a_', 'a_A', 'API_KEY', 'TOKEN_', 'a.', 'a-', 'a+', 'eyJa.', 'sk-', 'Ab3+'):
+            line = unit * (64000 // len(unit))
+            with self.subTest(unit=unit):
+                started = time.perf_counter()
+                secrets_scan.scan_line(line)
+                self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_secrets_name_inside_a_value(self):
+        # TB-198, as redact after #375/#378 and the TB-199 PR: a value may hold another name with its own value. The
+        # search goes on after the last code character of a rejected value, else in its last 256 characters (a part
+        # may pass where the whole failed the entropy floor or held a placeholder word); after a reported value, at
+        # the name that ends it.
+        key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
+        for line in (f'B_SECRET" = "x(=C_SECRET={key}', f'CLIENT_SECRET = "{{{{vault}}}}/APP_SECRET={key}"',
+                     f'A_TOKEN="abcdefB_TOKEN" = "{key}"', f'A_SECRET=fooB_SECRET: {key}',
+                     f'A_TOKEN={"a" * 40}/B_TOKEN={key}', f'A_TOKEN=test/B_TOKEN={key}',
+                     f'A_TOKEN=x(B_TOKEN=>{key}', f'A_TOKEN=x(y=>C_TOKEN={key}', f'A_TOKEN=x(B_TOKEN=y=>C_TOKEN={key}',
+                     f'A_TOKEN=x(B_TOKEN = C_TOKEN = {key}', f'A_TOKEN=x(B_TOKEN = LONGER_C_TOKEN = {key}',
+                     f' A_SECRET => password:x;passwd=>{key}'):
+            with self.subTest(line):
+                self.assertIn(key, [v for _, v in secrets_scan.scan_line(line)])
+        # A name right after `${` is a shell reference, not an assignment (docker compose, HR measure).
+        for line in ('A_SECRET=x=B_SECRET=abc(def', 'JWT_SECRET: getSecret(config)',
+                     'MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is not set}',
+                     'API_TOKEN=${API_TOKEN:-changemechangeme}', 'password: ${password:?password is required here}'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_separators(self):
+        # TB-199, as redact after #375/#378 and the TB-199 PR: `:=` and `=>` gave `=` or `>` as the value; `==` and
+        # `===` compare.
+        key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
+        for line in (f'GITHUB_TOKEN := "{key}"', f'password := {key}', f"'api_key' => '{key}'",
+                     f':password => "{key}"', f'"DB_PASSWORD" => "{key}",'):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [key])
+        for line in (f'if (A_TOKEN === "{key}") run()', f'if (password == {key}) run()'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_openai_key_body(self):
+        # Claude lens #349: redact masks `sk-` with `_` or `-` in the body (sk-[A-Za-z0-9_-]{20,}), the scanner did not.
+        key = 'sk-' + 'proj-' + 'Ab3_dE5-fG7hJ9kL2mN4pQ6r'
+        for line in (f'OPENAI={key}', f'x_{key} end', f'"{key}"', f'{key}é'):
+            with self.subTest(line):
+                self.assertIn(('openai-key', key), secrets_scan.scan_line(line))
+        # One finding per key: an Anthropic or an OpenRouter key is not an OpenAI key too.
+        ant = 'sk-' + 'ant-' + 'api03-' + 'DU23N4NKoXWOMVoCEKBsg4tuFq74zLZ'
+        orr = 'sk-' + 'or-v1-' + 'a3f91c7e' * 6
+        self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {ant}')], ['anthropic-key'])
+        self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {orr}')], ['openrouter-key'])
+
+    def test_secrets_inner_names_stay_linear(self):
+        # TB-198: from the start of every rejected value a run of `A_TOKEN:=` nested one inner value per name (64 000
+        # characters: 20 s). The CI runner is up to 10 times slower than a laptop, so the test compares 64 000
+        # characters with 16 000: a linear scan takes about 4 times longer (3.6-4.0 measured), a quadratic one 16
+        # times. A time below 10 ms counts as 10 ms (timer noise); 5 s is the guard against a hang.
+        units = ['A_SECRET=A_SECRET=', 'A_TOKEN=test/', 'A_TOKEN:=', 'api_key=api_key=', 'secret=secret=secret=',
+                 'A_SECRET=fooB_SECRET: ', 'A_TOKEN=>(', 'A_TOKEN:=' * 27 + ' ', 'secret=' * 35 + ' ',
+                 'pwd=' * 63 + ' ']
+
+        def best(line):
+            times = []
+            for _ in range(2):
+                started = time.perf_counter()
+                secrets_scan.scan_line(line)
+                times.append(time.perf_counter() - started)
+            return min(times)
+
+        for unit in units:
+            with self.subTest(unit=unit[:24]):
+                short = best(unit * (16000 // len(unit)))
+                long = best(unit * (64000 // len(unit)))
+                self.assertLess(long, 5.0)
+                self.assertLess(long / max(short, 0.01), 8)
 
     def test_hygiene(self):
         write(self.root, '.env', 'A=1\n')

@@ -386,6 +386,14 @@ class CommandsTest(Base):
         self.assertIn("снимать некого", out.getvalue())
 
 
+class LauncherTest(unittest.TestCase):
+    def test_launcher_of_second_session(self):
+        """#324: пусковой скрипт второй сессии — backend-2.sh; без него её пусковой bash не снимается с сессией."""
+        for name, ok in (("backend.sh", True), ("backend-2.sh", True), ("successor.sh", True),
+                         ("backend-10.sh", False), ("backend-2.shx", False)):
+            self.assertEqual(bool(L.LAUNCHER_RE.search(f"bash /tmp/claude-spawn.AbC123/{name}")), ok, name)
+
+
 class ReapTest(Base):
     def setUp(self):
         super().setUp()
@@ -397,8 +405,9 @@ class ReapTest(Base):
         self.env_l = {}
         self.now = 1.8e9  # часы FakeSys: updatedAt в sessions/*.json — мс от эпохи
 
-    def sess(self, pid, line=None, role="backend", status="idle", idle_h=1.0, cwd=None, start=ST, pstart=None):
+    def sess(self, pid, line=None, role="backend", status="idle", idle_h=1.0, cwd=None, start=ST, pstart=None, key=None):
         cmd = "claude" + (f" --settings /x/genome/{role}.json" if role else "")
+        cmd += f" Сборка Т3, ключ реестра {key}, роль 7." if key else ""
         self.procs.append(P(pid, 100, pid, f"ttys{pid % 1000:03d}", cmd, start))
         if line:
             self.env_l[pid] = line
@@ -444,6 +453,23 @@ class ReapTest(Base):
         self.assertNotIn(708, v)
         shown = L.read_json(L.ldir() / "reap-list.json")
         self.assertEqual(sorted(c["pid"] for c in shown["candidates"]), [701, 703])
+
+    def test_second_session_of_a_role_is_not_superseded(self):
+        """backend-2 — геном backend и свой ключ: обе сессии — текущие роли, ни одна не кандидат по простою."""
+        self.sess(701, line="r.a1", idle_h=30, key="backend")
+        self.sess(702, line="r.b2", idle_h=30, key="backend-2")
+        self.sess(703, line="r.c3.d4", idle_h=30, key="backend-2")   # наследник другой линии backend-2 — моложе
+        self.sess(704, line="r.c3", idle_h=30, key="backend-2")
+        L.write_json(L.ldir() / "r.c3.d4.ack", {"pid": 703, "start": ST})
+        _, out, _ = self.reap()
+        v = self.verdicts(out)
+        self.assertIn("текущая роль", v[701])
+        self.assertIn("backend-2", v[703])
+        self.assertIn("текущая роль", v[703])
+        self.assertIn("наследник принял", v[704])
+        self.assertIn("простой 30", v[702], "из двух сессий backend-2 текущая — с длинной линией")
+        shown = L.read_json(L.ldir() / "reap-list.json")
+        self.assertNotIn(701, [c["pid"] for c in shown["candidates"]])
 
     def test_resumed_session_line_from_transcript(self):
         """--resume теряет TAIBE_LINEAGE: линия — из первого промпта транскрипта по sessionId (05.11, роль 4)."""
