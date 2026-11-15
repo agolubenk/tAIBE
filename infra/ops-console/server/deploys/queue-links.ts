@@ -83,7 +83,10 @@ export function itemRefs(id: string, d: Record<string, unknown>, repo = ''): Ite
   const title = clip(str(d.title), TITLE_MAX)
   if (kind === 'merge') {
     // Тот же источник номера, что у мёржа из очереди; у пунктов без pr и команды — первый «#N» заголовка «Влить #N …».
-    const own = mergePlan(d).pr ?? hashNums(str(d.title))[0]
+    // PR другого репозитория (поле repo, -R) — не деплой консоли: номер тот же, PR другой (карточка HR c1nr0ih5, F5).
+    const plan = mergePlan(d)
+    const foreign = !!plan.repo && !!repo && plan.repo.toLowerCase() !== repo.toLowerCase()
+    const own = foreign ? undefined : plan.pr ?? hashNums(str(d.title))[0]
     return { id, kind, title, prs: new Set(own ? [own] : []), textPrs: new Set(), shas: [] }
   }
   const pr = typeof d.pr === 'number' ? [d.pr] : []

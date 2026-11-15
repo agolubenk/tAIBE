@@ -11,12 +11,13 @@ import { requireQueueActor, requireScope, type QueueEnv } from '../queue/auth'
 import { mergeInfo, mergeItem, redeploy } from '../queue/github'
 import { beatProduct, beatRelay, readRelay, relayBeatSchema } from '../queue/relay'
 import { acceptNotify, notifySchema } from '../queue/notify'
-import { throttleNotify, throttleWrite } from '../queue/throttle'
+import { throttleNotify, throttleWrite, writeCounted } from '../queue/throttle'
 import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
 import { changeItemProduct } from '../queue/product-change'
+import { historyQuery, historyReplyBody } from '../queue/history-view'
 import { recentPrs } from '../queue/prs'
 import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_BOARDS, PRODUCT_SLUG, visibilityKey, type Visibility } from '../queue/products'
 import { SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
@@ -79,9 +80,11 @@ queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {
 
 /** Продукт пункта меняет владелец (страница, бот): пункт и ответ — одной транзакцией (queue/product-change.ts). */
 queueRoutes.post('/items/:id/product', requireScope('owner'), async (c) => {
-  throttleWrite(c.get('oqActor').name)
-  const body = await parseBody(c, productChangeSchema)
-  return c.json(await changeItemProduct(c.get('oqActor'), c.req.param('id'), body.to, body.reason ?? ''))
+  const actor = c.get('oqActor')
+  return writeCounted(actor.name, async () => {
+    const body = await parseBody(c, productChangeSchema)
+    return c.json(await changeItemProduct(actor, c.req.param('id'), body.to, body.reason ?? ''))
+  })
 })
 
 /**
@@ -108,26 +111,34 @@ queueRoutes.get('/db/:col/:id', requireScope('read', 'agent'), async (c) => {
 for (const [method, merge] of [['put', false], ['patch', true]] as const) {
   queueRoutes[method]('/db/:col/:id', requireScope('agent'), async (c) => {
     const actor = c.get('oqActor')
-    throttleWrite(actor.name)
-    const body = await parseBody(c, writeSchema)
-    const doc = await writeDoc(actor, collectionOf(c.req.param('col')), c.req.param('id'), body.data, {
-      merge,
-      ifVersion: body.ifVersion,
-      ifAnswerAt: body.ifAnswerAt,
-      takeover: body.takeover,
-      release: body.release,
+    // Отказ 4xx (409 версии, 403, 422) лимит записи не съедает — writeCounted (GLM-ревью #221).
+    const doc = await writeCounted(actor.name, async () => {
+      const body = await parseBody(c, writeSchema)
+      return writeDoc(actor, collectionOf(c.req.param('col')), c.req.param('id'), body.data, {
+        merge,
+        ifVersion: body.ifVersion,
+        ifAnswerAt: body.ifAnswerAt,
+        takeover: body.takeover,
+        release: body.release,
+      })
     })
     return c.json(doc)
   })
 }
 
 queueRoutes.delete('/db/:col/:id', requireScope('owner'), async (c) => {
-  throttleWrite(c.get('oqActor').name)
-  await deleteDoc(c.get('oqActor'), collectionOf(c.req.param('col')), c.req.param('id'))
+  const actor = c.get('oqActor')
+  await writeCounted(actor.name, () => deleteDoc(actor, collectionOf(c.req.param('col')), c.req.param('id')))
   return c.json({ ok: true })
 })
 
-queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => c.json({ events: await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products) }))
+// История документа (queue/history-view.ts): ?limit= (без него — 50, как раньше), ?before= (next прошлого ответа),
+// ?fields=meta (без снимков after).
+queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => {
+  const q = historyQuery({ limit: c.req.query('limit'), before: c.req.query('before'), fields: c.req.query('fields') })
+  const page = await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products, q.limit, q.before)
+  return c.json(historyReplyBody(page, q))
+})
 
 // Автопередача входящих сессии (queue/relay.ts): отметка процесса `server.mjs --relay` и состояние для страницы и бота.
 // По продуктам (фаза 4a, OPS-51): актор видит сессии только своих продуктов и отмечается только за видимый продукт.

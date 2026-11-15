@@ -128,7 +128,7 @@ export class ArtifactMirror {
         }
       }
       let timer;
-      const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new NotReadyError('Страница артефакта не ответила вовремя', 'timeout')), timeoutMs); });
+      const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new NotReadyError('Страница очереди /queue не ответила вовремя', 'timeout')), timeoutMs); });
       try {
         return await Promise.race([fn(), timeout]);
       } catch (e) {
@@ -159,7 +159,7 @@ export class ArtifactMirror {
     if (/\/login/.test(this.page.url())) {
       throw new NotReadyError('Консоль не приняла токен бота (страница очереди открылась на входе)', 'auth');
     }
-    throw new NotReadyError('Страница артефакта не открылась', 'frame');
+    throw new NotReadyError('Страница очереди /queue не открылась', 'frame');
   }
 
   /** Фрейм с подключённой базой и отрисованным «Ходом работ» (страница рисует его в requestAnimationFrame). */

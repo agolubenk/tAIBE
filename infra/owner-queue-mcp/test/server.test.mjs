@@ -37,6 +37,22 @@ async function consoleFake(files, state) {
       req.on('end', () => { state.patches = [...(state.patches ?? []), JSON.parse(raw)]; json(200, { id: 'x', version: 2, data: {} }); });
       return;
     }
+    // История: консоль новой версии — по limit и с next; state.oldHistory — старая, параметры не знает и отдаёт 50 полных.
+    if (pathname.startsWith('/api/oq/v1/history/items/')) {
+      state.historyQueries = [...(state.historyQueries ?? []), searchParams.toString()];
+      const ev = (i) => ({ at: 1_000 - i, actor: 'token:a', action: 'patch', ...(searchParams.get('fields') === 'meta' ? { keys: ['step'] } : { after: { step: 50 - i } }) });
+      if (state.oldHistory) return json(200, { events: Array.from({ length: 50 }, (_, i) => ev(i)) });
+      const n = Number(searchParams.get('limit') || 50);
+      return json(200, { events: Array.from({ length: n }, (_, i) => ev(i)), next: '77' });
+    }
+    // Дельта /changes (OPS-50) — только если тест её включил (state.delta); иначе 404, как у старой консоли.
+    if (pathname === '/api/oq/v1/changes' && state.delta) {
+      state.changesReqs = [...(state.changesReqs ?? []), searchParams.get('since') ? 'since' : 'full'];
+      const items = [{ id: 'd-hr-1', version: 1, updatedAt: 2, product: 'hr-helper', data: { kind: 'decision', title: 'HR' } },
+        { id: 'taibe-d-1', version: 1, updatedAt: 1, product: 'taibe', data: { kind: 'decision', title: 'tAIBE' } }];
+      if (searchParams.get('since')) return json(200, { cursor: 'b1.1', changes: { checks: { docs: [], removed: [] }, items: { docs: [], removed: [] }, work: { docs: [], removed: [] } } });
+      return json(200, { full: true, cursor: 'b1.1', collections: { checks: { docs: [] }, items: { docs: items }, work: { docs: [] } } });
+    }
     // Список пунктов с продуктом рядом с data; ?product= фильтрует консоль, MCP передаёт его как есть.
     if (pathname === '/api/oq/v1/db/items') {
       state.itemsQueries = [...(state.itemsQueries ?? []), searchParams.toString()];
@@ -219,4 +235,46 @@ test('oq_list: серверный потолок списка — serverCapped �
   assert.equal(capped.truncated, undefined, 'окно ответа не урезано');
   assert.deepEqual(capped.docs.map((d) => d.id), ['w-cap-1', 'w-cap-2']);
   assert.equal(body(await m.call('oq_list', { collection: 'checks', limit: 1 })).serverCapped, undefined, 'без обрезки консоли — поля нет');
+});
+
+test('oq_list через дельту /changes (карточка HR Q-38): коллекция — полный список раз, дальше since; open_only — сервер, как раньше', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  m.state.delta = true;
+  const first = body(await m.call('oq_list', { collection: 'items' }));
+  assert.deepEqual(first.docs.map((d) => d.id), ['d-hr-1', 'taibe-d-1']);
+  const own = body(await m.call('oq_list', { collection: 'items', product: 'taibe' }));
+  assert.deepEqual(own.docs.map((d) => d.id), ['taibe-d-1'], 'продукт — фильтром здесь, по полю product');
+  assert.deepEqual(m.state.changesReqs, ['full', 'since']);
+  assert.equal(m.state.itemsQueries, undefined, 'полный /db/items не читали ни разу');
+  await m.call('oq_list', { collection: 'items', open_only: true });
+  assert.deepEqual(m.state.itemsQueries, ['open=1'], 'открытые — серверным правилом open-rule.ts');
+});
+
+test('oq_history (карточка HR oow56fdzk): по умолчанию limit=20, keys_only → fields=meta, next и before; старая консоль — окно режет MCP', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  const d = body(await m.call('oq_history', { collection: 'items', id: 'd-1' }));
+  assert.equal(d.events.length, 20);
+  assert.equal(d.next, '77');
+  const k = body(await m.call('oq_history', { collection: 'items', id: 'd-1', limit: 5, keys_only: true, before: '77' }));
+  assert.deepEqual(k.events[0].keys, ['step']);
+  assert.equal(k.events[0].after, undefined);
+  assert.deepEqual(m.state.historyQueries, ['limit=20', 'limit=5&before=77&fields=meta']);
+  m.state.oldHistory = true;
+  const old = body(await m.call('oq_history', { collection: 'items', id: 'd-1', limit: 3 }));
+  assert.equal(old.events.length, 3, 'консоль без limit отдала 50 — MCP показал 3');
+  assert.equal(old.next, undefined);
+  assert.match(old.console, /консоль старой версии/, 'агент знает, что before и keys_only не сработали');
+});
+
+test('oq_history: окно урезал потолок ответа — next не отдаётся, подсказка уменьшить limit (линза Claude #360, B2)', async () => {
+  const { historyOut } = await import('../list.mjs');
+  // 60 коротких полей на событие: brief их не сокращает (короче 200 символов), 100 событий не влезают и в brief.
+  const after = Object.fromEntries(Array.from({ length: 60 }, (_, k) => [`f${k}`, 'x'.repeat(20)]));
+  const big = Array.from({ length: 100 }, (_, i) => ({ at: i, actor: 'a', action: 'update', after: { ...after, step: i } }));
+  const out = historyOut({ events: big, next: '900' }, { n: 100 });
+  assert.equal(out.truncated, true);
+  assert.equal(out.next, undefined, 'next консоли указывал бы за 100-е событие, а показаны не все');
+  assert.match(out.hint, /меньшим limit/);
+  const fits = historyOut({ events: big.slice(0, 3), next: '900' }, { n: 3 });
+  assert.equal(fits.next, '900');
 });
