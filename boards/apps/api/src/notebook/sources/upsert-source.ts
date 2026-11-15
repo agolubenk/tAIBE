@@ -35,6 +35,13 @@ export const sha256 = (text: string) =>
 
 // Same text: only the title may move, chunks and their embeddings stay. New
 // text: the chunks are cut again and wait for the worker to embed them.
+//
+// TB-204: `changed: false` tells a caller that its text equals the stored
+// one, also a caller with a token that reads the source masked. So such a
+// caller (it needs manage_settings) can test one guess of a secret per
+// stored version: a wrong guess is a new text and replaces the stored one,
+// secret and all. The answer stays: hiding it would also hide a real "no
+// change" from the clients that skip a re-embed on it.
 export async function upsertSource(
   input: SourceInput,
 ): Promise<UpsertedSource> {
