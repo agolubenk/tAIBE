@@ -164,6 +164,21 @@ export function historyReply(events, { brief = false } = {}) {
 }
 
 /**
+ * Ответ oq_history по ответу консоли r (GET /history с limit=n): окно — не больше n. Консоль старой версии параметры
+ * не знает и отдаёт 50 полных событий — окно режется здесь, before и keys_only не работают (пометка console). Окно
+ * урезал потолок ответа — next не отдаётся: он указывает за последнее событие окна консоли, а не за последнее
+ * показанное, и агент пропустил бы события (линза Claude #360, B2).
+ */
+export function historyOut(r, { n, keysOnly = false, brief = false }) {
+  const all = Array.isArray(r?.events) ? r.events : [];
+  const legacy = all.length > n || (keysOnly && all.some((e) => e && 'after' in e && !('keys' in e)));
+  const out = historyReply(all.slice(0, n), { brief });
+  if (legacy) return { ...out, console: 'консоль старой версии: before и keys_only не поддерживает, страниц нет — свежие события' };
+  if (out.truncated) return { ...out, hint: `не влезли все ${n} — тот же вызов с меньшим limit (или keys_only)` };
+  return typeof r?.next === 'string' ? { ...out, next: r.next } : out;
+}
+
+/**
  * brief для события истории: строки длиннее BRIEF_TEXT — начало и <поле>Len; массив, чей JSON длиннее BRIEF_TEXT
  * (cards строки плана), — его длина <поле>Count, как cardsCount в oq_list; вложенный объект (inbox) — то же правило,
  * глубже двух уровней — число ключей <поле>Keys. Линзы #111: briefDoc не трогал вложенное, и строка плана со 150
