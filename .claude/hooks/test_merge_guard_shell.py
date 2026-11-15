@@ -988,13 +988,29 @@ B1_ENV = (
     ("push_env_concat.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
                            'subprocess.run("git push origin " + "$B", shell=True)\n'),
 )
-for name, text in B1_PUSH + B1_PASS + B1_ENV + (TMP_COMMENT,):
+# Линза Контроля на b5d5a4168 (B2): ветку задаёт другой оператор — checkout, switch, upstream в git config, — push
+# без назначения или в HEAD. cwd на fix/a: цель — только из текста скрипта. На base каждая — отказ.
+B2_IMPLICIT = (
+    ("push_checkout.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                         'subprocess.run(["git", "commit", "-am", "x"])\nsubprocess.run(["git", "push"])\n'),
+    ("push_upstream.py", 'import subprocess\nsubprocess.run(["git", "config", "branch.fix/a.merge", "refs/heads/main"])\n'
+                         'subprocess.run(["git", "push"])\n'),
+    ("push_switch_head.py", 'import subprocess\nsubprocess.run(["git", "switch", "main"])\n'
+                            'subprocess.run(["git", "push", "origin", "HEAD"])\n'),
+    ("push_checkout.js", 'const { execFileSync } = require("child_process");\n'
+                         'execFileSync("git", ["checkout", "main"]);\nexecFileSync("git", ["push"]);\n'),
+)
+for name, text in B1_PUSH + B1_PASS + B1_ENV + B2_IMPLICIT + (TMP_COMMENT,):
     (fp / name).write_text(text)
+for name, _ in B2_IMPLICIT:
+    interp = "node" if name.endswith(".js") else "python3 -I"
+    bash(f"SE-138 B2, push без назначения после checkout — отказ: {name}", f"{interp} {fp / name}", True,
+         cwd=on_branch)
 for name, _ in B1_PUSH:
     bash(f"SE-138 B1, скрипт с диска — отказ: {name}", f"python3 -I {fp / name}", True, cwd=on_main)
 for name, _ in B1_ENV:
-    run = "node" if name.endswith(".js") else "python3 -I"
-    bash(f"SE-138 B1, цель из окружения — отказ: {name}", f"{run} {fp / name}", True, cwd=on_main)
+    interp = "node" if name.endswith(".js") else "python3 -I"
+    bash(f"SE-138 B1, цель из окружения — отказ: {name}", f"{interp} {fp / name}", True, cwd=on_main)
 for name, _ in B1_PASS:
     bash(f"SE-138 B1, скрипт с диска — проход: {name}", f"python3 -I {fp / name}", False, cwd=on_main)
 bash("SE-138, TEMP в комментарии — не временная папка, отказ: tmp_comment.py",

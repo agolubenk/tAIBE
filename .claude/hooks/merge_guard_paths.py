@@ -145,6 +145,27 @@ CALLEE = re.compile(r"[\w.]+\s*\Z")
 CONST = {"True", "False", "None"}
 # `$B`, `${B}`, `$(…)`, `` `…` `` в команде push: значение даёт shell (env, os.putenv), разбор его не видит
 SHELL_SUB = re.compile(r"\$[{(\w@*]|`")
+PUSH_VALUE = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}  # опции push со значением следующим словом
+SELF_REF = {"HEAD", "@", "+HEAD", "+@"}
+
+
+def implicit(unit):
+    """У git push в unit нет назначения или назначение — `HEAD`/`@`: ветку задаёт состояние git (checkout, switch,
+    upstream в git config другим оператором), а не текст команды (линза Контроля на b5d5a4168). Слова — до конца
+    команды: `;`, `&`, `|`, конец строки, закрытая скобка."""
+    m = GIT_PUSH.search(unit)
+    if not m:
+        return False
+    tail = re.split(r"[;&|\n\])}{]", unit[m.end():])[0]
+    words, skip = [], False
+    for w in re.findall(r"[^\s'\",\[\]()]+", tail):
+        if skip:
+            skip = False
+        elif w.startswith("-"):
+            skip = w in PUSH_VALUE
+        else:
+            words.append(w)
+    return len(words) < 2 or bool(SELF_REF & set(words[1:]))
 
 
 def mask(s):
@@ -201,7 +222,8 @@ def opaque(s, pos, known=()):
     `target()`, `*flags`, `f"…{x}"`, `"git push " + b`). Команда — список: её скобочная группа; команда — одна
     строка: этот литерал (`cwd=repo` рядом — другой аргумент). Push вне литерала и вне скобок — текст (строка
     docstring), не команда. known — имена, уже разобранные (cmds). Подстановка shell в аргументах (`"git push
-    origin $B"`, `B` — из os.environ) — тоже значение, которого разбор не видит (линза Контроля на 952c2e232)."""
+    origin $B"`, `B` — из os.environ) и push без назначения или в `HEAD` (implicit) — тоже значение, которого
+    разбор не видит (линза Контроля на 952c2e232 и b5d5a4168)."""
     ms = mask(s)
     lit = next((m.span() for m in LITERAL.finditer(s) if m.start() <= pos < m.end()), None)
     if lit and GIT_PUSH.search(s[lit[0]:lit[1]]):
@@ -210,6 +232,8 @@ def opaque(s, pos, known=()):
         a, b, inner = group(ms, pos)
         if not inner and not known:
             return False
+    if implicit(s[a:b]):
+        return True
     (l1, r1), (l2, r2) = segment(ms, a, b)
     if any(SHELL_SUB.search(s[x:y]) for x, y in ((l1, r1), (a, b), (l2, r2))):
         return True
