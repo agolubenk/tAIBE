@@ -13,13 +13,15 @@ import tempfile
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "spawn_session.sh"
+sys.path.insert(0, str(SCRIPT.parent))
+from test_lineage import clean_env  # noqa: E402  # без TAIBE_PRODUCT/TAIBE_LINEAGE живой сессии (SE-130)
 
 
 def dry_run(env_extra):
     with tempfile.TemporaryDirectory() as tmp:
         handoff = Path(tmp) / "handoff.md"
         handoff.write_text("продолжай по handoff\n", encoding="utf-8")
-        env = {**os.environ, **env_extra, "TMPDIR": tmp}
+        env = clean_env(**{**env_extra, "TMPDIR": tmp})
         return subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp],
                               capture_output=True, text=True, env=env, timeout=30)
 
@@ -57,8 +59,8 @@ for name, ok in [
 
 # OPS-24: --launch в пустом каталоге сессий открывает роли по порядку и печатает итог; --status — «нет» у каждой роли.
 with tempfile.TemporaryDirectory() as tmp:
-    env = {**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
-           "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"), "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+    env = clean_env(TMPDIR=tmp, CLAUDE_SESSIONS_DIR=os.path.join(tmp, "sess"),
+                    TAIBE_LINEAGE_DIR=os.path.join(tmp, "lin"), NERVE_PLIST=os.path.join(tmp, "none.plist"))
     launch = subprocess.run(["bash", str(SCRIPT), "--launch", "--roles", "plan,coord", "--dry-run", "--cwd", tmp],
                             capture_output=True, text=True, env=env, timeout=60)
     status = subprocess.run(["bash", str(SCRIPT), "--status", "--cwd", tmp], capture_output=True, text=True, env=env,
@@ -88,8 +90,8 @@ with tempfile.TemporaryDirectory() as tmp:
         (tools / f).write_bytes((SCRIPT.parent / f).read_bytes())
     (tools.parent / "pipeline").mkdir()
     (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
-    env = {**os.environ, "TMPDIR": tmp, "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
-           "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"), "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+    env = clean_env(TMPDIR=tmp, CLAUDE_SESSIONS_DIR=os.path.join(tmp, "sess"),
+                    TAIBE_LINEAGE_DIR=os.path.join(tmp, "lin"), NERVE_PLIST=os.path.join(tmp, "none.plist"))
     prompts = str(SCRIPT.parent.parent / "prompts" / "launch-3010" / "roles")
     broken = subprocess.run(["bash", str(tools / "spawn_session.sh"), "--launch", "--role", "coord", "--dry-run",
                              "--prompt-dir", prompts, "--cwd", tmp], capture_output=True, text=True, env=env, timeout=60)
@@ -112,7 +114,7 @@ def launcher_lines(*flags):
         handoff = Path(tmp) / "handoff.md"
         handoff.write_text("x\n", encoding="utf-8")
         run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp, *flags],
-                             capture_output=True, text=True, env={**os.environ, "TMPDIR": tmp}, timeout=30)
+                             capture_output=True, text=True, env=clean_env(TMPDIR=tmp), timeout=30)
         return run.returncode, run.stdout.splitlines()
 
 
@@ -129,7 +131,7 @@ def product_run(env_extra, *flags):
     with tempfile.TemporaryDirectory() as tmp:
         handoff = Path(tmp) / "handoff.md"
         handoff.write_text("x\n", encoding="utf-8")
-        env = {**os.environ, "TMPDIR": tmp, **env_extra}
+        env = clean_env(**{"TMPDIR": tmp, **env_extra})
         run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--role", "boards", "--dry-run",
                               "--cwd", tmp, *flags], capture_output=True, text=True, env=env, timeout=30)
         return run.returncode, run.stdout + run.stderr
@@ -164,9 +166,8 @@ def second_run(product, *flags):
     with tempfile.TemporaryDirectory() as tmp:
         handoff = Path(tmp) / "handoff.md"
         handoff.write_text("x\n", encoding="utf-8")
-        env = {**os.environ, "TMPDIR": tmp, "TAIBE_PRODUCT": "", "TAIBE_LINEAGE": "r.ab12",
-               "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"), "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"),
-               "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+        env = clean_env(TMPDIR=tmp, TAIBE_LINEAGE="r.ab12", CLAUDE_SESSIONS_DIR=os.path.join(tmp, "sess"),
+                        TAIBE_LINEAGE_DIR=os.path.join(tmp, "lin"), NERVE_PLIST=os.path.join(tmp, "none.plist"))
         flags = [str(handoff) if a == "HANDOFF" else a for a in flags]
         run = subprocess.run(["bash", str(SCRIPT), *flags, "--product", product, "--dry-run", "--cwd", tmp],
                              capture_output=True, text=True, env=env, timeout=60)

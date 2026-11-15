@@ -108,6 +108,25 @@ class ChecksTest(unittest.TestCase):
             with self.subTest(line):
                 self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [secret])
 
+    def test_secrets_password_words(self):
+        # TB-193 B, TB-195: a password or a secret may be words; for these names the type name and the camelCase rule
+        # do not drop it. Key and token names keep both: there they are code (2 false errors in HR without them).
+        lower = ''.join(('correct', 'horse', 'battery', 'staple'))
+        upper = ''.join(('Correct', 'Horse', 'Battery', 'Staple'))
+        for line, value in ((f'CLIENT_SECRET={lower}', lower), (f'JWT_SECRET: {lower}', lower),
+                            (f'{{"CLIENT_SECRET": "{lower}", "n": 1}}', lower), (f'REDIS_PASSWORD={lower}', lower),
+                            (f'password: {lower}', lower), (f'CLIENT_SECRET={upper}', upper),
+                            (f'password: {upper}', upper), (f'secret = "{upper}"', upper)):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [value])
+        quiet = [f'GITHUB_TOKEN={lower}', f'api_key: {upper}', f'GITHUB_TOKEN={upper}',
+                 'JWT_SECRET: jwtSecretFromConfig', 'CLIENT_SECRET=your_client_secret',
+                 # Short words stay at the floor 3.5 (2.86); a long run of one letter has no entropy.
+                 'password: passwordhash', 'secret: ' + 'a' * 24]
+        for line in quiet:
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
     def test_secrets_key_after_underscore_or_dash(self):
         # OPS-71 (Claude lens #283): `\b` does not fire after `_`, so these keys passed; redact masks them.
         ant = 'sk-' + 'ant-' + 'Qz8Lm4Rt7Wx2Ny5Kp9Bv3Hd'
@@ -160,6 +179,75 @@ class ChecksTest(unittest.TestCase):
                 started = time.perf_counter()
                 secrets_scan.scan_line(line)
                 self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_secrets_name_inside_a_value(self):
+        # TB-198, as redact after #375/#378 and the TB-199 PR: a value may hold another name with its own value. The
+        # search goes on after the last code character of a rejected value, else in its last 256 characters (a part
+        # may pass where the whole failed the entropy floor or held a placeholder word); after a reported value, at
+        # the name that ends it.
+        key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
+        for line in (f'B_SECRET" = "x(=C_SECRET={key}', f'CLIENT_SECRET = "{{{{vault}}}}/APP_SECRET={key}"',
+                     f'A_TOKEN="abcdefB_TOKEN" = "{key}"', f'A_SECRET=fooB_SECRET: {key}',
+                     f'A_TOKEN={"a" * 40}/B_TOKEN={key}', f'A_TOKEN=test/B_TOKEN={key}',
+                     f'A_TOKEN=x(B_TOKEN=>{key}', f'A_TOKEN=x(y=>C_TOKEN={key}', f'A_TOKEN=x(B_TOKEN=y=>C_TOKEN={key}',
+                     f'A_TOKEN=x(B_TOKEN = C_TOKEN = {key}', f'A_TOKEN=x(B_TOKEN = LONGER_C_TOKEN = {key}',
+                     f' A_SECRET => password:x;passwd=>{key}'):
+            with self.subTest(line):
+                self.assertIn(key, [v for _, v in secrets_scan.scan_line(line)])
+        # A name right after `${` is a shell reference, not an assignment (docker compose, HR measure).
+        for line in ('A_SECRET=x=B_SECRET=abc(def', 'JWT_SECRET: getSecret(config)',
+                     'MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is not set}',
+                     'API_TOKEN=${API_TOKEN:-changemechangeme}', 'password: ${password:?password is required here}'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_separators(self):
+        # TB-199, as redact after #375/#378 and the TB-199 PR: `:=` and `=>` gave `=` or `>` as the value; `==` and
+        # `===` compare.
+        key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
+        for line in (f'GITHUB_TOKEN := "{key}"', f'password := {key}', f"'api_key' => '{key}'",
+                     f':password => "{key}"', f'"DB_PASSWORD" => "{key}",'):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [key])
+        for line in (f'if (A_TOKEN === "{key}") run()', f'if (password == {key}) run()'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_openai_key_body(self):
+        # Claude lens #349: redact masks `sk-` with `_` or `-` in the body (sk-[A-Za-z0-9_-]{20,}), the scanner did not.
+        key = 'sk-' + 'proj-' + 'Ab3_dE5-fG7hJ9kL2mN4pQ6r'
+        for line in (f'OPENAI={key}', f'x_{key} end', f'"{key}"', f'{key}é'):
+            with self.subTest(line):
+                self.assertIn(('openai-key', key), secrets_scan.scan_line(line))
+        # One finding per key: an Anthropic or an OpenRouter key is not an OpenAI key too.
+        ant = 'sk-' + 'ant-' + 'api03-' + 'DU23N4NKoXWOMVoCEKBsg4tuFq74zLZ'
+        orr = 'sk-' + 'or-v1-' + 'a3f91c7e' * 6
+        self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {ant}')], ['anthropic-key'])
+        self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {orr}')], ['openrouter-key'])
+
+    def test_secrets_inner_names_stay_linear(self):
+        # TB-198: from the start of every rejected value a run of `A_TOKEN:=` nested one inner value per name (64 000
+        # characters: 20 s). The CI runner is up to 10 times slower than a laptop, so the test compares 64 000
+        # characters with 16 000: a linear scan takes about 4 times longer (3.6-4.0 measured), a quadratic one 16
+        # times. A time below 10 ms counts as 10 ms (timer noise); 5 s is the guard against a hang.
+        units = ['A_SECRET=A_SECRET=', 'A_TOKEN=test/', 'A_TOKEN:=', 'api_key=api_key=', 'secret=secret=secret=',
+                 'A_SECRET=fooB_SECRET: ', 'A_TOKEN=>(', 'A_TOKEN:=' * 27 + ' ', 'secret=' * 35 + ' ',
+                 'pwd=' * 63 + ' ']
+
+        def best(line):
+            times = []
+            for _ in range(2):
+                started = time.perf_counter()
+                secrets_scan.scan_line(line)
+                times.append(time.perf_counter() - started)
+            return min(times)
+
+        for unit in units:
+            with self.subTest(unit=unit[:24]):
+                short = best(unit * (16000 // len(unit)))
+                long = best(unit * (64000 // len(unit)))
+                self.assertLess(long, 5.0)
+                self.assertLess(long / max(short, 0.01), 8)
 
     def test_hygiene(self):
         write(self.root, '.env', 'A=1\n')
