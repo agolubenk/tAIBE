@@ -120,9 +120,7 @@ describe("API integration: forms on a project move (TB-173)", () => {
     expect((await templatesOf(target.id)).map((row) => row.id)).toEqual([
       equal?.id,
     ]);
-    expect((await forms()).map((form) => form.templateId)).toEqual([
-      equal?.id,
-    ]);
+    expect((await forms()).map((form) => form.templateId)).toEqual([equal?.id]);
   });
 
   it("refuses the move when the target has that version with other fields", async () => {
@@ -139,8 +137,6 @@ describe("API integration: forms on a project move (TB-173)", () => {
       .select({ workspaceId: schema.projectTable.workspaceId })
       .from(schema.projectTable);
     expect(project?.workspaceId).toBe(owner.workspace.id);
-    expect((await forms()).map((form) => form.templateId)).toEqual([
-      source.id,
-    ]);
+    expect((await forms()).map((form) => form.templateId)).toEqual([source.id]);
   });
 });
