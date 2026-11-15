@@ -1020,8 +1020,49 @@ B3_MAP = (
                        'execFileSync("git", ["symbolic-ref", "refs/heads/feat", "refs/heads/main"]);\n'
                        'execFileSync("git", ["push", "origin", "feat"]);\n'),
 )
-for name, text in B1_PUSH + B1_PASS + B1_ENV + B2_IMPLICIT + B3_MAP + (TMP_COMMENT,):
+# Линзы Контроля и backend на 8b04e8322 (B4): то же состояние git без слов команды — ключ из частей, `.git/config`
+# и ссылка файлом, include, окружение GIT_CONFIG_*; push строкой shell на несколько строк. Белый список: отказ.
+B4_STATE = (
+    ("push_key_parts.py", 'import subprocess\nk = "remote.origin." + "push"\n'
+                          'subprocess.run(["git", "config", k, "refs/heads/feat:refs/heads/main"])\n'
+                          'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_key_concat.py", 'import subprocess\nr = "origin"\n'
+                           'subprocess.run(["git", "config", "remote." + r + ".push", "refs/heads/feat:refs/heads/main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_ini.py", 'import subprocess\nwith open(".git/config", "a") as f:\n'
+                    '    f.write(\'[remote "origin"]\\n\\tpush = refs/heads/feat:refs/heads/main\\n\')\n'
+                    'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_symref_file.py", 'import subprocess\nfrom pathlib import Path\n'
+                            'Path(".git/refs/heads/feat").write_text("ref: refs/heads/main\\n")\n'
+                            'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_include.py", 'import subprocess\nfrom pathlib import Path\n'
+                        'Path("x.cfg").write_text(\'[remote "origin"]\\n\\tpush = refs/heads/feat:refs/heads/main\\n\')\n'
+                        'subprocess.run(["git", "config", "include.path", "../x.cfg"])\n'
+                        'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_env_config.py", 'import os\nimport subprocess\nos.environ["GIT_CONFIG_COUNT"] = "1"\n'
+                           'os.environ["GIT_CONFIG_KEY_0"] = "remote.origin.push"\n'
+                           'os.environ["GIT_CONFIG_VALUE_0"] = "refs/heads/feat:refs/heads/main"\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_heredoc_var.py", 'import subprocess\nscript = """\nB=main\ngit push origin $B\n"""\n'
+                            'subprocess.run(script, shell=True)\n'),
+    ("push_heredoc_bare.py", 'import subprocess\n# release to main\nscript = """\ngit push\n"""\n'
+                             'subprocess.run(script, shell=True)\n'),
+)
+# Проход: назначение явное `src:dst` — его не меняют ни refmap, ни symref, ни upstream, даже если текст их меняет.
+B4_PASS = (
+    ("push_explicit.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                         'subprocess.run(["git", "commit", "-am", "x"])\n'
+                         'subprocess.run(["git", "push", "origin", "feat:feat"])\n'),
+    ("push_explicit_head.py", 'import subprocess\nBASE = "main"\nprint(BASE)\n'
+                              'subprocess.run(["git", "config", "user.name", "x"])\n'
+                              'subprocess.run("git push -u origin HEAD:refs/heads/feat", shell=True)\n'),
+)
+for name, text in B1_PUSH + B1_PASS + B1_ENV + B2_IMPLICIT + B3_MAP + B4_STATE + B4_PASS + (TMP_COMMENT,):
     (fp / name).write_text(text)
+for name, _ in B4_STATE:
+    bash(f"SE-138 B4, состояние git без слов команды — отказ: {name}", f"python3 -I {fp / name}", True, cwd=on_branch)
+for name, _ in B4_PASS:
+    bash(f"SE-138 B4, явное src:dst — проход: {name}", f"python3 -I {fp / name}", False, cwd=on_branch)
 for name, _ in B3_MAP:
     interp = "node" if name.endswith(".js") else "python3 -I"
     bash(f"SE-138 B3, назначение из настройки git — отказ: {name}", f"{interp} {fp / name}", True, cwd=on_branch)

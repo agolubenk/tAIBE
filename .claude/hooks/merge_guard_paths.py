@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-from merge_guard_gh import GIT_PUSH, classify_interp, push_target
+from merge_guard_gh import GIT_PUSH, INTERP_SEP, classify_interp, push_target
 from merge_guard_git import MAIN_WRITE
 from merge_guard_shell import is_lost
 
@@ -147,19 +147,38 @@ CONST = {"True", "False", "None"}
 SHELL_SUB = re.compile(r"\$[{(\w@*]|`")
 PUSH_VALUE = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}  # опции push со значением следующим словом
 SELF_REF = {"HEAD", "@", "+HEAD", "+@", ":", "+:"}  # `:` — matching: все ветки, которые есть с обеих сторон
-# Назначение push задаёт настройка git, а не слово команды: `remote.<имя>.push`, ветка-ссылка (`symbolic-ref`),
-# upstream (`branch.<имя>.merge`, `push.default`) — линза Контроля на 60a54f72a (B3). Ключи git config — без регистра.
-PUSH_MAP = re.compile(r"\bremote\.[\w.-]+\.push\b|\bsymbolic-ref\b|\bbranch\.[\w./-]+\.merge\b|\bpush\.default\b",
-                      re.I)
+# Белый список push из скрипта, когда цель есть в тексте (линза Контроля на 8b04e8322, координатор 20:13): назначение
+# выбирает и состояние git — refmap, symref, upstream, include, — а способов его задать больше, чем перечислишь (B2–B4).
+# Чистый текст (clean): git — только push и команды для чтения, нет окружения, записи в файл и следов настройки git.
+READ_ONLY = {"push", "status", "log", "diff", "show", "rev-parse", "ls-files"}
+GIT_CALL = re.compile(rf"\bgit\b(?:{INTERP_SEP}([\w-]+))?")  # без подкоманды — `.git/`, `"git"` в переменной, `git -c`
+STATE = re.compile(
+    r"\bGIT_[A-Z0-9_]+|\benviron\b|\bputenv\b|\bprocess\.env\b|\benv\s*=|\bHOME\b|gitconfig|\[remote\b|\bref:\s*refs/"
+    r"|\bopen\([^,)]*,(?!\s*(?:mode\s*=\s*)?['\"][rbt]*['\"]|\s*(?:encoding|errors|newline)\s*=)"
+    r"|\bmode\s*=\s*['\"][rbt]*[wax+]|\.open\((?!\s*\)|\s*['\"][rbt]*['\"])|\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b"
+    r"|(?<!stdout)(?<!stderr)\.write(?:_text|_bytes|lines)?\(|\bshutil\."
+    r"|\bos\.(?:symlink|link|rename|replace|truncate)\b|\.(?:symlink_to|hardlink_to|rename|touch)\("
+    r"|\bfs\.(?!(?:promises\.)?(?:read|exists|stat|lstat|access|realpath)\w*\()"
+    r"|\b(?:writeFile|appendFile|writeSync|openSync|createWriteStream|symlink|link|rename|copyFile|cp|truncate)"
+    r"(?:Sync)?\s*\(")
+STRINGS = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|`[^`]*`|' + LITERAL.pattern)  # и строки на несколько строк
+SHELL_WRITE = re.compile(r">|\b(?:tee|cp|mv|ln|install|dd|truncate|rsync)\b|\bsed\b[^\n]*\s-i")  # shell в строке
 
 
-def implicit(unit):
-    """У git push в unit нет назначения или назначение — `HEAD`/`@`/`:`: ветку задаёт состояние git (checkout,
-    switch, upstream в git config другим оператором), а не текст команды (линза Контроля на b5d5a4168 и 60a54f72a).
-    Слова — до конца команды: `;`, `&`, `|`, конец строки, закрытая скобка."""
+def clean(text):
+    """Текст не меняет состояние git, которое выбирает ветку push: git — только push и команды для чтения (READ_ONLY),
+    нет окружения, записи в файл (код и shell в строках) и следов настройки (`[remote`, `ref: refs/`)."""
+    if any(m.group(1) not in READ_ONLY for m in GIT_CALL.finditer(text)) or STATE.search(text):
+        return False
+    return not any(SHELL_WRITE.search(m.group(0)) for m in STRINGS.finditer(text))
+
+
+def push_words(unit):
+    """Слова git push в unit — удалённый и назначения, без флагов (и значений `-o`, `--repo`, …), до конца команды:
+    `;`, `&`, `|`, конец строки, закрытая скобка. None — push в unit нет."""
     m = GIT_PUSH.search(unit)
     if not m:
-        return False
+        return None
     tail = re.split(r"[;&|\n\])}{]", unit[m.end():])[0]
     words, skip = [], False
     for w in re.findall(r"[^\s'\",\[\]()]+", tail):
@@ -169,7 +188,21 @@ def implicit(unit):
             skip = w in PUSH_VALUE
         else:
             words.append(w)
-    return len(words) < 2 or bool(SELF_REF & set(words[1:]))
+    return words
+
+
+def implicit(unit):
+    """У git push в unit нет назначения или назначение — `HEAD`/`@`/`:`: ветку задаёт состояние git (checkout,
+    switch, upstream в git config другим оператором), а не текст команды (линза Контроля на b5d5a4168 и 60a54f72a)."""
+    words = push_words(unit)
+    return words is not None and (len(words) < 2 or bool(SELF_REF & set(words[1:])))
+
+
+def explicit(unit):
+    """Каждое назначение git push в unit — явное `src:dst` с непустым dst: его не меняют ни refmap, ни symref, ни
+    upstream. Защищённый dst сюда не доходит — это цель в операторе (push_target)."""
+    words = push_words(unit)
+    return bool(words) and len(words) >= 2 and all(":" in w and w.split(":", 1)[1] for w in words[1:])
 
 
 def mask(s):
@@ -229,13 +262,9 @@ def opaque(s, pos, known=()):
     origin $B"`, `B` — из os.environ) и push без назначения или в `HEAD` (implicit) — тоже значение, которого
     разбор не видит (линза Контроля на 952c2e232 и b5d5a4168)."""
     ms = mask(s)
-    lit = next((m.span() for m in LITERAL.finditer(s) if m.start() <= pos < m.end()), None)
-    if lit and GIT_PUSH.search(s[lit[0]:lit[1]]):
-        a, b = lit
-    else:
-        a, b, inner = group(ms, pos)
-        if not inner and not known:
-            return False
+    a, b, inner = push_unit(s, ms, pos)
+    if not inner and not known:
+        return False
     if implicit(s[a:b]):
         return True
     (l1, r1), (l2, r2) = segment(ms, a, b)
@@ -245,26 +274,46 @@ def opaque(s, pos, known=()):
     return bool(set(IDENT.findall(text)) - CONST - set(known))
 
 
+def push_unit(s, ms, pos):
+    """(a, b, inner): команда push у pos — литерал, если push целиком в нём, иначе скобочная группа; inner — есть
+    литерал или скобка (иначе push — текст, не команда)."""
+    lit = next((m.span() for m in LITERAL.finditer(s) if m.start() <= pos < m.end()), None)
+    if lit and GIT_PUSH.search(s[lit[0]:lit[1]]):
+        return lit[0], lit[1], True
+    return group(ms, pos)
+
+
+def allowed(s, pos, tidy):
+    """Push у pos в операторе s по белому списку, когда цель есть в тексте: аргументы — литералы (opaque — нет) и
+    назначение явное `src:dst` (explicit) или текст чистый (tidy = clean всего текста). Иначе — отказ, как на base.
+    Push-текст (строка shell на несколько строк, docstring) — тоже: без назначения или с `$B` — отказ."""
+    a, b, _ = push_unit(s, mask(s), pos)
+    unit = s[a:b]
+    if implicit(unit) or SHELL_SUB.search(unit) or opaque(s, pos):
+        return False
+    return tidy or explicit(unit)
+
+
 def push_found(lines, cwd):
     """Скрипт с диска: оператор (statement), где git push и цель (push_target), или None. По всему тексту правило
     давало ложный отказ тесту, где команда push — образец данных, а цель — опция или слово другого вызова (SE-138).
     Цель в переменной — тоже цель: имя, присвоенное в строке с целью, в операторе с git push; имя, присвоенное
     оператором с git push (`cmd = ["git", "push"]`), в операторе с целью. В аргументах push — имя, которое разбор
     не прослеживает (opaque: аргумент функции по умолчанию, кортеж, `append`, `return`, `*flags`), — правило base по
-    всему тексту (SE-138 B1, линза backend на 3ce7170af). Назначение push задаёт настройка git (PUSH_MAP где-то
-    в тексте) — тоже правило base (B3)."""
+    всему тексту (SE-138 B1, линза backend на 3ce7170af). Цель где-то в тексте — push проходит только по белому
+    списку (allowed): явное `src:dst` или чистый текст (B2–B4, линза Контроля на 8b04e8322)."""
     marks = [k for k, ln in enumerate(lines) if GIT_WORD.search(ln)]
     if not marks:
         return None
     text = "\n".join(lines)
     whole = push_target(text, cwd)
-    mapped = whole and bool(PUSH_MAP.search(text))
+    tidy = bool(whole) and clean(text)
     hot = names_rx({m.group(1) for m in map(PATH_VAR.match, lines) if m and push_target(m.string, cwd)})
     cmds = set()
     for i, s in near(lines, marks):
         p = GIT_PUSH.search(s)
         if p:
-            if push_target(s, cwd) or uses(hot, s) or mapped or (whole and opaque(s, p.start())):
+            if push_target(s, cwd) or uses(hot, s) or (whole and not allowed(s, p.start(), tidy)):
                 return s
             m = PATH_VAR.match(lines[i])
             cmds |= {m.group(1)} if m else set()
