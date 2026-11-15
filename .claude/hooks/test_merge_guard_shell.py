@@ -15,12 +15,12 @@ from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
 import merge_guard_git  # noqa: E402
-import merge_guard_launch as launch  # noqa: E402
+import merge_guard_launch as mg_launch  # noqa: E402
 
 # Правило блоба make (coord 12:36, #402) проверяет свой блок на настоящем репозитории git; фикстуры остальных форм make
 # лежат в TMP вне git, поэтому их разбор идёт без правила. До правки (тест до правки) атрибута ещё нет.
-blob_rule = getattr(launch, "same_blob", None)
-launch.same_blob = lambda p: True
+blob_rule = getattr(mg_launch, "same_blob", None)
+mg_launch.same_blob = lambda p: True
 on_main, on_branch = repo_on("main"), repo_on("fix/a")
 # Псевдонимы gh — из своего конфига, а не с машины: на раннере ~/.config/gh нет, и `gh co` (псевдоним gh по
 # умолчанию) там не прочитать — r21 «не запись» падали бы только в CI.
@@ -603,7 +603,7 @@ def origin_here(d):  # основная ветка origin — текущий HEA
     git(d, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
 
-launch.same_blob = blob_rule
+mg_launch.same_blob = blob_rule
 o, noo, other = repo_on("main", prefix="blob-"), repo_on("main", prefix="blob-noo-"), repo_on("main", prefix="blob-o-")
 merge_guard_git.HOME_REPOS = [str(o), str(noo)]
 ROOT_MK = (Path(__file__).resolve().parents[2] / "Makefile").read_text(encoding="utf-8")
@@ -649,7 +649,7 @@ for form in ("make check", "make wt-add TRACK=fix NAME=x", "make wt-check TRACK=
     why = run("Bash", {"command": form}, cwd=o / "root") or ""
     check(f"блоб: корневой Makefile, не правило блоба: {form!r}: {why[:90]!r}",
           why if "отличается от основной ветки" in why or "Makefile со словом include" in why else None, False)
-launch.same_blob = lambda p: True
+mg_launch.same_blob = lambda p: True
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
