@@ -55,10 +55,11 @@ describe("task form fetchers (TB-173)", () => {
   });
 
   it.each<[number, unknown, SaveFailure]>([
-    [409, { code: "row_version" }, "row_version"],
-    [409, { code: "version_mismatch" }, "version_mismatch"],
+    [409, { code: "ROW_VERSION_CONFLICT" }, "row_version"],
+    [409, { code: "VERSION_MISMATCH" }, "version_mismatch"],
     [409, {}, "row_version"],
-    [403, { message: "no" }, "forbidden"],
+    [403, { code: "PERSON_ONLY" }, "forbidden"],
+    [413, { code: "PAYLOAD_TOO_LARGE" }, "failed"],
     [401, { message: "no" }, "failed"],
     [500, { message: "boom" }, "failed"],
   ])("tells a %i %j apart as %s", async (status, body, failure) => {
@@ -68,7 +69,7 @@ describe("task form fetchers (TB-173)", () => {
 
   it("gives the issues of a refused answer set", async () => {
     const issues = [{ fieldId: "mood", code: "out_of_range" }];
-    respond({ issues }, 422);
+    respond({ code: "INVALID_ANSWERS", answerIssues: issues }, 422);
     const error = await failureOf();
     expect(error.failure).toBe("invalid");
     expect(error.issues).toEqual(issues);

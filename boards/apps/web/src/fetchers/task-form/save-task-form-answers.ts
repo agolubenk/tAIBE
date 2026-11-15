@@ -48,16 +48,18 @@ async function readBody(response: Response): Promise<Record<string, unknown>> {
   }
 }
 
+// The API error codes (apiErrorSchema, UPPER_SNAKE): 409 ROW_VERSION_CONFLICT
+// or VERSION_MISMATCH, 422 INVALID_ANSWERS with `answerIssues` (TB-173, #358).
 async function failureOf(response: Response): Promise<SaveTaskFormError> {
   const body = await readBody(response);
   if (response.status === 409) {
     return new SaveTaskFormError(
-      body.code === "version_mismatch" ? "version_mismatch" : "row_version",
+      body.code === "VERSION_MISMATCH" ? "version_mismatch" : "row_version",
     );
   }
   if (response.status === 422) {
-    const issues = Array.isArray(body.issues)
-      ? (body.issues as AnswerIssue[])
+    const issues = Array.isArray(body.answerIssues)
+      ? (body.answerIssues as AnswerIssue[])
       : [];
     return new SaveTaskFormError("invalid", issues);
   }
