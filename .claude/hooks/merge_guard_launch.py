@@ -51,8 +51,8 @@ AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
 WS_MAX = 256
 TEXT_MAX = 4 * 1024 * 1024
-IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"
-                         r"|(?i:npm_config_node_options|npm_config_script_shell))=(.*)", re.S)
+IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"  # `ИМЯ+=` shell тоже экспортирует
+                         r"|(?i:npm_config_node_options|npm_config_script_shell))\+?=(.*)", re.S)
 # Опции make, от которых зависит, какой текст make прочтёт (make_files), и переменные, от которых — что прочтёт и
 # запустит: в MAKEFLAGS они — отказ (SE-133). Метка — слово, которого shell не передаст (в словах нет NUL).
 MAKE_READS = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin", "-I", "--include-dir", "-E", "--eval",
@@ -279,8 +279,9 @@ def make_files(a, cwd):
 MAKE_OPTION = ("длинная опция make, которую разбор не раскрывает однозначно (`--d`, `--frob`): какой Makefile make "
                "прочтёт, не видно — напишите опцию полностью (`--directory=…`)")
 MAKEFLAGS_WHY = ("MAKEFLAGS или GNUMAKEFLAGS с опцией или переменной, от которой зависит, что make прочтёт и запустит "
-                 "(`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`): папку make (`-C`, `cd`) разбор с ними не сводит "
-                 "— передайте их в командной строке make")
+                 "(`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`), или с кавычкой, `\\`, `$` (слова и подстановки "
+                 "make делит иначе, чем shell): папку make (`-C`, `cd`) разбор с ними не сводит — передайте их в "
+                 "командной строке make")
 
 
 def make_option(a):
@@ -352,8 +353,12 @@ def make_flags(val):
     опция чтения (MAKE_READS; `-C`/`-f` make из окружения не слушает — с запасом) или MAKEFILES=, SHELL=, .SHELLFLAGS=
     дают команду `make` с меткой: хук отказывает с причиной MAKEFLAGS_WHY (make_option). Прочие переменные (`CC=`)
     — как в командной строке make: рецепты разбор проверяет только грубым признаком. Первое слово без `-` и без `=`
-    make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`)."""
-    ws = words(val)
+    make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`). Слова make делит только по пробелам:
+    кавычка для него — обычный символ, `\\ ` склеивает слова, `$(Y)` раскрывается из окружения (make 3.81) — такое
+    значение тоже отказ."""
+    if re.search(r"[\"'\\$]", val):
+        return [["make", MAKEFLAGS_ARG]]
+    ws = val.split()
     if ws and not ws[0].startswith("-") and "=" not in ws[0]:
         ws[0] = "-" + ws[0]
     values, rest = _options(["make"] + ws, MAKE_VALUED, short=True, names=MAKE_LONG)
