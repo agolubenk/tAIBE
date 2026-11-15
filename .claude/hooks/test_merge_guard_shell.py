@@ -959,6 +959,9 @@ B1_PUSH = (
                      'subprocess.run(f"git push origin {br()}", shell=True)\n'),
     ("push_cmd_hop.py", 'import subprocess\ncfg = {"x": "main"}\nb = cfg["x"]\ncmd = ["git", "push", "origin"]\n'
                         'subprocess.run(cmd + [b])\n'),
+    # линза backend на 952c2e232: `.substitute(b=b)` — вне группы `Template(…)`, `$b` в литерале
+    ("push_template.py", 'import subprocess\nfrom string import Template\n\n\ndef go(b="main"):\n'
+                         '    subprocess.run(Template("git push origin $b").substitute(b=b), shell=True)\n\n\ngo()\n'),
 )
 # Проход: цель есть в тексте, но аргументы push — литералы; `cwd=repo` — другой аргумент вызова.
 B1_PASS = (
@@ -969,10 +972,29 @@ B1_PASS = (
 )
 TMP_COMMENT = ("tmp_comment.py", 'from pathlib import Path\nroot = Path.cwd()  # not tempfile\n'
                                  '(root / ".claude/settings.json").write_text("{}")\n')
-for name, text in B1_PUSH + B1_PASS + (TMP_COMMENT,):
+# Линза Контроля на 952c2e232: цель — из окружения, в литерале push — подстановка shell. На base каждая — отказ.
+B1_ENV = (
+    ("push_env_set.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                        'subprocess.run("git push origin $B", shell=True)\n'),
+    ("push_env_update.py", 'import os\nimport subprocess\nos.environ.update(B="main")\n'
+                           'subprocess.run(["bash", "-c", "git push origin $B"])\n'),
+    ("push_env_dict.py", 'import os\nimport subprocess\nenv = {\n    **os.environ,\n    "B": "main",\n}\n'
+                         'subprocess.run("git push origin $B", shell=True, env=env)\n'),
+    ("push_env_refspec.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                            'subprocess.run("git push origin HEAD:${B}", shell=True)\n'),
+    ("push_env.js", 'const { execSync } = require("child_process");\nprocess.env.B = "main";\n'
+                    'execSync("git push origin $B");\n'),
+    ("push_putenv.py", 'import os\nos.putenv("B", "main")\nos.system("git push origin $B")\n'),
+    ("push_env_concat.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                           'subprocess.run("git push origin " + "$B", shell=True)\n'),
+)
+for name, text in B1_PUSH + B1_PASS + B1_ENV + (TMP_COMMENT,):
     (fp / name).write_text(text)
 for name, _ in B1_PUSH:
     bash(f"SE-138 B1, скрипт с диска — отказ: {name}", f"python3 -I {fp / name}", True, cwd=on_main)
+for name, _ in B1_ENV:
+    run = "node" if name.endswith(".js") else "python3 -I"
+    bash(f"SE-138 B1, цель из окружения — отказ: {name}", f"{run} {fp / name}", True, cwd=on_main)
 for name, _ in B1_PASS:
     bash(f"SE-138 B1, скрипт с диска — проход: {name}", f"python3 -I {fp / name}", False, cwd=on_main)
 bash("SE-138, TEMP в комментарии — не временная папка, отказ: tmp_comment.py",

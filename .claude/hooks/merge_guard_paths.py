@@ -143,6 +143,8 @@ IDENT = re.compile(r"(?<![\w.])[A-Za-z_]\w*")  # `self.marks` — одно им�
 KWARG = re.compile(r"(?<![\w.])[A-Za-z_]\w*\s*=(?!=)")  # `check=True`: ключ аргумента — не значение
 CALLEE = re.compile(r"[\w.]+\s*\Z")
 CONST = {"True", "False", "None"}
+# `$B`, `${B}`, `$(…)`, `` `…` `` в команде push: значение даёт shell (env, os.putenv), разбор его не видит
+SHELL_SUB = re.compile(r"\$[{(\w@*]|`")
 
 
 def mask(s):
@@ -172,7 +174,8 @@ def group(ms, pos):
 
 
 def segment(ms, a, b):
-    """Аргумент вокруг группы [a, b): соседние куски до `,` или скобки родительской группы (`[…] + rest`, `*flags`)."""
+    """Аргумент вокруг группы [a, b): соседние куски до `,` или скобки родительской группы (`[…] + rest`, `*flags`) —
+    отрезки (left, end) слева и (b, right) справа. Позиции те же в тексте и в mask."""
     pa, pb, inner = group(ms, a)
     lo, hi = (pa + 1, pb - 1) if inner else (pa, pb)
     left, depth = a, 0
@@ -183,20 +186,22 @@ def segment(ms, a, b):
     while right < hi and not (depth == 0 and ms[right] == ","):
         depth += DEPTH.get(ms[right], 0)
         right += 1
-    head = ms[left:a]
     if not inner:  # оператор верхнего уровня: `cmd = […]` — имя слева от `=` не аргумент
-        m = PATH_VAR.match(head)
-        head = head[m.end():] if m else head
+        m = PATH_VAR.match(ms, left, a)
+        left = m.end() if m else left
+    end = a
     if ms[a:a + 1] == "(":  # `subprocess.run(…)`: имя вызываемой функции не аргумент
-        head = CALLEE.sub("", head)
-    return head + " " + ms[b:right]
+        m = CALLEE.search(ms, left, a)
+        end = m.start() if m else a
+    return (left, end), (b, right)
 
 
 def opaque(s, pos, known=()):
     """В аргументах команды push у pos — имя или вызов, значение которых разбор не видит (`branch`, `rest`,
     `target()`, `*flags`, `f"…{x}"`, `"git push " + b`). Команда — список: её скобочная группа; команда — одна
     строка: этот литерал (`cwd=repo` рядом — другой аргумент). Push вне литерала и вне скобок — текст (строка
-    docstring), не команда. known — имена, уже разобранные (cmds)."""
+    docstring), не команда. known — имена, уже разобранные (cmds). Подстановка shell в аргументах (`"git push
+    origin $B"`, `B` — из os.environ) — тоже значение, которого разбор не видит (линза Контроля на 952c2e232)."""
     ms = mask(s)
     lit = next((m.span() for m in LITERAL.finditer(s) if m.start() <= pos < m.end()), None)
     if lit and GIT_PUSH.search(s[lit[0]:lit[1]]):
@@ -205,7 +210,10 @@ def opaque(s, pos, known=()):
         a, b, inner = group(ms, pos)
         if not inner and not known:
             return False
-    text = KWARG.sub(" ", ms[a:b] + " " + segment(ms, a, b))
+    (l1, r1), (l2, r2) = segment(ms, a, b)
+    if any(SHELL_SUB.search(s[x:y]) for x, y in ((l1, r1), (a, b), (l2, r2))):
+        return True
+    text = KWARG.sub(" ", ms[a:b] + " " + ms[l1:r1] + " " + ms[l2:r2])
     return bool(set(IDENT.findall(text)) - CONST - set(known))
 
 
