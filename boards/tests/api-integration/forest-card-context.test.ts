@@ -197,7 +197,7 @@ describe("API integration: card context pack (R-031)", () => {
     expect(note?.content).toBe(`comment ${SECRET}`);
   });
 
-  it("gives a token caller's meta write the stored values back in place of the markers it read (TB-141)", async () => {
+  it("gives a token caller's meta write the stored values back in place of the markers it read, and masks its meta reads (TB-141)", async () => {
     const forest = await createForest();
     const card = await addTask(forest.project.id, "Meta round trip");
     if (!card) throw new Error("fixture");
@@ -231,6 +231,28 @@ describe("API integration: card context pack (R-031)", () => {
       contextPack: `${contextPack}\n\nNext: run the tests.`,
     });
     expect(saved.status).toBe(200);
+    // The answer holds the restored values: it is masked as the read is.
+    expect(JSON.stringify(saved.body)).not.toContain(SECRET);
+    expect(saved.body).toMatchObject({
+      contextPack: `${contextPack}\n\nNext: run the tests.`,
+      executor,
+      files,
+    });
+
+    // The meta read is masked the same way as the pack's meta; the web
+    // app's session reads the stored text.
+    const meta = await forest.agent(`/cards/${card.id}/meta`);
+    expect(meta.status).toBe(200);
+    expect(JSON.stringify(meta.body)).not.toContain(SECRET);
+    expect(meta.body).toMatchObject({ executor, files, taskId: card.id });
+    expect(meta.body.contextPack).toContain("[REDACTED:");
+    const web = await forest.owner(`/cards/${card.id}/meta`);
+    expect(web.status).toBe(200);
+    expect(web.body).toMatchObject({
+      executor: `executor ${SECRET}`,
+      files: [`notes/${SECRET}.md`],
+      contextPack: `pack ${SECRET}\n\nNext: run the tests.`,
+    });
 
     // A list item with a marker has no block to tie the marker to: refused.
     const list = await put({ files: [...files, "notes/new.md"] });

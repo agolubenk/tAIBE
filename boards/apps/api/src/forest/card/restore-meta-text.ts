@@ -5,8 +5,17 @@ import {
   isTokenCaller,
   restoreForTokenCaller,
 } from "../../utils/token-caller-text";
-import { loadCardMeta } from "./card-meta";
+import { redactContextMeta } from "../context/redact-context";
+import { type CardMeta, loadCardMeta } from "./card-meta";
 import type { CardMetaPatch } from "./card-patch";
+
+// TB-141: a caller with a token reads the meta's free text masked, the same
+// mask as the meta of the context pack, so both reads give the same text.
+// That includes the answer of its own write, which holds the restored values.
+// The web app's session reads the stored text: it edits that text.
+export function maskMetaText(c: Context, meta: CardMeta): CardMeta {
+  return isTokenCaller(c) ? redactContextMeta(meta) : meta;
+}
 
 // The meta fields the context pack masks for a caller with a token (TB-141,
 // `forest/context/redact-context.ts`).
