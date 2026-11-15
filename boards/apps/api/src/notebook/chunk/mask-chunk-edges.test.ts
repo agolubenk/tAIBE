@@ -66,17 +66,25 @@ const filler = (n: number) => {
   return `${out.slice(0, n - 1)} `;
 };
 
-// A marker is capitals too, so it is taken out before the check.
+// A marker is capitals too, so it is taken out before the check. A run of
+// the secret is visible when it is one of the 3-character runs of a shown
+// text: one pass over the texts, not one per run of a 3 000-character PEM.
 const MARKER = /\[REDACTED:[a-z0-9_]+\]/g;
 function visible(texts: string[], secret: string) {
-  const shown = texts.map((text) => text.replace(MARKER, " "));
+  const shown = new Set<string>();
+  for (const text of texts.map((item) => item.replace(MARKER, " "))) {
+    for (let i = 0; i + 3 <= text.length; i++) shown.add(text.slice(i, i + 3));
+  }
   for (let i = 0; i + 3 <= secret.length; i++) {
     const run = secret.slice(i, i + 3);
-    if (run.includes("\n")) continue;
-    if (shown.some((text) => text.includes(run))) return true;
+    if (!run.includes("\n") && shown.has(run)) return true;
   }
   return false;
 }
+
+// The PEM block is read at about 470 cuts, three chunks each: 1 s here and
+// 4–7 s on a shared CI runner, over the default 5 s (boards-ci, a8307108f).
+const CUTS_TIMEOUT_MS = 30_000;
 
 // The chunks of a paragraph cut by hardSplit with the secret `shift`
 // characters before the cut at CHUNK_MAX_CHARS.
@@ -86,28 +94,32 @@ function cutAt(secret: string, shift: number) {
 }
 
 describe("maskChunkEdges (TB-203)", () => {
-  it.each(FAMILIES)("masks every cut of a $name at a chunk edge", (family) => {
-    const step = family.secret.length > 400 ? 7 : 1;
-    let cut = 0;
-    let leakedAlone = 0;
-    for (let shift = 1; shift < family.secret.length; shift += step) {
-      const chunks = cutAt(family.secret, shift);
-      const alone = chunks.map((chunk) => redact(chunk.text).text);
-      const masked = chunks.map(
-        (chunk, i) =>
-          maskChunkEdges(
-            chunk.text,
-            chunks[i - 1]?.text ?? "",
-            chunks[i + 1]?.text ?? "",
-          ).text,
-      );
-      cut++;
-      if (visible(alone, family.value)) leakedAlone++;
-      expect(visible(masked, family.value), `shift ${shift}`).toBe(false);
-    }
-    // Not vacuous: each chunk masked alone shows a piece of the value.
-    expect(leakedAlone).toBeGreaterThan(cut / 4);
-  });
+  it.each(FAMILIES)(
+    "masks every cut of a $name at a chunk edge",
+    (family) => {
+      const step = family.secret.length > 400 ? 7 : 1;
+      let cut = 0;
+      let leakedAlone = 0;
+      for (let shift = 1; shift < family.secret.length; shift += step) {
+        const chunks = cutAt(family.secret, shift);
+        const alone = chunks.map((chunk) => redact(chunk.text).text);
+        const masked = chunks.map(
+          (chunk, i) =>
+            maskChunkEdges(
+              chunk.text,
+              chunks[i - 1]?.text ?? "",
+              chunks[i + 1]?.text ?? "",
+            ).text,
+        );
+        cut++;
+        if (visible(alone, family.value)) leakedAlone++;
+        expect(visible(masked, family.value), `shift ${shift}`).toBe(false);
+      }
+      // Not vacuous: each chunk masked alone shows a piece of the value.
+      expect(leakedAlone).toBeGreaterThan(cut / 4);
+    },
+    CUTS_TIMEOUT_MS,
+  );
 
   it("keeps a chunk's own hits when the glue hides them", () => {
     // `x` glued before `ghp_…` breaks the word boundary of the key pattern.
