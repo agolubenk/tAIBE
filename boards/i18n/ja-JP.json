@@ -3546,6 +3546,10 @@
 				"sector": "Sector",
 				"subcards": "Subcards",
 				"tree": "Whole tree"
+			},
+			"forest": {
+				"openPage": "Forest — on the full page",
+				"title": "Forest"
 			}
 		},
 		"severity": {

@@ -14517,6 +14517,19 @@
 						"showAll": {
 							"type": "string"
 						},
+						"forest": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string"
+								},
+								"openPage": {
+									"type": "string"
+								}
+							},
+							"required": ["title", "openPage"]
+						},
 						"sections": {
 							"type": "object",
 							"additionalProperties": false,
@@ -14942,6 +14955,7 @@
 						"showMore",
 						"showLess",
 						"showAll",
+						"forest",
 						"sections",
 						"lease",
 						"worker",

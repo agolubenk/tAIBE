@@ -3673,6 +3673,10 @@
 			"showMore": "Показать полностью",
 			"showLess": "Свернуть",
 			"showAll": "Показать все ({{total}})",
+			"forest": {
+				"title": "Лес",
+				"openPage": "Лес — на полной странице"
+			},
 			"sections": {
 				"approvals": "Ждут «да»",
 				"lease": "Аренда",

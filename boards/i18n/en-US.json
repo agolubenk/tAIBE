@@ -3503,6 +3503,10 @@
 			"showMore": "Show more",
 			"showLess": "Show less",
 			"showAll": "Show all ({{total}})",
+			"forest": {
+				"title": "Forest",
+				"openPage": "Forest — on the full page"
+			},
 			"sections": {
 				"approvals": "Waiting for «да»",
 				"lease": "Lease",
