@@ -161,3 +161,32 @@ test('резервный бот помнит время удачного отв�
   assert.equal(h.sent.length, 1);
   assert.match(h.sent[0], new RegExp(`Последний удачный ответ консоли — ${hm} МСК`));
 });
+
+test('снимок связи: старая консоль — conn null; запись есть, а опроса checks ещё не было — okAt 0, не null (линза Claude #370, N1)', async () => {
+  const { snapshotPage } = await import('../frame-scripts.mjs');
+  const saved = { window: globalThis.window, document: globalThis.document };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [], getElementById: () => null };
+  try {
+    globalThis.window = {};
+    assert.equal(snapshotPage().conn, null, 'старая консоль без __oqConn');
+    globalThis.window = { __oqConn: {} };
+    assert.deepEqual(snapshotPage().conn, { okAt: 0, errAt: 0, err: '', status: 0, fails: 0 }, 'новая вкладка до первого опроса');
+    globalThis.window = { __oqConn: { checks: { okAt: 5, errAt: 0, err: '', status: 0, fails: 0 } } };
+    assert.equal(snapshotPage().conn.okAt, 5);
+  } finally {
+    globalThis.window = saved.window;
+    globalThis.document = saved.document;
+  }
+});
+
+test('новая вкладка дала базу до первого опроса (okAt 0) посреди сбоя — не 🟢 (линза Claude #370, N1)', async () => {
+  const h = harness();
+  await h.tick();
+  await minute(h, 3);
+  assert.equal(h.sent.length, 1, '🟠');
+  await minute(h, 1); // перезагрузка
+  h.set('shared', { okAt: 0, errAt: 0, err: '', status: 0, fails: 0 }); await h.tick();
+  assert.equal(h.sent.length, 1, 'база есть, опроса не было — связь не вернулась');
+  h.set('shared', { okAt: h.now(), errAt: 0, err: '', status: 0, fails: 0 }); await h.tick();
+  assert.match(h.sent[1], /^🟢 /);
+});
