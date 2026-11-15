@@ -1153,7 +1153,8 @@
 			"moveDialogTitle": "要移動到其他工作區嗎？",
 			"moveTargetLabel": "工作區",
 			"moving": "移動中...",
-			"tasksTitle": "任務"
+			"tasksTitle": "任務",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again."
 		},
 		"projectIntegrations": {
 			"pageTitle": "整合",
@@ -3558,6 +3559,49 @@
 			"high": "High",
 			"low": "Low",
 			"medium": "Medium"
+		},
+		"forms": {
+			"addNote": "Add a note",
+			"export": "Download JSON",
+			"intervalFrom": "From",
+			"intervalTo": "To",
+			"issues": {
+				"invalidInterval": "Fill in both ends; the start must not be after the end.",
+				"invalidOption": "Choose one of the options.",
+				"outOfRange": "The value is out of range.",
+				"required": "Answer this question.",
+				"tooLong": "The text is too long.",
+				"unknownField": "This question is not in the form.",
+				"versionMismatch": "The form has a new version. Reload it to answer.",
+				"wrongType": "This value does not fit the question."
+			},
+			"loadError": "Forms did not load.",
+			"no": "No",
+			"note": "Note",
+			"progress": "{{answered}} of {{total}}",
+			"reload": "Reload form",
+			"required": "required",
+			"resubmit": "Submit again",
+			"retry": "Retry",
+			"save": {
+				"failed": "Not saved. Your answers stay on this page.",
+				"forbidden": "You cannot change the answers of this form.",
+				"invalid": "Some answers are not saved: fix the marked questions.",
+				"pending": "Unsaved changes",
+				"rowVersion": "The form was changed in another tab. Reload it; changes made here after the last save will be lost.",
+				"saved": "Saved",
+				"saving": "Saving…",
+				"versionMismatch": "The form has a new version. Reload it to answer."
+			},
+			"status": {
+				"changed": "Changed after submit",
+				"draft": "Draft",
+				"submitted": "Submitted"
+			},
+			"submit": "Submit",
+			"submitIssues": "Answer the marked questions to submit.",
+			"title": "Forms",
+			"yes": "Yes"
 		}
 	},
 	"invitations": {
@@ -4036,10 +4080,16 @@
 					"SOURCE_TOO_MANY_CHUNKS": "The text splits into too many parts for one source (at most 2000)."
 				},
 				"refresh": "Refresh {{title}}",
+				"remove": "Remove {{title}}",
+				"removeTitle": "Remove this source from the notebook?",
+				"removeDescription": "{{title}} and its chunks leave the notebook, and answers stop citing it. You can add the link again later.",
+				"removeConfirm": "Remove",
 				"toast": {
 					"added": "In the notebook: {{title}}",
 					"error": "Could not add the source",
-					"unchanged": "Nothing changed: {{title}}"
+					"unchanged": "Nothing changed: {{title}}",
+					"removed": "Removed from the notebook: {{title}}",
+					"removeError": "Could not remove the source"
 				}
 			},
 			"status": {

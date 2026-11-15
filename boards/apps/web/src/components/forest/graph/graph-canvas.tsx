@@ -62,18 +62,19 @@ export function GraphCanvas({ graph, selectedId, onSelect }: GraphCanvasProps) {
   );
   const allLabels = graph.nodes.length <= ALL_LABELS_UP_TO;
   // The hit radius follows the rendered SVG width, not the window (TB-223).
+  // State holds the radius, not the width: a resize re-renders the graph only
+  // when the radius changes.
   const svgRef = useRef<SVGSVGElement>(null);
-  const [renderedWidth, setRenderedWidth] = useState(0);
+  const [hitRadius, setHitRadius] = useState(() => graphHitRadius(0, WIDTH));
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) setRenderedWidth(entry.contentRect.width);
+      if (entry) setHitRadius(graphHitRadius(entry.contentRect.width, WIDTH));
     });
     observer.observe(svg);
     return () => observer.disconnect();
   }, []);
-  const hitRadius = graphHitRadius(renderedWidth, WIDTH);
 
   return (
     <svg
