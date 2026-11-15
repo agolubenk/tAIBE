@@ -37,6 +37,14 @@ async function consoleFake(files, state) {
       req.on('end', () => { state.patches = [...(state.patches ?? []), JSON.parse(raw)]; json(200, { id: 'x', version: 2, data: {} }); });
       return;
     }
+    // История: консоль новой версии — по limit и с next; state.oldHistory — старая, параметры не знает и отдаёт 50 полных.
+    if (pathname.startsWith('/api/oq/v1/history/items/')) {
+      state.historyQueries = [...(state.historyQueries ?? []), searchParams.toString()];
+      const ev = (i) => ({ at: 1_000 - i, actor: 'token:a', action: 'patch', ...(searchParams.get('fields') === 'meta' ? { keys: ['step'] } : { after: { step: 50 - i } }) });
+      if (state.oldHistory) return json(200, { events: Array.from({ length: 50 }, (_, i) => ev(i)) });
+      const n = Number(searchParams.get('limit') || 50);
+      return json(200, { events: Array.from({ length: n }, (_, i) => ev(i)), next: '77' });
+    }
     // Дельта /changes (OPS-50) — только если тест её включил (state.delta); иначе 404, как у старой консоли.
     if (pathname === '/api/oq/v1/changes' && state.delta) {
       state.changesReqs = [...(state.changesReqs ?? []), searchParams.get('since') ? 'since' : 'full'];
@@ -240,4 +248,19 @@ test('oq_list через дельту /changes (карточка HR Q-38): ко�
   assert.equal(m.state.itemsQueries, undefined, 'полный /db/items не читали ни разу');
   await m.call('oq_list', { collection: 'items', open_only: true });
   assert.deepEqual(m.state.itemsQueries, ['open=1'], 'открытые — серверным правилом open-rule.ts');
+});
+
+test('oq_history (карточка HR oow56fdzk): по умолчанию limit=20, keys_only → fields=meta, next и before; старая консоль — окно режет MCP', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  const d = body(await m.call('oq_history', { collection: 'items', id: 'd-1' }));
+  assert.equal(d.events.length, 20);
+  assert.equal(d.next, '77');
+  const k = body(await m.call('oq_history', { collection: 'items', id: 'd-1', limit: 5, keys_only: true, before: '77' }));
+  assert.deepEqual(k.events[0].keys, ['step']);
+  assert.equal(k.events[0].after, undefined);
+  assert.deepEqual(m.state.historyQueries, ['limit=20', 'limit=5&before=77&fields=meta']);
+  m.state.oldHistory = true;
+  const old = body(await m.call('oq_history', { collection: 'items', id: 'd-1', limit: 3 }));
+  assert.equal(old.events.length, 3, 'консоль без limit отдала 50 — MCP показал 3');
+  assert.equal(old.next, undefined);
 });

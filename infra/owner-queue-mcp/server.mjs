@@ -398,14 +398,29 @@ const TOOLS = [
   },
   {
     name: 'oq_history',
-    description: 'Журнал изменений документа: кто, когда, что — до 50 последних событий, новые первыми. Ответ — до 95 тыс. '
-      + 'символов (дорого для контекста): обзор — сначала brief: true. {total — событий в этом окне, events, shown + truncated? — '
-      + 'старые события не влезли в потолок ответа, briefAuto? — полные события не влезли все, ответ сам дан в brief; '
-      + 'одно событие целиком — oq_get}.',
-    inputSchema: { type: 'object', properties: { collection: COLL, id: { type: 'string' }, brief: { type: 'boolean', description: 'в after строки длиннее 200 символов — начало и длина (<поле>Len), большие массивы (cards) — их длина (<поле>Count)' } }, required: ['collection', 'id'] },
-    run: async ({ collection, id, brief }) => {
-      const r = await api('GET', `/history/${collection}/${encodeURIComponent(id)}`);
-      return historyReply(Array.isArray(r?.events) ? r.events : [], { brief: brief === true });
+    description: 'Журнал изменений документа: кто, когда, что — по умолчанию 20 последних событий, новые первыми. Ответ — до 95 тыс. '
+      + 'символов (дорого для контекста): обзор — сначала keys_only: true или brief: true. {total — событий в этом окне, events, '
+      + 'next? — есть старше: тот же вызов с before = next, shown + truncated? — старые события не влезли в потолок ответа, '
+      + 'briefAuto? — полные события не влезли все, ответ сам дан в brief; одно событие целиком — oq_get}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        collection: COLL, id: { type: 'string' },
+        limit: { type: 'number', description: 'сколько событий, 1–100, по умолчанию 20' },
+        before: { type: 'string', description: 'next прошлого ответа — следующая (более старая) страница' },
+        keys_only: { type: 'boolean', description: 'без снимков after: at, actor, action и keys — какие поля событие изменило (null — сравнить не с чем)' },
+        brief: { type: 'boolean', description: 'в after строки длиннее 200 символов — начало и длина (<поле>Len), большие массивы (cards) — их длина (<поле>Count)' },
+      },
+      required: ['collection', 'id'],
+    },
+    run: async ({ collection, id, limit, before, keys_only: keysOnly, brief }) => {
+      const n = Math.min(100, Math.max(1, Math.floor(Number(limit) || 20)));
+      const q = new URLSearchParams({ limit: String(n), ...(before ? { before: String(before) } : {}), ...(keysOnly ? { fields: 'meta' } : {}) });
+      const r = await api('GET', `/history/${collection}/${encodeURIComponent(id)}?${q}`);
+      // Консоль до этой версии параметры не знает и отдаёт 50 полных событий — окно режется здесь.
+      const events = (Array.isArray(r?.events) ? r.events : []).slice(0, n);
+      const out = historyReply(events, { brief: brief === true });
+      return typeof r?.next === 'string' ? { ...out, next: r.next } : out;
     },
   },
 ];

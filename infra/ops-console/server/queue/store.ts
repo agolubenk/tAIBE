@@ -6,7 +6,7 @@
  *  - ifVersion — защита от одновременной правки (409 вместо молчаливой перезаписи).
  * Каждое изменение — строка журнала oq_events.
  */
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
@@ -433,15 +433,17 @@ function parseEventAfter(raw: string | null): unknown {
 }
 
 /** История документа — события видимых продуктов (у событий старого образа продукта нет — это HR). */
-export async function docHistory(collection: Collection, id: string, products: Visibility, limit = 50) {
+/** История документа, свежие первыми; id — номер события журнала. before — только события с номером меньше: следующая страница. */
+export async function docHistory(collection: Collection, id: string, products: Visibility, limit = 50, before?: number) {
   const own = products === '*' ? undefined : inArray(sql`coalesce(${oqEvents.product}, ${DEFAULT_PRODUCT})`, [...products])
+  const older = before === undefined ? undefined : lt(oqEvents.id, before)
   const rows = await getDb()
     .select()
     .from(oqEvents)
-    .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own))
+    .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own, older))
     .orderBy(desc(oqEvents.at), desc(oqEvents.id))
-    .limit(Math.min(limit, 100))
-  const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson), raw: r.afterJson }))
+    .limit(Math.min(limit, 101))
+  const events = rows.map((r) => ({ id: r.id, at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson), raw: r.afterJson }))
   // Смена продукта пишет событие в оба продукта; кто видит оба (владелец), получает одно.
   const seen = new Set<string>()
   return events
