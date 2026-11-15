@@ -12,7 +12,9 @@
       "frontend",
       "backend",
       "release",
-      "boards"
+      "boards",
+      "backend-2",
+      "frontend-2"
     ],
     "active_hours": 8
   },
@@ -192,6 +194,14 @@
       [
         "Контроль|DevOps|Выпуск|Безопасность|release",
         "release"
+      ],
+      [
+        "backend-2|Бэкенд-2|роль 7",
+        "backend-2"
+      ],
+      [
+        "frontend-2|Фронтенд-2|роль 8",
+        "frontend-2"
       ],
       [
         "Бэкенд|backend|Данные",

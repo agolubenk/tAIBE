@@ -7,6 +7,10 @@ import {
   jsonResponse,
 } from "../openapi";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
+import {
+  maskForTokenCaller,
+  restoreForTokenCaller,
+} from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createActivity from "./controllers/create-activity";
 import createComment from "./controllers/create-comment";
@@ -28,6 +32,7 @@ import {
   updateCommentBody,
   workspaceIdParam,
 } from "./schema";
+import { storedCommentContent } from "./stored-comment-content";
 
 const getWorkspaceActivitiesRoute = createRoute({
   method: "get",
@@ -146,6 +151,9 @@ const updateCommentRoute = createRoute({
     400: errorResponse("Invalid body"),
     403: errorResponse("Not the author, or no access to the project"),
     404: errorResponse("Activity or comment not found"),
+    409: errorResponse(
+      "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+    ),
   },
 });
 
@@ -174,19 +182,25 @@ const deleteCommentRoute = createRoute({
 const activity = apiRouter()
   .openapi(getWorkspaceActivitiesRoute, async (c) =>
     c.json(
-      await getWorkspaceActivities(
-        c.req.valid("param").workspaceId,
-        c.get("userId"),
+      maskForTokenCaller(
+        c,
+        await getWorkspaceActivities(
+          c.req.valid("param").workspaceId,
+          c.get("userId"),
+        ),
       ),
       200,
     ),
   )
   .openapi(getActivitiesRoute, async (c) =>
     c.json(
-      await getActivities(
-        c.req.valid("param").taskId,
-        c.get("userId"),
-        c.req.valid("query").limit,
+      maskForTokenCaller(
+        c,
+        await getActivities(
+          c.req.valid("param").taskId,
+          c.get("userId"),
+          c.req.valid("query").limit,
+        ),
       ),
       200,
     ),
@@ -199,24 +213,42 @@ const activity = apiRouter()
       });
     }
     return c.json(
-      await createActivity(taskId, type, c.get("userId"), message, eventData),
+      maskForTokenCaller(
+        c,
+        await createActivity(taskId, type, c.get("userId"), message, eventData),
+      ),
       200,
     );
   })
   .openapi(createCommentRoute, async (c) => {
     const { taskId, comment } = c.req.valid("json");
-    return c.json(await createComment(taskId, c.get("userId"), comment), 200);
+    return c.json(
+      maskForTokenCaller(
+        c,
+        await createComment(taskId, c.get("userId"), comment),
+      ),
+      200,
+    );
   })
   .openapi(updateCommentRoute, async (c) => {
     const { activityId, comment } = c.req.valid("json");
+    const restored = await restoreForTokenCaller(c, comment, () =>
+      storedCommentContent(activityId),
+    );
     return c.json(
-      await updateComment(c.get("userId"), activityId, comment),
+      maskForTokenCaller(
+        c,
+        await updateComment(c.get("userId"), activityId, restored),
+      ),
       200,
     );
   })
   .openapi(deleteCommentRoute, async (c) =>
     c.json(
-      await deleteComment(c.get("userId"), c.req.valid("json").activityId),
+      maskForTokenCaller(
+        c,
+        await deleteComment(c.get("userId"), c.req.valid("json").activityId),
+      ),
       200,
     ),
   );
