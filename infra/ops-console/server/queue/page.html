@@ -98,6 +98,9 @@ h1 { font-family: var(--font-display); font-weight: 600; font-size: clamp(22px, 
    «Отчёты» (телефон) и тема. Липкая до 1400 px окна и в две колонки (@container выше); бот снимает карточки в
    1260 px при окне 1400 — там шапка не липнет и на кадр не ложится. --bar-h — её высота, считает скрипт. */
 html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + var(--bar-h, 0px) + 8px); }
+/* Якорь прокрутки ставит скрипт (keepAnchor, просьба владельца 15.11): браузерный держит верхний видимый узел, а не
+   карточку под курсором, и вместе со скриптом сдвигал бы страницу дважды. */
+html { overflow-anchor: none; }
 .head-bar { z-index: 15; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -16px -16px 0; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .hb-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .hb-btn { font: inherit; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
@@ -166,13 +169,40 @@ h2.sec { font-size: 18px; font-weight: 700; margin: 0; }
 .sec-note { margin: 0; color: var(--muted); font-size: 14px; max-width: 72ch; }
 .item { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
 .item.is-done { background: transparent; }
-.item.is-done .item-body { display: none; }
-body.hide-done .item.is-done { display: none; }
+.item.is-done:not(.is-melting) .item-body { display: none; }
+body.hide-done .item.is-done:not(.is-melting) { display: none; }
+/* Таяние ответа (просьба владельца 15.11): пункт, на который владелец ответил на этой странице, 10 с остаётся на месте
+   раскрытым — ответ можно поменять — и медленно тает. Курсор на карточке (или фокус клавиатуры в ней) — таяние стоит и
+   карточка снова плотная; ушли — 10 с заново. Конец анимации убирает пункт (animationend → endMelt). «Показать
+   выполненные» — пункт не тает (oq-melt-keep: та же длина, без смены вида) и после 10 с уходит к выполненным. */
+@keyframes oq-melt { 0% { opacity: 1; filter: none; } 55% { opacity: .6; filter: saturate(.7); } 100% { opacity: 0; filter: saturate(0) blur(1.5px); } }
+@keyframes oq-melt-flat { from { opacity: 1; } to { opacity: 0; } }
+@keyframes oq-melt-keep { from { opacity: 1; } to { opacity: 1; } }
+.item.is-melting { animation: oq-melt 10s cubic-bezier(.45, 0, .85, .55) forwards; }
+body:not(.hide-done) .item.is-melting { animation-name: oq-melt-keep; }
+/* !important — пауза сильнее правил вида выше и ниже (oq-melt-keep, oq-melt-flat): иначе их специфичность её перебьёт. */
+.item.is-melting:has(:focus-visible) { animation: none !important; }
+@media (hover: hover) { .item.is-melting:hover { animation: none !important; } }
+/* Касание (наведения нет): тап по тающей карточке держит её, тап вне карточки отпускает — 10 с заново (линза coord #337). */
+.item.is-melting.is-held { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { body.hide-done .item.is-melting { animation-name: oq-melt-flat; } }
+/* Пока тает, высота карточки та же, что до ответа: ответ виден по нажатому варианту или галочке, строки «✓ …» и
+   «Изменить ответ» появятся после таяния (правила .item.is-done:not(.is-melting) ниже). Подсказка — в строке «Сохранено»:
+   её высота — строка и до ответа (min-height 1lh). Генерируемый текст не попадает в textContent, и бот очереди не
+   перескажет подсказку в Telegram. */
+body.hide-done .item.is-melting .saved:not(:empty)::after { content: " · уберётся через 10 с — наведите курсор, чтобы поменять ответ"; }
+body.hide-done .item.is-melting .saved:empty::after { content: "Уберётся через 10 с — наведите курсор, чтобы поменять ответ"; }
 /* Переход по ссылке «#item=<id>» (колонка «Связь» на /deploys): пункт выделен и раскрыт, даже если выполнен. */
 .item.is-target { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 body.hide-done .item.is-target.is-done { display: grid; }
 .item.is-target.is-done .item-body { display: grid; }
 .item-head { display: grid; gap: 6px; }
+/* Вид пункта — только «одной очередью» (#sec-queue); в разделах его называет заголовок раздела. Метка — вне .chips:
+   строку чипов читает бот очереди. «решение» среди чипов там повторяло бы метку. */
+.item-kind { display: none; }
+#sec-queue .item-kind { display: inline-block; justify-self: start; font-size: 12px; font-weight: 600; line-height: 1; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
+#sec-queue .item[data-kind="decision"] .item-kind { border-color: var(--accent); color: var(--accent); }
+#sec-queue .chip-decision { display: none; }
 .item-title { font-weight: 600; margin: 0; font-size: 15px; }
 .item.is-done .item-title { color: var(--muted); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -262,18 +292,18 @@ textarea.field { min-height: 84px; font-family: var(--font-mono); font-size: 12.
 .oqf-note { margin: 0; color: var(--muted); }
 .oqf-warn { color: var(--warn); }
 .oqf-card .oqf-add, .oqf-card .oqf-more { justify-self: start; }
-.item.is-done .oqf-add { display: none; }
+.item.is-done:not(.is-melting) .oqf-add { display: none; }
 .oqf-usage { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .oqf-usage.warn { color: var(--warn); }
 .oqf-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.saved { font-size: 12px; color: var(--muted); min-height: 1em; }
+.saved { font-size: 12px; color: var(--muted); min-height: 1.6em; min-height: 1lh; }
 .saved.err { color: var(--warn); }
-.item.is-done .answer { border-top: 0; padding-top: 0; }
-.item.is-done .answer .field, .item.is-done .answer .options { display: none; }
+.item.is-done:not(.is-melting) .answer { border-top: 0; padding-top: 0; }
+.item.is-done:not(.is-melting) .answer .field, .item.is-done:not(.is-melting) .answer .options { display: none; }
 .summary-answer { font-size: 13px; color: var(--done); display: none; }
-.item.is-done .summary-answer { display: block; }
+.item.is-done:not(.is-melting) .summary-answer { display: block; }
 .reopen { font: inherit; font-size: 12px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; width: fit-content; display: none; }
-.item.is-done .reopen { display: inline; }
+.item.is-done:not(.is-melting) .reopen { display: inline; }
 .agent-status { font-size: 13px; display: none; gap: 6px; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
 .agent-status > span { min-width: 0; }
 .agent-status.on { display: flex; }
@@ -422,7 +452,9 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 @media (min-width: 641px) and (max-width: 1399.98px) { .hb-to-dec { display: inline-flex; } }
 /* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди. Шапка — одна строка (просьба владельца
    10.11): у кнопок вместо названий значки (название — в aria-label и title), выбор продукта забирает оставшееся место. */
+.rm-range { justify-self: start; }
 @media (max-width: 640px) {
+  .rm-range { display: none; }
   .col-reports { display: none; }
   .hb-reports { display: inline-flex; }
   .hb-long, #jump-dash { display: none; }
@@ -430,7 +462,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   .head-bar, .hb-nav { flex-wrap: nowrap; gap: 6px; }
   .head-bar { min-width: 0; }
   .hb-btn { padding: 0 9px; gap: 4px; }
-  .hb-compose, .hb-reports, .hb-theme { flex: none; width: 40px; padding: 0; justify-content: center; }
+  .hb-compose, .hb-reports, .hb-theme, .hb-layout { flex: none; width: 40px; padding: 0; justify-content: center; }
   .hb-compose[data-draft="1"] { width: auto; padding: 0 8px; }
   /* width: 0 — иначе ширина текста выбора («Все продукты») раздвигает сетку страницы шире экрана; место даёт flex-grow. */
   #head-bar .oq-product-pick { flex: 1 1 0; width: 0; min-width: 0; max-width: none; }
@@ -476,6 +508,8 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
           <li><a href="#sec-inbox" data-kind="inbox">Входящие <span class="jump-c"></span></a></li>
         </ul>
       </details>
+      <!-- Раскладка очереди: подпись называет ту, на которую переключит (скрипт ставит её по выбору из localStorage). -->
+      <button type="button" class="hb-btn hb-layout" id="layout-btn" aria-label="Одной очередью" title="Решения, мёржи, сервер и проверки — одним списком по порядку выполнения"><svg class="hb-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path id="layout-ico" d="M4 6h16M4 10h16M4 14h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><span class="hb-long" id="layout-text">Одной очередью</span></button>
       <details class="jump" id="jump-dash">
         <summary class="hb-btn">Ход работ</summary>
         <ul class="jump-list">
@@ -611,6 +645,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     <div class="card" id="card-roadmap">
       <h3>Роадмап по неделям</h3>
       <p class="sub">Вехи по направлениям: залитый ромб — достигнута, пустой — по плану, с красной обводкой — просрочена.</p>
+      <button class="toggle rm-range" id="rm-range" type="button" aria-pressed="false">Весь горизонт</button>
       <div class="rm-scroll"><div class="rm" id="roadmap"></div></div>
     </div>
     <details class="card rep-card" id="report-card">
@@ -639,9 +674,9 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
         <li><b>Продукт у пункта</b> — список «Продукт:» в шапке пункта переносит его в другой продукт (кроме мёржа с вердиктом «Контроля»); сессии прежнего продукта его больше не увидят — страница спросит подтверждение.</li>
         <li>Всё сохраняется само, писать мне в чат не нужно; под пунктом видно «сохранено» или ошибку — при ошибке страница повторит сама. Передумали — «Изменить ответ» под пунктом.</li>
         <li><b>«Ждёт вас снова»</b> — вы уже ответили, но агенту снова нужны вы (вопрос в ответ, вывод с ошибкой, «повторите проверку»): что именно — в строке «Агент» под пунктом. Ответьте ещё раз — пункт закроется.</li>
-        <li><b>Над списком</b> — строка связи (подключено ли хранилище ответов; «нет связи» — показан последний снимок), полоса и число — сколько пунктов закрыто, «Показать выполненные» / «Скрыть выполненные» — закрытые пункты в списке. Ссылка вида <code>#item=&lt;id&gt;</code> открывает и подсвечивает один пункт, даже закрытый или из другого продукта.</li>
-        <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и все отчёты «Хода работ» — только по нему, «Все продукты» — по всем, с разбивкой по продуктам под показателями. «＋ Поставить задачу» открывает форму (горячие клавиши — под её кнопками; черновик помнится, точка на кнопке — в форме остался текст). «Очередь» — переходы к разделам с числом открытых; «ждут · снова» — сколько ждут вас и сколько вернулось. «Ход работ» — переходы к отчётам с их главными числами. «К решениям ↓» — к первому разделу очереди (на средних экранах). Справа — тема: авто, светлая или тёмная.</li>
-        <li><b>Шапка на телефоне</b> — одна строка значков: ＋ — поставить задачу, список с числом — разделы очереди, столбики — «Отчёты» (весь «Ход работ» в отдельном окне, ✕ или Esc закрывают), ◐ / ☀ / ☾ — тема. Название каждого значка — в его подписи для экранного чтения и во всплывающей подсказке.</li>
+        <li><b>Над списком</b> — строка связи (подключено ли хранилище ответов; «нет связи» — показан последний снимок), полоса и число — сколько пунктов закрыто, «Показать выполненные» / «Скрыть выполненные» — закрытые пункты в списке. В каждом списке пункты идут от старых к новым. Ссылка вида <code>#item=&lt;id&gt;</code> открывает и подсвечивает один пункт, даже закрытый или из другого продукта.</li>
+        <li><b>Шапка</b> — первым идёт выбор продукта (когда вам видно больше одного): очередь, числа и все отчёты «Хода работ» — только по нему, «Все продукты» — по всем, с разбивкой по продуктам под показателями. «＋ Поставить задачу» открывает форму (горячие клавиши — под её кнопками; черновик помнится, точка на кнопке — в форме остался текст). «Очередь» — переходы к разделам с числом открытых; «ждут · снова» — сколько ждут вас и сколько вернулось. «Одной очередью» сводит решения, мёржи, сервер и проверки в один список по порядку выполнения: сначала открытые и «ждут вас снова» от старых к новым, за ними выполненные, у пункта — метка вида; переход «Очередь → Решения» ведёт к первому открытому решению в нём. «По разделам» возвращает разделы; выбор помнится в этом браузере. «Ход работ» — переходы к отчётам с их главными числами. «К решениям ↓» — к первому разделу очереди (на средних экранах). Справа — тема: авто, светлая или тёмная.</li>
+        <li><b>Шапка на телефоне</b> — одна строка значков: ＋ — поставить задачу, список с числом — разделы очереди, полосы или блоки — «Одной очередью» или «По разделам», столбики — «Отчёты» (весь «Ход работ» в отдельном окне, ✕ или Esc закрывают), ◐ / ☀ / ☾ — тема. Название каждого значка — в его подписи для экранного чтения и во всплывающей подсказке.</li>
         <li><b>Ход работ: показатели</b> — плитки сверху: ваша очередь, задачи агентов, просрочки, медиана ожидания мёржа, вехи, открытые карточки t-boards. У каждой карточки отчёта, когда продуктов больше одного, подписано, какой продукт она показывает. Список рядом с заголовком «Ход работ» группирует Гант, роадмап, отчёт и отставание: по блокам (направлениям), проектам или секторам t-boards, по продуктам.</li>
         <li><b>Ваша очередь по дням</b> — левая ось: сколько пунктов поставлено вам и сколько закрыто, нарастающим итогом (разрыв — то, что ждёт вас). Правая ось: сколько пунктов пришло за день; пунктир — медиана за 14 дней, правее красной линии «сегодня» — прогноз на 30 дней. Наведите на график — подсказка с числами дня.</li>
         <li><b>Задачи агентов: план и факт</b> — левая ось, нарастающим итогом: пунктир — сколько задач должно быть готово по плану, сплошная — сколько готово на деле (ниже пунктира — агенты отстают); пунктир от «сегодня» — пересчитанный план: оставшиеся задачи при среднем темпе за 14 дней, над графиком — новый срок и сдвиг от плана. Правая ось — сколько задач готово за день; пунктир — среднее за 14 дней и прогноз на 30 дней. Меньше 7 дат — прогноз не рисуется, подпись «мало данных». Список «Срез» — все задачи или один продукт, проект, сектор или блок. <b>Готовность по разделам</b> — карточки t-boards задач агентов по продуктам, внутри — по проектам, секторам или блокам (список «Разрез»): закрыто, на ревью, открыто и чёрточка — сколько должно быть закрыто по плану к сегодня. <b>Карточки t-boards в плане</b> — сколько карточек прикреплено по продуктам и своему разрезу и сколько закрыто, ниже — открытые карточки по дням сверок.</li>
@@ -662,6 +697,14 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
       <button class="toggle" id="hide-done" type="button" aria-pressed="true">Показать выполненные</button>
     </div>
   </header>
+
+  <!-- «Одной очередью» (кнопка в шапке): решения, мёржи, сервер и проверки — здесь, четыре раздела ниже скрыты. Без
+       data-section: бот очереди собирает разделы и вид пункта по нему, а его страница всегда «по разделам». -->
+  <section id="sec-queue" hidden>
+    <div class="sec-head"><h2 class="sec">Очередь — по порядку выполнения</h2><span class="sec-count" data-count></span></div>
+    <p class="sec-note">Сначала открытые и «ждёт вас снова» — от старых к новым, за ними выполненные. Вид пункта — метка над заголовком.</p>
+    <div class="list"></div>
+  </section>
 
   <section data-section="decision" id="sec-decision">
     <div class="sec-head"><h2 class="sec">Решения</h2><span class="sec-count" data-count></span></div>
@@ -900,6 +943,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     decision: { field: 'Комментарий', placeholder: 'Необязательно' },
     inbox: { done: 'Принято', field: 'Уточнение для агента', placeholder: 'Необязательно' },
   };
+  // Метка вида у пункта «одной очередью» (.item-kind); входящих в общем списке нет.
+  var KIND_NAME = { decision: 'Решение', merge: 'Мёрж', server: 'На сервере', check: 'Проверить руками' };
   var INBOX_TYPE = { bug: '🐞 ошибка', idea: '💡 идея', task: '📝 задача', alert: '🚨 алерт' };
   var INBOX_URGENCY = { now: '⚡ сейчас', queue: '🗂 в очередь' };
   var INBOX_SEVERITY = { critical: '🔴 критично', high: '🟠 высокая', medium: 'средняя', low: 'низкая' };
@@ -946,7 +991,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     answer += '<span class="summary-answer"></span>' + (it.kind === 'inbox' ? '<span class="relay-st" hidden></span>' : '') + '<span class="agent-status"></span><button type="button" class="reopen">Изменить ответ</button><span class="saved" aria-live="polite"></span></div>';
     // Вложения — вне .item-body: бот очереди переносит тело пункта в сообщение, список файлов ему не нужен.
     var filesHtml = it.kind === 'inbox' && FILES ? FILES.cardHtml(it) : '';
-    return '<article class="item" data-id="' + it.id + '"><div class="item-head"><h3 class="item-title">' + esc(it.title) + '</h3>' +
+    var kindHtml = KIND_NAME[it.kind] ? '<span class="item-kind">' + KIND_NAME[it.kind] + '</span>' : '';
+    return '<article class="item" data-id="' + it.id + '" data-kind="' + esc(it.kind) + '"><div class="item-head">' + kindHtml + '<h3 class="item-title">' + esc(it.title) + '</h3>' +
       '<div class="chips">' + chipsHtml + '</div></div>' + (body ? '<div class="item-body">' + body + '</div>' : '') + filesHtml + answer + '</article>';
   }
   // Метка «ждёт вас снова» — первым чипом (строку чипов читает и бот очереди), только пока пункт снова ждёт владельца.
@@ -976,7 +1022,76 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var html = renderItem(it);
     if (fromDb) html = html.replace('<article class="item"', '<article class="item" data-src="db"');
     if (it.id === TARGET) html = html.replace('<article class="item"', '<article class="item is-target"');
-    list.insertAdjacentHTML(fromDb ? 'afterbegin' : 'beforeend', html);
+    list.insertAdjacentHTML('beforeend', html);
+  }
+  // Раскладка очереди (просьба владельца 13.11): «по разделам» (по умолчанию) или «одной очередью» — решения, мёржи,
+  // сервер и проверки одним списком #sec-queue по порядку выполнения. Выбор — в этом браузере (localStorage
+  // oq-queue-layout); приватное окно или запрет хранилища — до перезагрузки.
+  var LAYOUT_KEY = 'oq-queue-layout', LAYOUT = 'sections';
+  try { LAYOUT = layoutOf(localStorage.getItem(LAYOUT_KEY)); } catch (e) { LAYOUT = 'sections'; }
+  // Пункты в списках — по порядку orderItems (от старых к новым; «одной очередью» выполненные — после открытых). Узлы
+  // переносятся, только если порядок другой: ответ в поле и раскрытые блоки переживают перенос, фокус возвращается.
+  function placeItems() {
+    var byId = {}, groups = {};
+    document.querySelectorAll('section .list > .item[data-id]').forEach(function (el) { byId[el.dataset.id] = el; });
+    ITEMS.concat(DB_ITEMS).forEach(function (it) {
+      var key = listOfKind(it.kind, LAYOUT);
+      if (byId[it.id]) (groups[key] = groups[key] || []).push(it);
+    });
+    var active = document.activeElement;
+    // Тающий пункт — на месте открытого: «одной очередью» он не уезжает к выполненным, пока тает.
+    var doneOf = function (it) { return isDone(it, state[it.id]) && !MELT[it.id]; };
+    Object.keys(groups).forEach(function (key) {
+      var list = document.querySelector('#sec-' + key + ' .list');
+      if (!list) return;
+      var els = orderItems(groups[key], key === 'queue' ? doneOf : null).map(function (it) { return byId[it.id]; });
+      var same = list.children.length === els.length && els.every(function (el, i) { return list.children[i] === el; });
+      if (!same) els.forEach(function (el) { list.appendChild(el); });
+    });
+    if (active && active !== document.activeElement && active.isConnected && active.focus) active.focus({ preventScroll: true });
+  }
+  // Кнопка раскладки в шапке называет ту раскладку, на которую переключит; значок — тоже её (полосы — один список,
+  // блоки — разделы). «К решениям ↓» «одной очередью» ведёт к общему списку: раздел решений скрыт.
+  var LAYOUT_ICON = { one: 'M4 6h16M4 10h16M4 14h16M4 18h16', sections: 'M4 5h6M4 9h6M14 5h6M14 9h6M4 15h6M4 19h6M14 15h6M14 19h6' };
+  var layoutBtn = document.getElementById('layout-btn');
+  // Инструкция ssh живёт в разделе «На сервере»; «одной очередью» он скрыт, и ссылка «как подключиться» вела бы в
+  // невидимый узел. Поэтому инструкция переезжает в конец общего списка (команды сервера теперь там) и обратно.
+  var sshHowto = document.getElementById('ssh-howto');
+  function placeSshHowto(one) {
+    var sec = document.getElementById(one ? 'sec-queue' : 'sec-server');
+    // Нет узла (правка разметки) — инструкция не переезжает, но переключатель раскладки работает.
+    if (!sshHowto || !sec) return;
+    if (one) sec.appendChild(sshHowto); else sec.insertBefore(sshHowto, sec.querySelector('.list'));
+  }
+  function paintLayout() {
+    var one = LAYOUT === 'one', next = one ? 'По разделам' : 'Одной очередью';
+    document.getElementById('sec-queue').hidden = !one;
+    ['decision', 'merge', 'server', 'check'].forEach(function (k) { document.getElementById('sec-' + k).hidden = one; });
+    placeSshHowto(one);
+    document.getElementById('layout-text').textContent = next;
+    document.getElementById('layout-ico').setAttribute('d', LAYOUT_ICON[one ? 'sections' : 'one']);
+    layoutBtn.setAttribute('aria-label', next);
+    layoutBtn.title = one ? 'Вернуть разделы: решения, мёржи, на сервере, проверить руками'
+      : 'Решения, мёржи, сервер и проверки — одним списком по порядку выполнения';
+    var toDec = document.querySelector('.hb-to-dec');
+    if (toDec) { toDec.setAttribute('href', one ? '#sec-queue' : '#sec-decision'); toDec.textContent = one ? 'К очереди ↓' : 'К решениям ↓'; }
+  }
+  layoutBtn.addEventListener('click', function () {
+    LAYOUT = LAYOUT === 'one' ? 'sections' : 'one';
+    try { localStorage.setItem(LAYOUT_KEY, LAYOUT); } catch (e) { /* приватное окно — до перезагрузки */ }
+    paintLayout();
+    placeItems();
+  });
+  paintLayout();
+  // Переход «Очередь → Решения» и т. п. «одной очередью»: раздела нет — к первому видимому открытому пункту этого вида в
+  // общем списке (выбор продукта и «Скрыть выполненные» прячут пункты), нет такого — к началу списка.
+  function jumpToKind(kind) {
+    var els = document.querySelectorAll('#sec-queue .item[data-kind="' + kind + '"]'), el = null;
+    for (var i = 0; i < els.length && !el; i++) if (!els[i].classList.contains('is-done') && els[i].getClientRects().length) el = els[i];
+    if (!el) { document.getElementById('sec-queue').scrollIntoView({ block: 'start', behavior: smooth() }); return; }
+    el.setAttribute('tabindex', '-1');
+    el.scrollIntoView({ block: 'start', behavior: smooth() });
+    el.focus({ preventScroll: true });
   }
   function showTarget() {
     if (!TARGET || targetShown) return;
@@ -995,7 +1110,81 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (el) el.classList.add('is-target');
     showTarget();
   });
+  // Таяние ответа (просьба владельца 15.11): MELT[id] — пункт, на который владелец только что ответил на этой странице.
+  // Пока он тает, он не прячется к выполненным и стоит на месте открытого; вид и 10 с — CSS (.is-melting, oq-melt),
+  // конец — animationend. Ответ с другого устройства или от агента не тает: при загрузке страницы выполненных много.
+  var MELT = {};
+  function itemEl(id) { return id ? document.querySelector('.item[data-id="' + id + '"]') : null; }
+  function itemById(id) { var all = allItems(); for (var i = 0; i < all.length; i++) if (all[i].id === id) return all[i]; return null; }
+  // Вызывать до render(): иначе render сначала спрячет выполненный пункт, и карточка мигнёт. Новый ответ на тающий
+  // пункт — 10 с заново (снять класс и пересчитать стиль — анимация начнётся сначала, класс вернёт render).
+  function markMelt(id) {
+    var it = itemById(id);
+    if (!it || !isDone(it, state[id])) { delete MELT[id]; return; }
+    var el = itemEl(id);
+    if (MELT[id] && el) { el.classList.remove('is-melting'); void el.offsetWidth; }
+    MELT[id] = true;
+  }
+  document.addEventListener('animationend', function (ev) {
+    var id = ev.target && ev.target.dataset ? ev.target.dataset.id : '';
+    if (!/^oq-melt/.test(ev.animationName) || !id || !MELT[id]) return;
+    delete MELT[id];
+    render();
+  });
+
+  // Якорь прокрутки (просьба владельца 15.11): новые пункты, ответы с других устройств, конец таяния и графики выше не
+  // сдвигают карточку под курсором (или с фокусом); без них — верхнюю видимую. ANCHOR — где она была после последней
+  // прокрутки; после изменений страницы она возвращается туда же. Браузерный якорь выключен (overflow-anchor у html):
+  // он держит верхний видимый узел, теряет его, когда пункты базы перемонтируются, а в Safari его нет.
+  var HOVER = null, ANCHOR = { id: null, top: 0 };
+  function shown(el) { return !!el && el.isConnected && el.getClientRects().length > 0; }
+  function anchorPick() {
+    var vh = window.innerHeight;
+    var inView = function (el) { if (!shown(el)) return false; var r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < vh; };
+    var h = itemEl(HOVER); if (inView(h)) return h;
+    var a = document.activeElement, f = a && a.closest ? a.closest('.item[data-id]') : null; if (inView(f)) return f;
+    var all = document.querySelectorAll('section .list > .item[data-id]'), part = null;
+    for (var i = 0; i < all.length; i++) {
+      if (!inView(all[i])) continue;
+      if (all[i].getBoundingClientRect().top >= 0) return all[i];
+      part = part || all[i];
+    }
+    return part;
+  }
+  function rememberAnchor() {
+    var el = anchorPick();
+    ANCHOR.id = el ? el.dataset.id : null;
+    ANCHOR.top = el ? el.getBoundingClientRect().top : 0;
+  }
+  function restoreAnchor() {
+    var el = itemEl(ANCHOR.id);
+    if (shown(el)) {
+      var d = el.getBoundingClientRect().top - ANCHOR.top;
+      if (Math.abs(d) >= 1) window.scrollBy(0, d);
+    }
+    rememberAnchor();
+  }
+  // Прокрутка — синхронно, без отложенного кадра: изменение страницы до кадра вернуло бы её к старому месту.
+  window.addEventListener('scroll', rememberAnchor, { passive: true });
+  document.addEventListener('pointerover', function (ev) {
+    if (ev.pointerType === 'touch') return; // у касания нет наведения
+    var id = itemOf(ev.target);
+    if (id !== HOVER) { HOVER = id; rememberAnchor(); }
+  });
+  document.addEventListener('pointerout', function (ev) { if (!ev.relatedTarget) { HOVER = null; rememberAnchor(); } });
+  // Касание: тап по тающей карточке держит её (.is-held), тап в другом месте отпускает — таяние начинается заново.
+  document.addEventListener('pointerdown', function (ev) {
+    if (ev.pointerType !== 'touch') return;
+    var id = itemOf(ev.target);
+    document.querySelectorAll('.item.is-held').forEach(function (el) { if (el.dataset.id !== id) el.classList.remove('is-held'); });
+    var el = MELT[id] && itemEl(id);
+    if (el) el.classList.add('is-held');
+  }, { passive: true });
+  // Страница поменяла высоту не через render (отчёты и графики дорисовались) — тот же возврат после раскладки, до кадра.
+  if (window.ResizeObserver) new ResizeObserver(function () { restoreAnchor(); }).observe(document.querySelector('main.wrap') || document.body);
+
   ITEMS.forEach(function (it) { mount(it, false); });
+  placeItems();
   showTarget();
 
   var modeEl = document.getElementById('mode');
@@ -1009,6 +1198,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function fmtTime(iso) { try { return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
 
   function render() {
+    placeItems();
     var total = 0, done = 0;
     allItems().forEach(function (it) {
       var el = document.querySelector('.item[data-id="' + it.id + '"]');
@@ -1017,6 +1207,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       var st = itemState(it, e), d = st === 'done', again = st === 'again';
       el.classList.toggle('is-done', d);
       el.classList.toggle('is-again', again);
+      if (!d) delete MELT[it.id]; // ответ снят или «ждёт вас снова» — таять нечему
+      el.classList.toggle('is-melting', !!MELT[it.id]);
       markAgain(el, again);
       el.querySelectorAll('.opt').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.opt === e.choice)); });
       // «Ждёт вас снова» — галочка снята: одно нажатие «Сделано» и есть новый ответ (at позже записи агента).
@@ -1048,7 +1240,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
       if (it.kind !== 'inbox') { total++; if (d) done++; } // входящие — не дела владельца, в прогресс не идут
     });
-    var openBy = {}, againBy = {};
+    var openBy = {}, againBy = {}, qn = 0, qk = 0;
     document.querySelectorAll('section[data-section]').forEach(function (sec) {
       var kind = sec.dataset.section, n = 0, k = 0, a = 0;
       allItems().forEach(function (it) {
@@ -1059,12 +1251,16 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       });
       var c = sec.querySelector('[data-count]'); if (c) c.textContent = queueReady() ? k + ' из ' + n : '…';
       openBy[kind] = n - k; againBy[kind] = a;
+      if (listOfKind(kind, 'one') === 'queue') { qn += n; qk += k; }
     });
+    // Общий список «одной очередью» — сумма четырёх разделов (считается и при раскладке по разделам: он лишь скрыт).
+    var qc = document.querySelector('#sec-queue [data-count]'); if (qc) qc.textContent = queueReady() ? qk + ' из ' + qn : '…';
     jumpQueue(openBy, againBy);
     document.getElementById('progress').textContent = !queueReady() ? 'Загружаю ответы…'
       : (queueStale() ? 'Снимок 16.10, нет связи · сделано ' : 'Сделано ') + done + ' из ' + total;
     document.getElementById('bar').style.width = (queueReady() && total ? Math.round(done * 100 / total) : 0) + '%';
     scheduleDash();
+    restoreAnchor();
   }
 
   // Сбой сохранения — повтор сам, с паузой 5 → 10 → … → 60 с, пока не сохранится (линза GLM #214): иначе ответ живёт
@@ -1128,13 +1324,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (opt) {
       var id = itemOf(opt); if (!id) return;
       var e = entry(id); e.choice = opt.dataset.opt; e.done = true; e.at = new Date().toISOString();
-      render(); persist(id); return;
+      markMelt(id); persist(id); render(); return;
     }
     var re = t.closest && t.closest('.reopen');
     if (re) {
       var rid = itemOf(re); if (!rid) return;
       var r = entry(rid); r.choice = null; r.done = false; r.at = new Date().toISOString();
-      render(); persist(rid); return;
+      persist(rid); render(); return;
     }
     var b = t.closest && t.closest('.copy');
     if (b) {
@@ -1152,7 +1348,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (t.classList.contains('cb')) { e.done = t.checked; e.at = new Date().toISOString(); }
     else if (t.classList.contains('field')) { e.note = t.value.slice(0, 20000); e.at = new Date().toISOString(); }
     else return;
-    render(); persist(id);
+    // persist до render: строка «Сохранено» показывает «Сохраняю…» (pending), а не время до записи (Claude-линза #337).
+    markMelt(id); persist(id); render();
   });
 
   var hideBtn = document.getElementById('hide-done');
@@ -1171,11 +1368,15 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return list.map(function (d) {
       var id = d.id || d.key || d.doc_id || (typeof d.path === 'string' ? d.path.split('/').pop() : '');
       var data = typeof d.data === 'function' ? d.data() : (d.data || d.value || d.fields || d);
-      return { id: id, data: data, version: typeof d.version === 'number' ? d.version : null };
+      return { id: id, data: data, version: typeof d.version === 'number' ? d.version : null, updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0,
+        createdAt: typeof d.createdAt === 'number' ? d.createdAt : 0 };
     }).filter(function (r) { return r.id && r.data && typeof r.data === 'object'; });
   }
   function apply(snap) {
     LIVE.checks = true;
+    // Снимок пришёл после сбоя опроса (подмена базы повторяет его, когда консоль снова ответила): ответы снова
+    // сохраняются — страница возвращается к общей базе сама, без перезагрузки ботом или владельцем.
+    if (remote && modeEl.dataset.mode === 'local') setMode('shared');
     rowsOf(snap).forEach(function (r) {
       // Снимок, снятый до своего сохранения (медленная сеть), — не тот ответ, от которого правят дальше: он откатил бы
       // базу правки, и следующая правка получила бы ложный 409 (ревью «Контроля» #324, minor).
@@ -1268,15 +1469,28 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function applyItems(snap) {
     LIVE.items = true;
-    var list = rowsOf(snap).map(function (r) { return itemFromDb(r.id, r.data); }).filter(Boolean)
+    // createdAt строки — второй ключ порядка (orderItems), updatedAt — запасной, если консоль его не прислала. В ключ
+    // снимка они не входят: запись агента в поле, которого страница не показывает (sha, pr, deploy), не пересоздаёт
+    // пункты и не стирает набранный ответ. createdAt пункта не меняется, поэтому порядок от снимка не зависит.
+    var at = {};
+    var list = rowsOf(snap).map(function (r) { at[r.id] = r; return itemFromDb(r.id, r.data); }).filter(Boolean)
       .filter(function (it) { return !ITEMS.some(function (b) { return b.id === it.id; }); });
     var key = JSON.stringify(list) + (otherProduct() ? '|other' : '');
     if (key === dbItemsKey) return;
     dbItemsKey = key;
-    document.querySelectorAll('.item[data-src="db"]').forEach(function (el) { el.remove(); });
+    list.forEach(function (it) { it.createdAt = at[it.id].createdAt; it.updatedAt = at[it.id].updatedAt; });
+    // Тающий пункт не перемонтируется: иначе таяние началось бы заново, а курсор и фокус потеряли бы карточку.
+    var inList = {};
+    list.forEach(function (it) { inList[it.id] = true; });
+    document.querySelectorAll('.item[data-src="db"]').forEach(function (el) {
+      var id = el.dataset.id;
+      if (MELT[id] && inList[id]) return;
+      delete MELT[id];
+      el.remove();
+    });
     DB_ITEMS = list;
-    list.slice().reverse().forEach(function (it) { mount(it, true); });
-    render();
+    list.forEach(function (it) { if (!MELT[it.id] || !itemEl(it.id)) mount(it, true); });
+    render(); // порядок в списках ставит placeItems в начале render
     showTarget();
     if (FILES) FILES.itemsChanged();
   }
@@ -1582,14 +1796,46 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // 'again' — владелец ответил, а сессия после ответа поставила blocked: снова открыт, с меткой «ждёт вас снова».
   function itemState(it, e) { return oqItemState(it.kind, e || {}); }
   function isDone(it, e) { return itemState(it, e) === 'done'; }
+  // Порядок пунктов в списке — от старых к новым (просьба владельца 13.11): по added (дата YYYY-MM-DD), при равной дате —
+  // по createdAt (время создания пункта в базе, мс), затем по id. Время создания не меняется при правке пункта: шаг
+  // «1 из 3», поправленный после «2 из 3», остаётся выше (замечание владельца 14.11). Без createdAt (снимок старой
+  // консоли) — updatedAt. Без даты — раньше датированных (вшитые пункты 15–16.10 — самые старые). doneOf — для «одной
+  // очереди»: открытые и «ждёт вас снова» раньше выполненных, внутри групп — тот же порядок. Исходный массив не меняется.
+  function orderItems(items, doneOf) {
+    function cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+    function ms(v) { return typeof v === 'number' && isFinite(v) && v > 0 ? v : 0; }
+    return items.map(function (it) {
+      return {
+        it: it, done: doneOf && doneOf(it) ? 1 : 0, added: typeof it.added === 'string' ? it.added : '',
+        at: ms(it.createdAt) || ms(it.updatedAt), id: String(it.id),
+      };
+    }).sort(function (a, b) {
+      return a.done - b.done || cmp(a.added, b.added) || a.at - b.at || cmp(a.id, b.id);
+    }).map(function (x) { return x.it; });
+  }
+  // Список пункта: «одной очередью» (layout 'one') решения, мёржи, сервер и проверки — в общем списке queue (#sec-queue),
+  // входящие — в своём разделе; «по разделам» — каждый вид в своём. Без внешних имён: страница зовёт её до конца блока.
+  function listOfKind(kind, layout) {
+    return layout === 'one' && (kind === 'decision' || kind === 'merge' || kind === 'server' || kind === 'check') ? 'queue' : kind;
+  }
+  // Раскладка из localStorage (oq-queue-layout): 'one' — одной очередью; пусто, мусор или старое значение — по разделам.
+  function layoutOf(saved) { return saved === 'one' ? 'one' : 'sections'; }
   // Автопередача у входящего без статуса агента (relay — ответ GET /relay консоли; null — старая консоль, молчим):
   // wait — передано, ждём «взял»; sending — процесс жив, ещё не передал; stuck — передано, но «взял» нет 10 минут или
   // процесс с тех пор умер (Monitor сессии истёк): ждать некого, команда руками; off — автопередачи нет.
+  // product — продукт входящего (OPS-51): живой считается только сессия его продукта. Сессия без поля product — ответ
+  // консоли до автопередачи по продуктам, она про основной продукт: другому продукту не подходит (ревью #173, цепочка).
   var RELAY_SLOW_MS = 10 * 60000;
-  function relayItemState(relay, id, now) {
+  // Основной продукт: на странице его ставит page-scripts.ts; в чистом контексте (тесты блока) window нет.
+  function relayDefaultProduct() { return (typeof window !== 'undefined' && window.__oqDefaultProduct) || 'hr-helper'; }
+  function relaySessionFits(s, product) { return !!s && (!product || (s.product || relayDefaultProduct()) === product); }
+  function relayItemState(relay, id, now, product) {
     if (!relay || !Array.isArray(relay.sessions) || !relay.relayed || typeof relay.relayed !== 'object') return null;
-    var live = relay.sessions.filter(function (s) { return s && s.alive; })[0] || null;
+    var live = relay.sessions.filter(function (s) { return relaySessionFits(s, product) && s.alive; })[0] || null;
     var r = Object.prototype.hasOwnProperty.call(relay.relayed, id) ? relay.relayed[id] : null;
+    // Передача сессией другого продукта (пункт перенесли, или процесс прежней версии без фильтра) — не «передано»:
+    // ждём сессию своего продукта (ревью #173).
+    if (r && product && r.product && r.product !== product) r = null;
     if (r && (!live || now - Date.parse(r.at) > RELAY_SLOW_MS)) return { k: 'stuck', session: r.session, at: r.at, dead: !live };
     if (r) return { k: 'wait', session: r.session, at: r.at };
     if (live) return { k: 'sending', session: live.session };
@@ -1643,6 +1889,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // Роадмап по неделям (400dd…fead): на горизонте в ~38 недель неделе достаётся 15–22 px, а подписи «5 окт – 11 окт»
   // нужно ~84 px — тогда шкала подписывается месяцами, а недели остаются линиями.
   var RM_WEEK_LABEL_PX = 84;
+  // Окно роадмапа в неделях для полосы шириной laneW: столько недель, сколько помещается с недельной подписью
+  // (RM_WEEK_LABEL_PX на неделю), от 3 до 10: на самой узкой полосе (300 px) 3 недели по 100 px — подписи недельные;
+  // назад — до 2 (четверть окна), остальное — вперёд от текущей недели.
+  function rmWindowWeeks(laneW) {
+    var total = Math.max(3, Math.min(10, Math.floor(laneW / RM_WEEK_LABEL_PX)));
+    return { total: total, back: Math.min(2, Math.floor(total / 4)) };
+  }
   function roadmapLabelMode(pxPerWeek) { return pxPerWeek >= RM_WEEK_LABEL_PX ? 'weeks' : 'months'; }
   var RM_MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
   /** Подпись месяца шкалы: год — у первой подписи и у января. */
@@ -1667,6 +1920,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     });
     return out;
   }
+  /**
+   * «N просрочено до окна» (решение продукта #347): из просроченных (late) — те, чей план раньше начала окна a. Веху,
+   * которая уже стоит меткой в окне (ms: факт end в окне, план раньше), второй раз не считаем (линза фронтенда #347).
+   */
+  function roadmapBefore(late, ms, a) {
+    return late.filter(function (w) { var d = planEndOf(w); return !!d && d < a && ms.indexOf(w) < 0; });
+  }
   // Ссылка «#item=<id>» из колонки «Связь» на /deploys → id пункта или ''. Шаблон — DOC_ID сервера (store.ts): без
   // кавычек и скобок, поэтому id можно подставить в селектор [data-id="…"].
   function targetFromHash(hash) {
@@ -1677,6 +1937,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return /^[A-Za-z0-9_.~:@+-]{1,80}$/.test(id) ? id : '';
   }
   /* oq-pure:end */
+  // Окно роадмапа (rmWindowWeeks) или весь горизонт — выбор в этом браузере (oq-roadmap-range).
+  var RM_RANGE_KEY = 'oq-roadmap-range', RM_RANGE = 'window';
+  try { RM_RANGE = localStorage.getItem(RM_RANGE_KEY) === 'all' ? 'all' : 'window'; } catch (e) { RM_RANGE = 'window'; }
+  function rmWindowOn() { return RM_RANGE !== 'all' && !(window.matchMedia && window.matchMedia('(max-width: 640px)').matches); }
 
   // Базовые направления — потоки агентов; продуктовые блоки и переименования — документы work/track-<id>.
   var SEED_TRACKS = [
@@ -2250,8 +2514,19 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function roadmap(ws, t) {
     var host = document.getElementById('roadmap'), a = t, b = t;
     ws.forEach(function (w) { ['planStart', 'planEnd', 'start', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && d < a) a = d; if (d && d > b) b = d; }); });
+    // Окно ближайших недель (карточка HR vb1ea4jq): по умолчанию — целые недели вокруг сегодня, столько, сколько
+    // помещается с недельными подписями (до 2 назад и до 10 всего); «Весь горизонт» — прежний вид месяцами.
+    // Телефон — всегда весь горизонт, как было.
+    var win = rmWindowOn();
+    if (win) {
+      var wk = rmWindowWeeks(Math.max(300, (host.clientWidth || 720) - 150)), m0 = addD(t, -((t.getDay() + 6) % 7));
+      var wa = addD(m0, -7 * wk.back), wb = addD(m0, 7 * (wk.total - wk.back) - 1);
+      if (a < wa) a = wa;
+      if (b > wb) b = wb;
+    }
     a = addD(a, -((a.getDay() + 6) % 7)); b = addD(b, 6 - ((b.getDay() + 6) % 7));
     var nd = diffD(b, a) + 1;
+    var inWin = function (d) { return !!d && d >= a && d <= b; };
     function P(d, half) { return ((diffD(d, a) + (half ? 0.5 : 0)) * 100 / nd).toFixed(2) + '%'; }
     // Подпись вехи шириной 112 px у края полосы прижимается внутрь — как в placeRoadmapLabels
     function PL(d) { return 'clamp(56px, ' + P(d, true) + ', calc(100% - 56px))'; }
@@ -2259,7 +2534,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var laneW = Math.max(300, (host.clientWidth || 720) - 150), dx = laneW / nd;
     var lines = '', heads = '';
     for (var d = a; d <= b; d = addD(d, 7)) lines += '<span class="rm-wk" style="left:' + P(d) + '"></span>';
-    if (roadmapLabelMode(dx * 7) === 'weeks') {
+    var byWeeks = roadmapLabelMode(dx * 7) === 'weeks';
+    if (byWeeks) {
       for (var dw = a; dw <= b; dw = addD(dw, 7)) heads += '<span class="rm-wk" style="left:' + P(dw) + '">' + esc(fmtD(dw) + ' – ' + fmtD(addD(dw, 6))) + '</span>';
     } else {
       // Месяцы: первый неполный — подписью в начале, если до следующего месяца хватает места; дальше — с 1-го числа
@@ -2273,33 +2549,49 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
     }
     var now = '<span class="rm-now" style="left:' + P(t, true) + '"' + tipAttr(['Сегодня', fmtD(t)]) + '></span>';
-    var o = '<div class="rm-row rm-head"><div class="rm-name">Неделя</div><div class="rm-lane">' + heads + '</div></div>';
+    // Заголовок столбца — по подписям шкалы: над месяцами «Неделя» вводила в заблуждение (карточка HR epz36yxj).
+    var o = '<div class="rm-row rm-head"><div class="rm-name">' + (byWeeks ? 'Неделя' : 'Месяц') + '</div><div class="rm-lane">' + heads + '</div></div>';
     REP.tracksIn(TRACKS, ws).forEach(function (tr) {
       var list = ws.filter(function (w) { return w.track === tr.id; }), lo = null, hi = null;
       list.forEach(function (w) { ['planStart', 'start'].forEach(function (k) { var d = dParse(w[k]); if (d && (!lo || d < lo)) lo = d; }); ['planEnd', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && (!hi || d > hi)) hi = d; }); });
       var done = list.filter(function (w) { return w.status === 'done'; }).length;
       var lane = lines;
-      if (lo && hi) lane += '<span class="rm-span" style="left:' + P(lo) + ';width:' + ((diffD(hi, lo) + 1) * 100 / nd).toFixed(2) + '%;background:' + tr.c + '"></span>';
+      if (lo && lo < a) lo = a;
+      if (hi && hi > b) hi = b;
+      if (lo && hi && lo <= hi) lane += '<span class="rm-span" style="left:' + P(lo) + ';width:' + ((diffD(hi, lo) + 1) * 100 / nd).toFixed(2) + '%;background:' + tr.c + '"></span>';
       var late = list.filter(function (w) { return w.status !== 'done' && lagOf(w, t) > 0; });
-      var ms = list.filter(function (w) { return w.milestone && (dParse(w.end) || planEndOf(w)); });
+      var msAll = list.filter(function (w) { return w.milestone && (dParse(w.end) || planEndOf(w)); });
+      var ms = msAll.filter(function (w) { return inWin(dParse(w.end) || planEndOf(w)); });
+      // Просрочено до начала окна (линза фронтенда #347, решение продукта): в окне такой задачи не видно, а просрочка —
+      // главный красный сигнал. Число — у названия полосы, названия, план и отставание — в подсказке. Просроченную веху
+      // считаем здесь, а не во «вне окна»; веху с меткой в окне — только меткой (roadmapBefore в блоке oq-pure).
+      var before = win ? roadmapBefore(late, ms, a) : [];
+      var away = msAll.filter(function (w) { return !inWin(dParse(w.end) || planEndOf(w)) && before.indexOf(w) < 0; }).length;
       var marks = ms.map(function (w) {
         var at = dParse(w.end) || planEndOf(w), isLate = w.status !== 'done' && lagOf(w, t) > 0;
         return { w: w, at: at, isLate: isLate, x: (diffD(at, a) + 0.5) * dx, prio: isLate ? 0 : w.status === 'done' ? 2 : 1 };
       });
       var levels = placeRoadmapLabels(marks, laneW, 112, 8);
+      // Вехи без подписи (не влезли рядом с соседями): их название — только в подсказке, а на снимке бота (/charts)
+      // подсказок нет. Число — у названия полосы, названия и даты — в её подсказке (карточка HR u68lwzb1).
+      var hidden = marks.filter(function (m, i) { return !levels[i]; });
       marks.forEach(function (m, i) {
         var w = m.w;
         lane += '<span class="rm-ms' + (w.status === 'done' ? ' done' : '') + (m.isLate ? ' late' : '') + '" style="left:' + P(m.at, true) + ';color:' + tr.c + '"' + tipAttr([w.title, (w.status === 'done' ? 'достигнута ' : 'план ') + fmtD(m.at), w.note]) + '></span>';
         if (levels[i]) lane += '<span class="rm-lbl ' + levels[i] + '" style="left:' + PL(m.at) + '"' + tipAttr([w.title, (w.status === 'done' ? 'достигнута ' : 'план ') + fmtD(m.at), w.note]) + '>' + esc(w.title.split(':')[0].slice(0, 34)) + '<small>' + esc(fmtD(m.at)) + '</small></span>';
       });
-      if (!ms.length && late.length) {
+      if (win) late = late.filter(function (w) { return inWin(planEndOf(w)); });
+      if (!msAll.length && late.length) {
         late.forEach(function (w, i) {
           var at = planEndOf(w);
           lane += '<span class="rm-ms late" style="left:' + P(at, true) + ';color:' + tr.c + '"' + tipAttr([w.title, 'план ' + fmtD(at) + ' · отставание ' + lagOf(w, t) + ' дн.', w.note]) + '></span>';
         });
         lane += '<span class="rm-lbl dn" style="left:' + PL(planEndOf(late[0])) + '">просрочено: ' + late.length + '<small>с ' + esc(fmtD(planEndOf(late[late.length - 1]))) + '</small></span>';
       }
-      o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small></span></div><div class="rm-lane">' + lane + now + '</div></div>';
+      o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small>' +
+        (hidden.length ? '<br><small class="rm-hidden"' + tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); })) + '>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>' : '') +
+        (before.length ? '<br><small class="rm-before is-late"' + tipAttr(before.map(function (w) { return w.title + ' — план ' + fmtD(planEndOf(w)) + ', отставание ' + lagOf(w, t) + ' дн.'; })) + '>' + before.length + ' просрочено до окна</small>' : '') +
+        (away ? '<br><small class="rm-away">' + away + ' ' + plural(away, 'веха', 'вехи', 'вех') + ' вне окна</small>' : '') + '</span></div><div class="rm-lane">' + lane + now + '</div></div>';
     });
     host.innerHTML = ws.length ? o : '<p class="empty" style="padding:10px">' + noRows('Нет задач.') + '</p>';
   }
@@ -2393,6 +2685,19 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { jumpDash(c, ws, lag, st); } catch (e) { /* числа в шапке необязательны */ }
     document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
       : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
+  }
+  // Переключатель окна роадмапа: подпись постоянная — «Весь горизонт», состояние — aria-pressed (линза фронтенда #347:
+  // меняющаяся подпись вместе с aria-pressed читалась диктором наоборот). Перерисовывается только роадмап.
+  var rmRangeBtn = document.getElementById('rm-range');
+  function paintRmRange() { rmRangeBtn.setAttribute('aria-pressed', String(RM_RANGE === 'all')); }
+  if (rmRangeBtn) {
+    paintRmRange();
+    rmRangeBtn.addEventListener('click', function () {
+      RM_RANGE = RM_RANGE === 'all' ? 'window' : 'all';
+      try { localStorage.setItem(RM_RANGE_KEY, RM_RANGE); } catch (e) { /* приватное окно — до перезагрузки */ }
+      paintRmRange();
+      try { roadmap(workList(), today0()); } catch (e) { document.getElementById('roadmap').textContent = 'Роадмап не построился: ' + e.message; }
+    });
   }
   if (window.ResizeObserver) {
     new ResizeObserver(function () {
@@ -2496,6 +2801,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var a = ev.target.closest && ev.target.closest('.jump-list a');
     if (!a) return;
     var d = a.closest('details.jump'); if (d) d.open = false;
+    // «Одной очередью» четыре раздела скрыты: якорь никуда не ведёт — переход к пункту этого вида в общем списке.
+    if (a.dataset.kind && listOfKind(a.dataset.kind, LAYOUT) === 'queue') { ev.preventDefault(); jumpToKind(a.dataset.kind); return; }
     if (!a.dataset.dash) return; // разделы очереди — обычный якорь, отступ под шапку даёт scroll-padding-top
     ev.preventDefault();
     showDash(a.getAttribute('href').slice(1));
@@ -2536,11 +2843,16 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // Автопередача входящих сессии (server/queue/relay.ts, входящее владельца 9654): процесс под Monitor сессии
   // отмечается раз в минуту. Жив — «Возьми входящее» владельцу вставлять не нужно; нет — говорим прямо и даём команду.
   // Опрос — раз в минуту (вкладка в фоне — раз в 5 минут), ответ — меньше килобайта; старая консоль без /relay — молчим.
+  // По продуктам (OPS-51): у каждого продукта своя сессия автопередачи; без product — основной продукт.
   var relay = null, relayTimer = null;
-  function relayLive() { return relay ? relay.sessions.filter(function (s) { return s.alive; })[0] || null : null; }
+  function relayOf(product) {
+    var p = product || window.__oqDefaultProduct;
+    return relay ? relay.sessions.filter(function (s) { return relaySessionFits(s, p); }) : [];
+  }
+  function relayLive(product) { return relayOf(product).filter(function (s) { return s.alive; })[0] || null; }
   function relayCmd(id) { return '<span><code>Возьми входящее ' + esc(id) + '</code> <button type="button" class="copy">Копировать</button></span>'; }
-  function relayHtml(id) {
-    var x = relayItemState(relay, id, Date.now());
+  function relayHtml(id, product) {
+    var x = relayItemState(relay, id, Date.now(), product);
     if (!x) return '';
     if (x.k === 'wait') return '📨 Передано сессии ' + esc(x.session) + ' в ' + esc(fmtTime(x.at)) + ' — ждём «взял»';
     if (x.k === 'sending') return '📨 Передаётся сессии ' + esc(x.session) + '…';
@@ -2551,20 +2863,40 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function paintRelayItem(el, it, e, d) {
     var rl = el.querySelector('.relay-st');
     if (!rl) return;
-    var other = window.__oqProductOf && window.__oqProductOf(it.id) !== window.__oqDefaultProduct;
-    var html = d || e.agentStatus ? '' : other ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id);
+    var product = window.__oqProductOf ? window.__oqProductOf(it.id) : window.__oqDefaultProduct;
+    // Консоль до автопередачи по продуктам (в ответе нет products) передаёт только входящие основного продукта.
+    // relay null — ответа /relay ещё нет или консоль без него: молчим, а не «никто не возьмёт» (ревью #173).
+    var old = !!relay && product !== window.__oqDefaultProduct && !relay.products;
+    var html = d || e.agentStatus || !relay ? '' : old ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id, product);
     if (rl.innerHTML !== html) rl.innerHTML = html;
     rl.hidden = !html;
   }
+  // Продукты строки «Автопередача»: выбранный в фильтре, иначе все продукты владельца (основной — первым).
+  function relayProducts() {
+    var def = window.__oqDefaultProduct, view = window.__oqViewOf ? window.__oqViewOf() : '';
+    if (view) return [view];
+    var names = relay && relay.products ? productNames() : null, list = [def];
+    if (names) Object.keys(names).forEach(function (p) { if (p !== def) list.push(p); });
+    return list;
+  }
+  function relayLine(product, named) {
+    var live = relayLive(product), last = relayOf(product)[0];
+    var names = named ? productNames() || {} : {}, who = named ? (names[product] || product) + ': ' : '';
+    // Консоль до автопередачи по продуктам (нет products): её сессии — только основного продукта (ревью #173).
+    if (!relay.products && product !== window.__oqDefaultProduct) return { ok: false, text: '⚠️ ' + who + 'автопередачи для этого продукта пока нет' };
+    if (live) return { ok: true, text: '🔁 ' + who + (named ? 'н' : 'Н') + 'овые входящие сами уходят сессии ' + live.session + ' (отметка в ' + fmtTime(live.at) + ')' };
+    return { ok: false, text: '⚠️ ' + who + (last ? (named ? 'а' : 'А') + 'втопередача не работает: сессия ' + last.session + ' не отмечалась с ' + fmtDT(new Date(last.at)) : (named ? 'а' : 'А') + 'втопередача не включена') };
+  }
   function paintRelay() {
     var note = document.getElementById('relay-note');
-    var live = relayLive(), last = relay && relay.sessions[0];
+    var list = relayProducts(), named = list.length > 1 || list[0] !== window.__oqDefaultProduct;
+    var lines = relay ? list.map(function (p) { return relayLine(p, named); }) : [];
+    var allOk = lines.every(function (l) { return l.ok; });
     note.hidden = !relay;
-    note.classList.toggle('warn', !!relay && !live);
-    note.textContent = !relay ? '' : live
-      ? '🔁 Новые входящие сами уходят сессии ' + live.session + ' (отметка в ' + fmtTime(live.at) + '): «Возьми входящее» вставлять не нужно.'
-      : (last ? '⚠️ Автопередача не работает: сессия ' + last.session + ' не отмечалась с ' + fmtDT(new Date(last.at)) + '.' : 'Автопередача входящих не включена.') +
-        ' Чтобы агент взял задачу сейчас, вставьте в сессию «Возьми входящее» с номером — команда и «Копировать» есть у пункта.';
+    note.classList.toggle('warn', !!relay && !allOk);
+    note.textContent = !relay ? '' : lines.map(function (l) { return l.text; }).join(' · ') + (allOk
+      ? ': «Возьми входящее» вставлять не нужно.'
+      : '. Чтобы агент взял задачу сейчас, вставьте в сессию «Возьми входящее» с номером — команда и «Копировать» есть у пункта.');
     allItems().forEach(function (it) {
       if (it.kind !== 'inbox') return;
       var el = document.querySelector('.item[data-id="' + it.id + '"]'), e = state[it.id] || {};

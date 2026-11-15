@@ -45,8 +45,9 @@ class Roles(Base):
         self.procs = [P(100, 1, 100, "??", TERMINAL)]
         self.env_l = {}
 
-    def sess(self, pid, line, role, age_h=1.0, cwd=None, status="idle", started=None):
+    def sess(self, pid, line, role, age_h=1.0, cwd=None, status="idle", started=None, key=None):
         cmd = "claude" + (f" --settings /x/genome/{role}.json" if role else "")
+        cmd += f" Сборка Т3, ключ реестра {key}, роль 7." if key else ""
         self.procs.append(P(pid, 100, pid, f"ttys{pid % 1000:03d}", cmd))
         self.env_l[pid] = line
         L.write_json(L.sessions_dir() / f"{pid}.json", {
@@ -117,6 +118,62 @@ class LiveRoleTest(Roles):
         rc, out, _ = self.run_main("stop", "--cwd", str(self.root))
         self.assertIn("kill 702   # 1 coord s-702", out)
         self.assertNotIn("kill 701", out)
+
+
+class SecondSessionTest(Roles):
+    """backend-2: геном backend, свой ключ в первом сообщении — своя роль, не наследник и не дубль backend."""
+
+    def test_second_session_is_its_own_role(self):
+        self.sess(701, "r.a1", "backend", age_h=5, key="backend")
+        self.sess(702, "r.b2", "backend", age_h=1, key="backend-2")
+        self.sess(703, "r.c3", "frontend", key="backend-2")       # ключ чужой базовой роли — роль по геному
+        live = TS.live_roles(TS.role_rows(self.sx(), str(self.root)))
+        self.assertEqual({k: v["pid"] for k, v in live.items()}, {"backend": 701, "backend-2": 702, "frontend": 703})
+        rc, out, _ = self.run_main("live", "--role", "backend-2", "--cwd", str(self.root))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("pid 702", out)
+        rc, out, _ = self.run_main("live", "--role", "frontend-2", "--cwd", str(self.root))
+        self.assertEqual((rc, out), (TS.RC_MISSING, ""))
+
+    def test_key_from_lineage_record_after_resume(self):
+        """--resume: первого сообщения в argv нет — ключ из записи линии (spawn_session.sh record --role)."""
+        self.sess(701, "r.a1", "backend", age_h=5)
+        self.sess(702, "r.b2", "backend", age_h=1)
+        L.write_json(L.lfile("r.b2", ".json"), {"line": "r.b2", "role": "backend-2"})
+        live = TS.live_roles(TS.role_rows(self.sx(), str(self.root)))
+        self.assertEqual({k: v["pid"] for k, v in live.items()}, {"backend": 701, "backend-2": 702})
+
+    def test_status_lists_second_sessions_and_wait_finds_one(self):
+        self.sess(702, "r.b2", "backend", key="backend-2")
+        os.environ["NERVE_PLIST"] = str(self.dir / "none.plist")
+        rc, out, _ = self.run_main("status", "--cwd", str(self.root))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("4 backend   нет", out)
+        self.assertTrue(any(ln.startswith("7 backend-2") and "pid 702" in ln for ln in out.splitlines()), out)
+        self.assertIn("8 frontend-2 нет", out)
+        sx = self.sx()
+        sx.at(4, lambda: (self.sess(800, "r.z9.n1", "backend", started=sx.t, key="backend-2"),
+                          sx.p.update({800: next(p for p in self.procs if p.pid == 800)}), sx.env.update({800: "r.z9.n1"})))
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            rc = TS.main(["wait", "--role", "backend", "--line", "r.z9.n1", "--timeout", "8"], sx)
+        self.assertEqual(rc, 1, "сессия backend-2 — не сессия backend")
+        sx = self.sx()
+        sx.at(4, lambda: (self.sess(801, "r.z9.n2", "backend", started=sx.t, key="backend-2"),
+                          sx.p.update({801: next(p for p in self.procs if p.pid == 801)}), sx.env.update({801: "r.z9.n2"})))
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            rc = TS.main(["wait", "--role", "backend-2", "--line", "r.z9.n2", "--timeout", "8"], sx)
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertIn("pid 801", out.getvalue())
+
+    def test_numbers_follow_team_roles_of_every_product(self):
+        import products as P
+        _, products = P.load()
+        for slug, cfg in products.items():
+            roles = cfg["team"]["roles"]
+            self.assertEqual({r: i for i, r in enumerate(roles, 1)}, TS.NUM, slug)
+            self.assertEqual(set(TS.ORDER), set(roles), slug)
 
 
 class WaitTest(Roles):
