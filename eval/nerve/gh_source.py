@@ -119,8 +119,12 @@ def _recheck_ci(ctx, n, p):
         p["ci_at"] = _iso_now(ctx)
     _, checks, _, _, _ = _gh_view(ctx.cfg["github"]["repo"], n)
     p["checks"] = checks
-    if quorum.ci_state(_quorum_checks(ctx, p)) != "pending":
-        _check_pr(ctx, n, p, p["head"])
+    ci = quorum.ci_state(_quorum_checks(ctx, p))
+    if ci == "pending" or (ci == "none" and p.get("none_head") == p["head"]):
+        return   # «CI: none» уже разобран на этой голове: комментарии не перечитываются раз в 15 мин (HR #774 — 23 КБ)
+    if ci == "none":
+        p["none_head"] = p["head"]
+    _check_pr(ctx, n, p, p["head"])
 
 
 def poll_github(ctx):

@@ -108,9 +108,9 @@ def ci_state(checks):
     states = [str(c or "").upper() for c in checks]
     if states == ["NONE"]:
         return "none"   # маркер gh_source: у головы нет проверок дольше NO_CHECKS_AFTER — CI у PR нет
-    if not states or any(s in ("PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING") for s in states):
+    if not states or any(s in ("PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED") for s in states):
         return "pending"
-    if any(s in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED") for s in states):
+    if any(s in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE") for s in states):
         return "failure"
     return "ok"
 

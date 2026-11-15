@@ -167,6 +167,8 @@ class QuorumTest(unittest.TestCase):
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
         self.assertEqual(quorum.quorum(vs, head, [])[::3], (False, "pending"), "проверок ещё нет — не ok (SE-126)")
         self.assertEqual(quorum.ci_state([]), "pending")
+        self.assertEqual(quorum.ci_state(["SUCCESS", "STARTUP_FAILURE"]), "failure", "workflow не стартовал — провал")
+        self.assertEqual(quorum.ci_state(["SUCCESS", "REQUESTED"]), "pending", "прогон запрошен — CI ещё идёт")
         self.assertEqual(quorum.quorum(vs, head, ["NONE"])[::3], (True, "none"), "CI у PR нет — маркер gh_source")
 
     def test_author_roles_add_second_sessions(self):
@@ -575,7 +577,7 @@ class GithubPollTest(unittest.TestCase):
         обычное правило CI; новая голова сбрасывает отсчёт."""
         head, t0 = "f" * 40, self.ctx.now
         three = [f"{x}: approve на {{}}" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
-        views = []
+        views, reads = [], []
 
         def at(minutes, sha=head, ci=""):
             self.ctx.now = t0 + timedelta(minutes=minutes)
@@ -583,6 +585,7 @@ class GithubPollTest(unittest.TestCase):
             sources.run = fake
             gh_source.poll_github(self.ctx)
             views.append(len([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]))
+            reads.append(len([c for c in fake.calls if c[:2] == ["gh", "api"]]))
 
         def events(kind):
             return [t for k, t in self.kinds() if k == kind]
@@ -593,6 +596,7 @@ class GithubPollTest(unittest.TestCase):
         for m in (31, 35, 45, 47):
             at(m)
         self.assertEqual(views, [1, 1, 1, 0, 0, 1], "до 30 мин — каждый проход, дальше раз в 15 мин")
+        self.assertEqual(reads, [1, 0, 1, 0, 0, 0], "комментарии — на голове и один раз на «CI: none», не раз в 15 мин")
         self.assertEqual(events("pr.quorum"),
                          ["#483 собран: approve backend, boards, plan на fffffffff, CI: none (проверок нет 30 мин)"])
         self.assertEqual(len(events("pr.nochecks")), 1)
