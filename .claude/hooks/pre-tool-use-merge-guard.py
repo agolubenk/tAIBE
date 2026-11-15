@@ -21,14 +21,13 @@ import re
 import sys
 from pathlib import Path
 
-HOME_CLAUDE = Path.home() / ".claude"
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, reviewed_test, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
-from merge_guard_gh import classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
+from merge_guard_gh import classify_gh, classify_http, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts,  # noqa: E402
                                 read_names)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
@@ -40,10 +39,8 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
                                strip_prefix, subst_code, SUBST_AT, syntax_only, tokenize, uncommented)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
+from merge_guard_paths import interp_found, protected_path  # noqa: E402
 
-
-GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
-GUARDED_CLAUDE_DIRS = ("rules", "hooks")
 
 # Если разбор упал — защищённой считается команда, где есть хоть один из этих признаков.
 FALLBACK = re.compile(
@@ -62,77 +59,10 @@ def main_roots(project_dir=PROJECT_DIR):
     return sorted({s.split("/worktrees/", 1)[0], s})
 
 
-def protected_path(path_str, cwd, roots):
-    if not path_str or path_str.startswith("-"):
-        return None
-    p = os.path.join(cwd, os.path.expanduser(path_str))
-    if is_lost(p):  # `cd "$X" && echo > 01-base.md`: папка может оказаться .claude/rules — по имени файла не понять
-        return f"{path_str} после cd в папку, которую разбор не видит (пишите по абсолютному пути),"
-    p = os.path.realpath(p)
-    home = os.path.realpath(HOME_CLAUDE)
-    if p == os.path.join(home, "sessions") or p.startswith(os.path.join(home, "sessions") + "/"):
-        return p
-    if p in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
-        return p
-    for root in roots:
-        claude = os.path.join(os.path.realpath(root), ".claude")
-        if os.path.dirname(p) == claude and os.path.basename(p) in GUARDED_CLAUDE_FILES:
-            return p
-        if any(p == os.path.join(claude, d) or p.startswith(os.path.join(claude, d) + "/") for d in GUARDED_CLAUDE_DIRS):
-            return p
-    return None
-
-
-INTERP_WRITE = re.compile(r"""open\([^\n]*?,\s*(mode\s*=\s*)?['"][wax][+bt]*['"]|write_text|write_bytes|writeFile|appendFile|unlink|remove\(|rename|replace\(|rmSync|rmtree""")
-# Путь собран из частей: '.claude' и защищённое имя отдельными строками (os.path.join, Path / …).
-JOINED_CLAUDE = re.compile(r"""['"]\.claude['"].{0,80}?['"](rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S)
-
-
 # ---------- решение ----------
 
 def is_interp(word):
     return launcher(word) not in (None, "sh")
-
-
-# Присваивание пути переменной (python, js, perl): `p = '.claude/settings.json'`, `const S = path.join(…)`.
-PATH_VAR = re.compile(r"\s*(?:(?:const|let|var|my|our)\s+)?\$?([A-Za-z_]\w*)\s*(?::[^=\n]*)?=(?!=)")
-READS = re.compile(r"\.read|read_text|readFile|load|open\(|glob|listdir|scandir|walk|exists|is_?file|stat\(")
-
-
-def path_vars(lines, cwd, roots):
-    """Имена переменных, которым присвоен защищённый путь (не содержимое файла: строки с чтением не берутся)."""
-    names = set()
-    for ln in lines:
-        m = PATH_VAR.match(ln)
-        if m and not READS.search(ln) and (JOINED_CLAUDE.search(ln) or any(
-                protected_path(x.group(0), cwd, roots) for x in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", ln))):
-            names.add(m.group(1))
-    return names
-
-
-def interp_found(text, cwd, roots, by_line=False):
-    """Код python/node/…: защищённая команда в subprocess и запись в защищённые файлы. by_line — скрипт с диска:
-    запись и защищённый путь ищутся в одной строке (или путь в переменной из path_vars), иначе любой скрипт, который
-    читает законы и пишет своё, — отказ."""
-    found = []
-    kind = classify_interp(["_", text], cwd)
-    if kind:
-        found.append((kind, text[:120]))
-    chunks = text.splitlines() if by_line else [text]
-    names = path_vars(chunks, cwd, roots) if by_line else set()
-    for chunk in chunks:
-        if not INTERP_WRITE.search(chunk):
-            continue
-        hit = next((n for n in names if re.search(rf"(?<![\w.]){re.escape(n)}\b", chunk)), None)
-        if hit:
-            found.append(("file", f".claude/… (путь в переменной {hit} — правьте через Edit)"))
-        for m in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", chunk):
-            p = protected_path(m.group(0), cwd, roots)
-            if p:
-                found.append(("file", p))
-        if JOINED_CLAUDE.search(chunk):
-            found.append(("file", ".claude/… (путь собран из частей — правьте через Edit)"))
-    return found
 
 
 SOURCE = {"source", "."}

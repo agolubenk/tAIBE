@@ -11,6 +11,7 @@ from pathlib import Path
 spec = importlib.util.spec_from_file_location("mg", Path(__file__).resolve().parent / "pre-tool-use-merge-guard.py")
 mg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mg)
+import merge_guard_paths  # noqa: E402  — папку хуков в sys.path уже вставил сам хук
 
 
 TMP = Path(tempfile.mkdtemp(prefix="merge-guard-test-"))
@@ -19,7 +20,7 @@ HOME = TMP / "home" / ".claude"
 (ROOT / ".claude" / "rules").mkdir(parents=True)
 (ROOT / "worktrees" / "fix" / "x" / ".claude" / "rules").mkdir(parents=True)
 (HOME / "sessions").mkdir(parents=True)
-mg.HOME_CLAUDE = HOME
+merge_guard_paths.HOME_CLAUDE = HOME  # protected_path читает HOME_CLAUDE своего модуля
 
 D9 = {"sessionId": "d9d9d9d9-0000-0000-0000-000000000000", "name": "hr-helper-v2-d9", "pid": 1}
 C4 = {"sessionId": "4c4c4c4c-0000-0000-0000-000000000000", "name": "hr-helper-v2-4c", "pid": 2}
