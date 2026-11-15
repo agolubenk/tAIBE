@@ -131,6 +131,16 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(log.status).toBe(200);
     expect(text(log.body)).not.toContain(SECRET);
     expect(text(log.body)).toContain(MARKER);
+
+    // Claude #388 B2: a seed hash is of the raw body; the key gets none.
+    type Seed = { contentHash?: string };
+    const ownerSeeds = (await forest.owner(`/logs/${logId}`)).body
+      .seeds as Seed[];
+    expect(ownerSeeds.length).toBeGreaterThan(0);
+    expect(ownerSeeds.every((seed) => seed.contentHash)).toBe(true);
+    const seeds = log.body.seeds as Seed[];
+    expect(seeds).toHaveLength(ownerSeeds.length);
+    expect(seeds.filter((seed) => "contentHash" in seed)).toEqual([]);
   });
 
   it("pages logs for an API key by list order, not by hidden matches", async () => {
@@ -251,10 +261,11 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect((hybrid.body.results as Hit[])[0]?.score).toBe(1 / 61);
   });
 
-  it("keeps 20 visible keyword hits for an API key past hidden ones", async () => {
+  it("ranks keyword hits for an API key by the text it reads", async () => {
     const nb = await notebookFixture();
-    // 19 visible sections here and «Аренда» in the keys doc give 20 visible
-    // hits; «Секрет» holds both query words and has the first rank.
+    // 19 visible sections here, «Аренда» in the keys doc and «Секрет» give
+    // 21 hits on «аренда»; by the stored text «Секрет» also holds the
+    // secret and has the first rank.
     const sections = Array.from({ length: 19 }, (_, index) => [
       `## Срок ${index + 1}`,
       "",
@@ -276,23 +287,31 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     });
     expect(stored.status).toBe(200);
 
-    // A hidden chunk must not push a visible one out of the 20: a shorter
-    // list would confirm a guessed word (release lens #388).
-    const found = await nb.agent("POST", "/search", {
-      query: `аренда or ${SECRET}`,
-      limit: 20,
-      mode: "keyword",
-    });
-    const headings = (found.body.results as Hit[]).map((hit) => hit.heading);
-    expect(headings).toHaveLength(20);
-    expect(
-      headings.filter((heading) => /Секрет|Ротация/.test(heading)),
-    ).toEqual([]);
+    // A guessed word in a secret must not move a chunk up or push a visible
+    // one out (release lens #388): the answer is the same for any guess.
+    const ranked = async (guess: string) => {
+      const found = await nb.agent("POST", "/search", {
+        query: `аренда or ${guess}`,
+        limit: 20,
+        mode: "keyword",
+      });
+      expect(found.status).toBe(200);
+      return (found.body.results as Hit[]).map((hit) => [
+        hit.heading,
+        hit.score,
+      ]);
+    };
+    const bySecret = await ranked(SECRET);
+    expect(bySecret).toHaveLength(20);
+    expect(bySecret).toEqual(await ranked("другое"));
+    expect(bySecret.map(([heading]) => heading)).not.toContain(
+      "Ключи › Ротация",
+    );
   });
 
-  it("stops at the page cap past hidden keyword hits and logs no query", async () => {
+  it("stops at the scan cap of keyword hits and logs no query", async () => {
     const nb = await notebookFixture();
-    // 200 hidden chunks (10 pages) rank above the visible «Аренда».
+    // 200 hidden chunks rank above the visible «Аренда».
     const hidden = Array.from({ length: 200 }, (_, index) => [
       `## Секрет ${index + 1}`,
       "",
@@ -313,9 +332,11 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
       limit: 20,
       mode: "keyword",
     });
-    expect(found.body.results).toEqual([]);
+    expect(found.status).toBe(200);
+    expect(found.body.results).toHaveLength(20);
+    expect(text(found.body)).not.toContain(SECRET);
     const capped = warn.mock.calls.filter(([message]) =>
-      String(message).includes("page cap"),
+      String(message).includes("scan cap"),
     );
     expect(capped).toHaveLength(1);
     expect(JSON.stringify(warn.mock.calls)).not.toContain(PART);
@@ -357,6 +378,51 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(
       stemmed.body.results.map((hit: { heading: string }) => hit.heading),
     ).toEqual(["Ключи › Аренда"]);
+  });
+
+  it("answers a negated secret word as any other negated word", async () => {
+    const nb = await notebookFixture();
+    const headings = async (query: string, as: "owner" | "agent" = "agent") => {
+      const found = await nb[as]("POST", "/search", { query, mode: "keyword" });
+      expect(found.status).toBe(200);
+      return (found.body.results as Hit[]).map((hit) => hit.heading);
+    };
+
+    // The owner's session decides `-word` on the stored text, as before.
+    expect(await headings(`ротация -${SECRET}`, "owner")).toEqual([]);
+    // Claude #388 B1: for the key the whole query is checked on the masked
+    // text, so a secret word and another word give the same answer.
+    expect(await headings(`ротация -${SECRET}`)).toEqual(["Ключи › Ротация"]);
+    expect(await headings("ротация -другое")).toEqual(["Ключи › Ротация"]);
+    // Only negations: a chunk with a secret cannot be judged and leaves.
+    expect(await headings(`-${SECRET}`)).toEqual(["Ключи › Аренда"]);
+    expect(await headings("-другое")).toEqual(["Ключи › Аренда"]);
+  });
+
+  it("gives an API key no hash or length of a raw source", async () => {
+    const nb = await notebookFixture();
+    // Claude #388 B3: the hash and the length of the raw text stay only on a
+    // repo-doc (the sync compares the hash; the text is in git).
+    const link = await nb.owner("PUT", "/sources", {
+      kind: "link",
+      ref: "https://example.com/keys",
+      title: "Ссылка",
+      text: `Ротация ключа ${SECRET} раз в квартал.`,
+    });
+    expect(link.status).toBe(200);
+    type Shape = { kind: string; contentSha256?: string; chars?: number };
+    const shapes = async (as: "owner" | "agent") =>
+      ((await nb[as]("GET", "/sources")).body.sources as Shape[]).map(
+        ({ kind, contentSha256, chars }) => [kind, !!contentSha256, !!chars],
+      );
+    expect(await shapes("owner")).toEqual([
+      ["link", true, true],
+      ["repo-doc", true, true],
+    ]);
+    expect(await shapes("agent")).toEqual([
+      ["link", false, false],
+      ["repo-doc", true, true],
+    ]);
   });
 
   it("hands chunks to the embedding worker masked", async () => {

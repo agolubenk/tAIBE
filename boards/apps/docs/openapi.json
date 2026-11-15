@@ -4404,7 +4404,8 @@
             }
           },
           "contentHash": {
-            "type": "string"
+            "type": "string",
+            "description": "sha256 of the stored body. Absent for a caller with a token: the body it reads is masked."
           },
           "compressor": {
             "type": "string"
@@ -4423,7 +4424,6 @@
           "title",
           "body",
           "sourceTaskIds",
-          "contentHash",
           "compressor",
           "revision",
           "createdAt"
@@ -6717,10 +6717,12 @@
                   "type": "string"
                 },
                 "contentSha256": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "sha256 of the stored text. Absent for a caller with a token, except for repo-doc."
                 },
                 "chars": {
-                  "type": "integer"
+                  "type": "integer",
+                  "description": "Length of the stored text. Absent for a caller with a token, except for repo-doc."
                 },
                 "updatedAt": {
                   "type": "string",
@@ -6738,8 +6740,6 @@
                 "kind",
                 "ref",
                 "title",
-                "contentSha256",
-                "chars",
                 "updatedAt",
                 "chunks",
                 "embedded"
@@ -25658,7 +25658,7 @@
           "Forest"
         ],
         "summary": "List or search logs",
-        "description": "Felled trees, newest first. `q` searches titles, descriptions and kept history.",
+        "description": "Felled trees, newest first. `q` searches titles, descriptions and kept history. For a caller with a token a page may hold fewer items than `take`, or none, while `nextCursor` is set: logs that match only inside a secret are skipped. Page on until `nextCursor` is null.",
         "parameters": [
           {
             "schema": {

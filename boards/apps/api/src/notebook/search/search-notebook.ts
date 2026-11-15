@@ -10,15 +10,14 @@ import { isWorkerOnline, requestQueryEmbedding } from "../embed/embed-queue";
 import { decodeEmbedding } from "../embed/embedding-codec";
 import { notebookEmbedModel } from "../../notebook-model/effective-notebook-model";
 import { fuseRanks, type RankedList } from "./fuse-ranks";
-import { matchesVisibleText } from "../../utils/visible-match";
 import { loadVectorIndex, nearestChunks } from "./vector-index";
 
 const CANDIDATES = 20;
-// TB-196: keyword pages a token caller's search reads past hidden chunks.
-// Hidden chunks are rare (27 of 6612 in the synced docs), so a search
-// reads one page, seldom two; the cap stops planted secret chunks from
-// making one search read the whole corpus.
-const HIDDEN_PAGES_MAX = 10;
+// TB-196: keyword candidates a token caller's search reads and ranks by the
+// text it reads. Hidden chunks are rare (27 of 6612 in the synced docs);
+// the cap stops planted secret chunks from making one search read the
+// whole corpus.
+const KEYWORD_SCAN_MAX = 200;
 // Longer than one worker batch, short enough that a stuck worker costs the
 // reader a few seconds of keyword-only results, not a hang.
 export const QUERY_EMBED_WAIT_MS = 4_000;
@@ -71,75 +70,100 @@ export async function searchNotebook(input: {
 }
 
 // TB-196: a caller with a token reads a chunk masked (the route masks the
-// response, TB-143). For it a keyword candidate that holds a secret stays
-// only if each query word is in its visible text, and the others leave the
-// list before the ranks are fused: else the hit, its `matchedBy` or the
-// ranks of the hits after it would tell that a secret holds the word
-// (backend lens #388 B2). Chunks with no secret keep the stemmed match (the
-// stored tsvector finds `ключ` for `ключами`, a substring test would not).
-// The search reads rank pages until it has 20 visible chunks or no rows:
-// with only the first 20 ranks, a hidden chunk that holds a guessed word
-// would push a visible one out, and the shorter list would confirm the
-// guess (release lens #388).
+// response, TB-143). For it a keyword candidate stays only if the query
+// matches the text that it reads: the stored tsvector for a chunk with no
+// secret, the tsvector of the masked text for a chunk with one. The others
+// leave the list before the ranks are fused: else the hit, its `matchedBy`
+// or the ranks of the hits after it would tell that a secret holds a word
+// (backend lens #388 B2).
+//
+// A word with `-` before it must be absent, and SQL decides that on the
+// stored tsvector, which holds the secret: `staging -<guess>` would drop a
+// chunk only if the guess is in its secret (Claude #388 B1). So the
+// candidates come from the indexable part of the query (`querytree`, the
+// query without its negations), and then the whole query is checked as
+// above. A query with nothing indexable (`-word`, `a or -b`) cannot be
+// judged on a hidden chunk: such chunks leave the list.
+//
+// The rank is of the same text, and the first 20 are taken only after all
+// candidates up to the cap are ranked: with the stored rank, `аренда or
+// <guess>` would put a chunk whose secret holds the guess first, and with
+// only the first ranks read, a hidden chunk would push a visible one out
+// (release lens #388).
 async function visibleKeywordCandidates(workspaceId: string, query: string) {
-  const visible: string[] = [];
-  for (let page = 0; page < HIDDEN_PAGES_MAX; page += 1) {
-    const ids = await keywordCandidates(workspaceId, query, page * CANDIDATES);
-    visible.push(...(await visibleKeywordIds(ids, query)));
-    if (visible.length >= CANDIDATES || ids.length < CANDIDATES) {
-      return visible.slice(0, CANDIDATES);
-    }
+  const rows = await indexableCandidates(workspaceId, query);
+  if (rows.length > KEYWORD_SCAN_MAX) {
+    // The query is not logged: it can hold a guess at a secret.
+    console.warn("Notebook search stopped at the scan cap of keyword hits", {
+      workspaceId,
+      rows: KEYWORD_SCAN_MAX,
+    });
   }
-  // The query is not logged: it can hold a guess at a secret.
-  console.warn("Notebook search stopped at the page cap past hidden chunks", {
-    workspaceId,
-    pages: HIDDEN_PAGES_MAX,
-  });
-  return visible.slice(0, CANDIDATES);
+  return visibleRanked(rows.slice(0, KEYWORD_SCAN_MAX), query);
 }
 
-async function visibleKeywordIds(ids: string[], query: string) {
-  if (!ids.length) return ids;
-  const rows = await db
+type Candidate = Awaited<ReturnType<typeof indexableCandidates>>[number];
+
+// The first 20 rows that the whole query matches in the text the caller
+// reads, by the rank in that text, then by id.
+async function visibleRanked(rows: Candidate[], query: string) {
+  const checked = rows.flatMap(
+    (row): { id: string; masked: string | null }[] => {
+      // The same text as the stored tsvector: heading, a space, text.
+      const masked = redact(`${row.heading} ${row.text}`);
+      if (!masked.hits.length) return [{ id: row.id, masked: null }];
+      return row.negationsOnly ? [] : [{ id: row.id, masked: masked.text }];
+    },
+  );
+  if (!checked.length) return [];
+  const result = await db.execute<{ id: string }>(sql`
+    SELECT t.id
+    FROM (VALUES ${sql.join(
+      checked.map((row) => sql`(${row.id}, ${row.masked}::text)`),
+      sql`, `,
+    )}) AS t(id, masked)
+    JOIN ${notebookChunkTable} c ON c.id = t.id
+    CROSS JOIN LATERAL (
+      SELECT coalesce(to_tsvector('russian', t.masked), c.search) AS seen
+    ) v
+    CROSS JOIN LATERAL (
+      SELECT websearch_to_tsquery('russian', ${query}) AS q
+    ) w
+    WHERE v.seen @@ w.q
+    ORDER BY ts_rank(v.seen, w.q) DESC, t.id
+    LIMIT ${CANDIDATES}
+  `);
+  return result.rows.map((row) => row.id);
+}
+
+// A token caller's candidates with their text, one row past the cap.
+// `querytree` is `T` when no part of the query can be looked up (only
+// negations).
+async function indexableCandidates(workspaceId: string, query: string) {
+  const full = sql`websearch_to_tsquery('russian', ${query})`;
+  const indexable = sql`(CASE WHEN querytree(${full}) = 'T' THEN ${full} ELSE querytree(${full})::tsquery END)`;
+  return db
     .select({
       id: notebookChunkTable.id,
       heading: notebookChunkTable.heading,
       text: notebookChunkTable.text,
+      negationsOnly: sql<boolean>`querytree(${full}) = 'T'`,
     })
     .from(notebookChunkTable)
-    .where(inArray(notebookChunkTable.id, ids));
-  const visible = new Set(
-    rows.filter((row) => keywordHitVisible(row, query)).map((row) => row.id),
-  );
-  return ids.filter((id) => visible.has(id));
+    .where(
+      and(
+        eq(notebookChunkTable.workspaceId, workspaceId),
+        sql`${notebookChunkTable.search} @@ ${indexable}`,
+      ),
+    )
+    .orderBy(
+      sql`ts_rank(${notebookChunkTable.search}, ${indexable}) desc`,
+      notebookChunkTable.id,
+    )
+    .limit(KEYWORD_SCAN_MAX + 1);
 }
 
-function keywordHitVisible(
-  row: { heading: string; text: string },
-  query: string,
-): boolean {
-  const passage = `${row.heading}\n${row.text}`;
-  if (!redact(passage).hits.length) return true;
-  return queryWords(query).every((word) => matchesVisibleText(passage, word));
-}
-
-// The words `websearch_to_tsquery` must find: no quotes, no `or`, and no
-// word with `-` before it (that one must be absent).
-function queryWords(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((word) => word && word !== "or" && !word.startsWith("-"))
-    .map((word) => word.replace(/^"+|"+$/g, ""))
-    .filter(Boolean);
-}
-
-// The id after the rank keeps the order the same from page to page.
-async function keywordCandidates(
-  workspaceId: string,
-  query: string,
-  offset = 0,
-) {
+async function keywordCandidates(workspaceId: string, query: string) {
   const tsquery = sql`websearch_to_tsquery('russian', ${query})`;
   const rows = await db
     .select({ id: notebookChunkTable.id })
@@ -154,8 +178,7 @@ async function keywordCandidates(
       sql`ts_rank(${notebookChunkTable.search}, ${tsquery}) desc`,
       notebookChunkTable.id,
     )
-    .limit(CANDIDATES)
-    .offset(offset);
+    .limit(CANDIDATES);
   return rows.map(({ id }) => id);
 }
 
