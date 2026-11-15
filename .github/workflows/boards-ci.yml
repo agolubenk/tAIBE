@@ -128,11 +128,12 @@ jobs:
           POSTGRES_USER: kaneo
           POSTGRES_PASSWORD: kaneo-ci-only # checks: allow-secret
           POSTGRES_DB: kaneo_test
-        ports: ["5432:5432"]
+        # Not 5432/5433: tests/api-integration/setup.ts refuses the ports of live databases (TB-145).
+        ports: ["55432:5432"]
         options: >-
           --health-cmd "pg_isready -U kaneo" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DATABASE_URL: postgresql://kaneo:kaneo-ci-only@localhost:5432/kaneo_test # checks: allow-secret
+      DATABASE_URL: postgresql://kaneo:kaneo-ci-only@localhost:55432/kaneo_test # checks: allow-secret
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
