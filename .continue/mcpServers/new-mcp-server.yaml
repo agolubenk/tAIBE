@@ -5,4 +5,4 @@ schema: v1
 mcpServers:
   - name: 1MCP — Continue
     type: streamable-http
-    url: http://127.0.0.1:3050/mcp?app=continue
+    url: http://127.0.0.1:3050/mcp?app=continue&tags=code,project,context,docs,git,db,boards
