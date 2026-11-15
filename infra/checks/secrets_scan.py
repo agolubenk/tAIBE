@@ -28,7 +28,9 @@ PATTERNS = [
     ('private-key', re.compile(r'-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----')),
     ('anthropic-key', re.compile(START + r'sk-ant-[A-Za-z0-9_-]{20,}')),
     ('openrouter-key', re.compile(START + r'sk-or-v1-[a-f0-9]{40,}')),
-    ('openai-key', re.compile(START + r'sk-(?:proj-)?[A-Za-z0-9]{32,}\b')),
+    # As `sk-` of redact: the body takes `_` and `-` (sk-proj-…, Claude lens #349). The body is the end check's class,
+    # so the first start takes the whole run. A key the two rules above report is not reported twice.
+    ('openai-key', re.compile(START + r'sk-(?!ant-|or-v1-[a-f0-9]{40})[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])')),
     ('google-api-key', re.compile(START + r'AIza[0-9A-Za-z_-]{35}\b')),
     # Also inside a Bot API URL (.../bot<token>/...): only a digit may not precede it.
     ('telegram-bot-token', re.compile(r'(?<![0-9])\d{8,10}:AA[A-Za-z0-9_-]{33}(?![A-Za-z0-9_-])')),
@@ -40,16 +42,19 @@ PATTERNS = [
     ('url-credentials', re.compile(r'\b[a-z][a-z0-9+.-]{0,31}://[^/\s:@"\'`]+:([^@\s/"\'`]{6,})@[^\s"\'`]+', re.I)),
     ('bearer-token', re.compile(r'(?i)\bAuthorization["\']?[ \t]*:[ \t]*["\']?Bearer[ \t]+([^\s"\'`]{12,})')),
 ]
+# TB-199, as redact: the separator is `=`, `:`, `:=` (Go, Pascal) or `=>` (PHP, Ruby, Perl); `==` and `===` compare.
+# A name right after `${` is a shell reference (${PASSWORD:?not set}), not an assignment.
+SEPARATOR = r'(?::=|=>|=(?!=)|:)'
 # A credential name in any case, also as the end of a longer name (x-api-key, "api_key" in JSON); quotes optional.
-ASSIGNED = re.compile(r'(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)'
-                      r'\b["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s,;]{12,})')
+ASSIGNED = re.compile(r'(?i)(?<!\$\{)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token'
+                      r'|private[_-]?key)\b["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;]{12,})')
 # Environment style, uppercase only: any NAME ending in API_KEY, TOKEN, SECRET or PASSWORD (T_BOARDS_API_KEY=,
 # GITHUB_TOKEN:). `\b` does not fire after `_`, so ASSIGNED misses these names. The name starts where a run of
 # [A-Z0-9_] starts, also after a lowercase prefix (foo_API_KEY, app_CLIENT_SECRET), and has at most 64 characters
 # before the suffix: an open [A-Z0-9_]* that may start after every `_` made a long run of `_` quadratic (64 000
 # characters: 12 s, TB-136 security lens).
-ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))'
-                          r'["\']?[ \t]*[:=][ \t]*["\'`]?([^"\'`\s,;]{12,})')
+ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])(?<!\$\{)([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))'
+                          r'["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;]{12,})')
 # Long runs of the base64 alphabet mixing upper, lower and digits with high entropy: encoded key material. The same
 # thresholds as the base64 rule in redact; hex digests are single-case and never reach it.
 BASE64 = re.compile(r'[A-Za-z0-9+/]{64,}={0,2}')
@@ -119,6 +124,38 @@ def secret_chars(value):
     return not (DOTTED_NAME.match(value) or JOINED_WORDS.match(value))
 
 
+# A character that drops every value holding it in `secret_chars`. A `>` right after `=` is the separator `=>` of
+# an inner name, not code.
+DROPS_VALUE = re.compile(r'[(){}\[\];,<\\]|(?<!=)>|[^\x21-\x7e]')
+NAME_CHARS = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-')
+# A name of at most 64 + 11 characters, a separator and a key of at most ~170 characters.
+INNER_TAIL = 256
+
+
+def resume_offset(value, reported):
+    """TB-198, as `collectGroup` of redact: where in the value the search for the next name goes on, or None.
+
+    - A rejected value: after its last DROPS_VALUE character, which drops every inner value too. With no such
+      character, in its last INNER_TAIL characters: unlike redact, a part of the value may pass where the whole
+      failed (the entropy floor, a placeholder word in its first part). An inner name with a key fits in the tail.
+      An inner match may end after the outer value, its separator past a space or a quote
+      (A_TOKEN=x(B_TOKEN = LONGER_C_TOKEN = <v>): the restart counts from the inner value, so the name in it is
+      read. From the value's start a run of `A_TOKEN:=` nested one inner value per name: 64 000 characters took
+      20 s.
+    - A reported value: at the run of name characters that ends it (a final `:` or `=` aside). That name has its
+      separator after the value, past a space or a quote (A_SECRET=fooB_SECRET: <v>)."""
+    if not reported:
+        last = None
+        for m in DROPS_VALUE.finditer(value):
+            last = m.end()
+        return last or max(0, len(value) - INNER_TAIL)
+    end = len(value) - 1 if value.endswith((':', '=')) else len(value)
+    start = end
+    while start > 0 and value[start - 1] in NAME_CHARS:
+        start -= 1
+    return start if start < end else None
+
+
 def is_base64_key(line, m):
     """`isBase64Key` of redact: mixed case and digits, high entropy; not a name, a data: URI, an SRI hash or a URL
     path (two or more lowercase-word segments: /dashboard/workspace/<id>/…)."""
@@ -150,16 +187,19 @@ def scan_line(line):
         return any(m.start(g) < end and start < m.end(g) for start, end in spans)
 
     for rx in (ASSIGNED, ENV_ASSIGNED):
-        for m in rx.finditer(line):
+        m = rx.search(line)
+        while m:
             value = m.group(2)
             if PASSWORD_NAME.search(m.group(1)):
                 shaped, floor = looks_like_password(value), 3.0 if PASSPHRASE.match(value) else 3.5
             else:
                 shaped, floor = looks_like_secret(value), 3.5
-            if covered(m, 2) or PLACEHOLDER.search(value) or not shaped or entropy(value) < floor:
-                continue
-            found.append(('literal %s' % m.group(1).lower(), value))
-            spans.append(m.span(2))
+            reported = not (covered(m, 2) or PLACEHOLDER.search(value) or not shaped or entropy(value) < floor)
+            if reported:
+                found.append(('literal %s' % m.group(1).lower(), value))
+                spans.append(m.span(2))
+            offset = resume_offset(value, reported)
+            m = rx.search(line, m.end() if offset is None else max(m.start() + 1, m.start(2) + offset))
     for m in BASE64.finditer(line):
         if not covered(m, 0) and is_base64_key(line, m):
             found.append(('base64-blob', m.group(0)))
