@@ -96,7 +96,12 @@ describe("API integration: task forms (TB-173)", () => {
       rowVersion: 0,
     });
     expect(draft.status).toBe(200);
-    expect(draft.body).toMatchObject({ status: "draft", rowVersion: 1 });
+    // The flat SaveFormAnswersResult of the openapi schema, no wrapper.
+    expect(draft.body).toEqual({
+      status: "draft",
+      rowVersion: 1,
+      submittedAt: null,
+    });
 
     const missing = await save({
       answers: doc({ agree: true }),
