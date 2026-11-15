@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,9 @@ sys.path.insert(0, HERE)
 import actions  # noqa: E402
 import budget  # noqa: E402
 import nerve  # noqa: E402
+import products  # noqa: E402
 import quorum  # noqa: E402
+import gh_source  # noqa: E402
 import sources  # noqa: E402
 from journal import DIGEST, NERVOUS, Journal, read_from  # noqa: E402
 
@@ -163,6 +166,29 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual(changes, ["корректность и отказы"])
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
 
+    def test_author_roles_add_second_sessions(self):
+        roles = CFG["team"]["roles"]
+        self.assertEqual(quorum.author_roles("backend", roles), ["backend", "backend-2"])
+        self.assertEqual(quorum.author_roles("frontend", roles), ["frontend", "frontend-2"])
+        self.assertEqual(quorum.author_roles("coord", roles), ["coord"])
+        self.assertEqual(quorum.author_roles("backend", ["backend"]), ["backend"])
+
+    def test_second_session_is_the_same_lens(self):
+        """Линза backend #324: approve от backend и backend-2 — одна линза. Кворум трёх линз — от трёх ролей."""
+        head = "abd008c5c" + "0" * 31
+        vs = [pv(f"{l}: approve на abd008c5c") for l in ("Бэкенд (роль 4)", "Бэкенд (роль 7)", "Линза плана (роль 2)")]
+        self.assertEqual([v["lens"] for v in vs], ["backend", "backend-2", "plan"])
+        ok, approved, _, _ = quorum.quorum(vs, head, ["SUCCESS"])
+        self.assertEqual((ok, approved), (False, ["backend", "plan"]))
+        ok, approved, _, ci = quorum.quorum(vs, head, ["IN_PROGRESS"])
+        self.assertLess(len(approved), 3, "await_ci (sources.py) считает те же approved")
+        ok, approved, _, _ = quorum.quorum(vs + [pv("Данные (роль 6): approve на abd008c5c")], head, ["SUCCESS"])
+        self.assertEqual((ok, approved), (True, ["backend", "boards", "plan"]))
+        ch = vs + [pv("Данные (роль 6): approve на abd008c5c"), pv("Бэкенд (роль 7): changes на abd008c5c")]
+        ok, approved, changes, _ = quorum.quorum(ch, head, ["SUCCESS"])
+        self.assertEqual((ok, approved, changes), (False, ["backend", "boards", "plan"], ["backend-2"]),
+                         "changes второй сессии блокирует и адресован ей")
+
     def test_later_verdict_of_a_lens_overrides(self):
         head = "abcdef1234"
         vs = [pv(x) for x in (
@@ -269,6 +295,16 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(sources.route_source("hr-helper-v2-85 (QA)", rules), "coord")
         self.assertEqual(sources.route_source("plan-13-10", rules), "plan")
 
+    def test_route_source_second_sessions(self):
+        """#324 B1: пункт второй сессии — её ключ, не базовой роли; правила стоят до базовых в обоих продуктах."""
+        shared, prods = products.load()
+        for slug in ("taibe", "hr-helper"):
+            rules = products.config_for(slug, shared, prods)["queue"]["source_roles"]
+            for src, role in (("backend-2 r.ab12", "backend-2"), ("Бэкенд-2 (роль 7) r.ab12", "backend-2"),
+                              ("Фронтенд-2 r.cd34", "frontend-2"), ("frontend (роль 8)", "frontend-2"),
+                              ("Бэкенд r.f93t", "backend"), ("Фронтенд (роль 3)", "frontend")):
+                self.assertEqual(sources.route_source(src, rules), role, (slug, src))
+
 
 class FakeCtx:
     def __init__(self, d):
@@ -294,17 +330,22 @@ class FakeGh:
     """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
     REPO = CFG["github"]["repo"]
 
-    def __init__(self, open_prs, merged=(), broken=(), etag='W/"e1"', comments=None):
-        self.open_prs, self.merged, self.broken, self.etag = open_prs, set(merged), set(broken), etag
+    def __init__(self, open_prs, merged=(), broken=(), comments=None, closed=(), ci=None):
+        self.open_prs, self.merged, self.broken = open_prs, set(merged), set(broken)
+        self.ci = ci or {}          # номер → статус CI в gh pr view; по умолчанию SUCCESS
+        self.closed = set(closed)   # закрыты без мёржа; остальные номера вне merged — OPEN
         self.comments = comments or {}
         self.calls = []
 
     def __call__(self, cmd, stdin=None, timeout=30):
         self.calls.append(list(cmd))
-        if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/pulls"):
-            if "-H" in cmd and self.etag in cmd[cmd.index("-H") + 1]:
-                return 1, "HTTP/2.0 304 Not Modified\r\n\r\n", ""
-            return 0, f"HTTP/2.0 200 OK\r\nEtag: {self.etag}\r\n\r\n" + json.dumps(self.open_prs), ""
+        if cmd[:3] == ["gh", "pr", "list"]:
+            if cmd[cmd.index("--repo") + 1] != self.REPO:
+                return 1, "", "GraphQL: Could not resolve to a Repository"
+            limit = int(cmd[cmd.index("--limit") + 1])
+            return 0, json.dumps([{"number": p["number"], "title": p["title"], "updatedAt": p["updated_at"],
+                                   "createdAt": p["created_at"], "headRefOid": p["head"]["sha"]}
+                                  for p in self.open_prs[:limit]]), ""
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
             n = int(cmd[-1].split("/")[4])
             return 0, json.dumps([{"id": i, "body": b} for i, b in enumerate(self.comments.get(n, []))]), ""
@@ -314,15 +355,16 @@ class FakeGh:
                 return 1, "", f"GraphQL: Could not resolve to a PullRequest with the number of {n}."
             if n in self.broken:
                 return 1, "", "HTTP 502"
-            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": "SUCCESS"}],
-                 "state": "MERGED" if n in self.merged else "OPEN", "mergedAt": "2026-11-04T15:55:00Z"
-                 if n in self.merged else None}
+            state = "MERGED" if n in self.merged else "CLOSED" if n in self.closed else "OPEN"
+            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": self.ci.get(n, "SUCCESS")}],
+                 "state": state, "mergedAt": "2026-11-04T15:55:00Z" if state == "MERGED" else None,
+                 "closedAt": None if state == "OPEN" else "2026-11-04T15:55:00Z"}
             return 0, json.dumps(d), ""
         raise AssertionError(f"неожиданный вызов: {cmd}")
 
 
-def _pr(n, sha, upd="2026-11-04T10:00:00Z"):
-    return {"number": n, "title": f"PR {n}", "updated_at": upd, "head": {"sha": sha}}
+def _pr(n, sha, upd="2026-11-04T10:00:00Z", created=""):
+    return {"number": n, "title": f"PR {n}", "updated_at": upd, "head": {"sha": sha}, "created_at": created}
 
 
 class GithubPollTest(unittest.TestCase):
@@ -340,12 +382,12 @@ class GithubPollTest(unittest.TestCase):
     def test_every_gh_call_names_the_repo(self):
         fake = FakeGh([_pr(458, "a" * 40)])
         sources.run = fake
-        files, checks, state, _ = sources._gh_view(FakeGh.REPO, 458)
+        files, checks, state, _, _ = gh_source._gh_view(FakeGh.REPO, 458)
         self.assertEqual((files, checks, state), (["apps/backend/src/x.ts"], ["SUCCESS"], "OPEN"))
-        sources.poll_github(self.ctx)
+        gh_source.poll_github(self.ctx)
         self.assertTrue(fake.calls)
         for c in fake.calls:
-            if c[:3] == ["gh", "pr", "view"]:
+            if c[:3] in (["gh", "pr", "view"], ["gh", "pr", "list"]):
                 self.assertEqual(c[c.index("--repo") + 1], FakeGh.REPO, c)
             else:
                 self.assertTrue(c[-1].startswith(f"repos/{FakeGh.REPO}/"), c)
@@ -362,18 +404,40 @@ class GithubPollTest(unittest.TestCase):
             "**Линза «корректность и отказы» (роль 4) — ACCEPT на 2bc2b66ff**",
             "**Контроль (роль 5: безопасность · отказы · поставка) — ACCEPT на голове `2bc2b66ff`**"]})
         sources.run = fake
-        sources.poll_github(self.ctx)
+        gh_source.poll_github(self.ctx)
         kinds = [k for k, _ in self.kinds()]
         self.assertNotIn("pr.changes", kinds)
         self.assertIn("pr.quorum", kinds)
         self.assertEqual(self.ctx.state["github"]["prs"]["478"]["changes_by"], [])
 
+    def test_second_session_approve_does_not_make_quorum(self):
+        """Линза backend #324: backend + backend-2 + plan — две линзы: ни pr.quorum, ни await_ci."""
+        head = "abd008c5c" + "0" * 31
+        three = ["Бэкенд (роль 4): approve на abd008c5c", "Бэкенд (роль 7): approve на abd008c5c",
+                 "Линза плана (роль 2): approve на abd008c5c"]
+        sources.run = FakeGh([_pr(324, head)], comments={324: three})
+        gh_source.poll_github(self.ctx)
+        p = self.ctx.state["github"]["prs"]["324"]
+        self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+        self.assertFalse(p["await_ci"])
+        sources.run = FakeGh([_pr(324, head, "2026-11-04T11:00:00Z")],
+                             comments={324: three + ["Данные (роль 6): approve на abd008c5c"]})
+        gh_source.poll_github(self.ctx)
+        self.assertIn(("pr.quorum", "#324 собран: approve backend, boards, plan на abd008c5c, CI ok"), self.kinds())
+
+    def test_changes_reach_the_author_role_and_its_second_session(self):
+        """#324 B2: автор по путям — базовая роль; changes доходит и до второй сессии (PR могла открыть она)."""
+        sources.run = FakeGh([_pr(480, "c" * 40)], comments={480: ["**Линза плана (роль 2) — CHANGES на ccccccc**"]})
+        gh_source.poll_github(self.ctx)
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.changes"]
+        self.assertEqual([e["to"] for e in rec], [["backend", "backend-2"]])
+
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
-        sources.poll_github(self.ctx)
+        gh_source.poll_github(self.ctx)
         self.assertEqual(self.ctx.state["github"]["prs"]["479"]["changes_by"], ["backend"])
-        sources.run = FakeGh([_pr(479, "b" * 40, "2026-11-04T11:00:00Z")], etag='W/"e2"')
-        sources.poll_github(self.ctx)
+        sources.run = FakeGh([_pr(479, "b" * 40, "2026-11-04T11:00:00Z")])
+        gh_source.poll_github(self.ctx)
         rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.newhead"]
         self.assertEqual([e["to"] for e in rec], [["backend"]])
 
@@ -382,12 +446,13 @@ class GithubPollTest(unittest.TestCase):
         self.ctx.state["github"] = {"etag": 'W/"e1"', "prs": {"457": {"head": "b" * 40, "updated": "x",
                                                                        "seen": [], "changes_by": []}}}
         sources.run = FakeGh([], merged={457})
-        sources.poll_github(self.ctx)
+        gh_source.poll_github(self.ctx)
         st = self.ctx.state["github"]
         self.assertNotIn("457", st["prs"])
         self.assertIn(("pr.closed", "#457 влит"), self.kinds())
-        self.assertEqual((st["rev"], st["etag"]), (sources.GH_STATE_REV, 'W/"e1"'))
-        sources.poll_github(self.ctx)  # второй проход — 304, повторного «влит» нет
+        self.assertEqual(st["rev"], gh_source.GH_STATE_REV)
+        self.assertNotIn("etag", st, "etag REST-страницы снят (SE-119)")
+        gh_source.poll_github(self.ctx)  # второй проход — тот же список, повторного «влит» нет
         self.assertEqual(self.kinds().count(("pr.closed", "#457 влит")), 1)
 
     def test_stuck_open_pr_without_author_is_resolved_after_upgrade(self):
@@ -396,36 +461,134 @@ class GithubPollTest(unittest.TestCase):
         self.ctx.state["github"] = {"etag": 'W/"e1"', "prs": {"458": {"head": sha, "updated": upd,
                                                                        "seen": [], "changes_by": []}}}
         sources.run = FakeGh([_pr(458, sha, upd)])
-        sources.poll_github(self.ctx)
+        gh_source.poll_github(self.ctx)
         p = self.ctx.state["github"]["prs"]["458"]
         self.assertEqual(p.get("checks"), ["SUCCESS"])
         self.assertIn("author", p)
 
     def test_one_failing_pr_does_not_stop_the_pass_and_is_retried(self):
         sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)], merged={9}, broken={1})
-        self.ctx.state["github"] = {"etag": "", "rev": sources.GH_STATE_REV,
+        self.ctx.state["github"] = {"etag": "", "rev": gh_source.GH_STATE_REV,
                                     "prs": {"9": {"head": "e" * 40, "updated": "x", "seen": [], "changes_by": []}}}
         with self.assertRaisesRegex(RuntimeError, r"PR с ошибкой: 1; #1: gh pr view"):
-            sources.poll_github(self.ctx)
+            gh_source.poll_github(self.ctx)
         st = self.ctx.state["github"]
         self.assertIn("author", st["prs"]["2"], "#2 разобран, хотя #1 упал раньше")
         self.assertNotIn("9", st["prs"], "цикл закрытых прошёл")
         self.assertEqual((st["prs"]["1"]["head"], st["prs"]["1"]["updated"]), ("", ""), "#1 не считается увиденным")
-        self.assertEqual(st["etag"], "", "без etag следующий проход берёт полный список, а не 304")
         sources.run = FakeGh([_pr(1, "c" * 40), _pr(2, "d" * 40)])
-        sources.poll_github(self.ctx)
+        gh_source.poll_github(self.ctx)
         self.assertIn("author", st["prs"]["1"])
-        self.assertEqual(st["etag"], 'W/"e1"')
         self.assertEqual(self.kinds().count(("pr.new", "#1 открыт: PR 1")), 1, "повтор не дублирует событие")
 
     def test_closed_pr_that_fails_stays_for_retry(self):
         sources.run = FakeGh([], broken={7})
-        self.ctx.state["github"] = {"etag": "", "rev": sources.GH_STATE_REV,
+        self.ctx.state["github"] = {"etag": "", "rev": gh_source.GH_STATE_REV,
                                     "prs": {"7": {"head": "f" * 40, "updated": "x", "seen": [], "changes_by": []}}}
         with self.assertRaises(RuntimeError):
-            sources.poll_github(self.ctx)
+            gh_source.poll_github(self.ctx)
         self.assertIn("7", self.ctx.state["github"]["prs"])
         self.assertNotIn("pr.closed", [k for k, _ in self.kinds()])
+
+    def _known(self, *ns):
+        return {str(n): {"head": "a" * 40, "updated": "2026-11-04T10:00:00Z", "seen": [], "changes_by": [],
+                         "author": "backend", "checks": []} for n in ns}
+
+    def test_one_list_call_covers_all_open_prs(self):
+        """Дайджест 14.11 18:32: «#267 закрыт» при открытом PR — читалась одна страница из 50 при 161 открытом.
+        SE-119: весь список — один gh pr list с нужными полями, без REST-страниц на 3,45 МБ."""
+        self.ctx.state["github"] = {"etag": 'W/"e1"', "rev": gh_source.GH_STATE_REV,
+                                    "prs": self._known(1, 2, 3, 4, 5)}
+        fake = FakeGh([_pr(n, "a" * 40) for n in (1, 2, 3, 4, 5)])
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        lists = [c for c in fake.calls if c[:3] == ["gh", "pr", "list"]]
+        self.assertEqual(lists, [["gh", "pr", "list", "--repo", FakeGh.REPO, "--state", "open", "--limit", "1000",
+                                  "--json", "number,headRefOid,updatedAt,createdAt,title"]])
+        self.assertFalse([c for c in fake.calls if c[:2] == ["gh", "api"]], "PR не менялись: ни списка REST, "
+                         "ни комментариев")
+        self.assertNotIn("etag", self.ctx.state["github"])
+        self.assertEqual(sorted(self.ctx.state["github"]["prs"]), ["1", "2", "3", "4", "5"])
+        self.assertNotIn("pr.closed", [k for k, _ in self.kinds()])
+        self.assertFalse([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]], "все в списке: разбирать нечего")
+
+    def test_open_pr_missing_from_the_list_stays(self):
+        # Потолок страниц или сдвиг списка между страницами: PR нет в списке, но gh pr view говорит OPEN.
+        self.ctx.state["github"] = {"etag": "", "rev": gh_source.GH_STATE_REV, "prs": self._known(267, 300)}
+        sources.run = FakeGh([_pr(300, "a" * 40)], closed={268})
+        gh_source.poll_github(self.ctx)
+        self.assertIn("267", self.ctx.state["github"]["prs"])
+        self.assertNotIn("pr.closed", [k for k, _ in self.kinds()])
+
+    def test_real_close_after_a_false_one_is_reported(self):
+        # rev 2 записал ложный ключ gh:closed:268; настоящее закрытие — другой ключ, событие доходит.
+        self.ctx.emit("gh:closed:268", "pr.closed", DIGEST, ["coord"], "#268 закрыт", "github")
+        self.ctx.state["github"] = {"etag": "", "rev": gh_source.GH_STATE_REV, "prs": self._known(268)}
+        sources.run = FakeGh([], closed={268})
+        gh_source.poll_github(self.ctx)
+        self.assertEqual(self.kinds().count(("pr.closed", "#268 закрыт")), 2)
+        self.assertNotIn("268", self.ctx.state["github"]["prs"])
+
+    def test_quorum_waiting_for_ci_is_rechecked_while_the_pr_is_unchanged(self):
+        """SE-119: CI доезжает, не меняя PR. Раньше такой PR перепроверялся только на 304, а его почти не было."""
+        head = "d" * 40
+        three = [f"{x}: approve на ddddddd" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        sources.run = FakeGh([_pr(481, head)], comments={481: three}, ci={481: "IN_PROGRESS"})
+        gh_source.poll_github(self.ctx)
+        self.assertTrue(self.ctx.state["github"]["prs"]["481"]["await_ci"])
+        self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+        idle = FakeGh([_pr(481, head)], comments={481: three}, ci={481: "IN_PROGRESS"})
+        sources.run = idle
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([c[:3] for c in idle.calls if c[:2] != ["gh", "pr"] or c[2] != "list"],
+                         [["gh", "pr", "view"]], "CI идёт: только статус проверок, комментарии не читаются (#292: 54 КБ)")
+        self.assertTrue(self.ctx.state["github"]["prs"]["481"]["await_ci"])
+        fake = FakeGh([_pr(481, head)], comments={481: three})
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        self.assertIn(("pr.quorum", "#481 собран: approve backend, boards, plan на ddddddddd, CI ok"), self.kinds())
+        self.assertFalse(self.ctx.state["github"]["prs"]["481"]["await_ci"])
+        gh_source.poll_github(self.ctx)
+        self.assertEqual(len([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]), 1, "CI доехал: дальше без view")
+
+    def test_upgrade_backfill_is_capped_and_says_open_only_for_new_prs(self):
+        old = [_pr(n, "b" * 40, created="2026-11-01T10:00:00Z") for n in range(1, 26)]
+        self.ctx.state["github"] = {"etag": 'W/"e1"', "rev": 2, "prs": {}}
+        sources.run = FakeGh(old)
+        gh_source.poll_github(self.ctx)
+        st = self.ctx.state["github"]
+        self.assertEqual(len(st["prs"]), gh_source.GH_NEW_PER_PASS)
+        self.assertEqual(st["rev"], gh_source.GH_STATE_REV)
+        self.assertIn("backfill", st)
+        new = _pr(26, "c" * 40, created="2999-01-01T00:00:00Z")
+        sources.run = FakeGh(old + [new])
+        gh_source.poll_github(self.ctx)
+        self.assertEqual(len(st["prs"]), 26)
+        self.assertNotIn("backfill", st)
+        self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], ["#26 открыт: PR 26"])
+
+    def test_pr_opened_during_a_restart_gap_says_open(self):
+        """SE-120: граница догона — самое позднее updated известных PR, а не старт нового процесса. PR, открытый
+        в паузе перезапуска, получает «открыт»; давний PR, впервые увиденный новым кодом, — нет."""
+        known = self._known(1)
+        known["1"]["updated"] = "2026-11-05T00:00:00Z"
+        self.ctx.state["github"] = {"rev": 2, "prs": known}
+        sources.run = FakeGh([_pr(1, "a" * 40, "2026-11-05T00:00:00Z"),
+                              _pr(2, "b" * 40, created="2026-11-05T00:05:00Z"),
+                              _pr(3, "c" * 40, created="2026-11-04T10:00:00Z")])
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], ["#2 открыт: PR 2"])
+        self.assertEqual(sorted(self.ctx.state["github"]["prs"]), ["1", "2", "3"])
+
+    def test_backfill_boundary_ignores_bad_dates_and_the_future(self):
+        p = lambda u: {"updated": u}  # noqa: E731
+        since = gh_source._backfill_since
+        self.assertEqual(since({"1": p("2026-11-04T10:00:00Z"), "2": p("2026-11-05T00:00:00Z"), "3": p("x"),
+                                "4": p("")}), "2026-11-05T00:00:00Z")
+        now = since({})
+        self.assertRegex(now, gh_source.ISO_RE)
+        self.assertLess(since({"1": p("2999-01-01T00:00:00Z")}), "2999", "не позже текущего момента")
+        self.assertEqual(since({"1": p("x")})[:4], now[:4], "нет дат — сейчас, как до SE-120")
 
 
 class LimitActionTest(unittest.TestCase):
@@ -600,16 +763,38 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "emit", "backend, release,4", "двум").returncode, 0)
             self.assertEqual(self.nerve(d, "emit", "plan,frontend,backend,release,boards", "пятерым").returncode, 0)
             to = [sorted(r["to"]) for r in self.records(d)]
-            self.assertEqual(to, [["boards"], ["backend", "release"], sorted(CFG["team"]["roles"][1:])])
+            self.assertEqual(to, [["boards"], ["backend", "release"], ["backend", "boards", "frontend", "plan", "release"]])
             out = self.nerve(d, "tap", "boards", "--once").stdout
             self.assertIn("роль 6: одна", out, "tap 6 и tap boards — один курсор")
             self.assertIn("пятерым", out)
             self.assertNotIn("двум", out)
 
+    def test_second_session_has_its_own_cursor(self):
+        """backend-2 (роль 7): emit «backend» до неё не доходит (нет двойной работы), «all» — доходит обеим."""
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "journal.jsonl"), "w").close()
+            wj(os.path.join(d, "state.json"), {"heartbeat": datetime.now(timezone.utc).isoformat()})
+            for role in ("backend", "backend-2"):
+                self.assertEqual(self.nerve(d, "tap", role, "--once").stdout, "")  # курсоры — с конца журнала
+            self.assertEqual(self.nerve(d, "emit", "backend", "только первой").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "7", "только второй").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "frontend-2,backend-2", "вторым").returncode, 0)
+            self.assertEqual(self.nerve(d, "emit", "all", "всем").returncode, 0)
+            self.assertEqual([sorted(r["to"]) for r in self.records(d)][1:3], [["backend-2"], ["backend-2", "frontend-2"]])
+            first = self.nerve(d, "tap", "backend", "--once").stdout
+            second = self.nerve(d, "tap", "backend-2", "--once").stdout
+            self.assertIn("только первой", first)
+            self.assertNotIn("только второй", first)
+            self.assertNotIn("только первой", second)
+            self.assertIn("только второй", second)
+            self.assertIn("вторым", second)
+            self.assertIn("всем", first)
+            self.assertIn("всем", second)
+
     def test_emit_refuses_unknown_role(self):
         with tempfile.TemporaryDirectory() as d:
             open(os.path.join(d, "journal.jsonl"), "w").close()
-            for target in ("tboards", "7", "backend,review", ","):
+            for target in ("tboards", "9", "backend-3", "backend,review", ","):
                 p = self.nerve(d, "emit", target, "никому")
                 self.assertEqual(p.returncode, 2, target)
                 self.assertIn("ничего не записано", p.stderr, target)
@@ -621,7 +806,7 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "tap", "backend,release", "--once").returncode, 2)
             self.assertEqual(self.nerve(d, "tap", "selftest", "--once").returncode, 0, "split/6-verify.sh")
             self.assertTrue(os.path.exists(os.path.join(d, "tap-selftest.json")))
-            for n in ("0", "7", "99"):
+            for n in ("0", "9", "99"):
                 self.assertEqual(self.nerve(d, "tap", n, "--once").returncode, 2, f"emit не запишет «{n}»")
                 self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
 
@@ -782,6 +967,18 @@ class ProductsTest(unittest.TestCase):
         self.assertIn("owner.stop", [k for k, _ in hr])
         self.assertNotIn("owner.inbox", [k for k, _ in tb], "R-7: входящее — одному coord продукта по умолчанию")
 
+    def test_owner_answer_on_taibe_item_with_console_default_product(self):
+        """SE-88: консоль даёт `d-taibe-…` поле `product: hr-helper` (id не начинается с `taibe-`) — ответ всё равно
+        в журнал tAIBE, координатору HR — ничего."""
+        self.taibe["queue"] = dict(CFG["queue"], match="-taibe-", source_roles=[["taibe-59", "coord"]])
+        ctx = self.peered()
+        items = [{"id": "d-taibe-se44-1311", "product": "hr-helper", "data": {"kind": "decision", "source": "taibe-59"}}]
+        checks = [{"id": "d-taibe-se44-1311", "data": {"choice": "A", "at": "2026-11-13T20:08:00Z"}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            sources.poll_queue(ctx)
+        self.assertEqual([(r["kind"], r["to"]) for r in self.records("taibe")], [("owner.answer", ["coord"])])
+        self.assertEqual([r for r in self.records() if r["kind"] == "owner.answer"], [])
+
     def test_failing_peer_does_not_break_default_events(self):
         """Линза 1: сбой журнала продукта — в его errors; событие и состояние продукта по умолчанию — как без продуктов."""
         ctx = self.peered()
@@ -811,17 +1008,64 @@ class ProductsTest(unittest.TestCase):
         self.assertFalse(ctx.peers["taibe"].deliver, "после простоя — снова seed")
 
     def test_item_product_field_wins_over_id(self):
-        """Мост: продукт пункта выбирает владелец (поле `product` документа, v2-lite) — оно важнее метки в id;
-        входящее с продуктом — coord этого продукта и стоп только туда."""
+        """Мост: поле `product` документа с продуктом из peers важнее метки в id; входящее с продуктом — coord этого
+        продукта и стоп только туда. Поле с продуктом по умолчанию метку `-taibe-` не перебивает (SE-88)."""
+        self.taibe["queue"] = dict(CFG["queue"], match="-taibe-")
         ctx = self.peered()
         self.assertIs(ctx.for_item("s-set-control-b1-0711", "taibe"), ctx.peers["taibe"])
-        self.assertIs(ctx.for_item("d-taibe-m1m2-0411", "hr-helper"), ctx)
+        self.assertIs(ctx.for_item("d-taibe-m1m2-0411", "hr-helper"), ctx.peers["taibe"])
+        self.assertIs(ctx.for_item("d-465", "hr-helper"), ctx)
+        self.assertIs(ctx.for_item("d-taibe-1", "gone"), ctx.peers["taibe"], "неизвестный продукт — по метке")
         items = [{"id": "i-2", "product": "taibe",
                   "data": {"kind": "inbox", "inbox": {"text": "стоп", "urgency": "now"}}}]
         with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else [], {})):
             sources.poll_queue(ctx)
         self.assertEqual(sorted(r["kind"] for r in self.records("taibe")), ["owner.inbox", "owner.stop"])
         self.assertEqual(self.records(), [], "входящее tAIBE не будит coord HR")
+
+    def test_queue_match_is_a_regex(self):
+        """SE-109: `queue.match` — регулярное выражение. `m-taibe310-1411` (метка без дефиса после продукта) — tAIBE,
+        а не координатору HR; HR-пункты и чужие слова с `taibe` внутри — продукту по умолчанию."""
+        self.taibe["queue"] = dict(CFG["queue"], match=r"-taibe(-|\d|$)", source_roles=[["taibe-310", "release"]])
+        ctx = self.peered()
+        for item_id in ("m-taibe310-1411", "d-taibe-x", "s-restart-4-taibe-1211", "m-taibe-79", "s-restart-taibe"):
+            self.assertIs(ctx.for_item(item_id, "hr-helper"), ctx.peers["taibe"], item_id)
+        self.assertIs(ctx.for_item("taibe-m-93", "taibe"), ctx.peers["taibe"], "начало id — полем product")
+        for item_id in ("d-hr-x-1411", "d-1", "m-465", "d-taibeta-1", "taibe-m-93"):
+            self.assertIs(ctx.for_item(item_id, "hr-helper"), ctx, item_id)
+        items = [{"id": "m-taibe310-1411", "product": "hr-helper", "data": {"kind": "merge", "source": "taibe-310"}}]
+        checks = [{"id": "m-taibe310-1411", "data": {"done": True, "at": "2026-11-14T18:00:00Z"}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            sources.poll_queue(ctx)
+        self.assertEqual([(r["kind"], r["to"]) for r in self.records("taibe")], [("owner.answer", ["release"])])
+        self.assertEqual([r for r in self.records() if r["kind"] == "owner.answer"], [])
+
+    def test_answer_in_another_journal_is_not_repeated(self):
+        """SE-109, линза boards: ответ, уже записанный в журнал HR по старому правилу, после смены `queue.match` в
+        журнал tAIBE не идёт; новый ответ на тот же пункт (другое `at`) — идёт."""
+        self.taibe["queue"] = dict(CFG["queue"], match=r"-taibe(-|\d|$)", source_roles=[["taibe-310", "release"]])
+        ctx = self.peered()
+        old_at, new_at = "2026-11-14T13:41:36.560Z", "2026-11-14T19:00:00Z"
+        ctx.journal.emit(f"oq:answer:m-taibe310-1411:{old_at}", "owner.answer", NERVOUS, ["coord"], "старое", "queue")
+        items = [{"id": "m-taibe310-1411", "product": "hr-helper", "data": {"kind": "merge", "source": "taibe-310"}}]
+        checks = [{"id": "m-taibe310-1411", "data": {"done": True, "at": old_at}}]
+        poll = lambda: sources.poll_queue(ctx)  # noqa: E731
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            poll()
+        self.assertEqual([r for r in self.records("taibe") if r["kind"] == "owner.answer"], [])
+        self.assertEqual(len([r for r in self.records() if r["kind"] == "owner.answer"]), 1, "в HR — только старое")
+        checks = [{"id": "m-taibe310-1411", "data": {"done": True, "at": new_at}}]
+        with mock.patch.object(sources, "_oq_get", side_effect=lambda c, col: (items if col == "items" else checks, {})):
+            poll()
+        self.assertEqual([r["key"] for r in self.records("taibe") if r["kind"] == "owner.answer"],
+                         [f"oq:answer:m-taibe310-1411:{new_at}"])
+
+    def test_broken_queue_match_falls_back_to_substring(self):
+        """SE-109: битое выражение (минуя проверку `products.py`) не роняет обход очереди — сравнение подстрокой."""
+        self.taibe["queue"] = dict(CFG["queue"], match="-taibe[")
+        ctx = self.peered()
+        self.assertIs(ctx.for_item("d-taibe[-1"), ctx.peers["taibe"])
+        self.assertIs(ctx.for_item("d-taibe-1"), ctx)
 
     def test_broken_instances_keeps_last_good_products(self):
         """Линза 1: сбой instances/ на проходе — событие release и продукты последней удачной загрузки."""
@@ -910,7 +1154,7 @@ class RoleNumberingTest(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             body = re.search(r"^role_num\(\) \{\n(.*?)^\}", f.read(), re.S | re.M)
         self.assertIsNotNone(body, f"role_num() not found in {path}")
-        numbered = {key: int(n) for key, n in re.findall(r"(\w+)\) echo (\d+)", body.group(1))}
+        numbered = {key: int(n) for key, n in re.findall(r"([\w-]+)\) echo (\d+)", body.group(1))}
         expected = {key: i for i, key in enumerate(CFG["team"]["roles"], 1)}
         self.assertEqual(numbered, expected)
 

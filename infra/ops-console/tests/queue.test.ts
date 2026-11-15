@@ -92,10 +92,71 @@ describe('документы и права', () => {
     expect((await bearer(reader).get('/db/items')).status).toBe(200)
     const noScope = await createToken('agent-only', ['agent'])
     expect((await bearer(noScope.token).get('/db/items')).status).toBe(200)
+    await revokeToken(noScope.id) // токен теста не переживает тест (GLM-ревью #221)
     expect((await app.request('/api/oq/v1/db/items/d-test', { method: 'DELETE', headers: { Authorization: `Bearer ${agent}` } })).status).toBe(403)
     const t = await createToken('temp', ['agent'])
     await revokeToken(t.id)
     expect((await bearer(t.token).get('/db/items')).status).toBe(401)
+  })
+
+  it('пустая правка (GLM-ревью #221): 422 — ни нового документа, ни роста версии; правка со своими полями и release работают', async () => {
+    const a = bearer(agent)
+    expect((await a.patch('/db/checks/d-empty-agent', { data: {} })).status).toBe(422)
+    expect((await a.get('/db/checks/d-empty-agent')).status).toBe(404)
+    // Только серверные поля (их значения не принимаются) — тоже пусто.
+    expect((await a.patch('/db/checks/d-empty-agent', { data: { agentAt: '2026-01-01T00:00:00Z' } })).status).toBe(422)
+    expect((await a.get('/db/checks/d-empty-agent')).status).toBe(404)
+    const before = (await a.get('/db/items/d-test')).json.version as number
+    const empty = await a.patch('/db/items/d-test', { data: {} })
+    expect(empty.status).toBe(422)
+    expect(empty.json.error).toContain('Пустая правка')
+    expect((await a.get('/db/items/d-test')).json.version).toBe(before)
+    // oq_agent_status на пункт без ответа владельца — как раньше: создаёт checks/<id> со своими полями.
+    const status = await a.patch('/db/checks/d-empty-agent', { data: { agentStatus: 'planned', agentNote: 'возьму утром' } })
+    expect(status.status).toBe(200)
+    expect(status.json.data).toMatchObject({ agentStatus: 'planned', agentNote: 'возьму утром' })
+  })
+
+  it('лимит записи (120 в минуту) не съедают отказы 4xx: 130 ответов 409 подряд, затем запись — 200 (GLM-ревью #221)', async () => {
+    const t = await createToken('quota-4xx', ['read', 'agent'])
+    const a = bearer(t.token)
+    expect((await a.put('/db/items/d-quota', { data: decision })).status).toBe(200)
+    for (let i = 0; i < 130; i++) expect((await a.patch('/db/items/d-quota', { data: { title: `x${i}` }, ifVersion: 99 })).status).toBe(409)
+    expect((await a.patch('/db/items/d-quota', { data: { title: 'после отказов' } })).status).toBe(200)
+    // Успешные записи по-прежнему считаются: 120-я в минуту — последняя, 121-я — 429.
+    let last = 0
+    for (let i = 0; i < 125 && last !== 429; i++) last = (await a.patch('/db/items/d-quota', { data: { title: `y${i}` } })).status
+    expect(last).toBe(429)
+    await revokeToken(t.id)
+  })
+
+  it('все попытки записи, отказы тоже, — не больше 600 в минуту: цикл 409 упирается в 429 (линзы backend и Контроля #361)', async () => {
+    const t = await createToken('attempts-4xx', ['read', 'agent'])
+    const a = bearer(t.token)
+    expect((await a.put('/db/items/d-attempts', { data: decision })).status).toBe(200)
+    const codes: number[] = []
+    for (let i = 0; i < 600; i++) codes.push((await a.patch('/db/items/d-attempts', { data: { title: `x${i}` }, ifVersion: 99 })).status)
+    expect(codes.slice(0, 599).every((c) => c === 409)).toBe(true) // 1 запись + 599 отказов — в пределе 600
+    expect(codes[599]).toBe(429)
+    const over = await a.patch('/db/items/d-attempts', { data: { title: 'после' } })
+    expect(over.status).toBe(429)
+    expect(over.json.error).toContain('попыток записи')
+    await revokeToken(t.id)
+  })
+
+  it('createdAt пункта не меняется при правке, updatedAt — растёт: порядок /queue «от старых к новым» (замечание владельца 14.11)', async () => {
+    const a = bearer(agent)
+    const put = await a.put('/db/items/d-created', { data: decision })
+    expect(put.status).toBe(200)
+    expect(put.json.createdAt).toBe(put.json.updatedAt)
+    await new Promise((r) => setTimeout(r, 5))
+    const patch = await a.patch('/db/items/d-created', { data: { title: 'Поправлено' } })
+    expect(patch.status).toBe(200)
+    expect(patch.json.createdAt).toBe(put.json.createdAt)
+    expect(patch.json.updatedAt).toBeGreaterThan(put.json.updatedAt)
+    const listed = (await a.get('/db/items')).json.docs.find((d: any) => d.id === 'd-created')
+    expect(listed.createdAt).toBe(put.json.createdAt)
+    expect((await a.get('/db/items/d-created')).json.createdAt).toBe(put.json.createdAt)
   })
 
   it('planEnd агент не переписывает без basePlanEnd', async () => {
@@ -863,6 +924,34 @@ describe('мёрж из очереди', () => {
     const check = await bearer(agent).get('/db/checks/m-162')
     expect(check.json.data.done).toBe(true)
     expect((await post('m-162', SHA)).status).toBe(429)
+  })
+
+  it('два POST /merge почти одновременно (двойной клик, страница и бот) — один PUT в GitHub, второму 429 «мёрж уже идёт» (Q-35)', async () => {
+    // Медленный GitHub: пока первый запрос ждёт ответа на GET PR, второй уже прошёл бы прежнюю проверку интервала.
+    let puts = 0
+    const slow = async (method: string, path: string, token: string, body?: unknown): Promise<GithubResponse> => {
+      await new Promise((r) => setTimeout(r, 30))
+      if (method === 'PUT') puts++
+      return github(method, path, token, body)
+    }
+    setGithubTransportForTests(slow)
+    const version = (await bearer(agent).get('/db/items/m-170')).json.version as number
+    const [a, b] = await Promise.all([
+      bearer(owner).post('/merge/m-170', { sha: SHA, version }),
+      bearer(owner).post('/merge/m-170', { sha: SHA, version }),
+    ])
+    expect([a.status, b.status].sort()).toEqual([200, 429])
+    expect([a, b].find((r) => r.status === 429)!.json.error).toContain('Мёрж уже идёт')
+    expect(puts).toBe(1)
+    // Слот освобождён: дальше действует обычный интервал 30 с.
+    expect((await bearer(owner).post('/merge/m-170', { sha: SHA, version })).json.error).toContain('не чаще раза в 30 секунд')
+  })
+
+  it('отказ проверки освобождает слот: следующий мёрж не получает «мёрж уже идёт» (Q-35)', async () => {
+    setGithubTransportForTests(github)
+    expect((await post('m-171', SHA)).status).toBe(409) // нет вердикта «Контроля» — отказ до GitHub
+    const res = await post('m-170', SHA)
+    expect(res.status, JSON.stringify(res.json)).toBe(200)
   })
 
   it('POST без версии пункта — 422, с устаревшей — 409: способ и деплой не подменить между показом и кликом (ревью Q-29/Q-30)', async () => {
