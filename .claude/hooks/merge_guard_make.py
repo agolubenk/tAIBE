@@ -8,8 +8,8 @@ import os
 import re
 
 from merge_guard_files import command_writes
-from merge_guard_launch import (INCLUDE_ESCAPE, MAKE_BASE, MAKE_CONT, MAKE_ENV, MAKE_TEXT, MAKEFLAGS_ARG, MAKES,
-                                NOT_ASCII, _make_opts, _make_where, make_files)
+from merge_guard_launch import (APPEND_ARG, INCLUDE_ESCAPE, MAKE_BASE, MAKE_CONT, MAKE_ENV, MAKE_TEXT, MAKEFLAGS_ARG,
+                                MAKES, NOT_ASCII, _make_opts, _make_where, make_files)
 from merge_guard_shell import CURRENT, SUBST
 
 WT_TRACKS = ("feature", "fix", "refactor", "spike", "review")
@@ -33,6 +33,10 @@ MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS (и VPATH, GPATH, .SH
                  "`-O` make 4.x), или кавычка, `\\`, `$`, `$(…)`, знак вне печатного ASCII, кроме таба, в "
                  "MAKEFLAGS (слова и подстановки make делит иначе, чем shell): папку make (`-C`, `cd`) разбор "
                  "с ними не сводит — передайте опции в командной строке make, файлы — через `-f`")
+APPEND_WHY = ("`ИМЯ+=…` у MAKEFLAGS, GNUMAKEFLAGS, MAKEFILES, VPATH, GPATH, BASH_ENV, ENV, NODE_OPTIONS, "
+              "npm_config_node_options, npm_config_script_shell: shell склеит значение с прежним (слово раньше в "
+              "строке или окружение), и make, bash или node получат склейку, которую разбор по словам не видит — "
+              "задайте значение целиком через `=`")
 MAKE_STDIN = ("Makefile из потока, а не из файла (`-f -`, `-f /dev/stdin`, FIFO, ссылка на устройство, "
               "`include /dev/stdin` в Makefile или `--eval`, Makefile по умолчанию — ссылка на поток): его текст "
               "разбор не видит — запишите Makefile в файл и передайте `-f`")
@@ -70,6 +74,8 @@ def make_option(a, cwd):
     SE-127)."""
     if a[0] not in MAKES:
         return ""
+    if APPEND_ARG in a:  # `ИМЯ+=…` (implied_commands, линза backend #398)
+        return APPEND_WHY
     if MAKEFLAGS_ARG in a or any(os.environ.get(k) for k in MAKE_ENV):
         return MAKEFLAGS_WHY
     if any(SUBST in w or CURRENT in w for w in a):  # правило coord 11:47 (#402): один раз на все слова make
