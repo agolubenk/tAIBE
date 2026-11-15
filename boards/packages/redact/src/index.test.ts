@@ -383,6 +383,32 @@ describe("@kaneo/redact", () => {
       expectSingleHit(`x-api-key: x(x-api-key:${value}`, "api_key", value);
     });
 
+    // The restart rests on one property of both filters: a value with `=` or
+    // `:` and no DROPS_VALUE character is accepted from 8 characters on, so
+    // the value is masked whole with the name inside it.
+    it("accepts every value with = or : from 8 characters on", () => {
+      const alphabet = "aAzZqQ09_-.$/+@!~=:";
+      let seed = 1;
+      const random = () => {
+        seed = (seed * 48_271) % 2_147_483_647;
+        return seed;
+      };
+      for (let i = 0; i < 5000; i++) {
+        let candidate = "";
+        const length = 8 + (random() % 40);
+        while (candidate.length < length) {
+          candidate += alphabet.charAt(random() % alphabet.length);
+        }
+        if (!/[=:]/.test(candidate)) continue;
+        for (const next of ["", ",", ";", ")"]) {
+          expect(looksLikeSecret(candidate, next)).toBe(true);
+          expect(looksLikePassphrase(candidate, next)).toBe(true);
+        }
+      }
+      const outer = `A_TOKEN=aaaa/B_TOKEN=${value}`;
+      expect(redact(outer).text).toBe("A_TOKEN=[REDACTED:password_assignment]");
+    });
+
     it.each([
       ["code in the inner value", "A_SECRET=x=B_SECRET=abc(def"],
       ["a call", "JWT_SECRET: getSecret(config)"],
