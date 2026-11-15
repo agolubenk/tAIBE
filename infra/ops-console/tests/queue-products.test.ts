@@ -128,6 +128,21 @@ describe('продукт нового документа и id', () => {
     expect((await call(taibe, 'PUT', '/db/items/lavaeon-d-1', { data: decision('x') })).status).toBe(404)
     expect((await call(hr, 'PUT', '/db/items/lavaeon-d-1', { data: decision('x') })).json).toMatchObject({ product: 'hr-helper' })
   })
+
+  it('id документов плана от t-boards (TB-112, линза #159): taibe — с префиксом, HR — прежние', async () => {
+    const due = (item: string) => ({ kind: 'due', item, at: '2026-11-15', rows: [], applied: false })
+    // Токен t-boards видит оба продукта (boards/deploy/vps/README.md).
+    for (const id of ['taibe-d-due-20261115', 'taibe-d-focus-20261115']) {
+      expect((await call(both, 'PUT', `/db/items/${id}`, { data: decision('план') })).json).toMatchObject({ product: 'taibe' })
+    }
+    expect((await call(both, 'PUT', '/db/work/taibe-due', { data: due('taibe-d-due-20261115') })).json).toMatchObject({ product: 'taibe' })
+    for (const id of ['d-hr-helper-due-20261115', 'd-hr-focus-20261115']) {
+      expect((await call(both, 'PUT', `/db/items/${id}`, { data: decision('план') })).json).toMatchObject({ product: 'hr-helper' })
+    }
+    expect((await call(both, 'PUT', '/db/work/due-hr-helper', { data: due('d-hr-helper-due-20261115') })).json).toMatchObject({ product: 'hr-helper' })
+    // Прежний id решения taibe — пространство HR: токен одного taibe его не пишет.
+    expect((await call(taibe, 'PUT', '/db/items/d-taibe-due-20261115', { data: decision('x') })).status).toBe(404)
+  })
 })
 
 describe('токены', () => {
