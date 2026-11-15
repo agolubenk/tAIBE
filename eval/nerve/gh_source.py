@@ -15,6 +15,8 @@ from journal import DIGEST, NERVOUS
 GH_LIMIT = 1000        # не больше 1000 открытых PR за проход
 GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title"
 GH_NEW_PER_PASS = 20   # новых для Нерва PR за проход: догон не задерживает очередь владельца на минуты
+NO_CHECKS_AFTER = 1800  # с после головы без единой проверки — событие координатору (SE-126)
+NO_CHECKS_EVERY = 900   # с: дальше такой PR перечитывается раз в 15 мин, а не каждый проход
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
@@ -85,14 +87,46 @@ def _backfill_since(known):
     return min(max(seen), now) if seen else now
 
 
+def _iso_now(ctx):
+    return ctx.now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _no_checks(ctx, p):
+    """SE-126: у головы нет ни одной проверки дольше NO_CHECKS_AFTER — у PR CI нет (фильтры `paths` workflow: у HR
+    они у всех, 8 из 40 последних мёржей HR без проверок). До этого пустой список — CI ещё не стартовал (pending).
+    Отсчёт — от первой встречи головы: новая голова сбрасывает его в _check_pr."""
+    if p.get("checks"):
+        return False
+    since = sources._ts(p.setdefault("head_at", _iso_now(ctx))) or ctx.now
+    return (ctx.now - since).total_seconds() >= NO_CHECKS_AFTER
+
+
+def _quorum_checks(ctx, p):
+    """Проверки для кворума: голова без проверок дольше NO_CHECKS_AFTER — маркер NONE (`quorum.ci_state` → none)."""
+    return ["NONE"] if _no_checks(ctx, p) else (p.get("checks") or [])
+
+
 def _recheck_ci(ctx, n, p):
     """PR ждёт только CI: сначала статус проверок, комментарии — когда CI доехал. Пока CI идёт, комментарии не
     читаются: у большого PR это десятки КБ за проход (#292 — 54 КБ). Новый вердикт меняет updated PR — его разбирает
     основной путь прохода."""
+    slow = _no_checks(ctx, p)
+    if slow:
+        # CI у PR нет: перечитывать раз в NO_CHECKS_EVERY, а не каждый проход (до 1 440 gh pr view в сутки на PR) —
+        # только чтобы заметить проверки, если их всё же запустят
+        last = sources._ts(p.get("ci_at"))
+        if last and (ctx.now - last).total_seconds() < NO_CHECKS_EVERY:
+            return
     _, checks, _, _, _ = _gh_view(ctx.cfg["github"]["repo"], n)
+    if slow:
+        p["ci_at"] = _iso_now(ctx)   # после удачного чтения: сбой gh повторяется следующим проходом, а не через 15 мин
     p["checks"] = checks
-    if quorum.ci_state(checks) != "pending":
-        _check_pr(ctx, n, p, p["head"])
+    ci = quorum.ci_state(_quorum_checks(ctx, p))
+    if ci == "pending" or (ci == "none" and p.get("none_head") == p["head"]):
+        return   # «CI: none» уже разобран на этой голове: комментарии не перечитываются раз в 15 мин (HR #774 — 23 КБ)
+    _check_pr(ctx, n, p, p["head"], viewed=True)
+    if ci == "none":
+        p["none_head"] = p["head"]   # после разбора: упавшее чтение комментариев не теряет кворум «CI: none»
 
 
 def poll_github(ctx):
@@ -150,14 +184,18 @@ def _raise_fails(fails):
         raise RuntimeError(f"PR с ошибкой: {len(fails)}; " + "; ".join(fails))
 
 
-def _check_pr(ctx, n, p, head):
+def _check_pr(ctx, n, p, head, viewed=False):
+    """Разбор PR: комментарии, вердикты, кворум. viewed — проверки только что прочитаны (_recheck_ci)."""
     g = ctx.cfg["github"]
     head_changed = p["head"] != head
     comments = _gh_comments(g["repo"], n)
-    if head_changed or "author" not in p:
+    # Пустой список перечитывается: CI регистрируется позже push, и старый [] через 30 мин дал бы ложный «CI: none»
+    if head_changed or "author" not in p or not (p.get("checks") or viewed):
         files, checks, _, _, _ = _gh_view(g["repo"], n)
         p["author"] = quorum.author_role(files, g["path_roles"])
         p["checks"] = checks
+    if head_changed:
+        p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
     verdicts = []
     for c in comments:
@@ -169,9 +207,17 @@ def _check_pr(ctx, n, p, head):
             to = quorum.author_roles(p["author"], ctx.cfg["team"]["roles"])   # с вторыми сессиями роли (#324)
             ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, to,
                      f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github")
-    ok, approved, changes, ci = quorum.quorum(verdicts, head, p.get("checks") or [], g["min_lenses"])
+    ok, approved, changes, ci = quorum.quorum(verdicts, head, _quorum_checks(ctx, p), g["min_lenses"])
     p["changes_by"] = changes
-    p["await_ci"] = len(approved) >= g["min_lenses"] and not changes and ci == "pending"
-    if ok:
+    # CI нет (none) — ожидание не снимается: если проверки всё же запустят, кворум по ним — обычным правилом (SE-126)
+    p["await_ci"] = len(approved) >= g["min_lenses"] and not changes and ci in ("pending", "none")
+    if ok and ci == "none":
+        ctx.emit(f"gh:quorum:{n}:{head}:none", "pr.quorum", NERVOUS, g["quorum_to"],
+                 f"#{n} собран: approve {', '.join(approved)} на {head[:9]}, CI: none (проверок нет "
+                 f"{NO_CHECKS_AFTER // 60} мин)", "github")
+        ctx.emit(f"gh:nochecks:{n}:{head}", "pr.nochecks", DIGEST, ["coord"],
+                 f"#{n}: кворум без CI — у головы {head[:9]} нет ни одной проверки {NO_CHECKS_AFTER // 60} мин "
+                 f"(PR вне фильтров paths?); Контроль решает по «CI: none»", "github")
+    elif ok:
         ctx.emit(f"gh:quorum:{n}:{head}", "pr.quorum", NERVOUS, g["quorum_to"],
                  f"#{n} собран: approve {', '.join(approved)} на {head[:9]}, CI {ci}", "github")
