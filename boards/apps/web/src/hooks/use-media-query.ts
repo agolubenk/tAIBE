@@ -1,7 +1,10 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-/** Tailwind `lg` starts at 64rem = 1024px; this is the range below it. */
-export const BELOW_LG_QUERY = "(max-width: 1023px)";
+/**
+ * The range below Tailwind `lg`, the same query as its `max-lg:` variant.
+ * rem, not px: with a browser font other than 16px, 64rem is not 1024px.
+ */
+export const BELOW_LG_QUERY = "(width < 64rem)";
 
 const hasMatchMedia = () =>
   typeof window !== "undefined" && typeof window.matchMedia === "function";

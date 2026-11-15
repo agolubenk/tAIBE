@@ -57,13 +57,16 @@ vi.mock("@/hooks/use-project-websocket", () => ({
 
 type Listener = () => void;
 
-/** A matchMedia stub for `(max-width: 1023px)` that follows a fake width. */
-function stubViewport(initialWidth: number) {
+/**
+ * A matchMedia stub for `(width < Nrem)` that follows a fake width. Media
+ * query rem is the browser font size (16px by default), as in a browser.
+ */
+function stubViewport(initialWidth: number, browserFontPx = 16) {
   let width = initialWidth;
   const listeners = new Set<Listener>();
   const matches = (query: string) => {
-    const max = /max-width:\s*(\d+)px/.exec(query);
-    return max ? width <= Number(max[1]) : false;
+    const below = /width\s*<\s*(\d+)rem/.exec(query);
+    return below ? width < Number(below[1]) * browserFontPx : false;
   };
   vi.stubGlobal("matchMedia", (query: string) => ({
     get matches() {
@@ -125,6 +128,19 @@ describe("TaskLayout rail (TB-230)", () => {
     renderLayout();
 
     expect(screen.getByTestId("rail")).not.toBeNull();
+  });
+
+  it("uses the lg edge in rem, as the lg:flex CSS does", () => {
+    // Browser font 14px: lg starts at 896px, so 960px shows the rail.
+    stubViewport(960, 14);
+    const { unmount } = renderLayout();
+    expect(screen.getByTestId("rail")).not.toBeNull();
+    unmount();
+
+    // Browser font 20px: lg starts at 1280px, so 1100px hides it.
+    stubViewport(1100, 20);
+    renderLayout();
+    expect(screen.queryByTestId("rail")).toBeNull();
   });
 
   it("follows a resize across lg in both directions", () => {
