@@ -229,12 +229,18 @@ class ChecksTest(unittest.TestCase):
         # TB-200 item 1: `${NAME=<v>}` and `${NAME:=<v>}` give NAME a value when it is unset; the base found them.
         key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
         for line in (f'${{DB_PASSWORD="{key}"}}', f': "${{API_TOKEN:="{key}"}}"', f"echo ${{password='{key}'}}",
-                     f'PASSWORD=${{DB_PASSWORD="{key}"}}'):
+                     f'PASSWORD=${{DB_PASSWORD="{key}"}}',
+                     # TB-214: without quotes the value ends at `}`; before, the `}` dropped it as code.
+                     f'${{DB_PASSWORD:={key}}}', f'${{API_TOKEN={key}}}', f'cd ${{password:={key}}}/app',
+                     f'PASSWORD=${{DB_PASSWORD:={key}}}', f'${{A_TOKEN:=${{B_TOKEN:={key}}}}}'):
             with self.subTest(line):
                 self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [key])
         # `${NAME:?…}`, `${NAME:-…}`, `${NAME:+…}` check NAME or give a word in its place, not to it.
         for line in (f'${{DB_PASSWORD:?{key} is not set}}', f'${{API_TOKEN:-{key} fallback}}',
-                     f'${{password:+{key} and more}}', f'A_TOKEN: ${{A_TOKEN:?{key} is required}}'):
+                     f'${{password:+{key} and more}}', f'A_TOKEN: ${{A_TOKEN:?{key} is required}}',
+                     f'${{DB_PASSWORD:?{key}}}', f'${{API_TOKEN:-{key}}}', f'${{password:+{key}}}',
+                     # TB-214: a value up to `}` needs 12 characters; a reference is a placeholder.
+                     '${DB_PASSWORD:=Qz8Lm4Rt7}', '${API_TOKEN:=${OTHER_API_TOKEN}}'):
             with self.subTest(line):
                 self.assertEqual(secrets_scan.scan_line(line), [])
 
@@ -272,11 +278,20 @@ class ChecksTest(unittest.TestCase):
     def test_secrets_validation_rules(self):
         # TB-200 item 4: Laravel rules are lowercase words joined by `|`, each with an optional `:argument`.
         for line in ("'password' => 'required|string|min:8|confirmed',", "password: 'required|string|min:8'",
-                     "'api_key' => 'nullable|string|max:255',", '"password" => "required|confirmed|min:12|max:64"'):
+                     "'api_key' => 'nullable|string|max:255',", '"password" => "required|confirmed|min:12|max:64"',
+                     "'password' => 'required|same:password_confirmation',",
+                     "'current_password' => 'bail|required|different:new_password_value',",
+                     "'secret' => 'sometimes|string|starts_with:sk_live_example'"):
             with self.subTest(line):
                 self.assertEqual(secrets_scan.scan_line(line), [])
         key = ''.join(('Qz8', '|Lm4', 'Rt7Wx2Ny5'))
         self.assertEqual([v for _, v in secrets_scan.scan_line(f'password = "{key}"')], [key])
+        # TB-214: an argument may not hide a key, and words joined by `|` are rules only with a rule word.
+        arg = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3X'))
+        for line in (f'API_KEY=alpha:{arg}|omega', f"'password' => 'required|min:{arg}'",
+                     'password = "%s"' % '|'.join(('dolphin', 'sunrise', 'granite', 'meadow'))):
+            with self.subTest(line):
+                self.assertEqual(len(secrets_scan.scan_line(line)), 1)
 
     def test_secrets_inner_names_stay_linear(self):
         # TB-198: from the start of every rejected value a run of `A_TOKEN:=` nested one inner value per name (64 000
@@ -285,7 +300,9 @@ class ChecksTest(unittest.TestCase):
         # times. A time below 10 ms counts as 10 ms (timer noise); 5 s is the guard against a hang.
         units = ['A_SECRET=A_SECRET=', 'A_TOKEN=test/', 'A_TOKEN:=', 'api_key=api_key=', 'secret=secret=secret=',
                  'A_SECRET=fooB_SECRET: ', 'A_TOKEN=>(', 'A_TOKEN:=' * 27 + ' ', 'secret=' * 35 + ' ',
-                 'pwd=' * 63 + ' ']
+                 'pwd=' * 63 + ' ',
+                 # TB-214: the value ends at `}`.
+                 '${A_TOKEN:=}', '${A_TOKEN:=', 'A_TOKEN=}', '${A_TOKEN:=' * 20 + '}' * 20 + ' ']
 
         def best(line):
             times = []
