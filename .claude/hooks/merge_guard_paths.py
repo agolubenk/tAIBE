@@ -167,23 +167,30 @@ BUILD = re.compile(
 # `#{…}`), маска и скобки shell у слова (`/usr/bin/g?t`, `{g,}it`) — K3–K5 backend
 LIT_BUILD = re.compile(r"\\(?![ntr])|\w['\"]|['\"]\w|\w[?*\[]|[?*\]]\w|\{[^}\s]*,|#\{|" + SHELL_SUB.pattern)
 # Запуск программы (K5 backend). Имя из glob, argv, stdin или файла разбор не видит, а белый список узнаёт git только
-# по имени в тексте.
-SPAWN = re.compile(r"\b(?:run|call|check_call|check_output|Popen|system|popen|getoutput|getstatusoutput"
-                   r"|exec(?!utable\b|Path\b)\w*|spawn\w*|posix_spawn\w*|create_subprocess_\w+|fork)\b")
+# по имени в тексте. Ruby `Open3.capture2`/`popen3`/`pipeline`, `Deno.Command` и `sh.Command` — тоже запуск.
+SPAWN = re.compile(r"\b(?:run|call|check_call|check_output|Popen|system|popen\w*|getoutput|getstatusoutput"
+                   r"|exec(?!utable\b|Path\b)\w*|spawn\w*|posix_spawn\w*|create_subprocess_\w+|fork"
+                   r"|capture[23]\w*|pipeline\w*|Command)\b")
 IMPORT_LINE = re.compile(r"\s*(?:from\s+[\w.]+\s+import\b|import\b|(?:const|let|var)\b[^\n]*\brequire\s*\()")
-# K6 (линзы Контроля и backend на 646dfbe48, координатор 21:17): в чистом тексте запускается только git, все аргументы —
-# литералы. Интерпретатор или обёртка с данными (`sh -c argv`, `env <argv>`, `python3 -c`, `input=файл`) — не чистый
-# текст. Файл скрипта литералом (`sh prep.sh`, `[sys.executable, "tool.py"]`) остаётся — класс SE-145 (координатор).
-# Литерал в коде — метка (lit_kind): G — одна команда git без операторов shell, I — интерпретатор или файл скрипта,
-# F — флаг кода (`-c`, `-e`, `-`), S — имя запуска (K7: `vars(subprocess)["run"]`), B — `…` не git, Q — остальное.
+# K6–K8 (линзы Контроля и backend на 646dfbe48 и 6c97a95a9, координатор 21:17 и 21:47): в чистом тексте запускается
+# только git, все аргументы — литералы. Интерпретатор или обёртка где угодно в тексте — в коде или в литерале, с любыми
+# флагами, с файлом скрипта (`sh prep.sh`, `[sys.executable, "-I", "tool.py"]`) — не чистый текст: проходит только
+# явное `src:dst`. Чёрный список флагов кода открыт (`--eval=`, `deno eval`, `-m timeit`, `php -r` — K8).
+# Литерал в коде — метка (lit_kind): G — одна команда git без операторов shell, I — интерпретатор или обёртка в тексте,
+# F — флаг (`-c`, `-e`, `-`; у git можно), S — имя запуска (K7: `vars(subprocess)["run"]`), B — `…` не git,
+# Q — остальное.
 SHELL_CHARS = r"[^\s;&|<>`$(){}\\*?\[\]!#'\"]"
 GIT_LIT = re.compile(rf"[ \t]*git(?:[ \t]+{SHELL_CHARS}+)*[ \t]*")
-INTERP_LIT = re.compile(r"[ \t]*(?:\S*/)?(?:(?:ba|z|da|k|c|tc)?sh|fish|python[\d.]*|pypy[\d.]*|node(?:js)?|deno|bun"
-                        rf"|ruby|perl|php|osascript)(?:[ \t]+(?!-){SHELL_CHARS}+)*[ \t]*")
+# Слово-программа: `/usr/bin/env`, `x.sh`, `python3.12`, `BASH` (APFS); не часть имени (`node_modules`, `make.py`,
+# `--source`, `execSync`). Без регистра: лишний отказ дешевле пропуска.
+INTERP_WORD = re.compile(
+    r"(?<![\w$-])(?:(?:ba|z|da|k|c|tc)?sh|fish|python[\d.]*|pypy[\d.]*|node(?:js)?|deno|bun|ruby|perl|php|osascript"
+    r"|lua|tclsh|env|xargs|eval|source|[gmn]?awk|g?make|nice|nohup|sudo|doas|setsid|stdbuf|parallel|busybox)(?![\w./-])"
+    r"|\bsys\s*\.\s*executable\b|\bprocess\s*\.\s*execPath\b|\brunpy\b", re.I)
 CODE_FLAG = re.compile(r"-[A-Za-z]*[ceEps]|--(?:eval|print|command)|-")
 MARK = re.compile(r"\x00([QGIFSB])\x00")  # \x00 вне литерала в коде не бывает: имя `Q` метку не подделает
-PROGRAM = re.compile(r"\s*\[?\s*(?:\x00([GI])\x00|sys\.executable\b|process\.execPath\b)")
-# Опция запуска со значением-константой; имя — только у cwd. stdin и input — данные: у интерпретатора это код.
+PROGRAM = re.compile(r"\s*\[?\s*\x00G\x00")
+# Опция запуска со значением-константой; имя — только у cwd.
 CALL_OPT = re.compile(r"\b(\w+)\s*[=:]\s*(?:(\x00[QG]\x00|True|False|None|true|false|null|\d+(?:\.\d+)?"
                       r"|(?:subprocess\.)?(?:PIPE|DEVNULL|STDOUT)\b|sys\.std(?:out|err)\b)"
                       r"|([A-Za-z_][\w.]*)(?![\w.]*\s*[(\[]))")
@@ -212,12 +219,12 @@ SHELL_WRITE = re.compile(r">|\b(?:tee|cp|mv|ln|install|dd|truncate|rsync)\b|\bse
 def clean(text):
     """Текст не меняет состояние git, которое выбирает ветку push: git — только push и команды для чтения (READ_ONLY),
     нет окружения, записи в файл (код и shell в строках) и следов настройки (`[remote`, `ref: refs/`); запускается
-    только git или файл скрипта, все аргументы — литералы (calls_seen, K6)."""
+    только git, все аргументы — литералы (calls_seen, K6); интерпретатора и обёртки в тексте нет (INTERP_WORD, K8)."""
     if any(m.group(1) not in READ_ONLY for m in GIT_CALL.finditer(text)) or STATE.search(text):
         return False
     lits = list(STRINGS.finditer(text))
     code = re.sub(r"#[^\n]*", "", STRINGS.sub(lambda m: f" \x00{lit_kind(m.group(0))}\x00 ", text))
-    if BUILD.search(code) or GIT_PART.search(code) or any(built(text, m) for m in lits):
+    if BUILD.search(code) or GIT_PART.search(code) or INTERP_WORD.search(code) or any(built(text, m) for m in lits):
         return False
     return not any(m.group(1) not in KEYWORDS for m in SUBSCRIPT.finditer(code)) and calls_seen(code)
 
@@ -231,49 +238,42 @@ def lit_kind(s):
         return "B"  # ruby, perl, shell: `…` — запуск
     if SPAWN.fullmatch(body.strip()):
         return "S"
-    if INTERP_LIT.fullmatch(body):
+    if INTERP_WORD.search(body):
         return "I"
     return "F" if CODE_FLAG.fullmatch(body) else "Q"
 
 
 def calls_seen(code):
-    """Каждый запуск в коде (литералы — метки lit_kind) — git или файл скрипта литералами (call_seen). Имя запуска
-    без вызова — псевдоним (`r = subprocess.run`, `partial(run, …)`) — нет; в строке импорта можно, но без `as` и `:`
-    (`from subprocess import run as r`, `{ execSync: e }`). Метка I вне таких вызовов, S и B где угодно — запуск,
-    которого SPAWN не видит (`Open3.capture2("sh", …)`, `cp["execFileSync"]`, `` `sh x` `` в ruby)."""
-    seen = []
+    """Каждый запуск в коде (литералы — метки lit_kind) — git литералами (call_seen). Имя запуска без вызова —
+    псевдоним (`r = subprocess.run`, `partial(run, …)`) — нет; в строке импорта можно, но без `as` и `:`
+    (`from subprocess import run as r`, `{ execSync: e }`). Метки I, S и B где угодно — интерпретатор или запуск,
+    которого SPAWN не видит (`cp["execFileSync"]`, `` `sh x` `` в ruby)."""
     for m in SPAWN.finditer(code):
         p = re.compile(r"\s*\(").match(code, m.end())
         if p:
-            a = p.end() - 1
-            b = close(code, a)
-            if b is None or not call_seen(code[a + 1:b]):
+            b = close(code, p.end() - 1)
+            if b is None or not call_seen(code[p.end():b]):
                 return False
-            seen.append((a, b))
             continue
         start, end = code.rfind("\n", 0, m.start()) + 1, code.find("\n", m.end())
         line = code[start:end if end >= 0 else len(code)]
         if not IMPORT_LINE.match(line) or re.search(r"\bas\b|:", line):
             return False
-    return not any(k.group(1) in "SB" or k.group(1) == "I" and not any(a < k.start() < b for a, b in seen)
-                   for k in MARK.finditer(code))
+    return not any(k.group(1) in "SBI" for k in MARK.finditer(code))
 
 
 def call_seen(args):
-    """Аргументы вызова запуска (код с метками): программа — git (G) или интерпретатор (I, `sys.executable`,
-    `process.execPath`); остальное — литералы, у интерпретатора без флага кода и без stdin/input; опции — из
-    CALL_OPTS со значением-константой (у cwd — и имя). Иначе что запустить, решают данные (K6)."""
+    """Аргументы вызова запуска (код с метками): программа — git (G), остальное — литералы; опции — из CALL_OPTS со
+    значением-константой (у cwd — и имя). Иначе что запустить, решают данные (K6, K8)."""
     m = PROGRAM.match(args)
     if not m:
         return False
-    git = m.group(1) == "G"
 
     def opt(o):
         key, name = o.group(1), o.group(3)
-        bad = key not in CALL_OPTS or name and key != "cwd" or not git and key in ("stdin", "input")
-        return " \x01 " if bad else " "
+        return " \x01 " if key not in CALL_OPTS or name and key != "cwd" else " "
     words = re.sub(r"[\s,\[\]{}()]+", " ", CALL_OPT.sub(opt, args[m.end():])).split()
-    return all(w in ("\x00Q\x00", "\x00G\x00", "\x00I\x00") or git and w == "\x00F\x00" for w in words)
+    return all(w in ("\x00Q\x00", "\x00G\x00", "\x00F\x00") for w in words)
 
 
 def close(code, a):

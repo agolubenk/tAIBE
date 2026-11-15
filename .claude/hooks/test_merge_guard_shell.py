@@ -934,8 +934,10 @@ for name, text in (
                          'root = Path.cwd()\n(root / ".claude/settings.json").write_text("{}")\n'),
         ("p.awk", 'BEGIN { print "ok" }\n')):
     (fp / name).write_text(text)
-for name, where in (("push_data.py", on_main), ("tmp_settings.py", ROOT)):
-    bash(f"SE-138, скрипт с диска — проход: {name}", f"python3 -I {fp / name}", False, cwd=where)
+bash("SE-138, скрипт с диска — проход: tmp_settings.py", f"python3 -I {fp / 'tmp_settings.py'}", False, cwd=ROOT)
+# K8 (координатор 21:47): интерпретатор в тексте (`sys.executable`) — текст не чистый; push без явного `src:dst`
+# при цели в тексте (`--all`) — отказ. Был проходом SE-138; лишний отказ — цена правила.
+bash("SE-138 K8, интерпретатор в тексте — отказ: push_data.py", f"python3 -I {fp / 'push_data.py'}", True, cwd=on_main)
 for name, where in (("push_one.py", on_main), ("push_split.py", on_main), ("push_var.py", on_main),
                     ("push_cmd.py", on_main), ("open_settings.py", ROOT), ("repo_settings.py", ROOT),
                     ("tmp_other.py", ROOT)):
@@ -1092,7 +1094,16 @@ B4_K = (
     ("push_k6_env_argv.py", "import sys\n", '"env", sys.argv[1]'),
     ("push_k6_env_listdir.py", 'import os\ntool = sorted(os.listdir("/usr/bin"))[0]\n', '"env", tool'),
     ("push_k6_nice_input.py", "", '"nice", input()'),
-    ("push_prog_q.py", "import sys\nQ = sys.argv[1]\n", "Q"))) + tuple(
+    ("push_prog_q.py", "import sys\nQ = sys.argv[1]\n", "Q"),
+    # K8 (линза backend на 6c97a95a9, координатор 21:47): интерпретатор в тексте — не чистый текст, какие бы ни были
+    # флаги; файл скрипта литералом — тоже
+    ("push_k8_node_eval.py", "", '"node", "--eval=0"'),
+    ("push_k8_deno_eval.py", "", '"deno", "eval", "0"'),
+    ("push_k8_timeit.py", "", '"python3", "-m", "timeit", "-n1", "0"'),
+    ("push_k8_exe_timeit.py", "import sys\n", 'sys.executable, "-m", "timeit", "-n1", "0"'),
+    ("push_k8_php.py", "", '"php", "-r", "0"'),
+    ("push_k8_sh_file.py", "", '"sh", "cfg.sh"'),
+    ("push_k8_exe_file.py", "import sys\n", 'sys.executable, "-I", "cfg.py"'))) + tuple(
     (name, f'import subprocess\nimport sys\nBASE = "main"\nprint(BASE)\n{run}\n'
            'subprocess.run(["git", "push", "origin", "feat"])\n') for name, run in (
         ("push_k6_sh_argv.py", 'subprocess.run(["sh", "-c", sys.argv[1]])'),
@@ -1116,6 +1127,12 @@ B4_K = (
                            f'globals()["run"]([sys.argv[1], {K_CFG}'),
     ("push_k7_static.py", 'import inspect\nimport subprocess\nimport sys\n'
                           f'inspect.getattr_static(subprocess, "run")([sys.argv[1], {K_CFG}'),
+    # запуск ruby `Open3.capture2` с программой из данных — SPAWN; разбор от языка не зависит
+    ("push_k8_capture.py", 'import subprocess\nimport sys\nOpen3.capture2(sys.argv[1], "config", "remote.origin.push", '
+                           '"refs/heads/feat:refs/heads/main")\nsubprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_k8_eval.js", 'const cp = require("child_process");\ncp.execFileSync("node", ["--eval=0", "config", '
+                        '"remote.origin.push", "refs/heads/feat:refs/heads/main"]);\n'
+                        'cp.execFileSync("git", ["push", "origin", "feat"]);\n'),
     ("push_k7_index.js", 'const cp = require("child_process");\ncp["execFileSync"](process.argv[2], '
                          '["config", "remote.origin.push", "refs/heads/feat:refs/heads/main"]);\n'
                          'cp.execFileSync("git", ["push", "origin", "feat"]);\n'),
