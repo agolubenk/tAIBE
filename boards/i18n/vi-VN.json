@@ -4091,7 +4091,11 @@
 					"unchanged": "Nothing changed: {{title}}",
 					"removed": "Removed from the notebook: {{title}}",
 					"removeError": "Could not remove the source"
-				}
+				},
+				"addedByAgent": "Added by agent {{name}}",
+				"addedByMember": "Added by: a member",
+				"addedByPerson": "Added by {{name}}",
+				"addedByUnknown": "Added by: unknown"
 			},
 			"status": {
 				"counts": "{{sources}} sources · {{chunks}} chunks · {{embedded}} with vectors",

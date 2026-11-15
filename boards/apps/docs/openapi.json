@@ -6839,6 +6839,25 @@
                   "type": "integer",
                   "description": "Length of the stored text. Absent for a caller with a token, except for repo-doc."
                 },
+                "addedByKind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "agent",
+                    "person",
+                    null
+                  ],
+                  "description": "Who added a link or a pull request; null for a synced source or one added before authors were kept."
+                },
+                "addedBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The agent's name with its session, or the member's name."
+                },
                 "updatedAt": {
                   "type": "string",
                   "format": "date-time"
@@ -6855,6 +6874,8 @@
                 "kind",
                 "ref",
                 "title",
+                "addedByKind",
+                "addedBy",
                 "updatedAt",
                 "chunks",
                 "embedded"

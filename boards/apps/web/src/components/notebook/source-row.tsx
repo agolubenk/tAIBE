@@ -4,6 +4,7 @@ import { isRefreshable } from "./added-source-kind";
 import type { NotebookSource } from "./notebook-types";
 import { RefreshSourceButton } from "./refresh-source-button";
 import { RemoveSourceButton } from "./remove-source-button";
+import { SourceAuthor } from "./source-author";
 import { SourceLabel } from "./source-label";
 
 type SourceRowProps = {
@@ -18,7 +19,16 @@ export function SourceRow({ workspaceId, source, canRefresh }: SourceRowProps) {
 
   return (
     <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-3 py-2">
-      <SourceLabel kind={source.kind} ref_={source.ref} title={source.title} />
+      <span className="flex min-w-0 flex-col">
+        <SourceLabel
+          kind={source.kind}
+          ref_={source.ref}
+          title={source.title}
+        />
+        {isRefreshable(source.kind) ? (
+          <SourceAuthor kind={source.addedByKind} name={source.addedBy} />
+        ) : null}
+      </span>
       <div className="flex shrink-0 items-center gap-2">
         <div className="flex flex-col items-end text-xs">
           <span

@@ -17268,6 +17268,18 @@
 										"GITHUB_NO_ACCESS",
 										"SOURCE_TOO_MANY_CHUNKS"
 									]
+								},
+								"addedByAgent": {
+									"type": "string"
+								},
+								"addedByPerson": {
+									"type": "string"
+								},
+								"addedByMember": {
+									"type": "string"
+								},
+								"addedByUnknown": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -17281,7 +17293,11 @@
 								"removeDescription",
 								"removeConfirm",
 								"toast",
-								"errors"
+								"errors",
+								"addedByAgent",
+								"addedByPerson",
+								"addedByMember",
+								"addedByUnknown"
 							]
 						}
 					},
