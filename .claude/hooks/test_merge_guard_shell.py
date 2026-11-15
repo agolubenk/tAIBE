@@ -1000,8 +1000,31 @@ B2_IMPLICIT = (
     ("push_checkout.js", 'const { execFileSync } = require("child_process");\n'
                          'execFileSync("git", ["checkout", "main"]);\nexecFileSync("git", ["push"]);\n'),
 )
-for name, text in B1_PUSH + B1_PASS + B1_ENV + B2_IMPLICIT + (TMP_COMMENT,):
+# Линза Контроля на 60a54f72a (B3): назначение задаёт настройка git — `remote.<имя>.push`, `symbolic-ref`, — или
+# matching-refspec `:`. Каждая форма — реальный push в защищённую ветку (git 2.54, проба Контроля); на base — отказ.
+B3_MAP = (
+    ("push_map_config.py", 'import subprocess\n'
+                           'subprocess.run(["git", "config", "remote.origin.push", "refs/heads/feat:refs/heads/main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_map_case.py", 'import subprocess\n'
+                         'subprocess.run("git config --add Remote.Origin.Push refs/heads/feat:refs/heads/main", shell=True)\n'
+                         'subprocess.run("git push origin feat", shell=True)\n'),
+    ("push_matching.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                         'subprocess.run(["git", "push", "origin", ":"])\n'),
+    ("push_matching_plus.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                              'subprocess.run("git push origin +:", shell=True)\n'),
+    ("push_symref.py", 'import subprocess\n'
+                       'subprocess.run(["git", "symbolic-ref", "refs/heads/feat", "refs/heads/main"])\n'
+                       'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_symref.js", 'const { execFileSync } = require("child_process");\n'
+                       'execFileSync("git", ["symbolic-ref", "refs/heads/feat", "refs/heads/main"]);\n'
+                       'execFileSync("git", ["push", "origin", "feat"]);\n'),
+)
+for name, text in B1_PUSH + B1_PASS + B1_ENV + B2_IMPLICIT + B3_MAP + (TMP_COMMENT,):
     (fp / name).write_text(text)
+for name, _ in B3_MAP:
+    interp = "node" if name.endswith(".js") else "python3 -I"
+    bash(f"SE-138 B3, назначение из настройки git — отказ: {name}", f"{interp} {fp / name}", True, cwd=on_branch)
 for name, _ in B2_IMPLICIT:
     interp = "node" if name.endswith(".js") else "python3 -I"
     bash(f"SE-138 B2, push без назначения после checkout — отказ: {name}", f"{interp} {fp / name}", True,

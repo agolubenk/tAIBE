@@ -146,13 +146,17 @@ CONST = {"True", "False", "None"}
 # `$B`, `${B}`, `$(…)`, `` `…` `` в команде push: значение даёт shell (env, os.putenv), разбор его не видит
 SHELL_SUB = re.compile(r"\$[{(\w@*]|`")
 PUSH_VALUE = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}  # опции push со значением следующим словом
-SELF_REF = {"HEAD", "@", "+HEAD", "+@"}
+SELF_REF = {"HEAD", "@", "+HEAD", "+@", ":", "+:"}  # `:` — matching: все ветки, которые есть с обеих сторон
+# Назначение push задаёт настройка git, а не слово команды: `remote.<имя>.push`, ветка-ссылка (`symbolic-ref`),
+# upstream (`branch.<имя>.merge`, `push.default`) — линза Контроля на 60a54f72a (B3). Ключи git config — без регистра.
+PUSH_MAP = re.compile(r"\bremote\.[\w.-]+\.push\b|\bsymbolic-ref\b|\bbranch\.[\w./-]+\.merge\b|\bpush\.default\b",
+                      re.I)
 
 
 def implicit(unit):
-    """У git push в unit нет назначения или назначение — `HEAD`/`@`: ветку задаёт состояние git (checkout, switch,
-    upstream в git config другим оператором), а не текст команды (линза Контроля на b5d5a4168). Слова — до конца
-    команды: `;`, `&`, `|`, конец строки, закрытая скобка."""
+    """У git push в unit нет назначения или назначение — `HEAD`/`@`/`:`: ветку задаёт состояние git (checkout,
+    switch, upstream в git config другим оператором), а не текст команды (линза Контроля на b5d5a4168 и 60a54f72a).
+    Слова — до конца команды: `;`, `&`, `|`, конец строки, закрытая скобка."""
     m = GIT_PUSH.search(unit)
     if not m:
         return False
@@ -247,17 +251,20 @@ def push_found(lines, cwd):
     Цель в переменной — тоже цель: имя, присвоенное в строке с целью, в операторе с git push; имя, присвоенное
     оператором с git push (`cmd = ["git", "push"]`), в операторе с целью. В аргументах push — имя, которое разбор
     не прослеживает (opaque: аргумент функции по умолчанию, кортеж, `append`, `return`, `*flags`), — правило base по
-    всему тексту (SE-138 B1, линза backend на 3ce7170af)."""
+    всему тексту (SE-138 B1, линза backend на 3ce7170af). Назначение push задаёт настройка git (PUSH_MAP где-то
+    в тексте) — тоже правило base (B3)."""
     marks = [k for k, ln in enumerate(lines) if GIT_WORD.search(ln)]
     if not marks:
         return None
-    whole = push_target("\n".join(lines), cwd)
+    text = "\n".join(lines)
+    whole = push_target(text, cwd)
+    mapped = whole and bool(PUSH_MAP.search(text))
     hot = names_rx({m.group(1) for m in map(PATH_VAR.match, lines) if m and push_target(m.string, cwd)})
     cmds = set()
     for i, s in near(lines, marks):
         p = GIT_PUSH.search(s)
         if p:
-            if push_target(s, cwd) or uses(hot, s) or (whole and opaque(s, p.start())):
+            if push_target(s, cwd) or uses(hot, s) or mapped or (whole and opaque(s, p.start())):
                 return s
             m = PATH_VAR.match(lines[i])
             cmds |= {m.group(1)} if m else set()
