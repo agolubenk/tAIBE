@@ -175,14 +175,16 @@ async function visibleRanked(rows: Candidate[], query: string) {
 async function indexableCandidates(workspaceId: string, query: string) {
   const full = sql`websearch_to_tsquery('russian', ${query})`;
   const indexable = sql`(CASE WHEN querytree(${full}) = 'T' THEN ${full} ELSE regexp_replace(querytree(${full}), '<([0-9]+|-)>', '&', 'g')::tsquery END)`;
-  return db
+  const hit = db
     .select({
       id: notebookChunkTable.id,
       heading: notebookChunkTable.heading,
       text: notebookChunkTable.text,
-      before: textNear(-1),
-      after: textNear(1),
-      negationsOnly: sql<boolean>`querytree(${full}) = 'T'`,
+      sourceId: notebookChunkTable.sourceId,
+      ordinal: notebookChunkTable.ordinal,
+      rank: sql<number>`ts_rank(${notebookChunkTable.search}, ${indexable})`.as(
+        "rank",
+      ),
     })
     .from(notebookChunkTable)
     .where(
@@ -191,11 +193,21 @@ async function indexableCandidates(workspaceId: string, query: string) {
         sql`${notebookChunkTable.search} @@ ${indexable}`,
       ),
     )
-    .orderBy(
-      sql`ts_rank(${notebookChunkTable.search}, ${indexable}) desc`,
-      notebookChunkTable.id,
-    )
-    .limit(KEYWORD_SCAN_MAX + 1);
+    .orderBy(sql`rank desc`, notebookChunkTable.id)
+    .limit(KEYWORD_SCAN_MAX + 1)
+    .as("hit");
+  // The neighbours of the scanned rows only (textNear).
+  return db
+    .select({
+      id: hit.id,
+      heading: hit.heading,
+      text: hit.text,
+      before: textNear(-1, "hit"),
+      after: textNear(1, "hit"),
+      negationsOnly: sql<boolean>`querytree(${full}) = 'T'`,
+    })
+    .from(hit)
+    .orderBy(sql`${hit.rank} desc`, hit.id);
 }
 
 async function keywordCandidates(workspaceId: string, query: string) {

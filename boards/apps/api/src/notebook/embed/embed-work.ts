@@ -58,13 +58,13 @@ export async function claimEmbedWork(
   const room = EMBED_CHUNK_BATCH - items.length;
   if (room <= 0) return items;
   const leased = leasedChunkIds(workspaceId);
-  const chunks = await db
+  const claimed = db
     .select({
       id: notebookChunkTable.id,
       heading: notebookChunkTable.heading,
       text: notebookChunkTable.text,
-      before: textNear(-1),
-      after: textNear(1),
+      sourceId: notebookChunkTable.sourceId,
+      ordinal: notebookChunkTable.ordinal,
     })
     .from(notebookChunkTable)
     .where(
@@ -78,7 +78,19 @@ export async function claimEmbedWork(
       ),
     )
     .orderBy(notebookChunkTable.sourceId, notebookChunkTable.ordinal)
-    .limit(room);
+    .limit(room)
+    .as("claimed");
+  // The neighbours of the claimed rows only (textNear).
+  const chunks = await db
+    .select({
+      id: claimed.id,
+      heading: claimed.heading,
+      text: claimed.text,
+      before: textNear(-1, "claimed"),
+      after: textNear(1, "claimed"),
+    })
+    .from(claimed)
+    .orderBy(claimed.sourceId, claimed.ordinal);
   leaseChunks(
     workspaceId,
     chunks.map(({ id }) => id),

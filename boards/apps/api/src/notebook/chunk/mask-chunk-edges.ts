@@ -34,15 +34,20 @@ export function maskChunkEdges(
   return { text: masked(text, all), hidden: all.length > 0 };
 }
 
-// The text of the chunk before (-1) or after (1) a chunk of
-// notebookChunkTable in the same section of its source, or null. A subquery
-// of the same statement, so the neighbours are of the same sync as the
-// chunk. Every name is written in full: drizzle prints an alias without its
-// table and leaves columns of a one-table select unqualified, and inside the
-// subquery those would name the neighbour.
-export function textNear(step: -1 | 1) {
+// The text of the chunk before (-1) or after (1) a chunk in the same
+// section of its source, or null. `chunk` names the outer relation with the
+// chunk's `source_id`, `ordinal` and `heading`. A subquery of the same
+// statement, so the neighbours are of the same sync as the chunk. Every name
+// is written in full: drizzle prints an alias without its table and leaves
+// columns of a one-table select unqualified, and inside the subquery those
+// would name the neighbour. Postgres runs a subquery of the select list
+// before ORDER BY and LIMIT of the same level (EXPLAIN VERBOSE, PG 16):
+// a ranked or limited query reads the neighbours one level up.
+export function textNear(
+  step: -1 | 1,
+  chunk: string = getTableName(notebookChunkTable),
+) {
   const near = step < 0 ? "chunk_before" : "chunk_after";
-  const chunk = getTableName(notebookChunkTable);
   const column = (of: string, { name }: AnyColumn) =>
     sql`${sql.identifier(of)}.${sql.identifier(name)}`;
   const { heading, ordinal, sourceId, text } = notebookChunkTable;
