@@ -8,8 +8,8 @@ import os
 import re
 
 from merge_guard_files import command_writes
-from merge_guard_launch import (IMPLIED_VAR, INCLUDE_ESCAPE, MAKE_BASE, MAKE_CONT, MAKE_ENV, MAKE_TEXT, MAKEFLAGS_ARG,
-                                MAKES, NOT_ASCII, _make_opts, _make_where, make_files)
+from merge_guard_launch import (INCLUDE_ESCAPE, MAKE_BASE, MAKE_CONT, MAKE_ENV, MAKE_TEXT, MAKEFLAGS_ARG, MAKES,
+                                NOT_ASCII, _make_opts, _make_where, make_files)
 from merge_guard_shell import CURRENT, SUBST
 
 WT_TRACKS = ("feature", "fix", "refactor", "spike", "review")
@@ -140,18 +140,12 @@ MAKE_RESERVED = {"SHELL", "MAKESHELL", "MAKEFLAGS", "GNUMAKEFLAGS", "MFLAGS", "M
                  "MAKEOVERRIDES", "MAKELEVEL", "MAKECMDGOALS", "CURDIR", "SUFFIXES"}
 
 
-def _exported(assign):
-    """Присваивание меняет окружение рецептов: имя пришло в make из окружения (GNU make отдаёт его shell рецепта со
-    значением из Makefile, `PATH = /tmp/x`; `?=` значение из окружения не меняет) или меняет запуск программ
-    (IMPLIED_VAR). Линза backend #419, заметка 4."""
-    name = assign.group(1)
-    return assign.group(2) != "?" and (name in os.environ or IMPLIED_VAR.fullmatch(name + "=") is not None)
-
-
 def _make_rules(text):
     """{цель: (пререквизиты, строки рецепта)} и цели .PHONY; None — строка, которую разбор не сводит: директива,
-    присваивание с `$`, `!=`, переменной make (MAKE_RESERVED, имя с точкой) или в окружение рецептов (_exported),
-    правило с `$`, `%`, `::`, `;`, `|`,
+    присваивание с `$`, `!=`, переменной make (MAKE_RESERVED, имя с точкой) или не через `?=` (линза backend #419,
+    заметка 4; линза Claude, O1): имя, которое пришло в make из окружения (`X=1 make check`, `export X`, окружение
+    сессии), GNU make отдаёт shell рецепта со значением из Makefile (`PATH = /tmp/x`). `?=` значение окружения не
+    меняет, а своё имя без окружения make не экспортирует. Правило с `$`, `%`, `::`, `;`, `|`,
     `=`, `#`, специальная цель кроме .PHONY, цель дважды, табуляция до первого правила. Строка рецепта с
     продолжением (обратная косая в конце) — None в списке: make отдаёт её shell с переводом строки как есть (в
     кавычках shell их не снимает), склейка разбора с этим не совпадает."""
@@ -168,7 +162,7 @@ def _make_rules(text):
         current = None
         assign = MAKE_ASSIGN.match(line)
         if MAKE_DIRECTIVE.match(line) or assign and (assign.group(1) in MAKE_RESERVED or "$" in line
-                                                     or _exported(assign)):
+                                                     or assign.group(2) != "?"):
             return None
         if assign:
             continue

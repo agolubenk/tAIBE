@@ -210,13 +210,11 @@ def reviewed_test(path, a, cwd, written=()):
 
 
 def _trusted_dir(top, rel):
-    """Папка rel репозитория top (realpath) — без ссылок в пути и чиста (clean_dir), или её нет ни на диске, ни на
-    ветке (инстанс без eval/tools). Есть только на ветке — нет: тест взял бы код по `$TAIBE_ROOT`."""
+    """Папка rel репозитория top (realpath) есть, без ссылок в пути и чиста (clean_dir). Папки нет — нет доверия: тест
+    взял бы её код вне репозитория (`$TAIBE_ROOT`, `$HOME/…` — инстанс HR без eval/tools, линза Claude #419, B1)."""
     p = os.path.join(top, rel)
     try:
-        if os.path.lexists(p):
-            return os.path.realpath(p) == p and os.path.isdir(p) and clean_dir(p)
-        return not git_out(top, "rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD:" + rel)
+        return os.path.realpath(p) == p and os.path.isdir(p) and clean_dir(p)
     except GitTimeout:
         return False
 

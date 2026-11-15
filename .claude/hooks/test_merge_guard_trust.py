@@ -146,8 +146,10 @@ for label, change, kw in (
     bash(f"грязная папка слоя ({label}): отказ теста", "python3 .claude/hooks/test_x.py", True, cwd=d)
     bash(f"грязная папка слоя ({label}): отказ make check-layer", "make check-layer", True, cwd=d)
 
-no_tools = layer_repo("trust-notools-", drop=("eval/",))  # инстанс без eval/tools: ни на диске, ни на ветке
-bash("нет eval/tools ни на диске, ни на ветке: проход", "python3 .claude/hooks/test_x.py", False, cwd=no_tools)
+# Инстанс без eval/tools (HR): тест слоя взял бы spawn_session.sh по $TAIBE_ROOT или $HOME — вне репозитория, текст не
+# проверен (линза Claude #419, B1). Гейт — CI.
+no_tools = layer_repo("trust-notools-", drop=("eval/",))
+bash("нет eval/tools ни на диске, ни на ветке: отказ", "python3 .claude/hooks/test_x.py", True, cwd=no_tools)
 
 # Разбор: формы запуска и запись команды — без хука, функция целиком.
 rt = getattr(merge_guard_git, "reviewed_test", None)
@@ -193,7 +195,7 @@ if mr:
     expect("порядок make, префиксы @-+ и $$", recipe(good) == ["true", "false", "echo $HOME"])
     expect("цель без рецепта — пусто", recipe(".PHONY: check\ncheck:\n") == [])
     expect("PATH ?= значение окружения не меняет", recipe(".PHONY: check\nPATH ?= /tmp/x\ncheck:\n\ttrue\n") == ["true"])
-    expect("своё имя =", recipe(".PHONY: check\nSE127_OWN_X = 1\ncheck:\n\ttrue\n") == ["true"])
+    expect("своё имя ?=", recipe(".PHONY: check\nSE127_OWN_X ?= 1\ncheck:\n\ttrue\n") == ["true"])
     for label, text, a in (
             ("$ в рецепте", ".PHONY: check\ncheck:\n\t@echo $(X)\n", None),
             ("export", ".PHONY: check\nexport X\ncheck:\n\ttrue\n", None),
@@ -215,6 +217,7 @@ if mr:
             ("PATH = (имя из окружения)", ".PHONY: check\nPATH = /tmp/x\ncheck:\n\ttrue\n", None),
             ("PATH +=", ".PHONY: check\nPATH += /tmp/x\ncheck:\n\ttrue\n", None),
             ("BASH_ENV := (IMPLIED_VAR)", ".PHONY: check\nBASH_ENV := /tmp/x\ncheck:\n\ttrue\n", None),
+            ("своё имя = (X=1 make check его экспортирует)", ".PHONY: check\nSE127_OWN_X = 1\ncheck:\n\ttrue\n", None),
             ("ifeq", ".PHONY: check\nifeq (a,a)\nendif\ncheck:\n\ttrue\n", None),
             ("табуляция до правила", "\ttrue\n.PHONY: check\ncheck:\n\ttrue\n", None),
             ("отступ пробелами", ".PHONY: check\ncheck:\n    true\n", None),
