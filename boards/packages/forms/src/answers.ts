@@ -1,9 +1,9 @@
-import type { Answer, AnswersDoc } from "./answers-schema";
-import { LIMITS } from "./limits";
-import type { FieldOf, FormField, FormTemplate } from "./schema";
-import { visibleFieldIds } from "./show-if";
+import type { Answer, AnswersDoc } from "./answers-schema.js";
+import { LIMITS } from "./limits.js";
+import type { FieldOf, FormField, FormTemplate } from "./schema.js";
+import { visibleFieldIds } from "./show-if.js";
 
-export type { Answer, AnswersDoc } from "./answers-schema";
+export type { Answer, AnswersDoc } from "./answers-schema.js";
 
 // Every field starts empty: a new answer set is `{}`. An empty answer is
 // null, "", an absent key, or an interval/matrix with no part filled.

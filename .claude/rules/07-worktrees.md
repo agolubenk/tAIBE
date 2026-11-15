@@ -53,6 +53,13 @@ make wt-rm TRACK=fix NAME=candidate-merge-n-plus-one
 рецептов напрямую: их хук разбирает как любые команды, Makefile при них не читается. Отказ на `make <цель>` печатает
 эти команды с подставленными `TRACK`/`NAME`.
 
+Тесты слоя (SE-127): `python3 [-I] [-B] [-u] .claude/hooks/test_*.py`, `bash .claude/hooks/test_*.sh` и то же в
+`.claude/scripts` хук пускает без разбора их текста, если `.claude/hooks`, `.claude/scripts` и `eval/tools` (их код тесты
+запускают) — ровно их деревья на основной ветке origin (ни правки, ни лишнего файла, ни ссылки, `__pycache__` — только
+обычные файлы), а команда — простой запуск теста или цикл по ним. В worktree с правкой этих папок и в инстансе без
+`eval/tools` (HR: тест взял бы код по `$TAIBE_ROOT`) — отказ, гейт — CI. `make check`/`make check-layer` при Makefile с основной ветки хук
+разбирает по командам рецептов; пока тесты `eval/tools` с признаками (SE-138) их останавливают — команды напрямую.
+
 ```bash
 mkdir -p worktrees/fix                                                    # make wt-fix NAME=<topic>
 git worktree add "worktrees/fix/<topic>" -b "fix/<topic>" board-agents    # ветка есть: git worktree add "worktrees/fix/<topic>" "fix/<topic>"
