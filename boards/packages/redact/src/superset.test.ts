@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import { redact as baseRedact } from "../fixtures/redact-base";
+import { redact as base378Redact } from "../fixtures/redact-base-221e381b4";
 import { redact, type RedactHit } from "./index";
 
 // Coord, #375 (TB-198): a change of the search may only add masks. Every
-// character that the base (fixtures/redact-base.ts) masks, redact() masks
-// too. Seeded cases, two templates in turn, each with a value at the end:
+// character that a base masks, redact() masks too. Two frozen bases:
+// fixtures/redact-base.ts (2dd520685, before TB-198) and
+// fixtures/redact-base-221e381b4.ts (after #375 and #378, TB-202), so a
+// change that drops a mask added by #375 or #378 fails too. Seeded cases, two templates in turn, each with a value at the end:
 // - a chain of junk, names and separators, up to 6 deep;
 // - nested rewinds: 1-3 names behind a DROPS_VALUE character, then 1-3
 //   names in a row (A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = <v>).
@@ -109,15 +112,20 @@ function maskedBy(hits: RedactHit[], length: number): boolean[] {
   return masked;
 }
 
+const BASES = [
+  { name: "2dd520685", redact: baseRedact },
+  { name: "221e381b4", redact: base378Redact },
+];
+
 describe("redact masks a superset of the base", () => {
-  it(`keeps every base mask on ${CASES} seeded chains`, () => {
+  it.each(BASES)(`keeps every $name mask on ${CASES} seeded chains`, (b) => {
     const next = generator(SEED);
     const lost: string[] = [];
     let baseMasks = 0;
     let added = 0;
     for (let index = 0; index < CASES; index += 1) {
       const text = next();
-      const base = maskedBy(baseRedact(text).hits, text.length);
+      const base = maskedBy(b.redact(text).hits, text.length);
       const head = maskedBy(redact(text).hits, text.length);
       if (base.includes(true)) baseMasks += 1;
       if (base.some((on, at) => on && !head[at])) lost.push(text);
@@ -125,7 +133,8 @@ describe("redact masks a superset of the base", () => {
     }
     expect(lost.slice(0, 5)).toEqual([]);
     // The generator is not vacuous: the base masks most cases, and the
-    // search of TB-198 adds masks to some.
+    // head adds masks to some (TB-198 against 2dd520685, TB-199 against
+    // 221e381b4).
     expect(baseMasks).toBeGreaterThan(CASES / 2);
     expect(added).toBeGreaterThan(0);
   });

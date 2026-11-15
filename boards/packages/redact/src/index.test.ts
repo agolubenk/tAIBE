@@ -571,6 +571,17 @@ describe("@kaneo/redact", () => {
       expect(redact(input).text).not.toContain(secret);
     });
 
+    // TB-202 superset test against 221e381b4: a name with a glued `:=`
+    // after `=>` was accepted as the value, and the search stopped before
+    // the real value. Now it goes on at that name.
+    it.each([
+      [`X1_TOKEN=>A_TOKEN=>A_TOKEN:="${value}"`, value],
+      [`x-api-key"=api_key=>k1_api_key:="${camel}"`, camel],
+      [`X1_TOKEN=>A_TOKEN=>${value}`, value],
+    ])("masks the value after a chain of glued names: %s", (input, secret) => {
+      expect(redact(input).text).not.toContain(secret);
+    });
+
     it.each([
       "password===",
       "A_TOKEN:=",
@@ -578,15 +589,12 @@ describe("@kaneo/redact", () => {
       "A_TOKEN==(",
       "A_TOKEN=x(B_TOKEN=>",
       "A_TOKEN=(=>",
-    ])(
-      "redacts 256 000 characters of %j in linear time",
-      (unit) => {
-        const text = unit.repeat(Math.ceil(256_000 / unit.length));
-        const started = performance.now();
-        redact(text);
-        expect(performance.now() - started).toBeLessThan(250);
-      },
-    );
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      const text = unit.repeat(Math.ceil(256_000 / unit.length));
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
+    });
   });
 
   // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the

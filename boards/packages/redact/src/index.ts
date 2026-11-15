@@ -44,11 +44,17 @@ function nameStart(value: string, end: number): number {
   return start;
 }
 
-// The start of the run of name characters that ends the value (a final `:`
-// or `=` aside), or -1.
+// A separator that can end a value. `:=` and `=>` come first: with only `=`
+// cut, `A_TOKEN:=` has no name at its end, and an accepted value
+// `A_TOKEN:=` (after `=>`) stopped the search before the real value
+// (X1_TOKEN=>A_TOKEN:="<v>", TB-202 superset test against 221e381b4).
+const TRAILING_SEPARATORS = [":=", "=>", ":", "="];
+
+// The start of the run of name characters that ends the value (a final
+// separator aside), or -1.
 function trailingName(value: string): number {
-  const last = value.charAt(value.length - 1);
-  const end = last === ":" || last === "=" ? value.length - 1 : value.length;
+  const separator = TRAILING_SEPARATORS.find((sep) => value.endsWith(sep));
+  const end = value.length - (separator?.length ?? 0);
   const start = nameStart(value, end);
   return start < end ? start : -1;
 }
