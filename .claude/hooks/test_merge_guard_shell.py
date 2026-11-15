@@ -940,6 +940,43 @@ for name, where in (("push_one.py", on_main), ("push_split.py", on_main), ("push
                     ("push_cmd.py", on_main), ("open_settings.py", ROOT), ("repo_settings.py", ROOT),
                     ("tmp_other.py", ROOT)):
     bash(f"SE-138, скрипт с диска — отказ: {name}", f"python3 -I {fp / name}", True, cwd=where)
+# SE-138 B1 (линза backend на 3ce7170af): в аргументах push — имя, которое разбор не прослеживает, а цель есть
+# в тексте, — правило base по всему тексту (opaque). На base каждая форма — отказ.
+B1_PUSH = (
+    ("push_default.py", 'import subprocess\n\n\ndef push(branch="main"):\n'
+                        '    subprocess.run(["git", "push", "origin", branch])\n\n\npush()\n'),
+    ("push_tuple.py", 'import subprocess\nremote, branch = "origin", "main"\n'
+                      'subprocess.run(["git", "push", remote, branch])\n'),
+    ("push_hop.py", 'import subprocess\ncfg = {"branch": "main"}\ntarget = cfg["branch"]\n'
+                    'subprocess.run(["git", "push", "origin", target])\n'),
+    ("push_append.py", 'import subprocess\nrest = ["origin"]\nrest.append("main")\n'
+                       'subprocess.run(["git", "push"] + rest)\n'),
+    ("push_return.py", 'import subprocess\n\n\ndef target():\n    return "main"\n\n\n'
+                       'subprocess.run(["git", "push", "origin", target()])\n'),
+    ("push_star.py", 'import subprocess\nflags = []\nflags.append("--all")\n'
+                     'subprocess.run(["git", "push", "origin", *flags])\n'),
+    ("push_fstr.py", 'import subprocess\n\n\ndef br():\n    return "main"\n\n\n'
+                     'subprocess.run(f"git push origin {br()}", shell=True)\n'),
+    ("push_cmd_hop.py", 'import subprocess\ncfg = {"x": "main"}\nb = cfg["x"]\ncmd = ["git", "push", "origin"]\n'
+                        'subprocess.run(cmd + [b])\n'),
+)
+# Проход: цель есть в тексте, но аргументы push — литералы; `cwd=repo` — другой аргумент вызова.
+B1_PASS = (
+    ("push_kw_str.py", 'import subprocess\nBASE = "main"\nprint(BASE)\nrepo = "."\n'
+                       'subprocess.run("git push -q origin x", shell=True, cwd=repo)\n'),
+    ("push_kw_list.py", 'import subprocess\nBASE = "main"\nprint(BASE)\nrepo = "."\n'
+                        'subprocess.run(["git", "push", "-q", "origin", "x"], cwd=repo, check=True)\n'),
+)
+TMP_COMMENT = ("tmp_comment.py", 'from pathlib import Path\nroot = Path.cwd()  # not tempfile\n'
+                                 '(root / ".claude/settings.json").write_text("{}")\n')
+for name, text in B1_PUSH + B1_PASS + (TMP_COMMENT,):
+    (fp / name).write_text(text)
+for name, _ in B1_PUSH:
+    bash(f"SE-138 B1, скрипт с диска — отказ: {name}", f"python3 -I {fp / name}", True, cwd=on_main)
+for name, _ in B1_PASS:
+    bash(f"SE-138 B1, скрипт с диска — проход: {name}", f"python3 -I {fp / name}", False, cwd=on_main)
+bash("SE-138, TEMP в комментарии — не временная папка, отказ: tmp_comment.py",
+     f"python3 -I {fp / TMP_COMMENT[0]}", True, cwd=ROOT)
 for form in ('cur=""; for n in 1 2; do s=$(gh pr view $n); cur="$cur#$n: $s"; done',
              's=$(gh pr view 1); cur="a: $s $s"', 'A="x y"; export C=$A; local D=${A}; echo "$C"'):
     bash(f"SE-138, присваивание не делится на слова, main — проход: {form!r}", form, False, cwd=on_main)

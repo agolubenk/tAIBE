@@ -71,9 +71,10 @@ def uses(rx, text):
 def temp_vars(lines):
     """Имена временных папок: присвоены из tempfile, mkdtemp, TemporaryDirectory, gettempdir, tmp_path, tmpdir,
     `self.tmp` или из такого имени (`proj = Path(self.tmp.name) / "proj"`), `with tempfile.… as d`; фикстуры
-    tmp_path и tmpdir. Имя, которому где-то присвоено иное (`root = REPO`), — не временное."""
+    tmp_path и tmpdir. Имя, которому где-то присвоено иное (`root = REPO`), — не временное. Слово в комментарии или
+    строке (`root = Path.cwd()  # not tempfile`) — не в счёт (mask)."""
     values = {}
-    for ln in lines:
+    for ln in map(mask, lines):
         m = PATH_VAR.match(ln)
         for n, v in ([(m.group(1), ln[m.end():])] if m else []) + [(n, ln) for n in WITH_AS.findall(ln)
                                                                      if TEMP.search(ln)]:
@@ -138,25 +139,100 @@ def near(lines, marks):
     return [(i, statement(lines, i)) for i in starts]
 
 
+IDENT = re.compile(r"(?<![\w.])[A-Za-z_]\w*")  # `self.marks` — одно имя `self`: атрибут после точки не в счёт
+KWARG = re.compile(r"(?<![\w.])[A-Za-z_]\w*\s*=(?!=)")  # `check=True`: ключ аргумента — не значение
+CALLEE = re.compile(r"[\w.]+\s*\Z")
+CONST = {"True", "False", "None"}
+
+
+def mask(s):
+    """Литералы в одну строку — пробелами внутри кавычек, комментарии `#` — пробелами: позиции те же. Префикс
+    литерала (`f"…{x}"`, `r"…"`) остаётся словом — для opaque это имя."""
+    s = LITERAL.sub(lambda m: m.group(0)[0] + " " * (len(m.group(0)) - 2) + m.group(0)[-1], s)
+    return re.sub(r"#[^\n]*", lambda m: " " * len(m.group(0)), s)
+
+
+def group(ms, pos):
+    """(a, b, есть ли скобка): скобочная группа текста ms вокруг pos — от незакрытой скобки слева до её пары; скобки
+    нет — весь текст."""
+    depth = 0
+    for a in range(pos - 1, -1, -1):
+        d = DEPTH.get(ms[a], 0)
+        if d > 0 and depth == 0:
+            break
+        depth -= d
+    else:
+        return 0, len(ms), False
+    depth = 0
+    for b in range(a, len(ms)):
+        depth += DEPTH.get(ms[b], 0)
+        if depth == 0:
+            return a, b + 1, True
+    return a, len(ms), True
+
+
+def segment(ms, a, b):
+    """Аргумент вокруг группы [a, b): соседние куски до `,` или скобки родительской группы (`[…] + rest`, `*flags`)."""
+    pa, pb, inner = group(ms, a)
+    lo, hi = (pa + 1, pb - 1) if inner else (pa, pb)
+    left, depth = a, 0
+    while left > lo and not (depth == 0 and ms[left - 1] == ","):
+        depth -= DEPTH.get(ms[left - 1], 0)
+        left -= 1
+    right, depth = b, 0
+    while right < hi and not (depth == 0 and ms[right] == ","):
+        depth += DEPTH.get(ms[right], 0)
+        right += 1
+    head = ms[left:a]
+    if not inner:  # оператор верхнего уровня: `cmd = […]` — имя слева от `=` не аргумент
+        m = PATH_VAR.match(head)
+        head = head[m.end():] if m else head
+    if ms[a:a + 1] == "(":  # `subprocess.run(…)`: имя вызываемой функции не аргумент
+        head = CALLEE.sub("", head)
+    return head + " " + ms[b:right]
+
+
+def opaque(s, pos, known=()):
+    """В аргументах команды push у pos — имя или вызов, значение которых разбор не видит (`branch`, `rest`,
+    `target()`, `*flags`, `f"…{x}"`, `"git push " + b`). Команда — список: её скобочная группа; команда — одна
+    строка: этот литерал (`cwd=repo` рядом — другой аргумент). Push вне литерала и вне скобок — текст (строка
+    docstring), не команда. known — имена, уже разобранные (cmds)."""
+    ms = mask(s)
+    lit = next((m.span() for m in LITERAL.finditer(s) if m.start() <= pos < m.end()), None)
+    if lit and GIT_PUSH.search(s[lit[0]:lit[1]]):
+        a, b = lit
+    else:
+        a, b, inner = group(ms, pos)
+        if not inner and not known:
+            return False
+    text = KWARG.sub(" ", ms[a:b] + " " + segment(ms, a, b))
+    return bool(set(IDENT.findall(text)) - CONST - set(known))
+
+
 def push_found(lines, cwd):
     """Скрипт с диска: оператор (statement), где git push и цель (push_target), или None. По всему тексту правило
     давало ложный отказ тесту, где команда push — образец данных, а цель — опция или слово другого вызова (SE-138).
     Цель в переменной — тоже цель: имя, присвоенное в строке с целью, в операторе с git push; имя, присвоенное
-    оператором с git push (`cmd = ["git", "push"]`), в операторе с целью."""
+    оператором с git push (`cmd = ["git", "push"]`), в операторе с целью. В аргументах push — имя, которое разбор
+    не прослеживает (opaque: аргумент функции по умолчанию, кортеж, `append`, `return`, `*flags`), — правило base по
+    всему тексту (SE-138 B1, линза backend на 3ce7170af)."""
     marks = [k for k, ln in enumerate(lines) if GIT_WORD.search(ln)]
     if not marks:
         return None
+    whole = push_target("\n".join(lines), cwd)
     hot = names_rx({m.group(1) for m in map(PATH_VAR.match, lines) if m and push_target(m.string, cwd)})
     cmds = set()
     for i, s in near(lines, marks):
-        if GIT_PUSH.search(s):
-            if push_target(s, cwd) or uses(hot, s):
+        p = GIT_PUSH.search(s)
+        if p:
+            if push_target(s, cwd) or uses(hot, s) or (whole and opaque(s, p.start())):
                 return s
             m = PATH_VAR.match(lines[i])
             cmds |= {m.group(1)} if m else set()
     rx = names_rx(cmds)
     users = [k for k, ln in enumerate(lines) if uses(rx, ln)] if rx else []
-    return next((s for _, s in near(lines, users) if uses(rx, s) and (push_target(s, cwd) or uses(hot, s))), None)
+    return next((s for _, s in near(lines, users) if uses(rx, s) and (
+        push_target(s, cwd) or uses(hot, s) or (whole and opaque(s, rx.search(s).start(), cmds)))), None)
 
 
 def interp_found(text, cwd, roots, by_line=False):
