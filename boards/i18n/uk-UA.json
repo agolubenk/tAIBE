@@ -929,6 +929,7 @@
 			"toastMoved": "Проєкт успішно переміщено",
 			"toastMovedWithUnassigned": "Проєкт успішно переміщено. Із {{taskCount}} завдань знято призначення.",
 			"toastMoveError": "Не вдалося перемістити проєкт",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Не вдалося перевірити, до яких робочих просторів можна перемістити цей проєкт. Перезавантажте сторінку, щоб спробувати ще раз.",
 			"moveDialogDescription": "Завдання, призначені людям поза новим робочим простором, залишаться без виконавця, а підписки на сповіщення для цього проєкту буде скинуто.",
 			"moveDialogTitle": "Перемістити до іншого робочого простору?",

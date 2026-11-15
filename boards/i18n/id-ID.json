@@ -905,6 +905,7 @@
 			"toastMoved": "Proyek berhasil dipindahkan",
 			"toastMovedWithUnassigned": "Proyek berhasil dipindahkan. {{taskCount}} tugas dilepas penugasannya.",
 			"toastMoveError": "Gagal memindahkan proyek",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Tidak dapat memeriksa ruang kerja mana saja yang dapat menjadi tujuan pemindahan proyek ini. Muat ulang halaman untuk mencoba lagi.",
 			"moveDialogDescription": "Tugas yang ditugaskan ke orang di luar ruang kerja baru akan dilepas penugasannya, dan langganan notifikasi untuk proyek ini dihapus.",
 			"moveDialogTitle": "Pindahkan ke ruang kerja lain?",

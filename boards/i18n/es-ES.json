@@ -796,6 +796,7 @@
 			"toastMoved": "Proyecto movido correctamente",
 			"toastMovedWithUnassigned": "Proyecto movido correctamente. {{taskCount}} tarea(s) quedaron sin asignar.",
 			"toastMoveError": "No se pudo mover el proyecto",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "No se pudo comprobar a qué espacios de trabajo puedes mover este proyecto. Vuelve a cargar la página para intentarlo de nuevo.",
 			"moveDialogDescription": "Las tareas asignadas a personas que no están en el nuevo espacio de trabajo quedarán sin asignar, y se eliminarán las suscripciones a notificaciones de este proyecto.",
 			"moveDialogTitle": "¿Mover a otro espacio de trabajo?",

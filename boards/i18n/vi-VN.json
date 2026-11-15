@@ -1149,6 +1149,7 @@
 			"toastMoved": "Đã chuyển dự án thành công",
 			"toastMovedWithUnassigned": "Đã chuyển dự án thành công. {{taskCount}} công việc đã bị hủy phân công.",
 			"toastMoveError": "Không thể chuyển dự án",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Không thể kiểm tra những không gian làm việc mà bạn có thể chuyển dự án này đến. Hãy tải lại trang để thử lại.",
 			"moveDialogDescription": "Các công việc được giao cho người ngoài không gian làm việc mới sẽ bị bỏ giao, và các đăng ký nhận thông báo của dự án này sẽ bị xóa.",
 			"moveDialogTitle": "Chuyển sang không gian làm việc khác?",

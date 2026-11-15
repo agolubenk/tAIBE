@@ -791,6 +791,7 @@
 			"toastMoved": "Project succesvol verplaatst",
 			"toastMovedWithUnassigned": "Project succesvol verplaatst. {{taskCount}} taak/taken zijn niet langer toegewezen.",
 			"toastMoveError": "Verplaatsen van project mislukt",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Kon niet controleren naar welke workspaces je dit project kunt verplaatsen. Herlaad de pagina om het opnieuw te proberen.",
 			"moveDialogDescription": "Taken die zijn toegewezen aan mensen buiten de nieuwe werkruimte, worden niet meer toegewezen. Meldingsabonnementen voor dit project worden gewist.",
 			"moveDialogTitle": "Naar een andere werkruimte verplaatsen?",

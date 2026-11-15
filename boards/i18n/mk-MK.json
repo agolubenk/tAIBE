@@ -913,6 +913,7 @@
 			"toastMoved": "Проектот е успешно преместен",
 			"toastMovedWithUnassigned": "Проектот е успешно преместен. {{taskCount}} задачи останаа недоделени.",
 			"toastMoveError": "Неуспешно преместување на проектот",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Не можеше да се провери во кои работни простори може да го преместите овој проект. Освежете ја страницата за да се обидете повторно.",
 			"moveDialogDescription": "Задачите доделени на луѓе надвор од новиот работен простор остануваат недоделени, а претплатите за известувања за овој проект се бришат.",
 			"moveDialogTitle": "Да се премести во друг работен простор?",

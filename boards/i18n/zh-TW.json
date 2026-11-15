@@ -1148,6 +1148,7 @@
 			"toastMoved": "專案已移動",
 			"toastMovedWithUnassigned": "專案已移動。有 {{taskCount}} 個任務已變為未指派。",
 			"toastMoveError": "移動專案失敗",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "無法確認你可以將此專案移動到哪些工作區。請重新載入後再試一次。",
 			"moveDialogDescription": "指派給新工作區以外成員的任務將會取消指派，此專案的通知訂閱也會清除。",
 			"moveDialogTitle": "要移動到其他工作區嗎？",

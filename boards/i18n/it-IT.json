@@ -1167,6 +1167,7 @@
 			"toastMoved": "Progetto spostato con successo",
 			"toastMovedWithUnassigned": "Progetto spostato con successo. {{taskCount}} attività sono rimaste senza assegnatario.",
 			"toastMoveError": "Impossibile spostare il progetto",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Non è stato possibile verificare in quali spazi di lavoro puoi spostare questo progetto. Ricarica la pagina per riprovare.",
 			"moveDialogDescription": "Le attività assegnate a persone esterne al nuovo workspace resteranno senza assegnatario e le iscrizioni alle notifiche di questo progetto verranno rimosse.",
 			"moveDialogTitle": "Spostare in un altro workspace?",

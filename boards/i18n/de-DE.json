@@ -992,6 +992,7 @@
 			"toastMoved": "Projekt erfolgreich verschoben",
 			"toastMovedWithUnassigned": "Projekt erfolgreich verschoben. Bei {{taskCount}} Aufgabe(n) wurde die Zuweisung aufgehoben.",
 			"toastMoveError": "Projekt konnte nicht verschoben werden",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Es konnte nicht geprüft werden, in welche Workspaces du dieses Projekt verschieben kannst. Lade die Seite neu, um es erneut zu versuchen.",
 			"moveDialogDescription": "Aufgaben, die Personen außerhalb des neuen Workspaces zugewiesen sind, verlieren ihre Zuweisung, und Benachrichtigungsabos für dieses Projekt werden entfernt.",
 			"moveDialogTitle": "In anderen Workspace verschieben?",

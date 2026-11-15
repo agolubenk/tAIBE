@@ -1158,6 +1158,7 @@
 			"toastMoved": "प्रोजेक्ट सफलतापूर्वक ले जाया गया",
 			"toastMovedWithUnassigned": "प्रोजेक्ट सफलतापूर्वक ले जाया गया। {{taskCount}} कार्य का असाइनमेंट हटा दिया गया।",
 			"toastMoveError": "प्रोजेक्ट ले जाने में विफल",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "यह जाँचा नहीं जा सका कि आप इस प्रोजेक्ट को किन वर्कस्पेस में ले जा सकते हैं। पुनः प्रयास करने के लिए पेज रीलोड करें।",
 			"moveDialogDescription": "नए वर्कस्पेस से बाहर के लोगों को असाइन किए गए कार्यों का असाइनमेंट हट जाएगा, और इस प्रोजेक्ट की सूचना सदस्यताएँ हटा दी जाएँगी।",
 			"moveDialogTitle": "दूसरे वर्कस्पेस में ले जाएँ?",

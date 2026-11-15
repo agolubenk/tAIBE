@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import useMoveProject from "@/hooks/mutations/project/use-move-project";
 import { toast } from "@/lib/toast";
+import { moveErrorMessage } from "./move-error-message";
 
 type MoveTarget = { id: string; name: string };
 
@@ -78,11 +79,7 @@ export function MoveProjectRow({
         params: { workspaceId: target.id, projectId },
       });
     } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : t("settings:projectGeneral.toastMoveError"),
-      );
+      toast.error(moveErrorMessage(error, t));
     } finally {
       setIsSubmitting(false);
     }

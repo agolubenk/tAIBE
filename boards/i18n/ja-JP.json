@@ -1150,6 +1150,7 @@
 			"toastMoved": "Project moved successfully",
 			"toastMovedWithUnassigned": "Project moved successfully. {{taskCount}} task(s) were unassigned.",
 			"toastMoveError": "Failed to move project",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveDialogDescription": "移動先のワークスペースに所属していないユーザーに割り当てられたタスクは未割り当てになり、このプロジェクトの通知の購読は解除されます。",
 			"moveDialogTitle": "別のワークスペースに移動しますか？",
 			"moveTargetLabel": "ワークスペース",

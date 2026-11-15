@@ -913,6 +913,7 @@
 			"toastMoved": "Το έργο μετακινήθηκε με επιτυχία",
 			"toastMovedWithUnassigned": "Το έργο μετακινήθηκε με επιτυχία. Αφαιρέθηκε η ανάθεση από {{taskCount}} εργασίες.",
 			"toastMoveError": "Αποτυχία μετακίνησης του έργου",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Δεν ήταν δυνατός ο έλεγχος των χώρων εργασίας στους οποίους μπορείτε να μετακινήσετε αυτό το έργο. Ανανεώστε τη σελίδα για να δοκιμάσετε ξανά.",
 			"moveDialogDescription": "Οι εργασίες που έχουν ανατεθεί σε άτομα εκτός του νέου χώρου εργασίας μένουν χωρίς ανάθεση και οι συνδρομές ειδοποιήσεων για αυτό το έργο διαγράφονται.",
 			"moveDialogTitle": "Μετακίνηση σε άλλο χώρο εργασίας;",

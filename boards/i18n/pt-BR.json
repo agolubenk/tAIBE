@@ -1167,6 +1167,7 @@
 			"toastMoved": "Projeto movido com sucesso",
 			"toastMovedWithUnassigned": "Projeto movido com sucesso. {{taskCount}} tarefa(s) ficaram sem responsável.",
 			"toastMoveError": "Falha ao mover o projeto",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Não foi possível verificar para quais workspaces você pode mover este projeto. Recarregue a página para tentar novamente.",
 			"moveDialogDescription": "Tarefas atribuídas a pessoas fora do novo espaço de trabalho ficam sem responsável, e as inscrições de notificação deste projeto são removidas.",
 			"moveDialogTitle": "Mover para outro espaço de trabalho?",

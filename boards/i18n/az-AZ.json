@@ -1159,6 +1159,7 @@
 			"toastMoved": "Project moved successfully",
 			"toastMovedWithUnassigned": "Project moved successfully. {{taskCount}} task(s) were unassigned.",
 			"toastMoveError": "Failed to move project",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveDialogDescription": "Yeni iş sahəsindən kənar şəxslərə təyin olunmuş tapşırıqların icraçısı çıxarılır və bu layihə üçün bildiriş abunəlikləri silinir.",
 			"moveDialogTitle": "Başqa iş sahəsinə köçürülsün?",
 			"moveTargetLabel": "İş sahəsi",

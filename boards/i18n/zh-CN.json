@@ -1149,6 +1149,7 @@
 			"toastMoved": "项目移动成功",
 			"toastMovedWithUnassigned": "项目移动成功。已取消分配 {{taskCount}} 个任务。",
 			"toastMoveError": "移动项目失败",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "无法检查你可以将此项目移动到哪些工作区。请重新加载页面后重试。",
 			"moveDialogDescription": "分配给新工作区以外成员的任务将取消分配，此项目的通知订阅也会被清除。",
 			"moveDialogTitle": "移动到其他工作区？",

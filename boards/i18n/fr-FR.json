@@ -921,6 +921,7 @@
 			"toastMoved": "Projet déplacé avec succès",
 			"toastMovedWithUnassigned": "Projet déplacé avec succès. {{taskCount}} tâche(s) ont été désassignées.",
 			"toastMoveError": "Échec du déplacement du projet",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Impossible de vérifier vers quels espaces de travail vous pouvez déplacer ce projet. Rechargez la page pour réessayer.",
 			"moveDialogDescription": "Les tâches assignées à des personnes extérieures au nouvel espace de travail seront désassignées, et les abonnements aux notifications de ce projet seront supprimés.",
 			"moveDialogTitle": "Déplacer vers un autre espace de travail ?",

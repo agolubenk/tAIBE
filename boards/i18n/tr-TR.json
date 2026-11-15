@@ -913,6 +913,7 @@
 			"toastMoved": "Proje başarıyla taşındı",
 			"toastMovedWithUnassigned": "Proje başarıyla taşındı. {{taskCount}} görevin ataması kaldırıldı.",
 			"toastMoveError": "Proje taşınamadı",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"moveTargetsError": "Bu projeyi hangi çalışma alanlarına taşıyabileceğiniz kontrol edilemedi. Yeniden denemek için sayfayı yenileyin.",
 			"moveDialogDescription": "Yeni çalışma alanının dışındaki kişilere atanmış taleplerin ataması kaldırılır ve bu projenin bildirim abonelikleri temizlenir.",
 			"moveDialogTitle": "Başka bir çalışma alanına taşınsın mı?",
