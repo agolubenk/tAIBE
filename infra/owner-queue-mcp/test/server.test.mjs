@@ -263,4 +263,18 @@ test('oq_history (карточка HR oow56fdzk): по умолчанию limit=
   const old = body(await m.call('oq_history', { collection: 'items', id: 'd-1', limit: 3 }));
   assert.equal(old.events.length, 3, 'консоль без limit отдала 50 — MCP показал 3');
   assert.equal(old.next, undefined);
+  assert.match(old.console, /консоль старой версии/, 'агент знает, что before и keys_only не сработали');
+});
+
+test('oq_history: окно урезал потолок ответа — next не отдаётся, подсказка уменьшить limit (линза Claude #360, B2)', async () => {
+  const { historyOut } = await import('../list.mjs');
+  // 60 коротких полей на событие: brief их не сокращает (короче 200 символов), 100 событий не влезают и в brief.
+  const after = Object.fromEntries(Array.from({ length: 60 }, (_, k) => [`f${k}`, 'x'.repeat(20)]));
+  const big = Array.from({ length: 100 }, (_, i) => ({ at: i, actor: 'a', action: 'update', after: { ...after, step: i } }));
+  const out = historyOut({ events: big, next: '900' }, { n: 100 });
+  assert.equal(out.truncated, true);
+  assert.equal(out.next, undefined, 'next консоли указывал бы за 100-е событие, а показаны не все');
+  assert.match(out.hint, /меньшим limit/);
+  const fits = historyOut({ events: big.slice(0, 3), next: '900' }, { n: 3 });
+  assert.equal(fits.next, '900');
 });

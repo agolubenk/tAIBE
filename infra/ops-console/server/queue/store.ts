@@ -437,7 +437,8 @@ function parseEventAfter(raw: string | null): unknown {
  * номеру события журнала (id): у SQLite один писатель, id — порядок фиксации, а at может идти назад при шаге часов
  * (линза backend #360, M2). before — только события с номером меньше.
  * more — есть старше (по сырым строкам, до схлопывания пар product — M1), nextId — номер последней строки окна,
- * olderAfter — after следующего за окном события: с ним сравнивает keys вид fields=meta (history-view.ts).
+ * olderAfter и olderAction — after и действие следующего за окном события: с ним сравнивает keys вид fields=meta
+ * (history-view.ts).
  */
 export async function docHistory(collection: Collection, id: string, products: Visibility, limit = 50, before?: number) {
   const own = products === '*' ? undefined : inArray(sql`coalesce(${oqEvents.product}, ${DEFAULT_PRODUCT})`, [...products])
@@ -462,7 +463,8 @@ export async function docHistory(collection: Collection, id: string, products: V
     })
     .map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson) }))
   const more = rows.length > lim
-  return { events, more, nextId: more ? page[page.length - 1]!.id : undefined, olderAfter: more ? parseEventAfter(rows[lim]!.afterJson) : undefined }
+  const beyond = more ? rows[lim]! : undefined
+  return { events, more, nextId: more ? page[page.length - 1]!.id : undefined, olderAfter: beyond ? parseEventAfter(beyond.afterJson) : undefined, olderAction: beyond?.action }
 }
 
 /**

@@ -6,7 +6,8 @@
  * - `?before=<next>` — следующая страница: `next` прошлого ответа, номер события журнала (у одной миллисекунды
  *   может быть несколько событий, поэтому не время).
  * - `?fields=meta` — без after: at, actor, action и keys — какие поля верхнего уровня событие изменило против
- *   предыдущего; null — сравнить не с чем (after обрезан маркером или его нет).
+ *   предыдущего снимка; null — не снимок или сравнить не с чем. Снимок документа в after — только у set, update и
+ *   import; у merge — {pr, sha, …}, у product — {from, to, reason}, у delete after нет (линза Claude #360, B1).
  */
 import { apiError } from '../http-types'
 
@@ -15,8 +16,11 @@ export const HISTORY_LIMIT_MAX = 100
 
 export type HistoryQuery = { limit: number; before?: number; meta: boolean }
 type Event = { at: number; actor: string; action: string; after: unknown }
-/** Окно docHistory (store.ts): события, есть ли старше, номер последней строки окна и after следующего за окном. */
-export type HistoryPage = { events: Event[]; more: boolean; nextId?: number; olderAfter?: unknown }
+/** Окно docHistory (store.ts): события, есть ли старше, номер последней строки окна, after и действие следующего за окном. */
+export type HistoryPage = { events: Event[]; more: boolean; nextId?: number; olderAfter?: unknown; olderAction?: string }
+
+/** Действия, у которых after — снимок документа целиком. */
+const SNAPSHOT = new Set(['set', 'update', 'import'])
 
 const intIn = (raw: string, lo: number, hi: number) => /^\d{1,15}$/.test(raw) && Number(raw) >= lo && Number(raw) <= hi
 
@@ -43,13 +47,24 @@ function changedKeys(after: unknown, prev: unknown): string[] | null {
   return [...keys].filter((k) => JSON.stringify(after[k]) !== JSON.stringify(prev[k])).sort()
 }
 
-/** Тело ответа: события окна (со снимками или keys) и next, если есть старше. Самое старое событие документа — все поля. */
+/**
+ * Предыдущий снимок для события i: ближайший более старый set/update/import в окне; за окном — следующее событие, если
+ * оно снимок, иначе null (дальше окна не видно). undefined — старше снимков нет: самое старое, keys — все поля.
+ */
+function prevSnapshot(page: HistoryPage, i: number): unknown {
+  const list = page.events
+  for (let j = i + 1; j < list.length; j++) if (SNAPSHOT.has(list[j]!.action)) return list[j]!.after
+  if (!page.more) return undefined
+  return page.olderAction && SNAPSHOT.has(page.olderAction) ? page.olderAfter : null
+}
+
+/** Тело ответа: события окна (со снимками или keys) и next, если есть старше. */
 export function historyReplyBody(page: HistoryPage, q: HistoryQuery): { events: unknown[]; next?: string } {
-  const { events: list, more, nextId, olderAfter } = page
+  const { events: list, more, nextId } = page
   const events = list.map((e, i) => {
     if (!q.meta) return e
-    const prev = i + 1 < list.length ? list[i + 1]!.after : more ? (olderAfter ?? null) : undefined
-    return { at: e.at, actor: e.actor, action: e.action, keys: changedKeys(e.after, prev) }
+    const keys = SNAPSHOT.has(e.action) ? changedKeys(e.after, prevSnapshot(page, i)) : null
+    return { at: e.at, actor: e.actor, action: e.action, keys }
   })
   return more && nextId !== undefined ? { events, next: String(nextId) } : { events }
 }

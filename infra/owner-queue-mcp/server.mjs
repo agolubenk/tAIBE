@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { FILE_ID, ITEM_ID, alreadySaved, ensureDir, extOf, fileRoots, filesState, safeDir, saveStream } from './files.mjs';
-import { briefDoc, filterDocs, fitList, historyReply, pageList, replyText, snapshots } from './list.mjs';
+import { briefDoc, filterDocs, fitList, historyOut, pageList, replyText, snapshots } from './list.mjs';
 import { protocolText } from './protocol.mjs';
 import { createDeltaMirror } from './delta.mjs';
 
@@ -416,11 +416,7 @@ const TOOLS = [
     run: async ({ collection, id, limit, before, keys_only: keysOnly, brief }) => {
       const n = Math.min(100, Math.max(1, Math.floor(Number(limit) || 20)));
       const q = new URLSearchParams({ limit: String(n), ...(before ? { before: String(before) } : {}), ...(keysOnly ? { fields: 'meta' } : {}) });
-      const r = await api('GET', `/history/${collection}/${encodeURIComponent(id)}?${q}`);
-      // Консоль до этой версии параметры не знает и отдаёт 50 полных событий — окно режется здесь.
-      const events = (Array.isArray(r?.events) ? r.events : []).slice(0, n);
-      const out = historyReply(events, { brief: brief === true });
-      return typeof r?.next === 'string' ? { ...out, next: r.next } : out;
+      return historyOut(await api('GET', `/history/${collection}/${encodeURIComponent(id)}?${q}`), { n, keysOnly, brief: brief === true });
     },
   },
 ];

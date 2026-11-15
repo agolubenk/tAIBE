@@ -20,7 +20,7 @@ beforeAll(async () => {
   owner = (await createToken('hist-owner', ['owner'])).token
   // 55 правок: тело по 12 000 символов (потолок body пункта), шаг меняет поле step, каждая пятая — ещё и title.
   for (let i = 0; i < 55; i++) {
-    await logEvent('token:a', 'items', DOC, 'patch', { title: `пункт ${Math.floor(i / 5)}`, body: 'т'.repeat(12_000), step: i }, null)
+    await logEvent('token:a', 'items', DOC, 'update', { title: `пункт ${Math.floor(i / 5)}`, body: 'т'.repeat(12_000), step: i }, null)
   }
 })
 
@@ -64,6 +64,24 @@ describe('/history: limit, before, fields=meta', () => {
     // Самое старое событие документа — все его поля.
     const last = await get(`?limit=5&fields=meta&before=${(await get('?limit=50')).json.next}`)
     expect(last.json.events.at(-1)!.keys).toEqual(['body', 'step', 'title'])
+  })
+
+  it('fields=meta рядом с merge и product (у них в after не снимок документа): keys — между снимками, у merge и product — null (линза Claude #360, B1)', async () => {
+    const doc = 'd-hist-mixed'
+    await logEvent('token:a', 'items', doc, 'set', { title: 'Т', body: 'б', step: 1 }, null)
+    await logEvent('owner', 'items', doc, 'merge', { pr: 7, sha: 'a'.repeat(40), method: 'squash' }, null)
+    await logEvent('owner', 'items', doc, 'product', { from: 'hr-helper', to: 'taibe', reason: 'x' }, null)
+    await logEvent('token:a', 'items', doc, 'update', { title: 'Т', body: 'б', step: 2 }, null)
+    const r = await (await app.request(`/api/oq/v1/history/items/${doc}?fields=meta`, { headers: { Authorization: `Bearer ${agent}` } })).json() as { events: Ev[] }
+    expect(r.events.map((e) => [e.action, e.keys])).toEqual([
+      ['update', ['step']],
+      ['product', null],
+      ['merge', null],
+      ['set', ['body', 'step', 'title']],
+    ])
+    // Окно обрезало старший снимок, а за окном — merge: сравнить не с чем, null, а не ложный список.
+    const w = await (await app.request(`/api/oq/v1/history/items/${doc}?fields=meta&limit=1`, { headers: { Authorization: `Bearer ${agent}` } })).json() as { events: Ev[] }
+    expect(w.events[0]!.keys).toBeNull()
   })
 
   it('негодные параметры — 400 с причиной', async () => {
