@@ -399,6 +399,49 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(await headings("-другое")).toEqual(["Ключи › Аренда"]);
   });
 
+  it("answers a guess at a part of a secret as any other word", async () => {
+    const nb = await notebookFixture();
+    const stored = await nb.owner("PUT", "/sources", {
+      kind: "link",
+      ref: "https://example.com/passwords",
+      title: "Пароли",
+      text: `# Пароли\n\nСмена: password=${join("Summer", "-Hunter-", "2026")} раз в квартал.`,
+    });
+    expect(stored.status).toBe(200);
+    const headings = async (query: string) => {
+      const found = await nb.agent("POST", "/search", {
+        query,
+        mode: "keyword",
+      });
+      expect(found.status).toBe(200);
+      return (found.body.results as Hit[]).map((hit) => hit.heading);
+    };
+
+    // Backend #388 B1: the words of a marker ([REDACTED:password_assignment]
+    // reads `redact`, `password`, `assign`) are not in the stored text, so
+    // with them `<marker word> or <part>` found a chunk only for a right
+    // guess. A part of either secret answers as a word in no chunk.
+    const parts = ["ghp", "summer", "hunter", "2026"];
+    for (const words of [
+      "redacted or ",
+      "assignment or ",
+      "api or ",
+      "key or ",
+      '"redacted" ',
+      "password or ",
+      "смена -",
+      "ротация -",
+    ]) {
+      const other = await headings(`${words}другое`);
+      for (const part of parts) {
+        expect(await headings(`${words}${part}`), words + part).toEqual(other);
+      }
+    }
+    // Not vacuous: a visible word still finds the chunk.
+    expect(await headings("password or summer")).toEqual(["Пароли"]);
+    expect(await headings("смена -summer")).toEqual(["Пароли"]);
+  });
+
   it("gives an API key no hash or length of a raw source", async () => {
     const nb = await notebookFixture();
     // Claude #388 B3: the hash and the length of the raw text stay only on a

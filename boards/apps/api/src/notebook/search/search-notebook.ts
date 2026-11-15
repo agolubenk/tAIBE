@@ -19,6 +19,8 @@ const CANDIDATES = 20;
 // the cap stops planted secret chunks from making one search read the
 // whole corpus.
 const KEYWORD_SCAN_MAX = 200;
+// A marker of redact; in the checked text it is a space (backend #388 B1).
+const MARKER = /\[REDACTED:[a-z0-9_]+\]/g;
 // Longer than one worker batch, short enough that a stuck worker costs the
 // reader a few seconds of keyword-only results, not a hang.
 export const QUERY_EMBED_WAIT_MS = 4_000;
@@ -96,6 +98,13 @@ export async function searchNotebook(input: {
 // <guess>` would put a chunk whose secret holds the guess first, and with
 // only the first ranks read, a hidden chunk would push a visible one out
 // (release lens #388).
+//
+// The masked text must hold no word that the stored text has not: else
+// `redacted or <guess>` passes the check by the marker (`redact`, `password`,
+// `assign`) only for a chunk that the guess made a candidate (backend lens
+// #388 B1). So a marker is a space, and the checked tsvector keeps only the
+// lexemes of the stored one: a chunk that can pass the check is already a
+// candidate.
 async function visibleKeywordCandidates(workspaceId: string, query: string) {
   const rows = await indexableCandidates(workspaceId, query);
   if (rows.length > KEYWORD_SCAN_MAX) {
@@ -115,15 +124,16 @@ type Candidate = Awaited<ReturnType<typeof indexableCandidates>>[number];
 async function visibleRanked(rows: Candidate[], query: string) {
   const checked = rows.flatMap(
     (row): { id: string; masked: string | null }[] => {
-      // The text as the caller reads it (TB-203: with a secret cut at a
-      // chunk edge masked), in the form of the stored tsvector: heading, a
-      // space, text.
+      // The text as the caller reads it: a secret cut at a chunk edge is
+      // masked too (TB-203), and the route masks each field once more.
       const edges = maskChunkEdges(row.text, row.before ?? "", row.after ?? "");
-      const seen = redact(`${row.heading} ${edges.text}`);
-      if (!edges.hidden && !seen.hits.length) {
+      const heading = redact(row.heading);
+      if (!edges.hidden && !heading.hits.length) {
         return [{ id: row.id, masked: null }];
       }
-      return row.negationsOnly ? [] : [{ id: row.id, masked: seen.text }];
+      if (row.negationsOnly) return [];
+      const seen = `${heading.text} ${redact(edges.text).text}`;
+      return [{ id: row.id, masked: seen.replace(MARKER, " ") }];
     },
   );
   if (!checked.length) return [];
@@ -135,7 +145,14 @@ async function visibleRanked(rows: Candidate[], query: string) {
     )}) AS t(id, masked)
     JOIN ${notebookChunkTable} c ON c.id = t.id
     CROSS JOIN LATERAL (
-      SELECT coalesce(to_tsvector('russian', t.masked), c.search) AS seen
+      SELECT to_tsvector('russian', t.masked) AS raw
+    ) m
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN t.masked IS NULL THEN c.search
+        ELSE ts_delete(m.raw, ARRAY(
+          SELECT unnest(tsvector_to_array(m.raw))
+          EXCEPT SELECT unnest(tsvector_to_array(c.search))))
+      END AS seen
     ) v
     CROSS JOIN LATERAL (
       SELECT websearch_to_tsquery('russian', ${query}) AS q
