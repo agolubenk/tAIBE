@@ -35,17 +35,32 @@ function lastDropping(value: string): number {
   return -1;
 }
 
+const NAME_CHAR = /[A-Za-z0-9_-]/;
+
+// The start of the run of name characters that ends the value (a final `:`
+// or `=` aside), or -1.
+function trailingName(value: string): number {
+  const last = value.charAt(value.length - 1);
+  const end = last === ":" || last === "=" ? value.length - 1 : value.length;
+  let start = end;
+  while (start > 0 && NAME_CHAR.test(value.charAt(start - 1))) start -= 1;
+  return start < end ? start : -1;
+}
+
 // Replaces only group 1 of each match, keeping the surrounding context
 // (header name, assignment key, quotes) readable. `accept` also gets the
 // character after the value ("" at the end of the text).
 //
-// TB-198: a rejected value may hold another name with its own value
-// (B_SECRET="x(=C_SECRET=<v>): the search goes on inside it. A value with
-// `=` or `:` in it is not a name of any shape, so a filter rejects it only
-// for its length or for a DROPS_VALUE character, and then every value that
-// holds that character too. An inner value ends where the outer one ends, so
-// the search goes on after the last such character: no character is scanned
-// more than twice.
+// TB-198: after a value the search goes on where another name may start:
+// - in a rejected value, after its last DROPS_VALUE character
+//   (B_SECRET="x(=C_SECRET=<v>). A value with `=` or `:` in it is not a
+//   name of any shape, so a filter rejects it only for its length or for
+//   such a character, and then every value that holds it too;
+// - otherwise at the run of name characters that ends the value: that name
+//   has its separator after the value, past a space or a quote
+//   (A_TOKEN=x.B_TOKEN = <v>, A_SECRET=fooB_SECRET: <v>, Control #375).
+// An inner value ends with the outer one or starts after it, so the match
+// starts only grow and each value is read again at most once.
 function collectGroup(
   pattern: RegExp,
   kind: SecretKind,
@@ -59,11 +74,12 @@ function collectGroup(
       const value = match[group];
       if (value === undefined) continue;
       const start = match.index + match[0].indexOf(value);
-      if (accept(value, text.charAt(start + value.length))) {
-        hits.push({ kind, start, end: start + value.length });
-      } else {
-        const dropping = lastDropping(value);
-        if (dropping >= 0) pattern.lastIndex = start + dropping + 1;
+      const accepted = accept(value, text.charAt(start + value.length));
+      if (accepted) hits.push({ kind, start, end: start + value.length });
+      const dropping = accepted ? -1 : lastDropping(value);
+      const resume = dropping >= 0 ? dropping + 1 : trailingName(value);
+      if (resume >= 0) {
+        pattern.lastIndex = Math.max(match.index + 1, start + resume);
       }
     }
     return hits;
