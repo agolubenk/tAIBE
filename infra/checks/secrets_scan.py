@@ -42,7 +42,8 @@ PATTERNS = [
     ('url-credentials', re.compile(r'\b[a-z][a-z0-9+.-]{0,31}://[^/\s:@"\'`]+:([^@\s/"\'`]{6,})@[^\s"\'`]+', re.I)),
     ('bearer-token', re.compile(r'(?i)\bAuthorization["\']?[ \t]*:[ \t]*["\']?Bearer[ \t]+([^\s"\'`]{12,})')),
 ]
-# TB-199, as redact: the separator is `=`, `:`, `:=` (Go, Pascal) or `=>` (PHP, Ruby, Perl); `==` and `===` compare.
+# TB-199, as redact after #375/#378 and the TB-199 PR: the separator is `=`, `:`, `:=` (Go, Pascal) or `=>` (PHP,
+# Ruby, Perl); `==` and `===` compare.
 # A name right after `${` is a shell reference (${PASSWORD:?not set}), not an assignment.
 SEPARATOR = r'(?::=|=>|=(?!=)|:)'
 # A credential name in any case, also as the end of a longer name (x-api-key, "api_key" in JSON); quotes optional.

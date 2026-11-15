@@ -181,9 +181,10 @@ class ChecksTest(unittest.TestCase):
                 self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_secrets_name_inside_a_value(self):
-        # TB-198, as redact: a value may hold another name with its own value. The search goes on after the last code
-        # character of a rejected value, else in its last 256 characters (a part may pass where the whole failed the
-        # entropy floor or held a placeholder word); after a reported value, at the name that ends it.
+        # TB-198, as redact after #375/#378 and the TB-199 PR: a value may hold another name with its own value. The
+        # search goes on after the last code character of a rejected value, else in its last 256 characters (a part
+        # may pass where the whole failed the entropy floor or held a placeholder word); after a reported value, at
+        # the name that ends it.
         key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
         for line in (f'B_SECRET" = "x(=C_SECRET={key}', f'CLIENT_SECRET = "{{{{vault}}}}/APP_SECRET={key}"',
                      f'A_TOKEN="abcdefB_TOKEN" = "{key}"', f'A_SECRET=fooB_SECRET: {key}',
@@ -201,7 +202,8 @@ class ChecksTest(unittest.TestCase):
                 self.assertEqual(secrets_scan.scan_line(line), [])
 
     def test_secrets_separators(self):
-        # TB-199, as redact: `:=` and `=>` gave `=` or `>` as the value; `==` and `===` compare.
+        # TB-199, as redact after #375/#378 and the TB-199 PR: `:=` and `=>` gave `=` or `>` as the value; `==` and
+        # `===` compare.
         key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
         for line in (f'GITHUB_TOKEN := "{key}"', f'password := {key}', f"'api_key' => '{key}'",
                      f':password => "{key}"', f'"DB_PASSWORD" => "{key}",'):
@@ -225,15 +227,27 @@ class ChecksTest(unittest.TestCase):
 
     def test_secrets_inner_names_stay_linear(self):
         # TB-198: from the start of every rejected value a run of `A_TOKEN:=` nested one inner value per name (64 000
-        # characters: 20 s). In the last 256 characters each line takes up to 35 ms; short chains up to 150 ms.
+        # characters: 20 s). The CI runner is up to 10 times slower than a laptop, so the test compares 64 000
+        # characters with 16 000: a linear scan takes about 4 times longer (3.6-4.0 measured), a quadratic one 16
+        # times. A time below 10 ms counts as 10 ms (timer noise); 5 s is the guard against a hang.
         units = ['A_SECRET=A_SECRET=', 'A_TOKEN=test/', 'A_TOKEN:=', 'api_key=api_key=', 'secret=secret=secret=',
-                 'A_SECRET=fooB_SECRET: ', 'A_TOKEN=>(', 'A_TOKEN:=' * 27 + ' ', 'secret=' * 35 + ' ']
-        for unit in units:
-            line = unit * (64000 // len(unit))
-            with self.subTest(unit=unit[:24]):
+                 'A_SECRET=fooB_SECRET: ', 'A_TOKEN=>(', 'A_TOKEN:=' * 27 + ' ', 'secret=' * 35 + ' ',
+                 'pwd=' * 63 + ' ']
+
+        def best(line):
+            times = []
+            for _ in range(2):
                 started = time.perf_counter()
                 secrets_scan.scan_line(line)
-                self.assertLess(time.perf_counter() - started, 1.0)
+                times.append(time.perf_counter() - started)
+            return min(times)
+
+        for unit in units:
+            with self.subTest(unit=unit[:24]):
+                short = best(unit * (16000 // len(unit)))
+                long = best(unit * (64000 // len(unit)))
+                self.assertLess(long, 5.0)
+                self.assertLess(long / max(short, 0.01), 8)
 
     def test_hygiene(self):
         write(self.root, '.env', 'A=1\n')
