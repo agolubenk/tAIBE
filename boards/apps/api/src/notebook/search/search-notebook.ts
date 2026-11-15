@@ -166,10 +166,15 @@ function spaced(text: string, hits: RedactHit[]) {
 
 // A token caller's candidates with their text, one row past the cap.
 // `querytree` is `T` when no part of the query can be looked up (only
-// negations).
+// negations). Its phrase operators (`<->`, `<2>`) become `&`: in the masked
+// text the words around a secret stand together, in the stored one the
+// secret's lexemes stand between them, so `"<before> <after>" or <guess>`
+// was a candidate only for a right guess (boards lens #388 B2). With `&` a
+// chunk that the whole query matches in the masked text is a candidate:
+// its lexemes are all in the stored text.
 async function indexableCandidates(workspaceId: string, query: string) {
   const full = sql`websearch_to_tsquery('russian', ${query})`;
-  const indexable = sql`(CASE WHEN querytree(${full}) = 'T' THEN ${full} ELSE querytree(${full})::tsquery END)`;
+  const indexable = sql`(CASE WHEN querytree(${full}) = 'T' THEN ${full} ELSE regexp_replace(querytree(${full}), '<([0-9]+|-)>', '&', 'g')::tsquery END)`;
   return db
     .select({
       id: notebookChunkTable.id,

@@ -442,6 +442,47 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(await headings("смена -summer")).toEqual(["Пароли"]);
   });
 
+  it("answers a phrase around a secret as the masked text reads", async () => {
+    const nb = await notebookFixture();
+    const headings = async (query: string, as: "owner" | "agent" = "agent") => {
+      const found = await nb[as]("POST", "/search", { query, mode: "keyword" });
+      expect(found.status).toBe(200);
+      return (found.body.results as Hit[]).map((hit) => hit.heading);
+    };
+
+    // Boards #388 B2: in the masked text the words around the secret stand
+    // together, in the stored text the secret stands between them. With a
+    // phrase in the candidate gate, `or <guess>` decided the candidate.
+    const phrase = '"ключа раз в квартал"';
+    const right = SECRET.slice(4).toLowerCase();
+    const wrong = `${right.slice(0, -1)}9`;
+    for (const part of ["ghp", right]) {
+      expect(await headings(`${phrase} or ${part}`), part).toEqual([
+        "Ключи › Ротация",
+      ]);
+    }
+    for (const part of ["ghx", wrong, "другое"]) {
+      expect(await headings(`${phrase} or ${part}`), part).toEqual([
+        "Ключи › Ротация",
+      ]);
+    }
+    // The phrase is checked on the masked text: the stored text keeps the
+    // secret between the words, so the owner does not find it.
+    expect(await headings(`${phrase} or другое`, "owner")).toEqual([]);
+    // Phrase marks typed by hand (`<2>` glued to a word is a phrase to
+    // websearch) leave no operator in the gate; the answer is the owner's.
+    for (const query of [
+      "ротация <-> квартал",
+      "аренда <-> час",
+      "ротация<2>квартал",
+    ]) {
+      expect(await headings(query), query).toEqual(
+        await headings(query, "owner"),
+      );
+    }
+    expect(await headings("ротация <-> квартал")).toEqual(["Ключи › Ротация"]);
+  });
+
   it("gives an API key no hash or length of a raw source", async () => {
     const nb = await notebookFixture();
     // Claude #388 B3: the hash and the length of the raw text stay only on a
