@@ -20,8 +20,9 @@ import { getGithubSettings } from '../settings/store'
 import { decryptSecret } from '../lib/crypto'
 import { httpRequest } from '../lib/http'
 import { apiError } from '../http-types'
-import { DEFAULT_PRODUCT } from './products'
-import { getDoc, logEvent, writeDoc, type Actor } from './store'
+import { oqWrite } from './oq-write'
+import { DEFAULT_PRODUCT, listProducts } from './products'
+import { eventAfterJson, getDoc, logEvent, writeDocIn, type Actor } from './store'
 
 export interface GithubResponse {
   status: number
@@ -47,11 +48,15 @@ const realTransport: Transport = async (method, path, token, body) => {
 let transport: Transport = realTransport
 const MERGE_GAP_MS = 30_000
 let lastMergeAt = 0
+// Мёрж идёт (Q-35): занимается синхронно сразу после проверки интервала, до первого await, — второй POST, пришедший,
+// пока первый ждёт GitHub (двойной клик, страница и бот), получает 429. Консоль — один процесс на базу (changes.ts).
+let mergeInFlight = false
 
 /** Подмена транспорта в тестах; заодно сбрасывает паузу между мёржами, чтобы тесты не зависели от порядка. */
 export function setGithubTransportForTests(t: Transport | null): void {
   transport = t ?? realTransport
   lastMergeAt = 0
+  mergeInFlight = false
 }
 
 const prSchema = z.object({
@@ -417,7 +422,18 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
   if (version === undefined) {
     throw apiError(422, 'Нужна версия пункта с экрана подтверждения — откройте мёрж заново (на странице — после обновления; в Telegram — после обновления бота очереди)')
   }
+  if (mergeInFlight) throw apiError(429, 'Мёрж уже идёт — дождитесь его итога')
   if (Date.now() - lastMergeAt < MERGE_GAP_MS) throw apiError(429, 'Мёржи не чаще раза в 30 секунд — подождите')
+  mergeInFlight = true
+  try {
+    return await mergeChecked(actor, itemId, sha, version)
+  } finally {
+    mergeInFlight = false
+  }
+}
+
+/** Мёрж после проверок входа и интервала; слот mergeInFlight держит вызывающий mergeItem. */
+async function mergeChecked(actor: Actor, itemId: string, sha: string, version: number): Promise<{ sha: string; message: string }> {
   const info = await mergeInfo(itemId, version)
   if (info.state !== 'open') throw apiError(409, info.state === 'merged' ? `PR #${info.pr} уже влит` : `PR #${info.pr} закрыт`)
   if (info.approval === 'missing') {
@@ -433,7 +449,7 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
   if (info.mergeable === false) throw apiError(409, `GitHub не даёт влить: ${info.mergeableState || 'конфликт'}`)
   if (info.deploys && !info.skipCi && info.deployRunning && info.baseRef === 'main') throw apiError(409, 'Сейчас идёт деплой — дождитесь его окончания, затем вливайте')
   const { repo, token } = await settings()
-  // До чтения коммитов: окно, в котором второй POST проходит интервал, не шире прежнего (гонка целиком — карточка Q-35).
+  // До чтения коммитов: интервал считается от попытки мёржа; отказ до PUT его снимает.
   lastMergeAt = Date.now()
   const commits = info.method === 'squash'
     ? await prCommits(repo, info.pr as number, token).catch((e: unknown) => { lastMergeAt = 0; throw e })
@@ -448,10 +464,21 @@ export async function mergeItem(actor: Actor, itemId: string, sha: string, versi
   const merged = JSON.parse(res.text) as { sha?: string }
   const consequence = info.skipCi ? 'без деплоя ([skip ci])' : info.deploys && info.baseRef === 'main' ? 'запущен деплой прода' : 'деплой не ожидается'
   const message = `Влит PR #${info.pr} (${sha.slice(0, 7)}, ${info.method}), ${consequence}`
-  const prevNote = (await getDoc('checks', itemId, '*'))?.data.note
-  const note = typeof prevNote === 'string' && prevNote.trim() ? `${prevNote}\n${message}` : message
-  await writeDoc({ name: actor.name, scopes: ['owner'], products: '*' }, 'checks', itemId, { done: true, note: note.slice(-20_000), at: new Date().toISOString() }, { merge: true })
-  await logEvent(actor.name, 'items', itemId, 'merge', { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi, method: info.method, repo }, DEFAULT_PRODUCT)
+  // Ответ и событие мёржа — одной транзакцией (TB-153): заметка дописывается к сохранённой на момент записи.
+  const all = await listProducts()
+  await oqWrite(async (w) => {
+    const prev = await w.doc('checks', itemId)
+    const prevNote = prev ? (JSON.parse(prev.dataJson) as Record<string, unknown>).note : undefined
+    const note = typeof prevNote === 'string' && prevNote.trim() ? `${prevNote}\n${message}` : message
+    const owner: Actor = { name: actor.name, scopes: ['owner'], products: '*' }
+    await writeDocIn(w, owner, 'checks', itemId, { done: true, note: note.slice(-20_000), at: w.now.toISOString() }, { merge: true }, all)
+    // Продукт события — продукт пункта, а не продукт по умолчанию: дельта /changes (queue/changes.ts) показывает id по
+    // продукту события, и чужой пункт попал бы в removed у токена HR (линза Контроля #623). Сейчас mergeInfo пропускает
+    // только пункты HR (:382) — правка на день, когда мёрж подключат другим продуктам.
+    const itemProduct = (await w.doc('items', itemId))?.product ?? DEFAULT_PRODUCT
+    const after = { pr: info.pr, sha, mergeSha: merged.sha, skipCi: info.skipCi, method: info.method, repo }
+    await w.event({ actor: actor.name, collection: 'items', docId: itemId, action: 'merge', afterJson: eventAfterJson(after), product: itemProduct })
+  })
   return { sha: merged.sha ?? '', message }
 }
 

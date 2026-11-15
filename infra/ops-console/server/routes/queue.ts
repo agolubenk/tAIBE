@@ -17,6 +17,7 @@ import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
 import { changeItemProduct } from '../queue/product-change'
+import { historyQuery, historyReplyBody } from '../queue/history-view'
 import { recentPrs } from '../queue/prs'
 import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_BOARDS, PRODUCT_SLUG, visibilityKey, type Visibility } from '../queue/products'
 import { SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
@@ -127,7 +128,13 @@ queueRoutes.delete('/db/:col/:id', requireScope('owner'), async (c) => {
   return c.json({ ok: true })
 })
 
-queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => c.json({ events: await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products) }))
+// История документа (queue/history-view.ts): ?limit= (без него — 50, как раньше), ?before= (next прошлого ответа),
+// ?fields=meta (без снимков after).
+queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => {
+  const q = historyQuery({ limit: c.req.query('limit'), before: c.req.query('before'), fields: c.req.query('fields') })
+  const page = await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products, q.limit, q.before)
+  return c.json(historyReplyBody(page, q))
+})
 
 // Автопередача входящих сессии (queue/relay.ts): отметка процесса `server.mjs --relay` и состояние для страницы и бота.
 // По продуктам (фаза 4a, OPS-51): актор видит сессии только своих продуктов и отмечается только за видимый продукт.

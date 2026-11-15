@@ -44,8 +44,10 @@ type Pure = {
   ownerSnapshotApplies: (local: Record<string, unknown> | undefined, snap: Record<string, unknown> | undefined, pending: boolean) => boolean
   tipHtml: (s: string) => string
   roadmapLabelMode: (pxPerWeek: number) => 'weeks' | 'months'
+  rmWindowWeeks: (laneW: number) => { total: number; back: number }
   roadmapMonthLabel: (d: Date, first: boolean) => string
   placeRoadmapLabels: (items: { x: number; prio: number }[], laneW: number, labelW: number, gap: number) => ('up' | 'dn' | null)[]
+  roadmapBefore: <T extends Row>(late: T[], ms: T[], a: Date) => T[]
   targetFromHash: (hash: string) => string
 }
 type FakeDb = { doc: (path: string) => { set: (data: unknown, opts?: { ifVersion?: number }) => Promise<unknown>; get: () => Promise<unknown> } }
@@ -75,8 +77,8 @@ function pure(): Pure {
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
     itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
-    tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), roadmapMonthLabel: fn('roadmapMonthLabel'),
-    placeRoadmapLabels: fn('placeRoadmapLabels'), targetFromHash: fn('targetFromHash'),
+    tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), rmWindowWeeks: fn('rmWindowWeeks'), roadmapMonthLabel: fn('roadmapMonthLabel'),
+    placeRoadmapLabels: fn('placeRoadmapLabels'), roadmapBefore: fn('roadmapBefore'), targetFromHash: fn('targetFromHash'),
   }
 }
 
@@ -804,6 +806,55 @@ describe('роадмап по неделям: подписи не налезаю
     expect(roadmapLabelMode((1200 * 7) / 266)).toBe('months')
   })
 
+  it('заголовок столбца — по подписям шкалы: «Неделя» над неделями, «Месяц» над месяцами (карточка HR epz36yxj)', () => {
+    expect(html).toContain("var byWeeks = roadmapLabelMode(dx * 7) === 'weeks';")
+    expect(html).toContain(`'<div class="rm-row rm-head"><div class="rm-name">' + (byWeeks ? 'Неделя' : 'Месяц') + '</div>`)
+    expect(html).not.toContain('<div class="rm-name">Неделя</div>')
+  })
+
+  it('окно ближайших недель по умолчанию, «Весь горизонт» — переключателем; выбор в этом браузере; телефон — весь горизонт (карточка HR vb1ea4jq)', () => {
+    expect(html).toContain('<button class="toggle rm-range" id="rm-range" type="button" aria-pressed="false">Весь горизонт</button>')
+    // a11y: подпись постоянная, состояние — только aria-pressed (линза фронтенда #347, п. 3).
+    expect(html).toContain("function paintRmRange() { rmRangeBtn.setAttribute('aria-pressed', String(RM_RANGE === 'all')); }")
+    expect(html).not.toContain("'Ближайшие недели'")
+    // Просроченное до начала окна не пропадает: число у полосы, названия и отставание — в подсказке (решение продукта).
+    expect(html).toContain('var before = win ? roadmapBefore(late, ms, a) : [];')
+    expect(html).toContain("'>' + before.length + ' просрочено до окна</small>'")
+    // Цвет просрочки — текстовый токен списков (.is-late, var(--warn)), а не графический --late: на белом у --late
+    // 3,95:1, ниже AA для мелкого текста (линза фронтенда #347, 23:19Z).
+    expect(html).toContain(`'<br><small class="rm-before is-late"'`)
+    expect(html).toContain('.is-late { color: var(--warn); font-weight: 600; }')
+    expect(html).toContain('&& before.indexOf(w) < 0; }).length;')
+    expect(html).toContain("var RM_RANGE_KEY = 'oq-roadmap-range', RM_RANGE = 'window';")
+    expect(html).toContain("function rmWindowOn() { return RM_RANGE !== 'all' && !(window.matchMedia && window.matchMedia('(max-width: 640px)').matches); }")
+    expect(html).toContain('var wa = addD(m0, -7 * wk.back), wb = addD(m0, 7 * (wk.total - wk.back) - 1);')
+    expect(html).toContain('var ms = msAll.filter(function (w) { return inWin(dParse(w.end) || planEndOf(w)); });')
+    expect(html).toContain("try { localStorage.setItem(RM_RANGE_KEY, RM_RANGE); } catch (e)")
+    // Состояние окна — вне блока чистых функций (localStorage и window там недоступны в тесте).
+    expect(html.indexOf("var RM_RANGE_KEY = 'oq-roadmap-range'")).toBeGreaterThan(html.indexOf('/* oq-pure:end */'))
+    // Окно — столько недель, сколько помещается с недельной подписью: от 4 до 10, назад — до 2.
+    const { rmWindowWeeks, roadmapLabelMode } = pure()
+    expect(rmWindowWeeks(620)).toEqual({ total: 7, back: 1 })
+    expect(rmWindowWeeks(1100)).toEqual({ total: 10, back: 2 })
+    expect(rmWindowWeeks(300)).toEqual({ total: 3, back: 0 })
+    // На любой ширине полосы (от 300 px, laneW = max(300, …)) окно подписано неделями (линза фронтенда #347, п. 2).
+    for (const w of [300, 320, 335, 340, 620, 900, 1100]) expect(roadmapLabelMode((w / rmWindowWeeks(w).total))).toBe('weeks')
+  })
+
+  it('«просрочено до окна»: план раньше окна; веха с меткой в окне считается один раз — меткой (линза фронтенда #347)', () => {
+    const { roadmapBefore } = pure()
+    const a = new Date(2026, 10, 9) // начало окна — пн 9 ноя
+    const old = { id: 'old', status: 'doing', planEnd: '2026-11-02' } // план до окна, факта нет — только в счётчике
+    const msIn = { id: 'ms-in', status: 'doing', planEnd: '2026-11-03', end: '2026-11-12' } // план до окна, факт в окне
+    const inWin = { id: 'in', status: 'doing', planEnd: '2026-11-10' } // план в окне — не «до окна»
+    const base = { id: 'base', status: 'doing', basePlanEnd: '2026-11-01', planEnd: '2026-11-20' } // сдвинут: считаем по исходному плану
+    const noPlan = { id: 'np', status: 'doing' }
+    const late = [old, msIn, inWin, base, noPlan]
+    expect(roadmapBefore(late, [msIn], a).map((w) => w.id)).toEqual(['old', 'base'])
+    // Без метки в окне (веха вне ms) — снова в счётчике: просрочка не пропадает.
+    expect(roadmapBefore(late, [], a).map((w) => w.id)).toEqual(['old', 'ms-in', 'base'])
+  })
+
   it('месяц — коротко, год — у первой подписи и у января', () => {
     const { roadmapMonthLabel } = pure()
     expect(roadmapMonthLabel(new Date(2026, 10, 1), false)).toBe('ноя')
@@ -988,6 +1039,8 @@ describe('порядок пунктов: от старых к новым (про
       // живая ссылка: видно, какой updatedAt у пункта на странице после каждого снимка
       mount: (it: { id: string; updatedAt?: number }) => mounted.push(it),
       render: () => {}, showTarget: () => {},
+      // Таяние ответа (#337): тающих пунктов нет — applyItems перемонтирует все, как раньше.
+      MELT: {}, itemEl: () => null,
     })
     runInContext(fnSource('itemFromDb'), ctx)
     runInContext(fnSource('applyItems'), ctx)
@@ -1102,5 +1155,72 @@ describe('раскладка «Одной очередью» / «По разде
   it('подпись продукта и отбор по продукту — и у пунктов общего списка', () => {
     expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .item[data-id], #sec-queue .item[data-id]').forEach(decorateItem);")
     expect(PRODUCTS_JS).toContain("document.querySelectorAll('section[data-section] .list, #sec-queue .list')")
+  })
+})
+
+describe('связь вернулась — страница снова «Ответы сохраняются» сама (14.11: пара 🟠/🟢 на каждой выкатке)', () => {
+  it('снимок после сбоя возвращает страницу к общей базе без перезагрузки', () => {
+    expect(html).toContain("if (remote && modeEl.dataset.mode === 'local') setMode('shared');")
+  })
+})
+
+describe('таяние ответа и якорь прокрутки (просьба владельца 15.11)', () => {
+  it('ответ на странице: пункт 10 с тает на месте, раскрытым; курсор или фокус клавиатуры — пауза', () => {
+    expect(html).toContain('.item.is-melting { animation: oq-melt 10s')
+    expect(html).toContain('body.hide-done .item.is-done:not(.is-melting) { display: none; }')
+    expect(html).toContain('.item.is-done:not(.is-melting) .item-body { display: none; }')
+    // Пауза сильнее правил вида: !important.
+    expect(html).toContain('@media (hover: hover) { .item.is-melting:hover { animation: none !important; } }')
+    expect(html).toContain('.item.is-melting:has(:focus-visible) { animation: none !important; }')
+    expect(html).toContain('@media (prefers-reduced-motion: reduce) { body.hide-done .item.is-melting { animation-name: oq-melt-flat; } }')
+    // «Показать выполненные» — без смены вида, та же длина.
+    expect(html).toContain('body:not(.hide-done) .item.is-melting { animation-name: oq-melt-keep; }')
+  })
+
+  it('высота карточки не меняется, пока она тает: «✓ …» и «Изменить ответ» — после таяния, подсказка — в строке «Сохранено»', () => {
+    expect(html).toContain('.item.is-done:not(.is-melting) .summary-answer { display: block; }')
+    expect(html).toContain('.item.is-done:not(.is-melting) .reopen { display: inline; }')
+    expect(html).toContain('.saved { font-size: 12px; color: var(--muted); min-height: 1.6em; min-height: 1lh; }')
+    expect(html).toContain('body.hide-done .item.is-melting .saved:empty::after')
+    // Подсказка — генерируемый текст: бот очереди читает textContent «.saved» и не перескажет её.
+    expect(html).not.toContain('class="melt-hint"')
+  })
+
+  it('таяние начинает только свой ответ, до render(); конец — animationend; тающий пункт не уезжает и не перемонтируется', () => {
+    // persist до render (Claude-линза #337): до записи строка «Сохранено» показывает «Сохраняю…», а не время.
+    expect(html).toContain('markMelt(id); persist(id); render(); return;')
+    expect(html).toContain('markMelt(id); persist(id); render();\n')
+    expect(html).toContain('persist(rid); render(); return;')
+    expect(html).not.toContain('render(); persist(')
+    expect(html).toContain("if (!/^oq-melt/.test(ev.animationName) || !id || !MELT[id]) return;")
+    expect(html).toContain('var doneOf = function (it) { return isDone(it, state[it.id]) && !MELT[it.id]; };')
+    expect(html).toContain("el.classList.toggle('is-melting', !!MELT[it.id]);")
+    expect(html).toContain('if (MELT[id] && inList[id]) return;')
+    expect(html).toContain('list.forEach(function (it) { if (!MELT[it.id] || !itemEl(it.id)) mount(it, true); });')
+    // MELT объявлен до первого placeItems: иначе doneOf упал бы на undefined.
+    expect(html.indexOf('var MELT = {};')).toBeGreaterThan(0)
+    expect(html.indexOf('var MELT = {};')).toBeLessThan(html.indexOf('ITEMS.forEach(function (it) { mount(it, false); });'))
+  })
+
+  it('касание без наведения: тап держит тающую карточку, тап вне — отпускает (линза coord #337)', () => {
+    expect(html).toContain('.item.is-melting.is-held { animation: none !important; }')
+    expect(html).toContain("if (ev.pointerType !== 'touch') return;")
+    expect(html).toContain("if (el) el.classList.add('is-held');")
+  })
+
+  it('якорь прокрутки — скриптом: карточка под курсором (или с фокусом), без них — верхняя видимая; браузерный выключен', () => {
+    expect(html).toContain('html { overflow-anchor: none; }')
+    expect(html).toContain("window.addEventListener('scroll', rememberAnchor, { passive: true });")
+    expect(html).toContain('new ResizeObserver(function () { restoreAnchor(); })')
+    expect(html).toMatch(/scheduleDash\(\);\n {4}restoreAnchor\(\);\n {2}\}/)
+    expect(html).toContain("if (ev.pointerType === 'touch') return;")
+  })
+})
+
+describe('роадмап: вехи без подписи видны на снимке бота (карточка HR u68lwzb1)', () => {
+  it('у полосы — «+N вех без подписи», названия и даты — в её подсказке', () => {
+    expect(html).toContain('var hidden = marks.filter(function (m, i) { return !levels[i]; });')
+    expect(html).toContain("'>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>'")
+    expect(html).toContain("tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); }))")
   })
 })

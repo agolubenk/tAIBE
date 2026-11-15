@@ -880,6 +880,34 @@ describe('мёрж из очереди', () => {
     expect((await post('m-162', SHA)).status).toBe(429)
   })
 
+  it('два POST /merge почти одновременно (двойной клик, страница и бот) — один PUT в GitHub, второму 429 «мёрж уже идёт» (Q-35)', async () => {
+    // Медленный GitHub: пока первый запрос ждёт ответа на GET PR, второй уже прошёл бы прежнюю проверку интервала.
+    let puts = 0
+    const slow = async (method: string, path: string, token: string, body?: unknown): Promise<GithubResponse> => {
+      await new Promise((r) => setTimeout(r, 30))
+      if (method === 'PUT') puts++
+      return github(method, path, token, body)
+    }
+    setGithubTransportForTests(slow)
+    const version = (await bearer(agent).get('/db/items/m-170')).json.version as number
+    const [a, b] = await Promise.all([
+      bearer(owner).post('/merge/m-170', { sha: SHA, version }),
+      bearer(owner).post('/merge/m-170', { sha: SHA, version }),
+    ])
+    expect([a.status, b.status].sort()).toEqual([200, 429])
+    expect([a, b].find((r) => r.status === 429)!.json.error).toContain('Мёрж уже идёт')
+    expect(puts).toBe(1)
+    // Слот освобождён: дальше действует обычный интервал 30 с.
+    expect((await bearer(owner).post('/merge/m-170', { sha: SHA, version })).json.error).toContain('не чаще раза в 30 секунд')
+  })
+
+  it('отказ проверки освобождает слот: следующий мёрж не получает «мёрж уже идёт» (Q-35)', async () => {
+    setGithubTransportForTests(github)
+    expect((await post('m-171', SHA)).status).toBe(409) // нет вердикта «Контроля» — отказ до GitHub
+    const res = await post('m-170', SHA)
+    expect(res.status, JSON.stringify(res.json)).toBe(200)
+  })
+
   it('POST без версии пункта — 422, с устаревшей — 409: способ и деплой не подменить между показом и кликом (ревью Q-29/Q-30)', async () => {
     setGithubTransportForTests(github)
     lastPut = null

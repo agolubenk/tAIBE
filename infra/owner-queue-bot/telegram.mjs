@@ -6,6 +6,28 @@ import { pipeline } from 'node:stream/promises';
 
 const API = 'https://api.telegram.org';
 
+/**
+ * Один повтор после 429 (Too Many Requests), если Telegram просит подождать не дольше capS секунд: дольше — ошибка
+ * наружу сразу, чтобы не держать обработку остальных нажатий. Остальные ошибки — наружу без повтора.
+ */
+export async function retryFlood(fn, { sleep, capS = 5 }) {
+  try {
+    return await fn();
+  } catch (e) {
+    const wait = Number(e?.retryAfter) || 1;
+    if (e?.code !== 429 || wait > capS) throw e;
+    await sleep(wait * 1000);
+    return fn();
+  }
+}
+
+const apiError = (redact, method, json, status) => {
+  const err = new Error(redact(`${method}: ${json.description || status}`));
+  err.code = json.error_code;
+  err.retryAfter = json.parameters?.retry_after;
+  return err;
+};
+
 export class TelegramApi {
   constructor(token) {
     this.token = token;
@@ -24,12 +46,7 @@ export class TelegramApi {
       signal: AbortSignal.timeout(timeoutMs),
     });
     const json = await res.json().catch(() => ({ ok: false, description: `HTTP ${res.status}` }));
-    if (!json.ok) {
-      const err = new Error(this.redact(`${method}: ${json.description || res.status}`));
-      err.code = json.error_code;
-      err.retryAfter = json.parameters?.retry_after;
-      throw err;
-    }
+    if (!json.ok) throw apiError((t) => this.redact(t), method, json, res.status);
     return json.result;
   }
 
@@ -58,7 +75,7 @@ export class TelegramApi {
   async upload(method, form) {
     const res = await fetch(`${this.base}/${method}`, { method: 'POST', body: form, signal: AbortSignal.timeout(120_000) });
     const json = await res.json().catch(() => ({ ok: false }));
-    if (!json.ok) throw new Error(this.redact(`${method}: ${json.description || res.status}`));
+    if (!json.ok) throw apiError((t) => this.redact(t), method, json, res.status);
     return json.result;
   }
 
@@ -69,6 +86,21 @@ export class TelegramApi {
     form.append('caption', caption.slice(0, 1000));
     form.append('document', new Blob([text], { type: 'text/plain' }), name);
     return this.upload('sendDocument', form);
+  }
+
+  /** Заменить файл сообщения-документа на месте (editMessageMedia): карточка не растёт на 🔄 (линза Claude #343, B1). */
+  async editDocument(chatId, messageId, name, text, caption = '') {
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('message_id', String(messageId));
+    form.append('media', JSON.stringify({ type: 'document', media: 'attach://doc', caption: caption.slice(0, 1000) }));
+    form.append('doc', new Blob([text], { type: 'text/plain' }), name);
+    try {
+      return await this.upload('editMessageMedia', form);
+    } catch (e) {
+      if (/message is not modified/.test(e.message)) return null;
+      throw e;
+    }
   }
 
   /**

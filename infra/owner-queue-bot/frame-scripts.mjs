@@ -116,7 +116,12 @@ export function snapshotPage() {
   const modeEl = document.getElementById('mode');
   const howto = document.querySelector('header .howto');
   const ssh = document.getElementById('ssh-howto');
+  // Связь страницы с консолью (window.__oqConn ставит подмена базы консоли, page-scripts.ts): причина для сигнала
+  // «Очередь не подключилась к консоли». null — старая консоль без записи или страница не дошла до опроса.
+  const c = window.__oqConn && window.__oqConn.checks;
+  const conn = c ? { okAt: +c.okAt || 0, errAt: +c.errAt || 0, err: String(c.err || '').slice(0, 200), status: +c.status || 0, fails: +c.fails || 0 } : null;
   return {
+    conn,
     title: txt(document.querySelector('h1')),
     lede: txt(document.querySelector('.lede')),
     guide: howto ? tidy(conv(howto)) : '',
