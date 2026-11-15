@@ -12,11 +12,10 @@ import {
   maskForTokenCaller,
 } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
-import { HISTORY_CONTENT_CHARS } from "../fell/build-log";
 import { getLog } from "../read/get-log";
 import { listLogs } from "../read/list-logs";
 import { listSectors } from "../read/list-sectors";
-import { uncutClips, uncutText } from "../read/uncut-text";
+import { shownComment, uncutClips } from "../read/uncut-text";
 import { detectSectors } from "../sector/detect-sectors";
 import {
   detectedSectorSchema,
@@ -129,7 +128,7 @@ export const readRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       : log.seeds;
     const history = (log.history as Record<string, unknown>[]).map((entry) =>
       tokenCaller && typeof entry.content === "string"
-        ? { ...entry, content: uncutText(entry.content, HISTORY_CONTENT_CHARS) }
+        ? { ...entry, content: shownComment(entry.content) }
         : entry,
     );
     return c.json(

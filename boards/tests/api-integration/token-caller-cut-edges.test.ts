@@ -9,7 +9,10 @@ import {
 } from "vite-plus/test";
 import db, { schema } from "../../apps/api/src/database";
 import { seedTable } from "../../apps/api/src/database/forest-schema";
-import { HISTORY_CONTENT_CHARS } from "../../apps/api/src/forest/fell/build-log";
+import {
+  HISTORY_CONTENT_CHARS,
+  SEARCH_TEXT_CHARS,
+} from "../../apps/api/src/forest/fell/build-log";
 import {
   SEED_BODY_CHARS,
   SEED_TRUNCATED,
@@ -228,4 +231,77 @@ describe("API integration: secrets cut by a fixed length, for callers with a tok
     // A visible word of the same comment still finds it.
     expect(await found("слово")).toEqual([logId]);
   });
+
+  // Claude lens #400 B3 and coord 12:29: every field that the list searches,
+  // at each cut that can end it, with the token's head before the cut. A
+  // field at offset `start` of searchText is cut by its end at
+  // SEARCH_TEXT_CHARS - start.
+  const TITLE = "Обсуждение";
+  const LONG = filler(SEARCH_TEXT_CHARS - 2000);
+  it.each([
+    {
+      cut: "the title, by the end of searchText",
+      title: cutAt(SEARCH_TEXT_CHARS),
+    },
+    {
+      cut: "the description under an empty title, where the list reads it up to (B3)",
+      title: "",
+      description: cutAt(SEARCH_TEXT_CHARS),
+    },
+    {
+      cut: "the description, by the end of searchText",
+      title: TITLE,
+      description: cutAt(SEARCH_TEXT_CHARS - TITLE.length - 1),
+    },
+    {
+      cut: "a comment, where felling cuts it (B1)",
+      title: TITLE,
+      comment: cutAt(HISTORY_CONTENT_CHARS),
+    },
+    {
+      cut: "a comment, by the end of searchText",
+      title: TITLE,
+      description: LONG,
+      comment: cutAt(SEARCH_TEXT_CHARS - TITLE.length - LONG.length - 2),
+    },
+  ])(
+    "answers a guess at the cut word of $cut as any other word",
+    async ({ title, description, comment }) => {
+      const forest = await createForest();
+      const task = await addTask(forest.project.id, title);
+      if (!task) throw new Error("fixture");
+      await db
+        .update(schema.taskTable)
+        .set({ status: "done", description: description ?? null })
+        .where(eq(schema.taskTable.id, task.id));
+      if (comment) {
+        await db
+          .insert(schema.activityTable)
+          .values({ taskId: task.id, type: "comment", content: comment });
+      }
+      const felled = await forest.owner("/fell", {
+        kind: "tree",
+        rootId: task.id,
+        reason: "done",
+      });
+      expect(felled.status).toBe(200);
+      const logId = felled.body.logIds[0] as string;
+      const found = async (query: string) => {
+        const list = await forest.agent(`/logs?q=${encodeURIComponent(query)}`);
+        expect(list.status).toBe(200);
+        return (list.body.items as { id: string }[]).map((item) => item.id);
+      };
+
+      // The owner finds the log by the head: searchText holds it.
+      const owner = await forest.owner(`/logs?q=${HEAD}`);
+      expect(owner.body.items).toHaveLength(1);
+
+      for (const guess of [HEAD, HEAD.slice(0, 12)]) {
+        expect
+          .soft(await found(guess), guess.length.toString())
+          .toEqual(await found(`${guess.slice(0, -1)}0`));
+      }
+      expect(await found("слово")).toEqual([logId]);
+    },
+  );
 });
