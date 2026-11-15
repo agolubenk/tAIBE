@@ -13,9 +13,11 @@ import { FILE_ID, ITEM_ID, alreadySaved, ensureDir, extOf, fileRoots, filesState
 import { briefDoc, filterDocs, fitList, getBrief, historyOut, pageList, replyText, snapshots, writeAck } from './list.mjs';
 import { protocolText } from './protocol.mjs';
 import { createDeltaMirror } from './delta.mjs';
+import { request, timeoutsFromEnv } from './http.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BASE = `${(process.env.OQ_URL || 'https://ops.admin.hrhelper.space').replace(/\/$/, '')}/api/oq/v1`;
+const TIMEOUTS = timeoutsFromEnv();
 
 /** Основной продукт очереди (server/queue/product-boards.ts консоли): его токен — OQ_TOKEN. */
 export const DEFAULT_PRODUCT = 'hr-helper';
@@ -104,15 +106,7 @@ function api(method, path, body) {
 async function apiWith(tok, method, path, body, name = tokenName(PRODUCT)) {
   if (!tok && ENV_PRODUCT.error && !RELAY_MODE) throw new Error(`Продукт сессии не определён: ${ENV_PRODUCT.error}. Исправьте переменную и переподключите /mcp`);
   if (!tok) throw new Error(`Нет токена очереди: ${name} в окружении или в Keychain (security add-generic-password -U -s hr-helper-mcp -a ${name} -w <токен>)`);
-  const res = await fetch(BASE + path, {
-    method,
-    headers: { Authorization: `Bearer ${tok}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(20_000),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(json.error || `HTTP ${res.status}`), { status: res.status });
-  return json;
+  return request({ base: BASE, token: tok, method, path, body, timeouts: TIMEOUTS });
 }
 
 const COLL = { type: 'string', enum: ['checks', 'items', 'work'] };
@@ -509,7 +503,7 @@ if (isMain && RELAY_MODE) {
   else if (!t.value) fail(`нет ${t.name} для продукта ${a.product} (env или Keychain: security add-generic-password -U -s hr-helper-mcp -a ${t.name} -w <токен>)`);
   else {
     const relayApi = (method, path, body) => apiWith(t.value, method, path, body, t.name);
-    import('./relay.mjs').then((m) => m.relayLoop(a.session, { BASE, TOKEN: t.value, api: relayApi, product: a.product }));
+    import('./relay.mjs').then((m) => m.relayLoop(a.session, { BASE, TOKEN: t.value, api: relayApi, product: a.product, timeouts: TIMEOUTS }));
   }
 } else if (isMain) {
   createInterface({ input: process.stdin }).on('line', (line) => {
