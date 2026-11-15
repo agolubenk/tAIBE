@@ -14,6 +14,7 @@ export {
   answerSchema,
   answersDocSchema,
   isEmptyValue,
+  type ValidateOptions,
   validateAnswers,
   valueIssue,
 } from "./answers";

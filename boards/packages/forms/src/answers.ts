@@ -45,18 +45,30 @@ export interface AnswerIssue {
 export interface AnswersCheck {
   ok: boolean;
   issues: AnswerIssue[];
-  /** Answers to keep: shown fields only; empty ones need a note to stay. */
+  /**
+   * Answers to keep: shown fields only (a draft keeps hidden ones too);
+   * empty ones need a note to stay.
+   */
   answers: Record<string, Answer>;
 }
 
+export interface ValidateOptions {
+  /**
+   * A draft (autosave): no `required`, and answers to hidden fields are
+   * checked and kept, so a display rule that flips back loses nothing.
+   */
+  draft?: boolean;
+}
+
 /**
- * Checks an answer set against its template. Answers to hidden fields are
- * dropped, not errors. Choice answers are option indexes, so a set made for
- * another version of the template is refused as a whole.
+ * Checks an answer set against its template. On submit, answers to hidden
+ * fields are dropped, not errors. Choice answers are option indexes, so a
+ * set made for another version of the template is refused as a whole.
  */
 export function validateAnswers(
   template: FormTemplate,
   doc: Pick<AnswersDoc, "form" | "version" | "answers">,
+  { draft = false }: ValidateOptions = {},
 ): AnswersCheck {
   if (doc.form !== template.form || doc.version !== template.version) {
     return {
@@ -73,14 +85,16 @@ export function validateAnswers(
   const visible = visibleFieldIds(template, doc.answers);
   const kept: Record<string, Answer> = {};
   for (const field of template.fields) {
-    if (!visible.has(field.id)) continue;
+    if (!draft && !visible.has(field.id)) continue;
     const answer = doc.answers[field.id];
     const empty = isEmptyValue(field, answer?.v);
     if ((answer?.note?.length ?? 0) > LIMITS.note) {
       issues.push({ fieldId: field.id, code: "too_long" });
     }
     if (empty) {
-      if (field.required) issues.push({ fieldId: field.id, code: "required" });
+      if (field.required && !draft) {
+        issues.push({ fieldId: field.id, code: "required" });
+      }
     } else {
       const code = valueIssue(field, answer?.v);
       if (code) issues.push({ fieldId: field.id, code });

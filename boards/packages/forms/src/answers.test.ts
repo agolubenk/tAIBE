@@ -132,4 +132,25 @@ describe("validateAnswers", () => {
     });
     expect(long.issues).toEqual([{ fieldId: "a", code: "too_long" }]);
   });
+
+  // Autosave: yes -> no -> yes on a parent must not lose the child's answer.
+  it("keeps and checks hidden answers in a draft, no required", () => {
+    const doc = (answers: AnswerMap) => ({
+      form: template.form,
+      version: template.version,
+      answers: answers as Record<string, { v: unknown }>,
+    });
+    const hidden = { a: { v: false }, b: { v: 1 }, c: { v: "kept" } };
+
+    const draft = validateAnswers(template, doc(hidden), { draft: true });
+    expect(draft).toEqual({ ok: true, issues: [], answers: hidden });
+
+    const bad = validateAnswers(template, doc({ b: { v: 9 } }), {
+      draft: true,
+    });
+    expect(bad.issues).toEqual([{ fieldId: "b", code: "invalid_option" }]);
+
+    const submit = validateAnswers(template, doc(hidden));
+    expect(Object.keys(submit.answers)).toEqual(["a"]);
+  });
 });
