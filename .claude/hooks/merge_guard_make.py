@@ -8,8 +8,8 @@ import os
 import re
 
 from merge_guard_files import command_writes
-from merge_guard_launch import (INCLUDE_ESCAPE, MAKE_BASE, MAKE_CONT, MAKE_ENV, MAKE_TEXT, MAKEFLAGS_ARG, MAKES,
-                                NOT_ASCII, _make_opts, _make_where, make_files)
+from merge_guard_launch import (IMPLIED_VAR, INCLUDE_ESCAPE, MAKE_BASE, MAKE_CONT, MAKE_ENV, MAKE_TEXT, MAKEFLAGS_ARG,
+                                MAKES, NOT_ASCII, _make_opts, _make_where, make_files)
 from merge_guard_shell import CURRENT, SUBST
 
 WT_TRACKS = ("feature", "fix", "refactor", "spike", "review")
@@ -133,16 +133,25 @@ def make_hint(a, text):
 # признака по всему тексту. Разбор строгий: всё, чего он не сводит к простым целям, — None, и решает грубый признак.
 MAKE_TRUSTED_GOALS = {"check", "check-layer"}
 MAKE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
-MAKE_ASSIGN = re.compile(r"([A-Za-z0-9_][A-Za-z0-9_-]*)[ \t]*(?:\?|\+|:::|::|:)?=")
+MAKE_ASSIGN = re.compile(r"([A-Za-z0-9_][A-Za-z0-9_-]*)[ \t]*(\?|\+|:::|::|:)?=")
 MAKE_DIRECTIVE = re.compile(r"[ \t]*(?:-?include|sinclude|ifn?eq|ifn?def|else|endif|define|endef|export|unexport"
                             r"|override|undefine|vpath|-?load)(?![A-Za-z0-9_-])")
 MAKE_RESERVED = {"SHELL", "MAKESHELL", "MAKEFLAGS", "GNUMAKEFLAGS", "MFLAGS", "MAKEFILES", "VPATH", "GPATH", "MAKE",
                  "MAKEOVERRIDES", "MAKELEVEL", "MAKECMDGOALS", "CURDIR", "SUFFIXES"}
 
 
+def _exported(assign):
+    """Присваивание меняет окружение рецептов: имя пришло в make из окружения (GNU make отдаёт его shell рецепта со
+    значением из Makefile, `PATH = /tmp/x`; `?=` значение из окружения не меняет) или меняет запуск программ
+    (IMPLIED_VAR). Линза backend #419, заметка 4."""
+    name = assign.group(1)
+    return assign.group(2) != "?" and (name in os.environ or IMPLIED_VAR.fullmatch(name + "=") is not None)
+
+
 def _make_rules(text):
     """{цель: (пререквизиты, строки рецепта)} и цели .PHONY; None — строка, которую разбор не сводит: директива,
-    присваивание с `$`, `!=` или переменной make (MAKE_RESERVED, имя с точкой), правило с `$`, `%`, `::`, `;`, `|`,
+    присваивание с `$`, `!=`, переменной make (MAKE_RESERVED, имя с точкой) или в окружение рецептов (_exported),
+    правило с `$`, `%`, `::`, `;`, `|`,
     `=`, `#`, специальная цель кроме .PHONY, цель дважды, табуляция до первого правила. Строка рецепта с
     продолжением (обратная косая в конце) — None в списке: make отдаёт её shell с переводом строки как есть (в
     кавычках shell их не снимает), склейка разбора с этим не совпадает."""
@@ -158,7 +167,8 @@ def _make_rules(text):
             continue
         current = None
         assign = MAKE_ASSIGN.match(line)
-        if MAKE_DIRECTIVE.match(line) or assign and (assign.group(1) in MAKE_RESERVED or "$" in line):
+        if MAKE_DIRECTIVE.match(line) or assign and (assign.group(1) in MAKE_RESERVED or "$" in line
+                                                     or _exported(assign)):
             return None
         if assign:
             continue
@@ -212,10 +222,12 @@ def make_recipe(a, files):
 
 def trusted_make(a, files, found, coarse, written, classify, ctx):
     """SE-127: грубый признак Makefile (coarse) заменяют находки команд его рецептов (make_recipe) — каждая строка
-    отдельно, как make запускает её в своём shell: classify(строка, *ctx, disk, имена записи команды и строки).
-    make_option уже отказал Makefile не с основной ветки origin, MAKEFLAGS, `--eval`, include, `$(shell`. Разбор не
-    сводит или признака нет — (found, coarse) как были."""
+    отдельно, как make запускает её в своём shell: classify(строка, *ctx, disk, имена записи команды и всех строк
+    рецепта — запись прошлой строки видит следующая, линза backend #419, заметка 3). make_option уже отказал Makefile
+    не с основной ветки origin, MAKEFLAGS, `--eval`, include, `$(shell`. Разбор не сводит или признака нет —
+    (found, coarse) как были."""
     recipe = make_recipe(a, files) if coarse else None
     if recipe is None:
         return found, coarse
-    return found + [f for c in recipe for f in classify(c, *ctx, True, set(written) | command_writes(c))], []
+    w = set(written).union(*map(command_writes, recipe))
+    return found + [f for c in recipe for f in classify(c, *ctx, True, w)], []

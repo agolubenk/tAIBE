@@ -192,6 +192,8 @@ if mr:
             "\t+false\nother:\n\tgh pr merge 1\n")
     expect("порядок make, префиксы @-+ и $$", recipe(good) == ["true", "false", "echo $HOME"])
     expect("цель без рецепта — пусто", recipe(".PHONY: check\ncheck:\n") == [])
+    expect("PATH ?= значение окружения не меняет", recipe(".PHONY: check\nPATH ?= /tmp/x\ncheck:\n\ttrue\n") == ["true"])
+    expect("своё имя =", recipe(".PHONY: check\nSE127_OWN_X = 1\ncheck:\n\ttrue\n") == ["true"])
     for label, text, a in (
             ("$ в рецепте", ".PHONY: check\ncheck:\n\t@echo $(X)\n", None),
             ("export", ".PHONY: check\nexport X\ncheck:\n\ttrue\n", None),
@@ -210,6 +212,9 @@ if mr:
             ("целевая переменная", ".PHONY: check\ncheck: SHELL = /x\n", None),
             ("order-only", ".PHONY: check x\nx:\n\ttrue\ncheck: | x\n\ttrue\n", None),
             ("$ в присваивании", ".PHONY: check\nX := $(Y)\ncheck:\n\ttrue\n", None),
+            ("PATH = (имя из окружения)", ".PHONY: check\nPATH = /tmp/x\ncheck:\n\ttrue\n", None),
+            ("PATH +=", ".PHONY: check\nPATH += /tmp/x\ncheck:\n\ttrue\n", None),
+            ("BASH_ENV := (IMPLIED_VAR)", ".PHONY: check\nBASH_ENV := /tmp/x\ncheck:\n\ttrue\n", None),
             ("ifeq", ".PHONY: check\nifeq (a,a)\nendif\ncheck:\n\ttrue\n", None),
             ("табуляция до правила", "\ttrue\n.PHONY: check\ncheck:\n\ttrue\n", None),
             ("отступ пробелами", ".PHONY: check\ncheck:\n    true\n", None),
@@ -222,5 +227,9 @@ if mr:
     expect("make_recipe: два файла — None", mr(["make", "check"], [("a", ".PHONY: check\ncheck:\n"), ("b", "")]) is None)
     tm = merge_guard_make.trusted_make
     expect("trusted_make без грубого признака — как было", tm(["make", "check"], [], [1], [], set(), None, ()) == ([1], []))
+    seen = []
+    tm(["make", "check"], [("Makefile", ".PHONY: check\ncheck:\n\ttrue\n\techo 1 > json.py\n")], [], [1], set(),
+       lambda c, *x: seen.append(x[-1]) or [], ())
+    expect("trusted_make: каждая строка видит записи всего рецепта", len(seen) == 2 and all("json.py" in w for w in seen))
 
 finish(" — тесты слоя из чистой папки, SE-127")
