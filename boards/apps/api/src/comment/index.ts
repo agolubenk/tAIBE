@@ -16,6 +16,7 @@ import {
   restoreForTokenCaller,
 } from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
+import { writerKind } from "../forest/author-kind";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
 import getComments from "./controllers/get-comments";
@@ -151,7 +152,13 @@ const comment = apiRouter()
     return c.json(
       maskForTokenCaller(
         c,
-        await createComment(taskId, c.get("userId"), content, external),
+        await createComment(
+          taskId,
+          c.get("userId"),
+          content,
+          external,
+          writerKind(c),
+        ),
       ),
       200,
     );
@@ -163,7 +170,10 @@ const comment = apiRouter()
       storedCommentContent(id),
     );
     return c.json(
-      maskForTokenCaller(c, await updateComment(c.get("userId"), id, restored)),
+      maskForTokenCaller(
+        c,
+        await updateComment(c.get("userId"), id, restored, writerKind(c)),
+      ),
       200,
     );
   })
