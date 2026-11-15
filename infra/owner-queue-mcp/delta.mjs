@@ -30,6 +30,16 @@ const parsed = (fn) => {
   }
 };
 
+const isObj = (x) => typeof x === 'object' && x !== null && !Array.isArray(x);
+/**
+ * Документ консоли — объект со строковым id и объектом data. Иначе он остался бы в зеркале, и каждый oq_list items
+ * падал бы на d.data.kind до полного списка через 12 ч (линза Claude #380, NB1); прежний путь выздоравливал сразу.
+ */
+const docEntry = (d, where) => {
+  if (!isObj(d) || typeof d.id !== 'string' || !isObj(d.data)) throw contractError(`${where}: документ без строкового id или объекта data`);
+  return [d.id, d];
+};
+
 /** Порядок консоли (queue/list.ts listDocs, с #344): самые свежие первыми — по updatedAt, при равном — по id убыванию. */
 const byFresh = (a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 
@@ -54,7 +64,7 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
       for (const col of cols) {
         const c = j.collections[col];
         if (!Array.isArray(c?.docs)) throw contractError(`в полном списке нет коллекции ${col}`);
-        docs[col] = new Map(c.docs.map((d) => [d.id, d]));
+        docs[col] = new Map(c.docs.map((d) => docEntry(d, `полный список ${col}`)));
         meta[col] = c.truncated === true ? { truncated: true, total: c.total, limit: c.limit } : {};
       }
       return { cursor: j.cursor, fullAt: now(), docs, meta };
@@ -74,9 +84,12 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
     const ops = parsed(() => {
       if (typeof j?.cursor !== 'string' || !j.changes) throw contractError('ответ без cursor и changes');
       return cols.map((col) => {
+        // Консоль отдаёт оба списка у каждой коллекции (changes.ts, CollectionChanges): иное — нарушение контракта (NB1, NB2).
         const ch = j.changes[col];
-        if (!ch) throw contractError(`в дельте нет коллекции ${col}`);
-        return { col, removed: [...(ch.removed || [])], docs: [...(ch.docs || [])].map((d) => [d.id, d]) };
+        if (!isObj(ch)) throw contractError(`в дельте нет коллекции ${col}`);
+        if (!Array.isArray(ch.removed) || !ch.removed.every((id) => typeof id === 'string')) throw contractError(`дельта ${col}: removed — не список строк`);
+        if (!Array.isArray(ch.docs)) throw contractError(`дельта ${col}: docs — не список`);
+        return { col, removed: [...ch.removed], docs: ch.docs.map((d) => docEntry(d, `дельта ${col}`)) };
       });
     });
     for (const { col, removed, docs } of ops) {

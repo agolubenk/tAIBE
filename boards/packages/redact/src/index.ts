@@ -37,14 +37,53 @@ function lastDropping(value: string): number {
 
 const NAME_CHAR = /[A-Za-z0-9_-]/;
 
-// The start of the run of name characters that ends the value (a final `:`
-// or `=` aside), or -1.
-function trailingName(value: string): number {
-  const last = value.charAt(value.length - 1);
-  const end = last === ":" || last === "=" ? value.length - 1 : value.length;
+// The start of the run of name characters that ends at `end`.
+function nameStart(value: string, end: number): number {
   let start = end;
   while (start > 0 && NAME_CHAR.test(value.charAt(start - 1))) start -= 1;
+  return start;
+}
+
+// A separator that can end a value. `:=` and `=>` come first: with only `=`
+// cut, `A_TOKEN:=` has no name at its end, and an accepted value
+// `A_TOKEN:=` (after `=>`) stopped the search before the real value
+// (X1_TOKEN=>A_TOKEN:="<v>", TB-202 superset test against 221e381b4).
+const TRAILING_SEPARATORS = [":=", "=>", ":", "="];
+
+// The start of the run of name characters that ends the value (a final
+// separator aside), or -1.
+function trailingName(value: string): number {
+  const separator = TRAILING_SEPARATORS.find((sep) => value.endsWith(sep));
+  const end = value.length - (separator?.length ?? 0);
+  const start = nameStart(value, end);
   return start < end ? start : -1;
+}
+
+// Where the search goes on in a rejected value: after its last DROPS_VALUE
+// character. If that character is the `>` of `=>`, at the name before it:
+// the name has its value after `=>` (x(B_TOKEN=><v>, TB-199).
+function afterDropping(value: string, dropping: number): number {
+  const arrow = value.charAt(dropping) === ">";
+  return arrow && value.charAt(dropping - 1) === "="
+    ? nameStart(value, dropping - 1)
+    : dropping + 1;
+}
+
+// TB-199: before the new separators the base took the `=` of a glued `:=`
+// into the value (A_TOKEN:=<v>), and a filter accepts any value with `=` in
+// it that is long enough. A value right after `:=` or `=>` is also judged as
+// the base judged it, so no value that the base masked loses its mask
+// (coord, 15.11).
+function accepts(
+  accept: (value: string, next: string) => boolean,
+  text: string,
+  start: number,
+  value: string,
+): boolean {
+  const next = text.charAt(start + value.length);
+  if (accept(value, next)) return true;
+  const operator = text.slice(Math.max(0, start - 2), start);
+  return (operator === ":=" || operator === "=>") && accept(`=${value}`, next);
 }
 
 // Replaces only group 1 of each match, keeping the surrounding context
@@ -71,17 +110,20 @@ function collectGroup(
   group: number,
   accept: (value: string, next: string) => boolean = () => true,
 ): Detector {
+  // Flag `d` gives the group's own position. The first equal text in the
+  // match may sit in the name: `password: pass` (TB-199).
+  const search = new RegExp(pattern, `${pattern.flags.replace("d", "")}d`);
   return (text) => {
     const hits: RedactHit[] = [];
-    pattern.lastIndex = 0;
-    for (const match of text.matchAll(pattern)) {
+    search.lastIndex = 0;
+    for (const match of text.matchAll(search)) {
       const value = match[group];
-      if (value === undefined) continue;
-      const start = match.index + match[0].indexOf(value);
-      if (!accept(value, text.charAt(start + value.length))) continue;
+      const start = match.indices?.[group]?.[0];
+      if (value === undefined || start === undefined) continue;
+      if (!accepts(accept, text, start, value)) continue;
       hits.push({ kind, start, end: start + value.length });
     }
-    return hits.concat(innerHits(text, pattern, kind, group, accept));
+    return hits.concat(innerHits(text, search, kind, group, accept));
   };
 }
 
@@ -102,13 +144,14 @@ function innerHits(
   pattern.lastIndex = 0;
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const value = match[group];
-    if (value === undefined) continue;
-    const start = match.index + match[0].indexOf(value);
-    const accepted = accept(value, text.charAt(start + value.length));
+    const start = match.indices?.[group]?.[0];
+    if (value === undefined || start === undefined) continue;
+    const accepted = accepts(accept, text, start, value);
     if (accepted) hits.push({ kind, start, end: start + value.length });
     const dropping = accepted ? -1 : lastDropping(value);
     if (dropping >= 0) limit = Math.max(limit, pattern.lastIndex);
-    const resume = dropping >= 0 ? dropping + 1 : trailingName(value);
+    const resume =
+      dropping >= 0 ? afterDropping(value, dropping) : trailingName(value);
     if (resume >= 0) {
       pattern.lastIndex = Math.max(match.index + 1, start + resume);
     }
@@ -264,8 +307,16 @@ const telegramToken = collect(
 // A value given to a password name, in any case (JSON, YAML, code). The value
 // stays on the same line; a reference ($VAR, ${VAR}, $(cmd)) is not a secret
 // and stays readable.
+//
+// TB-199: the separator is `=`, `:`, `:=` (Go, Pascal) or `=>` (PHP, Ruby,
+// Perl) in this and the three patterns below. Before, `:=` and `=>` gave `=`
+// or `>` as the value, and the real value was left open. `==` and `===`
+// with a space, a quote or the end after them compare and stay readable
+// (`password === true`); glued to a value they are an assignment of a
+// value that starts with `=`, masked as the base masked it
+// (`DB_PASSWORD==<v>`, release #392 B1).
 const passwordAssignment = collectGroup(
-  /["']?(?:password|passwd|pwd)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
+  /["']?(?:password|passwd|pwd)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
   "password_assignment",
   1,
 );
@@ -277,7 +328,7 @@ const passwordAssignment = collectGroup(
 // dropped the key (Claude lens #283 B2). A password keeps them (it may hold
 // them), so passwordAssignment above does not stop there.
 const credentialAssignment = collectGroup(
-  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
+  /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/gi,
   "password_assignment",
   1,
   looksLikeSecret,
@@ -294,13 +345,13 @@ const credentialAssignment = collectGroup(
 // pattern with the passphrase filter (TB-195): a name has one suffix, so a
 // value is never found by both.
 const secretAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,
 );
 const passphraseAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikePassphrase,
@@ -397,7 +448,7 @@ export function redact(text: string): { text: string; hits: RedactHit[] } {
 
   // A hit that starts inside the previous one and ends after it widens it:
   // dropped, its tail stayed in the text (A_SECRET=x(B_SECRET:C_PASSWORD:q;<v>,
-  // Claude #375 B2).
+  // Claude #375 B2; A_SECRET => password:x;passwd=><v>, TB-199).
   const hits: RedactHit[] = [];
   for (const hit of accepted) {
     const last = hits.at(-1);
