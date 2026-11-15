@@ -26177,7 +26177,7 @@
             }
           },
           "409": {
-            "description": "No live lease of this session, or the Backlog ID is taken",
+            "description": "No live lease of this session, the Backlog ID is taken, or a [REDACTED:…] marker that a caller with a token sent does not match the stored text (REDACTED_MARKERS_MISMATCH)",
             "content": {
               "application/json": {
                 "schema": {

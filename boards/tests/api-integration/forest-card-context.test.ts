@@ -197,6 +197,60 @@ describe("API integration: card context pack (R-031)", () => {
     expect(note?.content).toBe(`comment ${SECRET}`);
   });
 
+  it("gives a token caller's meta write the stored values back in place of the markers it read (TB-141)", async () => {
+    const forest = await createForest();
+    const card = await addTask(forest.project.id, "Meta round trip");
+    if (!card) throw new Error("fixture");
+    await db.insert(schema.cardMetaTable).values({
+      taskId: card.id,
+      workspaceId: forest.workspace.id,
+      updatedBy: "test",
+      executor: `executor ${SECRET}`,
+      contextPack: `pack ${SECRET}`,
+      files: [`notes/${SECRET}.md`],
+    });
+    const lease = await forest.agent("/leases", { taskId: card.id }, "dev-1");
+    expect(lease.status).toBe(200);
+    const put = (body: unknown) =>
+      forest.agentApi(
+        "PUT",
+        `/forest/${forest.workspace.id}/cards/${card.id}/meta`,
+        body,
+        { "x-t-boards-fence": String(lease.body.fencingToken) },
+        "dev-1",
+      );
+
+    const read = await forest.agent(context(card.id));
+    expect(read.status).toBe(200);
+    const { executor, contextPack, files } = read.body.meta;
+    expect(contextPack).toContain("[REDACTED:");
+
+    // The agent adds a paragraph to the pack it read masked: the marker
+    // block gets the stored value back.
+    const saved = await put({
+      contextPack: `${contextPack}\n\nNext: run the tests.`,
+    });
+    expect(saved.status).toBe(200);
+
+    // A list item with a marker has no block to tie the marker to: refused.
+    const list = await put({ files: [...files, "notes/new.md"] });
+    expect(list.status).toBe(409);
+    expect(list.body.code).toBe("REDACTED_MARKERS_MISMATCH");
+
+    // A changed block with a marker is refused (TB-143 rule).
+    const moved = await put({ executor: `see ${executor}` });
+    expect(moved.status).toBe(409);
+    expect(moved.body.code).toBe("REDACTED_MARKERS_MISMATCH");
+
+    const [stored] = await db
+      .select()
+      .from(schema.cardMetaTable)
+      .where(eq(schema.cardMetaTable.taskId, card.id));
+    expect(stored?.contextPack).toBe(`pack ${SECRET}\n\nNext: run the tests.`);
+    expect(stored?.executor).toBe(`executor ${SECRET}`);
+    expect(stored?.files).toEqual([`notes/${SECRET}.md`]);
+  });
+
   it("caps long sections and names them in truncated", async () => {
     const forest = await createForest();
     const card = await addTask(forest.project.id, "Busy card");
