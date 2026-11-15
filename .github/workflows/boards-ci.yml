@@ -81,6 +81,9 @@ jobs:
           node-version: 24.19.0
           cache: pnpm
           cache-dependency-path: boards/pnpm-lock.yaml
+      # CI does not run docker build: a package missing in a Dockerfile stage fails only at deploy (TB-234).
+      - name: Dockerfile stages copy each workspace package their app needs
+        run: node deploy/check-dockerfile-deps.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       # The image runs dist under plain Node: an extensionless relative import crash-loops the API (TB-143, TB-173).

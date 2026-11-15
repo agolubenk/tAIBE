@@ -71,6 +71,7 @@ the tunnel:
 | `mac/memory-token-push.sh` | Mac | `memory-token-push.sh <vps host>` sends that token to `secrets/claude_mem_proxy_token` on ssh's stdin (never argv, stdout or history), then `up -d app` |
 | `selftest.sh` | Mac | Proves the whole kit locally before a delivery |
 | `../check-dist-esm.mjs` | CI (build job), Mac | After `pnpm build`: every relative import in `packages/*/dist` of an ESM package names a file, and every library entry imports under plain Node. Without it an extensionless import (`./index`) passes vitest and typecheck and crash-loops the image |
+| `../check-dockerfile-deps.mjs` | CI (build job), Mac | Static, no docker build: each `Dockerfile.kaneo` stage that copies `apps/<app>` also copies every workspace package the app needs (direct, and through `packages/*`). Without it a missing package (`@kaneo/forms` in web-builder, TB-234) fails only in the image build before a deploy |
 
 ## Secrets
 
