@@ -4,10 +4,14 @@ import { redact, type RedactHit } from "./index";
 
 // Coord, #375 (TB-198): a change of the search may only add masks. Every
 // character that the base (fixtures/redact-base.ts) masks, redact() masks
-// too. Seeded chains of names, separators and junk, up to 6 deep, with a
-// value at the end. CI runs 20 000 cases (0.3 s): on the 2a50b88f4 head of
-// #375, 1 case in 3 700 lost a mask, and 2 000 cases found it by chance only.
-// The PR body has 4 seeds x 200 000.
+// too. Seeded cases, two templates in turn, each with a value at the end:
+// - a chain of junk, names and separators, up to 6 deep;
+// - nested rewinds: 1-3 names behind a DROPS_VALUE character, then 1-3
+//   names in a row (A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = <v>).
+// CI runs 20 000 cases (about 1 s). Measured on 20 seeds: a head with only
+// the nested-rewind loss of #375 2a50b88f4 (B1) loses a mask in 2-8 cases
+// on every seed; chains alone found it on 5 seeds of 20. The PR body has
+// 4 seeds x 200 000.
 const CASES = 20_000;
 const SEED = 11;
 
@@ -66,6 +70,8 @@ const JUNK = [
   "aaaa/",
   "{{vault}}/",
 ];
+// Each holds a DROPS_VALUE character: a value with it is rejected.
+const DROPPING = ["x(", "y(", "(", "x)", "x;", "q;", "é"];
 const VALUES = [
   ["Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv"].join(""),
   ["Correct", "Horse", "Battery", "Staple"].join(""),
@@ -75,18 +81,25 @@ const ENDS = ["", '"', ";", ")", " tail"];
 
 function generator(seed: number): () => string {
   let state = seed;
+  let turn = 0;
   const pick = <T>(items: readonly T[]): T => {
     state = (state * 48_271) % 2_147_483_647;
     return items[state % items.length] as T;
   };
-  const depths = [1, 2, 3, 4, 5, 6];
+  const repeat = (times: number, part: () => string) =>
+    Array.from({ length: times }, part).join("");
+  const name = () => pick(NAMES) + pick(SEPARATORS);
+  const value = () => pick(["", '"']) + pick(VALUES) + pick(ENDS);
+  const chain = () =>
+    repeat(pick([1, 2, 3, 4, 5, 6]), () => pick(JUNK) + name()) + value();
+  const nested = () =>
+    name() +
+    repeat(pick([1, 2, 3]), () => pick(DROPPING) + name()) +
+    repeat(pick([1, 2, 3]), name) +
+    value();
   return () => {
-    let text = "";
-    const depth = pick(depths);
-    for (let part = 0; part < depth; part += 1) {
-      text += pick(JUNK) + pick(NAMES) + pick(SEPARATORS);
-    }
-    return text + pick(["", '"']) + pick(VALUES) + pick(ENDS);
+    turn += 1;
+    return turn % 2 ? chain() : nested();
   };
 }
 
