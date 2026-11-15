@@ -12,6 +12,7 @@ import {
 } from "../../openapi";
 import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { askNotebook } from "../chat/ask-notebook";
 import { briefThread } from "../chat/brief-thread";
@@ -193,11 +194,16 @@ const deleteThreadRoute = createRoute({
   },
 });
 
+// TB-196: a thread holds questions, answers and citation headings that may
+// quote a masked secret from a card; a caller with a token reads them masked.
 export const chatRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listThreadsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const threads = await listThreads(workspaceId);
-    return c.json({ threads: threads.map(toThread) }, 200);
+    return c.json(
+      maskForTokenCaller(c, { threads: threads.map(toThread) }),
+      200,
+    );
   })
   .openapi(startThreadRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -207,14 +213,12 @@ export const chatRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       question,
       userId: c.get("userId") ?? null,
     });
-    return c.json(toThreadResponse(asked), 201);
+    return c.json(maskForTokenCaller(c, toThreadResponse(asked)), 201);
   })
   .openapi(readThreadRoute, async (c) => {
     const { workspaceId, threadId } = c.req.valid("param");
-    return c.json(
-      toThreadResponse(await readThread(workspaceId, threadId)),
-      200,
-    );
+    const thread = await readThread(workspaceId, threadId);
+    return c.json(maskForTokenCaller(c, toThreadResponse(thread)), 200);
   })
   .openapi(askInThreadRoute, async (c) => {
     const { workspaceId, threadId } = c.req.valid("param");
@@ -225,7 +229,7 @@ export const chatRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       question,
       userId: c.get("userId") ?? null,
     });
-    return c.json(toThreadResponse(asked), 200);
+    return c.json(maskForTokenCaller(c, toThreadResponse(asked)), 200);
   })
   .openapi(briefThreadRoute, async (c) => {
     const { workspaceId, threadId } = c.req.valid("param");
@@ -234,7 +238,7 @@ export const chatRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       threadId,
       userId: c.get("userId") ?? null,
     });
-    return c.json(toThreadResponse(briefed), 200);
+    return c.json(maskForTokenCaller(c, toThreadResponse(briefed)), 200);
   })
   .openapi(deleteThreadRoute, async (c) => {
     const { workspaceId, threadId } = c.req.valid("param");

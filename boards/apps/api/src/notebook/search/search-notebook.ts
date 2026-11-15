@@ -1,3 +1,4 @@
+import { redact } from "@kaneo/redact";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import db from "../../database";
 import {
@@ -9,6 +10,7 @@ import { isWorkerOnline, requestQueryEmbedding } from "../embed/embed-queue";
 import { decodeEmbedding } from "../embed/embedding-codec";
 import { notebookEmbedModel } from "../../notebook-model/effective-notebook-model";
 import { fuseRanks, type RankedList } from "./fuse-ranks";
+import { matchesVisibleText } from "../../utils/visible-match";
 import { loadVectorIndex, nearestChunks } from "./vector-index";
 
 const CANDIDATES = 20;
@@ -35,6 +37,8 @@ export async function searchNotebook(input: {
   mode: SearchMode;
   // A caller that already read the settings passes the model along.
   embedModel?: string;
+  // A caller with a token (API key, agent key, MCP session), TB-196.
+  tokenCaller?: boolean;
 }): Promise<{ mode: SearchMode; results: NotebookHit[] }> {
   const wantVectors =
     input.mode === "hybrid" && isWorkerOnline(input.workspaceId);
@@ -54,9 +58,44 @@ export async function searchNotebook(input: {
   const byId = new Map(rows.map((row) => [row.chunkId, row]));
   const results = fused.flatMap((hit) => {
     const row = byId.get(hit.id);
-    return row ? [{ ...row, score: hit.score, matchedBy: hit.matchedBy }] : [];
+    if (!row) return [];
+    if (
+      input.tokenCaller &&
+      !keywordHitVisible(row, hit.matchedBy, input.query)
+    ) {
+      return [];
+    }
+    return [{ ...row, score: hit.score, matchedBy: hit.matchedBy }];
   });
   return { mode: vectorIds ? "hybrid" : "keyword", results };
+}
+
+// TB-196: a caller with a token reads a chunk masked (the route masks the
+// response, TB-143). A keyword hit on a chunk that holds a secret stays only
+// if each query word is in its visible text: else the hit would tell that a
+// secret holds the word. Chunks with no secret keep the stemmed match (the
+// stored tsvector finds `ключ` for `ключами`, a substring test would not).
+// A vector hit stays: it ranks by meaning, not by a word of the secret.
+function keywordHitVisible(
+  row: { heading: string; text: string },
+  matchedBy: MatchedBy[],
+  query: string,
+): boolean {
+  if (matchedBy.includes("vector")) return true;
+  const passage = `${row.heading}\n${row.text}`;
+  if (!redact(passage).hits.length) return true;
+  return queryWords(query).every((word) => matchesVisibleText(passage, word));
+}
+
+// The words `websearch_to_tsquery` must find: no quotes, no `or`, and no
+// word with `-` before it (that one must be absent).
+function queryWords(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word && word !== "or" && !word.startsWith("-"))
+    .map((word) => word.replace(/^"+|"+$/g, ""))
+    .filter(Boolean);
 }
 
 async function keywordCandidates(workspaceId: string, query: string) {

@@ -7,6 +7,7 @@ import {
 } from "../../openapi";
 import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { notebookEmbedModel } from "../../notebook-model/effective-notebook-model";
 import { addPullRequestSource } from "../sources/github-pr-source";
@@ -187,14 +188,14 @@ const addPullRequestRoute = createRoute({
   },
 });
 
+// TB-196: a source title comes from a card, a page or a pull request and may
+// hold a secret; a caller with a token reads it masked.
 export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listSourcesRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const model = await notebookEmbedModel();
-    return c.json(
-      { model, sources: await listSources(workspaceId, model) },
-      200,
-    );
+    const sources = await listSources(workspaceId, model);
+    return c.json(maskForTokenCaller(c, { model, sources }), 200);
   })
   .openapi(putSourceRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -216,10 +217,12 @@ export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(addLinkRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { url } = c.req.valid("json");
-    return c.json(await addLinkSource(workspaceId, url), 200);
+    const added = await addLinkSource(workspaceId, url);
+    return c.json(maskForTokenCaller(c, added), 200);
   })
   .openapi(addPullRequestRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { url } = c.req.valid("json");
-    return c.json(await addPullRequestSource(workspaceId, url), 200);
+    const added = await addPullRequestSource(workspaceId, url);
+    return c.json(maskForTokenCaller(c, added), 200);
   });

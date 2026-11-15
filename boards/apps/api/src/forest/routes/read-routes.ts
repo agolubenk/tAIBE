@@ -7,6 +7,10 @@ import {
   z,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import {
+  isTokenCaller,
+  maskForTokenCaller,
+} from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { getLog } from "../read/get-log";
 import { listLogs } from "../read/list-logs";
@@ -95,17 +99,26 @@ export const readRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listLogsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { q, cursor, take } = c.req.valid("query");
-    return c.json(await listLogs({ workspaceId, query: q, cursor, take }), 200);
+    // TB-196: a caller with a token reads logs masked, as task text (TB-143).
+    // The cursor is base64 that redact reads as a key, so it stays as is.
+    const page = await listLogs({
+      workspaceId,
+      query: q,
+      cursor,
+      take,
+      tokenCaller: isTokenCaller(c),
+    });
+    return c.json({ ...page, items: maskForTokenCaller(c, page.items) }, 200);
   })
   .openapi(getLogRoute, async (c) => {
     const { workspaceId, logId } = c.req.valid("param");
     const log = await getLog(workspaceId, logId);
     return c.json(
-      {
+      maskForTokenCaller(c, {
         ...log,
         fields: log.fields as Record<string, unknown>,
         history: log.history as Record<string, unknown>[],
-      },
+      }),
       200,
     );
   })

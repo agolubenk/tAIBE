@@ -7,6 +7,10 @@ import {
 } from "../../openapi";
 import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import {
+  isTokenCaller,
+  maskForTokenCaller,
+} from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { searchNotebook } from "../search/search-notebook";
 import { notebookStatus } from "../status/notebook-status";
@@ -67,15 +71,16 @@ export const searchRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(searchRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { query, limit, mode } = c.req.valid("json");
-    return c.json(
-      await searchNotebook({
-        workspaceId,
-        query,
-        limit: limit ?? 8,
-        mode: mode ?? "hybrid",
-      }),
-      200,
-    );
+    // TB-196: a caller with a token reads chunks masked, as task text
+    // (TB-143); card descriptions are chunks too.
+    const found = await searchNotebook({
+      workspaceId,
+      query,
+      limit: limit ?? 8,
+      mode: mode ?? "hybrid",
+      tokenCaller: isTokenCaller(c),
+    });
+    return c.json(maskForTokenCaller(c, found), 200);
   })
   .openapi(statusRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");

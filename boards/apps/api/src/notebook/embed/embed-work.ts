@@ -1,3 +1,4 @@
+import { redact } from "@kaneo/redact";
 import { and, eq, isNull, ne, notInArray, or } from "drizzle-orm";
 import db from "../../database";
 import { notebookChunkTable } from "../../database/notebook-schema";
@@ -26,8 +27,11 @@ export type EmbedResult = {
   embedding: string;
 };
 
+// TB-196: the embedding worker is a token caller and its model may run at an
+// outside provider, so a chunk goes to it masked. Vectors embedded before
+// this change stay until their chunk changes or the model does.
 const chunkPassage = (heading: string, text: string) =>
-  heading ? `${heading}\n\n${text}` : text;
+  redact(heading ? `${heading}\n\n${text}` : text).text;
 
 // Search queries first: someone is waiting on them.
 export async function claimEmbedWork(
