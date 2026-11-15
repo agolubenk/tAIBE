@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
 import { redact as baseRedact } from "../fixtures/redact-base";
 import { redact as base378Redact } from "../fixtures/redact-base-221e381b4";
+import { redact as baseBoardRedact } from "../fixtures/redact-base-be1b3ffe1";
 import { redact, type RedactHit } from "./index";
 
 // Coord, #375 (TB-198): a change of the search may only add masks. Every
-// character of a secret value that a base masks, redact() masks too. Two
+// character of a secret value that a base masks, redact() masks too. Three
 // frozen bases, never edited: fixtures/redact-base.ts (src/index.ts at
-// 2dd520685, before TB-198) and fixtures/redact-base-221e381b4.ts (src/
-// index.ts at 221e381b4, after #375 and #378, byte for byte, TB-202).
+// 2dd520685, before TB-198), fixtures/redact-base-221e381b4.ts (src/
+// index.ts at 221e381b4, after #375 and #378, byte for byte, TB-202) and
+// fixtures/redact-base-be1b3ffe1.ts (src/index.ts at be1b3ffe1, after #392,
+// byte for byte, coord B1 #401).
 //
 // The seeded test compares only the characters of the value at the end of
 // each case. TB-199 drops base masks that cover no value on purpose (a
@@ -129,9 +132,12 @@ function maskedBy(hits: RedactHit[], length: number): boolean[] {
   return masked;
 }
 
+// `adds`: the head masks some values that the base does not (TB-198 against
+// 2dd520685, TB-199 against 221e381b4). TB-201 adds none on these chains.
 const BASES = [
-  { name: "2dd520685", redact: baseRedact },
-  { name: "221e381b4", redact: base378Redact },
+  { name: "2dd520685", redact: baseRedact, adds: true },
+  { name: "221e381b4", redact: base378Redact, adds: true },
+  { name: "be1b3ffe1", redact: baseBoardRedact, adds: false },
 ];
 
 describe("redact masks a superset of the base", () => {
@@ -160,7 +166,7 @@ describe("redact masks a superset of the base", () => {
       // the cases, the head masks it in some more (TB-198 against 2dd520685,
       // TB-199 against 221e381b4), and many cases hold a glued `==`.
       expect(baseMasks).toBeGreaterThan(CASES / 4);
-      expect(added).toBeGreaterThan(0);
+      expect(added > 0).toBe(b.adds);
       expect(glued).toBeGreaterThan(CASES / 10);
     },
   );
@@ -183,8 +189,28 @@ describe("redact masks a superset of the base", () => {
     expect(masked).toBeGreaterThan(CASES / 4);
   });
 
-  // TB-199 drops these masks of 221e381b4 on purpose; none covers a value.
   // [start, text] of each run that the base masks and the head does not.
+  const dropped = (
+    base: (text: string) => { hits: RedactHit[] },
+    text: string,
+  ): [number, string][] => {
+    const before = maskedBy(base(text).hits, text.length);
+    const head = maskedBy(redact(text).hits, text.length);
+    const runs: [number, string][] = [];
+    for (let at = 0; at < text.length;) {
+      if (!before[at] || head[at]) {
+        at += 1;
+        continue;
+      }
+      let end = at;
+      while (end < text.length && before[end] && !head[end]) end += 1;
+      runs.push([at, text.slice(at, end)]);
+      at = end;
+    }
+    return runs;
+  };
+
+  // TB-199 drops these masks of 221e381b4 on purpose; none covers a value.
   const value = VALUES[0] as string;
   it.each([
     // The base took `=` of `:=` or `>` of `=>` as the value.
@@ -202,20 +228,36 @@ describe("redact masks a superset of the base", () => {
     ['GITHUB_TOKEN := "<v>"', []],
   ] as const)("drops only the listed 221e381b4 masks in %j", (input, runs) => {
     const text = input.replace("<v>", value);
-    const base = maskedBy(base378Redact(text).hits, text.length);
-    const head = maskedBy(redact(text).hits, text.length);
-    const dropped: [number, string][] = [];
-    for (let at = 0; at < text.length;) {
-      if (!base[at] || head[at]) {
-        at += 1;
-        continue;
-      }
-      let end = at;
-      while (end < text.length && base[end] && !head[end]) end += 1;
-      dropped.push([at, text.slice(at, end)]);
-      at = end;
-    }
-    expect(dropped).toEqual(runs);
+    expect(dropped(base378Redact, text)).toEqual(runs);
     if (input.includes("<v>")) expect(redact(text).text).not.toContain(value);
+  });
+
+  // TB-201 drops these masks of be1b3ffe1 on purpose; none covers a value.
+  it.each([
+    // Code after a glued `=>`: a camelCase identifier, a dotted name.
+    ["GITHUB_TOKEN=>githubToken,", [[14, "githubToken"]]],
+    [":api_key=>options.api_key,", [[10, "options.api_key"]]],
+    ["CLIENT_SECRET=>clientSecret,", [[15, "clientSecret"]]],
+    ["'auth_token'=>user.auth_token,", [[14, "user.auth_token"]]],
+    // The only class the seeded chains find (seeds 11-13, 600 000 cases):
+    // a dotted name after `=>`, in 588 cases; 0 value characters.
+    ["A_TOKEN=>x.password = <v>", [[9, "x.password"]]],
+    ["A_TOKEN=>x.api_key", [[9, "x.api_key"]]],
+    // A second pass: the rest of a separator before a mask.
+    [
+      "password:=[REDACTED:password_assignment]",
+      [[9, "=[REDACTED:password_assignment]"]],
+    ],
+    // A word value after a glued `=>` keeps its mask (coord B1 #401), and
+    // so does a value glued after a mask (role 4 N1).
+    ["api_key=><v>", []],
+    ["T_ACCESS_TOKEN=><v>;", []],
+    ["password:=[REDACTED:password_assignment]<v>", []],
+  ] as const)("drops only the listed be1b3ffe1 masks in %j", (input, runs) => {
+    const text = input.replace("<v>", VALUES[2] as string);
+    expect(dropped(baseBoardRedact, text)).toEqual(runs);
+    if (input.includes("<v>")) {
+      expect(redact(text).text).not.toContain(VALUES[2]);
+    }
   });
 });

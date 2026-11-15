@@ -592,8 +592,9 @@ describe("@kaneo/redact", () => {
       expect(redact(input).text).not.toContain(value);
     });
 
-    // Coord 15.11: the base took the `=` of a glued `:=` into the value and
-    // masked any value long enough. A value right after `:=` keeps that mask.
+    // Coord 15.11: the base took the `=` of a glued `:=` or `=>` into the
+    // value and masked any value long enough. A value right after them keeps
+    // that mask (coord B1 #401: a Ruby hash, a PHP array).
     const phrase = join("correct", "horse", "battery", "staple");
     const camel = join("Correct", "Horse", "Battery", "Staple");
     it.each([
@@ -601,24 +602,37 @@ describe("@kaneo/redact", () => {
       [`api_key:=${camel};`, camel],
       [`x-api-key:=${phrase}`, phrase],
       [`A_SECRET:=${camel};`, camel],
-    ])("masks a word value after a glued `:=`: %s", (input, secret) => {
+      [`T_ACCESS_TOKEN=>${phrase}`, phrase],
+      [`api_key=>${phrase}`, phrase],
+      [` k1_api_key=>${phrase}"`, phrase],
+      [`A_SECRET=>${camel};`, camel],
+    ])("masks a word value after a glued operator: %s", (input, secret) => {
       expect(redact(input).text).not.toContain(secret);
     });
 
-    // TB-201 (Claude lens #392, 1): the base read a glued `=>` as `=` and a
-    // value that starts with `>`, a DROPS_VALUE character, so it never
-    // masked one. A value after `=>` is judged as after `=`: code stays
-    // readable as it is with ` => ` and `=`.
+    // TB-201 (Claude lens #392, 1; coord B1 #401): after a glued `=>` the
+    // re-check masked code. A name of code is not judged again: a camelCase
+    // identifier or a dotted name. Code stays readable as it is with ` => `
+    // and `=`.
     it.each([
-      `T_ACCESS_TOKEN=>${phrase}`,
       ":api_key=>options.api_key,",
       "GITHUB_TOKEN=>githubToken,",
       "CLIENT_SECRET=>clientSecret,",
       "'auth_token'=>user.auth_token,",
-    ])("judges a value after a glued `=>` as after `=`: %s", (input) => {
+      "api_key=>this.apiKey",
+    ])("leaves code after a glued `=>` readable: %s", (input) => {
       const result = redact(input);
       expect(result.hits).toEqual([]);
       expect(redact(input.replace("=>", "=")).hits).toEqual([]);
+    });
+
+    // Role 4 #401 N1: a value that only starts with a separator and a mask
+    // is still a value; the mask does not reach its end.
+    it.each([
+      `password:=[REDACTED:password_assignment]${value}`,
+      `password=>[REDACTED:password_assignment]${value}`,
+    ])("masks a value glued after a mask: %s", (input) => {
+      expect(redact(input).text).not.toContain(value);
     });
 
     // TB-202 superset test against 221e381b4: a name with a glued `:=`
