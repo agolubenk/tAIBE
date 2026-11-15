@@ -415,6 +415,21 @@ for form in ("make -C n1 all", "make -C sub x"):
 for form in ("make -C d1 all", "make -C d5 all", "make -C d6 all"):
     why = run("Bash", {"command": form}, cwd=o) or ""
     check(f"SE-135 B1: причина {form!r}: {why[:90]!r}", why if "Makefile из потока" in why else None, True)
+# SE-135 линза backend (#402, Нерв 11:35): `\` + перевод строки продолжает строку include. Сверено с make 3.81:
+# нечётное число `\` — продолжение, чётное и `\#` — нет; комментарий с `\` в конце глотает следующую строку.
+for name, text in (("c1/Makefile", "include \\\n/dev/stdin\nall: ; @true\n"),
+                   ("c2/Makefile", "-include \\\n   \\\n/dev/stdin\nall: ; @true\n"),
+                   ("c3/Makefile", "foo = a\\\\\ninclude /dev/stdin\nall: ; @true\n"),
+                   ("c4/Makefile", "foo = a\\#\ninclude /dev/stdin\nall: ; @true\n"),
+                   ("c5/Makefile", "sinclude \\\n  lib.mk\nall: ; @true\n"), ("c5/lib.mk", "x:\n\tgh pr merge 1\n"),
+                   ("c6/Makefile", "# c \\\ninclude /dev/stdin\nall: ; @true\n"),
+                   ("c7/Makefile", "foo = a\\\\\\\ninclude /dev/stdin\nall: ; @true\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make -C c1 all", "make -C c2 all", "make -C c3 all", "make -C c4 all", "make -C c5 x"):
+    bash(f"SE-135 продолжение строки, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C c6 all", "make -C c7 all"):
+    bash(f"SE-135 продолжение строки, без признака: {form!r}", form, False, cwd=o)
 o = TMP / "se133"
 # Линза Claude (#398, issuecomment-6891590096). B1: `$(…)` и `` `…` `` в значении разбор режет в метку без `$`.
 # B2: make делит слова только по пробелу и табу (`isblank`), `\v`, `\f`, `\r`, `\n` — часть слова. B3: опции make 4.x
