@@ -45,7 +45,8 @@ const plain = (max: number) =>
 
 export const fieldIdSchema = z
   .string()
-  .regex(/^[A-Za-z0-9_-]{1,40}$/)
+  // __proto__ is no own key of a parsed record: its answer would vanish.
+  .regex(/^(?!(?:__proto__|constructor|prototype)$)[A-Za-z0-9_-]{1,40}$/)
   .describe("The field's id, unique in the template; answers are keyed by it.");
 
 export const showIfSchema = z
