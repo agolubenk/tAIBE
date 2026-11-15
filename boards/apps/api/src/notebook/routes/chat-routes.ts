@@ -12,7 +12,10 @@ import {
 } from "../../openapi";
 import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
-import { maskForTokenCaller } from "../../utils/token-caller-text";
+import {
+  isTokenCaller,
+  maskForTokenCaller,
+} from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { askNotebook } from "../chat/ask-notebook";
 import { briefThread } from "../chat/brief-thread";
@@ -212,6 +215,7 @@ export const chatRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       workspaceId,
       question,
       userId: c.get("userId") ?? null,
+      tokenCaller: isTokenCaller(c),
     });
     return c.json(maskForTokenCaller(c, toThreadResponse(asked)), 201);
   })
@@ -228,6 +232,7 @@ export const chatRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       threadId,
       question,
       userId: c.get("userId") ?? null,
+      tokenCaller: isTokenCaller(c),
     });
     return c.json(maskForTokenCaller(c, toThreadResponse(asked)), 200);
   })

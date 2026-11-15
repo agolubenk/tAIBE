@@ -104,6 +104,9 @@ export async function askNotebook(input: {
   threadId?: string;
   question: string;
   userId: string | null;
+  // A caller with a token (TB-196): a source is cited only if the question
+  // finds it in visible text, else a citation tells what a secret holds.
+  tokenCaller?: boolean;
 }) {
   const thread = input.threadId
     ? await findThread(input.workspaceId, input.threadId)
@@ -138,6 +141,7 @@ export async function askNotebook(input: {
     limit: ANSWER_SOURCES,
     mode: "hybrid",
     embedModel: settings.embedModel,
+    tokenCaller: input.tokenCaller,
   });
   const citations: NotebookCitation[] = hits.map((hit, i) => ({
     n: i + 1,

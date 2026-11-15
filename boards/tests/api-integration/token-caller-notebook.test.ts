@@ -191,4 +191,34 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(followUp.status).toBe(200);
     expect(text(followUp.body)).not.toContain(SECRET);
   });
+
+  it("cites a source for an API key only by visible text", async () => {
+    const nb = await notebookFixture();
+    type Message = { citations?: { heading: string }[] | null };
+    const cited = (body: { messages: Message[] }) =>
+      body.messages.flatMap((message) =>
+        (message.citations ?? []).map((citation) => citation.heading),
+      );
+
+    // The owner's question finds the chunk by its secret and cites it.
+    const owner = await nb.owner("POST", "/threads", { question: SECRET });
+    expect(cited(owner.body)).toEqual(["Ключи › Ротация"]);
+
+    // The same question from a key cites nothing: a citation would tell
+    // that the secret holds the question, as a search hit would (TB-191).
+    const started = await nb.agent("POST", "/threads", { question: SECRET });
+    expect(started.status).toBe(201);
+    expect(cited(started.body)).toEqual([]);
+    const followUp = await nb.agent(
+      "POST",
+      `/threads/${started.body.thread.id}/messages`,
+      { question: SECRET },
+    );
+    expect(followUp.status).toBe(200);
+    expect(cited(followUp.body)).toEqual([]);
+
+    // A visible word still cites the chunk for the key.
+    const visible = await nb.agent("POST", "/threads", { question: "ротация" });
+    expect(cited(visible.body)).toEqual(["Ключи › Ротация"]);
+  });
 });
