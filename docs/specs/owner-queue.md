@@ -183,6 +183,10 @@
 - **API агентов** — `/api/oq/v1/*`, Bearer-токен, zod-схемы, `@Throttle`-аналог (rate limit консоли).
 - **MCP** — сервер `owner-queue` (`infra/owner-queue-mcp/`), ходит в API консоли по токену. Инструменты:
   - `oq_list` · `oq_get` · `oq_put` · `oq_patch` · `oq_agent_status` · `oq_history`;
+  - `oq_history` (с 2026-11-15, карточка HR oow56fdzk) — по умолчанию 20 событий, `limit` 1–100, `before = next` —
+    следующая страница, `keys_only` — без снимков `after`, только изменённые поля. Консоль: `GET /history/:col/:id`
+    с `?limit=`, `?before=`, `?fields=meta`; без параметров — 50 полных событий, как раньше (их читает синхронизация
+    досок).
   - вложения входящих — `oq_files` · `oq_file_get`.
 - **`oq_list` по страницам (с 2026-10-30, карточка A входящего 115a).** Ответ — не больше 95 тыс. символов, режется по
   документам. Не влезло — в ответе `next_offset`: тот же вызов с `offset = next_offset` и `as_of = asOf`. Документ
