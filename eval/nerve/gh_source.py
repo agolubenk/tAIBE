@@ -17,6 +17,7 @@ GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title"
 GH_NEW_PER_PASS = 20   # новых для Нерва PR за проход: догон не задерживает очередь владельца на минуты
 NO_CHECKS_AFTER = 1800  # с после головы без единой проверки — событие координатору (SE-126)
 NO_CHECKS_EVERY = 900   # с: дальше такой PR перечитывается раз в 15 мин, а не каждый проход
+STALE_PASSES = 5        # проходов подряд с чужой головой в gh pr view — одно событие координатору (SE-134)
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
@@ -45,6 +46,10 @@ class StaleHead(Exception):
     """gh pr view отдал не ту голову, что список прохода: push между запросами. Проверки новой головы не пишутся к
     старой — PR разберёт следующий проход по новому списку (SE-131 N1)."""
 
+    def __init__(self, n, got, listed):
+        super().__init__(f"#{n}: в gh голова {str(got)[:9]}, в списке {listed[:9]}")
+        self.got, self.listed = str(got), listed
+
 
 def _gh_pr(repo, n, fields, head=None):
     # --repo обязателен: без него gh берёт репозиторий из рабочей папки демона (tAIBE), а не из конфига (SE-40).
@@ -54,7 +59,7 @@ def _gh_pr(repo, n, fields, head=None):
         raise RuntimeError(f"gh pr view {repo}#{n}: {err.strip()[:200]}")
     d = json.loads(out)
     if head and d.get("headRefOid") != head:
-        raise StaleHead(f"#{n}: в gh голова {str(d.get('headRefOid'))[:9]}, в списке {head[:9]}")
+        raise StaleHead(n, d.get("headRefOid"), head)
     checks = [c.get("conclusion") or c.get("status") or c.get("state") for c in d.get("statusCheckRollup") or []]
     return d, [f["path"] for f in d.get("files") or []], checks
 
@@ -130,21 +135,49 @@ def _quorum_checks(ctx, p):
     return ["NONE"] if _no_checks(ctx, p) else (p.get("checks") or [])
 
 
+def _failure_clock(ctx, p):
+    """SE-134: начало провала CI на этой голове — от него 30 мин перечитки каждый проход. Не провал (перезапуск идёт,
+    CI позеленел) сбрасывает отсчёт; новую голову сбрасывает _check_pr."""
+    if quorum.ci_state(p.get("checks") or []) == "failure":
+        p.setdefault("failure_at", _iso_now(ctx))
+    else:
+        p.pop("failure_at", None)
+
+
+def _slow_failure(ctx, p):
+    since = sources._ts(p.get("failure_at"))
+    return bool(since) and (ctx.now - since).total_seconds() >= NO_CHECKS_AFTER
+
+
+def _stale(ctx, n, p, e):
+    """SE-134: gh pr view STALE_PASSES проходов подряд отдаёт не ту голову, что список, — PR не разбирается, и без
+    события этого не видит никто. Одно событие координатору на голову списка; удачное чтение обнуляет счёт."""
+    head, count = p.get("stale") or ("", 0)
+    count = count + 1 if head == e.listed else 1
+    p["stale"] = [e.listed, count]
+    if count >= STALE_PASSES:
+        ctx.emit(f"gh:stale:{n}:{e.listed}", "pr.stale", DIGEST, ["coord"],
+                 f"#{n}: {STALE_PASSES} проходов подряд gh pr view отдаёт голову {e.got[:9]}, а список — "
+                 f"{e.listed[:9]}; PR не разбирается", "github")
+
+
 def _recheck_ci(ctx, n, p):
     """PR ждёт только CI: сначала статус проверок, комментарии — когда CI доехал. Пока CI идёт, комментарии не
     читаются: у большого PR это десятки КБ за проход (#292 — 54 КБ). Новый вердикт меняет updated PR — его разбирает
     основной путь прохода."""
-    slow = _no_checks(ctx, p)
+    slow = _no_checks(ctx, p) or _slow_failure(ctx, p)
     if slow:
-        # CI у PR нет: перечитывать раз в NO_CHECKS_EVERY, а не каждый проход (до 1 440 gh pr view в сутки на PR) —
-        # только чтобы заметить проверки, если их всё же запустят
+        # CI у PR нет или провал ждёт перезапуска дольше 30 мин: перечитывать раз в NO_CHECKS_EVERY, а не каждый проход
+        # (до 1 440 gh pr view в сутки на PR) — только чтобы заметить проверки или перезапуск (SE-126, SE-134)
         last = sources._ts(p.get("ci_at"))
         if last and (ctx.now - last).total_seconds() < NO_CHECKS_EVERY:
             return
     checks = _gh_checks(ctx.cfg["github"]["repo"], n, p["head"])
+    p.pop("stale", None)
     if slow:
         p["ci_at"] = _iso_now(ctx)   # после удачного чтения: сбой gh повторяется следующим проходом, а не через 15 мин
     p["checks"] = checks
+    _failure_clock(ctx, p)
     ci = quorum.ci_state(_quorum_checks(ctx, p))
     # «CI: none» или провал уже разобраны на этой голове — комментарии не перечитываются: у «none» раз в 15 мин
     # (HR #774 — 23 КБ), у провала каждый проход, пока ждём перезапуск (SE-131)
@@ -181,8 +214,8 @@ def poll_github(ctx):
                 # на ответе 304, а его почти не было (etag менял каждый push). Сбой — повтор: await_ci не снят.
                 try:
                     _recheck_ci(ctx, n, p)
-                except StaleHead:
-                    pass   # новую голову разберёт следующий проход
+                except StaleHead as e:
+                    _stale(ctx, n, p, e)   # новую голову разберёт следующий проход
                 except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
                     fails.append(f"#{n}: {e}")
             continue
@@ -196,11 +229,13 @@ def poll_github(ctx):
                      "github")
         try:
             _check_pr(ctx, n, p, pr["head"]["sha"])
-        except StaleHead:
+        except StaleHead as e:
+            _stale(ctx, n, p, e)
             continue   # updated не пишется: следующий проход разберёт PR по новой голове
         except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
             fails.append(f"#{n}: {e}")
             continue
+        p.pop("stale", None)
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     _gh_closed(ctx, g["repo"], known, open_now, fails)
     # Догон окончен, только если список полон: открытый известный PR вне списка (пустой или частичный ответ gh с
@@ -237,7 +272,9 @@ def _check_pr(ctx, n, p, head, viewed=False):
         p["checks"] = _gh_checks(g["repo"], n, head)
     if head_changed:
         p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
+        p.pop("failure_at", None)      # и отсчёт провала (SE-134)
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
+    _failure_clock(ctx, p)
     verdicts = []
     for c in comments:
         v = quorum.parse_verdict(c.get("body"), g["lens_roles"], ctx.cfg["team"]["roles"])
