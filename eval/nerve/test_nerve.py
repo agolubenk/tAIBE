@@ -411,9 +411,18 @@ class FakeGh:
             if cmd[cmd.index("--repo") + 1] != self.REPO:
                 return 1, "", "GraphQL: Could not resolve to a Repository"
             limit = int(cmd[cmd.index("--limit") + 1])
-            return 0, json.dumps([{"number": p["number"], "title": p["title"], "updatedAt": p["updated_at"],
-                                   "createdAt": p["created_at"], "headRefOid": p["head"]["sha"]}
-                                  for p in self.open_prs[:limit]]), ""
+            fields = cmd[cmd.index("--json") + 1].split(",")
+            out = []
+            for p in self.open_prs[:limit]:
+                d = {"number": p["number"], "title": p["title"], "updatedAt": p["updated_at"],
+                     "createdAt": p["created_at"], "headRefOid": p["head"]["sha"]}
+                # ветка, база и форк — только если проход их спросил (уборка worktree, OPS-52)
+                for k, v in (("headRefName", p.get("branch")), ("baseRefName", p.get("base")),
+                             ("isCrossRepository", p.get("fork"))):
+                    if k in fields and v is not None:
+                        d[k] = v
+                out.append(d)
+            return 0, json.dumps(out), ""
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
             n = int(cmd[-1].split("/")[4])
             if n in self.mute:
@@ -625,6 +634,57 @@ class GithubPollTest(unittest.TestCase):
         self.assertIn("author", st["prs"]["1"])
         self.assertEqual(self.kinds().count(("pr.new", "#1 открыт: PR 1")), 1, "повтор не дублирует событие")
 
+    def test_merged_pr_removes_its_worktree_and_reports_kept_ones(self):
+        """OPS-52: ветка и база PR запоминаются из списка открытых; после «влит» — wt_gc.py branch по repo_root."""
+        pr = dict(_pr(460, "c" * 40), branch="fix/done", base="main", fork=False)
+        sources.run = FakeGh([pr])
+        gh_source.poll_github(self.ctx)
+        self.assertEqual(self.ctx.state["github"]["prs"]["460"]["branch"], "fix/done")
+        gc_calls = []
+        fake = FakeGh([], merged={460})
+
+        def run(cmd, stdin=None, timeout=30):
+            if cmd[2:4] == [gh_source.WT_GC, "branch"]:
+                gc_calls.append(cmd)
+                return 0, json.dumps([{"path": "/r/worktrees/fix/done", "branch": "fix/done", "removed": True},
+                                      {"path": "/r/x", "branch": "fix/done", "removed": False, "reason": "незакоммиченные изменения: 2"}]), ""
+            return fake(cmd, stdin, timeout)
+        sources.run = run
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([c[4:] for c in gc_calls], [[self.ctx.cfg["repo_root"], "fix/done", "--json", "--head", "c" * 40, "--base", "main"]])
+        self.assertIn(("pr.closed", "#460 влит"), self.kinds())
+        recs = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "wt.gc"]
+        self.assertEqual([(e["to"], e["text"]) for e in recs], [
+            ([], "#460: worktree /r/worktrees/fix/done удалён"),
+            (["coord"], "#460 влит, worktree /r/x оставлен — незакоммиченные изменения: 2")])
+
+    def test_fork_pr_with_same_branch_name_is_not_ours(self):
+        """Ревью #178: PR из форка с именем локальной ветки не должен убрать чужой worktree."""
+        pr = dict(_pr(463, "f" * 40), branch="fix/done", base="main", fork=True)
+        sources.run = FakeGh([pr])
+        gh_source.poll_github(self.ctx)
+        self.assertNotIn("branch", self.ctx.state["github"]["prs"]["463"])
+
+    def test_closed_unmerged_pr_and_gc_failure_do_not_break_the_pass(self):
+        pr = dict(_pr(461, "d" * 40), branch="fix/dropped", base="main", fork=False)
+        sources.run = FakeGh([pr])
+        gh_source.poll_github(self.ctx)
+        fake = FakeGh([], closed={461})  # закрыт без мёржа — уборки нет
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        self.assertFalse([c for c in fake.calls if gh_source.WT_GC in c])
+        self.assertNotIn("461", self.ctx.state["github"]["prs"])
+        pr = dict(_pr(462, "e" * 40), branch="fix/boom", base="main", fork=False)
+        sources.run = FakeGh([pr])
+        gh_source.poll_github(self.ctx)
+        fake = FakeGh([], merged={462})
+        sources.run = lambda cmd, stdin=None, timeout=30: (1, "", "timeout") if gh_source.WT_GC in cmd else fake(cmd, stdin, timeout)
+        gh_source.poll_github(self.ctx)
+        self.assertNotIn("462", self.ctx.state["github"]["prs"])
+        self.assertIn(("pr.closed", "#462 влит"), self.kinds())
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["key"] == "wt:gc:462"]
+        self.assertEqual([(e["to"], e["text"]) for e in rec], [(["coord"], "#462: уборка worktree fix/boom не удалась: timeout — wt_gc.py sweep")])
+
     def test_closed_pr_that_fails_stays_for_retry(self):
         sources.run = FakeGh([], broken={7})
         self.ctx.state["github"] = {"etag": "", "rev": gh_source.GH_STATE_REV,
@@ -648,7 +708,9 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         lists = [c for c in fake.calls if c[:3] == ["gh", "pr", "list"]]
         self.assertEqual(lists, [["gh", "pr", "list", "--repo", FakeGh.REPO, "--state", "open", "--limit", "1000",
-                                  "--json", "number,headRefOid,updatedAt,createdAt,title"]])
+                                  "--json", gh_source.GH_FIELDS]])
+        # Поля списка: прежние + ветка, база и форк для уборки worktree после мёржа (OPS-52).
+        self.assertEqual(gh_source.GH_FIELDS, "number,headRefOid,updatedAt,createdAt,title,headRefName,baseRefName,isCrossRepository")
         self.assertFalse([c for c in fake.calls if c[:2] == ["gh", "api"]], "PR не менялись: ни списка REST, "
                          "ни комментариев")
         self.assertNotIn("etag", self.ctx.state["github"])
