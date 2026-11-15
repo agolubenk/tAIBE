@@ -63,6 +63,23 @@ function afterDropping(value: string, dropping: number): number {
     : dropping + 1;
 }
 
+// TB-199: before the new separators the base took the `=` of a glued `:=`
+// into the value (A_TOKEN:=<v>), and a filter accepts any value with `=` in
+// it that is long enough. A value right after `:=` or `=>` is also judged as
+// the base judged it, so no value that the base masked loses its mask
+// (coord, 15.11).
+function accepts(
+  accept: (value: string, next: string) => boolean,
+  text: string,
+  start: number,
+  value: string,
+): boolean {
+  const next = text.charAt(start + value.length);
+  if (accept(value, next)) return true;
+  const operator = text.slice(Math.max(0, start - 2), start);
+  return (operator === ":=" || operator === "=>") && accept(`=${value}`, next);
+}
+
 // Replaces only group 1 of each match, keeping the surrounding context
 // (header name, assignment key, quotes) readable. `accept` also gets the
 // character after the value ("" at the end of the text).
@@ -97,7 +114,7 @@ function collectGroup(
       const value = match[group];
       const start = match.indices?.[group]?.[0];
       if (value === undefined || start === undefined) continue;
-      if (!accept(value, text.charAt(start + value.length))) continue;
+      if (!accepts(accept, text, start, value)) continue;
       hits.push({ kind, start, end: start + value.length });
     }
     return hits.concat(innerHits(text, search, kind, group, accept));
@@ -123,7 +140,7 @@ function innerHits(
     const value = match[group];
     const start = match.indices?.[group]?.[0];
     if (value === undefined || start === undefined) continue;
-    const accepted = accept(value, text.charAt(start + value.length));
+    const accepted = accepts(accept, text, start, value);
     if (accepted) hits.push({ kind, start, end: start + value.length });
     const dropping = accepted ? -1 : lastDropping(value);
     if (dropping >= 0) limit = Math.max(limit, pattern.lastIndex);

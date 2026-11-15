@@ -556,6 +556,21 @@ describe("@kaneo/redact", () => {
       expect(redact(input).text).not.toContain(value);
     });
 
+    // Coord 15.11: the base took the `=` of a glued `:=` into the value and
+    // masked any value long enough. A value right after `:=` or `=>` keeps
+    // that mask.
+    const phrase = join("correct", "horse", "battery", "staple");
+    const camel = join("Correct", "Horse", "Battery", "Staple");
+    it.each([
+      [`GH2_TOKEN:=${phrase};`, phrase],
+      [`api_key:=${camel};`, camel],
+      [`x-api-key:=${phrase}`, phrase],
+      [`A_SECRET:=${camel};`, camel],
+      [`T_ACCESS_TOKEN=>${phrase}`, phrase],
+    ])("masks a word value after a glued operator: %s", (input, secret) => {
+      expect(redact(input).text).not.toContain(secret);
+    });
+
     it.each([
       "password===",
       "A_TOKEN:=",
