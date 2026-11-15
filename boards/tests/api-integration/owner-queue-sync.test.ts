@@ -25,6 +25,7 @@ function setup(forest: Forest) {
     tokenFile: "/dev/null",
     tokenName: TOKEN,
     products: new Map([[forest.workspace.id, "hr-helper"]]),
+    plan: { products: new Map([[forest.workspace.id, "hr-helper"]]) },
   };
   const deps: SyncDeps = {
     client: queue.as(TOKEN),

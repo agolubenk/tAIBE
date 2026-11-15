@@ -290,5 +290,43 @@ if rc != 0 or "backend-2" in out or "boards — команда напечата�
     print("FAIL: --roles all opens the six base roles only")
     print(out)
 
+# 15.11: имя сессии (claude --name) — продукт, роль, хвост линии; в заголовке окна, строке ввода и ListAgents.
+def name_run(handoff_dir, env_extra, *flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / handoff_dir
+        folder.mkdir(parents=True)
+        handoff = folder / "HANDOFF.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = clean_env(**{"TMPDIR": tmp, "TAIBE_LINEAGE": "r.ab12", **env_extra})
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp, *flags],
+                             capture_output=True, text=True, env=env, timeout=30)
+        return run.returncode, run.stdout + run.stderr
+
+
+TAIL = r"[a-z0-9]{4}"
+for name, handoff_dir, env_extra, flags, want in [
+    ("role successor: product, role and lineage tail", "2026-11-15/boards", {"TAIBE_PRODUCT": ""}, ["--role", "boards"],
+     rf"--name 'hr-helper-boards-{TAIL}'"),
+    ("tAIBE successor keeps its product in the name", "2026-11-15", {"TAIBE_PRODUCT": "taibe"}, ["--role", "coord"],
+     rf"--name 'taibe-coord-{TAIL}'"),
+    ("second session: own key in the name", "x", {"TAIBE_PRODUCT": ""}, ["--role", "backend-2", "--no-retire"],
+     rf"--name 'hr-helper-backend-2-{TAIL}'"),
+    ("no role: topic from the handoff folder", "handoff/2026-11-15/queue-lane", {"TAIBE_PRODUCT": "taibe"}, [],
+     rf"--name 'taibe-queue-lane-{TAIL}'"),
+    ("no role, date folder: session", "handoff/2026-11-15", {"TAIBE_PRODUCT": "taibe"}, [],
+     rf"--name 'taibe-session-{TAIL}'"),
+    ("exec launcher (--keep-window) passes the name too", "2026-11-15/boards", {"TAIBE_PRODUCT": ""},
+     ["--role", "boards", "--keep-window"], rf"exec \"\$\{{CLAUDE_BIN:-claude\}}\" --settings '[^']+/genome/boards\.json' --name 'hr-helper-boards-{TAIL}' \"\$m\""),
+]:
+    rc, out = name_run(handoff_dir, env_extra, *flags)
+    got = re.search(want, out)
+    # имя в первом сообщении то же, что в --name: наследник называет себя, не гадая по ListAgents
+    said = got and re.search(r"Твоё имя в списке сессий и в заголовке окна — %s\." % re.escape(
+        re.search(r"--name '([^']+)'", got.group(0)).group(1)), out)
+    if rc != 0 or not got or not said:
+        failed += 1
+        print("FAIL:", name, rc, bool(got), bool(said))
+        print(out)
+
 print("spawn_session: %d failed" % failed)
 sys.exit(1 if failed else 0)

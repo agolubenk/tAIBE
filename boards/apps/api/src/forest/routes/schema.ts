@@ -205,7 +205,10 @@ export const seedSchema = z
     title: z.string(),
     body: z.string(),
     sourceTaskIds: z.array(z.string()),
-    contentHash: z.string(),
+    contentHash: z.string().optional().openapi({
+      description:
+        "sha256 of the stored body. Absent for a caller with a token: the body it reads is masked.",
+    }),
     compressor: z.string(),
     revision: z.number(),
     createdAt: responseTimestamp,
