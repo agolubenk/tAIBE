@@ -18,7 +18,9 @@ usage: python3 -I eval/tools/spend.py --hours 24 [--json out.json]
 - Сессия — основной файл `<sid>.jsonl`. Вызовы субагентов `<sid>/subagents/*.jsonl` идут в сессию-родителя.
 - Роль, линия, ключ реестра — из первого сообщения сессии («роль N», «Линия: r.xxxx», «ключ реестра K»). Роли нет —
   «прочее»: доля «прочего» покажет, нужна ли метка.
-- Продукт — по папке проекта: самый длинный repo_root из instances/*.json, с которого начинается имя папки.
+- Продукт — у каждого вызова, той же функцией, что доля окна Нерва (budget.Products, SE-66): cwd записи под repo_root
+  продукта из instances/*.json, иначе папка проекта сессии, иначе unattributed. Сессия, сменившая cwd на чужой репо,
+  делится между продуктами так же, как в budget.py: одна сессия — одна разбивка в обоих.
 - День — местная дата вызова; окно [с, по] — по местному времени.
 Привязка к задачам и PR — PR 2, ночной прогон и строка в сводке — PR 3.
 """
@@ -32,8 +34,11 @@ from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+# Продукт вызова — одна функция с долей окна Нерва. В конец пути: модули eval/tools не перекрываются.
+sys.path.append(os.path.join(HERE, '..', 'nerve'))
 import prices  # noqa: E402
 import transcript as tr  # noqa: E402
+from budget import UNATTRIBUTED, Products, project_dir_name  # noqa: E402
 
 INSTANCES = os.path.join(HERE, '..', '..', 'instances')
 BANDS = ((250_000, '≤ 250K'), (500_000, '250–500K'), (1_000_000, '500K–1M'), (math.inf, '> 1M'))
@@ -43,9 +48,9 @@ LINE_RE = re.compile(r'Линия:?\s*(r\.[\w.]+)')
 KEY_RE = re.compile(r'ключ реестра\s+([\w-]+)')
 
 
-def products(instances=INSTANCES):
-    """[(префикс папки проекта, slug)] из instances/*.json, длинные раньше."""
-    out = []
+def roots(instances=INSTANCES):
+    """{slug: repo_root} из instances/*.json (кроме _shared.json) — вход budget.Products."""
+    out = {}
     for name in sorted(os.listdir(instances)) if os.path.isdir(instances) else []:
         if not name.endswith('.json') or name.startswith('_'):
             continue
@@ -55,8 +60,8 @@ def products(instances=INSTANCES):
         except (OSError, ValueError):
             continue
         if isinstance(d, dict) and d.get('repo_root') and d.get('slug'):
-            out.append((tr.dir_name(d['repo_root'].rstrip('/')), d['slug']))
-    return sorted(out, key=lambda x: -len(x[0]))
+            out[d['slug']] = d['repo_root']
+    return out
 
 
 def session_of(path, is_sub):
@@ -87,10 +92,9 @@ def is_text_message(o):
         isinstance(x, dict) and x.get('type') == 'tool_result' for x in c))
 
 
-def session_meta(main, project, prods):
-    """Роль, линия, ключ реестра — из первого текстового сообщения сессии; продукт — по папке проекта."""
-    meta = {'project': project, 'role': OTHER, 'lineage': None, 'key': None,
-            'product': next((slug for p, slug in prods if project == p or project.startswith(p + '-')), OTHER)}
+def session_meta(main, project):
+    """Роль, линия, ключ реестра — из первого текстового сообщения сессии."""
+    meta = {'project': project, 'role': OTHER, 'lineage': None, 'key': None}
     for o in records(main):
         if not is_text_message(o):
             continue
@@ -108,10 +112,11 @@ def band(ctx):
     return next(name for top, name in BANDS if ctx <= top)
 
 
-def new_roll(sid, day, meta):
-    return dict(meta, sid=sid, day=day, calls=0, usd=0.0, parts=dict.fromkeys(prices.PARTS, 0.0), ctx=[],
-                bands={name: {'calls': 0, 'usd': 0.0} for _, name in BANDS}, cold=0, compactions=0, first_ctx=None,
-                subagent_calls=0, subagent_usd=0.0)
+def new_roll(key, meta):
+    sid, day, product = key
+    return dict(meta, sid=sid, day=day, product=product, calls=0, usd=0.0, parts=dict.fromkeys(prices.PARTS, 0.0),
+                ctx=[], bands={name: {'calls': 0, 'usd': 0.0} for _, name in BANDS}, cold=0, compactions=0,
+                first_ctx=None, subagent_calls=0, subagent_usd=0.0)
 
 
 def add_call(r, u, model, is_sub, first):
@@ -135,9 +140,9 @@ def add_call(r, u, model, is_sub, first):
 
 
 def scan(since, until, home=None, instances=INSTANCES):
-    """{(sid, день): свёртка} за окно [since, until] и число файлов субагентов с вызовами в окне."""
-    prods = products(instances)
-    prefixes = [p for p, _ in prods] or tr.project_prefixes()
+    """{(sid, день, продукт): свёртка} за окно [since, until] и число файлов субагентов с вызовами в окне."""
+    prods = Products(roots(instances))
+    prefixes = [project_dir_name(root) for _, root in prods.roots] or tr.project_prefixes()
     seen, meta, roll, subs = set(), {}, {}, 0
     for path, is_sub in tr.files(prefixes, home):
         try:
@@ -147,7 +152,7 @@ def scan(since, until, home=None, instances=INSTANCES):
             continue
         project, sid, main = session_of(path, is_sub)
         if sid not in meta:
-            meta[sid] = session_meta(main, project, prods)
+            meta[sid] = session_meta(main, project)
         file_calls, used = 0, False
         for o in records(path):
             ts = o.get('timestamp')
@@ -155,10 +160,10 @@ def scan(since, until, home=None, instances=INSTANCES):
                 continue
             t = tr.local_time(ts)
             in_window = since <= t <= until
+            key = (sid, t.date().isoformat(), prods.of(o.get('cwd'), project))
             m = o.get('message') if isinstance(o.get('message'), dict) else {}
             if not is_sub and in_window and is_text_message(o) and tr.COMPACTED in tr.text_of(m.get('content')):
-                key = (sid, t.date().isoformat())
-                roll.setdefault(key, new_roll(sid, key[1], meta[sid]))['compactions'] += 1
+                roll.setdefault(key, new_roll(key, meta[sid]))['compactions'] += 1
             if o.get('type') != 'assistant' or not isinstance(m.get('usage'), dict) or m.get('model') == '<synthetic>':
                 continue
             rid = o.get('requestId') or m.get('id')
@@ -168,9 +173,8 @@ def scan(since, until, home=None, instances=INSTANCES):
             file_calls += 1
             if not in_window:
                 continue
-            key = (sid, t.date().isoformat())
-            add_call(roll.setdefault(key, new_roll(sid, key[1], meta[sid])), m['usage'], m.get('model') or '',
-                     is_sub, file_calls == 1)
+            add_call(roll.setdefault(key, new_roll(key, meta[sid])), m['usage'], m.get('model') or '', is_sub,
+                     file_calls == 1)
             used = True
         subs += is_sub and used
     return roll, subs

@@ -30,8 +30,9 @@ CI runs the same commands (`.github/workflows/eval-ci.yml`). Tool tests `eval/to
 ## Spend (GL-1)
 
 `python3 -I eval/tools/spend.py --hours 24 [--json out.json]` — read-only, no LLM. It reports $ at API prices per
-session × local day, with role, lineage and registry key from the first message of the session, product from
-`instances/*.json`, context median / p90, context window bands (≤ 250K, 250–500K, 500K–1M, > 1M) as shares of calls
+session × local day, with role, lineage and registry key from the first message of the session, product of each call
+by `budget.Products` (the same function as the Nerve window share, SE-66: cwd under a `repo_root` of
+`instances/*.json`, else the session folder), context median / p90, context window bands (≤ 250K, 250–500K, 500K–1M, > 1M) as shares of calls
 and $, cold calls, compactions and the first call. Subagent calls count in the parent session; a request copied into
 a resumed session counts once. Sessions without a role go to «прочее». Metric definitions are in the docstring of
 `spend.py`. Attribution to tasks and PRs, the nightly run and the weekly table are the next steps of the GL-1 plan.
