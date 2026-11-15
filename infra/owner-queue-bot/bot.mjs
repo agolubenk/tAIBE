@@ -18,7 +18,7 @@ const INBOX_ID = /^i-\d{8}-\d{6}-[0-9a-f]{4}$/;
 import { hasMediaOf, isForwarded } from './classify.mjs';
 import { toPlain } from './tg-html.mjs';
 import {
-  HELP, KINDS, btn, cut, esc, freshView, guideMessages, itemMessages, keyOf, menuFingerprint, menuView,
+  HELP, KINDS, btn, cut, esc, freshView, guideMessages, itemMessages, keyOf, menuFingerprint, menuView, mergeItems,
   nextOpen, optKey, searchView, sectionView, sshMessages, verOf, workMessages,
 } from './view.mjs';
 
@@ -58,6 +58,11 @@ const errText = (e) => (e instanceof NotReadyError
 
 async function snap() {
   last = await mirror.snapshot();
+  return last;
+}
+/** Снимок одного пункта поверх последнего полного (после ответа): шапка и счётчики — свежие, остальные пункты — из base. */
+async function snapItem(base, id) {
+  last = mergeItems(base, await mirror.snapshot([id]), [id]);
   return last;
 }
 const byKey = (s, key) => s?.items.find((it) => keyOf(it.id) === key);
@@ -175,7 +180,7 @@ async function doAction(q, key, op, arg, ver) {
   const res = await mirror.act(it.id, op, value, expect);
   if (!res.ok) return send(chatId, { text: `⚠️ ${esc(res.error)}` });
   log(`ответ: ${it.id} ${op}${op === 'choose' ? '=' + value : ''} ${res.confirmed ? 'подтверждён' : 'без подтверждения'}`);
-  const s2 = await snap();
+  const s2 = await snapItem(s, it.id);
   const fresh = byKey(s2, key);
   if (fresh) {
     const msgs = cardOf(s2, fresh);

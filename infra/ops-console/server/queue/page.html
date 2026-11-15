@@ -1197,7 +1197,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       : 'Ответы сохраняются только в этом браузере — продублируйте важное в чате';
   }
 
-  function fmtTime(iso) { try { return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+  // Форматтеры Intl — один на формат: toLocale*String собирает новый на каждый вызов, а страница форматирует время у
+  // каждого пункта и тысячи дат «Хода работ» на каждое изменение данных (профиль OPS-76: половина времени renderDash).
+  var FMT_HM = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  function fmtTime(iso) { try { return FMT_HM.format(new Date(iso)); } catch (e) { return ''; } }
 
   function render() {
     placeItems();
@@ -2065,9 +2068,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function dayOf(iso) { var t = new Date(iso); return isNaN(t) ? null : new Date(t.getFullYear(), t.getMonth(), t.getDate()); }
   function today0() { var n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
   function addD(d, k) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + k); }
-  function fmtD(d) { return d ? d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '') : '—'; }
-  function fmtDT(t) { return t.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace('.', ''); }
-  function nf(v, dec) { return Number(v).toLocaleString('ru-RU', { maximumFractionDigits: dec || 0 }); }
+  var FMT_DAY = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
+  var FMT_DT = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  var FMT_NUM = {};
+  // Неверная дата — прочерк: format() бросает исключение там, где toLocale*String писал «Invalid Date».
+  function fmtD(d) { return d && !isNaN(d) ? FMT_DAY.format(d).replace('.', '') : '—'; }
+  function fmtDT(t) { return t && !isNaN(t) ? FMT_DT.format(t).replace('.', '') : '—'; }
+  function nf(v, dec) { var k = dec || 0; return (FMT_NUM[k] || (FMT_NUM[k] = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: k }))).format(Number(v)); }
   var ST_COLOR = { done: 'var(--st-good)', doing: 'var(--st-warn)', blocked: 'var(--st-crit)', planned: 'var(--st-none)' };
   var ST_NAME = { done: 'сделано', doing: 'в работе', blocked: 'ждёт', planned: 'в плане' };
 
@@ -2709,7 +2716,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { paintScope(ws); } catch (e) { /* подписи продукта необязательны */ }
     try { jumpDash(c, ws, lag, st); } catch (e) { /* числа в шапке необязательны */ }
     document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
-      : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
+      : dashReady() ? 'обновлено ' + FMT_HM.format(new Date()) : 'загружаю…';
   }
   // Переключатель окна роадмапа: подпись постоянная — «Весь горизонт», состояние — aria-pressed (линза фронтенда #347:
   // меняющаяся подпись вместе с aria-pressed читалась диктором наоборот). Перерисовывается только роадмап.
