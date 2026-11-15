@@ -1397,10 +1397,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         if (typeof r.data.note === 'string') e.note = r.data.note;
         if (typeof r.data.at === 'string') e.at = r.data.at;
       }
-      if (typeof r.data.agentStatus === 'string') e.agentStatus = r.data.agentStatus;
-      if (typeof r.data.agentNote === 'string') e.agentNote = r.data.agentNote;
-      if (typeof r.data.agentAt === 'string') e.agentAt = r.data.agentAt;
-      if (typeof r.data.agentBy === 'string') e.agentBy = r.data.agentBy;
+      agentFieldsInto(e, r.data);
     });
     saveLocal(); render();
   }
@@ -1850,6 +1847,14 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // захват снимает сервер через 12 ч, как раньше (CLAIM_TTL_MS); помеченные смотрит координатор в 09:30.
   // relay null — ответа /relay ещё нет или консоль без него: про пульс не знаем, молчим.
   var HOLDER_SILENT_MS = 4 * 3600000;
+  // Поля агента из строки снимка checks (документ целиком) — в запись страницы. agentBy, которого нет в снимке,
+  // стирается: release снимает захват (сервер удаляет agentBy, статус и заметку оставляет), и без этого метка
+  // называла бы держателем сессию, которая пункт уже отпустила (линза фронтенда #414, N1).
+  function agentFieldsInto(e, data) {
+    ['agentStatus', 'agentNote', 'agentAt'].forEach(function (k) { if (typeof data[k] === 'string') e[k] = data[k]; });
+    if (typeof data.agentBy === 'string') e.agentBy = data.agentBy; else delete e.agentBy;
+    return e;
+  }
   function holderState(relay, e, now, product) {
     if (!relay || !Array.isArray(relay.sessions) || !e || ['taken', 'doing', 'blocked'].indexOf(e.agentStatus) < 0) return null;
     var by = typeof e.agentBy === 'string' ? e.agentBy : '';

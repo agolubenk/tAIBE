@@ -43,6 +43,7 @@ type Pure = {
   relayItemState: (relay: unknown, id: string, now: number, product?: string) => null | { k: 'wait' | 'sending' | 'stuck' | 'off'; session?: string; at?: string; dead?: boolean }
   ownerSnapshotApplies: (local: Record<string, unknown> | undefined, snap: Record<string, unknown> | undefined, pending: boolean) => boolean
   holderState: (relay: unknown, e: Record<string, unknown> | undefined, now: number, product?: string) => null | { k: 'online' | 'silent'; session: string; hours?: number }
+  agentFieldsInto: (e: Record<string, unknown>, data: Record<string, unknown>) => Record<string, unknown>
   tipHtml: (s: string) => string
   roadmapLabelMode: (pxPerWeek: number) => 'weeks' | 'months'
   rmWindowWeeks: (laneW: number) => { total: number; back: number }
@@ -77,7 +78,7 @@ function pure(): Pure {
     classifyOwnText: fn('classifyOwnText'), inboxTitleOf: fn('inboxTitleOf'), inboxDraftId: fn('inboxDraftId'), inboxItemOf: fn('inboxItemOf'),
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
-    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), holderState: fn('holderState'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
+    itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), holderState: fn('holderState'), agentFieldsInto: fn('agentFieldsInto'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
     tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), rmWindowWeeks: fn('rmWindowWeeks'), roadmapMonthLabel: fn('roadmapMonthLabel'),
     placeRoadmapLabels: fn('placeRoadmapLabels'), roadmapBefore: fn('roadmapBefore'), targetFromHash: fn('targetFromHash'),
   }
@@ -1259,6 +1260,20 @@ describe('держатель входящего (карточка HR xuc5csrv, d
     expect(holderState({ sessions: 'x' }, { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: ago(9) }, NOW)).toBeNull()
     expect(holderState(relay(), { agentStatus: 'doing', agentBy: 'r.ab12', agentAt: 'нет' }, NOW)).toBeNull()
     expect(holderState(relay(), undefined, NOW)).toBeNull()
+  })
+
+  it('release (сервер убрал agentBy, статус оставил) — снимок стирает держателя, метка не называет отпустившую сессию (линза #414, N1)', () => {
+    const { holderState, agentFieldsInto } = pure()
+    const e: Record<string, unknown> = {}
+    agentFieldsInto(e, { agentStatus: 'doing', agentNote: 'беру', agentBy: 'r.ab12', agentAt: ago(1) })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toEqual({ k: 'online', session: 'r.ab12' })
+    agentFieldsInto(e, { agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0) })
+    expect(e).toEqual({ agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0) })
+    expect(holderState(relay(live('r.ab12')), e, NOW)).toBeNull()
+    // Поля статуса, заметки и времени без значения в снимке не стираются — как было.
+    agentFieldsInto(e, { agentBy: 'r.cd34' })
+    expect(e).toEqual({ agentStatus: 'doing', agentNote: 'передано r.cd34', agentAt: ago(0), agentBy: 'r.cd34' })
+    expect(html).toContain('agentFieldsInto(e, r.data);')
   })
 
   it('по продуктам (OPS-51): живая сессия другого продукта с тем же именем держателя не делает его «в сети»', () => {
