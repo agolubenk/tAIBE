@@ -70,18 +70,24 @@ function SearchComponent() {
       <WorkspaceLayout
         title={t("workspace:search.pageTitle")}
         headerActions={
-          <Link
-            to="/dashboard/workspace/$workspaceId"
-            params={{ workspaceId }}
+          // One link styled as a button: no <button> inside <a> (TB-224).
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-2"
             aria-label={t("workspace:search.backToDashboard")}
+            render={
+              <Link
+                to="/dashboard/workspace/$workspaceId"
+                params={{ workspaceId }}
+              />
+            }
           >
-            <Button variant="ghost" size="sm" className="gap-2" tabIndex={-1}>
-              <ArrowLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">
-                {t("workspace:search.backToDashboard")}
-              </span>
-            </Button>
-          </Link>
+            <ArrowLeft aria-hidden="true" className="w-4 h-4" />
+            <span className="hidden sm:inline">
+              {t("workspace:search.backToDashboard")}
+            </span>
+          </Button>
         }
       >
         <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-6">

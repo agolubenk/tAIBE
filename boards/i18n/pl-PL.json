@@ -4410,6 +4410,12 @@
 				"subcards": "Subcards",
 				"tree": "Whole tree"
 			}
+		},
+		"severity": {
+			"critical": "Critical",
+			"high": "High",
+			"low": "Low",
+			"medium": "Medium"
 		}
 	},
 	"press": {
