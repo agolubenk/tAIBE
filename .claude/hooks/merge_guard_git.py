@@ -343,7 +343,7 @@ def config_bypass(args, gdir="."):
 def classify_git(a, cwd, depth=0, env_config=False, guess=False):
     """env_config — конфиг git задан окружением (GIT_CONFIG_*, GIT_DIR, HOME…): его не проверить, push и псевдонимы —
     отказ. То же при `--git-dir`: конфиг другого репозитория. Скобки shell (`HEAD:{main,x}`) раскрыты до вызова."""
-    i, gdir, conf, opaque = 1, cwd, [], env_config
+    i, gdir, conf, opaque, conf_env = 1, cwd, [], env_config, False
     while i < len(a) and a[i].startswith("-"):
         if a[i] == "-C" and i + 1 < len(a):
             gdir = os.path.join(gdir, os.path.expanduser(a[i + 1]))
@@ -354,6 +354,7 @@ def classify_git(a, cwd, depth=0, env_config=False, guess=False):
         elif a[i] == "--config-env" or a[i].startswith("--config-env="):
             key = (a[i + 1] if a[i] == "--config-env" and i + 1 < len(a) else a[i].split("=", 1)[-1]).split("=", 1)[0]
             opaque = opaque or bool(RISKY_KEY.match(key))
+            conf_env = True
             i += 2 if a[i] == "--config-env" else 1
         elif a[i] == "--git-dir" or a[i].startswith("--git-dir="):
             opaque = True
@@ -411,4 +412,13 @@ def classify_git(a, cwd, depth=0, env_config=False, guess=False):
         if any(f in ("-d", "--delete") for f in flags):
             return None
         return MAIN_WRITE if implicit_push(gdir, conf) else None
+    if (conf or conf_env) and not all(explicit_ref(r) for r in refspecs):
+        return MAIN_WRITE  # настройка на самом push (`-c remote.origin.push=…`) даёт dst голому src — SE-145
     return MAIN_WRITE if any(hits_main(r, gdir) for r in refspecs) else None
+
+
+def explicit_ref(refspec):
+    """`src:dst` с видимым dst: не пустой, без маски `*`, не `HEAD`/`@` и без подстановки. Такой dst не меняют ни
+    `remote.*.push`, ни `push.default` — белый список push с настройкой (SE-145, как у скрипта в #427)."""
+    _, sep, dst = refspec.lstrip("+").partition(":")
+    return bool(sep and dst) and "*" not in dst and dst not in ("HEAD", "@") and SUBST not in dst and "$" not in dst
