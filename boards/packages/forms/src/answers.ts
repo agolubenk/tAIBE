@@ -1,29 +1,14 @@
-import { z } from "zod";
-import {
-  type FieldOf,
-  fieldIdSchema,
-  type FormField,
-  type FormTemplate,
-  LIMITS,
-} from "./schema";
+import type { Answer, AnswersDoc } from "./answers-schema";
+import { LIMITS } from "./limits";
+import type { FieldOf, FormField, FormTemplate } from "./schema";
 import { visibleFieldIds } from "./show-if";
+
+export type { Answer, AnswersDoc } from "./answers-schema";
 
 // Every field starts empty: a new answer set is `{}`. An empty answer is
 // null, "", an absent key, or an interval/matrix with no part filled.
 
-export const answerSchema = z.strictObject({
-  v: z.unknown(),
-  note: z.string().max(LIMITS.note).optional(),
-});
-export type Answer = z.infer<typeof answerSchema>;
 export type AnswerMap = Partial<Record<string, Answer>>;
-
-export const answersDocSchema = z.strictObject({
-  form: z.string().min(1).max(80),
-  version: z.number().int().min(1),
-  answers: z.record(fieldIdSchema, answerSchema),
-});
-export type AnswersDoc = z.infer<typeof answersDocSchema>;
 
 /** Stable codes; the web maps them to i18n keys. No text here. */
 export type AnswerIssueCode =

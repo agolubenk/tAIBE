@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LIMITS } from "./limits";
 import { findShowIfCycle } from "./show-if";
 
 // R-027 (TB-173): a form template is JSON that agents send through MCP and
@@ -18,25 +19,6 @@ export type FieldType = (typeof FIELD_TYPES)[number];
 
 /** The types a display rule may point at: one answer, compared with `===`. */
 export const SHOW_IF_TARGETS = ["choice", "yesno", "scale"] as const;
-
-export const LIMITS = {
-  fields: 200,
-  id: 40,
-  title: 200,
-  q: 500,
-  help: 2000,
-  option: 500,
-  options: { min: 2, max: 5 },
-  rows: 30,
-  cols: { min: 2, max: 6 },
-  label: 200,
-  unit: 40,
-  placeholder: 2000,
-  scale: { min: 1, max: 5 },
-  inputText: 500,
-  text: 10_000,
-  note: 2000,
-} as const;
 
 const PLAIN = "Plain text: shown as text, never as HTML or markdown.";
 
