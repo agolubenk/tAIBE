@@ -9,6 +9,7 @@ import {
 } from "vite-plus/test";
 import db, { schema } from "../../apps/api/src/database";
 import { resetEmbedQueueForTests } from "../../apps/api/src/notebook/embed/embed-queue";
+import { encodeEmbedding } from "../../apps/api/src/notebook/embed/embedding-codec";
 import { clearVectorCacheForTests } from "../../apps/api/src/notebook/search/vector-index";
 import { resetTestDatabase } from "./helpers/database";
 import { addTask, createForest, relate } from "./helpers/forest";
@@ -33,6 +34,29 @@ const KEYS_DOC = [
 ].join("\n");
 
 const text = (body: unknown) => JSON.stringify(body);
+const vector = (values: number[]) => encodeEmbedding(values).toString("base64");
+const cursorId = (cursor: string) =>
+  Buffer.from(cursor, "base64url").toString().split("|")[1];
+
+type Forest = Awaited<ReturnType<typeof createForest>>;
+type Hit = { heading: string; score: number; matchedBy: string[] };
+
+// A finished tree of one card, felled by the owner into one log.
+async function fellCard(forest: Forest, title: string) {
+  const card = await addTask(forest.project.id, title);
+  if (!card) throw new Error("fixture");
+  await db
+    .update(schema.taskTable)
+    .set({ status: "done" })
+    .where(inArray(schema.taskTable.id, [card.id]));
+  const felled = await forest.owner("/fell", {
+    kind: "tree",
+    rootId: card.id,
+    reason: "done",
+  });
+  expect(felled.status).toBe(200);
+  return felled.body.logIds[0] as string;
+}
 
 async function notebookFixture() {
   const forest = await createForest();
@@ -107,6 +131,82 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(log.status).toBe(200);
     expect(text(log.body)).not.toContain(SECRET);
     expect(text(log.body)).toContain(MARKER);
+  });
+
+  it("pages logs for an API key by list order, not by hidden matches", async () => {
+    const forest = await createForest();
+    const older = await fellCard(forest, "Rotate older");
+    await fellCard(forest, `Hidden ${SECRET}`);
+    await fellCard(forest, `Hidden again ${SECRET}`);
+    const newer = await fellCard(forest, "Rotate newer");
+
+    // Two logs match only inside a secret: no item, and no cursor that
+    // names one of them (backend lens #388 B1).
+    const hidden = await forest.agent(`/logs?q=${PART}&take=1`);
+    expect(hidden.body).toEqual({ items: [], nextCursor: null });
+    expect(
+      (await forest.owner(`/logs?q=${PART}&take=1`)).body.nextCursor,
+    ).toBeTruthy();
+
+    // Visible matches page one by one; the cursor is the last item shown.
+    const first = await forest.agent("/logs?q=rotate&take=1");
+    expect(first.body.items.map((item: { id: string }) => item.id)).toEqual([
+      newer,
+    ]);
+    expect(cursorId(first.body.nextCursor)).toBe(newer);
+    const second = await forest.agent(
+      `/logs?q=rotate&take=1&cursor=${first.body.nextCursor}`,
+    );
+    expect(second.body.items.map((item: { id: string }) => item.id)).toEqual([
+      older,
+    ]);
+    expect(second.body.nextCursor).toBeNull();
+  });
+
+  it("fuses notebook ranks for an API key without hidden keyword hits", async () => {
+    const nb = await notebookFixture();
+
+    // Keyword only: the hidden chunk leaves before the ranks are fused, so
+    // the visible one has the first rank's score.
+    const keyword = await nb.agent("POST", "/search", {
+      query: `аренда or ${SECRET}`,
+    });
+    expect(keyword.body.mode).toBe("keyword");
+    expect(
+      (keyword.body.results as Hit[]).map((hit) => [hit.heading, hit.score]),
+    ).toEqual([["Ключи › Аренда", 1 / 61]]);
+
+    // Hybrid: the chunk with the secret stays a vector hit, not a keyword one.
+    const work = await nb.agent("GET", "/embed/work?wait=0");
+    const chunks = work.body.items as {
+      kind: string;
+      id: string;
+      text: string;
+    }[];
+    await nb.agent("POST", "/embed/results", {
+      model: "nomic-embed-text",
+      items: chunks.map((item) => ({
+        kind: item.kind,
+        id: item.id,
+        embedding: vector(item.text.includes("Ротация") ? [0, 1] : [1, 0]),
+      })),
+    });
+    const search = nb.agent("POST", "/search", { query: SECRET });
+    const poll = await nb.agent("GET", "/embed/work?wait=5");
+    const [query] = poll.body.items as { id: string }[];
+    await nb.agent("POST", "/embed/results", {
+      model: "nomic-embed-text",
+      items: [{ kind: "query", id: query?.id, embedding: vector([0.1, 1]) }],
+    });
+    const hybrid = await search;
+    expect(hybrid.body.mode).toBe("hybrid");
+    expect(
+      (hybrid.body.results as Hit[]).map((hit) => [hit.heading, hit.matchedBy]),
+    ).toEqual([
+      ["Ключи › Ротация", ["vector"]],
+      ["Ключи › Аренда", ["vector"]],
+    ]);
+    expect((hybrid.body.results as Hit[])[0]?.score).toBe(1 / 61);
   });
 
   it("masks notebook search and sources for an API key", async () => {

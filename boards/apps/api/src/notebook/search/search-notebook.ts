@@ -43,7 +43,9 @@ export async function searchNotebook(input: {
   const wantVectors =
     input.mode === "hybrid" && isWorkerOnline(input.workspaceId);
   const [keywordIds, vectorIds] = await Promise.all([
-    keywordCandidates(input.workspaceId, input.query),
+    keywordCandidates(input.workspaceId, input.query).then((ids) =>
+      input.tokenCaller ? visibleKeywordIds(ids, input.query) : ids,
+    ),
     wantVectors
       ? vectorCandidates(input.workspaceId, input.query, input.embedModel)
       : Promise.resolve(null),
@@ -58,30 +60,38 @@ export async function searchNotebook(input: {
   const byId = new Map(rows.map((row) => [row.chunkId, row]));
   const results = fused.flatMap((hit) => {
     const row = byId.get(hit.id);
-    if (!row) return [];
-    if (
-      input.tokenCaller &&
-      !keywordHitVisible(row, hit.matchedBy, input.query)
-    ) {
-      return [];
-    }
-    return [{ ...row, score: hit.score, matchedBy: hit.matchedBy }];
+    return row ? [{ ...row, score: hit.score, matchedBy: hit.matchedBy }] : [];
   });
   return { mode: vectorIds ? "hybrid" : "keyword", results };
 }
 
 // TB-196: a caller with a token reads a chunk masked (the route masks the
-// response, TB-143). A keyword hit on a chunk that holds a secret stays only
-// if each query word is in its visible text: else the hit would tell that a
-// secret holds the word. Chunks with no secret keep the stemmed match (the
+// response, TB-143). For it a keyword candidate that holds a secret stays
+// only if each query word is in its visible text, and the others leave the
+// list before the ranks are fused: else the hit, its `matchedBy` or the
+// ranks of the hits after it would tell that a secret holds the word
+// (backend lens #388 B2). Chunks with no secret keep the stemmed match (the
 // stored tsvector finds `ключ` for `ключами`, a substring test would not).
-// A vector hit stays: it ranks by meaning, not by a word of the secret.
+async function visibleKeywordIds(ids: string[], query: string) {
+  if (!ids.length) return ids;
+  const rows = await db
+    .select({
+      id: notebookChunkTable.id,
+      heading: notebookChunkTable.heading,
+      text: notebookChunkTable.text,
+    })
+    .from(notebookChunkTable)
+    .where(inArray(notebookChunkTable.id, ids));
+  const visible = new Set(
+    rows.filter((row) => keywordHitVisible(row, query)).map((row) => row.id),
+  );
+  return ids.filter((id) => visible.has(id));
+}
+
 function keywordHitVisible(
   row: { heading: string; text: string },
-  matchedBy: MatchedBy[],
   query: string,
 ): boolean {
-  if (matchedBy.includes("vector")) return true;
   const passage = `${row.heading}\n${row.text}`;
   if (!redact(passage).hits.length) return true;
   return queryWords(query).every((word) => matchesVisibleText(passage, word));
