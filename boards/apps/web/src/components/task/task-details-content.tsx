@@ -3,6 +3,7 @@ import { ArrowUpRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ExternalLinksAccordion } from "@/components/external-links/external-links-accordion";
+import { TaskFormsSlot } from "@/components/task-forms/task-forms-slot";
 import useExternalLinks from "@/hooks/queries/external-link/use-external-links";
 import useGetProject from "@/hooks/queries/project/use-get-project";
 import useGetTask from "@/hooks/queries/task/use-get-task";
@@ -78,6 +79,8 @@ export default function TaskDetailsContent({
       {properties}
 
       <TaskDescription taskId={taskId} />
+
+      <TaskFormsSlot taskId={taskId} />
 
       <div className="mt-6 flex flex-col gap-6">
         {task && (

@@ -3667,6 +3667,49 @@
 				"subcards": "Subcards",
 				"tree": "Whole tree"
 			}
+		},
+		"forms": {
+			"required": "required",
+			"yes": "Yes",
+			"no": "No",
+			"intervalFrom": "From",
+			"intervalTo": "To",
+			"addNote": "Add a note",
+			"note": "Note",
+			"issues": {
+				"required": "Answer this question.",
+				"wrongType": "This value does not fit the question.",
+				"outOfRange": "The value is out of range.",
+				"invalidOption": "Choose one of the options.",
+				"invalidInterval": "Fill in both ends; the start must not be after the end.",
+				"tooLong": "The text is too long.",
+				"unknownField": "This question is not in the form.",
+				"versionMismatch": "The form has a new version. Reload it to answer."
+			},
+			"title": "Forms",
+			"loadError": "Forms did not load.",
+			"retry": "Retry",
+			"progress": "{{answered}} of {{total}}",
+			"status": {
+				"draft": "Draft",
+				"submitted": "Submitted",
+				"changed": "Changed after submit"
+			},
+			"save": {
+				"pending": "Unsaved changes",
+				"saving": "Saving…",
+				"saved": "Saved",
+				"failed": "Not saved. Your answers stay on this page.",
+				"invalid": "Some answers are not saved: fix the marked questions.",
+				"rowVersion": "The form was changed in another tab. Reload it; changes made here after the last save will be lost.",
+				"versionMismatch": "The form has a new version. Reload it to answer.",
+				"forbidden": "You cannot change the answers of this form."
+			},
+			"reload": "Reload form",
+			"submit": "Submit",
+			"resubmit": "Submit again",
+			"submitIssues": "Answer the marked questions to submit.",
+			"export": "Download JSON"
 		}
 	},
 	"invitations": {
