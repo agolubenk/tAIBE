@@ -167,6 +167,52 @@ class ChecksTest(unittest.TestCase):
         self.assertIn(('boards/apps/api/drizzle/0002_orphan.sql', 'migration is not in the journal — it never runs'),
                       paths)
 
+    def drizzle_tree(self, entries, snapshots):
+        """entries: [(idx, tag, when)]; snapshots: {number: (id, prevId)}; every entry gets its .sql."""
+        base = 'boards/apps/api/drizzle'
+        write(self.root, base + '/meta/_journal.json', json.dumps({'entries': [
+            {'idx': i, 'when': w, 'tag': t} for i, t, w in entries]}))
+        for _, t, _ in entries:
+            write(self.root, '%s/%s.sql' % (base, t), 'select 1;')
+        for num, (sid, prev) in snapshots.items():
+            write(self.root, '%s/meta/%s_snapshot.json' % (base, num), json.dumps({'id': sid, 'prevId': prev}))
+        return {f.message for f in self.findings_raw('data') if f.level == 'error'}
+
+    def findings_raw(self, only):
+        self.git('add', '-A')
+        return run.collect(self.root, tuple(only.split(',')), None)[0]
+
+    def test_drizzle_journal_ok(self):
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 200)], {'0000': ('A', 'Z'), '0001': ('B', 'A')})
+        self.assertEqual(msgs, set())
+
+    def test_drizzle_journal_rebase_mistakes(self):
+        # OPS-74: two PRs took 0084; the second was rebased, appended without renumbering, without a snapshot, and
+        # kept its older `when` — drizzle would skip it on existing databases
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 300), (2, '0001_c', 200)],
+                                 {'0000': ('A', 'Z'), '0001': ('B', 'A')})
+        self.assertIn('0001_c: number in the tag is not 0002 — renumber it', msgs)
+        self.assertTrue(any(m.startswith('0001_c: when 200 is not newer') for m in msgs))
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 200), (2, '0002_c', 300)],
+                                 {'0000': ('A', 'Z'), '0001': ('B', 'A')})
+        self.assertIn('0002_c: no snapshot — generate the migration with db:generate', msgs)
+
+    def test_drizzle_snapshot_on_another_base(self):
+        # generated on the old base: its prevId points past the migration that merged first
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 200), (2, '0002_c', 300)],
+                                 {'0000': ('A', 'Z'), '0001': ('B', 'A'), '0002': ('C', 'A')})
+        self.assertIn('0002_c: snapshot prevId A is not the id of 0001_b — regenerate it on top of the journal', msgs)
+
+    def test_drizzle_allowlist_names_each_shipped_migration(self):
+        write(self.root, 'infra/checks/allow.txt',
+              'data  boards/apps/api/drizzle/meta/_journal.json  0001_b: no snapshot\n')
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 200), (2, '0002_c', 300)],
+                                 {'0000': ('A', 'Z'), '0002': ('C', 'Q')})
+        self.assertEqual(msgs, set())   # 0001 shipped without a snapshot; 0002 after a gap is not chained
+        os.remove(os.path.join(self.root, 'boards/apps/api/drizzle/meta/0002_snapshot.json'))
+        msgs = self.findings_raw('data')
+        self.assertIn('0002_c: no snapshot — generate the migration with db:generate', {f.message for f in msgs})
+
     def test_syntax(self):
         write(self.root, 'ok.py', 'x = 1\n')
         write(self.root, 'bad.py', 'def f(:\n')
