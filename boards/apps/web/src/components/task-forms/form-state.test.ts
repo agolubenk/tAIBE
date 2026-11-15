@@ -3,6 +3,7 @@ import {
   answersDoc,
   formProgress,
   issuesByField,
+  labelKeys,
   withAnswer,
 } from "./form-state";
 import { sevenTypesTemplate as template } from "./form-test-template";
@@ -51,6 +52,12 @@ describe("form state (TB-173)", () => {
       answers: { name: { v: "Ann" } },
     });
     expect(Object.keys(doc.answers)).toEqual(["name"]);
+  });
+
+  it("gives each label a distinct key, a repeated one too", () => {
+    const keys = labelKeys(["Yes", "No", "Yes", "1:Yes"]);
+    expect(keys).toEqual(["1:Yes", "1:No", "2:Yes", "1:1:Yes"]);
+    expect(new Set(keys).size).toBe(4);
   });
 
   it("ignores a field that is not in the template", () => {

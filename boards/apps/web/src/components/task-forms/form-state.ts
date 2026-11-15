@@ -53,6 +53,19 @@ export function mergeIssues(
   ];
 }
 
+/**
+ * React keys for the fixed labels of a field (options, rows, columns): the
+ * label with its occurrence number, so a repeated label gets its own key.
+ */
+export function labelKeys(labels: readonly string[]): string[] {
+  const seen = new Map<string, number>();
+  return labels.map((label) => {
+    const count = (seen.get(label) ?? 0) + 1;
+    seen.set(label, count);
+    return `${count}:${label}`;
+  });
+}
+
 /** The answer document of a form: a field without an answer has no entry. */
 export function answersDoc(
   template: FormTemplate,

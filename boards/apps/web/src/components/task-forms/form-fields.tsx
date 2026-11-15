@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Radio, RadioGroup } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
+import { labelKeys } from "./form-state";
 
 // TB-173 web (a): one input per field type of @kaneo/forms. Every text of a
 // template is plain text: React renders it as text, never as HTML. A value
@@ -96,6 +97,7 @@ export function ChoiceInput({
   invalid,
   disabled,
 }: FieldInputProps<"choice">) {
+  const keys = labelKeys(field.options);
   return (
     <RadioGroup
       aria-invalid={invalid || undefined}
@@ -106,12 +108,7 @@ export function ChoiceInput({
       value={indexValue(value)}
     >
       {field.options.map((option, index) => (
-        <Label
-          className="items-start gap-2 font-normal"
-          // Options are fixed by the template version; the index is the answer.
-          // biome-ignore lint/suspicious/noArrayIndexKey: the index is the value
-          key={index}
-        >
+        <Label className="items-start gap-2 font-normal" key={keys[index]}>
           <Radio className="mt-0.5" value={String(index)} />
           <span className="whitespace-pre-wrap">{option}</span>
         </Label>
@@ -298,6 +295,8 @@ export function MatrixInput({
     next[row] = col;
     onChange(next);
   };
+  const rowKeys = labelKeys(field.rows);
+  const colKeys = labelKeys(field.cols);
   return (
     <div className="flex flex-col gap-2">
       <div aria-hidden="true" className="hidden gap-2 sm:flex">
@@ -305,8 +304,7 @@ export function MatrixInput({
         {field.cols.map((col, index) => (
           <span
             className="line-clamp-2 w-18 text-center text-muted-foreground text-xs"
-            // biome-ignore lint/suspicious/noArrayIndexKey: the index is the value
-            key={index}
+            key={colKeys[index]}
             title={col}
           >
             {col}
@@ -316,8 +314,7 @@ export function MatrixInput({
       {field.rows.map((row, rowIndex) => (
         <div
           className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2"
-          // biome-ignore lint/suspicious/noArrayIndexKey: rows are fixed by the version
-          key={rowIndex}
+          key={rowKeys[rowIndex]}
         >
           <span
             className="whitespace-pre-wrap text-sm sm:flex-1"
@@ -336,8 +333,7 @@ export function MatrixInput({
             {field.cols.map((col, colIndex) => (
               <Label
                 className="gap-2 font-normal sm:w-18 sm:justify-center"
-                // biome-ignore lint/suspicious/noArrayIndexKey: the index is the value
-                key={colIndex}
+                key={colKeys[colIndex]}
               >
                 <Radio value={String(colIndex)} />
                 <span className="sm:sr-only">{col}</span>
