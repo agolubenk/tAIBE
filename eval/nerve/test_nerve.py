@@ -167,6 +167,7 @@ class QuorumTest(unittest.TestCase):
         self.assertFalse(quorum.quorum(vs, head, ["IN_PROGRESS"])[0], "CI ещё идёт")
         self.assertEqual(quorum.quorum(vs, head, [])[::3], (False, "pending"), "проверок ещё нет — не ok (SE-126)")
         self.assertEqual(quorum.ci_state([]), "pending")
+        self.assertEqual(quorum.quorum(vs, head, ["NONE"])[::3], (True, "none"), "CI у PR нет — маркер gh_source")
 
     def test_author_roles_add_second_sessions(self):
         roles = CFG["team"]["roles"]
@@ -567,6 +568,48 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         self.assertIn(("pr.quorum", "#482 собран: approve backend, boards, plan на eeeeeeeee, CI ok"), self.kinds())
         self.assertFalse(p["await_ci"])
+
+    def test_no_checks_for_30_min_gives_quorum_with_ci_none_then_normal_rule(self):
+        """SE-126, решение координатора 05:50: у PR вне фильтров paths проверок не будет. Через 30 мин после головы —
+        pr.quorum с «CI: none» и одно событие координатору; дальше gh pr view раз в 15 мин; проверки появились —
+        обычное правило CI; новая голова сбрасывает отсчёт."""
+        head, t0 = "f" * 40, self.ctx.now
+        three = [f"{x}: approve на {{}}" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        views = []
+
+        def at(minutes, sha=head, ci=""):
+            self.ctx.now = t0 + timedelta(minutes=minutes)
+            fake = FakeGh([_pr(483, sha)], comments={483: [c.format(sha[:7]) for c in three]}, ci={483: ci})
+            sources.run = fake
+            gh_source.poll_github(self.ctx)
+            views.append(len([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]))
+
+        def events(kind):
+            return [t for k, t in self.kinds() if k == kind]
+
+        for m in (0, 29):
+            at(m)
+        self.assertEqual(events("pr.quorum"), [], "до 30 мин пустой список — CI ещё не стартовал")
+        for m in (31, 35, 45, 47):
+            at(m)
+        self.assertEqual(views, [1, 1, 1, 0, 0, 1], "до 30 мин — каждый проход, дальше раз в 15 мин")
+        self.assertEqual(events("pr.quorum"),
+                         ["#483 собран: approve backend, boards, plan на fffffffff, CI: none (проверок нет 30 мин)"])
+        self.assertEqual(len(events("pr.nochecks")), 1)
+        self.assertTrue(self.ctx.state["github"]["prs"]["483"]["await_ci"], "CI: none — ожидание не снято")
+        at(50, ci="SUCCESS")
+        self.assertEqual(views[-1], 0, "проверки заметны на следующем чтении раз в 15 мин")
+        at(62, ci="SUCCESS")
+        self.assertEqual(events("pr.quorum")[-1], "#483 собран: approve backend, boards, plan на fffffffff, CI ok")
+        self.assertFalse(self.ctx.state["github"]["prs"]["483"]["await_ci"])
+        new = "1" * 40
+        at(63, new)
+        at(64, new)
+        self.assertEqual(views[-2:], [1, 1], "новая голова: снова каждый проход")
+        self.assertEqual(len(events("pr.quorum")), 2)
+        at(94, new)
+        self.assertEqual(len(events("pr.quorum")), 3)
+        self.assertEqual(len(events("pr.nochecks")), 2)
 
     def test_upgrade_backfill_is_capped_and_says_open_only_for_new_prs(self):
         old = [_pr(n, "b" * 40, created="2026-11-01T10:00:00Z") for n in range(1, 26)]
