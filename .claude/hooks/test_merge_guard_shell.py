@@ -345,6 +345,17 @@ for form in ("MAKEFLAGS=-Iinc make -C sub x", "export MAKEFLAGS=-Iinc; cd sub; m
     bash(f"SE-133 B2, отказ: {form!r}", form, True, cwd=o)
 for form in ("make -C sub x", "make -Iinc x"):
     bash(f"SE-133 B2, без признака: {form!r}", form, False, cwd=o)
+# Вторая линза backend (#398, 9c8f9f02e): make делит MAKEFLAGS только по пробелам (кавычка — обычный символ, `\ ` —
+# склейка) и раскрывает `$(Y)` из окружения — сверено с make 3.81; `ИМЯ+=` shell тоже отдаёт в окружение
+for form in ("MAKEFLAGS=\"-s 'a MAKEFILES=ok.mk'\" make x", "MAKEFLAGS=\"-s 'a -Iinc'\" make -C sub x",
+             "Y=-Iinc MAKEFLAGS='$(Y)' make -C sub x", "MAKEFLAGS='-s\\ Iinc' make -C sub x",
+             "MAKEFLAGS+=-Iinc make -C sub x", "export MAKEFLAGS+='MAKEFILES=ok.mk'; make x",
+             "MAKEFILES+=sub/inc/lib.mk make x"):
+    bash(f"SE-133 линза 2, отказ: {form!r}", form, True, cwd=o)
+for form in ("MAKEFLAGS='-j4 -s' make -C sub x", "MAKEFLAGS+=-k make -C sub x"):
+    bash(f"SE-133 линза 2, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s 'a -Iinc'\" make x"}, cwd=o) or ""
+check(f"SE-133 линза 2: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
