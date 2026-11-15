@@ -759,6 +759,34 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual((q["head"], q["updated"]), ("", ""), "не разобран: следующий проход — по новой голове")
         self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
 
+    def test_failure_before_the_quorum_gives_quorum_failure_after_the_third_lens(self):
+        """Линза Claude #397, B1 (путь S): провал при двух линзах ставил failure_head без кворума; третья линза пришла,
+        пока перезапуск шёл (pending), CI снова упал — _recheck_ci выходил до разбора, «собран … CI failure» не
+        приходил, пока CI красный. На базе SE-131 он был."""
+        head = "c5c5c5c5c" + "0" * 31
+        lens = [f"{x}: approve на c5c5c5c5c" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        event = ("pr.quorum", "#499 собран: approve backend, boards, plan на c5c5c5c5c, CI failure")
+        sources.run = FakeGh([_pr(499, head)], comments={499: lens[:2]}, ci={499: "FAILURE"})
+        gh_source.poll_github(self.ctx)
+        later = _pr(499, head, upd="2026-11-04T10:05:00Z")
+        sources.run = FakeGh([later], comments={499: lens}, ci={499: "IN_PROGRESS"})
+        gh_source.poll_github(self.ctx)
+        self.assertTrue(self.ctx.state["github"]["prs"]["499"]["await_ci"])
+        sources.run = FakeGh([later], comments={499: lens}, ci={499: "FAILURE"})
+        gh_source.poll_github(self.ctx)
+        self.assertEqual(self.kinds().count(event), 1)
+
+    def test_stale_head_in_a_pass_does_not_end_the_backfill(self):
+        """Линза Claude #397, п. 2: давний PR дважды подряд с другой головой в gh pr view — второй проход (fresh 0)
+        кончал догон, и третий давал ложное «#N открыт»."""
+        old, new = "c6" * 20, "c7" * 20
+        for _ in range(2):
+            sources.run = FakeGh([_pr(500, old)], heads={500: new})
+            gh_source.poll_github(self.ctx)
+        sources.run = FakeGh([_pr(500, new)])
+        gh_source.poll_github(self.ctx)
+        self.assertNotIn("pr.new", [k for k, _ in self.kinds()], "давний PR: «открыт» не приходит")
+
     def test_head_without_checks_waits_for_ci(self):
         """SE-126: сразу после push у головы нет ни одной проверки. Три approve — ожидание CI, а не pr.quorum с «CI ok»."""
         head = "e" * 40
