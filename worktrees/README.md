@@ -30,6 +30,16 @@ make wt-rm TRACK=fix NAME=notion-5xx-retry
 
 В Claude Code: slash-команды `/init-worktree`, `/init-parallel-worktrees`.
 
+Агентская сессия (не Контроль): `make` с этим Makefile останавливает merge-guard (SE-105), поэтому агент
+запускает команды рецептов напрямую. Отказ на `make <цель>` их печатает, полный список —
+`.claude/rules/07-worktrees.md`, «Агентская сессия — прямые формы»:
+
+```bash
+mkdir -p worktrees/fix && git worktree add "worktrees/fix/notion-5xx-retry" -b "fix/notion-5xx-retry" board-agents
+infra/scripts/dev/wt-deps.sh install "worktrees/fix/notion-5xx-retry"   # без зависимостей — пропустить
+git worktree list
+```
+
 ## Зависимости — свои у каждого worktree
 
 Worktree лежит внутри основного checkout: без своего `boards/node_modules` Node молча поднимается к установке

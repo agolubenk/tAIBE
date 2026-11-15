@@ -1,13 +1,11 @@
 """
 Код, который команда запускает из файла, не названного как скрипт (для pre-tool-use-merge-guard.py): `npm run X`,
 `npm install`, `turbo run X` — скрипты package.json (с хуками жизненного цикла и пакетами workspaces), `make` — рецепты
-Makefile и его include (разрешённые цели при Makefile из MAKE_BLOBS — без текста, SE-105), `awk -f F` — программа
-awk и её @include; `BASH_ENV=F`, `NODE_OPTIONS='-r F'`, `MAKEFILES=F`, `--script-shell F` — файл, который команда
-запустит сама (implied_commands). Решений не принимает: отдаёт тексты и команды, разбирает их хук. Текст None — папка
-не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
+Makefile и его include, `awk -f F` — программа awk и её @include; `BASH_ENV=F`, `NODE_OPTIONS='-r F'`, `MAKEFILES=F`,
+`--script-shell F` — файл, который команда запустит сама (implied_commands). Решений не принимает: отдаёт тексты и
+команды, разбирает их хук; make_hint — прямые команды целей Makefile для сообщения об отказе (SE-105). Текст None — папка не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
 """
 import glob
-import hashlib
 import json
 import os
 import re
@@ -36,12 +34,9 @@ NPM_CALL = {"-c", "--call"}  # `npm exec -c '…'`, `npx -c '…'`; у pnpm `-c`
 MAKES = {"make", "gmake"}
 MAKEFILES = ("GNUmakefile", "makefile", "Makefile")
 MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$")
-# SE-105: вся команда — ровно эта строка: одна цель из списка, переменные NAME/TRACK/WT_DEPS без знаков shell
-MAKE_TRUSTED = re.compile(r"make[ \t]+(?:wt-(?:fix|feature|refactor|spike|review|deps|check|list|help|rm)"
-                          r"|check-(?:eval|repo))(?:[ \t]+(?:NAME|TRACK|WT_DEPS)=[A-Za-z0-9._-]+)*")
-# Blob Makefile репозитория (`git hash-object --no-filters Makefile`), прошедший ревью. Не ссылка git: её сессия
-# сдвинет сама (update-ref, fetch с refspec). Правка Makefile — новый хеш здесь, до того make — весь текст.
-MAKE_BLOBS = frozenset({"cbb705a76c7fe50e287d96fc2d83d8682b4302db"})
+WT_TRACKS = ("feature", "fix", "refactor", "spike", "review")
+EVAL_SUITES = ("nerve", "pipeline", "pipeline/reflex", "pipeline/genome", "swarm", "evolve")
+MAKE_VALUE = re.compile(r"[A-Za-z0-9._-]+\Z")
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
@@ -220,12 +215,10 @@ def _read_tree(paths, includes):
     return out
 
 
-def make_files(a, cwd, command=None):
+def make_files(a, cwd):
     """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый из
     GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не исключение:
-    `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). command — вся команда Bash (None —
-    make не на верхнем уровне): если это MAKE_TRUSTED и каждый файл make — blob из MAKE_BLOBS, тексты пустые: рецепты
-    прошли ревью, грубый признак не нужен (SE-105)."""
+    `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток)."""
     if a[0] not in MAKES:
         return []
     values, _ = _options(a, {"-C", "--directory", "-f", "--file", "--makefile", "-I", "--include-dir", "-o",
@@ -243,22 +236,44 @@ def make_files(a, cwd, command=None):
                            if h), [])
         return found
 
-    files = [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t))
-             for p, t in _read_tree([p for p in paths if p], lambda p, t: includes(p, re.sub(r"#.*", "", t)))]
-    trusted = command and MAKE_TRUSTED.fullmatch(command.strip()) and files
-    if trusted and all(t is not None and _blob(p) in MAKE_BLOBS for p, t in files):  # None — папка не видна (LOST)
-        return [(p, "") for p, _ in files]
-    return files
+    return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t))
+            for p, t in _read_tree([p for p in paths if p], lambda p, t: includes(p, re.sub(r"#.*", "", t)))]
 
 
-def _blob(path):
-    """Хеш blob git для файла или None. Как `git hash-object`, но без фильтров: их git берёт из конфига."""
-    f = open_regular(path)
-    if f is None:
-        return None
-    with f:
-        data = f.read(TEXT_MAX + 1)
-    return None if len(data) > TEXT_MAX else hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+def _direct(goal, var):
+    """Команды рецепта цели worktree или проверок (Makefile команды) с TRACK/NAME/WT_BASE/WT_DEPS из var;
+    [] — цели нет в списке."""
+    track = goal[3:] if goal.startswith("wt-") and goal[3:] in WT_TRACKS else None
+    t, n = track or var.get("TRACK", "<TRACK>"), var.get("NAME", "<NAME>")
+    p, b = f'"worktrees/{t}/{n}"', f'"{t}/{n}"'
+    if track or goal == "wt-add":
+        return [f"mkdir -p worktrees/{t}", f"git worktree add {p} -b {b} {var['WT_BASE']}"
+                f"  # ветка {b} уже есть — git worktree add {p} {b}"] + (
+            [] if var.get("WT_DEPS") == "0" else [f"infra/scripts/dev/wt-deps.sh install {p}"])
+    return {"wt-help": ["cat worktrees/README.md"], "wt-list": ["git worktree list"],
+            "wt-deps": [f"infra/scripts/dev/wt-deps.sh install {p}"],
+            "wt-check": [f'infra/scripts/dev/wt-deps.sh check "worktrees/{t}/{n}/boards"'],
+            "wt-rm": [f"git worktree remove {p}"],
+            "check-repo": ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"],
+            "check-eval": [f"python3 -I -m unittest discover -s eval/{s} -p 'test_*.py'" for s in EVAL_SUITES],
+            }.get(goal, [])
+
+
+def make_hint(a, text):
+    """SE-105: make с признаком в Makefile — отказ, его решает хук, здесь он не меняется. Для целей worktree и
+    проверок, которые есть в прочтённом Makefile (text), — строка с прямыми командами рецепта для сообщения об
+    отказе: их хук разбирает как любые команды, Makefile при них не читается. "" — не make или целей из списка нет."""
+    if a[0] not in MAKES or not text:
+        return ""
+    var = {k: v for k, _, v in (w.partition("=") for w in a[1:] if "=" in w and not w.startswith("-"))
+           if MAKE_VALUE.match(v)}
+    base = re.search(r"(?m)^WT_BASE[ \t]*\??=[ \t]*([A-Za-z0-9._/-]+)[ \t]*$", text)
+    var.setdefault("WT_BASE", base.group(1) if base else "<WT_BASE>")
+    goals = [w for w in dict.fromkeys(a[1:]) if not w.startswith("-") and "=" not in w and _direct(w, var)
+             and re.search(rf"(?m)^{re.escape(w)}:", text)]
+    lines = [c for g in goals for c in _direct(g, var)]
+    return ("\nАгентской сессии вместо `make " + " ".join(goals) + "` — прямые команды рецепта: их хук разбирает "
+            "как обычные, Makefile не читается (SE-105):\n" + "\n".join("  " + c for c in lines)) if lines else ""
 
 
 def _awk_file(name, cwd):

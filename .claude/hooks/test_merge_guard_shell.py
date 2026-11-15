@@ -4,7 +4,6 @@
 
 Запуск: python3 -I .claude/hooks/test_merge_guard_shell.py  (только эти формы; все проверки — test_merge_guard.py)
 """
-import hashlib
 import os
 import subprocess
 import sys
@@ -13,9 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
-from merge_guard_launch import MAKE_BLOBS  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
-from merge_guard_testkit import ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
+from merge_guard_testkit import C4, CONTROL, D9, ROOT, SESSIONS, TMP, bash, check, finish, mg, repo_on, run  # noqa: E402
 
 on_main, on_branch = repo_on("main"), repo_on("fix/a")
 # Псевдонимы gh — из своего конфига, а не с машины: на раннере ~/.config/gh нет, и `gh co` (псевдоним gh по
@@ -475,56 +473,53 @@ for form in ("eval -- echo hi", "eval -- \"$(cat ok.sh)\"", "emulate sh -c -- \"
     bash(f"r24, `--` на ветке или безвредно на main: {form!r}", form, False,
          cwd=e_branch if form.startswith("builtin") else e_main)
 
-# --- SE-105: Makefile без грубого признака — только разрешённая цель при Makefile из MAKE_BLOBS ---
-REAL_MAKEFILE = Path(__file__).resolve().parents[2] / "Makefile"
-real_bytes = REAL_MAKEFILE.read_bytes()
-real = real_bytes.decode()
-real_blob = hashlib.sha1(b"blob %d\0" % len(real_bytes) + real_bytes).hexdigest()
-check(f"SE-105: Makefile репозитория изменён — его blob {real_blob} добавить в MAKE_BLOBS (merge_guard_launch.py)",
-      None if real_blob in MAKE_BLOBS else real_blob, False)
-check("SE-105: в Makefile репозитория есть признак", None if ".claude/hooks/" in real else "нет", False)
+# --- SE-105: make с признаком в Makefile — отказ, как в board-agents; в отказе — прямые команды цели ---
+CHECKOUT = Path(__file__).resolve().parents[2]  # чистый checkout ветки: Makefile и скрипты, которые зовут его цели
 mk = TMP / "se105"
 mk.mkdir(parents=True, exist_ok=True)
-(mk / "Makefile").write_bytes(real_bytes)
-for form in ("make wt-fix NAME=x", "make wt-feature NAME=a.b-c_1", "make wt-list", "make wt-help", "make check-eval",
-             "make check-repo", "make wt-deps TRACK=fix NAME=x", "make wt-check TRACK=fix NAME=x",
-             "make wt-rm TRACK=fix NAME=x", "make wt-fix NAME=x WT_DEPS=0", "  make  wt-list  ",
-             "make wt-refactor NAME=x", "make wt-spike NAME=x", "make wt-review NAME=x"):
-    bash(f"SE-105, разрешённая цель, Makefile как в board-agents: {form!r}", form, False, cwd=mk)
-for form in ("make", "make check", "make check-layer", "make help", "make wt-add TRACK=fix NAME=x",
-             "make wt-list wt-help", "make ./check", "make ./wt-list", "make 'wt-list'", 'make "$G"',
-             "make $(echo wt-list)", "make `echo wt-list`", "make wt-lis?", "make {wt-list,check}", "make wt-*",
-             "/usr/bin/make wt-list", "gmake wt-list", "command make wt-list", "env make wt-list", "\\make wt-list",
-             "make -s wt-list", "make --ev=x wt-list", "make --eval='wt-list: check-layer' wt-list",
-             "make -f Makefile wt-list", "make -C . wt-list", "make wt-list -n",
-             "MAKEFLAGS=--eval=wt-list:check-layer make wt-list", "MAKEFILES=x.mk make wt-list", "X=1 make wt-list",
-             "make wt-list SHELL=/bin/sh", "make wt-fix NAME='x;y'", "make wt-fix NAME=x/y", "make wt-fix NAME=$X",
-             "make wt-list; true", "true && make wt-list", "cd . && make wt-list", "make wt-list | cat",
-             "(make wt-list)", "export MAKEFLAGS=x; make wt-list", "make wt-list &", "make wt-list > o.txt",
-             "make wt-list <<EOF\nx\nEOF"):
-    bash(f"SE-105, форма не из списка — весь текст: {form!r}", form, True, cwd=mk)
-(mk / "Makefile").write_text(real + "# правка\n")
-bash("SE-105, Makefile отличается от закреплённого (даже комментарием) — весь текст", "make wt-list", True, cwd=mk)
-(mk / "Makefile").write_bytes(real_bytes)
-(mk / "GNUmakefile").write_text("wt-list:\n\tgh pr merge 1\n")
-bash("SE-105, make читает GNUmakefile, а не закреплённый Makefile — его текст", "make wt-list", True, cwd=mk)
-(mk / "GNUmakefile").unlink()
-bash("SE-105, снова закреплённый Makefile", "make wt-list", False, cwd=mk)
-forged = repo_on("fix/x", "se105f")
-(forged / "Makefile").write_text(real + "# подделка\n")
-for args in (["add", "Makefile"], ["commit", "-q", "-m", "m"],
-             ["update-ref", "refs/remotes/origin/board-agents", "HEAD"]):
-    subprocess.run(["git", "-C", str(forged), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True)
-bash("SE-105, origin/board-agents сдвинут на правленый Makefile (update-ref) — весь текст", "make wt-list", True,
-     cwd=forged)
-syn = TMP / "se105syn"
-for name, text in (("Makefile", "go: ./rel\nrel:\n\tgh pr merge 1\n-include ./gen.mk\ngen.mk:\n\tgh pr merge 1\n"),
-                   ("c/Makefile", "# .claude/rules/x и gh pr merge 1 — только комментарий\nall:\n\techo ok\n")):
-    (syn / name).parent.mkdir(parents=True, exist_ok=True)
-    (syn / name).write_text(text)
-for form in ("make ./rel", "make go", "make wt-list", 'make "$G"', "make $(echo rel)", "make re?"):
-    bash(f"SE-105, Makefile не закреплён (Control B1/B2): {form!r}", form, True, cwd=syn)
-bash("SE-105, признак только в комментарии — не отказ (как до SE-105)", "make all", False, cwd=syn / "c")
+(mk / "Makefile").write_bytes((CHECKOUT / "Makefile").read_bytes())
+WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" board-agents'
+DEPS_FIX = 'infra/scripts/dev/wt-deps.sh install "worktrees/fix/x"'
+EVAL_NERVE = "python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"
+for form, want, absent in (
+        ("make wt-fix NAME=x", ["mkdir -p worktrees/fix", WT_FIX, DEPS_FIX], []),
+        ("make wt-fix NAME=x WT_DEPS=0", [WT_FIX], [DEPS_FIX]),
+        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" board-agents'], []),
+        ("make wt-feature NAME=x", ['"worktrees/feature/x"'], []), ("make wt-refactor NAME=x", ['"refactor/x"'], []),
+        ("make wt-spike NAME=x", ['"spike/x"'], []), ("make wt-review NAME=x", ['"review/x"'], []),
+        ("make wt-fix NAME='x;y'", ['"worktrees/fix/<NAME>"'], ["x;y"]),
+        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" main'], []),
+        ("make wt-list", ["git worktree list"], []), ("make wt-help", ["cat worktrees/README.md"], []),
+        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []), ("make wt-rm TRACK=fix NAME=x", ['git worktree remove "worktrees/fix/x"'], []),
+        ("make wt-check TRACK=fix NAME=x", ['infra/scripts/dev/wt-deps.sh check "worktrees/fix/x/boards"'], []),
+        ("make check-repo", ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"], []),
+        ("make check-eval", [EVAL_NERVE, "-s eval/pipeline/reflex ", "-s eval/evolve "], []),
+        ("make -s wt-list check-repo", ["git worktree list", "infra/checks/run.py"], []),
+        ("make check-layer", [], ["прямые команды"]), ("make", [], ["прямые команды"])):
+    got = run("Bash", {"command": form}, cwd=mk) or ""
+    check(f"SE-105, make под отказом, как в board-agents: {form!r}", got or None, True)
+    lost = [w for w in want if w not in got] + [w for w in absent if w in got]
+    check(f"SE-105, прямые команды в отказе: {form!r}", None if not lost else f"{lost!r} в {got!r}", False)
+bash("SE-105, make у Контроля — как в board-agents", "make wt-fix NAME=x", False, who=D9, cwd=mk)
+(mk / "Makefile").write_text("wt-fix:\n\tgh pr merge 1\n")
+(mk / "m.awk").write_text('BEGIN { system("gh pr merge 1") }\n')
+for form in ("make wt-list", "awk -f m.awk"):
+    got = run("Bash", {"command": form}, cwd=mk) or ""
+    check(f"SE-105, отказ без подсказки (цели нет в Makefile, не make): {form!r}",
+          None if got and "прямые команды" not in got else got or "проход", False)
+
+
+def in_checkout(cmd):  # корень для защиты — сам checkout, как у живого хука в основном checkout
+    data = {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": C4["sessionId"], "cwd": str(CHECKOUT)}
+    return mg.decide(data, lambda: SESSIONS, lambda: CONTROL, roots=[str(CHECKOUT)])
+
+
+hint = in_checkout("make wt-fix NAME=x check-repo check-eval") or ""
+direct = [ln.strip().split("  #")[0] for ln in hint.splitlines() if ln.startswith("  ")]
+check("SE-105, отказ на make в checkout даёт прямые команды (в Makefile нет признака — make проходит, поправить "
+      "проверку)", None if WT_FIX in direct and EVAL_NERVE in direct else hint or "проход", False)
+for form in direct:
+    check(f"SE-105, прямая форма проходит в чистом checkout: {form!r}", in_checkout(form), False)
 
 if __name__ == "__main__":
     finish(" — формы shell")
