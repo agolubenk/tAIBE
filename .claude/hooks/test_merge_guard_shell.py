@@ -462,8 +462,14 @@ for name, text in (("a1/Makefile", "-include xà/dev/stdin\nall: ; @true\n"),
                    ("a2/Makefile", "include /dev/null\nall: ; @echo à\n")):
     (o / name).parent.mkdir(parents=True, exist_ok=True)
     (o / name).write_text(text)
+# Байт 0xA0 сам по себе: разбор читает Makefile как UTF-8 с заменой (U+FFFD), и MAKE_INCLUDE строку не находит —
+# нет `[ \t]` после слова или перед ним, а make в kk_KZ.PT154 видит `include /dev/stdin`.
+for name, raw in (("a3/Makefile", b"include\xa0/dev/stdin\nall: ; @true\n"),
+                  ("a4/Makefile", b"\xa0include /dev/stdin\nall: ; @true\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_bytes(raw)
 for form in ("make -C n1 V=à all", "make -C n1 --eval 'V=à' all", "make -f n1/Mà all", "make -C dà all",
-             "make -C a1 all"):
+             "make -C a1 all", "make -C a3 all", "make -C a4 all"):
     bash(f"SE-135 не ASCII в слове make, отказ: {form!r}", form, True, cwd=o)
 bash("SE-135 не ASCII вне include, без признака: рецепт с à", "make -C a2 all", False, cwd=o)
 for form, part in (("make -C n1 V=à all", "вне печатного ASCII"), ("make -C a1 all", "строка include")):
