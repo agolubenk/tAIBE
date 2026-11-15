@@ -75,7 +75,7 @@ describe("API integration: card context pack (R-031)", () => {
     expect(res.body.history[0]).not.toHaveProperty("changes");
   });
 
-  it("masks secrets in every free-text field of the pack and keeps the stored text (TB-141)", async () => {
+  it("masks secrets in every free-text field for a token caller; the web session reads them as stored (TB-141, TB-143)", async () => {
     const forest = await createForest();
     const card = await addTask(forest.project.id, `Rotate ${SECRET}`);
     const linked = await addTask(forest.project.id, `Linked ${SECRET}`);
@@ -121,7 +121,9 @@ describe("API integration: card context pack (R-031)", () => {
     });
     expect(comment.status).toBe(200);
 
-    const res = await forest.owner(context(card.id));
+    // A caller with a token (MCP forest_get_context sends a bearer, here an
+    // API key) feeds a model: every free-text field comes masked.
+    const res = await forest.agent(context(card.id));
     expect(res.status).toBe(200);
     expect(JSON.stringify(res.body)).not.toContain(SECRET);
     const masked = expect.stringContaining("[REDACTED:");
@@ -141,6 +143,34 @@ describe("API integration: card context pack (R-031)", () => {
       relations: [{ task: { id: linked.id, title: masked } }],
       comments: [{ content: masked }],
     });
+
+    // The web app's session (cookie, no token) reads the text as stored: it
+    // seeds the meta editor from this pack and saves what it shows, so a
+    // masked value there would replace the stored one.
+    const web = await forest.owner(context(card.id));
+    expect(web.status).toBe(200);
+    expect(web.body).toMatchObject({
+      title: `Rotate ${SECRET}`,
+      description: `Description ${SECRET}`,
+      labels: [`label ${SECRET}`],
+      meta: {
+        report: `report ${SECRET}`,
+        executor: `executor ${SECRET}`,
+        branch: `fix/${SECRET}`,
+        pullRequests: [`https://example.com/pull?ref=${SECRET}`],
+        files: [`notes/${SECRET}.md`],
+        contextPack: `pack ${SECRET}`,
+      },
+      approvals: [
+        {
+          reason: `reason ${SECRET}`,
+          params: { status: "done", note: `param ${SECRET}` },
+        },
+      ],
+      relations: [{ task: { id: linked.id, title: `Linked ${SECRET}` } }],
+      comments: [{ content: `comment ${SECRET}` }],
+    });
+    expect(JSON.stringify(web.body)).not.toContain("[REDACTED:");
 
     // The mask is on the way out only: the stored text does not change.
     const [task] = await db
