@@ -30,6 +30,23 @@ describe('правила связи', () => {
     expect(linked({ kind: 'merge', title: 'Влить после #404', cmd: 'gh pr merge 405 --merge' }, [405])).toBe(true)
   })
 
+  it('мёрж со своим subject без «(#N)» — связь по заголовку выкаченного коммита; ручной запуск и чужой репозиторий — нет (OPS-73)', () => {
+    const item = { kind: 'merge', title: 'Влить #600', pr: 600, subject: 'fix(oq): свой заголовок' }
+    expect(isLinked(itemRefs('x', item), [], 'abcdef123456', 'fix(oq): свой заголовок')).toBe(true)
+    expect(isLinked(itemRefs('x', item), [], 'abcdef123456', '  fix(oq): свой заголовок ')).toBe(true)
+    expect(isLinked(itemRefs('x', item), [], 'abcdef123456', 'fix(oq): другой заголовок')).toBe(false)
+    expect(isLinked(itemRefs('x', item), [], '', ''), 'ручной запуск: заголовка коммита нет').toBe(false)
+    expect(isLinked(itemRefs('x', { kind: 'merge', title: 'Влить #600', pr: 600 }), [], '', '')).toBe(false)
+    // --subject команды мёржа — тот же заголовок, что поле subject.
+    expect(isLinked(itemRefs('x', { kind: 'merge', title: 'Влить #600', cmd: "gh pr merge 600 --squash --subject 'docs: строка'" }), [], '', 'docs: строка')).toBe(true)
+    // Чужой репозиторий — не деплой консоли и по заголовку; не мёрж с тем же заголовком — не связь.
+    expect(isLinked(itemRefs('x', { ...item, repo: 'agolubenk/tAIBE' }, 'o/r'), [], '', 'fix(oq): свой заголовок')).toBe(false)
+    expect(isLinked(itemRefs('x', { kind: 'check', title: 'fix(oq): свой заголовок' }), [], '', 'fix(oq): свой заголовок')).toBe(false)
+    // Таблица deploys хранит заголовок до 250 знаков — сравнение по тем же 250.
+    const long = `fix: ${'я'.repeat(295)}`
+    expect(isLinked(itemRefs('x', { kind: 'merge', title: 'Влить #601', pr: 601, subject: long }), [], '', long.slice(0, 250))).toBe(true)
+  })
+
   it('остальные — номер в поле pr, в заголовке или в ссылке на PR', () => {
     expect(linked({ kind: 'check', title: 'Проверить вход после #404' }, [404])).toBe(true)
     expect(linked({ kind: 'check', title: 'Проверить вход после #4040' }, [404])).toBe(false)
@@ -138,6 +155,17 @@ describe('GET /events/deploys — поле queue', () => {
     const list = (await api(app, await login(app, 'view@ops.test', 'view-password-123')).get('/events/deploys')).json.deploys
     expect(list.length).toBe(4)
     for (const d of list) expect(d).not.toHaveProperty('queue')
+  })
+
+  it('мёрж из терминала со своим --subject без «(#N)»: деплой связан с пунктом по заголовку коммита (OPS-73)', async () => {
+    const owner = api(app, await login(app))
+    await getDb()
+      .insert(deploys)
+      .values({ runKey: '6', workflow: 'deploy-contabo.yml', status: 'completed', conclusion: 'success', headSha: '7777bbbb8888', title: 'fix(oq): свой заголовок без номера', createdAt: new Date() })
+    expect(byRun((await owner.get('/events/deploys')).json.deploys, '6').queue).toBeNull()
+    await importDoc('items', 'm-610', { kind: 'merge', title: 'Влить #610', cmd: "gh pr merge 610 --squash --subject 'fix(oq): свой заголовок без номера'" }, 'test')
+    await importDoc('items', 'm-611', { kind: 'merge', title: 'Влить #611', pr: 611, subject: 'fix(oq): другой заголовок' }, 'test')
+    expect(byRun((await owner.get('/events/deploys')).json.deploys, '6').queue.links.map((l: { id: string }) => l.id)).toEqual(['m-610'])
   })
 
   it('новый пункт виден со следующего запроса; сверх лимита — счётчик «ещё»', async () => {

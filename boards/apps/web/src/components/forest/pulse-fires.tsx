@@ -20,6 +20,7 @@ export function PulseFires({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={fires.isLoading}
         isError={fires.isError}
+        onRetry={() => void fires.refetch()}
         isEmpty={!fires.data?.items.length}
         empty={t("workspace:forest.pulse.firesEmpty")}
       >

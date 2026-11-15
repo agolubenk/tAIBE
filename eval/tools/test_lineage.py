@@ -30,6 +30,13 @@ CHILD, PARENT = "r.ab12.cd34", "r.ab12"
 # SE-57: линия из 60 сегментов — 302 символа; файл с таким именем macOS не создаст (Errno 63, предел 255)
 LONG_PARENT = "r" + "".join(f".{i:04d}" for i in range(59))
 LONG_CHILD = LONG_PARENT + ".zz99"
+# Продукт и линия живой сессии роли не идут в подпроцессы тестов: spawn взял бы продукт сессии и её линию как
+# родителя, ps -E увидел бы их у поддельного claude (SE-129). Общий для тестов eval/tools.
+SESSION_ENV = ("TAIBE_PRODUCT", "TAIBE_LINEAGE")
+
+
+def clean_env(**extra):
+    return {**{k: v for k, v in os.environ.items() if k not in SESSION_ENV}, **extra}
 
 
 def P(pid, ppid, pgid, tty, cmd, start=ST):
@@ -687,7 +694,7 @@ class RealProcessTest(Base):
 
     def spawn(self, line, mode):
         p = subprocess.Popen(["claude", "-I", "-c", FAKE_CLAUDE, mode, os.path.join(HERE, "lineage.py"), CHILD],
-                             executable=self.real, env={**os.environ, "TAIBE_LINEAGE": line}, start_new_session=True,
+                             executable=self.real, env=clean_env(TAIBE_LINEAGE=line), start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.started.append(p)
         return p

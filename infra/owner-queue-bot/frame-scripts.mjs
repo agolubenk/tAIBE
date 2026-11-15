@@ -89,6 +89,8 @@ export function snapshotPage() {
       agentStatus: st ? (Array.from(st.classList).find((c) => c.indexOf('st-') === 0) || '').slice(3) : '',
       agentStatusText: txt(st),
       agentNote: st && agSpans[1] ? txt(agSpans[1]).replace(/^Агент:\s*/, '') : '',
+      // Метка держателя входящего (карточка HR xuc5csrv): «🟢 … в сети» или «🔇 … молчит N ч»; страница без неё — ''.
+      holder: txt(el.querySelector('.holder-st:not([hidden])')),
       saved: txt(saved),
       saveErr: !!saved && saved.classList.contains('err'),
     };
@@ -117,8 +119,10 @@ export function snapshotPage() {
   const howto = document.querySelector('header .howto');
   const ssh = document.getElementById('ssh-howto');
   // Связь страницы с консолью (window.__oqConn ставит подмена базы консоли, page-scripts.ts): причина для сигнала
-  // «Очередь не подключилась к консоли». null — старая консоль без записи или страница не дошла до опроса.
-  const c = window.__oqConn && window.__oqConn.checks;
+  // «Очередь не подключилась к консоли». null — только старая консоль без записи. Запись есть, а опроса checks ещё не
+  // было — okAt 0: «удачного опроса не было», а не «связь вернулась» (линза Claude #370, N1: ложный 🟢 новой вкладки).
+  const oq = window.__oqConn;
+  const c = oq && (oq.checks || {});
   const conn = c ? { okAt: +c.okAt || 0, errAt: +c.errAt || 0, err: String(c.err || '').slice(0, 200), status: +c.status || 0, fails: +c.fails || 0 } : null;
   return {
     conn,

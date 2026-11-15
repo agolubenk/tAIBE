@@ -3,8 +3,9 @@
  * очередь у сессии консоли есть лишь у неё (server/queue/auth.ts), а деплои видит любая роль.
  *
  * Связь — по номеру PR из заголовка деплоя («Merge pull request #N …», «… (#N)») и по выкаченному коммиту:
- * - мёрж — только свой PR (поле pr или «gh pr merge N» в команде — как у мёржа из очереди) или событие «Влить» из
- *   очереди с этим коммитом: соседние мёржи пишут «после #N» в заголовке, но выкатываются своим деплоем;
+ * - мёрж — только свой PR (поле pr или «gh pr merge N» в команде — как у мёржа из очереди), событие «Влить» из
+ *   очереди с этим коммитом или заголовок коммита, равный subject пункта (поле или --subject команды: мёрж из терминала
+ *   со своим заголовком без «(#N)», OPS-73): соседние мёржи пишут «после #N» в заголовке, но выкатываются своим деплоем;
  * - остальные — N в поле pr, в заголовке или в ссылке на PR своего репозитория; по тексту (номер, короткий SHA от
  *   7 знаков) — только если пункт касается не больше трёх PR и трёх коммитов: обзорные пункты на десятки PR связью не
  *   считаются (сверено с очередью 30.10: до 21 PR в одном тексте).
@@ -19,7 +20,7 @@ import { mergePlan } from '../queue/github'
 import { oqItemState } from '../queue/open-rule'
 import { collectionTag, listDocs } from '../queue/list'
 import { DEFAULT_PRODUCT } from '../queue/products'
-import { MANUAL_RUN_TITLE } from './github'
+import { DEPLOY_TITLE_MAX, MANUAL_RUN_TITLE } from './github'
 
 export interface QueueLink {
   id: string
@@ -50,6 +51,8 @@ interface ItemRefs {
   textPrs: Set<number>
   /** Шестнадцатеричные токены текста от 7 знаков с цифрой — кандидаты в короткий SHA. */
   shas: string[]
+  /** Мёрж: заголовок коммита (поле subject или --subject команды), как его хранит таблица deploys; '' — нет. */
+  subject: string
 }
 
 export const LINKS_PER_DEPLOY = 6
@@ -87,7 +90,9 @@ export function itemRefs(id: string, d: Record<string, unknown>, repo = ''): Ite
     const plan = mergePlan(d)
     const foreign = !!plan.repo && !!repo && plan.repo.toLowerCase() !== repo.toLowerCase()
     const own = foreign ? undefined : plan.pr ?? hashNums(str(d.title))[0]
-    return { id, kind, title, prs: new Set(own ? [own] : []), textPrs: new Set(), shas: [] }
+    // Свой --subject без «(#N)» убирает номер из заголовка коммита — тогда связь по самому заголовку (OPS-73).
+    const subject = foreign || !plan.subject ? '' : plan.subject.slice(0, DEPLOY_TITLE_MAX)
+    return { id, kind, title, prs: new Set(own ? [own] : []), textPrs: new Set(), shas: [], subject }
   }
   const pr = typeof d.pr === 'number' ? [d.pr] : []
   const links = Array.isArray(d.links) ? d.links.map((l) => str((l as Record<string, unknown> | null)?.href)).join(' ') : ''
@@ -95,13 +100,16 @@ export function itemRefs(id: string, d: Record<string, unknown>, repo = ''): Ite
   const prs = new Set([...pr, ...hashNums(str(d.title)), ...pullNums(links, repo)])
   const textPrs = new Set([...hashNums(text), ...pullNums(text, repo)].filter((n) => !prs.has(n)))
   const shas = [...new Set([...`${str(d.title)}\n${text}`.matchAll(/\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/g)].map((m) => m[0]))]
-  return { id, kind, title, prs, textPrs, shas }
+  return { id, kind, title, prs, textPrs, shas, subject: '' }
 }
 
-/** Связан ли пункт с деплоем PR из prs и коммитом sha (12 знаков, как в таблице deploys; '' — коммит неизвестен). */
-export function isLinked(r: ItemRefs, prs: number[], sha: string): boolean {
+/**
+ * Связан ли пункт с деплоем PR из prs и коммитом sha (12 знаков, как в таблице deploys; '' — коммит неизвестен);
+ * title — заголовок выкаченного коммита ('' — ручной запуск: его заголовок — не коммит).
+ */
+export function isLinked(r: ItemRefs, prs: number[], sha: string, title = ''): boolean {
   if (prs.some((n) => r.prs.has(n))) return true
-  if (r.kind === 'merge') return false
+  if (r.kind === 'merge') return !!r.subject && r.subject === title.trim()
   if (r.prs.size + r.textPrs.size > TEXT_MAX_REFS || r.shas.length > TEXT_MAX_REFS) return false
   if (prs.some((n) => r.textPrs.has(n))) return true
   return sha.length >= 7 && r.shas.some((t) => (t.length <= sha.length ? sha.startsWith(t) : t.startsWith(sha)))
@@ -179,8 +187,9 @@ export async function queueLinksForDeploys(deploys: DeployRef[], repo = ''): Pro
   const linked = new Map<number, ItemRefs[]>()
   for (const d of deploys) {
     const prs = deployPrs(d.title)
-    const sha = d.title !== MANUAL_RUN_TITLE && d.headSha.length >= 7 ? d.headSha : ''
-    const hits = refs.filter((r) => isLinked(r, prs, sha))
+    const manual = d.title === MANUAL_RUN_TITLE
+    const sha = !manual && d.headSha.length >= 7 ? d.headSha : ''
+    const hits = refs.filter((r) => isLinked(r, prs, sha, manual ? '' : d.title))
     if (sha) {
       for (const [full, docId] of merged) {
         const r = byId.get(docId)
