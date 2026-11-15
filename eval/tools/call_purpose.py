@@ -18,9 +18,10 @@ import re
 import sys
 from datetime import datetime
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from prices import call_usd as cost  # noqa: E402 — один прайс на eval (GL-1)
+
 ROOT = os.path.expanduser('~/.claude/projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2')
-PRICES = {'opus-5-5': (4, 20, 0.2), 'opus-5': (5, 25, 0.5), 'opus-4': (5, 25, 0.5), 'sonnet': (2, 10, 0.2),
-          'haiku-5-5': (0.1, 0.5, 0.01), 'fable': (10, 50, 0.25)}
 COORD_TOOLS = {'SendMessage', 'ListAgents', 'Monitor', 'TaskStop', 'CronCreate', 'CronDelete', 'CronList',
                'ToolSearch', 'TaskOutput', 'TaskList', 'TaskGet'}
 COORD_MCP = re.compile(r'work_state_|__oq_')
@@ -29,21 +30,6 @@ COORD_BASH = re.compile(r'^\s*(cd [^;&]+(&&|;)\s*)?(gh (pr (view|checks|list|sta
 
 since = datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M')
 until = datetime.strptime(sys.argv[2], '%Y-%m-%d %H:%M')
-
-
-def price(model):
-    for k, v in PRICES.items():
-        if k in (model or ''):
-            return v
-    return PRICES['opus-5-5']
-
-
-def cost(u, model):
-    pi, po, pr = price(model)
-    cw = u.get('cache_creation_input_tokens', 0) or 0
-    c1 = (u.get('cache_creation') or {}).get('ephemeral_1h_input_tokens', 0) or 0
-    return ((u.get('input_tokens', 0) or 0) * pi + (cw - c1) * 1.25 * pi + c1 * 2 * pi
-            + (u.get('cache_read_input_tokens', 0) or 0) * pr + (u.get('output_tokens', 0) or 0) * po) / 1e6
 
 
 def text_of(c):

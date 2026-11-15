@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import db from "../../database";
 import { sectorTable, sectorTreeTable } from "../../database/forest-schema";
+import { sectorName } from "../sector/sector-name";
 import { PAGE_MAX } from "./page-cursor";
 
 export async function listSectors(workspaceId: string, status = "active") {
@@ -38,6 +39,7 @@ export async function listSectors(workspaceId: string, status = "active") {
     : [];
   return sectors.map((sector) => ({
     ...sector,
+    name: sectorName(sector.name),
     treeIds: trees
       .filter((tree) => tree.sectorId === sector.id)
       .map((tree) => tree.taskId),
