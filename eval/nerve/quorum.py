@@ -19,6 +19,10 @@ SHA — токен сразу за словом (между ними — «с у
 роль по github.lens_roles, иначе имя линзы. Так «Линза корректности (роль 4)» и «Линза «корректность и отказы» (роль 4)»
 — одна линза backend. Предел: подпись без номера и без имени из lens_roles даёт отдельный ключ.
 Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, проверки CI не висят.
+Approve автора PR (его базовой роли, со вторыми сессиями) в кворум не идёт: автор себя не проверяет (SE-121). Автора
+называет только строка тела PR «роль N — автор» (координатор 15.11). Пути файлов автора для кворума не дают: в tAIBE
+`boards/` — роль boards, а код `boards/apps/api` и `apps/web` пишут backend и frontend (замер 15.11: из 169 открытых
+PR 17 потеряли бы кворум, 13 — с неверным автором). Пути — только адресат pr.changes (author_role, pr_author).
 """
 import re
 
@@ -40,6 +44,7 @@ NOT_LENS_RE = re.compile(r"^(?:голова|новая\s+голова|head|new\s
                          r"|(?<!\w)(?:автор\w*|author\w*)", re.I)
 ROLE_RE = re.compile(r"(?<!\w)(?:(?:роль|роли|role)\s+|^(?:линза|lens)\s+)(\d{1,2})(?!\w)", re.I)
 NAMED_RE = re.compile(r"(?:линз\w*|lens)\s*«([^»]{1,60})»|«([^»]{1,60})»\s*(?:линз\w*|lens)", re.I)
+AUTHOR_LINE_RE = re.compile(r"(?<!\w)(?:роль|role)\s+(\d{1,2})\s*[—–-]\s*(?:автор|author)(?!\w)", re.I)
 RANK = {"changes": 0, "withdrawn": 1, "approve": 2}
 MAX_LINE = 500
 _MD = " \t*_#>`"
@@ -115,26 +120,40 @@ def ci_state(checks):
     return "ok"
 
 
-def quorum(verdicts, head, checks, min_lenses=3):
-    """verdicts — разобранные вердикты по порядку. Последний вердикт линзы на голову перекрывает её прежние.
-    Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI).
-    Линза — роль: approve второй сессии (backend-2) и основной (backend) — одна линза, геном и пусковой файл у них
-    общие. changes — по точному ключу: newhead и changes_by адресуют ту сессию, что просила правку."""
+def last_on_head(verdicts, head):
+    """{линза: последний вердикт на голову}: поздний вердикт линзы перекрывает её прежние."""
     last = {}
     for v in verdicts:
         if v and on_head(v["sha"], head):
             last[v["lens"]] = v["verdict"]
-    approved, changes = tally(last)
+    return last
+
+
+def quorum(verdicts, head, checks, min_lenses=3, author=None):
+    """verdicts — разобранные вердикты по порядку. Последний вердикт линзы на голову перекрывает её прежние.
+    Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI).
+    Линза — роль: approve второй сессии (backend-2) и основной (backend) — одна линза, геном и пусковой файл у них
+    общие. changes — по точному ключу: newhead и changes_by адресуют ту сессию, что просила правку.
+    author — роль из строки тела «роль N — автор» (body_author): её approve не считается (SE-121)."""
+    approved, changes = tally(last_on_head(verdicts, head), author)
     ci = ci_state(checks)
     return (len(approved) >= min_lenses and not changes and ci != "pending"), approved, changes, ci
 
 
-def tally(last):
+def tally(last, author=None):
     """{линза: последний вердикт на голову} → (одобрившие линзы по базовой роли, линзы с changes по точному ключу).
-    Один подсчёт для Нерва и eval/tools/release_status.py."""
-    approved = sorted({products.base_role(k) for k, x in last.items() if x == "approve"})
+    Approve базовой роли автора выпадает (SE-121); changes автора остаётся. Один подсчёт для Нерва и
+    eval/tools/release_status.py."""
+    own = products.base_role(author) if author else None
+    approved = sorted({products.base_role(k) for k, x in last.items() if x == "approve"} - {own})
     changes = sorted(k for k, x in last.items() if x == "changes")
     return approved, changes
+
+
+def author_approved(last, author):
+    """Автор одобрил свой PR на этой голове — approve не засчитан: Нерв и release_status называют его (SE-121)."""
+    own = products.base_role(author) if author else None
+    return bool(own) and any(x == "approve" and products.base_role(k) == own for k, x in last.items())
 
 
 def role_of_lens(lens, lens_roles, team_roles=()):
@@ -160,7 +179,25 @@ def author_role(files, path_roles, default="coord"):
     return max(sorted(votes), key=lambda r: votes[r])
 
 
+def body_author(body, team_roles):
+    """Роль из строки тела PR «роль N — автор» (N — номер в team.roles), иначе None. Цитата «>» не в счёт."""
+    for line in (body or "").splitlines():
+        if line.lstrip().startswith(">"):
+            continue
+        m = AUTHOR_LINE_RE.search(line)
+        if m and 1 <= int(m.group(1)) <= len(team_roles):
+            return team_roles[int(m.group(1)) - 1]
+    return None
+
+
+def pr_author(body, files, path_roles, team_roles, default="coord"):
+    """Адресат pr.changes: строка тела «роль N — автор», иначе большинство путей. Для кворума — только строка
+    (body_author): путь на сквозном PR ошибается."""
+    return body_author(body, team_roles) or author_role(files, path_roles, default)
+
+
 def author_roles(author, team_roles):
     """Адресаты pr.changes: роль автора и её вторые сессии из team.roles (backend → backend, backend-2). Автор по
-    путям файлов — всегда базовая роль, а PR могла открыть вторая сессия; чужой PR каждая сессия пропускает сама."""
+    путям файлов — всегда базовая роль, а PR могла открыть вторая сессия; чужой PR каждая сессия пропускает сама.
+    Строка тела «роль 7 — автор» называет саму сессию: changes идёт только ей (backend-2 → backend-2)."""
     return [author] + [r for r in team_roles if r != author and products.base_role(r) == author]
