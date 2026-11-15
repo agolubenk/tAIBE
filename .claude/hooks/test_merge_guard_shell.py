@@ -434,6 +434,11 @@ for form in ("MAKEFLAGS='-s\t-k' make -C sub x", "MAKEFLAGS='  -s  -k ' make -C 
 why = run("Bash", {"command": "MAKEFLAGS=\"-s $(printf %s -Iinc)\" make -C sub x"}, cwd=o) or ""
 check(f"SE-133 линза Claude: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None,
       True)
+# `-O` (make 4.x) в связке: разбор отдаёт ему остаток (`Iinc`), а make 3.81 `-O` не знает, пропускает букву и
+# применяет `-I inc` (сверено: `MAKEFLAGS=-OIinc make y` читает inc/lib.mk). В командной строке make 3.81 на `-O` падает.
+for form in ("MAKEFLAGS=-OIinc make -C sub x", "MAKEFLAGS=-sOIinc make -C sub x", "MAKEFLAGS=OIinc make -C sub x",
+             "GNUMAKEFLAGS=-OIinc make -C sub x"):
+    bash(f"SE-133 -O в связке, отказ: {form!r}", form, True, cwd=o)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
