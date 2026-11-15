@@ -52,7 +52,7 @@ export default function TaskDetailsContent({
         {parentTask && (
           <button
             type="button"
-            className="flex w-fit min-w-0 items-center gap-1.5 rounded-sm text-muted-foreground text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex w-fit min-w-0 max-w-full items-center gap-1.5 rounded-sm text-muted-foreground text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             onClick={() =>
               navigate({
                 to: "/dashboard/workspace/$workspaceId/project/$projectId/task/$taskId",
@@ -67,7 +67,10 @@ export default function TaskDetailsContent({
                 {project.slug}-{parentTask.number}
               </span>
             )}
-            <span className="truncate font-medium text-foreground/80">
+            <span
+              className="truncate font-medium text-foreground/80"
+              title={parentTask.title}
+            >
               {parentTask.title}
             </span>
           </button>

@@ -9,6 +9,7 @@ import { getEnv } from '../env'
 import { getGeneralSettings } from '../settings/store'
 import { plural } from '../../shared/plural'
 import { isContainerDown } from '../alerts/container-state'
+import { containerProjects } from './containers'
 import { OPS_REPORT_SCHEMA, type OpsOverallStatus, type OpsReport } from '../../shared/report-contract'
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null)
@@ -72,7 +73,7 @@ async function hostStats(start: Date, end: Date): Promise<OpsReport['hosts']> {
             )
         )[0]
       const [cpu, mem, disk] = await Promise.all([stat('cpu_pct'), stat('mem_pct'), stat('disk_pct')])
-      const down = await db.query.containers.findMany({ where: eq(containers.agentId, a.id), limit: 250 })
+      const ctrs = await db.query.containers.findMany({ where: eq(containers.agentId, a.id), limit: 250 })
       return {
         agent: a.id,
         name: a.name,
@@ -80,7 +81,8 @@ async function hostStats(start: Date, end: Date): Promise<OpsReport['hosts']> {
         cpuMaxPct: r1(cpu?.m ?? null),
         memAvgPct: r1(mem?.a === null || mem?.a === undefined ? null : Number(mem.a)),
         diskMaxPct: r1(disk?.m ?? null),
-        containersNotRunning: down.filter((c) => isContainerDown(c)).map((c) => c.name),
+        containersNotRunning: ctrs.filter((c) => isContainerDown(c)).map((c) => c.name),
+        projects: containerProjects(ctrs),
       }
     }),
   )
