@@ -89,6 +89,7 @@ export default function CommentInput({ taskId, projectId }: CommentInputProps) {
                   size="xs"
                   variant="default"
                   onClick={handleSubmit}
+                  aria-label={t("activity:comment.submitShortcut")}
                   disabled={isPending || !content.trim()}
                   className={cn(
                     isPending ||
@@ -97,7 +98,7 @@ export default function CommentInput({ taskId, projectId }: CommentInputProps) {
                       "bg-primary text-primary-foreground",
                   )}
                 >
-                  <ArrowUp className="size-3.5" />
+                  <ArrowUp aria-hidden="true" className="size-3.5" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
