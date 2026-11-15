@@ -209,6 +209,41 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual(quorum.role_of_lens("линза devops", CFG["github"]["lens_roles"]), "release")
         self.assertEqual(quorum.role_of_lens("backend", LR, TEAM), "backend", "ключ-роль — сама роль")
 
+    def test_body_author_line(self):
+        """SE-121: «роль N — автор» в теле PR — роль автора; другие слова и цитата — нет."""
+        roles = CFG["team"]["roles"]
+        for body, want in (("Линзы: роль 6 — автор. Нужны 3 линзы ролей не автора.", "boards"),
+                           ("Lenses: role 4 - author", "backend"), ("**Роль 7 – автор**", "backend-2"),
+                           ("роль 4 — автора не считаем", None), ("> роль 4 — автор\nтекст", None),
+                           ("роль 9 — автор", None), ("роль 0 — автор", None),
+                           ("Нужны 3 линзы ролей не автора", None), ("", None),
+                           (None, None), ("строка\nроль 2 — автор\nроль 5 — автор", "plan")):
+            self.assertEqual(quorum.body_author(body, roles), want, body)
+        paths = CFG["github"]["path_roles"]
+        backend_files = ["apps/backend/src/a.ts", "apps/backend/src/b.ts"]
+        self.assertEqual(quorum.pr_author("роль 2 — автор", backend_files, paths, roles), "plan", "строка важнее путей")
+        self.assertEqual(quorum.pr_author("", backend_files, paths, roles), "backend")
+
+    def test_author_approve_is_not_counted(self):
+        """SE-121: approve базовой роли автора не идёт в кворум — и от второй сессии; changes автора блокирует."""
+        head = "c0ffee123" + "0" * 31
+        vs = [pv(f"{l}: approve на c0ffee123") for l in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        self.assertTrue(quorum.quorum(vs, head, ["SUCCESS"])[0], "без автора — как раньше")
+        ok, approved, _, _ = quorum.quorum(vs, head, ["SUCCESS"], author="backend")
+        self.assertEqual((ok, approved), (False, ["boards", "plan"]))
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS"], author="backend-2")[:2], (False, ["boards", "plan"]),
+                         "автор — вторая сессия: approve основной сессии той же роли тоже выпадает")
+        last = quorum.last_on_head(vs + [pv("Бэкенд (роль 7): approve на c0ffee123")], head)
+        self.assertEqual(quorum.tally(last, "backend"), (["boards", "plan"], []))
+        self.assertTrue(quorum.author_approved(last, "backend"))
+        self.assertFalse(quorum.author_approved(last, "frontend"))
+        self.assertFalse(quorum.author_approved(last, None))
+        withdrawn = quorum.last_on_head(vs + [pv("Бэкенд (роль 4): approve на c0ffee123 отзываю")], head)
+        self.assertFalse(quorum.author_approved(withdrawn, "backend"), "отозванный approve автора не называется")
+        ch = vs + [pv("Линза «продукт» (роль 1): approve на c0ffee123"), pv("Бэкенд (роль 4): changes на c0ffee123")]
+        ok, approved, changes, _ = quorum.quorum(ch, head, ["SUCCESS"], author="backend")
+        self.assertEqual((ok, approved, changes), (False, ["boards", "coord", "plan"], ["backend"]))
+
 
 class BudgetTest(unittest.TestCase):
     def test_parse_reset(self):
@@ -335,8 +370,12 @@ class FakeGh:
     """Подмена sources.run для gh: пишет argv, отвечает по репозиторию и номеру; broken — номера с отказом."""
     REPO = CFG["github"]["repo"]
 
-    def __init__(self, open_prs, merged=(), broken=(), comments=None, closed=(), ci=None, mute=()):
+    FILES = ["apps/backend/src/x.ts"]
+
+    def __init__(self, open_prs, merged=(), broken=(), comments=None, closed=(), ci=None, mute=(), files=None,
+                 bodies=None):
         self.open_prs, self.merged, self.broken = open_prs, set(merged), set(broken)
+        self.files, self.bodies = files or {}, bodies or {}   # номер → пути файлов, тело PR
         self.mute = set(mute)       # номера, у которых падает чтение комментариев
         self.ci = ci or {}          # номер → статус CI в gh pr view; по умолчанию SUCCESS
         self.closed = set(closed)   # закрыты без мёржа; остальные номера вне merged — OPEN
@@ -365,9 +404,12 @@ class FakeGh:
                 return 1, "", "HTTP 502"
             state = "MERGED" if n in self.merged else "CLOSED" if n in self.closed else "OPEN"
             ci = self.ci.get(n, "SUCCESS")          # "" — у головы ещё нет ни одной проверки (SE-126)
-            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"conclusion": ci}] if ci else [],
+            d = {"files": [{"path": f} for f in self.files.get(n, self.FILES)],
+                 "statusCheckRollup": [{"conclusion": ci}] if ci else [],
                  "state": state, "mergedAt": "2026-11-04T15:55:00Z" if state == "MERGED" else None,
                  "closedAt": None if state == "OPEN" else "2026-11-04T15:55:00Z"}
+            if "body" in cmd[cmd.index("--json") + 1].split(","):
+                d["body"] = self.bodies.get(n, "")
             return 0, json.dumps(d), ""
         raise AssertionError(f"неожиданный вызов: {cmd}")
 
@@ -392,7 +434,7 @@ class GithubPollTest(unittest.TestCase):
         fake = FakeGh([_pr(458, "a" * 40)])
         sources.run = fake
         files, checks, state, _, _ = gh_source._gh_view(FakeGh.REPO, 458)
-        self.assertEqual((files, checks, state), (["apps/backend/src/x.ts"], ["SUCCESS"], "OPEN"))
+        self.assertEqual((files, checks, state), (FakeGh.FILES, ["SUCCESS"], "OPEN"))
         gh_source.poll_github(self.ctx)
         self.assertTrue(fake.calls)
         for c in fake.calls:
@@ -440,6 +482,76 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.changes"]
         self.assertEqual([e["to"] for e in rec], [["backend", "backend-2"]])
+
+    def test_author_approve_is_named_once_and_does_not_make_quorum(self):
+        """SE-121: тело называет автора backend; его approve не засчитан: одно pr.own Контролю на голову, потом
+        кворум трёх других линз, и строка кворума называет не засчитанный approve."""
+        head = "d0d0d0d0d" + "0" * 31
+        lens = [f"{x}: approve на d0d0d0d0d" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        body = {486: "Линзы: роль 4 — автор."}
+        sources.run = FakeGh([_pr(486, head)], comments={486: lens}, bodies=body)
+        gh_source.poll_github(self.ctx)
+        own = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.own"]
+        self.assertEqual([(e["text"], e["to"]) for e in own],
+                         [("#486: approve автора backend на d0d0d0d0d не засчитан — линз 2/3", ["release"])])
+        self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+        lens.append("Линза фронтенда (роль 3): changes на 0000000")   # вердикт на старую голову: кворум тот же
+        sources.run = FakeGh([_pr(486, head, "2026-11-04T10:30:00Z")], comments={486: lens}, bodies=body)
+        gh_source.poll_github(self.ctx)
+        sources.run = FakeGh([_pr(486, head, "2026-11-04T11:00:00Z")], bodies=body,
+                             comments={486: lens + ["Контроль (роль 5): approve на d0d0d0d0d"]})
+        gh_source.poll_github(self.ctx)
+        self.assertIn(("pr.quorum", "#486 собран: approve boards, plan, release на d0d0d0d0d, CI ok; "
+                                    "approve автора backend не засчитан"), self.kinds())
+        self.assertEqual([k for k, _ in self.kinds()].count("pr.own"), 1, "pr.own — один раз на голову")
+
+    def test_quorum_with_the_author_approve_at_once_has_no_own_event(self):
+        """SE-121: кворум собран и без автора — pr.own не нужен, причину называет строка кворума."""
+        head = "a2a2a2a2a" + "0" * 31
+        labels = ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)", "Контроль (роль 5)")
+        sources.run = FakeGh([_pr(489, head)], comments={489: [f"{x}: approve на a2a2a2a2a" for x in labels]},
+                             bodies={489: "роль 4 — автор"})
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([k for k, _ in self.kinds()], ["pr.quorum"])
+
+    def test_only_the_body_line_drops_an_approve_paths_do_not(self):
+        """SE-121 (координатор 06:40, вариант A): пути backend без строки — approve backend считается; строка
+        «роль 2 — автор» при тех же путях — выпадает approve plan, и pr.changes адресован plan."""
+        head = "e0e0e0e0e" + "0" * 31
+        lens = [f"{x}: approve на e0e0e0e0e" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        sources.run = FakeGh([_pr(487, head), _pr(490, head)], comments={487: lens, 490: lens},
+                             bodies={490: "Правка.\n\nЛинзы: роль 2 — автор."})
+        gh_source.poll_github(self.ctx)
+        prs = self.ctx.state["github"]["prs"]
+        self.assertEqual((prs["487"]["author"], prs["487"]["author_line"]), ("backend", None))
+        self.assertEqual((prs["490"]["author"], prs["490"]["author_line"]), ("plan", "plan"))
+        self.assertIn(("pr.quorum", "#487 собран: approve backend, boards, plan на e0e0e0e0e, CI ok"), self.kinds())
+        self.assertIn(("pr.own", "#490: approve автора plan на e0e0e0e0e не засчитан — линз 2/3"), self.kinds())
+        self.assertNotIn("#490 собран", " ".join(t for _, t in self.kinds()))
+
+    def test_pr_parsed_before_se121_reads_the_body_once_on_change(self):
+        """Состояние до SE-121: author есть, author_line нет — при изменении PR одно чтение тела, строка действует."""
+        head = "e1e1e1e1e" + "0" * 31
+        lens = [f"{x}: approve на e1e1e1e1e" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        self.ctx.state["github"] = {"rev": gh_source.GH_STATE_REV, "prs": {"491": {
+            "head": head, "updated": "x", "seen": [], "changes_by": [], "author": "backend", "checks": ["SUCCESS"]}}}
+        fake = FakeGh([_pr(491, head)], comments={491: lens}, bodies={491: "роль 4 — автор"})
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        self.assertEqual(self.ctx.state["github"]["prs"]["491"]["author_line"], "backend")
+        self.assertEqual(sum(c[:3] == ["gh", "pr", "view"] for c in fake.calls), 1)
+        self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+
+    def test_ci_recheck_does_not_read_the_body(self):
+        """SE-121: тело PR — только при разборе автора; перепроверка CI читает прежние поля без тела."""
+        head = "f1f1f1f1f" + "0" * 31
+        lens = [f"{x}: approve на f1f1f1f1f" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        fake = FakeGh([_pr(488, head)], comments={488: lens}, ci={488: "IN_PROGRESS"})
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        gh_source.poll_github(self.ctx)
+        views = [c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]]
+        self.assertEqual(views, ["files,statusCheckRollup,body", "files,statusCheckRollup,state,mergedAt,closedAt"])
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
