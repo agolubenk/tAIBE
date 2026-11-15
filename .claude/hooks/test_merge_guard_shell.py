@@ -334,6 +334,17 @@ for form in ("MAKEFLAGS=-s make x", "MAKEFLAGS='-j4 --no-print-directory' make x
     bash(f"SE-133, без признака: {form!r}", form, False, cwd=o)
 why = run("Bash", {"command": "MAKEFLAGS='-- MAKEFILES=ok.mk' make x"}, cwd=o) or ""
 check(f"SE-133: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# B2 (backend, #398): `-I` из MAKEFLAGS make берёт от папки после `-C`/`cd` — признак только в sub/inc/lib.mk
+o = TMP / "se133"
+for name, text in (("Makefile", "-include lib.mk\nx:\n\techo\n"), ("inc/lib.mk", "y:\n\techo\n"),
+                   ("sub/Makefile", "-include lib.mk\nx:\n\techo\n"), ("sub/inc/lib.mk", "x:\n\tgh pr merge 1\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("MAKEFLAGS=-Iinc make -C sub x", "export MAKEFLAGS=-Iinc; cd sub; make x",
+             "cd sub; MAKEFLAGS=-Iinc make x"):
+    bash(f"SE-133 B2, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C sub x", "make -Iinc x"):
+    bash(f"SE-133 B2, без признака: {form!r}", form, False, cwd=o)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
