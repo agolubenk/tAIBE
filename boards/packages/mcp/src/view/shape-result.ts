@@ -1,4 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { BOARD_TEXT_MARK } from "./board-text.js";
 import { filterSince } from "./filter-since.js";
 import { fitToBudget } from "./fit-to-budget.js";
 import { hashValue } from "./hash-value.js";
@@ -25,7 +26,8 @@ export function shapeResult(
     view.ifNoneMatch === etag
       ? encodeResponse({ unchanged: true, etag }, { format: view.format })
       : fitToBudget(
-          { etag, data: shape(data, view) },
+          // TB-83: one mark per answer, not one per item.
+          { etag, [BOARD_TEXT_MARK]: true, data: shape(data, view) },
           { budget: view.budget, format: view.format, fullRef },
         );
   if (encoded.fallbackError) onFallback?.(encoded.fallbackError);

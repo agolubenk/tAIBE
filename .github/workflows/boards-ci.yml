@@ -81,8 +81,14 @@ jobs:
           node-version: 24.19.0
           cache: pnpm
           cache-dependency-path: boards/pnpm-lock.yaml
+      # CI does not run docker build: a package missing in a Dockerfile stage fails only at deploy (TB-234).
+      - name: Dockerfile stages copy each workspace package their app needs
+        run: node deploy/check-dockerfile-deps.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # The image runs dist under plain Node: an extensionless relative import crash-loops the API (TB-143, TB-173).
+      - name: dist loads as ESM under plain Node
+        run: node deploy/check-dist-esm.mjs
 
   i18n:
     runs-on: ubuntu-latest
@@ -128,11 +134,12 @@ jobs:
           POSTGRES_USER: kaneo
           POSTGRES_PASSWORD: kaneo-ci-only # checks: allow-secret
           POSTGRES_DB: kaneo_test
-        ports: ["5432:5432"]
+        # Not 5432/5433: tests/api-integration/setup.ts refuses the ports of live databases (TB-145).
+        ports: ["55432:5432"]
         options: >-
           --health-cmd "pg_isready -U kaneo" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DATABASE_URL: postgresql://kaneo:kaneo-ci-only@localhost:5432/kaneo_test # checks: allow-secret
+      DATABASE_URL: postgresql://kaneo:kaneo-ci-only@localhost:55432/kaneo_test # checks: allow-secret
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

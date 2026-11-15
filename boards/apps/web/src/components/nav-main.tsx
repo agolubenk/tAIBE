@@ -114,7 +114,11 @@ export function NavMain() {
                 onClick={() => navigate({ to: item.url })}
               >
                 <item.icon aria-hidden="true" />
-                <span>{item.title}</span>
+                {/* A long label (SSR) is cut on a narrow sidebar: the full text
+                    stays in the native hint (TB-226). */}
+                <span className="min-w-0 truncate" title={item.title}>
+                  {item.title}
+                </span>
                 {item.count ? (
                   <span
                     className={cn(
