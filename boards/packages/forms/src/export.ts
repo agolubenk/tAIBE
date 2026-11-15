@@ -1,6 +1,6 @@
-import { type AnswersDoc, isEmptyValue, valueIssue } from "./answers";
-import type { FormField, FormTemplate } from "./schema";
-import { visibleFieldIds } from "./show-if";
+import { type AnswersDoc, isEmptyValue, valueIssue } from "./answers.js";
+import type { FormField, FormTemplate } from "./schema.js";
+import { visibleFieldIds } from "./show-if.js";
 
 export interface AnswerLabels {
   yes: string;

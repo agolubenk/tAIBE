@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { type AnswerMap, validateAnswers, valueIssue } from "./answers";
+import { type AnswerMap, validateAnswers, valueIssue } from "./answers.js";
 import {
   type FormField,
   type FormTemplate,
   formTemplateSchema,
-} from "./schema";
+} from "./schema.js";
 
 const form = (fields: unknown[]): FormTemplate =>
   formTemplateSchema.parse({ form: "probe", version: 2, title: "P", fields });
