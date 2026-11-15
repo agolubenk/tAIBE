@@ -2990,6 +2990,12 @@
 			"high": "High",
 			"urgent": "Urgent"
 		},
+		"severity": {
+			"critical": "Critical",
+			"high": "High",
+			"medium": "Medium",
+			"low": "Low"
+		},
 		"view": {
 			"board": "Board",
 			"list": "List",
