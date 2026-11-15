@@ -84,15 +84,16 @@ MAKE_ENV = ("MAKEFILES", "VPATH", "GPATH")  # в окружении хука —
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
 
-def _read(path):
+def _read(path, raw=False):
     f = open_regular(path)
     if f is None:
         return None
     try:
         with f:
-            return f.read().decode("utf-8", errors="replace") if os.fstat(f.fileno()).st_size <= TEXT_MAX else None
+            data = f.read() if os.fstat(f.fileno()).st_size <= TEXT_MAX else None
     except OSError:
         return None
+    return data if raw or data is None else data.decode("utf-8", errors="replace")
 
 
 def read_names(a):
@@ -252,9 +253,10 @@ def _nearest(d, name):
         d = os.path.dirname(d)
 
 
-def _read_tree(paths, includes, streams=None):
+def _read_tree(paths, includes, streams=None, check=None):
     """[(путь, текст)] файлов и того, что они включают (includes(путь, текст) → пути), не больше FILES_MAX;
-    путь от невидимой папки — (путь, None). Если дан список streams, путь-поток (_stream) идёт туда, не читается."""
+    путь от невидимой папки — (путь, None). Если дан список streams, путь-поток (_stream) идёт туда, не читается.
+    С check файл читается по realpath (один раз), и check(realpath, байты) получает те же байты (coord 12:59, #402)."""
     out, queue, seen = [], list(paths), set()
     while queue and len(seen) < FILES_MAX:
         p = queue.pop(0)
@@ -264,10 +266,14 @@ def _read_tree(paths, includes, streams=None):
         if streams is not None and _stream(p):
             streams.append(p)
             continue
-        t = None if is_lost(p) else _read(p)
+        real = p if check is None or is_lost(p) else os.path.realpath(p)
+        data = None if is_lost(p) else _read(real, raw=True)
+        t = None if data is None else data.decode("utf-8", errors="replace")
         if t is not None or is_lost(p):
             out.append((p, t))
             queue += includes(p, t) if t is not None else []
+            if check and data is not None:
+                check(real, data)
         elif streams is not None and os.path.lexists(p) and os.path.realpath(p) != os.devnull:
             streams.append(MAKE_TEXT)  # make прочтёт, разбор — нет (права, больше TEXT_MAX): coord 12:06 (#402)
     return out
@@ -324,13 +330,15 @@ def make_files(a, cwd, streams=None):
         except OSError:
             return True
 
+    def reviewed(real, data):  # байты не с основной ветки origin — текст не прошёл ревью (coord 12:36, 12:59; #402)
+        if not same_blob(real, data):
+            streams.append(MAKE_BASE)
+
     roots = [p for p in paths if p] + [h for _, t in evals for h in includes(None, t)]
-    tree = _read_tree(roots, includes, streams)
+    tree = _read_tree(roots, includes, streams, reviewed if streams is not None else None)
     if streams is not None and (any(t is not None and (MAKE_TOKENS.search(t) or remade(p)) for p, t in tree)
                                 or any(not p or not is_lost(p) and not os.path.lexists(p) for p in paths)):
         streams.append(MAKE_TEXT)  # сырой текст (и строка-комментарий), пересборка, Makefile нет (coord 12:06, 12:19)
-    if streams is not None and any(t is not None and not same_blob(p) for p, t in tree):
-        streams.append(MAKE_BASE)  # текст не с основной ветки origin — не прошёл ревью (coord 12:36, #402)
     return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t)) for p, t in tree] + evals
 
 

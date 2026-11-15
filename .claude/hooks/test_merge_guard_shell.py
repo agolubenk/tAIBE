@@ -20,7 +20,7 @@ import merge_guard_launch as mg_launch  # noqa: E402
 # Правило блоба make (coord 12:36, #402) проверяет свой блок на настоящем репозитории git; фикстуры остальных форм make
 # лежат в TMP вне git, поэтому их разбор идёт без правила. До правки (тест до правки) атрибута ещё нет.
 blob_rule = getattr(mg_launch, "same_blob", None)
-mg_launch.same_blob = lambda p: True
+mg_launch.same_blob = lambda p, data: True
 on_main, on_branch = repo_on("main"), repo_on("fix/a")
 # Псевдонимы gh — из своего конфига, а не с машины: на раннере ~/.config/gh нет, и `gh co` (псевдоним gh по
 # умолчанию) там не прочитать — r21 «не запись» падали бы только в CI.
@@ -643,13 +643,29 @@ for name in ("VPATH", "GPATH", "MAKEFILES"):  # окружение самого 
     why = run("Bash", {"command": "make x"}, cwd=o) or ""
     os.environ.pop(name)
     check(f"блоб: {name} в окружении — отказ: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# Линза backend B1 (#402, 6892659274), правило coord 12:59: блоб — того файла, что прочёл хук, по realpath. `link/..`
+# ядро проходит по ссылке (папка вне репозитория), а abspath убрал бы его по тексту — к корневому Makefile.
+OUT = TMP / "blob-out"
+(OUT / "d").mkdir(parents=True)
+(OUT / "Makefile").write_text("x: ; @true\n")
+(o / "link").symlink_to(OUT / "d")
+for form in ("make -C link/.. x", "make -f link/../Makefile x"):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"блоб: ссылка из репозитория наружу {form!r}: {why[:90]!r}",
+          why if "отличается от основной ветки origin" in why else None, True)
+bash("блоб, без признака: 'make -C ok/../ok x'", "make -C ok/../ok x", False, cwd=o)
+RAW = b"x: ; @true\n# \xff\xfe\r\n"  # не UTF-8: хеш — от байтов, а не от текста после decode
+GIT_ID = subprocess.run(["git", "hash-object", "--no-filters", "--stdin"], input=RAW, capture_output=True,
+                        check=True).stdout.decode().strip()
+check("блоб: blob_id = git hash-object --no-filters --stdin",
+      None if merge_guard_git.blob_id(RAW) == GIT_ID else (merge_guard_git.blob_id(RAW), GIT_ID), False)
 # Приёмка coord 12:36: корневой Makefile, который совпадает с основной веткой, правило блоба не задевает. Вызов и так
 # отказывает по грубому признаку (FALLBACK, `.claude/rules` и `.claude/hooks` в тексте) — это не причина правила.
 for form in ("make check", "make wt-add TRACK=fix NAME=x", "make wt-check TRACK=fix NAME=x"):
     why = run("Bash", {"command": form}, cwd=o / "root") or ""
     check(f"блоб: корневой Makefile, не правило блоба: {form!r}: {why[:90]!r}",
           why if "отличается от основной ветки" in why or "Makefile со словом include" in why else None, False)
-mg_launch.same_blob = lambda p: True
+mg_launch.same_blob = lambda p, data: True
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"

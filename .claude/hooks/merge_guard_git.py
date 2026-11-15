@@ -7,6 +7,7 @@
 заводимые `git config alias.*`. На все вызовы git у одного решения — общий бюджет времени: исчерпан — GitTimeout,
 и хук решает по грубому признаку (push — отказ).
 """
+import hashlib
 import os
 import re
 import shlex
@@ -72,16 +73,23 @@ def _common_dir(d):
     return os.path.realpath(os.path.join(d, out)) if out else ""
 
 
-def same_blob(path):
-    """Файл совпадает с блобом того же пути на основной ветке origin (`refs/remotes/origin/HEAD`, у tAIBE —
-    board-agents) репозитория хука или его worktree: текст прошёл ревью (coord 12:36, #402). Нет — путь в другом
-    репозитории (вложенный, чужой), пути на ветке нет, git не ответил вовремя (GitTimeout). `--no-filters`: хеш тех
-    байтов, что прочтёт make, и без clean-фильтров .gitattributes — их команды git запустил бы."""
-    d, base = os.path.split(os.path.abspath(path))
+def blob_id(data, width=40):
+    """id блоба git для байтов data — как `git hash-object --no-filters --stdin`: sha1, у id в 64 знака — sha256."""
+    h = (hashlib.sha256 if width == 64 else hashlib.sha1)(b"blob %d\0" % len(data))
+    h.update(data)
+    return h.hexdigest()
+
+
+def same_blob(path, data):
+    """Байты data, которые хук прочёл по пути path (realpath — его папка и имя), — блоб того же пути на основной
+    ветке origin (`refs/remotes/origin/HEAD`, у tAIBE — board-agents) репозитория хука или его worktree: текст прошёл
+    ревью (coord 12:36, #402). Хеш — от тех же байтов, второго чтения нет (coord 12:59). Нет — путь вне репозитория,
+    в другом (вложенный, чужой), пути на ветке нет, git не ответил вовремя (GitTimeout)."""
+    d, base = os.path.split(path)
     try:
         want = git_out(d, "rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD:./" + base)
         home = {c for c in map(_common_dir, HOME_REPOS) if c}
-        return bool(want) and _common_dir(d) in home and want == git_out(d, "hash-object", "--no-filters", "--", base)
+        return bool(want) and _common_dir(d) in home and want == blob_id(data, len(want))
     except GitTimeout:
         return False
 
