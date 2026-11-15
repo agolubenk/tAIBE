@@ -45,7 +45,7 @@ MAKE_VALUED = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin"
                "-o", "--old-file", "--assume-old", "-W", "--what-if", "--new-file", "--assume-new", "--jobserver-auth",
                "--jobserver-fds", "--jobserver-style", "--sync-mutex"}
 MAKE_OPTIONAL = {"-j", "-l", "-O"}  # необязательное значение: в связке — её остаток (`-lf ok.mk` — `-l f`, make 3.81)
-MAKEFILES =("GNUmakefile", "makefile", "Makefile")
+MAKEFILES = ("GNUmakefile", "makefile", "Makefile")
 MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$")
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
@@ -236,15 +236,18 @@ def _nearest(d, name):
         d = os.path.dirname(d)
 
 
-def _read_tree(paths, includes):
+def _read_tree(paths, includes, streams=None):
     """[(путь, текст)] файлов и того, что они включают (includes(путь, текст) → пути), не больше FILES_MAX;
-    путь от невидимой папки — (путь, None)."""
+    путь от невидимой папки — (путь, None). Если дан список streams, путь-поток (_stream) идёт туда, не читается."""
     out, queue, seen = [], list(paths), set()
     while queue and len(seen) < FILES_MAX:
         p = queue.pop(0)
         if p in seen:
             continue
         seen.add(p)
+        if streams is not None and _stream(p):
+            streams.append(p)
+            continue
         t = None if is_lost(p) else _read(p)
         if t is not None or is_lost(p):
             out.append((p, t))
@@ -265,12 +268,13 @@ def _make_where(values, cwd):
     return d, named, values.get("-E", []) + values.get("--eval", []), dirs
 
 
-def make_files(a, cwd):
-    """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый из
-    GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не исключение:
-    `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). Строка `--eval`/`-E` — тоже текст
-    Makefile (путь `--eval`), её include читаются. Длинные опции — как у getopt_long (SE-128); неоднозначная или
-    неизвестная — папка не видна (LOST): у make 3.81 `--o` — это `--old-file`, и его значение `-f` уже не опция."""
+def make_files(a, cwd, streams=None):
+    """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый
+    существующий из GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не
+    исключение: `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). Строка `--eval`/`-E` — тоже
+    текст Makefile (путь `--eval`), её include читаются. Пути-потоки дерева — в streams (make_option). Длинные опции —
+    как у getopt_long (SE-128); неоднозначная или неизвестная — папка не видна (LOST): у make 3.81 `--o` — это
+    `--old-file`, и его значение `-f` уже не опция."""
     if a[0] not in MAKES:
         return []
     values, _ = _make_opts(a)
@@ -279,7 +283,7 @@ def make_files(a, cwd):
     d, named, evals, dirs = _make_where(values, cwd)
     evals = [("--eval", re.sub(r"(?m)^[ \t]*#.*$", "", t)) for t in evals]
     paths = [os.path.join(d, os.path.expanduser(f)) for f in named] or (
-        [d] if is_lost(d) else [next((os.path.join(d, m) for m in MAKEFILES if os.path.isfile(os.path.join(d, m))), "")])
+        [d] if is_lost(d) else [next((p for p in (os.path.join(d, m) for m in MAKEFILES) if os.path.lexists(p)), "")])
 
     def includes(_, text):
         found = []
@@ -290,7 +294,7 @@ def make_files(a, cwd):
 
     roots = [p for p in paths if p] + [h for _, t in evals for h in includes(None, re.sub(r"#.*", "", t))]
     return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t))
-            for p, t in _read_tree(roots, lambda p, t: includes(p, re.sub(r"#.*", "", t)))] + evals
+            for p, t in _read_tree(roots, lambda p, t: includes(p, re.sub(r"#.*", "", t)), streams)] + evals
 
 
 # Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
@@ -301,7 +305,8 @@ MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS из окружени
                  "или кавычка, `\\`, `$` в MAKEFLAGS (слова и подстановки make делит иначе, чем shell): папку make "
                  "(`-C`, `cd`) разбор с ними не сводит — передайте опции в командной строке make, файлы — через `-f`")
 MAKE_STDIN = ("Makefile из потока, а не из файла (`-f -`, `-f /dev/stdin`, FIFO, ссылка на устройство, "
-              "`include /dev/stdin` в `--eval`): его текст разбор не видит — запишите Makefile в файл и передайте `-f`")
+              "`include /dev/stdin` в Makefile или `--eval`, Makefile по умолчанию — ссылка на поток): его текст "
+              "разбор не видит — запишите Makefile в файл и передайте `-f`")
 MAKE_EVAL = ("строка `--eval`/`-E` с `$`, рецептом (`;`, табуляция, `.RECIPEPREFIX`), `!=`, `define`, `export` или "
              "`SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=`: что она прочтёт и запустит, разбор не видит — передайте это "
              "Makefile-файлом (`-f`)")
@@ -319,8 +324,9 @@ def _stream(p):
 def make_option(a, cwd):
     """Причина, по которой разбор не видит, что прочтёт или запустит make, иначе "": метка make_flags (SE-133);
     длинная опция, которую getopt_long не раскроет однозначно (`--d`, `--o`, `--frob`, SE-128); Makefile из потока
-    (`-f -`, устройство, FIFO, `include /dev/stdin` в `--eval`); строка `--eval` с EVAL_RUNS; `SHELL=`, `.SHELLFLAGS=`,
-    `MAKEFILES=` в строке make (SE-135). Рецепты Makefile на диске — предел дизайна: только грубый признак (хук)."""
+    где угодно в дереве make_files (`-f -`, устройство, FIFO, Makefile по умолчанию — ссылка на поток, `include
+    /dev/stdin` в Makefile или `--eval`); строка `--eval` с EVAL_RUNS; `SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` в строке
+    make (SE-135). Рецепты Makefile на диске — предел дизайна: только грубый признак (хук)."""
     if a[0] not in MAKES:
         return ""
     if MAKEFLAGS_ARG in a:
@@ -328,11 +334,10 @@ def make_option(a, cwd):
     values, rest = _make_opts(a)
     if "?" in values:
         return MAKE_OPTION
-    d, named, evals, dirs = _make_where(values, cwd)
-    paths = [os.path.join(d, os.path.expanduser(f)) for f in named] + [
-        os.path.join(x, os.path.expanduser(n)) for t in evals for m in MAKE_INCLUDE.finditer(t)
-        for n in m.group(1).split() for x in dirs]
-    if "-" in named or any(map(_stream, paths)):
+    _, named, evals, _ = _make_where(values, cwd)
+    streams = []
+    make_files(a, cwd, streams)
+    if "-" in named or streams:
         return MAKE_STDIN
     if any(map(EVAL_RUNS.search, evals)):
         return MAKE_EVAL
