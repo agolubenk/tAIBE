@@ -3,6 +3,7 @@ import {
   type AnswerIssue,
   type AnswerIssueCode,
   type AnswerMap,
+  type AnswersDoc,
   type FormTemplate,
   isEmptyValue,
   visibleFieldIds,
@@ -52,6 +53,22 @@ export function mergeIssues(
   ];
 }
 
+/** The answer document of a form: a field without an answer has no entry. */
+export function answersDoc(
+  template: FormTemplate,
+  answers: AnswerMap,
+): AnswersDoc {
+  const kept: [string, Answer][] = [];
+  for (const [id, answer] of Object.entries(answers)) {
+    if (answer) kept.push([id, answer]);
+  }
+  return {
+    form: template.form,
+    version: template.version,
+    answers: Object.fromEntries(kept),
+  };
+}
+
 /** Answered and shown fields: hidden fields count in neither. */
 export function formProgress(
   template: FormTemplate,
@@ -80,7 +97,7 @@ export function withAnswer(
 ): AnswerMap {
   const field = template.fields.find((item) => item.id === fieldId);
   if (!field) return answers;
-  const merged: Answer = { ...answers[fieldId], ...change };
+  const merged: Answer = { v: undefined, ...answers[fieldId], ...change };
   const note = merged.note?.trim() ? merged.note : undefined;
   const next: AnswerMap = { ...answers };
   if (isEmptyValue(field, merged.v) && !note) {

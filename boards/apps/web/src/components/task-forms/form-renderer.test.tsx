@@ -95,7 +95,11 @@ describe("FormRenderer (TB-173)", () => {
 
   it("names each matrix row by the question and the row", () => {
     render(
-      <FormRenderer answers={{}} onAnswerChange={vi.fn()} template={template} />,
+      <FormRenderer
+        answers={{}}
+        onAnswerChange={vi.fn()}
+        template={template}
+      />,
     );
     const rows = question("Grid").getAllByRole("radiogroup");
     expect(rows.map((row) => row.getAttribute("aria-labelledby"))).toEqual([
@@ -150,8 +154,9 @@ describe("FormRenderer (TB-173)", () => {
     expect(
       question("Name").getByText("tasks:forms.issues.required"),
     ).toBeTruthy();
-    expect(question("Name").getByRole("textbox").getAttribute("aria-invalid"))
-      .toBe("true");
+    expect(
+      question("Name").getByRole("textbox").getAttribute("aria-invalid"),
+    ).toBe("true");
   });
 
   it("opens a note and answers it", () => {

@@ -12,7 +12,7 @@ import {
 import type { TaskForm } from "@/fetchers/task-form/get-task-forms";
 import { cn } from "@/lib/cn";
 import { FormRenderer } from "./form-renderer";
-import { formProgress } from "./form-state";
+import { answersDoc, formProgress } from "./form-state";
 import {
   type FormMeta,
   type SaveState,
@@ -51,11 +51,10 @@ export function TaskFormBlock({ taskId, form, onReload }: Props) {
   };
 
   const onExport = () => {
-    const data = exportAnswers(
-      template,
-      { answers },
-      { submitted: meta.status === "submitted", at: new Date().toISOString() },
-    );
+    const data = exportAnswers(template, answersDoc(template, answers), {
+      submitted: meta.status === "submitted",
+      at: new Date().toISOString(),
+    });
     downloadJson(`${template.form}-v${template.version}.json`, data);
   };
 
@@ -65,9 +64,7 @@ export function TaskFormBlock({ taskId, form, onReload }: Props) {
       onOpenChange={setOpen}
       open={open}
     >
-      <CollapsibleTrigger
-        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <ChevronRight
           aria-hidden="true"
           className={cn(

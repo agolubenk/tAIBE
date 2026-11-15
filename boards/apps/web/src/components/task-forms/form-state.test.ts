@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { formProgress, issuesByField, withAnswer } from "./form-state";
+import {
+  answersDoc,
+  formProgress,
+  issuesByField,
+  withAnswer,
+} from "./form-state";
 import { sevenTypesTemplate as template } from "./form-test-template";
 
 describe("form state (TB-173)", () => {
@@ -34,9 +39,18 @@ describe("form state (TB-173)", () => {
     expect(withAnswer(noted, template, "name", { v: "" })).toEqual({
       name: { v: "", note: "later" },
     });
-    expect(
-      withAnswer({}, template, "name", { v: null, note: "   " }),
-    ).toEqual({});
+    const blank = withAnswer({}, template, "name", { v: null, note: "   " });
+    expect(blank).toEqual({});
+  });
+
+  it("leaves fields without an answer out of the document", () => {
+    const doc = answersDoc(template, { name: { v: "Ann" }, mood: undefined });
+    expect(doc).toEqual({
+      form: template.form,
+      version: template.version,
+      answers: { name: { v: "Ann" } },
+    });
+    expect(Object.keys(doc.answers)).toEqual(["name"]);
   });
 
   it("ignores a field that is not in the template", () => {

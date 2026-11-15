@@ -21,7 +21,7 @@ import saveTaskFormAnswers, {
   SaveTaskFormError,
 } from "@/fetchers/task-form/save-task-form-answers";
 import { taskFormsKey } from "@/hooks/queries/task-form/use-task-forms";
-import { mergeIssues, withAnswer } from "./form-state";
+import { answersDoc, mergeIssues, withAnswer } from "./form-state";
 
 // TB-173 F1/F2: every change is saved as a draft one second after the last
 // keystroke; Submit checks the whole form first. The answers live here while
@@ -87,11 +87,7 @@ export function useFormAutosave(taskId: string, form: TaskForm) {
       while (runningRef.current) await runningRef.current;
       if (stoppedRef.current) return false;
       if (!submit && !dirtyRef.current) return true;
-      const doc = {
-        form: template.form,
-        version: template.version,
-        answers: answersRef.current,
-      };
+      const doc = answersDoc(template, answersRef.current);
       let draft = !submit;
       if (submit) {
         const full = validateAnswers(template, doc);
@@ -105,7 +101,7 @@ export function useFormAutosave(taskId: string, form: TaskForm) {
       // A draft keeps an invalid value here, next to its issue, and sends
       // the rest: the server refuses a draft with any invalid value.
       const invalid = new Set(check.issues.map((issue) => issue.fieldId));
-      const sent: AnswerMap = Object.fromEntries(
+      const sent = Object.fromEntries(
         Object.entries(check.answers).filter(([id]) => !invalid.has(id)),
       );
       if (draft) setIssues((prev) => mergeIssues(prev, check.issues));
