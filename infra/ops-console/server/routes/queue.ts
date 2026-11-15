@@ -2,21 +2,22 @@
  * API очереди владельца: /api/oq/v1. Документы в формате базы артефакта (страница /queue, агенты, бот),
  * журнал, мёрж и деплой. Доступ — токен очереди или сессия владельца консоли (server/queue/auth.ts).
  */
-import { Hono, type Context, type MiddlewareHandler } from 'hono'
+import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { z } from 'zod'
 import { apiError } from '../http-types'
 import { parseBody } from '../lib/validate'
 import { requireQueueActor, requireScope, type QueueEnv } from '../queue/auth'
 import { mergeInfo, mergeItem, redeploy } from '../queue/github'
-import { beatRelay, readRelay, relayBeatSchema } from '../queue/relay'
+import { beatProduct, beatRelay, readRelay, relayBeatSchema } from '../queue/relay'
 import { acceptNotify, notifySchema } from '../queue/notify'
-import { throttleNotify, throttleWrite } from '../queue/throttle'
+import { throttleNotify, throttleWrite, writeCounted } from '../queue/throttle'
 import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
 import { changeItemProduct } from '../queue/product-change'
+import { historyQuery, historyReplyBody } from '../queue/history-view'
 import { recentPrs } from '../queue/prs'
 import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_BOARDS, PRODUCT_SLUG, visibilityKey, type Visibility } from '../queue/products'
 import { SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
@@ -79,9 +80,11 @@ queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {
 
 /** Продукт пункта меняет владелец (страница, бот): пункт и ответ — одной транзакцией (queue/product-change.ts). */
 queueRoutes.post('/items/:id/product', requireScope('owner'), async (c) => {
-  throttleWrite(c.get('oqActor').name)
-  const body = await parseBody(c, productChangeSchema)
-  return c.json(await changeItemProduct(c.get('oqActor'), c.req.param('id'), body.to, body.reason ?? ''))
+  const actor = c.get('oqActor')
+  return writeCounted(actor.name, async () => {
+    const body = await parseBody(c, productChangeSchema)
+    return c.json(await changeItemProduct(actor, c.req.param('id'), body.to, body.reason ?? ''))
+  })
 })
 
 /**
@@ -108,38 +111,48 @@ queueRoutes.get('/db/:col/:id', requireScope('read', 'agent'), async (c) => {
 for (const [method, merge] of [['put', false], ['patch', true]] as const) {
   queueRoutes[method]('/db/:col/:id', requireScope('agent'), async (c) => {
     const actor = c.get('oqActor')
-    throttleWrite(actor.name)
-    const body = await parseBody(c, writeSchema)
-    const doc = await writeDoc(actor, collectionOf(c.req.param('col')), c.req.param('id'), body.data, {
-      merge,
-      ifVersion: body.ifVersion,
-      ifAnswerAt: body.ifAnswerAt,
-      takeover: body.takeover,
-      release: body.release,
+    // Отказ 4xx (409 версии, 403, 422) лимит записи не съедает — writeCounted (GLM-ревью #221).
+    const doc = await writeCounted(actor.name, async () => {
+      const body = await parseBody(c, writeSchema)
+      return writeDoc(actor, collectionOf(c.req.param('col')), c.req.param('id'), body.data, {
+        merge,
+        ifVersion: body.ifVersion,
+        ifAnswerAt: body.ifAnswerAt,
+        takeover: body.takeover,
+        release: body.release,
+      })
     })
     return c.json(doc)
   })
 }
 
 queueRoutes.delete('/db/:col/:id', requireScope('owner'), async (c) => {
-  throttleWrite(c.get('oqActor').name)
-  await deleteDoc(c.get('oqActor'), collectionOf(c.req.param('col')), c.req.param('id'))
+  const actor = c.get('oqActor')
+  await writeCounted(actor.name, () => deleteDoc(actor, collectionOf(c.req.param('col')), c.req.param('id')))
   return c.json({ ok: true })
 })
 
-queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => c.json({ events: await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products) }))
+// История документа (queue/history-view.ts): ?limit= (без него — 50, как раньше), ?before= (next прошлого ответа),
+// ?fields=meta (без снимков after).
+queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => {
+  const q = historyQuery({ limit: c.req.query('limit'), before: c.req.query('before'), fields: c.req.query('fields') })
+  const page = await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products, q.limit, q.before)
+  return c.json(historyReplyBody(page, q))
+})
 
 // Автопередача входящих сессии (queue/relay.ts): отметка процесса `server.mjs --relay` и состояние для страницы и бота.
-// Пока relay один — он про входящие HR: токен без HR не читает id входящих и не изображает живую автопередачу
-// (relay по продуктам — план, фаза 4a).
-const relayHr: MiddlewareHandler<QueueEnv> = async (c, next) => {
-  if (!canSee(c.get('oqActor').products, DEFAULT_PRODUCT)) throw apiError(404, 'Нет автопередачи для продуктов токена')
-  await next()
-}
-queueRoutes.get('/relay', requireScope('read', 'agent'), relayHr, async (c) => c.json(await readRelay()))
-queueRoutes.put('/relay', requireScope('agent'), relayHr, async (c) => {
-  throttleWrite(c.get('oqActor').name)
-  return c.json(await beatRelay(await parseBody(c, relayBeatSchema)))
+// По продуктам (фаза 4a, OPS-51): актор видит сессии только своих продуктов и отмечается только за видимый продукт.
+queueRoutes.get('/relay', requireScope('read', 'agent'), async (c) => c.json(await readRelay(c.get('oqActor').products)))
+queueRoutes.put('/relay', requireScope('agent'), async (c) => {
+  const actor = c.get('oqActor')
+  throttleWrite(actor.name)
+  const beat = await parseBody(c, relayBeatSchema)
+  const product = beatProduct(actor.products, beat.product)
+  // Чужой продукт или токен без продуктов — как несуществующее (404); свой, но не определить (несколько продуктов без
+  // основного) — 422.
+  const none = actor.products !== '*' && actor.products.length === 0
+  if (!product) throw beat.product || none ? apiError(404, 'Нет автопередачи для продуктов токена') : apiError(422, 'Укажите product: токен видит несколько продуктов')
+  return c.json(await beatRelay(beat, product, actor.products))
 })
 
 // PR репозитория консоли для графика «Сколько PR ждали мёржа» (queue/prs.ts). Репозиторий — HR: токен без HR — 404.

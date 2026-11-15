@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
+import { graphHitRadius } from "./graph-hit-radius";
 import { GraphNodeShape } from "./graph-node-shape";
 import type { GraphData } from "./graph-model";
 import { layoutGraph } from "./layout-graph";
@@ -60,9 +61,23 @@ export function GraphCanvas({ graph, selectedId, onSelect }: GraphCanvasProps) {
       : [],
   );
   const allLabels = graph.nodes.length <= ALL_LABELS_UP_TO;
+  // The hit radius follows the rendered SVG width, not the window (TB-223).
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [renderedWidth, setRenderedWidth] = useState(0);
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setRenderedWidth(entry.contentRect.width);
+    });
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, []);
+  const hitRadius = graphHitRadius(renderedWidth, WIDTH);
 
   return (
     <svg
+      ref={svgRef}
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       role="group"
       aria-label={t("workspace:forest.graph.canvasLabel")}
@@ -155,6 +170,7 @@ export function GraphCanvas({ graph, selectedId, onSelect }: GraphCanvasProps) {
               near.has(node.id)
             }
             onSelect={onSelect}
+            hitRadius={hitRadius}
           />
         );
       })}

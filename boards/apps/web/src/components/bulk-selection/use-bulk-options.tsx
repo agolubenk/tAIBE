@@ -8,6 +8,7 @@ import { resolveLabelColor } from "@/lib/label-color";
 import { getPriorityIcon } from "@/lib/priority";
 import type { OptionMenuItem } from "@/components/common/option-menu/option-menu-item";
 import type { BulkActions } from "./use-bulk-actions";
+import { getStatusDisplayLabel } from "@/lib/i18n/domain";
 
 const PRIORITIES = ["urgent", "high", "medium", "low", "no-priority"];
 
@@ -18,7 +19,7 @@ export function useBulkOptions(actions: BulkActions) {
   return useMemo(() => {
     const columnOptions: OptionMenuItem[] = columns.map((column) => ({
       value: column.id,
-      label: column.name,
+      label: getStatusDisplayLabel(column.id, column.name),
       icon: getColumnIcon(column.id, column.isFinal, column.icon),
     }));
     const priorityOptions: OptionMenuItem[] = PRIORITIES.map((priority) => ({

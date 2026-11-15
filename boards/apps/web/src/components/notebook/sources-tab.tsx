@@ -24,6 +24,7 @@ export function SourcesTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={sources.isLoading}
         isError={sources.isError}
+        onRetry={() => void sources.refetch()}
         isEmpty={list.length === 0}
         empty={t("workspace:notebook.sources.empty")}
       >

@@ -55,14 +55,21 @@ async function embed(config, model, texts) {
   return embeddings;
 }
 
+// Taking work leases it, so it is a POST (TB-97). An API deployed before that
+// has no POST route and answers 404: then the old GET, until the deploy.
+async function takeWork(config) {
+  const path = `/embed/work?wait=${POLL_WAIT_S}`;
+  const timeout = (POLL_WAIT_S + 15) * 1000;
+  try {
+    return await notebookApi(config, "POST", path, undefined, timeout);
+  } catch (error) {
+    if (!/^POST \S+: HTTP 40[45]\b/.test(error.message)) throw error;
+    return notebookApi(config, "GET", path, undefined, timeout);
+  }
+}
+
 async function round(config, label) {
-  const work = await notebookApi(
-    config,
-    "GET",
-    `/embed/work?wait=${POLL_WAIT_S}`,
-    undefined,
-    (POLL_WAIT_S + 15) * 1000,
-  );
+  const work = await takeWork(config);
   if (!work.items.length) return 0;
   const vectors = await oneAtATime(() =>
     embed(

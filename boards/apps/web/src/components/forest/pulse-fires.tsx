@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import useFires from "@/hooks/queries/forest/use-fires";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
+import { getSeverityLabel } from "@/lib/i18n/domain";
 import { ForestListState } from "./forest-list-state";
 import { ForestTaskLink } from "./forest-task-link";
 import { PulseSection } from "./pulse-section";
@@ -20,6 +21,7 @@ export function PulseFires({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={fires.isLoading}
         isError={fires.isError}
+        onRetry={() => void fires.refetch()}
         isEmpty={!fires.data?.items.length}
         empty={t("workspace:forest.pulse.firesEmpty")}
       >
@@ -46,7 +48,7 @@ export function PulseFires({ workspaceId }: { workspaceId: string }) {
                 <Badge variant={fire.hot ? "error" : "warning"}>
                   {fire.severity
                     ? t("workspace:forest.pulse.bugSeverity", {
-                        severity: fire.severity,
+                        severity: getSeverityLabel(fire.severity),
                       })
                     : t("workspace:forest.pulse.bug")}
                 </Badge>
