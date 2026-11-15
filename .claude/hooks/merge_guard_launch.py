@@ -11,6 +11,7 @@ import os
 import re
 
 from merge_guard_files import open_regular
+from merge_guard_git import same_blob
 from merge_guard_shell import CURRENT, LOST, SUBST, device, is_lost, words
 
 PKG_TOOLS = {"npm", "pnpm", "yarn", "bun", "turbo"}
@@ -55,14 +56,14 @@ INCLUDE_ESCAPE = "\0INCLUDE"  # метка в streams: строка include с `
 # и для пересборки встроенным правилом (coord 12:19): рядом `имя.*`, `имя,v`, `s.имя`, RCS/, SCCS/; Makefile нет.
 MAKE_TOKENS = re.compile(r"\$[({](?:eval|file|shell)|(?:^|[^A-Za-z0-9_.~/-])/dev/"
                          r"|(?<![A-Za-z0-9_-])(?:-?include|sinclude)(?![A-Za-z0-9_-])", re.M)
-MAKE_TEXT = "\0MAKETEXT"
+MAKE_TEXT, MAKE_BASE = "\0MAKETEXT", "\0MAKEBASE"  # MAKE_BASE: Makefile не с основной ветки origin (coord 12:36)
 NOT_ASCII = re.compile(r"[^\x20-\x7e\t]")  # make делит слова по isblank локали: в kk_KZ.PT154 0xA0 — пробел
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
 WS_MAX = 256
 TEXT_MAX = 4 * 1024 * 1024
-IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"  # `ИМЯ+=` shell тоже экспортирует
+IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|[VG]PATH|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"  # `ИМЯ+=` shell тоже экспортирует
                          r"|(?i:npm_config_node_options|npm_config_script_shell))\+?=(.*)", re.S)
 # Опции make, от которых зависит, какой текст make прочтёт (make_files), и переменные, от которых — что прочтёт и
 # запустит: в MAKEFLAGS они — отказ (SE-133). Метка — слово, которого shell не передаст (в словах нет NUL).
@@ -71,13 +72,15 @@ MAKE_READS = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin",
 # Опции make 4.x со значением, которых нет в make 3.81 (main.c:361-433): getopt 3.81 вернёт `?`, а следующее слово не
 # заберёт, и `-I` после них make применит. В MAKEFLAGS они — отказ, как `?` (линза Claude #398, B3).
 MAKE_4X_VALUED = {"--jobserver-auth", "--jobserver-style", "--sync-mutex"}
-MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
+MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|[VG]PATH|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
 MAKEFLAGS_ARG = "\0MAKEFLAGS"
 # Строка --eval, которая запускает или читает то, чего разбор не видит (SE-135): подстановка `$`, рецепт (`;`,
-# табуляция, `.RECIPEPREFIX`), `!=`, `define`, `export`, shell рецептов и файлы make — и в целевой переменной.
-EVAL_RUNS = re.compile(r"[$;\t]|!=|\.RECIPEPREFIX|\.EXPORT_ALL_VARIABLES|\b(?:define|export)\b"
-                       r"|(?<![\w.])(?:MAKEFILES|SHELL|\.SHELLFLAGS|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
-MAKE_VAR = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS)\s*[:+?!]*=")  # в строке make; MAKEFLAGS= — make_flags
+# табуляция, `.RECIPEPREFIX`), `!=`, `define`, `export`, shell рецептов и файлы make, пути поиска (`vpath`, VPATH,
+# GPATH: make пересоберёт Makefile из другой папки, coord 12:35) — и в целевой переменной.
+EVAL_RUNS = re.compile(r"[$;\t]|!=|\.RECIPEPREFIX|\.EXPORT_ALL_VARIABLES|\b(?:define|export|vpath)\b"
+                       r"|(?<![\w.])(?:MAKEFILES|SHELL|\.SHELLFLAGS|[VG]PATH|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
+MAKE_VAR = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|[VG]PATH)\s*[:+?!]*=")  # в строке make; MAKEFLAGS= — make_flags
+MAKE_ENV = ("MAKEFILES", "VPATH", "GPATH")  # в окружении хука — их наследует shell команды (coord 12:35)
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
 
@@ -326,23 +329,27 @@ def make_files(a, cwd, streams=None):
     if streams is not None and (any(t is not None and (MAKE_TOKENS.search(t) or remade(p)) for p, t in tree)
                                 or any(not p or not is_lost(p) and not os.path.lexists(p) for p in paths)):
         streams.append(MAKE_TEXT)  # сырой текст (и строка-комментарий), пересборка, Makefile нет (coord 12:06, 12:19)
+    if streams is not None and any(t is not None and not same_blob(p) for p, t in tree):
+        streams.append(MAKE_BASE)  # текст не с основной ветки origin — не прошёл ревью (coord 12:36, #402)
     return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t)) for p, t in tree] + evals
 
 
 # Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
 MAKE_OPTION = ("длинная опция make, которую разбор не раскрывает однозначно (`--d`, `--frob`): какой Makefile make "
                "прочтёт, не видно — напишите опцию полностью (`--directory=…`)")
-MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS из окружения: файлы MAKEFILES, опция или переменная "
+MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS (и VPATH, GPATH) из окружения: файлы MAKEFILES, папки поиска "
+                 "VPATH и GPATH (make пересоберёт Makefile из другой папки), опция или переменная "
                  "в MAKEFLAGS, от которой зависит, что make прочтёт и запустит (`-I`, `-C`, `-f`, `--eval`, "
-                 "`MAKEFILES=`, `SHELL=`, `.SHELLFLAGS=`, неизвестная длинная опция `--frob`, `--jobserver-auth`, "
+                 "`MAKEFILES=`, `SHELL=`, `.SHELLFLAGS=`, `VPATH=`, неизвестная длинная опция `--frob`, `--jobserver-auth`, "
                  "`-O` make 4.x), или кавычка, `\\`, `$`, `$(…)`, знак вне печатного ASCII, кроме таба, в "
                  "MAKEFLAGS (слова и подстановки make делит иначе, чем shell): папку make (`-C`, `cd`) разбор "
                  "с ними не сводит — передайте опции в командной строке make, файлы — через `-f`")
 MAKE_STDIN = ("Makefile из потока, а не из файла (`-f -`, `-f /dev/stdin`, FIFO, ссылка на устройство, "
               "`include /dev/stdin` в Makefile или `--eval`, Makefile по умолчанию — ссылка на поток): его текст "
               "разбор не видит — запишите Makefile в файл и передайте `-f`")
-MAKE_EVAL = ("строка `--eval`/`-E` с `$`, рецептом (`;`, табуляция, `.RECIPEPREFIX`), `!=`, `define`, `export` или "
-             "`SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=`: что она прочтёт и запустит, разбор не видит — передайте это "
+MAKE_EVAL = ("строка `--eval`/`-E` с `$`, рецептом (`;`, табуляция, `.RECIPEPREFIX`), `!=`, `define`, `export`, "
+             "`vpath` или `SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=`, `VPATH=`, `GPATH=`: что она прочтёт и запустит, "
+             "разбор не видит — передайте это "
              "Makefile-файлом (`-f`)")
 MAKE_INCLUDE_WHY = ("строка include с `\\` или `#` (экранирование, комментарий): какой файл make прочтёт, разбор не "
                     "сводит — уберите их из строки include или запустите команды цели напрямую")
@@ -355,8 +362,10 @@ MAKE_TEXT_WHY = ("Makefile со словом include, с `$(eval`, `$(file`, `$(
                  "RCS/, SCCS/; Makefile нет): что make прочтёт и запустит, разбор не сводит — запустите команды цели "
                  "напрямую")
 MAKE_VAR_WHY = ("переменная make в командной строке, от которой зависит, чем make запустит рецепты и что прочтёт "
-                "(`SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` — от папки после `-C`): разбор этого не видит — уберите её, "
-                "файл make передайте через `-f`")
+                "(`SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` — от папки после `-C`, `VPATH=`, `GPATH=`): разбор этого не "
+                "видит — уберите её, файл make передайте через `-f`")
+MAKE_BASE_WHY = ("Makefile отличается от основной ветки origin (у tAIBE — origin/board-agents; файл изменён, новый или в "
+                 "другом репозитории): влейте основную ветку в свою или дайте CI запустить цель")
 
 
 def _stream(p):
@@ -372,10 +381,12 @@ def make_option(a, cwd):
     /dev/stdin` в Makefile или `--eval`); строка `--eval` с EVAL_RUNS; `SHELL=`, `.SHELLFLAGS=`, `MAKEFILES=` в строке
     make (SE-135). То, что разбор не сводит, — отказ (coord, #402): подстановка shell и знак вне печатного ASCII в
     любом слове make, строка include с `\\` или `#`, Makefile дерева с MAKE_TOKENS, нечитаемый или такой, что make
-    его пересоберёт (coord 12:19). Рецепты Makefile на диске — предел дизайна: только грубый признак (хук)."""
+    его пересоберёт (coord 12:19). Разрешено только то, что прошло ревью (coord 12:35, 12:36): каждый Makefile дерева —
+    блоб основной ветки origin (same_blob), MAKE_ENV нет в окружении хука и в строке. Рецепты Makefile на диске —
+    предел дизайна: только грубый признак (хук)."""
     if a[0] not in MAKES:
         return ""
-    if MAKEFLAGS_ARG in a:
+    if MAKEFLAGS_ARG in a or any(os.environ.get(k) for k in MAKE_ENV):
         return MAKEFLAGS_WHY
     if any(SUBST in w or CURRENT in w for w in a):  # правило coord 11:47 (#402): один раз на все слова make
         return MAKE_SUBST
@@ -389,10 +400,10 @@ def make_option(a, cwd):
     make_files(a, cwd, streams)
     if INCLUDE_ESCAPE in streams:
         return MAKE_INCLUDE_WHY
-    if "-" in named or set(streams) - {MAKE_TEXT}:
+    if "-" in named or set(streams) - {MAKE_TEXT, MAKE_BASE}:
         return MAKE_STDIN
-    if MAKE_TEXT in streams:
-        return MAKE_TEXT_WHY
+    if MAKE_TEXT in streams or MAKE_BASE in streams:
+        return MAKE_TEXT_WHY if MAKE_TEXT in streams else MAKE_BASE_WHY
     if any(map(EVAL_RUNS.search, evals)):
         return MAKE_EVAL
     return MAKE_VAR_WHY if any(map(MAKE_VAR.match, rest)) else ""
@@ -437,7 +448,7 @@ def implied_commands(argvs):
             name, val = (m.group(1), m.group(2)) if m else ("", "")
             if name in ("BASH_ENV", "ENV") and val:
                 out.append(["bash", val])
-            elif name == "MAKEFILES":
+            elif name in MAKE_ENV:
                 out += [["make", MAKEFLAGS_ARG]] if val.split() else []
             elif name.endswith("MAKEFLAGS"):
                 out += make_flags(val)
@@ -477,20 +488,3 @@ def make_flags(val):
     o_opt = any(next((ch for ch in w[1:] if ch in takes_rest), "") == "O" for w in ws if re.fullmatch(r"-[^-].*", w))
     deny = (MAKE_READS | MAKE_4X_VALUED) & set(values) or o_opt or any(map(MAKEFLAGS_DEF.match, rest))
     return [["make", MAKEFLAGS_ARG]] if deny else []
-
-
-def syntax_only(opts):
-    """Оболочка только проверит синтаксис файла (`bash -n x.sh`, `-o noexec`): `-n`/`+n` и `-o`/`+o noexec` bash
-    применяет по порядку, решает последнее (`-n +n`, `+no noexec` — запуск, сверено с bash 3.2); интерактивный bash
-    (`-i`, `--rcfile`, `--init-file`) `-n` не слушает. opts — слова до файла скрипта."""
-    on, names = False, []  # names — знак у каждого `o` связки, `None` у `O`: их значения идут следующими словами
-    for x in opts:
-        if names:
-            sign = names.pop(0)
-            on = sign == "-" if sign and x == "noexec" else on
-        elif x in ("--rcfile", "--init-file") or re.fullmatch(r"[-+][a-zA-Z]*i[a-zA-Z]*", x):
-            return False
-        elif re.fullmatch(r"[-+][a-zA-Z]+", x):
-            on = x[0] == "-" if "n" in x else on
-            names += [x[0] if c == "o" else None for c in x[1:] if c in "oO"]
-    return on

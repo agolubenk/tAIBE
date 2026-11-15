@@ -63,6 +63,29 @@ def _git_run(gdir, *args):
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+# Репозиторий хука: правило блоба make (same_blob) верит только его основной ветке и его worktree. Тест подменяет.
+HOME_REPOS = [os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))]
+
+
+def _common_dir(d):
+    out = git_out(d, "rev-parse", "--git-common-dir")
+    return os.path.realpath(os.path.join(d, out)) if out else ""
+
+
+def same_blob(path):
+    """Файл совпадает с блобом того же пути на основной ветке origin (`refs/remotes/origin/HEAD`, у tAIBE —
+    board-agents) репозитория хука или его worktree: текст прошёл ревью (coord 12:36, #402). Нет — путь в другом
+    репозитории (вложенный, чужой), пути на ветке нет, git не ответил вовремя (GitTimeout). `--no-filters`: хеш тех
+    байтов, что прочтёт make, и без clean-фильтров .gitattributes — их команды git запустил бы."""
+    d, base = os.path.split(os.path.abspath(path))
+    try:
+        want = git_out(d, "rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD:./" + base)
+        home = {c for c in map(_common_dir, HOME_REPOS) if c}
+        return bool(want) and _common_dir(d) in home and want == git_out(d, "hash-object", "--no-filters", "--", base)
+    except GitTimeout:
+        return False
+
+
 def conf_get(gdir, conf, key):
     """Значение ключа: последнее `-c key=…` из команды, иначе из git config."""
     for c in reversed(conf):
