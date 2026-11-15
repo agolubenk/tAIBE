@@ -17145,6 +17145,18 @@
 								"refresh": {
 									"type": "string"
 								},
+								"remove": {
+									"type": "string"
+								},
+								"removeTitle": {
+									"type": "string"
+								},
+								"removeDescription": {
+									"type": "string"
+								},
+								"removeConfirm": {
+									"type": "string"
+								},
 								"toast": {
 									"type": "object",
 									"additionalProperties": false,
@@ -17155,11 +17167,23 @@
 										"unchanged": {
 											"type": "string"
 										},
+										"removed": {
+											"type": "string"
+										},
+										"removeError": {
+											"type": "string"
+										},
 										"error": {
 											"type": "string"
 										}
 									},
-									"required": ["added", "unchanged", "error"]
+									"required": [
+										"added",
+										"unchanged",
+										"removed",
+										"removeError",
+										"error"
+									]
 								},
 								"errors": {
 									"type": "object",
@@ -17248,6 +17272,10 @@
 								"chunks",
 								"add",
 								"refresh",
+								"remove",
+								"removeTitle",
+								"removeDescription",
+								"removeConfirm",
 								"toast",
 								"errors"
 							]
