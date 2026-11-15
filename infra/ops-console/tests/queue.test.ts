@@ -92,10 +92,56 @@ describe('документы и права', () => {
     expect((await bearer(reader).get('/db/items')).status).toBe(200)
     const noScope = await createToken('agent-only', ['agent'])
     expect((await bearer(noScope.token).get('/db/items')).status).toBe(200)
+    await revokeToken(noScope.id) // токен теста не переживает тест (GLM-ревью #221)
     expect((await app.request('/api/oq/v1/db/items/d-test', { method: 'DELETE', headers: { Authorization: `Bearer ${agent}` } })).status).toBe(403)
     const t = await createToken('temp', ['agent'])
     await revokeToken(t.id)
     expect((await bearer(t.token).get('/db/items')).status).toBe(401)
+  })
+
+  it('пустая правка (GLM-ревью #221): 422 — ни нового документа, ни роста версии; правка со своими полями и release работают', async () => {
+    const a = bearer(agent)
+    expect((await a.patch('/db/checks/d-empty-agent', { data: {} })).status).toBe(422)
+    expect((await a.get('/db/checks/d-empty-agent')).status).toBe(404)
+    // Только серверные поля (их значения не принимаются) — тоже пусто.
+    expect((await a.patch('/db/checks/d-empty-agent', { data: { agentAt: '2026-01-01T00:00:00Z' } })).status).toBe(422)
+    expect((await a.get('/db/checks/d-empty-agent')).status).toBe(404)
+    const before = (await a.get('/db/items/d-test')).json.version as number
+    const empty = await a.patch('/db/items/d-test', { data: {} })
+    expect(empty.status).toBe(422)
+    expect(empty.json.error).toContain('Пустая правка')
+    expect((await a.get('/db/items/d-test')).json.version).toBe(before)
+    // oq_agent_status на пункт без ответа владельца — как раньше: создаёт checks/<id> со своими полями.
+    const status = await a.patch('/db/checks/d-empty-agent', { data: { agentStatus: 'planned', agentNote: 'возьму утром' } })
+    expect(status.status).toBe(200)
+    expect(status.json.data).toMatchObject({ agentStatus: 'planned', agentNote: 'возьму утром' })
+  })
+
+  it('лимит записи (120 в минуту) не съедают отказы 4xx: 130 ответов 409 подряд, затем запись — 200 (GLM-ревью #221)', async () => {
+    const t = await createToken('quota-4xx', ['read', 'agent'])
+    const a = bearer(t.token)
+    expect((await a.put('/db/items/d-quota', { data: decision })).status).toBe(200)
+    for (let i = 0; i < 130; i++) expect((await a.patch('/db/items/d-quota', { data: { title: `x${i}` }, ifVersion: 99 })).status).toBe(409)
+    expect((await a.patch('/db/items/d-quota', { data: { title: 'после отказов' } })).status).toBe(200)
+    // Успешные записи по-прежнему считаются: 120-я в минуту — последняя, 121-я — 429.
+    let last = 0
+    for (let i = 0; i < 125 && last !== 429; i++) last = (await a.patch('/db/items/d-quota', { data: { title: `y${i}` } })).status
+    expect(last).toBe(429)
+    await revokeToken(t.id)
+  })
+
+  it('все попытки записи, отказы тоже, — не больше 600 в минуту: цикл 409 упирается в 429 (линзы backend и Контроля #361)', async () => {
+    const t = await createToken('attempts-4xx', ['read', 'agent'])
+    const a = bearer(t.token)
+    expect((await a.put('/db/items/d-attempts', { data: decision })).status).toBe(200)
+    const codes: number[] = []
+    for (let i = 0; i < 600; i++) codes.push((await a.patch('/db/items/d-attempts', { data: { title: `x${i}` }, ifVersion: 99 })).status)
+    expect(codes.slice(0, 599).every((c) => c === 409)).toBe(true) // 1 запись + 599 отказов — в пределе 600
+    expect(codes[599]).toBe(429)
+    const over = await a.patch('/db/items/d-attempts', { data: { title: 'после' } })
+    expect(over.status).toBe(429)
+    expect(over.json.error).toContain('попыток записи')
+    await revokeToken(t.id)
   })
 
   it('createdAt пункта не меняется при правке, updatedAt — растёт: порядок /queue «от старых к новым» (замечание владельца 14.11)', async () => {
@@ -640,12 +686,15 @@ describe('мёрж из очереди', () => {
     await bearer(agent).put('/db/items/m-taibe-165', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'GH_REPO=agolubenk/tAIBE gh pr merge 162 --squash' } })
     await bearer(agent).put('/db/items/m-taibe-166', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr merge https://github.com/agolubenk/tAIBE/pull/162 --squash' } })
     await bearer(agent).put('/db/items/m-taibe-167', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr merge 162 -Ragolubenk/tAIBE -ds' } })
+    // Карточка HR c1nr0ih5: репозиторий назван вне команды мёржа — в cmd2 или в другой команде строки.
+    await bearer(agent).put('/db/items/m-taibe-168', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr merge 162 --squash', cmd2: 'gh pr merge 162 -R agolubenk/tAIBE --squash' } })
+    await bearer(agent).put('/db/items/m-taibe-169', { data: { kind: 'merge', title: 'tAIBE #162', sha: SHA, base: 'board-agents', cmd: 'gh pr checks 162 -R agolubenk/tAIBE && gh pr merge 162 --squash' } })
   })
 
   it('PR другого репозитория (-R в команде или поле repo) — 409 до запроса к GitHub, а не одноимённый PR консоли (Q-29)', async () => {
     setGithubTransportForTests(github)
     calls.length = 0
-    for (const id of ['m-taibe-162', 'm-taibe-163', 'm-taibe-165', 'm-taibe-166', 'm-taibe-167']) {
+    for (const id of ['m-taibe-162', 'm-taibe-163', 'm-taibe-165', 'm-taibe-166', 'm-taibe-167', 'm-taibe-168', 'm-taibe-169']) {
       const info = await bearer(owner).get(`/merge/${id}`)
       expect(info.status, id).toBe(409)
       expect(info.json.error).toContain('в репозитории agolubenk/tAIBE')
@@ -702,6 +751,36 @@ describe('мёрж из очереди', () => {
     expect(plan('GH_REPO=a/b gh pr merge 41 -R c/d').problem).toContain('разные репозитории')
     // Тело (--body) с «-R x/y» — значение, не флаг.
     expect(plan('gh pr merge 41 -b "see -R other/repo" --squash')).toMatchObject({ repo: null, method: 'squash', problem: null })
+  })
+
+  it('репозиторий, названный вне команды мёржа (cmd2, -R/--repo или GH_REPO= другой команды), — репозиторий PR или отказ (карточка HR c1nr0ih5)', () => {
+    const plan = (cmd: string, extra: Record<string, unknown> = {}) => mergePlan({ kind: 'merge', cmd, ...extra })
+    expect(plan('gh pr merge 41 --squash', { cmd2: 'gh pr merge 41 -R agolubenk/tAIBE --squash' })).toMatchObject({ pr: 41, repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr merge 41', { cmd2: 'gh pr merge https://github.com/agolubenk/tAIBE/pull/41' })).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr checks 41 -R agolubenk/tAIBE && gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr view 41 --repo=agolubenk/tAIBE; gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('export GH_REPO="agolubenk/tAIBE"; gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('gh pr checks 41 -R agolubenk/tAIBE;gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    // Тот же репозиторий в другом регистре — не противоречие; -R самой команды мёржа не даёт второго отказа.
+    expect(plan('gh pr merge 41 -R agolubenk/tAIBE', { cmd2: 'gh pr merge 41 -R AGOLUBENK/taibe' }).problem).toBeNull()
+    expect(plan('gh pr merge 41 -R agolubenk/tAIBE', { repo: 'agolubenk/HR_Helper-v2' }).problem).not.toContain('вне команды мёржа')
+    // Разные репозитории — отказ, а не выбор одного из двух.
+    expect(plan('gh pr merge 41', { repo: 'agolubenk/HR_Helper-v2', cmd2: 'gh pr merge 41 -R agolubenk/tAIBE' }).problem).toContain('вне команды мёржа')
+    expect(plan('gh pr merge 41 -R agolubenk/HR_Helper-v2', { cmd2: 'GH_REPO=agolubenk/tAIBE gh pr merge 41' }).problem).toContain('назван agolubenk/tAIBE')
+    const two = plan('gh pr view 41 -R a/b && gh pr merge 41', { cmd2: 'gh pr merge 41 -R c/d' })
+    expect(two).toMatchObject({ repo: null, problem: expect.stringContaining('вне команды мёржа названы разные репозитории') })
+    expect(two.problem).toMatch(/a\/b/)
+    expect(two.problem).toMatch(/c\/d/)
+    // «-R x/y» в значении в кавычках, -R не у gh и не похожее на owner/name — не репозиторий.
+    expect(plan('gh pr merge 41 --squash', { cmd2: 'gh pr merge 41 --subject "see -R other/repo" --squash' })).toMatchObject({ repo: null, problem: null })
+    expect(plan('cp -R src/x dst/ && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    expect(plan('gh pr checks 41 -R && gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    // GH_REPO= — только присваивание в начале команды (Контроль #363, п. 1–2): в значении и у echo — текст.
+    expect(plan('gh pr merge 41 --squash --body "GH_REPO=evil/x"')).toMatchObject({ repo: null, problem: null })
+    expect(plan('echo GH_REPO=x/y; gh pr merge 41')).toMatchObject({ repo: null, problem: null })
+    expect(plan('echo GH_REPO=x/y && gh pr merge 41 -R agolubenk/tAIBE')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan('env GH_REPO=agolubenk/tAIBE gh pr merge 41')).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
+    expect(plan("cd ~/x && GH_REPO='agolubenk/tAIBE' gh pr merge 41")).toMatchObject({ repo: 'agolubenk/tAIBE', problem: null })
   })
 
   it('перенаправления shell (2>&1, 2>/dev/null, > файл, &>) — не аргументы мёржа (ревью «Контроля» #114, F1)', () => {

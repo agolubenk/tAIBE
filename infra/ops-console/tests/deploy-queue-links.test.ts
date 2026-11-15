@@ -44,6 +44,16 @@ describe('правила связи', () => {
     expect(isLinked(itemRefs('x', item), [404], '')).toBe(true)
   })
 
+  it('мёрж PR другого репозитория (поле repo, -R в cmd или cmd2) — не связь с деплоем консоли (карточка HR c1nr0ih5)', () => {
+    const item = { kind: 'merge', title: 'Влить tAIBE #404', pr: 404, repo: 'agolubenk/tAIBE' }
+    expect(isLinked(itemRefs('x', item, 'o/r'), [404], '')).toBe(false)
+    expect(isLinked(itemRefs('x', { ...item, repo: 'O/R' }, 'o/r'), [404], '')).toBe(true)
+    expect(isLinked(itemRefs('x', { kind: 'merge', title: 'Влить #404', cmd: 'gh pr merge 404 -R agolubenk/tAIBE' }, 'o/r'), [404], '')).toBe(false)
+    expect(isLinked(itemRefs('x', { kind: 'merge', title: 'Влить #404', cmd: 'gh pr merge 404', cmd2: 'gh pr merge 404 -R agolubenk/tAIBE' }, 'o/r'), [404], '')).toBe(false)
+    // Свой репозиторий не настроен — сверять не с чем, связь по номеру, как раньше.
+    expect(isLinked(itemRefs('x', item), [404], '')).toBe(true)
+  })
+
   it('текст — только у пунктов о ≤ 3 PR; обзор на десятки PR — не связь; «&#8212;» — не номер', () => {
     expect(linked({ kind: 'check', title: 'Биллинг Actions', body: 'После #404, #405 и #406' }, [405])).toBe(true)
     expect(linked({ kind: 'decision', title: 'Режим ревью', body: '#401 #402 #403 #404 #405' }, [404])).toBe(false)

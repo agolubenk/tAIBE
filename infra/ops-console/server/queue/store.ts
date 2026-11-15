@@ -6,7 +6,7 @@
  *  - ifVersion — защита от одновременной правки (409 вместо молчаливой перезаписи).
  * Каждое изменение — строка журнала oq_events.
  */
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
@@ -152,6 +152,8 @@ const checkSchema = z
 
 /** Поля агента в checks: замена документа владельцем (PUT) их не стирает (ревью #324, п. 5). */
 export const AGENT_FIELDS = ['agentStatus', 'agentNote', 'agentBy', 'agentAt', 'blockedAt'] as const
+/** Поля checks, которые ставит сервер (stampCheck): присланные значения не принимаются. */
+const SERVER_CHECK_FIELDS = ['agentAt', 'ownerAt', 'blockedAt'] as const
 
 const SCHEMAS: Record<Collection, z.ZodTypeAny> = { checks: checkSchema, items: itemSchema, work: workSchema }
 
@@ -304,6 +306,13 @@ export async function writeDocIn(
   all: readonly Product[],
 ): Promise<Doc> {
   if (!DOC_ID.test(id)) throw apiError(422, 'Недопустимый id документа')
+  // Пустая правка (GLM-ревью #221): нечего менять — без вставки пустого документа и без роста версии. Серверные поля
+  // checks (agentAt, ownerAt, blockedAt) агенту не в счёт: его значения не принимаются (владелец их ставит). release —
+  // сам по себе правка. Токен без области agent — дальше, к отказу 403 в authorize: области проверяются первыми.
+  const serverOnly = (k: string) => collection === 'checks' && !actor.scopes.includes('owner') && (SERVER_CHECK_FIELDS as readonly string[]).includes(k)
+  if (has(actor, 'agent') && opts.merge && !opts.release && !Object.keys(data).some((k) => !serverOnly(k))) {
+    throw apiError(422, 'Пустая правка: нет полей — нечего записывать')
+  }
   // Имя сессии — не пустое; проверяется присланное, а не сохранённое: старый документ с пустым именем не блокирует ответ.
   if (collection === 'checks' && 'agentBy' in data && !(typeof data.agentBy === 'string' && /\S/.test(data.agentBy))) {
     throw apiError(422, 'agentBy — имя сессии (линия), не пустое')
@@ -432,27 +441,39 @@ function parseEventAfter(raw: string | null): unknown {
   }
 }
 
-/** История документа — события видимых продуктов (у событий старого образа продукта нет — это HR). */
-export async function docHistory(collection: Collection, id: string, products: Visibility, limit = 50) {
+/**
+ * История документа (события видимых продуктов; у событий старого образа продукта нет — это HR), свежие первыми — по
+ * номеру события журнала (id): у SQLite один писатель, id — порядок фиксации, а at может идти назад при шаге часов
+ * (линза backend #360, M2). before — только события с номером меньше.
+ * more — есть старше (по сырым строкам, до схлопывания пар product — M1), nextId — номер последней строки окна,
+ * olderAfter и olderAction — after и действие следующего за окном события: с ним сравнивает keys вид fields=meta
+ * (history-view.ts).
+ */
+export async function docHistory(collection: Collection, id: string, products: Visibility, limit = 50, before?: number) {
   const own = products === '*' ? undefined : inArray(sql`coalesce(${oqEvents.product}, ${DEFAULT_PRODUCT})`, [...products])
+  const older = before === undefined ? undefined : lt(oqEvents.id, before)
+  const lim = Math.min(limit, 100)
   const rows = await getDb()
     .select()
     .from(oqEvents)
-    .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own))
-    .orderBy(desc(oqEvents.at), desc(oqEvents.id))
-    .limit(Math.min(limit, 100))
-  const events = rows.map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson), raw: r.afterJson }))
+    .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own, older))
+    .orderBy(desc(oqEvents.id))
+    .limit(lim + 1)
+  const page = rows.slice(0, lim)
   // Смена продукта пишет событие в оба продукта; кто видит оба (владелец), получает одно.
   const seen = new Set<string>()
-  return events
-    .filter((e) => {
-      if (e.action !== 'product') return true
-      const k = `${e.at}|${e.actor}|${e.raw}`
+  const events = page
+    .filter((r) => {
+      if (r.action !== 'product') return true
+      const k = `${r.at.getTime()}|${r.actor}|${r.afterJson}`
       if (seen.has(k)) return false
       seen.add(k)
       return true
     })
-    .map(({ raw: _raw, ...e }) => e)
+    .map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson) }))
+  const more = rows.length > lim
+  const beyond = more ? rows[lim]! : undefined
+  return { events, more, nextId: more ? page[page.length - 1]!.id : undefined, olderAfter: beyond ? parseEventAfter(beyond.afterJson) : undefined, olderAction: beyond?.action }
 }
 
 /**
