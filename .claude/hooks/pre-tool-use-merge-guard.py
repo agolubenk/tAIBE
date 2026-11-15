@@ -29,8 +29,8 @@ from merge_guard_git import classify_git, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
 from merge_guard_gh import classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
-from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts, read_names,  # noqa: E402
-                                syntax_only)
+from merge_guard_launch import (awk_programs, implied_commands, make_files, make_hint, package_scripts,  # noqa: E402
+                                read_names, syntax_only)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
 from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E402
 from merge_guard_vars import BLIND, VAR, words  # noqa: E402
@@ -39,6 +39,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
                                strip_prefix, subst_code, SUBST_AT, tokenize, uncommented)
+from merge_guard_launch import MAKE_OPTION, make_option  # noqa: E402
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -259,20 +260,23 @@ def script_found(text, interp, cwd, roots, depth, git_env, path=True):
 
 
 COARSE = "Makefile или программа awk с признаком защищённого действия"
+DIRECT = "\0direct"  # не находка: прямые команды цели make для сообщения об отказе (make_hint, SE-105)
 
 
 def launched(a, cwd, roots, depth, git_env, whole):
     """Код из файла, который команда не называет скриптом (merge_guard_launch): скрипты package.json — как команды
     shell из папки пакета, Makefile и awk — грубым признаком. Этот файл переписывает та же команда
     (`printf … > package.json; npm run x`) — ещё и грубый признак, как у скрипта, которого нет (runs_code)."""
-    found, files = [], make_files(a, cwd) + awk_programs(a, cwd)
+    found, files = ([(MAKE_OPTION, a[0])], []) if make_option(a) else ([], make_files(a, cwd) + awk_programs(a, cwd))
     for d, text in package_scripts(a, cwd):  # текст None — папка пакета не видна (LOST)
         found += [(LOST_DIR, d)] if text is None else classify_bash(text, d, roots, depth + 1, git_env, disk=True)
     read = read_names(a) | {p for p, _ in files}
     if rewritten(read, whole[3] or ()):
         found += ([(NOT_YET, a[0])] if FALLBACK.search(whole[4][1]) else [] if whole[2] else
                   [(BLIND_RUN, a[0])] if opaque(read, whole[3]) else named_found(whole[4][1], cwd))
-    return found + [(LOST_DIR if text is None else COARSE, p) for p, text in files if text is None or FALLBACK.search(text)]
+    coarse = [(LOST_DIR if text is None else COARSE, p) for p, text in files if text is None or FALLBACK.search(text)]
+    hint = make_hint(a, files[0][1]) if coarse and files else ""
+    return found + coarse + ([(DIRECT, hint)] if hint else [])
 
 
 def classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk=False, written=None, outer=None):
@@ -459,7 +463,7 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
     if files:
         return (f"merge-guard: {files[0]} — законы, настройки хуков или реестр сессий. Правка только с «да» владельца: "
                 "через PR из worktree или руками владельца.")
-    ops = [(k, d) for k, d in found if k != "file"]
+    ops = [(k, d) for k, d in found if k not in ("file", DIRECT)]
     if not ops:
         return None
     control, control_err = get_control()
@@ -468,7 +472,8 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
         return None
     return (f"merge-guard: {ops[0][0]} — только сессия «Контроля» (d-merge-guard-3010). {why}. "
             "Автор шлёт «PR #n, голова …» линзам, вливает Контроль; срочное — пункт владельцу. Список Контроля — "
-            ".claude/merge-guard.json, локально .claude/merge-guard.local.json (правит владелец).")
+            ".claude/merge-guard.json, локально .claude/merge-guard.local.json (правит владелец)."
+            + "".join(dict.fromkeys(d for k, d in found if k == DIRECT)))
 
 
 def main():
