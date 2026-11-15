@@ -79,8 +79,9 @@ const dbUrl = collect(
 // (your_secure_password), not a secret. Measured on this repo: without this
 // filter 95% of the new assignment hits were such code. A key has 8+
 // printable ASCII characters, no code punctuation, and is not a dotted name,
-// words joined by _ or -, or a short camelCase name. The same filter is
-// `looks_like_secret` in infra/checks/secrets_scan.py.
+// words joined by _ or -, or a short camelCase name. `looks_like_secret` in
+// infra/checks/secrets_scan.py has the same rules except the type name
+// below: the scanner drops a type name in any context (TB-193).
 //
 // A type name is capitalized words with no digit. Since the value ends at `,`
 // and `;` (#283 B2), the comma no longer drops `apiKey: ApiKeyUsageRow,`.
