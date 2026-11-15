@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  embedWorkGeneration,
   isWorkerOnline,
   leaseChunks,
   leasedChunkIds,
@@ -45,6 +46,38 @@ describe("embed queue", () => {
     void requestQueryEmbedding("ws1", "q", 1_000);
     await parked;
     expect(isWorkerOnline("ws1")).toBe(false);
+  });
+
+  // TB-212: the route claims work (queries, then chunks from the database)
+  // before it parks. A query that arrived during the database read woke
+  // nobody, the poll slept its whole wait and the search fell back to
+  // keyword after QUERY_EMBED_WAIT_MS (CI #400, run 43700128680).
+  it("wakes a poll for work that came while it was claiming", async () => {
+    vi.useFakeTimers();
+    const seen = embedWorkGeneration("ws1");
+    expect(takeQueries("ws1", 8)).toEqual([]);
+    void requestQueryEmbedding("ws1", "q", 4_000);
+    let woke = false;
+    void waitForEmbedWork("ws1", 25_000, undefined, seen).then(() => {
+      woke = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(woke).toBe(true);
+    expect(takeQueries("ws1", 8)).toHaveLength(1);
+  });
+
+  it("parks a poll with no new work until work or the timeout", async () => {
+    vi.useFakeTimers();
+    void requestQueryEmbedding("ws1", "earlier", 30_000);
+    const seen = embedWorkGeneration("ws1");
+    let woke = false;
+    void waitForEmbedWork("ws1", 25_000, undefined, seen).then(() => {
+      woke = true;
+    });
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(woke).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(woke).toBe(true);
   });
 
   it("forgets a worker that stopped polling", () => {

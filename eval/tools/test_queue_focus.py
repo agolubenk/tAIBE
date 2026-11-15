@@ -122,13 +122,21 @@ class PlanTest(unittest.TestCase):
 
     def test_next_skips_held_cards_takes_abandoned_first_and_a_card_once(self):
         rows = [('w-t-1', {'cards': [card('TB-1', st='in-progress'), card('TB-2', s='low'),
-                                     card('TB-3', st='in-progress', c='без аренды'), card('TB-4', st='done')]}),
+                                     card('TB-3', st='in-progress', mark='без аренды'), card('TB-4', st='done')]}),
                 ('w-t-2', {'cards': [card('TB-2'), card('SE-9', k='bug', s='high')]})]
         out = q.plan_next(rows)
         self.assertEqual([i['key'] for i in out], ['TB-3', 'TB-2', 'SE-9'])
         self.assertEqual([i['row'] for i in out], ['w-t-1', 'w-t-1', 'w-t-2'])
         self.assertIn('брошена', out[0]['why'])
         self.assertEqual(out[2]['why'], 'ошибка high')
+
+    def test_abandoned_is_read_from_mark_not_from_the_legacy_code(self):
+        # TB-106 F9 writes cards[].mark; cards[].c holds the legacy card code and never marks a card abandoned.
+        rows = [('w-t-1', {'cards': [card('TB-1', st='in-progress', c='без аренды'),
+                                     card('TB-2', st='in-progress', mark='без аренды')]})]
+        out = q.plan_next(rows)
+        self.assertEqual([i['key'] for i in out], ['TB-2'])
+        self.assertIn('брошена', out[0]['why'])
 
     def test_grilling_waits_for_the_owner_and_p0_ranks_as_urgent(self):
         rows = [('w-t-1', {'cards': [card('TB-1', st='grilling', s='urgent'), card('APP-2', s='medium'),

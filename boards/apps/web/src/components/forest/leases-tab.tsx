@@ -18,6 +18,7 @@ export function LeasesTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={leases.isLoading}
         isError={leases.isError}
+        onRetry={() => void leases.refetch()}
         isEmpty={!leases.data?.length}
         empty={t("workspace:forest.leases.empty")}
       >

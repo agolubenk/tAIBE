@@ -1,12 +1,10 @@
 // Зеркало очереди: Chromium под Playwright держит страницу /queue ops-консоли открытой (токен бота —
 // заголовком, только в запросы к консоли). Все вызовы к странице — по очереди,
 // у каждого потолок времени; зависший или упавший браузер перезапускается.
-import { randomBytes } from 'node:crypto';
 import { chromium } from 'playwright';
-import {
-  actOnItem, installChecksWatch, isQueueFrame, readCheck, saveErrorOf, setShotLayout, snapshotPage,
-} from './frame-scripts.mjs';
+import { actOnItem, isQueueFrame, setShotLayout, settled, snapshotPage } from './frame-scripts.mjs';
 import { releaseStaleProfileLock } from './profile-lock.mjs';
+import { watchSave } from './save-confirm.mjs';
 
 export class NotReadyError extends Error {
   constructor(message, reason) { super(message); this.reason = reason; }
@@ -14,6 +12,8 @@ export class NotReadyError extends Error {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const OP_TIMEOUT = 45_000;
+// Операция дольше — строка в лог: сколько ждала очереди и сколько шла сама (разбор медленного бота, OPS-76).
+const SLOW_OP_MS = 2_000;
 
 export class ArtifactMirror {
   constructor({ profileDir, url, headless = false, channel = 'chrome', sandbox = true, token = '', log = console.log }) {
@@ -26,8 +26,6 @@ export class ArtifactMirror {
     this.openedAt = 0;
     this.generation = 0; // растёт при каждой загрузке страницы — фон по нему пропускает «холодный» снимок
     this.broken = false;
-    // Имя подписки во фрейме — случайное: страница не может заранее подложить «подтверждения».
-    this.watchKey = '__oqb_' + randomBytes(6).toString('hex');
   }
 
   async launch() {
@@ -119,29 +117,40 @@ export class ArtifactMirror {
    * Все обращения к странице по одному, у каждого потолок времени. Таймаут — значит страница зависла:
    * браузер помечается сломанным и перезапускается перед следующей операцией.
    */
-  run(fn, timeoutMs = OP_TIMEOUT) {
+  run(fn, timeoutMs = OP_TIMEOUT, name = 'операция') {
+    const queued = Date.now();
     const task = async () => {
-      if (this.broken || !this.ctx) {
-        try { await this.restart(this.ctx ? 'страница не отвечала или упала' : 'браузер не запущен'); } catch (e) {
-          this.broken = true;
-          throw new NotReadyError(`Браузер бота не запускается: ${e.message}`, 'browser');
-        }
-      }
-      let timer;
-      const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new NotReadyError('Страница артефакта не ответила вовремя', 'timeout')), timeoutMs); });
+      const started = Date.now();
       try {
-        return await Promise.race([fn(), timeout]);
-      } catch (e) {
-        if (e instanceof NotReadyError && e.reason === 'timeout') this.broken = true;
-        if (/Target page, context or browser has been closed|Target crashed/i.test(e.message)) this.broken = true;
-        throw e;
+        return await this.exec(fn, timeoutMs);
       } finally {
-        clearTimeout(timer);
+        const done = Date.now();
+        if (done - queued > SLOW_OP_MS) this.log(`медленно: ${name} ${done - queued} мс (ждала очереди ${started - queued} мс, шла ${done - started} мс)`);
       }
     };
     const next = this.queue.then(task, task);
     this.queue = next.catch(() => {});
     return next;
+  }
+
+  async exec(fn, timeoutMs) {
+    if (this.broken || !this.ctx) {
+      try { await this.restart(this.ctx ? 'страница не отвечала или упала' : 'браузер не запущен'); } catch (e) {
+        this.broken = true;
+        throw new NotReadyError(`Браузер бота не запускается: ${e.message}`, 'browser');
+      }
+    }
+    let timer;
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new NotReadyError('Страница очереди /queue не ответила вовремя', 'timeout')), timeoutMs); });
+    try {
+      return await Promise.race([fn(), timeout]);
+    } catch (e) {
+      if (e instanceof NotReadyError && e.reason === 'timeout') this.broken = true;
+      if (/Target page, context or browser has been closed|Target crashed/i.test(e.message)) this.broken = true;
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async findFrame(timeoutMs = 30_000) {
@@ -159,7 +168,7 @@ export class ArtifactMirror {
     if (/\/login/.test(this.page.url())) {
       throw new NotReadyError('Консоль не приняла токен бота (страница очереди открылась на входе)', 'auth');
     }
-    throw new NotReadyError('Страница артефакта не открылась', 'frame');
+    throw new NotReadyError('Страница очереди /queue не открылась', 'frame');
   }
 
   /** Фрейм с подключённой базой и отрисованным «Ходом работ» (страница рисует его в requestAnimationFrame). */
@@ -186,55 +195,45 @@ export class ArtifactMirror {
     return f;
   }
 
-  snapshot() {
+  /**
+   * Снимок страницы. ids — только эти пункты (items), остальное — как в полном снимке: после ответа бот обновляет
+   * один пункт, а не разбирает тела всех пунктов страницы (при CPU x4 полный снимок 300 пунктов — 0,14 с, 800 — 0,33 с).
+   */
+  snapshot(ids = null) {
     return this.run(async () => {
       try {
-        return await (await this.readyFrame()).evaluate(snapshotPage);
+        return await (await this.readyFrame()).evaluate(snapshotPage, ids);
       } catch (e) {
         if (e instanceof NotReadyError || this.broken) throw e;
         // Фрейм пересоздан (переиздание артефакта) — одна повторная попытка с поиском заново.
         this.cachedFrame = null;
-        return (await this.readyFrame()).evaluate(snapshotPage);
+        return (await this.readyFrame()).evaluate(snapshotPage, ids);
       }
-    });
+    }, OP_TIMEOUT, ids ? 'снимок пункта' : 'снимок');
   }
 
   /**
    * Действие владельца через элементы страницы. Возвращает { ok, confirmed, error }.
-   * confirmed — в общей базе checks/<id> появилась НОВАЯ запись (сменилось поле at) и она совпадает
-   * с ожидаемой: повторное нажатие уже отмеченного варианта не засчитывается по старым данным.
+   * confirmed — консоль ответила на запись checks/<id>, которую страница отправила после нажатия, и сохранённая
+   * запись (консоль возвращает её целиком) совпадает с ожидаемой. Ответ сети видит Playwright, а не код страницы.
+   * Раньше бот ждал свою подписку на checks/ (до 2 с базовой линии и опрос раз в 400 мс после следующего опроса
+   * страницы): при CPU x4 ответ занимал 1,1–3,3 с (замер OPS-76, 15.11).
    */
   act(id, op, value, expect) {
     return this.run(async () => {
       const f = await this.readyFrame();
-      const key = this.watchKey;
-      await f.evaluate(installChecksWatch, key).catch(() => false);
-      // Базовая линия — только из пришедшего снимка базы, иначе старая запись сошла бы за подтверждение.
-      let before = null;
-      for (let i = 0; i < 10 && !before?.ready; i++) {
-        before = await f.evaluate(readCheck, { key, id }).catch(() => null);
-        if (!before?.ready) await sleep(200);
+      const save = watchSave(this.page, id); // до нажатия: ответ консоли может прийти раньше, чем вернётся evaluate
+      try {
+        const res = await f.evaluate(actOnItem, { id, op, value });
+        if (!res.ok) return res;
+        const out = await save.result(expect);
+        // Страница отрисовала сохранённое — снимок после act его увидит.
+        if (out.confirmed) await f.evaluate(settled).catch(() => {});
+        return out;
+      } finally {
+        save.stop();
       }
-      const errBefore = await f.evaluate(saveErrorOf, id).catch(() => false);
-      const res = await f.evaluate(actOnItem, { id, op, value });
-      if (!res.ok) return res;
-      const started = Date.now();
-      while (Date.now() - started < 6_000) {
-        await sleep(400);
-        const err = await f.evaluate(saveErrorOf, id).catch(() => false);
-        // Старая метка ошибки от прошлой неудачи держится до успешной записи — первые 3 с её не считаем.
-        if (err && (!errBefore || Date.now() - started > 3_000)) {
-          // Ответ уже изменён в другом месте (страница /queue, другая вкладка) — повтор старого его не перепишет
-          // (ревью «Контроля» #324, п. 1). Артефакт заморожен с 18.10 — отвечать на странице /queue.
-          return String(err).includes('изменён в другом месте')
-            ? { ok: false, error: 'Ответ уже изменён в другом месте — сохранён тот, что новее. Откройте пункт ещё раз.' }
-            : { ok: false, error: 'Страница не смогла сохранить ответ в общую базу. Повторите или ответьте на странице /queue.' };
-        }
-        const c = await f.evaluate(readCheck, { key, id }).catch(() => null);
-        if (before?.ready && c?.data && c.data.at !== before.data?.at && expect(c.data)) return { ok: true, confirmed: true };
-      }
-      return { ok: true, confirmed: false };
-    });
+    }, OP_TIMEOUT, 'ответ');
   }
 
   /** Скриншоты карточек «Ход работ» (графики, Гант, роадмап) — как их видит владелец. */
@@ -259,7 +258,7 @@ export class ArtifactMirror {
       } finally {
         await f.evaluate(setShotLayout, false).catch(() => {});
       }
-    }, 120_000);
+    }, 120_000, 'графики');
   }
 
   /** Свежая загрузка страницы в новой вкладке: профилактика раз в час и после сбоев. */
@@ -267,6 +266,6 @@ export class ArtifactMirror {
     return this.run(async () => {
       await this.freshPage();
       await this.open();
-    }, 90_000);
+    }, 90_000, 'перезагрузка');
   }
 }
