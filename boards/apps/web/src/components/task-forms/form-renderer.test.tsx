@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { formTemplateSchema } from "@kaneo/forms";
 import {
   cleanup,
@@ -28,16 +29,13 @@ const question = (name: string) => {
 
 describe("FormRenderer (TB-173)", () => {
   it("draws the 53 questions of the grill template", () => {
+    // A path: under jsdom, new URL(…, import.meta.url) is no file URL.
+    const file = resolve(
+      import.meta.dirname,
+      "../../../../../packages/forms/fixtures/t-boards-grill.form.json",
+    );
     const grill = formTemplateSchema.parse(
-      JSON.parse(
-        readFileSync(
-          new URL(
-            "../../../../../packages/forms/fixtures/t-boards-grill.form.json",
-            import.meta.url,
-          ),
-          "utf8",
-        ),
-      ),
+      JSON.parse(readFileSync(file, "utf8")),
     );
     render(
       <FormRenderer answers={{}} onAnswerChange={vi.fn()} template={grill} />,
