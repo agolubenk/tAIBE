@@ -303,12 +303,12 @@ def make_files(a, cwd, streams=None):
 # Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
 MAKE_OPTION = ("длинная опция make, которую разбор не раскрывает однозначно (`--d`, `--frob`): какой Makefile make "
                "прочтёт, не видно — напишите опцию полностью (`--directory=…`)")
-MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS из окружения: файлы MAKEFILES, опция или переменная в MAKEFLAGS, "
-                 "от которой зависит, что make прочтёт и запустит (`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`, "
-                 "`.SHELLFLAGS=`, неизвестная длинная опция `--frob`, `--jobserver-auth` make 4.x), или кавычка, `\\`, "
-                 "`$`, `$(…)`, пробельный символ, кроме пробела и таба, в MAKEFLAGS (слова и подстановки make делит "
-                 "иначе, чем shell): папку make (`-C`, `cd`) разбор с ними не сводит — передайте опции в командной "
-                 "строке make, файлы — через `-f`")
+MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS из окружения: файлы MAKEFILES, опция или переменная "
+                 "в MAKEFLAGS, от которой зависит, что make прочтёт и запустит (`-I`, `-C`, `-f`, `--eval`, "
+                 "`MAKEFILES=`, `SHELL=`, `.SHELLFLAGS=`, неизвестная длинная опция `--frob`, `--jobserver-auth`, "
+                 "`-O` make 4.x), или кавычка, `\\`, `$`, `$(…)`, пробельный символ, кроме пробела и таба, в "
+                 "MAKEFLAGS (слова и подстановки make делит иначе, чем shell): папку make (`-C`, `cd`) разбор "
+                 "с ними не сводит — передайте опции в командной строке make, файлы — через `-f`")
 MAKE_STDIN = ("Makefile из потока, а не из файла (`-f -`, `-f /dev/stdin`, FIFO, ссылка на устройство, "
               "`include /dev/stdin` в Makefile или `--eval`, Makefile по умолчанию — ссылка на поток): его текст "
               "разбор не видит — запишите Makefile в файл и передайте `-f`")
@@ -413,14 +413,19 @@ def make_flags(val):
     make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`). Слова make делит только по пробелу и табу
     (`isblank`): кавычка для него — обычный символ, `\\ ` склеивает слова, `$(Y)` раскрывается из окружения (make
     3.81) — такое значение тоже отказ, как и `\\v`, `\\f`, `\\r`, `\\n` и метка подстановки shell (`$(…)`, `` `…` ``
-    разбор уже заменил меткой без `$`). Опция make 4.x со значением (MAKE_4X_VALUED) — отказ (линза Claude #398)."""
+    разбор уже заменил меткой без `$`). Опция make 4.x со значением (MAKE_4X_VALUED) и `-O` в связке — отказ (линза
+    Claude #398)."""
     if re.search(r"[\"'\\$]|[^\S \t]", val) or SUBST in val or CURRENT in val:
         return [["make", MAKEFLAGS_ARG]]
     ws = [w for w in re.split(r"[ \t]+", val) if w]
     if ws and not ws[0].startswith("-") and "=" not in ws[0]:
         ws[0] = "-" + ws[0]
     values, rest = _make_opts(["make"] + ws)
-    deny = (MAKE_READS | MAKE_4X_VALUED) & set(values) or any(map(MAKEFLAGS_DEF.match, rest))
+    # `-O` (make 4.x) на месте опции: _make_opts отдаёт ему остаток связки, а make 3.81 букву пропускает и читает
+    # остаток как опции (`-OIinc` — `-I inc`, сверено) — отказ, как у MAKE_4X_VALUED.
+    takes_rest = {o[1] for o in MAKE_VALUED | MAKE_OPTIONAL if len(o) == 2}
+    o_opt = any(next((ch for ch in w[1:] if ch in takes_rest), "") == "O" for w in ws if re.fullmatch(r"-[^-].*", w))
+    deny = (MAKE_READS | MAKE_4X_VALUED) & set(values) or o_opt or any(map(MAKEFLAGS_DEF.match, rest))
     return [["make", MAKEFLAGS_ARG]] if deny else []
 
 
