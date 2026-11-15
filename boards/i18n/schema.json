@@ -15101,6 +15101,9 @@
 								},
 								"forbidden": {
 									"type": "string"
+								},
+								"tooLarge": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -15111,7 +15114,8 @@
 								"invalid",
 								"rowVersion",
 								"versionMismatch",
-								"forbidden"
+								"forbidden",
+								"tooLarge"
 							]
 						},
 						"reload": {

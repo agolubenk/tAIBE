@@ -4454,7 +4454,8 @@
 				"rowVersion": "The form was changed in another tab. Reload it; changes made here after the last save will be lost.",
 				"saved": "Saved",
 				"saving": "Saving…",
-				"versionMismatch": "The form has a new version. Reload it to answer."
+				"versionMismatch": "The form has a new version. Reload it to answer.",
+				"tooLarge": "The answers are too large to save. Shorten the long text, and the form saves by itself."
 			},
 			"status": {
 				"changed": "Changed after submit",

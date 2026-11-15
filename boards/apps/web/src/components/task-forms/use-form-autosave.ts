@@ -2,6 +2,7 @@ import {
   type Answer,
   type AnswerIssue,
   type AnswerMap,
+  LIMITS,
   validateAnswers,
 } from "@kaneo/forms";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,6 +20,7 @@ import type {
 import saveTaskFormAnswers, {
   type SaveFailure,
   SaveTaskFormError,
+  saveBodyOf,
 } from "@/fetchers/task-form/save-task-form-answers";
 import { taskFormsKey } from "@/hooks/queries/task-form/use-task-forms";
 import { answersDoc, mergeIssues, withAnswer } from "./form-state";
@@ -77,6 +79,8 @@ export function useFormAutosave(taskId: string, form: TaskForm) {
   const stoppedRef = useRef(false);
   const runningRef = useRef<Promise<unknown> | null>(null);
   const timerRef = useRef<Timer>(null);
+  // The smallest body known to be refused: the API limit, or less after a 413.
+  const tooLargeRef = useRef<number>(LIMITS.answersBody + 1);
 
   /**
    * One save at a time; a later one waits and sends the newest answers.
@@ -112,9 +116,14 @@ export function useFormAutosave(taskId: string, form: TaskForm) {
         submit: !draft,
         rowVersion: rowVersionRef.current,
       };
-      const small =
-        new TextEncoder().encode(JSON.stringify(request)).length <
-        KEEPALIVE_MAX_BYTES;
+      const bytes = new TextEncoder().encode(saveBodyOf(request)).length;
+      // A body the API refuses (413) is not sent: every pause would resend it
+      // over a slow line. Shorter text is saved again by itself.
+      if (bytes >= tooLargeRef.current) {
+        setSaveState({ kind: "failed", failure: "too_large" });
+        return false;
+      }
+      const small = bytes < KEEPALIVE_MAX_BYTES;
       dirtyRef.current = false;
       setSaveState({ kind: "saving" });
       const running = saveTaskFormAnswers(request, {
@@ -140,6 +149,9 @@ export function useFormAutosave(taskId: string, form: TaskForm) {
             error instanceof SaveTaskFormError ? error.failure : "failed";
           if (error instanceof SaveTaskFormError && failure === "invalid") {
             setIssues(error.issues);
+          }
+          if (failure === "too_large") {
+            tooLargeRef.current = Math.min(tooLargeRef.current, bytes);
           }
           if (STOPPING.has(failure)) stoppedRef.current = true;
           dirtyRef.current = true;

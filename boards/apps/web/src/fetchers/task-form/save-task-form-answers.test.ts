@@ -59,7 +59,7 @@ describe("task form fetchers (TB-173)", () => {
     [409, { code: "VERSION_MISMATCH" }, "version_mismatch"],
     [409, {}, "row_version"],
     [403, { code: "PERSON_ONLY" }, "forbidden"],
-    [413, { code: "PAYLOAD_TOO_LARGE" }, "failed"],
+    [413, { code: "PAYLOAD_TOO_LARGE" }, "too_large"],
     [401, { message: "no" }, "failed"],
     [500, { message: "boom" }, "failed"],
   ])("tells a %i %j apart as %s", async (status, body, failure) => {
