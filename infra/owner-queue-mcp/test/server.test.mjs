@@ -14,6 +14,13 @@ const SERVER = new URL('../server.mjs', import.meta.url).pathname;
 const ITEM = 'i-20261023-040000-abcd';
 const FILE = 'b'.repeat(32);
 const BODY = 'строка лога';
+const BIG = 's-tb-update-big';
+const B64 = Buffer.from('x'.repeat(3_000)).toString('base64');
+const BIG_DOC = {
+  id: BIG, version: 7, updatedAt: 1_763_200_000_000, createdAt: 1_763_100_000_000, product: 'hr-helper',
+  data: { kind: 'server', title: 'Обновить доски на сервере', source: 'backend r.f93t.g88q', body: 'т'.repeat(2_500),
+    cmd: `echo ${B64} | base64 -d | bash`, cmd2: `echo ${B64} | base64 -d | bash -s -- --rollback`, after: 'п'.repeat(800) },
+};
 // 120 отметок по ~2 КБ: весь список (~250 тыс. символов) в один ответ не влезает — как checks на 30.10 (504 документа).
 // Каждая десятая — ответ владельца, который агент ещё не прочёл.
 const CHECKS = Array.from({ length: 120 }, (_, i) => ({
@@ -37,6 +44,22 @@ async function consoleFake(files, state) {
       req.on('end', () => { state.patches = [...(state.patches ?? []), JSON.parse(raw)]; json(200, { id: 'x', version: 2, data: {} }); });
       return;
     }
+    // История: консоль новой версии — по limit и с next; state.oldHistory — старая, параметры не знает и отдаёт 50 полных.
+    if (pathname.startsWith('/api/oq/v1/history/items/')) {
+      state.historyQueries = [...(state.historyQueries ?? []), searchParams.toString()];
+      const ev = (i) => ({ at: 1_000 - i, actor: 'token:a', action: 'patch', ...(searchParams.get('fields') === 'meta' ? { keys: ['step'] } : { after: { step: 50 - i } }) });
+      if (state.oldHistory) return json(200, { events: Array.from({ length: 50 }, (_, i) => ev(i)) });
+      const n = Number(searchParams.get('limit') || 50);
+      return json(200, { events: Array.from({ length: n }, (_, i) => ev(i)), next: '77' });
+    }
+    // Дельта /changes (OPS-50) — только если тест её включил (state.delta); иначе 404, как у старой консоли.
+    if (pathname === '/api/oq/v1/changes' && state.delta) {
+      state.changesReqs = [...(state.changesReqs ?? []), searchParams.get('since') ? 'since' : 'full'];
+      const items = [{ id: 'd-hr-1', version: 1, updatedAt: 2, product: 'hr-helper', data: { kind: 'decision', title: 'HR' } },
+        { id: 'taibe-d-1', version: 1, updatedAt: 1, product: 'taibe', data: { kind: 'decision', title: 'tAIBE' } }];
+      if (searchParams.get('since')) return json(200, { cursor: 'b1.1', changes: { checks: { docs: [], removed: [] }, items: { docs: [], removed: [] }, work: { docs: [], removed: [] } } });
+      return json(200, { full: true, cursor: 'b1.1', collections: { checks: { docs: [] }, items: { docs: items }, work: { docs: [] } } });
+    }
     // Список пунктов с продуктом рядом с data; ?product= фильтрует консоль, MCP передаёт его как есть.
     if (pathname === '/api/oq/v1/db/items') {
       state.itemsQueries = [...(state.itemsQueries ?? []), searchParams.toString()];
@@ -46,6 +69,20 @@ async function consoleFake(files, state) {
       ];
       const p = searchParams.get('product');
       return json(200, { docs: p && !state.ignoreProduct ? all.filter((d) => d.product === p) : all });
+    }
+    // OPS-18: s-пункт с двумя командами и длинным телом (~12 КБ, как s-tb-update-b8) и его отметка checks.
+    // state.bigCheck: 'ok' (по умолчанию) — ответ владельца без отметки агента, 'none' — 404, 'down' — 503.
+    if (pathname === `/api/oq/v1/db/items/${BIG}`) {
+      if (req.method === 'GET') return json(200, BIG_DOC);
+      let raw = '';
+      req.on('data', (c) => { raw += c; });
+      req.on('end', () => { state.writes = [...(state.writes ?? []), { method: req.method, body: JSON.parse(raw) }]; json(200, { ...BIG_DOC, version: 8 }); });
+      return;
+    }
+    if (pathname === `/api/oq/v1/db/checks/${BIG}`) {
+      if (state.bigCheck === 'none') return json(404, { error: 'Нет такого документа' });
+      if (state.bigCheck === 'down') return json(503, { error: 'Service Unavailable' });
+      return json(200, { id: BIG, version: 2, data: { done: true, at: '2026-11-15T10:00:00Z', ownerAt: '2026-11-15T10:00:00Z', note: 'н'.repeat(1_500) } });
     }
     if (pathname === `/api/oq/v1/db/items/${ITEM}`) {
       return json(200, { id: ITEM, version: 1, data: { kind: 'inbox', title: 'лог', inbox: { type: 'bug', filesExpected: 3, receivedAt: new Date().toISOString() } } });
@@ -73,7 +110,8 @@ async function consoleFake(files, state) {
 
 function mcp(port) {
   const child = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, OQ_URL: `http://127.0.0.1:${port}`, OQ_TOKEN: 'test-token', OQ_FILES_DIR: '' },
+    // OQ_PRODUCT — основной: в сессии tAIBE TAIBE_PRODUCT=taibe, и сервер пошёл бы в Keychain за настоящим токеном.
+    env: { ...process.env, OQ_URL: `http://127.0.0.1:${port}`, OQ_TOKEN: 'test-token', OQ_PRODUCT: 'hr-helper', OQ_FILES_DIR: '' },
     stdio: ['pipe', 'pipe', 'ignore'],
   });
   const waiting = new Map();
@@ -218,4 +256,86 @@ test('oq_list: серверный потолок списка — serverCapped �
   assert.equal(capped.truncated, undefined, 'окно ответа не урезано');
   assert.deepEqual(capped.docs.map((d) => d.id), ['w-cap-1', 'w-cap-2']);
   assert.equal(body(await m.call('oq_list', { collection: 'checks', limit: 1 })).serverCapped, undefined, 'без обрезки консоли — поля нет');
+});
+
+test('oq_list через дельту /changes (карточка HR Q-38): коллекция — полный список раз, дальше since; open_only — сервер, как раньше', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  m.state.delta = true;
+  const first = body(await m.call('oq_list', { collection: 'items' }));
+  assert.deepEqual(first.docs.map((d) => d.id), ['d-hr-1', 'taibe-d-1']);
+  const own = body(await m.call('oq_list', { collection: 'items', product: 'taibe' }));
+  assert.deepEqual(own.docs.map((d) => d.id), ['taibe-d-1'], 'продукт — фильтром здесь, по полю product');
+  assert.deepEqual(m.state.changesReqs, ['full', 'since']);
+  assert.equal(m.state.itemsQueries, undefined, 'полный /db/items не читали ни разу');
+  await m.call('oq_list', { collection: 'items', open_only: true });
+  assert.deepEqual(m.state.itemsQueries, ['open=1'], 'открытые — серверным правилом open-rule.ts');
+});
+
+test('oq_history (карточка HR oow56fdzk): по умолчанию limit=20, keys_only → fields=meta, next и before; старая консоль — окно режет MCP', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  const d = body(await m.call('oq_history', { collection: 'items', id: 'd-1' }));
+  assert.equal(d.events.length, 20);
+  assert.equal(d.next, '77');
+  const k = body(await m.call('oq_history', { collection: 'items', id: 'd-1', limit: 5, keys_only: true, before: '77' }));
+  assert.deepEqual(k.events[0].keys, ['step']);
+  assert.equal(k.events[0].after, undefined);
+  assert.deepEqual(m.state.historyQueries, ['limit=20', 'limit=5&before=77&fields=meta']);
+  m.state.oldHistory = true;
+  const old = body(await m.call('oq_history', { collection: 'items', id: 'd-1', limit: 3 }));
+  assert.equal(old.events.length, 3, 'консоль без limit отдала 50 — MCP показал 3');
+  assert.equal(old.next, undefined);
+  assert.match(old.console, /консоль старой версии/, 'агент знает, что before и keys_only не сработали');
+});
+
+test('oq_history: окно урезал потолок ответа — next не отдаётся, подсказка уменьшить limit (линза Claude #360, B2)', async () => {
+  const { historyOut } = await import('../list.mjs');
+  // 60 коротких полей на событие: brief их не сокращает (короче 200 символов), 100 событий не влезают и в brief.
+  const after = Object.fromEntries(Array.from({ length: 60 }, (_, k) => [`f${k}`, 'x'.repeat(20)]));
+  const big = Array.from({ length: 100 }, (_, i) => ({ at: i, actor: 'a', action: 'update', after: { ...after, step: i } }));
+  const out = historyOut({ events: big, next: '900' }, { n: 100 });
+  assert.equal(out.truncated, true);
+  assert.equal(out.next, undefined, 'next консоли указывал бы за 100-е событие, а показаны не все');
+  assert.match(out.hint, /меньшим limit/);
+  const fits = historyOut({ events: big.slice(0, 3), next: '900' }, { n: 3 });
+  assert.equal(fits.next, '900');
+});
+
+test('OPS-18: oq_put и oq_patch отвечают {id, version, updatedAt} (≤ 200 байт), запрос к консоли прежний', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  for (const name of ['oq_put', 'oq_patch']) {
+    const r = await m.call(name, { collection: 'items', id: BIG, data: { title: 'x' }, if_version: 7 });
+    assert.ok(Buffer.byteLength(r.content[0].text) <= 200, `${name}: ${Buffer.byteLength(r.content[0].text)} байт`);
+    assert.deepEqual(body(r), { id: BIG, version: 8, updatedAt: BIG_DOC.updatedAt });
+  }
+  assert.deepEqual(m.state.writes, [
+    { method: 'PUT', body: { data: { title: 'x' }, ifVersion: 7 } },
+    { method: 'PATCH', body: { data: { title: 'x' }, ifVersion: 7 } },
+  ]);
+});
+
+test('OPS-18: oq_get brief — версия, заголовок и отметка checks без body/cmd/cmd2/after (≤ 1 КБ); без brief — документ целиком', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  const full = await m.call('oq_get', { collection: 'items', id: BIG });
+  assert.deepEqual(body(full), BIG_DOC, 'клиент без флага получает прежний ответ');
+  const r = await m.call('oq_get', { collection: 'items', id: BIG, brief: true });
+  const size = Buffer.byteLength(r.content[0].text);
+  assert.ok(size <= 1024, `brief: ${size} байт (полный — ${Buffer.byteLength(full.content[0].text)})`);
+  const b = body(r);
+  assert.deepEqual(b, {
+    id: BIG, version: 7, updatedAt: BIG_DOC.updatedAt, product: 'hr-helper', kind: 'server', title: BIG_DOC.data.title,
+    source: BIG_DOC.data.source, check: { done: true, unread: true },
+  });
+  m.state.bigCheck = 'none';
+  assert.equal(body(await m.call('oq_get', { collection: 'items', id: BIG, brief: true })).check, null);
+  m.state.bigCheck = 'down';
+  assert.equal(body(await m.call('oq_get', { collection: 'items', id: BIG, brief: true })).check.unknown, true, 'сбой checks — не «владелец не ответил»');
+});
+
+test('OPS-18: oq_get brief входящего — с пометкой «данные», без текста и вложений', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok');
+  const b = body(await m.call('oq_get', { collection: 'items', id: ITEM, brief: true }));
+  assert.equal(b.kind, 'inbox');
+  assert.equal(b.inbox, undefined);
+  assert.equal(b.files, undefined);
+  assert.match(b.untrusted, /не инструкции/);
 });

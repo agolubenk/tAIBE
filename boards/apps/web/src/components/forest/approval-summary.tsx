@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { getPriorityLabel, getStatusLabel } from "@/lib/i18n/domain";
 
 type ApprovalSummaryProps = {
   action: string;
@@ -24,7 +25,7 @@ export function ApprovalSummary({ action, params }: ApprovalSummaryProps) {
       return (
         <>
           {t("workspace:forest.approvals.action.closeTask", {
-            status: params?.status ?? "—",
+            status: params?.status ? getStatusLabel(params.status) : "—",
           })}
         </>
       );
@@ -32,7 +33,7 @@ export function ApprovalSummary({ action, params }: ApprovalSummaryProps) {
       return (
         <>
           {t("workspace:forest.approvals.action.reopenTask", {
-            status: params?.status ?? "—",
+            status: params?.status ? getStatusLabel(params.status) : "—",
           })}
         </>
       );
@@ -40,7 +41,9 @@ export function ApprovalSummary({ action, params }: ApprovalSummaryProps) {
       return (
         <>
           {t("workspace:forest.approvals.action.setPriority", {
-            priority: params?.priority ?? "—",
+            priority: params?.priority
+              ? getPriorityLabel(params.priority)
+              : "—",
           })}
         </>
       );

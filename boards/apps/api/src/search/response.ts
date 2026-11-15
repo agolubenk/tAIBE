@@ -33,7 +33,7 @@ export const searchResponseSchema = z
     results: z.array(searchResultSchema),
     totalCount: z.number().openapi({
       description:
-        "Total matches found before the `limit` slice, so a caller can tell that more exist.",
+        "Total matches found before the `limit` slice, so a caller can tell that more exist. For a caller with an API key it counts only the matches in the newest candidates that it scans (see the endpoint description).",
     }),
     searchQuery: z.string().openapi({ description: "The query that was run." }),
   })
