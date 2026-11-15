@@ -11,7 +11,7 @@ import { requireQueueActor, requireScope, type QueueEnv } from '../queue/auth'
 import { mergeInfo, mergeItem, redeploy } from '../queue/github'
 import { beatProduct, beatRelay, readRelay, relayBeatSchema } from '../queue/relay'
 import { acceptNotify, notifySchema } from '../queue/notify'
-import { throttleNotify, throttleWrite } from '../queue/throttle'
+import { throttleNotify, throttleWrite, writeCounted } from '../queue/throttle'
 import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
@@ -80,9 +80,11 @@ queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {
 
 /** Продукт пункта меняет владелец (страница, бот): пункт и ответ — одной транзакцией (queue/product-change.ts). */
 queueRoutes.post('/items/:id/product', requireScope('owner'), async (c) => {
-  throttleWrite(c.get('oqActor').name)
-  const body = await parseBody(c, productChangeSchema)
-  return c.json(await changeItemProduct(c.get('oqActor'), c.req.param('id'), body.to, body.reason ?? ''))
+  const actor = c.get('oqActor')
+  return writeCounted(actor.name, async () => {
+    const body = await parseBody(c, productChangeSchema)
+    return c.json(await changeItemProduct(actor, c.req.param('id'), body.to, body.reason ?? ''))
+  })
 })
 
 /**
@@ -109,22 +111,24 @@ queueRoutes.get('/db/:col/:id', requireScope('read', 'agent'), async (c) => {
 for (const [method, merge] of [['put', false], ['patch', true]] as const) {
   queueRoutes[method]('/db/:col/:id', requireScope('agent'), async (c) => {
     const actor = c.get('oqActor')
-    throttleWrite(actor.name)
-    const body = await parseBody(c, writeSchema)
-    const doc = await writeDoc(actor, collectionOf(c.req.param('col')), c.req.param('id'), body.data, {
-      merge,
-      ifVersion: body.ifVersion,
-      ifAnswerAt: body.ifAnswerAt,
-      takeover: body.takeover,
-      release: body.release,
+    // Отказ 4xx (409 версии, 403, 422) лимит записи не съедает — writeCounted (GLM-ревью #221).
+    const doc = await writeCounted(actor.name, async () => {
+      const body = await parseBody(c, writeSchema)
+      return writeDoc(actor, collectionOf(c.req.param('col')), c.req.param('id'), body.data, {
+        merge,
+        ifVersion: body.ifVersion,
+        ifAnswerAt: body.ifAnswerAt,
+        takeover: body.takeover,
+        release: body.release,
+      })
     })
     return c.json(doc)
   })
 }
 
 queueRoutes.delete('/db/:col/:id', requireScope('owner'), async (c) => {
-  throttleWrite(c.get('oqActor').name)
-  await deleteDoc(c.get('oqActor'), collectionOf(c.req.param('col')), c.req.param('id'))
+  const actor = c.get('oqActor')
+  await writeCounted(actor.name, () => deleteDoc(actor, collectionOf(c.req.param('col')), c.req.param('id')))
   return c.json({ ok: true })
 })
 

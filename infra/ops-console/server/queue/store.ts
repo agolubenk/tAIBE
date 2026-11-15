@@ -152,6 +152,8 @@ const checkSchema = z
 
 /** Поля агента в checks: замена документа владельцем (PUT) их не стирает (ревью #324, п. 5). */
 export const AGENT_FIELDS = ['agentStatus', 'agentNote', 'agentBy', 'agentAt', 'blockedAt'] as const
+/** Поля checks, которые ставит сервер (stampCheck): присланные значения не принимаются. */
+const SERVER_CHECK_FIELDS = ['agentAt', 'ownerAt', 'blockedAt'] as const
 
 const SCHEMAS: Record<Collection, z.ZodTypeAny> = { checks: checkSchema, items: itemSchema, work: workSchema }
 
@@ -304,6 +306,13 @@ export async function writeDocIn(
   all: readonly Product[],
 ): Promise<Doc> {
   if (!DOC_ID.test(id)) throw apiError(422, 'Недопустимый id документа')
+  // Пустая правка (GLM-ревью #221): нечего менять — без вставки пустого документа и без роста версии. Серверные поля
+  // checks (agentAt, ownerAt, blockedAt) агенту не в счёт: его значения не принимаются (владелец их ставит). release —
+  // сам по себе правка. Токен без области agent — дальше, к отказу 403 в authorize: области проверяются первыми.
+  const serverOnly = (k: string) => collection === 'checks' && !actor.scopes.includes('owner') && (SERVER_CHECK_FIELDS as readonly string[]).includes(k)
+  if (has(actor, 'agent') && opts.merge && !opts.release && !Object.keys(data).some((k) => !serverOnly(k))) {
+    throw apiError(422, 'Пустая правка: нет полей — нечего записывать')
+  }
   // Имя сессии — не пустое; проверяется присланное, а не сохранённое: старый документ с пустым именем не блокирует ответ.
   if (collection === 'checks' && 'agentBy' in data && !(typeof data.agentBy === 'string' && /\S/.test(data.agentBy))) {
     throw apiError(422, 'agentBy — имя сессии (линия), не пустое')
