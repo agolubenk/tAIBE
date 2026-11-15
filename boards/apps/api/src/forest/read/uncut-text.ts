@@ -4,12 +4,13 @@ import { SEED_TRUNCATED } from "../fell/build-seeds";
 // not know a secret without its end. So a cut text is read only up to the
 // last whitespace before the cut (backend lens #388, R2; TB-203). The rule
 // runs on read, so logs felled before it are covered too.
-function upToLastSpace(text: string) {
+export function upToLastSpace(text: string) {
   const lastSpace = text.search(/\s\S*$/);
   return lastSpace < 0 ? "" : text.slice(0, lastSpace);
 }
 
-// A text cut at `max` characters: the search text, a history entry. A text
+// A text cut at `max` characters: a history entry, a field of the search
+// text (searched-parts.ts). A text
 // of exactly `max` characters that was not cut loses its last word.
 export function uncutText(text: string, max: number) {
   return text.length < max ? text : upToLastSpace(text);

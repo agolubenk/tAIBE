@@ -3,8 +3,7 @@ import db from "../../database";
 import { timberLogTable } from "../../database/forest-schema";
 import { maskedMatchPage } from "../../task/masked-match-page";
 import { isMarkerQuery, matchesVisibleText } from "../../utils/visible-match";
-import { SEARCH_TEXT_CHARS } from "../fell/build-log";
-import { uncutText } from "./uncut-text";
+import { SEARCH_TEXT_CHARS, searchFields } from "../fell/build-log";
 import {
   decodeCursor,
   encodeCursor,
@@ -12,6 +11,24 @@ import {
   type PageCursor,
   pageSize,
 } from "./page-cursor";
+import { searchedParts } from "./searched-parts";
+
+// The comments of a log's history up to the cut of its searchText: those
+// that start past SEARCH_TEXT_CHARS of it are not read (up to 500 comments
+// of 4000 characters). A kept comment is not longer than the searched one,
+// and `length` counts no more than JavaScript does, so every comment that
+// searchText holds is in the list.
+const searchedContents = sql<(string | null)[]>`ARRAY(
+  SELECT h.content FROM (
+    SELECT e.n, e.item->>'content' AS content,
+      sum(coalesce(nullif(length(e.item->>'content'), 0) + 1, 0))
+        OVER (ORDER BY e.n) AS upto
+    FROM jsonb_array_elements(${timberLogTable.history})
+      WITH ORDINALITY AS e(item, n)
+  ) h
+  WHERE h.upto - coalesce(length(h.content), 0) <= ${SEARCH_TEXT_CHARS}
+  ORDER BY h.n
+)`;
 
 function likePattern(query: string) {
   return `%${query.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
@@ -121,6 +138,11 @@ async function listVisibleLogs(
         .select({
           id: timberLogTable.id,
           searchText: timberLogTable.searchText,
+          title: timberLogTable.title,
+          description: sql<
+            string | null
+          >`left(${timberLogTable.description}, ${SEARCH_TEXT_CHARS})`,
+          contents: searchedContents,
         })
         .from(timberLogTable)
         .where(
@@ -136,10 +158,10 @@ async function listVisibleLogs(
   const visible = new Set(
     texts
       .filter((row) =>
-        matchesVisibleText(
-          uncutText(row.searchText, SEARCH_TEXT_CHARS),
-          search,
-        ),
+        searchedParts(
+          row.searchText,
+          searchFields(row.title, row.description, row.contents),
+        ).some((part) => matchesVisibleText(part, search)),
       )
       .map((row) => row.id),
   );

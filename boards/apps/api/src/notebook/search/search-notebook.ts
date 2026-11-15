@@ -13,14 +13,14 @@ import { maskChunkEdges, textNear } from "../chunk/mask-chunk-edges";
 import { fuseRanks, type RankedList } from "./fuse-ranks";
 import { loadVectorIndex, nearestChunks } from "./vector-index";
 
+// A marker of redact; in the checked text it is a space (backend #388 B1).
+const MARKER = /\[REDACTED:[a-z0-9_]+\]/g;
 const CANDIDATES = 20;
 // TB-196: keyword candidates a token caller's search reads and ranks by the
 // text it reads. Hidden chunks are rare (27 of 6612 in the synced docs);
 // the cap stops planted secret chunks from making one search read the
 // whole corpus.
 const KEYWORD_SCAN_MAX = 200;
-// A marker of redact; in the checked text it is a space (backend #388 B1).
-const MARKER = /\[REDACTED:[a-z0-9_]+\]/g;
 // Longer than one worker batch, short enough that a stuck worker costs the
 // reader a few seconds of keyword-only results, not a hang.
 export const QUERY_EMBED_WAIT_MS = 4_000;
@@ -124,8 +124,11 @@ type Candidate = Awaited<ReturnType<typeof indexableCandidates>>[number];
 async function visibleRanked(rows: Candidate[], query: string) {
   const checked = rows.flatMap(
     (row): { id: string; masked: string | null }[] => {
-      // The text as the caller reads it: a secret cut at a chunk edge is
-      // masked too (TB-203), and the route masks each field once more.
+      // The text as the caller reads it: the route masks each field on its
+      // own, and a secret cut at a chunk edge is masked too (TB-203). Masked
+      // joined, a heading that ends with a label ("Staging password:") took
+      // the first word of the text as its value, and the secret after the
+      // text's own label stayed open (Claude #388 B1).
       const edges = maskChunkEdges(row.text, row.before ?? "", row.after ?? "");
       const heading = redact(row.heading);
       if (!edges.hidden && !heading.hits.length) {
