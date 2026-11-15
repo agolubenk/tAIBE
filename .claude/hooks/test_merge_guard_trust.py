@@ -30,7 +30,7 @@ MAKEFILE = (".PHONY: check check-layer other\n"
 LAYER = ((".claude/hooks/test_x.py", MERGE), (".claude/hooks/merge_guard_helper.py", "X = 1\n"),
          (".claude/hooks/test_y.sh", "gh pr merge 2\n"), (".claude/scripts/test_s.py", MERGE),
          ("sub/.claude/hooks/test_x.py", MERGE), ("tools/test_z.py", MERGE), ("Makefile", MAKEFILE),
-         ("bad/Makefile", ".PHONY: check\ncheck:\n\tgh pr merge 5\n"))
+         ("bad/Makefile", ".PHONY: check\ncheck:\n\tgh pr merge 5\n"), ("eval/tools/budget.py", "B = 1\n"))
 
 
 def expect(label, ok):
@@ -42,10 +42,10 @@ def git(d, *args):
                    capture_output=True)
 
 
-def layer_repo(prefix, home=True, origin=True, extra=()):
+def layer_repo(prefix, home=True, origin=True, extra=(), drop=()):
     """Репозиторий с папками слоя на основной ветке origin (refs/remotes/origin/HEAD → main), в HOME_REPOS хука."""
     d = repo_on("main", prefix=prefix)
-    for name, text in LAYER + tuple(extra):
+    for name, text in [f for f in LAYER if not f[0].startswith(tuple(drop))] + list(extra):
         (d / name).parent.mkdir(parents=True, exist_ok=True)
         (d / name).write_text(text)
     git(d, "add", "-A")
@@ -113,7 +113,25 @@ def cache_entry_link(h):
     (h / "__pycache__" / "x.pyc").symlink_to(h / "merge_guard_helper.py")
 
 
+def tools_link(h):  # eval/tools — ссылка на чистую копию: путь с ссылкой — не дерево ветки
+    tools, copy = h.parent.parent / "eval" / "tools", h.parent.parent / "eval" / "copy"
+    tools.rename(copy)
+    tools.symlink_to(copy)
+
+
+def tools_gone(h):  # на ветке есть, на диске нет: тест взял бы код по $TAIBE_ROOT
+    tools = h.parent.parent / "eval" / "tools"
+    (tools / "budget.py").unlink()
+    tools.rmdir()
+
+
+# Тесты слоя запускают и импортируют код из .claude/scripts и eval/tools (линза Claude к #419): грязная любая из них —
+# отказ и тесту из чистой .claude/hooks.
 for label, change, kw in (
+        ("изменён eval/tools", lambda h: (h.parent.parent / "eval/tools/budget.py").write_text("B = 2\n"), {}),
+        ("лишний файл в .claude/scripts", lambda h: (h.parent / "scripts/dams_common.py").write_text("X = 1\n"), {}),
+        ("eval/tools — ссылка", tools_link, {}),
+        ("нет eval/tools на диске", tools_gone, {}),
         ("изменён помощник", lambda h: (h / "merge_guard_helper.py").write_text("X = 2\n"), {}),
         ("изменён сам тест", lambda h: (h / "test_x.py").write_text(MERGE + "\n"), {}),
         ("лишний файл", lambda h: (h / "new.txt").write_text("x\n"), {}),
@@ -127,6 +145,9 @@ for label, change, kw in (
     d = dirty("trust-dirty-", change, **kw)
     bash(f"грязная папка слоя ({label}): отказ теста", "python3 .claude/hooks/test_x.py", True, cwd=d)
     bash(f"грязная папка слоя ({label}): отказ make check-layer", "make check-layer", True, cwd=d)
+
+no_tools = layer_repo("trust-notools-", drop=("eval/",))  # инстанс без eval/tools: ни на диске, ни на ветке
+bash("нет eval/tools ни на диске, ни на ветке: проход", "python3 .claude/hooks/test_x.py", False, cwd=no_tools)
 
 # Разбор: формы запуска и запись команды — без хука, функция целиком.
 rt = getattr(merge_guard_git, "reviewed_test", None)

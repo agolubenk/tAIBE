@@ -104,8 +104,11 @@ def same_blob(path, data):
 
 
 # Тесты слоя (SE-127, решение владельца A, taibe-d-se127-hooktests-1511): в их тексте — образцы защищённых команд,
-# грубый признак их не отличает от запуска. Хук пускает тест без разбора текста, только если вся его папка прошла ревью.
+# грубый признак их не отличает от запуска. Хук пускает тест без разбора текста, только если прошли ревью его папка и
+# всё, что тесты слоя запускают и импортируют: `.claude/scripts` (dams_common), `eval/tools` (ctx_budget.py,
+# spawn_session.sh из context-threshold) — линза Claude к #419.
 LAYER_DIRS = (".claude/hooks", ".claude/scripts")
+TRUST_DIRS = LAYER_DIRS + ("eval/tools",)
 PY_TEST_OPTS = {"-I", "-B", "-u"}  # `-W`, `-X`, `-m`, аргументы тоже исполняют код (категория `-W` — импорт модуля)
 FILE_MAX = 4 * 1024 * 1024
 CODE_EXT = (".py", ".pyc", ".pyo", ".pth", ".so", ".sh")  # новое имя рядом с тестом: `json.py` в той же команде
@@ -178,9 +181,10 @@ def reviewed_test(path, a, cwd, written=()):
     """Скрипт path (realpath, см. read_script) из команды a — тест слоя, текст которого хук не разбирает (SE-127):
     ровно `python3 [-I] [-B] [-u] <путь>/test_*.py` или `bash|sh <путь>/test_*.sh` — путь (или маска, которая его
     даёт: `"$t"` цикла `for t in …/test_*.py` разбор подставляет словом списка) последним словом, других слов нет;
-    лишние файлы маски — аргументы, их имена тоже с ветки; папка — LAYER_DIRS от корня репозитория и чиста
-    (clean_dir); команда не пишет имени, которое ляжет в эту папку или будет импортировано (written — базовые имена:
-    имя её файла, код — CODE_EXT, имя папки или предка, невидимая запись — ANY). Иначе — обычный разбор."""
+    лишние файлы маски — аргументы, их имена тоже с ветки; папка — LAYER_DIRS от корня репозитория, каждая из
+    TRUST_DIRS чиста (_trusted_dir); команда не пишет имени, которое ляжет в эту папку или будет импортировано
+    (written — базовые имена: имя её файла, код — CODE_EXT, имя папки или предка, невидимая запись — ANY). Иначе —
+    обычный разбор."""
     d, name = os.path.split(path)
     if re.fullmatch(r"python[\d.]*", a[0]) and len(a) >= 2 and set(a[1:-1]) <= PY_TEST_OPTS:
         ext = ".py"
@@ -201,7 +205,20 @@ def reviewed_test(path, a, cwd, written=()):
         top = git_out(d, "rev-parse", "--show-toplevel")
     except GitTimeout:
         return False
-    return bool(top) and os.path.relpath(d, os.path.realpath(top)) in LAYER_DIRS and clean_dir(d)
+    top = os.path.realpath(top) if top else ""
+    return bool(top) and os.path.relpath(d, top) in LAYER_DIRS and all(_trusted_dir(top, t) for t in TRUST_DIRS)
+
+
+def _trusted_dir(top, rel):
+    """Папка rel репозитория top (realpath) — без ссылок в пути и чиста (clean_dir), или её нет ни на диске, ни на
+    ветке (инстанс без eval/tools). Есть только на ветке — нет: тест взял бы код по `$TAIBE_ROOT`."""
+    p = os.path.join(top, rel)
+    try:
+        if os.path.lexists(p):
+            return os.path.realpath(p) == p and os.path.isdir(p) and clean_dir(p)
+        return not git_out(top, "rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD:" + rel)
+    except GitTimeout:
+        return False
 
 
 def conf_get(gdir, conf, key):
