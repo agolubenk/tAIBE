@@ -33,8 +33,10 @@
   `t-boards-grill-answers.json` и наброски Kimi по K-4/K-5 (`kimi-partial-k4-k5/`; код вошёл в
   `packages/importers/src/notion/` и `packages/claude-mem-reader/`). Архив исключён из `vp check`.
 - `kimi-reports/` — отчёты Kimi (K-1…K-3).
-- Пробы стенда и прогон интеграционных тестов — `../tools/` (`run-int.sh`, `mcp-probe*.mjs`, `history-probe.mjs`,
-  `mcp-wire-measure.mjs`, `tool-scope-probe.mjs`; нужен поднятый API `:1337` и собранный `packages/agent-format`).
+- Прогон интеграционных тестов — только `../scripts/it-pg.sh <имя> [файлы…]` (свой Postgres на прогон, удаляется на
+  выходе; TB-145). `../tools/run-int.sh` выведен 14.11: он брал базу из `.env`, то есть живую `t-boards-postgres-1`.
+- Пробы стенда — `../tools/` (`mcp-probe*.mjs`, `history-probe.mjs`, `mcp-wire-measure.mjs`, `tool-scope-probe.mjs`;
+  нужен поднятый API `:1337` и собранный `packages/agent-format`).
 
 ## Словарь идентификаторов
 

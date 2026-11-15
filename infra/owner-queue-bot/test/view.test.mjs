@@ -202,6 +202,46 @@ test('связь вернулась: сколько её не было, не м�
   assert.match(backNotice(5_000).text, /около 1 мин/);
 });
 
+test('снимок одного пункта поверх полного: пункт и счётчики свежие, остальные из полного, пропавший убран (OPS-76)', async () => {
+  const { mergeItems } = await import('../view.mjs');
+  const base = { ...snapOf([item({ id: 'd-1' }), item({ id: 'd-2', title: 'старый' }), item({ id: 'd-3' })]), progress: 'Сделано 0 из 3' };
+  const part = { ...snapOf([item({ id: 'd-2', title: 'новый', done: true })]), progress: 'Сделано 1 из 3' };
+  const m = mergeItems(base, part, ['d-2']);
+  assert.deepEqual(m.items.map((it) => it.id), ['d-1', 'd-2', 'd-3'], 'порядок полного снимка');
+  assert.equal(m.items[1].title, 'новый');
+  assert.equal(m.items[1].done, true);
+  assert.equal(m.progress, 'Сделано 1 из 3', 'шапка — из свежего');
+  assert.deepEqual(mergeItems(base, snapOf([]), ['d-3']).items.map((it) => it.id), ['d-1', 'd-2'], 'пункт пропал со страницы');
+  assert.equal(mergeItems(null, part, ['d-2']), part, 'полного ещё не было');
+});
+
+test('snapshotPage(ids) разбирает только эти пункты, без ids — все (OPS-76)', async () => {
+  const { snapshotPage } = await import('../frame-scripts.mjs');
+  const saved = { window: globalThis.window, document: globalThis.document, CSS: globalThis.CSS };
+  const el = (id) => ({
+    dataset: { id, src: 'db' }, classList: { contains: () => false }, closest: () => ({ dataset: { section: 'decision' } }),
+    querySelector: () => null, querySelectorAll: () => [],
+  });
+  const all = [el('d-1'), el('d-2'), el('d-3')];
+  const asked = [];
+  globalThis.document = {
+    querySelector: (sel) => { const m = /data-id="([^"]+)"/.exec(sel); if (!m) return null; asked.push(m[1]); return all.find((e) => e.dataset.id === m[1]) || null; },
+    querySelectorAll: (sel) => (sel === '.item[data-id]' ? all : []),
+    getElementById: () => null,
+  };
+  globalThis.window = {};
+  globalThis.CSS = { escape: (s) => s };
+  try {
+    assert.deepEqual(snapshotPage().items.map((it) => it.id), ['d-1', 'd-2', 'd-3']);
+    assert.deepEqual(snapshotPage(['d-2', 'd-9']).items.map((it) => it.id), ['d-2'], 'пропавший пункт — пусто, не ошибка');
+    assert.deepEqual(asked, ['d-2', 'd-9']);
+  } finally {
+    globalThis.window = saved.window;
+    globalThis.document = saved.document;
+    globalThis.CSS = saved.CSS;
+  }
+});
+
 test('держатель входящего (карточка HR xuc5csrv): «молчит» — 🔇 в списке открытых и жирная строка в карточке; «в сети» — строка без знака', () => {
   const silent = item({ id: 'i-1', kind: 'inbox', title: 'Входящее 1', options: [], agentStatus: 'doing', agentStatusText: 'в работе',
     holder: '🔇 Держатель r.ab12 молчит 5 ч — координатор передаст пункт живой сессии (проверка в 09:30)' });
