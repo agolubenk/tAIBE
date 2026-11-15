@@ -1,5 +1,4 @@
 import path from "node:path";
-import { gzipSync } from "node:zlib";
 import babel from "@rolldown/plugin-babel";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
@@ -71,41 +70,6 @@ export default defineConfig({
             imports: file.imports,
             isEntry: file.isEntry,
           };
-        }
-      },
-    },
-    // TEMP TB-173 (#357): module sizes of three chunks in the CI build log
-    // for the bundle check; removed before the PR leaves draft.
-    {
-      name: "tb173-chunk-report",
-      apply: "build",
-      generateBundle(_options, bundle) {
-        const chunks = new Set([
-          "index",
-          "task-shortcuts",
-          "task-forms-section",
-        ]);
-        for (const file of Object.values(bundle)) {
-          if (file.type !== "chunk" || !chunks.has(file.name)) continue;
-          const gz = (text: string) => gzipSync(text).length;
-          const deps =
-            /const __vite__mapDeps=[^;]*;/.exec(file.code)?.[0] ?? "";
-          console.log(
-            `[tb173] ${file.name} =chunk code ${file.code.length} gz ${gz(file.code)} mapDeps ${deps.length} gz-without-mapDeps ${gz(file.code.replace(deps, ""))}`,
-          );
-          console.log(
-            `[tb173] ${file.name} =imports ${file.imports.join(" ")}`,
-          );
-          console.log(
-            `[tb173] ${file.name} =dynamic ${file.dynamicImports.join(" ")}`,
-          );
-          console.log(`[tb173] ${file.name} =mapDeps ${deps.slice(0, 1500)}`);
-          for (const [id, info] of Object.entries(file.modules ?? {})) {
-            const name = id
-              .replace(/^.*node_modules\//, "")
-              .replace(/^.*\/boards\//, "");
-            console.log(`[tb173] ${file.name} ${info.renderedLength} ${name}`);
-          }
         }
       },
     },
