@@ -108,8 +108,8 @@ const itemSchema = z
   .refine((d) => (d.kind === 'inbox') === (d.inbox !== undefined), { message: 'Поле inbox — у пункта kind: inbox, и только у него' })
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}/).max(30)
-// Документ work может быть частичной правкой задачи из базового плана страницы (WORK_SEED): страница
-// накладывает его поверх по id, поэтому title и track необязательны.
+export const TRACK_COLOR = /^var\(--c[1-6]\)$/ // цвет направления — токен палитры: строка идёт в style страницы (OPS-72, page.html)
+// Частичная правка задачи базового плана (WORK_SEED) накладывается по id — title и track необязательны.
 const workSchema = z
   .object({
     title: z.string().min(1).max(200).optional(),
@@ -126,7 +126,7 @@ const workSchema = z
     note: z.string().max(600).optional(),
     link: z.string().regex(/^https:\/\/[^\s"<>]+$/).max(2000).optional(),
     linkText: z.string().max(200).optional(),
-    order: z.number().optional(),
+    order: z.number().optional(), color: z.string().regex(TRACK_COLOR, 'color — токен палитры var(--c1)…var(--c6)').optional(),
     archived: z.boolean().optional(),
   })
   .passthrough()

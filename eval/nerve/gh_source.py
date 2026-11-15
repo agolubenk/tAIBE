@@ -41,15 +41,31 @@ def _gh_comments(repo, n):
     return json.loads(out)
 
 
-def _gh_view(repo, n):
+def _gh_pr(repo, n, fields):
     # --repo обязателен: без него gh берёт репозиторий из рабочей папки демона (tAIBE), а не из конфига (SE-40).
-    code, out, err = sources.run(["gh", "pr", "view", str(n), "--repo", repo,
-                          "--json", "files,statusCheckRollup,state,mergedAt,closedAt"])
+    code, out, err = sources.run(["gh", "pr", "view", str(n), "--repo", repo, "--json", fields])
     if code != 0:
         raise RuntimeError(f"gh pr view {repo}#{n}: {err.strip()[:200]}")
     d = json.loads(out)
     checks = [c.get("conclusion") or c.get("status") or c.get("state") for c in d.get("statusCheckRollup") or []]
-    return [f["path"] for f in d.get("files") or []], checks, d.get("state"), d.get("mergedAt"), d.get("closedAt")
+    return d, [f["path"] for f in d.get("files") or []], checks
+
+
+def _gh_view(repo, n):
+    d, files, checks = _gh_pr(repo, n, "files,statusCheckRollup,state,mergedAt,closedAt")
+    return files, checks, d.get("state"), d.get("mergedAt"), d.get("closedAt")
+
+
+def _gh_checks(repo, n):
+    """Только статусы проверок головы — перечитать CI без списка файлов и тела PR (SE-123)."""
+    return _gh_pr(repo, n, "statusCheckRollup")[2]
+
+
+def _gh_author_view(repo, n):
+    """Файлы, проверки и тело PR — для автора (SE-121). Тело (несколько КБ) читается только здесь, а не на каждой
+    перепроверке CI: строку «роль N — автор» пишут при открытии PR."""
+    d, files, checks = _gh_pr(repo, n, "files,statusCheckRollup,body")
+    return files, checks, d.get("body") or ""
 
 
 # rev 2 (SE-40): состояние rev 1 могло застрять — PR без author/checks и влитые PR в prs. При первом проходе
@@ -61,7 +77,7 @@ GH_STATE_REV = 3
 
 def _gh_closed(ctx, repo, known, open_now, fails):
     """PR, которых нет в списке открытых: «влит» или «закрыт» — по самому PR. Открытый PR (список неполон — потолок
-    страниц) остаётся в prs без события. Ключ — с временем мёржа или закрытия: ложное «закрыт» rev 2 не прячет
+    GH_LIMIT или неполный ответ gh с кодом 0) остаётся в prs без события. Ключ — с временем мёржа или закрытия: ложное «закрыт» rev 2 не прячет
     настоящее, а закрытие после переоткрытия — новое событие."""
     for n in [k for k in known if k not in open_now]:
         try:
@@ -117,7 +133,7 @@ def _recheck_ci(ctx, n, p):
         last = sources._ts(p.get("ci_at"))
         if last and (ctx.now - last).total_seconds() < NO_CHECKS_EVERY:
             return
-    _, checks, _, _, _ = _gh_view(ctx.cfg["github"]["repo"], n)
+    checks = _gh_checks(ctx.cfg["github"]["repo"], n)
     if slow:
         p["ci_at"] = _iso_now(ctx)   # после удачного чтения: сбой gh повторяется следующим проходом, а не через 15 мин
     p["checks"] = checks
@@ -174,8 +190,11 @@ def poll_github(ctx):
             continue
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     _gh_closed(ctx, g["repo"], known, open_now, fails)
-    if not fails and not deferred:
-        st.pop("backfill", None)   # догон окончен: дальше каждый новый PR — «открыт»
+    # Догон окончен, только если список полон: открытый известный PR вне списка (пустой или частичный ответ gh с
+    # кодом 0) оставил бы следующие проходы без границы — каждый давний PR пошёл бы «открыт» (SE-123). Пустой список
+    # догон не кончает и при пустом known: без открытых PR граница никому не мешает (Контроль #393).
+    if not fails and not deferred and open_now and open_now >= set(known):
+        st.pop("backfill", None)   # дальше каждый новый PR — «открыт»
     _raise_fails(fails)
 
 
@@ -190,10 +209,15 @@ def _check_pr(ctx, n, p, head, viewed=False):
     head_changed = p["head"] != head
     comments = _gh_comments(g["repo"], n)
     # Пустой список перечитывается: CI регистрируется позже push, и старый [] через 30 мин дал бы ложный «CI: none»
-    if head_changed or "author" not in p or not (p.get("checks") or viewed):
-        files, checks, _, _, _ = _gh_view(g["repo"], n)
-        p["author"] = quorum.author_role(files, g["path_roles"])
+    # «author_line» нет у PR, разобранных до SE-121: одно чтение тела, когда PR изменится
+    if head_changed or "author_line" not in p or not (p.get("checks") or viewed):
+        files, checks, body = _gh_author_view(g["repo"], n)
+        p["author"] = quorum.pr_author(body, files, g["path_roles"], ctx.cfg["team"]["roles"])   # адресат changes
+        p["author_line"] = quorum.body_author(body, ctx.cfg["team"]["roles"])   # автор для кворума — только строка
         p["checks"] = checks
+    elif not viewed and quorum.ci_state(p["checks"]) == "pending":
+        # PR меняется каждый проход (комментарии) — _recheck_ci его не видит: CI перечитывается здесь (SE-123)
+        p["checks"] = _gh_checks(g["repo"], n)
     if head_changed:
         p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
@@ -207,17 +231,25 @@ def _check_pr(ctx, n, p, head, viewed=False):
             to = quorum.author_roles(p["author"], ctx.cfg["team"]["roles"])   # с вторыми сессиями роли (#324)
             ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, to,
                      f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github")
-    ok, approved, changes, ci = quorum.quorum(verdicts, head, _quorum_checks(ctx, p), g["min_lenses"])
+    author = p["author_line"]
+    ok, approved, changes, ci = quorum.quorum(verdicts, head, _quorum_checks(ctx, p), g["min_lenses"], author)
+    own = quorum.author_approved(quorum.last_on_head(verdicts, head), author)
     p["changes_by"] = changes
     # CI нет (none) — ожидание не снимается: если проверки всё же запустят, кворум по ним — обычным правилом (SE-126)
     p["await_ci"] = len(approved) >= g["min_lenses"] and not changes and ci in ("pending", "none")
+    note = f"; approve автора {author} не засчитан" if own else ""
+    if own and not changes and len(approved) + 1 == g["min_lenses"]:
+        # кворум ждёт только из-за approve автора: Контроль видит причину один раз на голову (SE-121)
+        ctx.emit(f"gh:own:{n}:{head}", "pr.own", DIGEST, g["quorum_to"],
+                 f"#{n}: approve автора {author} на {head[:9]} не засчитан — линз {len(approved)}/{g['min_lenses']}",
+                 "github")
     if ok and ci == "none":
         ctx.emit(f"gh:quorum:{n}:{head}:none", "pr.quorum", NERVOUS, g["quorum_to"],
                  f"#{n} собран: approve {', '.join(approved)} на {head[:9]}, CI: none (проверок нет "
-                 f"{NO_CHECKS_AFTER // 60} мин)", "github")
+                 f"{NO_CHECKS_AFTER // 60} мин){note}", "github")
         ctx.emit(f"gh:nochecks:{n}:{head}", "pr.nochecks", DIGEST, ["coord"],
                  f"#{n}: кворум без CI — у головы {head[:9]} нет ни одной проверки {NO_CHECKS_AFTER // 60} мин "
                  f"(PR вне фильтров paths?); Контроль решает по «CI: none»", "github")
     elif ok:
         ctx.emit(f"gh:quorum:{n}:{head}", "pr.quorum", NERVOUS, g["quorum_to"],
-                 f"#{n} собран: approve {', '.join(approved)} на {head[:9]}, CI {ci}", "github")
+                 f"#{n} собран: approve {', '.join(approved)} на {head[:9]}, CI {ci}{note}", "github")

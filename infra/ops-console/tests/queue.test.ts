@@ -11,7 +11,7 @@ import { OPEN_RULE_JS } from '../server/queue/open-rule'
 import { SHIM_JS } from '../server/queue/page-scripts'
 import { createToken, revokeToken } from '../server/queue/auth'
 import { mergePlan, mergeRequestBody, setGithubTransportForTests, type GithubResponse } from '../server/queue/github'
-import { deleteDoc, importDoc, writeDoc } from '../server/queue/store'
+import { TRACK_COLOR, deleteDoc, importDoc, writeDoc } from '../server/queue/store'
 import { getGithubSettings, writeSetting } from '../server/settings/store'
 import { encryptSecret } from '../server/lib/crypto'
 
@@ -164,6 +164,20 @@ describe('документы и права', () => {
     expect((await a.put('/db/work/w-t', { data: { title: 'Задача', track: 'ops', planEnd: '2026-10-20' } })).status).toBe(200)
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25' } })).status).toBe(409)
     expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', basePlanEnd: '2026-10-20', note: 'сдвиг: ждали ревью' } })).status).toBe(200)
+  })
+
+  it('цвет направления (work/track-<id>) — только токен палитры var(--c1)…var(--c6), как у страницы (OPS-72)', async () => {
+    const a = bearer(agent)
+    expect((await a.put('/db/work/track-x72', { data: { kind: 'track', name: 'X', color: 'var(--c3)' } })).status).toBe(200)
+    expect((await a.put('/db/work/track-y72', { data: { kind: 'track', name: 'Y' } })).status).toBe(200)
+    for (const bad of ['red', 'var(--c7)', 'var(--c1));background:url(https://evil)', '"><b>', '#fff']) {
+      const res = await a.put('/db/work/track-z72', { data: { kind: 'track', name: 'Z', color: bad } })
+      expect(res.status, bad).toBe(422)
+    }
+    expect((await a.patch('/db/work/track-x72', { data: { color: 'url(x)' } })).status).toBe(422)
+    // Сервер и страница пропускают одно и то же: регулярка страницы (trackFromDb) — та же строка.
+    const page = readFileSync(join(__dirname, '../server/queue/page.html'), 'utf8')
+    expect(page).toContain(`var TRACK_COLOR = ${TRACK_COLOR.toString()};`)
   })
 
   it('история пункта — журнал изменений', async () => {
