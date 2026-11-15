@@ -43,9 +43,12 @@ function lastDropping(value: string): number {
 // (B_SECRET="x(=C_SECRET=<v>): the search goes on inside it. A value with
 // `=` or `:` in it is not a name of any shape, so a filter rejects it only
 // for its length or for a DROPS_VALUE character, and then every value that
-// holds that character too. An inner value ends where the outer one ends, so
-// the search goes on after the last such character: no character is scanned
-// more than twice.
+// holds that character too. So the search goes on after the last such
+// character. An inner match can end after the outer value: its separator
+// crosses the space or the quote that ends the outer value
+// (A_TOKEN=x(B_TOKEN = C_TOKEN = <v>). Then the next search starts at the
+// end of the outer value (`limit`), as without the rewind, and finds
+// C_TOKEN. Each search starts after the start of the last match.
 function collectGroup(
   pattern: RegExp,
   kind: SecretKind,
@@ -54,6 +57,7 @@ function collectGroup(
 ): Detector {
   return (text) => {
     const hits: RedactHit[] = [];
+    let limit = -1;
     pattern.lastIndex = 0;
     for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
       const value = match[group];
@@ -63,7 +67,14 @@ function collectGroup(
         hits.push({ kind, start, end: start + value.length });
       } else {
         const dropping = lastDropping(value);
-        if (dropping >= 0) pattern.lastIndex = start + dropping + 1;
+        if (dropping >= 0) {
+          limit = Math.max(limit, pattern.lastIndex);
+          pattern.lastIndex = start + dropping + 1;
+          continue;
+        }
+      }
+      if (match.index < limit && pattern.lastIndex > limit) {
+        pattern.lastIndex = limit;
       }
     }
     return hits;
