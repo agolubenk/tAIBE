@@ -834,6 +834,13 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], [], "давний PR из догона — без «открыт»")
         self.assertNotIn("backfill", st, "список полон — догон окончен")
 
+    def test_empty_list_on_fresh_state_keeps_the_backfill(self):
+        """Контроль #393: при пустом known пустой ответ gh тоже не кончает догон (`set() >= set()` — истина)."""
+        self.ctx.state["github"] = {"rev": 2, "prs": {}}
+        sources.run = FakeGh([])
+        gh_source.poll_github(self.ctx)
+        self.assertIn("backfill", self.ctx.state["github"])
+
     def test_backfill_boundary_ignores_bad_dates_and_the_future(self):
         p = lambda u: {"updated": u}  # noqa: E731
         since = gh_source._backfill_since

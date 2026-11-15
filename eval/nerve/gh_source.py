@@ -191,8 +191,9 @@ def poll_github(ctx):
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     _gh_closed(ctx, g["repo"], known, open_now, fails)
     # Догон окончен, только если список полон: открытый известный PR вне списка (пустой или частичный ответ gh с
-    # кодом 0) оставил бы следующие проходы без границы — каждый давний PR пошёл бы «открыт» (SE-123).
-    if not fails and not deferred and open_now >= set(known):
+    # кодом 0) оставил бы следующие проходы без границы — каждый давний PR пошёл бы «открыт» (SE-123). Пустой список
+    # догон не кончает и при пустом known: без открытых PR граница никому не мешает (Контроль #393).
+    if not fails and not deferred and open_now and open_now >= set(known):
         st.pop("backfill", None)   # дальше каждый новый PR — «открыт»
     _raise_fails(fails)
 
