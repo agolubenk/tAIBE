@@ -153,6 +153,7 @@ const FAILURE_KEYS = {
   version_mismatch: "tasks:forms.save.versionMismatch",
   forbidden: "tasks:forms.save.forbidden",
   invalid: "tasks:forms.save.invalid",
+  too_large: "tasks:forms.save.tooLarge",
   failed: "tasks:forms.save.failed",
 } as const;
 
@@ -183,7 +184,8 @@ function SaveLine({
       state.failure === "version_mismatch"
     ) {
       action = { label: t("tasks:forms.reload"), run: onReload };
-    } else if (state.failure !== "forbidden") {
+    } else if (state.failure !== "forbidden" && state.failure !== "too_large") {
+      // The same too-large body would be refused again: no Retry.
       action = { label: t("tasks:forms.retry"), run: onRetry };
     }
   } else if (issues.some((issue) => issue.code === "required")) {
