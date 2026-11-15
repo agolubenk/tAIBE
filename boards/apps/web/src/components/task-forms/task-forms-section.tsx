@@ -17,9 +17,12 @@ export default function TaskFormsSection({ taskId }: { taskId: string }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const headingId = useId();
-  const { data: forms, isError, isFetching, refetch } = useTaskForms(taskId, {
-    retryOnMount: false,
-  });
+  const {
+    data: forms,
+    isError,
+    isFetching,
+    refetch,
+  } = useTaskForms(taskId, { retryOnMount: false });
   // Wait for the newest list once; after that the blocks stay mounted, so a
   // later refetch never drops answers that are being typed.
   const [shown, setShown] = useState(false);
