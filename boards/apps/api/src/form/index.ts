@@ -214,12 +214,13 @@ const form = apiRouter<BaseVariables & { workspaceId: string }>()
     );
     return c.json(maskForTokenCaller(c, attached), 201);
   })
-  .openapi(getTaskFormsRoute, async (c) =>
-    c.json(
-      maskForTokenCaller(c, await getTaskForms(c.req.valid("param").taskId)),
-      200,
-    ),
-  )
+  .openapi(getTaskFormsRoute, async (c) => {
+    const forms = await getTaskForms(
+      c.req.valid("param").taskId,
+      c.get("workspaceId"),
+    );
+    return c.json(maskForTokenCaller(c, forms), 200);
+  })
   .openapi(saveAnswersRoute, async (c) => {
     const result = await saveAnswers(
       c.req.valid("param").id,

@@ -64,7 +64,7 @@ const moveProjectRoute = createRoute({
   tags: ["Projects"],
   summary: "Move a project to another workspace",
   description:
-    "Move a project and its tasks. Requires update and delete permission in the source, plus project creation and workspace settings management permission in the destination. Remove cross-project task relationships before moving.",
+    "Move a project and its tasks. Requires update and delete permission in the source, plus project creation and workspace settings management permission in the destination. Remove cross-project task relationships before moving. The form templates of the tasks' forms go along: the destination's equal template (same slug and version) is reused, or a copy is made.",
   middleware: [
     workspaceAccess.fromProject(),
     requireWorkspacePermission({ project: ["update", "delete"] }),
@@ -86,7 +86,7 @@ const moveProjectRoute = createRoute({
     ),
     404: errorResponse("Project or destination workspace not found"),
     409: errorResponse(
-      "Project key conflict or cross-project task relationships",
+      "Project key conflict, cross-project task relationships, or a form template with the same slug and version but other fields in the destination (FORM_TEMPLATE_CONFLICT)",
     ),
   },
 });
