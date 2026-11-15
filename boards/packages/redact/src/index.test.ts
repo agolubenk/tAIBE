@@ -396,6 +396,12 @@ describe("@kaneo/redact", () => {
       `A_SECRET=x(B_SECRET = C_SECRET = ${value}`,
       `A_SECRET=y(B_SECRET : C_SECRET : ${value}`,
       `A_SECRET=éB_SECRET = C_SECRET = ${value}`,
+      // Claude lens on #375 2a50b88f4: nested rewinds paired a name with
+      // another value than the plain search (B1), and the overlap rule
+      // dropped a hit that ended after the previous one (B2).
+      `A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = X1_TOKEN = ${value}`,
+      `api_key=x(api_key : y(api_key : k1_api_key : x1_api_key : ${value}`,
+      `A_SECRET=x(B_SECRET:C_PASSWORD:q;${value}`,
     ])(
       "masks the value after an inner match past the outer value: %s",
       (input) => {
