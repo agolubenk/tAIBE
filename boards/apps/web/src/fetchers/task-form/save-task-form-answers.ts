@@ -18,12 +18,14 @@ export type SavedTaskForm = {
 /**
  * Why a save failed: another save came first (`row_version`), the template
  * changed (`version_mismatch`), the answers were refused (`invalid`, with
- * the issues), no right (`forbidden`) or anything else (`failed`).
+ * the issues), the body is over the limit (`too_large`, 413), no right
+ * (`forbidden`) or anything else (`failed`).
  */
 export type SaveFailure =
   | "row_version"
   | "version_mismatch"
   | "invalid"
+  | "too_large"
   | "forbidden"
   | "failed";
 
@@ -49,7 +51,8 @@ async function readBody(response: Response): Promise<Record<string, unknown>> {
 }
 
 // The API error codes (apiErrorSchema, UPPER_SNAKE): 409 ROW_VERSION_CONFLICT
-// or VERSION_MISMATCH, 422 INVALID_ANSWERS with `answerIssues` (TB-173, #358).
+// or VERSION_MISMATCH, 422 INVALID_ANSWERS with `answerIssues`, 413
+// PAYLOAD_TOO_LARGE (TB-173, #358).
 async function failureOf(response: Response): Promise<SaveTaskFormError> {
   const body = await readBody(response);
   if (response.status === 409) {
@@ -63,10 +66,22 @@ async function failureOf(response: Response): Promise<SaveTaskFormError> {
       : [];
     return new SaveTaskFormError("invalid", issues);
   }
+  if (response.status === 413) {
+    return new SaveTaskFormError("too_large");
+  }
   if (response.status === 403) {
     return new SaveTaskFormError("forbidden");
   }
   return new SaveTaskFormError("failed");
+}
+
+/** The PUT body as sent: its byte length is what the API limit counts. */
+export function saveBodyOf({
+  answers,
+  submit,
+  rowVersion,
+}: SaveTaskFormRequest): string {
+  return JSON.stringify({ answers, submit, rowVersion });
 }
 
 /**
@@ -74,18 +89,18 @@ async function failureOf(response: Response): Promise<SaveTaskFormError> {
  * save outlive a closed tab; the browser caps such a body at 64 KiB.
  */
 async function saveTaskFormAnswers(
-  { formId, answers, submit, rowVersion }: SaveTaskFormRequest,
+  request: SaveTaskFormRequest,
   { keepalive = false }: { keepalive?: boolean } = {},
 ): Promise<SavedTaskForm> {
   let response: Response;
   try {
     response = await fetch(
-      getApiUrl(`/form/${encodeURIComponent(formId)}/answers`),
+      getApiUrl(`/form/${encodeURIComponent(request.formId)}/answers`),
       {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers, submit, rowVersion }),
+        body: saveBodyOf(request),
         keepalive,
       },
     );

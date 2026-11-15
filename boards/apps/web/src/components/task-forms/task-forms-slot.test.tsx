@@ -15,10 +15,12 @@ import {
   it,
   vi,
 } from "vite-plus/test";
+import { SaveTaskFormError } from "@/fetchers/task-form/save-task-form-answers";
 import { HttpError } from "@/lib/http-error";
 import { taskForm } from "./form-test-template";
 import { TaskFormBlock } from "./task-form-block";
 import { TaskFormsSlot } from "./task-forms-slot";
+import { AUTOSAVE_DELAY_MS } from "./use-form-autosave";
 
 const { getForms, save } = vi.hoisted(() => ({
   getForms: vi.fn(),
@@ -119,4 +121,27 @@ describe("TaskFormBlock (TB-173 F2/F3)", () => {
     expect(marked).toEqual(["team", "name"]);
     expect(save).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["too_large", "tasks:forms.save.tooLarge", false],
+    ["failed", "tasks:forms.save.failed", true],
+  ] as const)(
+    "a %s save says %s, Retry shown: %s",
+    async (failure, text, retry) => {
+      vi.useFakeTimers();
+      save.mockRejectedValue(new SaveTaskFormError(failure));
+      renderWithClient(
+        <TaskFormBlock form={taskForm()} onReload={vi.fn()} taskId="task-1" />,
+      );
+      const [first] = screen.getAllByRole("radio");
+      if (!first) throw new Error("no radio");
+      fireEvent.click(first);
+      await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+      vi.useRealTimers();
+      expect(screen.getByText(text)).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "tasks:forms.retry" }) !== null,
+      ).toBe(retry);
+    },
+  );
 });

@@ -3655,7 +3655,8 @@
 				"invalid": "Some answers are not saved: fix the marked questions.",
 				"rowVersion": "The form was changed in another tab. Reload it; changes made here after the last save will be lost.",
 				"versionMismatch": "The form has a new version. Reload it to answer.",
-				"forbidden": "You cannot change the answers of this form."
+				"forbidden": "You cannot change the answers of this form.",
+				"tooLarge": "The answers are too large to save. Shorten the long text, and the form saves by itself."
 			},
 			"reload": "Reload form",
 			"submit": "Submit",
