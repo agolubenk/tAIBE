@@ -9,13 +9,17 @@ export const taskFormsKey = (taskId: string) => ["task-forms", taskId];
  * the same entry without a second request. Saves keep the entry current, so
  * a minute of cache is safe; a form changed in another tab answers 409.
  */
-function useTaskForms(taskId: string) {
+function useTaskForms(
+  taskId: string,
+  { retryOnMount = true }: { retryOnMount?: boolean } = {},
+) {
   return useQuery({
     queryKey: taskFormsKey(taskId),
     queryFn: () => getTaskForms(taskId),
     enabled: Boolean(taskId),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    retryOnMount,
   });
 }
 

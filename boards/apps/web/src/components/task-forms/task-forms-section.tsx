@@ -10,12 +10,16 @@ import { TaskFormBlock } from "./task-form-block";
 // TB-173 web (a): the forms of a task, loaded as a lazy chunk only when the
 // task has forms or its list did not load, so a card without forms pays
 // nothing for them. It reads the list of the slot's query: no second request.
+// The slot mounts it after a failed list too, so its observer must not retry
+// on mount: the user sees the error and decides to retry.
 
 export default function TaskFormsSection({ taskId }: { taskId: string }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const headingId = useId();
-  const { data: forms, isError, isFetching, refetch } = useTaskForms(taskId);
+  const { data: forms, isError, isFetching, refetch } = useTaskForms(taskId, {
+    retryOnMount: false,
+  });
   // Wait for the newest list once; after that the blocks stay mounted, so a
   // later refetch never drops answers that are being typed.
   const [shown, setShown] = useState(false);

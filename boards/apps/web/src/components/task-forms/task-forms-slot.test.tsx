@@ -64,6 +64,8 @@ describe("TaskFormsSlot (TB-173)", () => {
     renderWithClient(<TaskFormsSlot taskId="task-1" />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("tasks:forms.loadError");
+    // The lazy section reads the failed list; it does not fetch it again.
+    expect(getForms).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "tasks:forms.retry" }));
     expect(await screen.findByText("tasks:forms.title")).toBeTruthy();
     expect(screen.getByText("Seven types")).toBeTruthy();
