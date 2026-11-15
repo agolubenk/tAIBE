@@ -2556,7 +2556,8 @@
 			"myTasks": "我的任務",
 			"invitePeople": "邀請成員",
 			"forest": "Forest",
-			"notebook": "SSR (sessions, skills & rules)"
+			"notebook": "SSR (sessions, skills & rules)",
+			"skipToContent": "Skip to content"
 		},
 		"projectList": {
 			"viewProject": "檢視專案",
