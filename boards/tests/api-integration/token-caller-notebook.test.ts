@@ -19,6 +19,32 @@ const join = (...parts: string[]) => parts.join("");
 const SECRET = join("gh", "p_", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8");
 const PART = SECRET.slice(0, 12);
 const MARKER = "[REDACTED:";
+// Secrets of no provider format: only the label before each one marks it.
+const LABELED = [
+  join("Zq8f", "K2mP9xL4vB7nR1tY"),
+  join("Wd3h", "N7qR2sT9vX4zB6cF"),
+  join("Lp5j", "M8nQ1rS6tU3wY9aE"),
+];
+// Each heading ends with a label, and the text after it has its own.
+const LABEL_DOC = [
+  "# Staging",
+  "",
+  "## Staging password:",
+  "",
+  `password: ${LABELED[0]} перед релизом`,
+  "",
+  "# Config",
+  "",
+  "## Staging password:",
+  "",
+  `"password": "${LABELED[1]}" в конфиге`,
+  "",
+  "# Ops",
+  "",
+  "## Authorization: Bearer",
+  "",
+  `Authorization: Bearer ${LABELED[2]} для бота`,
+].join("\n");
 
 // Synthetic corpus only: the secret sits in one section, the other has none.
 const KEYS_DOC = [
@@ -190,6 +216,37 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
         (item: { id: string }) => item.id,
       ),
     ).toEqual([log]);
+  });
+
+  it("finds a log for an API key by each field as it reads them", async () => {
+    const forest = await createForest();
+    // Claude #388 B1: searchText glues the title, the description and the
+    // comments with "\n", and the answer masks each field. A title that ends
+    // with a label took the first word of the description as its value, so
+    // the secret stayed open in the glued text that was checked.
+    const secret = LABELED[2] ?? "";
+    const log = await fellCard(
+      forest,
+      "Ops Authorization: Bearer",
+      `Authorization: Bearer ${secret} для бота`,
+    );
+    const ids = async (query: string, as: "owner" | "agent" = "agent") => {
+      const found = await forest[as](`/logs?q=${encodeURIComponent(query)}`);
+      expect(found.status).toBe(200);
+      return (found.body.items as { id: string }[]).map((item) => item.id);
+    };
+
+    expect(await ids(secret, "owner")).toEqual([log]);
+    for (const guess of [secret, secret.slice(0, 12)]) {
+      expect(await ids(guess), guess.length.toString()).toEqual(
+        await ids(`${guess.slice(0, -1)}0`),
+      );
+    }
+    // Not vacuous: a visible word finds the log, and it reads masked.
+    expect(await ids("для бота")).toEqual([log]);
+    expect(text((await forest.agent(`/logs/${log}`)).body)).not.toContain(
+      secret,
+    );
   });
 
   it("cuts the logs window for an API key at 1 MiB of text", async () => {
@@ -483,6 +540,47 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(await headings("ротация <-> квартал")).toEqual(["Ключи › Ротация"]);
   });
 
+  it("answers a guess under a label heading as any other word", async () => {
+    const nb = await notebookFixture();
+    const stored = await nb.owner("PUT", "/sources", {
+      kind: "link",
+      ref: "https://example.com/staging",
+      title: "Staging",
+      text: LABEL_DOC,
+    });
+    expect(stored.status).toBe(200);
+    const search = async (query: string, as: "owner" | "agent" = "agent") => {
+      const found = await nb[as]("POST", "/search", { query, mode: "keyword" });
+      expect(found.status).toBe(200);
+      return found.body;
+    };
+    const headings = async (query: string, as: "owner" | "agent" = "agent") =>
+      ((await search(query, as)).results as Hit[]).map((hit) => hit.heading);
+
+    // Claude #388 B1: the check masked the heading and the text joined, and
+    // the answer masks each field. A heading that ends with a label took the
+    // first word of the text as its value, so the secret stayed open in the
+    // checked text: a right guess found the chunk, a wrong one did not.
+    for (const secret of LABELED) {
+      expect(await headings(secret, "owner"), secret.slice(0, 4)).toHaveLength(
+        1,
+      );
+      expect(await headings(secret), secret.slice(0, 4)).toEqual(
+        await headings(`${secret.slice(0, -1)}0`),
+      );
+    }
+    // Not vacuous: a visible word finds each chunk, and it reads masked.
+    for (const [word, heading] of [
+      ["релизом", "Staging › Staging password:"],
+      ["конфиге", "Config › Staging password:"],
+      ["бота", "Ops › Authorization: Bearer"],
+    ]) {
+      expect(await headings(word ?? ""), word).toEqual([heading]);
+      const found = text(await search(word ?? ""));
+      for (const secret of LABELED) expect(found).not.toContain(secret);
+    }
+  });
+
   it("gives an API key no hash or length of a raw source", async () => {
     const nb = await notebookFixture();
     // Claude #388 B3: the hash and the length of the raw text stay only on a
@@ -521,6 +619,26 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(items.some((item) => item.text.includes("Ротация ключа"))).toBe(
       true,
     );
+  });
+
+  it("hands a chunk under a label heading to the embedding worker masked", async () => {
+    const nb = await notebookFixture();
+    const stored = await nb.owner("PUT", "/sources", {
+      kind: "link",
+      ref: "https://example.com/staging",
+      title: "Staging",
+      text: LABEL_DOC,
+    });
+    expect(stored.status).toBe(200);
+
+    // Claude #388 B1: the passage glued the heading to the text before
+    // redact, so a heading that ends with a label hid the text's own label.
+    const work = await nb.agent("GET", "/embed/work?wait=0");
+    expect(work.status).toBe(200);
+    const items = work.body.items as { kind: string; text: string }[];
+    expect(items).toHaveLength(5);
+    for (const secret of LABELED) expect(text(items)).not.toContain(secret);
+    expect(items.some((item) => item.text.includes("для бота"))).toBe(true);
   });
 
   it("masks chat threads for an API key", async () => {
