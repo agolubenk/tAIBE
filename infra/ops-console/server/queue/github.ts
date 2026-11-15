@@ -245,6 +245,13 @@ function mergeFlags(cmd: string): MergeFlags {
   return out
 }
 
+/** Репозитории из флагов -R/--repo и GH_REPO в любой части строки (не только в команде мёржа). */
+function looseRepos(cmd: string): string[] {
+  const flags = [...cmd.matchAll(/(?:^|[\s;&|(])(?:-R\s*=?\s*|--repo(?:=|\s+))["']?([\w.-]+\/[\w.-]+)/g)].map((m) => m[1] ?? '')
+  const env = [...cmd.matchAll(/\bGH_REPO=["']?([\w.-]+\/[\w.-]+)/g)].map((m) => m[1] ?? '')
+  return [...flags, ...env].filter(Boolean).map(repoName)
+}
+
 /** Номер PR и последствия мёржа — из полей пункта или (для пунктов из артефакта) из его команды и меток. */
 export function mergePlan(item: Record<string, unknown>): MergePlan {
   const cmd = typeof item.cmd === 'string' ? item.cmd : ''
@@ -254,12 +261,21 @@ export function mergePlan(item: Record<string, unknown>): MergePlan {
   const approvedBase = typeof item.base === 'string' && BRANCH_NAME.test(item.base) ? item.base : null
   // Поле пункта главнее команды; противоречие команде — отказ, а не выбор одного из двух.
   const itemRepo = str(item.repo)
+  // Репозиторий, названный вне команды мёржа: в cmd2 (вариант той же команды) и флагом -R/--repo, GH_REPO в другой
+  // команде строки. Без него GET /merge читал бы PR консоли с тем же номером (карточка HR c1nr0ih5, F4).
+  const cmd2 = typeof item.cmd2 === 'string' ? item.cmd2 : ''
+  const elsewhere = [...new Map([mergeFlags(cmd2).repo, ...looseRepos(cmd), ...looseRepos(cmd2)]
+    .filter((r): r is string => !!r).map((r) => [r.toLowerCase(), r])).values()]
+  const named = itemRepo ?? flags.repo
+  const stray = elsewhere.filter((r) => !named || r.toLowerCase() !== named.toLowerCase())
   // Не проверяем формат здесь: кривое имя не совпадёт с репозиторием консоли, и mergeInfo откажет (fail-closed).
-  const repo = itemRepo ?? flags.repo
+  const repo = named ?? (elsewhere.length === 1 ? elsewhere[0]! : null)
   const problems = [
     itemRepo && flags.repo && itemRepo.toLowerCase() !== flags.repo.toLowerCase()
       ? `поле repo (${itemRepo}) и команда (${flags.repo}) называют разные репозитории`
       : itemRepo ? null : flags.problems.repo,
+    named && stray.length ? `репозиторий PR — ${named}, а вне команды мёржа (cmd2, -R, GH_REPO) назван ${stray.join(', ')}` : null,
+    !named && elsewhere.length > 1 ? `вне команды мёржа названы разные репозитории: ${elsewhere.join(', ')}` : null,
     item.mergeMethod === undefined ? flags.problems.method : null,
     str(item.subject) ? null : flags.problems.subject,
     flags.problems.other,
