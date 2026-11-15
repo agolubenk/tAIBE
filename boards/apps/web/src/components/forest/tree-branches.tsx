@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Skeleton } from "@/components/ui/skeleton";
 import useTree from "@/hooks/queries/forest/use-tree";
+import { getStatusLabel } from "@/lib/i18n/domain";
 import { ForestTaskLink } from "./forest-task-link";
 import { orderBranches } from "./order-branches";
 
@@ -52,7 +53,7 @@ export function TreeBranches({ workspaceId, rootId }: TreeBranchesProps) {
             title={branch.title}
           />
           <span className="shrink-0 text-muted-foreground text-xs">
-            {branch.status}
+            {getStatusLabel(branch.status)}
           </span>
         </li>
       ))}
