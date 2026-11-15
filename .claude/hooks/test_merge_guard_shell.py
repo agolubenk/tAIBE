@@ -352,10 +352,20 @@ for form in ("MAKEFLAGS=\"-s 'a MAKEFILES=ok.mk'\" make x", "MAKEFLAGS=\"-s 'a -
              "MAKEFLAGS+=-Iinc make -C sub x", "export MAKEFLAGS+='MAKEFILES=ok.mk'; make x",
              "MAKEFILES+=sub/inc/lib.mk make x"):
     bash(f"SE-133 линза 2, отказ: {form!r}", form, True, cwd=o)
-for form in ("MAKEFLAGS='-j4 -s' make -C sub x", "MAKEFLAGS+=-k make -C sub x"):
+for form in ("MAKEFLAGS='-j4 -s' make -C sub x", "MAKEFLAGS+= make -C sub x"):
     bash(f"SE-133 линза 2, без признака: {form!r}", form, False, cwd=o)
 why = run("Bash", {"command": "MAKEFLAGS=\"-s 'a -Iinc'\" make x"}, cwd=o) or ""
 check(f"SE-133 линза 2: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# Линза backend (#398, cc5db25db): `ИМЯ+=` склеивает с прежним значением без пробела, части по отдельности чисты —
+# make 3.81 читает inc/ (sub/inc/lib.mk). Любое `ИМЯ+=` с непустым значением у этих имён — отказ (APPEND_WHY).
+for form in ("MAKEFLAGS=\"-s --\"; MAKEFLAGS+=\"include-dir=inc\" make -C sub x",
+             "MAKEFLAGS=\"-s MAKEFI\"; MAKEFLAGS+=\"LES=inc/lib.mk\" make -C sub x", "MAKEFLAGS+=-k make -C sub x",
+             "GNUMAKEFLAGS+=-k make x", "MAKEFILES=sub/inc/li; MAKEFILES+=b.mk make x",
+             "BASH_ENV=a; BASH_ENV+=b.sh bash -c true", "export ENV+=b.sh; sh -c true",
+             "NODE_OPTIONS+=' -r ./m.js' node -e 1", "npm_config_script_shell+=sh npm test"):
+    bash(f"SE-133 линза backend +=, отказ: {form!r}", form, True, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s --\"; MAKEFLAGS+=\"include-dir=inc\" make -C sub x"}, cwd=o) or ""
+check(f"SE-133 +=: причина — склейка: {why[:90]!r}", why if "ИМЯ+=" in why else None, True)
 # Линза Claude (#398, issuecomment-6891590096). B1: `$(…)` и `` `…` `` в значении разбор режет в метку без `$`.
 # B2: make делит слова только по пробелу и табу (`isblank`), `\v`, `\f`, `\r`, `\n` — часть слова. B3: опции make 4.x
 # со значением, которых нет в 3.81: getopt 3.81 следующее слово не забирает, и `-I` проходит.

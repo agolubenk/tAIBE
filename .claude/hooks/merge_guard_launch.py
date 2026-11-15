@@ -65,6 +65,7 @@ MAKE_READS = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin",
 MAKE_4X_VALUED = {"--jobserver-auth", "--jobserver-style", "--sync-mutex"}
 MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
 MAKEFLAGS_ARG = "\0MAKEFLAGS"
+APPEND_ARG = "\0append"  # `ИМЯ+=…` у IMPLIED_VAR: прежнее значение по слову не видно (линза backend #398)
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
 
@@ -288,14 +289,17 @@ MAKEFLAGS_WHY = ("MAKEFLAGS или GNUMAKEFLAGS с опцией или пере�
                  "(`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`, `--jobserver-auth` make 4.x), или с кавычкой, "
                  "`\\`, `$`, `$(…)`, знаком вне печатного ASCII, кроме таба (слова и подстановки make делит иначе, "
                  "чем shell): папку make (`-C`, `cd`) разбор с ними не сводит — передайте их в командной строке make")
+APPEND_WHY = ("`ИМЯ+=…` у MAKEFLAGS, GNUMAKEFLAGS, MAKEFILES, BASH_ENV, ENV, NODE_OPTIONS, npm_config_node_options, "
+              "npm_config_script_shell: shell склеит значение с прежним (слово раньше в строке или окружение), и make, "
+              "bash или node получат склейку, которую разбор по словам не видит — задайте значение целиком через `=`")
 
 
 def make_option(a):
     """Причина, по которой разбор не видит, что прочтёт make, иначе "": длинная опция, которую getopt_long не раскроет
-    однозначно (`--d`, `--o`, `--frob`, SE-128), или метка make_flags (SE-133)."""
+    однозначно (`--d`, `--o`, `--frob`, SE-128), метка make_flags (SE-133) или `ИМЯ+=` (implied_commands)."""
     if a[0] not in MAKES:
         return ""
-    return MAKEFLAGS_WHY if MAKEFLAGS_ARG in a else MAKE_OPTION if "?" in _options(
+    return APPEND_WHY if APPEND_ARG in a else MAKEFLAGS_WHY if MAKEFLAGS_ARG in a else MAKE_OPTION if "?" in _options(
         a, MAKE_VALUED, short=True, names=MAKE_LONG)[0] else ""
 
 
@@ -365,13 +369,17 @@ def implied_commands(argvs):
     — bash и sh выполнят F до своей команды, в том числе внутри `npm run`; `MAKEFILES=F` — make прочтёт F;
     `MAKEFLAGS=-Idir`, `MAKEFLAGS='MAKEFILES=F'` — отказ с причиной (make_flags);
     `NODE_OPTIONS='-r F'` (`--require`, `--import`, `--loader`) — node загрузит F; `--script-shell F` и
-    `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске."""
+    `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске.
+    `ИМЯ+=…` с непустым значением — отказ с причиной APPEND_WHY: shell склеивает с прежним значением без пробела
+    (`MAKEFLAGS="-s --"; MAKEFLAGS+="include-dir=inc"` — make 3.81 читает inc/), а части по отдельности чисты."""
     out = []
     for a in argvs:
         for k, x in enumerate(a):
             m = IMPLIED_VAR.fullmatch(x)
             name, val = (m.group(1), m.group(2)) if m else ("", "")
-            if name in ("BASH_ENV", "ENV") and val:
+            if name and val and x[len(name)] == "+":
+                out.append(["make", APPEND_ARG])
+            elif name in ("BASH_ENV", "ENV") and val:
                 out.append(["bash", val])
             elif name == "MAKEFILES":
                 out += [["make", "-f", f] for f in val.split()]
