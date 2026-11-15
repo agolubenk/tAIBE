@@ -455,6 +455,20 @@ for form in ("make -C n1 V=1 all", "make -C $(pwd)/n1 all"):  # `$(pwd)` раз�
 why = run("Bash", {"command": "make -f <(printf 'x: ; @true') x"}, cwd=o) or ""
 check(f"SE-135 подстановка в слове make: причина: {why[:90]!r}",
       why if "подстановка shell в слове make" in why else None, True)
+# Правило coord 11:55 (#402): знак вне \x20-\x7e, кроме таба, в слове make (аргумент, `-f`, `--eval`) и в строке
+# include — отказ. Линза Claude #398: в локали kk_KZ.PT154 make 3.81 считает 0xA0 пробелом, `à` — C3 A0, поэтому
+# `-include xà/dev/stdin` для него — два слова, и второе — поток.
+for name, text in (("a1/Makefile", "-include xà/dev/stdin\nall: ; @true\n"),
+                   ("a2/Makefile", "include /dev/null\nall: ; @echo à\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make -C n1 V=à all", "make -C n1 --eval 'V=à' all", "make -f n1/Mà all", "make -C dà all",
+             "make -C a1 all"):
+    bash(f"SE-135 не ASCII в слове make, отказ: {form!r}", form, True, cwd=o)
+bash("SE-135 не ASCII вне include, без признака: рецепт с à", "make -C a2 all", False, cwd=o)
+for form, part in (("make -C n1 V=à all", "вне печатного ASCII"), ("make -C a1 all", "строка include")):
+    why = run("Bash", {"command": form}, cwd=o) or ""
+    check(f"SE-135 не ASCII: причина {form!r}: {why[:90]!r}", why if part in why else None, True)
 o = TMP / "se133"
 # Линза Claude (#398, issuecomment-6891590096). B1: `$(…)` и `` `…` `` в значении разбор режет в метку без `$`.
 # B2: make делит слова только по пробелу и табу (`isblank`), `\v`, `\f`, `\r`, `\n` — часть слова. B3: опции make 4.x
