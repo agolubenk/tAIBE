@@ -1732,6 +1732,7 @@
 			"toastMoved": "Project moved successfully",
 			"toastMovedWithUnassigned": "Project moved successfully. {{taskCount}} task(s) were unassigned.",
 			"toastMoveError": "Failed to move project",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"tasksTitle": "Tasks",
 			"moveTargetLabel": "Workspace",
 			"moveDialogTitle": "Move to another workspace?",
@@ -3618,6 +3619,49 @@
 				"progress": "{{done}} of {{total}} done",
 				"none": "None"
 			}
+		},
+		"forms": {
+			"required": "required",
+			"yes": "Yes",
+			"no": "No",
+			"intervalFrom": "From",
+			"intervalTo": "To",
+			"addNote": "Add a note",
+			"note": "Note",
+			"issues": {
+				"required": "Answer this question.",
+				"wrongType": "This value does not fit the question.",
+				"outOfRange": "The value is out of range.",
+				"invalidOption": "Choose one of the options.",
+				"invalidInterval": "Fill in both ends; the start must not be after the end.",
+				"tooLong": "The text is too long.",
+				"unknownField": "This question is not in the form.",
+				"versionMismatch": "The form has a new version. Reload it to answer."
+			},
+			"title": "Forms",
+			"loadError": "Forms did not load.",
+			"retry": "Retry",
+			"progress": "{{answered}} of {{total}}",
+			"status": {
+				"draft": "Draft",
+				"submitted": "Submitted",
+				"changed": "Changed after submit"
+			},
+			"save": {
+				"pending": "Unsaved changes",
+				"saving": "Saving…",
+				"saved": "Saved",
+				"failed": "Not saved. Your answers stay on this page.",
+				"invalid": "Some answers are not saved: fix the marked questions.",
+				"rowVersion": "The form was changed in another tab. Reload it; changes made here after the last save will be lost.",
+				"versionMismatch": "The form has a new version. Reload it to answer.",
+				"forbidden": "You cannot change the answers of this form."
+			},
+			"reload": "Reload form",
+			"submit": "Submit",
+			"resubmit": "Submit again",
+			"submitIssues": "Answer the marked questions to submit.",
+			"export": "Download JSON"
 		}
 	},
 	"invitations": {
@@ -4095,9 +4139,15 @@
 					"hint": "A web page (HTML, Markdown or plain text, up to 2 MB) is read once; a pull request comes through the GitHub App with its discussion. Adding the same link again refreshes it. PDF is not supported yet."
 				},
 				"refresh": "Refresh {{title}}",
+				"remove": "Remove {{title}}",
+				"removeTitle": "Remove this source from the notebook?",
+				"removeDescription": "{{title}} and its chunks leave the notebook, and answers stop citing it. You can add the link again later.",
+				"removeConfirm": "Remove",
 				"toast": {
 					"added": "In the notebook: {{title}}",
 					"unchanged": "Nothing changed: {{title}}",
+					"removed": "Removed from the notebook: {{title}}",
+					"removeError": "Could not remove the source",
 					"error": "Could not add the source"
 				},
 				"errors": {
