@@ -8,25 +8,12 @@ import glob
 import json
 import os
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 
-PRICES = {"fable": (10, 50, 0.25), "opus-5-5": (4, 20, 0.2), "opus-5": (5, 25, 0.5), "sonnet": (2, 10, 0.2),
-          "haiku-5-5": (0.1, 0.5, 0.01)}
-
-
-def price(model):
-    for k in PRICES:
-        if k in (model or ""):
-            return PRICES[k]
-    return PRICES["opus-5-5"]
-
-
-def call_usd(u, model):
-    pi, po, pr = price(model)
-    cw = u.get("cache_creation_input_tokens", 0) or 0
-    c1 = (u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens", 0) or 0
-    return ((u.get("input_tokens", 0) or 0) * pi + (cw - c1) * 1.25 * pi + c1 * 2 * pi
-            + (u.get("cache_read_input_tokens", 0) or 0) * pr + (u.get("output_tokens", 0) or 0) * po) / 1e6
+# Один прайс на весь eval (GL-1): eval/tools/prices.py. В конец пути, а не в начало: модули Нерва не перекрываются.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
+from prices import PRICES, call_usd, price  # noqa: E402,F401
 
 
 def parse_ts(s):
