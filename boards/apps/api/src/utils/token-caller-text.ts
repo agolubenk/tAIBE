@@ -24,15 +24,19 @@ export function maskForTokenCaller<T>(c: Context, value: T): T {
   return isTokenCaller(c) ? redactDeep(value) : value;
 }
 
+/** A list page: the cursor of the next page, or null on the last page. */
+type CursorPage = { nextCursor: string | null };
+
 /**
  * A page for a caller with a token: every string in the mask, except the
  * cursor. The cursor is base64url of a time and a row id, so it holds no
  * text; but redact reads its 66 characters as a base64 secret, and a masked
  * cursor makes the next page fail with 400 (TB-204).
  */
-export function maskPageForTokenCaller<
-  T extends { nextCursor: string | null },
->(c: Context, page: T): T {
+export function maskPageForTokenCaller<T extends CursorPage>(
+  c: Context,
+  page: T,
+): T {
   if (!isTokenCaller(c)) return page;
   return { ...redactDeep(page), nextCursor: page.nextCursor };
 }
