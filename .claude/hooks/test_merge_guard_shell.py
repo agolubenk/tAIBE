@@ -430,6 +430,31 @@ for form in ("make -C c1 all", "make -C c2 all", "make -C c3 all", "make -C c4 a
     bash(f"SE-135 продолжение строки, отказ: {form!r}", form, True, cwd=o)
 for form in ("make -C c6 all", "make -C c7 all"):
     bash(f"SE-135 продолжение строки, без признака: {form!r}", form, False, cwd=o)
+# Правило coord 11:46 (#402): экранирование make разбор не моделирует — строка include с `\` или `#` после склейки
+# продолжений — отказ. Форма линзы backend (issuecomment-6891872344, make 3.81): `-include x\#y /dev/stdin` читает stdin.
+for name, text in (("e1/Makefile", "-include x\\#y /dev/stdin\nall: ; @true\n"),
+                   ("e2/Makefile", "include a.mk # note\nall: ; @true\n"), ("e2/a.mk", "y: ; @true\n"),
+                   ("e3/Makefile", "include a\\ b.mk\nall: ; @true\n"),
+                   ("e4/Makefile", "# include x\\#y /dev/stdin\nall: ; @true\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make -C e1 all", "make -C e2 all", "make -C e3 all", "make -C n1 --eval 'include x\\#y' all"):
+    bash(f"SE-135 include с \\ или #, отказ: {form!r}", form, True, cwd=o)
+bash("SE-135 include с \\ или #, без признака: строка-комментарий", "make -C e4 all", False, cwd=o)
+why = run("Bash", {"command": "make -C e1 all"}, cwd=o) or ""
+check(f"SE-135 include с \\ или #: причина: {why[:90]!r}", why if "строка include" in why else None, True)
+# Правило coord 11:47 (#402): подстановка shell в любом слове make — отказ всего вызова. Линза release
+# (issuecomment-6891879848): B1 `--eval "$(cat evil.mk)"` — метка без `$`, EVAL_RUNS её не видит; B2 `-f <(…)` — пути
+# нет на диске, _read_tree его молча отбрасывает.
+for form in ('make --eval "$(cat evil.mk)" all', "make -f <(printf 'x: ; @true') x", 'make -f "$(echo Makefile)" all',
+             "make -C $(git branch --show-current) all", "make -f =(printf x) x", "make -C n1 X=$(date) all",
+             "make -C n1 -I `cat f` all", "make -C n1 all >(cat)"):
+    bash(f"SE-135 подстановка в слове make, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C n1 V=1 all", "make -C $(pwd)/n1 all"):  # `$(pwd)` разбор сводит к ${PWD} — не метка
+    bash(f"SE-135 подстановка в слове make, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "make -f <(printf 'x: ; @true') x"}, cwd=o) or ""
+check(f"SE-135 подстановка в слове make: причина: {why[:90]!r}",
+      why if "подстановка shell в слове make" in why else None, True)
 o = TMP / "se133"
 # Линза Claude (#398, issuecomment-6891590096). B1: `$(…)` и `` `…` `` в значении разбор режет в метку без `$`.
 # B2: make делит слова только по пробелу и табу (`isblank`), `\v`, `\f`, `\r`, `\n` — часть слова. B3: опции make 4.x
