@@ -1601,10 +1601,7 @@ export const taskFormTable = pgTable(
   },
   // The unique key starts with task_id, so it also serves the card's list.
   (table) => [
-    unique("task_form_task_template_unique").on(
-      table.taskId,
-      table.templateId,
-    ),
+    unique("task_form_task_template_unique").on(table.taskId, table.templateId),
   ],
 );
 

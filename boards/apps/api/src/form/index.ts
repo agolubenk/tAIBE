@@ -4,6 +4,7 @@ import { ApiError } from "../errors/api-error";
 import { resolveForestActor } from "../forest/actor";
 import {
   apiRouter,
+  type BaseVariables,
   createRoute,
   errorResponse,
   jsonResponse,
@@ -185,7 +186,7 @@ const exportFormRoute = createRoute({
   },
 });
 
-const form = apiRouter()
+const form = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(createTemplateRoute, async (c) => {
     const { template } = c.req.valid("json");
     const row = await createTemplate(

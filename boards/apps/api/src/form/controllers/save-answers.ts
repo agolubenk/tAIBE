@@ -59,9 +59,7 @@ export default async function saveAnswers(
       status: input.submit ? "submitted" : "draft",
       rowVersion: sql`${forms.rowVersion} + 1`,
       updatedBy: userId,
-      ...(input.submit
-        ? { submittedAt: new Date(), submittedBy: userId }
-        : {}),
+      ...(input.submit ? { submittedAt: new Date(), submittedBy: userId } : {}),
     })
     .where(and(eq(forms.id, id), eq(forms.rowVersion, input.rowVersion)))
     .returning({
