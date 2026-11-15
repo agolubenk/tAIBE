@@ -5,6 +5,7 @@ descendant gets its own lineage id under its parent's.
 
 Run: python3 -I eval/tools/test_spawn_session.py   (exit 1 on mismatch; --dry-run only, nothing is launched)
 """
+import hashlib
 import os
 import re
 import subprocess
@@ -203,6 +204,65 @@ rc, out = second_run("taibe", "--launch", "--roles", "all")
 if rc != 0 or "backend-2" in out or "boards — команда напечатана" not in out:
     failed += 1
     print("FAIL: --roles all opens the six base roles only")
+    print(out)
+
+# TB-131: строка запуска сразу за меткой линии; хэш генома — от файла --settings, хэш промпта — от сообщения без строки.
+LAUNCH_RE = re.compile(r" Запуск: parent=(\S+) genome=([0-9a-f]{12}|-) prompt=([0-9a-f]{12}) wake=(\w+)\.")
+
+
+def sha12(data):
+    return hashlib.sha256(data).hexdigest()[:12]
+
+
+def launch_run(*flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = {**os.environ, "TMPDIR": tmp, "TAIBE_PRODUCT": "", "TAIBE_LINEAGE": "r.ab12",
+               "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"), "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"),
+               "NERVE_PLIST": os.path.join(tmp, "none.plist")}
+        flags = [str(handoff) if a == "HANDOFF" else a for a in flags]
+        run = subprocess.run(["bash", str(SCRIPT), *flags, "--dry-run", "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+    msg = next((ln for ln in run.stdout.splitlines() if "Линия: " in ln), "")
+    genome = re.search(r"--settings '([^']+)'", run.stdout)
+    return run.returncode, msg, genome.group(1) if genome else None, run.stdout + run.stderr
+
+
+for name, flags, wake, has_genome in [
+    ("launch: wake human by default", ["--launch", "--role", "backend", "--product", "taibe"], "human", True),
+    ("launch --wake timer", ["--launch", "--role", "backend", "--product", "taibe", "--wake", "timer"], "timer", True),
+    ("handoff with a role: wake peer by default", ["--handoff", "HANDOFF", "--role", "boards", "--no-retire"], "peer",
+     True),
+    ("handoff without a role: no genome", ["--handoff", "HANDOFF", "--no-retire"], "peer", False),
+]:
+    rc, msg, genome, out = launch_run(*flags)
+    m = LAUNCH_RE.search(msg)
+    problems = []
+    if rc != 0 or not m:
+        problems.append("no launch line")
+    else:
+        if "в очереди." + m.group(0) not in msg:
+            problems.append("launch line is not right after the lineage tag")
+        if m.group(1) != "r.ab12":
+            problems.append("parent " + m.group(1))
+        want_genome = sha12(Path(genome).read_bytes()) if (has_genome and genome) else "-"
+        if m.group(2) != want_genome:
+            problems.append("genome %s, want %s" % (m.group(2), want_genome))
+        if m.group(3) != sha12(msg.replace(m.group(0), "", 1).encode("utf-8")):
+            problems.append("prompt hash is not the hash of the message without the launch line")
+        if m.group(4) != wake:
+            problems.append("wake " + m.group(4))
+        if len(m.group(0)) > 120:
+            problems.append("launch line longer than 120 chars")
+    if problems:
+        failed += 1
+        print("FAIL:", name, problems)
+        print(out)
+rc, msg, _, out = launch_run("--launch", "--role", "backend", "--product", "taibe", "--wake", "cron")
+if rc == 0 or "--wake: human, peer или timer" not in out:
+    failed += 1
+    print("FAIL: unknown --wake is refused")
     print(out)
 
 print("spawn_session: %d failed" % failed)

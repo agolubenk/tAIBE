@@ -20,7 +20,11 @@
 # Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|print (print — только напечатать
 # команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
 # · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам
-# · --keep-window (или SPAWN_AUTOCLOSE=off): окно Terminal не закрывается само после выхода claude.
+# · --keep-window (или SPAWN_AUTOCLOSE=off): окно Terminal не закрывается само после выхода claude
+# · --wake human|peer|timer — причина пробуждения (TB-131): по умолчанию peer у --handoff, иначе human.
+# Строка запуска (TB-131) идёт сразу за меткой линии: «Запуск: parent=<линия родителя> genome=<sha> prompt=<sha>
+# wake=<причина>.» sha — первые 12 знаков sha256: геном — файла --settings («-» без генома), промпт — первого
+# сообщения без этой строки. Тексты промптов не уходят никуда; запись значений — шаг 2 карточки.
 # Окно Terminal закрывается само, когда claude в нём вышел с кодом 0: 10 с отсчёта (Enter — оставить), затем
 # lineage.py autoclose — окно этой линии, одна вкладка, в ней только shell; настройка Terminal «When the shell exits»
 # не важна. Код ≠ 0 — окно остаётся. Код выхода пишется в запись линии (lineage.py exited) для автоуборки.
@@ -41,7 +45,7 @@ CWD="$PWD"
 TERMINAL="${SPAWN_TERMINAL:-terminal}"
 PROMPT_DIR=""
 HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO=""
-PRODUCT="" CWD_SET=0
+PRODUCT="" CWD_SET=0 WAKE=""
 CLOSE="${SPAWN_AUTOCLOSE:-on}"
 DELAY="${SPAWN_CLOSE_DELAY:-10}"  # с отсчёта перед закрытием окна (Enter — оставить)
 case "$DELAY" in ''|*[!0-9]*) DELAY=10 ;; esac
@@ -66,12 +70,18 @@ while [ $# -gt 0 ]; do
     --no-retire) RETIRE=off; shift ;;
     --keep-window) CLOSE=off; shift ;;
     --force) FORCE=1; shift ;;
+    --wake) WAKE="${2:?}"; shift 2 ;;
     --status) INFO=status; shift ;;
     --stop) INFO=stop; shift ;;
     -h|--help) awk 'NR>1{if(/^#/)print;else exit}' "$0"; exit 0 ;;  # шапка до первой строки кода — без номеров строк
     *) die "неизвестный аргумент: $1" ;;
   esac
 done
+# Причина пробуждения: human — запустил владелец, peer — сессия (handoff), timer — расписание.
+if [ -z "$WAKE" ]; then
+  if [ -n "$HANDOFF" ]; then WAKE=peer; else WAKE=human; fi
+fi
+case "$WAKE" in human|peer|timer) ;; *) die "--wake: human, peer или timer" ;; esac
 
 # Продукт и его поля — из instances/ через products.py; без них (копия слоя в хосте) — как до OPS-25.
 PRODUCTS_PY="$TOOLS/../nerve/products.py"
@@ -148,10 +158,20 @@ child_lineage() {
 }
 generation() { printf '%s' "$1" | tr -cd '.' | wc -c | tr -d ' '; }
 
-# Первое сообщение новой сессии → stdout. $2 — id линии новой сессии.
+# Первые 12 знаков sha256 от stdin (48 бит: сотни версий генома и промпта без совпадений, строка запуска короче).
+sha12() { python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:12])'; }
+
+# Строка запуска (TB-131) → stdout. $1 — геном (пусто — без генома), $2 — линия, $3 — сообщение без этой строки.
+launch_line() {
+  local g="-"
+  [ -z "$1" ] || g="$(sha12 < "$1")"
+  printf ' Запуск: parent=%s genome=%s prompt=%s wake=%s.' "${2%.*}" "$g" "$(printf '%s' "$3" | sha12)" "$WAKE"
+}
+
+# Первое сообщение новой сессии → stdout. $2 — id линии новой сессии, $3 — строка запуска (сразу за меткой линии).
 first_message() {
-  local role="$1" lineage="$2" num file tag base
-  tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди."
+  local role="$1" lineage="$2" launch="${3:-}" num file tag base
+  tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди.$launch"
   if [ -n "$HANDOFF" ]; then
     # Квитанция — последним шагом приёма: по ней сторож снимает предшественника, Monitor и кроны к этому времени свои.
     tag="$tag Последним шагом приёма (после Monitor, если ты его взводишь) выполни: python3 -I $TOOLS/lineage.py ack — по этой квитанции предшественник закроется сам."
@@ -182,15 +202,18 @@ alias_note() {
 
 # Одна сессия: пусковой скрипт в $TMPDIR, затем окно терминала (или печать команды).
 spawn_one() {
-  local role="$1" msg genome="" dir launcher cmd lineage out wid tty
+  local role="$1" msg line genome="" dir launcher cmd lineage out wid tty
   lineage="$(child_lineage)"
   SPAWNED_LINE="$lineage"
   SPAWNED_TTY=""
-  msg="$(first_message "$role" "$lineage")"
   if [ -n "$role" ]; then
     genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$(role_base "$role").json")"
     [ -f "$genome" ] || die "нет генома $genome (build.py собирает его из roles.json)"
   fi
+  msg="$(first_message "$role" "$lineage")"
+  # Хэш промпта — от сообщения без строки запуска: вырезать её из сообщения — и sha12 сойдётся.
+  line="$(launch_line "$genome" "$lineage" "$msg")"
+  msg="$(first_message "$role" "$lineage" "$line")"
   if [ "$TERMINAL" != print ] && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
     echo "# osascript нет (Linux/SSH) — окно не открыть, команда ниже (и без autoclose)" >&2
     TERMINAL=print
