@@ -67,9 +67,11 @@ merge-guard, а не порядок. Поезд этот блок не сним�
      m-пунктом.
    - **По умолчанию — `owner_item`.** Если `github.merge` нет, режим неизвестен или не разбирается — `owner_item`.
      У HR блока `merge` нет (`instances/hr-helper.json`), значит у HR — `owner_item`: там мёрж = деплой прода.
-   - Открыто для координатора (не блокирует v1): `.github/workflows/` (на этих воротах стоит `pr.quorum`) и
-     `eval/nerve/products.py` (рендер режима) в `owner_paths`. `eval/nerve/config.json` отдельно не нужен: он
-     рендерится из `instances/`, расхождение не пускает `products.py render --check` в CI.
+   - Файлы workflow с шагом деплоя — в `owner_paths`, а не весь `.github/workflows/` (решение координатора 05:29).
+     У tAIBE таких нет: на `cc23af7cc` там только CI (`boards-ci`, `checks-ci`, `eval-ci`, `infra-ci`, `layer-ci`). У
+     HR это `deploy-contabo.yml`. Новый workflow с шагом деплоя входит в `owner_paths` тем же PR, что его вводит.
+     `eval/nerve/products.py` в `owner_paths` не входит. `eval/nerve/config.json` отдельно не нужен: он рендерится из
+     `instances/`, расхождение не пускает `products.py render --check` в CI.
 
    Режим меняет владелец (поле в git, рендер `products.py render`). В Т3 вливает только Контроль
    (`.claude/rules/90-team-t3.md` п. 1) — это про исполнителя мёржа в режиме `control`, не про выбор режима.
