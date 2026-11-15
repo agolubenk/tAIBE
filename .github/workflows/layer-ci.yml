@@ -31,5 +31,7 @@ jobs:
             echo "== $t"
             python3 "$t"
           done
+          echo "== .claude/hooks/test_wt_deps_hook.sh"
+          bash .claude/hooks/test_wt_deps_hook.sh
       - name: Always-loaded context (L1) of every role within budget (eval/evolve/catalog.py)
         run: python3 -I eval/evolve/catalog.py --check

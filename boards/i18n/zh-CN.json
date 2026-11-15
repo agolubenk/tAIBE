@@ -2556,7 +2556,8 @@
 			"invitePeople": "邀请成员",
 			"myTasks": "我的任务",
 			"forest": "Forest",
-			"notebook": "SSR (sessions, skills & rules)"
+			"notebook": "SSR (sessions, skills & rules)",
+			"skipToContent": "Skip to content"
 		},
 		"projectList": {
 			"viewProject": "查看项目",
@@ -3546,7 +3547,17 @@
 				"sector": "Sector",
 				"subcards": "Subcards",
 				"tree": "Whole tree"
+			},
+			"forest": {
+				"openPage": "Forest — on the full page",
+				"title": "Forest"
 			}
+		},
+		"severity": {
+			"critical": "Critical",
+			"high": "High",
+			"low": "Low",
+			"medium": "Medium"
 		}
 	},
 	"invitations": {

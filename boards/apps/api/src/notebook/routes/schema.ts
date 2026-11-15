@@ -80,8 +80,14 @@ export const sourcesSchema = z
         kind: sourceKind,
         ref: z.string(),
         title: z.string(),
-        contentSha256: z.string(),
-        chars: z.number().int(),
+        contentSha256: z.string().optional().openapi({
+          description:
+            "sha256 of the stored text. Absent for a caller with a token, except for repo-doc.",
+        }),
+        chars: z.number().int().optional().openapi({
+          description:
+            "Length of the stored text. Absent for a caller with a token, except for repo-doc.",
+        }),
         updatedAt: responseTimestamp,
         chunks: z.number().int(),
         embedded: z.number().int().openapi({
