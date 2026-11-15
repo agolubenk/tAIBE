@@ -128,11 +128,11 @@ describe("API integration: secrets cut by a fixed length, for callers with a tok
     expect(agent.status).toBe(200);
     const agentHits = agent.body.results as Hit[];
     expect(agentHits).toHaveLength(ownerHits.length);
-    expect(agentHits.some((hit) => shows(hit.text, DB_VALUE))).toBe(false);
+    expect.soft(agentHits.some((hit) => shows(hit.text, DB_VALUE))).toBe(false);
 
     // The tail finds and cites nothing for the key, as any hidden word.
     const byTail = await nb.agent("POST", "/search", { query: DB_TAIL });
-    expect(byTail.body.results).toEqual([]);
+    expect.soft(byTail.body.results).toEqual([]);
     type Message = { citations?: { heading: string }[] | null };
     const cited = (body: { messages: Message[] }) =>
       body.messages.flatMap((message) =>
@@ -146,14 +146,14 @@ describe("API integration: secrets cut by a fixed length, for callers with a tok
       question: DB_TAIL,
     });
     expect(agentThread.status).toBe(201);
-    expect(cited(agentThread.body)).toEqual([]);
+    expect.soft(cited(agentThread.body)).toEqual([]);
 
     // The embedding worker gets every chunk masked across its edges.
     const work = await nb.agent("GET", "/embed/work?wait=0");
     expect(work.status).toBe(200);
     const items = work.body.items as { kind: string; text: string }[];
     expect(items).toHaveLength(ownerHits.length);
-    expect(items.some((item) => shows(item.text, DB_VALUE))).toBe(false);
+    expect.soft(items.some((item) => shows(item.text, DB_VALUE))).toBe(false);
   });
 
   it("masks a secret cut by felling in the log and in grown cards", async () => {
@@ -176,10 +176,10 @@ describe("API integration: secrets cut by a fixed length, for callers with a tok
     const seeds = log.body.seeds as Seed[];
     const history = log.body.history as Entry[];
     expect(seeds).toHaveLength(3);
-    expect(seeds.some((seed) => shows(seed.body, VALUE))).toBe(false);
-    expect(history.some((entry) => shows(entry.content ?? "", VALUE))).toBe(
-      false,
-    );
+    expect.soft(seeds.some((seed) => shows(seed.body, VALUE))).toBe(false);
+    expect
+      .soft(history.some((entry) => shows(entry.content ?? "", VALUE)))
+      .toBe(false);
     expect(seeds.filter((seed) => seed.body.includes("…"))).toHaveLength(3);
 
     // A grown card drops the cut word for everyone: it is new work.
@@ -198,9 +198,9 @@ describe("API integration: secrets cut by a fixed length, for callers with a tok
       .from(schema.taskTable)
       .where(inArray(schema.taskTable.id, grown.body.taskIds));
     expect(cards).toHaveLength(3);
-    expect(cards.some((card) => shows(card.description ?? "", VALUE))).toBe(
-      false,
-    );
+    expect
+      .soft(cards.some((card) => shows(card.description ?? "", VALUE)))
+      .toBe(false);
     expect(cards.every((card) => card.description?.includes("…"))).toBe(true);
   });
 });
