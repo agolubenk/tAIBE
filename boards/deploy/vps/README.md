@@ -147,7 +147,9 @@ applies the owner's answer itself. It is off until all four are set:
    `install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/oq_token`, then paste and Ctrl-D.
 3. Add to `/opt/t-boards/.env`: `OQ_URL=https://ops.admin.hrhelper.space`, `OQ_TOKEN_NAME=t-boards`,
    `OQ_WORKSPACE_PRODUCTS=<workspaceId>=hr-helper,<workspaceId>=hr-helper` (Lavaeon and aiBoards&eval; a workspace not
-   listed gets no items, only the t-boards UI).
+   listed gets no items, only the t-boards UI). The plan rows follow the board (TB-106) by the plan product: add
+   `OQ_PLAN_PRODUCTS=lth89qy6f8j1greiy4c5cn23=taibe` (aiBoards&eval plans under `w-taibe-*`, its off-plan row is
+   `w-taibe-unplanned`). A workspace not listed there plans under its `OQ_WORKSPACE_PRODUCTS` product; items keep it.
 4. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
 
 `install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
