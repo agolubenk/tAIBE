@@ -11,13 +11,12 @@ export {
   type AnswerMap,
   type AnswersCheck,
   type AnswersDoc,
-  answerSchema,
-  answersDocSchema,
   isEmptyValue,
   type ValidateOptions,
   validateAnswers,
   valueIssue,
 } from "./answers.js";
+export { answerSchema, answersDocSchema } from "./answers-schema.js";
 export {
   type AnswerLabels,
   type ExportEntry,
@@ -35,11 +34,11 @@ export {
   fieldIdSchema,
   fieldSchema,
   formTemplateSchema,
-  LIMITS,
   SHOW_IF_TARGETS,
   showIfSchema,
   type TemplateIssue,
   type TemplateIssueCode,
   templateIssues,
 } from "./schema.js";
+export { LIMITS } from "./limits.js";
 export { findShowIfCycle, visibleFieldIds } from "./show-if.js";

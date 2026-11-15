@@ -3,7 +3,7 @@
 `npm install`, `turbo run X` — скрипты package.json (с хуками жизненного цикла и пакетами workspaces), `make` — рецепты
 Makefile и его include, `awk -f F` — программа awk и её @include; `BASH_ENV=F`, `NODE_OPTIONS='-r F'`, `MAKEFILES=F`,
 `--script-shell F` — файл, который команда запустит сама (implied_commands). Решений не принимает: отдаёт тексты и
-команды, разбирает их хук; make_hint — прямые команды целей Makefile для сообщения об отказе (SE-105). Текст None — папка не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
+команды, разбирает их хук; причины отказа make и прямые команды его целей — merge_guard_make. Текст None — папка не видна (LOST, см. merge_guard_dirs): что делать, решает хук.
 """
 import glob
 import json
@@ -11,7 +11,8 @@ import os
 import re
 
 from merge_guard_files import open_regular
-from merge_guard_shell import CURRENT, LOST, SUBST, is_lost, words
+from merge_guard_git import same_blob
+from merge_guard_shell import CURRENT, LOST, SUBST, device, is_lost, words
 
 PKG_TOOLS = {"npm", "pnpm", "yarn", "bun", "turbo"}
 RUN = {"run", "run-script", "rum", "urn"}
@@ -44,17 +45,25 @@ MAKE_LONG = ("always-make", "assume-new", "assume-old", "check-symlink-times", "
 MAKE_VALUED = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin", "-I", "--include-dir", "-E", "--eval",
                "-o", "--old-file", "--assume-old", "-W", "--what-if", "--new-file", "--assume-new", "--jobserver-auth",
                "--jobserver-fds", "--jobserver-style", "--sync-mutex"}
+MAKE_OPTIONAL = {"-j", "-l", "-O"}  # необязательное значение: в связке — её остаток (`-lf ok.mk` — `-l f`, make 3.81)
 MAKEFILES = ("GNUmakefile", "makefile", "Makefile")
 MAKE_INCLUDE = re.compile(r"(?m)^[ \t]*(?:-include|sinclude|include)[ \t]+(.+)$")
-WT_TRACKS = ("feature", "fix", "refactor", "spike", "review")
-EVAL_SUITES = ("nerve", "pipeline", "pipeline/reflex", "pipeline/genome", "swarm", "evolve")
-MAKE_VALUE = re.compile(r"[A-Za-z0-9._-]+\Z")
+# `\` + перевод строки make склеивает раньше комментариев: нечётное число `\` — продолжение, чётное — нет (make 3.81).
+MAKE_CONT = re.compile(r"(?<!\\)((?:\\\\)*)\\\n[ \t]*")
+INCLUDE_ESCAPE = "\0INCLUDE"  # метка в streams: строка include с `\` или `#` — экранирование make разбор не сводит
+# Правило coord 12:06/12:07 (#402): в Makefile дерева — слово include в любой строке, `$(eval`, `$(file`, `$(shell`
+# (и `${…}`), `/dev/` в начале слова-пути; метка MAKE_TEXT в streams — и для Makefile, который разбор не прочёл,
+# и для пересборки встроенным правилом (coord 12:19): рядом `имя.*`, `имя,v`, `s.имя`, RCS/, SCCS/; Makefile нет.
+MAKE_TOKENS = re.compile(r"\$[({](?:eval|file|shell)|(?:^|[^A-Za-z0-9_.~/-])/dev/"
+                         r"|(?<![A-Za-z0-9_-])(?:-?include|sinclude)(?![A-Za-z0-9_-])", re.M)
+MAKE_TEXT, MAKE_BASE = "\0MAKETEXT", "\0MAKEBASE"  # MAKE_BASE: Makefile не с основной ветки origin (coord 12:36)
+NOT_ASCII = re.compile(r"[^\x20-\x7e\t]")  # make делит слова по isblank локали: в kk_KZ.PT154 0xA0 — пробел
 AWKS = {"awk", "gawk", "mawk", "nawk"}
 AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
 WS_MAX = 256
 TEXT_MAX = 4 * 1024 * 1024
-IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"  # `ИМЯ+=` shell тоже экспортирует
+IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|[VG]PATH|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"  # `ИМЯ+=` shell тоже экспортирует
                          r"|(?i:npm_config_node_options|npm_config_script_shell))\+?=(.*)", re.S)
 # Опции make, от которых зависит, какой текст make прочтёт (make_files), и переменные, от которых — что прочтёт и
 # запустит: в MAKEFLAGS они — отказ (SE-133). Метка — слово, которого shell не передаст (в словах нет NUL).
@@ -63,21 +72,23 @@ MAKE_READS = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin",
 # Опции make 4.x со значением, которых нет в make 3.81 (main.c:361-433): getopt 3.81 вернёт `?`, а следующее слово не
 # заберёт, и `-I` после них make применит. В MAKEFLAGS они — отказ, как `?` (линза Claude #398, B3).
 MAKE_4X_VALUED = {"--jobserver-auth", "--jobserver-style", "--sync-mutex"}
-MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
+MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|[VG]PATH|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
 MAKEFLAGS_ARG = "\0MAKEFLAGS"
+MAKE_ENV = ("MAKEFILES", "VPATH", "GPATH")  # в окружении хука — их наследует shell команды (coord 12:35)
 APPEND_ARG = "\0append"  # `ИМЯ+=…` у IMPLIED_VAR: прежнее значение по слову не видно (линза backend #398)
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
 
-def _read(path):
+def _read(path, raw=False):
     f = open_regular(path)
     if f is None:
         return None
     try:
         with f:
-            return f.read().decode("utf-8", errors="replace") if os.fstat(f.fileno()).st_size <= TEXT_MAX else None
+            data = f.read() if os.fstat(f.fileno()).st_size <= TEXT_MAX else None
     except OSError:
         return None
+    return data if raw or data is None else data.decode("utf-8", errors="replace")
 
 
 def read_names(a):
@@ -94,9 +105,10 @@ def _long(x, names):
     return "--" + hits[0] + eq + val if len(hits) == 1 else None
 
 
-def _options(a, valued, short=False, names=()):
+def _options(a, valued, short=False, names=(), optional=()):
     """(значения опций по имени, остальные слова) для `--k v`, `--k=v`, `-k v`, `-k=v`; short — ещё связки getopt
-    (`-sCsub`, `-vx=1`, `-F:`: значение — остаток связки или следующее слово). Опции без значения отбрасываются,
+    (`-sCsub`, `-vx=1`, `-F:`: значение — остаток связки или следующее слово; optional — опции с необязательным
+    значением: остаток связки — их значение, SE-135). Опции без значения отбрасываются,
     после `--` — всё слова. names — все длинные опции команды: слово `--k…` на месте опции (не значение) раскрывается
     как у getopt_long (`--dir=sub` → `--directory=sub`), неоднозначное или неизвестное — в values["?"] (SE-128)."""
     values, rest, i = {}, [], 1
@@ -120,8 +132,8 @@ def _options(a, valued, short=False, names=()):
             values.setdefault(x, []).append(nxt)
             i += 1
         elif short and re.fullmatch(r"-[^-].+", x):
-            j = next((j for j in range(1, len(x)) if "-" + x[j] in valued), None)
-            if j is not None:
+            j = next((j for j in range(1, len(x)) if "-" + x[j] in valued or "-" + x[j] in optional), None)
+            if j is not None and "-" + x[j] in valued:
                 values.setdefault("-" + x[j], []).append(x[j + 1:] or nxt)
                 i += 0 if x[j + 1:] else 1
         elif x.startswith("-") and eq and key in valued:
@@ -236,107 +248,99 @@ def _nearest(d, name):
         d = os.path.dirname(d)
 
 
-def _read_tree(paths, includes):
+def _read_tree(paths, includes, streams=None, check=None):
     """[(путь, текст)] файлов и того, что они включают (includes(путь, текст) → пути), не больше FILES_MAX;
-    путь от невидимой папки — (путь, None)."""
+    путь от невидимой папки — (путь, None). Если дан список streams, путь-поток (_stream) идёт туда, не читается.
+    С check файл читается по realpath (один раз), и check(realpath, байты) получает те же байты (coord 12:59, #402)."""
     out, queue, seen = [], list(paths), set()
     while queue and len(seen) < FILES_MAX:
         p = queue.pop(0)
         if p in seen:
             continue
         seen.add(p)
-        t = None if is_lost(p) else _read(p)
+        if streams is not None and _stream(p):
+            streams.append(p)
+            continue
+        real = p if check is None or is_lost(p) else os.path.realpath(p)
+        data = None if is_lost(p) else _read(real, raw=True)
+        t = None if data is None else data.decode("utf-8", errors="replace")
         if t is not None or is_lost(p):
             out.append((p, t))
             queue += includes(p, t) if t is not None else []
+            if check and data is not None:
+                check(real, data)
+        elif streams is not None and os.path.lexists(p) and os.path.realpath(p) != os.devnull:
+            streams.append(MAKE_TEXT)  # make прочтёт, разбор — нет (права, больше TEXT_MAX): coord 12:06 (#402)
     return out
 
 
-def make_files(a, cwd):
-    """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый из
-    GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не исключение:
-    `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). Строка `--eval`/`-E` — тоже текст
-    Makefile (путь `--eval`), её include читаются. Длинные опции — как у getopt_long (SE-128); неоднозначная или
-    неизвестная — папка не видна (LOST): у make 3.81 `--o` — это `--old-file`, и его значение `-f` уже не опция."""
-    if a[0] not in MAKES:
-        return []
-    values, _ = _options(a, MAKE_VALUED, short=True, names=MAKE_LONG)
-    if "?" in values:
-        return [(LOST, None)]
+def _make_opts(a):
+    """Опции make как у getopt_long (SE-128); `-j`, `-l`, `-O` в связке берут её остаток (SE-135)."""
+    return _options(a, MAKE_VALUED, short=True, names=MAKE_LONG, optional=MAKE_OPTIONAL)
+
+
+def _make_where(values, cwd):
+    """(папка make после `-C`, названные Makefile, строки `--eval`/`-E`, папки поиска include — она и `-I`)."""
     d = os.path.join(cwd, *[os.path.expanduser(x) for x in values.get("-C", []) + values.get("--directory", [])])
     named = sum((values.get(k, []) for k in ("-f", "--file", "--makefile", "--temp-stdin")), [])
-    evals = [("--eval", re.sub(r"(?m)^[ \t]*#.*$", "", t)) for t in values.get("-E", []) + values.get("--eval", [])]
-    paths = [os.path.join(d, os.path.expanduser(f)) for f in named] or (
-        [d] if is_lost(d) else [next((os.path.join(d, m) for m in MAKEFILES if os.path.isfile(os.path.join(d, m))), "")])
     dirs = [d] + [os.path.join(d, os.path.expanduser(x)) for x in values.get("-I", []) + values.get("--include-dir", [])]
+    return d, named, values.get("-E", []) + values.get("--eval", []), dirs
+
+
+def make_files(a, cwd, streams=None):
+    """[(путь, текст без строк-комментариев)] того, что прочтёт make: `-f F` (после `-C D`), иначе первый
+    существующий из GNUmakefile/makefile/Makefile, и их include/-include/sinclude (от папки make и `-I`). `make -n` не
+    исключение: `$(shell …)` выполняется при чтении. Имя include с `$` — не видно (остаток). Строка `--eval`/`-E` — тоже
+    текст Makefile (путь `--eval`), её include читаются. Пути-потоки дерева, метки INCLUDE_ESCAPE и MAKE_TEXT — в
+    streams (make_option). Длинные опции — как у getopt_long (SE-128); неоднозначная или неизвестная — папка не видна
+    (LOST): у make 3.81 `--o` — это `--old-file`, и его значение `-f` уже не опция."""
+    if a[0] not in MAKES:
+        return []
+    values, _ = _make_opts(a)
+    if "?" in values:
+        return [(LOST, None)]
+    d, named, evals, dirs = _make_where(values, cwd)
+    evals = [("--eval", re.sub(r"(?m)^[ \t]*#.*$", "", t)) for t in evals]
+    paths = [os.path.join(d, os.path.expanduser(f)) for f in named] or (
+        [d] if is_lost(d) else [next((p for p in (os.path.join(d, m) for m in MAKEFILES) if os.path.lexists(p)), "")])
 
     def includes(_, text):
-        found = []
-        for name in (n for m in MAKE_INCLUDE.finditer(text) for n in m.group(1).split() if "$" not in n):
-            found += next((h for h in (sorted(glob.glob(os.path.join(x, os.path.expanduser(name)))) for x in dirs)
-                           if h), [])
+        found, lines = [], [m.group(1) for m in MAKE_INCLUDE.finditer(MAKE_CONT.sub(r"\1 ", text))]
+        if streams is not None and any(re.search(r"[\\#]", x) for x in lines):
+            streams.append(INCLUDE_ESCAPE)  # правило coord 11:46 (#402): `\#`, `\ `, комментарий — отказ
+        for name in (n for x in lines for n in re.sub(r"#.*", "", x).split() if "$" not in n):
+            hits = next((h for h in (sorted(glob.glob(os.path.join(x, os.path.expanduser(name)))) for x in dirs)
+                         if h), [])
+            found += hits
+            if not hits and streams is not None:
+                streams.append(MAKE_TEXT)  # недостающий include make пересоберёт (coord 12:19, #402)
         return found
 
-    roots = [p for p in paths if p] + [h for _, t in evals for h in includes(None, re.sub(r"#.*", "", t))]
-    return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t))
-            for p, t in _read_tree(roots, lambda p, t: includes(p, re.sub(r"#.*", "", t)))] + evals
+    def remade(p):  # рядом исходник встроенного правила make (`.sh` сверено с make 3.81), регистр — как у APFS
+        folder, base = os.path.split(p)
+        b = base.casefold()
+        try:
+            return any(n.startswith((b + ".", b + ",")) or n in ("s." + b, "rcs", "sccs")
+                       for n in (x.casefold() for x in os.listdir(folder or ".")))
+        except OSError:
+            return True
+
+    def reviewed(real, data):  # байты не с основной ветки origin — текст не прошёл ревью (coord 12:36, 12:59; #402)
+        if not same_blob(real, data):
+            streams.append(MAKE_BASE)
+
+    roots = [p for p in paths if p] + [h for _, t in evals for h in includes(None, t)]
+    tree = _read_tree(roots, includes, streams, reviewed if streams is not None else None)
+    if streams is not None and (any(t is not None and (MAKE_TOKENS.search(t) or remade(p)) for p, t in tree)
+                                or any(not p or not is_lost(p) and not os.path.lexists(p) for p in paths)):
+        streams.append(MAKE_TEXT)  # сырой текст (и строка-комментарий), пересборка, Makefile нет (coord 12:06, 12:19)
+    return [(p, None if t is None else re.sub(r"(?m)^[ \t]*#.*$", "", t)) for p, t in tree] + evals
 
 
-# Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
-MAKE_OPTION = ("длинная опция make, которую разбор не раскрывает однозначно (`--d`, `--frob`): какой Makefile make "
-               "прочтёт, не видно — напишите опцию полностью (`--directory=…`)")
-MAKEFLAGS_WHY = ("MAKEFLAGS или GNUMAKEFLAGS с опцией или переменной, от которой зависит, что make прочтёт и запустит "
-                 "(`-I`, `-C`, `-f`, `--eval`, `MAKEFILES=`, `SHELL=`, `--jobserver-auth` make 4.x), или с кавычкой, "
-                 "`\\`, `$`, `$(…)`, знаком вне печатного ASCII, кроме таба (слова и подстановки make делит иначе, "
-                 "чем shell): папку make (`-C`, `cd`) разбор с ними не сводит — передайте их в командной строке make")
-APPEND_WHY = ("`ИМЯ+=…` у MAKEFLAGS, GNUMAKEFLAGS, MAKEFILES, BASH_ENV, ENV, NODE_OPTIONS, npm_config_node_options, "
-              "npm_config_script_shell: shell склеит значение с прежним (слово раньше в строке или окружение), и make, "
-              "bash или node получат склейку, которую разбор по словам не видит — задайте значение целиком через `=`")
-
-
-def make_option(a):
-    """Причина, по которой разбор не видит, что прочтёт make, иначе "": длинная опция, которую getopt_long не раскроет
-    однозначно (`--d`, `--o`, `--frob`, SE-128), метка make_flags (SE-133) или `ИМЯ+=` (implied_commands)."""
-    if a[0] not in MAKES:
-        return ""
-    return APPEND_WHY if APPEND_ARG in a else MAKEFLAGS_WHY if MAKEFLAGS_ARG in a else MAKE_OPTION if "?" in _options(
-        a, MAKE_VALUED, short=True, names=MAKE_LONG)[0] else ""
-
-
-def _direct(goal, var):
-    """Команды рецепта цели worktree или проверок (Makefile команды) с TRACK/NAME/WT_BASE/WT_DEPS из var;
-    [] — цели нет в списке."""
-    track = goal[3:] if goal.startswith("wt-") and goal[3:] in WT_TRACKS else None
-    t, n = track or var.get("TRACK", "<TRACK>"), var.get("NAME", "<NAME>")
-    p, b = f'"worktrees/{t}/{n}"', f'"{t}/{n}"'
-    if track or goal == "wt-add":
-        return [f"mkdir -p worktrees/{t}", f"git worktree add {p} -b {b} {var['WT_BASE']}"
-                f"  # ветка {b} уже есть — git worktree add {p} {b}"] + (
-            [] if var.get("WT_DEPS") == "0" else [f"infra/scripts/dev/wt-deps.sh install {p}"])
-    return {"wt-help": ["cat worktrees/README.md"], "wt-list": ["git worktree list"],
-            "wt-deps": [f"infra/scripts/dev/wt-deps.sh install {p}"],
-            "wt-check": [f'infra/scripts/dev/wt-deps.sh check "worktrees/{t}/{n}/boards"'],
-            "wt-rm": [f"git worktree remove {p}"],
-            "check-repo": ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"],
-            "check-eval": [f"python3 -I -m unittest discover -s eval/{s} -p 'test_*.py'" for s in EVAL_SUITES],
-            }.get(goal, [])
-
-
-def make_hint(a, text):
-    """SE-105: make с признаком в Makefile — отказ, его решает хук, здесь он не меняется. Для целей worktree и
-    проверок, которые есть в прочтённом Makefile (text), — строка с прямыми командами рецепта для сообщения об
-    отказе: их хук разбирает как любые команды, Makefile при них не читается. "" — не make или целей из списка нет."""
-    if a[0] not in MAKES or not text:
-        return ""
-    var = {k: v for k, _, v in (w.partition("=") for w in a[1:] if "=" in w and not w.startswith("-"))
-           if MAKE_VALUE.match(v)}
-    base = re.search(r"(?m)^WT_BASE[ \t]*\??=[ \t]*([A-Za-z0-9._/-]+)[ \t]*$", text)
-    var.setdefault("WT_BASE", base.group(1) if base else "<WT_BASE>")
-    goals = [w for w in dict.fromkeys(a[1:]) if not w.startswith("-") and "=" not in w and _direct(w, var)
-             and re.search(rf"(?m)^{re.escape(w)}:", text)]
-    lines = [c for g in goals for c in _direct(g, var)]
-    return ("\nАгентской сессии вместо `make " + " ".join(goals) + "` — прямые команды рецепта: их хук разбирает "
-            "как обычные, Makefile не читается (SE-105):\n" + "\n".join("  " + c for c in lines)) if lines else ""
+def _stream(p):
+    """make прочтёт путь как поток, а не файл: устройство (кроме /dev/null), FIFO, папка, битая ссылка (SE-135)."""
+    return not is_lost(p) and os.path.realpath(p) != os.devnull and (
+        device(p, "/") or os.path.lexists(p) and not os.path.isfile(p))
 
 
 def _awk_file(name, cwd):
@@ -366,8 +370,9 @@ def awk_programs(a, cwd):
 
 def implied_commands(argvs):
     """Команды, которые запустит сама команда, по её словам (префикс, `env …`, `export …`, опция): `BASH_ENV=F`/`ENV=F`
-    — bash и sh выполнят F до своей команды, в том числе внутри `npm run`; `MAKEFILES=F` — make прочтёт F;
-    `MAKEFLAGS=-Idir`, `MAKEFLAGS='MAKEFILES=F'` — отказ с причиной (make_flags);
+    — bash и sh выполнят F до своей команды, в том числе внутри `npm run`; `MAKEFILES=F` — make прочтёт F от своей
+    папки после `-C` (сверено с make 3.81), её разбор не сводит — отказ с причиной, как у
+    `MAKEFLAGS=-Idir`, `MAKEFLAGS='MAKEFILES=F'` (make_flags, SE-133, SE-135);
     `NODE_OPTIONS='-r F'` (`--require`, `--import`, `--loader`) — node загрузит F; `--script-shell F` и
     `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске.
     `ИМЯ+=…` с непустым значением — отказ с причиной APPEND_WHY: shell склеивает с прежним значением без пробела
@@ -381,8 +386,8 @@ def implied_commands(argvs):
                 out.append(["make", APPEND_ARG])
             elif name in ("BASH_ENV", "ENV") and val:
                 out.append(["bash", val])
-            elif name == "MAKEFILES":
-                out += [["make", "-f", f] for f in val.split()]
+            elif name in MAKE_ENV and a[0] not in MAKES:  # в строке make это переменная make: MAKE_VAR_WHY
+                out += [["make", MAKEFLAGS_ARG]] if val.split() else []
             elif name.endswith("MAKEFLAGS"):
                 out += make_flags(val)
             elif name.lower() in ("node_options", "npm_config_node_options"):
@@ -407,29 +412,17 @@ def make_flags(val):
     (`isblank`): кавычка для него — обычный символ, `\\ ` склеивает слова, `$(Y)` раскрывается из окружения (make
     3.81) — такое значение тоже отказ, как и знак вне \\x20-\\x7e, кроме таба (`\\v`, `\\n`, NBSP; `à` — C3 A0, а в
     локали kk_KZ.PT154 make 3.81 считает 0xA0 пробелом), и метка подстановки shell (`$(…)`, `` `…` `` разбор уже
-    заменил меткой без `$`). Опция make 4.x со значением (MAKE_4X_VALUED) — отказ (линза Claude #398)."""
-    if re.search(r"[\"'\\$]|[^\x20-\x7e\t]", val) or SUBST in val or CURRENT in val:
+    заменил меткой без `$`). Опция make 4.x со значением (MAKE_4X_VALUED) и `-O` в связке — отказ (линза Claude
+    #398)."""
+    if re.search(r"[\"'\\$]", val) or NOT_ASCII.search(val) or SUBST in val or CURRENT in val:
         return [["make", MAKEFLAGS_ARG]]
     ws = [w for w in re.split(r"[ \t]+", val) if w]
     if ws and not ws[0].startswith("-") and "=" not in ws[0]:
         ws[0] = "-" + ws[0]
-    values, rest = _options(["make"] + ws, MAKE_VALUED, short=True, names=MAKE_LONG)
-    deny = (MAKE_READS | MAKE_4X_VALUED) & set(values) or any(map(MAKEFLAGS_DEF.match, rest))
+    values, rest = _make_opts(["make"] + ws)
+    # `-O` (make 4.x) на месте опции: _make_opts отдаёт ему остаток связки, а make 3.81 букву пропускает и читает
+    # остаток как опции (`-OIinc` — `-I inc`, сверено) — отказ, как у MAKE_4X_VALUED.
+    takes_rest = {o[1] for o in MAKE_VALUED | MAKE_OPTIONAL if len(o) == 2}
+    o_opt = any(next((ch for ch in w[1:] if ch in takes_rest), "") == "O" for w in ws if re.fullmatch(r"-[^-].*", w))
+    deny = (MAKE_READS | MAKE_4X_VALUED) & set(values) or o_opt or any(map(MAKEFLAGS_DEF.match, rest))
     return [["make", MAKEFLAGS_ARG]] if deny else []
-
-
-def syntax_only(opts):
-    """Оболочка только проверит синтаксис файла (`bash -n x.sh`, `-o noexec`): `-n`/`+n` и `-o`/`+o noexec` bash
-    применяет по порядку, решает последнее (`-n +n`, `+no noexec` — запуск, сверено с bash 3.2); интерактивный bash
-    (`-i`, `--rcfile`, `--init-file`) `-n` не слушает. opts — слова до файла скрипта."""
-    on, names = False, []  # names — знак у каждого `o` связки, `None` у `O`: их значения идут следующими словами
-    for x in opts:
-        if names:
-            sign = names.pop(0)
-            on = sign == "-" if sign and x == "noexec" else on
-        elif x in ("--rcfile", "--init-file") or re.fullmatch(r"[-+][a-zA-Z]*i[a-zA-Z]*", x):
-            return False
-        elif re.fullmatch(r"[-+][a-zA-Z]+", x):
-            on = x[0] == "-" if "n" in x else on
-            names += [x[0] if c == "o" else None for c in x[1:] if c in "oO"]
-    return on
