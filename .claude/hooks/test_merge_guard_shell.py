@@ -7,10 +7,11 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
+from merge_guard_gh import GIT_PUSH, alias_tokens, gh_aliases  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import C4, CONTROL, D9, ROOT, SESSIONS, TMP, bash, check, finish, mg, repo_on, run  # noqa: E402
@@ -901,6 +902,237 @@ check("SE-105, отказ на make в checkout даёт прямые коман
       "проверку)", None if WT_FIX in direct and EVAL_NERVE in direct else hint or "проход", False)
 for form in direct:
     check(f"SE-105, прямая форма проходит в чистом checkout: {form!r}", in_checkout(form), False)
+
+# --- SE-145 (координатор 22:05): глобальные опции git до push (`-c`, `-C`, `--git-dir`, `--config-env`) и `GIT`
+# не прячут push от правила base: push и цель (защищённая ветка, --all/--mirror) в тексте скрипта — отказ. Формы B/K
+# из #427 (SE-138) на base — отказ; тест закрепляет это. Прохода по «чистому» тексту (clean() из #427) здесь нет.
+fp = TMP / "se145"
+fp.mkdir()
+B1_PUSH = (
+    ("push_default.py", 'import subprocess\n\n\ndef push(branch="main"):\n'
+                        '    subprocess.run(["git", "push", "origin", branch])\n\n\npush()\n'),
+    ("push_tuple.py", 'import subprocess\nremote, branch = "origin", "main"\n'
+                      'subprocess.run(["git", "push", remote, branch])\n'),
+    ("push_hop.py", 'import subprocess\ncfg = {"branch": "main"}\ntarget = cfg["branch"]\n'
+                    'subprocess.run(["git", "push", "origin", target])\n'),
+    ("push_append.py", 'import subprocess\nrest = ["origin"]\nrest.append("main")\n'
+                       'subprocess.run(["git", "push"] + rest)\n'),
+    ("push_return.py", 'import subprocess\n\n\ndef target():\n    return "main"\n\n\n'
+                       'subprocess.run(["git", "push", "origin", target()])\n'),
+    ("push_star.py", 'import subprocess\nflags = []\nflags.append("--all")\n'
+                     'subprocess.run(["git", "push", "origin", *flags])\n'),
+    ("push_fstr.py", 'import subprocess\n\n\ndef br():\n    return "main"\n\n\n'
+                     'subprocess.run(f"git push origin {br()}", shell=True)\n'),
+    ("push_cmd_hop.py", 'import subprocess\ncfg = {"x": "main"}\nb = cfg["x"]\ncmd = ["git", "push", "origin"]\n'
+                        'subprocess.run(cmd + [b])\n'),
+    ("push_template.py", 'import subprocess\nfrom string import Template\n\n\ndef go(b="main"):\n'
+                         '    subprocess.run(Template("git push origin $b").substitute(b=b), shell=True)\n\n\ngo()\n'),
+)
+B1_ENV = (
+    ("push_env_set.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                        'subprocess.run("git push origin $B", shell=True)\n'),
+    ("push_env_update.py", 'import os\nimport subprocess\nos.environ.update(B="main")\n'
+                           'subprocess.run(["bash", "-c", "git push origin $B"])\n'),
+    ("push_env_dict.py", 'import os\nimport subprocess\nenv = {\n    **os.environ,\n    "B": "main",\n}\n'
+                         'subprocess.run("git push origin $B", shell=True, env=env)\n'),
+    ("push_env_refspec.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                            'subprocess.run("git push origin HEAD:${B}", shell=True)\n'),
+    ("push_env.js", 'const { execSync } = require("child_process");\nprocess.env.B = "main";\n'
+                    'execSync("git push origin $B");\n'),
+    ("push_putenv.py", 'import os\nos.putenv("B", "main")\nos.system("git push origin $B")\n'),
+    ("push_env_concat.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                           'subprocess.run("git push origin " + "$B", shell=True)\n'),
+)
+# B2: ветку задаёт другой оператор — checkout, switch, upstream; push без назначения или в HEAD
+B2_IMPLICIT = (
+    ("push_checkout.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                         'subprocess.run(["git", "commit", "-am", "x"])\nsubprocess.run(["git", "push"])\n'),
+    ("push_upstream.py", 'import subprocess\n'
+                         'subprocess.run(["git", "config", "branch.fix/a.merge", "refs/heads/main"])\n'
+                         'subprocess.run(["git", "push"])\n'),
+    ("push_switch_head.py", 'import subprocess\nsubprocess.run(["git", "switch", "main"])\n'
+                            'subprocess.run(["git", "push", "origin", "HEAD"])\n'),
+    ("push_checkout.js", 'const { execFileSync } = require("child_process");\n'
+                         'execFileSync("git", ["checkout", "main"]);\nexecFileSync("git", ["push"]);\n'),
+)
+# B3: назначение задаёт настройка git — `remote.<имя>.push`, `symbolic-ref` — или matching-refspec `:`
+B3_MAP = (
+    ("push_map_config.py", 'import subprocess\nsubprocess.run(["git", "config", "remote.origin.push", '
+                           '"refs/heads/feat:refs/heads/main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_map_case.py", 'import subprocess\nsubprocess.run("git config --add Remote.Origin.Push '
+                         'refs/heads/feat:refs/heads/main", shell=True)\n'
+                         'subprocess.run("git push origin feat", shell=True)\n'),
+    ("push_matching.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                         'subprocess.run(["git", "push", "origin", ":"])\n'),
+    ("push_matching_plus.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                              'subprocess.run("git push origin +:", shell=True)\n'),
+    ("push_symref.py", 'import subprocess\n'
+                       'subprocess.run(["git", "symbolic-ref", "refs/heads/feat", "refs/heads/main"])\n'
+                       'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_symref.js", 'const { execFileSync } = require("child_process");\n'
+                       'execFileSync("git", ["symbolic-ref", "refs/heads/feat", "refs/heads/main"]);\n'
+                       'execFileSync("git", ["push", "origin", "feat"]);\n'),
+)
+# B4: то же состояние git без слов команды — ключ из частей, `.git/config`, ссылка файлом, include, GIT_CONFIG_*,
+# push строкой shell на несколько строк
+B4_STATE = (
+    ("push_key_parts.py", 'import subprocess\nk = "remote.origin." + "push"\n'
+                          'subprocess.run(["git", "config", k, "refs/heads/feat:refs/heads/main"])\n'
+                          'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_key_concat.py", 'import subprocess\nr = "origin"\nsubprocess.run(["git", "config", "remote." + r + '
+                           '".push", "refs/heads/feat:refs/heads/main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_ini.py", 'import subprocess\nwith open(".git/config", "a") as f:\n'
+                    '    f.write(\'[remote "origin"]\\n\\tpush = refs/heads/feat:refs/heads/main\\n\')\n'
+                    'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_symref_file.py", 'import subprocess\nfrom pathlib import Path\n'
+                            'Path(".git/refs/heads/feat").write_text("ref: refs/heads/main\\n")\n'
+                            'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_include.py", 'import subprocess\nfrom pathlib import Path\nPath("x.cfg").write_text('
+                        '\'[remote "origin"]\\n\\tpush = refs/heads/feat:refs/heads/main\\n\')\n'
+                        'subprocess.run(["git", "config", "include.path", "../x.cfg"])\n'
+                        'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_env_config.py", 'import os\nimport subprocess\nos.environ["GIT_CONFIG_COUNT"] = "1"\n'
+                           'os.environ["GIT_CONFIG_KEY_0"] = "remote.origin.push"\n'
+                           'os.environ["GIT_CONFIG_VALUE_0"] = "refs/heads/feat:refs/heads/main"\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_heredoc_var.py", 'import subprocess\nscript = """\nB=main\ngit push origin $B\n"""\n'
+                            'subprocess.run(script, shell=True)\n'),
+    ("push_heredoc_bare.py", 'import subprocess\n# release to main\nscript = """\ngit push\n"""\n'
+                             'subprocess.run(script, shell=True)\n'),
+)
+# K1–K8: маска и dst `HEAD`, `GIT`, имя git из частей, escape в назначении, программа из данных, обёртка запуска
+K_CFG = ('"config", "remote.origin.push", "refs/heads/feat:refs/heads/main"])\n'
+         'subprocess.run(["git", "push", "origin", "feat"])\n')
+B4_K = (
+    ("push_glob.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                     'subprocess.run(["git", "push", "origin", "refs/heads/*:refs/heads/*"])\n'),
+    ("push_glob_tidy.py", 'import subprocess\nBASE = "main"\nprint(BASE)\n'
+                          'subprocess.run(["git", "push", "origin", "refs/heads/*:refs/heads/*"])\n'),
+    ("push_dst_head.py", 'import subprocess\nBASE = "main"\nprint(BASE)\n'
+                         'subprocess.run(["git", "push", "origin", "feat:HEAD"])\n'),
+    ("push_git_shell.py", 'import subprocess\nsubprocess.run("g\'\'it config remote.origin.push '
+                          'refs/heads/feat:refs/heads/main", shell=True)\n'
+                          'subprocess.run(["git", "push", "origin", "feat"])\n'),
+) + tuple((name, f"import subprocess\n{pre}subprocess.run([{tool}, {K_CFG}") for name, pre, tool in (
+    ("push_git_upper.py", "", '"GIT"'),
+    ("push_git_parts.py", "", '"g" + "it"'),
+    ("push_git_vars.py", 'a = "g"\nb = "it"\n', "a + b"),
+    ("push_git_join.py", "", '"".join(["g", "it"])'),
+    ("push_git_fstr.py", 'a = "g"\n', 'f"{a}it"'),
+    ("push_git_escape.py", "", '"\\x67it"'),
+    ("push_git_slice.py", 's = "tig"\n', "s[::-1]"),
+    ("push_prog_glob.py", "import glob\n", 'glob.glob("/usr/bin/g?t")[0]'),
+    ("push_prog_argv.py", "import sys\n", "sys.argv[1]"),
+    ("push_prog_input.py", "", "input()"),
+    ("push_prog_file.py", "", 'open("tool.txt").read().strip()'))) + (
+    ("push_dst_escape.py", 'import subprocess\nsubprocess.run(["git", "log", "--oneline", "main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat:refs/heads/ma\\x69n"])\n'),
+    ("push_dst_octal.py", 'import subprocess\nsubprocess.run(["git", "log", "--oneline", "main"])\n'
+                          'subprocess.run("git push origin feat:refs/heads/ma\\151n", shell=True)\n'),
+    ("push_prog_alias.py", 'import subprocess\nimport sys\nr = subprocess.run\n'
+                           f'r([sys.argv[1], {K_CFG}'),
+    ("push_prog_as.py", 'import subprocess\nimport sys\nfrom subprocess import run as r\n'
+                        f'r([sys.argv[1], {K_CFG}'),
+    ("push_prog_shell_glob.py", 'import subprocess\nsubprocess.run("/usr/bin/g?t config remote.origin.push '
+                                'refs/heads/feat:refs/heads/main", shell=True)\n'
+                                'subprocess.run(["git", "push", "origin", "feat"])\n'),
+) + tuple((name, f"import subprocess\n{pre}subprocess.run([{tool}, {K_CFG}") for name, pre, tool in (
+    ("push_k6_env_argv.py", "import sys\n", '"env", sys.argv[1]'),
+    ("push_k6_env_listdir.py", 'import os\ntool = sorted(os.listdir("/usr/bin"))[0]\n', '"env", tool'),
+    ("push_k6_nice_input.py", "", '"nice", input()'),
+    ("push_prog_q.py", "import sys\nQ = sys.argv[1]\n", "Q"),
+    ("push_k8_node_eval.py", "", '"node", "--eval=0"'),
+    ("push_k8_deno_eval.py", "", '"deno", "eval", "0"'),
+    ("push_k8_timeit.py", "", '"python3", "-m", "timeit", "-n1", "0"'),
+    ("push_k8_exe_timeit.py", "import sys\n", 'sys.executable, "-m", "timeit", "-n1", "0"'),
+    ("push_k8_php.py", "", '"php", "-r", "0"'),
+    ("push_k8_sh_file.py", "", '"sh", "cfg.sh"'),
+    ("push_k8_exe_file.py", "import sys\n", 'sys.executable, "-I", "cfg.py"'))) + tuple(
+    (name, f'import subprocess\nimport sys\nBASE = "main"\nprint(BASE)\n{run}\n'
+           'subprocess.run(["git", "push", "origin", "feat"])\n') for name, run in (
+        ("push_k6_sh_argv.py", 'subprocess.run(["sh", "-c", sys.argv[1]])'),
+        ("push_k6_sh_var.py", 'cmd = sys.argv[1]\nsubprocess.run(["sh", "-c", cmd])'),
+        ("push_k6_sh_stdin.py", 'subprocess.run(["sh", "-c", sys.stdin.read()])'),
+        ("push_k6_bash_file.py", 'subprocess.run(["bash", "-c", open("cmd.txt").read()])'),
+        ("push_k6_py_argv.py", 'subprocess.run(["python3", "-c", sys.argv[1]])'),
+        ("push_k6_exe_argv.py", 'subprocess.run([sys.executable, "-c", sys.argv[1]])'),
+        ("push_k6_node_file.py", 'subprocess.run(["node", "-e", open("x.js").read()])'),
+        ("push_k6_sh_input.py", 'subprocess.run(["sh"], input=open("cmd.txt").read(), text=True)'),
+        ("push_k6_xargs.py", 'subprocess.run(["xargs", "-a", "args.txt"])'))) + (
+    ("push_k6_spawn.js", 'const { spawnSync, execFileSync } = require("child_process");\nconst BASE = "main";\n'
+                         'spawnSync("sh", ["-c", process.argv[2]]);\n'
+                         'execFileSync("git", ["push", "origin", "feat"]);\n'),
+    ("push_k6_bash.js", 'const fs = require("fs");\nconst { execFileSync } = require("child_process");\n'
+                        'const BASE = "main";\nexecFileSync("bash", ["-c", fs.readFileSync("cmd.txt", "utf8")]);\n'
+                        'execFileSync("git", ["push", "origin", "feat"]);\n'),
+    ("push_k7_vars.py", f'import subprocess\nimport sys\nvars(subprocess)["run"]([sys.argv[1], {K_CFG}'),
+    ("push_k7_globals.py", 'import subprocess\nimport sys\nfrom subprocess import run\n'
+                           f'globals()["run"]([sys.argv[1], {K_CFG}'),
+    ("push_k7_static.py", 'import inspect\nimport subprocess\nimport sys\n'
+                          f'inspect.getattr_static(subprocess, "run")([sys.argv[1], {K_CFG}'),
+    ("push_k8_capture.py", 'import subprocess\nimport sys\nOpen3.capture2(sys.argv[1], "config", "remote.origin.push", '
+                           '"refs/heads/feat:refs/heads/main")\nsubprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_k8_eval.js", 'const cp = require("child_process");\ncp.execFileSync("node", ["--eval=0", "config", '
+                        '"remote.origin.push", "refs/heads/feat:refs/heads/main"]);\n'
+                        'cp.execFileSync("git", ["push", "origin", "feat"]);\n'),
+    ("push_k7_index.js", 'const cp = require("child_process");\ncp["execFileSync"](process.argv[2], '
+                         '["config", "remote.origin.push", "refs/heads/feat:refs/heads/main"]);\n'
+                         'cp.execFileSync("git", ["push", "origin", "feat"]);\n'),
+)
+# Формы Контроля C4–C10, E1–E4 и формы backend со значением опции (пробел, запятая, скобка, shell `'…'`)
+SE145_MAP = '"remote.origin.push=refs/heads/feat:refs/heads/main"'
+SE145_DENY = (
+    ("se145_c4.py", 'import subprocess\nsubprocess.run("git -c remote.origin.push=refs/heads/feat:refs/heads/main '
+                    'push origin feat", shell=True)\n'),
+    ("se145_c6.py", 'import subprocess\nsubprocess.run(["git", "-c", "include.path=/tmp/x.cfg", "push", "origin", '
+                    '"feat"])\nassert "main" not in ["feat"]\n'),
+    ("se145_c7.py", f'import subprocess\nsubprocess.run(["git", "-c", {SE145_MAP}, "push", "origin", "feat"])\n'),
+    ("se145_c9.js", "const { execFileSync } = require('child_process');\n"
+                    f"execFileSync('git', ['-c', {SE145_MAP}, 'push', 'origin', 'feat']);\n"),
+    ("se145_c10.py", 'import os\nimport subprocess\nos.environ["V"] = "refs/heads/feat:refs/heads/main"\n'
+                     'subprocess.run(["git", "--config-env=remote.origin.push=V", "push", "origin", "feat"])\n'),
+    ("se145_e1.py", 'import subprocess\nsubprocess.run(["git", "-c", "x.y=z", "push", "origin", "HEAD:main"])\n'),
+    ("se145_e2.py", 'import subprocess\nsubprocess.run(["git", "-C", ".", "push", "origin", "HEAD:main"])\n'),
+    ("se145_e3.py", 'import subprocess\nsubprocess.run("git --git-dir=.git push origin HEAD:main", shell=True)\n'),
+    ("se145_e4.js", "const { execFileSync } = require('child_process');\n"
+                    "execFileSync('git', ['-c', 'x.y=z', 'push', 'origin', 'HEAD:main']);\n"),
+    ("se145_upper.py", 'import subprocess\nsubprocess.run(["GIT", "push", "origin", "main"])\n'),
+) + tuple((name, f'import subprocess\nsubprocess.run([{opts}, "push", "origin", "HEAD:main"])\n') for name, opts in (
+    ("se145_val_space.py", '"git", "-c", "user.name=Release Bot"'),
+    ("se145_val_comma.py", '"git", "-c", "x.y=a,b"'),
+    ("se145_val_dir.py", '"git", "-C", "/tmp/my repo"'),
+    ("se145_val_bracket.py", '"git", "-c", "x.y=[a]"'))) + (
+    ("se145_val_shell.py", 'import subprocess\n'
+                           'subprocess.run("git -c \'user.name=Release Bot\' push origin HEAD:main", shell=True)\n'),
+)
+# Проход: цели в тексте нет — глобальная опция сама по себе не отказ
+SE145_PASS = (
+    ("se145_no_target.py", 'import subprocess\n'
+                           'subprocess.run(["git", "-c", "x.y=z", "push", "origin", "feat:feat"])\n'),
+)
+DENY = ((B1_PUSH + B1_ENV, on_main), (B2_IMPLICIT + B3_MAP + B4_STATE + B4_K + SE145_DENY, on_branch))
+for group, _ in DENY:
+    for name, text in group:
+        (fp / name).write_text(text)
+for name, text in SE145_PASS:
+    (fp / name).write_text(text)
+for group, where in DENY:
+    for name, _ in group:
+        interp = "node" if name.endswith(".js") else "python3 -I"
+        bash(f"SE-145, push и цель в тексте скрипта — отказ: {name}", f"{interp} {fp / name}", True, cwd=where)
+for name, _ in SE145_PASS:
+    bash(f"SE-145, цели в тексте нет — проход: {name}", f"python3 -I {fp / name}", False, cwd=on_branch)
+# Линза backend на 5a0b1b7b8: разбор глобальных опций укладывается в таймаут хука; цепочка длиннее GIT_OPTS_MAX — push
+for label, text, limit in (("60 × -c", "git" + " -c" * 60 + " x", 0.1),
+                           ("60 × -c k=v", "git" + " -c k=v" * 60 + " x", 0.1),
+                           ("10 000 × git -c", "git -c " * 10000 + "x", 1.0)):
+    t0 = time.perf_counter()
+    GIT_PUSH.search(text)
+    took = time.perf_counter() - t0
+    check(f"SE-145, GIT_PUSH на {label}: {took:.3f} с, предел {limit} с", took if took >= limit else None, False)
+check("SE-145, 40 опций до push — push", GIT_PUSH.search("git" + " -c a=b" * 40 + " push origin HEAD:main"), True)
 
 if __name__ == "__main__":
     finish(" — формы shell")

@@ -1,9 +1,20 @@
 #!/bin/sh
 # claude-mem (mcp-search) для хаба: тот же сервер, что плагин claude-mem поднимает в каждой сессии Claude Code,
 # но одной копией на всех клиентов хаба. Данные и воркер (:37701) — общие, у плагина; обёртка только находит
-# установленную копию `mcp-server.cjs`: сначала маркетплейс (оттуда работает воркер), затем самая свежая в кэше.
+# установленную копию `mcp-server.cjs`: сначала маркетплейс (оттуда работает воркер), затем `installPath` из
+# `installed_plugins.json` (версия, которую поставил Claude Code), и только потом самая свежая по mtime в кэше:
+# по mtime старая копия может оказаться новее и взяться вместо установленной (OPS-21).
 C="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 S="$C/plugins/marketplaces/thedotmack/plugin/scripts/mcp-server.cjs"
+if [ ! -f "$S" ] && [ -f "$C/plugins/installed_plugins.json" ]; then
+  P="$(node -e 'try {
+    const j = require(process.argv[1]);
+    const e = [].concat((j.plugins || j)["claude-mem@thedotmack"] || []);
+    const u = e.find((x) => x && x.scope === "user") || e[0];
+    process.stdout.write((u && u.installPath) || "");
+  } catch {}' "$C/plugins/installed_plugins.json" 2>/dev/null)"
+  [ -n "$P" ] && S="$P/scripts/mcp-server.cjs"
+fi
 if [ ! -f "$S" ]; then
   S="$(ls -td "$C"/plugins/cache/thedotmack/claude-mem/*/scripts/mcp-server.cjs 2>/dev/null | head -1)"
 fi
