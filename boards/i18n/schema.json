@@ -10692,6 +10692,9 @@
 						},
 						"notebook": {
 							"type": "string"
+						},
+						"skipToContent": {
+							"type": "string"
 						}
 					},
 					"required": [
@@ -10705,7 +10708,8 @@
 						"myTasks",
 						"invitePeople",
 						"forest",
-						"notebook"
+						"notebook",
+						"skipToContent"
 					]
 				},
 				"projectList": {
@@ -12281,6 +12285,25 @@
 						"high",
 						"urgent"
 					]
+				},
+				"severity": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"critical": {
+							"type": "string"
+						},
+						"high": {
+							"type": "string"
+						},
+						"medium": {
+							"type": "string"
+						},
+						"low": {
+							"type": "string"
+						}
+					},
+					"required": ["critical", "high", "medium", "low"]
 				},
 				"view": {
 					"type": "object",
@@ -14502,6 +14525,19 @@
 						"showAll": {
 							"type": "string"
 						},
+						"forest": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"title": {
+									"type": "string"
+								},
+								"openPage": {
+									"type": "string"
+								}
+							},
+							"required": ["title", "openPage"]
+						},
 						"sections": {
 							"type": "object",
 							"additionalProperties": false,
@@ -14927,6 +14963,7 @@
 						"showMore",
 						"showLess",
 						"showAll",
+						"forest",
 						"sections",
 						"lease",
 						"worker",
@@ -15121,6 +15158,7 @@
 				"title",
 				"status",
 				"priority",
+				"severity",
 				"view",
 				"common",
 				"detail",

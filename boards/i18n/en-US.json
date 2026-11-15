@@ -2604,7 +2604,8 @@
 			"myTasks": "My tasks",
 			"invitePeople": "Invite people",
 			"forest": "Forest",
-			"notebook": "SSR (sessions, skills & rules)"
+			"notebook": "SSR (sessions, skills & rules)",
+			"skipToContent": "Skip to content"
 		},
 		"projectList": {
 			"viewProject": "View Project",
@@ -2990,6 +2991,12 @@
 			"medium": "Medium",
 			"high": "High",
 			"urgent": "Urgent"
+		},
+		"severity": {
+			"critical": "Critical",
+			"high": "High",
+			"medium": "Medium",
+			"low": "Low"
 		},
 		"view": {
 			"board": "Board",
@@ -3498,6 +3505,10 @@
 			"showMore": "Show more",
 			"showLess": "Show less",
 			"showAll": "Show all ({{total}})",
+			"forest": {
+				"title": "Forest",
+				"openPage": "Forest — on the full page"
+			},
 			"sections": {
 				"approvals": "Waiting for «да»",
 				"lease": "Lease",

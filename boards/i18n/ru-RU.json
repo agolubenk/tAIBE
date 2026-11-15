@@ -2706,7 +2706,8 @@
 			"invitePeople": "Пригласить людей",
 			"myTasks": "Мои задачи",
 			"forest": "Лес",
-			"notebook": "SSR (сессии, скиллы и правила)"
+			"notebook": "SSR (сессии, скиллы и правила)",
+			"skipToContent": "Перейти к содержимому"
 		},
 		"projectList": {
 			"viewProject": "Открыть проект",
@@ -3101,6 +3102,12 @@
 			"medium": "Средний",
 			"high": "Высокий",
 			"urgent": "Срочный"
+		},
+		"severity": {
+			"critical": "Критическая",
+			"high": "Высокая",
+			"medium": "Средняя",
+			"low": "Низкая"
 		},
 		"view": {
 			"board": "Доска",
@@ -3668,6 +3675,10 @@
 			"showMore": "Показать полностью",
 			"showLess": "Свернуть",
 			"showAll": "Показать все ({{total}})",
+			"forest": {
+				"title": "Лес",
+				"openPage": "Лес — на полной странице"
+			},
 			"sections": {
 				"approvals": "Ждут «да»",
 				"lease": "Аренда",

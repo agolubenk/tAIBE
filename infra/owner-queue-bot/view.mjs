@@ -67,6 +67,17 @@ function modeLine(snap, hint) {
   return '⏳ страница подключается к базе…';
 }
 
+/**
+ * Снимок части пунктов (ids) поверх полного base: шапка, разделы и «Ход работ» — из part, пункты ids — из part
+ * (пропавший со страницы — убран), остальные — из base. Полного ещё нет — part как есть.
+ */
+export function mergeItems(base, part, ids) {
+  if (!base?.items) return part;
+  const want = new Set(ids);
+  const fresh = new Map(part.items.map((it) => [it.id, it]));
+  return { ...part, items: base.items.filter((it) => !want.has(it.id) || fresh.has(it.id)).map((it) => fresh.get(it.id) || it) };
+}
+
 // Входящее закрывает агент («сделано») или владелец («Принято»); остальные пункты — только ответ владельца.
 const isClosed = (it) => it.done || (it.kind === 'inbox' && it.agentStatus === 'done');
 const openOf = (snap, kind) => snap.items.filter((it) => it.kind === kind && !isClosed(it));

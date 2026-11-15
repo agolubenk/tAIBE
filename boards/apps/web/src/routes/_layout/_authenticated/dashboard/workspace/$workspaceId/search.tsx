@@ -8,10 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import useGlobalSearch from "@/hooks/queries/search/use-global-search";
 import { getPriorityIcon } from "@/lib/priority";
+import { parseSearchQuery } from "@/lib/search-query";
 
 export const Route = createFileRoute(
   "/_layout/_authenticated/dashboard/workspace/$workspaceId/search",
 )({
+  validateSearch: parseSearchQuery,
   component: SearchComponent,
 });
 
@@ -19,8 +21,10 @@ function SearchComponent() {
   const { t } = useTranslation();
   const { workspaceId } = Route.useParams();
   const navigate = useNavigate();
-  const [searchInput, setSearchInput] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  // The address holds the query: a link to …/search?q=… opens the results.
+  const { q: urlQuery = "" } = Route.useSearch();
+  const debouncedQuery = urlQuery.trim();
+  const [searchInput, setSearchInput] = useState(urlQuery);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data, isLoading, isFetching } = useGlobalSearch({
@@ -29,17 +33,38 @@ function SearchComponent() {
     type: "tasks",
   });
 
-  const handleInputChange = useCallback((value: string) => {
-    setSearchInput(value);
+  const writeQuery = useCallback(
+    (value: string) => {
+      const query = value.trim();
+      navigate({
+        to: Route.fullPath,
+        params: { workspaceId },
+        search: query ? { q: query } : {},
+        replace: true,
+      });
+    },
+    [navigate, workspaceId],
+  );
 
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
+  const handleInputChange = useCallback(
+    (value: string) => {
+      setSearchInput(value);
 
-    debounceRef.current = setTimeout(() => {
-      setDebouncedQuery(value.trim());
-    }, 300);
-  }, []);
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+
+      debounceRef.current = setTimeout(() => writeQuery(value), 300);
+    },
+    [writeQuery],
+  );
+
+  // Back and forward change the address without typing: follow it.
+  useEffect(() => {
+    setSearchInput((current: string) =>
+      current.trim() === urlQuery.trim() ? current : urlQuery,
+    );
+  }, [urlQuery]);
 
   useEffect(() => {
     return () => {
@@ -70,18 +95,24 @@ function SearchComponent() {
       <WorkspaceLayout
         title={t("workspace:search.pageTitle")}
         headerActions={
-          <Link
-            to="/dashboard/workspace/$workspaceId"
-            params={{ workspaceId }}
+          // One link styled as a button: no <button> inside <a> (TB-224).
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-2"
             aria-label={t("workspace:search.backToDashboard")}
+            render={
+              <Link
+                to="/dashboard/workspace/$workspaceId"
+                params={{ workspaceId }}
+              />
+            }
           >
-            <Button variant="ghost" size="sm" className="gap-2" tabIndex={-1}>
-              <ArrowLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">
-                {t("workspace:search.backToDashboard")}
-              </span>
-            </Button>
-          </Link>
+            <ArrowLeft aria-hidden="true" className="w-4 h-4" />
+            <span className="hidden sm:inline">
+              {t("workspace:search.backToDashboard")}
+            </span>
+          </Button>
         }
       >
         <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-6">
@@ -204,7 +235,7 @@ function SearchComponent() {
                       size="sm"
                       onClick={() => {
                         setSearchInput(suggestion);
-                        setDebouncedQuery(suggestion);
+                        writeQuery(suggestion);
                       }}
                       className="text-xs"
                     >
