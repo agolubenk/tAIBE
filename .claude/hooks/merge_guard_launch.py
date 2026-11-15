@@ -51,8 +51,11 @@ AWK_INCLUDE = re.compile(r"""@include\s+"([^"]+)\"""")
 FILES_MAX = 32  # include/@include и пакетов workspaces за одну команду — больше разбор не читает
 WS_MAX = 256
 TEXT_MAX = 4 * 1024 * 1024
-IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|NODE_OPTIONS|(?i:npm_config_node_options|npm_config_script_shell))"
-                         r"=(.*)", re.S)
+IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"
+                         r"|(?i:npm_config_node_options|npm_config_script_shell))=(.*)", re.S)
+# Опции make, от которых зависит, какой текст make прочтёт (make_files): их в MAKEFLAGS разбор читает (SE-133)
+MAKE_READS = {"-C", "--directory", "-f", "--file", "--makefile", "--temp-stdin", "-I", "--include-dir", "-E", "--eval",
+              "?"}
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
 
@@ -307,6 +310,7 @@ def awk_programs(a, cwd):
 def implied_commands(argvs):
     """Команды, которые запустит сама команда, по её словам (префикс, `env …`, `export …`, опция): `BASH_ENV=F`/`ENV=F`
     — bash и sh выполнят F до своей команды, в том числе внутри `npm run`; `MAKEFILES=F` — make прочтёт F;
+    `MAKEFLAGS=-Idir` — make возьмёт опции (make_flags);
     `NODE_OPTIONS='-r F'` (`--require`, `--import`, `--loader`) — node загрузит F; `--script-shell F` и
     `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске."""
     out = []
@@ -318,6 +322,8 @@ def implied_commands(argvs):
                 out.append(["bash", val])
             elif name == "MAKEFILES":
                 out += [["make", "-f", f] for f in val.split()]
+            elif name.endswith("MAKEFLAGS"):
+                out += make_flags(val)
             elif name.lower() in ("node_options", "npm_config_node_options"):
                 ws = words(val) + [""]
                 out += [["node", ws[j + 1] if w in NODE_PRELOAD else w.partition("=")[2]] for j, w in enumerate(ws)
@@ -327,6 +333,18 @@ def implied_commands(argvs):
             if x == "--script-shell" and k + 1 < len(a) or x.startswith("--script-shell="):
                 out.append([a[k + 1] if x == "--script-shell" else x.partition("=")[2], "-c", "true"])
     return [list(v) for v in dict.fromkeys(tuple(v) for v in out if v[0] and v[-1])]
+
+
+def make_flags(val):
+    """`MAKEFLAGS=…`, `GNUMAKEFLAGS=…` — опции make из окружения: `-I` make слушает (сверено с make 3.81), `--eval`/`-E`
+    и GNUMAKEFLAGS — make 4.x (assumed, по документации). Команда `make` с ними — если они меняют прочитанный текст
+    (MAKE_READS); `-C`/`-f` make из окружения не слушает, но разбор читает и их — с запасом. Первое слово без `-` и
+    без `=` make читает как связку коротких опций (`MAKEFLAGS=sIinc` — `-sIinc`)."""
+    ws = words(val)
+    if ws and not ws[0].startswith("-") and "=" not in ws[0]:
+        ws[0] = "-" + ws[0]
+    values, _ = _options(["make"] + ws, MAKE_VALUED, short=True, names=MAKE_LONG)
+    return [["make"] + ws] if MAKE_READS & set(values) else []
 
 
 def syntax_only(opts):
