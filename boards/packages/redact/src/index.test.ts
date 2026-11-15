@@ -358,6 +358,112 @@ describe("@kaneo/redact", () => {
     });
   });
 
+  // TB-198 (Claude lens #368, item 1): a value the filter rejected was
+  // consumed whole, so a name inside it was never read and its value leaked.
+  describe("a name inside a rejected value (TB-198)", () => {
+    const value = join("Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv3");
+    const phrase = join("correct", "horse", "battery", "staple");
+
+    it.each([
+      ["a quoted code value", `B_SECRET" = "x(=C_SECRET=${value}`, value],
+      [
+        "a template value",
+        `CLIENT_SECRET = "{{vault}}/APP_SECRET=${value}"`,
+        value,
+      ],
+      ["a passphrase", `B_SECRET=x(=C_SECRET=${phrase}`, phrase],
+      ["a TOKEN name", `A_TOKEN=x(=B_TOKEN=${value}`, value],
+      ["a credential name", `api_key=x(api_key=${value}`, value],
+      ["a non-ASCII character", `A_SECRET=é=B_SECRET=${value}`, value],
+    ])("masks the inner value after %s", (_name, input, secret) => {
+      expectSingleHit(input, "password_assignment", secret);
+    });
+
+    it("masks the inner value of a header", () => {
+      expectSingleHit(`x-api-key: x(x-api-key:${value}`, "api_key", value);
+    });
+
+    // Claude lens and Control on #375: the inner match ends after the outer
+    // value, and the next search skipped C_TOKEN. The base masked these.
+    it.each([
+      `A_TOKEN=x(B_TOKEN = C_TOKEN = ${value}`,
+      `A_TOKEN=x(B_TOKEN = GITHUB_TOKEN = ${value}`,
+      `A_TOKEN=x(B_TOKEN"=C_TOKEN" = "${value}"`,
+      `A_TOKEN=x(B_TOKEN" = "GH2_TOKEN" = "${value}"`,
+      `A_TOKEN=x(B_TOKEN = "C_TOKEN" = "${value}"`,
+      `api_key=x(api_key = api_key = ${value}`,
+      `x-api-key: x(x-api-key: x-api-key: ${value}`,
+      `A_SECRET=x(B_SECRET = C_SECRET = ${value}`,
+      `A_SECRET=y(B_SECRET : C_SECRET : ${value}`,
+      `A_SECRET=éB_SECRET = C_SECRET = ${value}`,
+      // Claude lens on #375 2a50b88f4: nested rewinds paired a name with
+      // another value than the plain search (B1), and the overlap rule
+      // dropped a hit that ended after the previous one (B2).
+      `A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = X1_TOKEN = ${value}`,
+      `api_key=x(api_key : y(api_key : k1_api_key : x1_api_key : ${value}`,
+      `A_SECRET=x(B_SECRET:C_PASSWORD:q;${value}`,
+    ])(
+      "masks the value after an inner match past the outer value: %s",
+      (input) => {
+        const result = redact(input);
+        expect(result.text).not.toContain(value);
+        expect(result.hits.length).toBeGreaterThan(0);
+      },
+    );
+
+    // The restart rests on one property of both filters: a value with `=` or
+    // `:` and no DROPS_VALUE character is accepted from 8 characters on, so
+    // the value is masked whole with the name inside it.
+    it("accepts every value with = or : from 8 characters on", () => {
+      const alphabet = "aAzZqQ09_-.$/+@!~=:";
+      let seed = 1;
+      const random = () => {
+        seed = (seed * 48_271) % 2_147_483_647;
+        return seed;
+      };
+      for (let i = 0; i < 5000; i++) {
+        let candidate = "";
+        const length = 8 + (random() % 40);
+        while (candidate.length < length) {
+          candidate += alphabet.charAt(random() % alphabet.length);
+        }
+        if (!/[=:]/.test(candidate)) continue;
+        for (const next of ["", ",", ";", ")"]) {
+          expect(looksLikeSecret(candidate, next)).toBe(true);
+          expect(looksLikePassphrase(candidate, next)).toBe(true);
+        }
+      }
+      const outer = `A_TOKEN=aaaa/B_TOKEN=${value}`;
+      expect(redact(outer).text).toBe("A_TOKEN=[REDACTED:password_assignment]");
+    });
+
+    it.each([
+      ["code in the inner value", "A_SECRET=x=B_SECRET=abc(def"],
+      ["a call", "JWT_SECRET: getSecret(config)"],
+      ["a short inner value", "A_SECRET=x(=B_SECRET=abc"],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    // The search goes on after the last rejecting character, not after each
+    // inner name: 256 000 characters take ~4 ms, as before the fix.
+    it.each([
+      "A_SECRET=(",
+      "A_SECRET=x(",
+      "api_key=(",
+      "A_TOKEN=(",
+      "x-api-key:(",
+      "A_SECRET=é",
+      "A_TOKEN=x(B_TOKEN = ",
+      "A_SECRET=x(B_SECRET : ",
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      const text = unit.repeat(Math.ceil(256_000 / unit.length));
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
+    });
+  });
+
   // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the
   // Authorization header as a JSON key, an empty x-api-key header.
   describe("values next to code punctuation and JSON headers (#283)", () => {

@@ -24,9 +24,31 @@ function collect(pattern: RegExp, kind: SecretKind): Detector {
   };
 }
 
+// A character that drops every value holding it in `secretShaped`: code
+// punctuation or a character outside printable ASCII.
+const DROPS_VALUE = /[(){}[\];,<>\\]|[^\x21-\x7e]/;
+
+function lastDropping(value: string): number {
+  for (let i = value.length - 1; i >= 0; i--) {
+    if (DROPS_VALUE.test(value.charAt(i))) return i;
+  }
+  return -1;
+}
+
 // Replaces only group 1 of each match, keeping the surrounding context
 // (header name, assignment key, quotes) readable. `accept` also gets the
 // character after the value ("" at the end of the text).
+//
+// TB-198: a rejected value may hold another name with its own value
+// (B_SECRET="x(=C_SECRET=<v>), and the plain search does not look inside a
+// value it has passed. A second search goes on inside a rejected value,
+// after its last DROPS_VALUE character: a value with `=` or `:` in it is not
+// a name of any shape, so a filter rejects it only for its length or for
+// such a character, and then every value that holds that character too.
+// The second search may pair a name with another value than the plain one
+// (A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = X1_TOKEN = <v>), so it only
+// adds hits: the plain search runs as before, and redact() merges
+// overlapping hits (coord, #375).
 function collectGroup(
   pattern: RegExp,
   kind: SecretKind,
@@ -43,8 +65,44 @@ function collectGroup(
       if (!accept(value, text.charAt(start + value.length))) continue;
       hits.push({ kind, start, end: start + value.length });
     }
-    return hits;
+    return hits.concat(innerHits(text, pattern, kind, group, accept));
   };
+}
+
+// The second search of TB-198. An inner match can end after the outer value:
+// its separator crosses the space or the quote that ends the outer value
+// (A_TOKEN=x(B_TOKEN = C_TOKEN = <v>). Then the search goes on at the end of
+// the outer value (`limit`). Each search starts after the start of the last
+// match.
+function innerHits(
+  text: string,
+  pattern: RegExp,
+  kind: SecretKind,
+  group: number,
+  accept: (value: string, next: string) => boolean,
+): RedactHit[] {
+  const hits: RedactHit[] = [];
+  let limit = -1;
+  pattern.lastIndex = 0;
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    const value = match[group];
+    if (value === undefined) continue;
+    const start = match.index + match[0].indexOf(value);
+    if (accept(value, text.charAt(start + value.length))) {
+      hits.push({ kind, start, end: start + value.length });
+    } else {
+      const dropping = lastDropping(value);
+      if (dropping >= 0) {
+        limit = Math.max(limit, pattern.lastIndex);
+        pattern.lastIndex = start + dropping + 1;
+        continue;
+      }
+    }
+    if (match.index < limit && pattern.lastIndex > limit) {
+      pattern.lastIndex = limit;
+    }
+  }
+  return hits;
 }
 
 // PEM blocks end in "KEY-----", PGP key blocks in "KEY BLOCK-----".
@@ -101,8 +159,7 @@ const CAMEL_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)*$/;
 const HUMPED_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
 
 function secretShaped(value: string, next: string, name: RegExp): boolean {
-  if (value.length < 8 || !/^[\x21-\x7e]+$/.test(value)) return false;
-  if (/[(){}[\];,<>\\]/.test(value)) return false;
+  if (value.length < 8 || DROPS_VALUE.test(value)) return false;
   if (/^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$/.test(value)) return false;
   if (/^[A-Za-z]+(?:[_-][A-Za-z]+)+$/.test(value)) return false;
   if (value.length >= 32) return true;
@@ -319,16 +376,21 @@ export function redact(text: string): { text: string; hits: RedactHit[] } {
   }
   accepted.sort((a, b) => a.start - b.start || b.end - a.end);
 
+  // A hit that starts inside the previous one and ends after it widens it:
+  // dropped, its tail stayed in the text (A_SECRET=x(B_SECRET:C_PASSWORD:q;<v>,
+  // Claude #375 B2).
   const hits: RedactHit[] = [];
-  let cursor = 0;
   for (const hit of accepted) {
-    if (hit.start < cursor) continue;
+    const last = hits.at(-1);
+    if (last && hit.start < last.end) {
+      if (hit.end > last.end) hits[hits.length - 1] = { ...last, end: hit.end };
+      continue;
+    }
     hits.push(hit);
-    cursor = hit.end;
   }
 
   let result = "";
-  cursor = 0;
+  let cursor = 0;
   for (const hit of hits) {
     result += text.slice(cursor, hit.start);
     result += `[REDACTED:${hit.kind}]`;
