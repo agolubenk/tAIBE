@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { rowProduct } from "./plan-types";
-import { readOwnerQueueConfig } from "./queue-config";
+import {
+  itemIdPrefix,
+  planDocId,
+  readOwnerQueueConfig,
+} from "./queue-config";
 
 const base = {
   OQ_URL: "https://ops.test",
@@ -61,5 +65,17 @@ describe("rowProduct (TB-106, queue_focus.py plan_rows)", () => {
     );
     expect(rowProduct("cards-stats", products)).toBeNull();
     expect(rowProduct("w-n-high", ["taibe"])).toBeNull();
+  });
+});
+
+describe("planDocId (release lens #159)", () => {
+  it("prefixes a non-default product and keeps the hr-helper form", () => {
+    expect(planDocId("taibe", "due-taibe", "due")).toBe("taibe-due");
+    expect(planDocId("taibe", "d-taibe-due-", "d-due-")).toBe("taibe-d-due-");
+    expect(planDocId("hr-helper", "due-hr-helper", "due")).toBe(
+      "due-hr-helper",
+    );
+    const id = planDocId("taibe", "d-taibe-focus-1", "d-focus-1");
+    expect(id.startsWith(itemIdPrefix("taibe"))).toBe(true);
   });
 });

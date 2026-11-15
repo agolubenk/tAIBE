@@ -6,7 +6,9 @@ import {
   dueItemData,
   dueItemId,
   dueRows,
+  dueStateId,
   needsDecision,
+  readItemDue,
 } from "./plan-due";
 import type { OpenCard, RowForecast } from "./plan-eta";
 
@@ -26,7 +28,7 @@ const late = (id: string, lag: number, cut: string[] = []): DueRow => ({
 });
 const state = (rows: DueRow[], extra: Partial<DueState> = {}): DueState => ({
   kind: "due",
-  item: "d-taibe-due-20261112",
+  item: "taibe-d-due-20261112",
   at: "2026-11-12T06:00:00.000Z",
   rows,
   applied: false,
@@ -125,7 +127,7 @@ describe("dueItemData", () => {
       titles: new Map([["w-a", "Строка A"]]),
       today: "2026-11-13",
     });
-    expect(dueItemId("taibe", "2026-11-13")).toBe("d-taibe-due-20261113");
+    expect(dueItemId("taibe", "2026-11-13")).toBe("taibe-d-due-20261113");
     expect(data).toMatchObject({
       kind: "decision",
       title: "Сроки taibe: 2 строк не успевают по текущему темпу",
@@ -142,5 +144,33 @@ describe("dueItemData", () => {
       "- Строка A — срок 14.11, прогноз 20.11, опаздывает на 3 дн.; держать срок — в бэклог: TB-6, TB-3",
     );
     expect(String(data.body)).toContain("Темп: 1.5 карточки в день");
+  });
+});
+
+// The queue reads the product from the id's prefix (release lens #159).
+describe("due ids", () => {
+  it("prefixes a non-default product and keeps the hr-helper ids", () => {
+    expect(dueStateId("taibe")).toBe("taibe-due");
+    expect(dueItemId("taibe", "2026-11-15")).toBe("taibe-d-due-20261115");
+    expect(dueStateId("hr-helper")).toBe("due-hr-helper");
+    expect(dueItemId("hr-helper", "2026-11-15")).toBe(
+      "d-hr-helper-due-20261115",
+    );
+  });
+
+  it("reads only a decision of its own product", () => {
+    const data = {
+      kind: "decision",
+      source: "t-boards (TB-112)",
+      rows: [],
+      due: [],
+      moveTo: {},
+    };
+    const read = (id: string, product: string) =>
+      readItemDue({ id, data }, product);
+    expect(read("taibe-d-due-20261115", "taibe")).toEqual([]);
+    expect(read("d-taibe-due-20261115", "taibe")).toBeNull();
+    expect(read("taibe-d-due-20261115", "hr-helper")).toBeNull();
+    expect(read("d-hr-helper-due-20261115", "hr-helper")).toEqual([]);
   });
 });
