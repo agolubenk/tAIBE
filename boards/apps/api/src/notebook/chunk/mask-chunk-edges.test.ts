@@ -18,7 +18,8 @@ const value = (n: number, seed: number, alphabet = CAPITALS) => {
   return out;
 };
 const PEM_BODY = (() => {
-  const raw = value(3200, 3, BASE64);
+  // The last line is short (37): base64Blob misses it (TB-203 N4).
+  const raw = value(3237, 3, BASE64);
   const lines: string[] = [];
   for (let i = 0; i < raw.length; i += 64) lines.push(raw.slice(i, i + 64));
   return lines.join("\n");

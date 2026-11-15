@@ -741,9 +741,23 @@ describe("@kaneo/redact", () => {
       expect(result.text).toBe("[REDACTED:pem]\nnext\n[REDACTED:pem]");
     });
 
-    it("leaves a BEGIN line with no END line as is", () => {
-      const lone = `${begin}\nMIIEvwIBADANBgkq`;
-      expect(redact(lone).text).toBe(lone);
+    it("masks a BEGIN line with no END line up to the first blank line (TB-203 N4)", () => {
+      const cut = `${begin}\nMIIEvwIBADANBgkq\nAbCd12`;
+      expect(redact(`key:\n${cut}`).text).toBe("key:\n[REDACTED:pem]");
+      expect(redact(`${cut}\n \nnext`).text).toBe("[REDACTED:pem]\n \nnext");
+    });
+
+    it("masks an END line with no BEGIN line from the last blank line (TB-203 N4)", () => {
+      const end = join("-----END ", "PRIVATE KEY-----");
+      const cut = `Kq3x9AbCd12\nefGh34==\n${end}`;
+      expect(redact(cut).text).toBe("[REDACTED:pem]");
+      expect(redact(`intro\n\n${cut}\nnext`).text).toBe(
+        "intro\n\n[REDACTED:pem]\nnext",
+      );
+      // After a whole block, the cut one starts where the block ended.
+      expect(redact(`${secrets.pem}\n${cut}`).text).toBe(
+        "[REDACTED:pem][REDACTED:pem]",
+      );
     });
 
     it("joins a broken BEGIN with the block after it, as the lazy regex did", () => {
@@ -772,6 +786,10 @@ describe("@kaneo/redact", () => {
     "Ab3+",
     "postgres://a:",
     "-----BEGIN KEY-----",
+    "-----BEGIN KEY-----\n\n",
+    "-----END KEY-----",
+    "\n\n-----END KEY-----",
+    "-----BEGIN KEY-----END KEY-----",
   ])("redacts 256 000 characters of %j in linear time", (unit) => {
     const text = unit.repeat(Math.ceil(256_000 / unit.length));
     const started = performance.now();
