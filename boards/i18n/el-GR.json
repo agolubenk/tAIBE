@@ -3611,7 +3611,6 @@
 		"severity": {
 			"critical": "Critical",
 			"high": "High",
-			"label": "Severity",
 			"low": "Low",
 			"medium": "Medium"
 		}

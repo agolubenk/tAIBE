@@ -2991,7 +2991,6 @@
 			"urgent": "Urgent"
 		},
 		"severity": {
-			"label": "Severity",
 			"critical": "Critical",
 			"high": "High",
 			"medium": "Medium",

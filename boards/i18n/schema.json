@@ -12282,9 +12282,6 @@
 					"type": "object",
 					"additionalProperties": false,
 					"properties": {
-						"label": {
-							"type": "string"
-						},
 						"critical": {
 							"type": "string"
 						},
@@ -12298,7 +12295,7 @@
 							"type": "string"
 						}
 					},
-					"required": ["label", "critical", "high", "medium", "low"]
+					"required": ["critical", "high", "medium", "low"]
 				},
 				"view": {
 					"type": "object",

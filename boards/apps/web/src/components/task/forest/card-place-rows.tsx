@@ -94,7 +94,9 @@ export function CardPlaceRows({ workspaceId, taskId }: CardPlaceRowsProps) {
                   className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-normal text-xs outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <Layers aria-hidden="true" />
-                  <span className="truncate">{sector.name}</span>
+                  <span className="truncate" title={sector.name}>
+                    {sector.name}
+                  </span>
                 </Link>
               ))
             : null}

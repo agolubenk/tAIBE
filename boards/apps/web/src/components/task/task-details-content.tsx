@@ -67,7 +67,10 @@ export default function TaskDetailsContent({
                 {project.slug}-{parentTask.number}
               </span>
             )}
-            <span className="truncate font-medium text-foreground/80">
+            <span
+              className="truncate font-medium text-foreground/80"
+              title={parentTask.title}
+            >
               {parentTask.title}
             </span>
           </button>

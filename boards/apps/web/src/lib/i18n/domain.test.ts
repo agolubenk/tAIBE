@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 vi.mock("i18next", () => ({
   default: {
     t: (key: string, options?: { defaultValue?: string }) =>
-      key.startsWith("tasks:severity.") || key.startsWith("tasks:priority.")
+      key.startsWith("tasks:severity.") ||
+      key.startsWith("tasks:priority.") ||
+      key === "tasks:status.to-do"
         ? `[${key}]`
         : (options?.defaultValue ?? key),
   },
@@ -27,6 +29,7 @@ describe("domain labels (TB-220)", () => {
 
   it("labels priority by key and falls back to display case for status", () => {
     expect(getPriorityLabel("urgent")).toBe("[tasks:priority.urgent]");
+    expect(getStatusLabel("to-do")).toBe("[tasks:status.to-do]");
     expect(getStatusLabel("qa-check")).toBe("Qa Check");
   });
 });
