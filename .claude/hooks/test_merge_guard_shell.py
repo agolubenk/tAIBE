@@ -1087,6 +1087,38 @@ B4_K = (
     ("push_prog_shell_glob.py", 'import subprocess\nsubprocess.run("/usr/bin/g?t config remote.origin.push '
                                 'refs/heads/feat:refs/heads/main", shell=True)\n'
                                 'subprocess.run(["git", "push", "origin", "feat"])\n'),
+) + tuple((name, f"import subprocess\n{pre}subprocess.run([{tool}, {K_CFG}") for name, pre, tool in (
+    # K6 (линзы Контроля и backend на 646dfbe48): программа-литерал — обёртка, а что запустить, дают данные
+    ("push_k6_env_argv.py", "import sys\n", '"env", sys.argv[1]'),
+    ("push_k6_env_listdir.py", 'import os\ntool = sorted(os.listdir("/usr/bin"))[0]\n', '"env", tool'),
+    ("push_k6_nice_input.py", "", '"nice", input()'),
+    ("push_prog_q.py", "import sys\nQ = sys.argv[1]\n", "Q"))) + tuple(
+    (name, f'import subprocess\nimport sys\nBASE = "main"\nprint(BASE)\n{run}\n'
+           'subprocess.run(["git", "push", "origin", "feat"])\n') for name, run in (
+        ("push_k6_sh_argv.py", 'subprocess.run(["sh", "-c", sys.argv[1]])'),
+        ("push_k6_sh_var.py", 'cmd = sys.argv[1]\nsubprocess.run(["sh", "-c", cmd])'),
+        ("push_k6_sh_stdin.py", 'subprocess.run(["sh", "-c", sys.stdin.read()])'),
+        ("push_k6_bash_file.py", 'subprocess.run(["bash", "-c", open("cmd.txt").read()])'),
+        ("push_k6_py_argv.py", 'subprocess.run(["python3", "-c", sys.argv[1]])'),
+        ("push_k6_exe_argv.py", 'subprocess.run([sys.executable, "-c", sys.argv[1]])'),
+        ("push_k6_node_file.py", 'subprocess.run(["node", "-e", open("x.js").read()])'),
+        ("push_k6_sh_input.py", 'subprocess.run(["sh"], input=open("cmd.txt").read(), text=True)'),
+        ("push_k6_xargs.py", 'subprocess.run(["xargs", "-a", "args.txt"])'))) + (
+    ("push_k6_spawn.js", 'const { spawnSync, execFileSync } = require("child_process");\nconst BASE = "main";\n'
+                         'spawnSync("sh", ["-c", process.argv[2]]);\n'
+                         'execFileSync("git", ["push", "origin", "feat"]);\n'),
+    ("push_k6_bash.js", 'const fs = require("fs");\nconst { execFileSync } = require("child_process");\n'
+                        'const BASE = "main";\nexecFileSync("bash", ["-c", fs.readFileSync("cmd.txt", "utf8")]);\n'
+                        'execFileSync("git", ["push", "origin", "feat"]);\n'),
+    # K7 (линза backend на 646dfbe48): имя запуска в литерале — SPAWN его не видит
+    ("push_k7_vars.py", f'import subprocess\nimport sys\nvars(subprocess)["run"]([sys.argv[1], {K_CFG}'),
+    ("push_k7_globals.py", 'import subprocess\nimport sys\nfrom subprocess import run\n'
+                           f'globals()["run"]([sys.argv[1], {K_CFG}'),
+    ("push_k7_static.py", 'import inspect\nimport subprocess\nimport sys\n'
+                          f'inspect.getattr_static(subprocess, "run")([sys.argv[1], {K_CFG}'),
+    ("push_k7_index.js", 'const cp = require("child_process");\ncp["execFileSync"](process.argv[2], '
+                         '["config", "remote.origin.push", "refs/heads/feat:refs/heads/main"]);\n'
+                         'cp.execFileSync("git", ["push", "origin", "feat"]);\n'),
 )
 # Проход: назначение явное `src:dst` — его не меняют ни refmap, ни symref, ни upstream, даже если текст их меняет.
 B4_PASS = (
@@ -1102,8 +1134,9 @@ for name, text in B1_PUSH + B1_PASS + B1_ENV + B2_IMPLICIT + B3_MAP + B4_STATE +
 for name, _ in B4_STATE:
     bash(f"SE-138 B4, состояние git без слов команды — отказ: {name}", f"python3 -I {fp / name}", True, cwd=on_branch)
 for name, _ in B4_K:
-    bash(f"SE-138 K1–K3, маска, dst HEAD, имя git из частей — отказ: {name}", f"python3 -I {fp / name}", True,
-         cwd=on_branch)
+    interp = "node" if name.endswith(".js") else "python3 -I"
+    bash(f"SE-138 K1–K7, маска, dst HEAD, имя git из частей, программа из данных — отказ: {name}",
+         f"{interp} {fp / name}", True, cwd=on_branch)
 for name, _ in B4_PASS:
     bash(f"SE-138 B4, явное src:dst — проход: {name}", f"python3 -I {fp / name}", False, cwd=on_branch)
 for name, _ in B3_MAP:
