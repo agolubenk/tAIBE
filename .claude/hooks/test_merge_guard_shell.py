@@ -520,6 +520,26 @@ for form in ("make check", "make wt-add TRACK=fix NAME=x", "make wt-deps TRACK=f
     why = run("Bash", {"command": form}, cwd=o / "root") or ""
     check(f"SE-135 корневой Makefile, не правило текста: {form!r}: {why[:90]!r}",
           why if "Makefile со словом include" in why else None, False)
+# Решение coord 12:19 (#402): make пересобирает Makefile встроенными правилами. Сверено на make 3.81: Makefile старше
+# Makefile.sh — make делает `cat Makefile.sh >Makefile` и читает новый текст; без Makefile — так же. Отказ: рядом с
+# Makefile дерева `имя.*`, `имя,v`, `s.имя`, папка RCS/ или SCCS/; make не находит Makefile (`-f`, по умолчанию,
+# include из `--eval`).
+for name, text in (("r1/Makefile", "x: ; @true\n"), ("r1/Makefile.sh", "x: ; @echo FROM_SH\n"),
+                   ("r2/Makefile.sh", "x: ; @echo FROM_SH\n"), ("r3/Makefile", "x: ; @true\n"), ("r3/RCS/.keep", ""),
+                   ("r4/Makefile", "x: ; @true\n"), ("r4/SCCS/.keep", ""), ("r5/Makefile", "x: ; @true\n"),
+                   ("r5/Makefile,v", ""), ("r6/Makefile", "x: ; @true\n"), ("r6/s.Makefile", ""),
+                   ("r7/mk.mk", "x: ; @true\n"), ("r7/mk.mk.sh", "x: ; @echo FROM_SH\n"), ("r8/.keep", ""),
+                   ("r9/Makefile", "x: ; @true\n"), ("r9/Makefile-old", "x: ; @true\n"), ("r9/README", "x\n")):
+    (o / name).parent.mkdir(parents=True, exist_ok=True)
+    (o / name).write_text(text)
+for form in ("make -C r1 x", "make -C r2 x", "make -C r3 x", "make -C r4 x", "make -C r5 x", "make -C r6 x",
+             "make -C r7 -f mk.mk x", "make -C r8 x", "make -C n1 -f missing.mk all",
+             "make -C n1 --eval 'include missing.mk' all"):
+    bash(f"SE-135 пересборка Makefile, отказ: {form!r}", form, True, cwd=o)
+for form in ("make -C r9 x", "make -C n1 all", "make -n -f /dev/null x"):
+    bash(f"SE-135 пересборка Makefile, без признака: {form!r}", form, False, cwd=o)
+why = run("Bash", {"command": "make -C r1 x"}, cwd=o) or ""
+check(f"SE-135 пересборка Makefile: причина: {why[:90]!r}", why if "пересоберёт" in why else None, True)
 o = TMP / "se133"
 # Линза Claude (#398, issuecomment-6891590096). B1: `$(…)` и `` `…` `` в значении разбор режет в метку без `$`.
 # B2: make делит слова только по пробелу и табу (`isblank`), `\v`, `\f`, `\r`, `\n` — часть слова. B3: опции make 4.x
