@@ -362,10 +362,20 @@ for form in ("MAKEFLAGS=\"-s 'a MAKEFILES=ok.mk'\" make x", "MAKEFLAGS=\"-s 'a -
              "MAKEFLAGS+=-Iinc make -C sub x", "export MAKEFLAGS+='MAKEFILES=ok.mk'; make x",
              "MAKEFILES+=sub/inc/lib.mk make x"):
     bash(f"SE-133 линза 2, отказ: {form!r}", form, True, cwd=o)
-for form in ("MAKEFLAGS='-j4 -s' make -C ok x", "MAKEFLAGS+=-k make -C ok x"):
+for form in ("MAKEFLAGS='-j4 -s' make -C ok x", "MAKEFLAGS+= make -C ok x"):
     bash(f"SE-133 линза 2, без признака: {form!r}", form, False, cwd=o)
 why = run("Bash", {"command": "MAKEFLAGS=\"-s 'a -Iinc'\" make x"}, cwd=o) or ""
 check(f"SE-133 линза 2: причина — MAKEFLAGS: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
+# Линза backend (#398, cc5db25db): `ИМЯ+=` склеивает с прежним значением без пробела, части по отдельности чисты —
+# make 3.81 читает inc/ (sub/inc/lib.mk). Любое `ИМЯ+=` с непустым значением у этих имён — отказ (APPEND_WHY).
+for form in ("MAKEFLAGS=\"-s --\"; MAKEFLAGS+=\"include-dir=inc\" make -C sub x",
+             "MAKEFLAGS=\"-s MAKEFI\"; MAKEFLAGS+=\"LES=inc/lib.mk\" make -C sub x", "MAKEFLAGS+=-k make -C ok x",
+             "GNUMAKEFLAGS+=-k make -C ok x", "MAKEFILES=sub/inc/li; MAKEFILES+=b.mk make x",
+             "BASH_ENV=a; BASH_ENV+=b.sh bash -c true", "export ENV+=b.sh; sh -c true",
+             "NODE_OPTIONS+=' -r ./m.js' node -e 1", "npm_config_script_shell+=sh npm test"):
+    bash(f"SE-133 линза backend +=, отказ: {form!r}", form, True, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS=\"-s --\"; MAKEFLAGS+=\"include-dir=inc\" make -C sub x"}, cwd=o) or ""
+check(f"SE-133 +=: причина — склейка: {why[:90]!r}", why if "ИМЯ+=" in why else None, True)
 # --- SE-135: старые пробелы make (линза Claude #396). Сверено с make 3.81: `-l` берёт остаток связки (`-lf ok.mk` —
 # ./Makefile), `-f -` и `-f /dev/stdin` читают stdin, MAKEFILES (окружение и строка) — от папки после `-C`,
 # `SHELL=` в строке — shell рецептов. `--eval` — make 4.x (assumed, по документации).

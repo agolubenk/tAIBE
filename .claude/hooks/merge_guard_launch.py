@@ -75,6 +75,7 @@ MAKE_4X_VALUED = {"--jobserver-auth", "--jobserver-style", "--sync-mutex"}
 MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|[VG]PATH|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
 MAKEFLAGS_ARG = "\0MAKEFLAGS"
 MAKE_ENV = ("MAKEFILES", "VPATH", "GPATH")  # в окружении хука — их наследует shell команды (coord 12:35)
+APPEND_ARG = "\0append"  # `ИМЯ+=…` у IMPLIED_VAR: прежнее значение по слову не видно (линза backend #398)
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
 
@@ -373,13 +374,17 @@ def implied_commands(argvs):
     папки после `-C` (сверено с make 3.81), её разбор не сводит — отказ с причиной, как у
     `MAKEFLAGS=-Idir`, `MAKEFLAGS='MAKEFILES=F'` (make_flags, SE-133, SE-135);
     `NODE_OPTIONS='-r F'` (`--require`, `--import`, `--loader`) — node загрузит F; `--script-shell F` и
-    `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске."""
+    `npm_config_script_shell=F` — npm запустит скрипты через F. Разбирается при присваивании, а не при запуске.
+    `ИМЯ+=…` с непустым значением — отказ с причиной APPEND_WHY: shell склеивает с прежним значением без пробела
+    (`MAKEFLAGS="-s --"; MAKEFLAGS+="include-dir=inc"` — make 3.81 читает inc/), а части по отдельности чисты."""
     out = []
     for a in argvs:
         for k, x in enumerate(a):
             m = IMPLIED_VAR.fullmatch(x)
             name, val = (m.group(1), m.group(2)) if m else ("", "")
-            if name in ("BASH_ENV", "ENV") and val:
+            if name and val and x[len(name)] == "+":
+                out.append(["make", APPEND_ARG])
+            elif name in ("BASH_ENV", "ENV") and val:
                 out.append(["bash", val])
             elif name in MAKE_ENV and a[0] not in MAKES:  # в строке make это переменная make: MAKE_VAR_WHY
                 out += [["make", MAKEFLAGS_ARG]] if val.split() else []
