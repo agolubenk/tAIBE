@@ -72,16 +72,21 @@ export function TaskFormBlock({ taskId, form, onReload }: Props) {
             open && "rotate-90",
           )}
         />
-        <span className="min-w-0 flex-1 truncate font-medium text-sm">
-          {template.title}
+        {/* On a phone the progress and the badge wrap under the title, so the title keeps at least 10rem. */}
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="min-w-[min(10rem,100%)] flex-1 truncate font-medium text-sm">
+            {template.title}
+          </span>
+          <span className="flex shrink-0 items-center gap-2">
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {t("tasks:forms.progress", {
+                answered: progress.answered,
+                total: progress.total,
+              })}
+            </span>
+            <StatusBadge meta={meta} />
+          </span>
         </span>
-        <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
-          {t("tasks:forms.progress", {
-            answered: progress.answered,
-            total: progress.total,
-          })}
-        </span>
-        <StatusBadge meta={meta} />
       </CollapsibleTrigger>
       <CollapsiblePanel>
         <div className="flex flex-col gap-4 px-3 pt-1 pb-3" ref={bodyRef}>
