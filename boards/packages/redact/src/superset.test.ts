@@ -123,6 +123,36 @@ function generator(seed: number): () => Case {
   };
 }
 
+// Tools lens #400 B1: texts of 2-9 PEM pieces, also an END and a BEGIN glued
+// by shared dashes (`KEY-----BEGIN`, 5-9 dashes). Every character that a base
+// masks, the head masks too. Measured on seeds 11-13: without the fix the
+// head loses a mask in 78-102 of 20 000 texts, with it in none.
+const PEM_PIECES = [
+  "-----BEGIN A KEY-----",
+  "-----END A KEY-----",
+  "BEGIN B KEY-----",
+  "-----END B KEY",
+  "-----",
+  "-",
+  "KEY-----",
+  "SECRETBODY1234",
+  "\n",
+  "\n\n",
+  " ",
+];
+
+function pemGenerator(seed: number): () => string {
+  let state = seed;
+  const pick = <T>(items: readonly T[]): T => {
+    state = (state * 48_271) % 2_147_483_647;
+    return items[state % items.length] as T;
+  };
+  return () =>
+    Array.from({ length: pick([2, 3, 4, 5, 6, 7, 8, 9]) }, () =>
+      pick(PEM_PIECES),
+    ).join("");
+}
+
 function maskedBy(hits: RedactHit[], length: number): boolean[] {
   const masked = Array.from({ length }, () => false);
   for (const hit of hits) masked.fill(true, hit.start, hit.end);
@@ -162,6 +192,25 @@ describe("redact masks a superset of the base", () => {
       expect(baseMasks).toBeGreaterThan(CASES / 4);
       expect(added).toBeGreaterThan(0);
       expect(glued).toBeGreaterThan(CASES / 10);
+    },
+  );
+
+  it.each(BASES)(
+    `keeps every $name PEM mask on ${CASES} seeded glued blocks`,
+    (b) => {
+      const next = pemGenerator(SEED);
+      const lost: string[] = [];
+      let baseMasks = 0;
+      for (let index = 0; index < CASES; index += 1) {
+        const text = next();
+        const base = maskedBy(b.redact(text).hits, text.length);
+        const head = maskedBy(redact(text).hits, text.length);
+        if (base.includes(true)) baseMasks += 1;
+        if (base.some((on, at) => on && !head[at])) lost.push(text);
+      }
+      expect(lost.slice(0, 5)).toEqual([]);
+      // Not vacuous: the base masks a block in many texts.
+      expect(baseMasks).toBeGreaterThan(CASES / 10);
     },
   );
 

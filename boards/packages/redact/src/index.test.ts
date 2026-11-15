@@ -760,6 +760,23 @@ describe("@kaneo/redact", () => {
       );
     });
 
+    // Tools lens #400 B1: the search went on after the END, past a BEGIN
+    // that shares its dashes, and the body of that block stayed open. The
+    // END without a BEGIN regressed against the base; the whole block before
+    // the glue was open in the base too.
+    it.each([5, 6, 9])(
+      "masks the body of a BEGIN glued to the END before it by %i dashes",
+      (dashes) => {
+        const body = join("SECRET", "BODY1234");
+        // The END before ends in five dashes; the BEGIN starts with five.
+        const tail = `${"-".repeat(dashes - 5)}${join("BEGIN B ", "KEY-----")}\n${body}\n\nmore\n${join("-----END ", "B KEY-----")}`;
+        const orphan = `${join("-----END ", "A KEY-----")}${tail}`;
+        for (const text of [orphan, `${secrets.pem}${tail}`]) {
+          expect(redact(text).text).not.toContain(body);
+        }
+      },
+    );
+
     it("joins a broken BEGIN with the block after it, as the lazy regex did", () => {
       const result = redact(`${begin} cut\n${secrets.pem}`);
       expect(result.text).toBe("[REDACTED:pem]");

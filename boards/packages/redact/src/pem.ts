@@ -29,6 +29,14 @@ function matchFrom(
   return pattern.exec(text);
 }
 
+// A BEGIN can share the dashes of the END before it (`KEY-----BEGIN`, 5-9
+// dashes). The next search starts at that BEGIN, not after the END: from
+// there it found no BEGIN, and the body of the block stayed open (tools lens
+// #400 B1). `next` starts after the END's start, so `at` still grows.
+function nextFrom(stop: number, next: RegExpExecArray | null | undefined) {
+  return next && next.index < stop ? next.index : stop;
+}
+
 export const pem: Detector = (text) => {
   const hits: RedactHit[] = [];
   let at = 0;
@@ -52,21 +60,24 @@ export const pem: Detector = (text) => {
       }
       const stop = end.index + end[0].length;
       hits.push({ kind: "pem", start, end: stop });
-      at = stop;
+      at = nextFrom(stop, begin);
       continue;
     }
     if (!begin) break;
-    const opened = begin.index + begin[0].length;
+    const start = begin.index;
+    const opened = start + begin[0].length;
     // An END that starts inside the BEGIN line is not its END.
     end = matchFrom(PEM_END, text, opened, end);
-    let stop: number;
     if (end) {
-      stop = end.index + end[0].length;
+      const stop = end.index + end[0].length;
+      begin = matchFrom(PEM_BEGIN, text, end.index + 1, begin);
+      hits.push({ kind: "pem", start, end: stop });
+      at = nextFrom(stop, begin);
     } else {
-      stop = blankFrom(opened)?.index ?? text.length;
+      const stop = blankFrom(opened)?.index ?? text.length;
+      hits.push({ kind: "pem", start, end: stop });
+      at = stop;
     }
-    hits.push({ kind: "pem", start: begin.index, end: stop });
-    at = stop;
   }
   return hits;
 };
