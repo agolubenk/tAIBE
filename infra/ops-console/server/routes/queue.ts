@@ -129,11 +129,11 @@ queueRoutes.delete('/db/:col/:id', requireScope('owner'), async (c) => {
 })
 
 // История документа (queue/history-view.ts): ?limit= (без него — 50, как раньше), ?before= (next прошлого ответа),
-// ?fields=meta (без снимков after). На одно событие больше — чтобы знать next и было с чем сравнить keys.
+// ?fields=meta (без снимков after).
 queueRoutes.get('/history/:col/:id', requireScope('read', 'agent'), async (c) => {
   const q = historyQuery({ limit: c.req.query('limit'), before: c.req.query('before'), fields: c.req.query('fields') })
-  const rows = await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products, q.limit + 1, q.before)
-  return c.json(historyReplyBody(rows, q))
+  const page = await docHistory(collectionOf(c.req.param('col')), c.req.param('id'), c.get('oqActor').products, q.limit, q.before)
+  return c.json(historyReplyBody(page, q))
 })
 
 // Автопередача входящих сессии (queue/relay.ts): отметка процесса `server.mjs --relay` и состояние для страницы и бота.

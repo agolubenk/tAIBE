@@ -14,7 +14,9 @@ export const HISTORY_LIMIT_DEFAULT = 50
 export const HISTORY_LIMIT_MAX = 100
 
 export type HistoryQuery = { limit: number; before?: number; meta: boolean }
-type Row = { id: number; at: number; actor: string; action: string; after: unknown }
+type Event = { at: number; actor: string; action: string; after: unknown }
+/** Окно docHistory (store.ts): события, есть ли старше, номер последней строки окна и after следующего за окном. */
+export type HistoryPage = { events: Event[]; more: boolean; nextId?: number; olderAfter?: unknown }
 
 const intIn = (raw: string, lo: number, hi: number) => /^\d{1,15}$/.test(raw) && Number(raw) >= lo && Number(raw) <= hi
 
@@ -41,17 +43,13 @@ function changedKeys(after: unknown, prev: unknown): string[] | null {
   return [...keys].filter((k) => JSON.stringify(after[k]) !== JSON.stringify(prev[k])).sort()
 }
 
-/**
- * rows — свежие первыми, на одно больше limit (если есть): лишнее — чтобы у последнего показанного было с чем сравнить
- * и чтобы знать, есть ли следующая страница. Самое старое событие документа сравнивается с пустотой: keys — все поля.
- */
-export function historyReplyBody(rows: Row[], q: HistoryQuery): { events: unknown[]; next?: string } {
-  const shown = rows.slice(0, q.limit)
-  const more = rows.length > q.limit
-  const events = shown.map((e, i) => {
-    if (!q.meta) return { at: e.at, actor: e.actor, action: e.action, after: e.after }
-    const prev = i + 1 < rows.length ? rows[i + 1]!.after : undefined
+/** Тело ответа: события окна (со снимками или keys) и next, если есть старше. Самое старое событие документа — все поля. */
+export function historyReplyBody(page: HistoryPage, q: HistoryQuery): { events: unknown[]; next?: string } {
+  const { events: list, more, nextId, olderAfter } = page
+  const events = list.map((e, i) => {
+    if (!q.meta) return e
+    const prev = i + 1 < list.length ? list[i + 1]!.after : more ? (olderAfter ?? null) : undefined
     return { at: e.at, actor: e.actor, action: e.action, keys: changedKeys(e.after, prev) }
   })
-  return more ? { events, next: String(shown[shown.length - 1]!.id) } : { events }
+  return more && nextId !== undefined ? { events, next: String(nextId) } : { events }
 }

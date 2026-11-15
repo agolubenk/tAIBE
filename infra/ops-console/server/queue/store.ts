@@ -432,29 +432,37 @@ function parseEventAfter(raw: string | null): unknown {
   }
 }
 
-/** История документа — события видимых продуктов (у событий старого образа продукта нет — это HR). */
-/** История документа, свежие первыми; id — номер события журнала. before — только события с номером меньше: следующая страница. */
+/**
+ * История документа (события видимых продуктов; у событий старого образа продукта нет — это HR), свежие первыми — по
+ * номеру события журнала (id): у SQLite один писатель, id — порядок фиксации, а at может идти назад при шаге часов
+ * (линза backend #360, M2). before — только события с номером меньше.
+ * more — есть старше (по сырым строкам, до схлопывания пар product — M1), nextId — номер последней строки окна,
+ * olderAfter — after следующего за окном события: с ним сравнивает keys вид fields=meta (history-view.ts).
+ */
 export async function docHistory(collection: Collection, id: string, products: Visibility, limit = 50, before?: number) {
   const own = products === '*' ? undefined : inArray(sql`coalesce(${oqEvents.product}, ${DEFAULT_PRODUCT})`, [...products])
   const older = before === undefined ? undefined : lt(oqEvents.id, before)
+  const lim = Math.min(limit, 100)
   const rows = await getDb()
     .select()
     .from(oqEvents)
     .where(and(eq(oqEvents.collection, collection), eq(oqEvents.docId, id), own, older))
-    .orderBy(desc(oqEvents.at), desc(oqEvents.id))
-    .limit(Math.min(limit, 101))
-  const events = rows.map((r) => ({ id: r.id, at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson), raw: r.afterJson }))
+    .orderBy(desc(oqEvents.id))
+    .limit(lim + 1)
+  const page = rows.slice(0, lim)
   // Смена продукта пишет событие в оба продукта; кто видит оба (владелец), получает одно.
   const seen = new Set<string>()
-  return events
-    .filter((e) => {
-      if (e.action !== 'product') return true
-      const k = `${e.at}|${e.actor}|${e.raw}`
+  const events = page
+    .filter((r) => {
+      if (r.action !== 'product') return true
+      const k = `${r.at.getTime()}|${r.actor}|${r.afterJson}`
       if (seen.has(k)) return false
       seen.add(k)
       return true
     })
-    .map(({ raw: _raw, ...e }) => e)
+    .map((r) => ({ at: r.at.getTime(), actor: r.actor, action: r.action, after: parseEventAfter(r.afterJson) }))
+  const more = rows.length > lim
+  return { events, more, nextId: more ? page[page.length - 1]!.id : undefined, olderAfter: more ? parseEventAfter(rows[lim]!.afterJson) : undefined }
 }
 
 /**

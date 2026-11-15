@@ -4,16 +4,20 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { freshApp } from './helpers'
 import { createToken } from '../server/queue/auth'
 import { logEvent } from '../server/queue/store'
+import { getDb } from '../server/db/client'
+import { oqEvents } from '../server/db/schema'
 
 type App = Awaited<ReturnType<typeof freshApp>>
 type Ev = { at: number; actor: string; action: string; after?: Record<string, unknown>; keys?: string[] | null }
 let app: App
 let agent: string
+let owner: string
 const DOC = 'd-hist-limit'
 
 beforeAll(async () => {
   app = await freshApp()
   agent = (await createToken('hist-agent', ['read', 'agent'])).token
+  owner = (await createToken('hist-owner', ['owner'])).token
   // 55 правок: тело по 12 000 символов (потолок body пункта), шаг меняет поле step, каждая пятая — ещё и title.
   for (let i = 0; i < 55; i++) {
     await logEvent('token:a', 'items', DOC, 'patch', { title: `пункт ${Math.floor(i / 5)}`, body: 'т'.repeat(12_000), step: i }, null)
@@ -67,5 +71,47 @@ describe('/history: limit, before, fields=meta', () => {
       const r = await get(q)
       expect(r.status, q).toBe(400)
     }
+  })
+})
+
+const getAs = async (tok: string, doc: string, q = '') => {
+  const res = await app.request(`/api/oq/v1/history/items/${doc}${q}`, { headers: { Authorization: `Bearer ${tok}` } })
+  return (await res.json()) as { events: Ev[]; next?: string }
+}
+
+describe('/history: курсор и схлопывание пар product (линза backend #360)', () => {
+  it('M1: пара product в окне у владельца (видит оба продукта) — next всё равно есть, старшие события доступны', async () => {
+    const doc = 'd-hist-pair'
+    for (const step of [1, 2, 3]) await logEvent('token:a', 'items', doc, 'patch', { step }, null)
+    // Смена продукта: одно событие в оба продукта — одно время, автор и снимок.
+    const at = new Date()
+    const after = JSON.stringify({ step: 3, moved: true })
+    await getDb().insert(oqEvents).values([
+      { at, actor: 'bot', collection: 'items', docId: doc, action: 'product', afterJson: after, product: 'hr-helper' },
+      { at, actor: 'bot', collection: 'items', docId: doc, action: 'product', afterJson: after, product: 'taibe' },
+    ])
+    await logEvent('token:a', 'items', doc, 'patch', { step: 4 }, null)
+    const p1 = await getAs(owner, doc, '?limit=3')
+    expect(p1.events.map((e) => e.action)).toEqual(['patch', 'product'])
+    expect(typeof p1.next).toBe('string')
+    const p2 = await getAs(owner, doc, `?limit=3&before=${p1.next}`)
+    expect(p2.events.map((e) => e.after!.step)).toEqual([3, 2, 1])
+    expect(p2.next).toBeUndefined()
+  })
+
+  it('M2: часы шагнули назад (at не растёт с номером события) — постранично ни одно событие не теряется', async () => {
+    const doc = 'd-hist-clock'
+    const t0 = Date.now()
+    for (const [step, dt] of [[1, 0], [2, 200_000], [3, 100_000]] as const) {
+      await getDb().insert(oqEvents).values({ at: new Date(t0 + dt), actor: 'token:a', collection: 'items', docId: doc, action: 'patch', afterJson: JSON.stringify({ step }), product: null })
+    }
+    const seen: number[] = []
+    let next: string | undefined
+    do {
+      const p = await getAs(agent, doc, `?limit=1${next ? `&before=${next}` : ''}`)
+      seen.push(...p.events.map((e) => e.after!.step as number))
+      next = p.next
+    } while (next)
+    expect(seen).toEqual([3, 2, 1])
   })
 })
