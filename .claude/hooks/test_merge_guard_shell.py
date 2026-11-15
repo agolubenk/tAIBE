@@ -379,6 +379,14 @@ check(f"SE-133 линза Claude: причина — MAKEFLAGS: {why[:90]!r}", w
 for form in ("MAKEFLAGS=-OIinc make -C sub x", "MAKEFLAGS=-sOIinc make -C sub x", "MAKEFLAGS=OIinc make -C sub x",
              "GNUMAKEFLAGS=-OIinc make -C sub x"):
     bash(f"SE-133 -O в связке, отказ: {form!r}", form, True, cwd=o)
+# Линза Claude (#398, issuecomment-6891964594), остаток B2: make 3.81 зовёт setlocale, и в локали kk_KZ.PT154 байт
+# 0xA0 — пробел; `à` (C3 A0) Python пробелом не считает. Правило (coord 11:55): знак вне \x20-\x7e и таба — отказ.
+for form in ("MAKEFLAGS='-sà--include-dir=inc' make -C sub x", "MAKEFLAGS=-sà-Iinc make -C sub x",
+             "GNUMAKEFLAGS='-sà--include-dir=inc' make -C sub x", "MAKEFLAGS='-s\x7f-Iinc' make -C sub x",
+             "MAKEFLAGS='-s\x01-Iinc' make -C sub x"):
+    bash(f"SE-133 не ASCII в MAKEFLAGS, отказ: {form!r}", form, True, cwd=o)
+why = run("Bash", {"command": "MAKEFLAGS='-sà--include-dir=inc' make -C sub x"}, cwd=o) or ""
+check(f"SE-133 не ASCII в MAKEFLAGS: причина: {why[:90]!r}", why if "MAKEFLAGS или GNUMAKEFLAGS" in why else None, True)
 
 # --- файл переписывает та же команда: хук прочёл бы не то, что выполнится (автоматическое ревью на ca50900d7) ---
 o = TMP / "r11"
