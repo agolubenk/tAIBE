@@ -165,7 +165,7 @@ def poll_github(ctx):
     prs = _gh_list(g["repo"])
     known = st["prs"]
     fails = []
-    open_now, fresh = set(), 0
+    open_now, fresh, stale = set(), 0, False
     for pr in prs:
         n = pr["number"]
         open_now.add(str(n))
@@ -182,7 +182,7 @@ def poll_github(ctx):
                 try:
                     _recheck_ci(ctx, n, p)
                 except StaleHead:
-                    pass   # новую голову разберёт следующий проход
+                    stale = True   # новую голову разберёт следующий проход
                 except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
                     fails.append(f"#{n}: {e}")
             continue
@@ -197,6 +197,7 @@ def poll_github(ctx):
         try:
             _check_pr(ctx, n, p, pr["head"]["sha"])
         except StaleHead:
+            stale = True
             continue   # updated не пишется: следующий проход разберёт PR по новой голове
         except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
             fails.append(f"#{n}: {e}")
@@ -208,8 +209,9 @@ def poll_github(ctx):
     # догон не кончает и при пустом known: без открытых PR граница никому не мешает (Контроль #393). И только на
     # проходе без новых для Нерва PR (отложенные потолком — тоже новые): частичный список на свежем состоянии
     # содержит все известные, а давний PR из недочитанной части пошёл бы «открыт» — список подтверждает второе
-    # чтение (SE-131).
-    if not fails and not fresh and open_now and open_now >= set(known):
+    # чтение (SE-131). И не на проходе со StaleHead: такой PR не разобран, и после конца догона пошёл бы «открыт»
+    # (Claude #397, п. 2).
+    if not fails and not fresh and not stale and open_now and open_now >= set(known):
         st.pop("backfill", None)   # дальше каждый новый PR — «открыт»
     _raise_fails(fails)
 
@@ -272,5 +274,7 @@ def _check_pr(ctx, n, p, head, viewed=False):
         # у провала свой ключ: «CI ok» после перезапуска на той же голове — новое событие (SE-131)
         ctx.emit(f"gh:quorum:{n}:{head}" + (":failure" if ci == "failure" else ""), "pr.quorum", NERVOUS,
                  g["quorum_to"], f"#{n} собран: approve {', '.join(approved)} на {head[:9]}, CI {ci}{note}", "github")
-    if ci == "failure":
-        p["failure_head"] = head   # после разбора: _recheck_ci не перечитывает комментарии до перезапуска
+    if ci == "failure" and ok:
+        # после разбора и только с кворумом: _recheck_ci не перечитывает комментарии до перезапуска. Метка без кворума
+        # (две линзы) глушила бы «собран … CI failure», когда третья линза придёт на перезапуске (Claude #397, B1)
+        p["failure_head"] = head
