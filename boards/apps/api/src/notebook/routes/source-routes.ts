@@ -7,6 +7,10 @@ import {
 } from "../../openapi";
 import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import {
+  isTokenCaller,
+  maskForTokenCaller,
+} from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { notebookEmbedModel } from "../../notebook-model/effective-notebook-model";
 import { addPullRequestSource } from "../sources/github-pr-source";
@@ -187,12 +191,30 @@ const addPullRequestRoute = createRoute({
   },
 });
 
+// Claude #388 B3: the hash and the length are of the raw text, so with the
+// text of a card they would check a guess at a secret and give its length.
+// A repo-doc keeps them: the sync (notebook-sync.mjs) compares the hash,
+// and the text is in git.
+function withoutRawShape<T extends { kind: string }>(
+  source: T & { contentSha256: string; chars: number },
+) {
+  if (source.kind === "repo-doc") return source;
+  const { contentSha256: _sha, chars: _chars, ...rest } = source;
+  return rest;
+}
+
+// TB-196: a source title comes from a card, a page or a pull request and may
+// hold a secret; a caller with a token reads it masked.
 export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listSourcesRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const model = await notebookEmbedModel();
+    const sources = await listSources(workspaceId, model);
     return c.json(
-      { model, sources: await listSources(workspaceId, model) },
+      maskForTokenCaller(c, {
+        model,
+        sources: isTokenCaller(c) ? sources.map(withoutRawShape) : sources,
+      }),
       200,
     );
   })
@@ -216,10 +238,12 @@ export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(addLinkRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { url } = c.req.valid("json");
-    return c.json(await addLinkSource(workspaceId, url), 200);
+    const added = await addLinkSource(workspaceId, url);
+    return c.json(maskForTokenCaller(c, added), 200);
   })
   .openapi(addPullRequestRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { url } = c.req.valid("json");
-    return c.json(await addPullRequestSource(workspaceId, url), 200);
+    const added = await addPullRequestSource(workspaceId, url);
+    return c.json(maskForTokenCaller(c, added), 200);
   });

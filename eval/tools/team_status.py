@@ -5,12 +5,13 @@
   python3 -I eval/tools/team_status.py live --role KEY [--cwd DIR]     живая роль → «pid имя статус …», rc 0; нет — rc 3
                                                                        (другой rc — проверка сломалась, роль не открывать)
   python3 -I eval/tools/team_status.py wait --role KEY --line LINE [--timeout 90]   сессия этой линии поднялась → rc 0
-  python3 -I eval/tools/team_status.py status [--cwd DIR | --all]      роли по порядку 1→5→4→3→2→6 и пульс нерва; --all — по продуктам
+  python3 -I eval/tools/team_status.py status [--cwd DIR | --all]      роли по порядку 1→5→4→3→2→6→7→8 и пульс нерва; --all — по продуктам
   python3 -I eval/tools/team_status.py stop [--cwd DIR]                команды kill живых ролей для владельца; сам не снимает
   python3 -I eval/tools/team_status.py nerve [--fix]                   пульс; --fix: не загружен → bootstrap, молчит → kickstart
 
 Продукт — основной checkout папки --cwd вместе с его worktree. Живая роль — самая молодая живая сессия Claude Code
-с геномом роли (`/genome/<ключ>.json` в аргументах), папкой внутри продукта и без наследника (ни квитанции, ни живой
+с геномом роли (`/genome/<ключ>.json` в аргументах; вторая сессия backend-2 — геном backend и свой ключ
+в первом сообщении, lineage_reap.role_of), папкой внутри продукта и без наследника (ни квитанции, ни живой
 сессии той же роли с линией «<линия>.…»). Самая длинная линия не подходит: новая корневая линия после перезапуска
 команды короче старых.
 """
@@ -26,8 +27,9 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import lineage as L  # noqa: E402
 import lineage_reap as R  # noqa: E402
 
-ORDER = ("coord", "release", "backend", "frontend", "plan", "boards")
-NUM = {"coord": 1, "plan": 2, "frontend": 3, "backend": 4, "release": 5, "boards": 6}
+# Номер — место ключа в team.roles (как role_num в spawn_session.sh); вторые сессии — после базовых ролей.
+ORDER = ("coord", "release", "backend", "frontend", "plan", "boards", "backend-2", "frontend-2")
+NUM = {"coord": 1, "plan": 2, "frontend": 3, "backend": 4, "release": 5, "boards": 6, "backend-2": 7, "frontend-2": 8}
 LABEL = "space.hrhelper.nerve"  # до OPS-25 — один Нерв на Mac для всех продуктов
 # «Роли нет» — свой код: 1 Python отдаёт и на трейсбек (сбой импорта, исключение), и по нему открылась бы вторая
 # сессия живой роли.
@@ -103,8 +105,7 @@ def find_line(sx, role, line, since):
         p = procs.get(d["pid"])
         if p is None or L.argv0(p) != "claude" or L.norm(p.start) != L.norm(d.get("procStart")):
             continue
-        m = R.ROLE_RE.search(p.command)
-        if m and m.group(2) == role and L.session_line(sx, p) == line:
+        if R.role_of(p.command, line)[1] == role and L.session_line(sx, p) == line:
             return {"pid": p.pid, "name": d.get("name") or "", "status": d.get("status") or "?"}
     return None
 

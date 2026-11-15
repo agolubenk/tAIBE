@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { getApiUrl } from "@/fetchers/get-api-url";
 import { authClient } from "@/lib/auth-client";
 import { evictProjectCache } from "@/lib/evict-project-cache";
+import { invalidateProjectTaskDetails } from "@/lib/invalidate-project-task-details";
 import getTask from "@/fetchers/task/get-task";
 import getLabelsByTask from "@/fetchers/label/get-labels-by-task";
 import getExternalLinks from "@/fetchers/external-link/get-external-links";
@@ -77,6 +78,7 @@ export function useProjectWebSocket(projectId: string) {
       sourceTaskId?: string;
       targetTaskId?: string;
       linksChanged?: boolean;
+      completionChanged?: boolean;
     }) {
       if (["PROJECT_UPDATED", "TASK_LABEL_UPDATED"].includes(message.type)) {
         queryClient.invalidateQueries({
@@ -91,6 +93,8 @@ export function useProjectWebSocket(projectId: string) {
         queryClient.invalidateQueries({ queryKey: ["labels"] });
         if (message.linksChanged)
           queryClient.invalidateQueries({ queryKey: ["external-links"] });
+        if (message.completionChanged)
+          invalidateProjectTaskDetails(queryClient, projectId);
         return;
       }
 
