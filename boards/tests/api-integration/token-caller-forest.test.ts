@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 import db from "../../apps/api/src/database";
 import { cardMetaTable } from "../../apps/api/src/database/forest-schema";
 import { resetTestDatabase } from "./helpers/database";
-import { addTask, createForest } from "./helpers/forest";
+import { addTask, createForest, relate } from "./helpers/forest";
 
 // Fake secrets assembled at runtime, so this file holds no key-shaped literal.
 const join = (...parts: string[]) => parts.join("");
 const SECRET = join("gh", "p_", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8");
+// A severity holds at most 32 characters: a shorter key of the same kind.
+const SHORT = join("AK", "IA", "Q3EGRT7ZK2LMNB5X");
 const KEY_MARK = "[REDACTED:api_key]";
 
 // The owner writes a secret into a card (title with history, comment, card
@@ -55,11 +57,23 @@ describe("API integration: forest text for callers with a token (TB-204)", () =>
   it("masks every forest read that carries the text; the owner reads it raw", async () => {
     const { forest, taskId } = await setup();
     const projectId = forest.project.id;
+    // The place of a card shows its parents' titles, and the board's bugs
+    // show only the severity: a subcard of the card with the secret, and a
+    // secret in the severity, so both routes carry a text.
+    const child = await addTask(projectId, "Step");
+    if (!child) throw new Error("fixture");
+    await relate(taskId, child.id);
+    const severity = await forest.ownerApi(
+      "PUT",
+      `/forest/${forest.workspace.id}/cards/${taskId}/meta`,
+      { severity: `High ${SHORT}` },
+    );
+    expect(severity.status).toBe(200);
     const routes = [
       `/cards/${taskId}/context`,
       `/cards/${taskId}/meta`,
       `/cards/${taskId}/history`,
-      `/cards/${taskId}/place`,
+      `/cards/${child.id}/place`,
       "/trees",
       `/trees/${taskId}`,
       `/bugs?projectId=${projectId}`,
@@ -78,12 +92,11 @@ describe("API integration: forest text for callers with a token (TB-204)", () =>
         owner: 200,
         agent: 200,
       });
-      const carries = JSON.stringify(own.body).includes(SECRET);
+      const ownText = JSON.stringify(own.body);
+      const carries = [SECRET, SHORT].some((key) => ownText.includes(key));
       expect({ route, carries }).toEqual({ route, carries: true });
-      expect({ route, leaks: text.includes(SECRET) }).toEqual({
-        route,
-        leaks: false,
-      });
+      const leaks = [SECRET, SHORT].some((key) => text.includes(key));
+      expect({ route, leaks }).toEqual({ route, leaks: false });
       expect({ route, masked: text.includes(KEY_MARK) }).toEqual({
         route,
         masked: true,
