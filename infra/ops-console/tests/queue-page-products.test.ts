@@ -343,6 +343,9 @@ describe('отбор снимков по продукту в подмене ба
       // Задача и сводка tAIBE, записанные токеном HR: продукт — по доске карточек и data.ws, когда карта известна.
       { id: 'w-tb', data: { title: 'tAIBE через HR', track: 'core', cards: [{ key: 'OPS-34', ws: 'aiboards-eval' }, { id: 'q' }] }, version: 1, product: 'hr-helper' },
       { id: 'w-mixed', data: { title: 'обе доски', track: 'core', cards: [{ key: 'OPS-1', ws: 'aiboards-eval' }, { key: 'APP-1', ws: 'hr-helper-lavaeon' }] }, version: 1, product: 'hr-helper' },
+      // Строка плана tAIBE по id «w-taibe-…» (как queue_focus.py и TB-106): карточки с доски HR её продукт не меняют.
+      { id: 'w-taibe-from-hr', data: { title: 'слой tAIBE на доске HR', track: 'core', cards: [{ key: 'IS-1', ws: 'hr-helper-lavaeon' }] }, version: 1, product: 'hr-helper' },
+      { id: 'w-taibe-inputs', data: { title: 'вбросы tAIBE без карточек', track: 'core' }, version: 1, product: 'hr-helper' },
       { id: 'cards-stats-aiboards-eval', data: { kind: 'stats', ws: 'aiboards-eval' }, version: 1, product: 'hr-helper' },
     ],
     checks: [
@@ -400,13 +403,68 @@ describe('отбор снимков по продукту в подмене ба
     expect(s.win.__oqViewOf()).toBe('taibe')
   })
 
+  it('связь вернулась после трёх сбоев, а снимок не изменился (304) — подмена отдаёт его заново: страница выходит из «только в браузере»', async () => {
+    const win = { addEventListener() {} } as unknown as {
+      claude: { use: (cap: string) => Promise<{ collection: (c: string) => { onSnapshot: (ok: (d: unknown[]) => void, err?: () => void) => void } }> }
+    }
+    const timers: Array<() => void> = []
+    const seq = [200, 502, 502, 502, 304, 304]
+    const reply = (status: number) => Promise.resolve({
+      ok: status < 300, status, headers: { get: () => '"e1"' },
+      json: () => Promise.resolve({ docs: [{ id: 'd-1', data: { done: true }, version: 1 }] }),
+    })
+    runInNewContext(SHIM_JS, {
+      window: win, location: { hash: '' }, console, clearTimeout: () => {},
+      setTimeout: (fn: () => void) => { timers.push(fn); return timers.length },
+      document: { hidden: false, addEventListener() {} }, localStorage: { getItem: () => null },
+      fetch: (url: string) => reply(url.endsWith('/db/checks') ? seq.shift() ?? 304 : 200),
+    })
+    const db = await win.claude.use('db')
+    const ok: number[] = [], err: number[] = []
+    db.collection('checks').onSnapshot((d) => ok.push(d.length), () => err.push(1))
+    const flush = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)) }
+    await flush()
+    // Таймеры подмены — опросы по очереди: 3 × 502, затем 304.
+    for (let i = 0; i < 5; i++) { timers.splice(0).forEach((f) => f()); await flush() }
+    expect(err).toEqual([1])
+    expect(ok).toEqual([1, 1])
+  })
+
+  it('связь с консолью для бота (window.__oqConn): удачный опрос — okAt, ошибка — статус, текст и счёт подряд (просьба владельца 14.11)', async () => {
+    type Conn = { okAt: number; errAt: number; err: string; status: number; fails: number }
+    const win = { addEventListener() {} } as unknown as {
+      claude: { use: (cap: string) => Promise<{ collection: (c: string) => { onSnapshot: (ok: () => void, err?: () => void) => void } }> }
+      __oqConn: Record<string, Conn>
+    }
+    const replies: Record<string, () => Promise<unknown>> = {
+      items: () => Promise.resolve({ ok: true, status: 200, headers: { get: () => '"e1"' }, json: () => Promise.resolve({ docs: [] }) }),
+      checks: () => Promise.resolve({ ok: false, status: 502, headers: { get: () => null }, json: () => Promise.resolve({}) }),
+      work: () => Promise.reject(new TypeError('Failed to fetch')),
+    }
+    runInNewContext(SHIM_JS, {
+      window: win, location: { hash: '' }, console, setTimeout: () => 0, clearTimeout: () => {},
+      document: { hidden: false, addEventListener() {} }, localStorage: { getItem: () => null },
+      // Прочие запросы подмены (например, /products) — пустой удачный ответ.
+      fetch: (url: string) => (replies[url.replace('/api/oq/v1/db/', '')] ?? replies.items!)(),
+    })
+    const db = await win.claude.use('db')
+    for (const col of Object.keys(replies)) db.collection(col).onSnapshot(() => {}, () => {})
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0))
+    const c = win.__oqConn
+    expect(c.items).toMatchObject({ errAt: 0, status: 0, fails: 0 })
+    expect(c.items!.okAt).toBeGreaterThan(0)
+    expect(c.checks).toMatchObject({ okAt: 0, err: 'HTTP 502', status: 502, fails: 1 })
+    expect(c.checks!.errAt).toBeGreaterThan(0)
+    expect(c.work).toMatchObject({ okAt: 0, err: 'Failed to fetch', status: 0, fails: 1 })
+  })
+
   it('без продукта у строки — HR; смена выбора отдаёт снимки заново без запроса; «» — все', async () => {
     const s = shim(null)
     await s.subscribe()
     expect(s.last('items')).toEqual(['d-hr', 'taibe-d-1', 'd-old', 'taibe-d-link'])
     s.win.__oqView('hr-helper')
     expect(s.last('items')).toEqual(['d-hr', 'd-old'])
-    expect(s.last('work')).toEqual(['w-hr', 'track-core', 'w-tb', 'w-mixed', 'cards-stats-aiboards-eval'])
+    expect(s.last('work')).toEqual(['w-hr', 'track-core', 'w-tb', 'w-mixed', 'w-taibe-from-hr', 'w-taibe-inputs', 'cards-stats-aiboards-eval'])
     s.win.__oqView('')
     expect(s.last('items')).toEqual(['d-hr', 'taibe-d-1', 'd-old', 'taibe-d-link'])
     // Ответы при смене выбора не перевыдаются: их отбор не меняется.
@@ -434,7 +492,7 @@ describe('отбор снимков по продукту в подмене ба
     await s.subscribe()
     expect(s.win.__oqDefaultProduct).toBe('hr-helper')
     s.win.__oqBoards([{ slug: 'hr-helper', boards: ['hr-helper-lavaeon'] }, { slug: 'taibe', boards: ['aiboards-eval'] }])
-    expect(s.last('work')).toEqual(['taibe-w-1', 'track-core', 'w-tb', 'cards-stats-aiboards-eval'])
+    expect(s.last('work')).toEqual(['taibe-w-1', 'track-core', 'w-tb', 'w-taibe-from-hr', 'w-taibe-inputs', 'cards-stats-aiboards-eval'])
     s.win.__oqView('hr-helper')
     expect(s.last('work')).toEqual(['w-hr', 'track-core', 'w-mixed'])
     // Пункты очереди — только по столбцу product.
