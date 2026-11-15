@@ -81,7 +81,8 @@ const dbUrl = collect(
 // printable ASCII characters, no code punctuation, and is not a dotted name,
 // words joined by _ or -, or a short camelCase name. `looks_like_secret` in
 // infra/checks/secrets_scan.py has the same rules except the type name
-// below: the scanner drops a type name in any context (TB-193).
+// below and the passphrase rule (TB-195): the scanner drops a type name in
+// any context (TB-193) and lowercase words after any name.
 //
 // A type name is capitalized words with no digit. Since the value ends at `,`
 // and `;` (#283 B2), the comma no longer drops `apiKey: ApiKeyUsageRow,`.
@@ -95,15 +96,32 @@ const dbUrl = collect(
 // is not a type context: an .env value ends there.
 const TYPE_NAME = /^(?:[A-Z][a-z]+)+$/;
 const TYPE_CONTEXT = new Set([",", ";", ")"]);
+const CAMEL_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)*$/;
+// TB-195: a camelCase name with at least one capital inside (jwtSecret).
+const HUMPED_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
 
-export function looksLikeSecret(value: string, next = ""): boolean {
+function secretShaped(value: string, next: string, name: RegExp): boolean {
   if (value.length < 8 || !/^[\x21-\x7e]+$/.test(value)) return false;
   if (/[(){}[\];,<>\\]/.test(value)) return false;
   if (/^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$/.test(value)) return false;
   if (/^[A-Za-z]+(?:[_-][A-Za-z]+)+$/.test(value)) return false;
   if (value.length >= 32) return true;
-  if (/^[a-z]+(?:[A-Z][a-z0-9]*)*$/.test(value)) return false;
+  if (name.test(value)) return false;
   return !(TYPE_NAME.test(value) && TYPE_CONTEXT.has(next));
+}
+
+export function looksLikeSecret(value: string, next = ""): boolean {
+  return secretShaped(value, next, CAMEL_NAME);
+}
+
+// TB-195: a SECRET or PASSWORD name may hold a passphrase of lowercase words
+// joined together (CLIENT_SECRET=<words> at the end of an .env line), and
+// the camelCase rule read it as a variable name. For these names only a
+// name with a capital inside (jwtSecret) and the literal `undefined` stay
+// open. Measured on `git ls-files` of tAIBE and HR_Helper-v2: no new mask of
+// a SECRET name; a PASSWORD name was masked already by passwordAssignment.
+export function looksLikePassphrase(value: string, next = ""): boolean {
+  return value !== "undefined" && secretShaped(value, next, HUMPED_NAME);
 }
 
 // TB-136: credentials in a URL of any other scheme (https, smtp, ftp): only
@@ -196,12 +214,20 @@ const credentialAssignment = collectGroup(
 // app_CLIENT_SECRET), and has at most 64 characters before the suffix: an
 // open [A-Z0-9_]* that may start after every "_" made a run of "_" quadratic
 // (64 000 characters: 2 s, TB-136 security lens). The value ends at `,` or
-// `;`, as in credentialAssignment.
+// `;`, as in credentialAssignment. A SECRET or PASSWORD name has its own
+// pattern with the passphrase filter (TB-195): a name has one suffix, so a
+// value is never found by both.
 const secretAssignment = collectGroup(
-  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:API_KEY|TOKEN)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
   "password_assignment",
   1,
   looksLikeSecret,
+);
+const passphraseAssignment = collectGroup(
+  /(?<![A-Z0-9_])[A-Z0-9_]{0,64}(?:SECRET|PASSWORD)["']?[ \t]*[:=][ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s,;]+)/g,
+  "password_assignment",
+  1,
+  looksLikePassphrase,
 );
 
 // Long runs of the base64 alphabet that mix upper/lower/digit and carry
@@ -280,6 +306,7 @@ const detectors: Detector[] = [
   passwordAssignment,
   credentialAssignment,
   secretAssignment,
+  passphraseAssignment,
   base64Blob,
 ];
 

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
-import { looksLikeSecret, redact } from "./index";
+import { looksLikePassphrase, looksLikeSecret, redact } from "./index";
 
 // TB-136: one corpus for both rule sets. infra/checks/test_checks.py reads the
 // same file and expects the scanner rule `scan` on every case.
@@ -318,6 +318,43 @@ describe("@kaneo/redact", () => {
       ["a type before a parenthesis", "function f(apiKey: ApiKeyUsageRow)"],
     ])("leaves %s untouched", (_name, input) => {
       expect(redact(input).hits).toHaveLength(0);
+    });
+  });
+
+  // TB-195: lowercase words joined together, shorter than 32 characters, were
+  // read as a camelCase name after a SECRET or PASSWORD name too.
+  describe("a passphrase of lowercase words (TB-195)", () => {
+    const phrase = join("correct", "horse", "battery", "staple");
+
+    it.each([
+      ["an env line at the end of the text", `CLIENT_SECRET=${phrase}`],
+      ["an env line before the next one", `JWT_SECRET=${phrase}\nX=1`],
+      ["a YAML key", `CLIENT_SECRET: ${phrase}\nregion: eu`],
+      ["a JSON value", `{"CLIENT_SECRET": "${phrase}", "n": 1}`],
+      ["a PASSWORD name", `REDIS_PASSWORD=${phrase}`],
+      ["a lowercase password key", `password: ${phrase}`],
+    ])("masks %s", (_name, input) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(1);
+      expect(result.text).not.toContain(phrase);
+    });
+
+    it.each([
+      ["a camelCase variable", "{ JWT_SECRET: jwtSecret, ttl: 60 }"],
+      ["the literal undefined", "JWT_SECRET: undefined"],
+      ["joined words", "CLIENT_SECRET=your_client_secret"],
+      ["a TOKEN name", `GITHUB_TOKEN=${phrase}`],
+      ["a lowercase secret key in prose", `secret: ${phrase}`],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    it("looksLikePassphrase keeps lowercase words and drops code", () => {
+      expect(looksLikePassphrase(phrase)).toBe(true);
+      expect(looksLikeSecret(phrase)).toBe(false);
+      for (const value of ["jwtSecret", "undefined", "short", "a.b.c.d.e"]) {
+        expect(looksLikePassphrase(value)).toBe(false);
+      }
     });
   });
 
