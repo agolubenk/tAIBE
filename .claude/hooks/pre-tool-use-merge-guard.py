@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, reviewed_test, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
-from merge_guard_gh import classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
+from merge_guard_gh import VISIBILITY, classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts,  # noqa: E402
                                 read_names)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
@@ -42,6 +42,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
 from merge_guard_comments import comment_char_may_change, comment_char_seen, zsh_interactive  # noqa: E402  SE-77
 from merge_guard_partial import PARTIAL, settle, settled, tokens_before_error  # noqa: E402  разбор до ошибки (SE-76)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
+from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -311,6 +312,8 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
             tail = list(itertools.takewhile(lambda y: y != "+", a[k + 1:]))
             if strip_prefix(tail):
                 found += classify_argv(normalize(tail), cwd, roots, depth + 1, git_env, whole, strip_prefix(tail)[0])
+    if gated := strip_prefix(gate_tail(a)):  # `heavy-gate.sh gh pr merge 1`, `bash …/heavy-gate.sh git push …`
+        found += classify_argv(normalize(gated), cwd, roots, depth + 1, git_env, whole, gated[0], stdin_files, procs, hid)
     if launcher(a[0]) or a[0] in SOURCE or "/" in exe:
         found += runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files, procs)
     if is_interp(a[0]):
@@ -339,10 +342,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
         found.append((kind, " ".join(a)[:120]))
     if a[0] == "claude" and hooks_off(a):
         found.append(("file", "claude без хуков проекта (disableAllHooks, --setting-sources без project)"))
-    for t in write_targets(a):
-        p = protected_path(t, cwd, roots)
-        if p:
-            found.append(("file", p))
+    found += [("file", p) for t in write_targets(a) if (p := protected_path(t, cwd, roots))]  # файл ≤ 500 строк (01-base)
     return found
 
 
@@ -461,12 +461,12 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
     if code is not None:
         found += interp_found(code, cwd, roots)
 
-    files = [d for k, d in found if k == "file"]
-    if files:
+    if files := [d for k, d in found if k == "file"]:  # файл не длиннее 500 строк (01-base) — проверки через :=
         return (f"merge-guard: {files[0]} — законы, настройки хуков или реестр сессий. Правка только с «да» владельца: "
                 "через PR из worktree или руками владельца.")
-    ops = [(k, d) for k, d in found if k not in ("file", DIRECT)]
-    if not ops:
+    if owner := [d for k, d in found if k == VISIBILITY]:  # IS-124: не мёрж и не деплой — Контролю тоже нет
+        return f"merge-guard: {VISIBILITY} — только руками владельца, и Контролю тоже нет (IS-124). Команда: {owner[0]}"
+    if not (ops := [(k, d) for k, d in found if k not in ("file", DIRECT)]):
         return None
     control, control_err = get_control()
     why = control_err or control_verdict(sid, get_sessions(), control)

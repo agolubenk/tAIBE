@@ -394,8 +394,8 @@ class FakeCtx:
         self.deliver = False
         self.state = {}
 
-    def emit(self, key, kind, cls, to, text, src=""):
-        return self.journal.emit(key, kind, cls, to, text, src)
+    def emit(self, key, kind, cls, to, text, src="", **extra):
+        return self.journal.emit(key, kind, cls, to, text, src, **extra)
 
     peers = None
     emit_account = emit
@@ -711,7 +711,7 @@ class GithubPollTest(unittest.TestCase):
 
     def _known(self, *ns):
         return {str(n): {"head": "a" * 40, "updated": "2026-11-04T10:00:00Z", "seen": [], "changes_by": [],
-                         "author": "backend", "checks": []} for n in ns}
+                         "author": "backend", "checks": [], "body_verdicts": []} for n in ns}   # разобраны после SE-50
 
     def test_one_list_call_covers_all_open_prs(self):
         """Дайджест 14.11 18:32: «#267 закрыт» при открытом PR — читалась одна страница из 50 при 161 открытом.
@@ -849,6 +849,20 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual((kinds.count("pr.quorum"), kinds.count("pr.ci_failed")), (1, 1))
         self.assertIn(("pr.quorum", "#491 собран: approve backend, boards, plan на ddddddddd, CI ok"), self.kinds())
 
+    def test_new_head_drops_the_failed_ci_interval_of_the_old_head(self):
+        """SE-86, линза backend #252: ci_at — от провала старой головы. Новая голова с провалом на тихом PR читает
+        проверки следующим проходом, а не через FAILED_CI_EVERY от старой."""
+        old, new, t0, views = "a1" * 20, "b2" * 20, self.ctx.now, []
+        for s, head, upd in ((0, old, "2026-11-04T10:00:00Z"), (15, old, "2026-11-04T10:00:00Z"),
+                             (30, new, "2026-11-04T10:05:00Z"), (45, new, "2026-11-04T10:05:00Z")):
+            self.ctx.now = t0 + timedelta(seconds=s)
+            fake = FakeGh([_pr(492, head, upd=upd)], comments=self.lenses(492, head), ci={492: ("SUCCESS", "FAILURE")})
+            sources.run = fake
+            gh_source.poll_github(self.ctx)
+            views.append(len([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]))
+        self.assertEqual(views, [1, 1, 1, 1], "провал новой головы перечитывается сразу, ci_at старой снят")
+        self.assertEqual([k for k, _ in self.kinds()].count("pr.ci_failed"), 2)   # по одному на голову
+
     def test_unknown_ci_value_waits_without_events(self):
         """SE-86: незнакомое значение GitHub — не ok и не провал: PR ждёт CI, событий нет."""
         head = "9" * 40
@@ -871,7 +885,7 @@ class GithubPollTest(unittest.TestCase):
         self.assertIn(("pr.quorum", "#486 собран: approve backend, boards, plan на fffffffff, CI ok"), self.kinds())
         self.assertFalse(self.ctx.state["github"]["prs"]["486"]["await_ci"])
         self.assertEqual([c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]],
-                         ["statusCheckRollup"], "только проверки: без файлов и тела PR")
+                         ["statusCheckRollup,body"], "проверки и тело (SE-50) одним view, без файлов")
 
     def test_head_without_checks_waits_for_ci(self):
         """SE-126: сразу после push у головы нет ни одной проверки. Три approve — ожидание CI, а не pr.quorum с «CI ok»."""
