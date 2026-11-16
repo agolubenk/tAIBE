@@ -34,10 +34,10 @@ NESTED = {
     "queue": ("url", "secret_cmd", "owner_items", "delta", "source_roles"),
     "boards": ("url", "product", "workspace", "note"),
 }
-# Где живёт поле: путь или его префикс. Поля продукта, которых нет в config.json (slug, title, active, queue.match),
-# render не выводит.
+# Где живёт поле: путь или его префикс. Поля продукта, которых нет в config.json (slug, title, active, queue.match,
+# genome — его читает сборщик геномов, SE-79), render не выводит.
 PRODUCT = ("slug", "title", "active", "repo_root", "product_tree", "team.project_dir", "team.roles", "team.active_hours",
-           "github", "queue.source_roles", "queue.match")
+           "github", "queue.source_roles", "queue.match", "genome.disabledMcpjsonServers")
 SHARED = ("default_product", "layer_home", "interval_seconds", "sources", "team.projects_root", "queue.url",
           "queue.secret_cmd", "queue.owner_items", "queue.delta", "system", "budget", "circadian", "tap", "boards")
 REQUIRED = ("slug", "repo_root", "product_tree", "team.project_dir", "team.roles", "team.active_hours", "github.repo",
