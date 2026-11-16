@@ -116,9 +116,9 @@ KeepAlive), а не потомок сессии: окружение и песо�
 (`#{C:…}`, `#{E:…}`, `#(…)`, `show-environment`, `-f`/`-S` — отказ); `set-clipboard external` — панель не пишет буфер
 вставки владельца; `ensure` не перезапускает сервер, который жив, но не отвечает (версии после `brew upgrade tmux`).
 
-**С телефона** — без новой разработки: SSH на Mac и `tmux -L agents attach` (`-r` — только смотреть) из приложения с
-клавишей Ctrl (Termius, Blink). Нужно владельцу: «Общий доступ → Удалённый вход» на Mac, ключ телефона в
-`~/.ssh/authorized_keys`, вне дома — Tailscale или WireGuard (порт 22 в интернет не открывать). Веб-холст `ab-front` —
+**С телефона** — SSH на Mac через наш WireGuard t-boards и `tmux -L agents attach` из Termius (решение владельца 16.11:
+без Tailscale — iOS держит один VPN). На VPS между устройствами туннеля открыт только SSH к Mac и только с адресов
+`WG_MAC_SSH_FROM`. Пошагово — [`docs/guides/phone-access.md`](../../guides/phone-access.md). Веб-холст `ab-front` —
 фаза 2, если этого пути не хватит.
 
 Единая точка отказа: падение сервера tmux закрывает все роли сразу (окна Terminal падали по одному). LaunchAgent
