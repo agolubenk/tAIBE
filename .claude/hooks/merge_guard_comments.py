@@ -43,6 +43,40 @@ def comment_char_seen(written, text, outer):
     return before
 
 
+def _option_name(word):
+    """Имя опции zsh без регистра, `_` и `-`: `INTER_active`, `inter-active` — interactive."""
+    return word.lower().replace("_", "").replace("-", "")
+
+
+def zsh_interactive(a):
+    """argv — интерактивный zsh: `-i` в связке (`-is`, `-fi`), `-o interactive` и `-ointeractive`, `--interactive`;
+    `+i`, `+o …`, приставка `no` — выключают, последняя опция главнее. Такой zsh, читая код со stdin (`<`, `|`, `<<<`,
+    heredoc, `-s`, `-`), не считает `#` комментарием, пока нет interactivecomments (замер zsh 5.9, 16.11, SE-77): код
+    за `#` выполняется. Файл скрипта (`zsh -i x.zsh`) и `-c` читаются с комментариями — `-c` даёт False, файл
+    проверяет вызывающий (только stdin). Опции — до первого слова без `-`/`+`, `--` и `-` их кончают."""
+    if not a or a[0] != "zsh":
+        return False
+    on, i = False, 1
+    while i < len(a) and len(a[i]) > 1 and a[i][0] in "-+" and a[i] != "--":
+        x, i = a[i], i + 1
+        if x[:2] == "--":
+            name = _option_name(x[2:])
+            on = name == "interactive" or (on and name != "nointeractive")
+            continue
+        for k, ch in enumerate(x[1:], 2):
+            if ch == "c":
+                return False
+            if ch == "i":
+                on = x[0] == "-"
+            elif ch == "o":  # `-o имя`, `-oимя`; `no` перед именем — обратный знак
+                name, i = (x[k:], i) if x[k:] else (a[i] if i < len(a) else "", i + 1)
+                name = _option_name(name)
+                if name in ("interactive", "nointeractive"):
+                    on = (x[0] == "-") == (name == "interactive")
+                break
+    return on
+
+
 def sure_comments(cmd):
     """Позиции `#`, с которых bash и zsh точно начинают комментарий на верхнем уровне — вне кавычек и любых скобок:
     `$(…)`, `(…)`, `((…))`, `${…}`. Уверенность теряется до конца текста на: обратных кавычках; heredoc (тело могло
