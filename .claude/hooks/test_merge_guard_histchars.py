@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Проверка merge-guard, SE-77: текст меняет знак комментария — zsh `histchars`, `interactive_comments` в `bash -i`.
-Тогда `#` — то ли комментарий, то ли код, и хук разбирает текст обоими способами (classify_bash, keep и raw).
+Проверка merge-guard, SE-77: текст меняет знак комментария — zsh `histchars`, `interactive_comments` в `bash -i`,
+интерактивный zsh со stdin (`zsh -i < x.zsh`). Тогда `#` — то ли комментарий, то ли код, и хук разбирает текст
+обоими способами (classify_bash, keep и raw).
 
 Запуск: python3 -I .claude/hooks/test_merge_guard_histchars.py
 """
@@ -9,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_comments import comment_char_may_change  # noqa: E402
+from merge_guard_comments import comment_char_may_change, zsh_interactive  # noqa: E402
 from merge_guard_testkit import D9, bash, check, finish, repo_on  # noqa: E402
 
 # zsh 5.9 (проверено 14.11): после `histchars='!^%'` знак комментария — `%`, и `#` — буква. Действует на то, что
@@ -54,6 +55,23 @@ bash("SE-77: `histchars` и безобидный комментарий — пр
 # кавычкой ниже и спрятал строку с мёржем. Поэтому разбор дважды.
 bash("SE-77: оставить комментарий — не прятать код за `'` в нём", ": histchars\nG=gh\necho x # it's\n$G pr merge 1\necho # '",
      True)
+
+# zsh 5.9 (замер 16.11): интерактивный zsh, читая код со stdin, не считает `#` комментарием — `zsh -f -i < f` с
+# `echo a # ; echo HIT` печатает `a # HIT`. Файл скрипта (`zsh -i f`), `/dev/stdin` и `-c` — с комментариями.
+HEREDOC = f"<<'EOF'\nG=gh\n{HIDE}\nEOF"
+for form in ("zsh -i < h.zsh", "zsh -is < h.zsh", "zsh -fi < h.zsh", "cat h.zsh | zsh -i", "zsh -o interactive < h.zsh",
+             "zsh --interactive < h.zsh", "zsh -i - < h.zsh", "zsh -o nointeractive -i < h.zsh", f"zsh -i {HEREDOC}"):
+    bash(f"SE-77: интерактивный zsh со stdin — `#` не прячет код: {form!r}", form, True, cwd=se77)
+for form in ("zsh < h.zsh", "zsh -i h.zsh", "zsh -i +i < h.zsh", "zsh -i -o nointeractive < h.zsh", "bash -i < h.zsh",
+             f"zsh -i -c 'G=gh; {HIDE}'", f"zsh {HEREDOC}"):
+    bash(f"SE-77: zsh без интерактивного stdin — комментарий снимается, проход: {form!r}", form, False, cwd=se77)
+ZSH_I = ((["zsh", "-i"], True), (["zsh", "-fis"], True), (["zsh", "-ointeractive"], True), (["zsh", "-i", "--", "x"], True),
+         (["zsh", "-o", "INTER_active"], True), (["zsh", "--inter-active"], True), (["zsh", "+o", "nointeractive"], True),
+         (["zsh"], False), (["zsh", "-i", "+i"], False), (["zsh", "-i", "+o", "interactive"], False),
+         (["zsh", "--no-interactive"], False), (["zsh", "-ic", "x"], False), (["bash", "-i"], False),
+         (["zsh", "x.zsh", "-i"], False))
+for argv, want in ZSH_I:
+    check(f"SE-77 zsh_interactive {argv!r}", argv if zsh_interactive(argv) else None, want)
 
 NAMES = ("histchars='!^%'", 'typeset "hist""chars=x"', "${:-hist}chars=x", "HISTCHARS=x", "h\\istchars=x",
          "shopt -u interactive_comments", "set +o interactive-comments", "setopt NO_INTERACTIVE_COMMENTS")

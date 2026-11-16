@@ -39,7 +39,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, CHANGED,
                                strip_prefix, subst_code, SUBST_AT, syntax_only, comment_readings, uncommented)
-from merge_guard_shell import comment_char_may_change, comment_char_seen  # noqa: E402  знак комментария (SE-77)
+from merge_guard_comments import comment_char_may_change, comment_char_seen, zsh_interactive  # noqa: E402  SE-77
 from merge_guard_partial import PARTIAL, settle, settled, tokens_before_error  # noqa: E402  разбор до ошибки (SE-76)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 
@@ -202,12 +202,12 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
             if s in stdin_files and FALLBACK.search(whole[0]):
                 found.append((STDIN, whole[0][:120]))
             continue
-        first_line = text.split("\n", 1)[0]
-        is_interp_script = interp if interp is not None else (
-            first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
-        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_seen(whole[3], text, whole[4][1])))
+        is_interp_script = interp if interp is not None else bool(re.match(r"#!.*(python|node|perl|ruby|osascript)", text))
+        # `zsh -i < x.zsh`: интерактивный zsh со stdin не считает `#` комментарием — разбор и без снятия (SE-77)
+        keep = comment_char_seen(whole[3], text, whole[4][1]) or (s in stdin_files and zsh_interactive(a))
+        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path, keep))
         found += got  # разобран до ошибки — находки части и грубый признак по тексту скрипта: в `bash x.sh` его нет
-        if partial and FALLBACK.search(text if is_interp_script else uncommented(text)):
+        if partial and FALLBACK.search(text if is_interp_script or keep else uncommented(text)):
             found.append((UNPARSED, s))
     if scripts and opaque(scripts, whole[3] or ()) and not whole[2]:  # `git switch x && bash m.sh` — с диска прочтён не тот код
         found.append((BLIND_RUN, scripts[0]))
@@ -282,7 +282,7 @@ def classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk=Fa
     found = []
     for r in readers:
         if r[0] in SHELLS and not any(re.fullmatch(r"-[a-z]*c[a-z]*", x) for x in r[1:]):
-            found += classify_bash(body, cwd, roots, depth + 1, git_env, disk, written, outer)
+            found += classify_bash(body, cwd, roots, depth + 1, git_env, disk, written, outer, keep=zsh_interactive(r))
         elif is_interp(r[0]):
             found += interp_found(body, cwd, roots)
     if expands:  # метка без кавычек: $(…) и `…` в теле shell выполнит, кто бы ни читал
