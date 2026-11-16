@@ -5,6 +5,7 @@
 Запуск: python3 -I .claude/hooks/test_merge_guard_shell.py  (только эти формы; все проверки — test_merge_guard.py)
 """
 import os
+import re
 import subprocess
 import sys
 import time
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_gh import GIT_PUSH, alias_tokens, gh_aliases  # noqa: E402
 from merge_guard_comments import sure_comments  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
+from merge_guard_make import WT_TRACKS, _direct  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import C4, CONTROL, D9, ROOT, SESSIONS, TMP, bash, check, finish, mg, repo_on, run  # noqa: E402
 import merge_guard_git  # noqa: E402
@@ -861,29 +863,67 @@ CHECKOUT = Path(__file__).resolve().parents[2]  # чистый checkout ветк
 mk = TMP / "se105"
 mk.mkdir(parents=True, exist_ok=True)
 (mk / "Makefile").write_bytes((CHECKOUT / "Makefile").read_bytes())
-WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" board-agents'
+WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" "board-agents"'
 DEPS_FIX = 'infra/scripts/dev/wt-deps.sh install "worktrees/fix/x"'
 EVAL_NERVE = "python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"
+NO_HINT = ["прямые команды"]
+ENV_NOTE, OWNER_YES, REMOVE = "Переменные окружения перед make", "«да» владельца", "git worktree remove"
 for form, want, absent in (
-        ("make wt-fix NAME=x", ["mkdir -p worktrees/fix", WT_FIX, DEPS_FIX], []),
+        ("make wt-fix NAME=x", ['mkdir -p "worktrees/fix"', WT_FIX, DEPS_FIX, ENV_NOTE], [OWNER_YES]),
         ("make wt-fix NAME=x WT_DEPS=0", [WT_FIX], [DEPS_FIX]),
-        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" board-agents'], []),
+        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" "board-agents"'], []),
         ("make wt-feature NAME=x", ['"worktrees/feature/x"'], []), ("make wt-refactor NAME=x", ['"refactor/x"'], []),
         ("make wt-spike NAME=x", ['"spike/x"'], []), ("make wt-review NAME=x", ['"review/x"'], []),
-        ("make wt-fix NAME='x;y'", ['"worktrees/fix/<NAME>"'], ["x;y"]),
-        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" main'], []),
+        ("make wt-fix NAME='x;y'", ["не хватает NAME"], ["x;y", "<NAME>", "git worktree add"]),
+        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" "main"'], []),
         ("make wt-list", ["git worktree list"], []), ("make wt-help", ["cat worktrees/README.md"], []),
-        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []), ("make wt-rm TRACK=fix NAME=x", ['git worktree remove "worktrees/fix/x"'], []),
+        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []),
+        ("make wt-rm TRACK=fix NAME=x", [f'{REMOVE} "worktrees/fix/x"', OWNER_YES], []),  # frontend #385
         ("make wt-check TRACK=fix NAME=x", ['infra/scripts/dev/wt-deps.sh check "worktrees/fix/x/boards"'], []),
         ("make check-repo", ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"], []),
         ("make check-eval", [EVAL_NERVE, "-s eval/pipeline/reflex ", "-s eval/evolve "], []),
         ("make -s wt-list check-repo", ["git worktree list", "infra/checks/run.py"], []),
-        ("make check-layer", [], ["прямые команды"]), ("make", [], ["прямые команды"])):
+        ("make -j4 -k wt-list", ["git worktree list"], []),
+        ("make check-layer", [], NO_HINT),
+        ("make", ["вместо `make` —", "cat worktrees/README.md"], []), ("make help", ["cat worktrees/README.md"], []),
+        # Контроль #385: -C/-f — пути не от корня
+        ("make -C . wt-list", [], NO_HINT), ("make -f Makefile wt-fix NAME=x", [], NO_HINT),
+        ("make --directory=. wt-list", [], NO_HINT), ("make -sfMakefile wt-list", [], NO_HINT),
+        ("make --dir=. wt-list", [], NO_HINT), ("make -n wt-list", [], NO_HINT),
+        # Claude #385, ниты 1–5: значения опций — не цели, пробный прогон рецепт не выполняет, у переменной —
+        # последнее значение, без TRACK/NAME — чего не хватает, окружение перед make подсказка не видит
+        ("make -o wt-rm wt-list TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make -W wt-rm wt-list TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make -sn wt-list", [], NO_HINT), ("make --just-print wt-rm TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make --dry-run wt-list", [], NO_HINT), ("make -q wt-list", [], NO_HINT), ("make -t wt-list", [], NO_HINT),
+        ("make wt-add TRACK=spike TRACK=fix NAME=x", ['"worktrees/fix/x"'], ['"worktrees/spike/x"']),
+        ("make wt-add TRACK=fix 'TRACK=a b' NAME=x", ["не хватает TRACK"], ["git worktree add"]),
+        ("make wt-rm", ["не хватает NAME, TRACK"], [REMOVE]), ("make wt-fix NAME:=x", [WT_FIX], []),
+        ("WT_BASE=main make wt-fix NAME=x", [WT_FIX, ENV_NOTE], [])):
     got = run("Bash", {"command": form}, cwd=mk) or ""
     check(f"SE-105, make под отказом, как в board-agents: {form!r}", got or None, True)
     lost = [w for w in want if w not in got] + [w for w in absent if w in got]
     check(f"SE-105, прямые команды в отказе: {form!r}", None if not lost else f"{lost!r} в {got!r}", False)
 bash("SE-105, make у Контроля — как в board-agents", "make wt-fix NAME=x", False, who=D9, cwd=mk)
+# Подсказка не отстаёт от Makefile (Контроль #385): каждая прямая команда и запасная форма из комментария — строка
+# рецепта цели после подстановки переменных; wt-<трек> — рецепт wt-add через `$(MAKE) wt-add TRACK=<трек>`.
+recipes, target = {}, None
+for line in (CHECKOUT / "Makefile").read_text().splitlines():
+    m = re.match(r"([A-Za-z][\w-]*):", line)
+    target = m.group(1) if m else target if line.startswith("\t") else None
+    if target and line.startswith("\t"):
+        recipes[target] = recipes.get(target, "") + line.lstrip("\t@") + "\n"
+for goal in ("wt-add", "wt-feature", "wt-fix", "wt-refactor", "wt-spike", "wt-review", "wt-deps", "wt-check", "wt-rm",
+             "wt-list", "check-repo", "check-eval"):
+    via_add = goal[3:] in WT_TRACKS
+    body = recipes.get("wt-add" if via_add else goal, "")
+    for k, v in (("TRACK", goal[3:] if via_add else "fix"), ("NAME", "x"), ("WT_BASE", "board-agents")):
+        body = body.replace(f"$({k})", v)
+    forms = [f for c in _direct(goal, {"TRACK": "fix", "NAME": "x", "WT_BASE": "board-agents"})
+             for f in [c.split("  # ")[0]] + ([c.split("  # ", 1)[1].split(" — ", 1)[1]] if "  # " in c else [])]
+    stale = [f for f in forms if f not in body] + ([] if not via_add or f"wt-add TRACK={goal[3:]} " in recipes.get(goal, "")
+                                                   else [f"{goal}: нет $(MAKE) wt-add TRACK={goal[3:]}"])
+    check(f"SE-105, _direct({goal!r}) = рецепт Makefile (правка рецепта — правка _direct)", stale or None, False)
 (mk / "Makefile").write_text("wt-fix:\n\tgh pr merge 1\n")
 (mk / "m.awk").write_text('BEGIN { system("gh pr merge 1") }\n')
 for form in ("make wt-list", "awk -f m.awk"):

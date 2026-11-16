@@ -82,8 +82,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: boards/pnpm-lock.yaml
       # CI does not run docker build: a package missing in a Dockerfile stage fails only at deploy (TB-234).
+      # Dockerfile.kaneo is the prod image; apps/api and apps/web Dockerfiles build the local stack (TB-235).
       - name: Dockerfile stages copy each workspace package their app needs
-        run: node deploy/check-dockerfile-deps.mjs
+        run: |
+          rc=0
+          for f in Dockerfile.kaneo apps/api/Dockerfile apps/web/Dockerfile; do
+            node deploy/check-dockerfile-deps.mjs . "$f" || rc=1
+          done
+          exit "$rc"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       # The image runs dist under plain Node: an extensionless relative import crash-loops the API (TB-143, TB-173).

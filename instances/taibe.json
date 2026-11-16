@@ -205,5 +205,10 @@
       ]
     ],
     "match": "-taibe(-|\\d|$)"
+  },
+  "genome": {
+    "disabledMcpjsonServers": [
+      "ai-council"
+    ]
   }
 }

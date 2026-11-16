@@ -59,6 +59,11 @@ export interface OpsReport {
      * stopped — все остальные, кроме разовой задачи с кодом 0 (её нет и в total). В отчётах до OPS-8 поля нет.
      */
     projects?: Array<{ name: string; main: boolean; total: number; running: number; stopped: string[] }>
+    /**
+     * Стеки хоста из прошлого сохранённого отчёта, которых нет в projects (OPS-57): `compose down` удаляет контейнеры,
+     * и без сравнения пропажа целого стека не видна. Поле есть, только когда что-то пропало.
+     */
+    missingProjects?: string[]
   }>
   deploys: { total: number; failed: number; recent: Array<{ title: string; conclusion: string | null; at: string; url: string }> }
   tls: Array<{ domain: string; daysLeft: number | null; error: string | null }>
