@@ -10,6 +10,10 @@
 # firewall rules of an older wg0. A new peer gets a preshared key, printed once
 # with its config block; a peer that is already there keeps what it has.
 # Usage: wg-setup.sh [PEER_PUBLIC_KEY [LABEL [split|full]]]   (asks for the key when omitted)
+#        wg-setup.sh --rules   only rewrite and apply the firewall rules (no device key)
+# SSH to the Mac from a phone (OPS-82): WG_MAC_SSH_FROM in /opt/t-boards/.env lists the
+# tunnel addresses (space-separated) that may open TCP 22 on the Mac's tunnel address
+# (CLAUDE_MEM_WORKER_HOST, 10.77.0.2 by default). Nothing else between devices is opened.
 set -euo pipefail
 
 WG_IF=wg0
@@ -33,16 +37,23 @@ die() {
 
 [ "$(id -u)" = 0 ] || die "нужен root"
 
+rules_only=0
+if [ "${1:-}" = --rules ]; then
+  rules_only=1
+  set --
+fi
 peer_pub="${1:-}"
 label="${2:-mac}"
 mode="${3:-split}"
 case "$mode" in split | full) ;; *) die "режим — split или full, не «$mode»" ;; esac
 [[ "$label" =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "имя устройства — латиница, цифры, . _ -"
-if [ -z "$peer_pub" ]; then
-  read -r -p "Публичный ключ устройства (приложение WireGuard → Public key): " peer_pub </dev/tty
+if [ "$rules_only" = 0 ]; then
+  if [ -z "$peer_pub" ]; then
+    read -r -p "Публичный ключ устройства (приложение WireGuard → Public key): " peer_pub </dev/tty
+  fi
+  peer_pub="$(printf '%s' "$peer_pub" | tr -d '[:space:]')"
+  [[ "$peer_pub" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "это не публичный ключ WireGuard"
 fi
-peer_pub="$(printf '%s' "$peer_pub" | tr -d '[:space:]')"
-[[ "$peer_pub" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "это не публичный ключ WireGuard"
 
 if ! command -v wg >/dev/null 2>&1; then
   command -v apt-get >/dev/null 2>&1 || die "нет apt-get — поставьте wireguard-tools вручную"
@@ -71,6 +82,21 @@ if ! [[ "${mem_host#"$WG_NET".}" =~ ^[0-9]{1,3}$ && "$mem_port" =~ ^[0-9]{1,5}$ 
   log "память $mem_host:$mem_port — не адрес туннеля, беру $WG_NET.2:37702"
   mem_host=$WG_NET.2 mem_port=37702
 fi
+
+# Phones that may reach the Mac's SSH (the owner's view of the agent sessions, tmux over SSH).
+# Both directions are listed: the reply is wg0 → wg0 too, and the chain drops that by default.
+ssh_from="" ssh_rules=""
+[ ! -r "$TB_ENV" ] || ssh_from="$(sed -n 's/^WG_MAC_SSH_FROM=//p' "$TB_ENV" | tail -1 | tr -d "\"'")"
+for ip in $ssh_from; do
+  n="${ip#"$WG_NET".}"
+  if ! [[ "$n" =~ ^[0-9]{1,3}$ ]] || [ "$n" -lt 2 ] || [ "$n" -gt 254 ] || [ "$ip" = "$mem_host" ]; then
+    log "WG_MAC_SSH_FROM: $ip — не адрес устройства в $WG_NET.0/24, пропускаю"
+    continue
+  fi
+  ssh_rules+="  iptables -A \"\$CHAIN\" -i \"\$wg_if\" -o \"\$wg_if\" -s $ip -d $mem_host -p tcp --dport 22 -j ACCEPT"$'\n'
+  ssh_rules+="  iptables -A \"\$CHAIN\" -i \"\$wg_if\" -o \"\$wg_if\" -s $mem_host -d $ip -p tcp --sport 22 -m conntrack --ctstate ESTABLISHED -j ACCEPT"$'\n'
+  log "SSH к Mac ($mem_host:22) с $ip"
+done
 
 # Firewall rules live in one script that wg-quick runs on up and down, so an
 # upgrade rewrites them in one place.
@@ -116,7 +142,7 @@ if [ "\$action" = up ]; then
   iptables -A "\$CHAIN" -i "\$wg_if" -o "\$ext_if" -j ACCEPT
   iptables -A "\$CHAIN" -i "\$ext_if" -o "\$wg_if" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
   iptables -A "\$CHAIN" -i $TB_BRIDGE -o "\$wg_if" -s $TB_APP_IP -d $mem_host -p tcp --dport $mem_port -m conntrack --ctstate NEW -j RETURN
-  iptables -A "\$CHAIN" -o "\$wg_if" -m conntrack ! --ctstate RELATED,ESTABLISHED -j DROP
+${ssh_rules}  iptables -A "\$CHAIN" -o "\$wg_if" -m conntrack ! --ctstate RELATED,ESTABLISHED -j DROP
   iptables -A "\$CHAIN" -i "\$wg_if" -o $TB_BRIDGE -d $TB_APP_IP -s $mem_host -p tcp --sport $mem_port -m conntrack --ctstate ESTABLISHED -j RETURN
   iptables -A "\$CHAIN" -i "\$wg_if" -m conntrack --ctstate DNAT -j RETURN
   iptables -A "\$CHAIN" -i "\$wg_if" -j DROP
@@ -175,6 +201,13 @@ backup() {
 }
 write_rules
 printf 'net.ipv4.ip_forward = 1\n' >"$SYSCTL"
+if [ "$rules_only" = 1 ]; then
+  [ -f "$CONF" ] || die "нет $CONF — сначала wg-setup.sh с ключом устройства"
+  systemctl is-active --quiet "wg-quick@$WG_IF" || die "wg-quick@$WG_IF не запущен — правила применятся при старте"
+  "$RULES" up "$WG_IF"
+  log "правила применены: SSH к Mac — $(printf '%s' "$ssh_rules" | grep -c -- '--dport 22' || true) устройств"
+  exit 0
+fi
 
 if [ ! -f "$CONF" ]; then
   if ip -4 -o addr show | grep -q " $WG_NET\." || ip -4 route show | grep -q "^$WG_NET\."; then
