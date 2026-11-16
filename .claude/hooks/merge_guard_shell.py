@@ -10,7 +10,7 @@ import os
 import re
 import shlex
 
-from merge_guard_comments import sure_comments
+from merge_guard_comments import comment_readings, strip_comments  # noqa: F401 — comment_readings: для хука
 from merge_guard_files import open_regular
 from merge_guard_vars import (ASSIGN, SHELL_WORDS, SUBST, dir_vars, expand_vars, note_vars, substitute,  # noqa: F401
                               words)  # dir_vars, expand_vars, note_vars, substitute — отсюда для хука
@@ -117,84 +117,6 @@ def cut_substitutions(cmd, quotes=True):
         out.append(c)
         i += 1
     return "".join(out), inner
-
-
-COMMENT_SAFE = re.compile(r"[^'\"`(){}\]]*")
-# `(` — только после пробела: не `$(`, `<(`, `@(`
-COMMENT_PARENS = re.compile(r"(?:[^'\"`(){}\]\\]|(?<=[ \t])\(|\))*")
-
-
-def comment_safe(text):
-    """Текст от `#` до конца строки можно снять как комментарий (см. strip_comments): в нём нет `'"`{}]` — символов,
-    которыми bash закрыл бы строку, `${…}`, `$[…]` или обратные кавычки, а скобки, если есть, — парные, `(` после
-    пробела и без `\\`: закрыть `$(…)`, `$((…))` или `((…))` нечем, открыть подстановку — тоже."""
-    if COMMENT_SAFE.fullmatch(text):
-        return True
-    if not COMMENT_PARENS.fullmatch(text):
-        return False
-    depth = 0
-    for c in text:
-        depth += (c == "(") - (c == ")")
-        if depth < 0:
-            return False
-    return depth == 0
-
-
-def strip_comments(cmd, force=False, keep=None):
-    """Комментарии shell — от `#` в начале слова до конца строки — убрать, как это делает bash: `\\` в конце комментария
-    строку не продолжает, `#` внутри слова (`a\\ #b`, `"…"#`, `$'…'`) — не комментарий. Снимается только то, что
-    пропускает comment_safe: если разбор ошибся и для bash этот `#` внутри строки, `${…}`, `$((…))` или обратных
-    кавычек, закрыть их bash может только символом, которого там нет, — и такой текст остаётся на разбор. Кавычки не
-    сошлись — команда остаётся как есть (лишний отказ, не пропуск); force — всё равно снять: так безопасно для
-    грубого признака, правило comment_safe от разбора кавычек не зависит. keep — признак, с которым комментарий
-    остаётся всегда; задан — снимается и комментарий с опасными знаками (`# Docker's …`, `# say "hi`), если bash
-    здесь точно на верхнем уровне (sure_comments, SE-75, SE-76): там всё до конца строки — комментарий. Такой снят —
-    текст без него и при несошедшихся кавычках: с ним кавычки сошлись бы через строки и спрятали бы код, который
-    bash выполнит до ошибки в конце скрипта."""
-    out, i, quote, word, sure, hits = [], 0, None, False, None, []
-
-    def sure_comment(at, text):
-        nonlocal sure
-        if keep is None or keep(text):
-            return False
-        sure = sure_comments(cmd) if sure is None else sure  # один разбор на текст, и только если нужен
-        hits.extend([at] if at in sure else [])
-        return at in sure
-
-    while i < len(cmd):
-        c = cmd[i]
-        if quote == "'":
-            quote = None if c == "'" else quote
-        elif quote == "$'" and c == "\\":  # в $'…' `\'` — экранированная кавычка
-            out.append(cmd[i:i + 2])
-            i += 2
-            continue
-        elif quote == "$'":
-            quote = None if c == "'" else quote
-        elif c == "\\":
-            word = word or cmd[i + 1:i + 2] != "\n"  # `\`+перевод строки — склейка, слово не начинает
-            out.append(cmd[i:i + 2])
-            i += 2
-            continue
-        elif c == "$" and quote is None and cmd[i + 1:i + 2] == "'":
-            quote, word = "$'", True
-            out.append("$'")
-            i += 2
-            continue
-        elif c == "'" and quote is None:
-            quote = "'"
-        elif c == '"':
-            quote = None if quote == '"' else '"'
-        elif c == "#" and quote is None and not word:
-            end = cmd.find("\n", i)
-            end = len(cmd) if end < 0 else end
-            if comment_safe(cmd[i:end]) or sure_comment(i, cmd[i:end]):
-                i = end
-                continue
-        word = quote is not None or c not in " \t\n;&|(<>"  # `)` слово не кончает: `$(true)#` — не комментарий
-        out.append(c)
-        i += 1
-    return cmd if quote and not force and not hits else "".join(out)
 
 
 FD = re.compile(r"(?<![^\s;&|(])\d+(?=[<>])")  # `0<f`, `2>&1`: номер дескриптора — не аргумент команды
