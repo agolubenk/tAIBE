@@ -81,8 +81,8 @@ def loaded(label):
 
 def summary():
     # headroom не ставится отсюда: переключение снимает процесс на :8787 — это решение, а не подъём (install).
-    hr = "infra/headroom/developer/headroom_launchd.py " + ("status" if loaded("space.hrhelper.headroom")
-                                                             else "install — сейчас не под launchd")
+    hr = "python3 -I infra/headroom/developer/headroom_launchd.py " + (
+        "status" if loaded("space.hrhelper.headroom") else "install — сейчас не под launchd")
     rows = [("сервер tmux ролей", T.server_info() is not None, f"tmux -L {T.socket()} attach"),
             ("MCP-хаб :3050", port_open(3050), "infra/scripts/dev-ai/mcp-hub.sh status"),
             ("headroom :8787", port_open(8787) and loaded("space.hrhelper.headroom"), hr),

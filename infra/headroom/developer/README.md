@@ -6,12 +6,14 @@
 > контейнер зависел от VM Docker: 16.11 VM пересоздалась вместе с диском, контейнер пропал, прокси подняли руками в окне
 > Terminal (закрыть окно — API нет у всех). Теперь — LaunchAgent `space.hrhelper.headroom`: нативный headroom из uv той
 > же версии (0.41.0), флаги и окружение — из манифеста ниже (без флагов Docker), подъём после сбоя.
-> `python3 -I infra/headroom/developer/headroom_launchd.py status | install | plist`; журнал старта —
-> `~/Library/Logs/taibe-headroom.log`, запросы — `~/.headroom/logs/proxy-8787.log`. `install` снимает только
-> headroom вне сервиса, чужой процесс на порту не трогает; сервис не ответил за 60 с — запасной процесс с теми же
-> флагами. Манифест и настройки таблицы ниже остаются каноном: после `npm run ai-pipeline:headroom-apply` —
-> `headroom_launchd.py install` (перезапустит сервис с новыми флагами). Таблица «Контейнер» и команды
-> `ai-pipeline:start/stop` описывают прежний путь через Docker — для тестов.
+> `python3 -I infra/headroom/developer/headroom_launchd.py status | install | plist`; журнал запросов —
+> `~/.headroom/logs/proxy-8787.log` (headroom ротирует его сам), stdout и stderr сервиса не пишутся; причина сбоя —
+> `status` (код выхода из launchd). `install` проверяет манифест (адрес только `127.0.0.1:8787`, флаги и переменные
+> по списку) и бинарь uv до любого изменения, снимает только headroom вне сервиса, чужой процесс на порту не трогает;
+> сервис не ответил за 60 с — запасной процесс с теми же флагами (код 3). Флаги меняются в манифесте, затем
+> `install` (сервис загрузится заново). Пока сервис загружен, `ai-pipeline:start|stop|restart|headroom-apply`
+> отказываются (Docker занял бы тот же порт); таблица «Контейнер» ниже описывает путь через Docker — для тестов.
+> Архив `savings_events.jsonl` (`headroom_archive_events`) запускает `ai-pipeline:status` — раз в 30 дней нужен.
 
 ## Что это
 
