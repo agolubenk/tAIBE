@@ -251,7 +251,7 @@ LAUNCHERS = {
 INFO = {"node": {"-v", "-h"}, "python": {"-V", "-h"}, "perl": {"-v"}}  # и у всех `--version`, `--help`: только справка
 STDIN_CODE = {"sh": "s", "python": "i"}  # `bash -s x` — код из stdin, x — аргумент; `python3 -i x.py` — stdin после x.py
 LONG_VALUED = {"--rcfile", "--init-file", "--require", "--import", "--loader", "--experimental-loader", "--conditions",
-               "--input-type", "--check-hash-based-pycs"}
+               "--input-type", "--check-hash-based-pycs", "--emulate"}  # `zsh --emulate csh` — режим, не скрипт (SE-77)
 SCRIPT_EXT = re.compile(r"\.(sh|bash|zsh|py|[mc]?js|[mc]?ts|pl|rb|scpt|applescript)$")
 SCRIPT_MAX = 4 * 1024 * 1024
 # Исполняемый файл ядра (ELF, Mach-O, universal) — не текст скрипта. NUL в тексте — не признак: bash отказывается от
