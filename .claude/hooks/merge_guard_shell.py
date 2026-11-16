@@ -105,6 +105,8 @@ def cut_substitutions(cmd, quotes=True):
 
 
 FD = re.compile(r"(?<![^\s;&|(])\d+(?=[<>])")  # `0<f`, `2>&1`: номер дескриптора — не аргумент команды
+# `⏎<<`, `⏎</dev/null` — одна серия пунктуации (после склейки `\`⏎ — SE-83): перевод строки кончает команду до редиректа
+NL_REDIRECT = re.compile(r"(?<=\n)(?=[<>])")
 
 
 def _lexer(cmd):
@@ -130,7 +132,7 @@ def split_commands(tokens):
     argv, targets, sources, piped, skip = [], [], [], False, None
     depth = floor = 0
     mark = None
-    for t in tokens:
+    for t in (p for x in tokens for p in (NL_REDIRECT.split(x) if set(x) <= SEPARATORS else (x,))):
         if t and set(t) <= SEPARATORS:
             depth = max(0, depth + t.count("(") - t.count(")"))
             floor = min(floor, depth)

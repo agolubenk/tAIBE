@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_comments import strip_comments  # noqa: E402
-from merge_guard_shell import cut_heredocs, heredoc_text, join_lines  # noqa: E402
+from merge_guard_shell import cut_heredocs, heredoc_text, join_lines, split_commands, tokenize  # noqa: E402
 from merge_guard_testkit import bash, check, finish, repo_on  # noqa: E402
 
 se83 = repo_on("main", "se83")
@@ -124,6 +124,17 @@ check("SE-83 cut_heredocs: 300 `<<` без метки — одно тело до
       else len(cut_heredocs(MANY)[1]), False)
 check("SE-83 join_lines: нечётная серия — склейка, чётная — нет",
       None if join_lines("gh \\\npr a\\\\\nb c\\\\\\\nd") == "gh pr a\\\\\nb c\\\\d" else "нет", False)
+
+# Линза backend 6910113882: склейка `\`⏎ даёт серию `⏎<<`, `⏎<<<`, `⏎<` — перевод строки кончает команду до редиректа.
+# Без ⏎ (`;<`, `|<`, `&&<`) — SE-149, не здесь.
+for form in ("echo a\n\\\n<<E gh pr merge 1 >/dev/null\n`cat <<E\ncat >/dev/null <<-E\nbash <<E\n",
+             "echo a\n\\\n<<<x gh pr merge 1\n\tE\ncat >/dev/null <<'E'\n", "echo a\n\\\n</dev/null gh pr merge 1",
+             "echo a\n\\\n>/dev/null gh pr merge 1", "echo a\n</dev/null gh pr merge 1", "echo a |\n</dev/null gh pr merge 1"):
+    bash(f"SE-83: `⏎` перед редиректом кончает команду: {form!r}", form, True)
+bash("SE-83: `⏎<<` без команды мёржа — проход", "echo a\n\\\n<<E cat >/dev/null\nx\nE", False)
+for text, want in (("echo a\n<<<x gh", [["echo", "a"], ["gh"]]), ("echo 'a\n<b' c", [["echo", "a\n<b", "c"]])):
+    got = [argv for argv, *_ in split_commands(tokenize(text))]
+    check(f"SE-83 split_commands: серия `⏎<` делится, слово — нет: {text!r}", None if got == want else got, False)
 
 if __name__ == "__main__":
     finish(" — склейка строк")
