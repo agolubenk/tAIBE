@@ -5,7 +5,9 @@
 точка подмены в тестах.
 """
 import json
+import os
 import re
+import sys
 from datetime import datetime, timezone
 
 import quorum
@@ -13,7 +15,8 @@ import sources
 from journal import DIGEST, NERVOUS
 
 GH_LIMIT = 1000        # не больше 1000 открытых PR за проход
-GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title"
+# headRefName, baseRefName, isCrossRepository — уборка worktree после мёржа (OPS-52): ветка и база PR из этого репозитория.
+GH_FIELDS = "number,headRefOid,updatedAt,createdAt,title,headRefName,baseRefName,isCrossRepository"
 GH_NEW_PER_PASS = 20   # новых для Нерва PR за проход: догон не задерживает очередь владельца на минуты
 NO_CHECKS_AFTER = 1800  # с после головы без единой проверки — событие координатору (SE-126)
 NO_CHECKS_EVERY = 900   # с: дальше такой PR перечитывается раз в 15 мин, а не каждый проход
@@ -30,8 +33,11 @@ def _gh_list(repo):
                                   "--json", GH_FIELDS])
     if code != 0:
         raise RuntimeError(f"gh pr list {repo}: {err.strip()[:200]}")
+    # PR из форка — не наша ветка, даже при том же имени: ветки для уборки worktree нет.
     return [{"number": d["number"], "title": d.get("title") or "", "updated_at": d["updatedAt"],
-             "created_at": d.get("createdAt") or "", "head": {"sha": d["headRefOid"]}} for d in json.loads(out)]
+             "created_at": d.get("createdAt") or "", "head": {"sha": d["headRefOid"]},
+             "branch": "" if d.get("isCrossRepository") else (d.get("headRefName") or ""),
+             "base": d.get("baseRefName") or ""} for d in json.loads(out)]
 
 
 def _gh_comments(repo, n):
@@ -56,6 +62,11 @@ def _gh_view(repo, n):
     return files, checks, d.get("state"), d.get("mergedAt"), d.get("closedAt")
 
 
+def _gh_checks(repo, n):
+    """Только статусы проверок головы — перечитать CI без списка файлов и тела PR (SE-123)."""
+    return _gh_pr(repo, n, "statusCheckRollup")[2]
+
+
 def _gh_author_view(repo, n):
     """Файлы, проверки и тело PR — для автора (SE-121). Тело (несколько КБ) читается только здесь, а не на каждой
     перепроверке CI: строку «роль N — автор» пишут при открытии PR."""
@@ -72,7 +83,7 @@ GH_STATE_REV = 3
 
 def _gh_closed(ctx, repo, known, open_now, fails):
     """PR, которых нет в списке открытых: «влит» или «закрыт» — по самому PR. Открытый PR (список неполон — потолок
-    страниц) остаётся в prs без события. Ключ — с временем мёржа или закрытия: ложное «закрыт» rev 2 не прячет
+    GH_LIMIT или неполный ответ gh с кодом 0) остаётся в prs без события. Ключ — с временем мёржа или закрытия: ложное «закрыт» rev 2 не прячет
     настоящее, а закрытие после переоткрытия — новое событие."""
     for n in [k for k in known if k not in open_now]:
         try:
@@ -85,7 +96,37 @@ def _gh_closed(ctx, repo, known, open_now, fails):
         word = "влит" if merged else "закрыт"
         ctx.emit(f"gh:closed:{n}:{merged or closed or state}", "pr.closed", DIGEST, ["coord"], f"#{n} {word}",
                  "github")
+        if merged and known[n].get("branch"):
+            _gc_worktree(ctx, n, known[n]["branch"], known[n].get("head", ""), known[n].get("base", ""))
         del known[n]
+
+
+WT_GC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "wt_gc.py")
+
+
+def _gc_worktree(ctx, n, branch, head="", base=""):
+    """OPS-52 (решение владельца 13.11 «после мёржа»): worktree влитой ветки удаляется, если копия чистая, всё на
+    remote и в ней никто не работает (eval/tools/wt_gc.py). Удалён — запись в журнал без доставки; оставлен —
+    координатору с причиной. Сбой уборки не мешает проходу GitHub: PR уже снят, повтор — `wt_gc.py sweep`."""
+    try:
+        cmd = [sys.executable, "-I", WT_GC, "branch", ctx.cfg["repo_root"], branch, "--json"]
+        # Голова и база PR: worktree удаляется, только если его HEAD — голова влитого PR, а база — основная ветка.
+        cmd += (["--head", head] if head else []) + (["--base", base] if base else [])
+        code, out, err = sources.run(cmd, timeout=300)
+        res = json.loads(out) if code == 0 and out else None
+    except Exception as e:  # noqa: BLE001 — таймаут или сбой разбора: только запись
+        code, res, err = 1, None, str(e)
+    if res is None:
+        # Сбой — координатору: повтора нет (PR уже снят), worktree занимает место в пределе, пока его не уберёт sweep.
+        ctx.emit(f"wt:gc:{n}", "wt.gc", DIGEST, ["coord"],
+                 f"#{n}: уборка worktree {branch} не удалась: {(err or '')[:120]} — wt_gc.py sweep", "github")
+        return
+    for r in res:
+        if r["removed"]:
+            ctx.emit(f"wt:gc:{n}:{r['path']}", "wt.gc", DIGEST, [], f"#{n}: worktree {r['path']} удалён", "github")
+        else:
+            ctx.emit(f"wt:gc:{n}:{r['path']}", "wt.gc", DIGEST, ["coord"],
+                     f"#{n} влит, worktree {r['path']} оставлен — {r['reason']}", "github")
 
 
 def _backfill_since(known):
@@ -128,7 +169,7 @@ def _recheck_ci(ctx, n, p):
         last = sources._ts(p.get("ci_at"))
         if last and (ctx.now - last).total_seconds() < NO_CHECKS_EVERY:
             return
-    _, checks, _, _, _ = _gh_view(ctx.cfg["github"]["repo"], n)
+    checks = _gh_checks(ctx.cfg["github"]["repo"], n)
     if slow:
         p["ci_at"] = _iso_now(ctx)   # после удачного чтения: сбой gh повторяется следующим проходом, а не через 15 мин
     p["checks"] = checks
@@ -160,6 +201,8 @@ def poll_github(ctx):
                 continue
             fresh += 1
         p = known.setdefault(str(n), {"head": "", "updated": "", "seen": [], "changes_by": []})
+        if pr.get("branch"):
+            p["branch"], p["base"] = pr["branch"], pr.get("base", "")   # до проверки «не менялся»: и у давних PR
         # «author» — признак разобранного PR: в rev 1 head и updated писались до сбоя _gh_view (SE-40).
         if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"] and "author" in p:
             if p.get("await_ci"):
@@ -185,8 +228,11 @@ def poll_github(ctx):
             continue
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
     _gh_closed(ctx, g["repo"], known, open_now, fails)
-    if not fails and not deferred:
-        st.pop("backfill", None)   # догон окончен: дальше каждый новый PR — «открыт»
+    # Догон окончен, только если список полон: открытый известный PR вне списка (пустой или частичный ответ gh с
+    # кодом 0) оставил бы следующие проходы без границы — каждый давний PR пошёл бы «открыт» (SE-123). Пустой список
+    # догон не кончает и при пустом known: без открытых PR граница никому не мешает (Контроль #393).
+    if not fails and not deferred and open_now and open_now >= set(known):
+        st.pop("backfill", None)   # дальше каждый новый PR — «открыт»
     _raise_fails(fails)
 
 
@@ -207,6 +253,9 @@ def _check_pr(ctx, n, p, head, viewed=False):
         p["author"] = quorum.pr_author(body, files, g["path_roles"], ctx.cfg["team"]["roles"])   # адресат changes
         p["author_line"] = quorum.body_author(body, ctx.cfg["team"]["roles"])   # автор для кворума — только строка
         p["checks"] = checks
+    elif not viewed and quorum.ci_state(p["checks"]) == "pending":
+        # PR меняется каждый проход (комментарии) — _recheck_ci его не видит: CI перечитывается здесь (SE-123)
+        p["checks"] = _gh_checks(g["repo"], n)
     if head_changed:
         p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
     p["head"] = head  # после запросов: при сбое голова не считается увиденной

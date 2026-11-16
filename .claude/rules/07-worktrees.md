@@ -6,7 +6,7 @@ paths:
 
 # Git worktrees + Claude Code
 
-> **Sync:** `Makefile`, `worktrees/README.md`, прямые формы целей — `.claude/hooks/merge_guard_launch.py` (`_direct`)
+> **Sync:** `Makefile`, `worktrees/README.md`, прямые формы целей — `.claude/hooks/merge_guard_make.py` (`_direct`)
 
 ## Схема путей
 
@@ -55,6 +55,13 @@ make wt-rm TRACK=fix NAME=candidate-merge-n-plus-one
 `-C`/`-f` меняют папку и Makefile, `-n`/`-q`/`-t` рецепт не выполняют. Переменные окружения перед `make` подсказка не
 видит.
 
+Тесты слоя (SE-127): `python3 [-I] [-B] [-u] .claude/hooks/test_*.py`, `bash .claude/hooks/test_*.sh` и то же в
+`.claude/scripts` хук пускает без разбора их текста, если `.claude/hooks`, `.claude/scripts` и `eval/tools` (их код тесты
+запускают) — ровно их деревья на основной ветке origin (ни правки, ни лишнего файла, ни ссылки, `__pycache__` — только
+обычные файлы), а команда — простой запуск теста или цикл по ним. В worktree с правкой этих папок и в инстансе без
+`eval/tools` (HR: тест взял бы код по `$TAIBE_ROOT`) — отказ, гейт — CI. `make check`/`make check-layer` при Makefile с основной ветки хук
+разбирает по командам рецептов; пока тесты `eval/tools` с признаками (SE-138) их останавливают — команды напрямую.
+
 ```bash
 mkdir -p worktrees/fix                                                    # make wt-fix NAME=<topic>
 git worktree add "worktrees/fix/<topic>" -b "fix/<topic>" board-agents    # ветка есть: git worktree add "worktrees/fix/<topic>" "fix/<topic>"
@@ -87,9 +94,29 @@ python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'              # make
    typecheck и сборки (2026-10-08; 30.10 — «EXTENSION_AUTH_CODES is not iterable»). Гейт (`npm run …`, `npx …`) в
    worktree без своих зависимостей останавливает хук `.claude/hooks/pre-tool-use-wt-deps.sh` с командой починки.
    Обход для команды, которой зависимости не нужны, — `WT_DEPS_CHECK=0` в её начале; для всей сессии —
-   `WT_DEPS_CHECK=0` в окружении, с которым запущен `claude` (хук и проверка Stop-typecheck молчат).
+   `WT_DEPS_CHECK=0` в окружении, с которым запущен `claude` (хук и проверка Stop-typecheck молчат). Установку
+   (`pnpm install|i|ci`) хук пропускает: это и есть починка (SE-124).
 3. Проверить локальные `.env` из `.worktreeinclude` (у досок — `boards/.env`)
-4. Одна задача на worktree — один PR
+4. Один worktree — одна полоса работы: связанные задачи одного сектора (общие файлы, связанные ветки) — в одном
+   worktree, а не в новом на каждую карточку. Отдельный PR на задачу — по-прежнему.
+
+## Предел и уборка (владелец, 13.11, OPS-52)
+
+- Не больше **10** worktree на продукт. Перед новым — найди открытый worktree своего сектора. `make wt-add` и
+  `git worktree add` на пределе останавливает `eval/tools/wt_gc.py check-limit` (хук
+  `.claude/hooks/pre-tool-use-wt-limit.sh`); исключение — только по слову владельца, `WT_LIMIT_CHECK=0`.
+  До 20.11 (владелец 14.11, `d-taibe-ops52-limit-1311` = B) продукт выше предела получает только предупреждение —
+  своди работу в существующие worktree. Остановка включается сама 20.11 или когда продукт впервые опустится до 10.
+- Работа влита — worktree удаляется сам: Нерв видит мёрж PR в основную ветку и вызывает `wt_gc.py branch`
+  (`eval/nerve/sources.py`). Удаляется только копия, чей HEAD — голова влитого PR, без правок, без неотслеживаемых
+  файлов, без игнорируемого состояния сессии (`.ai/task/`, `.claude/memory/session/`, `CLAUDE.local.md`, правленый
+  `.env`), в которой нет процесса, не работали последний час и на которую не ссылаются ссылки и задачи launchd. Ветка
+  остаётся. Что осталось и почему — событие `wt.gc` координатору. Пропущенные мёржи — `wt_gc.py sweep <repo>`.
+- Продолжаешь связанную задачу в том же worktree после мёржа — сделай коммит или `git worktree lock`: уборка не тронет
+  копию, чей HEAD ушёл от головы PR, и запертую копию.
+- В пределе считаются и worktree, которые создаёт сам Claude Code (`.claude/worktrees/agent-*`, `EnterWorktree`):
+  хук их не видит (не Bash), а уборка — только если у их ветки влитой PR. Закончил с таким worktree — удали его.
+  `review/*` в detached HEAD уборка не трогает: удаляет тот, кто ревьюил.
 
 ## Чужой незакоммиченный WIP
 

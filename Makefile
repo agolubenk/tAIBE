@@ -1,6 +1,6 @@
 # tAIBE — команды слоя: git worktrees, проверки, ИИ-контур разработки.
 # Worktrees — worktrees/README.md, .claude/rules/07-worktrees.md. Usage: make wt-fix NAME=notion-5xx-retry
-# Прямые формы целей wt-*/check-repo/check-eval для отказа merge-guard — .claude/hooks/merge_guard_launch.py
+# Прямые формы целей wt-*/check-repo/check-eval для отказа merge-guard — .claude/hooks/merge_guard_make.py
 # (_direct): правка рецепта — правка там (SE-105).
 
 WT_BASE ?= board-agents
@@ -34,6 +34,7 @@ wt-list:
 wt-add:
 	@test -n "$(TRACK)" || (echo "TRACK required (feature|fix|refactor|spike|review)" && exit 1)
 	@test -n "$(NAME)" || (echo "NAME required (kebab-case topic)" && exit 1)
+	@[ "$(WT_LIMIT_CHECK)" = 0 ] || { python3 -I eval/tools/wt_gc.py check-limit "$(CURDIR)"; rc=$$?; [ $$rc -ne 3 ]; }
 	@mkdir -p "worktrees/$(TRACK)"
 	@if git show-ref --verify --quiet "refs/heads/$(TRACK)/$(NAME)"; then \
 		git worktree add "worktrees/$(TRACK)/$(NAME)" "$(TRACK)/$(NAME)"; \
@@ -90,6 +91,7 @@ check-eval:
 
 check-layer:
 	@for t in .claude/hooks/test_*.py .claude/scripts/test_*.py eval/tools/test_*.py; do python3 "$$t" || exit 1; done
+	bash .claude/hooks/test_wt_deps_hook.sh
 	bash .claude/scripts/sync-agent-skills.sh --check
 	python3 -I eval/evolve/catalog.py --check
 

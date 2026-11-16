@@ -26,6 +26,15 @@ import sources  # noqa: E402
 from journal import DIGEST, NERVOUS, Journal, read_from  # noqa: E402
 
 MSK = timezone(timedelta(hours=3))
+# Окружение живой сессии роли (геном ставит продукт и линию): подпроцесс nerve.py без них, иначе журнал уходит в
+# папку продукта, а тест читает NERVE_STATE_DIR (SE-129).
+SESSION_ENV = ("TAIBE_PRODUCT", "TAIBE_LINEAGE")
+
+
+def clean_env(**extra):
+    return {**{k: v for k, v in os.environ.items() if k not in SESSION_ENV}, **extra}
+
+
 with open(os.path.join(HERE, "config.json"), encoding="utf-8") as _f:
     CFG = json.load(_f)
 # Дельта /changes (OPS-50) ходит в консоль через sources.run — у неё свои тесты с фальшивой консолью
@@ -345,6 +354,20 @@ class JournalTest(unittest.TestCase):
                               ("Бэкенд r.f93t", "backend"), ("Фронтенд (роль 3)", "frontend")):
                 self.assertEqual(sources.route_source(src, rules), role, (slug, src))
 
+    def test_route_source_qa_and_second_session_spellings(self):
+        """SE-122: «QA» — отдельным словом, буквы qa в метке линии (r.qa3f, .9qa1) не уводят ответ координатору.
+        Вторая сессия — и без дефиса (backend2, «Бэкенд–2»), а backend-20 и «роль 70» — не она."""
+        shared, prods = products.load()
+        for slug in ("taibe", "hr-helper"):
+            rules = products.config_for(slug, shared, prods)["queue"]["source_roles"]
+            for src, role in (("backend r.qa3f", "backend"), ("backend-2 r.qa3f", "backend-2"),
+                              ("backend-2 r.ab12.9qa1", "backend-2"), ("frontend r.aqa1", "frontend"),
+                              ("QA", "coord"), ("hr-helper-v2-85 (QA)", "coord"), ("qa-сессия", "coord"),
+                              ("backend2 r.ab12", "backend-2"), ("backend 2", "backend-2"), ("Бэкенд–2", "backend-2"),
+                              ("Фронтенд 2 r.cd34", "frontend-2"), ("backend-20", "backend"),
+                              ("Бэкенд (роль 70)", "backend")):
+                self.assertEqual(sources.route_source(src, rules), role, (slug, src))
+
 
 class FakeCtx:
     def __init__(self, d):
@@ -388,9 +411,18 @@ class FakeGh:
             if cmd[cmd.index("--repo") + 1] != self.REPO:
                 return 1, "", "GraphQL: Could not resolve to a Repository"
             limit = int(cmd[cmd.index("--limit") + 1])
-            return 0, json.dumps([{"number": p["number"], "title": p["title"], "updatedAt": p["updated_at"],
-                                   "createdAt": p["created_at"], "headRefOid": p["head"]["sha"]}
-                                  for p in self.open_prs[:limit]]), ""
+            fields = cmd[cmd.index("--json") + 1].split(",")
+            out = []
+            for p in self.open_prs[:limit]:
+                d = {"number": p["number"], "title": p["title"], "updatedAt": p["updated_at"],
+                     "createdAt": p["created_at"], "headRefOid": p["head"]["sha"]}
+                # ветка, база и форк — только если проход их спросил (уборка worktree, OPS-52)
+                for k, v in (("headRefName", p.get("branch")), ("baseRefName", p.get("base")),
+                             ("isCrossRepository", p.get("fork"))):
+                    if k in fields and v is not None:
+                        d[k] = v
+                out.append(d)
+            return 0, json.dumps(out), ""
         if cmd[:2] == ["gh", "api"] and cmd[-1].startswith(f"repos/{self.REPO}/issues/"):
             n = int(cmd[-1].split("/")[4])
             if n in self.mute:
@@ -543,7 +575,7 @@ class GithubPollTest(unittest.TestCase):
         self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
 
     def test_ci_recheck_does_not_read_the_body(self):
-        """SE-121: тело PR — только при разборе автора; перепроверка CI читает прежние поля без тела."""
+        """SE-121: тело PR — только при разборе автора; SE-123: перепроверка CI читает только проверки."""
         head = "f1f1f1f1f" + "0" * 31
         lens = [f"{x}: approve на f1f1f1f1f" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
         fake = FakeGh([_pr(488, head)], comments={488: lens}, ci={488: "IN_PROGRESS"})
@@ -551,7 +583,7 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         gh_source.poll_github(self.ctx)
         views = [c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]]
-        self.assertEqual(views, ["files,statusCheckRollup,body", "files,statusCheckRollup,state,mergedAt,closedAt"])
+        self.assertEqual(views, ["files,statusCheckRollup,body", "statusCheckRollup"])
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
@@ -602,6 +634,57 @@ class GithubPollTest(unittest.TestCase):
         self.assertIn("author", st["prs"]["1"])
         self.assertEqual(self.kinds().count(("pr.new", "#1 открыт: PR 1")), 1, "повтор не дублирует событие")
 
+    def test_merged_pr_removes_its_worktree_and_reports_kept_ones(self):
+        """OPS-52: ветка и база PR запоминаются из списка открытых; после «влит» — wt_gc.py branch по repo_root."""
+        pr = dict(_pr(460, "c" * 40), branch="fix/done", base="main", fork=False)
+        sources.run = FakeGh([pr])
+        gh_source.poll_github(self.ctx)
+        self.assertEqual(self.ctx.state["github"]["prs"]["460"]["branch"], "fix/done")
+        gc_calls = []
+        fake = FakeGh([], merged={460})
+
+        def run(cmd, stdin=None, timeout=30):
+            if cmd[2:4] == [gh_source.WT_GC, "branch"]:
+                gc_calls.append(cmd)
+                return 0, json.dumps([{"path": "/r/worktrees/fix/done", "branch": "fix/done", "removed": True},
+                                      {"path": "/r/x", "branch": "fix/done", "removed": False, "reason": "незакоммиченные изменения: 2"}]), ""
+            return fake(cmd, stdin, timeout)
+        sources.run = run
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([c[4:] for c in gc_calls], [[self.ctx.cfg["repo_root"], "fix/done", "--json", "--head", "c" * 40, "--base", "main"]])
+        self.assertIn(("pr.closed", "#460 влит"), self.kinds())
+        recs = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "wt.gc"]
+        self.assertEqual([(e["to"], e["text"]) for e in recs], [
+            ([], "#460: worktree /r/worktrees/fix/done удалён"),
+            (["coord"], "#460 влит, worktree /r/x оставлен — незакоммиченные изменения: 2")])
+
+    def test_fork_pr_with_same_branch_name_is_not_ours(self):
+        """Ревью #178: PR из форка с именем локальной ветки не должен убрать чужой worktree."""
+        pr = dict(_pr(463, "f" * 40), branch="fix/done", base="main", fork=True)
+        sources.run = FakeGh([pr])
+        gh_source.poll_github(self.ctx)
+        self.assertNotIn("branch", self.ctx.state["github"]["prs"]["463"])
+
+    def test_closed_unmerged_pr_and_gc_failure_do_not_break_the_pass(self):
+        pr = dict(_pr(461, "d" * 40), branch="fix/dropped", base="main", fork=False)
+        sources.run = FakeGh([pr])
+        gh_source.poll_github(self.ctx)
+        fake = FakeGh([], closed={461})  # закрыт без мёржа — уборки нет
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        self.assertFalse([c for c in fake.calls if gh_source.WT_GC in c])
+        self.assertNotIn("461", self.ctx.state["github"]["prs"])
+        pr = dict(_pr(462, "e" * 40), branch="fix/boom", base="main", fork=False)
+        sources.run = FakeGh([pr])
+        gh_source.poll_github(self.ctx)
+        fake = FakeGh([], merged={462})
+        sources.run = lambda cmd, stdin=None, timeout=30: (1, "", "timeout") if gh_source.WT_GC in cmd else fake(cmd, stdin, timeout)
+        gh_source.poll_github(self.ctx)
+        self.assertNotIn("462", self.ctx.state["github"]["prs"])
+        self.assertIn(("pr.closed", "#462 влит"), self.kinds())
+        rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["key"] == "wt:gc:462"]
+        self.assertEqual([(e["to"], e["text"]) for e in rec], [(["coord"], "#462: уборка worktree fix/boom не удалась: timeout — wt_gc.py sweep")])
+
     def test_closed_pr_that_fails_stays_for_retry(self):
         sources.run = FakeGh([], broken={7})
         self.ctx.state["github"] = {"etag": "", "rev": gh_source.GH_STATE_REV,
@@ -625,7 +708,9 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         lists = [c for c in fake.calls if c[:3] == ["gh", "pr", "list"]]
         self.assertEqual(lists, [["gh", "pr", "list", "--repo", FakeGh.REPO, "--state", "open", "--limit", "1000",
-                                  "--json", "number,headRefOid,updatedAt,createdAt,title"]])
+                                  "--json", gh_source.GH_FIELDS]])
+        # Поля списка: прежние + ветка, база и форк для уборки worktree после мёржа (OPS-52).
+        self.assertEqual(gh_source.GH_FIELDS, "number,headRefOid,updatedAt,createdAt,title,headRefName,baseRefName,isCrossRepository")
         self.assertFalse([c for c in fake.calls if c[:2] == ["gh", "api"]], "PR не менялись: ни списка REST, "
                          "ни комментариев")
         self.assertNotIn("etag", self.ctx.state["github"])
@@ -671,6 +756,22 @@ class GithubPollTest(unittest.TestCase):
         self.assertFalse(self.ctx.state["github"]["prs"]["481"]["await_ci"])
         gh_source.poll_github(self.ctx)
         self.assertEqual(len([c for c in fake.calls if c[:3] == ["gh", "pr", "view"]]), 1, "CI доехал: дальше без view")
+
+    def test_ci_is_reread_while_comments_keep_changing_the_pr(self):
+        """SE-123: PR ждёт только CI, а updatedAt меняется каждый проход (комментарии) — его разбирает основной путь,
+        а не _recheck_ci. Раньше проверки при той же голове не перечитывались: «pending» держался до тихого прохода."""
+        head = "f" * 40
+        three = [f"{x}: approve на fffffff" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        sources.run = FakeGh([_pr(486, head)], comments={486: three}, ci={486: "IN_PROGRESS"})
+        gh_source.poll_github(self.ctx)
+        self.assertTrue(self.ctx.state["github"]["prs"]["486"]["await_ci"])
+        fake = FakeGh([_pr(486, head, upd="2026-11-04T10:05:00Z")], comments={486: three + ["вопрос по ходу"]})
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        self.assertIn(("pr.quorum", "#486 собран: approve backend, boards, plan на fffffffff, CI ok"), self.kinds())
+        self.assertFalse(self.ctx.state["github"]["prs"]["486"]["await_ci"])
+        self.assertEqual([c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]],
+                         ["statusCheckRollup"], "только проверки: без файлов и тела PR")
 
     def test_head_without_checks_waits_for_ci(self):
         """SE-126: сразу после push у головы нет ни одной проверки. Три approve — ожидание CI, а не pr.quorum с «CI ok»."""
@@ -804,6 +905,27 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], ["#2 открыт: PR 2"])
         self.assertEqual(sorted(self.ctx.state["github"]["prs"]), ["1", "2", "3"])
 
+    def test_empty_list_does_not_end_the_backfill(self):
+        """SE-123: `gh pr list` с кодом 0 отдал [] или часть списка — проход без ошибок, но известный PR вне списка
+        ещё открыт. Раньше догон на этом кончался, и давние PR потом шли «открыт» (линза #340: 112 ложных pr.new)."""
+        self.ctx.state["github"] = {"rev": gh_source.GH_STATE_REV, "backfill": "2026-11-05T00:00:00Z",
+                                    "prs": self._known(1)}
+        sources.run = FakeGh([])
+        gh_source.poll_github(self.ctx)
+        st = self.ctx.state["github"]
+        self.assertEqual((st.get("backfill"), sorted(st["prs"])), ("2026-11-05T00:00:00Z", ["1"]))
+        sources.run = FakeGh([_pr(1, "a" * 40), _pr(2, "b" * 40, created="2026-11-04T10:00:00Z")])
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], [], "давний PR из догона — без «открыт»")
+        self.assertNotIn("backfill", st, "список полон — догон окончен")
+
+    def test_empty_list_on_fresh_state_keeps_the_backfill(self):
+        """Контроль #393: при пустом known пустой ответ gh тоже не кончает догон (`set() >= set()` — истина)."""
+        self.ctx.state["github"] = {"rev": 2, "prs": {}}
+        sources.run = FakeGh([])
+        gh_source.poll_github(self.ctx)
+        self.assertIn("backfill", self.ctx.state["github"])
+
     def test_backfill_boundary_ignores_bad_dates_and_the_future(self):
         p = lambda u: {"updated": u}  # noqa: E731
         since = gh_source._backfill_since
@@ -833,7 +955,7 @@ class LimitActionTest(unittest.TestCase):
 
 class TapTest(unittest.TestCase):
     def run_tap(self, d, role):
-        env = dict(os.environ, NERVE_STATE_DIR=d)
+        env = clean_env(NERVE_STATE_DIR=d)
         return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), "tap", role, "--once"],
                               capture_output=True, text=True, env=env, timeout=30).stdout
 
@@ -971,7 +1093,7 @@ class TapTest(unittest.TestCase):
 
 class EmitTest(unittest.TestCase):
     def nerve(self, d, *args):
-        env = dict(os.environ, NERVE_STATE_DIR=d)
+        env = clean_env(NERVE_STATE_DIR=d)
         return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), *args],
                               capture_output=True, text=True, env=env, timeout=30)
 

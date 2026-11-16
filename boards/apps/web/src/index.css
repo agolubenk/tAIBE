@@ -422,6 +422,13 @@ input:-webkit-autofill:active {
     outline: none;
   }
 
+  /* Keyboard focus is visible (WCAG 2.4.7, TB-224). */
+  .kaneo-tiptap-content .ProseMirror:focus-visible {
+    border-radius: var(--radius-sm);
+    outline: 2px solid var(--ring);
+    outline-offset: 4px;
+  }
+
   /* iOS Safari zooms the page into any focused field under 16px; keep the
      editors at 16px on phone widths so focusing them doesn't zoom. */
   @media (max-width: 639.98px) {
