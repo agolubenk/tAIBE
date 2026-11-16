@@ -24,8 +24,11 @@ def changes(n=7, sha=A, lens="backend", text=None):
             "lens": lens}
 
 
-def state(d, prs):
-    wj(os.path.join(d, "state.json"), {"github": {"etag": "", "prs": prs}})
+def state(d, prs, closed=None):
+    gh = {"etag": "", "prs": prs}
+    if closed is not None:
+        gh["closed"] = closed
+    wj(os.path.join(d, "state.json"), {"github": gh})
 
 
 class FreshTest(unittest.TestCase):
@@ -53,6 +56,24 @@ class FreshTest(unittest.TestCase):
         state(self.d, {"8": {"head": A, "changes_by": ["backend"]}})
         rec = changes(n=7)
         self.assertEqual(self.out(rec), [rec["text"]])
+
+    def test_changes_of_closed_pr_is_dropped(self):
+        # SE-153: PR влит или закрыт после вердикта — снят с prs, номер в closed; pr.closed уже ушёл координатору.
+        state(self.d, {}, closed={"7": "2026-11-16T11:00:00Z"})
+        other = changes(n=8)
+        self.assertEqual(self.out(changes(n=7), other), [other["text"]], "#8 нет ни в prs, ни в closed — fail open")
+
+    def test_open_pr_wins_over_closed_record(self):
+        # Переоткрыт: в prs снова есть — сверка по голове, запись closed не решает.
+        state(self.d, {"7": {"head": A, "changes_by": ["backend"]}}, closed={"7": "2026-11-16T11:00:00Z"})
+        rec = changes(n=7, sha=A)
+        self.assertEqual(self.out(rec), [rec["text"]])
+
+    def test_bad_closed_field_fails_open(self):
+        rec = changes(n=7)
+        for bad in (["7"], "7", None, 7):
+            state(self.d, {}, closed=bad)
+            self.assertEqual(self.out(rec), [rec["text"]], repr(bad))
 
     def test_no_check_records_skip_state_read(self):
         cur = {"pending": ["#9 открыт: x"]}
@@ -101,11 +122,12 @@ class TapFlushTest(unittest.TestCase):
         return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), "tap", "backend", "--once"],
                               capture_output=True, text=True, env=env, timeout=30).stdout
 
-    def queue(self, d, recs, prs):
+    def queue(self, d, recs, prs, closed=None):
         jp = os.path.join(d, "journal.jsonl")
         open(jp, "w").close()
         hb = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        wj(os.path.join(d, "state.json"), {"heartbeat": hb, "github": {"etag": "", "prs": prs}})
+        gh = dict({"etag": "", "prs": prs}, **({"closed": closed} if closed is not None else {}))
+        wj(os.path.join(d, "state.json"), {"heartbeat": hb, "github": gh})
         wj(os.path.join(d, "mode.json"), {"phase": "day", "pause": False})
         self.assertEqual(self.run_tap(d), "")  # курсор с конца журнала
         j = Journal(jp)
@@ -136,6 +158,17 @@ class TapFlushTest(unittest.TestCase):
                 self.assertEqual(json.load(f)["pending"], [], "выпавшее событие не копится")
 
 
+    def test_changes_of_pr_closed_after_verdict_is_not_delivered(self):
+        """ACCEPTANCE SE-153 через настоящий tap: changes в очереди, PR закрыт до выдачи — строки нет."""
+        with tempfile.TemporaryDirectory() as d:
+            kept = changes(n=8, sha=B)
+            out = self.queue(d, [changes(n=7, sha=A), kept], {"8": {"head": B, "changes_by": ["backend"]}},
+                             closed={"7": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+            self.assertIn("дайджест (1)", out)
+            self.assertIn(kept["text"], out)
+            self.assertNotIn("#7:", out)
+
+
 class LineTest(unittest.TestCase):
     def test_line_counts_cuts_and_is_empty_without_texts(self):
         self.assertEqual(digest.line([], 3), "")
@@ -153,6 +186,41 @@ class SourceFieldsTest(unittest.TestCase):
         gh_source.poll_github(ctx)
         rec = [r for r in read_from(os.path.join(d, "j.jsonl"), 0)[0] if r["kind"] == "pr.changes"]
         self.assertEqual([(r["pr"], r["sha"], r["lens"]) for r in rec], [(479, "aaaaaaa", "backend")])
+
+
+class ClosedMemoryTest(unittest.TestCase):
+    """SE-153: проход GitHub помнит снятые PR сутки — без новых вызовов gh."""
+
+    def setUp(self):
+        self.ctx = FakeCtx(tempfile.mkdtemp())
+        run = sources.run
+        self.addCleanup(setattr, sources, "run", run)
+
+    def poll(self, fake, after=timedelta(0)):
+        self.ctx.now += after
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        return [c[1:3] for c in fake.calls]
+
+    def gone(self):
+        return self.ctx.state["github"]["closed"]
+
+    def test_closed_pr_is_remembered_a_day_and_reopen_clears_it(self):
+        self.poll(FakeGh([_pr(7, A), _pr(8, B)]))
+        calls = self.poll(FakeGh([_pr(8, B)], closed={7}))
+        self.assertEqual(calls, [["pr", "list"], ["pr", "view"]], "только список и pr view снятого — как до SE-153")
+        self.assertEqual(list(self.gone()), ["7"])
+        self.poll(FakeGh([_pr(8, B)]), timedelta(hours=23))
+        self.assertEqual(list(self.gone()), ["7"])
+        self.poll(FakeGh([_pr(8, B)]), timedelta(hours=2))      # 25 ч — запись ушла
+        self.assertEqual(self.gone(), {})
+
+    def test_reopened_pr_leaves_closed_and_bad_time_is_pruned(self):
+        self.poll(FakeGh([_pr(7, A)]))
+        self.poll(FakeGh([], closed={7}))
+        self.gone()["9"] = "не время"
+        self.poll(FakeGh([_pr(7, A)]))
+        self.assertEqual(self.gone(), {})
 
 
 if __name__ == "__main__":

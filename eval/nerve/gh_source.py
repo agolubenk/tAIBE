@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import quorum
 import sources
@@ -22,6 +22,9 @@ NO_CHECKS_AFTER = 1800  # с после головы без единой про�
 NO_CHECKS_EVERY = 900   # с: дальше такой PR перечитывается раз в 15 мин, а не каждый проход
 FAILED_CI_EVERY = 300   # с: CI упал при собранных линзах — проверки раз в 5 мин: повтор job зеленеет на той же голове
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+# SE-153: state.github.closed {номер: время} — снятые с учёта PR для digest.fresh. Сутки: дайджест копит события
+# всю ночь (выдаёт только в дневной фазе), за 2 ч ночной pr.changes закрытого PR ушёл бы утром.
+GONE_KEEP = timedelta(hours=24)
 
 
 def _gh_list(repo):
@@ -82,10 +85,10 @@ def _gh_author_view(repo, n):
 GH_STATE_REV = 3
 
 
-def _gh_closed(ctx, repo, known, open_now, fails):
+def _gh_closed(ctx, repo, known, open_now, fails, gone):
     """PR, которых нет в списке открытых: «влит» или «закрыт» — по самому PR. Открытый PR (список неполон — потолок
     GH_LIMIT или неполный ответ gh с кодом 0) остаётся в prs без события. Ключ — с временем мёржа или закрытия: ложное «закрыт» rev 2 не прячет
-    настоящее, а закрытие после переоткрытия — новое событие."""
+    настоящее, а закрытие после переоткрытия — новое событие. Снятый PR — в gone {номер: время} (SE-153)."""
     for n in [k for k in known if k not in open_now]:
         try:
             _, _, state, merged, closed = _gh_view(repo, int(n))
@@ -100,6 +103,15 @@ def _gh_closed(ctx, repo, known, open_now, fails):
         if merged and known[n].get("branch"):
             _gc_worktree(ctx, n, known[n]["branch"], known[n].get("head", ""), known[n].get("base", ""))
         del known[n]
+        gone[n] = ctx.now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _prune_gone(gone, now):
+    """SE-153: память о снятых PR — не дольше GONE_KEEP; запись с битым временем уходит."""
+    for n in list(gone):
+        at = sources._ts(gone[n]) if isinstance(gone[n], str) else None
+        if at is None or now - at > GONE_KEEP:
+            del gone[n]
 
 
 WT_GC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "wt_gc.py")
@@ -236,7 +248,11 @@ def poll_github(ctx):
             fails.append(f"#{n}: {e}")
             continue
         p["updated"] = pr["updated_at"]  # только после разбора: упавший PR не считается увиденным
-    _gh_closed(ctx, g["repo"], known, open_now, fails)
+    gone = st.setdefault("closed", {})
+    for n in open_now:
+        gone.pop(n, None)   # переоткрыт: его pr.changes снова сверяются по prs (или выдаются, если PR ещё не разобран)
+    _gh_closed(ctx, g["repo"], known, open_now, fails, gone)
+    _prune_gone(gone, ctx.now)
     # Догон окончен, только если список полон: открытый известный PR вне списка (пустой или частичный ответ gh с
     # кодом 0) оставил бы следующие проходы без границы — каждый давний PR пошёл бы «открыт» (SE-123). Пустой список
     # догон не кончает и при пустом known: без открытых PR граница никому не мешает (Контроль #393).

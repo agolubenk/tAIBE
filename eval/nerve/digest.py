@@ -30,18 +30,21 @@ def line(texts, most):
 
 
 def fresh(cur, pdir):
-    """Тексты к выдаче. pr.changes выпадает, если его sha не на текущей голове PR или линзы больше нет в changes_by.
-    Fail open — выдаётся: нет github.prs в state.json, файл битый, PR нет в prs (демон видит не все открытые PR,
-    а закрытие приходит своим событием pr.closed). Строка без записи сверки (старый курсор, другие виды событий)
+    """Тексты к выдаче. pr.changes выпадает, если его sha не на текущей голове PR, линзы больше нет в changes_by
+    или PR снят с учёта как влитый или закрытый (github.closed, SE-153: о нём уже пришло pr.closed).
+    Fail open — выдаётся: нет github.prs в state.json, файл битый, PR нет ни в prs, ни в closed (демон видит не все
+    открытые PR; closed держит сутки). Строка без записи сверки (старый курсор, другие виды событий)
     выдаётся как есть. Нет записей сверки — state.json (~1 МБ) не читается."""
     if not cur.get("changes_meta"):
         return list(cur["pending"])
     st = load_json(os.path.join(pdir, "state.json"), {})
     gh = st.get("github") if isinstance(st, dict) else None
     prs = gh.get("prs") if isinstance(gh, dict) else None
+    gone = gh.get("closed") if isinstance(gh, dict) else None
+    gone = gone if isinstance(gone, dict) else {}   # демон до SE-153 поля не пишет — сверка как раньше
     drop = Counter()
     if isinstance(prs, dict):
-        drop.update(m["text"] for m in cur.get("changes_meta") or [] if isinstance(m, dict) and _stale(m, prs))
+        drop.update(m["text"] for m in cur.get("changes_meta") or [] if isinstance(m, dict) and _stale(m, prs, gone))
     out = []
     for text in cur["pending"]:
         if drop[text] > 0:
@@ -51,8 +54,8 @@ def fresh(cur, pdir):
     return out
 
 
-def _stale(m, prs):
+def _stale(m, prs, gone):
     p = prs.get(m.get("pr"))
     if not isinstance(p, dict):
-        return False
+        return m.get("pr") in gone   # снят как влитый или закрытый после вердикта (SE-153)
     return not quorum.on_head(m.get("sha"), p.get("head")) or m.get("lens") not in (p.get("changes_by") or [])
