@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import digest  # noqa: E402
+import gh_source  # noqa: E402
 import sources  # noqa: E402
 from journal import DIGEST, Journal, read_from  # noqa: E402
 from test_nerve import FakeCtx, FakeGh, _pr, wj  # noqa: E402
@@ -95,7 +96,8 @@ class TapFlushTest(unittest.TestCase):
     changes на текущей голове — выдаётся."""
 
     def run_tap(self, d):
-        env = dict(os.environ, NERVE_STATE_DIR=d)
+        # продукт по умолчанию — курсор в самой папке d; TAIBE_PRODUCT сессии увёл бы его в products/<slug>/
+        env = dict({k: v for k, v in os.environ.items() if k != "TAIBE_PRODUCT"}, NERVE_STATE_DIR=d)
         return subprocess.run([sys.executable, "-I", os.path.join(HERE, "nerve.py"), "tap", "backend", "--once"],
                               capture_output=True, text=True, env=env, timeout=30).stdout
 
@@ -134,6 +136,13 @@ class TapFlushTest(unittest.TestCase):
                 self.assertEqual(json.load(f)["pending"], [], "выпавшее событие не копится")
 
 
+class LineTest(unittest.TestCase):
+    def test_line_counts_cuts_and_is_empty_without_texts(self):
+        self.assertEqual(digest.line([], 3), "")
+        self.assertEqual(digest.line(["a", "b"], 3), "дайджест (2): a · b")
+        self.assertEqual(digest.line(["a", "b", "c", "d"], 2), "дайджест (4): a · b · ещё 2")
+
+
 class SourceFieldsTest(unittest.TestCase):
     def test_pr_changes_carries_pr_sha_and_lens(self):
         d = tempfile.mkdtemp()
@@ -141,7 +150,7 @@ class SourceFieldsTest(unittest.TestCase):
         run = sources.run
         self.addCleanup(setattr, sources, "run", run)
         sources.run = FakeGh([_pr(479, A)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
-        sources.poll_github(ctx)
+        gh_source.poll_github(ctx)
         rec = [r for r in read_from(os.path.join(d, "j.jsonl"), 0)[0] if r["kind"] == "pr.changes"]
         self.assertEqual([(r["pr"], r["sha"], r["lens"]) for r in rec], [(479, "aaaaaaa", "backend")])
 

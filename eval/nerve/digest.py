@@ -21,6 +21,14 @@ def pend(cur, rec):
                                                    "sha": str(rec.get("sha") or ""), "lens": str(rec.get("lens") or "")})
 
 
+def line(texts, most):
+    """Строка дайджеста без времени: «дайджест (n): a · b · ещё k». Пусто — все события выпали, строки нет."""
+    if not texts:
+        return ""
+    more = f" · ещё {len(texts) - most}" if len(texts) > most else ""
+    return f"дайджест ({len(texts)}): {' · '.join(texts[:most])}{more}"
+
+
 def fresh(cur, pdir):
     """Тексты к выдаче. pr.changes выпадает, если его sha не на текущей голове PR или линзы больше нет в changes_by.
     Fail open — выдаётся: нет github.prs в state.json, файл битый, PR нет в prs (демон видит не все открытые PR,

@@ -16,6 +16,10 @@ COPY packages/libs/package.json ./packages/libs/
 COPY packages/permissions/package.json ./packages/permissions/
 COPY packages/importers/package.json ./packages/importers/
 COPY packages/mcp/package.json ./packages/mcp/
+COPY packages/agent-format/package.json ./packages/agent-format/
+COPY packages/redact/package.json ./packages/redact/
+COPY packages/forms/package.json ./packages/forms/
+COPY packages/claude-mem-reader/package.json ./packages/claude-mem-reader/
 COPY apps/api/package.json ./apps/api/
 
 # Install dependencies
@@ -28,6 +32,10 @@ COPY packages/libs ./packages/libs
 COPY packages/permissions ./packages/permissions
 COPY packages/importers ./packages/importers
 COPY packages/mcp ./packages/mcp
+COPY packages/agent-format ./packages/agent-format
+COPY packages/redact ./packages/redact
+COPY packages/forms ./packages/forms
+COPY packages/claude-mem-reader ./packages/claude-mem-reader
 COPY i18n ./i18n
 COPY apps/api ./apps/api
 
@@ -64,6 +72,10 @@ COPY packages/email/package.json ./packages/email/
 COPY packages/permissions/package.json ./packages/permissions/
 COPY packages/importers/package.json ./packages/importers/
 COPY packages/mcp/package.json ./packages/mcp/
+COPY packages/agent-format/package.json ./packages/agent-format/
+COPY packages/redact/package.json ./packages/redact/
+COPY packages/forms/package.json ./packages/forms/
+COPY packages/claude-mem-reader/package.json ./packages/claude-mem-reader/
 COPY apps/api/package.json ./apps/api/
 
 RUN sed -i 's/"prepare": "husky"/"prepare": ""/g' package.json && \
@@ -91,6 +103,10 @@ COPY --from=builder --chown=appuser:appuser /app/packages/email ./packages/email
 COPY --from=builder --chown=appuser:appuser /app/packages/permissions ./packages/permissions
 COPY --from=builder --chown=appuser:appuser /app/packages/importers/dist ./packages/importers/dist
 COPY --from=builder --chown=appuser:appuser /app/packages/mcp/dist ./packages/mcp/dist
+COPY --from=builder --chown=appuser:appuser /app/packages/agent-format/dist ./packages/agent-format/dist
+COPY --from=builder --chown=appuser:appuser /app/packages/redact/dist ./packages/redact/dist
+COPY --from=builder --chown=appuser:appuser /app/packages/forms/dist ./packages/forms/dist
+COPY --from=builder --chown=appuser:appuser /app/packages/claude-mem-reader/dist ./packages/claude-mem-reader/dist
 
 # Fail the build early if the runtime dependency layout is broken on the target architecture
 RUN cd /app/apps/api && node -e "const fs=require('fs');for(const m of ['bcryptjs','hono','pg','drizzle-orm','better-auth','ioredis','valibot','octokit','@modelcontextprotocol/sdk']){fs.accessSync('node_modules/'+m+'/package.json')}for(const m of ['email','permissions','importers']){fs.accessSync('node_modules/@kaneo/'+m+'/dist/index.js')}" && \

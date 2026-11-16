@@ -100,6 +100,8 @@ export default function TaskTitle({ taskId, size = "md" }: TaskTitleProps) {
             readOnly={!canEdit}
             className={cn(
               "block h-auto w-full resize-none appearance-none overflow-hidden border-0 bg-transparent p-0 font-heading font-semibold text-2xl text-foreground leading-[1.25] tracking-[-0.02em] outline-none placeholder:text-foreground/45",
+              // Keyboard focus is visible (WCAG 2.4.7, TB-224).
+              "rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-background",
               size === "lg" && "sm:text-[1.75rem] sm:leading-[1.2]",
             )}
             onKeyDown={(e) => {
