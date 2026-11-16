@@ -10,7 +10,7 @@ import os
 import re
 import shlex
 
-from merge_guard_comments import comment_readings, strip_comments  # noqa: F401 — comment_readings: для хука
+from merge_guard_comments import CHANGED, comment_char_may_change, comment_char_seen, comment_readings, strip_comments  # noqa: F401 хуку
 from merge_guard_files import open_regular
 from merge_guard_vars import (ASSIGN, SHELL_WORDS, SUBST, dir_vars, expand_vars, note_vars, substitute,  # noqa: F401
                               words)  # dir_vars, expand_vars, note_vars, substitute — отсюда для хука
@@ -251,7 +251,7 @@ LAUNCHERS = {
 INFO = {"node": {"-v", "-h"}, "python": {"-V", "-h"}, "perl": {"-v"}}  # и у всех `--version`, `--help`: только справка
 STDIN_CODE = {"sh": "s", "python": "i"}  # `bash -s x` — код из stdin, x — аргумент; `python3 -i x.py` — stdin после x.py
 LONG_VALUED = {"--rcfile", "--init-file", "--require", "--import", "--loader", "--experimental-loader", "--conditions",
-               "--input-type", "--check-hash-based-pycs"}
+               "--input-type", "--check-hash-based-pycs", "--emulate"}  # `zsh --emulate csh` — режим, не скрипт (SE-77)
 SCRIPT_EXT = re.compile(r"\.(sh|bash|zsh|py|[mc]?js|[mc]?ts|pl|rb|scpt|applescript)$")
 SCRIPT_MAX = 4 * 1024 * 1024
 # Исполняемый файл ядра (ELF, Mach-O, universal) — не текст скрипта. NUL в тексте — не признак: bash отказывается от
@@ -353,10 +353,10 @@ def proc_files(body, cwd):
 
 def uncommented(text):
     """Shell-текст для грубого признака: без комментариев (strip_comments, force), тела heredoc — как есть: для
-    `python3 <<EOF` в них `#` — не комментарий shell."""
+    `python3 <<EOF` в них `#` — не комментарий shell. Текст может сменить знак комментария — комментарии остаются (SE-77)."""
     try:
         cmd, bodies = cut_heredocs(text)
-        return "\n".join([strip_comments(cmd, force=True)] + [b for _, b, _ in bodies])
+        return "\n".join([cmd if comment_char_may_change(text) else strip_comments(cmd, force=True)] + [b for _, b, _ in bodies])
     except Exception:
         return text
 

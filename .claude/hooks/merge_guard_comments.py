@@ -4,6 +4,7 @@ comment_readings — SE-82). Простой разбор кавычек не з�
 и потому оставляет комментарий с опасными знаками (`# Docker's …`, `# say "hi`): если разбор ошибся, такой знак
 закрыл бы строку bash. sure_comments — разбор со стеком вложенности; на всём, чего он не моделирует, уверенность
 теряется до конца текста. Решений не принимает; без импорта других модулей merge-guard.
+Ещё здесь — признак, что текст может сменить сам знак комментария (comment_char_may_change, SE-77).
 """
 import re
 
@@ -13,6 +14,68 @@ SEPARATORS = " \t\n;&|()<>"
 WORDS = re.compile(r"(case|alias)(?=[\s;&|()<>]|$)")
 NAME = re.compile(r"[A-Za-z0-9_@*#?$!-]")  # `$NAME`, `$1`, `$@` внутри `${…}`
 BRACE_LOST = set("'\"`{\\")  # в `${…}` кавычки и `\` разные версии bash разбирают по-разному
+# Знак комментария меняют: третий знак `histchars` у zsh — для строк скрипта ниже, `eval` и `source` после него
+# (у `zsh -c` и `eval` весь текст разобран до присваивания); в интерактивном bash (`bash -i`) — `shopt -u
+# interactive_comments`, `+O interactive_comments`, `set +o interactive-comments`: `#` там — буква. Имя ищется в
+# тексте без всего, кроме латинских букв и цифр: `hist""chars`, `${:-hist}chars`, `NO_INTERACTIVE_COMMENTS`.
+COMMENT_CHAR = (b"histchars", b"interactivecomments")
+NOT_ALNUM = bytes(c for c in range(128) if not chr(c).isalnum())
+
+
+def comment_char_may_change(text):
+    """Текст называет настройку, которая меняет знак комментария (COMMENT_CHAR). Тогда `#` в нём и в том, что
+    shell разберёт после, — то ли комментарий, то ли код: разбирать надо обоими способами. Имя, собранное в
+    переменной или выводе команды (`${h}chars`, `$(…)`), не видно."""
+    flat = text.encode("ascii", "ignore").lower().translate(None, NOT_ALNUM)  # 4 МБ — 12–50 мс
+    return any(name in flat for name in COMMENT_CHAR)
+
+
+CHANGED = "\0comment-char"  # в written команды: настройка знака комментария уже была (comment_char_seen)
+
+
+def comment_char_seen(written, text, outer):
+    """Настройка знака комментария была до скрипта text: во внешней команде (`histchars=…; source x`) или в скрипте,
+    который команда прочла раньше (`source a.zsh; source b.zsh`, `source a.zsh; eval …`: настройка живёт в оболочке).
+    Скрипт, который её называет, отмечается в written (CHANGED) — для всего, что команда разберёт после него."""
+    before = CHANGED in (written or ()) or comment_char_may_change(outer)
+    if written is not None and comment_char_may_change(text):
+        written.add(CHANGED)
+    return before
+
+
+def _option_name(word):
+    """Имя опции zsh без регистра, `_` и `-`: `INTER_active`, `inter-active` — interactive."""
+    return word.lower().replace("_", "").replace("-", "")
+
+
+def zsh_interactive(a):
+    """argv — интерактивный zsh: `-i` в связке (`-is`, `-fi`), `-o interactive` и `-ointeractive`, `--interactive`;
+    `+i`, `+o …`, приставка `no` — выключают, последняя опция главнее. Такой zsh, читая код со stdin (`<`, `|`, `<<<`,
+    heredoc, `-s`, `-`), не считает `#` комментарием, пока нет interactivecomments (замер zsh 5.9, 16.11, SE-77): код
+    за `#` выполняется. Файл скрипта (`zsh -i x.zsh`) и `-c` читаются с комментариями — `-c` даёт False, файл
+    проверяет вызывающий (только stdin). Опции — до первого слова без `-`/`+`, `--` и `-` их кончают."""
+    if not a or a[0] != "zsh":
+        return False
+    on, i = False, 1
+    while i < len(a) and len(a[i]) > 1 and a[i][0] in "-+" and a[i] != "--":
+        x, i = a[i], i + 1
+        if x[:2] == "--":
+            name = _option_name(x[2:])
+            on = name == "interactive" or (on and name != "nointeractive")
+            i += name == "emulate"  # `--emulate zsh` берёт режим следующим словом (Контроль 6909989591)
+            continue
+        for k, ch in enumerate(x[1:], 2):
+            if ch == "c":
+                return False
+            if ch == "i":
+                on = x[0] == "-"
+            elif ch == "o":  # `-o имя`, `-oимя`; `no` перед именем — обратный знак
+                name, i = (x[k:], i) if x[k:] else (a[i] if i < len(a) else "", i + 1)
+                name = _option_name(name)
+                if name in ("interactive", "nointeractive"):
+                    on = (x[0] == "-") == (name == "interactive")
+                break
+    return on
 
 
 def sure_comments(cmd):
