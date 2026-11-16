@@ -75,12 +75,18 @@ def port_open(port):
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def loaded(label):
+    return subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], capture_output=True).returncode == 0
+
+
 def summary():
+    # headroom не ставится отсюда: переключение снимает процесс на :8787 — это решение, а не подъём (install).
+    hr = "infra/headroom/developer/headroom_launchd.py " + ("status" if loaded("space.hrhelper.headroom")
+                                                             else "install — сейчас не под launchd")
     rows = [("сервер tmux ролей", T.server_info() is not None, f"tmux -L {T.socket()} attach"),
             ("MCP-хаб :3050", port_open(3050), "infra/scripts/dev-ai/mcp-hub.sh status"),
-            ("headroom :8787", port_open(8787), "окно ops:health"),
-            ("Нерв", subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/space.hrhelper.nerve"],
-                                    capture_output=True).returncode == 0, "spawn_session.sh --status")]
+            ("headroom :8787", port_open(8787) and loaded("space.hrhelper.headroom"), hr),
+            ("Нерв", loaded("space.hrhelper.nerve"), "spawn_session.sh --status")]
     for name, ok, hint in rows:
         print(f"  {'✓' if ok else '✗'} {name:<20} {hint}")
     wins = T.tmux("list-windows", "-a", "-F", "#{session_name}").stdout.split()
