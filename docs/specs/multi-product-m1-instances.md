@@ -84,7 +84,7 @@ tAIBE знает ровно один продукт. Всё, что относи
 - **R-3.** `add` не трогает `default_product` без `--default`; не перезаписывает существующий slug.
 - **R-4.** Команды — только stdlib Python, `python3 -I eval/tools/taibe.py …`, плюс sh-обёртка `./taibe` в корне
   tAIBE. Обёртка ищет интерпретатор так же, как плист Нерва.
-- **R-5.** Роли продукта ⊂ `eval/pipeline/roles.json`; `path_roles`, `lens_roles`, `source_roles` ссылаются только
+- **R-5.** Роли продукта ⊂ `eval/pipeline/genome/roles.json`; `path_roles`, `lens_roles`, `source_roles` ссылаются только
   на роли продукта.
 - **R-6.** `check` ничего не пишет и проверяет:
   - папка — git-checkout, `remote.origin.url` указывает на `github.repo`;

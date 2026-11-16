@@ -106,6 +106,19 @@ bash("GIT_CONFIG_* + push", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GI
 bash("export GIT_CONFIG + push ветки", "export GIT_CONFIG_GLOBAL=/tmp/x; git push origin fix/a", True)
 bash("GIT_CONFIG + status", "GIT_CONFIG_GLOBAL=/tmp/x git status", False)
 bash("-c include.path + push", "git -c include.path=/tmp/x push origin fix/a", True)
+# SE-145: настройка на самом push (`-c`, `--config-env`) — проходят только явные `src:dst` (refmap даёт dst голому
+# src); глобальные опции до push не прячут цель; `GIT` на APFS — тот же git. Формы Контроля D1, D3–D6.
+on_fa = repo_on("fix/a")
+for form in ("git -c remote.origin.push=refs/heads/feat:refs/heads/main push origin feat",
+             "git -c x.y=z push origin feat", "git -c x.y=z push origin feat:HEAD",
+             "git --config-env=user.name=N push origin fix/a", "git --git-dir=.git push origin HEAD:main",
+             "git -C . push origin HEAD:main", "git -c x.y=z push origin HEAD:main",
+             "git --no-pager push origin HEAD:main", "GIT push origin main", "Git -c x.y=z push origin feat",
+             "/usr/bin/GIT push origin HEAD:main"):
+    bash(f"SE-145, отказ: {form!r}", form, True, cwd=on_fa)
+for form in ("git -c x.y=z push origin feat:feat", "git -c remote.origin.push=refs/heads/feat:refs/heads/main push "
+             "origin fix/a:fix/a", "git -C . push origin fix/a", "git --no-pager push origin fix/a"):
+    bash(f"SE-145, проход: {form!r}", form, False, cwd=on_fa)
 bash("config --file alias", "git config --file /tmp/x alias.p push", True)
 bash("config set alias", "git config set --global alias.p 'push origin main'", True)
 bash("alias-скрипт без слова push", "git config alias.x '!sh -c \"git pu\"\"sh\"'", True)
@@ -425,6 +438,7 @@ bash("$PWD с пробелом, через переменную", "X=$PWD; git -
 
 import test_merge_guard_shell  # noqa: E402,F401  — формы shell, те же счётчики
 import test_merge_guard_branches  # noqa: E402,F401  — защищённые ветки (origin/HEAD, protected)
+import test_merge_guard_pathcase  # noqa: E402,F401  — защищённый путь в другом регистре (SE-94)
 import test_merge_guard_lines  # noqa: E402,F401  — склейка строк `\`⏎ (SE-83)
 
 # --- бюджет git ---
