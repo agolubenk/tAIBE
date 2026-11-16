@@ -41,6 +41,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                strip_prefix, subst_code, SUBST_AT, syntax_only, tokenize, uncommented)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
+from merge_guard_crash import crash, crash_verdict  # noqa: E402  сбой хука — роли отказ (SE-152)
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -209,9 +210,8 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
         try:
             found += script_found(text, is_interp_script, cwd, roots, depth, git_env, path)
-        except Exception:  # грубый признак — по тексту скрипта: в команде (`bash x.sh`) его нет
-            if FALLBACK.search(text if is_interp_script else uncommented(text)):
-                found.append((UNPARSED, s))
+        except Exception as exc:  # грубый признак — по тексту скрипта (в `bash x.sh` его нет); сбой — находка (SE-152)
+            found += [(UNPARSED, s)] if FALLBACK.search(text if is_interp_script else uncommented(text)) else crash(exc, s)
     if scripts and opaque(scripts, whole[3] or ()) and not whole[2]:  # `git switch x && bash m.sh` — с диска прочтён не тот код
         found.append((BLIND_RUN, scripts[0]))
     elif scripts and not seen and FALLBACK.search(whole[4][1]):
@@ -455,7 +455,8 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
     for cmd in shell:
         try:
             found += classify_bash(cmd, cwd, roots)
-        except Exception as exc:  # разбор не удался — решает грубый признак
+        except Exception as exc:  # разбор не удался — решает грубый признак; сбой не по кавычкам — находка (SE-152)
+            found += crash(exc)
             if FALLBACK.search(cmd):
                 return f"merge-guard: команду не разобрать ({exc.__class__.__name__}), а в ней признак защищённого действия. Разбейте её на простые команды."
     if code is not None:
@@ -485,11 +486,8 @@ def main():
         return
     try:
         reason = decide(data)
-    except Exception as exc:  # сбой хука не должен ни пропускать мёрж, ни блокировать всё подряд
-        cmd = json.dumps(data.get("tool_input"), ensure_ascii=False) if data.get("tool_name") != "Bash" else \
-            str((data.get("tool_input") or {}).get("command", ""))
-        reason = (f"merge-guard: сбой хука ({exc.__class__.__name__}), а в вызове признак защищённого действия."
-                  if FALLBACK.search(cmd) or re.search(r"merge_pull_request|auto_merge", str(data.get("tool_name"))) else None)
+    except Exception as exc:  # сбой хука: признак в вызове — отказ всем; иначе роли отказ, Контроль — своим путём
+        reason = crash_verdict(data, exc, FALLBACK)
     if reason:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}},
