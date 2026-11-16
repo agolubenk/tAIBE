@@ -30,7 +30,7 @@ TOP = ("repo_root", "product_tree", "layer_home", "interval_seconds", "sources",
        "budget", "circadian", "tap", "boards")
 NESTED = {
     "team": ("projects_root", "project_dir", "roles", "active_hours"),
-    "github": ("repo", "min_lenses", "quorum_to", "path_roles", "lens_roles"),
+    "github": ("repo", "min_lenses", "quorum_to", "path_roles", "lens_roles", "wt_sweep_minutes"),  # OPS-81: 0 — выкл.
     "queue": ("url", "secret_cmd", "owner_items", "delta", "source_roles"),
     "boards": ("url", "product", "workspace", "note"),
 }

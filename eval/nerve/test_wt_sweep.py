@@ -14,7 +14,7 @@ import wt_sweep  # noqa: E402
 from journal import read_from  # noqa: E402
 from test_nerve import CFG, FakeCtx, FakeGh, _pr  # noqa: E402
 
-SWEEP_CFG = dict(CFG, wt_sweep_minutes=60, repo_root="/r")
+SWEEP_CFG = dict(CFG, repo_root="/r", github=dict(CFG["github"], wt_sweep_minutes=60))
 
 
 class Sweeper:
@@ -98,9 +98,10 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(len(fails), 1)
         self.assertIn("300 s", fails[0])
 
-    def test_off_without_repo_root_or_with_zero_minutes(self):
+    def test_off_without_repo_root_or_with_zero_or_bad_minutes(self):
         run = Sweeper([])
-        for cfg in (dict(SWEEP_CFG, wt_sweep_minutes=0), dict(SWEEP_CFG, repo_root="")):
+        off = [dict(SWEEP_CFG, github=dict(SWEEP_CFG["github"], wt_sweep_minutes=v)) for v in (0, "60", None, True, -5)]
+        for cfg in off + [dict(SWEEP_CFG, repo_root="")]:
             self.ctx.cfg = cfg
             self.sweep(run)
         self.assertEqual(run.calls, [])

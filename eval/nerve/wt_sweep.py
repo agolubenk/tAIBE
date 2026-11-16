@@ -27,9 +27,11 @@ BUDGET_S = 45        # после него новое удаление не на
 
 
 def due(ctx):
-    """Пора ли проход: прошло SWEEP_MINUTES (cfg `wt_sweep_minutes`, 0 — выключено) с прошлого."""
-    every = ctx.cfg.get("wt_sweep_minutes", SWEEP_MINUTES)
-    if not every or not ctx.cfg.get("repo_root"):
+    """Пора ли проход: прошло SWEEP_MINUTES с прошлого. Продукт меняет период полем `github.wt_sweep_minutes` в
+    instances/<slug>.json (PRODUCT, products.py; у продукта по умолчанию его выносит в config.json `render`).
+    0, не число или нет repo_root — выключено: удаление не начинается, проход GitHub не падает."""
+    every = (ctx.cfg.get("github") or {}).get("wt_sweep_minutes", SWEEP_MINUTES)
+    if isinstance(every, bool) or not isinstance(every, (int, float)) or every <= 0 or not ctx.cfg.get("repo_root"):
         return False
     last = sources._ts(ctx.state.get("wt_sweep", {}).get("at", ""))
     return last is None or ctx.now - last >= timedelta(minutes=every)
