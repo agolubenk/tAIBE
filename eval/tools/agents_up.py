@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Сервисы сессий одной командой (OPS-82): MCP-хаб, сервер tmux ролей, окна сервисов в tmux, сводка.
 
-  python3 -I eval/tools/agents_up.py            поднять что лежит, открыть окна сервисов, напечатать сводку
+  python3 -I eval/tools/agents_up.py            включить разработку: снятые службы, хаб, tmux, окна сервисов, Ollama
   python3 -I eval/tools/agents_up.py --status   только сводка
+  python3 -I eval/tools/agents_up.py --down     выключить разработку (спросит, если живы сессии Claude; --yes — нет)
+Ярлыки «Разработка ВКЛ/ВЫКЛ» на рабочем столе и автозагрузка — dev_power.py install.
 
 Процессы держит launchd (подъём после сбоя), а не tmux: окна сессии `ops` в сервере `tmux -L agents` только
 показывают сервисы — журналы хаба, Нерва и memguard, проверку headroom раз в 15 с. Владелец видит роли и сервисы
@@ -20,6 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tmux_host as T  # noqa: E402
+import dev_power as D  # noqa: E402
+import team_status as TS  # noqa: E402
 
 OPS = "ops"
 
@@ -94,17 +98,54 @@ def summary():
     return 0 if all(ok for _, ok, _ in rows) else 1
 
 
+def mem():
+    free = TS.Sys().mem_free()
+    return "—" if free is None else f"{free}%"
+
+
+def down(yes):
+    """Выключить разработку (dev_power): живые сессии Claude теряют API и MCP — спросить, если они есть."""
+    n = TS.live_sessions(TS.Sys())
+    roles = sum(1 for s in T.tmux("list-windows", "-a", "-F", "#{session_name}").stdout.split() if s != OPS)
+    if (n or roles) and not yes:
+        print(f"Живых сессий Claude: {n}, ролей в tmux: {roles}. Выключение закроет роли в tmux, остальные сессии "
+              "останутся без API (headroom) и MCP.")
+        if not sys.stdin.isatty():
+            print("не из терминала — нужен --yes")
+            return 2
+        if input("Выключить разработку? [y/N] ").strip().lower() not in ("y", "yes", "д", "да"):
+            print("отменено")
+            return 1
+    before = mem()
+    D.agents_off(print)
+    hub = hub_script()
+    if hub:
+        subprocess.run(["bash", str(hub), "stop"], cwd=str(hub.parents[3]), timeout=120,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        print("  ✓ хаб MCP и serena остановлены")
+    D.apps_off(print)
+    print(f"Разработка выключена. Свободно памяти: {before} → {mem()}. Остались: memguard, резервные копии, WireGuard. "
+          "Включить — «Разработка ВКЛ» на рабочем столе или вход в систему.")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="agents_up.py", description=(__doc__ or "").split("\n", 1)[0])
     ap.add_argument("--status", action="store_true", help="только сводка")
+    ap.add_argument("--down", action="store_true", help="выключить разработку (dev_power.py)")
+    ap.add_argument("--yes", action="store_true", help="с --down: не спрашивать про живые сессии")
     a = ap.parse_args(argv)
+    if a.down:
+        return down(a.yes)
     if not a.status:
+        D.agents_on(print)  # снятые «ВЫКЛ» службы — обратно (headroom первым)
         hub = hub_script()
         if hub and not port_open(3050):
             subprocess.run(["bash", str(hub), "start"], cwd=str(hub.parents[3]), timeout=300)
         if T.ensure():
             return 1
         open_ops()
+        D.apps_on(print)
     return summary()
 
 

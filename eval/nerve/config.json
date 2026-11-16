@@ -232,6 +232,25 @@
     "mem_warn": 20,
     "max_sessions": 10,
     "terminal": "tmux",
+    "dev": {
+      "agents": [
+        "space.hrhelper.headroom",
+        "space.hrhelper.agents-tmux",
+        "space.hrhelper.nerve",
+        "space.hrhelper.t-boards-memory-proxy",
+        "space.hrhelper.t-boards-notebook-worker",
+        "space.hrhelper.t-boards-notebook-sync",
+        "space.hrhelper.reaper",
+        "space.hrhelper.evolve-daily"
+      ],
+      "apps_on": [
+        "com.electron.ollama"
+      ],
+      "apps_off": [
+        "com.docker.docker",
+        "com.electron.ollama"
+      ]
+    },
     "hub_health": "http://127.0.0.1:3050/health"
   },
   "budget": {
