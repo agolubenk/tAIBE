@@ -285,7 +285,7 @@ def _check_pr(ctx, n, p, head, viewed=False):
         if v["verdict"] == "changes" and quorum.on_head(v["sha"], head):
             to = quorum.author_roles(p["author"], roles)   # с вторыми сессиями роли (#324)
             ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, to,
-                     f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github")
+                     f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github", pr=n, sha=v["sha"], lens=v["lens"])
     # Строки тела (SE-50) — без pr.changes: тело пишет автор PR. Комментарий линзы на голову главнее её строки тела.
     verdicts = quorum.with_body(p.get("body_verdicts") or [], said, head)
     author = p["author_line"]
