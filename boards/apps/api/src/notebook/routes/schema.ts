@@ -88,6 +88,14 @@ export const sourcesSchema = z
           description:
             "Length of the stored text. Absent for a caller with a token, except for repo-doc.",
         }),
+        addedByKind: z.enum(["agent", "person"]).nullable().openapi({
+          description:
+            "Who added a link or a pull request; null for a synced source or one added before authors were kept.",
+        }),
+        addedBy: z.string().nullable().openapi({
+          description:
+            "The agent's name with its session, or the member's name.",
+        }),
         updatedAt: responseTimestamp,
         chunks: z.number().int(),
         embedded: z.number().int().openapi({

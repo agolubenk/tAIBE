@@ -20,6 +20,7 @@ import {
   listSources,
   pruneSources,
 } from "../sources/list-sources";
+import { sourceAuthor } from "../sources/source-author";
 import { syncCardSources } from "../sources/sync-card-sources";
 import { upsertSource } from "../sources/upsert-source";
 import {
@@ -279,12 +280,12 @@ export const sourceRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(addLinkRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { url } = c.req.valid("json");
-    const added = await addLinkSource(workspaceId, url);
+    const added = await addLinkSource(workspaceId, url, sourceAuthor(c));
     return c.json(maskForTokenCaller(c, added), 200);
   })
   .openapi(addPullRequestRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { url } = c.req.valid("json");
-    const added = await addPullRequestSource(workspaceId, url);
+    const added = await addPullRequestSource(workspaceId, url, sourceAuthor(c));
     return c.json(maskForTokenCaller(c, added), 200);
   });

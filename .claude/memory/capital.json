@@ -196,9 +196,9 @@
       "tags": ["process", "review", "opencode", "glm", "notebook", "ideas", "spec"],
       "status": "active",
       "version": 1,
-      "token_estimate": 750,
+      "token_estimate": 920,
       "load_condition": "task_contains:!ревью|!review|!opencode|!опенкод|!glm|!блокнот|!notebook|!идея|!идеи|!идею|!исследова|!спеку|!спеки|!спека|!spec|!прожар|!grill|мелкая правк|мелкую правк",
-      "last_updated": "2026-11-13",
+      "last_updated": "2026-11-14",
       "provenance": "решение владельца 13.11 (сессия agolubenko primary); канон ревью — process-adversarial-review"
     }
   ]

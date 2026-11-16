@@ -1,6 +1,6 @@
-/** OPS-8: контейнеры в отчёте по compose-проектам — группы, строка карточки, строка хоста, отчёт до OPS-8. */
+/** OPS-8: контейнеры в отчёте по compose-проектам — группы, строка карточки, строка хоста, отчёт до OPS-8. OPS-57: пропавший стек. */
 import { describe, expect, it } from 'vitest'
-import { containerProjects, containersLine, hostContainers } from '../server/reports/containers'
+import { containerProjects, containersLine, hostContainers, missingProjects } from '../server/reports/containers'
 import type { OpsReport } from '../shared/report-contract'
 
 const ctr = (name: string, composeProject: string, o: { main?: boolean; state?: string; policy?: string; code?: number | null } = {}) => ({
@@ -80,5 +80,59 @@ describe('контейнеры отчёта по стекам (OPS-8)', () => {
     expect(hostContainers(host('prod', [stack('backend', 2, ['w'], true), stack('', 1)]))).toBe(' · стеки: backend 1/2 (не работают: w), без compose 1/1')
     expect(hostContainers(host('prod', undefined, ['w']))).toBe(' · не работают: w')
     expect(hostContainers(host('prod'))).toBe('')
+  })
+})
+
+describe('пропавший стек (OPS-57)', () => {
+  const now = [stack('backend', 2, [], true)]
+
+  it('сравнивает с прошлым отчётом только хосты, у которых там были стеки', () => {
+    const prev = { hosts: [host('prod', [stack('backend', 2, [], true), stack('t-boards', 4)]), host('old', undefined, [])] }
+    expect(missingProjects(prev, 'prod', now)).toEqual(['t-boards'])
+    expect(missingProjects(prev, 'old', now)).toEqual([])
+    expect(missingProjects(prev, 'new', now)).toEqual([])
+    expect(missingProjects(null, 'prod', now)).toEqual([])
+    expect(missingProjects(prev, 'prod', [...now, stack('t-boards', 4, ['a', 'b', 'c', 'd'])])).toEqual([])
+  })
+
+  it('пропавший стек числится пропавшим, пока не вернётся: прошлый отчёт держит его в missingProjects', () => {
+    const prev = { hosts: [{ ...host('prod', now), missingProjects: ['t-boards'] }] }
+    expect(missingProjects(prev, 'prod', now)).toEqual(['t-boards'])
+    expect(missingProjects(prev, 'prod', [...now, stack('t-boards', 2)])).toEqual([])
+    // Хост потерял все стеки: projects пуст, пропавшие всё равно сравниваются; повтор имени не двоится.
+    const empty = { hosts: [{ ...host('prod', []), missingProjects: ['backend', 't-boards'] }] }
+    expect(missingProjects(empty, 'prod', [])).toEqual(['backend', 't-boards'])
+    const both = { hosts: [{ ...host('prod', now), missingProjects: ['backend'] }] }
+    expect(missingProjects(both, 'prod', [])).toEqual(['backend'])
+  })
+
+  it('пропал стек — карточка не пишет «все работают», хост называет его', () => {
+    const h = { ...host('prod', now), missingProjects: ['t-boards'] }
+    expect(containersLine({ hosts: [h], restarts: [] })).toBe(
+      '📦 Контейнеры: пропал стек: t-boards (было 2) · 1 стек: backend 2/2 · перезапусков: 0',
+    )
+    expect(hostContainers(h)).toBe(' · стеки: backend 2/2 · пропал стек: t-boards')
+  })
+
+  it('пропавший и неработающий — оба в строке; несколько хостов — с именем хоста', () => {
+    const a = { ...host('a', [stack('backend', 2, ['w'], true)]), missingProjects: ['t-boards', ''] }
+    const b = host('b', [stack('x', 1)])
+    expect(containersLine({ hosts: [a, b], restarts: [] })).toBe(
+      '📦 Контейнеры: пропали стеки: a/t-boards, a/без compose (было 4); не работают — a/backend: w · 2 стека: a/backend 1/2, b/x 1/1 · перезапусков: 0',
+    )
+  })
+
+  it('хост потерял все стеки — карточка и строка хоста называют пропажу, пустого «стеки:» нет', () => {
+    const gone = { ...host('prod', []), missingProjects: ['backend', 't-boards'] }
+    expect(containersLine({ hosts: [gone], restarts: [] })).toBe(
+      '📦 Контейнеры: пропали стеки: backend, t-boards (было 2) · перезапусков: 0',
+    )
+    expect(hostContainers(gone)).toBe(' · пропали стеки: backend, t-boards')
+    // Два хоста: у prod пропало всё, второй работает.
+    expect(containersLine({ hosts: [gone, host('b', [stack('x', 1)])], restarts: [] })).toBe(
+      '📦 Контейнеры: пропали стеки: prod/backend, prod/t-boards (было 3) · 1 стек: b/x 1/1 · перезапусков: 0',
+    )
+    // Хост без стеков и без пропаж (старый агент, пустой хост) — прежний путь.
+    expect(hostContainers(host('old', []))).toBe('')
   })
 })

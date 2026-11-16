@@ -18,7 +18,9 @@ SHA — токен сразу за словом (между ними — «с у
 Ключ линзы — роль команды: N-я роль team.roles, если подпись называет «роль N» (нумерация spawn_session.sh), иначе
 роль по github.lens_roles, иначе имя линзы. Так «Линза корректности (роль 4)» и «Линза «корректность и отказы» (роль 4)»
 — одна линза backend. Предел: подпись без номера и без имени из lens_roles даёт отдельный ключ.
-Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, проверки CI не висят.
+Кворум: на текущую голову не меньше min_lenses разных линз с approve, ни одного changes, CI ok — каждая проверка
+SUCCESS, NEUTRAL или SKIPPED — или «CI: none» (ci_state). Висящий, упавший или неизвестный CI кворум не собирает:
+линзы собраны, а CI упал — автору pr.ci_failed (SE-86).
 Approve автора PR (его базовой роли, со вторыми сессиями) в кворум не идёт: автор себя не проверяет (SE-121). Автора
 называет только строка тела PR «роль N — автор» (координатор 15.11). Пути файлов автора для кворума не дают: в tAIBE
 `boards/` — роль boards, а код `boards/apps/api` и `apps/web` пишут backend и frontend (замер 15.11: из 169 открытых
@@ -106,18 +108,23 @@ def on_head(sha, head):
     return bool(sha) and bool(head) and head.lower().startswith(sha.lower())
 
 
+CI_OK = ("SUCCESS", "NEUTRAL", "SKIPPED")
+CI_FAILED = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
+
+
 def ci_state(checks):
-    """checks — список статусов/выводов. pending, если что-то не завершено или проверок ещё нет; failure, если есть
-    провал; none — маркер NONE от gh_source; иначе ok. Пустой список — не «ok»: сразу после push GitHub какое-то время
-    не отдаёт ни одной проверки, и кворум ушёл бы Контролю раньше CI (SE-126)."""
+    """checks — выводы и статусы проверок (CheckConclusionState, CheckStatusState, StatusState GitHub). none — маркер
+    NONE от gh_source: у головы нет проверок дольше NO_CHECKS_AFTER. failure — есть провал из CI_FAILED (он побеждает,
+    даже если другие ещё идут; повтор job на той же голове gh_source замечает сам); ok — каждая проверка в CI_OK;
+    иначе pending: идёт, ждёт, REQUESTED, COMPLETED без вывода, неизвестное значение. Пустой список — тоже pending: сразу после push GitHub какое-то время не отдаёт ни
+    одной проверки, и кворум ушёл бы Контролю раньше CI (SE-126). Список разрешённых — новое значение GitHub не даст ни
+    ложного кворума, ни ложного pr.ci_failed (SE-86)."""
     states = [str(c or "").upper() for c in checks]
     if states == ["NONE"]:
         return "none"   # маркер gh_source: у головы нет проверок дольше NO_CHECKS_AFTER — CI у PR нет
-    if not states or any(s in ("PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED") for s in states):
-        return "pending"
-    if any(s in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE") for s in states):
+    if any(s in CI_FAILED for s in states):
         return "failure"
-    return "ok"
+    return "ok" if states and all(s in CI_OK for s in states) else "pending"
 
 
 def last_on_head(verdicts, head):
@@ -134,10 +141,11 @@ def quorum(verdicts, head, checks, min_lenses=3, author=None):
     Возвращает (собран ли, одобрившие линзы, линзы с changes, состояние CI).
     Линза — роль: approve второй сессии (backend-2) и основной (backend) — одна линза, геном и пусковой файл у них
     общие. changes — по точному ключу: newhead и changes_by адресуют ту сессию, что просила правку.
-    author — роль из строки тела «роль N — автор» (body_author): её approve не считается (SE-121)."""
+    author — роль из строки тела «роль N — автор» (body_author): её approve не считается (SE-121).
+    Собран — только при CI ok или none: упавший CI кворум не собирает (SE-86), ждущий — тоже."""
     approved, changes = tally(last_on_head(verdicts, head), author)
     ci = ci_state(checks)
-    return (len(approved) >= min_lenses and not changes and ci != "pending"), approved, changes, ci
+    return (len(approved) >= min_lenses and not changes and ci in ("ok", "none")), approved, changes, ci
 
 
 def tally(last, author=None):

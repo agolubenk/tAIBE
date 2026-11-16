@@ -4,6 +4,7 @@ import db from "../../database";
 import {
   type NotebookCitation,
   type NotebookMessageStatus,
+  type NotebookUsage,
   notebookMessageTable,
   notebookThreadTable,
 } from "../../database/notebook-schema";
@@ -64,6 +65,8 @@ type Outcome = {
   status: NotebookMessageStatus;
   content: string;
   model: string | null;
+  // D-018: only an answered call carries the provider's usage.
+  usage?: NotebookUsage | null;
 };
 
 async function writeAnswer(
@@ -90,7 +93,12 @@ async function writeAnswer(
   }
   const reply = await callModel(config, key, messages);
   if (reply.ok) {
-    return { status: "answered", content: reply.content, model: config.model };
+    return {
+      status: "answered",
+      content: reply.content,
+      model: config.model,
+      usage: reply.usage,
+    };
   }
   return {
     status: reply.limited ? "rate-limited" : "failed",

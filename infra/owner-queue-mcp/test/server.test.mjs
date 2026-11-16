@@ -58,7 +58,16 @@ async function consoleFake(files, state) {
       const items = [{ id: 'd-hr-1', version: 1, updatedAt: 2, product: 'hr-helper', data: { kind: 'decision', title: 'HR' } },
         { id: 'taibe-d-1', version: 1, updatedAt: 1, product: 'taibe', data: { kind: 'decision', title: 'tAIBE' } }];
       if (searchParams.get('since')) return json(200, { cursor: 'b1.1', changes: { checks: { docs: [], removed: [] }, items: { docs: [], removed: [] }, work: { docs: [], removed: [] } } });
-      return json(200, { full: true, cursor: 'b1.1', collections: { checks: { docs: [] }, items: { docs: items }, work: { docs: [] } } });
+      const full = JSON.stringify({ full: true, cursor: 'b1.1', collections: { checks: { docs: [] }, items: { docs: items }, work: { docs: [] } } });
+      // OPS-79: полный список медленный — заголовки сразу, остаток тела через state.slowFullMs (как 1,64 МБ за 43 с).
+      if (state.slowFullMs) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write(full.slice(0, 5));
+        setTimeout(() => { if (!res.destroyed) res.end(full.slice(5)); }, state.slowFullMs);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(full);
     }
     // Список пунктов с продуктом рядом с data; ?product= фильтрует консоль, MCP передаёт его как есть.
     if (pathname === '/api/oq/v1/db/items') {
@@ -108,12 +117,15 @@ async function consoleFake(files, state) {
   return srv;
 }
 
-function mcp(port) {
+function mcp(port, extraEnv = {}) {
   const child = spawn(process.execPath, [SERVER], {
     // OQ_PRODUCT — основной: в сессии tAIBE TAIBE_PRODUCT=taibe, и сервер пошёл бы в Keychain за настоящим токеном.
-    env: { ...process.env, OQ_URL: `http://127.0.0.1:${port}`, OQ_TOKEN: 'test-token', OQ_PRODUCT: 'hr-helper', OQ_FILES_DIR: '' },
-    stdio: ['pipe', 'pipe', 'ignore'],
+    env: { ...process.env, OQ_URL: `http://127.0.0.1:${port}`, OQ_TOKEN: 'test-token', OQ_PRODUCT: 'hr-helper', OQ_FILES_DIR: '', ...extraEnv },
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
+  // Диагностика сервера (stderr) — для проверок вида «нет строки о нарушении контракта».
+  const stderr = [];
+  child.stderr.on('data', (chunk) => stderr.push(String(chunk)));
   const waiting = new Map();
   let buf = '';
   child.stdout.on('data', (chunk) => {
@@ -137,14 +149,14 @@ function mcp(port) {
     waiting.set(id, { resolve: (r) => { clearTimeout(timer); resolve(r); }, reject: (e) => { clearTimeout(timer); reject(e); } });
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } })}\n`);
   });
-  return { call, close: () => child.kill() };
+  return { call, close: () => child.kill(), stderr: () => stderr.join('') };
 }
 
-async function rig(t, files) {
+async function rig(t, files, extraEnv) {
   const state = { checks: CHECKS.slice(), checksReads: 0 };
   const srv = await consoleFake(files, state);
-  const m = mcp(srv.address().port);
-  t.after(() => { m.close(); srv.close(); });
+  const m = mcp(srv.address().port, extraEnv);
+  t.after(() => { m.close(); srv.closeAllConnections(); srv.close(); });
   return { ...m, state };
 }
 const body = (result) => JSON.parse(result.content[0].text);
@@ -277,6 +289,29 @@ test('oq_list через дельту /changes (карточка HR Q-38): ко�
   assert.equal(m.state.itemsQueries, undefined, 'полный /db/items не читали ни разу');
   await m.call('oq_list', { collection: 'items', open_only: true });
   assert.deepEqual(m.state.itemsQueries, ['open=1'], 'открытые — серверным правилом open-rule.ts');
+});
+
+test('OPS-79: полный /changes дольше обычного таймаута, но в пределах таймаута списка — oq_list через дельту, без ошибки контракта и без /db/items', { timeout: 30_000 }, async (t) => {
+  // Масштаб 1:100 от 15.11: обычный таймаут 300 мс (20 с), тело — 800 мс (43 с), таймаут списка — 5 с (120 с).
+  const m = await rig(t, 'ok', { OQ_TIMEOUT_MS: '300', OQ_LIST_TIMEOUT_MS: '5000' });
+  m.state.delta = true;
+  m.state.slowFullMs = 800;
+  const first = body(await m.call('oq_list', { collection: 'items' }));
+  assert.deepEqual(first.docs.map((d) => d.id), ['d-hr-1', 'taibe-d-1']);
+  assert.deepEqual(m.state.changesReqs, ['full']);
+  assert.equal(m.state.itemsQueries, undefined, 'прежний путь не понадобился');
+  assert.doesNotMatch(m.stderr(), /не по контракту|не ответила/);
+});
+
+test('OPS-79: полный /changes не дочитан и за таймаут списка — временный сбой: oq_list прежним путём, без ошибки контракта; ответ — не `{}`', { timeout: 30_000 }, async (t) => {
+  const m = await rig(t, 'ok', { OQ_TIMEOUT_MS: '300', OQ_LIST_TIMEOUT_MS: '400' });
+  m.state.delta = true;
+  m.state.slowFullMs = 2_000;
+  const first = body(await m.call('oq_list', { collection: 'items' }));
+  assert.deepEqual(first.docs.map((d) => d.id), ['d-hr-1', 'taibe-d-1'], 'список — из GET /db/items');
+  assert.deepEqual(m.state.itemsQueries, ['']);
+  assert.match(m.stderr(), /консоль не ответила на \/changes \(ответ консоли не дочитан/);
+  assert.doesNotMatch(m.stderr(), /не по контракту|30 мин/);
 });
 
 test('oq_history (карточка HR oow56fdzk): по умолчанию limit=20, keys_only → fields=meta, next и before; старая консоль — окно режет MCP', { timeout: 30_000 }, async (t) => {
