@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 
+from merge_guard_comments import sure_comments
 from merge_guard_files import open_regular
 from merge_guard_vars import (ASSIGN, SHELL_WORDS, SUBST, dir_vars, expand_vars, note_vars, substitute,  # noqa: F401
                               words)  # dir_vars, expand_vars, note_vars, substitute — отсюда для хука
@@ -139,14 +140,26 @@ def comment_safe(text):
     return depth == 0
 
 
-def strip_comments(cmd, force=False):
+def strip_comments(cmd, force=False, keep=None):
     """Комментарии shell — от `#` в начале слова до конца строки — убрать, как это делает bash: `\\` в конце комментария
     строку не продолжает, `#` внутри слова (`a\\ #b`, `"…"#`, `$'…'`) — не комментарий. Снимается только то, что
     пропускает comment_safe: если разбор ошибся и для bash этот `#` внутри строки, `${…}`, `$((…))` или обратных
     кавычек, закрыть их bash может только символом, которого там нет, — и такой текст остаётся на разбор. Кавычки не
     сошлись — команда остаётся как есть (лишний отказ, не пропуск); force — всё равно снять: так безопасно для
-    грубого признака, правило comment_safe от разбора кавычек не зависит."""
-    out, i, quote, word = [], 0, None, False
+    грубого признака, правило comment_safe от разбора кавычек не зависит. keep — признак, с которым комментарий
+    остаётся всегда; задан — снимается и комментарий, где из опасных знаков только `'` (`# Docker's …`), если bash
+    здесь точно на верхнем уровне (sure_comments, SE-75). Такой снят — текст без него и при несошедшихся кавычках:
+    с ним `'` сошлись бы через строки и спрятали бы код, который bash выполнит до ошибки в конце скрипта."""
+    out, i, quote, word, sure, hits = [], 0, None, False, None, []
+
+    def apostrophe_only(at, text):
+        nonlocal sure
+        if keep is None or "'" not in text or keep(text) or not comment_safe(text.replace("'", "")):
+            return False
+        sure = sure_comments(cmd) if sure is None else sure  # один разбор на текст, и только если нужен
+        hits.extend([at] if at in sure else [])
+        return at in sure
+
     while i < len(cmd):
         c = cmd[i]
         if quote == "'":
@@ -174,13 +187,13 @@ def strip_comments(cmd, force=False):
         elif c == "#" and quote is None and not word:
             end = cmd.find("\n", i)
             end = len(cmd) if end < 0 else end
-            if comment_safe(cmd[i:end]):
+            if comment_safe(cmd[i:end]) or apostrophe_only(i, cmd[i:end]):
                 i = end
                 continue
         word = quote is not None or c not in " \t\n;&|(<>"  # `)` слово не кончает: `$(true)#` — не комментарий
         out.append(c)
         i += 1
-    return cmd if quote and not force else "".join(out)
+    return cmd if quote and not force and not hits else "".join(out)
 
 
 FD = re.compile(r"(?<![^\s;&|(])\d+(?=[<>])")  # `0<f`, `2>&1`: номер дескриптора — не аргумент команды
