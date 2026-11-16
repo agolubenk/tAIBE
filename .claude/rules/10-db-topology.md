@@ -1,7 +1,8 @@
 ---
 paths:
   - apps/backend/**
-  - infra/**
+  - infra/docker/**
+  - infra/k8s/**
 ---
 
 # DB Topology & Data Flow
