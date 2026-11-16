@@ -1,6 +1,6 @@
 # agent-bridges/ab — разбор встраивания
 
-> **Статус (2026-11-16):** 🟡 разобран, фаза 1 в работе. Источник — [agent-bridges/ab](https://github.com/agent-bridges/ab)
+> **Статус (2026-11-16):** 🟡 разобран; PR 1 (пропуск) — #447, PR 2 (tmux) — сервис поднят, PR на ревью. Источник — [agent-bridges/ab](https://github.com/agent-bridges/ab)
 > (+ `ab-pty`, `ab-back`, `ab-front`), MIT. Индекс и правила — [`../README.md`](../README.md).
 > Постановка владельца 16.11: «огромное количество окон, теряюсь; организовать работу на этом устройстве и на сервере;
 > чтобы ноутбук или сервер не сдохли; всё наше (Нерв, headroom, процессы tAIBE) работает как сейчас через терминалы,
@@ -72,7 +72,33 @@
 равно; `--handoff` и `--dry-run` не проверяются. `max_sessions` = 10 в `instances/_shared.json` (при VM Docker 8 ГБ;
 12 — если VM ≤ 5 ГБ). Проверка 16.11: `пропуск закрыт: сессий Claude 16 ≥ max_sessions 10 · память 36 %`.
 
-### PR 2 — tmux хозяин сессий
+### PR 2 — tmux хозяин сессий (ветка `feature/agent-bridge-tmux`, сервис поднят 16.11)
+
+**Сделано.** `eval/tools/tmux_host.py`; `spawn_session.sh --terminal tmux` — по умолчанию (`system.terminal` в
+`instances/_shared.json`); запись линии с панелью, pid пусковой оболочки и сервером; сторож и авто-уборка закрывают
+панель только при совпадении всех трёх (`close_pane`); merge-guard — агенту только чтение списков tmux
+(`.claude/hooks/merge_guard_tmux.py`). Сервер — LaunchAgent `space.hrhelper.agents-tmux` (`tmux -D -L agents`,
+KeepAlive), а не потомок сессии: окружение и песочница сессии в окна не попадают.
+
+Отличия от плана ниже: сервер — под launchd, а не `env -i` из сессии (п. 2); окно tmux закрывается само, когда пусковой
+скрипт вышел (п. 3); «ждёт» — из статуса сессии (`~/.claude/sessions/<pid>.json`: `waiting` — «!», `idle` — «·»),
+пункты очереди в строку статуса не входят: на них владелец отвечает в боте, а не в окне (п. 6); `--resume` после
+падения сервера не сделан — `spawn_session.sh --launch --roles all` открывает заново только мёртвые роли (п. 4).
+
+Замер 16.11 (живой сервис): сервер tmux — 3,7 МБ RSS, ppid 1; в окружении сервера только переменные launchd; панель
+получила `ANTHROPIC_BASE_URL` и PATH к `claude` из `~/.zshrc`, переменных сессии (`CLAUDECODE`, `TAIBE_LINEAGE`,
+`CLAUDE_CODE_SSE_PORT`) — 0; пробное окно закрылось само.
+
+| Действие | Команда |
+|---|---|
+| Смотреть роли (одно окно) | `tmux -L agents attach` — откроется само при первой роли, если никто не подключён |
+| Следующее окно, которое ждёт | `Ctrl-b j`; список окон — `Ctrl-b w`; мышь включена |
+| Состояние сервиса | `launchctl print gui/$(id -u)/space.hrhelper.agents-tmux \| head -20` |
+| Перезапуск сервера (окна ролей закроются) | `launchctl kickstart -k gui/$(id -u)/space.hrhelper.agents-tmux` |
+| Откат на окна Terminal | `"terminal": "terminal"` в `instances/_shared.json` или `SPAWN_TERMINAL=terminal` |
+| Снять сервис | `launchctl bootout gui/$(id -u)/space.hrhelper.agents-tmux` |
+
+План (как был утверждён):
 
 1. `spawn_session.sh --terminal tmux`; по умолчанию — `terminal` в `instances/_shared.json`. Один tmux-сервер
    (`tmux -L agents`, `exit-empty off`), сессия tmux на продукт, окно на роль, имя — `<роль> <карточка>`.
