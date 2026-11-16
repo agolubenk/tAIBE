@@ -40,6 +40,8 @@ with open(os.path.join(HERE, "config.json"), encoding="utf-8") as _f:
 # Дельта /changes (OPS-50) ходит в консоль через sources.run — у неё свои тесты с фальшивой консолью
 # (test_queue_delta.py). Здесь опрос очереди — прежним списком: тесты подменяют _oq_get и не идут в сеть.
 CFG["queue"]["delta"] = False
+# Повторная уборка worktree (OPS-81) зовёт wt_gc.py через sources.run раз в час — свои тесты в test_wt_sweep.py.
+CFG["github"]["wt_sweep_minutes"] = 0
 
 
 def wj(path, data):

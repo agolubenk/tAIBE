@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 import quorum
 import sources
+import wt_sweep
 from journal import DIGEST, NERVOUS
 
 GH_LIMIT = 1000        # не больше 1000 открытых PR за проход
@@ -242,6 +243,7 @@ def poll_github(ctx):
     # догон не кончает и при пустом known: без открытых PR граница никому не мешает (Контроль #393).
     if not fails and not deferred and open_now and open_now >= set(known):
         st.pop("backfill", None)   # дальше каждый новый PR — «открыт»
+    wt_sweep.poll(ctx, {pr["branch"] for pr in prs if pr.get("branch")})   # раз в час, OPS-81; сбой — внутри
     _raise_fails(fails)
 
 
