@@ -62,6 +62,7 @@ def zsh_interactive(a):
         if x[:2] == "--":
             name = _option_name(x[2:])
             on = name == "interactive" or (on and name != "nointeractive")
+            i += name == "emulate"  # `--emulate zsh` берёт режим следующим словом (Контроль 6909989591)
             continue
         for k, ch in enumerate(x[1:], 2):
             if ch == "c":
