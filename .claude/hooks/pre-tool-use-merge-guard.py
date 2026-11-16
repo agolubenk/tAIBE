@@ -38,7 +38,8 @@ from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load
 from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name, cut_heredocs,  # noqa: E402
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
-                               strip_prefix, subst_code, SUBST_AT, syntax_only, tokenize, uncommented)
+                               strip_prefix, subst_code, SUBST_AT, syntax_only, uncommented)
+from merge_guard_partial import PARTIAL, settled, tokens_before_error  # noqa: E402  разбор до ошибки (SE-76)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 
@@ -207,11 +208,10 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         first_line = text.split("\n", 1)[0]
         is_interp_script = interp if interp is not None else (
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
-        try:
-            found += script_found(text, is_interp_script, cwd, roots, depth, git_env, path)
-        except Exception:  # грубый признак — по тексту скрипта: в команде (`bash x.sh`) его нет
-            if FALLBACK.search(text if is_interp_script else uncommented(text)):
-                found.append((UNPARSED, s))
+        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path))
+        found += got  # разобран до ошибки — находки части и грубый признак по тексту скрипта: в `bash x.sh` его нет
+        if partial and FALLBACK.search(text if is_interp_script else uncommented(text)):
+            found.append((UNPARSED, s))
     if scripts and opaque(scripts, whole[3] or ()) and not whole[2]:  # `git switch x && bash m.sh` — с диска прочтён не тот код
         found.append((BLIND_RUN, scripts[0]))
     elif scripts and not seen and FALLBACK.search(whole[4][1]):
@@ -351,7 +351,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
 
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False):
     """[(вид, подробность)] защищённых действий. git_env — git-конфиг из окружения, disk — текст с диска, written —
-    имена, что пишет команда (дополняется), part — тело `$(…)`/маски: не верхний уровень, комментарий с `'` цел."""
+    имена, что пишет команда (дополняется), part — тело `$(…)`/маски: не верхний уровень, опасный комментарий цел."""
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
@@ -361,7 +361,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         written.update(command_writes(cmd))
     cmd, bodies = cut_heredocs(cmd)  # до снятия комментариев: в теле `'` — не кавычка, `#` — не комментарий
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd = strip_comments(cmd, keep=None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
+    cmd = strip_comments(cmd, True, None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
     whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
@@ -374,7 +374,8 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         found += classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk, written, whole[4])
     for code in qualifier_code(cmd):  # zsh `ls *(e:'gh pr merge 1':)`
         found += classify_bash(code, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
-    tokens = tokenize(cmd)
+    tokens, complete = tokens_before_error(cmd)
+    found += [] if complete else [(PARTIAL, cmd[:120])]  # кавычки не сошлись: разбор до ошибки без комментариев
     found += [(DEFERRED, t[:120]) for t in tokens if ("$(" in t or "`" in t) and FALLBACK.search(t)]
     env, prev, st, saved = dir_vars({}, cwd), ([], []), new_state(cwd), []
     fed = [r for readers, _, _ in bodies for r in readers]
@@ -453,11 +454,10 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
         if why:
             return f"merge-guard: {why}."
     for cmd in shell:
-        try:
-            found += classify_bash(cmd, cwd, roots)
-        except Exception as exc:  # разбор не удался — решает грубый признак
-            if FALLBACK.search(cmd):
-                return f"merge-guard: команду не разобрать ({exc.__class__.__name__}), а в ней признак защищённого действия. Разбейте её на простые команды."
+        got, partial, why = settled(lambda: classify_bash(cmd, cwd, roots))
+        found += got  # разобрана до ошибки — находки этой части, и грубый признак, как у неразобранной
+        if partial and FALLBACK.search(cmd):
+            return f"merge-guard: команду не разобрать ({why}), а в ней признак защищённого действия. Разбейте её на простые команды."
     if code is not None:
         found += interp_found(code, cwd, roots)
 

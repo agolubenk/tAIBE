@@ -69,8 +69,8 @@ def _gh_checks(repo, n):
 
 
 def _gh_author_view(repo, n):
-    """Файлы, проверки и тело PR — для автора (SE-121). Тело (несколько КБ) читается только здесь, а не на каждой
-    перепроверке CI: строку «роль N — автор» пишут при открытии PR."""
+    """Файлы, проверки и тело PR — для автора (SE-121) и вердиктов тела (SE-50). Без файлов тело читается в _check_pr
+    при изменении PR на той же голове, но не на перепроверке CI: PR без изменений тела не менял."""
     d, files, checks = _gh_pr(repo, n, "files,statusCheckRollup,body")
     return files, checks, d.get("body") or ""
 
@@ -197,7 +197,7 @@ def poll_github(ctx):
     prs = _gh_list(g["repo"])
     known = st["prs"]
     fails = []
-    open_now, fresh, deferred = set(), 0, 0
+    open_now, fresh, deferred, reread = set(), 0, 0, 0
     for pr in prs:
         n = pr["number"]
         open_now.add(str(n))
@@ -211,14 +211,17 @@ def poll_github(ctx):
             p["branch"], p["base"] = pr["branch"], pr.get("base", "")   # до проверки «не менялся»: и у давних PR
         # «author» — признак разобранного PR: в rev 1 head и updated писались до сбоя _gh_view (SE-40).
         if p["updated"] == pr["updated_at"] and p["head"] == pr["head"]["sha"] and "author" in p:
-            if p.get("await_ci"):
-                # CI доезжает, не меняя PR: кворум, ждущий только CI, перепроверяется каждый проход. Раньше — только
-                # на ответе 304, а его почти не было (etag менял каждый push). Сбой — повтор: await_ci не снят.
-                try:
-                    _recheck_ci(ctx, n, p)
-                except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
-                    fails.append(f"#{n}: {e}")
-            continue
+            if "body_verdicts" not in p and reread < GH_NEW_PER_PASS:
+                reread += 1   # разобран до SE-50: тело читается один раз, не больше 20 PR за проход
+            else:
+                if p.get("await_ci"):
+                    # CI доезжает, не меняя PR: кворум, ждущий только CI, перепроверяется каждый проход. Раньше — только
+                    # на ответе 304, а его почти не было (etag менял каждый push). Сбой — повтор: await_ci не снят.
+                    try:
+                        _recheck_ci(ctx, n, p)
+                    except Exception as e:  # noqa: BLE001 — один PR не обрывает проход
+                        fails.append(f"#{n}: {e}")
+                continue
         if not p["head"] and pr.get("created_at", "") >= st.get("backfill", ""):
             ctx.emit(f"gh:new:{n}", "pr.new", DIGEST, ["coord"], f"#{n} открыт: {pr['title'][:80]}", "github")
         elif p["head"] != pr["head"]["sha"] and p.get("changes_by"):
@@ -252,30 +255,39 @@ def _check_pr(ctx, n, p, head, viewed=False):
     g = ctx.cfg["github"]
     head_changed = p["head"] != head
     comments = _gh_comments(g["repo"], n)
+    roles, body = ctx.cfg["team"]["roles"], None
     # Пустой список перечитывается: CI регистрируется позже push, и старый [] через 30 мин дал бы ложный «CI: none»
     # «author_line» нет у PR, разобранных до SE-121: одно чтение тела, когда PR изменится
     if head_changed or "author_line" not in p or not (p.get("checks") or viewed):
         files, checks, body = _gh_author_view(g["repo"], n)
-        p["author"] = quorum.pr_author(body, files, g["path_roles"], ctx.cfg["team"]["roles"])   # адресат changes
-        p["author_line"] = quorum.body_author(body, ctx.cfg["team"]["roles"])   # автор для кворума — только строка
+        p["author"] = quorum.pr_author(body, files, g["path_roles"], roles)   # адресат changes
         p["checks"] = checks
-    elif not viewed and quorum.ci_state(p["checks"]) in ("pending", "failure"):
-        # PR меняется каждый проход (комментарии) — _recheck_ci его не видит: CI перечитывается здесь (SE-123).
-        # failure — тоже: повтор упавшего job зеленеет на той же голове (SE-86)
-        p["checks"] = _gh_checks(g["repo"], n)
+    elif not viewed:
+        # PR изменился на той же голове: тело — вердикты в нём (SE-50) и строка автора. Комментарии меняют PR каждый
+        # проход, и _recheck_ci его не видит: CI pending или failure перечитывается тем же запросом (SE-123, SE-86).
+        ci = quorum.ci_state(p["checks"]) in ("pending", "failure")
+        d, _, checks = _gh_pr(g["repo"], n, "statusCheckRollup,body" if ci else "body")
+        body, p["checks"] = d.get("body") or "", checks if ci else p["checks"]
+    if body is not None:
+        p["author_line"] = quorum.body_author(body, roles)   # автор для кворума — только строка
+        p["author"] = p["author_line"] or p["author"]   # строка, дописанная без push, — и адресат changes
+        p["body_verdicts"] = quorum.body_verdicts(body, g["lens_roles"], roles)
     if head_changed:
         p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
+        p.pop("ci_at", None)   # интервал перечитывания упавшего CI — от старой головы: новая читается сразу
     p["head"] = head  # после запросов: при сбое голова не считается увиденной
-    verdicts = []
+    said = []
     for c in comments:
-        v = quorum.parse_verdict(c.get("body"), g["lens_roles"], ctx.cfg["team"]["roles"])
+        v = quorum.parse_verdict(c.get("body"), g["lens_roles"], roles)
         if not v:
             continue
-        verdicts.append(v)
+        said.append(v)
         if v["verdict"] == "changes" and quorum.on_head(v["sha"], head):
-            to = quorum.author_roles(p["author"], ctx.cfg["team"]["roles"])   # с вторыми сессиями роли (#324)
+            to = quorum.author_roles(p["author"], roles)   # с вторыми сессиями роли (#324)
             ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, to,
                      f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github", pr=n, sha=v["sha"], lens=v["lens"])
+    # Строки тела (SE-50) — без pr.changes: тело пишет автор PR. Комментарий линзы на голову главнее её строки тела.
+    verdicts = quorum.with_body(p.get("body_verdicts") or [], said, head)
     author = p["author_line"]
     ok, approved, changes, ci = quorum.quorum(verdicts, head, _quorum_checks(ctx, p), g["min_lenses"], author)
     own = quorum.author_approved(quorum.last_on_head(verdicts, head), author)

@@ -1232,5 +1232,21 @@ for text in SURE:  # комментарий — последний ` # ` стр�
 for text in LOST:
     check(f"SE-75 sure_comments — уверенности нет: {text!r}", sure_comments(text) or None, False)
 
+# --- SE-76: bash (файл, stdin, source, `-c`, eval) выполняет команды до синтаксической ошибки в конце — их разбор ---
+se76 = repo_on("main", "se76")
+TAILS = {"quote.sh": 'G=gh\n$G pr merge 1\necho "\n', "esc.sh": "G=gh\n$G pr merge 1\necho \\",
+         "dq.sh": '# say "hi\nG=gh\n$G pr merge 1\necho "\n',  # `"` в комментарии сошёлся бы с кавычкой в конце
+         "dq-odd.sh": "# say \"hi\nG=gh\n$G pr merge 1\necho 'x\n", "push.sh": "git push origin main\necho \"\n",
+         "late.sh": 'echo "\n$G pr merge 1\n', "ok.sh": 'echo hi\necho "\n'}  # late — кавычка раньше: bash не выполнит
+for name, text in TAILS.items():
+    (se76 / name).write_text(text)
+    for form in (f"bash {name}", f"source {name}", f"bash < {name}"):
+        bash(f"SE-76: {form} — строки до ошибки выполнятся", form, name not in ("late.sh", "ok.sh"), cwd=se76)
+for form in ('G=gh\n$G pr merge 1\necho "', "bash -c 'G=gh\n$G pr merge 1\necho \"'", "eval 'G=gh; $G pr merge 1; echo \"'"):
+    bash(f"SE-76: команда с ошибкой в конце: {form!r}", form, True)
+bash("SE-76: Контролю мёрж из скрипта с ошибкой в конце можно", "bash quote.sh", False, who=D9, cwd=se76)
+(se76 / "dq-ok.sh").write_text('# say "hi\necho ok\n')
+bash("SE-76: `\"` в комментарии безобидного скрипта — проход", "bash dq-ok.sh", False, cwd=se76)
+
 if __name__ == "__main__":
     finish(" — формы shell")
