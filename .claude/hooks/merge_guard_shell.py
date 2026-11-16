@@ -144,6 +144,8 @@ def split_commands(tokens):
                 skip = "source" if t == "<" else "string"
                 if t in ("<<<", "<&"):
                     sources.append(None)
+                    if mark is None:  # `⏎<<<` без слова — команда и без слова: уровень нужен (линза backend 6910273773)
+                        mark, floor = (floor, depth), depth
             else:  # перед `|` и `&` — подоболочка в bash и zsh: папка и переменные после неё — как до неё
                 if argv or targets or sources:
                     yield argv, targets, sources, piped, mark if t.strip("\n") not in ("|", "|&", "&") else (

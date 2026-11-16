@@ -135,6 +135,13 @@ bash("SE-83: `⏎<<` без команды мёржа — проход", "echo a
 for text, want in (("echo a\n<<<x gh", [["echo", "a"], ["gh"]]), ("echo 'a\n<b' c", [["echo", "a\n<b", "c"]])):
     got = [argv for argv, *_ in split_commands(tokenize(text))]
     check(f"SE-83 split_commands: серия `⏎<` делится, слово — нет: {text!r}", None if got == want else got, False)
+# Линза backend 6910273773 (B2): `<<<` без слова в конце — команда без argv; без уровня classify_bash падал, находки
+# терялись. bash выполняет строки до ошибки разбора.
+for form in ("gh zzalias 1\n<<<", "gh zzalias 1 &&\n<<<", "bash -c 'gh zzalias 1\n<<<'", "gh zzalias 1\n <<<",
+             "\n # it's\ngh zzalias 1\n<<<\\\n"):
+    bash(f"SE-83: `<<<` без слова в конце не теряет находки: {form!r}", form, True)
+check("SE-83 split_commands: `⏎<<<` без слова — команда с уровнем",
+      None if [m for *_, m in split_commands(tokenize("echo a\n<<<"))] == [(0, 0), (0, 0)] else "нет", False)
 
 if __name__ == "__main__":
     finish(" — склейка строк")
