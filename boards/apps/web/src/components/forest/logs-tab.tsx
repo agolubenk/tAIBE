@@ -56,6 +56,7 @@ export function LogsTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={logs.isLoading}
         isError={logs.isError}
+        onRetry={() => void logs.refetch()}
         isEmpty={!items.length}
         empty={t("workspace:forest.logs.empty")}
       >

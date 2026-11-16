@@ -1,3 +1,4 @@
+import type { NotebookUsage } from "../../database/notebook-schema";
 import { withoutOutboundTelemetry } from "../../utils/sensitive-outbound";
 
 const RESPONSE_MAX_BYTES = 512 * 1024;
@@ -67,12 +68,43 @@ export function answerText(body: unknown): string {
   return content.trim();
 }
 
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+// D-018: the provider's own token counts. OpenAI and OpenRouter put the cache
+// in prompt_tokens_details.cached_tokens, DeepSeek in prompt_cache_hit_tokens;
+// both count it inside prompt_tokens. A missing or odd usage is null, never a
+// guess: the answer itself is not lost over it.
+export function providerUsage(body: unknown): NotebookUsage | null {
+  const usage = (body as { usage?: unknown } | null)?.usage as
+    | {
+        prompt_tokens?: unknown;
+        completion_tokens?: unknown;
+        prompt_tokens_details?: { cached_tokens?: unknown } | null;
+        prompt_cache_hit_tokens?: unknown;
+      }
+    | null
+    | undefined;
+  if (!usage || typeof usage !== "object") return null;
+  const input = usage.prompt_tokens;
+  const output = usage.completion_tokens;
+  if (!isCount(input) || !isCount(output)) return null;
+  const cached =
+    usage.prompt_tokens_details?.cached_tokens ??
+    usage.prompt_cache_hit_tokens ??
+    0;
+  if (!isCount(cached) || cached > input) return null;
+  return { input, output, cached };
+}
+
+export type ChatCompletion = { text: string; usage: NotebookUsage | null };
+
 export async function chatCompletion(
   config: { baseUrl: string; model: string; thinking?: string },
   key: string,
   messages: ChatMessage[],
   options: { timeoutMs?: number; maxTokens?: number } = {},
-): Promise<string> {
+): Promise<ChatCompletion> {
   const signal = AbortSignal.timeout(options.timeoutMs ?? 60_000);
   try {
     const response = await withoutOutboundTelemetry(() =>
@@ -106,7 +138,8 @@ export async function chatCompletion(
       void response.body?.cancel().catch(() => {});
       throw new LlmError("http", response.status);
     }
-    return answerText(await readBoundedJson(response));
+    const body = await readBoundedJson(response);
+    return { text: answerText(body), usage: providerUsage(body) };
   } catch (error) {
     if (error instanceof LlmError) throw error;
     if (signal.aborted) throw new LlmError("timeout");

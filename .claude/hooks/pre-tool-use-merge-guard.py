@@ -25,21 +25,23 @@ HOME_CLAUDE = Path.home() / ".claude"
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_git import classify_git, start_budget  # noqa: E402
+from merge_guard_git import classify_git, reviewed_test, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
 from merge_guard_gh import classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
-from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts, read_names,  # noqa: E402
-                                syntax_only)
+from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts,  # noqa: E402
+                                read_names)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
 from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E402
 from merge_guard_vars import BLIND, VAR, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
-from merge_guard_shell import (LOST, PARTIAL, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name,  # noqa: E402
-                               CHANGED, comment_char_may_change, comment_char_seen, cut_heredocs, cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost,
-                               launch_args, launcher, normalize, note_vars, proc_files, read_script, settle,
-                               split_commands, strip_prefix, subst_code, SUBST_AT, tokens_before_error,
-                               comment_readings, uncommented)
+from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name, cut_heredocs,  # noqa: E402
+                               cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
+                               launcher, normalize, note_vars, proc_files, read_script, split_commands, CHANGED,
+                               strip_prefix, subst_code, SUBST_AT, syntax_only, comment_readings, uncommented)
+from merge_guard_shell import comment_char_may_change, comment_char_seen  # noqa: E402  знак комментария (SE-77)
+from merge_guard_partial import PARTIAL, settle, settled, tokens_before_error  # noqa: E402  разбор до ошибки (SE-76)
+from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -48,8 +50,8 @@ GUARDED_CLAUDE_DIRS = ("rules", "hooks")
 # Если разбор упал — защищённой считается команда, где есть хоть один из этих признаков.
 FALLBACK = re.compile(
     r"gh\s+pr\s+merge|gh\s+workflow\s+run|gh\s+run\s+rerun|\bgit\b[^\n;|&]*\bpush\b|/merge\b|mergePullRequest"
-    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)"
-)
+    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)", re.I
+)  # re.I: APFS не различает регистр — `.CLAUDE/rules` (SE-94, HR IS-245)
 # Конфиг git из окружения: его содержимое хук не видит.
 GIT_ENV = re.compile(r"\b(GIT_CONFIG\w*|GIT_DIR|GIT_COMMON_DIR|HOME|XDG_CONFIG_HOME)=")
 
@@ -69,23 +71,24 @@ def protected_path(path_str, cwd, roots):
     if is_lost(p):  # `cd "$X" && echo > 01-base.md`: папка может оказаться .claude/rules — по имени файла не понять
         return f"{path_str} после cd в папку, которую разбор не видит (пишите по абсолютному пути),"
     p = os.path.realpath(p)
-    home = os.path.realpath(HOME_CLAUDE)
-    if p == os.path.join(home, "sessions") or p.startswith(os.path.join(home, "sessions") + "/"):
+    f = p.casefold()  # APFS: `.CLAUDE/settings.json` — тот же файл (SE-94, HR IS-245); на Linux худшее — ложный отказ
+    home = os.path.realpath(HOME_CLAUDE).casefold()
+    if f == os.path.join(home, "sessions") or f.startswith(os.path.join(home, "sessions") + "/"):
         return p
-    if p in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
+    if f in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
         return p
     for root in roots:
-        claude = os.path.join(os.path.realpath(root), ".claude")
-        if os.path.dirname(p) == claude and os.path.basename(p) in GUARDED_CLAUDE_FILES:
+        claude = os.path.join(os.path.realpath(root), ".claude").casefold()
+        if os.path.dirname(f) == claude and os.path.basename(f) in GUARDED_CLAUDE_FILES:
             return p
-        if any(p == os.path.join(claude, d) or p.startswith(os.path.join(claude, d) + "/") for d in GUARDED_CLAUDE_DIRS):
+        if any(f == os.path.join(claude, d) or f.startswith(os.path.join(claude, d) + "/") for d in GUARDED_CLAUDE_DIRS):
             return p
     return None
 
 
 INTERP_WRITE = re.compile(r"""open\([^\n]*?,\s*(mode\s*=\s*)?['"][wax][+bt]*['"]|write_text|write_bytes|writeFile|appendFile|unlink|remove\(|rename|replace\(|rmSync|rmtree""")
 # Путь собран из частей: '.claude' и защищённое имя отдельными строками (os.path.join, Path / …).
-JOINED_CLAUDE = re.compile(r"""['"]\.claude['"].{0,80}?['"](rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S)
+JOINED_CLAUDE = re.compile(r"""['"]\.claude['"].{0,80}?['"](rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S | re.I)
 
 
 # ---------- решение ----------
@@ -105,7 +108,7 @@ def path_vars(lines, cwd, roots):
     for ln in lines:
         m = PATH_VAR.match(ln)
         if m and not READS.search(ln) and (JOINED_CLAUDE.search(ln) or any(
-                protected_path(x.group(0), cwd, roots) for x in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", ln))):
+                protected_path(x.group(0), cwd, roots) for x in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", ln, re.I))):
             names.add(m.group(1))
     return names
 
@@ -114,10 +117,7 @@ def interp_found(text, cwd, roots, by_line=False):
     """Код python/node/…: защищённая команда в subprocess и запись в защищённые файлы. by_line — скрипт с диска:
     запись и защищённый путь ищутся в одной строке (или путь в переменной из path_vars), иначе любой скрипт, который
     читает законы и пишет своё, — отказ."""
-    found = []
-    kind = classify_interp(["_", text], cwd)
-    if kind:
-        found.append((kind, text[:120]))
+    found = [(kind, text[:120])] if (kind := classify_interp(["_", text], cwd)) else []
     chunks = text.splitlines() if by_line else [text]
     names = path_vars(chunks, cwd, roots) if by_line else set()
     for chunk in chunks:
@@ -126,7 +126,7 @@ def interp_found(text, cwd, roots, by_line=False):
         hit = next((n for n in names if re.search(rf"(?<![\w.]){re.escape(n)}\b", chunk)), None)
         if hit:
             found.append(("file", f".claude/… (путь в переменной {hit} — правьте через Edit)"))
-        for m in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", chunk):
+        for m in re.finditer(r"[\w./~-]*\.claude/[\w./-]+", chunk, re.I):
             p = protected_path(m.group(0), cwd, roots)
             if p:
                 found.append(("file", p))
@@ -198,18 +198,15 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         state, path, text = read_script(s, cwd)  # переписанный той же командой — как ненаписанный, но и текущий разбор
         seen = seen or (state != "missing" and not rewritten([s], whole[3] or ()))
         found += [(UNSEEN[state], s)] if state in UNSEEN else []
-        if text is None:
+        if text is None or reviewed_test(path, a, cwd, whole[3] or ()):  # тест слоя из чистой папки (SE-127)
             if s in stdin_files and FALLBACK.search(whole[0]):
                 found.append((STDIN, whole[0][:120]))
             continue
         first_line = text.split("\n", 1)[0]
         is_interp_script = interp if interp is not None else (
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
-        try:  # разобран до ошибки — находки этой части и грубый признак по тексту скрипта: в `bash x.sh` его нет
-            got, partial = settle(script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_seen(whole[3], text, whole[4][1])))
-        except Exception:
-            got, partial = [], True
-        found += got
+        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path, comment_char_seen(whole[3], text, whole[4][1])))
+        found += got  # разобран до ошибки — находки части и грубый признак по тексту скрипта: в `bash x.sh` его нет
         if partial and FALLBACK.search(text if is_interp_script else uncommented(text)):
             found.append((UNPARSED, s))
     if scripts and opaque(scripts, whole[3] or ()) and not whole[2]:  # `git switch x && bash m.sh` — с диска прочтён не тот код
@@ -260,20 +257,25 @@ def script_found(text, interp, cwd, roots, depth, git_env, path=True, keep=False
 
 
 COARSE = "Makefile или программа awk с признаком защищённого действия"
+DIRECT = "\0direct"  # не находка: прямые команды цели make для сообщения об отказе (make_hint, SE-105)
 
 
 def launched(a, cwd, roots, depth, git_env, whole):
     """Код из файла, который команда не называет скриптом (merge_guard_launch): скрипты package.json — как команды
     shell из папки пакета, Makefile и awk — грубым признаком. Этот файл переписывает та же команда
     (`printf … > package.json; npm run x`) — ещё и грубый признак, как у скрипта, которого нет (runs_code)."""
-    found, files = [], make_files(a, cwd) + awk_programs(a, cwd)
+    why = make_option(a, cwd)  # опция make, MAKEFLAGS, Makefile из потока, `--eval`, `SHELL=` (SE-128, 133, 135)
+    found, files = ([(why, a[0])], []) if why else ([], make_files(a, cwd) + awk_programs(a, cwd))
     for d, text in package_scripts(a, cwd):  # текст None — папка пакета не видна (LOST)
         found += [(LOST_DIR, d)] if text is None else classify_bash(text, d, roots, depth + 1, git_env, disk=True)
     read = read_names(a) | {p for p, _ in files}
     if rewritten(read, whole[3] or ()):
         found += ([(NOT_YET, a[0])] if FALLBACK.search(whole[4][1]) else [] if whole[2] else
                   [(BLIND_RUN, a[0])] if opaque(read, whole[3]) else named_found(whole[4][1], cwd))
-    return found + [(LOST_DIR if text is None else COARSE, p) for p, text in files if text is None or FALLBACK.search(text)]
+    coarse = [(LOST_DIR if text is None else COARSE, p) for p, text in files if text is None or FALLBACK.search(text)]
+    found, coarse = trusted_make(a, files, found, coarse, whole[3], classify_bash, (cwd, roots, depth + 1, git_env))
+    hint = make_hint(a, files[0][1]) if coarse and files else ""
+    return found + coarse + ([(DIRECT, hint)] if hint else [])
 
 
 def classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk=False, written=None, outer=None):
@@ -345,9 +347,10 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
 
 
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, alt=False, keep=False, raw=None):
-    """[(вид, подробность)] защищённых действий команды. git_env — конфиг git задан окружением, disk — текст скрипта с диска, written — имена файлов, которые уже пишет эта команда (дополняется), part — тело `$(…)` или кода маски:
-    его начало для bash — не обязательно верхний уровень (strip_comments, keep), alt — разбирается второе прочтение комментариев (comment_readings, SE-82). Кавычки не сошлись — разбор до ошибки без комментариев и PARTIAL.
-    Знак комментария мог смениться (keep — до этого текста: `histchars=…; source x`; текст или внешняя команда называют настройку — comment_char_may_change, SE-77) — разбор дважды: со снятыми комментариями и без (raw), находки обоих."""
+    """[(вид, подробность)] защищённых действий. git_env — git-конфиг из окружения, disk — текст с диска, written —
+    имена, что пишет команда (дополняется), part — тело `$(…)`/маски: не верхний уровень, опасный комментарий цел;
+    alt — второе прочтение комментариев (comment_readings, SE-82). Знак комментария мог смениться (keep — до текста:
+    `histchars=…; source x`; текст называет настройку — comment_char_may_change, SE-77): разбор и без снятия (raw)."""
     if raw is None and (keep or CHANGED in (written or ()) or comment_char_may_change(cmd + "\n" + (outer[1] if outer else ""))):  # только raw — код за `'` в комментарии
         return [f for r in (False, True) for f in classify_bash(cmd, cwd, roots, depth, git_env, disk, written, outer, part, alt, keep, r)]
     fresh, written = written is None, set() if written is None else written
@@ -373,7 +376,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
     for code in qualifier_code(cmd):  # zsh `ls *(e:'gh pr merge 1':)`
         found += classify_bash(code, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
     tokens, complete = tokens_before_error(cmd)
-    found += [] if complete else [(PARTIAL, cmd[:120])]
+    found += [] if complete else [(PARTIAL, cmd[:120])]  # кавычки не сошлись: разбор до ошибки без комментариев
     found += [(DEFERRED, t[:120]) for t in tokens if ("$(" in t or "`" in t) and FALLBACK.search(t)]
     env, prev, st, saved = dir_vars({}, cwd), ([], []), new_state(cwd), []
     fed = [r for readers, _, _ in bodies for r in readers]
@@ -437,8 +440,7 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
         else:
             code = str(inp.get("code", ""))
     elif tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-        p = protected_path(str(inp.get("file_path") or inp.get("notebook_path") or ""), cwd, roots)
-        if p:
+        if p := protected_path(str(inp.get("file_path") or inp.get("notebook_path") or ""), cwd, roots):
             found = [("file", p)]
     elif tool.startswith("mcp__"):
         kind = classify_mcp(tool, inp, cwd) or oq_merge_write(tool, inp)
@@ -452,11 +454,8 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
         if why:
             return f"merge-guard: {why}."
     for cmd in shell:
-        try:  # разобрана до ошибки — находки этой части, и грубый признак, как у неразобранной
-            (got, partial), why = settle(classify_bash(cmd, cwd, roots)), "кавычки не сошлись"
-        except Exception as exc:
-            (got, partial), why = ([], True), exc.__class__.__name__
-        found += got
+        got, partial, why = settled(lambda: classify_bash(cmd, cwd, roots))
+        found += got  # разобрана до ошибки — находки этой части, и грубый признак, как у неразобранной
         if partial and FALLBACK.search(cmd):
             return f"merge-guard: команду не разобрать ({why}), а в ней признак защищённого действия. Разбейте её на простые команды."
     if code is not None:
@@ -466,7 +465,7 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
     if files:
         return (f"merge-guard: {files[0]} — законы, настройки хуков или реестр сессий. Правка только с «да» владельца: "
                 "через PR из worktree или руками владельца.")
-    ops = [(k, d) for k, d in found if k != "file"]
+    ops = [(k, d) for k, d in found if k not in ("file", DIRECT)]
     if not ops:
         return None
     control, control_err = get_control()
@@ -475,7 +474,8 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
         return None
     return (f"merge-guard: {ops[0][0]} — только сессия «Контроля» (d-merge-guard-3010). {why}. "
             "Автор шлёт «PR #n, голова …» линзам, вливает Контроль; срочное — пункт владельцу. Список Контроля — "
-            ".claude/merge-guard.json, локально .claude/merge-guard.local.json (правит владелец).")
+            ".claude/merge-guard.json, локально .claude/merge-guard.local.json (правит владелец)."
+            + "".join(dict.fromkeys(d for k, d in found if k == DIRECT)))
 
 
 def main():

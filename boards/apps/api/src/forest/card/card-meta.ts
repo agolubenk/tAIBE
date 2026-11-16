@@ -13,9 +13,17 @@ export type CardMeta = Omit<
   costUsd: number | null;
   updatedBy: string | null;
   updatedAt: Date | null;
+  // TB-142: what a write sends back as expectedMetaRevision; null — no row yet.
+  revision: string | null;
   // Notion fields read-only now (R-081, TB-71): computed, not stored.
   mirrored: boolean;
 };
+
+// No migration (TB-142): the revision is updated_at to the millisecond. An
+// update moves it strictly forward (write-card-meta), so it never repeats.
+export function metaRevision(updatedAt: Date) {
+  return updatedAt.toISOString();
+}
 
 // A card nobody wrote fields for answers the defaults, without a row.
 export function toCardMeta(taskId: string, row?: CardMetaRow): CardMeta {
@@ -38,6 +46,7 @@ export function toCardMeta(taskId: string, row?: CardMetaRow): CardMeta {
       contextPack: null,
       updatedBy: null,
       updatedAt: null,
+      revision: null,
       mirrored: false,
     };
   }
@@ -45,6 +54,7 @@ export function toCardMeta(taskId: string, row?: CardMetaRow): CardMeta {
   return {
     ...rest,
     costUsd: costUsd === null ? null : Number(costUsd),
+    revision: metaRevision(row.updatedAt),
     mirrored: isMirroredCard(workspaceId, row.notionPageId),
   };
 }

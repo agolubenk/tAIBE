@@ -180,13 +180,14 @@ def config_moved(argv):
 
 def rewritten(paths, written):
     """Файл из paths переписывает та же команда: прочитанное хуком — не то, что выполнится."""
-    paths = set(paths)
-    return bool(paths) and (ANY in written or bool(path_names(paths) & set(written)))
+    paths, written = set(paths), {w.casefold() for w in written}  # APFS: `> X.sh; bash x.sh` — тот же файл (IS-245)
+    return bool(paths) and (ANY in written or bool({n.casefold() for n in path_names(paths)} & written))
 
 
 def opaque(paths, written):
     """Файл из paths та же команда переписывает тем, чего не видно: дерево другой ветки, загрузка, распаковка."""
-    return ANY in written or any(ANY + n in written for n in path_names(paths))
+    written = {w.casefold() for w in written}
+    return ANY in written or any(ANY + n.casefold() in written for n in path_names(paths))
 
 
 def command_writes(text, depth=0, alt=False, keep=False, raw=False):
@@ -199,7 +200,8 @@ def command_writes(text, depth=0, alt=False, keep=False, raw=False):
     comment_char_may_change, SE-77) — имена и из прочтения без снятия комментариев (raw), в том числе у `eval`/`-c`."""
     from merge_guard_shell import (SHELLS, command_name, comment_char_may_change, comment_readings, cut_heredocs,  # shell
                                    cut_substitutions, expand_vars, note_vars, split_commands, strip_prefix,  # импортирует
-                                   substitute, tokens_before_error)  # этот модуль
+                                   substitute)  # этот модуль
+    from merge_guard_partial import tokens_before_error  # этот модуль (через merge_guard_shell)
     if depth > 3:
         return set()
     source, keep = text, keep or comment_char_may_change(text)  # `histchars='!^%'; echo a # ; echo … > m.sh`
