@@ -55,7 +55,7 @@ if [ "$rules_only" = 0 ]; then
   [[ "$peer_pub" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "это не публичный ключ WireGuard"
 fi
 
-if ! command -v wg >/dev/null 2>&1; then
+if [ "$rules_only" = 0 ] && ! command -v wg >/dev/null 2>&1; then
   command -v apt-get >/dev/null 2>&1 || die "нет apt-get — поставьте wireguard-tools вручную"
   log "ставлю wireguard-tools"
   apt-get update -qq 2>&1 | tail -2
@@ -85,8 +85,10 @@ fi
 
 # Phones that may reach the Mac's SSH (the owner's view of the agent sessions, tmux over SSH).
 # Both directions are listed: the reply is wg0 → wg0 too, and the chain drops that by default.
-ssh_from="" ssh_rules=""
-[ ! -r "$TB_ENV" ] || ssh_from="$(sed -n 's/^WG_MAC_SSH_FROM=//p' "$TB_ENV" | tail -1 | tr -d "\"'")"
+# The VPS host itself (10.77.0.1, OUTPUT) is shut out of the Mac's SSH while it is open to a phone.
+ssh_from="" ssh_rules="" ssh_out="" ssh_line=""
+[ ! -r "$TB_ENV" ] || ssh_line="$(sed -n 's/^WG_MAC_SSH_FROM=//p' "$TB_ENV" | tail -1)"
+ssh_from="$(printf '%s' "${ssh_line%%#*}" | tr -d "\"'\r" | tr ' \t' '\n\n' | grep -E . | sort -u || true)"
 for ip in $ssh_from; do
   n="${ip#"$WG_NET".}"
   if ! [[ "$n" =~ ^[0-9]{1,3}$ ]] || [ "$n" -lt 2 ] || [ "$n" -gt 254 ] || [ "$ip" = "$mem_host" ]; then
@@ -97,6 +99,11 @@ for ip in $ssh_from; do
   ssh_rules+="  iptables -A \"\$CHAIN\" -i \"\$wg_if\" -o \"\$wg_if\" -s $mem_host -d $ip -p tcp --sport 22 -m conntrack --ctstate ESTABLISHED -j ACCEPT"$'\n'
   log "SSH к Mac ($mem_host:22) с $ip"
 done
+if [ -n "$ssh_rules" ]; then
+  ssh_out="  iptables -A \"\$CHAIN-OUT\" -o \"\$wg_if\" -d $mem_host -p tcp --dport 22 -j DROP"$'\n'
+elif [ -n "$ssh_line" ]; then
+  log "WG_MAC_SSH_FROM задан, но адресов устройств в нём нет — SSH к Mac закрыт"
+fi
 
 # Firewall rules live in one script that wg-quick runs on up and down, so an
 # upgrade rewrites them in one place.
@@ -149,6 +156,7 @@ ${ssh_rules}  iptables -A "\$CHAIN" -o "\$wg_if" -m conntrack ! --ctstate RELATE
   # Its own chain too: a changed memory address must not leave the old rule.
   iptables -N "\$CHAIN-OUT" 2>/dev/null || iptables -F "\$CHAIN-OUT"
   iptables -A "\$CHAIN-OUT" -o "\$wg_if" -d $mem_host -p tcp --dport $mem_port -j DROP
+${ssh_out}
 fi
 spec=(FORWARD -j "\$CHAIN")
 rule -t filter
@@ -203,7 +211,7 @@ write_rules
 printf 'net.ipv4.ip_forward = 1\n' >"$SYSCTL"
 if [ "$rules_only" = 1 ]; then
   [ -f "$CONF" ] || die "нет $CONF — сначала wg-setup.sh с ключом устройства"
-  systemctl is-active --quiet "wg-quick@$WG_IF" || die "wg-quick@$WG_IF не запущен — правила применятся при старте"
+  ip link show "$WG_IF" >/dev/null 2>&1 || die "$WG_IF не поднят — правила применятся при его старте"
   "$RULES" up "$WG_IF"
   log "правила применены: SSH к Mac — $(printf '%s' "$ssh_rules" | grep -c -- '--dport 22' || true) устройств"
   exit 0

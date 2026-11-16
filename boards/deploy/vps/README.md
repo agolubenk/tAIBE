@@ -47,7 +47,8 @@ the tunnel:
   address (subnet `10.78.0.0/28` taken).
 - devices of the tunnel do not reach each other, with one exception (OPS-82): the addresses in `WG_MAC_SSH_FROM`
   (`/opt/t-boards/.env`, space-separated) may open TCP 22 on the Mac's tunnel address (`CLAUDE_MEM_WORKER_HOST`),
-  and only the replies of that SSH come back. That is the owner's phone looking at the agent sessions —
+  and only the replies of that SSH come back; while the list is set, the VPS host itself may not reach the Mac's 22
+  (`TB-WG-OUT`). `install.sh` keeps the variable when it rewrites `.env`. That is the owner's phone looking at the agent sessions —
   [`docs/guides/phone-access.md`](../../../docs/guides/phone-access.md). After changing it: `wg-setup.sh --rules`.
 
 `ip_forward` stays on through `/etc/sysctl.d/99-t-boards-wg.conf`.
