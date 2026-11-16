@@ -461,15 +461,12 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
     if code is not None:
         found += interp_found(code, cwd, roots)
 
-    files = [d for k, d in found if k == "file"]
-    if files:
+    if files := [d for k, d in found if k == "file"]:  # файл не длиннее 500 строк (01-base) — проверки через :=
         return (f"merge-guard: {files[0]} — законы, настройки хуков или реестр сессий. Правка только с «да» владельца: "
                 "через PR из worktree или руками владельца.")
-    owner = [d for k, d in found if k == VISIBILITY]
-    if owner:  # IS-124: не мёрж и не деплой — Контролю тоже нет
+    if owner := [d for k, d in found if k == VISIBILITY]:  # IS-124: не мёрж и не деплой — Контролю тоже нет
         return f"merge-guard: {VISIBILITY} — только руками владельца, и Контролю тоже нет (IS-124). Команда: {owner[0]}"
-    ops = [(k, d) for k, d in found if k not in ("file", DIRECT)]
-    if not ops:
+    if not (ops := [(k, d) for k, d in found if k not in ("file", DIRECT)]):
         return None
     control, control_err = get_control()
     why = control_err or control_verdict(sid, get_sessions(), control)
