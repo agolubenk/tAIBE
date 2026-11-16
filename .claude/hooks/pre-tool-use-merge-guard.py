@@ -40,6 +40,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, CHANGED,
                                strip_prefix, subst_code, SUBST_AT, syntax_only, comment_readings, uncommented)
 from merge_guard_comments import comment_char_may_change, comment_char_seen, zsh_interactive  # noqa: E402  SE-77
+from merge_guard_shell import heredoc_text, join_lines  # noqa: E402  SE-83
 from merge_guard_partial import PARTIAL, settle, settled, tokens_before_error  # noqa: E402  разбор до ошибки (SE-76)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
@@ -280,13 +281,13 @@ def launched(a, cwd, roots, depth, git_env, whole):
 
 
 def classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk=False, written=None, outer=None):
-    found = []
+    found, text = [], heredoc_text(body, expands)  # читателю — тело после раскрытия `\` (SE-83)
     for r in readers:
         if r[0] in SHELLS and not any(re.fullmatch(r"-[a-z]*c[a-z]*", x) for x in r[1:]):
-            found += classify_bash(body, cwd, roots, depth + 1, git_env, disk, written, outer, keep=zsh_interactive(r))
+            found += classify_bash(text, cwd, roots, depth + 1, git_env, disk, written, outer, keep=zsh_interactive(r))
         elif is_interp(r[0]):
-            found += interp_found(body, cwd, roots)
-    if expands:  # метка без кавычек: $(…) и `…` в теле shell выполнит, кто бы ни читал
+            found += interp_found(text, cwd, roots)
+    if expands:  # метка без кавычек: $(…) и `…` в теле shell выполнит, кто бы ни читал; `\\$(…)` — тоже: тело как есть
         for inner in cut_substitutions(body, quotes=False)[1]:
             found += classify_bash(inner, cwd, roots, depth + 1, git_env, disk, written, outer)
     return found
@@ -361,9 +362,8 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
     if fresh:  # все записи команды — до разбора `$(…)` и heredoc (они разбираются раньше); вложенным — уже от родителя
         written.update(command_writes(cmd, keep=keep) | ({CHANGED} if keep else set()))  # keep — и для `eval` в скрипте
     cmd, bodies = (cmd, []) if alt else cut_heredocs(cmd)  # до снятия комментариев; alt — уже снят (comment_readings)
-    bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd, other = (cmd.replace("\\\n", " "), None) if raw else comment_readings(cmd, None if part else FALLBACK.search, alt)  # SE-77, SE-82
-    whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
+    cmd, other = (join_lines(cmd), None) if raw else comment_readings(cmd, None if part else FALLBACK.search, alt)  # SE-77, SE-82, SE-83
+    whole = (cmd, "\n".join([cmd] + [join_lines(heredoc_text(b, e)) for _, b, e in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
     procs = {f"{PROC}{k}": proc_files(body, cwd) for k, body in enumerate(inner) if f"{PROC}{k}" in cmd}
