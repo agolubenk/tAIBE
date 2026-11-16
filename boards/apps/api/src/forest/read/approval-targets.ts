@@ -3,6 +3,7 @@ import db from "../../database";
 import { sectorTable } from "../../database/forest-schema";
 import { projectTable, taskTable } from "../../database/schema";
 import { projectAccessCondition } from "../../project-access/project-access-condition";
+import { sectorName } from "../sector/sector-name";
 
 export type ApprovalTarget = {
   title: string;
@@ -70,7 +71,7 @@ export async function loadApprovalTargets(
   }
   for (const sector of sectors) {
     targets.set(targetKey("sector", sector.id), {
-      title: sector.name,
+      title: sectorName(sector.name),
       number: null,
       projectId: null,
       projectName: null,

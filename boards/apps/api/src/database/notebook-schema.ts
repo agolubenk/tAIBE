@@ -31,6 +31,8 @@ const tsvector = customType<{ data: string }>({
 });
 
 export type NotebookSourceKind = "repo-doc" | "card" | "github-pr" | "link";
+// TB-115: who added a fetched page or pull request to «Источники».
+export type SourceAuthorKind = "agent" | "person";
 
 export const notebookSourceTable = pgTable(
   "notebook_source",
@@ -50,6 +52,11 @@ export const notebookSourceTable = pgTable(
     title: text("title").notNull(),
     contentSha256: text("content_sha256").notNull(),
     chars: integer("chars").notNull(),
+    // TB-115: the agent (its name carries the session) or the member who
+    // first added a link or a pull request. A refresh keeps the first author.
+    // Null: a synced source (repo doc, card) or one added before the column.
+    addedByKind: text("added_by_kind").$type<SourceAuthorKind>(),
+    addedBy: text("added_by"),
     updatedAt: timestamp("updated_at", { mode: "date" })
       .default(utcNow)
       .notNull(),
