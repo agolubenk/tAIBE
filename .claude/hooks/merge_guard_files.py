@@ -198,8 +198,8 @@ def command_writes(text, depth=0, alt=False):
     (comment_readings, SE-82; alt — оно само): запись, спрятанная `"` комментария, иначе не попала бы в имена, и хук
     прочёл бы с диска старый файл."""
     from merge_guard_shell import (SHELLS, command_name, comment_readings, cut_heredocs, cut_substitutions,  # shell
-                                   expand_vars, note_vars, split_commands, strip_prefix, substitute,  # импортирует
-                                   tokens_before_error)  # этот модуль
+                                   expand_vars, note_vars, split_commands, strip_prefix, substitute)  # импортирует
+    from merge_guard_partial import tokens_before_error  # этот модуль (через merge_guard_shell)
     if depth > 3:
         return set()
     try:
