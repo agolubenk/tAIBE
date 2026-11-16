@@ -257,9 +257,11 @@ def normalize(argv):
 
 
 def command_name(word):
-    """Имя команды без пути: `/opt/homebrew/bin/gh` → `gh`; zsh `=gh` (EQUALS) — путь к gh, тоже `gh`."""
+    """Имя команды без пути: `/opt/homebrew/bin/gh` → `gh`; zsh `=gh` (EQUALS) — путь к gh, тоже `gh`. Без регистра:
+    на APFS `GIT` и `Gh` — те же git и gh (SE-145). Имя с `$` и подстановкой — как есть: в нём имя переменной."""
     w = word.lstrip("`")
-    return os.path.basename(w[1:] if w.startswith("=") and len(w) > 1 else w)
+    base = os.path.basename(w[1:] if w.startswith("=") and len(w) > 1 else w)
+    return base.lower() if re.fullmatch(r"[\w.+-]+", base) and SUBST not in base else base
 
 
 def strip_prefix(argv):
@@ -471,3 +473,20 @@ def subst_code(code, bodies, cwd, stale):
         unseen.extend(f for f, t in zip(files, texts) if t is None)
         return SUBST if None in texts else "".join(texts).rstrip("\n")
     return SUBST_AT.sub(put, code), unseen
+
+
+def syntax_only(opts):
+    """Оболочка только проверит синтаксис файла (`bash -n x.sh`, `-o noexec`): `-n`/`+n` и `-o`/`+o noexec` bash
+    применяет по порядку, решает последнее (`-n +n`, `+no noexec` — запуск, сверено с bash 3.2); интерактивный bash
+    (`-i`, `--rcfile`, `--init-file`) `-n` не слушает. opts — слова до файла скрипта."""
+    on, names = False, []  # names — знак у каждого `o` связки, `None` у `O`: их значения идут следующими словами
+    for x in opts:
+        if names:
+            sign = names.pop(0)
+            on = sign == "-" if sign and x == "noexec" else on
+        elif x in ("--rcfile", "--init-file") or re.fullmatch(r"[-+][a-zA-Z]*i[a-zA-Z]*", x):
+            return False
+        elif re.fullmatch(r"[-+][a-zA-Z]+", x):
+            on = x[0] == "-" if "n" in x else on
+            names += [x[0] if c == "o" else None for c in x[1:] if c in "oO"]
+    return on
