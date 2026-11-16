@@ -34,6 +34,7 @@ import { getTaskPath } from "@/lib/task-link";
 import { toast } from "@/lib/toast";
 import useProjectStore from "@/store/project";
 import type Task from "@/types/task";
+import { getStatusDisplayLabel } from "@/lib/i18n/domain";
 
 type TaskCardContext = {
   worskpaceId: string;
@@ -215,7 +216,7 @@ export default function TaskCardContextMenuContent({
                 className="[&_svg]:text-muted-foreground"
               >
                 {getColumnIcon(col.slug, col.isFinal, col.icon)}
-                <span>{col.name}</span>
+                <span>{getStatusDisplayLabel(col.slug, col.name)}</span>
               </ContextMenuCheckboxItem>
             ))}
           </ContextMenuSubContent>

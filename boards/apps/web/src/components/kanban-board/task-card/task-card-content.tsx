@@ -1,4 +1,3 @@
-import { format } from "date-fns";
 import { Calendar, CalendarClock, CalendarX, Trash2Icon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -27,6 +26,7 @@ import {
   getDueDateStatus,
   isTaskCompleted,
 } from "@/lib/due-date-status";
+import { formatDateShort } from "@/lib/format";
 import { getInitials } from "@/lib/get-initials";
 import { getPriorityLabel } from "@/lib/i18n/domain";
 import { getPriorityIcon } from "@/lib/priority";
@@ -254,7 +254,7 @@ function TaskCardContent({
                     dueDateStatus === "no-due-date") && (
                     <Calendar className="w-3 h-3" />
                   )}
-                  <span>{format(new Date(task.dueDate), "MMM d")}</span>
+                  <span>{formatDateShort(task.dueDate)}</span>
                 </div>
               )}
 
