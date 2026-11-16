@@ -66,6 +66,11 @@
             "if": "Bash(git -C * worktree add*)",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-wt-limit.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-heavy-gate.py\"",
+            "timeout": 10
           }
         ]
       },

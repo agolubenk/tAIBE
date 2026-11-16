@@ -1174,6 +1174,18 @@ for label, text, limit in (("60 × -c", "git" + " -c" * 60 + " x", 0.1),
     took = time.perf_counter() - t0
     check(f"SE-145, GIT_PUSH на {label}: {took:.3f} с, предел {limit} с", took if took >= limit else None, False)
 check("SE-145, 40 опций до push — push", GIT_PUSH.search("git" + " -c a=b" * 40 + " push origin HEAD:main"), True)
+# Линза backend #338 B1: обёртка тяжёлого гейта запускает хвост argv (`exec "$@"`), хвост разбирается как команда.
+# Путь — настоящий скрипт: его текст разбирается и хвоста не называет, так что отказ даёт только разбор хвоста.
+GATE = Path(__file__).resolve().parents[1] / "scripts" / "heavy-gate.sh"
+for label, form in (("команда в хвосте", f"{GATE} gh pr merge 5 --squash"),
+                    ("подсказка хука, bash -c", f"{GATE} bash -c 'pnpm test && gh pr merge 5 --squash'"),
+                    ("через timeout", f"timeout 600 {GATE} gh pr merge 5"),
+                    ("source обёртки", f"source {GATE} gh pr merge 5")):
+    bash(f"SE-116, heavy-gate.sh — {label}", form, True)
+bash("SE-116, bash heavy-gate.sh — push в main", f"bash {GATE} git push origin HEAD:main", True, cwd=on_branch)
+for label, form in (("гейт в bash -c", f"{GATE} bash -c 'cd boards && pnpm test'"), ("голый гейт", f"{GATE} pnpm test"),
+                    ("bash heavy-gate.sh гейт", f"bash {GATE} pnpm test")):
+    bash(f"SE-116, heavy-gate.sh — {label}", form, False)
 
 # --- SE-75: `'` в комментарии скрипта сдвигал разбор кавычек — ложная «запись в main» или спрятанный код ---
 se75 = repo_on("main", "se75")
@@ -1219,6 +1231,22 @@ for text in SURE:  # комментарий — последний ` # ` стр�
     check(f"SE-75 sure_comments — верхний уровень: {text!r}", None if got == {text.rindex(" # ") + 1} else got, False)
 for text in LOST:
     check(f"SE-75 sure_comments — уверенности нет: {text!r}", sure_comments(text) or None, False)
+
+# --- SE-76: bash (файл, stdin, source, `-c`, eval) выполняет команды до синтаксической ошибки в конце — их разбор ---
+se76 = repo_on("main", "se76")
+TAILS = {"quote.sh": 'G=gh\n$G pr merge 1\necho "\n', "esc.sh": "G=gh\n$G pr merge 1\necho \\",
+         "dq.sh": '# say "hi\nG=gh\n$G pr merge 1\necho "\n',  # `"` в комментарии сошёлся бы с кавычкой в конце
+         "dq-odd.sh": "# say \"hi\nG=gh\n$G pr merge 1\necho 'x\n", "push.sh": "git push origin main\necho \"\n",
+         "late.sh": 'echo "\n$G pr merge 1\n', "ok.sh": 'echo hi\necho "\n'}  # late — кавычка раньше: bash не выполнит
+for name, text in TAILS.items():
+    (se76 / name).write_text(text)
+    for form in (f"bash {name}", f"source {name}", f"bash < {name}"):
+        bash(f"SE-76: {form} — строки до ошибки выполнятся", form, name not in ("late.sh", "ok.sh"), cwd=se76)
+for form in ('G=gh\n$G pr merge 1\necho "', "bash -c 'G=gh\n$G pr merge 1\necho \"'", "eval 'G=gh; $G pr merge 1; echo \"'"):
+    bash(f"SE-76: команда с ошибкой в конце: {form!r}", form, True)
+bash("SE-76: Контролю мёрж из скрипта с ошибкой в конце можно", "bash quote.sh", False, who=D9, cwd=se76)
+(se76 / "dq-ok.sh").write_text('# say "hi\necho ok\n')
+bash("SE-76: `\"` в комментарии безобидного скрипта — проход", "bash dq-ok.sh", False, cwd=se76)
 
 if __name__ == "__main__":
     finish(" — формы shell")

@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, reviewed_test, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
-from merge_guard_gh import classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
+from merge_guard_gh import VISIBILITY, classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts,  # noqa: E402
                                 read_names)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
@@ -38,8 +38,10 @@ from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load
 from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name, cut_heredocs,  # noqa: E402
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
-                               strip_prefix, subst_code, SUBST_AT, syntax_only, tokenize, uncommented)
+                               strip_prefix, subst_code, SUBST_AT, syntax_only, uncommented)
+from merge_guard_partial import PARTIAL, settled, tokens_before_error  # noqa: E402  разбор до ошибки (SE-76)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
+from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -206,11 +208,10 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         first_line = text.split("\n", 1)[0]
         is_interp_script = interp if interp is not None else (
             first_line.startswith("#!") and bool(re.search(r"python|node|perl|ruby|osascript", first_line)))
-        try:
-            found += script_found(text, is_interp_script, cwd, roots, depth, git_env, path)
-        except Exception:  # грубый признак — по тексту скрипта: в команде (`bash x.sh`) его нет
-            if FALLBACK.search(text if is_interp_script else uncommented(text)):
-                found.append((UNPARSED, s))
+        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path))
+        found += got  # разобран до ошибки — находки части и грубый признак по тексту скрипта: в `bash x.sh` его нет
+        if partial and FALLBACK.search(text if is_interp_script else uncommented(text)):
+            found.append((UNPARSED, s))
     if scripts and opaque(scripts, whole[3] or ()) and not whole[2]:  # `git switch x && bash m.sh` — с диска прочтён не тот код
         found.append((BLIND_RUN, scripts[0]))
     elif scripts and not seen and FALLBACK.search(whole[4][1]):
@@ -314,6 +315,8 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
             tail = list(itertools.takewhile(lambda y: y != "+", a[k + 1:]))
             if strip_prefix(tail):
                 found += classify_argv(normalize(tail), cwd, roots, depth + 1, git_env, whole, strip_prefix(tail)[0])
+    if gated := strip_prefix(gate_tail(a)):  # `heavy-gate.sh gh pr merge 1`, `bash …/heavy-gate.sh git push …`
+        found += classify_argv(normalize(gated), cwd, roots, depth + 1, git_env, whole, gated[0], stdin_files, procs, hid)
     if launcher(a[0]) or a[0] in SOURCE or "/" in exe:
         found += runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files, procs)
     if is_interp(a[0]):
@@ -342,16 +345,13 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
         found.append((kind, " ".join(a)[:120]))
     if a[0] == "claude" and hooks_off(a):
         found.append(("file", "claude без хуков проекта (disableAllHooks, --setting-sources без project)"))
-    for t in write_targets(a):
-        p = protected_path(t, cwd, roots)
-        if p:
-            found.append(("file", p))
+    found += [("file", p) for t in write_targets(a) if (p := protected_path(t, cwd, roots))]  # файл ≤ 500 строк (01-base)
     return found
 
 
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False):
     """[(вид, подробность)] защищённых действий. git_env — git-конфиг из окружения, disk — текст с диска, written —
-    имена, что пишет команда (дополняется), part — тело `$(…)`/маски: не верхний уровень, комментарий с `'` цел."""
+    имена, что пишет команда (дополняется), part — тело `$(…)`/маски: не верхний уровень, опасный комментарий цел."""
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
@@ -361,7 +361,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         written.update(command_writes(cmd))
     cmd, bodies = cut_heredocs(cmd)  # до снятия комментариев: в теле `'` — не кавычка, `#` — не комментарий
     bodies = [(r, b.replace("\\\n", " "), e) for r, b, e in bodies]
-    cmd = strip_comments(cmd, keep=None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
+    cmd = strip_comments(cmd, True, None if part else FALLBACK.search).replace("\\\n", " ")  # `\` строку не продолжает
     whole = (cmd, "\n".join([cmd] + [b for _, b, _ in bodies]), disk, written)
     whole += (outer or whole[:2],)
     cmd, inner = cut_substitutions(resolve_dirs(cmd, disk, cwd))
@@ -374,7 +374,8 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         found += classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk, written, whole[4])
     for code in qualifier_code(cmd):  # zsh `ls *(e:'gh pr merge 1':)`
         found += classify_bash(code, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
-    tokens = tokenize(cmd)
+    tokens, complete = tokens_before_error(cmd)
+    found += [] if complete else [(PARTIAL, cmd[:120])]  # кавычки не сошлись: разбор до ошибки без комментариев
     found += [(DEFERRED, t[:120]) for t in tokens if ("$(" in t or "`" in t) and FALLBACK.search(t)]
     env, prev, st, saved = dir_vars({}, cwd), ([], []), new_state(cwd), []
     fed = [r for readers, _, _ in bodies for r in readers]
@@ -453,20 +454,19 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
         if why:
             return f"merge-guard: {why}."
     for cmd in shell:
-        try:
-            found += classify_bash(cmd, cwd, roots)
-        except Exception as exc:  # разбор не удался — решает грубый признак
-            if FALLBACK.search(cmd):
-                return f"merge-guard: команду не разобрать ({exc.__class__.__name__}), а в ней признак защищённого действия. Разбейте её на простые команды."
+        got, partial, why = settled(lambda: classify_bash(cmd, cwd, roots))
+        found += got  # разобрана до ошибки — находки этой части, и грубый признак, как у неразобранной
+        if partial and FALLBACK.search(cmd):
+            return f"merge-guard: команду не разобрать ({why}), а в ней признак защищённого действия. Разбейте её на простые команды."
     if code is not None:
         found += interp_found(code, cwd, roots)
 
-    files = [d for k, d in found if k == "file"]
-    if files:
+    if files := [d for k, d in found if k == "file"]:  # файл не длиннее 500 строк (01-base) — проверки через :=
         return (f"merge-guard: {files[0]} — законы, настройки хуков или реестр сессий. Правка только с «да» владельца: "
                 "через PR из worktree или руками владельца.")
-    ops = [(k, d) for k, d in found if k not in ("file", DIRECT)]
-    if not ops:
+    if owner := [d for k, d in found if k == VISIBILITY]:  # IS-124: не мёрж и не деплой — Контролю тоже нет
+        return f"merge-guard: {VISIBILITY} — только руками владельца, и Контролю тоже нет (IS-124). Команда: {owner[0]}"
+    if not (ops := [(k, d) for k, d in found if k not in ("file", DIRECT)]):
         return None
     control, control_err = get_control()
     why = control_err or control_verdict(sid, get_sessions(), control)

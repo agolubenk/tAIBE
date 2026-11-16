@@ -439,6 +439,7 @@ bash("$PWD с пробелом, через переменную", "X=$PWD; git -
 import test_merge_guard_shell  # noqa: E402,F401  — формы shell, те же счётчики
 import test_merge_guard_branches  # noqa: E402,F401  — защищённые ветки (origin/HEAD, protected)
 import test_merge_guard_pathcase  # noqa: E402,F401  — защищённый путь в другом регистре (SE-94)
+import test_merge_guard_visibility  # noqa: E402,F401  — смена видимости репозитория, Контролю тоже нет (IS-124, SE-91)
 
 # --- бюджет git ---
 mg_git = sys.modules["merge_guard_git"]
