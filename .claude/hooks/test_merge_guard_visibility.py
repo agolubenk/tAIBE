@@ -3,7 +3,8 @@
 Проверка merge-guard: смена видимости репозитория (IS-124) — отказ всем, и Контролю тоже. Формы: `gh repo edit
 --visibility` и `--accept-visibility-change-consequences`, `gh api` PATCH `repos/<o>/<r>` с полем visibility или private
 (и тело `--input`, в том числе с `\\u`-ключом и не JSON), `repositories/<id>`, GraphQL `updateRepository` с visibility,
-любой не-GET curl/wget/httpie к самому репозиторию (тело из файла и stdin, хост с портом и в верхнем регистре), PATCH
+любой не-GET curl/wget/httpie к самому репозиторию (тело из файла и stdin, хост с портом и в верхнем регистре, сегменты
+`.` и `..` в пути, curl --request-target), PATCH
 к репозиторию из кода python/node и тот же gh из кода интерпретатора (SE-91). Обычная правка, ресурсы репозитория
 и чтение проходят.
 
@@ -60,6 +61,17 @@ DENY = (
     ("httpie данные без метода", f"http {R} visibility=public"),
     ("python subprocess", f"python3 -c \"import subprocess as s; s.run(['{G}','repo','edit','--visibility','public'])\""),
     ("вместе с мёржем", f"{G} pr merge 1 && {G} repo edit --visibility public"),
+    # backend #276: B1 — сегменты `.` и `..` в пути (клиент убирает их до отправки), B2 — curl --request-target
+    ("B1 curl x/../repos", f"curl -X {P} https://{H}/x/../repos/o/r -d '{{\"private\":false}}'"),
+    ("B1 curl repos/o/./r", f"curl -X {P} https://{H}/repos/o/./r -d '{{\"private\":false}}'"),
+    ("B1 curl ./repos, тело из файла", f"curl -X {P} https://{H}/./repos/o/r -d @{v}"),
+    ("B1 curl URL в кавычках", f"curl -X {P} 'https://{H}/repos/x/../o/r' -d '{{\"private\":false}}'"),
+    ("B1 curl %2E%2E", f"curl -X {P} https://{H}/x/%2E%2E/repos/o/r -d @{v}"),
+    ("B1 wget", f"wget --method={P} --body-data='{{\"private\":false}}' https://{H}/x/../repos/o/r"),
+    ("B1 httpie", f"http {P} https://{H}/x/../repos/o/r private:=false"),
+    ("B1 curl repositories/1/../2", f"curl -X {P} https://{H}/repositories/1/../2 -d @{v}"),
+    ("B2 curl --request-target", f"curl -X {P} --request-target /repos/o/r https://{H}/x -d @{v}"),
+    ("B2 curl --request-target=", f"curl -X {P} --request-target=/repos/o/r https://{H}/x -d @{v}"),
 )
 ALLOW = (
     ("repo edit описание", f"{G} repo edit o/r --description x"),
@@ -75,6 +87,9 @@ ALLOW = (
     ("python чтение поля private", f"python3 -c \"import json,urllib.request as u; "
                                    f"print(json.load(u.urlopen('{R}'))['private'])\""),
     ("httpie GET с параметром", f"http {R} per_page==1"),
+    ("curl GET с ../ в пути", f"curl -s https://{H}/x/../repos/o/r"),
+    ("curl POST issue в репозитории .github", f"curl -X POST https://{H}/repos/o/.github/issues -d '{{\"title\":\"x\"}}'"),
+    ("curl POST issue, тело ./файл", f"curl -X POST {R}/issues -d @./body.json"),
 )
 for label, cmd in DENY:
     bash(label, cmd, True)

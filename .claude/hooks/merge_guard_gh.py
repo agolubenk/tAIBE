@@ -33,6 +33,11 @@ VIS_KEYS = ("visibility", "private")
 REPO_PATH = r"(?:^|/)(?:repos/[^/]+/[^/]+|repositories/\d+)$"
 # Тот же путь в URL: хост без учёта регистра, с точкой в конце и портом (`API.GITHUB.COM:443`) — искать в blob.lower().
 API_REPO = r"api\.github\.com\.?(?::\d+)?/(?:repos/[^/\s\"'`?#]+/[^/\s\"'`?#]+|repositories/\d+)(?=[\s\"'`?#),;]|$)"
+# Путь URL к api.github.com и сегмент `.` или `..` (и `%2e`) в нём: curl, wget и httpie убирают такие сегменты до отправки
+# (RFC 3986), и `…/x/../repos/o/r` уходит к самому репозиторию мимо API_REPO (backend #276 B1). finditer без перекрытий —
+# разбор линейный и на длинном тексте.
+API_URL_PATH = re.compile(r"api\.github\.com\.?(?::\d+)?(/[^\s\"'`?#]*)")
+DOT_SEGMENT = re.compile(r"/(?:\.|%2e){1,2}(?=/|$)")
 # curl/wget/httpie шлют не GET: метод, тело или выгрузка. Значение метода — отдельно (`-X GET` — чтение).
 # `-X PATCH`, `-sXPATCH`, `--method=PATCH`; `(?!H)` — склеенный заголовок `-HX-GitHub-Api-Version: …` не метод
 HTTP_METHOD = re.compile(r"(?:-(?!H)[A-Za-z]*X|--request|--method)(?:=?(.+))?")
@@ -392,11 +397,21 @@ def classify_interp(a, cwd="."):
     return None
 
 
+def api_path_hidden(a, low):
+    """Запись к api.github.com, путь которой не тот, что в тексте: сегмент `.` или `..` в пути URL (клиент его уберёт)
+    или `curl --request-target` (шлёт свой путь вместо пути из URL; `--request-` — и сокращение опции). Слою не нужно
+    ни то ни другое, а путь репозитория так проходит мимо API_REPO (backend #276 B1, B2)."""
+    if any(t.startswith("--request-") for t in a[1:]):
+        return True
+    return any(DOT_SEGMENT.search(m.group(1)) for m in API_URL_PATH.finditer(low))
+
+
 def classify_http(a, cwd="."):
     blob = " ".join(a)
-    if "api.github.com" not in blob.lower():  # curl сам приводит хост к нижнему регистру: `API.GITHUB.COM` — тот же
+    low = blob.lower()
+    if "api.github.com" not in low:  # curl сам приводит хост к нижнему регистру: `API.GITHUB.COM` — тот же
         return None
-    if re.search(API_REPO, blob.lower()) and http_write(a):
+    if (re.search(API_REPO, low) or api_path_hidden(a, low)) and http_write(a):
         return VISIBILITY  # любой не-GET к самому репозиторию: тело может быть в файле или stdin, его не видно (SE-91)
     if re.search(r"\bupdateRepository\b", blob) and re.search(r"\bvisibility\b", blob):
         return VISIBILITY
