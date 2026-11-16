@@ -5,6 +5,7 @@
 Запуск: python3 -I .claude/hooks/test_merge_guard_shell.py  (только эти формы; все проверки — test_merge_guard.py)
 """
 import os
+import re
 import subprocess
 import sys
 import time
@@ -12,7 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_gh import GIT_PUSH, alias_tokens, gh_aliases  # noqa: E402
+from merge_guard_comments import sure_comments  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
+from merge_guard_make import WT_TRACKS, _direct  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import C4, CONTROL, D9, ROOT, SESSIONS, TMP, bash, check, finish, mg, repo_on, run  # noqa: E402
 import merge_guard_git  # noqa: E402
@@ -860,29 +863,67 @@ CHECKOUT = Path(__file__).resolve().parents[2]  # чистый checkout ветк
 mk = TMP / "se105"
 mk.mkdir(parents=True, exist_ok=True)
 (mk / "Makefile").write_bytes((CHECKOUT / "Makefile").read_bytes())
-WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" board-agents'
+WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" "board-agents"'
 DEPS_FIX = 'infra/scripts/dev/wt-deps.sh install "worktrees/fix/x"'
 EVAL_NERVE = "python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"
+NO_HINT = ["прямые команды"]
+ENV_NOTE, OWNER_YES, REMOVE = "Переменные окружения перед make", "«да» владельца", "git worktree remove"
 for form, want, absent in (
-        ("make wt-fix NAME=x", ["mkdir -p worktrees/fix", WT_FIX, DEPS_FIX], []),
+        ("make wt-fix NAME=x", ['mkdir -p "worktrees/fix"', WT_FIX, DEPS_FIX, ENV_NOTE], [OWNER_YES]),
         ("make wt-fix NAME=x WT_DEPS=0", [WT_FIX], [DEPS_FIX]),
-        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" board-agents'], []),
+        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" "board-agents"'], []),
         ("make wt-feature NAME=x", ['"worktrees/feature/x"'], []), ("make wt-refactor NAME=x", ['"refactor/x"'], []),
         ("make wt-spike NAME=x", ['"spike/x"'], []), ("make wt-review NAME=x", ['"review/x"'], []),
-        ("make wt-fix NAME='x;y'", ['"worktrees/fix/<NAME>"'], ["x;y"]),
-        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" main'], []),
+        ("make wt-fix NAME='x;y'", ["не хватает NAME"], ["x;y", "<NAME>", "git worktree add"]),
+        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" "main"'], []),
         ("make wt-list", ["git worktree list"], []), ("make wt-help", ["cat worktrees/README.md"], []),
-        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []), ("make wt-rm TRACK=fix NAME=x", ['git worktree remove "worktrees/fix/x"'], []),
+        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []),
+        ("make wt-rm TRACK=fix NAME=x", [f'{REMOVE} "worktrees/fix/x"', OWNER_YES], []),  # frontend #385
         ("make wt-check TRACK=fix NAME=x", ['infra/scripts/dev/wt-deps.sh check "worktrees/fix/x/boards"'], []),
         ("make check-repo", ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"], []),
         ("make check-eval", [EVAL_NERVE, "-s eval/pipeline/reflex ", "-s eval/evolve "], []),
         ("make -s wt-list check-repo", ["git worktree list", "infra/checks/run.py"], []),
-        ("make check-layer", [], ["прямые команды"]), ("make", [], ["прямые команды"])):
+        ("make -j4 -k wt-list", ["git worktree list"], []),
+        ("make check-layer", [], NO_HINT),
+        ("make", ["вместо `make` —", "cat worktrees/README.md"], []), ("make help", ["cat worktrees/README.md"], []),
+        # Контроль #385: -C/-f — пути не от корня
+        ("make -C . wt-list", [], NO_HINT), ("make -f Makefile wt-fix NAME=x", [], NO_HINT),
+        ("make --directory=. wt-list", [], NO_HINT), ("make -sfMakefile wt-list", [], NO_HINT),
+        ("make --dir=. wt-list", [], NO_HINT), ("make -n wt-list", [], NO_HINT),
+        # Claude #385, ниты 1–5: значения опций — не цели, пробный прогон рецепт не выполняет, у переменной —
+        # последнее значение, без TRACK/NAME — чего не хватает, окружение перед make подсказка не видит
+        ("make -o wt-rm wt-list TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make -W wt-rm wt-list TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make -sn wt-list", [], NO_HINT), ("make --just-print wt-rm TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make --dry-run wt-list", [], NO_HINT), ("make -q wt-list", [], NO_HINT), ("make -t wt-list", [], NO_HINT),
+        ("make wt-add TRACK=spike TRACK=fix NAME=x", ['"worktrees/fix/x"'], ['"worktrees/spike/x"']),
+        ("make wt-add TRACK=fix 'TRACK=a b' NAME=x", ["не хватает TRACK"], ["git worktree add"]),
+        ("make wt-rm", ["не хватает NAME, TRACK"], [REMOVE]), ("make wt-fix NAME:=x", [WT_FIX], []),
+        ("WT_BASE=main make wt-fix NAME=x", [WT_FIX, ENV_NOTE], [])):
     got = run("Bash", {"command": form}, cwd=mk) or ""
     check(f"SE-105, make под отказом, как в board-agents: {form!r}", got or None, True)
     lost = [w for w in want if w not in got] + [w for w in absent if w in got]
     check(f"SE-105, прямые команды в отказе: {form!r}", None if not lost else f"{lost!r} в {got!r}", False)
 bash("SE-105, make у Контроля — как в board-agents", "make wt-fix NAME=x", False, who=D9, cwd=mk)
+# Подсказка не отстаёт от Makefile (Контроль #385): каждая прямая команда и запасная форма из комментария — строка
+# рецепта цели после подстановки переменных; wt-<трек> — рецепт wt-add через `$(MAKE) wt-add TRACK=<трек>`.
+recipes, target = {}, None
+for line in (CHECKOUT / "Makefile").read_text().splitlines():
+    m = re.match(r"([A-Za-z][\w-]*):", line)
+    target = m.group(1) if m else target if line.startswith("\t") else None
+    if target and line.startswith("\t"):
+        recipes[target] = recipes.get(target, "") + line.lstrip("\t@") + "\n"
+for goal in ("wt-add", "wt-feature", "wt-fix", "wt-refactor", "wt-spike", "wt-review", "wt-deps", "wt-check", "wt-rm",
+             "wt-list", "check-repo", "check-eval"):
+    via_add = goal[3:] in WT_TRACKS
+    body = recipes.get("wt-add" if via_add else goal, "")
+    for k, v in (("TRACK", goal[3:] if via_add else "fix"), ("NAME", "x"), ("WT_BASE", "board-agents")):
+        body = body.replace(f"$({k})", v)
+    forms = [f for c in _direct(goal, {"TRACK": "fix", "NAME": "x", "WT_BASE": "board-agents"})
+             for f in [c.split("  # ")[0]] + ([c.split("  # ", 1)[1].split(" — ", 1)[1]] if "  # " in c else [])]
+    stale = [f for f in forms if f not in body] + ([] if not via_add or f"wt-add TRACK={goal[3:]} " in recipes.get(goal, "")
+                                                   else [f"{goal}: нет $(MAKE) wt-add TRACK={goal[3:]}"])
+    check(f"SE-105, _direct({goal!r}) = рецепт Makefile (правка рецепта — правка _direct)", stale or None, False)
 (mk / "Makefile").write_text("wt-fix:\n\tgh pr merge 1\n")
 (mk / "m.awk").write_text('BEGIN { system("gh pr merge 1") }\n')
 for form in ("make wt-list", "awk -f m.awk"):
@@ -1133,6 +1174,51 @@ for label, text, limit in (("60 × -c", "git" + " -c" * 60 + " x", 0.1),
     took = time.perf_counter() - t0
     check(f"SE-145, GIT_PUSH на {label}: {took:.3f} с, предел {limit} с", took if took >= limit else None, False)
 check("SE-145, 40 опций до push — push", GIT_PUSH.search("git" + " -c a=b" * 40 + " push origin HEAD:main"), True)
+
+# --- SE-75: `'` в комментарии скрипта сдвигал разбор кавычек — ложная «запись в main» или спрятанный код ---
+se75 = repo_on("main", "se75")
+MEM = "\n".join((  # mem-stats.sh из TB-124, сокращённый: прежний разбор давал «запись в защищённую ветку» на main
+    "# A decimal point in numbers whatever the SSH session's locale (ru_RU prints «307,0»).",
+    "sample_once() {", "    awk -F'\\t' -v now=\"$now\" -v project=\"$PROJECT\" \"$AWK_MIB\"'", "      }'",
+    "  while :; do", "    sleep \"$step\"", "  done", "}", "report() {", "  if [ -z \"$file\" ]; then",
+    "    file=\"$(find \"$DIR\" -maxdepth 1 -name 'mem-*.tsv' 2>/dev/null | sort | tail -n 1)\"", "  fi",
+    "  [ -n \"$file\" ] && [ -s \"$file\" ] || {", "    exit 1", "  }",
+    "  echo \"$file: $(cut -f1 \"$file\" | sort -u | wc -l | tr -d ' ') samples, $(head -n 1 \"$file\" | cut -f1)\"",
+    "  printf '%-10s %8s %8s %8s %8s %10s\\n' service samples p95_MiB peak_MiB limit suggested",
+    "  for id in $(containers); do", "    docker inspect -f '{{.Name}} restarts={{.RestartCount}}' \"$id\"", "  done",
+    "  # OOM kills from the kernel log: Docker's State.OOMKilled forgets a kill once the container restarts.",
+    "  if ! command -v journalctl >/dev/null 2>&1; then", "    return 0", "  fi", "}", "case \"${1:-}\" in", "esac",
+    ""))
+(se75 / "mem.sh").write_text(MEM)
+(se75 / "mem-push.sh").write_text(MEM + "git push origin HEAD:main\n")
+(se75 / "mem-sign.sh").write_text(MEM.replace("Docker's", "Docker's gh pr merge 1"))
+(se75 / "tail.sh").write_text("echo x # don't\ngh pr merge 1\necho 'it's'\n")  # bash выполнит строку 2 до ошибки
+(se75 / "tail2.sh").write_text("G=gh\necho x # don't\n$G pr merge 1\necho 'it'\n")
+bash("SE-75: `'` в комментариях скрипта — не запись в main", "bash mem.sh", False, cwd=se75)
+bash("SE-75: тот же скрипт с настоящей записью в main", "bash mem-push.sh", True, cwd=se75)
+bash("SE-75: признак в комментарии с `'` — лишний отказ, как c1.sh", "bash mem-sign.sh", True, cwd=se75)
+bash("SE-75: кавычка не закрылась после комментария с `'`", "bash tail.sh", True, cwd=se75)
+bash("SE-75: комментарий с `'` не прячет $G", "bash tail2.sh", True, cwd=se75)
+for form in (": # it's\n$G pr merge 1\n: # it's", "echo \"$(echo \"a\")\" # it's\n$G pr merge 1",
+             "echo $(( 16#ff )) # it's\n$G pr merge 1", "f() { echo; } # it's\n$G pr merge 1",
+             "echo ${#x} $# # it's\n$G pr merge 1", "echo \"it's\" # it's\n$G pr merge 1",
+             "cat <<< 'x' # it's\n$G pr merge 1", "echo \"a # it's\"\n$G pr merge 1"):
+    bash(f"SE-75: `'` в комментарии или рядом не прячет код: {form!r}", "G=gh\n" + form, True)
+# Контроль на 439e47b9f: маска чисел zsh `<1-2>`, `<1->`, `<->` — часть слова, `#` за ней — тоже (zsh 5.9 выполняет код)
+for form in ("setopt nonomatch\nG=gh\n: <1-2>#'\n'; $G pr merge 1; : '\n'", "G=gh\nnoglob : <1-2>#'\n'; $G pr merge 1; : '\n'",
+             "setopt nonomatch\nG=gh\n: <->#'\n'; $G pr merge 1; : '\n'"):
+    bash(f"SE-75: `#` за маской чисел zsh — не комментарий: {form!r}", form, True)
+SURE = ("a # it's\nb", "echo \"$(x \"$f\")\" # it's", "f() { :; } # it's", "a=(1) # it's", "echo ${x#*/} # it's",
+        "echo $'\\'' # it's", "echo 'it''s' # it's", "echo $# ${#x} $((16#f)) # it's", "cat <<< 'x' # it's")
+LOST = ("echo `a` # it's", "cat <<E\nE\n# it's", "echo $[1] # it's", "x=$(case a in a) :;; esac) # it's",
+        "(( 1 # it's\n))", "echo ${x:-'a'} # it's", "( : # it's\n)", "ls (#i)x # it's", "ls !(a) # it's",
+        "x=$(: # it's\n)", "(a)# it's", "alias q=\"'\"\n# it's", "echo 'a # it's", "echo \"$(echo \"#\") # it's\"",
+        "<1-2>#'", ": <1->#'", ": <->#'")
+for text in SURE:  # комментарий — последний ` # ` строки
+    got = sure_comments(text)
+    check(f"SE-75 sure_comments — верхний уровень: {text!r}", None if got == {text.rindex(" # ") + 1} else got, False)
+for text in LOST:
+    check(f"SE-75 sure_comments — уверенности нет: {text!r}", sure_comments(text) or None, False)
 
 if __name__ == "__main__":
     finish(" — формы shell")

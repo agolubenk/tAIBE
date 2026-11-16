@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { eq } from 'drizzle-orm'
 import { api, freshApp, login } from './helpers'
 import { getDb } from '../server/db/client'
-import { agents, alerts, channels, containers, loginAttempts, metricSamples, users } from '../server/db/schema'
+import { agents, alerts, channels, containers, loginAttempts, metricSamples, reports, users } from '../server/db/schema'
 import { encryptJson, hashPassword } from '../server/lib/crypto'
 import { setEnvForTests } from '../server/env'
 import { signInitData } from '../server/telegram/initdata'
@@ -133,6 +133,62 @@ describe('формат отчётов', () => {
     ])
     expect(digestHtml(r, 'Europe/Minsk')).toContain('📦 Контейнеры: не работают — t-boards: tb-api-1, tb-web-1 · 2 стека: t-boards 0/2, backend 1/1')
     expect(detailHtmlParts(r, 'Europe/Minsk').join('\n')).toContain('· стеки: backend 1/1, t-boards 0/2 (не работают: tb-api-1, tb-web-1)')
+  })
+
+  it('стек, исчезнувший целиком после прошлого отчёта, назван в карточке (OPS-57)', async () => {
+    await seedMetrics(['cpu_pct'])
+    const base = { agentId: 'prod', image: 'x', health: 'none', restartCount: 0, updatedAt: new Date() }
+    await getDb()
+      .insert(containers)
+      .values([{ ...base, name: 'backend-api-1', state: 'running', composeProject: 'backend', mainStack: true }])
+    const stacks = [
+      { name: 'backend', main: true, total: 1, running: 1, stopped: [] },
+      { name: 't-boards', main: false, total: 2, running: 2, stopped: [] },
+    ]
+    const saved = (createdAt: Date, payloadJson: string) => ({
+      period: 'daily' as const,
+      periodStart: createdAt,
+      periodEnd: createdAt,
+      payloadJson,
+      deliveryStatus: 'sent' as const,
+      createdAt,
+    })
+    // Старый отчёт со стеком и битое тело старше — не мешают: сравнение идёт с последним сохранённым.
+    await getDb()
+      .insert(reports)
+      .values([
+        saved(new Date(Date.now() - 3 * 86_400_000), '{'),
+        saved(new Date(Date.now() - 86_400_000), JSON.stringify({ hosts: [{ agent: 'prod', projects: stacks }] })),
+      ])
+    const r = await buildReport('daily')
+    expect(r.hosts[0]!.missingProjects).toEqual(['t-boards'])
+    const digest = digestHtml(r, 'Europe/Minsk')
+    expect(digest).toContain('📦 Контейнеры: пропал стек: t-boards (было 2) · 1 стек: backend 1/1')
+    expect(digest).not.toContain('все работают')
+
+    // Второй и третий отчёт подряд без стека: сигнал держится, пока стек не вернётся.
+    const at = (s: number) => new Date(Date.now() + s * 1000)
+    await getDb().insert(reports).values(saved(at(0), JSON.stringify(r)))
+    const r2 = await buildReport('daily')
+    expect(r2.hosts[0]!.missingProjects).toEqual(['t-boards'])
+    expect(digestHtml(r2, 'Europe/Minsk')).toContain('📦 Контейнеры: пропал стек: t-boards (было 2) · 1 стек: backend 1/1')
+    await getDb().insert(reports).values(saved(at(1), JSON.stringify(r2)))
+    const r3 = await buildReport('daily')
+    expect(r3.hosts[0]!.missingProjects).toEqual(['t-boards'])
+
+    // Битое последнее тело — молчание; следующий целый отчёт снова видит пропажу.
+    await getDb().insert(reports).values(saved(at(2), 'not json'))
+    expect((await buildReport('daily')).hosts[0]!.missingProjects).toBeUndefined()
+    await getDb().insert(reports).values(saved(at(3), JSON.stringify(r3)))
+    expect((await buildReport('daily')).hosts[0]!.missingProjects).toEqual(['t-boards'])
+
+    // Стек вернулся — строки нет.
+    await getDb()
+      .insert(containers)
+      .values(['tb-api-1', 'tb-web-1'].map((name) => ({ ...base, name, state: 'running', composeProject: 't-boards', mainStack: false })))
+    const r4 = await buildReport('daily')
+    expect(r4.hosts[0]!.missingProjects).toBeUndefined()
+    expect(digestHtml(r4, 'Europe/Minsk')).not.toContain('пропал')
   })
 
   it('подробный отчёт: длинные строки не рвут разметку, сообщения ≤ 3800', () => {
