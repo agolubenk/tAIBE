@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """SE-50: вердикты линз в теле PR. Тела — по форме HR #668–#679 и прежних HR PR (#604, #635, #640): разделы, цифры,
 таблицы; текст вымышленный, из HR взяты только структура, колонки и слова вердиктов."""
-import json
 import os
 import sys
 import tempfile
@@ -10,7 +9,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-import gh_poll  # noqa: E402
+import gh_source  # noqa: E402
 import quorum  # noqa: E402
 import sources  # noqa: E402
 from journal import read_from  # noqa: E402
@@ -115,35 +114,25 @@ class WithBodyTest(unittest.TestCase):
         self.assertEqual(quorum.quorum(out, HEAD, [], 1)[1:3], (["plan"], []))
 
 
-class BodyGh(FakeGh):
-    """FakeGh со своим CI в gh pr view."""
-
-    def __init__(self, open_prs, rollup="SUCCESS", **kw):
-        super().__init__(open_prs, **kw)
-        self.rollup = rollup
-
-    def __call__(self, cmd, stdin=None, timeout=30):
-        if cmd[:3] == ["gh", "pr", "view"]:
-            self.calls.append(list(cmd))
-            d = {"files": [{"path": "apps/backend/src/x.ts"}], "statusCheckRollup": [{"status": self.rollup}],
-                 "state": "OPEN", "mergedAt": None}
-            return 0, json.dumps(d), ""
-        return super().__call__(cmd, stdin, timeout)
-
-    def asked(self, what):
-        return [c for c in self.calls if what in " ".join(c)]
+def hr_gh(text, upd="2026-11-14T03:00:00Z", ci="SUCCESS", comments=None):
+    """FakeGh с одним HR PR #643 на HEAD: тело — text, CI — ci в gh pr view."""
+    return FakeGh([_pr(643, HEAD, upd)], bodies={643: text}, ci={643: ci}, comments=comments)
 
 
-def hr_pr(text, upd="2026-11-14T03:00:00Z"):
-    return dict(_pr(643, HEAD, upd), body=text)
+def views(fake):
+    """Поля --json каждого gh pr view."""
+    return [c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]]
+
+
+def body_reads(fake):
+    return [f for f in views(fake) if "body" in f.split(",")]
 
 
 class PollBodyTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.ctx = FakeCtx(self.d)
-        self._run = sources.run
-        self.addCleanup(setattr, sources, "run", self._run)
+        self.addCleanup(setattr, sources, "run", sources.run)
 
     def kinds(self):
         return [e["kind"] for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0]]
@@ -151,9 +140,13 @@ class PollBodyTest(unittest.TestCase):
     def pr(self):
         return self.ctx.state["github"]["prs"]["643"]
 
+    def poll(self, fake):
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        return fake
+
     def test_body_table_reaches_quorum_without_comments(self):
-        sources.run = BodyGh([hr_pr(hr_body(ROWS))])
-        gh_poll.poll_github(self.ctx)
+        self.poll(hr_gh(hr_body(ROWS)))
         self.assertIn("pr.quorum", self.kinds())
 
     def test_body_edit_after_a_lens_changes_comment_does_not_drop_it(self):
@@ -163,45 +156,62 @@ class PollBodyTest(unittest.TestCase):
                 f"| ресурсы | — | {H} | accept |"]
         said = {643: [f"Гейт и безопасность — Контроль (роль 5): changes на {H}"]}
         for upd in ("2026-11-14T02:00:00Z", "2026-11-14T04:00:00Z"):
-            sources.run = BodyGh([hr_pr(hr_body(rows), upd)], comments=said, etag=f'W/"{upd}"')
-            gh_poll.poll_github(self.ctx)
+            self.poll(hr_gh(hr_body(rows), upd, comments=said))
             self.assertNotIn("pr.quorum", self.kinds(), upd)
             self.assertEqual(self.pr()["changes_by"], ["release"], upd)
-        sources.run = BodyGh([hr_pr(hr_body(rows), "2026-11-14T04:10:00Z")], etag='W/"e3"')  # Контроль снял changes
-        gh_poll.poll_github(self.ctx)
+        self.poll(hr_gh(hr_body(rows), "2026-11-14T04:10:00Z"))  # Контроль снял changes
         self.assertIn("pr.quorum", self.kinds())
 
     def test_body_change_on_the_same_head_without_comments_is_read_again(self):
         """Находка цепочки на 74b6237b3: правка строки тела на той же голове, без комментариев линз. Каждая правка
-        (новый updated_at) разбирается заново: changes → approve даёт кворум, approve → changes возвращает changes_by."""
+        (новый updatedAt) разбирается заново: changes → approve даёт кворум, approve → changes возвращает changes_by.
+        Тело на той же голове при зелёном CI — один `gh pr view --json body`: без файлов и проверок."""
         fail = ROWS[:3] + [f"| продукт/UX (круг 2) | Контроль | `{H}` | fail, 1 major |", ROWS[4]]
         steps = [(fail, "03:00", ["plan"], 0), (ROWS, "03:10", [], 1), (fail, "03:20", ["plan"], 1)]
         for rows, hm, changes, quorums in steps:
-            upd = f"2026-11-14T{hm}:00Z"
-            sources.run = BodyGh([hr_pr(hr_body(rows), upd)], etag=f'W/"{upd}"')
-            gh_poll.poll_github(self.ctx)
+            fake = self.poll(hr_gh(hr_body(rows), f"2026-11-14T{hm}:00Z"))
             self.assertEqual(self.pr()["changes_by"], changes, hm)
             self.assertEqual(self.kinds().count("pr.quorum"), quorums, hm)  # один pr.quorum на голову
+            if hm != "03:00":
+                self.assertEqual(views(fake), ["body"], hm)
         self.assertNotIn("pr.changes", self.kinds())  # строки тела пишет автор: pr.changes о них не шлётся
 
-    def test_304_refresh_keeps_the_body_verdicts(self):
-        sources.run = BodyGh([hr_pr(hr_body(ROWS))], rollup="IN_PROGRESS")
-        gh_poll.poll_github(self.ctx)
+    def test_ci_recheck_keeps_the_body_verdicts_without_reading_the_body(self):
+        self.poll(hr_gh(hr_body(ROWS), ci="IN_PROGRESS"))
         self.assertNotIn("pr.quorum", self.kinds())
         self.assertTrue(self.pr()["await_ci"])
-        sources.run = BodyGh([hr_pr(hr_body(ROWS))], rollup="SUCCESS")  # тот же etag — 304, тела нет
-        gh_poll.poll_github(self.ctx)
+        fake = self.poll(hr_gh(hr_body(ROWS), ci="SUCCESS"))  # PR не менялся: перепроверка CI, тело не читается
+        self.assertEqual((views(fake), body_reads(fake)), (["statusCheckRollup"], []))
         self.assertIn("pr.quorum", self.kinds())
 
-    def test_rev2_state_is_parsed_again_for_the_body(self):
-        upd = "2026-11-14T03:00:00Z"
-        self.ctx.state["github"] = {"rev": 2, "etag": 'W/"e1"', "prs": {"643": {
-            "head": HEAD, "updated": upd, "seen": [], "changes_by": [], "author": "backend", "checks": ["SUCCESS"]}}}
-        sources.run = fake = BodyGh([hr_pr(hr_body(ROWS), upd)])
-        gh_poll.poll_github(self.ctx)
-        self.assertTrue(fake.asked("issues/643/comments"))
+    def test_pending_ci_and_body_are_one_view(self):
+        """PR изменился на той же голове при CI pending: тело и проверки — один gh pr view (SE-123)."""
+        self.poll(hr_gh(hr_body(), ci="IN_PROGRESS"))
+        fake = self.poll(hr_gh(hr_body(ROWS), "2026-11-14T03:10:00Z", ci="SUCCESS"))
+        self.assertEqual(views(fake), ["statusCheckRollup,body"])
         self.assertIn("pr.quorum", self.kinds())
-        self.assertEqual(self.ctx.state["github"]["rev"], gh_poll.GH_STATE_REV)
+
+    def test_author_line_added_without_push_is_seen(self):
+        """Строка «роль N — автор», дописанная без push, видна со следующего изменения PR: approve автора из строки
+        тела в кворум не идёт (SE-121)."""
+        self.poll(hr_gh(hr_body()))
+        self.assertIsNone(self.pr()["author_line"])
+        self.poll(hr_gh(f"роль {TEAM.index('plan') + 1} — автор\n\n" + hr_body(ROWS), "2026-11-14T03:10:00Z"))
+        self.assertEqual((self.pr()["author_line"], self.pr()["author"]), ("plan", "plan"))
+        self.assertNotIn("pr.quorum", self.kinds())
+
+    def test_state_before_se50_is_read_again_20_prs_per_pass(self):
+        """PR, разобранные до SE-50 (нет body_verdicts), перечитываются ради тела — не больше GH_NEW_PER_PASS за
+        проход. Ревизия состояния та же: догон новых PR не начинается заново."""
+        upd, first, many = "2026-11-14T03:00:00Z", 700, gh_source.GH_NEW_PER_PASS + 5
+        self.ctx.state["github"] = {"rev": gh_source.GH_STATE_REV, "prs": {str(n): {
+            "head": HEAD, "updated": upd, "seen": [], "changes_by": [], "author": "backend", "author_line": None,
+            "checks": ["SUCCESS"]} for n in range(first, first + many)}}
+        open_prs = [_pr(n, HEAD, upd) for n in range(first, first + many)]
+        reads = [len(body_reads(self.poll(FakeGh(open_prs, bodies={first: hr_body(ROWS)})))) for _ in range(3)]
+        self.assertEqual(reads, [gh_source.GH_NEW_PER_PASS, 5, 0])
+        self.assertIn("pr.quorum", self.kinds())  # #700: вердикты тела старого PR
+        self.assertNotIn("pr.new", self.kinds())
 
 
 if __name__ == "__main__":
