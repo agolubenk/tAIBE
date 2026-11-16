@@ -60,13 +60,15 @@ bash("SE-77: оставить комментарий — не прятать к�
 # `echo a # ; echo HIT` печатает `a # HIT`. Файл скрипта (`zsh -i f`), `/dev/stdin` и `-c` — с комментариями.
 HEREDOC = f"<<'EOF'\nG=gh\n{HIDE}\nEOF"
 for form in ("zsh -i < h.zsh", "zsh -is < h.zsh", "zsh -fi < h.zsh", "cat h.zsh | zsh -i", "zsh -o interactive < h.zsh",
-             "zsh --interactive < h.zsh", "zsh -i - < h.zsh", "zsh -o nointeractive -i < h.zsh", f"zsh -i {HEREDOC}"):
+             "zsh --interactive < h.zsh", "zsh -i - < h.zsh", "zsh -o nointeractive -i < h.zsh", f"zsh -i {HEREDOC}",
+             "zsh --emulate zsh -i < h.zsh", "zsh --emulate csh -i < h.zsh"):
     bash(f"SE-77: интерактивный zsh со stdin — `#` не прячет код: {form!r}", form, True, cwd=se77)
 for form in ("zsh < h.zsh", "zsh -i h.zsh", "zsh -i +i < h.zsh", "zsh -i -o nointeractive < h.zsh", "bash -i < h.zsh",
              f"zsh -i -c 'G=gh; {HIDE}'", f"zsh {HEREDOC}"):
     bash(f"SE-77: zsh без интерактивного stdin — комментарий снимается, проход: {form!r}", form, False, cwd=se77)
 ZSH_I = ((["zsh", "-i"], True), (["zsh", "-fis"], True), (["zsh", "-ointeractive"], True), (["zsh", "-i", "--", "x"], True),
          (["zsh", "-o", "INTER_active"], True), (["zsh", "--inter-active"], True), (["zsh", "+o", "nointeractive"], True),
+         (["zsh", "--emulate", "zsh", "-i"], True), (["zsh", "--emulate", "-i"], False),
          (["zsh"], False), (["zsh", "-i", "+i"], False), (["zsh", "-i", "+o", "interactive"], False),
          (["zsh", "--no-interactive"], False), (["zsh", "-ic", "x"], False), (["bash", "-i"], False),
          (["zsh", "x.zsh", "-i"], False))
