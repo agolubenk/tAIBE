@@ -154,6 +154,32 @@ class WtGcTest(unittest.TestCase):
         self.assertFalse(os.path.exists(merged))
         self.assertTrue(os.path.isdir(open_))
 
+    def test_sweep_skips_open_branches_keeps_budget_and_names_the_pr(self):
+        """OPS-81: ветка открытого PR (--skip) не трогается; после срока новое удаление не начинается; в ответе — номер
+        влитого PR (по нему Нерв ставит ключ события, общий с отказом после мёржа)."""
+        a, b = self.wt("fix/a"), self.wt("fix/b")
+        heads = {br: subprocess.run(["git", "rev-parse", "HEAD"], cwd=p, capture_output=True, text=True).stdout.strip()
+                 for br, p in (("fix/a", a), ("fix/b", b))}
+        old = wt_gc.merged_prs, wt_gc.busy_paths, wt_gc.external_refs
+        self.addCleanup(lambda: (setattr(wt_gc, "merged_prs", old[0]), setattr(wt_gc, "busy_paths", old[1]),
+                                 setattr(wt_gc, "external_refs", old[2])))
+        asked = []
+        wt_gc.merged_prs = lambda repo, limit=2000: asked.append(limit) or {
+            "fix/a": (heads["fix/a"], "main", 11), "fix/b": (heads["fix/b"], "main", 12)}
+        wt_gc.busy_paths, wt_gc.external_refs = (lambda: set()), (lambda: {})
+        self.assertEqual(wt_gc.sweep(self.repo, budget=-1, limit=50), [], "срок вышел до первого удаления")
+        self.assertEqual(asked, [50])
+        res = wt_gc.sweep(self.repo, skip={"fix/b"})
+        self.assertEqual([(r["branch"], r["removed"], r["pr"]) for r in res], [("fix/a", True, 11)])
+        self.assertTrue(os.path.isdir(b))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = wt_gc.main(["wt_gc.py", "sweep", self.repo, "--json", "--skip", "fix/b", "--budget", "30", "--limit", "7"])
+        self.assertEqual((code, json.loads(out.getvalue()), asked[-1]), (0, [], 7))
+        self.assertTrue(os.path.isdir(b), "--skip из командной строки")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(wt_gc.main(["wt_gc.py", "sweep", self.repo, "--budget", "x"]), 1)
+
     def test_session_state_head_base_lsof_and_activity_keep_the_worktree(self):
         """Ревью #178 (две линзы, major): игнорируемое состояние сессии, чужая голова или база, сбой lsof, работа
         в последний час — worktree остаётся. Копии файлов основного checkout и сборка — не мешают."""

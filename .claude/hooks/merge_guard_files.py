@@ -190,23 +190,30 @@ def opaque(paths, written):
     return ANY in written or any(ANY + n.casefold() in written for n in path_names(paths))
 
 
-def command_writes(text, depth=0):
+def command_writes(text, depth=0, alt=False, keep=False, raw=False):
     """Имена файлов, которые пишет команда целиком — с подстановками, heredoc и `bash -c`, без учёта порядка. Хук
     разбирает `$(…)` и heredoc раньше основной команды, а shell выполняет их после записи в той же строке
-    (`printf … > m.sh; echo $(bash m.sh)`). Лишнее имя — лишь грубая проверка вместо разбора; что не разобрать — без имён."""
-    from merge_guard_shell import (SHELLS, command_name, cut_heredocs, cut_substitutions, expand_vars,  # shell
-                                   note_vars, split_commands, strip_comments, strip_prefix, substitute,  # импортирует
-                                   tokenize)  # этот модуль
+    (`printf … > m.sh; echo $(bash m.sh)`). Лишнее имя — лишь грубая проверка вместо разбора; что не разобрать — без имён.
+    Кавычки не сошлись — имена из слов до ошибки: bash их выполнит (SE-76). Имена и из второго прочтения комментариев
+    (comment_readings, SE-82; alt — оно само): запись, спрятанная `"` комментария, иначе не попала бы в имена, и хук
+    прочёл бы с диска старый файл. Знак комментария мог смениться (keep — до текста, или текст называет настройку —
+    comment_char_may_change, SE-77) — имена и из прочтения без снятия комментариев (raw), в том числе у `eval`/`-c`."""
+    from merge_guard_shell import (SHELLS, command_name, comment_char_may_change, comment_readings, cut_heredocs,  # shell
+                                   cut_substitutions, expand_vars, heredoc_text, join_lines, note_vars,  # импортирует
+                                   split_commands, strip_prefix, substitute)  # этот модуль
+    from merge_guard_partial import tokens_before_error  # этот модуль (через merge_guard_shell)
     if depth > 3:
         return set()
+    source, keep = text, keep or comment_char_may_change(text)  # `histchars='!^%'; echo a # ; echo … > m.sh`
     try:
-        text, bodies = cut_heredocs(text)
-        text, inner = cut_substitutions(strip_comments(text).replace("\\\n", " "))
+        text, bodies = (text, []) if alt else cut_heredocs(text)
+        text, other = (join_lines(text), None) if raw else comment_readings(text, None, alt)  # с `'"`… остаётся
+        text, inner = cut_substitutions(text)
     except Exception:
         return set()
-    names, env, more = set(), {}, inner + [b for _, b, _ in bodies]
+    names, env, more = set(), {}, inner + [heredoc_text(b, e) for _, b, e in bodies]  # тело — как его прочтёт bash
     try:
-        for argv, targets, *_ in split_commands(tokenize(text)):
+        for argv, targets, *_ in split_commands(tokens_before_error(text)[0]):
             out = [o.strip("'\"") for t in targets for o in substitute(t, env)]
             names |= base_names(out) | gh_config(out)
             names |= {GH_MOVED} if config_moved(argv) else set()  # gh прочтёт другой конфиг — как переписанный
@@ -217,4 +224,6 @@ def command_writes(text, depth=0):
                 more += v[1:] if v[0] == "eval" else v[v.index("-c") + 1:][:1] if v[0] in SHELLS and "-c" in v else []
     except Exception:
         pass
-    return names.union(*(command_writes(m, depth + 1) for m in more))
+    names |= command_writes(other, depth, True, keep) if other else set()
+    names |= command_writes(source, depth, alt, keep, True) if keep and not raw else set()
+    return names.union(*(command_writes(m, depth + 1, keep=keep) for m in more))

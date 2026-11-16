@@ -10,11 +10,12 @@ import os
 import re
 import shlex
 
-from merge_guard_comments import sure_comments
+from merge_guard_comments import CHANGED, comment_char_may_change, comment_char_seen, comment_readings, strip_comments  # noqa: F401 хуку
 from merge_guard_files import open_regular
 from merge_guard_vars import (ASSIGN, SHELL_WORDS, SUBST, dir_vars, expand_vars, note_vars, substitute,  # noqa: F401
                               words)  # dir_vars, expand_vars, note_vars, substitute — отсюда для хука
 from merge_guard_expand import NAMES_MAX, brace_words  # раскрытия до запуска
+from merge_guard_heredoc import cut_heredocs, heredoc_text, join_lines  # noqa: F401 — и для хука (SE-83)
 
 PROC = SUBST + "P"  # на месте <(…) и =(…): PROC + номер в списке подстановок — файл с выводом этой команды
 SUBST_AT = re.compile(rf"{SUBST}C(\d+)x")  # на месте $(…) и `…`: SUBST, C, номер в списке подстановок, x (subst_code)
@@ -25,7 +26,6 @@ WRAPPERS = {"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "
             "noglob", "nocorrect", "-", "parallel", "watch", "stdbuf", "unbuffer", "chronic", "arch"}  # `-`, nocorrect — zsh
 WRAPPER_VALUE_FLAGS = {"-I", "-n", "-P", "-L", "-d", "-E", "-s", "-u", "-g", "-C", "-k"}
 SHELLS = {"bash", "sh", "zsh", "dash"}
-HEREDOC = re.compile(r"<<-?\s*\\?(['\"]?)(\w+)\1([^\n]*)\n(.*?)\n[ \t]*\2[ \t]*(?=\n|$)", re.S)  # `<<\EOF` = `<<'EOF'`
 # `$(…)`, которая печатает текущую ветку: на её место — CURRENT, остальные подстановки в цели push — «не видно куда».
 CURRENT_BRANCH = re.compile(r"\s*git\s+(branch\s+--show-current|rev-parse\s+--abbrev-ref\s+HEAD"
                             r"|symbolic-ref\s+(-q\s+)?--short(\s+-q)?\s+HEAD)\s*")
@@ -35,21 +35,6 @@ PWD_CMD = re.compile(r"\s*pwd(\s+-[LP])?\s*")  # `$(pwd)`, `` `pwd` `` — па�
 def is_lost(path):
     """Путь от папки, которую разбор не видит (LOST): что там лежит, не прочесть."""
     return path == LOST or path.startswith(LOST + "/")
-
-
-def cut_heredocs(cmd):
-    """Тела heredoc — отдельно: [(читатели, тело, раскрывает ли shell `$(…)` в теле)].
-    Читатели — argv команды с `<<` и команд после `|` в той же строке (`cat <<EOF | bash`)."""
-    bodies = []
-
-    def repl(m):
-        line = cmd[cmd.rfind("\n", 0, m.start()) + 1:m.start()]
-        heads = [re.split(r"[;&|(]", line)[-1]] + m.group(3).split("|")[1:]
-        readers = [a for a in (normalize(words(h)) for h in heads) if a]
-        bodies.append((readers, m.group(4), not m.group(1)))
-        return f"<< {m.group(2)}{m.group(3)}\n"
-
-    return HEREDOC.sub(repl, cmd), bodies
 
 
 def _subst_end(cmd, i):
@@ -119,94 +104,23 @@ def cut_substitutions(cmd, quotes=True):
     return "".join(out), inner
 
 
-COMMENT_SAFE = re.compile(r"[^'\"`(){}\]]*")
-# `(` — только после пробела: не `$(`, `<(`, `@(`
-COMMENT_PARENS = re.compile(r"(?:[^'\"`(){}\]\\]|(?<=[ \t])\(|\))*")
-
-
-def comment_safe(text):
-    """Текст от `#` до конца строки можно снять как комментарий (см. strip_comments): в нём нет `'"`{}]` — символов,
-    которыми bash закрыл бы строку, `${…}`, `$[…]` или обратные кавычки, а скобки, если есть, — парные, `(` после
-    пробела и без `\\`: закрыть `$(…)`, `$((…))` или `((…))` нечем, открыть подстановку — тоже."""
-    if COMMENT_SAFE.fullmatch(text):
-        return True
-    if not COMMENT_PARENS.fullmatch(text):
-        return False
-    depth = 0
-    for c in text:
-        depth += (c == "(") - (c == ")")
-        if depth < 0:
-            return False
-    return depth == 0
-
-
-def strip_comments(cmd, force=False, keep=None):
-    """Комментарии shell — от `#` в начале слова до конца строки — убрать, как это делает bash: `\\` в конце комментария
-    строку не продолжает, `#` внутри слова (`a\\ #b`, `"…"#`, `$'…'`) — не комментарий. Снимается только то, что
-    пропускает comment_safe: если разбор ошибся и для bash этот `#` внутри строки, `${…}`, `$((…))` или обратных
-    кавычек, закрыть их bash может только символом, которого там нет, — и такой текст остаётся на разбор. Кавычки не
-    сошлись — команда остаётся как есть (лишний отказ, не пропуск); force — всё равно снять: так безопасно для
-    грубого признака, правило comment_safe от разбора кавычек не зависит. keep — признак, с которым комментарий
-    остаётся всегда; задан — снимается и комментарий, где из опасных знаков только `'` (`# Docker's …`), если bash
-    здесь точно на верхнем уровне (sure_comments, SE-75). Такой снят — текст без него и при несошедшихся кавычках:
-    с ним `'` сошлись бы через строки и спрятали бы код, который bash выполнит до ошибки в конце скрипта."""
-    out, i, quote, word, sure, hits = [], 0, None, False, None, []
-
-    def apostrophe_only(at, text):
-        nonlocal sure
-        if keep is None or "'" not in text or keep(text) or not comment_safe(text.replace("'", "")):
-            return False
-        sure = sure_comments(cmd) if sure is None else sure  # один разбор на текст, и только если нужен
-        hits.extend([at] if at in sure else [])
-        return at in sure
-
-    while i < len(cmd):
-        c = cmd[i]
-        if quote == "'":
-            quote = None if c == "'" else quote
-        elif quote == "$'" and c == "\\":  # в $'…' `\'` — экранированная кавычка
-            out.append(cmd[i:i + 2])
-            i += 2
-            continue
-        elif quote == "$'":
-            quote = None if c == "'" else quote
-        elif c == "\\":
-            word = word or cmd[i + 1:i + 2] != "\n"  # `\`+перевод строки — склейка, слово не начинает
-            out.append(cmd[i:i + 2])
-            i += 2
-            continue
-        elif c == "$" and quote is None and cmd[i + 1:i + 2] == "'":
-            quote, word = "$'", True
-            out.append("$'")
-            i += 2
-            continue
-        elif c == "'" and quote is None:
-            quote = "'"
-        elif c == '"':
-            quote = None if quote == '"' else '"'
-        elif c == "#" and quote is None and not word:
-            end = cmd.find("\n", i)
-            end = len(cmd) if end < 0 else end
-            if comment_safe(cmd[i:end]) or apostrophe_only(i, cmd[i:end]):
-                i = end
-                continue
-        word = quote is not None or c not in " \t\n;&|(<>"  # `)` слово не кончает: `$(true)#` — не комментарий
-        out.append(c)
-        i += 1
-    return cmd if quote and not force and not hits else "".join(out)
-
-
 FD = re.compile(r"(?<![^\s;&|(])\d+(?=[<>])")  # `0<f`, `2>&1`: номер дескриптора — не аргумент команды
+# `⏎<<`, `⏎</dev/null` — одна серия пунктуации (после склейки `\`⏎ — SE-83): перевод строки кончает команду до редиректа
+NL_REDIRECT = re.compile(r"(?<=\n)(?=[<>])")
 
 
-def tokenize(cmd):
-    """Слова и разделители; флаги zsh `${(L)G}` — `${#L#G}`: скобки внутри не делят слово, имя не подставляется."""
+def _lexer(cmd):
     cmd = re.sub(r"\$\{\(([^()]*)\)", r"${#\1#", FD.sub("", cmd))
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
     lex.commenters = ""
-    return list(lex)
+    return lex
+
+
+def tokenize(cmd):
+    """Слова и разделители; флаги zsh `${(L)G}` — `${#L#G}`: скобки внутри не делят слово, имя не подставляется."""
+    return list(_lexer(cmd))
 
 
 def split_commands(tokens):
@@ -218,7 +132,7 @@ def split_commands(tokens):
     argv, targets, sources, piped, skip = [], [], [], False, None
     depth = floor = 0
     mark = None
-    for t in tokens:
+    for t in (p for x in tokens for p in (NL_REDIRECT.split(x) if set(x) <= SEPARATORS else (x,))):
         if t and set(t) <= SEPARATORS:
             depth = max(0, depth + t.count("(") - t.count(")"))
             floor = min(floor, depth)
@@ -230,6 +144,8 @@ def split_commands(tokens):
                 skip = "source" if t == "<" else "string"
                 if t in ("<<<", "<&"):
                     sources.append(None)
+                    if mark is None:  # `⏎<<<` без слова — команда и без слова: уровень нужен (линза backend 6910273773)
+                        mark, floor = (floor, depth), depth
             else:  # перед `|` и `&` — подоболочка в bash и zsh: папка и переменные после неё — как до неё
                 if argv or targets or sources:
                     yield argv, targets, sources, piped, mark if t.strip("\n") not in ("|", "|&", "&") else (
@@ -324,7 +240,7 @@ LAUNCHERS = {
 INFO = {"node": {"-v", "-h"}, "python": {"-V", "-h"}, "perl": {"-v"}}  # и у всех `--version`, `--help`: только справка
 STDIN_CODE = {"sh": "s", "python": "i"}  # `bash -s x` — код из stdin, x — аргумент; `python3 -i x.py` — stdin после x.py
 LONG_VALUED = {"--rcfile", "--init-file", "--require", "--import", "--loader", "--experimental-loader", "--conditions",
-               "--input-type", "--check-hash-based-pycs"}
+               "--input-type", "--check-hash-based-pycs", "--emulate"}  # `zsh --emulate csh` — режим, не скрипт (SE-77)
 SCRIPT_EXT = re.compile(r"\.(sh|bash|zsh|py|[mc]?js|[mc]?ts|pl|rb|scpt|applescript)$")
 SCRIPT_MAX = 4 * 1024 * 1024
 # Исполняемый файл ядра (ELF, Mach-O, universal) — не текст скрипта. NUL в тексте — не признак: bash отказывается от
@@ -425,11 +341,13 @@ def proc_files(body, cwd):
 
 
 def uncommented(text):
-    """Shell-текст для грубого признака: без комментариев (strip_comments, force), тела heredoc — как есть: для
-    `python3 <<EOF` в них `#` — не комментарий shell."""
+    """Shell-текст для грубого признака: без комментариев (strip_comments, force), тела heredoc — как их получит читатель
+    (heredoc_text, join_lines; SE-83): для `python3 <<EOF` в них `#` — не комментарий shell. Текст может сменить знак
+    комментария — комментарии остаются (SE-77)."""
     try:
         cmd, bodies = cut_heredocs(text)
-        return "\n".join([strip_comments(cmd, force=True)] + [b for _, b, _ in bodies])
+        return "\n".join([cmd if comment_char_may_change(text) else strip_comments(cmd, force=True)] +
+                         [join_lines(heredoc_text(b, e)) for _, b, e in bodies])
     except Exception:
         return text
 

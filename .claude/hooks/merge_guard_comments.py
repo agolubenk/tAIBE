@@ -1,8 +1,10 @@
 """
-Где bash точно видит комментарий, для merge-guard (strip_comments в merge_guard_shell, SE-75). Простой разбор кавычек
-там не знает вложенности (`"$(cut -f1 "$f")"`, `$((…))`, `${…}`) и потому оставляет комментарий с `'` (`# Docker's …`):
-если разбор ошибся, `'` закрыл бы строку bash. Здесь — разбор со стеком вложенности; на всём, чего он не моделирует,
-уверенность теряется до конца текста. Решений не принимает; без импорта других модулей merge-guard.
+Где bash точно видит комментарий (sure_comments, SE-75), и снятие комментариев для merge-guard (strip_comments,
+comment_readings — SE-82). Простой разбор кавычек не знает вложенности (`"$(cut -f1 "$f")"`, `$((…))`, `${…}`)
+и потому оставляет комментарий с опасными знаками (`# Docker's …`, `# say "hi`): если разбор ошибся, такой знак
+закрыл бы строку bash. sure_comments — разбор со стеком вложенности; на всём, чего он не моделирует, уверенность
+теряется до конца текста. Решений не принимает; без импорта других модулей merge-guard.
+Ещё здесь — признак, что текст может сменить сам знак комментария (comment_char_may_change, SE-77).
 """
 import re
 
@@ -12,6 +14,68 @@ SEPARATORS = " \t\n;&|()<>"
 WORDS = re.compile(r"(case|alias)(?=[\s;&|()<>]|$)")
 NAME = re.compile(r"[A-Za-z0-9_@*#?$!-]")  # `$NAME`, `$1`, `$@` внутри `${…}`
 BRACE_LOST = set("'\"`{\\")  # в `${…}` кавычки и `\` разные версии bash разбирают по-разному
+# Знак комментария меняют: третий знак `histchars` у zsh — для строк скрипта ниже, `eval` и `source` после него
+# (у `zsh -c` и `eval` весь текст разобран до присваивания); в интерактивном bash (`bash -i`) — `shopt -u
+# interactive_comments`, `+O interactive_comments`, `set +o interactive-comments`: `#` там — буква. Имя ищется в
+# тексте без всего, кроме латинских букв и цифр: `hist""chars`, `${:-hist}chars`, `NO_INTERACTIVE_COMMENTS`.
+COMMENT_CHAR = (b"histchars", b"interactivecomments")
+NOT_ALNUM = bytes(c for c in range(128) if not chr(c).isalnum())
+
+
+def comment_char_may_change(text):
+    """Текст называет настройку, которая меняет знак комментария (COMMENT_CHAR). Тогда `#` в нём и в том, что
+    shell разберёт после, — то ли комментарий, то ли код: разбирать надо обоими способами. Имя, собранное в
+    переменной или выводе команды (`${h}chars`, `$(…)`), не видно."""
+    flat = text.encode("ascii", "ignore").lower().translate(None, NOT_ALNUM)  # 4 МБ — 12–50 мс
+    return any(name in flat for name in COMMENT_CHAR)
+
+
+CHANGED = "\0comment-char"  # в written команды: настройка знака комментария уже была (comment_char_seen)
+
+
+def comment_char_seen(written, text, outer):
+    """Настройка знака комментария была до скрипта text: во внешней команде (`histchars=…; source x`) или в скрипте,
+    который команда прочла раньше (`source a.zsh; source b.zsh`, `source a.zsh; eval …`: настройка живёт в оболочке).
+    Скрипт, который её называет, отмечается в written (CHANGED) — для всего, что команда разберёт после него."""
+    before = CHANGED in (written or ()) or comment_char_may_change(outer)
+    if written is not None and comment_char_may_change(text):
+        written.add(CHANGED)
+    return before
+
+
+def _option_name(word):
+    """Имя опции zsh без регистра, `_` и `-`: `INTER_active`, `inter-active` — interactive."""
+    return word.lower().replace("_", "").replace("-", "")
+
+
+def zsh_interactive(a):
+    """argv — интерактивный zsh: `-i` в связке (`-is`, `-fi`), `-o interactive` и `-ointeractive`, `--interactive`;
+    `+i`, `+o …`, приставка `no` — выключают, последняя опция главнее. Такой zsh, читая код со stdin (`<`, `|`, `<<<`,
+    heredoc, `-s`, `-`), не считает `#` комментарием, пока нет interactivecomments (замер zsh 5.9, 16.11, SE-77): код
+    за `#` выполняется. Файл скрипта (`zsh -i x.zsh`) и `-c` читаются с комментариями — `-c` даёт False, файл
+    проверяет вызывающий (только stdin). Опции — до первого слова без `-`/`+`, `--` и `-` их кончают."""
+    if not a or a[0] != "zsh":
+        return False
+    on, i = False, 1
+    while i < len(a) and len(a[i]) > 1 and a[i][0] in "-+" and a[i] != "--":
+        x, i = a[i], i + 1
+        if x[:2] == "--":
+            name = _option_name(x[2:])
+            on = name == "interactive" or (on and name != "nointeractive")
+            i += name == "emulate"  # `--emulate zsh` берёт режим следующим словом (Контроль 6909989591)
+            continue
+        for k, ch in enumerate(x[1:], 2):
+            if ch == "c":
+                return False
+            if ch == "i":
+                on = x[0] == "-"
+            elif ch == "o":  # `-o имя`, `-oимя`; `no` перед именем — обратный знак
+                name, i = (x[k:], i) if x[k:] else (a[i] if i < len(a) else "", i + 1)
+                name = _option_name(name)
+                if name in ("interactive", "nointeractive"):
+                    on = (x[0] == "-") == (name == "interactive")
+                break
+    return on
 
 
 def sure_comments(cmd):
@@ -117,3 +181,99 @@ def expansion(cmd, i, stack):
             return None
         j += 1
     return None if j >= len(cmd) else j + 1
+
+
+COMMENT_SAFE = re.compile(r"[^'\"`(){}\]]*")
+# `(` — только после пробела: не `$(`, `<(`, `@(`
+COMMENT_PARENS = re.compile(r"(?:[^'\"`(){}\]\\]|(?<=[ \t])\(|\))*")
+
+
+def comment_safe(text):
+    """Текст от `#` до конца строки можно снять как комментарий (см. strip_comments): в нём нет `'"`{}]` — символов,
+    которыми bash закрыл бы строку, `${…}`, `$[…]` или обратные кавычки, а скобки, если есть, — парные, `(` после
+    пробела и без `\\`: закрыть `$(…)`, `$((…))` или `((…))` нечем, открыть подстановку — тоже."""
+    if COMMENT_SAFE.fullmatch(text):
+        return True
+    if not COMMENT_PARENS.fullmatch(text):
+        return False
+    depth = 0
+    for c in text:
+        depth += (c == "(") - (c == ")")
+        if depth < 0:
+            return False
+    return depth == 0
+
+
+def strip_comments(cmd, force=False, keep=None, trust=False, kept=None):
+    """Комментарии shell — от `#` в начале слова до конца строки — снять, как это делает bash: `\\` в конце комментария
+    строку не продолжает, `#` внутри слова (`a\\ #b`, `"…"#`, `$'…'`) — не комментарий. Снимается только то, что
+    пропускает comment_safe: если разбор ошибся и для bash этот `#` внутри строки, `${…}`, `$((…))` или обратных
+    кавычек, закрыть их bash может только символом, которого там нет, — и такой текст остаётся на разбор. Кавычки не
+    сошлись — команда остаётся как есть (лишний отказ, не пропуск); force — всё равно снять: так безопасно для
+    грубого признака, правило comment_safe от разбора кавычек не зависит. keep — признак, с которым комментарий
+    остаётся всегда; задан — снимается и комментарий с опасными знаками (`# Docker's …`, `# say "hi`), если bash
+    здесь точно на верхнем уровне (sure_comments, SE-75, SE-76): там всё до конца строки — комментарий. Такой снят —
+    текст без него и при несошедшихся кавычках: с ним кавычки сошлись бы через строки и спрятали бы код, который
+    bash выполнит до ошибки в конце скрипта. trust — снять и остальные комментарии в начале слова (второе прочтение,
+    comment_readings); kept — список, куда пишутся позиции комментариев, которые остались. `\\`+перевод строки вне
+    `'…'` и `$'…'` снимается целиком, как в bash (SE-83): `g\\`⏎`h` — слово `gh`, а `\\\\`⏎ — экранированная `\\` и
+    конец строки. В снятом комментарии `\\` строку не продолжает: перевод строки после него остаётся."""
+    out, i, quote, word, sure, hits = [], 0, None, False, None, []
+
+    def sure_comment(at, text):
+        nonlocal sure
+        if keep is None or keep(text):
+            return False
+        sure = sure_comments(cmd) if sure is None else sure  # один разбор на текст, и только если нужен
+        hits.extend([at] if at in sure else [])
+        return at in sure
+
+    while i < len(cmd):
+        c = cmd[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif quote == "$'" and c == "\\":  # в $'…' `\'` — экранированная кавычка
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        elif quote == "$'":
+            quote = None if c == "'" else quote
+        elif c == "\\":  # `\`+перевод строки вне `'…'` и `$'…'` — склейка: bash снимает оба знака, слово не начинает
+            word = word or cmd[i + 1:i + 2] != "\n"
+            out.append("" if cmd[i + 1:i + 2] == "\n" else cmd[i:i + 2])  # `\\`⏎ — экранированная `\`, строка кончилась
+            i += 2
+            continue
+        elif c == "$" and quote is None and cmd[i + 1:i + 2] == "'":
+            quote, word = "$'", True
+            out.append("$'")
+            i += 2
+            continue
+        elif c == "'" and quote is None:
+            quote = "'"
+        elif c == '"':
+            quote = None if quote == '"' else '"'
+        elif c == "#" and quote is None and not word:
+            end = cmd.find("\n", i)
+            end = len(cmd) if end < 0 else end
+            if trust or comment_safe(cmd[i:end]) or sure_comment(i, cmd[i:end]):
+                i = end
+                continue
+            if kept is not None:
+                kept.append(i)
+        word = quote is not None or c not in " \t\n;&|(<>"  # `)` слово не кончает: `$(true)#` — не комментарий
+        out.append(c)
+        i += 1
+    return cmd if quote and not force and not hits else "".join(out)
+
+
+def comment_readings(cmd, keep, trust=False):
+    """(текст без комментариев, второе прочтение или None) для разбора команды (classify_bash, force). Комментарий в
+    начале слова, который strip_comments оставил (sure_comments не уверен: после heredoc, обратных кавычек, `$[…]`),
+    bash может прочесть и как комментарий: тогда его `"` или `'` не сходится с кавычкой ниже и не прячет код до неё
+    (SE-82). Второе прочтение — без всех таких комментариев, его находки идут в решение вместе с первым. trust — это
+    прочтение и разбирается, третьего нет. Склейку строк делает strip_comments (SE-83).
+    cmd — уже без тел heredoc, и второе прочтение их повторно не режет: на месте heredoc осталось `<< E`, и строка
+    `E` ниже сделала бы телом код, который bash выполнит."""
+    kept = []
+    plain = strip_comments(cmd, True, keep, trust, kept)
+    return plain, strip_comments(cmd, True, keep, True) if kept and not trust else None

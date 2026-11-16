@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_testkit import C4, CONTROL, D9, SESSIONS, TMP, bash, check, failures, finish, mg, run  # noqa: E402
 import merge_guard_crash as mc  # noqa: E402
+import merge_guard_partial as mp  # noqa: E402
 
 
 def want(label, got, text):
@@ -34,6 +35,20 @@ check("другой ValueError — сбой", mc.crash(ValueError("invalid liter
 kind, where = (mc.crash(TypeError("x"), "u.sh") or [("", "")])[0]
 want("вид находки несёт класс, текст и место", kind or None, "на u.sh (TypeError: x)")
 check("текст ошибки не длиннее 200 знаков", None if len(mc.crash_text(KeyError("k" * 500))) <= 200 else "длинный", False)
+
+
+# --- settled (merge_guard_partial): обе точки разбора хука идут через него (линза backend #444, B1) ---
+def unclosed():
+    raise ValueError("No closing quotation")
+
+
+got, partial, why = mp.settled(boom, "x.sh")
+want("settled: сбой — находка «сбой хука» с местом", (got or [("", "")])[0][0] or None, "на x.sh (TypeError")
+check("settled: сбой — и грубый признак решает, как раньше", None if partial and why == "TypeError" else "нет", False)
+got, partial, why = mp.settled(unclosed)
+check("settled: кавычка без пары — находки нет, решает грубый признак", got or None if partial else "не partial", False)
+check("settled: без сбоя — как раньше", mp.settled(lambda: [(mp.PARTIAL, ""), ("x", "y")])[:2] != ([("x", "y")], True)
+      or None, False)
 
 # --- сбой разбора команды (classify_bash): роли отказ, Контролю проход ---
 real = mg.classify_bash
