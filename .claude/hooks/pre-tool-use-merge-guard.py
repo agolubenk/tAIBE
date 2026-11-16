@@ -40,6 +40,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
                                strip_prefix, subst_code, SUBST_AT, syntax_only, tokenize, uncommented)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
+from merge_guard_shell import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -295,20 +296,6 @@ def classify_heredoc(readers, body, expands, cwd, roots, depth, git_env, disk=Fa
 
 
 FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
-GATE = "heavy-gate.sh"  # обёртка тяжёлого гейта (SE-116): `exec "$@"` — хвост её argv и есть команда
-
-
-def gate_tail(a):
-    """Команда, которую запустит обёртка тяжёлого гейта: хвост после `heavy-gate.sh`, `bash|sh … heavy-gate.sh`,
-    `source … heavy-gate.sh`, иначе []. Подсказка хука heavy-gate сама заворачивает в неё исходную команду
-    (`heavy-gate.sh bash -c '<команда>'`), а текст скрипта хвоста не называет (backend #338 B1). В WRAPPERS обёртки
-    нет: тот же normalize зовёт хук heavy-gate, и `heavy-gate.sh pnpm test` стал бы у него голым `pnpm test`."""
-    if a[0] == GATE:
-        return a[1:]
-    if a[0] in SHELLS or a[0] in SOURCE:
-        k = next((k for k, x in enumerate(a[1:], 1) if command_name(x) == GATE), None)
-        return a[k + 1:] if k else []
-    return []
 
 
 def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, ("", "")), exe="", stdin_files=(), procs=None,
@@ -328,8 +315,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
             tail = list(itertools.takewhile(lambda y: y != "+", a[k + 1:]))
             if strip_prefix(tail):
                 found += classify_argv(normalize(tail), cwd, roots, depth + 1, git_env, whole, strip_prefix(tail)[0])
-    gated = strip_prefix(gate_tail(a))  # `heavy-gate.sh gh pr merge 1`, `bash …/heavy-gate.sh git push …`
-    if gated:
+    if gated := strip_prefix(gate_tail(a)):  # `heavy-gate.sh gh pr merge 1`, `bash …/heavy-gate.sh git push …`
         found += classify_argv(normalize(gated), cwd, roots, depth + 1, git_env, whole, gated[0], stdin_files, procs, hid)
     if launcher(a[0]) or a[0] in SOURCE or "/" in exe:
         found += runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files, procs)
@@ -359,10 +345,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
         found.append((kind, " ".join(a)[:120]))
     if a[0] == "claude" and hooks_off(a):
         found.append(("file", "claude без хуков проекта (disableAllHooks, --setting-sources без project)"))
-    for t in write_targets(a):
-        p = protected_path(t, cwd, roots)
-        if p:
-            found.append(("file", p))
+    found += [("file", p) for t in write_targets(a) if (p := protected_path(t, cwd, roots))]  # файл ≤ 500 строк (01-base)
     return found
 
 
