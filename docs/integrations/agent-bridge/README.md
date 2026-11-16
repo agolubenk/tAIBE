@@ -38,6 +38,10 @@
   reaper (`lineage.py reap --auto`, launchd, раз в 30 мин). Пороги — `instances/_shared.json`: `mem_warn` 20,
   `mem_critical` 10. **Пропуска на запуск новой сессии нет.**
 
+- Docker на Mac уже на пути каждой сессии: `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` — это контейнер
+  `headroom-default` (1024 МБ). В VM ещё база доски `t-boards-postgres-1` и стенд HR; все контейнеры вместе —
+  3259 МБ (`docker stats`, 16.11). Перезапуск Docker Desktop — минута без API у всех сессий.
+
 **Вывод.** Окна дешёвые: проблема окон — навигация, а не память. Память съедают число сессий, тяжёлые гейты
 (`tsc` 3,3 ГБ) и VM Docker (до 8 ГБ).
 
