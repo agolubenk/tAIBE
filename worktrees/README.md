@@ -30,13 +30,24 @@ make wt-rm TRACK=fix NAME=notion-5xx-retry
 
 В Claude Code: slash-команды `/init-worktree`, `/init-parallel-worktrees`.
 
+Агентская сессия (не Контроль): `make` с этим Makefile останавливает merge-guard (SE-105), поэтому агент
+запускает команды рецептов напрямую. Отказ на `make <цель>` их печатает, полный список —
+`.claude/rules/07-worktrees.md`, «Агентская сессия — прямые формы»:
+
+```bash
+mkdir -p worktrees/fix && git worktree add "worktrees/fix/notion-5xx-retry" -b "fix/notion-5xx-retry" board-agents
+infra/scripts/dev/wt-deps.sh install "worktrees/fix/notion-5xx-retry"   # без зависимостей — пропустить
+git worktree list
+```
+
 ## Зависимости — свои у каждого worktree
 
 Worktree лежит внутри основного checkout: без своего `boards/node_modules` Node молча поднимается к установке
 основного checkout — чужой WIP пакетов, другая версия TypeScript, ложные ошибки typecheck и тестов. Хук
 `PreToolUse` (`.claude/hooks/pre-tool-use-wt-deps.sh` → `infra/scripts/dev/wt-deps.sh check`) останавливает гейт
 (`pnpm …`, `vp …`, `npm run …`, `npx …`) в `boards/` linked worktree без своей свежей установки; обход для команды,
-не связанной с зависимостями, — `WT_DEPS_CHECK=0` в её начале. eval и слой — stdlib python, зависимостей нет.
+не связанной с зависимостями, — `WT_DEPS_CHECK=0` в её начале. Установку (`pnpm install|i|ci`) хук пропускает:
+это и есть починка (SE-124). eval и слой — stdlib python, зависимостей нет.
 
 Интеграционные тесты API досок из любого worktree — `zsh boards/tools/run-int.sh` (одна тестовая БД на все
 checkout'ы, прогоны идут по очереди под локом).

@@ -277,16 +277,31 @@ def classify_gh(a, cwd=".", written=(), depth=0, guess=False):
     return None
 
 
+INTERP_SEP = r"[\"',\s\]\[]+"  # между словами команды в коде: кавычки, запятые, скобки списка, пробелы
+# Глобальные опции git до подкоманды: `-c k=v`, `-C dir`, `--git-dir=…`, `--no-pager` — push за ними тоже push (SE-145)
+# Ветки не пересекаются — общая не берёт опции со значением, иначе перебор растёт экспоненциально (38 × `-c` —
+# 15 с при таймауте хука 10 с). Значение — литерал в кавычках или слово: `"Release Bot"`, `x.y=a,b`,
+# `"/tmp/my repo"`; разделитель перед ним — закрывающая кавычка опции и пробелы, запятые, скобки.
+GIT_VALUE_OPT = r"-[cC]|--(?:git-dir|work-tree|namespace|config-env|exec-path|super-prefix)"
+GIT_VALUE = r"\"[^\"\n]*\"|'[^'\n]*'|[^\s\"',\[\]]+"
+GIT_OPT = (rf"(?:{INTERP_SEP}(?:{GIT_VALUE_OPT})(?:[\"']?[,\s\[\]]+|=)(?:{GIT_VALUE})"
+           rf"|{INTERP_SEP}(?!(?:{GIT_VALUE_OPT})(?![\w-]))--?[A-Za-z][\w-]*(?:=(?:{GIT_VALUE}))?)")
+# `GIT` на APFS — тот же git. Цепочка опций — не длиннее GIT_OPTS_MAX: иначе текст из тысяч `git -c` разбирается
+# с каждого `git` заново (10 000 повторов — 7,9 с). Цепочка длиннее — push (лишний отказ дешевле пропуска).
+GIT_OPTS_MAX = 32
+GIT_PUSH = re.compile(rf"\bgit{GIT_OPT}{{0,{GIT_OPTS_MAX}}}{INTERP_SEP}push\b|\bgit{GIT_OPT}{{{GIT_OPTS_MAX}}}", re.I)
+
+
 def classify_interp(a, cwd="."):
     """Защищённая команда, запущенная из python/node/… списком аргументов или строкой."""
     blob = " ".join(a[1:])
-    q = r"[\"',\s\]\[]+"
+    q = INTERP_SEP
     if re.search(rf"\bgh{q}pr{q}merge\b|mergePullRequest|/pulls/\d+/merge\b", blob):
         return MERGE
     if re.search(rf"\bgh{q}(workflow{q}run|run{q}rerun)\b|/dispatches\b", blob):
         return DEPLOY
-    if re.search(rf"\bgit{q}push\b", blob) and (re.search(r"(?<![\w-])--(all|mirror)\b", blob) or
-                                                 mentions_protected(blob, cwd)):
+    if GIT_PUSH.search(blob) and (re.search(r"(?<![\w-])--(all|mirror)\b", blob) or
+                                  mentions_protected(blob, cwd)):
         return MAIN_WRITE
     return None
 

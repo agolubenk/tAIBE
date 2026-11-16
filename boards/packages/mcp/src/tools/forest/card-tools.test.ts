@@ -48,6 +48,28 @@ describe("forest card tools", () => {
     );
   });
 
+  it("sends expectedMetaRevision in the body, apart from the task's expectedRevision header (TB-142)", async () => {
+    const { client, call } = setup();
+
+    await call("forest_set_card_meta", {
+      workspaceId: "ws1",
+      taskId: "t1",
+      session: "dev-1",
+      fencingToken: 3,
+      contextPack: "do not: X",
+      expectedMetaRevision: "2026-11-14T09:00:00.123Z",
+    });
+
+    expect(client.json).toHaveBeenCalledWith("/api/forest/ws1/cards/t1/meta", {
+      method: "PUT",
+      headers: { "x-t-boards-session": "dev-1", "x-t-boards-fence": "3" },
+      body: JSON.stringify({
+        contextPack: "do not: X",
+        expectedMetaRevision: "2026-11-14T09:00:00.123Z",
+      }),
+    });
+  });
+
   it("leaves half-baked to the owner: the tool has no such field", async () => {
     const { client, call } = setup();
 
@@ -108,5 +130,48 @@ describe("forest card tools", () => {
       data: { comments: Array<{ id: string }> };
     };
     expect(data.comments.map((comment) => comment.id)).toEqual(["c2"]);
+  });
+
+  // TB-192: the memory route masks the titles for a caller with a token
+  // (maskForTokenCaller). The tool reads only that route and passes its
+  // answer on, so no unmasked copy reaches the agent another way.
+  it("returns the card memory as the API masked it, from the one route", async () => {
+    const answer = {
+      available: true,
+      stale: false,
+      fetchedAt: "2026-11-15T00:00:00.000Z",
+      scanned: 1,
+      items: [
+        {
+          id: 7,
+          type: "change",
+          title: "t1: rotated [REDACTED:api_key]",
+          subtitle: null,
+          createdAt: "2026-11-15T00:00:00.000Z",
+          matchedOn: "task-id",
+          matchedValue: "t1",
+          source: "text",
+        },
+      ],
+    };
+    const { client, call } = setup(answer);
+
+    const result = await call("forest_get_card_memory", {
+      workspaceId: "ws1",
+      taskId: "t1",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(client.json).toHaveBeenCalledTimes(1);
+    expect(client.json).toHaveBeenCalledWith(
+      "/api/forest/ws1/cards/t1/memory",
+      {
+        method: "GET",
+        headers: {},
+      },
+    );
+    expect(decodeWire(result.content[0]?.text ?? "")).toMatchObject({
+      data: answer,
+    });
   });
 });

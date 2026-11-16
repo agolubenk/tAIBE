@@ -17,8 +17,9 @@ import sys
 from datetime import datetime
 
 ROOT = os.path.expanduser('~/.claude/projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2')
-PRICES = {'fable': (10, 50, 0.25), 'opus-5-5': (4, 20, 0.2), 'opus-5': (5, 25, 0.5), 'sonnet': (2, 10, 0.2),
-          'haiku-5-5': (0.1, 0.5, 0.01)}
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import prices  # noqa: E402 — один прайс на eval (GL-1)
+
 WRITE_TOOLS = {'Edit', 'Write', 'NotebookEdit', 'CronCreate', 'CronDelete'}
 WRITE_MCP = re.compile(r'oq_put|oq_patch|notion-create|notion-update|create_pull_request|merge_pull_request|'
                        r'add_issue_comment|pull_request_review_write|push_files|create_or_update_file')
@@ -39,21 +40,10 @@ since = datetime.strptime(args[0], '%Y-%m-%d %H:%M')
 until = datetime.strptime(args[1], '%Y-%m-%d %H:%M') if len(args) > 1 else datetime.now()
 
 
-def price(model):
-    for k in ('fable', 'opus-5-5', 'opus-5', 'sonnet', 'haiku-5-5'):
-        if k in model:
-            return PRICES[k]
-    return PRICES['opus-5-5']
-
-
 def call_cost(m):
-    u = m['usage']
-    pi, po, pr = price(m.get('model', ''))
-    cw = u.get('cache_creation_input_tokens', 0) or 0
-    c1 = (u.get('cache_creation') or {}).get('ephemeral_1h_input_tokens', 0) or 0
-    cost = ((u.get('input_tokens', 0) or 0) * pi + ((cw - c1) * 1.25 + c1 * 2) * pi +
-            (u.get('cache_read_input_tokens', 0) or 0) * pr + (u.get('output_tokens', 0) or 0) * po) / 1e6
-    write_cost = ((cw - c1) * 1.25 + c1 * 2) * pi / 1e6
+    """($ вызова, $ из них на запись кэша)."""
+    c = prices.call_cost(m['usage'], m.get('model', ''))
+    cost, write_cost = sum(c.values()), c['запись кэша 5 мин'] + c['запись кэша 1 ч']
     return cost, write_cost
 
 
