@@ -1133,6 +1133,18 @@ for label, text, limit in (("60 × -c", "git" + " -c" * 60 + " x", 0.1),
     took = time.perf_counter() - t0
     check(f"SE-145, GIT_PUSH на {label}: {took:.3f} с, предел {limit} с", took if took >= limit else None, False)
 check("SE-145, 40 опций до push — push", GIT_PUSH.search("git" + " -c a=b" * 40 + " push origin HEAD:main"), True)
+# Линза backend #338 B1: обёртка тяжёлого гейта запускает хвост argv (`exec "$@"`), хвост разбирается как команда.
+# Путь — настоящий скрипт: его текст разбирается и хвоста не называет, так что отказ даёт только разбор хвоста.
+GATE = Path(__file__).resolve().parents[1] / "scripts" / "heavy-gate.sh"
+for label, form in (("команда в хвосте", f"{GATE} gh pr merge 5 --squash"),
+                    ("подсказка хука, bash -c", f"{GATE} bash -c 'pnpm test && gh pr merge 5 --squash'"),
+                    ("через timeout", f"timeout 600 {GATE} gh pr merge 5"),
+                    ("source обёртки", f"source {GATE} gh pr merge 5")):
+    bash(f"SE-116, heavy-gate.sh — {label}", form, True)
+bash("SE-116, bash heavy-gate.sh — push в main", f"bash {GATE} git push origin HEAD:main", True, cwd=on_branch)
+for label, form in (("гейт в bash -c", f"{GATE} bash -c 'cd boards && pnpm test'"), ("голый гейт", f"{GATE} pnpm test"),
+                    ("bash heavy-gate.sh гейт", f"bash {GATE} pnpm test")):
+    bash(f"SE-116, heavy-gate.sh — {label}", form, False)
 
 if __name__ == "__main__":
     finish(" — формы shell")
