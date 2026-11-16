@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "spawn_session.sh"
@@ -365,9 +366,9 @@ if sys.argv[1] == "ensure":
 if sys.argv[1] == "default-terminal":
     print("tmux")
 if sys.argv[1] == "open":
-    parts = sys.argv[-1].split("'")
-    if len(parts) > 1:
-        shutil.rmtree(os.path.dirname(parts[1]), ignore_errors=True)
+    if os.environ.get("FAKE_OPEN_RC"):
+        sys.exit(int(os.environ["FAKE_OPEN_RC"]))
+    shutil.rmtree(os.path.dirname(sys.argv[sys.argv.index("--launcher") + 1]), ignore_errors=True)
     print("@3 %7 /dev/ttys021 4242 100:200")
     if os.environ.get("FAKE_ATTACH"):
         print("tmux -L agents attach -t '=x'")
@@ -378,7 +379,7 @@ with open(os.environ["FAKE_LOG"], "a") as f:
 """
 
 
-def tmux_run(ensure_rc=0, attach=False):
+def tmux_run(ensure_rc=0, attach=False, open_rc=""):
     with tempfile.TemporaryDirectory() as tmp:
         tools = Path(tmp) / "layer" / "tools"
         tools.mkdir(parents=True)
@@ -393,8 +394,9 @@ def tmux_run(ensure_rc=0, attach=False):
         handoff.write_text("x\n", encoding="utf-8")
         log = Path(tmp) / "fake.log"
         env = clean_env(PATH=f"{fake_bin}:{os.environ['PATH']}", TMPDIR=tmp, TAIBE_LINEAGE="r.ab12", FAKE_LOG=str(log),
-                        FAKE_RC="0", FAKE_START="1", SPAWN_START_WAIT="1", SPAWN_TERMINAL="",
-                        FAKE_ENSURE=str(ensure_rc), FAKE_ATTACH="1" if attach else "")
+                        FAKE_RC="0", FAKE_START="1", SPAWN_TERMINAL="",
+                        FAKE_ENSURE=str(ensure_rc), FAKE_ATTACH="1" if attach else "", FAKE_OPEN_RC=open_rc,
+                        SPAWN_START_WAIT="30")  # отказ open — сразу, а не через 30 с ожидания скрипта
         run = subprocess.run(["bash", str(tools / "spawn_session.sh"), "--handoff", str(handoff), "--cwd", tmp],
                              capture_output=True, text=True, env=env, timeout=60)
         calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
@@ -427,6 +429,13 @@ if not (rc == 0 and "host-open" not in calls and "osascript" in calls
         and "сервер tmux не отвечает" in out):
     failed += 1
     print("FAIL: tmux server down -> Terminal window as before", rc, calls)
+    print(out)
+t0 = time.monotonic()
+rc, out, calls = tmux_run(open_rc="1")
+if not (rc == 4 and time.monotonic() - t0 < 20 and not any(c.startswith(("record ", "retire ")) for c in calls)
+        and "--terminal terminal" in out):
+    failed += 1
+    print("FAIL: tmux open failed -> code 4 at once, no record, hint --terminal terminal", rc, calls)
     print(out)
 
 print("spawn_session: %d failed" % failed)

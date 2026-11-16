@@ -5,15 +5,17 @@
 роль. Владелец видит все роли одним окном (`tmux -L agents attach`); окно, где сессия ждёт ответа, помечено «!» в
 строке статуса, `prefix j` — к следующему такому окну.
 
-  tmux_host.py ensure                  сервер отвечает? нет — LaunchAgent (Mac) или прямой старт (Linux); код 0 — жив
-  tmux_host.py open --product P --name N --cwd DIR -- CMD
-                                       окно роли; stdout: «<окно> <панель> <tty> <pid панели> <сервер>», второй строкой —
-                                       команда attach, если к серверу ещё никто не подключён
+  tmux_host.py ensure                  сервер отвечает? точно мёртв — поднять (LaunchAgent на Mac, прямой старт на Linux)
+                                       под замком; не отвечает, но жив (версии, таймаут) — код 1, сервер не трогается
+  tmux_host.py open --product P --name N --cwd DIR --launcher FILE
+                                       окно роли с пусковым скриптом spawn_session.sh (другой файл — отказ); stdout:
+                                       «<окно> <панель> <tty> <pid панели> <сервер>», второй строкой — команда attach,
+                                       если к серверу никто не подключён и attach не просили последние 15 с
   tmux_host.py status-line             пометить окна (@wait: w — ждёт разрешения, i — ждёт задачи) и напечатать сводку
   tmux_host.py next CLIENT WINDOW      к следующему окну, которое ждёт (клавиша prefix j)
   tmux_host.py conf | default-terminal конфиг сервера | терминал по умолчанию (system.terminal в instances/_shared.json)
 
-Сервер — сервис, а не потомок сессии: LaunchAgent space.hrhelper.agents-tmux (`tmux -D`, KeepAlive) получает окружение
+Сервер — сервис, а не потомок сессии: LaunchAgent space.hrhelper.agents-tmux (`tmux -D`, подъём после сбоя) получает окружение
 launchd, а не сессии, которая открыла окно (CLAUDECODE, TAIBE_LINEAGE, CLAUDE_CODE_SSE_PORT и песочница сессии в окна
 не попадают); `update-environment` пустой. Панель запускает пусковой скрипт через `<login shell> -l -i -c`, как окно
 Terminal: ANTHROPIC_BASE_URL (headroom) и PATH к claude приходят из ~/.zshrc.
@@ -23,9 +25,12 @@ Terminal: ANTHROPIC_BASE_URL (headroom) и PATH к claude приходят из 
 TAIBE_TMUX_CONF_DIR — папка конфига.
 """
 import argparse
+import contextlib
+import fcntl
 import os
 import plistlib
 import pwd
+import re
 import shlex
 import shutil
 import subprocess
@@ -44,6 +49,8 @@ MARKS = ("", "i", "w")  # по возрастанию: окно с двумя п
 STATUS_MARK = {"waiting": "w", "idle": "i"}  # статус ~/.claude/sessions/<pid>.json → метка окна @wait
 TERMINALS = ("terminal", "iterm", "tmux", "print")
 SERVICE_WAIT = 5.0
+ATTACH_GAP = 15.0  # с: окно attach уже попросили — клиент Terminal ещё поднимается, второе окно не открывать
+DEAD = ("no server running", "error connecting", "No such file or directory", "Connection refused")
 
 
 def socket():
@@ -72,12 +79,33 @@ def tmux(*args):
         return subprocess.CompletedProcess(args, 127, "", str(exc))
 
 
-def server_info():
-    """«pid:start_time» живого сервера или None. Сравнение с записью линии ловит перезапуск сервера: id панелей
-    после него начинаются заново и достаются другим ролям."""
+def probe():
+    """(«pid:start_time» живого сервера или None, сервера точно нет, ошибка). Сравнение pid:start_time с записью линии
+    ловит перезапуск сервера: id панелей после него начинаются заново и достаются другим ролям. «Точно нет» — только
+    эти ответы tmux: несовпадение версий клиента и сервера (brew upgrade tmux) и таймаут — живой сервер с ролями."""
     r = tmux("display-message", "-p", SERVER_FMT)
     out = r.stdout.strip()
-    return out if r.returncode == 0 and ":" in out else None
+    if r.returncode == 0 and ":" in out:
+        return out, False, ""
+    err = (r.stderr or r.stdout).strip()
+    return None, r.returncode != 127 and any(m in err for m in DEAD), err
+
+
+def server_info():
+    return probe()[0]
+
+
+@contextlib.contextmanager
+def start_lock():
+    """Один старт сервера на машину: второй запуск ждёт первого и видит уже живой сервер."""
+    path = conf_dir() / f"{socket()}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def write_private(path, data, mode=0o600):
@@ -121,7 +149,12 @@ def conf_text(py, tools):
         'set -g update-environment ""',   # окружение клиента (сессии, открывшей окно) в окна не копируется
         "set -g remain-on-exit off",       # пусковой скрипт вышел — панель закрылась сама
         "set -g mouse on",
-        "set -g history-limit 5000",       # ≈ 1–2 МБ на панель; 12 панелей — десятки МБ, не сотни
+        # Выделение мышью — сразу в буфер macOS через pbcopy (Terminal.app не принимает OSC 52); Option+перетаскивание —
+        # выделение самого Terminal, мимо tmux.
+        "set -s set-clipboard external",  # не on: OSC 52 из панели не пишет буфер — сессия не подложит текст владельцу
+        'bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"',
+        'bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"',
+        "set -g history-limit 5000",       # 5–20 МБ на панель в худшем случае (200 колонок, цвет); 12 панелей ≤ 250 МБ
         "set -g base-index 1",
         "set -g allow-rename off",
         "setw -g automatic-rename off",    # имя окна — роль, не то, что пишет claude в заголовок
@@ -147,17 +180,32 @@ def plist_bytes(conf):
         "ProgramArguments": [exe, "-D", "-L", socket(), "-f", str(conf)],
         # Остальное окружение (HOME, SHELL, TMPDIR, SSH_AUTH_SOCK) даёт launchd; переменные сессии сюда не попадают.
         "EnvironmentVariables": {"PATH": path, "LANG": lang if "UTF-8" in lang.upper() else "en_US.UTF-8"},
-        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 10, "ProcessType": "Interactive",
+        # Поднимать снова только после сбоя: `kill-server` владельца — не сбой. Битый конфиг — не чаще 2 раз в минуту.
+        "RunAtLoad": True, "KeepAlive": {"SuccessfulExit": False}, "ThrottleInterval": 30, "ProcessType": "Interactive",
         "StandardErrorPath": str(Path.home() / "Library" / "Logs" / "taibe-agents-tmux.log"),
     })
 
 
-def start_launchd(conf):
-    plist = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
-    write_private(plist, plist_bytes(conf), mode=0o644)
+def plist_path():
+    return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+
+
+def conf_python(conf):
+    """Интерпретатор строки статуса — тот, что уже в конфиге, пока он есть: иначе конфиг менялся бы от вызова к вызову
+    (python3 разных PATH) и сервер перечитывал бы его каждый раз."""
+    try:
+        m = re.search(r"#\((\S+) -I ", conf.read_text(encoding="utf-8"))
+    except OSError:
+        m = None
+    old = shlex.split(m.group(1))[0] if m else ""
+    return old if old and os.access(old, os.X_OK) else sys.executable
+
+
+def start_launchd():
+    """Сервер мёртв (probe): загружен — kickstart без -k (живой сервер он не трогает), нет — bootstrap."""
     dom = f"gui/{os.getuid()}"
     loaded = subprocess.run(["launchctl", "print", f"{dom}/{LABEL}"], capture_output=True).returncode == 0
-    cmd = ["launchctl", "kickstart", "-k", f"{dom}/{LABEL}"] if loaded else ["launchctl", "bootstrap", dom, str(plist)]
+    cmd = ["launchctl", "kickstart", f"{dom}/{LABEL}"] if loaded else ["launchctl", "bootstrap", dom, str(plist_path())]
     subprocess.run(cmd, capture_output=True, timeout=30)
 
 
@@ -173,22 +221,32 @@ def start_direct(conf):
 
 
 def ensure():
+    if not shutil.which(tmux_bin()):  # без tmux LaunchAgent падал бы и поднимался вечно
+        print("tmux_host: tmux не установлен (brew install tmux) — окно Terminal", file=sys.stderr)
+        return 1
     conf = conf_dir() / f"{socket()}.conf"
-    changed = write_private(conf, conf_text(sys.executable, layer_tools()))
-    if server_info():
+    changed = write_private(conf, conf_text(conf_python(conf), layer_tools()))
+    service = os.environ.get("TAIBE_TMUX_SERVICE", "on") != "off" and sys.platform == "darwin" \
+        and bool(shutil.which("launchctl"))
+    if service:  # правка plist руками или агентом откатывается при каждом вызове
+        write_private(plist_path(), plist_bytes(conf))
+    info, dead, err = probe()
+    if info:
         if changed:
             tmux("source-file", str(conf))
         return 0
-    service = os.environ.get("TAIBE_TMUX_SERVICE", "on") != "off"
-    if service and sys.platform == "darwin" and shutil.which("launchctl"):
-        start_launchd(conf)
-    else:
-        start_direct(conf)
-    deadline = time.monotonic() + SERVICE_WAIT
-    while time.monotonic() < deadline:
-        if server_info():
-            return 0
-        time.sleep(0.2)
+    if not dead:  # сервер с ролями жив, но не отвечает этому клиенту — не трогать
+        print(f"tmux_host: сервер tmux «{socket()}» не отвечает ({err or 'таймаут'}) — не перезапускаю", file=sys.stderr)
+        return 1
+    with start_lock():
+        if probe()[0]:
+            return 0  # пока ждали замок, сервер поднял соседний запуск
+        start_launchd() if service else start_direct(conf)
+        deadline = time.monotonic() + SERVICE_WAIT
+        while time.monotonic() < deadline:
+            if server_info():
+                return 0
+            time.sleep(0.2)
     print(f"tmux_host: сервер tmux «{socket()}» не ответил за {SERVICE_WAIT:.0f} с", file=sys.stderr)
     return 1
 
@@ -203,13 +261,45 @@ def attach_cmd(sess):
     return f"{shlex.quote(tmux_bin())} -L {shlex.quote(socket())} attach -t '={sess}'"
 
 
-def open_window(product, name, cwd, cmd):
+def launcher_ok(path):
+    """Пусковой скрипт spawn_session.sh: свой файл 0700 в своей папке claude-spawn.* 0700, вторая строка — снятие
+    маркеров сессии. open не запускает произвольную строку: иначе он был бы готовой командой мимо merge-guard."""
+    p = Path(path)
+    try:
+        st, dst = p.stat(), p.parent.stat()
+        second = p.read_text(encoding="utf-8").split("\n")[1]
+    except (OSError, IndexError, UnicodeDecodeError):
+        return False
+    own = st.st_uid == dst.st_uid == os.getuid() and not (st.st_mode | dst.st_mode) & 0o077
+    return (own and p.is_absolute() and p.parent.name.startswith("claude-spawn.") and p.suffix == ".sh"
+            and second == "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE")
+
+
+def want_attach():
+    """Окно attach: к серверу никто не подключён и его не просили последние ATTACH_GAP с (Terminal и zsh поднимают
+    клиента дольше, чем открывается следующая роль, — иначе снова окно на роль)."""
+    if tmux("list-clients").stdout.strip():
+        return False
+    mark = conf_dir() / f"{socket()}.attach"
+    try:
+        if time.time() - mark.stat().st_mtime < ATTACH_GAP:
+            return False
+    except OSError:
+        pass
+    write_private(mark, str(time.time()))
+    return True
+
+
+def open_window(product, name, cwd, launcher):
+    if not launcher_ok(launcher):
+        print(f"tmux_host: {launcher} — не пусковой скрипт spawn_session.sh", file=sys.stderr)
+        return 2
     if ensure():
         return 1
     sess = tmux_name(product)
     win = tmux_name(name[len(product) + 1:] if name.startswith(product + "-") else name)
     shell = pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
-    run = f"exec {shlex.quote(shell)} -l -i -c {shlex.quote(cmd)}"
+    run = f"exec {shlex.quote(shell)} -l -i -c {shlex.quote('/bin/bash ' + shlex.quote(launcher))}"
     new_window = ("new-window", "-d", "-P", "-F", FMT, "-t", f"={sess}:", "-n", win, "-c", cwd, run)
     if tmux("has-session", "-t", f"={sess}").returncode == 0:
         r = tmux(*new_window)
@@ -219,10 +309,12 @@ def open_window(product, name, cwd, cmd):
             r = tmux(*new_window)  # сессию продукта в тот же миг открыл соседний запуск
     parts = r.stdout.split()
     if r.returncode or len(parts) != 4 or not parts[2].startswith("/dev/"):
+        if r.returncode == 0 and parts[1:2] and parts[1].startswith("%"):
+            tmux("kill-pane", "-t", parts[1])  # окно открылось, но без записи линии его не закрыть — сразу закрыть
         print(f"tmux_host: окно {win} не открыто: {(r.stderr or r.stdout).strip() or r.returncode}", file=sys.stderr)
         return 1
     print(" ".join(parts + [server_info() or "-"]))
-    if not tmux("list-clients").stdout.strip():
+    if want_attach():
         print(attach_cmd(sess))
     return 0
 
@@ -257,11 +349,18 @@ def status_line(sx=None):
         tmux(*cmds[:-1])
     nw = sum(1 for _, n in wins.values() if n == "w")
     ni = sum(1 for _, n in wins.values() if n == "i")
-    print((f"! {nw} ждут · " if nw else "") + f"{ni} свободны · claude {sum(map(len, by_tty.values()))}")
+    n = sum(len(by_tty.get(ln.split("\t")[1], [])) for ln in r.stdout.splitlines() if ln.count("\t") >= 1)
+    print((f"! {nw} ждут · " if nw else "") + f"{ni} свободны · ролей в tmux {n}")
     return 0
 
 
 def next_waiting(client, current):
+    with open(os.devnull, "w") as quiet:  # метки — свежие, а не 15-секундной давности (0,08 с на нажатие)
+        out, sys.stdout = sys.stdout, quiet
+        try:
+            status_line()
+        finally:
+            sys.stdout = out
     r = tmux("list-windows", "-a", "-F", "#{window_id}\t#{@wait}")
     rows = [(ln.split("\t") + [""])[:2] for ln in r.stdout.splitlines()]
     order = [w for w, _ in rows]
@@ -321,7 +420,7 @@ def main(argv=None):
     o.add_argument("--product", required=True)
     o.add_argument("--name", required=True)
     o.add_argument("--cwd", required=True)
-    o.add_argument("command", nargs=argparse.REMAINDER, help="-- CMD: строка команды пускового скрипта")
+    o.add_argument("--launcher", required=True, help="пусковой скрипт spawn_session.sh (claude-spawn.*/<роль>.sh)")
     n = sub.add_parser("next")
     n.add_argument("client")
     n.add_argument("window")
@@ -329,10 +428,7 @@ def main(argv=None):
     if a.cmd == "ensure":
         return ensure()
     if a.cmd == "open":
-        cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
-        if len(cmd) != 1:
-            ap.error("open: после -- — одна строка команды")
-        return open_window(a.product, a.name, a.cwd, cmd[0])
+        return open_window(a.product, a.name, a.cwd, a.launcher)
     if a.cmd == "status-line":
         return status_line()
     if a.cmd == "next":

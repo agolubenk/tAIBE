@@ -302,7 +302,14 @@ spawn_one() {
   osa=0
   if [ "$TERMINAL" = tmux ]; then
     out="$(python3 -I "$TOOLS/tmux_host.py" open --product "${PRODUCT:-$(basename "$CWD")}" --name "$name" --cwd "$CWD" \
-      -- "$cmd")" || { osa=$?; out=""; }
+      --launcher "$launcher")" || { osa=$?; out=""; }
+    if [ -z "$out" ]; then  # окна нет — ждать старта скрипта незачем
+      rm -rf "$dir"
+      echo "spawn_session: окно ${role:-наследника} не открылось (tmux, код $osa). Линия не записана, сторож не запущен." \
+        "Вручную: тот же вызов с --terminal terminal" >&2
+      SPAWN_FAILED=1
+      return
+    fi
   elif [ "$TERMINAL" = iterm ]; then
     osascript -e "tell application \"iTerm\" to create window with default profile command \"$cmd\"" >/dev/null || osa=$?
   else
@@ -326,7 +333,7 @@ spawn_one() {
   elif [ "$TERMINAL" = tmux ]; then
     # «окно панель tty pid-панели сервер»; второй строкой — attach, если к серверу никто не подключён.
     read -r wid pane tty ppid server <<< "$(printf '%s\n' "$out" | sed -n 1p)"
-    case "$tty" in /dev/tty*) ;; *) tty="" ;; esac
+    case "$tty" in /dev/*) ;; *) tty="" ;; esac  # macOS /dev/ttysN, Linux /dev/pts/N
     record "$lineage" tmux "$wid" "$tty" "$role" "$pane" "$ppid" "$server"
     SPAWNED_TTY="$tty"
     att="$(printf '%s\n' "$out" | sed -n 2p)"

@@ -71,10 +71,30 @@ class Base(unittest.TestCase):
 
 
 class OpenTest(Base):
-    def run_open(self):
-        with mock.patch("sys.stdout.write") as w:
-            rc = T.open_window("taibe", "taibe-coord-ab12", "/w", "/bin/bash '/t/x.sh'")
+    def launcher(self, second="unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE", mode=0o700):
+        d = Path(tempfile.mkdtemp(prefix="claude-spawn.", dir=self.tmp.name))
+        f = d / "coord.sh"
+        f.write_text(f"#!/bin/bash\n{second}\nexec claude\n", encoding="utf-8")
+        f.chmod(mode)
+        return str(f)
+
+    def run_open(self, launcher=None):
+        with mock.patch("sys.stdout.write") as w, mock.patch("sys.stderr.write"):
+            rc = T.open_window("taibe", "taibe-coord-ab12", "/w", launcher or self.launcher())
         return rc, "".join(c.args[0] for c in w.call_args_list)
+
+    def test_only_spawn_launcher_runs(self):
+        """open — не запуск произвольной команды мимо merge-guard: только пусковой скрипт spawn_session.sh."""
+        self.spec(display_message=SERVER, has_session=["", 0], new_window=["@2 %2 /dev/ttys002 556\n", 0])
+        for bad in (self.launcher(second="tmux -L agents send-keys -t x y"), self.launcher(mode=0o755),
+                    "/bin/bash", "tmux send-keys -t x y"):
+            self.assertEqual(self.run_open(bad)[0], 2, bad)
+        self.assertEqual(self.calls(), [])
+
+    def test_attach_asked_once_while_terminal_starts(self):
+        self.spec(display_message=SERVER, has_session=["", 0], new_window=["@2 %2 /dev/ttys002 556\n", 0])
+        first, second = self.run_open()[1], self.run_open()[1]
+        self.assertEqual((len(first.splitlines()), len(second.splitlines())), (2, 1))
 
     def test_first_role_creates_product_session_and_asks_to_attach(self):
         self.spec(display_message=SERVER, has_session=["", 1], new_session=["@1 %1 /dev/ttys001 555\n", 0])
@@ -85,7 +105,7 @@ class OpenTest(Base):
         new = next(c for c in self.calls() if c[0] == "new-session")
         self.assertEqual(new[new.index("-s") + 1], "taibe")
         self.assertEqual(new[new.index("-n") + 1], "coord-ab12")
-        self.assertRegex(new[-1], r"^exec \S+ -l -i -c '/bin/bash '")  # оболочка входа: ~/.zshrc, как Terminal
+        self.assertRegex(new[-1], r"^exec \S+ -l -i -c '/bin/bash .*claude-spawn\.")  # оболочка входа: ~/.zshrc
         conf = (Path(os.environ["TAIBE_TMUX_CONF_DIR"]) / "agents-test.conf").read_text()
         self.assertIn('set -g update-environment ""', conf)
 
@@ -101,15 +121,30 @@ class OpenTest(Base):
 
     def test_window_not_opened(self):
         self.spec(display_message=SERVER, has_session=["", 0], new_window=["", 1])
-        with mock.patch("sys.stderr.write"):
-            self.assertEqual(self.run_open()[0], 1)
+        self.assertEqual(self.run_open()[0], 1)
 
-    def test_server_down_and_not_started(self):
-        self.spec(display_message=["", 1])
-        with mock.patch.object(T, "SERVICE_WAIT", 0.3), mock.patch("sys.stderr.write"):
+    def test_half_opened_window_is_closed(self):
+        self.spec(display_message=SERVER, has_session=["", 0], new_window=["@2 %2\n", 0])
+        self.assertEqual(self.run_open()[0], 1)
+        self.assertIn(["kill-pane", "-t", "%2"], self.calls())  # без записи линии его потом не закрыть
+
+    def test_dead_server_is_started(self):
+        self.spec(display_message=["no server running on /tmp/tmux-501/agents-test\n", 1])
+        with mock.patch.object(T, "SERVICE_WAIT", 0.3):
             self.assertEqual(self.run_open()[0], 1)
         self.assertTrue(any(c[-1] == "start-server" and "-f" in c for c in self.calls()))  # без launchd — прямой старт
         self.assertNotIn("new-session", self.subs())
+
+    def test_live_server_that_does_not_answer_is_left_alone(self):
+        """brew upgrade tmux: клиент новой версии не говорит со старым сервером — роли живы, сервер не трогать."""
+        self.spec(display_message=["protocol version mismatch (client 9, server 8)\n", 1])
+        self.assertEqual(self.run_open()[0], 1)
+        self.assertFalse(any("start-server" in c for c in self.calls()))
+
+    def test_no_tmux_binary_no_service(self):
+        with mock.patch.dict(os.environ, {"TAIBE_TMUX": "/nonexistent/tmux"}), mock.patch("sys.stderr.write"):
+            self.assertEqual(T.ensure(), 1)
+        self.assertFalse((Path(os.environ["TAIBE_TMUX_CONF_DIR"]) / "agents-test.conf").exists())
 
 
 class ClosePaneTest(Base):
@@ -159,7 +194,7 @@ class StatusTest(Base):
         sets = next(c for c in self.calls() if c[0] == "set-option")
         self.assertEqual(sets, ["set-option", "-w", "-t", "@1", "@wait", "w", ";",
                                 "set-option", "-w", "-t", "@3", "@wait", ""])  # @2 уже «i» — не трогаем
-        self.assertEqual(pr.call_args.args[0], "! 1 ждут · 1 свободны · claude 3")
+        self.assertEqual(pr.call_args.args[0], "! 1 ждут · 1 свободны · ролей в tmux 3")
 
     def test_next_waiting_wraps_and_prefers_waiting(self):
         self.spec(list_windows=["@1\ti\n@2\tw\n@3\t\n@4\tw\n", 0])
@@ -171,6 +206,30 @@ class StatusTest(Base):
         self.spec(list_windows=["@1\t\n@2\t\n", 0])
         T.next_waiting("/dev/ttys009", "@1")
         self.assertEqual(self.subs()[-1], "display-message")
+
+
+class OpsTest(Base):
+    """agents_up.py: окна сервисов — только чтение; повторный запуск не множит окна, сменённую команду обновляет."""
+
+    def test_ops_windows_are_read_only_views(self):
+        import agents_up as A
+        for name, cmd in A.ops_windows():
+            self.assertRegex(cmd, r"^(tail -n 40 -F |while :; do )", name)
+
+    def test_rerun_keeps_same_windows_and_respawns_changed(self):
+        import agents_up as A
+        import hashlib
+        shell = __import__("shlex").quote(os.environ.get("SHELL") or "/bin/zsh")
+        rows = []
+        for k, (name, cmd) in enumerate(A.ops_windows()):
+            run = f"exec {shell} -l -c {__import__('shlex').quote(cmd)}"
+            tag = "old" if name == "nerve" else hashlib.sha1(run.encode()).hexdigest()[:12]
+            rows.append(f"@{k}\t{name}\t{tag}")
+        self.spec(list_windows=["\n".join(rows) + "\n", 0], has_session=["", 0])
+        A.open_ops()
+        subs = self.subs()
+        self.assertNotIn("new-window", subs)
+        self.assertEqual([c[3] for c in self.calls() if c[0] == "respawn-window"], ["@2"])  # только nerve
 
 
 class ServiceTest(Base):
@@ -188,7 +247,7 @@ class ServiceTest(Base):
         self.assertEqual(set(d["EnvironmentVariables"]), {"PATH", "LANG"})
         self.assertEqual(d["EnvironmentVariables"]["LANG"], "en_US.UTF-8")  # tmux без UTF-8 ломает кириллицу
         self.assertEqual(d["ProgramArguments"][1:], ["-D", "-L", "agents-test", "-f", "/c/agents.conf"])
-        self.assertTrue(d["KeepAlive"])
+        self.assertEqual(d["KeepAlive"], {"SuccessfulExit": False})  # kill-server владельца сервер не поднимает
 
     def test_client_env_drops_tmux_and_session_markers(self):
         with mock.patch.dict(os.environ, {"TMUX": "/tmp/x,1,0", "CLAUDECODE": "1", "TAIBE_LINEAGE": "r.x"}):

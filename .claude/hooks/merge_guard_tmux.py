@@ -1,17 +1,25 @@
 """
 merge-guard: окна сессий в tmux (OPS-82). Роли Claude живут окнами одного сервера tmux (eval/tools/tmux_host.py):
-`send-keys` в окно Контроля — тот же обход «вливает только Контроль», что ввод от имени владельца; `capture-pane` и
-буферы читают чужой экран; `#(…)` в формате, `run-shell`, `if-shell`, `-c` и хуки выполняют команду в сервере мимо
-разбора этого хука. Агенту — только чтение списков; остальное — руками владельца, Контролю тоже нет.
-Окна открывает spawn_session.sh (через tmux_host.py), закрывает сторож retire — их вызовы tmux этот хук не видит.
+`send-keys` в окно Контроля — тот же обход «вливает только Контроль», что ввод от имени владельца; `capture-pane`,
+буферы и поиск по экрану (`#{C:…}`) читают чужой экран; `#(…)`, `#{E:…}` (формат из заголовка панели, который пишет
+сама панель), `run-shell`, `if-shell`, `-c`, `-f` и хуки выполняют команду в сервере мимо разбора этого хука.
+Агенту — только чтение списков с простыми переменными формата; остальное — руками владельца, Контролю тоже нет.
+Окна открывает spawn_session.sh (tmux_host.py open берёт только его пусковой скрипт), закрывает сторож retire.
 Подкоманды — по списку разрешённых: сокращение (`send` → send-keys) и псевдоним вне списка — тоже отказ.
 """
+import re
+
 TMUX = "ввод, экран или управление окнами сессий в tmux (OPS-82)"
 READ_ONLY = {"list-sessions", "ls", "list-windows", "lsw", "list-panes", "lsp", "list-clients", "lsc", "has-session",
-             "has", "display-message", "display", "show-options", "show", "show-window-options", "showw",
-             "show-environment", "showenv"}
-GLOBAL_VALUED = set("LSfT")  # -L имя, -S сокет, -f конфиг, -T возможности терминала
-GLOBAL_BOOL = set("2uvVNl")  # -C (команды из stdin), -c (команда оболочки), -D (сервер) — нет: отказ
+             "has", "display-message", "display", "show-options", "show", "show-window-options", "showw"}
+GLOBAL_VALUED = {"L"}  # -L имя сервера; -S, -f (конфиг с хуками), -T — отказ
+GLOBAL_BOOL = set("2uVNl")  # -C (команды из stdin), -c (команда оболочки), -D (сервер), -v (журнал в cwd) — отказ
+DISPLAY_DENY = set("aIv")  # display -a печатает все переменные (и pane_start_command), -I пишет stdin в панель
+# Переменные формата, которые агенту можно читать: имена и номера, без содержимого экрана и команд панелей.
+SAFE_VARS = {"session_name", "session_id", "window_id", "window_index", "window_name", "window_active", "pane_id",
+             "pane_index", "pane_tty", "pane_pid", "pane_active", "pane_dead", "client_name", "client_tty", "pid",
+             "start_time", "version", "@wait"}
+FORMAT = re.compile(r"(?:[^#]|##|#\{([\w@]+)\})*")
 # `tmux lsw \; send-keys …`: разбор shell в хуке делит команду и по `\;` — хвост цепочки приходит отдельной командой с
 # именем подкоманды tmux. Программ с такими именами нет: отказ по имени. Только однозначные — без `run`, `source`, `at`,
 # `new`, `a`, `if`: это настоящие команды и встроенные shell.
@@ -20,7 +28,8 @@ CHAIN_TAIL = {"send-keys", "send", "send-prefix", "capture-pane", "capturep", "p
               "respawnw", "run-shell", "if-shell", "set-hook", "source-file", "new-window", "neww", "split-window",
               "splitw", "new-session", "attach-session", "paste-buffer", "pasteb", "load-buffer", "loadb", "set-buffer",
               "setb", "show-buffer", "showb", "save-buffer", "saveb", "set-option", "set-window-option", "setw",
-              "set-environment", "setenv", "command-prompt", "display-popup", "popup", "bind-key", "unbind-key"}
+              "set-environment", "setenv", "show-environment", "showenv", "command-prompt", "display-popup", "popup",
+              "bind-key", "unbind-key"}
 
 
 def _commands(words):
@@ -35,6 +44,20 @@ def _commands(words):
         else:
             cur.append(w)
     return out + [cur]
+
+
+def _safe_format(w):
+    """Слово без `#` или формат только из простых переменных SAFE_VARS (без модификаторов E:, C:, ?, =, s/…)."""
+    m = FORMAT.fullmatch(w)
+    return "#" not in w or (m is not None and all(v in SAFE_VARS for v in re.findall(r"#\{([\w@]+)\}", w)))
+
+
+def _read_only(c):
+    if c[0] not in READ_ONLY or not all(_safe_format(w) for w in c[1:]):
+        return False
+    if c[0] in ("display-message", "display"):
+        return not any(w.startswith("-") and set(w[1:]) & DISPLAY_DENY for w in c[1:])
+    return True
 
 
 def classify_tmux(a):
@@ -61,7 +84,5 @@ def classify_tmux(a):
     rest = a[i:]
     if not rest:
         return None if version else TMUX  # `tmux` без команды — новая сессия с подключением
-    if any("#(" in w for w in rest):
-        return TMUX  # формат выполняет команду оболочки в сервере
     cmds = [c for c in _commands(rest) if c]
-    return TMUX if not cmds or any(c[0] not in READ_ONLY for c in cmds) else None
+    return TMUX if not cmds or not all(_read_only(c) for c in cmds) else None
