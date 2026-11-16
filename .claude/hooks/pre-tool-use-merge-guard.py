@@ -40,7 +40,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
                                launcher, normalize, note_vars, proc_files, read_script, split_commands, strip_comments,
                                strip_prefix, subst_code, SUBST_AT, syntax_only, tokenize, uncommented)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
-from merge_guard_shell import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
+from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
