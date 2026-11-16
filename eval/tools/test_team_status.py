@@ -302,5 +302,53 @@ class SpawnLaunchTest(Base):
         self.assertIn("# coord: вставить", r.stdout, r.stderr)
 
 
+class GateSys(TeamSys):
+    def __init__(self, procs, env=None, free=50):
+        super().__init__(procs, env=env)
+        self.free = free
+
+    def mem_free(self):
+        return self.free
+
+
+class GateTest(Roles):
+    """Пропуск на новую сессию (OPS-82): память по memory_pressure и число сессий Claude на всей машине."""
+
+    def gate(self, free, limits=None):
+        sx = GateSys(self.procs, env=self.env_l, free=free)
+        with mock.patch.object(TS, "gate_limits", return_value=limits or {"mem_warn": 20, "max_sessions": 3}):
+            return self.run_main("gate", sx=sx)
+
+    def test_open_with_memory_and_room(self):
+        self.sess(201, "r.a1", "coord")
+        rc, out, _ = self.gate(50)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("пропуск открыт", out)
+        self.assertIn("сессий 1/3", out)
+
+    def test_low_memory_closes_with_numbers(self):
+        rc, out, _ = self.gate(15)
+        self.assertEqual(rc, TS.RC_MISSING, out)
+        self.assertIn("свободно памяти 15% < mem_warn 20%", out)
+
+    def test_cap_counts_sessions_of_every_product_but_not_dead_files(self):
+        for pid in (201, 202, 203):
+            self.sess(pid, f"r.b{pid}", "coord", cwd=self.dir / "other-product")
+        L.write_json(L.sessions_dir() / "999.json", {"pid": 999, "procStart": ST})  # процесса нет
+        rc, out, _ = self.gate(50)
+        self.assertEqual(rc, TS.RC_MISSING, out)
+        self.assertIn("сессий Claude 3 ≥ max_sessions 3", out)
+
+    def test_unknown_memory_does_not_close(self):
+        rc, out, _ = self.gate(None)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("память —", out)
+
+    def test_limits_come_from_instances(self):
+        lim = TS.gate_limits()
+        self.assertEqual(set(lim), {"mem_warn", "max_sessions"})
+        self.assertTrue(all(isinstance(v, int) and v > 0 for v in lim.values()), lim)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
