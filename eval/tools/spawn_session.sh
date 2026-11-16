@@ -12,6 +12,9 @@
 # --launch идемпотентен (OPS-24): сначала поднимает нерв (не загружен → bootstrap, молчит → kickstart), живую роль
 # продукта пропускает («жива: …»), после открытия ждёт сессию новой линии до SPAWN_WAIT с (90), затем следующую роль;
 # в конце печатает итог. --force — открыть и при живой роли. Продукт — основной checkout папки --cwd (team_status.py).
+# Пропуск (OPS-82): перед каждой ролью team_status.py gate — свободно памяти < system.mem_warn или сессий Claude на Mac
+# ≥ system.max_sessions (instances/_shared.json) → роль и следующие не открываются, причина с цифрами — в итог.
+# SPAWN_GATE=off — открыть всё равно. --handoff пропуск не проверяет: наследник сменяет предшественника.
 # (в инстансе HR_Helper-v2 скрипт лежит в supertick-eval/tools/ — работает так же; корень дерева берётся из его места)
 # Продукт (OPS-25): --product SLUG, иначе $TAIBE_PRODUCT (его ставит геном роли — наследник берёт продукт
 # предшественника), иначе продукт по умолчанию из instances/. У продукта не по умолчанию — геном
@@ -314,7 +317,7 @@ record() {
 }
 
 # Одна роль в --launch: живую пропустить, иначе открыть и дождаться её сессии. Итог — строкой в SUMMARY.
-SUMMARY="" SPAWN_FAILED=0
+SUMMARY="" SPAWN_FAILED=0 GATE_CLOSED=0
 note() { SUMMARY="$SUMMARY$(printf '\n  %s' "$*")"; }
 launch_role() {
   local r="$1" live rc got
@@ -325,6 +328,14 @@ launch_role() {
     # Открывать только по явному «роли нет» (rc 3). Любой другой rc (1 — трейсбек Python, 2 — ошибка) — проверка
     # сломалась: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
     if [ "$rc" != 3 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
+  fi
+  # Пропуск (OPS-82): мало памяти или сессий Claude на Mac уже max_sessions — роль не открываем. Проверка — перед
+  # каждой ролью: предыдущая уже заняла память. Сломанная проверка (rc ≠ 0 и ≠ 3) запуск не держит — только в итог.
+  if [ "${SPAWN_GATE:-on}" != off ] && [ "$DRY" = 0 ] && [ "$TERMINAL" != print ]; then
+    rc=0; gate="$(python3 -I "$TOOLS/team_status.py" gate 2>&1)" || rc=$?
+    if [ "$rc" = 3 ]; then
+      echo "# $r: $gate" >&2; note "$r — НЕ открыта: $gate (SPAWN_GATE=off — открыть всё равно)"; GATE_CLOSED=1; return
+    elif [ "$rc" != 0 ]; then note "$r — пропуск не проверен: $gate"; fi
   fi
   spawn_one "$r"
   if [ "$SPAWN_FAILED" = 1 ]; then note "$r — НЕ открыта: окно не открылось (--terminal print — вручную)"; return; fi
@@ -391,6 +402,7 @@ elif [ "$LAUNCH" = 1 ]; then
   for r in $(echo "$ROLES" | tr ',' ' '); do
     launch_role "$r"
     [ "$SPAWN_FAILED" = 0 ] || { note "дальше не открывал: окно $r не открылось"; break; }
+    [ "$GATE_CLOSED" = 0 ] || { note "дальше не открывал: пропуск закрыт"; break; }
   done
   echo "итог ($(basename "${MAIN:-$CWD}")):$SUMMARY"
   python3 -I "$TOOLS/team_status.py" nerve 2>&1 | sed 's/^/  /' || true
