@@ -350,10 +350,8 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
 
 
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False):
-    """[(вид, подробность)] защищённых действий команды. git_env — конфиг git где-то задан окружением, disk — текст
-    из скрипта на диске, а не из команды, written — имена файлов, которые уже пишет эта команда (дополняется), part —
-    тело `$(…)` или кода маски, вырезанное разбором: что для bash его начало — верхний уровень, не гарантировано, и
-    комментарий с `'` в нём остаётся (strip_comments, keep)."""
+    """[(вид, подробность)] защищённых действий. git_env — git-конфиг из окружения, disk — текст с диска, written —
+    имена, что пишет команда (дополняется), part — тело `$(…)`/маски: не верхний уровень, комментарий с `'` цел."""
     fresh, written = written is None, set() if written is None else written
     git_env = git_env or bool(GIT_ENV.search(cmd))
     if depth > 3:  # глубже не разбираем: признак защищённого действия — отказ
