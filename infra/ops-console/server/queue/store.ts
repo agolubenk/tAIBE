@@ -247,9 +247,15 @@ function authorize(actor: Actor, collection: Collection, before: Record<string, 
       const held = !!prevBy && !!before && before.agentStatus !== undefined && before.agentStatus !== 'done' && !Number.isNaN(since) && !(ctx.now - since > CLAIM_TTL_MS)
       // Защита от случайного перехвата, а не от враждебной сессии: имя называет сама сессия, токен общий.
       // Отпустить — только своё: и занятый, и уже не удерживаемый пункт (подпись agentBy — кто вёл пункт, её не стирают).
-      if (ctx.release && prevBy && by !== prevBy) throw apiError(409, `Отпустить захват может только ${prevBy} — пункт вела эта сессия`)
-      const heir = held && by !== prevBy && heirOf(by, prevBy)
-      if (held && by !== prevBy && !(heir && ctx.takeover === prevBy)) {
+      // Своё — и захват предка по линии (OPS-55): r.0afd взял, r.0afd.8pa4 уходит без наследника — иначе пункт застревал,
+      // а назваться предком сессии не даёт merge-guard («session — только своя линия»).
+      const lineHeir = !!prevBy && by !== prevBy && heirOf(by, prevBy)
+      if (ctx.release && prevBy && by !== prevBy && !lineHeir) {
+        throw apiError(409, `Отпустить захват может только ${prevBy} или наследник его линии — пункт вела эта сессия`)
+      }
+      // Наследник проходит удерживаемый захват, назвав держателя (takeover) или отпуская его (release).
+      const heir = held && lineHeir
+      if (held && by !== prevBy && !(heir && (ctx.takeover === prevBy || ctx.release))) {
         throw apiError(409, !by
           ? `Пункт ведёт ${prevBy}. Если это вы — передайте session (имя своей сессии)`
           : heir
