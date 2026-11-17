@@ -93,10 +93,17 @@ describe("API integration: MCP call journal (R-036)", () => {
       workspaceId: null,
       actorKind: "agent",
       actorId: "bearer:user-1",
+      // TB-44: an answered call that names a card is filed under it.
+      targetType: "task",
+      targetId: "task-1",
+    });
+    // A refused call keeps the tool as its target: its taskId is not trusted.
+    expect(denied).toMatchObject({
       targetType: "mcp_tool",
       targetId: "get_task",
     });
     const detail = JSON.parse(allowed?.detail ?? "{}");
+    expect(detail.tool).toBe("get_task");
     expect(detail.bytes).toBeGreaterThan(0);
     expect(detail.tokens).toBeGreaterThan(0);
     expect(JSON.parse(detail.args)).toEqual({ taskId: "task-1" });

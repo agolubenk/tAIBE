@@ -12,13 +12,22 @@
 # --launch идемпотентен (OPS-24): сначала поднимает нерв (не загружен → bootstrap, молчит → kickstart), живую роль
 # продукта пропускает («жива: …»), после открытия ждёт сессию новой линии до SPAWN_WAIT с (90), затем следующую роль;
 # в конце печатает итог. --force — открыть и при живой роли. Продукт — основной checkout папки --cwd (team_status.py).
+# Пропуск (OPS-82): перед каждой ролью team_status.py gate — свободно памяти < system.mem_warn или сессий Claude на Mac
+# ≥ system.max_sessions (instances/_shared.json) → роль и следующие не открываются, причина с цифрами — в итог.
+# SPAWN_GATE=off — открыть всё равно. --handoff пропуск не проверяет: наследник сменяет предшественника.
 # (в инстансе HR_Helper-v2 скрипт лежит в supertick-eval/tools/ — работает так же; корень дерева берётся из его места)
 # Продукт (OPS-25): --product SLUG, иначе $TAIBE_PRODUCT (его ставит геном роли — наследник берёт продукт
 # предшественника), иначе продукт по умолчанию из instances/. У продукта не по умолчанию — геном
 # genome/<slug>/<роль>.json, пусковые файлы eval/prompts/<slug>/roles/, а --launch без --cwd открывается в его repo_root.
 # Пусковой скрипт экспортирует TAIBE_PRODUCT.
-# Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|print (print — только напечатать
-# команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
+# Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|tmux|print (print — только напечатать
+# команду для вкладки терминала VS Code; без опции — $SPAWN_TERMINAL, иначе system.terminal в instances/_shared.json)
+# · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
+# tmux (OPS-82): роль — окно сервера `tmux -L agents` (tmux_host.py: LaunchAgent, сессия tmux на продукт, окно на роль),
+# все роли — в одном окне Terminal с attach (открывается само, если к серверу никто не подключён). Сервер не отвечает —
+# окно Terminal, как раньше. Окно tmux закрывается само, когда пусковой скрипт вышел; код ≠ 0, Enter в отсчёте и
+# --keep-window оставляют в нём оболочку. Сторож retire закрывает панель предшественника по записи линии (id панели,
+# pid пусковой оболочки, сервер).
 # · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам
 # · --keep-window (или SPAWN_AUTOCLOSE=off): окно Terminal не закрывается само после выхода claude.
 # Окно открыто, только если пусковой скрипт стартовал за SPAWN_START_WAIT с (30; он удаляет свою папку). Иначе — код 4,
@@ -41,7 +50,7 @@ set -euo pipefail
 
 TOOLS="$(cd "$(dirname "$0")" && pwd)"
 CWD="$PWD"
-TERMINAL="${SPAWN_TERMINAL:-terminal}"
+TERMINAL="${SPAWN_TERMINAL:-}"
 PROMPT_DIR=""
 HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO=""
 PRODUCT="" CWD_SET=0
@@ -123,7 +132,10 @@ if [ -n "$PRODUCT_SUB" ]; then
 else
   PROMPT_DIR="${PROMPT_DIR:-$(in_tree_product prompts/launch-3010/roles)}"
 fi
-case "$TERMINAL" in terminal|iterm|print) ;; *) die "--terminal: terminal, iterm или print" ;; esac
+# Терминал по умолчанию — system.terminal в instances/_shared.json (tmux_host.py default-terminal); без него — terminal.
+[ -n "$TERMINAL" ] || TERMINAL="$(python3 -I "$TOOLS/tmux_host.py" default-terminal 2>/dev/null)" || TERMINAL=""
+[ -n "$TERMINAL" ] || TERMINAL=terminal
+case "$TERMINAL" in terminal|iterm|tmux|print) ;; *) die "--terminal: terminal, iterm, tmux или print" ;; esac
 
 # Номер — место ключа в team.roles instances/<slug>.json (тест сверяет): так роль 7 и в Нерве (emit 7), и в подписи линзы.
 ROLE_LIST="coord plan frontend backend release boards backend-2 frontend-2"
@@ -201,7 +213,7 @@ alias_note() {
 
 # Одна сессия: пусковой скрипт в $TMPDIR, затем окно терминала (или печать команды).
 spawn_one() {
-  local role="$1" msg genome="" dir launcher cmd lineage out="" wid tty osa name args
+  local role="$1" msg genome="" dir launcher cmd lineage out="" wid tty osa name args pane ppid server att
   lineage="$(child_lineage)"
   SPAWNED_LINE="$lineage"
   SPAWNED_TTY=""
@@ -213,7 +225,12 @@ spawn_one() {
     [ -f "$genome" ] || die "нет генома $genome (build.py собирает его из roles.json)"
     args="--settings $(sq "$genome") $args"
   fi
-  if [ "$TERMINAL" != print ] && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
+  # Сервер tmux не отвечает (нет tmux, LaunchAgent не поднялся) — окно Terminal, как до OPS-82 (README, PR 2 п. 4).
+  if [ "$TERMINAL" = tmux ] && [ "$DRY" = 0 ] && ! python3 -I "$TOOLS/tmux_host.py" ensure >&2; then
+    TERMINAL=terminal
+    echo "# spawn_session: сервер tmux не отвечает — окно Terminal" >&2
+  fi
+  if { [ "$TERMINAL" = terminal ] || [ "$TERMINAL" = iterm ]; } && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
     echo "# osascript нет (Linux/SSH) — окно не открыть, команда ниже (и без autoclose)" >&2
     TERMINAL=print
   fi
@@ -252,6 +269,22 @@ spawn_one() {
       echo "if read -r -t $DELAY _; then python3 -I \"\$L\" exited --rc 0 --keep >/dev/null 2>&1 </dev/null || true; echo \"окно оставлено\"; exit 0; fi"
       echo "python3 -I \"\$L\" autoclose --tty \"\$(tty)\" --pid \$\$ >/dev/null 2>&1 </dev/null || true"
       echo "exit 0"
+    elif [ "$TERMINAL" = tmux ]; then
+      # Окно tmux закрывается само, когда скрипт вышел (remain-on-exit off): отцепленный autoclose не нужен. Код ≠ 0,
+      # Enter в отсчёте, --keep-window — вместо выхода оболочка входа: окно остаётся, причина видна.
+      echo "set -m"
+      echo "\"\${CLAUDE_BIN:-claude}\" $args \"\$m\"; rc=\$?"
+      echo "L=$(sq "$TOOLS/lineage.py")"
+      echo "python3 -I \"\$L\" exited --rc \"\$rc\" >/dev/null 2>&1 </dev/null || true"
+      echo "keep() { echo \"\$1\"; exec \"\${SHELL:-/bin/sh}\" -l; }"
+      echo "[ \"\$rc\" = 0 ] || keep \"claude вышел с кодом \$rc — окно оставлено\""
+      if [ "$CLOSE" = on ]; then
+        echo "echo \"claude вышел. Окно закроется через $DELAY с — Enter, чтобы оставить.\""
+        echo "if read -r -t $DELAY _; then python3 -I \"\$L\" exited --rc 0 --keep >/dev/null 2>&1 </dev/null || true; keep \"окно оставлено\"; fi"
+        echo "exit 0"
+      else
+        echo "keep \"claude вышел — окно оставлено (--keep-window)\""
+      fi
     else
       echo "exec \"\${CLAUDE_BIN:-claude}\" $args \"\$m\""
     fi
@@ -267,7 +300,17 @@ spawn_one() {
     return
   fi
   osa=0
-  if [ "$TERMINAL" = iterm ]; then
+  if [ "$TERMINAL" = tmux ]; then
+    out="$(python3 -I "$TOOLS/tmux_host.py" open --product "${PRODUCT:-$(basename "$CWD")}" --name "$name" --cwd "$CWD" \
+      --launcher "$launcher")" || { osa=$?; out=""; }
+    if [ -z "$out" ]; then  # окна нет — ждать старта скрипта незачем
+      rm -rf "$dir"
+      echo "spawn_session: окно ${role:-наследника} не открылось (tmux, код $osa). Линия не записана, сторож не запущен." \
+        "Вручную: тот же вызов с --terminal terminal" >&2
+      SPAWN_FAILED=1
+      return
+    fi
+  elif [ "$TERMINAL" = iterm ]; then
     osascript -e "tell application \"iTerm\" to create window with default profile command \"$cmd\"" >/dev/null || osa=$?
   else
     # id окна и tty вкладки — сразу при открытии: у окна нет tty, у вкладки нет id; по ним сторож закроет именно его.
@@ -279,14 +322,28 @@ spawn_one() {
   # (ответ не пришёл за 2 мин), окна не было, а скрипт писал «открыто» и запускал сторожа без наследника.
   if ! launcher_started "$dir"; then
     rm -rf "$dir"  # окно, открывшееся позже, не найдёт скрипт: наследника без записи линии не будет
-    echo "spawn_session: окно ${role:-наследника} не открылось — osascript код $osa, пусковой скрипт не стартовал" \
+    echo "spawn_session: окно ${role:-наследника} не открылось ($TERMINAL) — код $osa, пусковой скрипт не стартовал" \
       "за ${SPAWN_START_WAIT:-30} с. Линия не записана, сторож не запущен. Вручную: тот же вызов с --terminal print" >&2
     SPAWN_FAILED=1
     return
   fi
-  [ "$osa" = 0 ] || echo "# spawn_session: osascript вернул код $osa, но пусковой скрипт стартовал — окно открыто" >&2
+  [ "$osa" = 0 ] || echo "# spawn_session: открытие вернуло код $osa, но пусковой скрипт стартовал — окно открыто" >&2
   if [ "$TERMINAL" = iterm ]; then
     record "$lineage" iterm "" "" "$role"
+  elif [ "$TERMINAL" = tmux ]; then
+    # «окно панель tty pid-панели сервер»; второй строкой — attach, если к серверу никто не подключён.
+    read -r wid pane tty ppid server <<< "$(printf '%s\n' "$out" | sed -n 1p)"
+    case "$tty" in /dev/*) ;; *) tty="" ;; esac  # macOS /dev/ttysN, Linux /dev/pts/N
+    record "$lineage" tmux "$wid" "$tty" "$role" "$pane" "$ppid" "$server"
+    SPAWNED_TTY="$tty"
+    att="$(printf '%s\n' "$out" | sed -n 2p)"
+    if [ -n "$att" ] && command -v osascript >/dev/null 2>&1; then
+      # Одно окно Terminal на все роли: владелец видит новую роль так же сразу, как раньше видел её окно.
+      osascript -e 'tell application "Terminal"' -e "do script \"$att\"" -e 'activate' -e 'end tell' >/dev/null 2>&1 \
+        || echo "# spawn_session: окно с attach не открылось — вручную: $att" >&2
+    elif [ -n "$att" ]; then
+      echo "# роли — окна tmux: $att" >&2
+    fi
   else
     wid="${out%% *}"; tty="${out#* }"
     case "$wid" in *[!0-9]*|"") wid="" ;; esac
@@ -307,14 +364,16 @@ launcher_started() {
   done
 }
 
-# Запись линии (окно, tty) для сторожа и reap_sessions.sh. Сбой — предупреждение: окно уже открыто.
+# Запись линии (окно, tty; у tmux — ещё панель, pid пусковой оболочки, сервер) для сторожа и reap_sessions.sh.
+# Сбой — предупреждение: окно уже открыто.
 record() {
   python3 -I "$TOOLS/lineage.py" record --line "$1" --terminal "$2" --window-id "$3" --tty "$4" --role "$5" \
+    ${6:+--pane "$6"} ${7:+--pane-pid "$7"} ${8:+--server "$8"} \
     || echo "# spawn_session: запись линии $1 не сохранена — окно закроется только по tty" >&2
 }
 
 # Одна роль в --launch: живую пропустить, иначе открыть и дождаться её сессии. Итог — строкой в SUMMARY.
-SUMMARY="" SPAWN_FAILED=0
+SUMMARY="" SPAWN_FAILED=0 GATE_CLOSED=0
 note() { SUMMARY="$SUMMARY$(printf '\n  %s' "$*")"; }
 launch_role() {
   local r="$1" live rc got
@@ -325,6 +384,14 @@ launch_role() {
     # Открывать только по явному «роли нет» (rc 3). Любой другой rc (1 — трейсбек Python, 2 — ошибка) — проверка
     # сломалась: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
     if [ "$rc" != 3 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
+  fi
+  # Пропуск (OPS-82): мало памяти или сессий Claude на Mac уже max_sessions — роль не открываем. Проверка — перед
+  # каждой ролью: предыдущая уже заняла память. Сломанная проверка (rc ≠ 0 и ≠ 3) запуск не держит — только в итог.
+  if [ "${SPAWN_GATE:-on}" != off ] && [ "$DRY" = 0 ] && [ "$TERMINAL" != print ]; then
+    rc=0; gate="$(python3 -I "$TOOLS/team_status.py" gate 2>&1)" || rc=$?
+    if [ "$rc" = 3 ]; then
+      echo "# $r: $gate" >&2; note "$r — НЕ открыта: $gate (SPAWN_GATE=off — открыть всё равно)"; GATE_CLOSED=1; return
+    elif [ "$rc" != 0 ]; then note "$r — пропуск не проверен: $gate"; fi
   fi
   spawn_one "$r"
   if [ "$SPAWN_FAILED" = 1 ]; then note "$r — НЕ открыта: окно не открылось (--terminal print — вручную)"; return; fi
@@ -391,6 +458,7 @@ elif [ "$LAUNCH" = 1 ]; then
   for r in $(echo "$ROLES" | tr ',' ' '); do
     launch_role "$r"
     [ "$SPAWN_FAILED" = 0 ] || { note "дальше не открывал: окно $r не открылось"; break; }
+    [ "$GATE_CLOSED" = 0 ] || { note "дальше не открывал: пропуск закрыт"; break; }
   done
   echo "итог ($(basename "${MAIN:-$CWD}")):$SUMMARY"
   python3 -I "$TOOLS/team_status.py" nerve 2>&1 | sed 's/^/  /' || true
