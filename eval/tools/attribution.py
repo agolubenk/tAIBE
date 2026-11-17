@@ -11,9 +11,11 @@
   строки), репозиторий — из `-R`/`--repo`, иначе репозиторий продукта записи с командой.
 - Время события — время первой записи его requestId; сравнение со временем вызова — включительно.
 - Окно линзы PR N — от первого view/diff/checkout N захода до comment/review N. Заход — просмотры N, между
-  которыми не больше LENS_GAP (1 ч); comment/review дальше LENS_GAP от последнего просмотра окна не даёт. Второй
-  comment/review не дальше LENS_GAP от первого продлевает окно. work_state окно не режет. Окно без comment/review
-  отбрасывается. Окна пересекаются — побеждает открытое позже.
+  которыми не больше LENS_GAP (1 ч) и нет work_state с карточкой или веткой; comment/review дальше LENS_GAP от
+  последнего просмотра окна не даёт. work_state после последнего просмотра заход не режет: вердикт без нового
+  просмотра закрывает его. Второй comment/review продлевает окно, если он не дальше LENS_GAP от первого и между ними
+  нет work_state с карточкой или веткой и событий другого PR. Окно без comment/review отбрасывается. Окна
+  пересекаются — побеждает открытое позже.
 - Субагент видит свои события и события родителя.
 - Порядок: окно линзы → ветка work_state → PR с этой headRefName → карточка work_state → PR, в теле которого id
   карточки → только карточка → карточка аренды (если сессия арендовала ровно одну) → «не отнесено».
@@ -126,20 +128,29 @@ class Timeline:
         """Окна линз, состояние work_state и аренды по времени. own — события субагента поверх событий родителя."""
         # По (время, порядок): значения разных видов не сравнимы; при равенстве родитель раньше субагента.
         evs = sorted(self.events + (own.events if own else []), key=lambda e: e[:2])
-        views, windows, states, leases, last = {}, [], [], set(), {}
+        # views: PR → (начало захода, последний просмотр); cut: заходы, после которых была другая работа;
+        # last: PR → (окно, время первого вердикта) — окна, которые ещё может продлить вердикт того же PR.
+        views, cut, windows, states, leases, last = {}, set(), [], [], set(), {}
         for t, _, kind, value in evs:
-            if kind == 'open':  # заход: просмотры не дальше LENS_GAP друг от друга; окно — от первого просмотра захода
+            if kind in ('open', 'close'):  # событие другого PR — другая работа: продлевать чужое окно нельзя (B2)
+                last = {pr: w for pr, w in last.items() if pr == value}
+            if kind == 'open':  # заход: просмотры не дальше LENS_GAP друг от друга и без другой работы между ними
                 start, prev = views.get(value, (t, t))
-                views[value] = (start if t - prev <= LENS_GAP else t, t)
+                views[value] = (start if t - prev <= LENS_GAP and value not in cut else t, t)
+                cut.discard(value)
             elif kind == 'close':
                 start, prev = views.pop(value, (None, None))
+                cut.discard(value)
                 if start is not None and t - prev <= LENS_GAP:
-                    last[value] = len(windows)
+                    last[value] = (len(windows), t)
                     windows.append((start, t, value))
-                elif value in last and t - windows[last[value]][1] <= LENS_GAP:  # второй вердикт продлевает окно (N1)
-                    windows[last[value]] = windows[last[value]][:1] + (t, value)
-            elif kind == 'state':  # work_state окно не режет: роли пишут его и посреди линзы (Claude-линза #417)
+                elif value in last and t - last[value][1] <= LENS_GAP:  # второй вердикт — от первого, не цепочкой
+                    windows[last[value][0]] = windows[last[value][0]][:1] + (t, value)
+            elif kind == 'state':
                 states.append((t,) + value)
+                if any(value):  # другая работа (B1, B2): следующий просмотр — новый заход, вердикт окно не продлевает;
+                    cut.update(views)  # уже открытый заход state не режет: вердикт без нового просмотра — строка 3
+                    last = {}
             elif kind == 'lease':
                 leases.add(value)
         self.windows = sorted(windows, key=lambda w: w[:2])  # repo бывает None: значения не сравниваем (N3)

@@ -109,6 +109,23 @@ class TimelineTest(unittest.TestCase):
         tl = self.line((t(9), 'open', (None, 7)), (t(9, 5), 'close', (None, 7)), (t(15), 'close', (None, 7)))
         self.assertEqual([tl.lens(x) for x in (t(9, 3), t(12), t(15))], [(None, 7), None, None])
 
+    def test_verdict_chain_measured_from_first_verdict(self):
+        """Claude-линза #417 на 3dd65fab0, G6: view 9:00, comment 9:05, 10:00, 10:55, 11:50 — окно 9:00–10:00, не 11:50."""
+        tl = self.line((t(9), 'open', (None, 7)), *[(t(h, m), 'close', (None, 7)) for h, m in
+                                                    ((9, 5), (10, 0), (10, 55), (11, 50))])
+        self.assertEqual([tl.lens(x) for x in (t(9, 30), t(10), t(10, 30), t(11, 30))], [(None, 7), (None, 7), None, None])
+
+    def test_other_work_between_verdicts_does_not_extend_window(self):
+        """G7: view 7 в 10:00, comment 10:01, work_state на ветке #202 в 10:05, comment 7 в 10:59 — 10:30 не на #7.
+        То же, если между вердиктами — событие другого PR (окно #8 10:10–10:20)."""
+        state = (t(10, 5), 'state', (None, 'fix/se74-nerve-lens-names'))
+        other_pr = [(t(10, 10), 'open', (None, 8)), (t(10, 20), 'close', (None, 8))]
+        for name, mid in (('state', [state]), ('другой PR', other_pr), ('state без карточки и ветки', None)):
+            with self.subTest(name):
+                tl = self.line((t(10), 'open', (None, 7)), (t(10, 1), 'close', (None, 7)),
+                               *(mid or [(t(10, 5), 'state', (None, None))]), (t(10, 59), 'close', (None, 7)))
+                self.assertEqual(tl.lens(t(10, 30)), None if mid else (None, 7))
+
     def test_equal_windows_with_and_without_repo_sort(self):
         """Два окна с равными началом и концом, repo у одного None — без TypeError (Claude-линза #417, N3); при
         равенстве — окно, закрытое позже по порядку событий."""
@@ -172,6 +189,15 @@ class LedgerTest(unittest.TestCase):
                   (t(13), 'open', (None, 377)), (t(13, 30), 'close', (None, 377))]
         self.assertEqual(self.target(events, t(11)), ('pr', REPO, 202))
         self.assertEqual(self.target(events, t(13, 10)), ('pr', REPO, 377))
+
+    def test_work_state_between_close_views_starts_new_visit(self):
+        """Claude-линза #417 на 3dd65fab0, B1: view #377 в 8:00, work_state на ветке #202 в 8:10, view #377 в 8:55,
+        comment в 9:30 — разрыв меньше часа, но работа 8:10–8:55 — на #202. Первый заход без вердикта отброшен: 8:05 —
+        «не отнесено», как строка 1 таблицы до state."""
+        events = [(t(8), 'open', (None, 377)), (t(8, 10), 'state', (None, 'fix/se74-nerve-lens-names')),
+                  (t(8, 55), 'open', (None, 377)), (t(9, 30), 'close', (None, 377))]
+        self.assertEqual([self.target(events, w) for w in (t(8, 5), t(8, 30), t(9))],
+                         [at.UNATTRIBUTED, ('pr', REPO, 202), ('pr', REPO, 377)])
 
     def test_head_check_before_verdict_keeps_lens_window(self):
         """Claude-линза #417 на fe4c5017c: work_state 9:00, просмотр #377 в 10:00, чтение файлов, проверка головы в 10:29,
