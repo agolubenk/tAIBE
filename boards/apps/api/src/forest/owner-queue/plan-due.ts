@@ -1,9 +1,10 @@
 import { type OpenCard, PACE_DAYS, type RowForecast } from "./plan-eta";
+import { planDocId } from "./queue-config";
 
 // F7.2: one owner decision per product about the rows that miss their term.
-// The decision item d-<P>-due-<date> is the source of truth: what the owner
+// The decision item (dueItemId) is the source of truth: what the owner
 // read is what the answer applies — rows, the move dates (moveTo, checked by
-// the queue server, TB-112 part 1) and the cut cards (due). work/due-<P> (kind
+// the queue server, TB-112 part 1) and the cut cards (due). The work doc (kind
 // «due»: not a plan row, the page skips a doc without a title) only points to
 // the open item and keeps the late rows for the next «ask again?» check.
 
@@ -39,11 +40,16 @@ const CUT_MAX = 10;
 // A lag that grew this much since the last decision asks again.
 const LAG_STEP_DAYS = 2;
 
-export const dueStateId = (product: string) => `due-${product}`;
+// hr-helper: work/due-hr-helper, d-hr-helper-due-<date>; another product:
+// work/taibe-due, taibe-d-due-<date> (the queue reads the product from the
+// id's prefix).
+export const dueStateId = (product: string) =>
+  planDocId(product, `due-${product}`, "due");
+// Every decision item of the product starts so.
+export const dueItemPrefix = (product: string) =>
+  planDocId(product, `d-${product}-due-`, "d-due-");
 export const dueItemId = (product: string, today: string) =>
-  `d-${product}-due-${today.replaceAll("-", "")}`;
-// Every decision item of the product starts so (the queue server: DUE_REF).
-export const dueItemPrefix = (product: string) => `d-${product}-due-`;
+  `${dueItemPrefix(product)}${today.replaceAll("-", "")}`;
 export const DUE_SOURCE = "t-boards (TB-112)";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;

@@ -128,6 +128,21 @@ describe('продукт нового документа и id', () => {
     expect((await call(taibe, 'PUT', '/db/items/lavaeon-d-1', { data: decision('x') })).status).toBe(404)
     expect((await call(hr, 'PUT', '/db/items/lavaeon-d-1', { data: decision('x') })).json).toMatchObject({ product: 'hr-helper' })
   })
+
+  it('id документов плана от t-boards (TB-112, линза #159): taibe — с префиксом, HR — прежние', async () => {
+    const due = (item: string) => ({ kind: 'due', item, at: '2026-11-15', rows: [], applied: false })
+    // Токен t-boards видит оба продукта (boards/deploy/vps/README.md).
+    for (const id of ['taibe-d-due-20261115', 'taibe-d-focus-20261115']) {
+      expect((await call(both, 'PUT', `/db/items/${id}`, { data: decision('план') })).json).toMatchObject({ product: 'taibe' })
+    }
+    expect((await call(both, 'PUT', '/db/work/taibe-due', { data: due('taibe-d-due-20261115') })).json).toMatchObject({ product: 'taibe' })
+    for (const id of ['d-hr-helper-due-20261115', 'd-hr-focus-20261115']) {
+      expect((await call(both, 'PUT', `/db/items/${id}`, { data: decision('план') })).json).toMatchObject({ product: 'hr-helper' })
+    }
+    expect((await call(both, 'PUT', '/db/work/due-hr-helper', { data: due('d-hr-helper-due-20261115') })).json).toMatchObject({ product: 'hr-helper' })
+    // Прежний id решения taibe — пространство HR: токен одного taibe его не пишет.
+    expect((await call(taibe, 'PUT', '/db/items/d-taibe-due-20261115', { data: decision('x') })).status).toBe(404)
+  })
 })
 
 describe('токены', () => {
@@ -182,10 +197,16 @@ describe('запись — надёжность и пары', () => {
 })
 
 describe('relay и вложения', () => {
-  it('relay — про входящие HR: токен без HR получает 404 на чтение и отметку', async () => {
-    expect((await call(taibe, 'GET', '/relay')).status).toBe(404)
-    expect((await call(taibe, 'PUT', '/relay', { session: 'hr-sess' })).status).toBe(404)
-    expect((await call(hr, 'GET', '/relay')).status).toBe(200)
+  it('relay по продуктам (OPS-51): токен taibe отмечается за taibe и не видит сессий и id HR', async () => {
+    expect((await call(hr, 'PUT', '/relay', { session: 'hr-sess', relayed: ['i-20261113-100000-aa01'] })).status).toBe(200)
+    expect((await call(taibe, 'PUT', '/relay', { session: 'taibe-sess' })).status).toBe(200)
+    const seen = await call(taibe, 'GET', '/relay')
+    expect(seen.status).toBe(200)
+    const names = (r: { json: Record<string, unknown> | null }) => ((r.json?.sessions ?? []) as { session: string }[]).map((s) => s.session)
+    expect(names(seen)).toEqual(['taibe-sess'])
+    expect(seen.json?.relayed).toEqual({})
+    expect((await call(taibe, 'PUT', '/relay', { session: 'taibe-sess', product: 'hr-helper' })).status).toBe(404)
+    expect(names(await call(hr, 'GET', '/relay'))).toEqual(['hr-sess'])
   })
 
   it('файлы чужого пункта — как у несуществующего: пусто', async () => {

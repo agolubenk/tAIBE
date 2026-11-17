@@ -4,7 +4,11 @@
 // Ответ инструмента — не больше OUT_MAX символов. Список урезается по документам, а не по символам: обрезанный
 // посередине JSON клиенты не разбирают (строки «Хода работ» несут списки карточек досок).
 export const OUT_MAX = 95_000;
-export const LIMIT_MAX = 500;
+// SE-45: без limit — 20, потолок — 30. Замер 11–13.11: крупные ответы (26–34 тыс. символов) — checks с limit 60 и без
+// limit; их перечитывание — основная цена oq_list. С ids агент назвал документы сам — окно до IDS_MAX.
+export const LIMIT_DEFAULT = 20;
+export const LIMIT_MAX = 30;
+export const IDS_MAX = 500;
 const BRIEF_TEXT = 200;
 // Отметки времени в данных документов: checks — ответ и записи агента, items — added, work — факт начала и конца.
 const TIME_FIELDS = ['at', 'ownerAt', 'agentAt', 'blockedAt', 'added', 'start', 'end'];
@@ -20,11 +24,18 @@ function lastTime(data) {
 }
 
 /**
+ * Ответы, которые читает не роль, а программа: агенту их отмечать нечем, а его статус в пункте будит владельца ботом.
+ * d-team-split — доли команды ролей, их переключает кнопка «Роли» в шапке /queue, читает сторож Mac
+ * (system.team.split_item в instances/_shared.json; Нерв их тоже не пересылает — eval/nerve/sources.py).
+ */
+export const QUIET_ANSWERS = new Set(['d-team-split']);
+
+/**
  * Владелец ответил (done или choice), а агент после ответа ничего не записал. Отметки — серверные, как в open-rule.ts
  * консоли: ownerAt — сохранение ответа (у старых документов — at), agentAt — последняя запись агента.
  */
-export function ownerAnswerUnread(c) {
-  if (!c || !(c.done || c.choice)) return false;
+export function ownerAnswerUnread(c, id) {
+  if (!c || !(c.done || c.choice) || QUIET_ANSWERS.has(id)) return false;
   const agentAt = typeof c.agentAt === 'string' ? Date.parse(c.agentAt) : NaN;
   if (Number.isNaN(agentAt)) return true;
   const answeredAt = Date.parse(typeof c.ownerAt === 'string' ? c.ownerAt : c.at);
@@ -48,15 +59,16 @@ export function filterDocs(collection, docs, { ids, prefix, kind, session, since
     if (kind && x.kind !== kind) return false;
     if (session && x[sessionKey] !== session) return false;
     if (!Number.isNaN(sinceMs) && !(lastTime(x) >= sinceMs)) return false;
-    if (unread && !ownerAnswerUnread(x)) return false;
+    if (unread && !ownerAnswerUnread(x, d.id)) return false;
     return true;
   });
 }
 
-/** Окно списка: offset — с какого документа, limit — сколько (1…LIMIT_MAX, по умолчанию 50). */
-export function pageList(list, { offset, limit } = {}) {
+/** Окно списка: offset — с какого документа, limit — сколько (1…LIMIT_MAX, по умолчанию LIMIT_DEFAULT; с ids — до IDS_MAX). */
+export function pageList(list, { offset, limit, ids } = {}) {
   const from = Math.max(0, Math.floor(Number(offset) || 0));
-  const n = limit === undefined ? 50 : Math.min(Math.max(1, Math.floor(Number(limit) || 1)), LIMIT_MAX);
+  const max = Array.isArray(ids) && ids.length ? IDS_MAX : LIMIT_MAX;
+  const n = limit === undefined ? (max === IDS_MAX ? max : LIMIT_DEFAULT) : Math.min(Math.max(1, Math.floor(Number(limit) || 1)), max);
   return { from, docs: list.slice(from, from + n) };
 }
 
@@ -115,7 +127,8 @@ export function fitList(total, docs, from = 0, extra = {}) {
       ...(from ? { offset: from } : {}),
       ...(k < docs.length ? { shown: k, truncated: true } : {}),
       ...(oversized ? { oversized: [docs[0].id] } : {}),
-      ...(next < total ? { next_offset: next } : {}),
+      // «ещё N»: агент видит, что список не весь, не считая total − offset сам.
+      ...(next < total ? { next_offset: next, more: `ещё ${total - next}` } : {}),
       ...extra,
       docs: docs.slice(0, k),
     };
@@ -164,6 +177,21 @@ export function historyReply(events, { brief = false } = {}) {
 }
 
 /**
+ * Ответ oq_history по ответу консоли r (GET /history с limit=n): окно — не больше n. Консоль старой версии параметры
+ * не знает и отдаёт 50 полных событий — окно режется здесь, before и keys_only не работают (пометка console). Окно
+ * урезал потолок ответа — next не отдаётся: он указывает за последнее событие окна консоли, а не за последнее
+ * показанное, и агент пропустил бы события (линза Claude #360, B2).
+ */
+export function historyOut(r, { n, keysOnly = false, brief = false }) {
+  const all = Array.isArray(r?.events) ? r.events : [];
+  const legacy = all.length > n || (keysOnly && all.some((e) => e && 'after' in e && !('keys' in e)));
+  const out = historyReply(all.slice(0, n), { brief });
+  if (legacy) return { ...out, console: 'консоль старой версии: before и keys_only не поддерживает, страниц нет — свежие события' };
+  if (out.truncated) return { ...out, hint: `не влезли все ${n} — тот же вызов с меньшим limit (или keys_only)` };
+  return typeof r?.next === 'string' ? { ...out, next: r.next } : out;
+}
+
+/**
  * brief для события истории: строки длиннее BRIEF_TEXT — начало и <поле>Len; массив, чей JSON длиннее BRIEF_TEXT
  * (cards строки плана), — его длина <поле>Count, как cardsCount в oq_list; вложенный объект (inbox) — то же правило,
  * глубже двух уровней — число ключей <поле>Keys. Линзы #111: briefDoc не трогал вложенное, и строка плана со 150
@@ -191,4 +219,53 @@ export function replyText(out, max = 100_000) {
   const text = JSON.stringify(out, null, 1);
   if (text === undefined || text.length <= max) return { text: text ?? 'null' };
   return { text: `Ответ ${text.length} символов больше потолка ${max} — сузьте запрос (oq_list — фильтры, limit, brief; oq_history — brief).`, isError: true };
+}
+
+/**
+ * Ответ oq_put и oq_patch (OPS-18, AC-1): только то, что нужно для следующей правки, — {id, version, updatedAt}.
+ * Документ целиком (у s-пункта с командами — до 12 КБ) агент перечитывает oq_get, если он ему нужен.
+ */
+export function writeAck(doc) {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return doc;
+  return { id: doc.id, version: doc.version, updatedAt: doc.updatedAt };
+}
+
+// Поля data в кратком oq_get: что это за документ, чей он и в каком он состоянии. body, cmd, cmd2, after, options,
+// inbox.text и списки карточек — только в полном ответе.
+const GET_BRIEF_FIELDS = ['kind', 'title', 'source', 'status', 'session', 'track'];
+
+/**
+ * Краткий oq_get (OPS-18, AC-1): версия и время документа, GET_BRIEF_FIELDS из data и отметка checks пункта
+ * (ответил ли владелец, статус агента, прочитан ли ответ). Строки длиннее BRIEF_TEXT — начало и длина, как в brief списка.
+ * check — документ checks/<id> пункта или null (ответа и статуса ещё нет).
+ */
+export function getBrief(doc, check) {
+  const data = doc?.data && typeof doc.data === 'object' ? doc.data : {};
+  const picked = {};
+  for (const k of GET_BRIEF_FIELDS) if (data[k] !== undefined) picked[k] = data[k];
+  const out = { id: doc?.id, version: doc?.version, updatedAt: doc?.updatedAt, ...(doc?.product ? { product: doc.product } : {}), ...briefDoc(picked) };
+  if (check !== undefined) {
+    const c = check?.data ?? null;
+    out.check = c
+      ? briefDoc({
+        ...(c.done !== undefined ? { done: c.done } : {}),
+        ...(c.choice !== undefined ? { choice: c.choice } : {}),
+        ...(c.agentStatus !== undefined ? { agentStatus: c.agentStatus } : {}),
+        ...(c.agentBy !== undefined ? { agentBy: c.agentBy } : {}),
+        unread: ownerAnswerUnread(c, doc?.id),
+      })
+      : null;
+  }
+  return out;
+}
+
+/** Строка списка work: у плана cards — числом, у памятки (окно «Памятки» на /queue) текст и команды — размерами. */
+export function workBrief(d) {
+  const { cards, ...data } = d.data;
+  // Памятка владельцу (окно «Памятки» на /queue): текст и команды — через oq_get, в списке только размеры.
+  if (data.kind === 'memo') {
+    const { body, cmds, ...rest } = data;
+    return { id: d.id, version: d.version, ...rest, bodyLen: typeof body === 'string' ? body.length : 0, cmdsCount: Array.isArray(cmds) ? cmds.length : 0 };
+  }
+  return { id: d.id, version: d.version, ...data, ...(Array.isArray(cards) ? { cardsCount: cards.length } : {}) };
 }
