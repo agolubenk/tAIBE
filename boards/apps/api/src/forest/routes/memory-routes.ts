@@ -22,7 +22,7 @@ const getMemoryRoute = createRoute({
   tags: ["Forest"],
   summary: "List claude-mem observations about a card",
   description:
-    "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Read-only; when the worker is down the last copy is returned and marked stale.",
+    "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Read-only; when the worker is down the last copy is returned and marked stale. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["read"] }),
@@ -45,5 +45,8 @@ export const memoryRoutes = apiRouter<
     await loadCardBinding(taskId),
     { project: memoryProject() },
   );
+  // TB-192: titles come from the claude-mem summarizer and can hold a secret.
+  // A token caller feeds a model and reads them masked; the web app does not
+  // (TB-143 decision (a)). Read-only, so nothing is restored on write.
   return c.json(maskForTokenCaller(c, memory), 200);
 });

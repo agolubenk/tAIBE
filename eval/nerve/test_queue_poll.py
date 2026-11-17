@@ -87,6 +87,16 @@ class QueuePollTest(unittest.TestCase):
         self.assertNotIn("If-None-Match", fake.calls[-1][1].replace('If-None-Match: W/"checks-1"', ""))
         self.assertEqual(sources._OQ_CACHE[next(k for k in sources._OQ_CACHE if k.endswith("/checks"))][0], 'W/"checks-2"')
 
+    def test_team_split_answer_wakes_no_role(self):
+        """Доли команды ролей (OPS-82) переключает кнопка «Роли» в шапке /queue — ответ читает сторож Mac, не роль."""
+        self.ctx.cfg["system"] = {"team": {"split_item": "d-team-split"}}
+        split = {"id": "d-team-split", "version": 1, "data": {"kind": "decision", "title": "Доли", "source": "taibe"}}
+        checks = [{"id": "d-team-split", "version": 3, "data": {"choice": "pause", "done": True, "at": "2026-10-28T07:00:00Z"}},
+                  {"id": "d-1", "version": 2, "data": {"choice": "yes", "done": True, "at": "2026-10-28T07:00:00Z"}}]
+        sources.run = FakeCurl({"items": [split, _item(1)], "checks": checks})
+        sources.poll_queue(self.ctx)
+        self.assertEqual([e["text"] for e in self.events() if e["kind"] == "owner.answer"], ["ответ владельца d-1: yes"])
+
     def test_bytes_roll_over_by_local_day(self):
         sources.run = FakeCurl({"items": [], "checks": []})
         sources.poll_queue(self.ctx)

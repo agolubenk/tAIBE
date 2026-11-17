@@ -48,6 +48,6 @@ The common mistake is finishing one path while leaving another stale. Check the 
 
 ## Verifying
 
-Use the smallest proof that covers the behavior. Focused tests and the affected package's typecheck usually suffice; use integration tests for routing, authorization, PostgreSQL, and migrations. For realtime changes, check the event-to-WebSocket-to-cache path. Use a real browser for user-visible flows when requested or when it is the only meaningful proof. Run repo-wide checks for broad cross-package changes or before a requested commit or pull request. Report what ran.
+Use the smallest proof that covers the behavior. Focused tests and the affected package's typecheck usually suffice; use integration tests for routing, authorization, PostgreSQL, and migrations, and run them through `scripts/it-pg.sh <name> [test files…]`, which gives each run a throwaway Postgres of its own. For realtime changes, check the event-to-WebSocket-to-cache path. Use a real browser for user-visible flows when requested or when it is the only meaningful proof. Run repo-wide checks for broad cross-package changes or before a requested commit or pull request. Report what ran.
 
 Keep comments for constraints and surprising decisions. Update this guide only when a recurring failure shows that an agent needs a durable rule.

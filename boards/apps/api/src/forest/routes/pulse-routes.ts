@@ -6,7 +6,10 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
-import { maskForTokenCaller } from "../../utils/token-caller-text";
+import {
+  maskForTokenCaller,
+  maskPageForTokenCaller,
+} from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { listFires } from "../read/list-fires";
 import { listJournal } from "../read/list-journal";
@@ -62,7 +65,7 @@ export const pulseRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     const { workspaceId } = c.req.valid("param");
     const { actor, outcome, cursor, take } = c.req.valid("query");
     return c.json(
-      maskForTokenCaller(
+      maskPageForTokenCaller(
         c,
         await listJournal({
           workspaceId,
@@ -72,7 +75,6 @@ export const pulseRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
           cursor,
           take,
         }),
-        ["nextCursor"],
       ),
       200,
     );

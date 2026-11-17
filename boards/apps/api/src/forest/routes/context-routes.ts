@@ -39,17 +39,8 @@ export const contextRoutes = apiRouter<
   const { workspaceId, taskId } = c.req.valid("param");
   const userId = c.get("userId");
   await assertTaskInWorkspace(taskId, workspaceId, userId);
-  const { meta, lease, approvals, ...card } = await buildCardContext(
-    taskId,
-    workspaceId,
-    userId,
-  );
-  // TB-144: the task text, labels, linked card titles and comments reach a
-  // caller with a token masked, as on the task and comment routes (TB-143).
-  // Forest working data stays as its own routes return it: a masked copy of
-  // meta would come back through set_card_meta, which restores nothing.
   return c.json(
-    { ...maskForTokenCaller(c, card), meta, lease, approvals },
+    maskForTokenCaller(c, await buildCardContext(taskId, workspaceId, userId)),
     200,
   );
 });

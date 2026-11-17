@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
-import { looksLikeSecret, redact } from "./index";
+import { growth, MAX_GROWTH } from "../fixtures/linear-time.js";
+import { looksLikePassphrase, looksLikeSecret, redact } from "./index.js";
 
 // TB-136: one corpus for both rule sets. infra/checks/test_checks.py reads the
 // same file and expects the scanner rule `scan` on every case.
@@ -24,6 +25,16 @@ const corpus = JSON.parse(
 // no string that a secret scanner could mistake for live material.
 function join(...parts: string[]): string {
   return parts.join("");
+}
+
+// TB-205, TB-209: redact of 256 000 characters against redact of a quarter of
+// them in the same run, not a limit in milliseconds (fixtures/linear-time.ts).
+const CHARS = 256_000;
+function repeated(unit: string, end = ""): (n: number) => string {
+  return (n) => unit.repeat(Math.ceil(n / unit.length)) + end;
+}
+function expectLinear(make: (n: number) => string): void {
+  expect(growth(make, redact, CHARS)).toBeLessThan(MAX_GROWTH);
 }
 
 const secrets = {
@@ -273,12 +284,354 @@ describe("@kaneo/redact", () => {
         "your_secure_password",
         "パスワードを入力",
         "%s\\nX-GitHub",
-        "ApiKeyUsageRow",
-        "SecretStr",
       ]) {
         expect(looksLikeSecret(value)).toBe(false);
       }
     });
+
+    // TB-193: a type name is code only with `,`, `;` or `)` right after it.
+    it("looksLikeSecret drops a type name only in a type context", () => {
+      for (const next of [",", ";", ")"]) {
+        expect(looksLikeSecret("ApiKeyUsageRow", next)).toBe(false);
+        expect(looksLikeSecret("SecretStr", next)).toBe(false);
+      }
+      for (const next of ["", " ", "\n", '"', "|"]) {
+        expect(looksLikeSecret("ApiKeyUsageRow", next)).toBe(true);
+      }
+    });
+  });
+
+  // TB-193: capitalized words with no digit, shorter than 32 characters, were
+  // read as a type name everywhere after #283, so a passphrase stayed open.
+  describe("a passphrase of capitalized words (TB-193)", () => {
+    const phrase = join("Correct", "Horse", "Battery", "Staple");
+    const short = join("Open", "Sesame", "Now");
+
+    it.each([
+      ["an env line at the end of the text", `CLIENT_SECRET=${phrase}`, phrase],
+      ["an env line before the next one", `GITHUB_TOKEN=${short}\nX=1`, short],
+      ["a YAML key", `api_key: ${phrase}\nregion: eu`, phrase],
+      ["a JSON value", `{"access_token": "${phrase}", "n": 1}`, phrase],
+      ["a header", `x-api-key: ${phrase}`, phrase],
+      ["a markdown table cell", `| \`GITHUB_TOKEN=${short}\` | prod |`, short],
+    ])("masks %s", (_name, input, value) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(1);
+      expect(result.text).not.toContain(value);
+    });
+
+    it.each([
+      [
+        "a type before a comma",
+        "function f(apiKey: ApiKeyUsageRow, now: Date)",
+      ],
+      ["a type before a semicolon", "{ access_token: AccessTokenPayload; }"],
+      ["a type before a parenthesis", "function f(apiKey: ApiKeyUsageRow)"],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+  });
+
+  // TB-195: lowercase words joined together, shorter than 32 characters, were
+  // read as a camelCase name after a SECRET or PASSWORD name too.
+  describe("a passphrase of lowercase words (TB-195)", () => {
+    const phrase = join("correct", "horse", "battery", "staple");
+
+    it.each([
+      ["an env line at the end of the text", `CLIENT_SECRET=${phrase}`],
+      ["an env line before the next one", `JWT_SECRET=${phrase}\nX=1`],
+      ["a YAML key", `CLIENT_SECRET: ${phrase}\nregion: eu`],
+      ["a JSON value", `{"CLIENT_SECRET": "${phrase}", "n": 1}`],
+      ["a PASSWORD name", `REDIS_PASSWORD=${phrase}`],
+      ["a lowercase password key", `password: ${phrase}`],
+    ])("masks %s", (_name, input) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(1);
+      expect(result.text).not.toContain(phrase);
+    });
+
+    it.each([
+      ["a camelCase variable", "{ JWT_SECRET: jwtSecret, ttl: 60 }"],
+      ["the literal undefined", "JWT_SECRET: undefined"],
+      ["joined words", "CLIENT_SECRET=your_client_secret"],
+      ["a TOKEN name", `GITHUB_TOKEN=${phrase}`],
+      ["a lowercase secret key in prose", `secret: ${phrase}`],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    it("looksLikePassphrase keeps lowercase words and drops code", () => {
+      expect(looksLikePassphrase(phrase)).toBe(true);
+      expect(looksLikeSecret(phrase)).toBe(false);
+      for (const value of ["jwtSecret", "undefined", "short", "a.b.c.d.e"]) {
+        expect(looksLikePassphrase(value)).toBe(false);
+      }
+    });
+  });
+
+  // TB-198 (Claude lens #368, item 1): a value the filter rejected was
+  // consumed whole, so a name inside it was never read and its value leaked.
+  describe("a name inside a rejected value (TB-198)", () => {
+    const value = join("Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv3");
+    const phrase = join("correct", "horse", "battery", "staple");
+
+    it.each([
+      ["a quoted code value", `B_SECRET" = "x(=C_SECRET=${value}`, value],
+      [
+        "a template value",
+        `CLIENT_SECRET = "{{vault}}/APP_SECRET=${value}"`,
+        value,
+      ],
+      ["a passphrase", `B_SECRET=x(=C_SECRET=${phrase}`, phrase],
+      ["a TOKEN name", `A_TOKEN=x(=B_TOKEN=${value}`, value],
+      ["a credential name", `api_key=x(api_key=${value}`, value],
+      ["a non-ASCII character", `A_SECRET=é=B_SECRET=${value}`, value],
+    ])("masks the inner value after %s", (_name, input, secret) => {
+      expectSingleHit(input, "password_assignment", secret);
+    });
+
+    it("masks the inner value of a header", () => {
+      expectSingleHit(`x-api-key: x(x-api-key:${value}`, "api_key", value);
+    });
+
+    // Claude lens and Control on #375: the inner match ends after the outer
+    // value, and the next search skipped C_TOKEN. The base masked these.
+    it.each([
+      `A_TOKEN=x(B_TOKEN = C_TOKEN = ${value}`,
+      `A_TOKEN=x(B_TOKEN = GITHUB_TOKEN = ${value}`,
+      `A_TOKEN=x(B_TOKEN"=C_TOKEN" = "${value}"`,
+      `A_TOKEN=x(B_TOKEN" = "GH2_TOKEN" = "${value}"`,
+      `A_TOKEN=x(B_TOKEN = "C_TOKEN" = "${value}"`,
+      `api_key=x(api_key = api_key = ${value}`,
+      `x-api-key: x(x-api-key: x-api-key: ${value}`,
+      `A_SECRET=x(B_SECRET = C_SECRET = ${value}`,
+      `A_SECRET=y(B_SECRET : C_SECRET : ${value}`,
+      `A_SECRET=éB_SECRET = C_SECRET = ${value}`,
+      // Claude lens on #375 2a50b88f4: nested rewinds paired a name with
+      // another value than the plain search (B1), and the overlap rule
+      // dropped a hit that ended after the previous one (B2).
+      `A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = X1_TOKEN = ${value}`,
+      `api_key=x(api_key : y(api_key : k1_api_key : x1_api_key : ${value}`,
+      `A_SECRET=x(B_SECRET:C_PASSWORD:q;${value}`,
+    ])(
+      "masks the value after an inner match past the outer value: %s",
+      (input) => {
+        const result = redact(input);
+        expect(result.text).not.toContain(value);
+        expect(result.hits.length).toBeGreaterThan(0);
+      },
+    );
+
+    // The restart rests on one property of both filters: a value with `=` or
+    // `:` and no DROPS_VALUE character is accepted from 8 characters on, so
+    // the value is masked whole with the name inside it.
+    it("accepts every value with = or : from 8 characters on", () => {
+      const alphabet = "aAzZqQ09_-.$/+@!~=:";
+      let seed = 1;
+      const random = () => {
+        seed = (seed * 48_271) % 2_147_483_647;
+        return seed;
+      };
+      for (let i = 0; i < 5000; i++) {
+        let candidate = "";
+        const length = 8 + (random() % 40);
+        while (candidate.length < length) {
+          candidate += alphabet.charAt(random() % alphabet.length);
+        }
+        if (!/[=:]/.test(candidate)) continue;
+        for (const next of ["", ",", ";", ")"]) {
+          expect(looksLikeSecret(candidate, next)).toBe(true);
+          expect(looksLikePassphrase(candidate, next)).toBe(true);
+        }
+      }
+      const outer = `A_TOKEN=aaaa/B_TOKEN=${value}`;
+      expect(redact(outer).text).toBe("A_TOKEN=[REDACTED:password_assignment]");
+    });
+
+    it.each([
+      ["code in the inner value", "A_SECRET=x=B_SECRET=abc(def"],
+      ["a call", "JWT_SECRET: getSecret(config)"],
+      ["a short inner value", "A_SECRET=x(=B_SECRET=abc"],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    // Control #375: an inner name may end where the outer value ends, with
+    // its separator after a space or a quote. The search goes on at the
+    // start of that name, whether the outer value was rejected or masked.
+    const hidden = "[REDACTED:password_assignment]";
+
+    it.each([
+      [
+        "a rejected dotted value",
+        `A_TOKEN=x.B_TOKEN = ${value}`,
+        `A_TOKEN=x.B_TOKEN = ${hidden}`,
+      ],
+      [
+        "a rejected value before a quote",
+        `A_TOKEN="abcdefB_TOKEN" = "${value}"`,
+        `A_TOKEN="abcdefB_TOKEN" = "${hidden}"`,
+      ],
+      [
+        "a masked value ending in a colon",
+        `A_SECRET=fooB_SECRET: ${value}`,
+        `A_SECRET=${hidden} ${hidden}`,
+      ],
+      [
+        "a masked dotted value ending in a colon",
+        `A_TOKEN=myApp.B_TOKEN: ${value}`,
+        `A_TOKEN=${hidden} ${hidden}`,
+      ],
+      [
+        "a masked value without a final separator",
+        `A_TOKEN=a=B_TOKEN = ${value}`,
+        `A_TOKEN=${hidden} = ${hidden}`,
+      ],
+      [
+        "a password value",
+        `password=foopassword = ${value}`,
+        `password=${hidden} = ${hidden}`,
+      ],
+    ])("masks the next value after %s", (_name, input, expected) => {
+      expect(redact(input).text).toBe(expected);
+    });
+
+    // The search goes on after the last rejecting character or at the name
+    // that ends the value, never at or before the previous match start:
+    // 256 000 characters take under 10 ms.
+    it.each([
+      "A_SECRET=(",
+      "A_SECRET=x(",
+      "api_key=(",
+      "A_TOKEN=(",
+      "x-api-key:(",
+      "A_SECRET=é",
+      "A_TOKEN=x.B_TOKEN ",
+      "A_SECRET=fooB_SECRET: ",
+      "password=xpassword ",
+      "A_TOKEN=a=B_TOKEN ",
+      "A_TOKEN=x(B_TOKEN = ",
+      "A_SECRET=x(B_SECRET : ",
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      expectLinear(repeated(unit));
+    });
+  });
+
+  // TB-199: `:=` and `=>` gave `=` or `>` as the value, a comparison was
+  // masked, and the mask could land on the name.
+  describe("separators and the position of the value (TB-199)", () => {
+    const value = join("Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv3");
+    const hidden = "[REDACTED:password_assignment]";
+
+    it.each([
+      ["password := <v>", `password := ${hidden}`],
+      ['api_key := "<v>"', `api_key := "${hidden}"`],
+      ['GITHUB_TOKEN := "<v>"', `GITHUB_TOKEN := "${hidden}"`],
+      ['CLIENT_SECRET := "<v>"', `CLIENT_SECRET := "${hidden}"`],
+      ["'password' => '<v>'", `'password' => '${hidden}'`],
+      [':api_key => "<v>"', `:api_key => "${hidden}"`],
+      ['"DB_PASSWORD" => "<v>",', `"DB_PASSWORD" => "${hidden}",`],
+      // TB-201 part C: a bare value after a spaced separator.
+      ["B_TOKEN := <v>", `B_TOKEN := ${hidden}`],
+      ["B_TOKEN => <v>", `B_TOKEN => ${hidden}`],
+    ])("masks the value in %s", (input, expected) => {
+      expect(redact(input.replace("<v>", value)).text).toBe(expected);
+    });
+
+    it.each([
+      "if (password === true) run()",
+      "x.password == y",
+      "const m = data.must_change_password === true",
+      `A_TOKEN === "${value}"`,
+    ])("leaves the comparison %j untouched", (input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    // Release #392 B1: `==` glued to the value is an assignment of a value
+    // that starts with `=`; the base masked it.
+    it.each([
+      `PASSWORD==${value}`,
+      `DB_PASSWORD==${value}`,
+      `A_TOKEN==${value}`,
+      `api_key===${value}`,
+      `password==${value}`,
+    ])("masks the value after a glued == in %s", (input) => {
+      expect(redact(input).text).not.toContain(value);
+    });
+
+    it.each([
+      `password == ${value}`,
+      `password=="${value}"`,
+      `A_TOKEN== '${value}'`,
+    ])("leaves the comparison %j with a space or a quote readable", (input) => {
+      expect(redact(input).text).toContain(value);
+    });
+
+    it.each([
+      ["password: pass", `password: ${hidden}`],
+      ["password=sword", `password=${hidden}`],
+      ["{ password: password }", `{ password: ${hidden} }`],
+    ])("masks the value, not the name, in %j", (input, expected) => {
+      expect(redact(input).text).toBe(expected);
+    });
+
+    // A rejected value that ends in `name=><v>` goes on at the name; a hit
+    // that starts inside the previous one widens it.
+    it.each([
+      `A_TOKEN=x(B_TOKEN=>${value}`,
+      `A_TOKEN=x(y=>C_TOKEN=${value}`,
+      `api_key=x(api_key=>${value}`,
+      ` A_SECRET => password:x;passwd=>${value}`,
+      `A_SECRET => password:x;passwd=${value}`,
+    ])("masks the value in %s", (input) => {
+      expect(redact(input).text).not.toContain(value);
+    });
+
+    // Coord 15.11: the base took the `=` of a glued `:=` into the value and
+    // masked any value long enough. A value right after `:=` or `=>` keeps
+    // that mask.
+    const phrase = join("correct", "horse", "battery", "staple");
+    const camel = join("Correct", "Horse", "Battery", "Staple");
+    it.each([
+      [`GH2_TOKEN:=${phrase};`, phrase],
+      [`api_key:=${camel};`, camel],
+      [`x-api-key:=${phrase}`, phrase],
+      [`A_SECRET:=${camel};`, camel],
+      [`T_ACCESS_TOKEN=>${phrase}`, phrase],
+    ])("masks a word value after a glued operator: %s", (input, secret) => {
+      expect(redact(input).text).not.toContain(secret);
+    });
+
+    // TB-202 superset test against 221e381b4: a name with a glued `:=`
+    // after `=>` was accepted as the value, and the search stopped before
+    // the real value. Now it goes on at that name.
+    it.each([
+      [`X1_TOKEN=>A_TOKEN=>A_TOKEN:="${value}"`, value],
+      [`x-api-key"=api_key=>k1_api_key:="${camel}"`, camel],
+      [`X1_TOKEN=>A_TOKEN=>${value}`, value],
+    ])("masks the value after a chain of glued names: %s", (input, secret) => {
+      expect(redact(input).text).not.toContain(secret);
+    });
+
+    it.each([
+      "password===",
+      "A_TOKEN:=",
+      "password=>",
+      "A_TOKEN==(",
+      "A_TOKEN=x(B_TOKEN=>",
+      "A_TOKEN=(=>",
+      "password==",
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      expectLinear(repeated(unit));
+    });
+
+    // The lookahead after `=` reads the run of `=` once per name.
+    it.each(["A_TOKEN", "password", "api_key"])(
+      "redacts %s with 256 000 = after it in linear time",
+      (name) => {
+        expectLinear((n) => `${name}${"=".repeat(n)} x`);
+      },
+    );
   });
 
   // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the
@@ -405,7 +758,8 @@ describe("@kaneo/redact", () => {
   // scan to the end of the text is quadratic. MCP call arguments go through
   // redact before they are cut (api/src/mcp/call-detail.ts), so such a rule
   // holds the API event loop. On 256 000 characters each run takes up to
-  // 26 ms linear and 1.3–60 s quadratic; the bound sits between them.
+  // 26 ms linear and 1.3–60 s quadratic. A quarter of the text takes a
+  // quarter of the time if the work is linear, a sixteenth if quadratic.
   it.each([
     "_",
     "A_",
@@ -422,10 +776,7 @@ describe("@kaneo/redact", () => {
     "postgres://a:",
     "-----BEGIN KEY-----",
   ])("redacts 256 000 characters of %j in linear time", (unit) => {
-    const text = unit.repeat(Math.ceil(256_000 / unit.length));
-    const started = performance.now();
-    redact(text);
-    expect(performance.now() - started).toBeLessThan(250);
+    expectLinear(repeated(unit));
   });
 
   // Claude lens #283 B1: a run of a key prefix that fails only at its last
@@ -456,18 +807,12 @@ describe("@kaneo/redact", () => {
   )(
     "redacts 256 000 characters of %j and a final %j in linear time",
     (unit, stop) => {
-      const text = unit.repeat(Math.ceil(256_000 / unit.length)) + stop;
-      const started = performance.now();
-      redact(text);
-      expect(performance.now() - started).toBeLessThan(250);
+      expectLinear(repeated(unit, stop));
     },
   );
 
   it("redacts one 256 000-character key body with a failing end in linear time", () => {
-    const text = `${join("gh", "p_")}${"a".repeat(256_000)}_`;
-    const started = performance.now();
-    redact(text);
-    expect(performance.now() - started).toBeLessThan(250);
+    expectLinear((n) => `${join("gh", "p_")}${"a".repeat(n)}_`);
   });
 
   // Frontend lens #283: a key with an alphanumeric body or a fixed length may

@@ -17,6 +17,12 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
+vi.mock("@/lib/i18n/domain", () => ({
+  getSeverityLabel: (severity: string) => `label:${severity}`,
+  getStatusLabel: (status: string) => `label:${status}`,
+  getPriorityLabel: (priority: string) => `label:${priority}`,
+}));
+
 vi.mock("@/lib/format", () => ({
   formatDateTime: (value: string) => value,
   formatRelativeTime: () => "5 min ago",
@@ -136,7 +142,7 @@ describe("PulseTab", () => {
       1,
     );
     expect(
-      screen.getByText("workspace:forest.pulse.bugSeverity High"),
+      screen.getByText("workspace:forest.pulse.bugSeverity label:High"),
     ).toBeTruthy();
     expect(screen.getByText("workspace:forest.pulse.urgent")).toBeTruthy();
     expect(screen.getByText("3")).toBeTruthy();

@@ -29,6 +29,16 @@ export function getPriorityLabel(priority: string) {
   });
 }
 
+// Severity is free text from Notion and agents («High», «major», «Критичная»):
+// a known level gets its label, anything else is shown as written (TB-220).
+const SEVERITY_LEVELS = new Set(["critical", "high", "medium", "low"]);
+
+export function getSeverityLabel(severity: string) {
+  const level = severity.trim().toLowerCase();
+  if (!SEVERITY_LEVELS.has(level)) return severity;
+  return i18n.t(`tasks:severity.${level}`, { defaultValue: severity });
+}
+
 function toDisplayCase(value: string) {
   return value
     .replace(/[-_]/g, " ")
