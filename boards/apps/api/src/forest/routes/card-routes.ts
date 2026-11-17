@@ -10,7 +10,7 @@ import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import { readAgentHeaders } from "../agent-guard/agent-headers";
 import { loadCardMeta, toCardMeta } from "../card/card-meta";
-import { cardMetaPatch } from "../card/card-patch";
+import { cardMetaWrite } from "../card/card-patch";
 import { maskMetaText, restoreMetaText } from "../card/restore-meta-text";
 import { setCardMeta } from "../card/set-card-meta";
 import { assertTaskInWorkspace } from "../task-scope";
@@ -43,7 +43,7 @@ const setCardMetaRoute = createRoute({
   tags: ["Forest"],
   summary: "Change a card's Notion and agent fields",
   description:
-    "Sends only the fields to change; null clears one. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only. A caller with a token sends a text field back with the [REDACTED:<kind>] markers it read: they get the stored values back. Its answer is masked as the read is.",
+    "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only. A caller with a token sends a text field back with the [REDACTED:<kind>] markers it read: they get the stored values back. Its answer is masked as the read is.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["update"] }),
@@ -52,7 +52,7 @@ const setCardMetaRoute = createRoute({
     params: cardParam,
     body: {
       required: true,
-      content: { "application/json": { schema: cardMetaPatch } },
+      content: { "application/json": { schema: cardMetaWrite } },
     },
   },
   responses: {
@@ -62,7 +62,7 @@ const setCardMetaRoute = createRoute({
     ),
     404: errorResponse("Task not found"),
     409: errorResponse(
-      "No live lease of this session, the Backlog ID is taken, or a [REDACTED:…] marker that a caller with a token sent does not match the stored text (REDACTED_MARKERS_MISMATCH)",
+      "No live lease of this session, the Backlog ID is taken, revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision), or a [REDACTED:…] marker that a caller with a token sent does not match the stored text (REDACTED_MARKERS_MISMATCH)",
     ),
   },
 });
@@ -79,12 +79,14 @@ export const cardRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(setCardMetaRoute, async (c) => {
     const { workspaceId, taskId } = c.req.valid("param");
     await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
+    const { expectedMetaRevision, ...patch } = c.req.valid("json");
     const meta = await setCardMeta({
       workspaceId,
       taskId,
       actor: resolveForestActor(c),
       headers: readAgentHeaders(c),
-      patch: await restoreMetaText(c, taskId, c.req.valid("json")),
+      patch: await restoreMetaText(c, taskId, patch),
+      expectedRevision: expectedMetaRevision,
     });
     return c.json(maskMetaText(c, meta), 200);
   });

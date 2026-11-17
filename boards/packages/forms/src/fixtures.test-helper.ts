@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { formTemplateSchema } from "./schema";
+import { formTemplateSchema } from "./schema.js";
 
 const read = (relative: string): unknown =>
   JSON.parse(readFileSync(new URL(relative, import.meta.url), "utf8"));
