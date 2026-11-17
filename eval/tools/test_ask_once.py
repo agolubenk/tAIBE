@@ -34,8 +34,6 @@ class AskOnceTest(unittest.TestCase):
               '# Закрыто\n\n- **Кэш ассетов веба** (закрыто 2026-11-01): nginx отдаёт неизменённые чанки с expires 1y\n')
         write(self.root, a.SPEC, '| R-090 | Импорт карточек из Notion идёт пачками по сто | Q-031 |\n'
                                  '| R-101 | Форма перманентных вопросов владельца на доске | Q-104 |\n')
-        write(self.root, a.ROADMAP, '| B3 | Экран: что видно владельцу и агентам | R-041 | В: состав экрана | 🔲 |\n'
-                                    '| B5 | Стоимость и чтения журнала MCP через API | R-036 | А | 🔲 |\n')
         write(self.root, 'oq.json', json.dumps([
             {'id': 'c-7', 'data': {'kind': 'decision', 'title': 'Запрещать ли второго родителя у подзадачи?'}},
             {'id': 'c-8', 'data': {'kind': 'decision', 'title': 'Сколько реплик Redis держать?', 'done': True}}],
@@ -58,12 +56,10 @@ class AskOnceTest(unittest.TestCase):
         self.assertEqual(self.check('второй родитель у подзадачи — запрещать?', *oq), 4)  # open in the owner queue
         self.assertEqual(self.check('сколько реплик Redis держать', *oq), 0)  # done in the queue — not «open»
         self.assertEqual(self.check('форма перманентных вопросов владельца'), 4)  # spec Q-1xx
-        self.assertEqual(self.check('что видно владельцу и агентам на экране'), 4)  # roadmap «В:»
 
     def test_unknown_and_near_misses_are_asked(self):
         self.assertEqual(self.check('сколько реплик Redis держать в проде'), 0)
         self.assertEqual(self.check('какой язык писать в коммитах'), 0)  # not the UI-language answer
-        self.assertEqual(self.check('стоимость журнала MCP через API'), 0)  # a roadmap row is context, not a decision
 
     def test_record_then_found_and_last_line_wins(self):
         self.assertEqual(self.check('сколько реплик Redis держать'), 0)

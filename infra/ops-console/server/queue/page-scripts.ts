@@ -24,12 +24,26 @@ export const SHIM_JS = String.raw`(function () {
   var DEFAULT = ${JSON.stringify(DEFAULT_PRODUCT)}, BOARD_OF = Object.create(null);
   try { view = localStorage.getItem('oq-product-filter') || ''; } catch (e) { view = ''; }
   if (!/^[a-z][a-z0-9-]{1,30}$/.test(view)) view = '';
-  // Продукт документа. Задача «Хода работ», сводка и карта доски — в продукте своих досок (ws карточек или data.ws,
-  // карта пространств — GET /products, page-products.ts), когда все известные доски одного продукта: документы tAIBE
-  // пишет токен HR. Иначе — столбец product.
+  // Продукт документа. Задача «Хода работ» с id «w-<slug>-…» — в продукте slug: так строки плана делят
+  // eval/tools/queue_focus.py и синхронизация плана с досками (TB-106), а строка tAIBE может вести карточки с доски HR.
+  // Иначе задача, сводка и карта доски — в продукте своих досок (ws карточек или data.ws, карта пространств —
+  // GET /products, page-products.ts), когда все известные доски одного продукта: документы tAIBE пишет токен HR.
+  // Иначе — столбец product. Продукты известны после GET /products (BOARD_OF).
+  function prefixProduct(id) {
+    var best = '';
+    Object.keys(BOARD_OF).forEach(function (w) {
+      var slug = BOARD_OF[w];
+      if (slug !== DEFAULT && typeof id === 'string' && id.indexOf('w-' + slug + '-') === 0 && slug.length > best.length) best = slug;
+    });
+    return best;
+  }
   function productOfDoc(col, d) {
     var home = d.product || DEFAULT, x = d.data, ws = [], p = '';
     if (col !== 'work' || !x) return home;
+    if (!x.kind) {
+      var byId = prefixProduct(d.id);
+      if (byId) return byId;
+    }
     if (typeof x.ws === 'string') ws = [x.ws];
     else if (Array.isArray(x.cards)) ws = x.cards.map(function (c) { return c && c.ws; });
     for (var i = 0; i < ws.length; i++) {
