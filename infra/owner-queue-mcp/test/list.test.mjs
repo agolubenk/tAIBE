@@ -43,11 +43,14 @@ test('filterDocs: неверный since и unread вне checks — ошибк�
   assert.throws(() => filterDocs('items', [], { unread: true }), /только для checks/);
 });
 
-test('pageList: offset и limit (1…500, по умолчанию 50); offset за концом — пустое окно', () => {
+test('pageList: offset и limit (1…30, по умолчанию 20; с ids — до 500); offset за концом — пустое окно (SE-45)', () => {
   const list = Array.from({ length: 120 }, (_, i) => i);
-  assert.deepEqual(pageList(list, {}), { from: 0, docs: list.slice(0, 50) });
-  assert.deepEqual(pageList(list, { offset: 100, limit: 50 }).docs, list.slice(100));
-  assert.equal(pageList(list, { limit: 10_000 }).docs.length, 120);
+  assert.deepEqual(pageList(list, {}), { from: 0, docs: list.slice(0, 20) });
+  assert.deepEqual(pageList(list, { offset: 100, limit: 30 }).docs, list.slice(100));
+  assert.equal(pageList(list, { limit: 10_000 }).docs.length, 30);
+  assert.equal(pageList(list, { ids: ['a'] }).docs.length, 120, 'с ids — все названные');
+  assert.equal(pageList(list, { ids: ['a'], limit: 60 }).docs.length, 60);
+  assert.equal(pageList(list, { ids: [] }).docs.length, 20, 'пустой ids — как без него');
   assert.equal(pageList(list, { limit: 0 }).docs.length, 1);
   assert.equal(pageList(list, { offset: -5 }).from, 0);
   assert.deepEqual(pageList(list, { offset: 500 }).docs, []);
@@ -56,7 +59,7 @@ test('pageList: offset и limit (1…500, по умолчанию 50); offset з
 test('fitList: next_offset — пока документы остались, за limit или за потолком размера; последнее окно без него', () => {
   const docs = Array.from({ length: 10 }, (_, i) => ({ id: `d-${i}` }));
   assert.deepEqual(fitList(10, docs), { total: 10, docs });
-  assert.deepEqual(fitList(30, docs, 10), { total: 30, offset: 10, next_offset: 20, docs });
+  assert.deepEqual(fitList(30, docs, 10), { total: 30, offset: 10, next_offset: 20, more: 'ещё 10', docs });
   assert.deepEqual(fitList(30, docs, 20), { total: 30, offset: 20, docs });
 
   const big = Array.from({ length: 40 }, (_, i) => ({ id: `b-${i}`, note: 'x'.repeat(5_000) }));

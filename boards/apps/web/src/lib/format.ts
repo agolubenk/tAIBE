@@ -25,14 +25,22 @@ export function localeCompareSort(a: string, b: string, locale?: string) {
   return collator.compare(a, b);
 }
 
+// A new Intl.DateTimeFormat costs ~29 µs, a cached one ~0.4 µs (Node, M-series,
+// TB-225): board cards and Gantt rows format a date each, so reuse them.
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
 export function formatDate(
   value: DateInput,
   options?: Intl.DateTimeFormatOptions,
   locale?: string,
 ) {
-  return new Intl.DateTimeFormat(getLocale(locale), options).format(
-    toDate(value),
-  );
+  const key = `${getLocale(locale)}|${options ? JSON.stringify(options) : ""}`;
+  let formatter = dateFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(getLocale(locale), options);
+    dateFormatters.set(key, formatter);
+  }
+  return formatter.format(toDate(value));
 }
 
 export function formatDateShort(value: DateInput, locale?: string) {
