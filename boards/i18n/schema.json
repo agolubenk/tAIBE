@@ -14831,11 +14831,14 @@
 										"key": {
 											"type": "string"
 										},
+										"backlog": {
+											"type": "string"
+										},
 										"queue": {
 											"type": "string"
 										}
 									},
-									"required": ["id", "key", "queue"]
+									"required": ["id", "key", "backlog", "queue"]
 								}
 							},
 							"required": [

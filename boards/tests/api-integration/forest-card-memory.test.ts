@@ -168,18 +168,45 @@ describe("API integration: card memory (TB-113)", () => {
     });
   });
 
+  // TB-121: «R-036» has a board key's form, and the proxy labels it «key».
+  // The API labels it by where it came from.
+  it("labels a Backlog ID as a Backlog ID, not as a card key", async () => {
+    const forest = await createForest();
+    const card = await numberedCard(forest.project.id, "memc", 5);
+    await db.insert(schema.cardMetaTable).values({
+      taskId: card.id,
+      workspaceId: forest.workspace.id,
+      backlogId: "R-036",
+      updatedBy: "test",
+    });
+
+    const res = await forest.agent(`/cards/${card.id}/memory`);
+    expect(res.status).toBe(200);
+    expect(asked).toEqual([[card.id, "MEMC-5", "R-036"]]);
+    expect(
+      res.body.keys.map((k: { key: string; matchedOn: string }) => [
+        k.key,
+        k.matchedOn,
+      ]),
+    ).toEqual([
+      [card.id, "id"],
+      ["MEMC-5", "key"],
+      ["R-036", "backlog"],
+    ]);
+  });
+
   // TB-192, TB-143 decision (a): a caller with a token feeds a model and reads
   // the titles masked; the web app's cookie session reads them as stored.
   it("masks secrets in titles for an agent's key on both routes, not for the web app", async () => {
     const forest = await createForest();
-    const card = await numberedCard(forest.project.id, "memc", 5);
+    const card = await numberedCard(forest.project.id, "memd", 6);
     const key = `tbk_${"a1B2c3D4".repeat(4)}`;
     const github = `ghp_${"Q1w2E3r4".repeat(5)}`;
     secretTitle = `rotated ${key} pushed with ${github}`;
 
     for (const path of [
       `/cards/${card.id}/memory`,
-      "/memory?ticketKey=MEMC-5",
+      "/memory?ticketKey=MEMD-6",
     ]) {
       const agent = await forest.agent(path);
       expect(agent.status, path).toBe(200);

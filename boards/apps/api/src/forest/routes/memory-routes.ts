@@ -11,7 +11,11 @@ import { requestWorkspaceScope } from "../../utils/api-key-workspace-scope";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
 import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
-import { loadCardMemoryKeys } from "../memory/card-memory-keys";
+import {
+  labelBySource,
+  loadCardMemoryKeys,
+  type MemoryKey,
+} from "../memory/card-memory-keys";
 import { getCardMemoryFinder } from "../memory/memory-reader";
 import { assertQueueItemVisible } from "../memory/queue-item-check";
 import { assertTaskInWorkspace } from "../task-scope";
@@ -64,6 +68,11 @@ const lookupMemoryRoute = createRoute({
   },
 });
 
+async function searchMemory(keys: MemoryKey[]) {
+  const memory = await getCardMemoryFinder()(keys.map(({ key }) => key));
+  return labelBySource(memory, keys);
+}
+
 // TB-192: titles come from the claude-mem summarizer and can hold a secret.
 // A token caller feeds a model and reads them masked; the web app does not
 // (TB-143 decision (a)). Read-only, so nothing is restored on write. Both
@@ -72,10 +81,13 @@ export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(getMemoryRoute, async (c) => {
     const { workspaceId, taskId } = c.req.valid("param");
     await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
-    const memory = await getCardMemoryFinder()(
-      await loadCardMemoryKeys(taskId),
+    return c.json(
+      maskForTokenCaller(
+        c,
+        await searchMemory(await loadCardMemoryKeys(taskId)),
+      ),
+      200,
     );
-    return c.json(maskForTokenCaller(c, memory), 200);
   })
   .openapi(lookupMemoryRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -88,7 +100,10 @@ export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     if (queueItemId) {
       await assertQueueItemVisible(workspaceId, queueItemId);
       return c.json(
-        maskForTokenCaller(c, await getCardMemoryFinder()([queueItemId])),
+        maskForTokenCaller(
+          c,
+          await searchMemory([{ key: queueItemId, source: "queue" }]),
+        ),
         200,
       );
     }
@@ -98,8 +113,11 @@ export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       apiKeyScope: requestWorkspaceScope(c),
     });
     await assertTaskInWorkspace(task.id, workspaceId, userId);
-    const memory = await getCardMemoryFinder()(
-      await loadCardMemoryKeys(task.id),
+    return c.json(
+      maskForTokenCaller(
+        c,
+        await searchMemory(await loadCardMemoryKeys(task.id)),
+      ),
+      200,
     );
-    return c.json(maskForTokenCaller(c, memory), 200);
   });

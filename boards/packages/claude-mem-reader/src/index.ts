@@ -1,12 +1,4 @@
 export {
-  type CardBinding,
-  type MatchedOn,
-  type MatchSource,
-  matchObservationToCards,
-  type ObservationCardMatch,
-  type ObservationLike,
-} from "./bind.js";
-export {
   CARD_MEMORY_PATH,
   type CardMemoryAnswer,
   type CardMemoryClient,
