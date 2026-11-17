@@ -309,7 +309,9 @@ for bad in ("backend-3", "boards-2"):
         print("FAIL: unknown second session refused:", bad)
         print(out)
 rc, out = second_run("taibe", "--launch", "--roles", "all")
-if rc != 0 or "backend-2" in out or "boards — команда напечатана" not in out:
+# Вторая сессия — строка итога «backend-2 —» или имя «…-backend-2-<хвост>»; подстрока «backend-2» ловила и хвост линии
+# базовой роли («taibe-backend-2wvk»: CI #457, прогон 44140212836).
+if rc != 0 or re.search(r"^\s+backend-2 —|-backend-2-", out, re.M) or "boards — команда напечатана" not in out:
     failed += 1
     print("FAIL: --roles all opens the six base roles only")
     print(out)
