@@ -4,12 +4,12 @@
  */
 import { and, avg, count, desc, eq, gte, isNull, lt, lte, max, or, sql } from 'drizzle-orm'
 import { getDb } from '../db/client'
-import { alerts, checkRollups, commands, containers, deploys, incidents, metricSamples, monitors, tlsChecks } from '../db/schema'
+import { alerts, checkRollups, commands, containers, deploys, incidents, metricSamples, monitors, reports, tlsChecks } from '../db/schema'
 import { getEnv } from '../env'
 import { getGeneralSettings } from '../settings/store'
 import { plural } from '../../shared/plural'
 import { isContainerDown } from '../alerts/container-state'
-import { containerProjects } from './containers'
+import { containerProjects, missingProjects } from './containers'
 import { OPS_REPORT_SCHEMA, type OpsOverallStatus, type OpsReport } from '../../shared/report-contract'
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null)
@@ -53,9 +53,24 @@ async function availability(start: Date, end: Date): Promise<OpsReport['availabi
   })
 }
 
+/**
+ * Хосты прошлого сохранённого отчёта — для пропавших стеков (OPS-57). Отчёт не сохраняется, пока собирается, поэтому
+ * последняя строка — прошлый. Битое тело — как отчёта нет: сравнение молчит, а не роняет сборку.
+ */
+async function previousHosts(): Promise<Pick<OpsReport, 'hosts'> | null> {
+  const row = await getDb().query.reports.findFirst({ orderBy: desc(reports.createdAt), columns: { payloadJson: true } })
+  if (!row) return null
+  try {
+    const hosts = (JSON.parse(row.payloadJson) as Partial<OpsReport>).hosts
+    return Array.isArray(hosts) ? { hosts } : null
+  } catch {
+    return null
+  }
+}
+
 async function hostStats(start: Date, end: Date): Promise<OpsReport['hosts']> {
   const db = getDb()
-  const list = await db.query.agents.findMany({ limit: 50 })
+  const [list, previous] = await Promise.all([db.query.agents.findMany({ limit: 50 }), previousHosts()])
   return Promise.all(
     list.map(async (a) => {
       const stat = async (metric: string) =>
@@ -74,6 +89,8 @@ async function hostStats(start: Date, end: Date): Promise<OpsReport['hosts']> {
         )[0]
       const [cpu, mem, disk] = await Promise.all([stat('cpu_pct'), stat('mem_pct'), stat('disk_pct')])
       const ctrs = await db.query.containers.findMany({ where: eq(containers.agentId, a.id), limit: 250 })
+      const projects = containerProjects(ctrs)
+      const missing = missingProjects(previous, a.id, projects)
       return {
         agent: a.id,
         name: a.name,
@@ -82,7 +99,8 @@ async function hostStats(start: Date, end: Date): Promise<OpsReport['hosts']> {
         memAvgPct: r1(mem?.a === null || mem?.a === undefined ? null : Number(mem.a)),
         diskMaxPct: r1(disk?.m ?? null),
         containersNotRunning: ctrs.filter((c) => isContainerDown(c)).map((c) => c.name),
-        projects: containerProjects(ctrs),
+        projects,
+        ...(missing.length ? { missingProjects: missing } : {}),
       }
     }),
   )

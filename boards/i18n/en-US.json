@@ -3655,7 +3655,8 @@
 				"invalid": "Some answers are not saved: fix the marked questions.",
 				"rowVersion": "The form was changed in another tab. Reload it; changes made here after the last save will be lost.",
 				"versionMismatch": "The form has a new version. Reload it to answer.",
-				"forbidden": "You cannot change the answers of this form."
+				"forbidden": "You cannot change the answers of this form.",
+				"tooLarge": "The answers are too large to save. Shorten the long text, and the form saves by itself."
 			},
 			"reload": "Reload form",
 			"submit": "Submit",
@@ -4169,7 +4170,11 @@
 					"GITHUB_UNAVAILABLE": "GitHub did not answer. Try again, or reconnect the integration.",
 					"GITHUB_NO_ACCESS": "The GitHub App may not read this repository's pull requests. Grant it pull request access, or reconnect the integration.",
 					"SOURCE_TOO_MANY_CHUNKS": "The text splits into too many parts for one source (at most 2000)."
-				}
+				},
+				"addedByAgent": "Added by agent {{name}}",
+				"addedByPerson": "Added by {{name}}",
+				"addedByMember": "Added by: a member",
+				"addedByUnknown": "Added by: unknown"
 			}
 		},
 		"ssr": {

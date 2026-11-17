@@ -19,4 +19,10 @@ export const LIMITS = {
   inputText: 500,
   text: 10_000,
   note: 2000,
+  /**
+   * Bytes of a PUT …/answers body; the API answers 413 above it. Up to
+   * 10 000 characters per text field; the grill is 37 KB. The web checks
+   * this before it sends (TB-173).
+   */
+  answersBody: 512 * 1024,
 } as const;

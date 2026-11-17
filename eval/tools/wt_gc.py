@@ -19,6 +19,7 @@ wt-limit-armed в общей папке .git, обратно не снимает
 
     python3 -I eval/tools/wt_gc.py branch <repo_root> <branch> [--head SHA] [--base REF] [--json]  # Нерв после мёржа
     python3 -I eval/tools/wt_gc.py sweep <repo_root> [--dry-run] [--json]  # все worktree с влитыми PR (gh)
+        [--skip BRANCH]... [--budget SEC] [--limit N]  # Нерв раз в час (OPS-81): ветки открытых PR, срок, окно мёржей
     python3 -I eval/tools/wt_gc.py check-limit <repo_root>                # 3 — остановка, 4 — только предупреждение
 """
 import json
@@ -262,35 +263,42 @@ def gc_branch(repo, branch, cwds=..., refs=None, head=None, base=None):
 
 
 def merged_prs(repo, limit=2000):
-    """{ветка: (голова, база)} влитых PR из этого же репозитория (не из форков). Окно — последние limit мёржей."""
-    code, out, err = _run(["gh", "pr", "list", "--state", "merged", "--limit", str(limit),
-                           "--json", "headRefName,headRefOid,baseRefName,isCrossRepository"], cwd=repo, timeout=180)
+    """{ветка: (голова, база, номер)} влитых PR из этого же репозитория (не из форков). Окно — последние limit мёржей."""
+    code, out, err = _run(["gh", "pr", "list", "--state", "merged", "--limit", str(limit), "--json",
+                           "number,headRefName,headRefOid,baseRefName,isCrossRepository"], cwd=repo, timeout=180)
     if code:
         raise RuntimeError(f"gh pr list не ответил: {err[:160]}")
     res = {}
     for p in json.loads(out or "[]"):
         if not p.get("isCrossRepository") and p["headRefName"] not in res:  # список — от свежих к старым
-            res[p["headRefName"]] = (p["headRefOid"], p["baseRefName"])
+            res[p["headRefName"]] = (p["headRefOid"], p["baseRefName"], p.get("number"))
     return res
 
 
-def sweep(repo, dry_run=False):
-    """Все worktree, чья ветка влита PR: удалить безопасные. Для пропущенных Нервом мёржей (демон стоял)."""
-    merged = merged_prs(repo)
-    cwds, refs = _real(busy_paths()), external_refs()
+def sweep(repo, dry_run=False, skip=(), budget=None, limit=None):
+    """Все worktree, чья ветка влита PR: удалить безопасные. Для пропущенных Нервом мёржей (демон стоял) и для
+    оставленных после мёржа из-за свежей работы (Нерв раз в час, OPS-81). skip — ветки открытых PR: ветку взяли
+    заново, её worktree не трогается. budget — секунд на проход: после него новое удаление не начинается (Нерв
+    ждёт вызов не дольше 300 с, одно удаление — до 240 с). limit — окно последних мёржей для gh (None — 2000)."""
+    merged = merged_prs(repo) if limit is None else merged_prs(repo, limit)
+    cwds, refs, start = _real(busy_paths()), external_refs(), time.monotonic()
     res = []
     for wt in worktrees(repo):
-        if not wt["branch"] or wt["branch"] not in merged:
+        if not wt["branch"] or wt["branch"] not in merged or wt["branch"] in skip:
             continue
-        head, base = merged[wt["branch"]]
+        if budget is not None and time.monotonic() - start > budget:
+            break  # остальные — следующим проходом
+        head, base, *num = merged[wt["branch"]]
+        pr = {"pr": num[0]} if num and num[0] else {}
         if dry_run:
             try:
                 reason = why_not(wt, repo, cwds, refs, head, base)
             except GitError as e:
                 reason = str(e)
-            res.append({"path": wt["path"], "branch": wt["branch"], "removed": False, "reason": reason or "dry-run: удалился бы"})
+            res.append({"path": wt["path"], "branch": wt["branch"], "removed": False, "reason": reason or "dry-run: удалился бы",
+                        **pr})
         else:
-            res.append(remove(repo, wt, cwds, refs, head, base))
+            res.append({**remove(repo, wt, cwds, refs, head, base), **pr})
     return res
 
 
@@ -367,8 +375,10 @@ def main(argv):
                 return 2
             res = gc_branch(repo, argv[3], head=_opt(argv, "--head"), base=_opt(argv, "--base"))
         else:
-            res = sweep(repo, dry_run="--dry-run" in argv)
-    except (GitError, RuntimeError) as e:
+            skip = {argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--skip"}
+            budget, limit = _opt(argv, "--budget"), _opt(argv, "--limit")
+            res = sweep(repo, "--dry-run" in argv, skip, budget and float(budget), limit and int(limit))
+    except (GitError, RuntimeError, ValueError) as e:  # ValueError — пустая ветка, нечисловой --budget или --limit
         print(f"wt_gc: {e}", file=sys.stderr)
         return 1
     if as_json:

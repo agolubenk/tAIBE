@@ -12,7 +12,7 @@
                  --window-minutes назад, одна вкладка, тот же tty, в ней только shell. Окна без записи — никогда.
       Для ack и idle одинаково: не держатель роли (как team_status.py live), в папке нет незакоммиченного, коммитов
       не на remote и stash этой ветки. Перед снятием статус и «несохранённое» проверяются заново.
-      Никогда: своя сессия и её предки, busy, чужой проект (вне --root), сессия не в Terminal, сессия ровно в общем
+      Никогда: своя сессия и её предки, busy, чужой проект (вне --root), сессия не в Terminal и не в tmux, сессия ровно в общем
       корне проектов (--keep-cwd; по умолчанию папка над основным checkout слоя — там постоянный мост).
   lineage.py reap --auto --summary [--since-hours 24]
       читаемая сводка журнала за период: прогоны, кого снял бы (снял) и почему, итоги действий. Без сырого JSONL.
@@ -125,8 +125,8 @@ def decide(sx, procs, r, ctx, a):
     if r["status"] not in ("idle", "waiting"):
         return None, f"статус {r['status']}"
     where = L.host(procs, r["proc"])
-    if where != "terminal":
-        return None, f"не в Terminal ({where}) — только руками"
+    if where not in ("terminal", "tmux"):  # tmux (OPS-82): панель закрывает take_down по записи линии
+        return None, f"не в Terminal и не в tmux ({where}) — только руками"
     kind, why = criterion(sx, procs, r, a)
     if kind is None:
         return None, why

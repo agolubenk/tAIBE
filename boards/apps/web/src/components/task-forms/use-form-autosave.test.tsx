@@ -9,6 +9,7 @@ import {
   it,
   vi,
 } from "vite-plus/test";
+import { formTemplateSchema, LIMITS } from "@kaneo/forms";
 import type { TaskForm } from "@/fetchers/task-form/get-task-forms";
 import { SaveTaskFormError } from "@/fetchers/task-form/save-task-form-answers";
 import { taskFormsKey } from "@/hooks/queries/task-form/use-task-forms";
@@ -158,6 +159,60 @@ describe("useFormAutosave (TB-173 F1/F2)", () => {
     await flush();
     expect(save).toHaveBeenCalledTimes(2);
     expect(sentAnswers(1)).toEqual({ mood: { v: 4 } });
+    expect(result.current.saveState.kind).toBe("saved");
+  });
+
+  it("does not send answers over the API limit and saves once they are shorter", async () => {
+    vi.useFakeTimers();
+    // 60 long texts: about 1.2 MB of UTF-8, over the 512 KiB the API takes.
+    const long = "я".repeat(LIMITS.text);
+    const template = formTemplateSchema.parse({
+      form: "long",
+      version: 1,
+      title: "Long",
+      fields: Array.from({ length: 60 }, (_, i) => ({
+        id: `t${i}`,
+        type: "text",
+        q: `Text ${i}`,
+      })),
+    });
+    const { result } = setup(taskForm({ template }));
+    act(() => {
+      for (let i = 0; i < 60; i++) result.current.change(`t${i}`, { v: long });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+    expect(save).not.toHaveBeenCalled();
+    expect(result.current.saveState).toEqual({
+      kind: "failed",
+      failure: "too_large",
+    });
+    act(() => {
+      for (let i = 1; i < 60; i++) result.current.change(`t${i}`, { v: "" });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(result.current.saveState.kind).toBe("saved");
+  });
+
+  it("after a 413 sends no body as large again, and a shorter one at once", async () => {
+    vi.useFakeTimers();
+    save.mockRejectedValueOnce(new SaveTaskFormError("too_large"));
+    const { result } = setup();
+    act(() => result.current.change("story", { v: "a".repeat(5000) }));
+    await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+    expect(result.current.saveState).toEqual({
+      kind: "failed",
+      failure: "too_large",
+    });
+    act(() => result.current.change("story", { v: "b".repeat(5000) }));
+    await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+    act(() => result.current.retry());
+    await flush();
+    expect(save).toHaveBeenCalledTimes(1);
+    act(() => result.current.change("story", { v: "short" }));
+    await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(sentAnswers(1)).toEqual({ story: { v: "short" } });
     expect(result.current.saveState.kind).toBe("saved");
   });
 
