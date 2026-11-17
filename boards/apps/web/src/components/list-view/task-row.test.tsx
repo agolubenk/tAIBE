@@ -117,6 +117,11 @@ vi.mock("@/store/user-preferences", () => ({
   }),
 }));
 
+vi.mock("@/lib/i18n/domain", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/i18n/domain")>()),
+  getSeverityLabel: (severity: string) => `label:${severity}`,
+}));
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string) => key,
@@ -313,7 +318,7 @@ describe("TaskRow", () => {
     );
 
     expect(screen.getAllByText("tasks:card.kind.bug")).toHaveLength(1);
-    expect(screen.getByText("· high")).toBeVisible();
+    expect(screen.getByText("· label:high")).toBeVisible();
     expect(useBoardBugs).toHaveBeenCalledWith("workspace-1", "project-1");
   });
 
