@@ -26,6 +26,7 @@ import { answeredApproval } from "./answered-approval";
 import { isPlainJson } from "./json-media-type";
 import { loadGuardedTask, projectWorkspace } from "./load-task";
 import { type MoveFacts, moveFacts, moveRoute } from "./move-facts";
+import { restoreGuardedText } from "./restore-guarded-text";
 
 type Denial = {
   workspaceId: string | null;
@@ -185,8 +186,12 @@ async function guardEdit(
     action: request.action,
     targetId: task.id,
   };
-  const { changes } = request;
-  const { moved, statusChanged, facts } = await writeFacts(request, task);
+  // TB-143: a masked title or description sent back unchanged is not an edit.
+  const changes = restoreGuardedText(request.changes, task);
+  const { moved, statusChanged, facts } = await writeFacts(
+    { ...request, changes },
+    task,
+  );
   const decision = decideTaskWrite(changes, task, facts);
   if (decision.kind === "deny") {
     await deny(at, new ForestError("agent_forbidden", decision.reason));
