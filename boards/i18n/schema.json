@@ -17355,6 +17355,9 @@
 						"loadError": {
 							"type": "string"
 						},
+						"draftChanged": {
+							"type": "string"
+						},
 						"approveMatching": {
 							"type": "object",
 							"additionalProperties": false,
@@ -17536,6 +17539,7 @@
 						"diffFrom",
 						"empty",
 						"loadError",
+						"draftChanged",
 						"approveMatching"
 					]
 				}
