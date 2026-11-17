@@ -30,7 +30,12 @@ for form in ("$D/git push origin HEAD:main", "\"$D/gh\" pr merge 1", "$D/GIT pus
              "read D < d.txt; ${=D}/swiftc push origin HEAD:main", "read D < d.txt; \"${=D}/swiftc\" push origin HEAD:main",
              "read D < d.txt; ${(z)D}/swiftc push origin HEAD:main", "D=$(cat d.txt); ${=D}/swiftc push origin HEAD:main",
              "set -- git -c a.b=; \"$@/swiftc\" push origin HEAD:main",
-             "bash -c '$0/swiftc push origin HEAD:main' 'git -c a.b='"):
+             "bash -c '$0/swiftc push origin HEAD:main' 'git -c a.b='",
+             # B1': имя задаёт сама оболочка, без присваивания в команде
+             "read < d.txt; $REPLY/swiftc push origin HEAD:main", "read < d.txt; \"$REPLY/swiftc\" push origin HEAD:main",
+             "echo 'git -c a.b='; $_/swiftc push origin HEAD:main", "set -- git -c a.b=; $argv/swiftc push origin HEAD:main",
+             "mapfile < d.txt; ${MAPFILE}/swiftc push origin HEAD:main",
+             "set -- -a 'git -c a.b='; getopts a: o; $OPTARG/swiftc push origin HEAD:main"):
     bash(f"SE-78: имя git/gh/curl, не видно или значение невидимо — догадка: {form!r}", form, True, cwd=se78)
 # Модуль: имя без пути, скрытое и подстановка — не «видимое».
 for exe, hidden, want in (("$D/swiftc", False, True), ("$D/GIT", False, False), ("swiftc", False, False),
