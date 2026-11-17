@@ -339,6 +339,15 @@ class GateTest(Roles):
         self.assertEqual(rc, TS.RC_MISSING, out)
         self.assertIn("сессий Claude 3 ≥ max_sessions 3", out)
 
+    def test_claude_mem_observers_not_counted(self):
+        """Фоновые сессии claude-mem (~/.claude-mem/observer-sessions) не занимают места людей и ролей (17.11)."""
+        self.sess(201, "r.a1", "coord")
+        for pid in (202, 203, 204):
+            self.sess(pid, f"r.c{pid}", "coord", cwd=self.dir / ".claude-mem" / "observer-sessions" / str(pid))
+        rc, out, _ = self.gate(50)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("сессий 1/3", out)
+
     def test_unknown_memory_does_not_close(self):
         rc, out, _ = self.gate(None)
         self.assertEqual(rc, 0, out)
