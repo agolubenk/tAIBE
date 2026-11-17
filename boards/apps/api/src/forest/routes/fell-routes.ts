@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import { fellTrees } from "../fell/fell-trees";
@@ -96,7 +97,7 @@ export const fellRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
             kind: "sector",
             sectorId: body.sectorId,
           });
-    return c.json(result, 200);
+    return c.json(maskForTokenCaller(c, result), 200);
   })
   .openapi(growRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -106,5 +107,5 @@ export const fellRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       actor: resolveForestActor(c),
       ...body,
     });
-    return c.json(result, 200);
+    return c.json(maskForTokenCaller(c, result), 200);
   });

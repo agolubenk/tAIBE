@@ -1,7 +1,7 @@
 // Отбор и страницы oq_list (list.mjs): фильтры, окно offset/limit, next_offset и потолок размера ответа.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OUT_MAX, briefDeep, briefDoc, filterDocs, fitEvents, fitList, historyReply, ownerAnswerUnread, pageList, replyText, snapshots } from '../list.mjs';
+import { OUT_MAX, briefDeep, briefDoc, filterDocs, fitEvents, fitList, historyReply, ownerAnswerUnread, pageList, replyText, snapshots, workBrief } from '../list.mjs';
 
 const check = (id, data) => ({ id, version: 1, data });
 
@@ -183,4 +183,21 @@ test('replyText: JSON целиком или ошибка с размером —
   assert.equal(r.isError, true);
   assert.match(r.text, /больше потолка 100/);
   assert.deepEqual(replyText(undefined), { text: 'null' });
+});
+
+test('workBrief: строка плана — cardsCount; памятка — без текста и команд, только их размеры', () => {
+  const row = workBrief({ id: 'w-taibe-1', version: 3, data: { title: 'x', cards: [{ key: 'OPS-1' }, { key: 'OPS-2' }] } });
+  assert.deepEqual(row, { id: 'w-taibe-1', version: 3, title: 'x', cardsCount: 2 });
+  const memo = workBrief({ id: 'memo-phone', version: 1, data: { kind: 'memo', title: 'Телефон потерян', body: 'абзац', cmds: [{ cmd: 'a' }, { cmd: 'b' }], order: 1 } });
+  assert.deepEqual(memo, { id: 'memo-phone', version: 1, kind: 'memo', title: 'Телефон потерян', order: 1, bodyLen: 5, cmdsCount: 2 });
+});
+
+test('unread: ответ на доли команды ролей (d-team-split) читает сторож Mac — агенту не «непрочитанный»', () => {
+  const docs = [
+    { id: 'd-team-split', version: 3, data: { done: true, choice: 'pause', at: '2026-11-17T10:00:00Z', ownerAt: '2026-11-17T10:00:00Z' } },
+    { id: 'd-1', version: 2, data: { done: true, choice: 'yes', at: '2026-11-17T10:00:00Z', ownerAt: '2026-11-17T10:00:00Z' } },
+  ];
+  assert.deepEqual(filterDocs('checks', docs, { unread: true }).map((d) => d.id), ['d-1']);
+  assert.equal(ownerAnswerUnread(docs[0].data, 'd-team-split'), false);
+  assert.equal(ownerAnswerUnread(docs[1].data, 'd-1'), true);
 });
