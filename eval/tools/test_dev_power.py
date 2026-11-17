@@ -121,6 +121,7 @@ class InstallTest(Base):
         self.assertEqual(os.stat(on).st_mode & 0o777, 0o755)
         self.assertIn("agents_up.py --down", off.read_text())
         self.assertNotIn("--down", on.read_text())
+        self.assertIn("agents_up.py --attach", on.read_text())  # окно ярлыка — окно ролей
         d = plistlib.loads(D.plist(D.LABEL_UP).read_bytes())
         self.assertTrue(d["RunAtLoad"])
         self.assertNotIn("KeepAlive", d)  # один раз при входе
@@ -156,6 +157,59 @@ class DownTest(Base):
     def test_answer_no_cancels(self):
         self.assertEqual(self.down(1, tty=True, answer="n"), 1)
         self.assertEqual(self.acts("bootout"), [])
+
+
+class Attach(Base):
+    """Ярлык «ВКЛ» (--attach): роли — в фоне, окно ярлыка — окно ролей tmux; ✗ в сводке — сначала Enter."""
+
+    def up(self, summary=0, server="1:2", tmux_env=None, tty=True):
+        self.execs, self.bg, self.asked, self.team_up = [], [], [], []
+        with mock.patch.dict(os.environ, {}), \
+                mock.patch.object(A.D, "agents_on", lambda log: None), mock.patch.object(A.D, "apps_on", lambda log: None), \
+                mock.patch.object(A.T, "ensure", lambda: 1), mock.patch.object(A, "port_open", lambda port: True), \
+                mock.patch.object(A, "summary", lambda: summary), mock.patch.object(A.T, "server_info", lambda: server), \
+                mock.patch.object(A.TP, "up", lambda log: self.team_up.append(1)), \
+                mock.patch.object(A.subprocess, "Popen", lambda cmd, **kw: self.bg.append((cmd, kw))), \
+                mock.patch.object(A.os, "execvp", lambda f, args: self.execs.append(args)), \
+                mock.patch.object(sys.stdin, "isatty", lambda: tty), \
+                mock.patch("builtins.input", lambda p: self.asked.append(p)), mock.patch("builtins.print"):
+            os.environ.pop("TMUX", None)
+            if tmux_env:
+                os.environ["TMUX"] = tmux_env
+            return A.main(["--attach"])
+
+    def test_team_in_background_then_attach(self):
+        self.up()
+        self.assertEqual(self.team_up, [])  # не ждёт открытия ролей
+        (cmd, kw), = self.bg
+        self.assertEqual(cmd[-2:], [str(Path(A.__file__).resolve().parent / "team_plan.py"), "up"])
+        self.assertTrue(kw["start_new_session"])  # закрытое окно не обрывает открытие ролей
+        self.assertEqual(self.execs, [[A.T.tmux_bin(), "-L", A.T.socket(), "attach"]])
+        self.assertEqual(self.asked, [])
+        self.assertTrue((self.home / "conf" / f"{A.T.socket()}.attach").exists())  # роли не откроют второе окно
+
+    def test_failed_summary_waits_for_enter(self):
+        self.up(summary=1)
+        self.assertEqual(len(self.asked), 1)
+        self.assertEqual(len(self.execs), 1)
+
+    def test_no_server_no_attach(self):
+        self.assertEqual(self.up(server=None), 1)
+        self.assertEqual(self.execs, [])
+
+    def test_inside_tmux_no_nested_attach(self):
+        self.assertEqual(self.up(tmux_env="/tmp/tmux-501/default,1,0"), 0)
+        self.assertEqual(self.execs, [])
+
+    def test_login_agent_keeps_team_in_foreground(self):
+        with mock.patch.object(A.D, "agents_on", lambda log: None), mock.patch.object(A.D, "apps_on", lambda log: None), \
+                mock.patch.object(A.T, "ensure", lambda: 1), mock.patch.object(A, "port_open", lambda port: True), \
+                mock.patch.object(A, "summary", lambda: 0), mock.patch.object(A.os, "execvp", self.fail), \
+                mock.patch.object(A.subprocess, "Popen", self.fail), mock.patch("builtins.print"):
+            ran = []
+            with mock.patch.object(A.TP, "up", lambda log: ran.append(1)):
+                self.assertEqual(A.main([]), 0)
+        self.assertEqual(ran, [1])
 
 
 if __name__ == "__main__":

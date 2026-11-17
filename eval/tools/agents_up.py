@@ -2,6 +2,7 @@
 """Сервисы сессий одной командой (OPS-82): MCP-хаб, сервер tmux ролей, окна сервисов в tmux, сводка.
 
   python3 -I eval/tools/agents_up.py            включить разработку: службы, хаб, tmux, окна сервисов, Ollama, роли
+  python3 -I eval/tools/agents_up.py --attach   то же, роли — в фоне, а это окно Terminal — окно ролей (ярлык «ВКЛ»)
   python3 -I eval/tools/agents_up.py --status   только сводка
   python3 -I eval/tools/agents_up.py --down     выключить разработку (спросит, если живы сессии Claude; --yes — нет)
 Ярлыки «Разработка ВКЛ/ВЫКЛ» на рабочем столе и автозагрузка — dev_power.py install.
@@ -164,12 +165,44 @@ def down(yes):
     return 0
 
 
+def team_bg():
+    """Команда ролей в фоне (ярлык «ВКЛ»): окно сразу становится окном tmux, роли появляются в нём по мере открытия.
+    Журнал — тот же, что у сторожа; запуск, заставший сторожа за работой, выходит по замку team.lock."""
+    log = D.home() / "Library" / "Logs" / "taibe-team.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a", encoding="utf-8") as out:
+        subprocess.Popen([sys.executable, "-I", "-u", str(Path(__file__).resolve().parent / "team_plan.py"), "up"],
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    print(f"  роли открываются в фоне — появятся окнами tmux; журнал: {log}")
+
+
+def attach(ok):
+    """Это окно Terminal становится окном ролей (`tmux -L agents attach`). Сводка с ✗ — сначала Enter: иначе tmux
+    закроет её экраном ролей. Возврат — только если окно ролей не открыть; тогда ярлык допечатает «Готово»."""
+    if T.server_info() is None:
+        print("  сервер tmux не отвечает — окно ролей не открыть; роли откроются окнами Terminal")
+        return 1
+    if os.environ.get("TMUX"):
+        print("  это окно уже внутри tmux: роли — Ctrl-b s")
+        return 0
+    if not ok and sys.stdin.isatty():
+        input("  выше ✗ — что не поднялось. Enter — открыть окно ролей: ")
+    print("  окно ролей: Ctrl-b s — продукты, Ctrl-b w — роли, Ctrl-b d — отключиться (роли продолжат работу)")
+    cmd = [T.tmux_bin(), "-L", T.socket(), "attach"]
+    try:
+        os.execvp(cmd[0], cmd)
+    except OSError as exc:
+        print(f"  окно ролей не открылось ({exc.__class__.__name__}): {' '.join(cmd)}")
+    return 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="agents_up.py", description=(__doc__ or "").split("\n", 1)[0])
     ap.add_argument("--status", action="store_true", help="только сводка")
     ap.add_argument("--down", action="store_true", help="выключить разработку (dev_power.py)")
     ap.add_argument("--yes", action="store_true", help="с --down: не спрашивать про живые сессии")
     ap.add_argument("--no-team", action="store_true", help="только службы, без команды ролей")
+    ap.add_argument("--attach", action="store_true", help="роли в фоне, затем это окно — окно ролей tmux (ярлык «ВКЛ»)")
     a = ap.parse_args(argv)
     if a.down:
         return down(a.yes)
@@ -182,9 +215,13 @@ def main(argv=None):
             hub_cmd("start", 300)
         D.trim_log("taibe-dev-up.log")
         D.trim_log("taibe-team.log")
-        if not a.no_team:
+        if a.attach and not a.no_team:
+            T.claim_attach()  # роль, открытая до подключения окна, не откроет второе окно Terminal
+            team_bg()
+        elif not a.no_team:
             TP.up(log=print)  # роли по продуктам: 12 (доли — из очереди владельца), при нехватке памяти — 10
-    return summary()
+    rc = summary()
+    return attach(rc == 0) if a.attach and not a.status else rc
 
 
 if __name__ == "__main__":
