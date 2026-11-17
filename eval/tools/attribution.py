@@ -123,15 +123,15 @@ class Timeline:
         evs = sorted(self.events + (own.events if own else []), key=lambda e: e[:2])
         opened, windows, states, leases = {}, [], [], set()
         for t, _, kind, value in evs:
-            if kind == 'open':
-                opened.setdefault(value, t)
+            if kind == 'open':  # окно — от последнего просмотра перед comment/review: старый просмотр окно не тянет
+                opened[value] = t
             elif kind == 'close' and value in opened:
                 windows.append((opened.pop(value), t, value))
             elif kind == 'state':
                 states.append((t,) + value)
             elif kind == 'lease':
                 leases.add(value)
-        self.windows = sorted(windows)
+        self.windows = sorted(windows, key=lambda w: w[:2])  # repo бывает None: значения не сравниваем (N3)
         self.state_times = [s[0] for s in states]
         self.states = states
         self.lease = next(iter(leases)) if len(leases) == 1 else None

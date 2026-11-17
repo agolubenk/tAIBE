@@ -85,11 +85,18 @@ class TimelineTest(unittest.TestCase):
             tl.add(when, kind, value)
         return tl.build()
 
-    def test_lens_window_inclusive_and_unclosed_dropped(self):
+    def test_lens_window_from_last_open_inclusive_and_unclosed_dropped(self):
+        """Окно — от последнего просмотра перед comment/review (Claude-линза #417, B1), границы включительно."""
         tl = self.line((t(10), 'open', (None, 1)), (t(10, 5), 'open', (None, 1)), (t(10, 20), 'close', (None, 1)),
                        (t(11), 'open', (None, 2)))
-        self.assertEqual([tl.lens(x) for x in (t(9, 59), t(10), t(10, 20), t(10, 21), t(11, 30))],
-                         [None, (None, 1), (None, 1), None, None])
+        self.assertEqual([tl.lens(x) for x in (t(10), t(10, 4), t(10, 5), t(10, 20), t(10, 21), t(11, 30))],
+                         [None, None, (None, 1), (None, 1), None, None])
+
+    def test_equal_windows_with_and_without_repo_sort(self):
+        """Два окна с равными началом и концом, repo у одного None — без TypeError (Claude-линза #417, N3)."""
+        tl = self.line((t(10), 'open', (REPO, 3)), (t(10), 'open', (None, 3)), (t(10, 9), 'close', (REPO, 3)),
+                       (t(10, 9), 'close', (None, 3)))
+        self.assertEqual(tl.lens(t(10, 5))[1], 3)
 
     def test_overlap_latest_opened_wins(self):
         tl = self.line((t(10), 'open', (None, 1)), (t(10, 10), 'open', (None, 2)), (t(10, 20), 'close', (None, 2)),
@@ -139,6 +146,14 @@ class LedgerTest(unittest.TestCase):
                          ('task', 'abcdefghijklmnopqrstuvwx'), 'затем только карточка')
         self.assertEqual(self.target([(t(9), 'lease', CARD2)], t(11)), ('task', CARD2), 'затем аренда')
         self.assertEqual(self.target([], t(11)), at.UNATTRIBUTED)
+
+    def test_stale_view_does_not_hold_work_on_other_branch(self):
+        """Claude-линза #417, B1: просмотр #377 утром, work_state на ветке #202, затем повторный просмотр и комментарий
+        #377. Работа между ними — на #202, а не на #377."""
+        events = [(t(8), 'open', (None, 377)), (t(9), 'state', (None, 'fix/se74-nerve-lens-names')),
+                  (t(13), 'open', (None, 377)), (t(13, 30), 'close', (None, 377))]
+        self.assertEqual(self.target(events, t(11)), ('pr', REPO, 202))
+        self.assertEqual(self.target(events, t(13, 10)), ('pr', REPO, 377))
 
     def test_branch_prefers_open_pr(self):
         self.assertEqual(self.target([(t(9), 'state', (None, 'fix/se74-nerve-lens-names'))], t(11)), ('pr', REPO, 202))
