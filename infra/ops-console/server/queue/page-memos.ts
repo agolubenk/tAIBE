@@ -56,7 +56,7 @@ const MEMOS_DOM = String.raw`
     '.memo-err { margin: 8px 16px 0; color: var(--warn); }' +
     '@media (max-width: 640px) { .hb-memos { width: 40px; padding: 0; justify-content: center; } }';
   document.head.appendChild(css);
-  var dlg = null, listEl = null, btn = null, busy = Object.create(null), errText = '';
+  var dlg = null, listEl = null, btn = null, busy = Object.create(null), errText = '', shownKey = '';
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -127,7 +127,13 @@ const MEMOS_DOM = String.raw`
   }
   function render() {
     if (!dlg || !dlg.open) return;
-    var all = memos(), shown = all.filter(function (m) { return !m.archived; }), hidden = all.filter(function (m) { return m.archived; });
+    var all = memos();
+    // Снимок work меняется и без памяток (строки плана): окно не пересобирается — не закрываются «Скрытые», не
+    // сбрасывается выделение команды.
+    var key = JSON.stringify([all, errText, Object.keys(busy)]);
+    if (key === shownKey) return;
+    shownKey = key;
+    var shown = all.filter(function (m) { return !m.archived; }), hidden = all.filter(function (m) { return m.archived; });
     listEl.textContent = '';
     if (errText) listEl.appendChild(el('p', 'memo-err', errText));
     if (!shown.length) {
@@ -182,6 +188,7 @@ const MEMOS_DOM = String.raw`
     btn.addEventListener('click', function () {
       if (dlg.open) return;
       if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+      shownKey = '';
       render();
     });
   }

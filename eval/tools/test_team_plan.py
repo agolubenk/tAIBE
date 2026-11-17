@@ -291,6 +291,12 @@ class QueuePauseTest(Base):
             TP.main(["team_plan.py", "resume"])
         self.assertIn("в очереди стоит пауза", "".join(c.args[0] for c in out.write.call_args_list))
 
+    def test_idle_run_sends_one_mark(self):
+        self.run_up()
+        self.published = []
+        self.run_up()  # всё открыто: отметка до прохода и в конце одинаковые
+        self.assertEqual(len(self.published), 1)
+
     def test_publish_failure_does_not_break_the_run(self):
         self.publish_fails = True
         self.assertEqual(self.run_up(), 0)

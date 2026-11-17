@@ -47,6 +47,7 @@ ORDER = ("coord", "release", "backend", "frontend", "plan", "boards", "backend-2
 DEFAULTS = {"total": 12, "floor": 10, "min_per_product": 2, "split_item": "d-team-split"}
 SOURCE = "team_plan (сторож команды ролей на Mac, OPS-82)"
 PAUSE_CHOICE = "pause"  # ответ на пункт долей: кнопка «Пауза» в шапке /queue
+_SENT = {}             # последняя отметка этого запуска: такая же — без PUT
 STATE_API = "/team"     # PUT /api/oq/v1/team: настройка консоли, не документ очереди (infra/ops-console/server/queue/team.ts)
 RAISE_GAP = 8        # п.п. памяти сверх mem_warn, чтобы вернуть полный состав
 PAUSE_AFTER = 15     # с между ролями: MCP и первый ход предыдущей успевают взять память
@@ -264,8 +265,11 @@ def publish(st, team, log):
     mem = st.get("mem")
     doc["mem"] = round(mem, 1) if isinstance(mem, (int, float)) else None
     doc = {k: v for k, v in doc.items() if v is not None or k in ("want", "live", "extra", "cap", "mem")}
+    if _SENT.get("doc") == doc:
+        return
     try:
         Q.oq_request(STATE_API, method="PUT", data=doc)
+        _SENT["doc"] = doc
     except ERRORS as exc:
         log(f"  состояние для /queue не записано ({exc.__class__.__name__})")
 
@@ -296,6 +300,7 @@ def up(limit=None, log=print):
             log("команда: роли уже открывает другой запуск (сторож или «ВКЛ») — они появятся в окне tmux")
             return 0
         st = load_state()
+        _SENT.clear()
         try:
             return _up(st, limit, log)
         finally:

@@ -111,7 +111,7 @@ const TEAM_DOM = String.raw`
     '@media (max-width: 640px) { .hb-team { flex: none; width: 40px; padding: 0; justify-content: center; } .hb-team::after { display: none; } }';
   document.head.appendChild(css);
   var st = { id: ITEM, item: null, check: null, mac: null }, opts = [], box = null, sum = null, list = null;
-  var toastEl = null, toastTimer = 0, busy = false, macSeq = 0;
+  var toastEl = null, toastTimer = 0, busy = false, macSeq = 0, painted = '';
   function find(col, id) {
     var docs = window.__oqDocs ? window.__oqDocs(col) : [];
     for (var i = 0; i < docs.length; i++) if (docs[i].id === id) return docs[i];
@@ -148,6 +148,7 @@ const TEAM_DOM = String.raw`
   function mount() {
     var jq = document.getElementById('jump-queue');
     if (!jq || box) return;
+    painted = '';
     box = el('details', 'jump');
     box.id = 'jump-team';
     sum = el('summary', 'hb-btn hb-team');
@@ -163,9 +164,13 @@ const TEAM_DOM = String.raw`
     jq.parentNode.insertBefore(box, jq.nextSibling);
   }
   function paint() {
-    if (!opts.length) { if (box) { box.remove(); box = null; } return; }
+    if (!opts.length) { if (box) { box.remove(); box = null; painted = ''; } return; }
     mount();
     var now = Date.now(), s = oqtState(st.check, opts, st.mac, now), line = oqtMacLine(st.mac, now), want = oqtWanted(st.check);
+    // Снимки items и checks приходят часто (статусы агентов) — меню не пересобирается под пальцем без нужды.
+    var key = JSON.stringify([s, line, want, busy, opts]);
+    if (key === painted) return;
+    painted = key;
     sum.querySelector('.hb-long').textContent = s.label;
     sum.classList.toggle('warn', s.warn);
     sum.setAttribute('aria-label', s.label + '. ' + line);

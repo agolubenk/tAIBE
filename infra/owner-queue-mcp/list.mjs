@@ -251,3 +251,14 @@ export function getBrief(doc, check) {
   }
   return out;
 }
+
+/** Строка списка work: у плана cards — числом, у памятки (окно «Памятки» на /queue) текст и команды — размерами. */
+export function workBrief(d) {
+  const { cards, ...data } = d.data;
+  // Памятка владельцу (окно «Памятки» на /queue): текст и команды — через oq_get, в списке только размеры.
+  if (data.kind === 'memo') {
+    const { body, cmds, ...rest } = data;
+    return { id: d.id, version: d.version, ...rest, bodyLen: typeof body === 'string' ? body.length : 0, cmdsCount: Array.isArray(cmds) ? cmds.length : 0 };
+  }
+  return { id: d.id, version: d.version, ...data, ...(Array.isArray(cards) ? { cardsCount: cards.length } : {}) };
+}
