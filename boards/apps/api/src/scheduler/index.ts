@@ -6,6 +6,7 @@ import * as Sentry from "@sentry/node";
 import { Cron } from "croner";
 import {
   ownerQueueExpiry,
+  ownerQueuePlanRows,
   ownerQueueTick,
 } from "../forest/owner-queue/owner-queue-sync";
 import { readMirrorConfig } from "../import/notion-mirror/mirror-config";
@@ -71,6 +72,15 @@ export function initializeScheduler(): void {
       "*/5 * * * *",
       { protect: true },
       withCheckIn("owner-queue-expiry", ownerQueueExpiry),
+    ),
+  );
+  // TB-106: plan rows follow the board every 5 min, at second 15 — between
+  // the 30 s ticks, which share the queue's write limit.
+  jobs.push(
+    new Cron(
+      "15 */5 * * * *",
+      { protect: true },
+      withCheckIn("owner-queue-plan-rows", () => ownerQueuePlanRows()),
     ),
   );
   jobs.push(
