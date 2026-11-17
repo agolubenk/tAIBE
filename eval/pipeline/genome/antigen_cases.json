@@ -34,5 +34,53 @@
     }
    }
   ]
+ },
+ "dnm-label-remove": {
+  "fires": [
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "gh pr edit 390 --remove-label do-not-merge"
+    }
+   },
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "gh pr edit 412 --remove-label do-not-merge && gh pr merge 412 --squash --match-head-commit abc1234"
+    }
+   },
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "gh --repo org/app pr edit 7 --remove-label \"needs-lens,do-not-merge\""
+    }
+   }
+  ],
+  "quiet": [
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "gh pr edit 390 --add-label do-not-merge"
+    }
+   },
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "gh pr edit 390 --remove-label needs-lens"
+    }
+   },
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "gh pr view 390 --json labels --jq '.labels[].name' | grep do-not-merge"
+    }
+   },
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "grep -rn 'remove-label do-not-merge' docs"
+    }
+   }
+  ]
  }
 }

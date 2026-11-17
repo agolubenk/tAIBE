@@ -177,5 +177,13 @@
     "pattern": "\"timeout_ms\":\\s{0,3}\"?(?:330000[1-9]|33000[1-9]\\d|3300[1-9]\\d{2}|330[1-9]\\d{3}|33[1-9]\\d{4}|3[4-9]\\d{5}|[4-9]\\d{6}|[1-9]\\d{7})|\"persistent\":\\s{0,3}true|\"delaySeconds\":\\s{0,3}\"?(?:330[1-9]|33[1-9]\\d|3[4-9]\\d{2}|[4-9]\\d{3}|[1-9]\\d{4})",
     "lesson": "Ожидание дольше 55 минут: кэш живёт час, и ход после паузы перепишет всё окно по цене 2× входа (замер 07.11: паузы больше часа — 4,1 % денег). Норма d-f63b-economy-0711: Monitor — timeout_ms не больше 3300000 и без persistent, ScheduleWakeup — не больше 3300 с; по таймауту — один голый перевзвод, без oq_list, work_state и текста.",
     "memory": ""
+  },
+  {
+    "id": "dnm-label-remove",
+    "tool": "Bash",
+    "field": "command",
+    "pattern": "\\bgh\\s{1,20}(?:-R\\s{1,20}\\S{1,200}\\s{1,20}|--repo[ =]\\S{1,200}\\s{1,20})?pr\\s{1,20}edit\\b[^\\n;&|]{0,300}--remove-label[ =][^\\n;&|]{0,100}do-not-merge",
+    "lesson": "Метку do-not-merge сессия роли не снимает: классификатор auto-режима отклоняет это как [Undermining Oversight] (16.11), и повтор встаёт так же. Метку снимает команда m-пункта, который пишет Контроль: `gh pr edit N --remove-label do-not-merge && gh pr merge N … || gh pr edit N --add-label do-not-merge`. Координатору ответь, что метка уйдёт в m-пункт.",
+    "memory": "dnm-label-removal-denied.md"
   }
 ]
