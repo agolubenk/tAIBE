@@ -250,12 +250,23 @@ class Retriever:
         # Корни кода по умолчанию — поле `council.default_roots` продукта (Ф2 OPS-23); нет поля или папок — корень.
         return [r for r in product.current().default_roots if (REPO_ROOT / r).is_dir()] or ["."]
 
+    _EMPTY_MODULES_SAID: set[str] = set()   # о каком модуле без кода уже сказано (одна строка на процесс)
+
     def _roots_for(self, modules: list[str]) -> list[str]:
+        """Корни кода модулей карточки. Модуль, у которого в карте нет ни одного пути на диске (карта устарела,
+        SE-108), не сужает поиск молча: одна строка в stderr, и карточка ищет в корнях по умолчанию ([] →
+        `_default_roots`), а не только в коде остальных модулей."""
         roots: list[str] = []
         for module in modules:
-            for path in self.MODULE_PATHS.get(module, []):
-                if path not in roots and (REPO_ROOT / path).exists():
-                    roots.append(path)
+            paths = self.MODULE_PATHS.get(module, [])
+            found = [p for p in paths if (REPO_ROOT / p).exists()]
+            if paths and not found:
+                if module not in self._EMPTY_MODULES_SAID:
+                    self._EMPTY_MODULES_SAID.add(module)
+                    print(f"retrieval: модуль «{module}» — ни одного пути карты нет на диске, поиск идёт в корнях "
+                          "по умолчанию; карта — council.modules (supervisor.py doctor)", file=sys.stderr)
+                return []
+            roots.extend(p for p in found if p not in roots)
         return roots
 
     def _llm_terms(self, card: dict) -> list[str]:
