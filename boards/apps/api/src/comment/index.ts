@@ -17,6 +17,7 @@ import {
 } from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import { dialogMarkFor } from "../forest/dialog/dialog-store";
+import { writerKind } from "../forest/author-kind";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
 import getComments from "./controllers/get-comments";
@@ -153,7 +154,14 @@ const comment = apiRouter()
     return c.json(
       maskForTokenCaller(
         c,
-        await createComment(taskId, c.get("userId"), content, external, dialog),
+        await createComment(
+          taskId,
+          c.get("userId"),
+          content,
+          external,
+          writerKind(c),
+          dialog,
+        ),
       ),
       200,
     );
@@ -165,7 +173,10 @@ const comment = apiRouter()
       storedCommentContent(id),
     );
     return c.json(
-      maskForTokenCaller(c, await updateComment(c.get("userId"), id, restored)),
+      maskForTokenCaller(
+        c,
+        await updateComment(c.get("userId"), id, restored, writerKind(c)),
+      ),
       200,
     );
   })

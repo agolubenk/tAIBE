@@ -19,6 +19,7 @@ export function SessionsTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={sessions.isLoading}
         isError={sessions.isError}
+        onRetry={() => void sessions.refetch()}
         isEmpty={!sessions.data?.length}
         empty={t("workspace:forest.sessions.empty")}
       >

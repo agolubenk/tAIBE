@@ -120,11 +120,53 @@ class GenomeTest(unittest.TestCase):
                 self.assertEqual(g['env']['SUCCESSOR_AUTO'], 'off')
 
 
+class McpServersOffTest(unittest.TestCase):
+    """SE-79: deny for a whole server also turns the .mcp.json server off, so its process does not start."""
+
+    def test_coord_turns_off_docker_and_council_release_keeps_docker(self):
+        self.assertTrue({'docker', 'ai-council'} <= set(GENOMES['coord']['disabledMcpjsonServers']))
+        self.assertNotIn('docker', GENOMES['release']['disabledMcpjsonServers'])
+        self.assertNotIn('ai-council', GENOMES['plan']['disabledMcpjsonServers'])  # plan HR keeps the council
+
+    def test_tool_deny_does_not_turn_the_server_off(self):
+        for role, g in GENOMES.items():
+            with self.subTest(role=role):
+                off = g['disabledMcpjsonServers']
+                self.assertIn('notion', off)  # base deny mcp__notion
+                self.assertNotIn('hub', off)  # mcp__hub__sentry*, mcp__hub__cloudflare* — tools, not the server
+                self.assertNotIn('claude_ai_Claude_Docs', off)  # a claude.ai connector, not a .mcp.json server
+
+    def test_servers_off_forms(self):
+        deny = ['mcp__docker', 'mcp__x__*', 'mcp__hub__sentry*', 'mcp__hub__a_tool', 'mcp__claude_ai_Docs', 'Bash',
+                'mcp__a_b', 'mcp__srv__*x']
+        self.assertEqual(build.servers_off(deny, ('ai-council', 'docker')), ['a_b', 'ai-council', 'docker', 'x'])
+
+    def test_product_list_is_checked(self):
+        self.assertEqual(build.product_off({}, 's'), ())
+        self.assertEqual(build.product_off({'genome': {'disabledMcpjsonServers': ['ai-council']}}, 's'),
+                         ('ai-council',))
+        for bad in ('ai-council', [1], ['a__b'], ['a*']):
+            with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                build.product_off({'genome': {'disabledMcpjsonServers': bad}}, 's')
+
+    def test_taibe_turns_the_council_off_in_every_role(self):
+        """Until OPS-23 Ф3 the tAIBE host has no council data (CouncilDbMissing): no role starts it there."""
+        for slug, out, _root, _reflex, off in build.products():
+            if slug != 'taibe':
+                continue
+            self.assertEqual(off, ('ai-council',))
+            for role in NEEDED:
+                with self.subTest(role=role), open(os.path.join(out, f'{role}.json'), encoding='utf-8') as f:
+                    self.assertIn('ai-council', json.load(f)['disabledMcpjsonServers'])
+            return
+        self.fail('instances/ has no taibe')
+
+
 class ProductGenomeTest(unittest.TestCase):
     """OPS-25 Ф3: геном каждого продукта несёт TAIBE_PRODUCT и пути своего checkout."""
 
     def test_every_product_has_six_roles_with_its_env_and_root(self):
-        for slug, out, root, _reflex in build.products():
+        for slug, out, root, _reflex, _off in build.products():
             with self.subTest(product=slug):
                 for role in NEEDED:
                     with open(os.path.join(out, f'{role}.json'), encoding='utf-8') as f:
@@ -136,7 +178,7 @@ class ProductGenomeTest(unittest.TestCase):
     def test_non_default_products_live_in_their_subfolder(self):
         rest = build.products()[1:]
         self.assertTrue(rest, 'instances/ has a second product')
-        for slug, out, _root, _reflex in rest:
+        for slug, out, _root, _reflex, _off in rest:
             self.assertEqual(out, os.path.join(build.HERE, slug))
 
 
