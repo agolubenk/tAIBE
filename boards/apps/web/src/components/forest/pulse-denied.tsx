@@ -37,6 +37,7 @@ export function PulseDenied({
       <ForestListState
         isLoading={journal.isLoading}
         isError={journal.isError}
+        onRetry={() => void journal.refetch()}
         isEmpty={!recent.length}
         empty={t("workspace:forest.pulse.deniedEmpty")}
       >

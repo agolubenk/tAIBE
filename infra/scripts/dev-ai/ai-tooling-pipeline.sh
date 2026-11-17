@@ -665,6 +665,14 @@ cmd_logs() {
   done
 }
 
+# OPS-82: прокси под launchd — Docker-путь не трогает :8787 (занял бы порт или «остановил» не тот процесс).
+case "${1:-status}" in start|stop|restart|headroom-apply)
+  if launchctl print "gui/$(id -u)/space.hrhelper.headroom" >/dev/null 2>&1; then
+    echo "headroom работает под launchd — $1 через Docker не выполняю. Состояние, флаги и перезапуск:" \
+      "python3 -I infra/headroom/developer/headroom_launchd.py status|install (флаги — манифест канона)" >&2
+    exit 1
+  fi ;;
+esac
 case "${1:-status}" in
   start) cmd_start ;;
   stop) cmd_stop ;;

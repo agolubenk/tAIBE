@@ -90,8 +90,9 @@ def _council_paths(check, tmp: Path, cc) -> None:
     store.close()
 
 
-# Пакеты монорепо, по которым M7 строит turbo-команду. В хосте без них (дом слоя: доски на pnpm, eval на stdlib)
-# проверка идёт на фикстуре с теми же package.json, а не молча проходит и не падает на чужом дереве.
+# Пакеты монорепо, по которым M7 строит turbo-команду, и настоящий путь F1. Проверка всегда идёт на этом дереве, а не
+# на checkout хоста (OPS-48): в доме слоя пакетов нет, в другом хосте может не быть F1 — итог не должен от этого
+# зависеть. MASK в дереве нет, поэтому она остаётся маской.
 HOST_PACKAGES = {
     "apps/frontend": {"name": "@hr-helper/web", "scripts": {"test:run": "vitest run", "typecheck": "tsc"}},
     "apps/backend": {"name": "@hr-helper/nestjs-api-v2", "scripts": {"test:run": "vitest run", "typecheck": "tsc"}},
@@ -100,24 +101,16 @@ HOST_PACKAGES = {
 }
 
 
-def _fixture_host(tmp: Path) -> Path:
+def tree() -> dict[str, str]:
     import json
-    root = tmp / "m7-host"
-    for rel, data in HOST_PACKAGES.items():
-        (root / rel).mkdir(parents=True, exist_ok=True)
-        (root / rel / "package.json").write_text(json.dumps(data), encoding="utf-8")
-    return root
+    files = {f"{rel}/package.json": json.dumps(data) for rel, data in HOST_PACKAGES.items()}
+    files[F1] = ""
+    return files
 
 
 def run(tmp: Path, check) -> None:
     import council_clean as cc
-    real_root = cc.REPO_ROOT
-    if not all((real_root / rel / "package.json").exists() for rel in HOST_PACKAGES if rel != "packages/dto"):
-        cc.REPO_ROOT = _fixture_host(tmp)
-        cc._package.cache_clear()
-    try:
+    from selftest_tree import host_tree
+    with host_tree(tmp, tree(), name="m7-host"):
         _units(check, cc)
         _council_paths(check, tmp, cc)
-    finally:
-        cc.REPO_ROOT = real_root
-        cc._package.cache_clear()
