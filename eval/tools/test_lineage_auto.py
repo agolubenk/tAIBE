@@ -189,15 +189,13 @@ class AutoTest(Base):
         self.assertIn("простой 0.6 < 8 ч", v[723])  # без метки — обычное правило простоя
         self.assertIn("простой 0.6 < 8 ч", v[724])  # метка чужого pid не в счёт
 
-    def test_surplus_mark_lapses_when_split_comes_back(self):
-        """Владелец вернул долю («Отменить»): роль снова в доле — метка не в счёт, сессия снова держатель роли."""
+    def test_surplus_mark_holds_after_split_comes_back(self):
+        """Владелец вернул долю: сессия с меткой уже передала смену и не работает — её всё равно снять, иначе она
+        держала бы роль впустую; сторож откроет роль заново (линза продукта #471)."""
         import team_plan as TP
         self.sess(741, line="r.b1", role="plan", idle_h=0.6)
         L.write_json(L.ldir() / "r.b1.surplus", {"line": "r.b1", "pid": 741, "start": ST, "role": "plan", "slug": "taibe"})
         with mock.patch.object(TP, "keep", lambda slug, role, log=None: (True, "hr-helper 6 · taibe 6")):
-            v = self.verdicts(self.auto()[1])
-        self.assertIn("простой 0.6 < 8 ч", v[741])  # метка не в счёт — обычное правило, не снять
-        with mock.patch.object(TP, "keep", lambda slug, role, log=None: (False, "hr-helper 8 · taibe 4")):
             v = self.verdicts(self.auto()[1])
         self.assertIn("СНЯТЬ: сверх доли владельца", v[741])
 

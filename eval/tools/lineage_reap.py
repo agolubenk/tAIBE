@@ -136,18 +136,14 @@ def ack_state(procs, line):
 
 
 def surplus_state(procs, line):
-    """Метка «сверх доли владельца» (lineage.py surplus) этой самой сессии: pid и старт совпали с живым claude, и роль
-    всё ещё сверх доли (владелец мог вернуть долю — «Отменить» в тосте): иначе метка не в счёт."""
+    """Метка «сверх доли владельца» (lineage.py surplus) этой самой сессии: pid и старт совпали с живым claude. Метка
+    действует и после возврата доли: сессия уже передала смену и стоит на исходе контекста, работать не будет — её
+    снимет автоуборка, а сторож откроет роль заново (handoff у координатора). Иначе она держала бы роль, не работая."""
     if not L.valid_line(line or ""):
         return False
     m = L.read_json(L.lfile(line, ".surplus")) or {}
     s = procs.get(m.get("pid") if isinstance(m.get("pid"), int) else -1)
-    if s is None or L.argv0(s) != "claude" or L.norm(s.start) != L.norm(m.get("start")):
-        return False
-    if isinstance(m.get("slug"), str) and m["slug"] and isinstance(m.get("role"), str) and m["role"]:
-        import team_plan as TP  # noqa: E402 — team_plan импортирует team_status, тот — этот модуль
-        return not TP.keep(m["slug"], m["role"])[0]  # без сети: кэш долей; сбой — keep → метка не в счёт
-    return True
+    return s is not None and L.argv0(s) == "claude" and L.norm(s.start) == L.norm(m.get("start"))
 
 
 def cmd_surplus(sx, a):
