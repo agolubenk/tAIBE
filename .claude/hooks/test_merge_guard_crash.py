@@ -14,7 +14,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_testkit import C4, CONTROL, D9, SESSIONS, TMP, bash, check, failures, finish, mg, run  # noqa: E402
 import merge_guard_crash as mc  # noqa: E402
+import merge_guard_git as mgg  # noqa: E402
 import merge_guard_partial as mp  # noqa: E402
+from merge_guard_testkit import repo_on  # noqa: E402
 
 
 def want(label, got, text):
@@ -32,6 +34,7 @@ def boom(*_a, **_k):
 check("кавычка без пары — не сбой", mc.crash(ValueError("No closing quotation")) or None, False)
 check("`\\` в конце — не сбой", mc.crash(ValueError("No escaped character")) or None, False)
 check("другой ValueError — сбой", mc.crash(ValueError("invalid literal for int()")) or None, True)
+check("бюджет git исчерпан (GitTimeout) — не сбой", mc.crash(mgg.GitTimeout()) or None, False)
 kind, where = (mc.crash(TypeError("x"), "u.sh") or [("", "")])[0]
 want("вид находки несёт класс, текст и место", kind or None, "на u.sh (TypeError: x)")
 check("текст ошибки не длиннее 200 знаков", None if len(mc.crash_text(KeyError("k" * 500))) <= 200 else "длинный", False)
@@ -98,6 +101,27 @@ want("сбой decide: вход не словарь", mc.crash_verdict([], KeyEr
 want("сбой decide: проверка Контроля упала — отказ",
      mc.crash_verdict(dict(ls, session_id=D9["sessionId"]), KeyError("x"), mg.FALLBACK, lambda: SESSIONS, boom),
      "проверка Контроля тоже упала (TypeError")
+check("сбой decide: GitTimeout, признака нет — роли проход, как до SE-152", verdict(ls, exc=mgg.GitTimeout()), False)
+want("сбой decide: GitTimeout с признаком — отказ и Контролю",
+     verdict({"tool_name": "Bash", "tool_input": {"command": "git push"}}, exc=mgg.GitTimeout(), who=D9),
+     "признак защищённого действия")
+
+
+# --- бюджет git исчерпан в разборе (GitTimeout из classify_git): решает грубый признак (линза backend #444, B1) ---
+def late(*_a, **_k):
+    raise mgg.GitTimeout()
+
+
+repo = repo_on("feature/x", "late-")
+real = mgg._git_run
+mgg._git_run = late
+try:
+    for cmd in ("git merge-tree a b", "git patch-id", "git commit-tree x", "git st", "git co -b x"):
+        bash(f"GitTimeout: роль, `{cmd}` — проход, как на базе", cmd, False, cwd=repo)
+    for cmd in ("git push origin feature/x", "git push"):
+        bash(f"GitTimeout: роль, `{cmd}` — отказ, как на базе", cmd, True, cwd=repo)
+finally:
+    mgg._git_run = real
 
 # --- хук целиком: настоящий сбой decide (commands — не список) ---
 hook = Path(__file__).resolve().parent / "pre-tool-use-merge-guard.py"
