@@ -9,11 +9,15 @@ Run: python3 -I build.py [--check] [--product SLUG]   (--check: exit 1 if a gene
 Products (OPS-25): the default product of `instances/` keeps its genomes in genome/<role>.json, every other
 product gets genome/<slug>/<role>.json with its own repo_root. Every genome sets env TAIBE_PRODUCT=<slug>: the
 session's Bash and Monitor inherit it, so `nerve.py tap <role>` and spawn_session.sh know the product.
+
+MCP servers (SE-79): a server that deny closes whole, and a server in instances/<slug>.json
+genome.disabledMcpjsonServers, go to disabledMcpjsonServers — Claude Code then does not start it from .mcp.json.
 """
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -74,19 +78,36 @@ def hooks(python, reflex=None):
     }
 
 
-def genome(base, role, root=None, reflex=None, product=None):
+# SE-79: deny for a whole server closes its tools, but Claude Code still starts the server from .mcp.json — a process
+# the role cannot use (about 1.9 GB on the Mac, 14.11). The genome turns such a server off. A name has no «__» inside:
+# `mcp__hub__sentry*` is tools of the server hub, not a server.
+WHOLE_SERVER = re.compile(r'^mcp__((?:[A-Za-z0-9-]|_(?!_))+)(?:__\*)?$')
+
+
+def servers_off(deny, product_off=()):
+    """Names for disabledMcpjsonServers: servers that deny closes whole, and servers the product turns off
+    (instances/<slug>.json genome.disabledMcpjsonServers). A name that is not in .mcp.json does nothing: the key
+    applies only to .mcp.json servers, so the build does not read .mcp.json (it is not in CI for other products).
+    claude.ai connectors (`mcp__claude_ai_*`) are not .mcp.json servers: they are left out."""
+    whole = {m.group(1) for d in deny for m in [WHOLE_SERVER.match(d)] if m and not m.group(1).startswith('claude_ai_')}
+    return sorted(whole | set(product_off))
+
+
+def genome(base, role, root=None, reflex=None, product=None, product_off=()):
     root = root or ROOT
     on = set(role.get('skills_on', []))
     overrides = {name: 'off' for name in base['skills_off'] if name not in on}
     overrides.update({name: 'name-only' for name in base['skills_name_only']})
     # SE-62: model and window travel with the genome (`claude --settings`), not with a CLAUDE_BIN wrapper outside git.
     window = {key: role.get(key, base.get(key)) for key in ('model', 'autoCompactWindow') if key in role or key in base}
+    deny = base['deny'] + [d for d in role.get('deny', []) if d not in base['deny']]
     return {
         **window,
         'enabledPlugins': dict(base['enabledPlugins']),
         'skillOverrides': overrides,
         'disableBundledSkills': True,
-        'permissions': {'deny': base['deny'] + [d for d in role.get('deny', []) if d not in base['deny']]},
+        'permissions': {'deny': deny},
+        'disabledMcpjsonServers': servers_off(deny, product_off),
         'env': {**base['env'], **role.get('env', {}), **({'TAIBE_PRODUCT': product} if product else {})},
         'claudeMdExcludes': [x.replace('{root}', root) for x in base['claudeMdExcludes']],
         'hooks': hooks(base['python'], reflex),
@@ -95,26 +116,36 @@ def genome(base, role, root=None, reflex=None, product=None):
     }
 
 
-def build(table, root=None, reflex=None, product=None):
-    return {name: genome(table['base'], role, root, reflex, product) for name, role in table['roles'].items()}
+def build(table, root=None, reflex=None, product=None, product_off=()):
+    return {name: genome(table['base'], role, root, reflex, product, product_off)
+            for name, role in table['roles'].items()}
+
+
+def product_off(cfg, slug):
+    """genome.disabledMcpjsonServers of the product: a list of server names, or nothing."""
+    off = (cfg.get('genome') or {}).get('disabledMcpjsonServers', [])
+    if not isinstance(off, list) or not all(isinstance(x, str) and WHOLE_SERVER.match(f'mcp__{x}') for x in off):
+        raise SystemExit(f'instances/{slug}.json: genome.disabledMcpjsonServers — a list of server names, got {off!r}')
+    return tuple(off)
 
 
 def products():
-    """[(slug, out_dir, repo_root, reflex)] from instances/: the default product first, in genome/; others in
-    genome/<slug>/. Without instances/ (a layer copy in a host) — one product from config.json, as before."""
+    """[(slug, out_dir, repo_root, reflex, product_off)] from instances/: the default product first, in genome/;
+    others in genome/<slug>/. Without instances/ (a layer copy in a host) — one product from config.json, as before."""
     sys.path.insert(0, os.path.join(HERE, '..', '..', 'nerve'))
     if not os.path.isdir(os.path.join(HERE, '..', '..', '..', 'instances')):
-        return [(None, HERE, ROOT, REFLEX)]   # a layer copy without instances/: the old single-product build
+        return [(None, HERE, ROOT, REFLEX, ())]   # a layer copy without instances/: the old single-product build
     import products as P                      # instances/ is there but broken — fail loudly, do not drop the env
     shared, items = P.load()
     default = shared['default_product']
-    out = [(default, HERE, ROOT, REFLEX)]
+    out = [(default, HERE, ROOT, REFLEX, product_off(P.config_for(default, shared, items), default))]
     for slug in sorted(items):
         if slug == default:
             continue
         cfg = P.config_for(slug, shared, items)
         layer = cfg.get('layer_home') or os.path.join(cfg['repo_root'], cfg['product_tree'])
-        out.append((slug, os.path.join(HERE, slug), cfg['repo_root'], os.path.join(layer, 'pipeline', 'reflex')))
+        out.append((slug, os.path.join(HERE, slug), cfg['repo_root'], os.path.join(layer, 'pipeline', 'reflex'),
+                    product_off(cfg, slug)))
     return out
 
 
@@ -130,8 +161,8 @@ def main(argv):
     if args.product and not todo:
         print(f'no product {args.product} in instances/', file=sys.stderr)
         return 2
-    built = [(out, name, data) for slug, out, root, reflex in todo
-             for name, data in build(table, root, reflex, slug).items()]
+    built = [(out, name, data) for slug, out, root, reflex, off in todo
+             for name, data in build(table, root, reflex, slug, off).items()]
     for out, name, data in built:
         os.makedirs(out, exist_ok=True)
         path = os.path.join(out, f'{name}.json')

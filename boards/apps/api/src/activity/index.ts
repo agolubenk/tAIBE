@@ -12,6 +12,7 @@ import {
   restoreForTokenCaller,
 } from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
+import { type AuthorKind, authorMark, writerKind } from "../forest/author-kind";
 import createActivity from "./controllers/create-activity";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
@@ -215,7 +216,11 @@ const activity = apiRouter()
     return c.json(
       maskForTokenCaller(
         c,
-        await createActivity(taskId, type, c.get("userId"), message, eventData),
+        // TB-83: the writer's kind is stamped, never taken from the body.
+        await createActivity(taskId, type, c.get("userId"), message, {
+          ...eventData,
+          ...authorMark(writerKind(c)),
+        }),
       ),
       200,
     );
@@ -225,7 +230,13 @@ const activity = apiRouter()
     return c.json(
       maskForTokenCaller(
         c,
-        await createComment(taskId, c.get("userId"), comment),
+        await createComment(
+          taskId,
+          c.get("userId"),
+          comment,
+          undefined,
+          writerKind(c),
+        ),
       ),
       200,
     );
@@ -238,7 +249,12 @@ const activity = apiRouter()
     return c.json(
       maskForTokenCaller(
         c,
-        await updateComment(c.get("userId"), activityId, restored),
+        await updateComment(
+          c.get("userId"),
+          activityId,
+          restored,
+          writerKind(c),
+        ),
       ),
       200,
     );
@@ -258,11 +274,18 @@ subscribeToEvent<{
   currentUserId: string;
   type: string;
   content: string | null;
+  author?: AuthorKind;
 }>("task.created", async (data) => {
   if (!data.currentUserId || !data.taskId || !data.type) {
     return;
   }
-  await createActivity(data.taskId, data.type, data.currentUserId, null, {});
+  await createActivity(
+    data.taskId,
+    data.type,
+    data.currentUserId,
+    null,
+    authorMark(data.author),
+  );
 });
 
 subscribeToEvent<{

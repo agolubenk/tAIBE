@@ -138,6 +138,9 @@ importers:
       '@kaneo/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@kaneo/forms':
+        specifier: workspace:*
+        version: link:../../packages/forms
       '@kaneo/importers':
         specifier: workspace:*
         version: link:../../packages/importers
@@ -597,6 +600,9 @@ importers:
       '@babel/core':
         specifier: '>=7.29.6 <8'
         version: 7.29.7
+      '@kaneo/forms':
+        specifier: workspace:*
+        version: link:../../packages/forms
       '@kaneo/libs':
         specifier: workspace:*
         version: link:../../packages/libs

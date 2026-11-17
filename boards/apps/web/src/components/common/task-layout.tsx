@@ -1,6 +1,6 @@
 import { ShortcutKeys } from "@/components/shortcuts/shortcut-keys";
 import { useNavigate } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import TaskCrumbSelect from "@/components/common/header/task-crumb-select";
 import Layout from "@/components/common/layout";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/tooltip";
 import useGetProject from "@/hooks/queries/project/use-get-project";
 import useGetTask from "@/hooks/queries/task/use-get-task";
+import { useBelowLg } from "@/hooks/use-media-query";
 import { useProjectWebSocket } from "@/hooks/use-project-websocket";
 import { getProjectUnavailableReason } from "@/lib/project-unavailable-reason";
 import ProjectUnavailable from "./project-unavailable";
@@ -42,6 +43,14 @@ export default function TaskLayout({
   });
   const { data: task } = useGetTask(taskId);
   const unavailableReason = getProjectUnavailableReason(projectError);
+  const isBelowLg = useBelowLg();
+  // Once the screen was lg or wider, the rail stays mounted: a dialog it owns
+  // (the card meta draft) renders in a portal and would lose its text when a
+  // rotation or resize across lg unmounted the rail. A phone that was never
+  // wide still mounts no rail and sends none of its requests.
+  const [wasWide, setWasWide] = useState(!isBelowLg);
+  if (!isBelowLg && !wasWide) setWasWide(true);
+  const showRail = !unavailableReason && (wasWide || !isBelowLg);
 
   useProjectWebSocket(unavailableReason ? "" : projectId);
 
@@ -122,11 +131,12 @@ export default function TaskLayout({
             )}
           </Layout.Content>
         </div>
-        {unavailableReason ? null : (
+        {/* Below lg the rail is not mounted until the screen was wide: hidden by CSS, its panels would still fetch. */}
+        {showRail ? (
           <div className="hidden border-border/80 border-l lg:flex lg:h-full lg:overflow-y-auto">
             {rail}
           </div>
-        )}
+        ) : null}
       </Layout>
     </div>
   );
