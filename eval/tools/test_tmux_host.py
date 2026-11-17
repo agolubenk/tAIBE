@@ -236,6 +236,7 @@ class ServiceTest(Base):
     def test_conf(self):
         conf = T.conf_text("/usr/bin/python3", Path("/r/eval/tools"))
         for want in ("set -g exit-empty off", 'set -g update-environment ""', "set -g remain-on-exit off",
+                     'set -g status-left "[#S] Ctrl+b: w окна, d выйти "',
                      "#(/usr/bin/python3 -I /r/eval/tools/tmux_host.py status-line)",
                      "bind-key j run-shell -b \"/usr/bin/python3 -I /r/eval/tools/tmux_host.py next "
                      "'#{client_name}' '#{window_id}'\""):
