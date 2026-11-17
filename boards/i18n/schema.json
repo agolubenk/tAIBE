@@ -15101,6 +15101,9 @@
 								},
 								"forbidden": {
 									"type": "string"
+								},
+								"tooLarge": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -15111,7 +15114,8 @@
 								"invalid",
 								"rowVersion",
 								"versionMismatch",
-								"forbidden"
+								"forbidden",
+								"tooLarge"
 							]
 						},
 						"reload": {
@@ -17145,6 +17149,18 @@
 								"refresh": {
 									"type": "string"
 								},
+								"remove": {
+									"type": "string"
+								},
+								"removeTitle": {
+									"type": "string"
+								},
+								"removeDescription": {
+									"type": "string"
+								},
+								"removeConfirm": {
+									"type": "string"
+								},
 								"toast": {
 									"type": "object",
 									"additionalProperties": false,
@@ -17155,11 +17171,23 @@
 										"unchanged": {
 											"type": "string"
 										},
+										"removed": {
+											"type": "string"
+										},
+										"removeError": {
+											"type": "string"
+										},
 										"error": {
 											"type": "string"
 										}
 									},
-									"required": ["added", "unchanged", "error"]
+									"required": [
+										"added",
+										"unchanged",
+										"removed",
+										"removeError",
+										"error"
+									]
 								},
 								"errors": {
 									"type": "object",
@@ -17240,6 +17268,18 @@
 										"GITHUB_NO_ACCESS",
 										"SOURCE_TOO_MANY_CHUNKS"
 									]
+								},
+								"addedByAgent": {
+									"type": "string"
+								},
+								"addedByPerson": {
+									"type": "string"
+								},
+								"addedByMember": {
+									"type": "string"
+								},
+								"addedByUnknown": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -17248,8 +17288,16 @@
 								"chunks",
 								"add",
 								"refresh",
+								"remove",
+								"removeTitle",
+								"removeDescription",
+								"removeConfirm",
 								"toast",
-								"errors"
+								"errors",
+								"addedByAgent",
+								"addedByPerson",
+								"addedByMember",
+								"addedByUnknown"
 							]
 						}
 					},

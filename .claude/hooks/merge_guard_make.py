@@ -1,18 +1,22 @@
 """
 make для pre-tool-use-merge-guard.py поверх разбора merge_guard_launch (make_files, опции make): make_option — причина,
 по которой разбор не видит, что прочтёт или запустит make (хук отказывает с ней вместо LOST_DIR); make_hint — прямые
-команды целей Makefile для сообщения об отказе (SE-105). Решений не принимает: отдаёт причину и строку, решает хук.
+команды целей Makefile для сообщения об отказе (SE-105); trusted_make — команды рецептов `make check`/`check-layer`
+вместо грубого признака (SE-127). Решений не принимает: отдаёт причину, строку и находки, решает хук.
 """
 import os
 import re
 
-from merge_guard_launch import (APPEND_ARG, INCLUDE_ESCAPE, MAKE_BASE, MAKE_ENV, MAKE_TEXT, MAKEFLAGS_ARG, MAKES,
-                                NOT_ASCII, _make_opts, _make_where, make_files)
+from merge_guard_files import command_writes
+from merge_guard_launch import (APPEND_ARG, INCLUDE_ESCAPE, MAKE_BASE, MAKE_CONT, MAKE_ENV, MAKE_TEXT, MAKEFLAGS_ARG,
+                                MAKES, NOT_ASCII, _make_opts, _make_where, make_files)
 from merge_guard_shell import CURRENT, SUBST
 
 WT_TRACKS = ("feature", "fix", "refactor", "spike", "review")
 EVAL_SUITES = ("nerve", "pipeline", "pipeline/reflex", "pipeline/genome", "swarm", "evolve")
 MAKE_VALUE = re.compile(r"[A-Za-z0-9._-]+\Z")
+MAKE_QUIET = re.compile(r"(?:-s|--silent|--quiet|-k|--keep-going|-j[0-9]*)\Z")  # опции, при которых подсказка верна
+MAKE_DEFAULT = re.compile(r"(?m)^([A-Za-z0-9][\w.-]*)[ \t]*:(?![:=])")  # первая цель — цель голого `make`
 # Строка --eval, которая запускает или читает то, чего разбор не видит (SE-135): подстановка `$`, рецепт (`;`,
 # табуляция, `.RECIPEPREFIX`), `!=`, `define`, `export`, shell рецептов и файлы make, пути поиска (`vpath`, VPATH,
 # GPATH: make пересоберёт Makefile из другой папки, coord 12:35) — и в целевой переменной.
@@ -23,7 +27,8 @@ MAKE_VAR = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|[VG]PATH)\s*[:+?!]*=")  
 # Причины отказа хука (launched) вместо LOST_DIR: папка видна, не разобрана опция.
 MAKE_OPTION = ("длинная опция make, которую разбор не раскрывает однозначно (`--d`, `--frob`): какой Makefile make "
                "прочтёт, не видно — напишите опцию полностью (`--directory=…`)")
-MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS (и VPATH, GPATH) из окружения: файлы MAKEFILES, папки поиска "
+MAKEFLAGS_WHY = ("MAKEFILES, MAKEFLAGS или GNUMAKEFLAGS (и VPATH, GPATH, .SHELLFLAGS, .RECIPEPREFIX, .EXTRA_PREREQS) "
+                 "из окружения: файлы MAKEFILES, папки поиска "
                  "VPATH и GPATH (make пересоберёт Makefile из другой папки), опция или переменная "
                  "в MAKEFLAGS, от которой зависит, что make прочтёт и запустит (`-I`, `-C`, `-f`, `--eval`, "
                  "`MAKEFILES=`, `SHELL=`, `.SHELLFLAGS=`, `VPATH=`, неизвестная длинная опция `--frob`, `--jobserver-auth`, "
@@ -67,7 +72,8 @@ def make_option(a, cwd):
     любом слове make, строка include с `\\` или `#`, Makefile дерева с MAKE_TOKENS, нечитаемый или такой, что make
     его пересоберёт (coord 12:19). Разрешено только то, что прошло ревью (coord 12:35, 12:36): каждый Makefile дерева —
     блоб основной ветки origin (same_blob), MAKE_ENV нет в окружении хука и в строке. Рецепты Makefile на диске —
-    предел дизайна: только грубый признак (хук)."""
+    грубый признак (хук), кроме `make check`/`check-layer` по разобранному Makefile: команды рецептов (trusted_make,
+    SE-127)."""
     if a[0] not in MAKES:
         return ""
     if APPEND_ARG in a:  # `ИМЯ+=…` (implied_commands, линза backend #398)
@@ -102,10 +108,10 @@ def _direct(goal, var):
     t, n = track or var.get("TRACK", "<TRACK>"), var.get("NAME", "<NAME>")
     p, b = f'"worktrees/{t}/{n}"', f'"{t}/{n}"'
     if track or goal == "wt-add":
-        return [f"mkdir -p worktrees/{t}", f"git worktree add {p} -b {b} {var['WT_BASE']}"
+        return [f'mkdir -p "worktrees/{t}"', f"git worktree add {p} -b {b} \"{var['WT_BASE']}\""
                 f"  # ветка {b} уже есть — git worktree add {p} {b}"] + (
             [] if var.get("WT_DEPS") == "0" else [f"infra/scripts/dev/wt-deps.sh install {p}"])
-    return {"wt-help": ["cat worktrees/README.md"], "wt-list": ["git worktree list"],
+    return {"help": ["cat worktrees/README.md"], "wt-help": ["cat worktrees/README.md"], "wt-list": ["git worktree list"],
             "wt-deps": [f"infra/scripts/dev/wt-deps.sh install {p}"],
             "wt-check": [f'infra/scripts/dev/wt-deps.sh check "worktrees/{t}/{n}/boards"'],
             "wt-rm": [f"git worktree remove {p}"],
@@ -117,15 +123,128 @@ def _direct(goal, var):
 def make_hint(a, text):
     """SE-105: make с признаком в Makefile — отказ, его решает хук, здесь он не меняется. Для целей worktree и
     проверок, которые есть в прочтённом Makefile (text), — строка с прямыми командами рецепта для сообщения об
-    отказе: их хук разбирает как любые команды, Makefile при них не читается. "" — не make или целей из списка нет."""
-    if a[0] not in MAKES or not text:
+    отказе: их хук разбирает как любые команды, Makefile при них не читается. "" — не make, целей из списка нет или
+    опция не из MAKE_QUIET: `-C`/`-f` сменят папку или Makefile (пути команд — от корня репозитория), `-n`/`-q`/`-t`
+    не выполняют рецепт, значения `-o`/`-W`/`-I` — не цели. Без голых целей — цель по умолчанию (первая в Makefile).
+    Переменная — последнее значение из argv, как у make; значение не из MAKE_VALUE — переменной нет. Без
+    TRACK/NAME — строка о том, чего не хватает (Makefile остановится так же), команд с заглушками нет."""
+    if a[0] not in MAKES or not text or any(w.startswith("-") and not MAKE_QUIET.match(w) for w in a[1:]):
         return ""
-    var = {k: v for k, _, v in (w.partition("=") for w in a[1:] if "=" in w and not w.startswith("-"))
-           if MAKE_VALUE.match(v)}
+    var = {k.rstrip(":"): v for k, _, v in (w.partition("=") for w in a[1:] if "=" in w and not w.startswith("-"))}
+    var = {k: v for k, v in var.items() if MAKE_VALUE.match(v)}
     base = re.search(r"(?m)^WT_BASE[ \t]*\??=[ \t]*([A-Za-z0-9._/-]+)[ \t]*$", text)
     var.setdefault("WT_BASE", base.group(1) if base else "<WT_BASE>")
-    goals = [w for w in dict.fromkeys(a[1:]) if not w.startswith("-") and "=" not in w and _direct(w, var)
-             and re.search(rf"(?m)^{re.escape(w)}:", text)]
+    named = [w for w in dict.fromkeys(a[1:]) if not w.startswith("-") and "=" not in w]
+    first = MAKE_DEFAULT.search(text)
+    goals = [w for w in named or ([first.group(1)] if first else [])
+             if _direct(w, var) and re.search(rf"(?m)^{re.escape(w)}:", text)]
     lines = [c for g in goals for c in _direct(g, var)]
-    return ("\nАгентской сессии вместо `make " + " ".join(goals) + "` — прямые команды рецепта: их хук разбирает "
-            "как обычные, Makefile не читается (SE-105):\n" + "\n".join("  " + c for c in lines)) if lines else ""
+    if not lines:
+        return ""
+    head = "\nАгентской сессии вместо `" + " ".join(["make"] + (goals if named else [])) + "` — "
+    missing = sorted({m for c in lines for m in re.findall(r"<([A-Z_]+)>", c)})
+    if missing:
+        return (head + "не хватает " + ", ".join(missing) + " (Makefile остановится так же: «… required»). Повтори "
+                "make с ними — отказ напечатает прямые команды рецепта (SE-105).")
+    notes = ["Удаление worktree — только с «да» владельца."] if "wt-rm" in goals else []
+    return (head + "прямые команды рецепта: их хук разбирает как обычные, Makefile не читается (SE-105):\n"
+            + "\n".join("  " + c for c in lines) + "\n" + "\n".join(notes + [
+                "Переменные окружения перед make (`WT_BASE=… make`) здесь не видны — подставь их в команды."]))
+
+
+# SE-127 (владелец, A): `make check`/`make check-layer` по прошедшему ревью Makefile — команды рецептов вместо грубого
+# признака по всему тексту. Разбор строгий: всё, чего он не сводит к простым целям, — None, и решает грубый признак.
+MAKE_TRUSTED_GOALS = {"check", "check-layer"}
+MAKE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
+MAKE_ASSIGN = re.compile(r"([A-Za-z0-9_][A-Za-z0-9_-]*)[ \t]*(\?|\+|:::|::|:)?=")
+MAKE_DIRECTIVE = re.compile(r"[ \t]*(?:-?include|sinclude|ifn?eq|ifn?def|else|endif|define|endef|export|unexport"
+                            r"|override|undefine|vpath|-?load)(?![A-Za-z0-9_-])")
+MAKE_RESERVED = {"SHELL", "MAKESHELL", "MAKEFLAGS", "GNUMAKEFLAGS", "MFLAGS", "MAKEFILES", "VPATH", "GPATH", "MAKE",
+                 "MAKEOVERRIDES", "MAKELEVEL", "MAKECMDGOALS", "CURDIR", "SUFFIXES"}
+
+
+def _make_rules(text):
+    """{цель: (пререквизиты, строки рецепта)} и цели .PHONY; None — строка, которую разбор не сводит: директива,
+    присваивание с `$`, `!=`, переменной make (MAKE_RESERVED, имя с точкой) или не через `?=` (линза backend #419,
+    заметка 4; линза Claude, O1): имя, которое пришло в make из окружения (`X=1 make check`, `export X`, окружение
+    сессии), GNU make отдаёт shell рецепта со значением из Makefile (`PATH = /tmp/x`). `?=` значение окружения не
+    меняет, а своё имя без окружения make не экспортирует. Правило с `$`, `%`, `::`, `;`, `|`,
+    `=`, `#`, специальная цель кроме .PHONY, цель дважды, табуляция до первого правила. Строка рецепта с
+    продолжением (обратная косая в конце) — None в списке: make отдаёт её shell с переводом строки как есть (в
+    кавычках shell их не снимает), склейка разбора с этим не совпадает."""
+    rules, phony, current = {}, set(), None
+    for line in MAKE_CONT.sub(lambda m: m.group(1) + " \0", text).split("\n"):  # `\0` — место склейки
+        if line.startswith("\t"):
+            if current is None:
+                return None
+            current.append(None if "\0" in line else line[1:])
+            continue
+        line = line.replace("\0", "")  # вне рецепта make склеивает продолжение пробелом
+        if not line.strip():  # и строка-комментарий: make_files снял его текст, рецепт она не прерывает
+            continue
+        current = None
+        assign = MAKE_ASSIGN.match(line)
+        if MAKE_DIRECTIVE.match(line) or assign and (assign.group(1) in MAKE_RESERVED or "$" in line
+                                                     or assign.group(2) != "?"):
+            return None
+        if assign:
+            continue
+        targets, colon, prereqs = line.partition(":")
+        names, deps = targets.split(), prereqs.split()
+        if not colon or not names or not all(map(MAKE_NAME.match, deps)) or prereqs.startswith(":"):
+            return None
+        if names == [".PHONY"]:
+            phony.update(deps)
+            current = []
+            continue
+        if not all(map(MAKE_NAME.match, names)) or any(n in rules for n in names):
+            return None
+        current = []
+        rules.update((n, (deps, current)) for n in names)
+    return rules, phony
+
+
+def make_recipe(a, files):
+    """Команды, которые выполнит `make <цели>` (цели — только MAKE_TRUSTED_GOALS, без опций и `VAR=`) по одному
+    Makefile files (make_files), в порядке make: пререквизиты, затем рецепт; у строки сняты `@-+`, `$$` — `$`.
+    None — разбор не сводит: другие слова, файлов не один или текст не прочтён, _make_rules — None, цель или
+    пререквизит без правила или не в .PHONY (make искал бы неявное правило), `$` в строке рецепта."""
+    if a[0] not in MAKES or len(a) < 2 or not set(a[1:]) <= MAKE_TRUSTED_GOALS or len(files) != 1 or not files[0][1]:
+        return None
+    parsed = _make_rules(files[0][1])
+    if parsed is None:
+        return None
+    rules, phony = parsed
+    order, seen = [], set()
+
+    def visit(t):
+        if t in seen:
+            return True
+        seen.add(t)
+        if t not in rules or t not in phony or not all(visit(p) for p in rules[t][0]):
+            return False
+        order.append(t)
+        return True
+
+    if not all(visit(g) for g in a[1:]):
+        return None
+    out = []
+    for line in (x for t in order for x in rules[t][1]):
+        cmd = re.sub(r"^[ \t@+-]*", "", line or "")
+        if line is None or "$" in cmd.replace("$$", ""):
+            return None
+        out += [cmd.replace("$$", "$")] if cmd.strip() else []
+    return out
+
+
+def trusted_make(a, files, found, coarse, written, classify, ctx):
+    """SE-127: грубый признак Makefile (coarse) заменяют находки команд его рецептов (make_recipe) — каждая строка
+    отдельно, как make запускает её в своём shell: classify(строка, *ctx, disk, имена записи команды и всех строк
+    рецепта — запись прошлой строки видит следующая, линза backend #419, заметка 3). make_option уже отказал Makefile
+    не с основной ветки origin, MAKEFLAGS, `--eval`, include, `$(shell`. Разбор не сводит или признака нет —
+    (found, coarse) как были."""
+    recipe = make_recipe(a, files) if coarse else None
+    if recipe is None:
+        return found, coarse
+    w = set(written).union(*map(command_writes, recipe))
+    return found + [f for c in recipe for f in classify(c, *ctx, True, w)], []

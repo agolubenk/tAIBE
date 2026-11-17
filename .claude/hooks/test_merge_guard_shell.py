@@ -5,13 +5,18 @@
 Запуск: python3 -I .claude/hooks/test_merge_guard_shell.py  (только эти формы; все проверки — test_merge_guard.py)
 """
 import os
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_gh import alias_tokens, gh_aliases  # noqa: E402
+from merge_guard_gh import GIT_PUSH, alias_tokens, gh_aliases  # noqa: E402
+from merge_guard_comments import comment_readings, sure_comments  # noqa: E402
 from merge_guard_expand import brace_argv, qualifier_code  # noqa: E402
+from merge_guard_files import command_writes  # noqa: E402
+from merge_guard_make import WT_TRACKS, _direct  # noqa: E402
 from merge_guard_shell import command_name, proc_files  # noqa: E402
 from merge_guard_testkit import C4, CONTROL, D9, ROOT, SESSIONS, TMP, bash, check, finish, mg, repo_on, run  # noqa: E402
 import merge_guard_git  # noqa: E402
@@ -859,29 +864,67 @@ CHECKOUT = Path(__file__).resolve().parents[2]  # чистый checkout ветк
 mk = TMP / "se105"
 mk.mkdir(parents=True, exist_ok=True)
 (mk / "Makefile").write_bytes((CHECKOUT / "Makefile").read_bytes())
-WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" board-agents'
+WT_FIX = 'git worktree add "worktrees/fix/x" -b "fix/x" "board-agents"'
 DEPS_FIX = 'infra/scripts/dev/wt-deps.sh install "worktrees/fix/x"'
 EVAL_NERVE = "python3 -I -m unittest discover -s eval/nerve -p 'test_*.py'"
+NO_HINT = ["прямые команды"]
+ENV_NOTE, OWNER_YES, REMOVE = "Переменные окружения перед make", "«да» владельца", "git worktree remove"
 for form, want, absent in (
-        ("make wt-fix NAME=x", ["mkdir -p worktrees/fix", WT_FIX, DEPS_FIX], []),
+        ("make wt-fix NAME=x", ['mkdir -p "worktrees/fix"', WT_FIX, DEPS_FIX, ENV_NOTE], [OWNER_YES]),
         ("make wt-fix NAME=x WT_DEPS=0", [WT_FIX], [DEPS_FIX]),
-        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" board-agents'], []),
+        ("make wt-add TRACK=spike NAME=y", ['git worktree add "worktrees/spike/y" -b "spike/y" "board-agents"'], []),
         ("make wt-feature NAME=x", ['"worktrees/feature/x"'], []), ("make wt-refactor NAME=x", ['"refactor/x"'], []),
         ("make wt-spike NAME=x", ['"spike/x"'], []), ("make wt-review NAME=x", ['"review/x"'], []),
-        ("make wt-fix NAME='x;y'", ['"worktrees/fix/<NAME>"'], ["x;y"]),
-        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" main'], []),
+        ("make wt-fix NAME='x;y'", ["не хватает NAME"], ["x;y", "<NAME>", "git worktree add"]),
+        ("make wt-fix NAME=x WT_BASE=main", ['-b "fix/x" "main"'], []),
         ("make wt-list", ["git worktree list"], []), ("make wt-help", ["cat worktrees/README.md"], []),
-        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []), ("make wt-rm TRACK=fix NAME=x", ['git worktree remove "worktrees/fix/x"'], []),
+        ("make wt-deps TRACK=fix NAME=x", [DEPS_FIX], []),
+        ("make wt-rm TRACK=fix NAME=x", [f'{REMOVE} "worktrees/fix/x"', OWNER_YES], []),  # frontend #385
         ("make wt-check TRACK=fix NAME=x", ['infra/scripts/dev/wt-deps.sh check "worktrees/fix/x/boards"'], []),
         ("make check-repo", ["python3 -I infra/checks/test_checks.py", "python3 -I infra/checks/run.py"], []),
         ("make check-eval", [EVAL_NERVE, "-s eval/pipeline/reflex ", "-s eval/evolve "], []),
         ("make -s wt-list check-repo", ["git worktree list", "infra/checks/run.py"], []),
-        ("make check-layer", [], ["прямые команды"]), ("make", [], ["прямые команды"])):
+        ("make -j4 -k wt-list", ["git worktree list"], []),
+        ("make check-layer", [], NO_HINT),
+        ("make", ["вместо `make` —", "cat worktrees/README.md"], []), ("make help", ["cat worktrees/README.md"], []),
+        # Контроль #385: -C/-f — пути не от корня
+        ("make -C . wt-list", [], NO_HINT), ("make -f Makefile wt-fix NAME=x", [], NO_HINT),
+        ("make --directory=. wt-list", [], NO_HINT), ("make -sfMakefile wt-list", [], NO_HINT),
+        ("make --dir=. wt-list", [], NO_HINT), ("make -n wt-list", [], NO_HINT),
+        # Claude #385, ниты 1–5: значения опций — не цели, пробный прогон рецепт не выполняет, у переменной —
+        # последнее значение, без TRACK/NAME — чего не хватает, окружение перед make подсказка не видит
+        ("make -o wt-rm wt-list TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make -W wt-rm wt-list TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make -sn wt-list", [], NO_HINT), ("make --just-print wt-rm TRACK=fix NAME=x", [], NO_HINT + [REMOVE]),
+        ("make --dry-run wt-list", [], NO_HINT), ("make -q wt-list", [], NO_HINT), ("make -t wt-list", [], NO_HINT),
+        ("make wt-add TRACK=spike TRACK=fix NAME=x", ['"worktrees/fix/x"'], ['"worktrees/spike/x"']),
+        ("make wt-add TRACK=fix 'TRACK=a b' NAME=x", ["не хватает TRACK"], ["git worktree add"]),
+        ("make wt-rm", ["не хватает NAME, TRACK"], [REMOVE]), ("make wt-fix NAME:=x", [WT_FIX], []),
+        ("WT_BASE=main make wt-fix NAME=x", [WT_FIX, ENV_NOTE], [])):
     got = run("Bash", {"command": form}, cwd=mk) or ""
     check(f"SE-105, make под отказом, как в board-agents: {form!r}", got or None, True)
     lost = [w for w in want if w not in got] + [w for w in absent if w in got]
     check(f"SE-105, прямые команды в отказе: {form!r}", None if not lost else f"{lost!r} в {got!r}", False)
 bash("SE-105, make у Контроля — как в board-agents", "make wt-fix NAME=x", False, who=D9, cwd=mk)
+# Подсказка не отстаёт от Makefile (Контроль #385): каждая прямая команда и запасная форма из комментария — строка
+# рецепта цели после подстановки переменных; wt-<трек> — рецепт wt-add через `$(MAKE) wt-add TRACK=<трек>`.
+recipes, target = {}, None
+for line in (CHECKOUT / "Makefile").read_text().splitlines():
+    m = re.match(r"([A-Za-z][\w-]*):", line)
+    target = m.group(1) if m else target if line.startswith("\t") else None
+    if target and line.startswith("\t"):
+        recipes[target] = recipes.get(target, "") + line.lstrip("\t@") + "\n"
+for goal in ("wt-add", "wt-feature", "wt-fix", "wt-refactor", "wt-spike", "wt-review", "wt-deps", "wt-check", "wt-rm",
+             "wt-list", "check-repo", "check-eval"):
+    via_add = goal[3:] in WT_TRACKS
+    body = recipes.get("wt-add" if via_add else goal, "")
+    for k, v in (("TRACK", goal[3:] if via_add else "fix"), ("NAME", "x"), ("WT_BASE", "board-agents")):
+        body = body.replace(f"$({k})", v)
+    forms = [f for c in _direct(goal, {"TRACK": "fix", "NAME": "x", "WT_BASE": "board-agents"})
+             for f in [c.split("  # ")[0]] + ([c.split("  # ", 1)[1].split(" — ", 1)[1]] if "  # " in c else [])]
+    stale = [f for f in forms if f not in body] + ([] if not via_add or f"wt-add TRACK={goal[3:]} " in recipes.get(goal, "")
+                                                   else [f"{goal}: нет $(MAKE) wt-add TRACK={goal[3:]}"])
+    check(f"SE-105, _direct({goal!r}) = рецепт Makefile (правка рецепта — правка _direct)", stale or None, False)
 (mk / "Makefile").write_text("wt-fix:\n\tgh pr merge 1\n")
 (mk / "m.awk").write_text('BEGIN { system("gh pr merge 1") }\n')
 for form in ("make wt-list", "awk -f m.awk"):
@@ -901,6 +944,353 @@ check("SE-105, отказ на make в checkout даёт прямые коман
       "проверку)", None if WT_FIX in direct and EVAL_NERVE in direct else hint or "проход", False)
 for form in direct:
     check(f"SE-105, прямая форма проходит в чистом checkout: {form!r}", in_checkout(form), False)
+
+# --- SE-145 (координатор 22:05): глобальные опции git до push (`-c`, `-C`, `--git-dir`, `--config-env`) и `GIT`
+# не прячут push от правила base: push и цель (защищённая ветка, --all/--mirror) в тексте скрипта — отказ. Формы B/K
+# из #427 (SE-138) на base — отказ; тест закрепляет это. Прохода по «чистому» тексту (clean() из #427) здесь нет.
+fp = TMP / "se145"
+fp.mkdir()
+B1_PUSH = (
+    ("push_default.py", 'import subprocess\n\n\ndef push(branch="main"):\n'
+                        '    subprocess.run(["git", "push", "origin", branch])\n\n\npush()\n'),
+    ("push_tuple.py", 'import subprocess\nremote, branch = "origin", "main"\n'
+                      'subprocess.run(["git", "push", remote, branch])\n'),
+    ("push_hop.py", 'import subprocess\ncfg = {"branch": "main"}\ntarget = cfg["branch"]\n'
+                    'subprocess.run(["git", "push", "origin", target])\n'),
+    ("push_append.py", 'import subprocess\nrest = ["origin"]\nrest.append("main")\n'
+                       'subprocess.run(["git", "push"] + rest)\n'),
+    ("push_return.py", 'import subprocess\n\n\ndef target():\n    return "main"\n\n\n'
+                       'subprocess.run(["git", "push", "origin", target()])\n'),
+    ("push_star.py", 'import subprocess\nflags = []\nflags.append("--all")\n'
+                     'subprocess.run(["git", "push", "origin", *flags])\n'),
+    ("push_fstr.py", 'import subprocess\n\n\ndef br():\n    return "main"\n\n\n'
+                     'subprocess.run(f"git push origin {br()}", shell=True)\n'),
+    ("push_cmd_hop.py", 'import subprocess\ncfg = {"x": "main"}\nb = cfg["x"]\ncmd = ["git", "push", "origin"]\n'
+                        'subprocess.run(cmd + [b])\n'),
+    ("push_template.py", 'import subprocess\nfrom string import Template\n\n\ndef go(b="main"):\n'
+                         '    subprocess.run(Template("git push origin $b").substitute(b=b), shell=True)\n\n\ngo()\n'),
+)
+B1_ENV = (
+    ("push_env_set.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                        'subprocess.run("git push origin $B", shell=True)\n'),
+    ("push_env_update.py", 'import os\nimport subprocess\nos.environ.update(B="main")\n'
+                           'subprocess.run(["bash", "-c", "git push origin $B"])\n'),
+    ("push_env_dict.py", 'import os\nimport subprocess\nenv = {\n    **os.environ,\n    "B": "main",\n}\n'
+                         'subprocess.run("git push origin $B", shell=True, env=env)\n'),
+    ("push_env_refspec.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                            'subprocess.run("git push origin HEAD:${B}", shell=True)\n'),
+    ("push_env.js", 'const { execSync } = require("child_process");\nprocess.env.B = "main";\n'
+                    'execSync("git push origin $B");\n'),
+    ("push_putenv.py", 'import os\nos.putenv("B", "main")\nos.system("git push origin $B")\n'),
+    ("push_env_concat.py", 'import os\nimport subprocess\nos.environ["B"] = "main"\n'
+                           'subprocess.run("git push origin " + "$B", shell=True)\n'),
+)
+# B2: ветку задаёт другой оператор — checkout, switch, upstream; push без назначения или в HEAD
+B2_IMPLICIT = (
+    ("push_checkout.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                         'subprocess.run(["git", "commit", "-am", "x"])\nsubprocess.run(["git", "push"])\n'),
+    ("push_upstream.py", 'import subprocess\n'
+                         'subprocess.run(["git", "config", "branch.fix/a.merge", "refs/heads/main"])\n'
+                         'subprocess.run(["git", "push"])\n'),
+    ("push_switch_head.py", 'import subprocess\nsubprocess.run(["git", "switch", "main"])\n'
+                            'subprocess.run(["git", "push", "origin", "HEAD"])\n'),
+    ("push_checkout.js", 'const { execFileSync } = require("child_process");\n'
+                         'execFileSync("git", ["checkout", "main"]);\nexecFileSync("git", ["push"]);\n'),
+)
+# B3: назначение задаёт настройка git — `remote.<имя>.push`, `symbolic-ref` — или matching-refspec `:`
+B3_MAP = (
+    ("push_map_config.py", 'import subprocess\nsubprocess.run(["git", "config", "remote.origin.push", '
+                           '"refs/heads/feat:refs/heads/main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_map_case.py", 'import subprocess\nsubprocess.run("git config --add Remote.Origin.Push '
+                         'refs/heads/feat:refs/heads/main", shell=True)\n'
+                         'subprocess.run("git push origin feat", shell=True)\n'),
+    ("push_matching.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                         'subprocess.run(["git", "push", "origin", ":"])\n'),
+    ("push_matching_plus.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                              'subprocess.run("git push origin +:", shell=True)\n'),
+    ("push_symref.py", 'import subprocess\n'
+                       'subprocess.run(["git", "symbolic-ref", "refs/heads/feat", "refs/heads/main"])\n'
+                       'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_symref.js", 'const { execFileSync } = require("child_process");\n'
+                       'execFileSync("git", ["symbolic-ref", "refs/heads/feat", "refs/heads/main"]);\n'
+                       'execFileSync("git", ["push", "origin", "feat"]);\n'),
+)
+# B4: то же состояние git без слов команды — ключ из частей, `.git/config`, ссылка файлом, include, GIT_CONFIG_*,
+# push строкой shell на несколько строк
+B4_STATE = (
+    ("push_key_parts.py", 'import subprocess\nk = "remote.origin." + "push"\n'
+                          'subprocess.run(["git", "config", k, "refs/heads/feat:refs/heads/main"])\n'
+                          'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_key_concat.py", 'import subprocess\nr = "origin"\nsubprocess.run(["git", "config", "remote." + r + '
+                           '".push", "refs/heads/feat:refs/heads/main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_ini.py", 'import subprocess\nwith open(".git/config", "a") as f:\n'
+                    '    f.write(\'[remote "origin"]\\n\\tpush = refs/heads/feat:refs/heads/main\\n\')\n'
+                    'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_symref_file.py", 'import subprocess\nfrom pathlib import Path\n'
+                            'Path(".git/refs/heads/feat").write_text("ref: refs/heads/main\\n")\n'
+                            'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_include.py", 'import subprocess\nfrom pathlib import Path\nPath("x.cfg").write_text('
+                        '\'[remote "origin"]\\n\\tpush = refs/heads/feat:refs/heads/main\\n\')\n'
+                        'subprocess.run(["git", "config", "include.path", "../x.cfg"])\n'
+                        'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_env_config.py", 'import os\nimport subprocess\nos.environ["GIT_CONFIG_COUNT"] = "1"\n'
+                           'os.environ["GIT_CONFIG_KEY_0"] = "remote.origin.push"\n'
+                           'os.environ["GIT_CONFIG_VALUE_0"] = "refs/heads/feat:refs/heads/main"\n'
+                           'subprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_heredoc_var.py", 'import subprocess\nscript = """\nB=main\ngit push origin $B\n"""\n'
+                            'subprocess.run(script, shell=True)\n'),
+    ("push_heredoc_bare.py", 'import subprocess\n# release to main\nscript = """\ngit push\n"""\n'
+                             'subprocess.run(script, shell=True)\n'),
+)
+# K1–K8: маска и dst `HEAD`, `GIT`, имя git из частей, escape в назначении, программа из данных, обёртка запуска
+K_CFG = ('"config", "remote.origin.push", "refs/heads/feat:refs/heads/main"])\n'
+         'subprocess.run(["git", "push", "origin", "feat"])\n')
+B4_K = (
+    ("push_glob.py", 'import subprocess\nsubprocess.run(["git", "checkout", "main"])\n'
+                     'subprocess.run(["git", "push", "origin", "refs/heads/*:refs/heads/*"])\n'),
+    ("push_glob_tidy.py", 'import subprocess\nBASE = "main"\nprint(BASE)\n'
+                          'subprocess.run(["git", "push", "origin", "refs/heads/*:refs/heads/*"])\n'),
+    ("push_dst_head.py", 'import subprocess\nBASE = "main"\nprint(BASE)\n'
+                         'subprocess.run(["git", "push", "origin", "feat:HEAD"])\n'),
+    ("push_git_shell.py", 'import subprocess\nsubprocess.run("g\'\'it config remote.origin.push '
+                          'refs/heads/feat:refs/heads/main", shell=True)\n'
+                          'subprocess.run(["git", "push", "origin", "feat"])\n'),
+) + tuple((name, f"import subprocess\n{pre}subprocess.run([{tool}, {K_CFG}") for name, pre, tool in (
+    ("push_git_upper.py", "", '"GIT"'),
+    ("push_git_parts.py", "", '"g" + "it"'),
+    ("push_git_vars.py", 'a = "g"\nb = "it"\n', "a + b"),
+    ("push_git_join.py", "", '"".join(["g", "it"])'),
+    ("push_git_fstr.py", 'a = "g"\n', 'f"{a}it"'),
+    ("push_git_escape.py", "", '"\\x67it"'),
+    ("push_git_slice.py", 's = "tig"\n', "s[::-1]"),
+    ("push_prog_glob.py", "import glob\n", 'glob.glob("/usr/bin/g?t")[0]'),
+    ("push_prog_argv.py", "import sys\n", "sys.argv[1]"),
+    ("push_prog_input.py", "", "input()"),
+    ("push_prog_file.py", "", 'open("tool.txt").read().strip()'))) + (
+    ("push_dst_escape.py", 'import subprocess\nsubprocess.run(["git", "log", "--oneline", "main"])\n'
+                           'subprocess.run(["git", "push", "origin", "feat:refs/heads/ma\\x69n"])\n'),
+    ("push_dst_octal.py", 'import subprocess\nsubprocess.run(["git", "log", "--oneline", "main"])\n'
+                          'subprocess.run("git push origin feat:refs/heads/ma\\151n", shell=True)\n'),
+    ("push_prog_alias.py", 'import subprocess\nimport sys\nr = subprocess.run\n'
+                           f'r([sys.argv[1], {K_CFG}'),
+    ("push_prog_as.py", 'import subprocess\nimport sys\nfrom subprocess import run as r\n'
+                        f'r([sys.argv[1], {K_CFG}'),
+    ("push_prog_shell_glob.py", 'import subprocess\nsubprocess.run("/usr/bin/g?t config remote.origin.push '
+                                'refs/heads/feat:refs/heads/main", shell=True)\n'
+                                'subprocess.run(["git", "push", "origin", "feat"])\n'),
+) + tuple((name, f"import subprocess\n{pre}subprocess.run([{tool}, {K_CFG}") for name, pre, tool in (
+    ("push_k6_env_argv.py", "import sys\n", '"env", sys.argv[1]'),
+    ("push_k6_env_listdir.py", 'import os\ntool = sorted(os.listdir("/usr/bin"))[0]\n', '"env", tool'),
+    ("push_k6_nice_input.py", "", '"nice", input()'),
+    ("push_prog_q.py", "import sys\nQ = sys.argv[1]\n", "Q"),
+    ("push_k8_node_eval.py", "", '"node", "--eval=0"'),
+    ("push_k8_deno_eval.py", "", '"deno", "eval", "0"'),
+    ("push_k8_timeit.py", "", '"python3", "-m", "timeit", "-n1", "0"'),
+    ("push_k8_exe_timeit.py", "import sys\n", 'sys.executable, "-m", "timeit", "-n1", "0"'),
+    ("push_k8_php.py", "", '"php", "-r", "0"'),
+    ("push_k8_sh_file.py", "", '"sh", "cfg.sh"'),
+    ("push_k8_exe_file.py", "import sys\n", 'sys.executable, "-I", "cfg.py"'))) + tuple(
+    (name, f'import subprocess\nimport sys\nBASE = "main"\nprint(BASE)\n{run}\n'
+           'subprocess.run(["git", "push", "origin", "feat"])\n') for name, run in (
+        ("push_k6_sh_argv.py", 'subprocess.run(["sh", "-c", sys.argv[1]])'),
+        ("push_k6_sh_var.py", 'cmd = sys.argv[1]\nsubprocess.run(["sh", "-c", cmd])'),
+        ("push_k6_sh_stdin.py", 'subprocess.run(["sh", "-c", sys.stdin.read()])'),
+        ("push_k6_bash_file.py", 'subprocess.run(["bash", "-c", open("cmd.txt").read()])'),
+        ("push_k6_py_argv.py", 'subprocess.run(["python3", "-c", sys.argv[1]])'),
+        ("push_k6_exe_argv.py", 'subprocess.run([sys.executable, "-c", sys.argv[1]])'),
+        ("push_k6_node_file.py", 'subprocess.run(["node", "-e", open("x.js").read()])'),
+        ("push_k6_sh_input.py", 'subprocess.run(["sh"], input=open("cmd.txt").read(), text=True)'),
+        ("push_k6_xargs.py", 'subprocess.run(["xargs", "-a", "args.txt"])'))) + (
+    ("push_k6_spawn.js", 'const { spawnSync, execFileSync } = require("child_process");\nconst BASE = "main";\n'
+                         'spawnSync("sh", ["-c", process.argv[2]]);\n'
+                         'execFileSync("git", ["push", "origin", "feat"]);\n'),
+    ("push_k6_bash.js", 'const fs = require("fs");\nconst { execFileSync } = require("child_process");\n'
+                        'const BASE = "main";\nexecFileSync("bash", ["-c", fs.readFileSync("cmd.txt", "utf8")]);\n'
+                        'execFileSync("git", ["push", "origin", "feat"]);\n'),
+    ("push_k7_vars.py", f'import subprocess\nimport sys\nvars(subprocess)["run"]([sys.argv[1], {K_CFG}'),
+    ("push_k7_globals.py", 'import subprocess\nimport sys\nfrom subprocess import run\n'
+                           f'globals()["run"]([sys.argv[1], {K_CFG}'),
+    ("push_k7_static.py", 'import inspect\nimport subprocess\nimport sys\n'
+                          f'inspect.getattr_static(subprocess, "run")([sys.argv[1], {K_CFG}'),
+    ("push_k8_capture.py", 'import subprocess\nimport sys\nOpen3.capture2(sys.argv[1], "config", "remote.origin.push", '
+                           '"refs/heads/feat:refs/heads/main")\nsubprocess.run(["git", "push", "origin", "feat"])\n'),
+    ("push_k8_eval.js", 'const cp = require("child_process");\ncp.execFileSync("node", ["--eval=0", "config", '
+                        '"remote.origin.push", "refs/heads/feat:refs/heads/main"]);\n'
+                        'cp.execFileSync("git", ["push", "origin", "feat"]);\n'),
+    ("push_k7_index.js", 'const cp = require("child_process");\ncp["execFileSync"](process.argv[2], '
+                         '["config", "remote.origin.push", "refs/heads/feat:refs/heads/main"]);\n'
+                         'cp.execFileSync("git", ["push", "origin", "feat"]);\n'),
+)
+# Формы Контроля C4–C10, E1–E4 и формы backend со значением опции (пробел, запятая, скобка, shell `'…'`)
+SE145_MAP = '"remote.origin.push=refs/heads/feat:refs/heads/main"'
+SE145_DENY = (
+    ("se145_c4.py", 'import subprocess\nsubprocess.run("git -c remote.origin.push=refs/heads/feat:refs/heads/main '
+                    'push origin feat", shell=True)\n'),
+    ("se145_c6.py", 'import subprocess\nsubprocess.run(["git", "-c", "include.path=/tmp/x.cfg", "push", "origin", '
+                    '"feat"])\nassert "main" not in ["feat"]\n'),
+    ("se145_c7.py", f'import subprocess\nsubprocess.run(["git", "-c", {SE145_MAP}, "push", "origin", "feat"])\n'),
+    ("se145_c9.js", "const { execFileSync } = require('child_process');\n"
+                    f"execFileSync('git', ['-c', {SE145_MAP}, 'push', 'origin', 'feat']);\n"),
+    ("se145_c10.py", 'import os\nimport subprocess\nos.environ["V"] = "refs/heads/feat:refs/heads/main"\n'
+                     'subprocess.run(["git", "--config-env=remote.origin.push=V", "push", "origin", "feat"])\n'),
+    ("se145_e1.py", 'import subprocess\nsubprocess.run(["git", "-c", "x.y=z", "push", "origin", "HEAD:main"])\n'),
+    ("se145_e2.py", 'import subprocess\nsubprocess.run(["git", "-C", ".", "push", "origin", "HEAD:main"])\n'),
+    ("se145_e3.py", 'import subprocess\nsubprocess.run("git --git-dir=.git push origin HEAD:main", shell=True)\n'),
+    ("se145_e4.js", "const { execFileSync } = require('child_process');\n"
+                    "execFileSync('git', ['-c', 'x.y=z', 'push', 'origin', 'HEAD:main']);\n"),
+    ("se145_upper.py", 'import subprocess\nsubprocess.run(["GIT", "push", "origin", "main"])\n'),
+) + tuple((name, f'import subprocess\nsubprocess.run([{opts}, "push", "origin", "HEAD:main"])\n') for name, opts in (
+    ("se145_val_space.py", '"git", "-c", "user.name=Release Bot"'),
+    ("se145_val_comma.py", '"git", "-c", "x.y=a,b"'),
+    ("se145_val_dir.py", '"git", "-C", "/tmp/my repo"'),
+    ("se145_val_bracket.py", '"git", "-c", "x.y=[a]"'))) + (
+    ("se145_val_shell.py", 'import subprocess\n'
+                           'subprocess.run("git -c \'user.name=Release Bot\' push origin HEAD:main", shell=True)\n'),
+)
+# Проход: цели в тексте нет — глобальная опция сама по себе не отказ
+SE145_PASS = (
+    ("se145_no_target.py", 'import subprocess\n'
+                           'subprocess.run(["git", "-c", "x.y=z", "push", "origin", "feat:feat"])\n'),
+)
+DENY = ((B1_PUSH + B1_ENV, on_main), (B2_IMPLICIT + B3_MAP + B4_STATE + B4_K + SE145_DENY, on_branch))
+for group, _ in DENY:
+    for name, text in group:
+        (fp / name).write_text(text)
+for name, text in SE145_PASS:
+    (fp / name).write_text(text)
+for group, where in DENY:
+    for name, _ in group:
+        interp = "node" if name.endswith(".js") else "python3 -I"
+        bash(f"SE-145, push и цель в тексте скрипта — отказ: {name}", f"{interp} {fp / name}", True, cwd=where)
+for name, _ in SE145_PASS:
+    bash(f"SE-145, цели в тексте нет — проход: {name}", f"python3 -I {fp / name}", False, cwd=on_branch)
+# Линза backend на 5a0b1b7b8: разбор глобальных опций укладывается в таймаут хука; цепочка длиннее GIT_OPTS_MAX — push
+for label, text, limit in (("60 × -c", "git" + " -c" * 60 + " x", 0.1),
+                           ("60 × -c k=v", "git" + " -c k=v" * 60 + " x", 0.1),
+                           ("10 000 × git -c", "git -c " * 10000 + "x", 1.0)):
+    t0 = time.perf_counter()
+    GIT_PUSH.search(text)
+    took = time.perf_counter() - t0
+    check(f"SE-145, GIT_PUSH на {label}: {took:.3f} с, предел {limit} с", took if took >= limit else None, False)
+check("SE-145, 40 опций до push — push", GIT_PUSH.search("git" + " -c a=b" * 40 + " push origin HEAD:main"), True)
+# Линза backend #338 B1: обёртка тяжёлого гейта запускает хвост argv (`exec "$@"`), хвост разбирается как команда.
+# Путь — настоящий скрипт: его текст разбирается и хвоста не называет, так что отказ даёт только разбор хвоста.
+GATE = Path(__file__).resolve().parents[1] / "scripts" / "heavy-gate.sh"
+for label, form in (("команда в хвосте", f"{GATE} gh pr merge 5 --squash"),
+                    ("подсказка хука, bash -c", f"{GATE} bash -c 'pnpm test && gh pr merge 5 --squash'"),
+                    ("через timeout", f"timeout 600 {GATE} gh pr merge 5"),
+                    ("source обёртки", f"source {GATE} gh pr merge 5")):
+    bash(f"SE-116, heavy-gate.sh — {label}", form, True)
+bash("SE-116, bash heavy-gate.sh — push в main", f"bash {GATE} git push origin HEAD:main", True, cwd=on_branch)
+for label, form in (("гейт в bash -c", f"{GATE} bash -c 'cd boards && pnpm test'"), ("голый гейт", f"{GATE} pnpm test"),
+                    ("bash heavy-gate.sh гейт", f"bash {GATE} pnpm test")):
+    bash(f"SE-116, heavy-gate.sh — {label}", form, False)
+
+# --- SE-75: `'` в комментарии скрипта сдвигал разбор кавычек — ложная «запись в main» или спрятанный код ---
+se75 = repo_on("main", "se75")
+MEM = "\n".join((  # mem-stats.sh из TB-124, сокращённый: прежний разбор давал «запись в защищённую ветку» на main
+    "# A decimal point in numbers whatever the SSH session's locale (ru_RU prints «307,0»).",
+    "sample_once() {", "    awk -F'\\t' -v now=\"$now\" -v project=\"$PROJECT\" \"$AWK_MIB\"'", "      }'",
+    "  while :; do", "    sleep \"$step\"", "  done", "}", "report() {", "  if [ -z \"$file\" ]; then",
+    "    file=\"$(find \"$DIR\" -maxdepth 1 -name 'mem-*.tsv' 2>/dev/null | sort | tail -n 1)\"", "  fi",
+    "  [ -n \"$file\" ] && [ -s \"$file\" ] || {", "    exit 1", "  }",
+    "  echo \"$file: $(cut -f1 \"$file\" | sort -u | wc -l | tr -d ' ') samples, $(head -n 1 \"$file\" | cut -f1)\"",
+    "  printf '%-10s %8s %8s %8s %8s %10s\\n' service samples p95_MiB peak_MiB limit suggested",
+    "  for id in $(containers); do", "    docker inspect -f '{{.Name}} restarts={{.RestartCount}}' \"$id\"", "  done",
+    "  # OOM kills from the kernel log: Docker's State.OOMKilled forgets a kill once the container restarts.",
+    "  if ! command -v journalctl >/dev/null 2>&1; then", "    return 0", "  fi", "}", "case \"${1:-}\" in", "esac",
+    ""))
+(se75 / "mem.sh").write_text(MEM)
+(se75 / "mem-push.sh").write_text(MEM + "git push origin HEAD:main\n")
+(se75 / "mem-sign.sh").write_text(MEM.replace("Docker's", "Docker's gh pr merge 1"))
+(se75 / "tail.sh").write_text("echo x # don't\ngh pr merge 1\necho 'it's'\n")  # bash выполнит строку 2 до ошибки
+(se75 / "tail2.sh").write_text("G=gh\necho x # don't\n$G pr merge 1\necho 'it'\n")
+bash("SE-75: `'` в комментариях скрипта — не запись в main", "bash mem.sh", False, cwd=se75)
+bash("SE-75: тот же скрипт с настоящей записью в main", "bash mem-push.sh", True, cwd=se75)
+bash("SE-75: признак в комментарии с `'` — лишний отказ, как c1.sh", "bash mem-sign.sh", True, cwd=se75)
+bash("SE-75: кавычка не закрылась после комментария с `'`", "bash tail.sh", True, cwd=se75)
+bash("SE-75: комментарий с `'` не прячет $G", "bash tail2.sh", True, cwd=se75)
+for form in (": # it's\n$G pr merge 1\n: # it's", "echo \"$(echo \"a\")\" # it's\n$G pr merge 1",
+             "echo $(( 16#ff )) # it's\n$G pr merge 1", "f() { echo; } # it's\n$G pr merge 1",
+             "echo ${#x} $# # it's\n$G pr merge 1", "echo \"it's\" # it's\n$G pr merge 1",
+             "cat <<< 'x' # it's\n$G pr merge 1", "echo \"a # it's\"\n$G pr merge 1"):
+    bash(f"SE-75: `'` в комментарии или рядом не прячет код: {form!r}", "G=gh\n" + form, True)
+# Контроль на 439e47b9f: маска чисел zsh `<1-2>`, `<1->`, `<->` — часть слова, `#` за ней — тоже (zsh 5.9 выполняет код)
+for form in ("setopt nonomatch\nG=gh\n: <1-2>#'\n'; $G pr merge 1; : '\n'", "G=gh\nnoglob : <1-2>#'\n'; $G pr merge 1; : '\n'",
+             "setopt nonomatch\nG=gh\n: <->#'\n'; $G pr merge 1; : '\n'"):
+    bash(f"SE-75: `#` за маской чисел zsh — не комментарий: {form!r}", form, True)
+SURE = ("a # it's\nb", "echo \"$(x \"$f\")\" # it's", "f() { :; } # it's", "a=(1) # it's", "echo ${x#*/} # it's",
+        "echo $'\\'' # it's", "echo 'it''s' # it's", "echo $# ${#x} $((16#f)) # it's", "cat <<< 'x' # it's")
+LOST = ("echo `a` # it's", "cat <<E\nE\n# it's", "echo $[1] # it's", "x=$(case a in a) :;; esac) # it's",
+        "(( 1 # it's\n))", "echo ${x:-'a'} # it's", "( : # it's\n)", "ls (#i)x # it's", "ls !(a) # it's",
+        "x=$(: # it's\n)", "(a)# it's", "alias q=\"'\"\n# it's", "echo 'a # it's", "echo \"$(echo \"#\") # it's\"",
+        "<1-2>#'", ": <1->#'", ": <->#'")
+for text in SURE:  # комментарий — последний ` # ` строки
+    got = sure_comments(text)
+    check(f"SE-75 sure_comments — верхний уровень: {text!r}", None if got == {text.rindex(" # ") + 1} else got, False)
+for text in LOST:
+    check(f"SE-75 sure_comments — уверенности нет: {text!r}", sure_comments(text) or None, False)
+
+# --- SE-76: bash (файл, stdin, source, `-c`, eval) выполняет команды до синтаксической ошибки в конце — их разбор ---
+se76 = repo_on("main", "se76")
+TAILS = {"quote.sh": 'G=gh\n$G pr merge 1\necho "\n', "esc.sh": "G=gh\n$G pr merge 1\necho \\",
+         "dq.sh": '# say "hi\nG=gh\n$G pr merge 1\necho "\n',  # `"` в комментарии сошёлся бы с кавычкой в конце
+         "dq-odd.sh": "# say \"hi\nG=gh\n$G pr merge 1\necho 'x\n", "push.sh": "git push origin main\necho \"\n",
+         "late.sh": 'echo "\n$G pr merge 1\n', "ok.sh": 'echo hi\necho "\n'}  # late — кавычка раньше: bash не выполнит
+for name, text in TAILS.items():
+    (se76 / name).write_text(text)
+    for form in (f"bash {name}", f"source {name}", f"bash < {name}"):
+        bash(f"SE-76: {form} — строки до ошибки выполнятся", form, name not in ("late.sh", "ok.sh"), cwd=se76)
+for form in ('G=gh\n$G pr merge 1\necho "', "bash -c 'G=gh\n$G pr merge 1\necho \"'", "eval 'G=gh; $G pr merge 1; echo \"'"):
+    bash(f"SE-76: команда с ошибкой в конце: {form!r}", form, True)
+bash("SE-76: Контролю мёрж из скрипта с ошибкой в конце можно", "bash quote.sh", False, who=D9, cwd=se76)
+(se76 / "dq-ok.sh").write_text('# say "hi\necho ok\n')
+bash("SE-76: `\"` в комментарии безобидного скрипта — проход", "bash dq-ok.sh", False, cwd=se76)
+
+# --- SE-82: после heredoc, обратных кавычек, `$[…]` sure_comments не уверен — `"` комментария прятала код ---
+se82 = repo_on("main", "se82")
+LOSS = {"hd": "cat <<E\nx\nE\n", "tick": "echo `true`\n", "arith": "echo $[1]\n"}
+for key, head in LOSS.items():
+    for name, text in ((f"{key}.sh", '# say "hi\ngh pr merge 1\necho "\n'),
+                       (f"{key}-var.sh", '# say "hi\nG=gh\n$G pr merge 1\necho "\n'),
+                       (f"{key}-odd.sh", "# say \"hi\nG=gh\n$G pr merge 1\necho \"x\"\necho '\n")):
+        (se82 / name).write_text(head + text)
+        bash(f"SE-82: {name} — `\"` комментария не прячет код", f"bash {name}", True, cwd=se82)
+    (se82 / f"{key}-ok.sh").write_text(head + '# say "hi\necho ok\necho "x"\n')
+    bash(f"SE-82: {key}-ok.sh — безобидный скрипт с `\"` в комментарии — проход", f"bash {key}-ok.sh", False, cwd=se82)
+bash("SE-82: та же форма командой", 'cat <<E\nx\nE\n# say "hi\nG=gh\n$G pr merge 1\necho "', True)
+bash("SE-82: Контролю мёрж из такого скрипта можно", "bash hd-var.sh", False, who=D9, cwd=se82)
+REDO = 'cat <<E\nx\nE\n# say "hi\nG=gh\n$G pr merge 1\nE\necho "\n'  # второе прочтение не режет heredoc снова
+(se82 / "redo.sh").write_text(REDO)
+bash("SE-82: строка `E` ниже не делает код телом heredoc — скрипт", "bash redo.sh", True, cwd=se82)
+bash("SE-82: строка `E` ниже не делает код телом heredoc — команда", REDO, True)
+(se82 / "m.sh").write_text("echo hi\n")  # старый безобидный файл: хук прочёл бы его, не зная, что команда его пишет
+HIDDEN = "printf '%s\\n' 'gh pr merge 1' > m.sh\nbash m.sh\n"
+for name, text in (("hw.sh", f'cat <<E\nx\nE\n# say "hi\n{HIDDEN}echo "\n'),
+                   ("hw-redo.sh", f'cat <<E\nx\nE\n# say "hi\n{HIDDEN}E\necho "\n')):
+    (se82 / name).write_text(text)
+    bash(f"SE-82: {name} — запись, спрятанная `\"` комментария, видна: старый m.sh не читается", f"bash {name}", True,
+         cwd=se82)
+    bash(f"SE-82: {name} командой", text, True, cwd=se82)
+for run_ in ("bash", "source"):  # второе прочтение видит тела heredoc первого: m.sh пишет heredoc
+    WRITTEN = f"cat > m.sh <<'E'\ngh pr merge 1\nE\n# say \"hi\n{run_} m.sh\n\"\n"
+    (se82 / f"hdw-{run_}.sh").write_text(WRITTEN)
+    bash(f"SE-82: heredoc пишет m.sh, `{run_} m.sh` спрятан `\"` комментария — скрипт", f"bash hdw-{run_}.sh", True,
+         cwd=se82)
+    bash(f"SE-82: heredoc пишет m.sh, `{run_} m.sh` спрятан `\"` комментария — команда", WRITTEN, True, cwd=se82)
+bash("SE-82: комментарий с признаком и записью остаётся и для имён записи (zsh с другим histchars прочтёт его как код)",
+     "echo a # ; printf '%s\\n' 'gh pr merge 1' > m.sh; bash m.sh", True, cwd=se82)
+check("SE-82 command_writes: имя из второго прочтения и из слов до ошибки",
+      None if "w.sh" in command_writes('cat <<E\nx\nE\n# say "hi\necho x > w.sh\necho "') else "нет", False)
+NONE = lambda text: False  # noqa: E731 — признака нет: снимается всё, в чём sure_comments уверен
+check("SE-82 comment_readings: все комментарии точно — второго прочтения нет",
+      comment_readings('a # say "hi\nb', NONE)[1], False)
+check("SE-82 comment_readings: второе прочтение — без комментария, в котором нет уверенности",
+      None if comment_readings('echo `a`\n# say "hi\nb', NONE)[1] == "echo `a`\n\nb" else "нет", False)
+check("SE-82 comment_readings: в самом втором прочтении третьего нет",
+      comment_readings('echo `a`\n# say "hi\nb', NONE, True)[1], False)
 
 if __name__ == "__main__":
     finish(" — формы shell")

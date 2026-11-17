@@ -199,10 +199,13 @@ def poll_queue(ctx):
     _oq_watch(ctx, "checks", check_meta)
     items = {d["id"]: d.get("data") or {} for d in item_docs}
     product = {d["id"]: d.get("product") for d in item_docs}       # v2-lite (#95): продукт документа, если есть
+    # Доли команды ролей (OPS-82): владелец переключает их кнопкой «Роли» в шапке /queue, ответ читает сторож Mac, не
+    # роль — событие будило бы роль, а её отметка в пункте будила бы владельца ботом.
+    quiet = {((ctx.cfg.get("system") or {}).get("team") or {}).get("split_item")} - {None}
     for c in checks:
         it = items.get(c["id"])
         a = c.get("data") or {}
-        if not it or it.get("kind") == "inbox" or not a.get("at"):
+        if not it or it.get("kind") == "inbox" or not a.get("at") or c["id"] in quiet:
             continue
         if not (a.get("done") is True or a.get("choice") is not None or a.get("note")):
             continue

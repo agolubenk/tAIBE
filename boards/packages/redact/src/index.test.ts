@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
-import { growth, MAX_GROWTH } from "../fixtures/linear-time";
-import { looksLikePassphrase, looksLikeSecret, redact } from "./index";
+import { growth, MAX_GROWTH } from "../fixtures/linear-time.js";
+import { looksLikePassphrase, looksLikeSecret, redact } from "./index.js";
 
 // TB-136: one corpus for both rule sets. infra/checks/test_checks.py reads the
 // same file and expects the scanner rule `scan` on every case.

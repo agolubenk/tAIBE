@@ -6839,6 +6839,25 @@
                   "type": "integer",
                   "description": "Length of the stored text. Absent for a caller with a token, except for repo-doc."
                 },
+                "addedByKind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "agent",
+                    "person",
+                    null
+                  ],
+                  "description": "Who added a link or a pull request; null for a synced source or one added before authors were kept."
+                },
+                "addedBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The agent's name with its session, or the member's name."
+                },
                 "updatedAt": {
                   "type": "string",
                   "format": "date-time"
@@ -6855,6 +6874,8 @@
                 "kind",
                 "ref",
                 "title",
+                "addedByKind",
+                "addedBy",
                 "updatedAt",
                 "chunks",
                 "embedded"
@@ -9658,12 +9679,32 @@
                 },
                 "calls": {
                   "type": "integer"
+                },
+                "withUsage": {
+                  "type": "integer",
+                  "description": "Calls of today whose provider reported token usage; the token sums are over these calls only."
+                },
+                "input": {
+                  "type": "integer",
+                  "description": "Prompt tokens the provider reported today, the cached part included (D-018)."
+                },
+                "output": {
+                  "type": "integer",
+                  "description": "Completion tokens the provider reported today."
+                },
+                "cached": {
+                  "type": "integer",
+                  "description": "The part of input the provider read from its cache; priced lower."
                 }
               },
               "required": [
                 "workspaceId",
                 "name",
-                "calls"
+                "calls",
+                "withUsage",
+                "input",
+                "output",
+                "cached"
               ]
             }
           }
@@ -28939,6 +28980,110 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotebookPruned"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing workspace:manage_settings permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/notebook/{workspaceId}/sources/remove": {
+      "post": {
+        "operationId": "removeNotebookSource",
+        "tags": [
+          "Notebook"
+        ],
+        "summary": "Remove one added page or pull request from the notebook",
+        "description": "Deletes one link or github-pr source with its chunks. The synced kinds are refused: their next sync would bring them back. A ref that is already gone answers deleted: 0.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "link",
+                      "github-pr"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "The ref the sources list shows: the URL of a page or owner/repo#n of a pull request."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ref"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Source removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotebookPruned"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a link or github-pr source, or no ref",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

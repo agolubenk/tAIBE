@@ -64,6 +64,7 @@ FILES_MAX = 32  # include/@include и пакетов workspaces за одну к
 WS_MAX = 256
 TEXT_MAX = 4 * 1024 * 1024
 IMPLIED_VAR = re.compile(r"(BASH_ENV|ENV|MAKEFILES|[VG]PATH|(?:GNU)?MAKEFLAGS|NODE_OPTIONS"  # `ИМЯ+=` shell тоже экспортирует
+                         r"|\.SHELLFLAGS|\.RECIPEPREFIX|\.EXTRA_PREREQS"  # `env .SHELLFLAGS=… make` (SE-127)
                          r"|(?i:npm_config_node_options|npm_config_script_shell))\+?=(.*)", re.S)
 # Опции make, от которых зависит, какой текст make прочтёт (make_files), и переменные, от которых — что прочтёт и
 # запустит: в MAKEFLAGS они — отказ (SE-133). Метка — слово, которого shell не передаст (в словах нет NUL).
@@ -75,6 +76,9 @@ MAKE_4X_VALUED = {"--jobserver-auth", "--jobserver-style", "--sync-mutex"}
 MAKEFLAGS_DEF = re.compile(r"(?:MAKEFILES|SHELL|\.SHELLFLAGS|[VG]PATH|(?:GNU)?MAKEFLAGS)\s*[:+?!]*=")
 MAKEFLAGS_ARG = "\0MAKEFLAGS"
 MAKE_ENV = ("MAKEFILES", "VPATH", "GPATH")  # в окружении хука — их наследует shell команды (coord 12:35)
+# make 3.82+ берёт из окружения и эти (SHELL — нет): флаги shell рецептов, префикс рецепта, пререквизиты всех целей.
+# Отказ, как у MAKE_ENV: `make check` по рецептам (SE-127) верит, что рецепт выполнит `/bin/sh -c`.
+MAKE_ENV += (".SHELLFLAGS", ".RECIPEPREFIX", ".EXTRA_PREREQS")
 APPEND_ARG = "\0append"  # `ИМЯ+=…` у IMPLIED_VAR: прежнее значение по слову не видно (линза backend #398)
 NODE_PRELOAD = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
 
