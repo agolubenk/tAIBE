@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Сервисы сессий одной командой (OPS-82): MCP-хаб, сервер tmux ролей, окна сервисов в tmux, сводка.
 
-  python3 -I eval/tools/agents_up.py            включить разработку: снятые службы, хаб, tmux, окна сервисов, Ollama
+  python3 -I eval/tools/agents_up.py            включить разработку: службы, хаб, tmux, окна сервисов, Ollama, роли
   python3 -I eval/tools/agents_up.py --status   только сводка
   python3 -I eval/tools/agents_up.py --down     выключить разработку (спросит, если живы сессии Claude; --yes — нет)
 Ярлыки «Разработка ВКЛ/ВЫКЛ» на рабочем столе и автозагрузка — dev_power.py install.
@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tmux_host as T  # noqa: E402
 import dev_power as D  # noqa: E402
 import team_status as TS  # noqa: E402
+import team_plan as TP  # noqa: E402
 
 OPS = "ops"
 
@@ -141,7 +142,7 @@ def down(yes):
           + "headroom, хаб MCP и serena, Нерв, службы досок, Docker, Ollama.")
     if n:
         print(f"Сессий Claude сейчас: {n}. Те, что вне tmux, не закроются: они держат память и до «ВКЛ» останутся "
-              "без API (headroom) и MCP. Роли после «ВКЛ» сами не вернутся — «ВКЛ» покажет команду.")
+              "без API (headroom) и MCP. Роли «ВКЛ» откроет снова по плану команды (12, доли — из очереди).")
     if (n or roles) and not ask("Выключить разработку?"):
         print("отменено")
         return 1
@@ -149,8 +150,7 @@ def down(yes):
         print("отменено")
         return 1
     before = mem()
-    D.save_roles()
-    D.agents_off(print)
+    D.agents_off(print)  # первым снимается сторож команды — он не откроет роли заново
     stopped = hub_cmd("stop", 120) and not port_open(3050)
     print(f"  {'✓' if stopped else '✗'} хаб MCP и serena " + ("остановлены" if stopped else "не остановились"))
     D.apps_off(print, ask)
@@ -169,6 +169,7 @@ def main(argv=None):
     ap.add_argument("--status", action="store_true", help="только сводка")
     ap.add_argument("--down", action="store_true", help="выключить разработку (dev_power.py)")
     ap.add_argument("--yes", action="store_true", help="с --down: не спрашивать про живые сессии")
+    ap.add_argument("--no-team", action="store_true", help="только службы, без команды ролей")
     a = ap.parse_args(argv)
     if a.down:
         return down(a.yes)
@@ -179,8 +180,10 @@ def main(argv=None):
         D.apps_on(print)
         if not port_open(3050):  # последним: старт хаба с serena — до минуты, остальное его не ждёт
             hub_cmd("start", 300)
-        for cmd in D.roles_hint():
-            print(f"  роли, закрытые «ВЫКЛ», — поднять: {cmd}")
+        D.trim_log("taibe-dev-up.log")
+        D.trim_log("taibe-team.log")
+        if not a.no_team:
+            TP.up(log=print)  # роли по продуктам: 12 (доли — из очереди владельца), при нехватке памяти — 10
     return summary()
 
 

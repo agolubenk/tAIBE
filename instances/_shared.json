@@ -20,8 +20,15 @@
   "system": {
     "mem_critical": 10,
     "mem_warn": 20,
-    "max_sessions": 10,
+    "max_sessions": 14,
     "terminal": "tmux",
+    "team": {
+      "total": 12,
+      "floor": 10,
+      "min_per_product": 2,
+      "split": {"hr-helper": 6, "taibe": 6},
+      "split_item": "d-team-split"
+    },
     "dev": {
       "agents": [
         "space.hrhelper.headroom",
@@ -31,7 +38,8 @@
         "space.hrhelper.t-boards-notebook-worker",
         "space.hrhelper.t-boards-notebook-sync",
         "space.hrhelper.reaper",
-        "space.hrhelper.evolve-daily"
+        "space.hrhelper.evolve-daily",
+        "space.hrhelper.team-keeper"
       ],
       "apps_on": ["com.electron.ollama"],
       "apps_off": ["com.docker.docker", "com.electron.ollama"]
