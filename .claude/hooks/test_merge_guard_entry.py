@@ -46,7 +46,9 @@ class BrokenHook(unittest.TestCase):
         for cmd in ("git push origin board-agents", "gh pr merge 1", "echo x > .claude/hooks/a.py"):
             got = run(bash(cmd), hook)
             self.assertEqual(got and got["permissionDecision"], "deny", cmd)
-            self.assertIn("ImportError", got["permissionDecisionReason"])
+            # ModuleNotFoundError — подкласс ImportError; в причине — класс и текст сбоя
+            self.assertIn("ModuleNotFoundError", got["permissionDecisionReason"])
+            self.assertIn("merge_guard_missing", got["permissionDecisionReason"])
 
     def test_syntax_error_and_exit_deny_too(self):
         for body in ("def (:\n", "raise SystemExit(1)\n"):

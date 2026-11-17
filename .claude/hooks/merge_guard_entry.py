@@ -25,7 +25,8 @@ def failure_reason(data, exc):
     inp = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
     cmd = str(inp.get("command", "")) if data.get("tool_name") == "Bash" else json.dumps(inp, ensure_ascii=False)
     if FALLBACK.search(cmd) or re.search(r"merge_pull_request|auto_merge", str(data.get("tool_name"))):
-        return f"merge-guard: сбой хука ({exc.__class__.__name__}), а в вызове признак защищённого действия."
+        return (f"merge-guard: сбой хука ({exc.__class__.__name__}: {str(exc)[:160]}), а в вызове признак защищённого "
+                "действия. Хук чинит владелец из своего терминала; роль сообщает координатору.")
     return None
 
 
