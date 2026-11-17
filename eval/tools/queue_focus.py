@@ -174,6 +174,8 @@ def render(result):
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+# The «без аренды» mark of a row card: the board pass writes it to cards[].mark (TB-106 F9); cards[].c is the legacy
+# card code.
 ABANDONED = 'без аренды'
 NOT_ROWS = ('done', 'blocked')
 
@@ -222,7 +224,7 @@ def plan_next(rows, top=5):
             bug = c.get('k') == 'bug'
             cards[key] = {'key': key, 'title': str(c.get('t') or ''), 'status': str(c.get('st') or 'to-do'),
                           'kind': 'bug' if bug else 'task', ('severity' if bug else 'priority'): str(c.get('s') or ''),
-                          'abandoned': c.get('c') == ABANDONED}
+                          'abandoned': c.get('mark') == ABANDONED}
         cards = {k: v for k, v in cards.items() if v['status'].lower() not in WAITING}
         if not cards:
             continue
@@ -238,10 +240,12 @@ def plan_next(rows, top=5):
     return out
 
 
-def fetch_work(root=ROOT):
-    """All `work` docs of the owner queue: paged GET, the same token as the Nerve (stdlib, TLS verified)."""
+def oq_request(path, root=ROOT, method='GET', data=None):
+    """One request to the owner queue `/api/oq/v1/db/<path>`: the same token as the Nerve (`$OQ_TOKEN` or
+    `queue.secret_cmd`), stdlib, TLS verified. Returns the JSON reply; 404 — None."""
     import ssl
     import subprocess
+    import urllib.error
     import urllib.request
     with open(os.path.join(root, 'instances', '_shared.json'), encoding='utf-8') as f:
         queue = json.load(f)['queue']
@@ -256,12 +260,23 @@ def fetch_work(root=ROOT):
         ctx = pipeline_settings._tls_context() or ssl.create_default_context()
     except Exception:  # noqa: BLE001 — the default store still verifies
         ctx = ssl.create_default_context()
+    body = None if data is None else json.dumps(data, ensure_ascii=False).encode()
+    req = urllib.request.Request('%s/api/oq/v1/db/%s' % (queue['url'].rstrip('/'), path), data=body, method=method,
+                                 headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            return json.loads(resp.read() or b'{}')
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
+def fetch_work(root=ROOT):
+    """All `work` docs of the owner queue: paged GET (oq_request)."""
     docs, offset = [], 0
     while True:
-        req = urllib.request.Request('%s/api/oq/v1/db/work?limit=500&offset=%d' % (queue['url'].rstrip('/'), offset),
-                                     headers={'Authorization': 'Bearer ' + token})
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-            page = json.loads(resp.read() or b'{}')
+        page = oq_request('work?limit=500&offset=%d' % offset, root) or {}
         docs += page.get('docs') or []
         if page.get('next_offset') is None:
             return docs

@@ -2,6 +2,7 @@ import { createId } from "@paralleldrive/cuid2";
 import { and, asc, eq } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
 import db from "../../database";
+import type { AuthorKind } from "../../forest/author-kind";
 import {
   assetTable,
   columnTable,
@@ -126,11 +127,15 @@ async function duplicateTask({
   currentUserId,
   canUpdateTasks,
   title,
+  author,
 }: {
   taskId: string;
   currentUserId: string;
   canUpdateTasks: boolean;
   title?: string;
+  // TB-83: a copy carries the source's text, so it is agent if either the
+  // source or the copier is.
+  author?: AuthorKind;
 }) {
   const sourceTask = await db.query.taskTable.findFirst({
     where: eq(taskTable.id, taskId),
@@ -366,6 +371,7 @@ async function duplicateTask({
     taskId: duplicatedTask.id,
     userId: duplicatedTask.userId ?? "",
     currentUserId,
+    author,
     type: "created",
     content: null,
   });
