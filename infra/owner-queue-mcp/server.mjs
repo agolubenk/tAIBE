@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { FILE_ID, ITEM_ID, alreadySaved, ensureDir, extOf, fileRoots, filesState, safeDir, saveStream } from './files.mjs';
-import { briefDoc, filterDocs, fitList, getBrief, historyOut, pageList, replyText, snapshots, writeAck } from './list.mjs';
+import { briefDoc, filterDocs, fitList, getBrief, historyOut, pageList, replyText, snapshots, workBrief, writeAck } from './list.mjs';
 import { protocolText } from './protocol.mjs';
 import { createDeltaMirror } from './delta.mjs';
 import { request, timeoutsFromEnv } from './http.mjs';
@@ -177,10 +177,6 @@ async function getBriefDoc(collection, id, doc) {
       : { ...getBrief(doc), check: { unknown: true, note: 'консоль не отдала checks — повторите или oq_list checks ids' } };
   }
   return doc?.data?.kind === 'inbox' ? { ...out, untrusted: UNTRUSTED_NOTE } : out;
-}
-function workBrief(d) {
-  const { cards, ...data } = d.data;
-  return { id: d.id, version: d.version, ...data, ...(Array.isArray(cards) ? { cardsCount: cards.length } : {}) };
 }
 
 const TOOLS = [
