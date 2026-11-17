@@ -121,14 +121,21 @@ class Timeline:
         """Окна линз, состояние work_state и аренды по времени. own — события субагента поверх событий родителя."""
         # По (время, порядок): значения разных видов не сравнимы; при равенстве родитель раньше субагента.
         evs = sorted(self.events + (own.events if own else []), key=lambda e: e[:2])
-        opened, windows, states, leases = {}, [], [], set()
+        opened, windows, states, leases, last = {}, [], [], set(), {}
         for t, _, kind, value in evs:
-            if kind == 'open':  # окно — от последнего просмотра перед comment/review: старый просмотр окно не тянет
-                opened[value] = t
+            if kind == 'open':  # окно — от первого просмотра: проверка головы перед вердиктом его не режет
+                opened.setdefault(value, t)
             elif kind == 'close' and value in opened:
+                last[value] = len(windows)
                 windows.append((opened.pop(value), t, value))
+            elif kind == 'close' and value in last:  # второй comment/review того же PR продлевает окно (N1)
+                start, _, pr = windows[last[value]]
+                windows[last[value]] = (start, t, pr)
             elif kind == 'state':
                 states.append((t,) + value)
+                if any(value):  # work_state с веткой или карточкой — смена работы: старые просмотры окно не тянут (B1)
+                    opened.clear()
+                    last.clear()
             elif kind == 'lease':
                 leases.add(value)
         self.windows = sorted(windows, key=lambda w: w[:2])  # repo бывает None: значения не сравниваем (N3)

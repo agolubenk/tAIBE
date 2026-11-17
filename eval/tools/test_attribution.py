@@ -85,18 +85,34 @@ class TimelineTest(unittest.TestCase):
             tl.add(when, kind, value)
         return tl.build()
 
-    def test_lens_window_from_last_open_inclusive_and_unclosed_dropped(self):
-        """Окно — от последнего просмотра перед comment/review (Claude-линза #417, B1), границы включительно."""
+    def test_lens_window_from_first_open_inclusive_and_unclosed_dropped(self):
+        """Проверка головы перед вердиктом (второй просмотр) окно не режет (Claude-линза #417 на fe4c5017c)."""
         tl = self.line((t(10), 'open', (None, 1)), (t(10, 5), 'open', (None, 1)), (t(10, 20), 'close', (None, 1)),
                        (t(11), 'open', (None, 2)))
-        self.assertEqual([tl.lens(x) for x in (t(10), t(10, 4), t(10, 5), t(10, 20), t(10, 21), t(11, 30))],
-                         [None, None, (None, 1), (None, 1), None, None])
+        self.assertEqual([tl.lens(x) for x in (t(9, 59), t(10), t(10, 4), t(10, 20), t(10, 21), t(11, 30))],
+                         [None, (None, 1), (None, 1), (None, 1), None, None])
+
+    def test_work_state_with_branch_or_card_cuts_views_step_only_does_not(self):
+        """B1: work_state с веткой или карточкой отрезает старый просмотр; state только со step (заметка о шаге посреди
+        линзы) окно не режет."""
+        for value, want in (((None, 'fix/b'), [None, None, (None, 1)]), ((CARD, None), [None, None, (None, 1)]),
+                            ((None, None), [(None, 1), (None, 1), (None, 1)])):
+            with self.subTest(value):
+                tl = self.line((t(8), 'open', (None, 1)), (t(9), 'state', value), (t(13), 'open', (None, 1)),
+                               (t(13, 30), 'close', (None, 1)))
+                self.assertEqual([tl.lens(x) for x in (t(8, 30), t(11), t(13, 10))], want)
+
+    def test_second_comment_or_review_extends_window(self):
+        """N1: `gh pr comment 7` в 10:20 и `gh pr review 7` в 10:25 — вызовы между ними тоже на #7."""
+        tl = self.line((t(10), 'open', (None, 7)), (t(10, 20), 'close', (None, 7)), (t(10, 25), 'close', (None, 7)))
+        self.assertEqual([tl.lens(x) for x in (t(10, 22), t(10, 25), t(10, 26))], [(None, 7), (None, 7), None])
 
     def test_equal_windows_with_and_without_repo_sort(self):
-        """Два окна с равными началом и концом, repo у одного None — без TypeError (Claude-линза #417, N3)."""
+        """Два окна с равными началом и концом, repo у одного None — без TypeError (Claude-линза #417, N3); при
+        равенстве — окно, закрытое позже по порядку событий."""
         tl = self.line((t(10), 'open', (REPO, 3)), (t(10), 'open', (None, 3)), (t(10, 9), 'close', (REPO, 3)),
                        (t(10, 9), 'close', (None, 3)))
-        self.assertEqual(tl.lens(t(10, 5))[1], 3)
+        self.assertEqual(tl.lens(t(10, 5)), (None, 3))
 
     def test_overlap_latest_opened_wins(self):
         tl = self.line((t(10), 'open', (None, 1)), (t(10, 10), 'open', (None, 2)), (t(10, 20), 'close', (None, 2)),
@@ -154,6 +170,14 @@ class LedgerTest(unittest.TestCase):
                   (t(13), 'open', (None, 377)), (t(13, 30), 'close', (None, 377))]
         self.assertEqual(self.target(events, t(11)), ('pr', REPO, 202))
         self.assertEqual(self.target(events, t(13, 10)), ('pr', REPO, 377))
+
+    def test_head_check_before_verdict_keeps_lens_window(self):
+        """Claude-линза #417 на fe4c5017c: work_state 9:00, просмотр #377 в 10:00, чтение файлов, проверка головы в 10:29,
+        комментарий в 10:30 — чтение 10:03–10:28 на #377, не на ветку work_state."""
+        events = [(t(9), 'state', (None, 'fix/se74-nerve-lens-names')), (t(10), 'open', (None, 377)),
+                  (t(10, 29), 'open', (None, 377)), (t(10, 30), 'close', (None, 377))]
+        self.assertEqual(self.target(events, t(10, 15)), ('pr', REPO, 377))
+        self.assertEqual(self.target(events, t(10, 31)), ('pr', REPO, 202))
 
     def test_branch_prefers_open_pr(self):
         self.assertEqual(self.target([(t(9), 'state', (None, 'fix/se74-nerve-lens-names'))], t(11)), ('pr', REPO, 202))
