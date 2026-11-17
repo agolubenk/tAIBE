@@ -3,9 +3,9 @@ import {
   DROPS_VALUE,
   looksLikePassphrase,
   looksLikeSecret,
-} from "./value-shape";
+} from "./value-shape.js";
 
-export { looksLikePassphrase, looksLikeSecret } from "./value-shape";
+export { looksLikePassphrase, looksLikeSecret } from "./value-shape.js";
 
 export type SecretKind =
   | "api_key"
