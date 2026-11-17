@@ -21,8 +21,18 @@ const queryOwner = new Map<string, string>();
 const wakers = new Map<string, Set<() => void>>();
 const workerSeenAt = new Map<string, number>();
 const chunkLeases = new Map<string, Map<string, number>>();
+// TB-212: a poll claims work before it parks, and the claim waits for the
+// database. Work that arrives during that wait finds no parked poll, so the
+// poll slept its whole wait and a search query timed out. Each notice moves
+// the workspace's generation; a poll that read an older one does not park.
+const generations = new Map<string, number>();
+
+export function embedWorkGeneration(workspaceId: string) {
+  return generations.get(workspaceId) ?? 0;
+}
 
 export function notifyEmbedWork(workspaceId: string) {
+  generations.set(workspaceId, embedWorkGeneration(workspaceId) + 1);
   const waiting = wakers.get(workspaceId);
   if (!waiting) return;
   wakers.delete(workspaceId);
@@ -123,13 +133,20 @@ export function releaseChunks(workspaceId: string, ids: string[]) {
   for (const id of ids) leases.delete(id);
 }
 
-// Resolves on new work, on timeout or when the worker hangs up.
+// Resolves on new work, on timeout or when the worker hangs up. `since` is
+// the generation the caller read before it claimed work: a notice after that
+// read resolves at once instead of being lost (TB-212).
 export function waitForEmbedWork(
   workspaceId: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  since = embedWorkGeneration(workspaceId),
 ): Promise<void> {
   return new Promise((resolve) => {
+    if (embedWorkGeneration(workspaceId) !== since || signal?.aborted) {
+      resolve();
+      return;
+    }
     const waiting = wakers.get(workspaceId) ?? new Set<() => void>();
     const done = () => {
       clearTimeout(timer);
@@ -155,4 +172,5 @@ export function resetEmbedQueueForTests() {
   wakers.clear();
   workerSeenAt.clear();
   chunkLeases.clear();
+  generations.clear();
 }
