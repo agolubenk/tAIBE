@@ -35,9 +35,11 @@ from datetime import datetime, timedelta
 HOME_CLAUDE = os.path.expanduser('~/.claude/')
 ROOT = HOME_CLAUDE + 'projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2'
 OBSERVER_GLOB = HOME_CLAUDE + 'projects/*observer*/*.jsonl'
-PRICES = {'fable': (10, 50, 0.25), 'opus-5-5': (4, 20, 0.2), 'opus-5': (5, 25, 0.5), 'sonnet': (2, 10, 0.2),
-          'haiku-5-5': (0.1, 0.5, 0.01)}
-COMPACTED = 'This session is being continued'
+# прайс, разбор и список транскриптов — общие для замеров eval (GL-1): prices.py, transcript.py
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from prices import call_cost  # noqa: E402
+import transcript as tr  # noqa: E402
+from transcript import COMPACTED, local_time, text_of  # noqa: E402
 
 TOOLSET_DELTA = {'deferred_tools_delta', 'mcp_instructions_delta', 'agent_listing_delta', 'skill_listing'}
 pos = [a for a in sys.argv[1:] if not a.startswith('--')]
@@ -56,34 +58,11 @@ else:
     until = datetime.strptime(pos[1], '%Y-%m-%d %H:%M')
 
 
-def project_prefixes(config=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'nerve', 'config.json')):
-    """Claude project-dir names of the host and the layer checkouts; worktree dirs start with the same name."""
-    try:
-        with open(config, encoding='utf-8') as f:
-            cfg = json.load(f)
-    except (OSError, ValueError):
-        cfg = {}
-    roots = [cfg.get('repo_root'), os.path.dirname(cfg['layer_home'].rstrip('/')) if cfg.get('layer_home') else None]
-    return [re.sub(r'[^A-Za-z0-9]', '-', r) for r in roots if r] or [os.path.basename(ROOT)]
-
-
 def transcripts():
     """(path, is_subagent): the team dir only, or with --all every dir of the instance and its subagents."""
     if not all_dirs:
         return [(p, False) for p in glob.glob(os.path.join(ROOT, '*.jsonl'))]
-    prefixes, out = project_prefixes(), []
-    for d in glob.glob(HOME_CLAUDE + 'projects/*'):
-        if any(os.path.basename(d).startswith(p) for p in prefixes):
-            out += [(p, False) for p in glob.glob(os.path.join(d, '*.jsonl'))]
-            out += [(p, True) for p in glob.glob(os.path.join(d, '*', 'subagents', '*.jsonl'))]
-
-    def born(item):
-        try:
-            st = os.stat(item[0])
-        except OSError:  # deleted between the glob and the sort; the scan skips it
-            return 0
-        return getattr(st, 'st_birthtime', st.st_mtime)
-    return sorted(out, key=born)   # the original before its fork: a copied request counts where it was made
+    return tr.files(tr.project_prefixes(fallback=os.path.basename(ROOT)), HOME_CLAUDE)
 
 
 def cold_cause(first, was_compact, gap, marks):
@@ -104,32 +83,11 @@ def cold_cause(first, was_compact, gap, marks):
     return 'прочее'
 
 
-def price(model):
-    for k in PRICES:
-        if k in (model or ''):
-            return PRICES[k]
-    return PRICES['opus-5-5']
-
-
 # one estimate for the whole eval: the evolution toolkit prices artifacts with the same function
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'evolve'))
 from tokens import est_tokens  # noqa: E402,F401
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import context_gen as cg  # noqa: E402 — section 8
-
-
-def text_of(content):
-    if isinstance(content, str):
-        return content
-    out = []
-    for x in content or []:
-        if isinstance(x, dict) and isinstance(x.get('text') or x.get('content'), str):
-            out.append(x.get('text') or x.get('content'))
-    return ' '.join(out)
-
-
-def local_time(ts):
-    return datetime.fromisoformat(ts.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
 
 
 def wake_kind(text):
@@ -169,17 +127,6 @@ def norm_path(p):
 def first_tag(text):
     m = re.search(r'<([a-zA-Z][\w-]{2,40})[\s>]', text[:400])
     return m.group(1) if m else 'без тега'
-
-
-def call_cost(u, model):
-    pi, po, pr = price(model)
-    cw = u.get('cache_creation_input_tokens', 0) or 0
-    c1 = (u.get('cache_creation') or {}).get('ephemeral_1h_input_tokens', 0) or 0
-    return {'вход': (u.get('input_tokens', 0) or 0) * pi / 1e6,
-            'запись кэша 5 мин': (cw - c1) * 1.25 * pi / 1e6,
-            'запись кэша 1 ч': c1 * 2 * pi / 1e6,
-            'чтение кэша': (u.get('cache_read_input_tokens', 0) or 0) * pr / 1e6,
-            'выход': (u.get('output_tokens', 0) or 0) * po / 1e6}
 
 
 def first_prompt(path):

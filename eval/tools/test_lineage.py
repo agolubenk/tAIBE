@@ -25,11 +25,20 @@ import lineage_reap as R  # noqa: E402
 import lineage_retire as LR  # noqa: E402
 
 TERMINAL = "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+TMUX_SERVER = "/opt/homebrew/bin/tmux -D -L agents -f /x/agents.conf"  # сервер сессий под launchd (OPS-82)
 ST = "Wed Nov  4 20:00:00 2026"
 CHILD, PARENT = "r.ab12.cd34", "r.ab12"
 # SE-57: линия из 60 сегментов — 302 символа; файл с таким именем macOS не создаст (Errno 63, предел 255)
 LONG_PARENT = "r" + "".join(f".{i:04d}" for i in range(59))
 LONG_CHILD = LONG_PARENT + ".zz99"
+# Продукт и линия живой сессии роли не идут в подпроцессы тестов: spawn взял бы продукт сессии и её линию как
+# родителя, ps -E увидел бы их у поддельного claude (SE-129). Общий для тестов eval/tools.
+SESSION_ENV = ("TAIBE_PRODUCT", "TAIBE_LINEAGE")
+
+
+def clean_env(**extra):
+    # SPAWN_TERMINAL=terminal: проверки окна Terminal не зависят от system.terminal в instances/_shared.json (OPS-82)
+    return {**{k: v for k, v in os.environ.items() if k not in SESSION_ENV}, "SPAWN_TERMINAL": "terminal", **extra}
 
 
 def P(pid, ppid, pgid, tty, cmd, start=ST):
@@ -164,6 +173,35 @@ class WatchTest(Base):
         self.assertNotIn(300, sx.p)
         self.assertIn(400, sx.p)
         self.assertEqual(sx.osa_calls, [("/dev/ttys005", "19220")])
+
+    def tmux_close(self, rec, host=TMUX_SERVER):
+        """Предшественник в панели tmux (OPS-82): close_pane подменён — что сторож ему передал."""
+        sx = FakeSys(tree(pred_host=host), env={400: CHILD, 300: PARENT})
+        L.write_json(L.ldir() / f"{PARENT}.json", rec)
+        sx.at(10, self.ack)
+        calls = []
+        import tmux_host
+        with mock.patch.object(tmux_host, "close_pane", lambda r, tty, log: calls.append((r.get("pane"), tty))):
+            self.assertEqual(self.run_watch(sx), 0, self.lines)
+        return sx, calls
+
+    def test_tmux_pane_closed_by_record(self):
+        rec = {"terminal": "tmux", "pane": "%7", "tty": "/dev/ttys005", "pane_pid": "200", "server": "100:1"}
+        sx, calls = self.tmux_close(rec)
+        self.assertEqual(L.host({100: P(100, 1, 100, "??", TMUX_SERVER)}, P(9, 100, 9, "", "x")), "tmux")
+        self.assertNotIn(300, sx.p)
+        self.assertEqual(calls, [("%7", "/dev/ttys005")])
+        self.assertEqual(sx.osa_calls, [])                        # окна Terminal нет
+        self.assertNotIn((201, signal.SIGHUP), sx.sent)           # HUP панели шлёт сам kill-pane
+
+    def test_tmux_host_without_tmux_record_keeps_pane(self):
+        _, calls = self.tmux_close({"terminal": "terminal", "window_id": "5", "tty": "/dev/ttys005"})
+        self.assertEqual(calls, [])
+        self.assertIn("панель не трогаю", " ".join(self.lines))
+
+    def test_tmux_record_in_terminal_keeps_window(self):
+        sx, calls = self.tmux_close({"terminal": "tmux", "pane": "%7", "tty": "/dev/ttys005"}, host=TERMINAL)
+        self.assertEqual((calls, sx.osa_calls), ([], []))
 
     def test_successor_died_after_ack(self):
         sx = self.fake()
@@ -400,6 +438,14 @@ class CommandsTest(Base):
         self.assertIn("снимать некого", out.getvalue())
 
 
+class LauncherTest(unittest.TestCase):
+    def test_launcher_of_second_session(self):
+        """#324: пусковой скрипт второй сессии — backend-2.sh; без него её пусковой bash не снимается с сессией."""
+        for name, ok in (("backend.sh", True), ("backend-2.sh", True), ("successor.sh", True),
+                         ("backend-10.sh", False), ("backend-2.shx", False)):
+            self.assertEqual(bool(L.LAUNCHER_RE.search(f"bash /tmp/claude-spawn.AbC123/{name}")), ok, name)
+
+
 class ReapTest(Base):
     def setUp(self):
         super().setUp()
@@ -411,8 +457,9 @@ class ReapTest(Base):
         self.env_l = {}
         self.now = 1.8e9  # часы FakeSys: updatedAt в sessions/*.json — мс от эпохи
 
-    def sess(self, pid, line=None, role="backend", status="idle", idle_h=1.0, cwd=None, start=ST, pstart=None):
+    def sess(self, pid, line=None, role="backend", status="idle", idle_h=1.0, cwd=None, start=ST, pstart=None, key=None):
         cmd = "claude" + (f" --settings /x/genome/{role}.json" if role else "")
+        cmd += f" Сборка Т3, ключ реестра {key}, роль 7." if key else ""
         self.procs.append(P(pid, 100, pid, f"ttys{pid % 1000:03d}", cmd, start))
         if line:
             self.env_l[pid] = line
@@ -458,6 +505,23 @@ class ReapTest(Base):
         self.assertNotIn(708, v)
         shown = L.read_json(L.ldir() / "reap-list.json")
         self.assertEqual(sorted(c["pid"] for c in shown["candidates"]), [701, 703])
+
+    def test_second_session_of_a_role_is_not_superseded(self):
+        """backend-2 — геном backend и свой ключ: обе сессии — текущие роли, ни одна не кандидат по простою."""
+        self.sess(701, line="r.a1", idle_h=30, key="backend")
+        self.sess(702, line="r.b2", idle_h=30, key="backend-2")
+        self.sess(703, line="r.c3.d4", idle_h=30, key="backend-2")   # наследник другой линии backend-2 — моложе
+        self.sess(704, line="r.c3", idle_h=30, key="backend-2")
+        L.write_json(L.ldir() / "r.c3.d4.ack", {"pid": 703, "start": ST})
+        _, out, _ = self.reap()
+        v = self.verdicts(out)
+        self.assertIn("текущая роль", v[701])
+        self.assertIn("backend-2", v[703])
+        self.assertIn("текущая роль", v[703])
+        self.assertIn("наследник принял", v[704])
+        self.assertIn("простой 30", v[702], "из двух сессий backend-2 текущая — с длинной линией")
+        shown = L.read_json(L.ldir() / "reap-list.json")
+        self.assertNotIn(701, [c["pid"] for c in shown["candidates"]])
 
     def test_resumed_session_line_from_transcript(self):
         """--resume теряет TAIBE_LINEAGE: линия — из первого промпта транскрипта по sessionId (05.11, роль 4)."""
@@ -675,7 +739,7 @@ class RealProcessTest(Base):
 
     def spawn(self, line, mode):
         p = subprocess.Popen(["claude", "-I", "-c", FAKE_CLAUDE, mode, os.path.join(HERE, "lineage.py"), CHILD],
-                             executable=self.real, env={**os.environ, "TAIBE_LINEAGE": line}, start_new_session=True,
+                             executable=self.real, env=clean_env(TAIBE_LINEAGE=line), start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.started.append(p)
         return p

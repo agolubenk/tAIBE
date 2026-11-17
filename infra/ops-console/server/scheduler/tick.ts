@@ -6,7 +6,7 @@
  */
 import { and, lt, sql } from 'drizzle-orm'
 import { getDb } from '../db/client'
-import { activity, alerts, checkResults, checkRollups, containers, deliveries, metricSamples, reports } from '../db/schema'
+import { activity, alerts, checkResults, checkRollups, deliveries, reports } from '../db/schema'
 import { expireStaleCommands } from '../containers/commands'
 import { runDueChecks } from '../monitors/checks'
 import { checkTlsCertificates } from '../monitors/tls'
@@ -15,6 +15,7 @@ import { pruneDeployProgress } from '../deploys/progress'
 import { evaluateDeploySlow } from '../deploys/alerts'
 import { evaluateAgentSilence } from '../agents/silence'
 import { pruneVpn } from '../agents/vpn'
+import { pruneMetricSamples } from '../agents/metric-retention'
 import { pruneAuthTables } from '../auth/session'
 import { ensureBuiltinRules } from '../alerts/builtin'
 import { pruneBusyEpisodes } from '../alerts/container-busy'
@@ -100,15 +101,8 @@ async function cleanup(): Promise<void> {
   const now = Date.now()
   await db.delete(checkResults).where(lt(checkResults.createdAt, new Date(now - g.checkRetentionDays * DAY)))
   await db.delete(checkRollups).where(lt(checkRollups.bucketStart, now - g.rollupRetentionDays * DAY))
-  // Счётчик перезапусков пишется только при изменении, и его последний замер — база окна правила «перезапуск по
-  // кругу». Удали его срок хранения — первый всплеск после месяца тишины недосчитался бы на перезапуск и не дотянул
-  // до порога. Последний замер счётчика каждого существующего контейнера остаётся, сколько бы ему ни было.
-  await db.delete(metricSamples).where(
-    and(
-      lt(metricSamples.createdAt, new Date(now - g.metricRetentionDays * DAY)),
-      sql`${metricSamples.id} not in (select max(s.id) from ${metricSamples} s join ${containers} c on c.agent_id = s.agent_id and s.metric = 'restarts:' || c.name group by s.agent_id, s.metric)`,
-    ),
-  )
+  // Последний замер счётчика перезапусков каждого существующего контейнера остаётся, сколько бы ему ни было.
+  await pruneMetricSamples(db, new Date(now - g.metricRetentionDays * DAY))
   // Доставки горящего алерта не удаляем: по ним находится карточка Telegram (ответы в ветку,
   // переписывание итога). Срок хранения можно опустить до 7 дней, а алерт горит дольше.
   await db
