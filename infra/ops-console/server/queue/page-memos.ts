@@ -14,7 +14,7 @@ export const MEMOS_PURE = String.raw`
 var OQM_ID = /^(?:[a-z][a-z0-9-]{1,30}-)?memo-[A-Za-z0-9_.~:@+-]{1,75}$/;
 // Невидимые и меняющие направление символы — метками ⟦U+…⟧, как у ссылок пунктов: владелец копирует и запускает
 // команду, а на экране такие символы не видны (агент мог подменить команду).
-var OQM_INVISIBLE = /(?![\uFE00-\uFE0F\u{E0100}-\u{E01EF}])\p{Default_Ignorable_Code_Point}|[\p{Cf}\p{Co}]/gu;
+var OQM_INVISIBLE = /(?![\uFE00-\uFE0F\u{E0100}-\u{E01EF}])\p{Default_Ignorable_Code_Point}|[\p{Cf}\p{Co}]|(?![\t\n\r])\p{Cc}/gu;
 function oqmReveal(s) {
   return String(s == null ? '' : s).replace(OQM_INVISIBLE, function (c) {
     var hex = c.codePointAt(0).toString(16).toUpperCase();
@@ -27,7 +27,7 @@ function oqmPad(n) { return (n < 10 ? '0' : '') + n; }
 /** «Записал taibe-07, изменено 17.11 16:05» — кто и когда: памятку может переписать любой агент. */
 function oqmByline(m) {
   var parts = [];
-  if (m.source) parts.push('Записал ' + m.source);
+  if (m.source) parts.push('Записал ' + oqmReveal(m.source));
   if (m.updatedAt > 0) {
     var d = new Date(m.updatedAt);
     parts.push((m.version > 1 ? 'изменено ' : 'записано ') + oqmPad(d.getDate()) + '.' + oqmPad(d.getMonth() + 1) + ' ' + oqmPad(d.getHours()) + ':' + oqmPad(d.getMinutes()));

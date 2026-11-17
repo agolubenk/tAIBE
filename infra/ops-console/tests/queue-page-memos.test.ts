@@ -32,6 +32,7 @@ describe('памятки из снимка work', () => {
   it('невидимые и меняющие направление символы — метками; такую команду не копировать; кто и когда записал', () => {
     expect(oqmReveal('rm\u202E-rf ~')).toBe('rm⟦U+202E⟧-rf ~')
     expect(oqmReveal('ssh\u200Broot@x')).toBe('ssh⟦U+200B⟧root@x')
+    expect(oqmReveal('a\u001Bb\tc\nd')).toBe('a⟦U+001B⟧b\tc\nd') // ESC — меткой, табуляция и перенос — как есть
     const [m] = oqmList([{ id: 'memo-a', version: 3, updatedAt: new Date(2026, 10, 17, 16, 5).getTime(), data: { kind: 'memo', title: 'А', source: 'taibe-07', cmds: [{ cmd: 'ls\u2066 -la' }, { cmd: 'ls' }] } }])
     expect(m?.cmds.map((c) => c.hidden)).toEqual([true, false])
     expect(oqmByline(m)).toBe('Записал taibe-07, изменено 17.11 16:05')

@@ -76,7 +76,7 @@ function oqtMacLine(mac, now) {
     : 'открыто ' + live + ' из ' + want + ' ' + oqtPlural(want, 'роли', 'ролей', 'ролей'));
   if (typeof mac.mem === 'number' && isFinite(mac.mem)) s += ', свободно памяти ' + Math.round(mac.mem) + '%';
   s += '.';
-  if (extra) s += ' Ещё ' + extra + ' ' + oqtPlural(extra, 'роль', 'роли', 'ролей') + ' сверх доли ' + (extra === 1 ? 'работает' : 'работают') + ' до конца своей сессии.';
+  if (extra) s += ' Ещё ' + extra + ' ' + oqtPlural(extra, 'роль', 'роли', 'ролей') + ' сверх доли ' + (extra === 1 ? 'продолжает' : 'продолжают') + ' работать.';
   if (mac.seen === false) s += ' Mac не видит пункт долей — выбор здесь до него не дойдёт; напишите агенту.';
   if (typeof mac.hold === 'string' && mac.hold) s += ' Новые роли не открываются: ' + mac.hold.slice(0, 160) + '.';
   return s;
@@ -94,9 +94,10 @@ function oqtSavedText(opt, wasPause, mac, now) {
   }
   var head = 'Сохранено: ' + opt.label + '.';
   if (!ok) return head + ' Открытые роли не закрываются.';
-  // Все места заняты: новые роли другой доли откроются, только когда роли сверх доли закончат свою сессию.
+  // Все места заняты: роль сверх доли при передаче смены открывает наследника на то же место (spawn_session.sh
+  // --handoff долю не проверяет), так что новая доля встаёт только после «ВЫКЛ → ВКЛ» (решение d-team-surplus-1711).
   if (oqtFree(mac) === 0) {
-    return head + (wasPause ? ' Пауза снята.' : '') + ' Открытые роли не закрываются: новые роли по этой доле откроются, когда роли сверх неё закончат свою сессию (или после «Разработка ВЫКЛ → ВКЛ»).';
+    return head + (wasPause ? ' Пауза снята.' : '') + ' Все ' + (oqtCount(mac.cap) || 12) + ' мест заняты, открытые роли не закрываются. Новая доля заработает после «Разработка ВЫКЛ → ВКЛ».';
   }
   return head + ' Mac начнёт применять в течение 10 минут' + (wasPause ? ' и снимет паузу' : '') + '. Открытые роли не закрываются.';
 }
@@ -125,7 +126,7 @@ const TEAM_DOM = String.raw`
     '.oq-toast p { margin: 0; } .oq-toast p + p { margin-top: 4px; opacity: .85; }' +
     '.oq-toast .oq-toast-x { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; border: 0; background: none; color: inherit; font-size: 16px; cursor: pointer; }' +
     '.oq-toast .oq-toast-undo { margin-top: 8px; min-height: 36px; padding: 0 12px; border: 1px solid currentColor; border-radius: 8px; background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }' +
-    '@media (max-width: 640px) { .hb-team { flex: none; width: 40px; padding: 0; justify-content: center; } .hb-team::after { display: none; } }';
+    '@media (max-width: 1399.98px) { .hb-team .hb-long { display: none; } .hb-team .hb-ico { display: block; } .hb-team { flex: none; width: 40px; padding: 0; justify-content: center; } .hb-team::after { display: none; } }';
   document.head.appendChild(css);
   var st = { id: ITEM, item: null, check: null, mac: null }, opts = [], box = null, sum = null, list = null;
   var toastEl = null, toastTimer = 0, busy = false, macSeq = 0, painted = '', macAt = 0;
@@ -250,6 +251,7 @@ const TEAM_DOM = String.raw`
       if (st.check) st.check.mine = false;
       busy = false;
       read();
+      if (window.__oqRefresh) window.__oqRefresh('checks'); // новый ответ — сразу, не через 4 с опроса
       return toast(['Ответ уже изменили (другое окно или бот). Выберите ещё раз.'], true);
     }
     toast([e.status ? 'Не сохранено: ' + (e.message || 'ошибка сервера ' + e.status) + '.' : 'Не сохранено: нет связи с сервером. Попробуйте ещё раз.'], true);
