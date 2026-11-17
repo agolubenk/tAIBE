@@ -92,20 +92,22 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual([tl.lens(x) for x in (t(9, 59), t(10), t(10, 4), t(10, 20), t(10, 21), t(11, 30))],
                          [None, (None, 1), (None, 1), (None, 1), None, None])
 
-    def test_work_state_with_branch_or_card_cuts_views_step_only_does_not(self):
-        """B1: work_state с веткой или карточкой отрезает старый просмотр; state только со step (заметка о шаге посреди
-        линзы) окно не режет."""
-        for value, want in (((None, 'fix/b'), [None, None, (None, 1)]), ((CARD, None), [None, None, (None, 1)]),
-                            ((None, None), [(None, 1), (None, 1), (None, 1)])):
-            with self.subTest(value):
-                tl = self.line((t(8), 'open', (None, 1)), (t(9), 'state', value), (t(13), 'open', (None, 1)),
-                               (t(13, 30), 'close', (None, 1)))
-                self.assertEqual([tl.lens(x) for x in (t(8, 30), t(11), t(13, 10))], want)
+    def test_views_further_than_gap_start_a_new_visit(self):
+        """Заход — просмотры не дальше LENS_GAP (1 ч, включительно); без work_state, сессия только смотрит PR."""
+        for second, want in ((t(11), (None, 1)), (t(11, 1), None)):
+            with self.subTest(second):
+                tl = self.line((t(10), 'open', (None, 1)), (second, 'open', (None, 1)), (t(11, 30), 'close', (None, 1)))
+                self.assertEqual(tl.lens(t(10, 30)), want)
 
     def test_second_comment_or_review_extends_window(self):
         """N1: `gh pr comment 7` в 10:20 и `gh pr review 7` в 10:25 — вызовы между ними тоже на #7."""
         tl = self.line((t(10), 'open', (None, 7)), (t(10, 20), 'close', (None, 7)), (t(10, 25), 'close', (None, 7)))
         self.assertEqual([tl.lens(x) for x in (t(10, 22), t(10, 25), t(10, 26))], [(None, 7), (None, 7), None])
+
+    def test_late_second_comment_does_not_extend_window(self):
+        """Claude-линза #417 на 7b681968d, N1: view 9:00, comment 9:05, comment 15:00 — окно не 9:05–15:00."""
+        tl = self.line((t(9), 'open', (None, 7)), (t(9, 5), 'close', (None, 7)), (t(15), 'close', (None, 7)))
+        self.assertEqual([tl.lens(x) for x in (t(9, 3), t(12), t(15))], [(None, 7), None, None])
 
     def test_equal_windows_with_and_without_repo_sort(self):
         """Два окна с равными началом и концом, repo у одного None — без TypeError (Claude-линза #417, N3); при
@@ -178,6 +180,33 @@ class LedgerTest(unittest.TestCase):
                   (t(10, 29), 'open', (None, 377)), (t(10, 30), 'close', (None, 377))]
         self.assertEqual(self.target(events, t(10, 15)), ('pr', REPO, 377))
         self.assertEqual(self.target(events, t(10, 31)), ('pr', REPO, 202))
+
+    def test_lens_table_of_claude_lens_on_7b681968d(self):
+        """Таблица Claude-линзы #417 на 7b681968d: строка — набор событий и ответы в 10:05 и 10:20 (строка 4 — в 11:00).
+        X — work_state на ветке #202; своя карточка — карточка и ветка #377."""
+        view, comment = (lambda h, m=0: (t(h, m), 'open', (None, 377))), (lambda h, m=0: (t(h, m), 'close', (None, 377)))
+        other = lambda h, m=0: (t(h, m), 'state', (None, 'fix/se74-nerve-lens-names'))  # noqa: E731
+        own = lambda h, m=0: (t(h, m), 'state', (CARD2, 'fix/se122-qa-anchor'))  # noqa: E731
+        lens, x = ('pr', REPO, 377), ('pr', REPO, 202)
+        rows = [
+            ('1: старый просмотр, state другой карточки, новый заход', [view(8), other(9), view(10), comment(10, 30)],
+             (), [(t(9, 30), x), (t(10, 5), lens), (t(10, 20), lens)]),
+            ('2: проверка головы перед вердиктом', [view(10), view(10, 29), comment(10, 30)], (),
+             [(t(10, 5), lens), (t(10, 20), lens)]),
+            ('3: state своей карточки посреди линзы', [view(10), own(10, 10), comment(10, 30)], (),
+             [(t(10, 5), lens), (t(10, 20), lens)]),
+            ('3: state другой карточки посреди линзы', [view(10), other(10, 10), comment(10, 30)], (),
+             [(t(10, 5), lens), (t(10, 20), lens)]),
+            ('4: взгляд утром, работа над X, вердикт без просмотра', [view(8), other(9), comment(13, 30)], (),
+             [(t(11), x), (t(13, 10), x)]),
+            ('5: просмотр субагента, state родителя, вердикт родителя', [other(10, 10), comment(10, 30)], [view(10, 5)],
+             [(t(10, 5), lens), (t(10, 20), lens)]),
+            ('5: просмотр субагента, state родителя, вердикт субагента', [other(10, 10)], [view(10, 5), comment(10, 30)],
+             [(t(10, 5), lens), (t(10, 20), lens)]),
+        ]
+        for name, events, sub, want in rows:
+            with self.subTest(name):
+                self.assertEqual([(w, self.target(events, w, sub)) for w, _ in want], want)
 
     def test_branch_prefers_open_pr(self):
         self.assertEqual(self.target([(t(9), 'state', (None, 'fix/se74-nerve-lens-names'))], t(11)), ('pr', REPO, 202))

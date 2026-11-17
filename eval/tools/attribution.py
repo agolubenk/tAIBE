@@ -10,8 +10,10 @@
   `gh pr view|diff|checkout|comment|review N` в начале команды (после `;`, `&&`, `|`, `(`, `do`, `then`, перевода
   строки), репозиторий — из `-R`/`--repo`, иначе репозиторий продукта записи с командой.
 - Время события — время первой записи его requestId; сравнение со временем вызова — включительно.
-- Окно линзы PR N — от первого view/diff/checkout N до comment/review N. Окно без comment/review отбрасывается.
-  Окна пересекаются — побеждает открытое позже.
+- Окно линзы PR N — от первого view/diff/checkout N захода до comment/review N. Заход — просмотры N, между
+  которыми не больше LENS_GAP (1 ч); comment/review дальше LENS_GAP от последнего просмотра окна не даёт. Второй
+  comment/review не дальше LENS_GAP от первого продлевает окно. work_state окно не режет. Окно без comment/review
+  отбрасывается. Окна пересекаются — побеждает открытое позже.
 - Субагент видит свои события и события родителя.
 - Порядок: окно линзы → ветка work_state → PR с этой headRefName → карточка work_state → PR, в теле которого id
   карточки → только карточка → карточка аренды (если сессия арендовала ровно одну) → «не отнесено».
@@ -26,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import transcript as tr  # noqa: E402
@@ -38,6 +41,8 @@ GH_PR_RE = re.compile(r'(?:^|[;&|(`\n]|\b(?:do|then|else)\s)\s*(?:\w+=\S*\s+)*gh
 REPO_RE = re.compile(r'(?:^|\s)(?:-R|--repo)(?:\s+|=)([\w.-]+/[\w.-]+)')
 CARD_RE = r'\b[a-z][a-z0-9]{23}\b'
 PR_LIMIT = 1000
+# Разрыв, после которого просмотр PR — новый заход, а вердикт без свежего просмотра окна не даёт (Claude-линза #417)
+LENS_GAP = timedelta(hours=1)
 PR_JQ = '[.[] | {number, headRefName, mergedAt, cards: [.body | scan("%s")] | unique}]' % CARD_RE.replace('\\', '\\\\')
 
 
@@ -121,21 +126,20 @@ class Timeline:
         """Окна линз, состояние work_state и аренды по времени. own — события субагента поверх событий родителя."""
         # По (время, порядок): значения разных видов не сравнимы; при равенстве родитель раньше субагента.
         evs = sorted(self.events + (own.events if own else []), key=lambda e: e[:2])
-        opened, windows, states, leases, last = {}, [], [], set(), {}
+        views, windows, states, leases, last = {}, [], [], set(), {}
         for t, _, kind, value in evs:
-            if kind == 'open':  # окно — от первого просмотра: проверка головы перед вердиктом его не режет
-                opened.setdefault(value, t)
-            elif kind == 'close' and value in opened:
-                last[value] = len(windows)
-                windows.append((opened.pop(value), t, value))
-            elif kind == 'close' and value in last:  # второй comment/review того же PR продлевает окно (N1)
-                start, _, pr = windows[last[value]]
-                windows[last[value]] = (start, t, pr)
-            elif kind == 'state':
+            if kind == 'open':  # заход: просмотры не дальше LENS_GAP друг от друга; окно — от первого просмотра захода
+                start, prev = views.get(value, (t, t))
+                views[value] = (start if t - prev <= LENS_GAP else t, t)
+            elif kind == 'close':
+                start, prev = views.pop(value, (None, None))
+                if start is not None and t - prev <= LENS_GAP:
+                    last[value] = len(windows)
+                    windows.append((start, t, value))
+                elif value in last and t - windows[last[value]][1] <= LENS_GAP:  # второй вердикт продлевает окно (N1)
+                    windows[last[value]] = windows[last[value]][:1] + (t, value)
+            elif kind == 'state':  # work_state окно не режет: роли пишут его и посреди линзы (Claude-линза #417)
                 states.append((t,) + value)
-                if any(value):  # work_state с веткой или карточкой — смена работы: старые просмотры окно не тянут (B1)
-                    opened.clear()
-                    last.clear()
             elif kind == 'lease':
                 leases.add(value)
         self.windows = sorted(windows, key=lambda w: w[:2])  # repo бывает None: значения не сравниваем (N3)
