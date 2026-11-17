@@ -7,6 +7,8 @@ import { assertTaskInWorkspace } from "../task-scope";
 import type { GrantApprovalAction } from "./approval-params";
 import { grantItems } from "./grant-items";
 
+const GRANT_TASKS_MAX = 20;
+
 export type GrantRequest = {
   targetId: string;
   value?: string;
@@ -22,6 +24,12 @@ async function assertTasks(
   const ids = [...new Set(taskIds ?? [])];
   if (ids.length === 0) {
     throw new HTTPException(400, { message: "taskIds: name the cards" });
+  }
+  // The schema lets a batch close name 250 cards (TB-108); a grant stays at 20.
+  if (ids.length > GRANT_TASKS_MAX) {
+    throw new HTTPException(400, {
+      message: `taskIds: a grant names at most ${GRANT_TASKS_MAX} cards`,
+    });
   }
   for (const id of ids) await assertTaskInWorkspace(id, workspaceId, userId);
   return ids;

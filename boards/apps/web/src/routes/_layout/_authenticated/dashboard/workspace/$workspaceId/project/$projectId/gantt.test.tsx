@@ -115,6 +115,19 @@ vi.mock("@/components/gantt/gantt-task-bar", () => ({
 // Resolves against the real en-US bundle, so the assertions fail if the
 // jumpToToday key (or its interpolated siblings) stops matching what the
 // component actually requests.
+// The real module loads i18n, which this file mocks; en-US Intl output keeps
+// the old date-fns "MMM d, yyyy" text.
+vi.mock("@/lib/format", () => ({
+  formatDate: (value: Date, options?: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat("en-US", options).format(value),
+  formatDateMedium: (value: Date) =>
+    new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(value),
+}));
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {

@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { assertTaskInWorkspace } from "../task-scope";
 import { getCardPlace } from "../tree/card-place";
@@ -106,7 +107,10 @@ export const treeRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     const { workspaceId } = c.req.valid("param");
     const { projectId } = c.req.valid("query");
     return c.json(
-      await listTrees(workspaceId, c.get("userId"), projectId),
+      maskForTokenCaller(
+        c,
+        await listTrees(workspaceId, c.get("userId"), projectId),
+      ),
       200,
     );
   })
@@ -114,15 +118,24 @@ export const treeRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     const { workspaceId, rootId } = c.req.valid("param");
     const userId = c.get("userId");
     await assertTaskInWorkspace(rootId, workspaceId, userId);
-    return c.json(await getTreeBranches(rootId, workspaceId, userId), 200);
+    return c.json(
+      maskForTokenCaller(c, await getTreeBranches(rootId, workspaceId, userId)),
+      200,
+    );
   })
   .openapi(getCardPlaceRoute, async (c) => {
     const { workspaceId, taskId } = c.req.valid("param");
     const userId = c.get("userId");
     await assertTaskInWorkspace(taskId, workspaceId, userId);
-    return c.json(await getCardPlace(taskId, workspaceId, userId), 200);
+    return c.json(
+      maskForTokenCaller(c, await getCardPlace(taskId, workspaceId, userId)),
+      200,
+    );
   })
   .openapi(listLeasesRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
-    return c.json(await listLiveLeases(workspaceId, c.get("userId")), 200);
+    return c.json(
+      maskForTokenCaller(c, await listLiveLeases(workspaceId, c.get("userId"))),
+      200,
+    );
   });

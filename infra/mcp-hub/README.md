@@ -30,6 +30,22 @@ Claude Code в tAIBE ──────► 127.0.0.1:9122/mcp  (serena-taibe п�
 (`disabledMcpjsonServers` + `enabledPlugins."context7@claude-plugins-official": false`). Хаб не
 запущен — этих четырёх у Claude Code нет, как и serena.
 
+## Хост и продукты
+
+Хаб один на Mac владельца (`:3050`) для всех продуктов; код и эксплуатация — tAIBE, роль ops слоя (`infra/CLAUDE.md`).
+Команды — из основной папки tAIBE (`npm run mcp-hub:*`). В HR те же `npm run mcp-hub:*` — алиасы (решение владельца):
+обёртка HR `infra/scripts/dev-ai/taibe-dev-ai.sh` зовёт код tAIBE с хостом — основной папкой HR (OPS-42).
+
+- **Хост** — продукт, чьи пути получают серверы с хостом (serena `:9121`, git, dams-rag, postgres-readonly, ai-council); сейчас HR.
+  Как выбирается — абзац «Хост» в «Две serena». serena tAIBE (`:9122`) — по требованию, с 08.11 выключена.
+- **Продукт** видит хаб через свой срез `?tags=` у клиента; срез — не граница доверия, копии серверов под продукт —
+  только по замеру (раздел «Подключение клиентов», OPS-43).
+- **Не менять реальный путь папки состояния** `~/.config/hr-helper-mcp-hub/`: 1mcp привязывает хранилище OAuth к
+  realpath этой папки (`auth/storage/protectedRecordStorage.js`, `canonicalPath` → `fs.realpathSync`, 1mcp 0.39.3).
+  Перенос или переименование — повторный вход во все OAuth-серверы и клиенты. Имена с `hr-helper` (папка, логи
+  `~/Library/Logs/hr-helper-mcp-hub/`, LaunchAgent `space.hrhelper.mcp-hub`) остаются; новое имя — только ссылкой на
+  старую папку, не наоборот (OPS-46, отложено).
+
 ## Запуск
 
 В VS Code всё делает задача **«MCP: старт и авторизация»** (`.vscode/tasks.json`, `runOn: folderOpen`):
@@ -296,17 +312,29 @@ Code. context7 работает без авторизации (анонимны�
 
 | Клиент | Где | Запись |
 |---|---|---|
-| Copilot Chat | `~/Library/Application Support/Code/User/mcp.json` | `"hr-helper-hub": {"type": "http", "url": "http://127.0.0.1:3050/mcp?app=vscode"}` |
-| Continue | `.continue/config.yaml`, `.continue/agents/glm-only.yaml` | `type: streamable-http`, `url: …/mcp?app=continue&tags=…` |
-| Roo Code | `…/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json` | `{"type": "streamable-http", "url": "…/mcp?app=roo"}` |
-| Kimi Code | `~/.kimi-code/mcp.json` | `{"url": "…/mcp?app=kimi"}` |
-| Codex | `codex mcp add hr-helper-hub --url …/mcp?app=codex` | — |
+| Copilot Chat | `~/Library/Application Support/Code/User/mcp.json` | `"hr-helper-hub": {"type": "http", "url": "http://127.0.0.1:3050/mcp?app=vscode&tags=oauth,connector,boards"}` |
+| Continue | `.continue/config.yaml`, `.continue/agents/glm-only.yaml` | `type: streamable-http`, `url: …/mcp?app=continue&tags=…`. Вторую запись хаба (`.continue/mcpServers/*.yaml`) не заводите: Continue подключит хаб дважды, и схемы инструментов уйдут к модели два раза |
+| Roo Code | `…/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json` | `{"type": "streamable-http", "url": "…/mcp?app=roo&tags=oauth,connector,boards"}` |
+| Kimi Code | `~/.kimi-code/mcp.json` | `{"url": "…/mcp?app=kimi&tags=oauth,connector,boards"}` |
+| Codex | `codex mcp add hr-helper-hub --url "…/mcp?app=codex&tags=oauth,connector,boards"` (`~/.codex/config.toml`) | — |
 | Claude Code | `claude mcp add -s user -t http serena http://127.0.0.1:9121/mcp`; OAuth-серверы и t-boards — `claude mcp add -s local -t http hub "http://127.0.0.1:3050/mcp?app=claude-code&tags=oauth,connector,boards"` | serena; notion, sentry, cloudflare, context7, t-boards и подключённые коннекторы (по желанию, см. ниже). Отдельной записи `t-boards` (`/api/mcp`, OAuth) у Claude Code нет: один маршрут — через хаб. Запись `hub` добавлена раньше, без `boards`, — t-boards в ней молча нет: `claude mcp remove hub -s local` и добавить заново командой слева |
 
 `?tags=` отдаёт клиенту срез хаба. Это важно там, где схемы всех инструментов уходят в каждый запрос к
 модели (у Continue на GLM). Теги серверов: `code` (serena, dams-rag), `project` (ai-council,
-dams-rag), `context` (headroom), `docs` (markitdown, context7), `git` (git), `db`
-(postgres-readonly), `infra` (docker), `remote` (github, notion, sentry, cloudflare, t-boards), `boards` (t-boards), `memory` (mcp-search).
+owner-queue, dams-rag), `context` (headroom), `docs` (markitdown, context7), `git` (git), `db`
+(postgres-readonly), `infra` (docker), `remote` (github, sentry, cloudflare, t-boards), `oauth` (sentry, cloudflare,
+context7), `connector` (коннекторы, по умолчанию выключены), `boards` (t-boards), `memory` (mcp-search).
+
+Codex, Copilot Chat, Roo и Kimi Code берут срез как у Claude Code — `tags=oauth,connector,boards`: sentry, cloudflare,
+context7, t-boards и включённые коннекторы. Очереди владельца, github с токеном и записи в память в нём нет, а описаний
+инструментов в каждой сессии меньше (без среза — 277 инструментов, около 855 КБ). Решение владельца 15.11
+(`taibe-d-ops21-1511` = a, OPS-21) для Codex, Copilot Chat и Roo; Kimi Code — по той же причине, решение координатора
+15.11. Клиент без `tags=` получает весь хаб.
+
+Срез — не граница доверия (OPS-21): auth у хаба выключен, вход по токену не включаем (`d-taibe-tb77-hubkey-1311`). Копию сервера под продукт (`git-taibe` и т. п.) заводите
+только по факту вызовов — замер `python3 -I infra/mcp-hub/usage_by_server.py --days 7` (транскрипты Claude Code по
+серверу и продукту + `tool.routed` журнала хаба; клиента 1mcp в журнал не пишет). Замер 13.11 (OPS-43): через хаб
+вызывают только t-boards, копии не нужны.
 
 ## Что какой сервер даёт
 
@@ -317,7 +345,7 @@ dams-rag), `context` (headroom), `docs` (markitdown, context7), `git` (git), `db
 | `ai-council` | Консилиум по карточкам Notion, его база знаний, граф зависимостей (`council_graph_neighbors`), пайплайн | Читает через gateway `:8790`, он должен быть поднят (`npm run ai-pipeline:start`). Граф — `graphify-out/graph.json`, освежать `npm run graph:update` (только AST, без LLM, ~2 мин холодный старт) |
 | `owner-queue` | Очередь владельца в ops-консоли: `oq_list`, `oq_get`, `oq_put`, `oq_patch`, `oq_agent_status`, `oq_history` | Токен `OQ_TOKEN` в Keychain (`security add-generic-password -U -s hr-helper-mcp -a OQ_TOKEN -w` — токен спросит сам), выпуск — `token-create <имя> agent` в консоли. Адрес — `OQ_URL`, по умолчанию прод |
 | `headroom` | `headroom_compress`/`retrieve` — сжатие и общее хранилище контекста | — |
-| `mcp-search` | claude-mem: поиск по памяти сессий, `work_state_*`, `save_memory`, timeline | Обёртка `infra/mcp-hub/claude-mem-mcp.sh` находит `mcp-server.cjs` установленного плагина Claude Code (маркетплейс, затем самая свежая копия в кэше). Перед запуском она поднимает воркер (`:37701`) командой `claude-mem start`, как хук SessionStart плагина: так воркер не становится потомком хаба, и `mcp-hub:stop` его не гасит. `cwd` — корень репо, по нему claude-mem определяет проект. Тег `memory`, его Continue по умолчанию не берёт: 19 инструментов — это около 14 КБ схем в каждом запросе к GLM. Нужна память в Continue — допишите `memory` в `tags=`. Claude Code берёт те же инструменты у плагина, поэтому `memory` в запись `hub` не добавлять, иначе они задвоятся. HTTP MCP на 37701 у claude-mem нет, там только dashboard |
+| `mcp-search` | claude-mem: поиск по памяти сессий, `work_state_*`, `save_memory`, timeline | Обёртка `infra/mcp-hub/claude-mem-mcp.sh` находит `mcp-server.cjs` установленного плагина Claude Code: маркетплейс, затем `installPath` из `~/.claude/plugins/installed_plugins.json`, и только потом самая свежая копия в кэше по mtime (тест `test_claude_mem_mcp.py`, OPS-21). Перед запуском она поднимает воркер (`:37701`) командой `claude-mem start`, как хук SessionStart плагина: так воркер не становится потомком хаба, и `mcp-hub:stop` его не гасит. `cwd` — корень репо, по нему claude-mem определяет проект. Тег `memory`, его Continue по умолчанию не берёт: 19 инструментов — это около 14 КБ схем в каждом запросе к GLM. Нужна память в Continue — допишите `memory` в `tags=`. Claude Code берёт те же инструменты у плагина, поэтому `memory` в запись `hub` не добавлять, иначе они задвоятся. HTTP MCP на 37701 у claude-mem нет, там только dashboard |
 | `git` | status/diff/log/show/branch по репо | Только чтение: commit/add/reset/checkout/create_branch скрыты (`disabledTools`) |
 | `postgres-readonly` | Схема dev-БД | Роль `mcp_readonly` без SELECT на таблицы. Структура — через `execute_sql` по `pg_catalog`; `list_objects` пуст |
 | `github` | Issues/PR/код на GitHub | Токен `gh auth token` (или `GITHUB_PAT` в Keychain) |

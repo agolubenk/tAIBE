@@ -16,6 +16,7 @@ MCP-хаб, шлюз моделей, сжатие контекста, ops-кон
 | `headroom/` | Сжатие контекста на входе/handoff задачи (`headroom_compress`/`headroom_retrieve`), проверка контракта | python · `runtime/contract_check.py` |
 | `scripts/dev-ai/` | Запуск и обслуживание контура: хаб, секреты (`mcp-secret.sh`: env → Keychain), MCP досок (`mcp-t-boards.sh`), Ollama, Open WebUI | bash (macOS — хозяйская машина) |
 | `scripts/split/` | Разделение HR / tAIBE на Mac владельца: шаги `1-preflight` … `6-verify`, `rollback`, снимок и перенос коммитов вложенных репозиториев. Инструкция — `docs/ops/split-hr-taibe.md` | bash 3.2 · `shellcheck -x` |
+| `opencode/` | Агенты opencode слоя: `taibe-review` (линза ревью без инструментов) и `taibe-fix` (мелкая правка ≤ 20 строк), ставит `install.sh` ссылками в `~/.config/opencode/agents/`; цепочка ревью opencode → GLM → Claude — `ai-council/review_chain.sh`, предел правки — `scripts/dev-ai/fix_gate.sh` (решение владельца 13.11, `.claude/memory/chunks/process/executors.md`) | bash · `bash scripts/dev-ai/tests/fix-gate.test.sh` |
 | `scripts/dev/wt-deps.sh` | Свои зависимости git worktree (pnpm досок / npm хоста) — для `make wt-*` и хука `PreToolUse` | bash |
 | `checks/` | Детерминированные проверки репозитория без модели: секреты, гигиена, полнота данных (планы, журнал решений, журнал миграций drizzle), синтаксис; аудит зависимостей храповиком. Описание — `checks/README.md` | python stdlib · `make check-repo`, CI `checks-ci.yml` |
 | `scripts/misc/done-index.py` | Таблица модулей `docs/plans/DONE.md` и проверка формата журнала закрытого | python stdlib |
@@ -31,8 +32,9 @@ MCP-хаб, шлюз моделей, сжатие контекста, ops-кон
 - **Секреты — только по цепочке env → Keychain** (`scripts/dev-ai/mcp-secret.sh`, service `hr-helper-mcp`); в git —
   только `*.env.example`. MCP- и API-ключи наружу — хэшем, ключ показывается один раз.
 - **Локальные модели — строго последовательно** (машинный flock `~/.local/state/taibe/council/ollama-local.lock`:
-  консилиум — `ollama.local_inference_slot`, шлюз моделей — `llm-gateway/src/machine-lock.mjs`; мимо него идут
-  backend продукта — OPS-28, роли Continue напрямую и прогрев — OPS-33), облачные полосы — по квоте 5-часового окна, а не по числу потоков.
+  консилиум — `ollama.local_inference_slot`, шлюз моделей — `llm-gateway/src/machine-lock.mjs`, скрипты — `scripts/dev-ai/ollama-locked.py`;
+  chat/edit/apply Continue — через шлюз; мимо замка — только список «Мимо замка» в `llm-gateway/README.md`, OPS-33),
+  облачные полосы — по квоте 5-часового окна, а не по числу потоков.
 - **Инстанс-зависимое — в конфиге, не в коде:** адрес очереди и роли — `eval/nerve/config.json`, модели и источники
   консилиума — `ai-council/config.toml`, домены и туннель досок — `scripts/dev-ai/mcp-t-boards.sh` (`T_BOARDS_URL`).
 - **Рантайм-состояние не коммитится:** `.claude/council/` (SQLite консилиума), `llm-gateway/.state/`,

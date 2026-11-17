@@ -61,9 +61,9 @@ export const requestApprovalBody = z.object({
       description:
         "create_label: the new workspace label (targetId is the workspace id).",
     }),
-  taskIds: z.array(z.string().min(1)).min(1).max(20).optional().openapi({
+  taskIds: z.array(z.string().min(1)).min(1).max(250).optional().openapi({
     description:
-      "create_label and attach_label (targetId is the workspace label id): the cards that get the label.",
+      "create_label and attach_label (targetId is the workspace label id): the cards that get the label, up to 20. close_task (targetId is the workspace id, no value): the cards to close, up to 250 — each goes to its project's final column (TB-108).",
   }),
   doneRef: z.string().max(200).optional().openapi({
     description:
@@ -205,7 +205,10 @@ export const seedSchema = z
     title: z.string(),
     body: z.string(),
     sourceTaskIds: z.array(z.string()),
-    contentHash: z.string(),
+    contentHash: z.string().optional().openapi({
+      description:
+        "sha256 of the stored body. Absent for a caller with a token: the body it reads is masked.",
+    }),
     compressor: z.string(),
     revision: z.number(),
     createdAt: responseTimestamp,
