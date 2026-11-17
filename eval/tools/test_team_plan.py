@@ -54,7 +54,7 @@ class Base(unittest.TestCase):
         self.spawned, self.notes, self.log, self.published = [], [], [], []
         self.free, self.live, self.choice, self.note = 60, set(), None, ""
         self.limit, self.hub, self.failing, self.queue_down = None, True, set(), False
-        self.publish_fails = False
+        self.publish_fails, self.spawn_override = False, False
 
     def tearDown(self):
         self.env.stop()
@@ -66,10 +66,10 @@ class Base(unittest.TestCase):
                 raise TP.subprocess.TimeoutExpired("secret", 20)
             if path.startswith("checks/"):
                 return {"data": {"choice": self.choice, "note": self.note}} if self.choice or self.note else None
-            if path == "work/team-mac":
+            if path == "/team":
                 if self.publish_fails:
                     raise OSError("HTTP 503")
-                self.published.append(data["data"])
+                self.published.append(data)
                 return {}
             self.notes.append((path, data))
             return {}
@@ -83,7 +83,8 @@ class Base(unittest.TestCase):
 
         sysm = mock.Mock(mem_free=lambda: self.free)
         with mock.patch.object(TP, "config", lambda: (TEAM, 20, 10, 14, ROLES, {"hr-helper": "/h", "taibe": "/t"})), \
-                mock.patch.object(TP.Q, "oq_request", oq), mock.patch.object(TP, "spawn", spawn), \
+                mock.patch.object(TP.Q, "oq_request", oq), \
+                mock.patch.object(TP, "spawn", TP.spawn if self.spawn_override else spawn), \
                 mock.patch.object(TP, "live_set", lambda roots, log=None: (set(self.live), set())), \
                 mock.patch.object(TP, "nerve_limit", lambda slugs: self.limit), \
                 mock.patch.object(TP, "hub_up", lambda: self.hub), \
@@ -213,11 +214,82 @@ class QueuePauseTest(Base):
         self.free = 37
         self.run_up()
         doc = self.published[-1]
-        self.assertEqual({k: doc[k] for k in ("kind", "item", "total", "live", "want", "cap", "mem", "src")},
-                         {"kind": "team", "item": "d-team-split", "total": 12, "live": 12, "want": 12, "cap": 12,
-                          "mem": 37, "src": "конфиг"})
-        self.assertRegex(doc["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]")
+        self.assertEqual({k: doc[k] for k in ("item", "total", "live", "want", "cap", "mem", "src", "pause", "hold")},
+                         {"item": "d-team-split", "total": 12, "live": 12, "want": 12, "cap": 12, "mem": 37,
+                          "src": "конфиг", "pause": "", "hold": ""})
+        self.assertNotIn("at", doc)  # время отметки ставит консоль
         self.assertEqual(self.notes, [])  # ни пунктов, ни записи в checks
+
+    def test_lower_share_keeps_total_with_surplus_roles(self):
+        self.choice = "2-10"  # у tAIBE 8 ролей: на деле 4-8
+        self.run_up()
+        self.assertEqual(self.published[-1]["alloc"], [["hr-helper", 4], ["taibe", 8]])
+        self.assertEqual(self.published[-1]["max"], [["hr-helper", 8], ["taibe", 8]])
+        self.choice, self.spawned = "6-6", []
+        self.run_up()
+        self.assertEqual(self.spawned, [])  # 12 работают: роли сверх доли не закрыты, новых не открыть
+        doc = self.published[-1]
+        self.assertEqual((doc["live"], doc["want"], doc["extra"]), (10, 12, 2))
+        self.live -= {("taibe", "backend-2"), ("taibe", "frontend-2")}  # роли сверх доли закрылись сами
+        self.run_up()
+        self.assertEqual(sorted(self.spawned), [("hr-helper", "boards"), ("hr-helper", "plan")])
+        self.assertEqual(self.published[-1]["extra"], 0)
+
+    def test_owner_texts_without_commands(self):
+        self.limit = {"resume": "2099-01-01T15:00:00+03:00"}
+        self.run_up()
+        self.assertRegex(self.published[-1]["hold"], r"^лимит Claude исчерпан до \d\d:\d\d$")
+        self.assertIn("Нерв стоит на лимите", self.log[-1])
+        self.limit, self.hub = None, False
+        self.run_up()
+        self.assertNotIn(":3050", self.published[-1]["hold"])
+        (Path(self.tmp.name) / "team-pause").write_text("x")
+        self.run_up()
+        self.assertEqual(self.published[-1]["pause"], "mac")
+        self.assertNotIn("team_plan", self.published[-1]["hold"])
+
+    def test_keeper_crash_publishes_failure_not_old_state(self):
+        self.run_up()
+        with mock.patch.object(TP, "allocate", side_effect=KeyError("x")):
+            with self.assertRaises(KeyError):
+                self.run_up()
+        doc = self.published[-1]
+        self.assertIsNone(doc["live"])
+        self.assertIn("сбой сторожа", doc["hold"])
+
+    def test_pause_mid_pass_stops_before_the_next_role(self):
+        """Проход при входе открывает 12 ролей до получаса: пауза владельца действует со следующей роли."""
+        real = TP.spawn
+
+        def spawn(s, r, log):
+            if len(self.spawned) == 2:
+                self.choice = "pause"  # владелец нажал «Пауза», пока Mac открывает третью роль
+            self.spawned.append((s, r))
+            self.live.add((s, r))
+            return True
+        with mock.patch.object(TP, "spawn", spawn):
+            self.spawn_override = True
+            self.run_up()
+        self.assertIs(TP.spawn, real)
+        self.assertEqual(len(self.spawned), 3)
+        self.assertTrue(any("остальные роли не открываю" in m for m in self.log))
+        self.assertEqual(self.published[-1]["pause"], "queue")
+        self.assertGreaterEqual(len(self.published), 4)  # до прохода и после каждой роли
+
+    def test_answer_404_keeps_pause(self):
+        self.choice = "pause"
+        self.run_up()
+        self.choice = None  # ответ не виден: oq() отдаёт None, как 404
+        self.spawned = []
+        self.run_up()
+        self.assertEqual(self.spawned, [])
+        self.assertIn("не виден (404)", " ".join(self.log))
+
+    def test_resume_on_mac_tells_about_queue_pause(self):
+        (Path(self.tmp.name) / "team-pause-queue").write_text("x")
+        with mock.patch("sys.stdout") as out:
+            TP.main(["team_plan.py", "resume"])
+        self.assertIn("в очереди стоит пауза", "".join(c.args[0] for c in out.write.call_args_list))
 
     def test_publish_failure_does_not_break_the_run(self):
         self.publish_fails = True

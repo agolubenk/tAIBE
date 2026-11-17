@@ -129,6 +129,11 @@ html { overflow-anchor: none; }
 .jump-list a:hover, .jump-list a:focus-visible { background: var(--accent-soft); color: var(--accent); outline-offset: -2px; }
 .jump-c { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .jump-c.hot { color: var(--warn); font-weight: 600; }
+/* Телефон: «Одной очередью» и «Тема» — строками меню «Очередь», их места в шапке у «Роли» и «Памятки» (OPS-82). */
+.jump-phone { display: none; }
+.jump-phone.jump-sep { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+.jump-act { display: block; width: 100%; min-height: 40px; padding: 9px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.jump-act:hover, .jump-act:focus-visible { background: var(--accent-soft); color: var(--accent); outline-offset: -2px; }
 /* Окна шапки: форма «Поставить задачу» и (на телефоне) «Отчёты». Esc и ✕ закрывают, фокус внутри (showModal). */
 dialog.sheet { width: min(760px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 48px); margin: 24px auto auto; padding: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); box-shadow: 0 18px 60px rgba(0, 0, 0, .28); }
 dialog.sheet::backdrop { background: rgba(15, 19, 25, .45); }
@@ -465,6 +470,10 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   .head-bar { min-width: 0; }
   .hb-btn { padding: 0 9px; gap: 4px; }
   .hb-compose, .hb-reports, .hb-theme, .hb-layout { flex: none; width: 40px; padding: 0; justify-content: center; }
+  .head-bar .hb-theme, .hb-nav .hb-layout { display: none; }
+  /* Стрелка меню на телефоне — 10 px из строки, где каждый пиксель у выбора продукта; меню видно по счётчику. */
+  #jump-queue > summary::after { display: none; }
+  .jump-phone { display: list-item; list-style: none; }
   .hb-compose[data-draft="1"] { width: auto; padding: 0 8px; }
   /* width: 0 — иначе ширина текста выбора («Все продукты») раздвигает сетку страницы шире экрана; место даёт flex-grow. */
   #head-bar .oq-product-pick { flex: 1 1 0; width: 0; min-width: 0; max-width: none; }
@@ -508,6 +517,8 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
           <li><a href="#sec-server" data-kind="server">На сервере <span class="jump-c"></span></a></li>
           <li><a href="#sec-check" data-kind="check">Проверить руками <span class="jump-c"></span></a></li>
           <li><a href="#sec-inbox" data-kind="inbox">Входящие <span class="jump-c"></span></a></li>
+          <li class="jump-phone jump-sep"><button type="button" class="jump-act" data-proxy="layout-btn"></button></li>
+          <li class="jump-phone"><button type="button" class="jump-act" data-proxy="theme-btn"></button></li>
         </ul>
       </details>
       <!-- Раскладка очереди: подпись называет ту, на которую переключит (скрипт ставит её по выбору из localStorage). -->
@@ -784,9 +795,12 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   Пишет агент при сверке с досками (история — точка на каждый день сверки). Карточка в плане — та, чей ключ есть
   в cards какой-либо строки; новая карточка без строки — кандидат в строку блока.
 
-work/team-mac  состояние команды ролей Mac {kind: 'team', at, item, total, split: [[slug, n]], src, want, live, cap,
-  mem, hold}. Пишет сторож Mac (eval/tools/team_plan.py) каждым проходом; читает кнопка «Роли» в шапке. Ответ на
-  пункт item (d-team-split) — доля «8-4» или «pause»: пауза, новые роли не открываются.</pre>
+work/memo-&lt;id&gt;  памятка владельцу (окно «Памятки» в шапке) {kind: 'memo', title, body (простой текст: абзацы через
+  пустую строку), cmds: [{label, cmd}] (команды с кнопкой «Скопировать»), order, added, source, archived}. Пишет агент,
+  когда владелец просит «вынеси в памятки»; скрывает владелец (archived: true). Не пункт: ни счётчиков, ни бота.
+
+Кнопка «Роли» в шапке: ответ на пункт d-team-split — доля «8-4» или «pause» (новые роли не открываются); состояние
+  команды ролей Mac — GET /api/oq/v1/team (отметка сторожа eval/tools/team_plan.py раз в 10 мин).</pre>
   </details>
 
   <footer>PR #122 (мажорные обновления зависимостей) — трекер, не вливать. Ребрендинг lavaeon отложен.</footer>
@@ -2043,7 +2057,7 @@ work/team-mac  состояние команды ролей Mac {kind: 'team', a
       // Сводка доски выбранного продукта (SHIM относит её к продукту по data.ws); при всех продуктах — cards-stats (HR).
       if (d.kind === 'stats') { if (!stats || r.id === 'cards-stats') stats = statsFromDb(d); return; }
       if (d.kind === 'boards') return; // карта доски — для группировки (page-lanes.ts), не строка плана
-      if (d.kind === 'team') return; // состояние команды ролей Mac — для кнопки «Роли» в шапке (page-team.ts)
+      if (d.kind === 'memo') return; // памятка владельцу — окно «Памятки» (page-memos.ts), не строка плана
       WORK_FIELDS.forEach(function (k) { if (typeof d[k] === 'string') w[k] = d[k].slice(0, k === 'note' ? 600 : 200); });
       if (typeof d.order === 'number') w.order = d.order;
       if (typeof d.milestone === 'boolean') w.milestone = d.milestone;
@@ -2827,6 +2841,22 @@ work/team-mac  состояние команды ролей Mac {kind: 'team', a
     });
   }
   function closeJumps(except) { document.querySelectorAll('details.jump[open]').forEach(function (d) { if (d !== except) d.open = false; }); }
+  // Телефон: строки меню «Очередь» нажимают скрытые кнопки шапки — подписи берут у них же (что будет по нажатию).
+  function paintProxies() {
+    jumpQ.querySelectorAll('.jump-act').forEach(function (b) {
+      var src = document.getElementById(b.dataset.proxy);
+      b.textContent = src ? (b.dataset.proxy === 'theme-btn' ? document.getElementById('theme-text').textContent : src.getAttribute('aria-label')) : '';
+    });
+  }
+  jumpQ.addEventListener('toggle', function () { if (jumpQ.open) paintProxies(); });
+  jumpQ.addEventListener('click', function (ev) {
+    var b = ev.target.closest && ev.target.closest('.jump-act');
+    if (!b) return;
+    var src = document.getElementById(b.dataset.proxy);
+    if (src) src.click();
+    if (b.dataset.proxy === 'theme-btn') { paintProxies(); return; } // тему видно сразу — меню остаётся, можно листать дальше
+    jumpQ.open = false;
+  });
   document.querySelectorAll('details.jump').forEach(function (d) { d.addEventListener('toggle', function () { if (d.open) closeJumps(d); }); });
   document.addEventListener('click', function (ev) { if (!(ev.target.closest && ev.target.closest('details.jump'))) closeJumps(null); });
   document.addEventListener('keydown', function (ev) {

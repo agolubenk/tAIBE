@@ -24,6 +24,7 @@ import { LANES_JS } from './page-lanes'
 import { PRODUCTS_JS } from './page-products'
 import { REPORTS_JS } from './page-reports'
 import { TEAM_JS } from './page-team'
+import { MEMOS_JS } from './page-memos'
 import { OPEN_RULE_JS } from './open-rule'
 
 export const QUEUE_ASSETS = '/queue/assets/'
@@ -73,6 +74,7 @@ export function queuePageBuild(): Built {
     scriptTag(assets, 'enhance', ENHANCE_JS) + '\n' +
     scriptTag(assets, 'products', PRODUCTS_JS) + '\n' +
     scriptTag(assets, 'team', TEAM_JS) + '\n' +
+    scriptTag(assets, 'memos', MEMOS_JS) + '\n' +
     html.slice(end)
   built = { html: page, assets, themeHash: sha256(html.slice(themeOpen + '<script>'.length, themeClose), 'base64') }
   return built
