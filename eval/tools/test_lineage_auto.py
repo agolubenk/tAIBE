@@ -24,7 +24,7 @@ sys.path.insert(0, HERE)
 import lineage as L  # noqa: E402
 import lineage_auto as A  # noqa: E402
 import lineage_close as C  # noqa: E402
-from test_lineage import ST, TERMINAL, Base, FakeSys, P  # noqa: E402
+from test_lineage import ST, TERMINAL, Base, FakeSys, P, clean_env  # noqa: E402
 
 NOW = 1.8e9                                   # часы FakeSys (с от эпохи)
 TERM_START = "Thu Jan  1 00:00:00 2026"       # Terminal запущен раньше любой записи линии
@@ -187,8 +187,8 @@ class AutoTest(Base):
         v = self.verdicts(self.auto()[1])
         self.assertIn("общий корень проектов", v[721])
         self.assertIn("чужой проект", v[722])
-        self.assertIn("не в Terminal (vscode)", v[723])
-        self.assertIn("не в Terminal (other)", v[724])
+        self.assertIn("не в Terminal и не в tmux (vscode)", v[723])
+        self.assertIn("не в Terminal и не в tmux (other)", v[724])
         self.assertIn("СНЯТЬ", v[725])                                   # квитанция наследника-моста годится
         self.assertIn("своя сессия", v[700])
 
@@ -416,9 +416,9 @@ class LauncherIntegrationTest(unittest.TestCase):
             stub = Path(tmp) / "osa.sh"
             stub.write_text(f'#!/bin/sh\ncat >/dev/null\necho "$@" >> {calls}\necho "closed 1"\n')
             stub.chmod(0o700)
-            env = {**os.environ, "TMPDIR": tmp, "TAIBE_LINEAGE": "r.zz", "TAIBE_LINEAGE_DIR": f"{tmp}/lin",
-                   "LINEAGE_OSASCRIPT": str(stub), "CLAUDE_BIN": claude_bin,
-                   "SPAWN_CLOSE_DELAY": "1" if enter_after is None else "3"}
+            env = clean_env(TMPDIR=tmp, TAIBE_LINEAGE="r.zz", TAIBE_LINEAGE_DIR=f"{tmp}/lin",
+                            LINEAGE_OSASCRIPT=str(stub), CLAUDE_BIN=claude_bin,
+                            SPAWN_CLOSE_DELAY="1" if enter_after is None else "3")
             dry = subprocess.run(["bash", os.path.join(HERE, "spawn_session.sh"), "--handoff", str(handoff),
                                   "--dry-run", "--cwd", tmp], capture_output=True, text=True, env=env, timeout=30)
             lines = dry.stdout.splitlines()
