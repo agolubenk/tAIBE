@@ -123,7 +123,7 @@ write_files() {
   [ -f "$ROOT/.env" ] && cp -a "$ROOT/.env" "$ROOT/.env.prev"
   local kept=""
   if [ -f "$ROOT/.env.prev" ]; then
-    kept="$(grep -E '^(NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ)_' "$ROOT/.env.prev" || true)"
+    kept="$(grep -E '^(NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH)_' "$ROOT/.env.prev" || true)"
   fi
   {
     echo "TB_IMAGE=t-boards:$TB_TAG"

@@ -43,6 +43,7 @@ import { waitForDatabase } from "./database/wait-for-database";
 import discordIntegration from "./discord-integration";
 import { eventContext } from "./events";
 import externalLink from "./external-link";
+import form from "./form";
 import genericWebhookIntegration from "./generic-webhook-integration";
 import giteaIntegration, { handleGiteaWebhookRoute } from "./gitea-integration";
 import githubIntegration, {
@@ -940,6 +941,7 @@ export function createApp() {
   const invitationApi = api.route("/invitation", invitation);
   const workspaceApi = api.route("/workspace", workspace);
   const customFieldApi = api.route("/custom-field", customField);
+  const formApi = api.route("/form", form);
   const importApi = api.route("/import", importRoutes);
   const userApi = api.route("/user", user);
   const adminApi = api.route("/admin", admin);
@@ -1081,6 +1083,7 @@ export function createApp() {
     workflowRuleApi,
     workspaceApi,
     customFieldApi,
+    formApi,
     importApi,
     oauthApi,
   };
@@ -1251,6 +1254,7 @@ const {
   workflowRuleApi,
   workspaceApi,
   customFieldApi,
+  formApi,
   importApi,
   oauthApi,
 } = createdApp;
@@ -1299,6 +1303,7 @@ export type AppType =
   | typeof invitationApi
   | typeof workspaceApi
   | typeof customFieldApi
+  | typeof formApi
   | typeof importApi
   | typeof userApi
   | typeof adminApi
