@@ -20,10 +20,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lineage as L  # noqa: E402
 import team_status as TS  # noqa: E402
-from test_lineage import ST, TERMINAL, Base, FakeSys, P  # noqa: E402
+from test_lineage import ST, TERMINAL, Base, FakeSys, P, clean_env  # noqa: E402
 
 NOW = 1.8e9  # часы FakeSys: startedAt/updatedAt в sessions/*.json — мс от эпохи
-
 
 class TeamSys(FakeSys):
     def __init__(self, procs, env=None, launchctl=None):
@@ -45,8 +44,9 @@ class Roles(Base):
         self.procs = [P(100, 1, 100, "??", TERMINAL)]
         self.env_l = {}
 
-    def sess(self, pid, line, role, age_h=1.0, cwd=None, status="idle", started=None):
+    def sess(self, pid, line, role, age_h=1.0, cwd=None, status="idle", started=None, key=None):
         cmd = "claude" + (f" --settings /x/genome/{role}.json" if role else "")
+        cmd += f" Сборка Т3, ключ реестра {key}, роль 7." if key else ""
         self.procs.append(P(pid, 100, pid, f"ttys{pid % 1000:03d}", cmd))
         self.env_l[pid] = line
         L.write_json(L.sessions_dir() / f"{pid}.json", {
@@ -117,6 +117,62 @@ class LiveRoleTest(Roles):
         rc, out, _ = self.run_main("stop", "--cwd", str(self.root))
         self.assertIn("kill 702   # 1 coord s-702", out)
         self.assertNotIn("kill 701", out)
+
+
+class SecondSessionTest(Roles):
+    """backend-2: геном backend, свой ключ в первом сообщении — своя роль, не наследник и не дубль backend."""
+
+    def test_second_session_is_its_own_role(self):
+        self.sess(701, "r.a1", "backend", age_h=5, key="backend")
+        self.sess(702, "r.b2", "backend", age_h=1, key="backend-2")
+        self.sess(703, "r.c3", "frontend", key="backend-2")       # ключ чужой базовой роли — роль по геному
+        live = TS.live_roles(TS.role_rows(self.sx(), str(self.root)))
+        self.assertEqual({k: v["pid"] for k, v in live.items()}, {"backend": 701, "backend-2": 702, "frontend": 703})
+        rc, out, _ = self.run_main("live", "--role", "backend-2", "--cwd", str(self.root))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("pid 702", out)
+        rc, out, _ = self.run_main("live", "--role", "frontend-2", "--cwd", str(self.root))
+        self.assertEqual((rc, out), (TS.RC_MISSING, ""))
+
+    def test_key_from_lineage_record_after_resume(self):
+        """--resume: первого сообщения в argv нет — ключ из записи линии (spawn_session.sh record --role)."""
+        self.sess(701, "r.a1", "backend", age_h=5)
+        self.sess(702, "r.b2", "backend", age_h=1)
+        L.write_json(L.lfile("r.b2", ".json"), {"line": "r.b2", "role": "backend-2"})
+        live = TS.live_roles(TS.role_rows(self.sx(), str(self.root)))
+        self.assertEqual({k: v["pid"] for k, v in live.items()}, {"backend": 701, "backend-2": 702})
+
+    def test_status_lists_second_sessions_and_wait_finds_one(self):
+        self.sess(702, "r.b2", "backend", key="backend-2")
+        os.environ["NERVE_PLIST"] = str(self.dir / "none.plist")
+        rc, out, _ = self.run_main("status", "--cwd", str(self.root))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("4 backend   нет", out)
+        self.assertTrue(any(ln.startswith("7 backend-2") and "pid 702" in ln for ln in out.splitlines()), out)
+        self.assertIn("8 frontend-2 нет", out)
+        sx = self.sx()
+        sx.at(4, lambda: (self.sess(800, "r.z9.n1", "backend", started=sx.t, key="backend-2"),
+                          sx.p.update({800: next(p for p in self.procs if p.pid == 800)}), sx.env.update({800: "r.z9.n1"})))
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            rc = TS.main(["wait", "--role", "backend", "--line", "r.z9.n1", "--timeout", "8"], sx)
+        self.assertEqual(rc, 1, "сессия backend-2 — не сессия backend")
+        sx = self.sx()
+        sx.at(4, lambda: (self.sess(801, "r.z9.n2", "backend", started=sx.t, key="backend-2"),
+                          sx.p.update({801: next(p for p in self.procs if p.pid == 801)}), sx.env.update({801: "r.z9.n2"})))
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            rc = TS.main(["wait", "--role", "backend-2", "--line", "r.z9.n2", "--timeout", "8"], sx)
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertIn("pid 801", out.getvalue())
+
+    def test_numbers_follow_team_roles_of_every_product(self):
+        import products as P
+        _, products = P.load()
+        for slug, cfg in products.items():
+            roles = cfg["team"]["roles"]
+            self.assertEqual({r: i for i, r in enumerate(roles, 1)}, TS.NUM, slug)
+            self.assertEqual(set(TS.ORDER), set(roles), slug)
 
 
 class WaitTest(Roles):
@@ -214,7 +270,7 @@ class SpawnLaunchTest(Base):
         self.root.mkdir()
         real = subprocess.run(["ps", "-o", "comm=", "-p", str(os.getpid())], capture_output=True, text=True).stdout.strip()
         self.p = subprocess.Popen(["claude", "-I", "-c", "import time; time.sleep(60)", "--settings", "/x/genome/coord.json"],
-                                  executable=real, env={**os.environ, "TAIBE_LINEAGE": "r.t1"}, start_new_session=True,
+                                  executable=real, env=clean_env(TAIBE_LINEAGE="r.t1"), start_new_session=True,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         start = L.Sys().procs()[self.p.pid].start
         L.write_json(L.sessions_dir() / f"{self.p.pid}.json", {
@@ -228,7 +284,7 @@ class SpawnLaunchTest(Base):
         super().tearDown()
 
     def launch(self, *extra):
-        env = {**os.environ, "TMPDIR": str(self.dir)}
+        env = clean_env(TMPDIR=str(self.dir))
         return subprocess.run(["bash", os.path.join(HERE, "spawn_session.sh"), "--launch", "--roles", "coord,plan",
                                "--dry-run", "--cwd", str(self.root), *extra], capture_output=True, text=True, env=env,
                               timeout=60)
@@ -244,6 +300,63 @@ class SpawnLaunchTest(Base):
         self.assertIn("нерв: не установлен", r.stdout)
         r = self.launch("--force")
         self.assertIn("# coord: вставить", r.stdout, r.stderr)
+
+
+class GateSys(TeamSys):
+    def __init__(self, procs, env=None, free=50):
+        super().__init__(procs, env=env)
+        self.free = free
+
+    def mem_free(self):
+        return self.free
+
+
+class GateTest(Roles):
+    """Пропуск на новую сессию (OPS-82): память по memory_pressure и число сессий Claude на всей машине."""
+
+    def gate(self, free, limits=None):
+        sx = GateSys(self.procs, env=self.env_l, free=free)
+        with mock.patch.object(TS, "gate_limits", return_value=limits or {"mem_warn": 20, "max_sessions": 3}):
+            return self.run_main("gate", sx=sx)
+
+    def test_open_with_memory_and_room(self):
+        self.sess(201, "r.a1", "coord")
+        rc, out, _ = self.gate(50)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("пропуск открыт", out)
+        self.assertIn("сессий 1/3", out)
+
+    def test_low_memory_closes_with_numbers(self):
+        rc, out, _ = self.gate(15)
+        self.assertEqual(rc, TS.RC_MISSING, out)
+        self.assertIn("свободно памяти 15% < mem_warn 20%", out)
+
+    def test_cap_counts_sessions_of_every_product_but_not_dead_files(self):
+        for pid in (201, 202, 203):
+            self.sess(pid, f"r.b{pid}", "coord", cwd=self.dir / "other-product")
+        L.write_json(L.sessions_dir() / "999.json", {"pid": 999, "procStart": ST})  # процесса нет
+        rc, out, _ = self.gate(50)
+        self.assertEqual(rc, TS.RC_MISSING, out)
+        self.assertIn("сессий Claude 3 ≥ max_sessions 3", out)
+
+    def test_claude_mem_observers_not_counted(self):
+        """Фоновые сессии claude-mem (~/.claude-mem/observer-sessions) не занимают места людей и ролей (17.11)."""
+        self.sess(201, "r.a1", "coord")
+        for pid in (202, 203, 204):
+            self.sess(pid, f"r.c{pid}", "coord", cwd=self.dir / ".claude-mem" / "observer-sessions" / str(pid))
+        rc, out, _ = self.gate(50)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("сессий 1/3", out)
+
+    def test_unknown_memory_does_not_close(self):
+        rc, out, _ = self.gate(None)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("память —", out)
+
+    def test_limits_come_from_instances(self):
+        lim = TS.gate_limits()
+        self.assertEqual(set(lim), {"mem_warn", "max_sessions"})
+        self.assertTrue(all(isinstance(v, int) and v > 0 for v in lim.values()), lim)
 
 
 if __name__ == "__main__":

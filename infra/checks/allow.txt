@@ -6,8 +6,15 @@
 data  boards/apps/api/drizzle/meta/_journal.json  0006_rename_active_workspace_to_organization: when
 data  boards/apps/api/drizzle/meta/_journal.json  0025_early_owl: when
 data  boards/apps/api/drizzle/meta/_journal.json  0026_encrypt_notification_preference_secrets: when
-# Upstream migrations shipped without snapshots (warnings only): drizzle diffs against the previous snapshot.
-data  boards/apps/api/drizzle/meta/_journal.json  no snapshot
+# Migrations shipped without snapshots: later snapshots already include their changes, so db:generate does not
+# emit them again. A new migration without a snapshot is an error (OPS-74): name it here only if it shipped so.
+data  boards/apps/api/drizzle/meta/_journal.json  0006_rename_active_workspace_to_organization: no snapshot
+data  boards/apps/api/drizzle/meta/_journal.json  0014_private_assets: no snapshot
+data  boards/apps/api/drizzle/meta/_journal.json  0016_add_task_relation: no snapshot
+data  boards/apps/api/drizzle/meta/_journal.json  0020_gitea_dedup_guards: no snapshot
+data  boards/apps/api/drizzle/meta/_journal.json  0024_device_code_timestamps: no snapshot
+data  boards/apps/api/drizzle/meta/_journal.json  0025_early_owl: no snapshot
+data  boards/apps/api/drizzle/meta/_journal.json  0043_backfill_time_entry_durations: no snapshot
 
 # Upstream Kaneo public site: the press kit is a published download, not a build artifact.
 hygiene  boards/apps/site/public/press/kaneo-press-kit.zip
