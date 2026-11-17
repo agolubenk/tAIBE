@@ -18,6 +18,28 @@ SLOW_PASS_CYCLES = 2
 SLOW_EVERY_SECONDS = 3600
 
 
+def poll_source(ctx, name, fn, tag, durs):
+    """Один источник прохода: пульс с его именем, вызов, сбой и восстановление — событием release (источник не валит
+    демон), длительность — в durs[name + tag]. Вынесено из nerve.one_pass без изменений (nerve.py ≤ 500 строк)."""
+    errs = ctx.state.setdefault("errors", {})
+    ctx.pulse(name + tag)
+    t = time.monotonic()
+    try:
+        fn(ctx)
+        if name in errs:
+            ctx.emit(f"err:{name}:ok:{errs[name]['since']}", "nerve.error", DIGEST, ["release"],
+                     f"источник {name} снова отвечает (сбой с {errs[name]['since'][11:16]})", "nerve")
+            del errs[name]
+    except Exception as e:  # noqa: BLE001  источник не должен валить демон
+        msg = f"{type(e).__name__}: {e}"[:200]
+        if name not in errs:
+            errs[name] = {"since": now_iso(), "msg": msg}
+            ctx.emit(f"err:{name}:{errs[name]['since']}", "nerve.error", DIGEST, ["release"],
+                     f"источник {name} не отвечает: {msg}", "nerve")
+        errs[name]["msg"] = msg
+    durs[name + tag] = round(time.monotonic() - t, 1)
+
+
 def close_pass(ctx, peers=None):
     """Конец прохода по умолчанию: длительность прохода, nerve.slow, пульс и state.json — одна запись за проход.
     Длительности других продуктов (github@<slug>) — в общий список, только этого прохода: nerve.slow назовёт и

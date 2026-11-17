@@ -41,7 +41,7 @@ from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from
 STATE_DIR = os.environ.get("NERVE_STATE_DIR", os.path.join(HERE, "state"))
 from heartbeat import (AWAKE_CLOCK, MAX_CYCLE_SECONDS, as_obj, awake_seconds, awake_since_sleep,  # noqa: E402,F401
                        cycle_seconds, finite_number, heartbeat_silent, heartbeat_stale_after, slept_cycle)
-from pass_watch import close_pass, code_restart, pass_lines, silence_alarm  # noqa: E402
+from pass_watch import close_pass, code_restart, pass_lines, poll_source, silence_alarm  # noqa: E402
 import state_io  # noqa: E402
 from state_io import load_json, save_json  # noqa: E402,F401
 
@@ -151,28 +151,11 @@ POLLS = [("github", gh_source.poll_github), ("queue", sources.poll_queue), ("sys
 
 def one_pass(ctx, polls=None, finish=True):
     """finish=False — пульс и запись state.json оставить run_products (одна запись ≈1 МБ за проход, а не две)."""
-    errs = ctx.state.setdefault("errors", {})
     durs = {}
     tag = "" if polls is None else f"@{ctx.cfg.get('slug', '?')}"
     for name, fn in (POLLS if polls is None else polls):
-        if not ctx.cfg["sources"].get(name, True):
-            continue
-        ctx.pulse(name + tag)
-        t = time.monotonic()
-        try:
-            fn(ctx)
-            if name in errs:
-                ctx.emit(f"err:{name}:ok:{errs[name]['since']}", "nerve.error", DIGEST, ["release"],
-                         f"источник {name} снова отвечает (сбой с {errs[name]['since'][11:16]})", "nerve")
-                del errs[name]
-        except Exception as e:  # источник не должен валить демон
-            msg = f"{type(e).__name__}: {e}"[:200]
-            if name not in errs:
-                errs[name] = {"since": now_iso(), "msg": msg}
-                ctx.emit(f"err:{name}:{errs[name]['since']}", "nerve.error", DIGEST, ["release"],
-                         f"источник {name} не отвечает: {msg}", "nerve")
-            errs[name]["msg"] = msg
-        durs[name + tag] = round(time.monotonic() - t, 1)
+        if ctx.cfg["sources"].get(name, True):
+            poll_source(ctx, name, fn, tag, durs)  # пульс, сбой источника — событием, длительность (pass_watch)
     ctx.state["durations"] = {"at": ctx.pass_started, "sources": durs}
     if polls is not None:          # проход другого продукта: пульс и режим пишет только проход по умолчанию
         ctx.save()
