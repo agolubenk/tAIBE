@@ -15,6 +15,7 @@ import {
   workspaceUserTable,
 } from "../../database/schema";
 import { publishEvent } from "../../events";
+import { moveProjectForms } from "../../form/move-project-forms";
 import { grantProjectToRestrictedMember } from "../../project-access/grant-project-to-restricted-member";
 import { filterUsersWithProjectAccess } from "../../project-access/filter-users-with-project-access";
 import { closeProjectConnections } from "../../ws";
@@ -93,6 +94,9 @@ async function moveProject(
         message:
           "Remove task relationships to other projects before moving this project.",
       });
+
+    // Templates belong to a workspace: the forms take theirs along (TB-173).
+    await moveProjectForms(tx, id, targetWorkspaceId);
 
     // These rows point at both the project and a notification rule via
     // composite foreign keys carrying workspace_id. Updating the project's

@@ -24,12 +24,26 @@ export const SHIM_JS = String.raw`(function () {
   var DEFAULT = ${JSON.stringify(DEFAULT_PRODUCT)}, BOARD_OF = Object.create(null);
   try { view = localStorage.getItem('oq-product-filter') || ''; } catch (e) { view = ''; }
   if (!/^[a-z][a-z0-9-]{1,30}$/.test(view)) view = '';
-  // Продукт документа. Задача «Хода работ», сводка и карта доски — в продукте своих досок (ws карточек или data.ws,
-  // карта пространств — GET /products, page-products.ts), когда все известные доски одного продукта: документы tAIBE
-  // пишет токен HR. Иначе — столбец product.
+  // Продукт документа. Задача «Хода работ» с id «w-<slug>-…» — в продукте slug: так строки плана делят
+  // eval/tools/queue_focus.py и синхронизация плана с досками (TB-106), а строка tAIBE может вести карточки с доски HR.
+  // Иначе задача, сводка и карта доски — в продукте своих досок (ws карточек или data.ws, карта пространств —
+  // GET /products, page-products.ts), когда все известные доски одного продукта: документы tAIBE пишет токен HR.
+  // Иначе — столбец product. Продукты известны после GET /products (BOARD_OF).
+  function prefixProduct(id) {
+    var best = '';
+    Object.keys(BOARD_OF).forEach(function (w) {
+      var slug = BOARD_OF[w];
+      if (slug !== DEFAULT && typeof id === 'string' && id.indexOf('w-' + slug + '-') === 0 && slug.length > best.length) best = slug;
+    });
+    return best;
+  }
   function productOfDoc(col, d) {
     var home = d.product || DEFAULT, x = d.data, ws = [], p = '';
     if (col !== 'work' || !x) return home;
+    if (!x.kind) {
+      var byId = prefixProduct(d.id);
+      if (byId) return byId;
+    }
     if (typeof x.ws === 'string') ws = [x.ws];
     else if (Array.isArray(x.cards)) ws = x.cards.map(function (c) { return c && c.ws; });
     for (var i = 0; i < ws.length; i++) {
@@ -61,26 +75,41 @@ export const SHIM_JS = String.raw`(function () {
     if (!res.ok) return res.text().then(function (t) { var m = ''; try { m = JSON.parse(t).error || ''; } catch (e) {} var err = new Error(m || ('HTTP ' + res.status)); err.status = res.status; throw err; });
     return res.status === 204 ? null : res.json();
   }
+  // Связь с консолью по коллекции — для бота очереди (window.__oqConn, читает frame-scripts.mjs snapshotPage): время
+  // последнего удачного опроса, последняя ошибка и её HTTP-статус (0 — сеть). Бот пишет причину в сигнал «Очередь не
+  // подключилась к консоли» (просьба владельца 14.11). Только числа и текст ошибки — без токенов и данных пунктов.
+  var conn = window.__oqConn = window.__oqConn || {};
+  function noteConn(col, e) {
+    var c = conn[col] || (conn[col] = { okAt: 0, errAt: 0, err: '', status: 0, fails: 0 });
+    if (!e) { c.okAt = Date.now(); c.fails = 0; return; }
+    c.errAt = Date.now(); c.err = String((e && e.message) || e).slice(0, 200); c.status = (e && e.status) || 0; c.fails++;
+  }
   function poll(col) {
     var s = subs[col];
     clearTimeout(s.timer);
     fetch(BASE + col, { credentials: 'same-origin', headers: s.etag ? { 'If-None-Match': s.etag } : {} })
       .then(function (res) {
         if (res.status === 304) return null;
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) { var err = new Error('HTTP ' + res.status); err.status = res.status; throw err; }
         s.etag = res.headers.get('ETag');
         return res.json();
       })
       .then(function (j) {
+        // Связь вернулась после сбоя (выкатка консоли, сеть): снимок не изменился (304), но страница уже ушла в «только в
+        // этом браузере» — отдаём последний снимок заново, и она возвращается к общей базе без перезагрузки.
+        var recovered = (s.fail || 0) >= 3;
         s.fail = 0;
-        if (!j) return;
+        noteConn(col, null);
+        if (!j) { if (recovered) deliver(col); return; }
         // version — чтобы страница отличала снимок, снятый до своего сохранения (ревью #324, minor).
         // product — продукт документа (v2-lite): метка и фильтр страницы (page-products.ts), рядом с data.
-        s.last = j.docs.map(function (d) { return { id: d.id, data: d.data, version: d.version, product: d.product }; });
+        // createdAt — время создания (мс): порядок пунктов страницы при равной дате added; updatedAt — запасной ключ.
+        s.last = j.docs.map(function (d) { return { id: d.id, data: d.data, version: d.version, product: d.product, updatedAt: d.updatedAt, createdAt: d.createdAt }; });
         deliver(col);
       })
       .catch(function (e) {
         s.fail = (s.fail || 0) + 1;
+        noteConn(col, e);
         if (s.fail === 3) s.cbs.forEach(function (cb) { if (cb.err) cb.err(e); });
       })
       .then(function () { s.timer = setTimeout(function () { poll(col); }, document.hidden ? 30000 : 4000); });
@@ -211,8 +240,9 @@ export const ENHANCE_JS = String.raw`(function () {
       .catch(function (e) { say(el, e.message, true); })
       .then(function () { delete btn.dataset.busy; syncButton(btn, id); });
   }
+  // Мёржи — в своём разделе или «одной очередью» в общем списке #sec-queue (кнопка раскладки в шапке страницы).
   function decorate() {
-    document.querySelectorAll('#sec-merge .item[data-id]').forEach(function (el) {
+    document.querySelectorAll('#sec-merge .item[data-id], #sec-queue .item[data-kind="merge"][data-id]').forEach(function (el) {
       var btn = el.querySelector('.oq-merge');
       if (!btn) {
         var row = el.querySelector('.answer');
@@ -225,8 +255,9 @@ export const ENHANCE_JS = String.raw`(function () {
       }
       syncButton(btn, el.dataset.id);
     });
-    var head = document.querySelector('#sec-merge .sec-head');
-    if (head && !head.querySelector('.oq-redeploy')) {
+    ['#sec-merge .sec-head', '#sec-queue .sec-head'].forEach(function (sel) {
+      var head = document.querySelector(sel);
+      if (!head || head.querySelector('.oq-redeploy')) return;
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'toggle oq-redeploy';
@@ -236,7 +267,7 @@ export const ENHANCE_JS = String.raw`(function () {
         api('POST', '/redeploy').then(function (r) { window.alert(r.message); }, function (e) { window.alert(e.message); });
       });
       head.appendChild(b);
-    }
+    });
   }
   var queued = false;
   new MutationObserver(function () {

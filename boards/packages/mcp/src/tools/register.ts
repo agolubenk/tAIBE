@@ -3,6 +3,7 @@ import { z } from "zod";
 import { buildFullTaskUpdateBody } from "../kaneo/task-helpers.js";
 import { excerptSearchResults } from "../view/excerpt.js";
 import { registerForestTools } from "./forest/register-forest.js";
+import { registerFormTools } from "./form-tools.js";
 import { getCurrentUser } from "./get-current-user.js";
 import { registerNotebookTools } from "./notebook-tools.js";
 import { registerSsrTools } from "./ssr-tools.js";
@@ -19,6 +20,8 @@ export type { FormatFallback, RegisterHooks, RegisterTool, ToolCall };
 // The API registers its own tools (R-034 tools_find) with the same
 // validation and call journal as these.
 export { createRegisterTool };
+// The API test checks them against @kaneo/forms (TB-173).
+export { FORM_FIELD_TYPES, FORM_LIMITS } from "./form-tools.js";
 
 export type ToolClient = {
   readonly usingApiKey?: boolean;
@@ -873,6 +876,7 @@ export function registerTools(
   );
 
   registerForestTools(registerTool, client);
+  registerFormTools(registerTool, client);
   registerNotebookTools(registerTool, client);
   registerSsrTools(registerTool, client);
 }
