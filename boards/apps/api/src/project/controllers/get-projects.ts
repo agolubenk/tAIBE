@@ -1,7 +1,13 @@
 import { and, count, eq, isNull, min, sql } from "drizzle-orm";
 import db from "../../database";
 import { projectTable, taskTable } from "../../database/schema";
+import type { z } from "../../openapi";
 import { projectAccessCondition } from "../../project-access/project-access-condition";
+import type { projectListItemSchema } from "../response";
+
+// Legacy fields, always empty. Typed by the response schema: a bare `[]` is
+// `never[]`, which hono >= 4.13.16 types as JSONValue in the response (TB-240).
+type ProjectListItem = z.infer<typeof projectListItemSchema>;
 
 type ProjectStatistics = {
   completionPercentage: number;
@@ -94,9 +100,9 @@ async function getProjects(
   return projects.map((project) => ({
     ...project,
     statistics: statisticsByProject.get(project.id) ?? EMPTY_STATISTICS,
-    archivedTasks: [],
-    plannedTasks: [],
-    columns: [],
+    archivedTasks: [] as ProjectListItem["archivedTasks"],
+    plannedTasks: [] as ProjectListItem["plannedTasks"],
+    columns: [] as ProjectListItem["columns"],
   }));
 }
 
