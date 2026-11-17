@@ -19,6 +19,7 @@ function defaultFields(taskId: string): Record<string, unknown> {
     taskId: _,
     updatedBy,
     updatedAt,
+    revision,
     mirrored,
     ...fields
   } = toCardMeta(taskId);
