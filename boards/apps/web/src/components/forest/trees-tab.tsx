@@ -66,6 +66,7 @@ export function TreesTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={trees.isLoading}
         isError={trees.isError}
+        onRetry={() => void trees.refetch()}
         isEmpty={!trees.data?.trees.length}
         empty={t("workspace:forest.trees.empty")}
       >

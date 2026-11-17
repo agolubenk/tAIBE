@@ -23,6 +23,7 @@ COPY apps/web/package.json ./apps/web/
 COPY packages/typescript-config/package.json ./packages/typescript-config/
 COPY packages/libs/package.json ./packages/libs/
 COPY packages/permissions/package.json ./packages/permissions/
+COPY packages/forms/package.json ./packages/forms/
 
 # Install dependencies
 RUN pnpm install --frozen-lockfile
@@ -31,11 +32,14 @@ RUN pnpm install --frozen-lockfile
 COPY packages/typescript-config ./packages/typescript-config
 COPY packages/libs ./packages/libs
 COPY packages/permissions ./packages/permissions
+COPY packages/forms ./packages/forms
 COPY i18n ./i18n
 COPY apps/web ./apps/web
 
-# Build the permissions package first
+# Build the workspace packages first
 WORKDIR /app/packages/permissions
+RUN pnpm run build
+WORKDIR /app/packages/forms
 RUN pnpm run build
 
 # Build the application

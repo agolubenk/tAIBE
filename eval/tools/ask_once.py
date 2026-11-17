@@ -7,7 +7,7 @@
 Exit code of `check`:
 - 0 — nothing close: ask the owner (in the owner queue), and `record` the answer when it comes;
 - 3 — a candidate answer: READ the hit; if it really answers your question, cite it and do not ask, otherwise ask;
-- 4 — the same question is already open (owner queue, spec `Q-1xx`, roadmap «В:»): do not ask again, wait;
+- 4 — the same question is already open (owner queue, spec `Q-1xx`): do not ask again, wait;
 - 5 — no source could be read at all (wrong root, files missing): that is not «nobody decided», fix and retry.
 
 A hit counts only when its score passes the threshold (0.3) AND it shares a distinctive word with the question
@@ -16,8 +16,8 @@ with 1 false candidate — hence exit 3 means "read it", not "decided": "which l
 the answer about the UI language, but a near miss can still surface and the reader rejects it. Only owner answers decide: the ledger `eval/data/decisions.jsonl` (one JSON per line; the last line of
 an id wins, so a correction is a new line with the same id), the closed-items log `docs/plans/done/*.md` and spec
 rows citing an owner answer `Q-0xx` or decision `D-0xx` (`boards/docs/t-boards-spec.md`). Open questions live where
-the rules put them — the owner queue (`--oq`: an `oq_list` export), the spec (`Q-1xx`) and the roadmap
-(`docs/plans/roadmap/open-items.md`, rows «В:»); other roadmap rows are context, never a decision. Matching is
+the rules put them — the owner queue (`--oq`: an `oq_list` export) and the spec (`Q-1xx`); the roadmap summary
+`open-items.md` is deleted (open work is on the boards). Matching is
 TF-IDF over crudely stemmed words (Russian and English); ledger entries carry `kw` — keywords in the other language.
 Nothing leaves the machine. Stdlib only.
 """
@@ -34,7 +34,6 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 LEDGER = 'eval/data/decisions.jsonl'
 DONE_DIR = 'docs/plans/done'
 SPEC = 'boards/docs/t-boards-spec.md'
-ROADMAP = 'docs/plans/roadmap/open-items.md'
 LEDGER_BOOST = 1.25  # a curated question→answer pair beats a line that only shares words
 DECIDES = {'answered', 'done', 'spec'}
 WORD = re.compile(r'[0-9a-zа-яё]+', re.I)
@@ -99,7 +98,7 @@ def from_oq(path):
 
 
 def documents(root, oq=None):
-    """[(status, source, text)]; status: answered | done | spec (decide) · open · related (context only)."""
+    """[(status, source, text)]; status: answered | done | spec (decide) · open."""
     docs = []
     for ident, (n, e) in sorted(ledger(root).items(), key=lambda kv: kv[1][0]):
         if e.get('a'):
@@ -119,10 +118,6 @@ def documents(root, oq=None):
             docs.append(('spec', '%s:%d' % (SPEC, n), line))
         elif re.search(r'\bQ-1\d\d\b', line):
             docs.append(('open', '%s:%d' % (SPEC, n), line))
-    for n, line in _lines(root, ROADMAP):
-        if line.startswith('|') and len(terms(line)) >= 4:
-            waits = '| В' in line and '🔲' in line
-            docs.append(('open' if waits else 'related', '%s:%d' % (ROADMAP, n), line))
     if oq:
         docs += from_oq(oq)
     return docs
@@ -161,7 +156,7 @@ def rank(question, docs, top=3):
 
 
 def verdict(hits, threshold, min_shared=1):
-    strong = [h for h in hits if h[0] >= threshold and len(h[4]) >= min_shared and h[1] != 'related']
+    strong = [h for h in hits if h[0] >= threshold and len(h[4]) >= min_shared]
     if not strong:
         return 0
     return 4 if strong[0][1] == 'open' else 3 if strong[0][1] in DECIDES else 0
@@ -216,8 +211,8 @@ def main(argv=None):
     docs = documents(args.root, args.oq)
     if not docs:
         # E9: no source could be read — that is not «nobody decided this», so the owner is not asked again blindly.
-        print('ask_once: ни один источник не прочитан (%s, %s, %s, %s) — это не «ответа нет»; проверь корень '
-              '(--root) и файлы, потом повтори' % (LEDGER, DONE_DIR, SPEC, ROADMAP))
+        print('ask_once: ни один источник не прочитан (%s, %s, %s) — это не «ответа нет»; проверь корень '
+              '(--root) и файлы, потом повтори' % (LEDGER, DONE_DIR, SPEC))
         return 5
     hits = rank(args.question, docs, args.top)
     code = verdict(hits, args.threshold)

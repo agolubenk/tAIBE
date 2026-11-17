@@ -23,6 +23,7 @@ export function MirrorTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={mirror.isLoading}
         isError={mirror.isError}
+        onRetry={() => void mirror.refetch()}
         isEmpty={false}
         empty=""
       >
