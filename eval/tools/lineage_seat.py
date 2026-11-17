@@ -1,23 +1,27 @@
 """Контроль новому release после «ВКЛ» (SE-155): у продукта в списках Контроля нет живой записи, а мёртвая — ровно
 одна — сторож команды заменяет её на sessionId только что открытого release.
 
-Вписывает только release, которого spawn_session.sh открыл из team_plan.py up (решение координатора 17.11, SE-155
-Q1 = A): сторож команды и вход под launchd (space.hrhelper.team-keeper, space.hrhelper.dev-up) или «ВКЛ» в окне
-Terminal. Агентская сессия, которая зовёт seat из своего дерева процессов или подделывает argv, Контроль не создаёт.
-Граница доверия — пользователь macOS (PR #457, линза продукта): plist сторожа, «ВКЛ».command, python сторожа (группа
-admin), /opt/homebrew, файл claude, PATH и BASH_ENV вызова пишет тот же пользователь, под которым работают агенты.
-Процесс, который нарочно готовит это окружение, от сторожа не отличить; такой обход — нарушение правил, не случай.
+Вписывает только release, которого spawn_session.sh открыл из задачи launchd (решение координатора 17.11, SE-155
+Q1 = A): сторож команды (space.hrhelper.team-keeper) или вход (space.hrhelper.dev-up; его же запускает ярлык «ВКЛ»,
+agents_up.py --attach). Окно Terminal — не пропуск: его открывает и агент (osascript). Агентская сессия, которая
+зовёт seat из своего дерева процессов, подделывает argv или подменяет реестр сессий, Контроль не создаёт.
+Граница доверия — пользователь macOS (PR #457): plist задач, python сторожа (группа admin), /opt/homebrew, файл claude,
+PATH, BASH_ENV и `launchctl setenv` пишет тот же пользователь, под которым работают агенты. Процесс, который нарочно
+готовит это окружение, от сторожа не отличить; такой обход — нарушение правил, не случай.
 Любое сомнение — ни одной записи (fail-closed), владельцу остаётся s-пункт, как до SE-155:
+- Окружение: реестр сессий, транскрипты и линии — из дома пользователя (lineage_guard.env_problem в
+  hand_control, SE-167; Claude-линза #457, B2).
 - Код: seat запущен из eval/tools основного checkout (не worktree и не копия).
 - Вызов (Claude-линза #457, B1): в цепочке предков seat нет claude. argv звеньев — по позиции, исполняемый файл — по
   ядру (proc_pidpath; argv задаёт любой execv): родитель — `bash <tools>/spawn_session.sh --launch --product S --role
   release` (bash из системной папки, подоболочки — то же звено), над ним — `<python> -I <tools>/team_plan.py up …` или
-  `<python> -I <tools>/agents_up.py …`. Верх цепочки (родитель — launchd) — сам этот вызов как процесс задачи launchd с
-  такой меткой (pid из launchctl print) или Terminal/iTerm по пути файла над окном, на чьём tty вся цепочка ниже.
-  Отцепленный потомок агентской сессии (nohup, `&`) тоже висит под launchd, но это не pid задачи.
+  `<python> -I <tools>/agents_up.py …`, и это верх цепочки (родитель — launchd) и pid задачи launchd с такой меткой
+  (launchctl print). Отцепленный потомок агентской сессии (nohup, `&`) тоже висит под launchd, но это не pid задачи.
+  После проверок звенья цепочки должны быть живы с тем же стартом (pid не сменил процесс).
 - Наследник: единственный claude на tty окна, которое открыл spawn_session.sh (аргумент, не запись линии), той же
-  линии, с `--settings` генома release этого продукта, запущен пусковым скриптом `/bin/bash …/claude-spawn.*/release.sh`,
-  прошёл successor_sid (lineage_guard) и работает в корне продукта (не в worktree).
+  линии, argv ровно `claude --settings <геном release продукта> --name <продукт>-release-<хвост линии> <текст>` (без
+  других флагов: `--resume` сохранил бы чужой sessionId), запущен пусковым скриптом `/bin/bash
+  …/claude-spawn.*/release.sh`, прошёл successor_sid (lineage_guard) и работает в корне продукта (не в worktree).
 - Записи: продукт живой — по cwd в реестре сессий того же старта (реестр хук закрывает от агентов); мёртвой — по cwd
   в её транскрипте `~/.claude/projects/*/<sid>.jsonl`. Транскрипт агенты могут править, но он решает только, какую
   мёртвую запись заменить; Контроль получает лишь проверенный наследник. Нет транскрипта — запись чужая.
@@ -39,17 +43,12 @@ from lineage_guard import SID_RE, entry_is, hand_control, successor_sid
 from lineage_guard_fs import GUARD, guard_dirs, main_root, read_control, take_pins
 
 LABELS = ("space.hrhelper.team-keeper", "space.hrhelper.dev-up")  # = dev_power.LABEL_KEEPER, LABEL_UP
-# Путь файла приложения окна; tmux нет: окно в сервере tmux открывает и агент (tmux new-window)
-TERMINAL_EXES = ("/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
-                 "/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
-                 "/Applications/iTerm.app/Contents/MacOS/iTerm2")
 # Папки, где лежат bash и python сторожа и «ВКЛ». Отсев путей /tmp, $HOME и worktree, не граница доверия: в
 # /opt/homebrew и в python.org-фреймворке (root:admin, rwxrwxr-x) пишет и пользователь из группы admin.
 SYSTEM_DIRS = ("/bin/", "/usr/bin/", "/opt/homebrew/", "/usr/local/", "/Library/Frameworks/Python.framework/",
                "/Library/Developer/CommandLineTools/", "/Applications/Xcode.app/")
 LAUNCHER_RE = re.compile(r"/bin/bash \S+/claude-spawn\.[A-Za-z0-9]+/release\.sh")  # пусковой скрипт release
 ENTRY_RE = re.compile(r"[0-9a-f][0-9a-f-]{7,35}")
-NO_TTY = ("", "??")
 
 
 def job_pid(label):
@@ -70,7 +69,7 @@ def exe_path(pid):
         n = ctypes.CDLL("/usr/lib/libproc.dylib").proc_pidpath(int(pid), buf, ctypes.c_uint32(len(buf)))
     except (OSError, AttributeError, TypeError, ValueError):
         return None
-    return os.path.realpath(buf.value.decode("utf-8", "replace")) if n > 0 else None
+    return buf.value.decode("utf-8", "replace") if n > 0 else None  # путь ядра как есть, без realpath (N6)
 
 
 def system_exe(sx, p, name):
@@ -109,7 +108,7 @@ def is_caller(sx, p, tools):
 
 
 def caller_problem(sx, procs, pid):
-    """None — seat вызвал сторож команды (задача launchd) или «ВКЛ» (окно терминала); иначе причина отказа."""
+    """None — seat вызвала задача launchd сторожа или входа («ВКЛ» запускает вход); иначе причина отказа."""
     up = ancestor_claude(procs, pid)
     if up is not None:
         return f"seat запущен из сессии claude ({up.pid}) — агентская сессия Контроль не выдаёт"
@@ -132,13 +131,11 @@ def caller_problem(sx, procs, pid):
     if i == len(chain) or not is_caller(sx, chain[i], tools):
         return "над spawn_session.sh не team_plan.py up и не agents_up.py — release вписывает только сторож или «ВКЛ»"
     top, jobs = chain[-1], getattr(sx, "job_pid", job_pid)
-    if top is chain[i] and top.pid in {jobs(label) for label in LABELS}:
-        return None
-    below = chain[:-1]
-    if (top.tty in NO_TTY and getattr(sx, "exe_path", exe_path)(top.pid) in TERMINAL_EXES and below
-            and below[0].tty not in NO_TTY and all(p.tty == below[0].tty for p in below)):
-        return None
-    return f"верх цепочки seat ({top.pid}) — не задача launchd сторожа и не окно терминала (отцепленный процесс?)"
+    if top is not chain[i] or top.pid not in {jobs(label) for label in LABELS}:
+        return f"верх цепочки seat ({top.pid}) — не задача launchd сторожа или входа (окно, отцепленный процесс?)"
+    if not all(sx.alive(p) for p in chain):  # снимок ps раньше чтения путей: pid мог перейти к другому процессу (N5)
+        return "звено цепочки seat сменилось после снимка процессов"
+    return None
 
 
 def under(path, root):
@@ -238,7 +235,7 @@ def dead_entry(dirs, product, roots, procs):
     return dead[0], None
 
 
-def successor(sx, procs, tty, line, root, genome):
+def successor(sx, procs, tty, line, root, genome, product):
     """(sessionId release этой линии на tty окна в корне продукта, None) или (None, причина)."""
     cands = [p for p in procs.values() if argv0(p) == "claude" and tty and "/dev/" + str(p.tty) == tty]
     if len(cands) != 1:
@@ -247,6 +244,11 @@ def successor(sx, procs, tty, line, root, genome):
     a = s.command.split()
     if a[1:2] != ["--settings"] or len(a) < 3 or os.path.realpath(a[2]) != genome:
         return None, f"сессия {s.pid} на tty окна — не с геномом release ({genome})"
+    # argv как пишет spawn_session.sh (session_name): имя с хвостом линии и текст запуска, других флагов нет —
+    # `--resume <sid>` оставил бы sessionId, который выбрал запустивший (Claude-линза #457, B2)
+    if (a[3:5] != ["--name", f"{product}-release-{line.rsplit('.', 1)[-1]}"] or len(a) < 6
+            or any(w.startswith("-") for w in a[5:])):
+        return None, f"сессия {s.pid} на tty окна — argv не тот, что пишет spawn_session.sh для release"
     up = procs.get(s.ppid)
     if up is None or not LAUNCHER_RE.fullmatch(up.command) or not system_exe(sx, up, "bash"):
         return None, f"сессия {s.pid} запущена не пусковым скриптом release (claude-spawn.*/release.sh)"
@@ -287,7 +289,7 @@ def seat(sx, product, line, tty, guard, log, roots):
 
     def succ():  # под guard.lock: перед первой записью и после последней
         now = sx.procs()
-        sid, why = successor(sx, now, tty, line, root, genome)
+        sid, why = successor(sx, now, tty, line, root, genome, product)
         if not sid:
             return None, why
         got = other_live(dirs, product, roots, now, succ_sid=sid)
