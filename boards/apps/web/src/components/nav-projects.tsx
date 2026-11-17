@@ -236,7 +236,7 @@ export function NavProjects() {
           </CollapsibleTrigger>
           {canCreate && (
             <SidebarGroupAction
-              className="top-2 right-2 text-sidebar-foreground/70"
+              className="top-1.5 right-1.5 w-6 text-sidebar-foreground/70"
               title={t("navigation:projectList.addProject")}
               onClick={() => setIsCreateProjectModalOpen(true)}
             >
