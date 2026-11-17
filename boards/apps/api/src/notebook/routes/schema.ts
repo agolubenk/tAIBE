@@ -80,8 +80,22 @@ export const sourcesSchema = z
         kind: sourceKind,
         ref: z.string(),
         title: z.string(),
-        contentSha256: z.string(),
-        chars: z.number().int(),
+        contentSha256: z.string().optional().openapi({
+          description:
+            "sha256 of the stored text. Absent for a caller with a token, except for repo-doc.",
+        }),
+        chars: z.number().int().optional().openapi({
+          description:
+            "Length of the stored text. Absent for a caller with a token, except for repo-doc.",
+        }),
+        addedByKind: z.enum(["agent", "person"]).nullable().openapi({
+          description:
+            "Who added a link or a pull request; null for a synced source or one added before authors were kept.",
+        }),
+        addedBy: z.string().nullable().openapi({
+          description:
+            "The agent's name with its session, or the member's name.",
+        }),
         updatedAt: responseTimestamp,
         chunks: z.number().int(),
         embedded: z.number().int().openapi({
@@ -96,6 +110,16 @@ export const pruneSourcesBody = z.object({
   kind: uploadKind,
   keep: z.array(z.string().min(1).max(512)).max(20_000).openapi({
     description: "Every ref of this kind that still exists; the rest goes.",
+  }),
+});
+
+// TB-132: one source a member added by hand. The synced kinds (cards, docs,
+// uploads) come back on their next sync, so this route does not take them.
+export const removeSourceBody = z.object({
+  kind: z.enum(["link", "github-pr"]),
+  ref: z.string().min(1).max(SOURCE_URL_MAX).openapi({
+    description:
+      "The ref the sources list shows: the URL of a page or owner/repo#n of a pull request.",
   }),
 });
 

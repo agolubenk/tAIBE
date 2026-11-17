@@ -88,13 +88,13 @@ end run
 """
 
 
-def own_record():
-    """(линия, запись) своей линии, если её открыл spawn_session.sh в Terminal; иначе (линия, None)."""
+def own_record(kinds=("terminal",)):
+    """(линия, запись) своей линии, если её открыл spawn_session.sh в окне kinds; иначе (линия, None)."""
     line = os.environ.get("TAIBE_LINEAGE", "")
     if not L.valid_line(line):
         return line, None
     rec = L.read_json(L.lfile(line, ".json"))
-    return line, rec if isinstance(rec, dict) and rec.get("terminal") == "terminal" else None
+    return line, rec if isinstance(rec, dict) and rec.get("terminal") in kinds else None
 
 
 def closable_exit(rec):
@@ -115,9 +115,9 @@ def add_exited_args(p):
 
 
 def cmd_exited(sx, a):
-    line, rec = own_record()
+    line, rec = own_record(("terminal", "tmux"))  # код выхода и у окна tmux: оставленные окна видны в записи (OPS-82)
     if rec is None:
-        return 0  # не окно spawn_session.sh в Terminal — записывать некуда
+        return 0  # не окно spawn_session.sh — записывать некуда
     rec = {**rec, "exit": a.rc, "exited_at": L.stamp(), **({"keep": True} if a.keep else {})}
     L.write_json(L.lfile(line, ".json"), rec)
     return 0
