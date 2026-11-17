@@ -254,13 +254,8 @@ describe("API integration: card context pack (R-031)", () => {
       contextPack: `pack ${SECRET}\n\nNext: run the tests.`,
     });
 
-    // A list item with a marker has no block to tie the marker to: refused.
-    const list = await put({ files: [...files, "notes/new.md"] });
-    expect(list.status).toBe(409);
-    expect(list.body.code).toBe("REDACTED_MARKERS_MISMATCH");
-
-    // A changed block with a marker is refused (TB-143 rule).
-    const moved = await put({ executor: `see ${executor}` });
+    // A changed block with a marker in the pack is refused (TB-143 rule).
+    const moved = await put({ contextPack: `see ${contextPack}` });
     expect(moved.status).toBe(409);
     expect(moved.body.code).toBe("REDACTED_MARKERS_MISMATCH");
 

@@ -13,26 +13,15 @@ import {
   loadContextHistory,
 } from "./load-context-threads";
 import { loadContextApprovals, loadContextLease } from "./load-context-work";
-import {
-  redactContextApproval,
-  redactContextComment,
-  redactContextMeta,
-  redactContextRelation,
-  redactContextTask,
-} from "./redact-context";
 
 // One read to pick up a card (R-031): the task, its fields, who holds it,
 // open «да» requests, links, the latest comments and edits. The route has
 // already checked the card belongs to the workspace and the caller sees it;
 // linked cards from projects the caller cannot see are left out.
-// `tokenCaller` (TB-143 contract, `utils/token-caller-text.ts`): only a caller
-// with a token gets free text through redact. The web app (cookie session)
-// gets the real text: it seeds the meta editor from this pack and saves it.
 export async function buildCardContext(
   taskId: string,
   workspaceId: string,
   userId: string,
-  { tokenCaller }: { tokenCaller: boolean },
 ) {
   const now = new Date();
   const [task, meta, lease, approvals, relations, comments, history] =
@@ -63,7 +52,7 @@ export async function buildCardContext(
   );
   const { taskId: _, ...fields } = toCardMeta(taskId, meta);
 
-  const pack = {
+  return {
     ...task,
     meta: fields,
     lease,
@@ -72,17 +61,5 @@ export async function buildCardContext(
     comments: sections.comments.items,
     history: sections.history.items,
     truncated,
-  };
-  if (!tokenCaller) return pack;
-
-  // Free text leaves through redact, after the caps (TB-141); edits carry
-  // field names only, no values.
-  return {
-    ...pack,
-    ...redactContextTask(task),
-    meta: redactContextMeta(fields),
-    approvals: pack.approvals.map(redactContextApproval),
-    relations: pack.relations.map(redactContextRelation),
-    comments: pack.comments.map(redactContextComment),
   };
 }

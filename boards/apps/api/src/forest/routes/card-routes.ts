@@ -6,12 +6,13 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import { readAgentHeaders } from "../agent-guard/agent-headers";
 import { loadCardMeta, toCardMeta } from "../card/card-meta";
 import { cardMetaWrite } from "../card/card-patch";
-import { maskMetaText, restoreMetaText } from "../card/restore-meta-text";
+import { restoreMetaText } from "../card/restore-meta-text";
 import { setCardMeta } from "../card/set-card-meta";
 import { assertTaskInWorkspace } from "../task-scope";
 import { cardMetaSchema, cardParam } from "./card-schema";
@@ -23,7 +24,7 @@ const getCardMetaRoute = createRoute({
   tags: ["Forest"],
   summary: "Get a card's Notion and agent fields",
   description:
-    "A card nobody wrote fields for answers the defaults: kind task, not half-baked, empty lists. A caller with a token (API key, agent key, MCP) reads secrets in report, executor, branch, pull requests, files and context pack as [REDACTED:<kind>], as in the context pack. The web app's session reads the text as stored.",
+    "A card nobody wrote fields for answers the defaults: kind task, not half-baked, empty lists. A caller with a token (API key, agent key, MCP) reads secrets in the text as [REDACTED:<kind>]; the web app's session reads the text as stored.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["read"] }),
@@ -43,7 +44,7 @@ const setCardMetaRoute = createRoute({
   tags: ["Forest"],
   summary: "Change a card's Notion and agent fields",
   description:
-    "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only. A caller with a token sends a text field back with the [REDACTED:<kind>] markers it read: they get the stored values back. Its answer is masked as the read is.",
+    "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only. A caller with a token sends report or context pack back with the [REDACTED:<kind>] markers it read: they get the stored values back. A marker in another field is stored as it came. The answer is masked as the read is.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["update"] }),
@@ -62,7 +63,7 @@ const setCardMetaRoute = createRoute({
     ),
     404: errorResponse("Task not found"),
     409: errorResponse(
-      "No live lease of this session, the Backlog ID is taken, revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision), or a [REDACTED:…] marker that a caller with a token sent does not match the stored text (REDACTED_MARKERS_MISMATCH)",
+      "No live lease of this session, the Backlog ID is taken, revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision), or REDACTED_MARKERS_MISMATCH: a block with a [REDACTED:…] marker in report or context pack does not match the stored text",
     ),
   },
 });
@@ -72,7 +73,7 @@ export const cardRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     const { workspaceId, taskId } = c.req.valid("param");
     await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
     return c.json(
-      maskMetaText(c, toCardMeta(taskId, await loadCardMeta(taskId))),
+      maskForTokenCaller(c, toCardMeta(taskId, await loadCardMeta(taskId))),
       200,
     );
   })
@@ -88,5 +89,5 @@ export const cardRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       patch: await restoreMetaText(c, taskId, patch),
       expectedRevision: expectedMetaRevision,
     });
-    return c.json(maskMetaText(c, meta), 200);
+    return c.json(maskForTokenCaller(c, meta), 200);
   });

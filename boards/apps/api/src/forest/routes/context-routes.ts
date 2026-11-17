@@ -6,7 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
-import { isTokenCaller } from "../../utils/token-caller-text";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { buildCardContext } from "../context/card-context";
 import { assertTaskInWorkspace } from "../task-scope";
@@ -20,7 +20,7 @@ const getContextRoute = createRoute({
   tags: ["Forest"],
   summary: "Get the context pack of a card",
   description:
-    "The task with its labels and card fields, the live lease, pending approval requests, linked cards, the latest comments and which fields the latest edits changed. Each list is capped; `truncated` names the ones that had more. A caller with a token (API key, agent key, MCP) reads secrets in free text as [REDACTED:<kind>]; names, ids and dates pass as they are. The web app's session reads the text as stored.",
+    "The task with its labels and card fields, the live lease, pending approval requests, linked cards, the latest comments and which fields the latest edits changed. Each list is capped; `truncated` names the ones that had more. A caller with a token (API key, agent key, MCP) reads secrets in the text as [REDACTED:<kind>]; the web app's session reads the text as stored.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["read"] }),
@@ -40,9 +40,7 @@ export const contextRoutes = apiRouter<
   const userId = c.get("userId");
   await assertTaskInWorkspace(taskId, workspaceId, userId);
   return c.json(
-    await buildCardContext(taskId, workspaceId, userId, {
-      tokenCaller: isTokenCaller(c),
-    }),
+    maskForTokenCaller(c, await buildCardContext(taskId, workspaceId, userId)),
     200,
   );
 });
