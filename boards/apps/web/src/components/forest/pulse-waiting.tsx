@@ -37,6 +37,10 @@ export function PulseWaiting({
       <ForestListState
         isLoading={approvals.isLoading || sessions.isLoading}
         isError={approvals.isError || sessions.isError}
+        onRetry={() => {
+          void approvals.refetch();
+          void sessions.refetch();
+        }}
         isEmpty={!pending.length && !waiting.length}
         empty={t("workspace:forest.pulse.waitingEmpty")}
       >

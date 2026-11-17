@@ -1,7 +1,8 @@
 /** Метаданные вложений (`oq_files`). Сам файл — storage.ts; здесь — строки и правила лимитов. */
-import { and, desc, eq, exists, inArray, isNull, sql, type SQL } from 'drizzle-orm'
+import { and, desc, eq, exists, isNull, sql, type SQL } from 'drizzle-orm'
 import { getDb } from '../../db/client'
 import { oqDocs, oqFiles } from '../../db/schema'
+import { oqWrite, type NewOqFile } from '../oq-write'
 import { canSee, productWhere, type Visibility } from '../products'
 
 /**
@@ -13,7 +14,7 @@ export const filesEpoch = (): number => epoch
 const bump = (): void => { epoch++ }
 
 export type FileRow = typeof oqFiles.$inferSelect
-export type NewFileRow = Omit<typeof oqFiles.$inferInsert, 'createdAt'>
+export type NewFileRow = NewOqFile
 
 export type InsertResult =
   | { status: 'created' | 'duplicate'; row: FileRow }
@@ -38,38 +39,28 @@ export async function isInboxItem(itemId: string, products: Visibility): Promise
 }
 
 /**
- * Вставка одним оператором: лимит на пункт и общий потолок проверяются в том же `INSERT … SELECT`, что и вставка, —
- * параллельные загрузки не проскочат между проверкой и записью (SQLite выполняет оператор целиком под записью).
- * Идущие загрузки сюда не входят: иначе две параллельные у потолка отказали бы обе. Тот же файл в том же пункте —
- * прежняя строка (повтор доставки ботом, двойное нажатие).
+ * Вставка одним оператором (oq-write.ts, insertFileIfRoom): лимит на пункт и общий потолок проверяются в том же
+ * `INSERT … SELECT`, что и вставка. Идущие загрузки сюда не входят: иначе две параллельные у потолка отказали бы обе.
+ * Тот же файл в том же пункте — прежняя строка (повтор доставки ботом, двойное нажатие).
  */
 export async function insertFile(row: NewFileRow, opts: { maxPerItem: number; capBytes: number }): Promise<InsertResult> {
-  const db = getDb()
-  // Отказ вставки объясняется по одному снимку (число в пункте и общий объём — одним запросом). Если ни лимит, ни
-  // потолок не мешают — между вставкой и проверкой место освободили параллельно: вставка повторяется один раз.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await db.run(sql`
-      INSERT INTO oq_files (id, item_id, name, kind, mime, size, sha256, created_by)
-      SELECT ${row.id}, ${row.itemId}, ${row.name}, ${row.kind}, ${row.mime}, ${row.size}, ${row.sha256}, ${row.createdBy}
-      WHERE (SELECT count(*) FROM oq_files WHERE item_id = ${row.itemId} AND deleted_at IS NULL) < ${opts.maxPerItem}
-        AND (SELECT coalesce(sum(size), 0) FROM oq_files WHERE deleted_at IS NULL) + ${row.size} <= ${opts.capBytes}
-      ON CONFLICT (item_id, sha256) WHERE deleted_at IS NULL DO NOTHING`)
-    if (res.rowsAffected > 0) {
-      bump()
-      const created = await db.query.oqFiles.findFirst({ where: eq(oqFiles.id, row.id) })
+  // Отказ объясняется по снимку той же транзакции: между вставкой и проверкой место никто не освободит (записи идут по
+  // одной), поэтому прежний повтор вставки здесь не нужен.
+  const res = await oqWrite(async (w): Promise<InsertResult> => {
+    if (await w.insertFileIfRoom(row, opts)) {
+      const created = await w.tx.query.oqFiles.findFirst({ where: eq(oqFiles.id, row.id) })
       return { status: 'created', row: created! }
     }
-    const dup = await db.query.oqFiles.findFirst({
+    const dup = await w.tx.query.oqFiles.findFirst({
       where: and(eq(oqFiles.itemId, row.itemId), eq(oqFiles.sha256, row.sha256), isNull(oqFiles.deletedAt)),
     })
     if (dup) return { status: 'duplicate', row: dup }
-    const snap = await db.get<{ n: number; total: number }>(sql`
-      SELECT (SELECT count(*) FROM oq_files WHERE item_id = ${row.itemId} AND deleted_at IS NULL) AS n,
-             (SELECT coalesce(sum(size), 0) FROM oq_files WHERE deleted_at IS NULL) AS total`)
-    if (Number(snap?.n ?? 0) >= opts.maxPerItem) return { status: 'limit' }
-    if (Number(snap?.total ?? 0) + row.size > opts.capBytes) return { status: 'cap' }
-  }
-  return { status: 'cap' }
+    // Не дубль и не вставлено — значит, мешает лимит пункта или общий потолок (лимит — первым, как и раньше).
+    const snap = await w.tx.get<{ n: number }>(sql`SELECT count(*) AS n FROM oq_files WHERE item_id = ${row.itemId} AND deleted_at IS NULL`)
+    return Number(snap?.n ?? 0) >= opts.maxPerItem ? { status: 'limit' } : { status: 'cap' }
+  })
+  if (res.status === 'created') bump()
+  return res
 }
 
 /**
@@ -153,7 +144,7 @@ const chunks = (ids: string[]): string[][] => Array.from({ length: Math.ceil(ids
 /** Срок хранения истёк: файл удаляется, строка остаётся надгробием. */
 export async function markExpired(ids: string[], at: Date): Promise<void> {
   if (!ids.length) return
-  for (const part of chunks(ids)) await getDb().update(oqFiles).set({ deletedAt: at, deletedReason: 'retention' }).where(inArray(oqFiles.id, part))
+  for (const part of chunks(ids)) await oqWrite((w) => w.expireFiles(part, at))
   bump()
 }
 
@@ -162,16 +153,16 @@ export async function getFile(id: string): Promise<FileRow | null> {
 }
 
 export async function deleteFileRow(id: string): Promise<boolean> {
-  const res = await getDb().delete(oqFiles).where(eq(oqFiles.id, id)).returning({ id: oqFiles.id })
+  const res = await oqWrite((w) => w.deleteFiles({ ids: [id] }))
   if (res.length) bump()
   return res.length > 0
 }
 
 /** Строки вложений пункта удаляются; возвращает id — их файлы удаляет вызывающий после коммита. */
 export async function deleteItemFileRows(itemId: string): Promise<string[]> {
-  const res = await getDb().delete(oqFiles).where(eq(oqFiles.itemId, itemId)).returning({ id: oqFiles.id })
+  const res = await oqWrite((w) => w.deleteFiles({ itemId }))
   if (res.length) bump()
-  return res.map((r) => r.id)
+  return res
 }
 
 /** Отпечаток таблицы вложений одним проходом: меняется при любой вставке, удалении и надгробии. */
@@ -196,7 +187,7 @@ export async function allFileRows(afterId = ''): Promise<FileRow[]> {
 
 export async function deleteRows(ids: string[]): Promise<void> {
   if (!ids.length) return
-  for (const part of chunks(ids)) await getDb().delete(oqFiles).where(inArray(oqFiles.id, part))
+  for (const part of chunks(ids)) await oqWrite((w) => w.deleteFiles({ ids: part }))
   bump()
 }
 
