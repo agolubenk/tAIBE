@@ -127,7 +127,7 @@ class InstallTest(Base):
         self.assertTrue(d["ProgramArguments"][-1].endswith("agents_up.py"))
         self.assertEqual(self.acts("bootstrap"), [D.LABEL_KEEPER, D.LABEL_UP])
         keeper = plistlib.loads(D.plist(D.LABEL_KEEPER).read_bytes())
-        self.assertEqual((keeper["StartInterval"], keeper["ProgramArguments"][-2:][1]), (600, "up"))
+        self.assertEqual((keeper["StartInterval"], keeper["ProgramArguments"][-2:]), (600, ["up", "4"]))
 
     def test_uninstall(self):
         D.install(lambda m: None)

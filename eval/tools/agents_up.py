@@ -183,7 +183,7 @@ def main(argv=None):
         D.trim_log("taibe-dev-up.log")
         D.trim_log("taibe-team.log")
         if not a.no_team:
-            TP.up(print)  # роли по продуктам: 12 (доли — из очереди владельца), при нехватке памяти — 10
+            TP.up(log=print)  # роли по продуктам: 12 (доли — из очереди владельца), при нехватке памяти — 10
     return summary()
 
 

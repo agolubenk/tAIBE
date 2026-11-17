@@ -214,7 +214,7 @@ def up_plist():
 
 def keeper_plist():
     # Сторож команды: раз в 10 мин открывает недостающие роли и меняет потолок 12/10 по памяти (team_plan.py).
-    return agent_plist(LABEL_KEEPER, "team_plan.py", ["up"], "taibe-team.log", StartInterval=600)
+    return agent_plist(LABEL_KEEPER, "team_plan.py", ["up", "4"], "taibe-team.log", StartInterval=600)
 
 
 def trim_log(name, limit=1 << 20):
