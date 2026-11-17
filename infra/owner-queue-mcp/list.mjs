@@ -24,11 +24,18 @@ function lastTime(data) {
 }
 
 /**
+ * Ответы, которые читает не роль, а программа: агенту их отмечать нечем, а его статус в пункте будит владельца ботом.
+ * d-team-split — доли команды ролей, их переключает кнопка «Роли» в шапке /queue, читает сторож Mac
+ * (system.team.split_item в instances/_shared.json; Нерв их тоже не пересылает — eval/nerve/sources.py).
+ */
+export const QUIET_ANSWERS = new Set(['d-team-split']);
+
+/**
  * Владелец ответил (done или choice), а агент после ответа ничего не записал. Отметки — серверные, как в open-rule.ts
  * консоли: ownerAt — сохранение ответа (у старых документов — at), agentAt — последняя запись агента.
  */
-export function ownerAnswerUnread(c) {
-  if (!c || !(c.done || c.choice)) return false;
+export function ownerAnswerUnread(c, id) {
+  if (!c || !(c.done || c.choice) || QUIET_ANSWERS.has(id)) return false;
   const agentAt = typeof c.agentAt === 'string' ? Date.parse(c.agentAt) : NaN;
   if (Number.isNaN(agentAt)) return true;
   const answeredAt = Date.parse(typeof c.ownerAt === 'string' ? c.ownerAt : c.at);
@@ -52,7 +59,7 @@ export function filterDocs(collection, docs, { ids, prefix, kind, session, since
     if (kind && x.kind !== kind) return false;
     if (session && x[sessionKey] !== session) return false;
     if (!Number.isNaN(sinceMs) && !(lastTime(x) >= sinceMs)) return false;
-    if (unread && !ownerAnswerUnread(x)) return false;
+    if (unread && !ownerAnswerUnread(x, d.id)) return false;
     return true;
   });
 }
@@ -245,7 +252,7 @@ export function getBrief(doc, check) {
         ...(c.choice !== undefined ? { choice: c.choice } : {}),
         ...(c.agentStatus !== undefined ? { agentStatus: c.agentStatus } : {}),
         ...(c.agentBy !== undefined ? { agentBy: c.agentBy } : {}),
-        unread: ownerAnswerUnread(c),
+        unread: ownerAnswerUnread(c, doc?.id),
       })
       : null;
   }

@@ -55,5 +55,7 @@ describe('PUT/GET /team', () => {
     expect((await call(agent, 'PUT', '/team', { ...BEAT, hold: 'x'.repeat(301) })).status).toBe(400)
     expect((await call(agent, 'PUT', '/team', { ...BEAT, split: [['HR Helper', 6]] })).status).toBe(400)
     expect((await call(agent, 'PUT', '/team', { ...BEAT, item: 'a b' })).status).toBe(400)
+    expect((await call(agent, 'PUT', '/team', { ...BEAT, seen: false })).status).toBe(200)
+    expect((await call(reader, 'GET', '/team')).json.seen).toBe(false)
   })
 })

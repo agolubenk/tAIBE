@@ -1,7 +1,8 @@
 /**
  * «Памятки» в шапке /queue (решение владельца d-queue-memos — кнопка в шапке, 17.11). Памятка — то, что владельцу
  * нужно под рукой надолго, а не пункт к выполнению: «Телефон потерян или украден» и две команды на Mac. Документ
- * work/memo-<id> {kind: 'memo', title, body, cmds: [{label, cmd}], order, added, source, archived}. Пишет агент,
+ * work/memo-<id> (у продукта не по умолчанию — work/<slug>-memo-<id>: id без префикса принадлежит HR, и токен другого
+ * продукта его не запишет) {kind: 'memo', title, body, cmds: [{label, cmd}], order, added, source, archived}. Пишет агент,
  * когда владелец просит «вынеси в памятки»; владелец скрывает и возвращает (archived) — PATCH, как ответ на странице.
  * Памятки не пункты: не входят в счётчик «Очередь» и в бот, строкой «Хода работ» не становятся (page.html пропускает
  * kind memo).
@@ -10,7 +11,29 @@
  * Чистые функции — MEMOS_PURE (их исполняет tests/queue-page-memos.test.ts), разметка и запросы — MEMOS_DOM.
  */
 export const MEMOS_PURE = String.raw`
-var OQM_ID = /^memo-[A-Za-z0-9_.~:@+-]{1,75}$/;
+var OQM_ID = /^(?:[a-z][a-z0-9-]{1,30}-)?memo-[A-Za-z0-9_.~:@+-]{1,75}$/;
+// Невидимые и меняющие направление символы — метками ⟦U+…⟧, как у ссылок пунктов: владелец копирует и запускает
+// команду, а на экране такие символы не видны (агент мог подменить команду).
+var OQM_INVISIBLE = /(?![\uFE00-\uFE0F\u{E0100}-\u{E01EF}])\p{Default_Ignorable_Code_Point}|[\p{Cf}\p{Co}]/gu;
+function oqmReveal(s) {
+  return String(s == null ? '' : s).replace(OQM_INVISIBLE, function (c) {
+    var hex = c.codePointAt(0).toString(16).toUpperCase();
+    while (hex.length < 4) hex = '0' + hex;
+    return '⟦U+' + hex + '⟧';
+  });
+}
+function oqmHidden(s) { OQM_INVISIBLE.lastIndex = 0; var r = OQM_INVISIBLE.test(String(s || '')); OQM_INVISIBLE.lastIndex = 0; return r; }
+function oqmPad(n) { return (n < 10 ? '0' : '') + n; }
+/** «Записал taibe-07, изменено 17.11 16:05» — кто и когда: памятку может переписать любой агент. */
+function oqmByline(m) {
+  var parts = [];
+  if (m.source) parts.push('Записал ' + m.source);
+  if (m.updatedAt > 0) {
+    var d = new Date(m.updatedAt);
+    parts.push((m.version > 1 ? 'изменено ' : 'записано ') + oqmPad(d.getDate()) + '.' + oqmPad(d.getMonth() + 1) + ' ' + oqmPad(d.getHours()) + ':' + oqmPad(d.getMinutes()));
+  }
+  return parts.join(', ');
+}
 function oqmStr(v, max) { return typeof v === 'string' ? v.slice(0, max) : ''; }
 /** Памятки из снимка work: только kind memo с заголовком; порядок — order, затем дата, затем заголовок. */
 function oqmList(docs) {
@@ -19,9 +42,11 @@ function oqmList(docs) {
     var x = d && d.data;
     if (!x || x.kind !== 'memo' || !OQM_ID.test(String(d.id)) || !oqmStr(x.title, 200).trim()) return;
     var cmds = (Array.isArray(x.cmds) ? x.cmds : []).filter(function (c) { return c && typeof c.cmd === 'string' && c.cmd.trim(); })
-      .slice(0, 10).map(function (c) { return { label: oqmStr(c.label, 200), cmd: c.cmd.slice(0, 4000) }; });
+      .slice(0, 10).map(function (c) { return { label: oqmStr(c.label, 200), cmd: c.cmd.slice(0, 4000), hidden: oqmHidden(c.cmd) }; });
     out.push({
       id: d.id, title: oqmStr(x.title, 200), body: oqmStr(x.body, 4000), cmds: cmds, archived: x.archived === true,
+      source: oqmStr(x.source, 80), version: typeof d.version === 'number' ? d.version : 0,
+      updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : 0,
       order: typeof x.order === 'number' && isFinite(x.order) ? x.order : 1e9, added: oqmStr(x.added, 10),
     });
   });
@@ -45,6 +70,8 @@ const MEMOS_DOM = String.raw`
     '.memo p { margin: 6px 0; white-space: pre-line; line-height: 1.5; }' +
     '.memo-cmd { margin: 10px 0 0; }' +
     '.memo-cmd-label { margin-bottom: 4px; color: var(--muted); font-size: 13px; }' +
+    '.memo-by { margin: 0 0 6px; color: var(--muted); font-size: 12px; }' +
+    '.memo-warn { margin: 6px 0 0; color: var(--warn); font-size: 13px; }' +
     '.memo-cmd pre { margin: 0; padding: 10px 12px; overflow-x: auto; border-radius: 8px; background: var(--code-bg); font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-all; }' +
     '.memo-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }' +
     '.memo-btn { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; }' +
@@ -54,6 +81,7 @@ const MEMOS_DOM = String.raw`
     '.memo-hidden { padding: 0 16px 16px; }' +
     '.memo-hidden > summary { cursor: pointer; color: var(--muted); padding: 8px 0; }' +
     '.memo-err { margin: 8px 16px 0; color: var(--warn); }' +
+    '@media (max-width: 1399.98px) { .hb-memos .hb-long { display: none; } .hb-memos .hb-ico { display: block; } }' +
     '@media (max-width: 640px) { .hb-memos { width: 40px; padding: 0; justify-content: center; } }';
   document.head.appendChild(css);
   var dlg = null, listEl = null, btn = null, busy = Object.create(null), errText = '', shownKey = '';
@@ -102,19 +130,26 @@ const MEMOS_DOM = String.raw`
   }
   function card(m) {
     var a = el('article', 'memo');
-    a.appendChild(el('h3', '', m.title));
-    oqmParas(m.body).forEach(function (p) { a.appendChild(el('p', '', p)); });
+    a.appendChild(el('h3', '', oqmReveal(m.title)));
+    var by = oqmByline(m);
+    if (by) a.appendChild(el('p', 'memo-by', by));
+    oqmParas(m.body).forEach(function (p) { a.appendChild(el('p', '', oqmReveal(p))); });
     m.cmds.forEach(function (c) {
       var box = el('div', 'memo-cmd');
-      if (c.label) box.appendChild(el('div', 'memo-cmd-label', c.label));
-      var pre = el('pre'), code = el('code', '', c.cmd);
+      if (c.label) box.appendChild(el('div', 'memo-cmd-label', oqmReveal(c.label)));
+      var pre = el('pre'), code = el('code', '', oqmReveal(c.cmd));
       pre.appendChild(code);
       box.appendChild(pre);
-      var row = el('div', 'memo-row'), b = el('button', 'memo-btn', 'Скопировать');
-      b.type = 'button';
-      b.addEventListener('click', function () { copy(c.cmd, b); });
-      row.appendChild(b);
-      box.appendChild(row);
+      if (c.hidden) {
+        // Скрытые символы в команде — не копировать: запущенная команда была бы не той, что видна.
+        box.appendChild(el('p', 'memo-warn', 'В команде скрытые символы (метки ⟦U+…⟧) — не копируйте и не запускайте её; напишите агенту.'));
+      } else {
+        var row = el('div', 'memo-row'), b = el('button', 'memo-btn', 'Скопировать');
+        b.type = 'button';
+        b.addEventListener('click', function () { copy(c.cmd, b); });
+        row.appendChild(b);
+        box.appendChild(row);
+      }
       a.appendChild(box);
     });
     var row = el('div', 'memo-row'), h = el('button', 'memo-btn quiet', m.archived ? 'Вернуть' : 'Скрыть');
@@ -137,7 +172,7 @@ const MEMOS_DOM = String.raw`
     listEl.textContent = '';
     if (errText) listEl.appendChild(el('p', 'memo-err', errText));
     if (!shown.length) {
-      listEl.appendChild(el('p', 'memo-empty', 'Памяток пока нет. Чтобы добавить, напишите агенту: «вынеси в памятки …».'));
+      listEl.appendChild(el('p', 'memo-empty', 'Памяток пока нет. Чтобы добавить, нажмите «Поставить задачу» и напишите: вынеси в памятки …'));
     } else {
       var ul = el('div', 'memo-list');
       shown.forEach(function (m) { ul.appendChild(card(m)); });

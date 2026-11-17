@@ -88,8 +88,13 @@ def read_answer(team, log=lambda m: None):
     продукт, которого токен не видит, или удалили) — пауза как была: иначе она снялась бы сама."""
     doc = Q.oq_request(f"checks/{team['split_item']}")
     if doc is None:
-        log(f"  ответ на {team['split_item']} не виден (404) — доли и пауза из последнего ответа")
+        # Ответа нет: владелец ещё не отвечал (пункт виден) или пункт токену не виден — тогда выбор на /queue сюда не
+        # доходит, и страница должна это сказать, а не обещать «применит за 10 минут».
+        _SENT["seen"] = Q.oq_request(f"items/{team['split_item']}") is not None
+        if not _SENT["seen"]:
+            log(f"  пункт {team['split_item']} токену не виден (404) — доли и пауза из последнего ответа")
         return {}
+    _SENT["seen"] = True
     data = doc.get("data") or {}
     # Пауза — тот же ответ: доли при ней — последний принятый ответ (кэш), снять — выбрать долю.
     if data.get("choice") == PAUSE_CHOICE:
@@ -234,16 +239,19 @@ def queue_pause_path():
 
 
 def hhmm(when):
+    """«15:00» сегодня, «завтра 15:00», «19.11 15:00» — лимит недели кончается и через несколько дней."""
     try:
-        return datetime.fromisoformat(str(when)).astimezone().strftime("%H:%M")
+        t = datetime.fromisoformat(str(when)).astimezone()
     except ValueError:
         return str(when)
+    days = (t.date() - datetime.now().astimezone().date()).days
+    return t.strftime("%H:%M") if days <= 0 else t.strftime("завтра %H:%M") if days == 1 else t.strftime("%d.%m %H:%M")
 
 
 def holdup(slugs):
     """Почему роли сейчас не открывать: (пауза mac|queue|'', текст владельцу, текст журнала); всё пусто — можно."""
     if pause_path().exists():
-        return "mac", "пауза включена на самом Mac — снять можно только там", \
+        return "mac", "пауза включена на Mac — попросите агента её снять", \
             "пауза владельца на Mac (team_plan.py resume — снять)"
     if queue_pause_path().exists():
         return "queue", "включена пауза — чтобы снять, выберите долю в «Роли»", \
@@ -260,13 +268,14 @@ def holdup(slugs):
 
 def publish(st, team, log):
     """Состояние команды для кнопки «Роли» в шапке /queue — каждый запуск; время отметки ставит консоль."""
-    doc = {"item": team["split_item"], "total": int(team["total"]),
+    doc = {"item": team["split_item"], "total": int(team["total"]), "seen": _SENT.get("seen", True),
            **{k: st.get(k) for k in ("split", "alloc", "max", "src", "want", "live", "extra", "cap", "pause", "hold")}}
     mem = st.get("mem")
     doc["mem"] = round(mem, 1) if isinstance(mem, (int, float)) else None
     doc = {k: v for k, v in doc.items() if v is not None or k in ("want", "live", "extra", "cap", "mem")}
     if _SENT.get("doc") == doc:
         return
+    _SENT.pop("doc", None)
     try:
         Q.oq_request(STATE_API, method="PUT", data=doc)
         _SENT["doc"] = doc
@@ -311,9 +320,9 @@ def _up(st, limit, log):
     team, warn, crit, _, roles, roots = config()
     try:
         return _run(st, limit, log, team, warn, crit, roles, roots)
-    except ERRORS:
+    except Exception:  # noqa: BLE001 — любой сбой, и испорченный team-state.json тоже; ошибка идёт дальше
         # Без этого в очередь ушло бы прошлое состояние с новым временем — «на Mac всё хорошо».
-        st.update(want=None, live=None, extra=None, pause="", hold="сбой сторожа Mac — подробности в taibe-team.log")
+        st.update(want=None, live=None, extra=None, pause="", hold="сбой на Mac — напишите агенту, он посмотрит журнал")
         raise
     finally:
         publish(st, team, log)

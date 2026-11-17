@@ -31,11 +31,15 @@ function oqtOptions(item, mac) {
   if (out.length) out.push({ id: OQT_PAUSE, label: 'Пауза — новые роли не открывать' });
   return out;
 }
-/** Доля, которую просит ответ: доля из заметки важнее варианта (как у сторожа), иначе выбор. */
-function oqtWanted(check) {
+/** Доля, которую просит ответ: доля из заметки важнее варианта, если сторож её примет (столько чисел, сколько
+ *  продуктов, сумма — всего ролей, как parse_split в team_plan.py); иначе выбор. «с 18-11» в заметке — не доля. */
+function oqtWanted(check, mac) {
   var c = check || {}, m = /\b(\d{1,2}(?:-\d{1,2})+)\b/.exec(typeof c.note === 'string' ? c.note : '');
   if (c.choice === OQT_PAUSE) return OQT_PAUSE;
-  return m ? m[1] : typeof c.choice === 'string' && OQT_SPLIT.test(c.choice) ? c.choice : '';
+  var total = mac && typeof mac.total === 'number' ? mac.total : 12, n = mac && Array.isArray(mac.split) && mac.split.length ? mac.split.length : 2;
+  var nums = m ? m[1].split('-').map(Number) : [];
+  var noted = nums.length === n && nums.reduce(function (a, b) { return a + b; }, 0) === total;
+  return noted ? m[1] : typeof c.choice === 'string' && OQT_SPLIT.test(c.choice) ? c.choice : '';
 }
 function oqtSplitText(id, opts) {
   var o = opts.filter(function (x) { return x.id === id; })[0];
@@ -45,13 +49,14 @@ function oqtFresh(mac, now) {
   var at = mac && typeof mac.at === 'string' ? Date.parse(mac.at) : NaN;
   return !isNaN(at) && (now - at) / 60000 <= OQT_STALE_MIN;
 }
-/** Состояние кнопки: подпись, пауза ли и нужна ли точка предупреждения. */
+/** Состояние кнопки: подпись, пауза ли; warn — пауза или роли не открываются (точка цвета предупреждения), quiet — Mac
+ *  не на связи (серая точка: утром после сна и при «Разработка ВЫКЛ» это обычное дело, не тревога). */
 function oqtState(check, opts, mac, now) {
-  var want = oqtWanted(check), fresh = oqtFresh(mac, now);
+  var want = oqtWanted(check, mac), fresh = oqtFresh(mac, now);
   var macPause = fresh && mac.pause === 'mac', pause = want === OQT_PAUSE || macPause;
   var label = pause ? 'Роли: пауза' : want ? 'Роли: ' + oqtSplitText(want, opts) : 'Роли';
-  var hold = fresh && typeof mac.hold === 'string' && mac.hold !== '';
-  return { label: label, pause: pause, warn: pause || !fresh || hold };
+  var hold = fresh && (typeof mac.hold === 'string' && mac.hold !== '' || mac.seen === false);
+  return { label: label, pause: pause, warn: pause || hold, quiet: !pause && !hold && !fresh };
 }
 function oqtPad(n) { return (n < 10 ? '0' : '') + n; }
 /** «10:50» сегодня, «16.11 10:50» — раньше. */
@@ -68,21 +73,32 @@ function oqtMacLine(mac, now) {
   if (!oqtFresh(mac, now)) return 'Mac не на связи с ' + when + ' (выключен, спит или разработка выключена). Выбор применится, когда он включится.';
   var live = oqtCount(mac.live), want = oqtCount(mac.want), extra = oqtCount(mac.extra);
   var s = 'На Mac в ' + when + ': ' + (live === null || want === null ? 'сколько ролей открыто — неизвестно'
-    : 'открыто ' + live + ' ' + oqtPlural(want, 'роли', 'ролей', 'ролей') + ' из ' + want);
+    : 'открыто ' + live + ' из ' + want + ' ' + oqtPlural(want, 'роли', 'ролей', 'ролей'));
   if (typeof mac.mem === 'number' && isFinite(mac.mem)) s += ', свободно памяти ' + Math.round(mac.mem) + '%';
   s += '.';
-  if (extra) s += ' Ещё ' + extra + ' сверх доли дорабатыва' + (extra === 1 ? 'ет' : 'ют') + ' задачу.';
+  if (extra) s += ' Ещё ' + extra + ' ' + oqtPlural(extra, 'роль', 'роли', 'ролей') + ' сверх доли ' + (extra === 1 ? 'работает' : 'работают') + ' до конца своей сессии.';
+  if (mac.seen === false) s += ' Mac не видит пункт долей — выбор здесь до него не дойдёт; напишите агенту.';
   if (typeof mac.hold === 'string' && mac.hold) s += ' Новые роли не открываются: ' + mac.hold.slice(0, 160) + '.';
   return s;
 }
+/** Мест для новых ролей: всего ролей минус открытые (и сверх доли тоже — они считаются в потолок). */
+function oqtFree(mac) {
+  var cap = oqtCount(mac && mac.cap), live = oqtCount(mac && mac.live), extra = oqtCount(mac && mac.extra) || 0;
+  return cap === null || live === null ? null : Math.max(0, cap - live - extra);
+}
 /** Первая строка тоста после сохранения; Mac не на связи или стоит — без обещания срока (вторая строка скажет почему). */
 function oqtSavedText(opt, wasPause, mac, now) {
-  var ok = oqtFresh(mac, now) && !(typeof mac.hold === 'string' && mac.hold && mac.pause !== 'queue');
+  var ok = oqtFresh(mac, now) && mac.seen !== false && !(typeof mac.hold === 'string' && mac.hold && mac.pause !== 'queue');
   if (opt.id === OQT_PAUSE) {
     return 'Пауза сохранена.' + (ok ? ' Через 10 минут Mac перестанет открывать новые роли.' : '') + ' Открытые роли продолжают работать.';
   }
-  return 'Сохранено: ' + opt.label + '.' + (ok ? ' Mac начнёт применять в течение 10 минут' + (wasPause ? ' и снимет паузу' : '') + '.' : '') +
-    ' Открытые роли не закрываются.';
+  var head = 'Сохранено: ' + opt.label + '.';
+  if (!ok) return head + ' Открытые роли не закрываются.';
+  // Все места заняты: новые роли другой доли откроются, только когда роли сверх доли закончат свою сессию.
+  if (oqtFree(mac) === 0) {
+    return head + (wasPause ? ' Пауза снята.' : '') + ' Открытые роли не закрываются: новые роли по этой доле откроются, когда роли сверх неё закончат свою сессию (или после «Разработка ВЫКЛ → ВКЛ»).';
+  }
+  return head + ' Mac начнёт применять в течение 10 минут' + (wasPause ? ' и снимет паузу' : '') + '. Открытые роли не закрываются.';
 }
 `
 
@@ -94,7 +110,8 @@ const TEAM_DOM = String.raw`
   var css = document.createElement('style');
   css.textContent = '.hb-team { position: relative; }' +
     '.hb-team .hb-dot { display: none; position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 2px var(--bg); }' +
-    '.hb-team.warn .hb-dot { display: block; }' +
+    '.hb-team.warn .hb-dot, .hb-team.quiet .hb-dot { display: block; }' +
+    '.hb-team.quiet .hb-dot { background: var(--muted); }' +
     '.hb-team.warn .hb-long { color: var(--warn); }' +
     '.team-mac { padding: 6px 10px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.45; max-width: 340px; }' +
     '.team-opt { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }' +
@@ -111,7 +128,7 @@ const TEAM_DOM = String.raw`
     '@media (max-width: 640px) { .hb-team { flex: none; width: 40px; padding: 0; justify-content: center; } .hb-team::after { display: none; } }';
   document.head.appendChild(css);
   var st = { id: ITEM, item: null, check: null, mac: null }, opts = [], box = null, sum = null, list = null;
-  var toastEl = null, toastTimer = 0, busy = false, macSeq = 0, painted = '';
+  var toastEl = null, toastTimer = 0, busy = false, macSeq = 0, painted = '', macAt = 0;
   function find(col, id) {
     var docs = window.__oqDocs ? window.__oqDocs(col) : [];
     for (var i = 0; i < docs.length; i++) if (docs[i].id === id) return docs[i];
@@ -120,6 +137,7 @@ const TEAM_DOM = String.raw`
   /** Состояние Mac; ответ старше последнего запроса и сбой не трогают прежнее. */
   function loadMac() {
     var seq = ++macSeq;
+    macAt = Date.now();
     return fetch(TEAM, { credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : null; })
       .then(function (m) { if (seq === macSeq && m && typeof m === 'object') { st.mac = m.at ? m : null; schedule(); } }, function () {});
   }
@@ -166,13 +184,15 @@ const TEAM_DOM = String.raw`
   function paint() {
     if (!opts.length) { if (box) { box.remove(); box = null; painted = ''; } return; }
     mount();
-    var now = Date.now(), s = oqtState(st.check, opts, st.mac, now), line = oqtMacLine(st.mac, now), want = oqtWanted(st.check);
+    if (!document.hidden && Date.now() - macAt > 5 * 60000) loadMac();
+    var now = Date.now(), s = oqtState(st.check, opts, st.mac, now), line = oqtMacLine(st.mac, now), want = oqtWanted(st.check, st.mac);
     // Снимки items и checks приходят часто (статусы агентов) — меню не пересобирается под пальцем без нужды.
     var key = JSON.stringify([s, line, want, busy, opts]);
     if (key === painted) return;
     painted = key;
     sum.querySelector('.hb-long').textContent = s.label;
     sum.classList.toggle('warn', s.warn);
+    sum.classList.toggle('quiet', s.quiet);
     sum.setAttribute('aria-label', s.label + '. ' + line);
     sum.setAttribute('title', line);
     list.textContent = '';
@@ -226,7 +246,12 @@ const TEAM_DOM = String.raw`
     });
   }
   function fail(e) {
-    if (e.status === 409) return toast(['Ответ уже изменили (другое окно или бот). Выберите ещё раз.'], true);
+    if (e.status === 409) {
+      if (st.check) st.check.mine = false;
+      busy = false;
+      read();
+      return toast(['Ответ уже изменили (другое окно или бот). Выберите ещё раз.'], true);
+    }
     toast([e.status ? 'Не сохранено: ' + (e.message || 'ошибка сервера ' + e.status) + '.' : 'Не сохранено: нет связи с сервером. Попробуйте ещё раз.'], true);
   }
   /** Выбор доли или паузы; prev — ответ до выбора (для «Отменить»), undo — это возврат прежнего ответа. */
@@ -234,7 +259,7 @@ const TEAM_DOM = String.raw`
     if (busy) return;
     if (box) box.open = false;
     if (sum) sum.focus();
-    var was = oqtWanted(st.check);
+    var was = oqtWanted(st.check, st.mac);
     if (!undo && o.id === was) { toast([st.check && st.check.choice === OQT_PAUSE ? 'Пауза уже включена.' : 'Эта доля уже выбрана.', oqtMacLine(st.mac, Date.now())]); return; }
     var before = st.check ? { choice: st.check.choice, note: st.check.note } : null;
     var answer = undo ? { done: true, choice: prev.choice, note: typeof prev.note === 'string' ? prev.note : '', at: new Date().toISOString() }
@@ -244,10 +269,13 @@ const TEAM_DOM = String.raw`
     save(answer).then(function (doc) {
       st.check = doc && doc.data ? doc.data : answer;
       st.check.mine = true;
-      if (undo) toast(['Отменено: снова ' + oqtState(st.check, opts, st.mac, Date.now()).label.replace(/^Роли: /, '') + '.']);
-      else toast([oqtSavedText(o, was === OQT_PAUSE, st.mac, Date.now()), oqtMacLine(st.mac, Date.now())], false,
-        before && typeof before.choice === 'string' ? function () { choose(o, before, true); } : null);
       if (window.__oqRefresh) window.__oqRefresh('checks');
+      // Тост — по свежему состоянию Mac: на 3G меню могло открыться раньше, чем пришло состояние.
+      return loadMac().then(function () {
+        if (undo) toast(['Отменено: снова ' + oqtState(st.check, opts, st.mac, Date.now()).label.replace(/^Роли: /, '') + '.']);
+        else toast([oqtSavedText(o, was === OQT_PAUSE, st.mac, Date.now()), oqtMacLine(st.mac, Date.now())], false,
+          before && typeof before.choice === 'string' ? function () { choose(o, before, true); } : null);
+      });
     }, fail).then(function () { busy = false; paint(); });
   }
   if (window.claude) window.claude.use('db').then(function (db) {

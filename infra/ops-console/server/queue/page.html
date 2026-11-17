@@ -456,7 +456,12 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 .link-host.warn { color: var(--warn); font-weight: 600; }
 /* До 1400 px окна шапка липнет всегда; с 641 до 1400 — ещё и «К решениям ↓» (решение владельца d-queue-jump-link). */
 @media (max-width: 1399.98px) { .head-bar { position: sticky; top: env(safe-area-inset-top, 0px); } }
-@media (min-width: 641px) and (max-width: 1399.98px) { .hb-to-dec { display: inline-flex; } }
+@media (min-width: 641px) and (max-width: 1399.98px) {
+  .hb-to-dec { display: inline-flex; }
+  /* Планшет и узкое окно Mac: «Тема» — строкой меню «Очередь», «Памятки» — значком (page-memos.ts), иначе шапка в 4 строки. */
+  .head-bar .hb-theme { display: none; }
+  .jump-phone.jump-theme { display: list-item; list-style: none; }
+}
 /* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди. Шапка — одна строка (просьба владельца
    10.11): у кнопок вместо названий значки (название — в aria-label и title), выбор продукта забирает оставшееся место. */
 .rm-range { justify-self: start; }
@@ -518,7 +523,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
           <li><a href="#sec-check" data-kind="check">Проверить руками <span class="jump-c"></span></a></li>
           <li><a href="#sec-inbox" data-kind="inbox">Входящие <span class="jump-c"></span></a></li>
           <li class="jump-phone jump-sep"><button type="button" class="jump-act" data-proxy="layout-btn"></button></li>
-          <li class="jump-phone"><button type="button" class="jump-act" data-proxy="theme-btn"></button></li>
+          <li class="jump-phone jump-theme"><button type="button" class="jump-act" data-proxy="theme-btn"></button></li>
         </ul>
       </details>
       <!-- Раскладка очереди: подпись называет ту, на которую переключит (скрипт ставит её по выбору из localStorage). -->

@@ -29,7 +29,7 @@ export const protocolText = (note = '') => 'Очередь владельца (o
   + 'checks/<id> — ответ владельца {done, choice, note, at}: читать, НЕ менять (сервер ответит 403); свой статус — oq_agent_status. '
   + 'work/<id> — задача агента {title, track tails|providers|council|secfront|ops|<id из work/track-<id>>, status, who agent|owner, session, planStart, planEnd, start, end, milestone, note, link, linkText, order, '
   + 'cards[{key ключ карточки t-boards (OPS-34), ws slug пространства (aiboards-eval), t, k bug|task, s, st, c}]}; work/track-<id> — направление {kind:"track", name, color (только var(--c1)…var(--c6), иначе 422), order}; '
-  + 'work/cards-stats — сводка сверки с досками {kind:"stats"}; work/memo-<id> — памятка владельцу (окно «Памятки» в шапке /queue) {kind:"memo", title, body (простой текст), cmds[{label, cmd}], order, added, source} — только когда владелец просит «вынеси в памятки»; скрывает владелец (archived). '
+  + 'work/cards-stats — сводка сверки с досками {kind:"stats"}; work/memo-<id> (токен продукта не hr-helper — work/<slug>-memo-<id>) — памятка владельцу (окно «Памятки» в шапке /queue) {kind:"memo", title, body (простой текст), cmds[{label, cmd}], order, added, source} — только когда владелец просит «вынеси в памятки»; скрывает владелец (archived). '
   + 'В oq_list у work поле cards заменено на cardsCount — полный документ через oq_get; свои поля в чужой строке — только oq_patch. '
   + 'planEnd не переписывать: сдвиг — новый planEnd и basePlanEnd = прежняя дата, причина в note (иначе 409). Перед правкой существующего документа — oq_get и if_version. '
   + INBOX_PROTOCOL + (note ? ` ${note}` : '');

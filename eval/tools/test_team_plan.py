@@ -54,7 +54,7 @@ class Base(unittest.TestCase):
         self.spawned, self.notes, self.log, self.published = [], [], [], []
         self.free, self.live, self.choice, self.note = 60, set(), None, ""
         self.limit, self.hub, self.failing, self.queue_down = None, True, set(), False
-        self.publish_fails, self.spawn_override = False, False
+        self.publish_fails, self.spawn_override, self.item_hidden = False, False, False
 
     def tearDown(self):
         self.env.stop()
@@ -66,6 +66,8 @@ class Base(unittest.TestCase):
                 raise TP.subprocess.TimeoutExpired("secret", 20)
             if path.startswith("checks/"):
                 return {"data": {"choice": self.choice, "note": self.note}} if self.choice or self.note else None
+            if path.startswith("items/") and method == "GET":
+                return None if self.item_hidden else {"data": {"kind": "decision"}}
             if path == "/team":
                 if self.publish_fails:
                     raise OSError("HTTP 503")
@@ -238,7 +240,7 @@ class QueuePauseTest(Base):
     def test_owner_texts_without_commands(self):
         self.limit = {"resume": "2099-01-01T15:00:00+03:00"}
         self.run_up()
-        self.assertRegex(self.published[-1]["hold"], r"^лимит Claude исчерпан до \d\d:\d\d$")
+        self.assertRegex(self.published[-1]["hold"], r"^лимит Claude исчерпан до 01\.01 \d\d:\d\d$")  # не сегодня — с датой
         self.assertIn("Нерв стоит на лимите", self.log[-1])
         self.limit, self.hub = None, False
         self.run_up()
@@ -255,7 +257,7 @@ class QueuePauseTest(Base):
                 self.run_up()
         doc = self.published[-1]
         self.assertIsNone(doc["live"])
-        self.assertIn("сбой сторожа", doc["hold"])
+        self.assertIn("сбой на Mac", doc["hold"])
 
     def test_pause_mid_pass_stops_before_the_next_role(self):
         """Проход при входе открывает 12 ролей до получаса: пауза владельца действует со следующей роли."""
@@ -279,11 +281,26 @@ class QueuePauseTest(Base):
     def test_answer_404_keeps_pause(self):
         self.choice = "pause"
         self.run_up()
-        self.choice = None  # ответ не виден: oq() отдаёт None, как 404
+        self.choice, self.item_hidden = None, True  # пункт перенесли в продукт, которого токен не видит: 404
         self.spawned = []
         self.run_up()
         self.assertEqual(self.spawned, [])
-        self.assertIn("не виден (404)", " ".join(self.log))
+        self.assertIn("токену не виден (404)", " ".join(self.log))
+
+    def test_hidden_item_is_reported_not_a_missing_answer(self):
+        self.run_up()
+        self.assertTrue(self.published[-1]["seen"])  # ответа ещё нет, пункт виден
+        self.item_hidden = True
+        self.run_up()
+        self.assertFalse(self.published[-1]["seen"])
+        self.assertIn("токену не виден", " ".join(self.log))
+
+    def test_any_crash_marks_failure(self):
+        (Path(self.tmp.name) / "team-state.json").write_text(json.dumps({"roles": {"taibe/plan": "испорчено"}}))
+        self.live = set()
+        with self.assertRaises(AttributeError):
+            self.run_up()
+        self.assertIn("сбой на Mac", self.published[-1]["hold"])
 
     def test_resume_on_mac_tells_about_queue_pause(self):
         (Path(self.tmp.name) / "team-pause-queue").write_text("x")

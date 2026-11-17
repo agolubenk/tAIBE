@@ -10,8 +10,8 @@ import { TEAM_JS, TEAM_PURE } from '../server/queue/page-team'
 type Opt = { id: string; label: string }
 interface Pure {
   oqtOptions(item: unknown, mac: unknown): Opt[]
-  oqtWanted(check: unknown): string
-  oqtState(check: unknown, opts: Opt[], mac: unknown, now: number): { label: string; pause: boolean; warn: boolean }
+  oqtWanted(check: unknown, mac?: unknown): string
+  oqtState(check: unknown, opts: Opt[], mac: unknown, now: number): { label: string; pause: boolean; warn: boolean; quiet: boolean }
   oqtMacLine(mac: unknown, now: number): string
   oqtSavedText(opt: Opt, wasPause: boolean, mac: unknown, now: number): string
 }
@@ -31,7 +31,8 @@ const ITEM = {
 }
 const NOW = new Date(2026, 10, 17, 11, 0).getTime()
 const at = (min: number) => new Date(NOW - min * 60000).toISOString()
-const MAC = { at: at(3), live: 12, want: 12, extra: 0, mem: 34.4, pause: '', hold: '', max: [['hr-helper', 8], ['taibe', 8]] }
+const MAC = { at: at(3), total: 12, cap: 12, live: 12, want: 12, extra: 0, mem: 34.4, pause: '', hold: '', seen: true,
+  split: [['hr-helper', 6], ['taibe', 6]], max: [['hr-helper', 8], ['taibe', 8]] }
 const opts = P.oqtOptions(ITEM, MAC)
 
 describe('варианты, подпись и точка', () => {
@@ -41,29 +42,33 @@ describe('варианты, подпись и точка', () => {
     expect(P.oqtOptions(null, MAC)).toEqual([])
     expect(P.oqtOptions({ options: [{ id: 'yes', label: 'Да' }] }, MAC)).toEqual([]) // без долей кнопки нет
   })
-  it('доля из заметки важнее варианта — как у сторожа Mac', () => {
-    expect(P.oqtWanted({ choice: '6-6', note: 'на неделю 7-5' })).toBe('7-5')
-    expect(P.oqtWanted({ choice: '8-4', note: '' })).toBe('8-4')
-    expect(P.oqtWanted({ choice: 'pause', note: '7-5' })).toBe('pause')
+  it('доля из заметки важнее варианта, если сторож её примет — как parse_split', () => {
+    expect(P.oqtWanted({ choice: '6-6', note: 'на неделю 7-5' }, MAC)).toBe('7-5')
+    expect(P.oqtWanted({ choice: '8-4', note: 'с 18-11' }, MAC)).toBe('8-4') // 18+11 ≠ 12 — не доля
+    expect(P.oqtWanted({ choice: '8-4', note: '' }, MAC)).toBe('8-4')
+    expect(P.oqtWanted({ choice: 'pause', note: '7-5' }, MAC)).toBe('pause')
     expect(P.oqtWanted(null)).toBe('')
   })
-  it('подпись и точка: пауза, Mac не на связи, роли не открываются', () => {
-    expect(P.oqtState({ choice: '8-4' }, opts, MAC, NOW)).toEqual({ label: 'Роли: HR 8 · tAIBE 4', pause: false, warn: false })
-    expect(P.oqtState({ choice: 'pause' }, opts, MAC, NOW)).toEqual({ label: 'Роли: пауза', pause: true, warn: true })
+  it('подпись и точка: предупреждение — пауза и простой; серая — Mac не на связи', () => {
+    expect(P.oqtState({ choice: '8-4' }, opts, MAC, NOW)).toEqual({ label: 'Роли: HR 8 · tAIBE 4', pause: false, warn: false, quiet: false })
+    expect(P.oqtState({ choice: 'pause' }, opts, MAC, NOW)).toEqual({ label: 'Роли: пауза', pause: true, warn: true, quiet: false })
     expect(P.oqtState({ choice: '6-6' }, opts, { ...MAC, pause: 'mac' }, NOW).label).toBe('Роли: пауза')
-    expect(P.oqtState({ choice: '6-6' }, opts, { ...MAC, at: at(40) }, NOW).warn).toBe(true)
+    expect(P.oqtState({ choice: '6-6' }, opts, { ...MAC, at: at(40) }, NOW)).toMatchObject({ warn: false, quiet: true })
     expect(P.oqtState({ choice: '6-6' }, opts, { ...MAC, hold: 'лимит Claude исчерпан до 15:00' }, NOW).warn).toBe(true)
+    expect(P.oqtState({ choice: '6-6' }, opts, { ...MAC, seen: false }, NOW).warn).toBe(true)
     expect(P.oqtState({ choice: '6-6', note: '7-5' }, opts, MAC, NOW).label).toBe('Роли: 7-5')
-    expect(P.oqtState(null, opts, null, NOW)).toEqual({ label: 'Роли', pause: false, warn: true })
+    expect(P.oqtState(null, opts, null, NOW)).toEqual({ label: 'Роли', pause: false, warn: false, quiet: true })
   })
 })
 
 describe('что на Mac сейчас', () => {
   it('свежее состояние: открыто, память, роли сверх доли и причина простоя', () => {
-    expect(P.oqtMacLine(MAC, NOW)).toBe('На Mac в 10:57: открыто 12 ролей из 12, свободно памяти 34%.')
+    expect(P.oqtMacLine(MAC, NOW)).toBe('На Mac в 10:57: открыто 12 из 12 ролей, свободно памяти 34%.')
     expect(P.oqtMacLine({ ...MAC, live: 10, extra: 2, mem: null, hold: 'включена пауза — чтобы снять, выберите долю в «Роли»' }, NOW))
-      .toBe('На Mac в 10:57: открыто 10 ролей из 12. Ещё 2 сверх доли дорабатывают задачу. Новые роли не открываются: включена пауза — чтобы снять, выберите долю в «Роли».')
-    expect(P.oqtMacLine({ ...MAC, live: 1, want: 1, extra: 1 }, NOW)).toContain('открыто 1 роли из 1, свободно памяти 34%. Ещё 1 сверх доли дорабатывает')
+      .toBe('На Mac в 10:57: открыто 10 из 12 ролей. Ещё 2 роли сверх доли работают до конца своей сессии. Новые роли не открываются: включена пауза — чтобы снять, выберите долю в «Роли».')
+    expect(P.oqtMacLine({ ...MAC, live: 1, want: 1, extra: 1 }, NOW)).toContain('открыто 1 из 1 роли, свободно памяти 34%. Ещё 1 роль сверх доли работает')
+    expect(P.oqtMacLine({ ...MAC, live: 2, want: 12, extra: 5 }, NOW)).toContain('открыто 2 из 12 ролей, свободно памяти 34%. Ещё 5 ролей сверх доли работают')
+    expect(P.oqtMacLine({ ...MAC, seen: false }, NOW)).toContain('Mac не видит пункт долей')
   })
   it('Mac не на связи дольше 25 мин или не присылал вовсе', () => {
     expect(P.oqtMacLine({ ...MAC, at: at(40) }, NOW)).toBe(
@@ -81,9 +86,12 @@ describe('что на Mac сейчас', () => {
 
 describe('тост после выбора', () => {
   const opt = { id: '8-4', label: 'HR 8 · tAIBE 4' }
-  it('Mac на связи — срок; после паузы — «и снимет паузу»', () => {
-    expect(P.oqtSavedText(opt, false, MAC, NOW)).toBe('Сохранено: HR 8 · tAIBE 4. Mac начнёт применять в течение 10 минут. Открытые роли не закрываются.')
-    expect(P.oqtSavedText(opt, true, { ...MAC, pause: 'queue', hold: 'включена пауза' }, NOW)).toContain('в течение 10 минут и снимет паузу')
+  it('есть свободные места — срок; все заняты — когда роли сверх доли закончат сессию', () => {
+    const roomy = { ...MAC, live: 10 }
+    expect(P.oqtSavedText(opt, false, roomy, NOW)).toBe('Сохранено: HR 8 · tAIBE 4. Mac начнёт применять в течение 10 минут. Открытые роли не закрываются.')
+    expect(P.oqtSavedText(opt, true, { ...roomy, pause: 'queue', hold: 'включена пауза' }, NOW)).toContain('в течение 10 минут и снимет паузу')
+    expect(P.oqtSavedText(opt, false, MAC, NOW)).toBe('Сохранено: HR 8 · tAIBE 4. Открытые роли не закрываются: новые роли по этой доле откроются, когда роли сверх неё закончат свою сессию (или после «Разработка ВЫКЛ → ВКЛ»).')
+    expect(P.oqtSavedText(opt, false, { ...MAC, seen: false }, NOW)).toBe('Сохранено: HR 8 · tAIBE 4. Открытые роли не закрываются.')
     expect(P.oqtSavedText({ id: 'pause', label: 'Пауза' }, false, MAC, NOW))
       .toBe('Пауза сохранена. Через 10 минут Mac перестанет открывать новые роли. Открытые роли продолжают работать.')
   })
