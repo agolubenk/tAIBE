@@ -229,7 +229,7 @@ def _up(st, limit, log):
     if pause_path().exists():
         log("команда: пауза владельца (team_plan.py resume — снять) — роли не открываю")
         return 0
-    team, warn, crit, max_s, roles, roots = config()
+    team, warn, crit, _, roles, roots = config()
     lim = nerve_limit(list(roles))
     if lim:
         log(f"команда: Нерв стоит на лимите аккаунта до {lim.get('resume') or lim.get('reset')} — роли не открываю")
@@ -256,7 +256,9 @@ def _up(st, limit, log):
         if len([x for x in steps if x in live]) >= cap:
             blocked.append(key)
             continue
-        if (free is not None and free < crit) or TS.live_sessions(TS.Sys()) >= max_s or (limit and opened >= limit):
+        # Свои границы команды — потолок ролей и память; max_sessions — пропуск ручных запусков: в нём и сессии
+        # владельца, и фоновые claude (17.11 четыре такие сессии оборвали команду на 9 ролях из 12).
+        if (free is not None and free < crit) or (limit and opened >= limit):
             break
         t = tries.get(key) or {}
         if t.get("next", 0) > now:

@@ -320,12 +320,15 @@ def gate_limits():
 
 def live_sessions(sx):
     """Живые сессии Claude Code на машине (все продукты): файл сессии, живой pid того же старта, argv0 claude.
-    Сессия на паузе (SIGSTOP) — тоже живая: память она держит."""
+    Сессия на паузе (SIGSTOP) — тоже живая: память она держит. Фоновые сессии claude-mem (папка
+    ~/.claude-mem/observer-sessions) — не сессии людей и ролей: их держит сам claude-mem, память видна в mem_warn."""
     procs = sx.procs()
     n = 0
     for f in L.sessions_dir().glob("*.json"):
         d = L.read_json(f)
         if not isinstance(d, dict) or not isinstance(d.get("pid"), int):
+            continue
+        if "/.claude-mem/" in str(d.get("cwd") or ""):
             continue
         p = procs.get(d["pid"])
         if p is not None and L.argv0(p) == "claude" and L.norm(p.start) == L.norm(d.get("procStart")):
