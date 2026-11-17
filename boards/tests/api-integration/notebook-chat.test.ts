@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   afterAll,
   afterEach,
@@ -48,6 +48,7 @@ type Reply = {
   content?: string;
   retryAfter?: string;
   delayMs?: number;
+  usage?: unknown;
 };
 type Seen = {
   authorization?: string;
@@ -82,7 +83,10 @@ beforeAll(async () => {
         res.end(
           JSON.stringify(
             next.status === 200
-              ? { choices: [{ message: { content: next.content } }] }
+              ? {
+                  choices: [{ message: { content: next.content } }],
+                  usage: next.usage,
+                }
               : { error: "nope" },
           ),
         );
@@ -226,6 +230,91 @@ describe("API integration: notebook chat", () => {
       callsToday: 1,
       usage: [{ workspaceId: nb.workspace.id, calls: 1 }],
     });
+  });
+
+  // D-018 (storage d-taibe-tb134-usage-1411 = A): the provider's own counts
+  // are kept per answer and summed per workspace for the admin.
+  it("stores the provider's usage per answer and brief and sums it for the admin", async () => {
+    useLlm();
+    const brief =
+      "GOAL: Extend a card lease.\nCONSTRAINTS: none stated\nACCEPTANCE: lease renewed";
+    script = [
+      {
+        status: 200,
+        content: "Через час [1].",
+        usage: {
+          prompt_tokens: 1200,
+          completion_tokens: 80,
+          prompt_tokens_details: { cached_tokens: 1024 },
+        },
+      },
+      {
+        status: 200,
+        content: brief,
+        usage: {
+          prompt_tokens: 300,
+          completion_tokens: 20,
+          prompt_cache_hit_tokens: 100,
+        },
+      },
+      { status: 200, content: "В бревно [1]." },
+      { status: 500 },
+    ];
+    const nb = await chatFixture();
+    const asked = await nb.owner("POST", "/threads", {
+      question: "аренда карточки",
+    });
+    const threadId = asked.body.thread.id;
+    // The usage is for the admin, not for the members who read the thread.
+    expect(asked.body.messages[1]).not.toHaveProperty("usage");
+    await nb.owner("POST", `/threads/${threadId}/brief`);
+    await nb.owner("POST", `/threads/${threadId}/messages`, {
+      question: "а рубка?",
+    });
+    const failed = await nb.owner("POST", `/threads/${threadId}/messages`, {
+      question: "а семена?",
+    });
+    expect(failed.body.messages[1]).toMatchObject({ status: "failed" });
+
+    const rows = await db
+      .select({
+        status: schema.notebookMessageTable.status,
+        usage: schema.notebookMessageTable.usage,
+        empty: sql<boolean>`${schema.notebookMessageTable.usage} IS NULL`,
+      })
+      .from(schema.notebookMessageTable)
+      .where(eq(schema.notebookMessageTable.role, "assistant"))
+      .orderBy(schema.notebookMessageTable.createdAt);
+    expect(rows).toEqual([
+      {
+        status: "answered",
+        usage: { input: 1200, output: 80, cached: 1024 },
+        empty: false,
+      },
+      {
+        status: "brief",
+        usage: { input: 300, output: 20, cached: 100 },
+        empty: false,
+      },
+      // No usage from the provider, and a failed call: SQL NULL, not a JSON
+      // null, so count(usage) leaves them out.
+      { status: "answered", usage: null, empty: true },
+      { status: "failed", usage: null, empty: true },
+    ]);
+
+    mockAuthenticatedSession(await createInstanceAdmin());
+    const view = await projectAccessApi()("/admin/notebook-model");
+    expect((await view.json()).usage).toEqual([
+      {
+        workspaceId: nb.workspace.id,
+        name: expect.any(String),
+        calls: 4,
+        withUsage: 2,
+        input: 1500,
+        output: 100,
+        cached: 1124,
+      },
+    ]);
   });
 
   // The model may come from the settings while the key stays in the

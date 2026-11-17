@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { getStatusLabel } from "@/lib/i18n/domain";
 import { FellDialog } from "./fell-dialog";
 import { ForestTaskLink } from "./forest-task-link";
 import type { ForestTree } from "./forest-types";
@@ -49,10 +50,10 @@ export function TreeRow({ workspaceId, tree, sectorNames }: TreeRowProps) {
             tree.isCompleted && "text-muted-foreground line-through",
           )}
         />
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
           <Badge variant="outline">{tree.projectName}</Badge>
           <Badge variant={tree.isCompleted ? "success" : "secondary"}>
-            {tree.status}
+            {getStatusLabel(tree.status)}
           </Badge>
           <Badge variant="outline">
             <GitBranch aria-hidden="true" />
@@ -72,13 +73,18 @@ export function TreeRow({ workspaceId, tree, sectorNames }: TreeRowProps) {
               })}
             </Badge>
           ) : null}
-          {tree.sectorIds.map((sectorId) => (
-            <Badge key={sectorId} variant="info">
-              {t("workspace:forest.trees.sector", {
-                name: sectorNames.get(sectorId) ?? "…",
-              })}
-            </Badge>
-          ))}
+          {tree.sectorIds.map((sectorId) => {
+            const sector = t("workspace:forest.trees.sector", {
+              name: sectorNames.get(sectorId) ?? "…",
+            });
+            return (
+              <Badge key={sectorId} variant="info" className="max-w-full">
+                <span className="truncate" title={sector}>
+                  {sector}
+                </span>
+              </Badge>
+            );
+          })}
           <Button size="xs" variant="ghost" onClick={() => setFelling(true)}>
             <Axe aria-hidden="true" />
             {t("workspace:forest.fell.submit")}

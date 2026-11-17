@@ -35,11 +35,12 @@ const visible = (collection: Collection, products: Visibility) => and(eq(oqDocs.
 export async function listDocs(collection: Collection, products: Visibility): Promise<DocList> {
   const { max, bytes } = listLimits
   // Накопленный объём от самых свежих и размер коллекции — окном по узкому подзапросу (id и числа, без тел), одним
-  // запросом: тела читаются только у документов в пределах потолка, total согласован с выборкой.
+  // запросом: тела читаются только у документов в пределах потолка, total согласован с выборкой. Второй ключ — id:
+  // у документов с одной миллисекундой иначе порядок решало бы хранилище (SQLite и Postgres — по-разному, TB-153).
   const w = getDb()
     .select({
       id: oqDocs.id,
-      run: sql<number>`sum(length(cast(${oqDocs.dataJson} as blob))) over (order by ${oqDocs.updatedAt} desc rows unbounded preceding)`.as('run'),
+      run: sql<number>`sum(length(cast(${oqDocs.dataJson} as blob))) over (order by ${oqDocs.updatedAt} desc, ${oqDocs.id} desc rows unbounded preceding)`.as('run'),
       total: sql<number>`count(*) over ()`.as('total'),
     })
     .from(oqDocs)
@@ -50,7 +51,7 @@ export async function listDocs(collection: Collection, products: Visibility): Pr
     .from(oqDocs)
     .innerJoin(w, and(eq(oqDocs.collection, collection), eq(oqDocs.id, w.id)))
     .where(lte(w.run, bytes))
-    .orderBy(desc(oqDocs.updatedAt))
+    .orderBy(desc(oqDocs.updatedAt), desc(oqDocs.id))
     .limit(max)
   const docs = rows.map((r) => parseDoc(r.doc))
   // Пусто, а коллекция нет — самый свежий документ больше потолка объёма: total — отдельным count.
