@@ -12,7 +12,10 @@
 вперемешку по рангу роли, чтобы при потолке у каждого остались главные роли. Открывает spawn_session.sh --launch,
 по одной, с паузой; роль, чья сессия не поднялась, — снова через 10, 20, 40 мин… (не чаще раза в 6 ч), после
 трёх неудач — пункт владельцу. Не открывает: пока Нерв стоит на лимите аккаунта, пока молчит хаб MCP (:3050),
-пока владелец поставил паузу (team_plan.py pause). Уменьшение доли не закрывает работающие роли.
+пока владелец поставил паузу — на Mac (team_plan.py pause) или в очереди (ответ «pause» на тот же пункт: кнопка «Роли»
+в шапке /queue). Уменьшение доли не закрывает работающие роли. Каждый запуск пишет состояние команды в work/team-mac
+очереди (доли, пауза, открыто из нужного, память, время) — его показывает шапка /queue; в checks не пишет: изменение
+статуса агента в пункте будит владельца ботом.
 
   python3 -I eval/tools/team_plan.py plan      что должно быть открыто и что открыто (ничего не запускает)
   python3 -I eval/tools/team_plan.py up [N]    открыть недостающие роли (не больше N за запуск; «ВКЛ», вход, сторож)
@@ -41,6 +44,8 @@ import tmux_host as T  # noqa: E402
 ORDER = ("coord", "release", "backend", "frontend", "plan", "boards", "backend-2", "frontend-2")
 DEFAULTS = {"total": 12, "floor": 10, "min_per_product": 2, "split_item": "d-team-split"}
 SOURCE = "team_plan (сторож команды ролей на Mac, OPS-82)"
+PAUSE_CHOICE = "pause"  # ответ на пункт долей: кнопка «Пауза» в шапке /queue
+STATE_DOC = "work/team-mac"
 RAISE_GAP = 8        # п.п. памяти сверх mem_warn, чтобы вернуть полный состав
 PAUSE_AFTER = 15     # с между ролями: MCP и первый ход предыдущей успевают взять память
 RETRY = 600          # с до повтора роли, чья сессия не поднялась; дальше — вдвое, до RETRY_MAX
@@ -82,6 +87,11 @@ def owner_split(team, slugs, log=lambda m: None):
         zip(slugs, [total // len(slugs) + (i < total % len(slugs)) for i in range(len(slugs))]))
     try:
         data = (Q.oq_request(f"checks/{team['split_item']}") or {}).get("data") or {}
+        # Пауза — тот же ответ: доли при ней — последний принятый ответ (кэш), снять — выбрать долю.
+        if data.get("choice") == PAUSE_CHOICE:
+            T.write_private(queue_pause_path(), str(data.get("at") or ""))
+        else:
+            queue_pause_path().unlink(missing_ok=True)
         # В пункте до 5 вариантов; другая доля («7-5») — в заметке к ответу, она важнее выбранного варианта.
         noted = re.search(r"\b(\d{1,2}(?:-\d{1,2})+)\b", str(data.get("note") or ""))
         got = (noted and parse_split(noted.group(1), slugs, total, least)) or parse_split(data.get("choice"), slugs,
@@ -193,6 +203,36 @@ def pause_path():
     return T.conf_dir() / "team-pause"
 
 
+def queue_pause_path():
+    """Последний прочитанный ответ владельца — пауза (очередь недоступна — действует он)."""
+    return T.conf_dir() / "team-pause-queue"
+
+
+def holdup(slugs):
+    """Почему роли сейчас не открывать; '' — можно."""
+    if pause_path().exists():
+        return "пауза владельца на Mac (team_plan.py resume — снять)"
+    if queue_pause_path().exists():
+        return "пауза владельца в очереди (снять — выбрать долю в шапке /queue)"
+    lim = nerve_limit(slugs)
+    if lim:
+        return f"Нерв стоит на лимите аккаунта до {lim.get('resume') or lim.get('reset')}"
+    if not hub_up():
+        return "хаб MCP (:3050) молчит — роли без него работают вслепую"
+    return ""
+
+
+def publish(st, team, log):
+    """Состояние команды для шапки /queue: work/team-mac (kind team) — каждый запуск, время в нём — знак, что сторож жив."""
+    doc = {"kind": "team", "item": team["split_item"], "total": int(team["total"]),
+           "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+           **{k: st.get(k) for k in ("split", "src", "want", "live", "cap", "mem", "hold")}}
+    try:
+        Q.oq_request(STATE_DOC, method="PUT", data={"data": doc})
+    except ERRORS as exc:
+        log(f"  состояние для /queue не записано ({exc.__class__.__name__})")
+
+
 def load_state():
     try:
         st = json.loads(state_path().read_text(encoding="utf-8"))
@@ -226,22 +266,24 @@ def up(limit=None, log=print):
 
 
 def _up(st, limit, log):
-    if pause_path().exists():
-        log("команда: пауза владельца (team_plan.py resume — снять) — роли не открываю")
-        return 0
     team, warn, crit, _, roles, roots = config()
-    lim = nerve_limit(list(roles))
-    if lim:
-        log(f"команда: Нерв стоит на лимите аккаунта до {lim.get('resume') or lim.get('reset')} — роли не открываю")
-        return 0
-    if not hub_up():
-        log("команда: хаб MCP (:3050) молчит — роли без него работают вслепую, не открываю")
-        return 0
+    try:
+        return _run(st, limit, log, team, warn, crit, roles, roots)
+    finally:
+        publish(st, team, log)
+
+
+def _run(st, limit, log, team, warn, crit, roles, roots):
     split, src = owner_split(team, list(roles), log)
     steps = plan(allocate(split, roles), roles)
     live, bad = live_set(roots, log)
     total = int(team["total"])
-    cap = ceiling(TS.Sys().mem_free(), st.get("cap", total), warn, team)
+    st.update(split=[[s, n] for s, n in split.items()], src=src, want=len(steps), hold=holdup(list(roles)),
+              live=len([x for x in steps if x in live]), mem=TS.Sys().mem_free())
+    if st["hold"]:
+        log(f"команда: {st['hold']} — роли не открываю")
+        return 0
+    cap = ceiling(st["mem"], st.get("cap", total), warn, team)
     log("команда: " + " · ".join(f"{s} {n}" for s, n in split.items()) + f" ({src}), открыто "
         f"{len([x for x in steps if x in live])}, потолок {cap}")
     tries, now, blocked = st.setdefault("roles", {}), time.time(), []
@@ -289,7 +331,7 @@ def _up(st, limit, log):
                    f"Свободной памяти снова больше {warn + RAISE_GAP}%: сторож открывает недостающие роли до {total}.",
                    log)
         st["low"] = False
-    st.update(cap=cap, at=time.strftime("%Y-%m-%d %H:%M"))
+    st.update(cap=cap, live=have, at=time.strftime("%Y-%m-%d %H:%M"))
     log(f"команда: открыто ролей {have} из {len(steps)}, потолок {cap}")
     return 0
 
@@ -298,7 +340,8 @@ def show():
     team, warn, _, _, roles, roots = config()
     split, src = owner_split(team, list(roles))
     live, _ = live_set(roots)
-    paused = " · ПАУЗА владельца" if pause_path().exists() else ""
+    paused = " · ПАУЗА владельца на Mac" if pause_path().exists() else \
+        " · ПАУЗА владельца в очереди" if queue_pause_path().exists() else ""
     print("доли: " + " · ".join(f"{s} {n}" for s, n in split.items()) + f" ({src}); всего {team['total']}, при "
           f"свободной памяти < {warn}% — {team['floor']}, обратно от {warn + RAISE_GAP}%{paused}")
     tries = load_state().get("roles") or {}

@@ -782,7 +782,11 @@ work/track-&lt;id&gt;  направление «Хода работ» {kind: 'tr
 work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs: {critical, high, medium, low, none},
   tasks: {P0, P1, P2, P3, none}, inPlan, notInPlan, halfBaked, history: [{d: 'YYYY-MM-DD', bugs, tasks, inPlan}]}
   Пишет агент при сверке с досками (история — точка на каждый день сверки). Карточка в плане — та, чей ключ есть
-  в cards какой-либо строки; новая карточка без строки — кандидат в строку блока.</pre>
+  в cards какой-либо строки; новая карточка без строки — кандидат в строку блока.
+
+work/team-mac  состояние команды ролей Mac {kind: 'team', at, item, total, split: [[slug, n]], src, want, live, cap,
+  mem, hold}. Пишет сторож Mac (eval/tools/team_plan.py) каждым проходом; читает кнопка «Роли» в шапке. Ответ на
+  пункт item (d-team-split) — доля «8-4» или «pause»: пауза, новые роли не открываются.</pre>
   </details>
 
   <footer>PR #122 (мажорные обновления зависимостей) — трекер, не вливать. Ребрендинг lavaeon отложен.</footer>
@@ -2039,6 +2043,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       // Сводка доски выбранного продукта (SHIM относит её к продукту по data.ws); при всех продуктах — cards-stats (HR).
       if (d.kind === 'stats') { if (!stats || r.id === 'cards-stats') stats = statsFromDb(d); return; }
       if (d.kind === 'boards') return; // карта доски — для группировки (page-lanes.ts), не строка плана
+      if (d.kind === 'team') return; // состояние команды ролей Mac — для кнопки «Роли» в шапке (page-team.ts)
       WORK_FIELDS.forEach(function (k) { if (typeof d[k] === 'string') w[k] = d[k].slice(0, k === 'note' ? 600 : 200); });
       if (typeof d.order === 'number') w.order = d.order;
       if (typeof d.milestone === 'boolean') w.milestone = d.milestone;

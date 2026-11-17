@@ -51,9 +51,10 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = mock.patch.dict(os.environ, {"TAIBE_TMUX_CONF_DIR": self.tmp.name})
         self.env.start()
-        self.spawned, self.notes, self.log = [], [], []
+        self.spawned, self.notes, self.log, self.published = [], [], [], []
         self.free, self.live, self.choice, self.note = 60, set(), None, ""
         self.limit, self.hub, self.failing, self.queue_down = None, True, set(), False
+        self.publish_fails = False
 
     def tearDown(self):
         self.env.stop()
@@ -65,6 +66,11 @@ class Base(unittest.TestCase):
                 raise TP.subprocess.TimeoutExpired("secret", 20)
             if path.startswith("checks/"):
                 return {"data": {"choice": self.choice, "note": self.note}} if self.choice or self.note else None
+            if path == "work/team-mac":
+                if self.publish_fails:
+                    raise OSError("HTTP 503")
+                self.published.append(data["data"])
+                return {}
             self.notes.append((path, data))
             return {}
 
@@ -181,6 +187,44 @@ class UpTest(Base):
         self.free = 5
         self.run_up()
         self.assertEqual(self.spawned, [])
+
+
+class QueuePauseTest(Base):
+    def test_pause_from_queue_keeps_split_and_resumes_with_a_split(self):
+        self.choice = "8-4"
+        self.run_up(limit=2)
+        self.choice, self.spawned = "pause", []
+        self.run_up()
+        self.assertEqual(self.spawned, [])
+        self.assertIn("пауза владельца в очереди", self.log[-1])
+        doc = self.published[-1]
+        self.assertEqual(doc["split"], [["hr-helper", 8], ["taibe", 4]])  # доли — последний ответ
+        self.assertEqual((doc["live"], doc["want"]), (2, 12))
+        self.assertIn("пауза", doc["hold"])
+        self.queue_down = True  # очередь молчит — пауза держится по последнему ответу
+        self.run_up()
+        self.assertEqual(self.spawned, [])
+        self.queue_down, self.choice = False, "6-6"
+        self.run_up()
+        self.assertEqual(len(self.live), 12)
+        self.assertEqual(self.published[-1]["hold"], "")
+
+    def test_state_published_each_run_without_checks_write(self):
+        self.free = 37
+        self.run_up()
+        doc = self.published[-1]
+        self.assertEqual({k: doc[k] for k in ("kind", "item", "total", "live", "want", "cap", "mem", "src")},
+                         {"kind": "team", "item": "d-team-split", "total": 12, "live": 12, "want": 12, "cap": 12,
+                          "mem": 37, "src": "конфиг"})
+        self.assertRegex(doc["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]")
+        self.assertEqual(self.notes, [])  # ни пунктов, ни записи в checks
+
+    def test_publish_failure_does_not_break_the_run(self):
+        self.publish_fails = True
+        self.assertEqual(self.run_up(), 0)
+        self.assertEqual(len(self.spawned), 12)
+        self.assertIn("состояние для /queue не записано (OSError)", self.log[-1])
+        self.assertEqual(self.state()["live"], 12)  # своё состояние на Mac записано
 
 
 class LimitTest(unittest.TestCase):
