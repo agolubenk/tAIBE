@@ -48,6 +48,28 @@ describe("forest card tools", () => {
     );
   });
 
+  it("sends expectedMetaRevision in the body, apart from the task's expectedRevision header (TB-142)", async () => {
+    const { client, call } = setup();
+
+    await call("forest_set_card_meta", {
+      workspaceId: "ws1",
+      taskId: "t1",
+      session: "dev-1",
+      fencingToken: 3,
+      contextPack: "do not: X",
+      expectedMetaRevision: "2026-11-14T09:00:00.123Z",
+    });
+
+    expect(client.json).toHaveBeenCalledWith("/api/forest/ws1/cards/t1/meta", {
+      method: "PUT",
+      headers: { "x-t-boards-session": "dev-1", "x-t-boards-fence": "3" },
+      body: JSON.stringify({
+        contextPack: "do not: X",
+        expectedMetaRevision: "2026-11-14T09:00:00.123Z",
+      }),
+    });
+  });
+
   it("leaves half-baked to the owner: the tool has no such field", async () => {
     const { client, call } = setup();
 
