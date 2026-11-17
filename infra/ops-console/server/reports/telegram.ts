@@ -13,6 +13,7 @@ import { escapeHtml } from '../notify/format'
 import { clock } from '../lib/time'
 import { plural } from '../../shared/plural'
 import { periodHead } from './digest'
+import { containersLine, hostContainers } from './containers'
 
 
 /** TLS в карточке — только если до конца меньше стольких дней (или ошибка проверки). */
@@ -77,7 +78,6 @@ export function digestHtml(r: OpsReport, tz: string, opts: { urgent?: boolean } 
   const cpuMax = maxOf(r.hosts.map((h) => h.cpuMaxPct))
   const memMax = maxOf(r.hosts.map((h) => h.memAvgPct))
   const diskMax = maxOf(r.hosts.map((h) => h.diskMaxPct))
-  const down = r.hosts.flatMap((h) => h.containersNotRunning.map((c) => `${h.name}/${c}`))
   const tlsRisk = r.tls
     .filter((t) => t.error || (t.daysLeft !== null && t.daysLeft < TLS_SOON_DAYS))
     .sort((a, b) => (a.error ? -1 : b.error ? 1 : (a.daysLeft ?? 0) - (b.daysLeft ?? 0)))[0]
@@ -101,7 +101,7 @@ export function digestHtml(r: OpsReport, tz: string, opts: { urgent?: boolean } 
     `🌐 Доступность: <b>${pct(totalUptime)}</b>${checks.length ? ` по ${plural(checks.length, ['монитору', 'мониторам', 'мониторам'])}` : ' — проверок не было'}${worst && (worst.uptimePct ?? 100) < 100 ? ` · хуже всех ${e(worst.monitor)} ${pct(worst.uptimePct)}` : ''}`,
     `🚨 Инциденты: <b>${r.incidents.length}</b>${openIncidents.length ? ` (открыто ${openIncidents.length})` : ''} · алерты: <b>${r.alerts.fired}</b>${r.alerts.critical ? ` (критичных ${r.alerts.critical})` : ''}`,
     resources,
-    `📦 Контейнеры: ${down.length ? `не работают — ${e(down.slice(0, 4).join(', '))}${down.length > 4 ? ` и ещё ${down.length - 4}` : ''}` : 'все работают'} · перезапусков: ${r.restarts.length}`,
+    containersLine(r),
     `🚀 Деплои: ${r.deploys.total}${r.deploys.failed ? ` (упало ${r.deploys.failed})` : ''}`,
   ]
   if (tlsRisk) {
@@ -201,7 +201,7 @@ export function detailSections(r: OpsReport, tz: string, now = Date.now()): Repo
         ...(r.hosts.length
           ? r.hosts.map(
               (h) =>
-                `• <b>${e(h.name)}</b>: CPU ${pct(h.cpuAvgPct)} (пик ${pct(h.cpuMaxPct)}), RAM ${pct(h.memAvgPct)}, диск до ${pct(h.diskMaxPct)}${h.containersNotRunning.length ? ` · не работают: ${e(h.containersNotRunning.join(', '))}` : ''}`,
+                `• <b>${e(h.name)}</b>: CPU ${pct(h.cpuAvgPct)} (пик ${pct(h.cpuMaxPct)}), RAM ${pct(h.memAvgPct)}, диск до ${pct(h.diskMaxPct)}${hostContainers(h)}`,
             )
           : ['• агентов нет']),
         '',

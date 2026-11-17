@@ -1,6 +1,6 @@
 # tAIBE — команды слоя: git worktrees, проверки, ИИ-контур разработки.
 # Worktrees — worktrees/README.md, .claude/rules/07-worktrees.md. Usage: make wt-fix NAME=notion-5xx-retry
-# Прямые формы целей wt-*/check-repo/check-eval для отказа merge-guard — .claude/hooks/merge_guard_launch.py
+# Прямые формы целей wt-*/check-repo/check-eval для отказа merge-guard — .claude/hooks/merge_guard_make.py
 # (_direct): правка рецепта — правка там (SE-105).
 
 WT_BASE ?= board-agents
@@ -92,6 +92,7 @@ check-eval:
 check-layer:
 	@for t in .claude/hooks/test_*.py .claude/scripts/test_*.py eval/tools/test_*.py; do python3 "$$t" || exit 1; done
 	bash .claude/hooks/test_wt_deps_hook.sh
+	bash .claude/scripts/test_heavy_gate.sh
 	bash .claude/scripts/sync-agent-skills.sh --check
 	python3 -I eval/evolve/catalog.py --check
 
@@ -106,7 +107,7 @@ check-infra:
 	@for f in infra/scripts/dev-ai/*.sh infra/scripts/dev-ai/lib/*.sh infra/scripts/dev/*.sh; do bash -n "$$f" || exit 1; done
 
 check-boards:
-	cd boards && pnpm lint && pnpm typecheck && pnpm test
+	bash .claude/scripts/heavy-gate.sh bash -c 'cd boards && pnpm lint && pnpm typecheck && pnpm test'
 
 genome-check:
 	cd eval/pipeline/genome && python3 -I build.py --check

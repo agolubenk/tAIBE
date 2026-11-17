@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import { growth, MAX_GROWTH } from "../fixtures/linear-time";
-import { redact } from "./index";
+import { growth, MAX_GROWTH } from "../fixtures/linear-time.js";
+import { redact } from "./index.js";
 import {
   hasRedactionMarker,
   RESTORE_MAX_CHARS,
   redactDeep,
   restoreRedacted,
-} from "./restore";
+} from "./restore.js";
 
 // Fake secrets assembled at runtime, so this file holds no key-shaped literal.
 const join = (...parts: string[]) => parts.join("");

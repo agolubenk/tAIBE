@@ -35,6 +35,7 @@ export function ThreadView({
     <ForestListState
       isLoading={thread.isLoading}
       isError={thread.isError}
+      onRetry={() => void thread.refetch()}
       isEmpty={false}
       empty=""
     >
