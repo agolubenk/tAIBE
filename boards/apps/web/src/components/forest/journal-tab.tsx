@@ -51,6 +51,7 @@ export function JournalTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={journal.isLoading}
         isError={journal.isError}
+        onRetry={() => void journal.refetch()}
         isEmpty={!items.length}
         empty={t("workspace:forest.journal.empty")}
       >

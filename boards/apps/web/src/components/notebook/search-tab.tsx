@@ -48,6 +48,7 @@ export function SearchTab({ workspaceId }: { workspaceId: string }) {
         <ForestListState
           isLoading={search.isLoading}
           isError={search.isError}
+          onRetry={() => void search.refetch()}
           isEmpty={results.length === 0}
           empty={t("workspace:notebook.search.empty")}
         >
