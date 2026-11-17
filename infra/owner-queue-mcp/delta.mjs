@@ -15,7 +15,10 @@ export const FULL_EVERY_MS = 12 * 3600_000;
 export const BACKOFF_MS = 30 * 60_000;
 export const RETRY_MS = 60_000;
 
-/** Сбой, который пройдёт сам: 5xx, 429 или сеть (у ошибки fetch нет status); ответ не по контракту — не он. */
+/**
+ * Сбой, который пройдёт сам: 5xx, 429, сеть или недочитанное тело (у ошибок fetch и http.mjs bodyJson нет status, OPS-79);
+ * ответ не по контракту — не он.
+ */
 const transient = (e) => !e?.contract && (e?.status === undefined ? true : e.status >= 500 || e.status === 429);
 const contractError = (msg) => Object.assign(new Error(msg), { contract: true });
 /**
