@@ -233,6 +233,31 @@ rm -r /opt/t-boards
 setup "$k2" phone full
 echo "ok: claude-mem proxy address from .env, outside the tunnel falls back"
 
+# SSH to the Mac from a phone (OPS-82): only the listed tunnel addresses, both directions, ahead of the drops;
+# the Mac itself and addresses outside the tunnel are skipped. --rules needs no device key.
+mkdir -p /opt/t-boards
+printf "WG_MAC_SSH_FROM=10.77.0.3 10.77.0.2 10.77.0.3 192.168.1.9 # phone\r\n" >/opt/t-boards/.env
+bash /kit/wg-setup.sh --rules >/tmp/out 2>&1 </dev/null || { cat /tmp/out; fail "wg-setup.sh --rules"; }
+{
+  chain 10.77.0.2 37702 | sed -n 1,3p
+  echo "-A TB-WG -s 10.77.0.3/32 -d 10.77.0.2/32 -i wg0 -o wg0 -p tcp -m tcp --dport 22 -j ACCEPT"
+  echo "-A TB-WG -s 10.77.0.2/32 -d 10.77.0.3/32 -i wg0 -o wg0 -p tcp -m tcp --sport 22 -m conntrack --ctstate ESTABLISHED -j ACCEPT"
+  chain 10.77.0.2 37702 | sed -n "4,\$p"
+} | diff - <(iptables -S TB-WG | tail -n +2) || fail "SSH to the Mac: chain"
+grep -q "10.77.0.2 — не адрес" /tmp/out && grep -q "192.168.1.9 — не адрес" /tmp/out || fail "SSH to the Mac: bad addresses not skipped"
+grep -q "правила применены: SSH к Mac — 1 устройств" /tmp/out || fail "SSH to the Mac: --rules summary (duplicates, comment)"
+printf -- "-A TB-WG-OUT -d 10.77.0.2/32 -o wg0 -p tcp -m tcp --dport 37702 -j DROP\n-A TB-WG-OUT -d 10.77.0.2/32 -o wg0 -p tcp -m tcp --dport 22 -j DROP\n" |
+  diff - <(iptables -S TB-WG-OUT | tail -n +2) || fail "SSH to the Mac: the VPS host is not shut out of it"
+printf "WG_MAC_SSH_FROM=10.77.0.2\n" >/opt/t-boards/.env
+bash /kit/wg-setup.sh --rules >/tmp/out 2>&1 </dev/null || { cat /tmp/out; fail "wg-setup.sh --rules, no device address"; }
+grep -q "адресов устройств в нём нет" /tmp/out || fail "SSH to the Mac: empty list not reported"
+rm -r /opt/t-boards
+bash /kit/wg-setup.sh --rules >/tmp/out 2>&1 </dev/null || { cat /tmp/out; fail "wg-setup.sh --rules without .env"; }
+iptables -S TB-WG | tail -n +2 | diff <(chain 10.77.0.2 37702) - || fail "SSH rules left after WG_MAC_SSH_FROM removed"
+[ "$(iptables -S TB-WG-OUT | tail -n +2)" = "-A TB-WG-OUT -d 10.77.0.2/32 -o wg0 -p tcp -m tcp --dport 37702 -j DROP" ] || fail "host SSH drop left after WG_MAC_SSH_FROM removed"
+grep -q "WG_MAC_SSH" /kit/install.sh || fail "install.sh drops WG_MAC_SSH_FROM when it rewrites .env"
+echo "ok: SSH to the Mac only from WG_MAC_SSH_FROM, both directions ahead of the drops; --rules without a device key"
+
 # wg-issue.sh: the server makes the keys; the same PresharedKey goes to the peer and the profile.
 issue() { bash /kit/wg-issue.sh "$@" >/tmp/conf 2>/tmp/log </dev/null || { cat /tmp/log; fail "wg-issue.sh $*"; }; }
 for i in 1 2 3 4 5; do : >/etc/wireguard/wg0.conf.bak-20200101-00000$i; done

@@ -187,8 +187,8 @@ class AutoTest(Base):
         v = self.verdicts(self.auto()[1])
         self.assertIn("общий корень проектов", v[721])
         self.assertIn("чужой проект", v[722])
-        self.assertIn("не в Terminal (vscode)", v[723])
-        self.assertIn("не в Terminal (other)", v[724])
+        self.assertIn("не в Terminal и не в tmux (vscode)", v[723])
+        self.assertIn("не в Terminal и не в tmux (other)", v[724])
         self.assertIn("СНЯТЬ", v[725])                                   # квитанция наследника-моста годится
         self.assertIn("своя сессия", v[700])
 

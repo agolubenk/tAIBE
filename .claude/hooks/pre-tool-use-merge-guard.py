@@ -44,14 +44,14 @@ from merge_guard_shell import heredoc_text, join_lines  # noqa: E402  SE-83
 from merge_guard_partial import PARTIAL, settle, settled, tokens_before_error  # noqa: E402  разбор до ошибки (SE-76)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
+from merge_guard_tmux import TMUX, classify_tmux  # noqa: E402  окна сессий в tmux — только владелец (OPS-82)
 from merge_guard_crash import crash_verdict  # noqa: E402  сбой decide — роли отказ (SE-152); сбой разбора — в settled
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
 GUARDED_CLAUDE_DIRS = ("rules", "hooks")
 
-# Если разбор упал — защищённой считается команда, где есть хоть один из этих признаков.
-FALLBACK = re.compile(
+FALLBACK = re.compile(  # разбор упал — защищённой считается команда, где есть хоть один из этих признаков
     r"gh\s+pr\s+merge|gh\s+workflow\s+run|gh\s+run\s+rerun|\bgit\b[^\n;|&]*\bpush\b|/merge\b|mergePullRequest"
     r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)", re.I
 )  # re.I: APFS не различает регистр — `.CLAUDE/rules` (SE-94, HR IS-245)
@@ -324,7 +324,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     written = whole[3] or ()
     http = lambda x: classify_http(x, cwd)  # noqa: E731
     kind = {"gh": lambda x: classify_gh(x, cwd, written), "curl": http, "wget": http, "http": http,
-            "xh": http}.get(a[0], lambda _: None)(a)
+            "xh": http}.get(a[0], classify_tmux)(a)  # остальные — tmux и хвост его цепочки `\;` (OPS-82)
     if a[0] == "git":
         kind = classify_git(a, cwd, env_config=git_env)
     if "$" in exe or SUBST in exe:  # имя не видно: `$GH pr merge 1`, `$(echo gh) pr merge 1`, `${G/x/gh}` — как gh, git, curl
@@ -465,8 +465,8 @@ def decide(data, get_sessions=live_sessions, get_control=load_control, roots=Non
     if files := [d for k, d in found if k == "file"]:  # файл не длиннее 500 строк (01-base) — проверки через :=
         return (f"merge-guard: {files[0]} — законы, настройки хуков или реестр сессий. Правка только с «да» владельца: "
                 "через PR из worktree или руками владельца.")
-    if owner := [d for k, d in found if k == VISIBILITY]:  # IS-124: не мёрж и не деплой — Контролю тоже нет
-        return f"merge-guard: {VISIBILITY} — только руками владельца, и Контролю тоже нет (IS-124). Команда: {owner[0]}"
+    if owner := [(k, d) for k, d in found if k in (VISIBILITY, TMUX)]:  # IS-124, OPS-82: не мёрж — Контролю тоже нет
+        return f"merge-guard: {owner[0][0]} — только руками владельца, и Контролю тоже нет. Команда: {owner[0][1]}"
     if not (ops := [(k, d) for k, d in found if k not in ("file", DIRECT)]):
         return None
     control, control_err = get_control()
