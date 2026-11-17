@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -17,6 +18,12 @@ def copy_instances():
     for name in os.listdir(P.INSTANCES):
         shutil.copy(os.path.join(P.INSTANCES, name), d)
     return d
+
+
+def _at(data, keys):
+    for k in keys:
+        data = data[k]
+    return data
 
 
 def edit(d, name, fn):
@@ -123,6 +130,31 @@ class ErrorsTest(unittest.TestCase):
     def test_queue_match_must_be_a_string(self):
         edit(self.d, "taibe.json", lambda d: d["queue"].update(match=["-taibe-"]))
         self.fails("queue.match")
+
+    def test_empty_required_string_is_refused(self):
+        """SE-172: пустая строка в обязательном поле — ошибка загрузки, а не "" с кодом 0 у `get` (линза #218)."""
+        for path in ("repo_root", "product_tree", "team.project_dir", "github.repo"):
+            for value in ("", "  "):
+                with self.subTest(path=path, value=value):
+                    d = copy_instances()
+                    self.addCleanup(shutil.rmtree, d)
+                    *keys, leaf = path.split(".")
+                    edit(d, "taibe.json", lambda data, k=keys, lf=leaf, v=value: _at(data, k).update({lf: v}))
+                    with self.assertRaises(P.ProductError) as e:
+                        P.load(d)
+                    self.assertIn(f"instances/taibe.json: пустое обязательное поле {path}", str(e.exception))
+
+    def test_get_of_empty_required_field_fails(self):
+        import contextlib
+        import io
+        edit(self.d, "taibe.json", lambda d: d.update(repo_root=""))
+        err = io.StringIO()
+        real = P.load
+        with mock.patch.object(P, "load", lambda instances=self.d: real(instances)), \
+                contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(err):
+            self.assertEqual(P.main(["get", "taibe", "repo_root"]), 1)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("пустое обязательное поле repo_root", err.getvalue())
 
     def test_unknown_default(self):
         edit(self.d, "_shared.json", lambda d: d.update(default_product="nope"))
