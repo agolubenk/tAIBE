@@ -7,7 +7,7 @@ Evaluates how a long-lived team of AI coding sessions spends money and attention
 | `nerve/` | Watchdog daemon: GitHub / owner-queue / system / budget sources, quorum between roles, circadian modes (day/evening/night). |
 | `swarm/` | Egress orchestration for the session swarm. |
 | `pipeline/` | Capsule handoffs (author → review lenses), `genome/` configs (roles, boards, plan). |
-| `tools/` | `wake_anatomy.py` (what wakes a session, what it costs), `context_audit.py`, `call_purpose.py`, `spawn_session.sh` + `lineage.py` (predecessor retires itself after the successor's ack), `reap_sessions.sh` (list finished sessions; `--kill` is the owner's; `--auto` — safe auto-cleanup, dry by default, acts only under the owner's launchd agent `reaper_launchd.sh`, `--auto --summary` — a readable day summary), Terminal windows of `spawn_session.sh` close themselves after `claude` exits 0 and a 10 s countdown (Enter keeps)., `ctx_budget.py` (live window budget of a session: `next`/`done`/`status`, daily `learn` → `~/.claude/ctx-budget/params.json`; hook `context-threshold.py`). |
+| `tools/` | `spend.py` (team spend at API prices: session × day, role, product, context window bands — see «Spend» below), `prices.py` (the one API price table for `eval/`), `transcript.py` (where transcripts live, how to read them), `wake_anatomy.py` (what wakes a session, what it costs), `context_audit.py`, `call_purpose.py`, `spawn_session.sh` + `lineage.py` (predecessor retires itself after the successor's ack), `reap_sessions.sh` (list finished sessions; `--kill` is the owner's; `--auto` — safe auto-cleanup, dry by default, acts only under the owner's launchd agent `reaper_launchd.sh`, `--auto --summary` — a readable day summary), Terminal windows of `spawn_session.sh` close themselves after `claude` exits 0 and a 10 s countdown (Enter keeps)., `ctx_budget.py` (live window budget of a session: `next`/`done`/`status`, daily `learn` → `~/.claude/ctx-budget/params.json`; hook `context-threshold.py`). |
 | `data/` | Measurements: wake anatomy runs, cost audits per team wave. |
 | `reports/`, `shadow/` | Lens reports; shadow-mode watchdog probe. |
 | `context/` | Background: the evaluated [supertick](https://github.com/denizen24/supertick) approach (excerpt in `context/supertick-src/`, MIT) and team notes. |
@@ -25,7 +25,17 @@ python3 -I -m unittest discover -s eval/pipeline -p 'test_*.py'
 python3 -I -m unittest discover -s eval/swarm    -p 'test_*.py'
 ```
 
-CI runs the same commands (`.github/workflows/eval-ci.yml`).
+CI runs the same commands (`.github/workflows/eval-ci.yml`). Tool tests `eval/tools/test_*.py` run as scripts in `.github/workflows/layer-ci.yml`.
+
+## Spend (GL-1)
+
+`python3 -I eval/tools/spend.py --hours 24 [--json out.json]` — read-only, no LLM. It reports $ at API prices per
+session × local day, with role, lineage and registry key from the first message of the session, product of each call
+by `budget.Products` (the same function as the Nerve window share, SE-66: cwd under a `repo_root` of
+`instances/*.json`, else the session folder), context median / p90, context window bands (≤ 250K, 250–500K, 500K–1M, > 1M) as shares of calls
+and $, cold calls, compactions and the first call. Subagent calls count in the parent session; a request copied into
+a resumed session counts once. Sessions without a role go to «прочее». Metric definitions are in the docstring of
+`spend.py`. Attribution to tasks and PRs, the nightly run and the weekly table are the next steps of the GL-1 plan.
 
 ## Runtime state
 

@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import updateColumn from "@/fetchers/column/update-column";
+import { invalidateProjectTaskDetails } from "@/lib/invalidate-project-task-details";
 
 export function useUpdateColumn() {
   const queryClient = useQueryClient();
@@ -28,6 +29,10 @@ export function useUpdateColumn() {
           queryKey: ["tasks", variables.projectId],
           refetchType: "all",
         }),
+        // The broadcast skips this window; its own open card needs the new
+        // completedAt too (TB-30).
+        variables.data.isFinal !== undefined &&
+          invalidateProjectTaskDetails(queryClient, variables.projectId),
       ]);
     },
   });

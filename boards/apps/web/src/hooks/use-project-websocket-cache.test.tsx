@@ -492,6 +492,39 @@ it("refreshes workspace label filters when a remote project event changes labels
   });
 });
 
+// TB-30: a column's finality moved completedAt; open cards of this project
+// refetch, and plain project events leave task details alone.
+it("refreshes this project's open task details only when completion changed", async () => {
+  renderHook(() => useProjectWebSocket("p"));
+  const taskDetailCalls = () =>
+    mocks.client.invalidateQueries.mock.calls.filter(
+      ([filters]) =>
+        (filters as { queryKey?: unknown[] }).queryKey?.[0] === "task" &&
+        (filters as { queryKey?: unknown[] }).queryKey?.length === 1,
+    );
+  Socket.current.message("PROJECT_UPDATED", {});
+  await vi.waitFor(() =>
+    expect(mocks.client.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["labels"],
+    }),
+  );
+  expect(taskDetailCalls()).toHaveLength(0);
+
+  Socket.current.message("PROJECT_UPDATED", { completionChanged: true });
+  await vi.waitFor(() => expect(taskDetailCalls()).toHaveLength(1));
+  const { predicate } = taskDetailCalls()[0][0] as {
+    predicate: (query: unknown) => boolean;
+  };
+  const query = (key: unknown[], projectId?: string) => ({
+    queryKey: key,
+    state: { data: projectId ? { projectId } : undefined },
+  });
+  expect(predicate(query(["task", "t1"], "p"))).toBe(true);
+  expect(predicate(query(["task", "t2"], "other"))).toBe(false);
+  expect(predicate(query(["task", "t3"]))).toBe(false);
+  expect(predicate(query(["task", "t1", "kaneo-issue-link"], "p"))).toBe(false);
+});
+
 it("refreshes task link details when a project event explicitly changes links", async () => {
   renderHook(() => useProjectWebSocket("p"));
   Socket.current.message("PROJECT_UPDATED", { linksChanged: true });

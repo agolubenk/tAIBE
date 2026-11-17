@@ -1,6 +1,16 @@
 import { type OwnerQueueConfig, readQueueToken } from "./queue-config";
 
-export type QueueCollection = "items" | "checks";
+// work — plan rows of «Ход работ» (TB-106): the server only reads and patches
+// them, it never creates one.
+export type QueueCollection = "items" | "checks" | "work";
+
+// One page of a collection. The console may answer the whole collection in
+// one page (no next_offset) or cap it (truncated).
+export type QueuePage = {
+  docs: QueueDoc[];
+  nextOffset: number | null;
+  truncated: boolean;
+};
 
 export type QueueDoc = {
   id: string;
@@ -56,9 +66,46 @@ export interface QueueClient {
     ifVersion?: number,
   ): Promise<QueueDoc>;
   history(collection: QueueCollection, id: string): Promise<QueueEvent[]>;
+  list(collection: QueueCollection, offset: number): Promise<QueuePage>;
 }
 
 const TIMEOUT_MS = 15_000;
+export const LIST_PAGE = 500;
+const LIST_PAGES_MAX = 20;
+
+export type ListResult = {
+  docs: QueueDoc[];
+  truncated: boolean;
+  // One page: the console reads the whole visible collection in one query
+  // (ops-console GET /db/:col ignores limit and offset), so the list is one
+  // snapshot. A paged walk has no snapshot (the HTTP API has no as_of): a
+  // write between pages can shift a doc out of the walk.
+  snapshot: boolean;
+};
+
+// The whole collection page by page; a page that does not move the offset
+// forward ends the walk, so a faulty next_offset cannot loop. Past the
+// deadline (ms since epoch) no next page is read and the list is truncated.
+export async function listAll(
+  client: QueueClient,
+  collection: QueueCollection,
+  deadline = Number.POSITIVE_INFINITY,
+): Promise<ListResult> {
+  const docs: QueueDoc[] = [];
+  let truncated = false;
+  let offset = 0;
+  for (let page = 0; page < LIST_PAGES_MAX; page += 1) {
+    if (page > 0 && Date.now() > deadline) break;
+    const next = await client.list(collection, offset);
+    docs.push(...next.docs);
+    truncated ||= next.truncated;
+    if (next.nextOffset === null || next.nextOffset <= offset) {
+      return { docs, truncated, snapshot: page === 0 };
+    }
+    offset = next.nextOffset;
+  }
+  return { docs, truncated: true, snapshot: false };
+}
 
 export function httpQueueClient(config: OwnerQueueConfig): QueueClient {
   const base = `${config.url}/api/oq/v1`;
@@ -117,6 +164,18 @@ export function httpQueueClient(config: OwnerQueueConfig): QueueClient {
         `/history/${collection}/${encodeURIComponent(id)}`,
       );
       return ((json?.events as QueueEvent[] | undefined) ?? []).slice(0, 50);
+    },
+    async list(collection, offset) {
+      const json = await call(
+        "GET",
+        `/db/${collection}?limit=${LIST_PAGE}&offset=${offset}`,
+      );
+      const next = json?.next_offset;
+      return {
+        docs: (json?.docs as QueueDoc[] | undefined) ?? [],
+        nextOffset: typeof next === "number" ? next : null,
+        truncated: json?.truncated === true,
+      };
     },
   };
 }
