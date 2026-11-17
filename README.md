@@ -122,7 +122,10 @@ Third-party foundations:
   between fences with a per-call random nonce → the same judge, the AI council's review prompts and the board
   notebook (idea, own code); **ASD-STE100** (Simplified Technical English, ASD) — controlled-language writing rules
   (sentence length, one word one meaning, imperative, active voice) → agent-to-agent text in all products,
-  `.claude/rules/00-agent-comms.md` (a short subset in own words, not the specification text).
+  `.claude/rules/00-agent-comms.md` (a short subset in own words, not the specification text);
+  **[agent-bridges/ab](https://github.com/agent-bridges/ab)** (MIT) — the principle «a session lives apart from its
+  window» → roles as windows of one `tmux` server under launchd, `eval/tools/tmux_host.py` (principle only, own code;
+  review — [`docs/integrations/agent-bridge/`](docs/integrations/agent-bridge/README.md)).
 - The MCP hub runs [1mcp](https://github.com/1mcp-app/agent); the AI council and the gateway use local
   [Ollama](https://ollama.com) models and hosted providers (GLM Z.AI, OpenRouter) through their public APIs.
 
