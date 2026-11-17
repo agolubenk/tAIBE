@@ -221,7 +221,7 @@ def poll_queue(ctx):
         # Роль-автор без сессии (сверх доли владельца — d-team-surplus-1711 — или закрыта), а другие роли продукта живы:
         # ответ и координатору, иначе его никто не прочтёт. Живых нет вовсе (ночь, CI) — как раньше, только роли.
         live = active_roles(target) if role != "coord" else []
-        orphan = bool(live) and role not in live
+        orphan = role != "coord" and (bool(live) and role not in live or role in surplus_roles(target))
         _emit_to(ctx, target, key, "owner.answer", NERVOUS, [role, "coord"] if orphan else [role],
                  f"ответ владельца {c['id']}: {label}{' · есть заметка' if a.get('note') else ''}"
                  + (f" · роль {role} без сессии — возьми, coord" if orphan else ""), "queue")
@@ -311,6 +311,25 @@ def map_roles(ctx):
 
 def active_roles(ctx):
     return sorted(map_roles(ctx))
+
+
+def surplus_roles(ctx):
+    """Роли продукта, закончившие смену сверх доли владельца за active_hours (метки eval/tools/lineage.py surplus,
+    d-team-surplus-1711): ответы на их пункты нужны и координатору. Продукт метки — ключ генома: '' — по умолчанию."""
+    d = os.environ.get("TAIBE_LINEAGE_DIR") or os.path.join(os.path.expanduser("~"), ".claude", "lineage")
+    key, horizon = ctx.cfg.get("slug", ""), ctx.now.timestamp() - ctx.cfg["team"]["active_hours"] * 3600
+    out = set()
+    for f in glob.glob(os.path.join(d, "*.surplus")):
+        try:
+            if os.path.getmtime(f) < horizon:
+                continue
+            with open(f, encoding="utf-8") as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(m, dict) and m.get("product", "") == key and isinstance(m.get("role"), str):
+            out.add(m["role"])
+    return out
 
 
 def poll_system(ctx):

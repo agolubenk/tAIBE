@@ -436,23 +436,29 @@ elif [ -n "$HANDOFF" ]; then
           "Do not wake it. Take its open work from the handoff $HANDOFF. The Mac closes its session after 30 min idle." >&2
       else
         echo "spawn_session: role $ROLE ($PRODUCT) is surplus over the owner split ($split, decision d-team-surplus-1711)." \
-          "No successor opens. 1. Write work_state. 2. Release your inbox claims (oq_agent_status release, note: to coord)." \
-          "3. Do not start new work. 4. Do not wait for a successor ack and do not run spawn_session.sh again." \
-          "The Mac closes this session after 30 min idle." >&2
+          "No successor opens. 1. Commit and push your WIP branch, then write work_state (unsaved work keeps the session" \
+          "open). 2. Release your inbox claims (oq_agent_status release, note: to coord). 3. Do not start new work." \
+          "4. Do not wait for a successor ack and do not run spawn_session.sh again. The Mac closes this session after" \
+          "30 min idle." >&2
       fi
       mark=0
-      [ "$DRY" = 1 ] || python3 -I "$TOOLS/lineage.py" surplus --handoff "$HANDOFF" >/dev/null 2>&1 || mark=$?
+      [ "$DRY" = 1 ] || python3 -I "$TOOLS/lineage.py" surplus --handoff "$HANDOFF" --role "$ROLE" \
+        --product "${PRODUCT_SUB%/}" --slug "$PRODUCT" >/dev/null 2>&1 || mark=$?
       if [ "$mark" = 3 ]; then
         echo "spawn_session: the coordinator already has your handoff." >&2
       elif [ "$DRY" = 0 ] && python3 -I "${SPAWN_NERVE:-$TOOLS/../nerve/nerve.py}" emit coord --product "$PRODUCT" \
-        "Role $ROLE ($PRODUCT) ends: it is surplus over the owner split ($split, d-team-surplus-1711). No successor opens. 1. Read the handoff $HANDOFF. 2. Take its PRs, cards and work_state. 3. Take its owner-queue items: owner answers to them go to role $ROLE, which has no session." \
+        "Role $ROLE ($PRODUCT) ends: it is surplus over the owner split ($split, d-team-surplus-1711). No successor opens. 1. Read the handoff $HANDOFF. 2. Take its PRs, cards and work_state. 3. Take its owner-queue items: the Nerve also sends owner answers to them to you." \
         >/dev/null 2>&1; then
+        python3 -I "$TOOLS/lineage.py" surplus --coord-done >/dev/null 2>&1 || true
         echo "spawn_session: the coordinator has your handoff." >&2
       elif [ "$DRY" = 0 ]; then
         echo "spawn_session: the event to coord failed. Run: python3 -I $TOOLS/../nerve/nerve.py emit coord" \
           "--product $PRODUCT \"Take the handoff $HANDOFF of surplus role $ROLE\"" >&2
       fi
-      [ "$mark" = 0 ] || [ "$mark" = 3 ] || echo "# spawn_session: метка lineage.py surplus не записана ($mark) — место освободит «ВЫКЛ → ВКЛ»" >&2
+      if [ "$mark" != 0 ] && [ "$mark" != 3 ] && [ "$mark" != 4 ]; then
+        echo "spawn_session: the surplus mark failed ($mark). This session still counts as a role; the slot frees only" \
+          "after «Разработка ВЫКЛ → ВКЛ». Tell coord." >&2
+      fi
       exit 5
     fi
   fi

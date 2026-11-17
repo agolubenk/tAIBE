@@ -136,18 +136,25 @@ def ack_state(procs, line):
 
 
 def surplus_state(procs, line):
-    """Метка «сверх доли владельца» (lineage.py surplus) этой самой сессии: pid и старт совпали с живым claude."""
+    """Метка «сверх доли владельца» (lineage.py surplus) этой самой сессии: pid и старт совпали с живым claude, и роль
+    всё ещё сверх доли (владелец мог вернуть долю — «Отменить» в тосте): иначе метка не в счёт."""
     if not L.valid_line(line or ""):
         return False
     m = L.read_json(L.lfile(line, ".surplus")) or {}
     s = procs.get(m.get("pid") if isinstance(m.get("pid"), int) else -1)
-    return s is not None and L.argv0(s) == "claude" and L.norm(s.start) == L.norm(m.get("start"))
+    if s is None or L.argv0(s) != "claude" or L.norm(s.start) != L.norm(m.get("start")):
+        return False
+    if isinstance(m.get("slug"), str) and m["slug"] and isinstance(m.get("role"), str) and m["role"]:
+        import team_plan as TP  # noqa: E402 — team_plan импортирует team_status, тот — этот модуль
+        return not TP.keep(m["slug"], m["role"])[0]  # без сети: кэш долей; сбой — keep → метка не в счёт
+    return True
 
 
 def cmd_surplus(sx, a):
     """Роль сверх доли владельца (spawn_session.sh --handoff, код 5): метка <линия>.surplus с pid и стартом своего
-    claude. По ней сторож команды не считает сессию живой ролью, а автоуборка снимает её после простоя. Код 0 — метка
-    новая, 3 — такая же уже была (повтор handoff: событие координатору второй раз не нужно)."""
+    claude. По ней сторож команды не считает сессию живой ролью, автоуборка снимает её после простоя, а Нерв шлёт ответы
+    владельца на её пункты и координатору (role, product — ключ генома: '' у продукта по умолчанию). Код 0 — метка
+    новая, 4 — уже была, но координатор ещё не подтверждён, 3 — была и координатор получил handoff (--coord-done)."""
     procs = sx.procs()
     me = L.ancestor_claude(procs, os.getpid())
     line = os.environ.get("TAIBE_LINEAGE", "") or (L.session_line(sx, me) if me else None) or ""
@@ -165,10 +172,20 @@ def cmd_surplus(sx, a):
             break
     if who is None:
         return L.die(f"нет живой сессии линии {line}")
+    # Метка только на сессию той самой роли: иначе (координатор без TAIBE_LINEAGE= будит роль, унаследованная линия)
+    # она легла бы на координатора или другую роль, и автоуборка сняла бы рабочую сессию (линза корректности).
+    got = role_of(who.command, line)
+    if a.role and got != (a.product, a.role):
+        return L.die(f"линия {line} — сессия {got[1] or 'без роли'} ({got[0] or 'по умолчанию'}), не {a.role}: метку не ставлю")
     f, old = L.lfile(line, ".surplus"), L.read_json(L.lfile(line, ".surplus")) or {}
-    if old.get("pid") == who.pid and L.norm(old.get("start")) == L.norm(who.start):
-        return 3
-    L.write_json(f, {"line": line, "pid": who.pid, "start": who.start, "handoff": a.handoff, "at": L.stamp()})
+    same = old.get("pid") == who.pid and L.norm(old.get("start")) == L.norm(who.start)
+    if same and a.coord_done:
+        L.write_json(f, {**old, "coord": True})
+        return 0
+    if same:
+        return 3 if old.get("coord") else 4
+    L.write_json(f, {"line": line, "pid": who.pid, "start": who.start, "role": a.role, "product": a.product, "slug": a.slug,
+                     "handoff": a.handoff, "coord": False, "at": L.stamp()})
     return 0
 
 

@@ -142,10 +142,20 @@ def decide(sx, procs, r, ctx, a):
         return None, why
     if r["pid"] in ctx["holders"]:
         return None, "держатель роли"
+    if kind == "surplus" and main_checkout(r["cwd"]):
+        # Основной checkout общий: его несохранённое — не этой сессии (роли работают в worktree), снятие процесса
+        # файлов не трогает, handoff уже у координатора. Иначе роль сверх доли висела бы вечно (линза ресурсов).
+        return kind, why + ", основной checkout — несохранённое общее, не этой сессии"
     lost = sx.unsaved(r["cwd"])
     if lost:
         return None, f"{lost} в папке"
     return kind, why + ", не держатель роли, в папке всё сохранено"
+
+
+def main_checkout(cwd):
+    """Папка — основной checkout репозитория (.git — каталог), не свой worktree сессии (.git — файл)."""
+    root = R.git_root(cwd or "")
+    return bool(root) and os.path.realpath(root) == os.path.realpath(cwd) and os.path.isdir(os.path.join(root, ".git"))
 
 
 def parse_windows(out):
@@ -251,6 +261,8 @@ def recheck(sx, r):
     st = sx.status(r["pid"])
     if st not in (("idle",) if r["auto"] in ("idle", "surplus") else ("idle", "waiting")):
         return f"пропуск: статус стал {st}"
+    if r["auto"] == "surplus" and main_checkout(r["cwd"]):
+        return ""
     lost = sx.unsaved(r["cwd"])
     return f"пропуск: {lost} в папке" if lost else ""
 

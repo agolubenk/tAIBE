@@ -189,6 +189,31 @@ class AutoTest(Base):
         self.assertIn("простой 0.6 < 8 ч", v[723])  # без метки — обычное правило простоя
         self.assertIn("простой 0.6 < 8 ч", v[724])  # метка чужого pid не в счёт
 
+    def test_surplus_mark_lapses_when_split_comes_back(self):
+        """Владелец вернул долю («Отменить»): роль снова в доле — метка не в счёт, сессия снова держатель роли."""
+        import team_plan as TP
+        self.sess(741, line="r.b1", role="plan", idle_h=0.6)
+        L.write_json(L.ldir() / "r.b1.surplus", {"line": "r.b1", "pid": 741, "start": ST, "role": "plan", "slug": "taibe"})
+        with mock.patch.object(TP, "keep", lambda slug, role, log=None: (True, "hr-helper 6 · taibe 6")):
+            v = self.verdicts(self.auto()[1])
+        self.assertIn("простой 0.6 < 8 ч", v[741])  # метка не в счёт — обычное правило, не снять
+        with mock.patch.object(TP, "keep", lambda slug, role, log=None: (False, "hr-helper 8 · taibe 4")):
+            v = self.verdicts(self.auto()[1])
+        self.assertIn("СНЯТЬ: сверх доли владельца", v[741])
+
+    def test_surplus_in_dirty_main_checkout_is_taken_own_worktree_is_not(self):
+        """Основной checkout общий и всегда «грязный» (53–60 строк на Mac 17.11): роль сверх доли там не держится вечно;
+        в своём worktree несохранённое по-прежнему держит сессию."""
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        self.sess(731, line="r.m1", role="plan", idle_h=0.6, cwd=self.root)
+        self.sess(732, line="r.m2", role="boards", idle_h=0.6)                                   # cwd — worktrees/x
+        for pid, line in ((731, "r.m1"), (732, "r.m2")):
+            L.write_json(L.ldir() / f"{line}.surplus", {"line": line, "pid": pid, "start": ST})
+        v = self.verdicts(self.auto(unsaved={str(self.root): "незакоммиченное", str(self.wt): "незакоммиченное"})[1])
+        self.assertIn("СНЯТЬ: сверх доли владельца", v[731])
+        self.assertIn("основной checkout", v[731])
+        self.assertIn("незакоммиченное в папке", v[732])
+
     def test_protections_beat_every_criterion(self):
         self.sess(721, line="r.m1", role=None, idle_h=50, cwd=self.dir / "dev")           # мост в общем корне
         self.sess(722, line="r.m2", role=None, idle_h=50, cwd="/elsewhere")               # чужой проект
