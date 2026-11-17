@@ -9,15 +9,15 @@ import {
   ssrVersionTable,
 } from "../database/ssr-schema";
 import { isCorpusPath } from "./corpus";
-import { pushRepoOf } from "./push-repos";
+import { type PushTarget, readPushTargets } from "./push-target";
 import { resolvePushToken } from "./push-token";
 
 // Push-back (spec RU-9, D-010, D-012): commits served-latest files into the
-// product repo's main with [skip ci]. The push is conditional — for every
-// file the repo's current sha must equal what the sync last saw; anything
-// else is a conflict row, never a silent overwrite. Rollbacks push
-// immediately; the nightly job only reconciles what drifted.
-const BRANCH = process.env.SSR_PUSH_GITHUB_BRANCH ?? "main";
+// workspace's own repo and branch (push-target.ts, TB-160) with [skip ci].
+// The push is conditional — for every file the repo's current sha must equal
+// what the sync last saw; anything else is a conflict row, never a silent
+// overwrite. Rollbacks push immediately; the nightly job only reconciles what
+// drifted.
 const API = "https://api.github.com";
 
 type ChangesetFile = { path: string; sha256: string; content: string };
@@ -32,14 +32,13 @@ export type PushResult = {
 
 // One push talks to one repo with one token: the token file is read once per
 // push (TB-116), not once per GitHub call.
-type PushTarget = { repo: string; token: string };
+type PushCall = PushTarget & { token: string };
 
-// `path` is relative to the repo: "/contents/…", "/git/…".
-function github(target: PushTarget, path: string, init: RequestInit = {}) {
-  return fetch(`${API}/repos/${target.repo}${path}`, {
+function github(call: PushCall, path: string, init: RequestInit = {}) {
+  return fetch(`${API}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${target.token}`,
+      Authorization: `Bearer ${call.token}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "Content-Type": "application/json",
@@ -51,14 +50,14 @@ function github(target: PushTarget, path: string, init: RequestInit = {}) {
 type RepoFile = { sha: string | null; content: string | null };
 
 async function readRepoFiles(
-  target: PushTarget,
+  target: PushCall,
   paths: string[],
 ): Promise<Map<string, RepoFile>> {
   const result = new Map<string, RepoFile>();
   for (const path of paths) {
     const response = await github(
       target,
-      `/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
+      `/repos/${target.repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(target.branch)}`,
     );
     if (response.status === 404) {
       result.set(path, { sha: null, content: null });
@@ -133,10 +132,12 @@ export async function collectChangeset(
   return changeset;
 }
 
+// targets — SSR_PUSH_TARGETS, read once per nightly run by the caller.
 export async function pushChangeset(
   workspaceId: string,
   message: string,
   filterPaths?: string[],
+  targets: ReadonlyMap<string, PushTarget> = readPushTargets(),
 ): Promise<PushResult> {
   // TB-116: no token file means push-back is off, not an error.
   const { token } = resolvePushToken();
@@ -147,17 +148,6 @@ export async function pushChangeset(
       files: [],
       conflicts: [],
       reason: "not_configured",
-    };
-  }
-  // TB-93: the repo of this workspace, never a repo of another product.
-  const repo = pushRepoOf(workspaceId);
-  if (!repo) {
-    return {
-      pushed: false,
-      commitSha: null,
-      files: [],
-      conflicts: [],
-      reason: "no_repo",
     };
   }
   let changeset = await collectChangeset(workspaceId);
@@ -181,7 +171,19 @@ export async function pushChangeset(
     };
   }
 
-  const target: PushTarget = { repo, token };
+  // No target, no GitHub call: the versions stay served, nothing is lost.
+  const repoTarget = targets.get(workspaceId);
+  if (!repoTarget) {
+    return {
+      pushed: false,
+      commitSha: null,
+      files: [],
+      conflicts: [],
+      reason: "no_target",
+    };
+  }
+  const target: PushCall = { ...repoTarget, token };
+
   const repoFiles = await readRepoFiles(
     target,
     changeset.map((file) => file.path),
@@ -270,16 +272,23 @@ export async function pushChangeset(
 }
 
 async function commitFiles(
-  target: PushTarget,
+  target: PushCall,
   message: string,
   files: ChangesetFile[],
 ): Promise<string> {
-  const refResponse = await github(target, `/git/ref/heads/${BRANCH}`);
+  const repo = `/repos/${target.repo}`;
+  const refResponse = await github(
+    target,
+    `${repo}/git/ref/heads/${target.branch}`,
+  );
   if (!refResponse.ok) {
     throw new Error(`GitHub ref: HTTP ${refResponse.status}`);
   }
   const ref = (await refResponse.json()) as { object: { sha: string } };
-  const commitResponse = await github(target, `/git/commits/${ref.object.sha}`);
+  const commitResponse = await github(
+    target,
+    `${repo}/git/commits/${ref.object.sha}`,
+  );
   if (!commitResponse.ok) {
     throw new Error(`GitHub commit: HTTP ${commitResponse.status}`);
   }
@@ -287,7 +296,7 @@ async function commitFiles(
 
   const treeItems = await Promise.all(
     files.map(async (file) => {
-      const blobResponse = await github(target, "/git/blobs", {
+      const blobResponse = await github(target, `${repo}/git/blobs`, {
         method: "POST",
         body: JSON.stringify({
           content: Buffer.from(file.content, "utf8").toString("base64"),
@@ -309,7 +318,7 @@ async function commitFiles(
     }),
   );
 
-  const treeResponse = await github(target, "/git/trees", {
+  const treeResponse = await github(target, `${repo}/git/trees`, {
     method: "POST",
     body: JSON.stringify({ base_tree: commit.tree.sha, tree: treeItems }),
   });
@@ -318,7 +327,7 @@ async function commitFiles(
   }
   const tree = (await treeResponse.json()) as { sha: string };
 
-  const newCommitResponse = await github(target, "/git/commits", {
+  const newCommitResponse = await github(target, `${repo}/git/commits`, {
     method: "POST",
     body: JSON.stringify({
       message: `${message} [skip ci]`,
@@ -331,10 +340,14 @@ async function commitFiles(
   }
   const newCommit = (await newCommitResponse.json()) as { sha: string };
 
-  const updateResponse = await github(target, `/git/refs/heads/${BRANCH}`, {
-    method: "PATCH",
-    body: JSON.stringify({ sha: newCommit.sha }),
-  });
+  const updateResponse = await github(
+    target,
+    `${repo}/git/refs/heads/${target.branch}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ sha: newCommit.sha }),
+    },
+  );
   if (!updateResponse.ok) {
     throw new Error(`GitHub ref update: HTTP ${updateResponse.status}`);
   }
@@ -342,6 +355,14 @@ async function commitFiles(
 }
 
 // Nightly reconcile (scheduler): push whatever drifted, record conflicts.
-export async function runNightlyPush(workspaceId: string): Promise<PushResult> {
-  return pushChangeset(workspaceId, "tAI-Boards SSR: sync approved versions");
+export async function runNightlyPush(
+  workspaceId: string,
+  targets: ReadonlyMap<string, PushTarget>,
+): Promise<PushResult> {
+  return pushChangeset(
+    workspaceId,
+    "tAI-Boards SSR: sync approved versions",
+    undefined,
+    targets,
+  );
 }

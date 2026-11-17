@@ -97,22 +97,24 @@ describe("SSR push-back deploy wiring", () => {
     /\n {2}app:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:\n)/,
   )?.[1];
 
-  it("hands the app the token file and the repo pairs, never the token", () => {
+  it("hands the app the token file and the push targets, never the token", () => {
     expect(app).toBeDefined();
     expect(app).toContain(
       "SSR_PUSH_GITHUB_TOKEN_FILE: /run/tb-secrets/ssr_push_github_token",
     );
     // Compose syntax, not a JS template: built so the literal stays literal.
-    expect(app).toContain(`SSR_PUSH_REPOS: $\{SSR_PUSH_REPOS:-}`);
+    expect(app).toContain(`SSR_PUSH_TARGETS: $\{SSR_PUSH_TARGETS:-}`);
     expect(app).toContain("- ./secrets:/run/tb-secrets:ro");
     expect(app).not.toMatch(/SSR_PUSH_GITHUB_TOKEN:/);
   });
 
-  it("install.sh locks the token file down and keeps SSR_PUSH_REPOS in .env", () => {
+  it("install.sh locks the token file down and keeps SSR_PUSH_TARGETS in .env", () => {
     expect(install).toMatch(
       /for optional in [^;\n]*\bssr_push_github_token\b[^;\n]*; do/,
     );
-    expect(install).toContain("SSR_PUSH_REPOS=)");
-    expect(install).toMatch(/for var in [^;\n]*\bSSR_PUSH_REPOS\b[^;\n]*; do/);
+    expect(install).toContain("SSR_PUSH_TARGETS=)");
+    expect(install).toMatch(
+      /for var in [^;\n]*\bSSR_PUSH_TARGETS\b[^;\n]*; do/,
+    );
   });
 });

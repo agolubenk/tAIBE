@@ -6,11 +6,15 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, lazyPlugins } from "vite-plus";
 import packageJson from "../../package.json";
+import { type ChunkGraph, unloadedDeps } from "./bundling/preload-deps";
 
 const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
 const sentryOrg = process.env.SENTRY_ORG;
 const sentryProject = process.env.SENTRY_PROJECT;
 const uploadSourceMaps = Boolean(sentryAuthToken && sentryOrg && sentryProject);
+
+// The chunks of the last build, for build.modulePreload below (TB-173).
+let chunkGraph: ChunkGraph = {};
 
 export default defineConfig({
   run: {
@@ -54,6 +58,21 @@ export default defineConfig({
     tailwindcss(),
     react(),
     babel({ presets: [reactCompilerPreset()] }),
+    // Runs before Vite writes the preload lists; until then nothing is cut.
+    {
+      name: "chunk-graph",
+      apply: "build",
+      generateBundle(_options, bundle) {
+        chunkGraph = {};
+        for (const file of Object.values(bundle)) {
+          if (file.type !== "chunk") continue;
+          chunkGraph[file.fileName] = {
+            imports: file.imports,
+            isEntry: file.isEntry,
+          };
+        }
+      },
+    },
     // Hidden when Sentry env vars are absent so local dev does not depend on it.
     ...(uploadSourceMaps
       ? [
@@ -88,6 +107,11 @@ export default defineConfig({
     // Generate maps only for private symbolication, then delete after upload.
     // "hidden" alone still writes publicly servable .map files.
     sourcemap: uploadSourceMaps ? "hidden" : false,
+    modulePreload: {
+      // A chunk the page has already loaded is not listed again (TB-173).
+      resolveDependencies: (_filename, deps, { hostId, hostType }) =>
+        hostType === "js" ? unloadedDeps(chunkGraph, hostId, deps) : deps,
+    },
     rollupOptions: {},
     commonjsOptions: {
       include: [/better-auth/, /node_modules/],

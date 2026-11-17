@@ -121,19 +121,19 @@ write_files() {
   bash "$here/render-tls.sh" "$here/tls.conf.template" "$ROOT/tls.conf" \
     "$WG_ADDR:$TLS_PORT" "$DOMAIN" 127.0.0.1:5180 || die "tls.conf не отрендерился"
 
-  # Keep the mirror, notebook, claude-mem, owner-queue and SSR push-back repo
+  # Keep the mirror, notebook, claude-mem, owner-queue and SSR push-back target
   # settings the owner already filled in.
   [ -f "$ROOT/.env" ] && cp -a "$ROOT/.env" "$ROOT/.env.prev"
   local kept=""
   if [ -f "$ROOT/.env.prev" ]; then
-    kept="$(grep -E '^((NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ)_|SSR_PUSH_REPOS=)' "$ROOT/.env.prev" || true)"
+    kept="$(grep -E '^((NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH)_|SSR_PUSH_TARGETS=)' "$ROOT/.env.prev" || true)"
   fi
   {
     echo "TB_IMAGE=t-boards:$TB_TAG"
     echo "TB_DOMAIN=$DOMAIN"
     echo "TB_LE_VOLUME=$LE_VOLUME"
     if [ -n "$kept" ]; then printf '%s\n' "$kept"; fi
-    for var in NOTION_MIRROR_WORKSPACE_ID NOTION_MIRROR_DATABASES SSR_PUSH_REPOS; do
+    for var in NOTION_MIRROR_WORKSPACE_ID NOTION_MIRROR_DATABASES SSR_PUSH_TARGETS; do
       grep -q "^$var=" <<<"$kept" || echo "$var="
     done
     # The Mac's read-only claude-mem proxy listens on its tunnel address.

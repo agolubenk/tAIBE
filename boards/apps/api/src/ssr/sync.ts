@@ -63,6 +63,23 @@ export async function syncCorpus(
     );
   }
 
+  // The sha names the bytes: blobs are shared between workspaces, so bytes
+  // stored under a wrong sha would be served to every workspace that names
+  // that sha (TB-92).
+  const forged = input.files.filter(
+    (file) =>
+      file.content !== undefined && sha256(file.content) !== file.sha256,
+  );
+  if (forged.length > 0) {
+    throw new SyncError(
+      `Content does not match its sha256: ${forged
+        .slice(0, 5)
+        .map((file) => file.path)
+        .join(", ")}`,
+      "sha_mismatch",
+    );
+  }
+
   const secretHits = scanSecrets(
     input.files.filter((file) => file.content !== undefined) as Array<{
       path: string;

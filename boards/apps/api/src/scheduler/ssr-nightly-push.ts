@@ -1,38 +1,36 @@
-import { inArray } from "drizzle-orm";
 import db from "../database";
 import { workspaceTable } from "../database/schema";
-import { runNightlyPush } from "../ssr/pushback";
-import { pushRepos } from "../ssr/push-repos";
+import { readPushTargets } from "../ssr/push-target";
 import { resolvePushToken } from "../ssr/push-token";
+import { runNightlyPush } from "../ssr/pushback";
 
 // Nightly push-back (spec RU-9): reconcile the served-latest files of every
-// workspace that names its repo in SSR_PUSH_REPOS into that repo (TB-93).
-// Disabled without the token file (TB-116) — a missing config is a setup
-// state, not an error worth paging anyone for: one log line says why.
+// workspace with a target (SSR_PUSH_TARGETS, TB-160) into its own repo.
+// Disabled without the token file (TB-116) or a target — a missing config is
+// a setup state, not an error worth paging anyone for: one log line says why.
 export async function runNightlySsrPush(): Promise<{ degraded?: boolean }> {
   const { reason } = resolvePushToken();
   if (reason) {
     console.log(`SSR push-back skipped: no GitHub token: ${reason}`);
     return {};
   }
-  // TB-93: only the workspaces that name their own repo.
-  const repos = pushRepos();
-  if (repos.size === 0) {
-    console.log(
-      process.env.SSR_PUSH_GITHUB_REPO
-        ? "SSR push-back skipped: SSR_PUSH_GITHUB_REPO is ignored since TB-93; set SSR_PUSH_REPOS=<workspaceId>=<owner>/<repo>"
-        : "SSR push-back skipped: SSR_PUSH_REPOS names no workspace",
-    );
+  const targets = readPushTargets();
+  if (targets.size === 0) {
+    console.log("SSR push-back skipped: SSR_PUSH_TARGETS names no workspace");
     return {};
   }
   let degraded = false;
+  let untargeted = 0;
   const workspaces = await db
     .select({ id: workspaceTable.id })
-    .from(workspaceTable)
-    .where(inArray(workspaceTable.id, [...repos.keys()]));
+    .from(workspaceTable);
   for (const workspace of workspaces) {
+    if (!targets.has(workspace.id)) {
+      untargeted += 1;
+      continue;
+    }
     try {
-      const result = await runNightlyPush(workspace.id);
+      const result = await runNightlyPush(workspace.id, targets);
       if (result.conflicts.length > 0 || (!result.pushed && result.reason)) {
         degraded = true;
         console.warn(
@@ -44,6 +42,11 @@ export async function runNightlySsrPush(): Promise<{ degraded?: boolean }> {
       degraded = true;
       console.error(`SSR push-back workspace ${workspace.id} failed`, error);
     }
+  }
+  if (untargeted > 0) {
+    console.log(
+      `SSR push-back: ${untargeted} workspace(s) without a target in SSR_PUSH_TARGETS, not pushed`,
+    );
   }
   return { degraded };
 }
