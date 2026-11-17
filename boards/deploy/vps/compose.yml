@@ -77,6 +77,16 @@ services:
       # is not its queue product.
       OQ_PLAN_PRODUCTS: ${OQ_PLAN_PRODUCTS:-}
       OQ_TOKEN_FILE: /run/tb-secrets/oq_token
+      # Mail (TB-31 R-10): off until SMTP_HOST and SMTP_FROM are set. An empty
+      # SMTP_SECURE means TLS from the first byte (port 465); a provider on 587
+      # with STARTTLS needs SMTP_SECURE=false. The password is a file only.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-}
+      SMTP_PASSWORD_FILE: /run/tb-secrets/smtp_password
     volumes:
       - ./secrets:/run/tb-secrets:ro
     ports:

@@ -94,7 +94,7 @@ ensure_secrets() {
     chown 1001:1001 "$ROOT/secrets/$name"
     chmod 0400 "$ROOT/secrets/$name"
   done
-  for optional in notion_token notebook_llm_key claude_mem_proxy_token; do
+  for optional in notion_token notebook_llm_key claude_mem_proxy_token smtp_password; do
     if [ -f "$ROOT/secrets/$optional" ]; then
       chown 1001:1001 "$ROOT/secrets/$optional"
       chmod 0400 "$ROOT/secrets/$optional"
@@ -118,12 +118,12 @@ write_files() {
   bash "$here/render-tls.sh" "$here/tls.conf.template" "$ROOT/tls.conf" \
     "$WG_ADDR:$TLS_PORT" "$DOMAIN" 127.0.0.1:5180 || die "tls.conf не отрендерился"
 
-  # Keep the mirror, notebook, claude-mem and owner-queue settings the owner
-  # already filled in.
+  # Keep the mirror, notebook, claude-mem, owner-queue and mail settings the
+  # owner already filled in.
   [ -f "$ROOT/.env" ] && cp -a "$ROOT/.env" "$ROOT/.env.prev"
   local kept=""
   if [ -f "$ROOT/.env.prev" ]; then
-    kept="$(grep -E '^(NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH)_' "$ROOT/.env.prev" || true)"
+    kept="$(grep -E '^(NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH|SMTP)_' "$ROOT/.env.prev" || true)"
   fi
   {
     echo "TB_IMAGE=t-boards:$TB_TAG"
