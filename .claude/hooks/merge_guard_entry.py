@@ -40,15 +40,14 @@ def main(hook=HOOK):
         spec = importlib.util.spec_from_file_location("merge_guard_hook", hook)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-    except BaseException as exc:  # noqa: BLE001 — SystemExit и KeyboardInterrupt при загрузке тоже не проход
+        sys.stdin = io.StringIO(raw)
+        mod.main()
+    except BaseException as exc:  # noqa: BLE001 — сбой загрузки или main() хука (и SystemExit) — не проход
         reason = failure_reason(data if isinstance(data, dict) else {}, exc)
         if reason:
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}},
                 ensure_ascii=False))
-        return
-    sys.stdin = io.StringIO(raw)
-    mod.main()
 
 
 if __name__ == "__main__":

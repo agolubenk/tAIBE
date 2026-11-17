@@ -55,6 +55,12 @@ class BrokenHook(unittest.TestCase):
             got = run(bash("git push"), self.hook(body))
             self.assertEqual(got and got["permissionDecision"], "deny", body)
 
+    def test_failure_inside_hook_main_denies(self):
+        # хук загрузился, но упал его main() (линза boards N1)
+        hook = self.hook("def main():\n    raise RuntimeError('main упал')\n")
+        self.assertEqual(run(bash("gh pr merge 1"), hook)["permissionDecision"], "deny")
+        self.assertIsNone(run(bash("ls"), hook))
+
     def test_plain_command_passes(self):
         # сбой хука не блокирует всё подряд — как сбой разбора в main() хука
         self.assertIsNone(run(bash("ls -la"), self.hook("raise ImportError('x')\n")))
