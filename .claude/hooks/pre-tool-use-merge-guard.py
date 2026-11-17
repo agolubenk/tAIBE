@@ -26,7 +26,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, reviewed_test, start_budget  # noqa: E402
-from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
+from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, dir_steps, new_state, resolve_dirs  # noqa: E402
 from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
 from merge_guard_gh import VISIBILITY, classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts,  # noqa: E402
@@ -403,14 +403,14 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         for v in implied_commands(expanded):  # `BASH_ENV=m.sh bash -c true`, `NODE_OPTIONS='-r ./m.js' npm test`
             found += classify_argv(normalize(v), cwd, roots, depth, git_env, whole[:2] + (True,) + whole[3:],
                                   strip_prefix(v)[0])
-        raws = [r for r in (strip_prefix(v) for v in expanded) if r]
-        variants = [([command_name(r[0])] + r[1:], r[0]) for r in raws]
+        variants = [([command_name(r[0])] + r[1:], r[0]) for r in (strip_prefix(v) for v in expanded) if r]
         stdin_files = [x for f in sources or (cat_files(*prev, cwd) if piped else []) for x in procs.get(f, [f])]
         stdin_files = stdin_files or ([HEREDOC] if argv in fed else [])
         prev = ([v for v, _ in variants], stdin_files)
-        if any(v[0] in DIR_CMDS for v, _ in variants):
-            new = dir_step([v for v, _ in variants], st, piped)
-            if disk and is_lost(new):  # в скрипте с диска `cd "$ROOT"` в функциях и циклах обычен — папка прежняя
+        steps = dir_steps(expanded, variants)  # `CD x`, `nohup cd x` — папка та же; `command cd` — неизвестна (SE-90)
+        if any(v is None or v and v[0] in DIR_CMDS for v in steps):
+            new = dir_step(steps, st, piped)  # bash и zsh расходятся (`command cd`, `… | cd`) — LOST и в скрипте с диска
+            if disk and is_lost(new) and not piped and None not in steps:  # `cd "$ROOT"` в функциях и циклах — прежняя
                 st.update(new_state(cwd))
             else:
                 cwd = new
