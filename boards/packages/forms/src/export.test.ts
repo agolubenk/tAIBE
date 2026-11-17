@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { validateAnswers } from "./answers";
-import { exportAnswers, humanAnswer } from "./export";
-import { grillAnswers, grillTemplate } from "./fixtures.test-helper";
-import { formTemplateSchema } from "./schema";
-import { visibleFieldIds } from "./show-if";
+import { validateAnswers } from "./answers.js";
+import { exportAnswers, humanAnswer } from "./export.js";
+import { grillAnswers, grillTemplate } from "./fixtures.test-helper.js";
+import { formTemplateSchema } from "./schema.js";
+import { visibleFieldIds } from "./show-if.js";
 
 describe("grill round trip (TB-173 acceptance)", () => {
   it("exports the owner's grill answers equal by q and answer", () => {

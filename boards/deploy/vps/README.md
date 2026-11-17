@@ -45,6 +45,11 @@ the tunnel:
   After changing that address in `.env`, re-run
   `wg-setup.sh` with the Mac's key; `install.sh` warns while the rules disagree and stops if the app did not get its
   address (subnet `10.78.0.0/28` taken).
+- devices of the tunnel do not reach each other, with one exception (OPS-82): the addresses in `WG_MAC_SSH_FROM`
+  (`/opt/t-boards/.env`, space-separated) may open TCP 22 on the Mac's tunnel address (`CLAUDE_MEM_WORKER_HOST`),
+  and only the replies of that SSH come back; while the list is set, the VPS host itself may not reach the Mac's 22
+  (`TB-WG-OUT`). `install.sh` keeps the variable when it rewrites `.env`. That is the owner's phone looking at the agent sessions —
+  [`docs/guides/phone-access.md`](../../../docs/guides/phone-access.md). After changing it: `wg-setup.sh --rules`.
 
 `ip_forward` stays on through `/etc/sysctl.d/99-t-boards-wg.conf`.
 
@@ -52,7 +57,7 @@ the tunnel:
 
 | File | Where it runs | What it does |
 |---|---|---|
-| `wg-setup.sh` | VPS | `wg-setup.sh <public key> <device> split\|full`. The first run creates wg0 (10.77.0.0/24, UDP 51820) and the rules script. Later runs add a peer and upgrade a wg0 from the first kit. Prints the config block for the device with `MTU = 1380`. A new peer gets a PresharedKey, printed once in that block; a peer that is already there is never given one, since that would cut off the device |
+| `wg-setup.sh` | VPS | `wg-setup.sh <public key> <device> split\|full`; `wg-setup.sh --rules` only rewrites and applies the firewall rules (after a change of `.env`). The first run creates wg0 (10.77.0.0/24, UDP 51820) and the rules script. Later runs add a peer and upgrade a wg0 from the first kit. Prints the config block for the device with `MTU = 1380`. A new peer gets a PresharedKey, printed once in that block; a peer that is already there is never given one, since that would cut off the device |
 | `wg-issue.sh` | VPS | `wg-issue.sh <device> split\|full` makes the keypair and the PresharedKey on the VPS and prints a ready profile (stdout) and a QR (stderr). Both carry the device's private key and PresharedKey: save the profile as `(umask 077; ssh root@VPS 'bash /opt/t-boards/wg-issue.sh phone split' > phone.conf)` and delete it after the import, never redirect stderr to a file or a log, and do not run it through an agent, whose transcript would keep the keys. `--revoke <device>` removes the peer |
 | `wg-psk.sh` | VPS | Sets or removes the PresharedKey of one peer by its tunnel address. The address is required. The key never goes into argv or shell history: `ssh -t root@VPS 'bash /opt/t-boards/wg-psk.sh 10.77.0.2'` asks for it with hidden input, or `wg genpsk \| tee >(pbcopy) \| ssh root@VPS 'bash /opt/t-boards/wg-psk.sh 10.77.0.2'`; clear the clipboard after pasting it on the device. Rollback `bash wg-psk.sh --remove 10.77.0.2`. Not through `base64 -d \| bash`: there stdin is the script itself, and wg-psk.sh would read its tail as the key. A failed run leaves `wg0.conf.bak-psk` and prints the rollback, which clears that peer's live key first (an older `wg syncconf` keeps it); the next run stops and prints it again until it is used |
 | `wg-selftest.sh` | Mac | Runs the three scripts above in a privileged container with real iptables. Covers split, full, a re-run, PresharedKey and MTU, the shared lock in all three, wg-psk.sh on the live interface and its refusals, backup retention (idle re-runs, several edits in one second, a clock set back, the stop at the 99th) and file modes, live packets to the memory proxy (only the app gets through, also after a Docker restart and when wg0 starts before Docker), the `install.sh` check of those rules, the first-kit upgrade and stop |
@@ -66,10 +71,12 @@ the tunnel:
 | `backup-key.sh` | VPS | Adds the Mac pull key with `restrict`, `from="10.77.0.2"` and `command="cat latest.dump"` |
 | `mac/backup-agent.sh` | Mac | `key` / `install` / `remove` for the pull key and the LaunchAgent, which runs every 2 h |
 | `mac/pull-backup.sh` | Mac, launchd | Pulls `latest.dump`, checks the `PGDMP` header, skips duplicates, keeps 14 days |
-| `mac/restore-check.sh` | Mac | AC-004: restores a dump into a throwaway Postgres and prints the row counts |
+| `mac/restore-check.sh` | Mac | AC-004: restores a dump into a throwaway Postgres and prints the row counts. It creates the roles `oq_owner` and `oq_console` before `pg_restore` (a dump does not carry roles) and prints `oq_guards` — the owner-queue write triggers that came back (3 since migration 0085) |
 | `mac/memory-agent.sh` | Mac | `token` / `install` / `check` / `remove` for the read-only claude-mem proxy `mac/memory-proxy.mjs` (LaunchAgent). `token` makes `~/.t-boards-memory/proxy_token` once (600, directory 700) and never prints it. `check` expects 401 without the header, 200 with it and 405 for POST; without the token file, 200 and 405 |
 | `mac/memory-token-push.sh` | Mac | `memory-token-push.sh <vps host>` sends that token to `secrets/claude_mem_proxy_token` on ssh's stdin (never argv, stdout or history), then `up -d app` |
 | `selftest.sh` | Mac | Proves the whole kit locally before a delivery |
+| `../check-dist-esm.mjs` | CI (build job), Mac | After `pnpm build`: every relative import in `packages/*/dist` of an ESM package names a file, and every library entry imports under plain Node. Without it an extensionless import (`./index`) passes vitest and typecheck and crash-loops the image |
+| `../check-dockerfile-deps.mjs` | CI (build job), Mac | Static, no docker build: each `Dockerfile.kaneo` stage that copies `apps/<app>` also copies every workspace package the app needs (direct, and through `packages/*`). Without it a missing package (`@kaneo/forms` in web-builder, TB-234) fails only in the image build before a deploy |
 
 ## Secrets
 
@@ -187,6 +194,20 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
   `wg0.conf.bak-<time>`; only the newest three stay, since they hold the server PrivateKey. A re-run that changes nothing makes no copy. The three scripts take one
   lock, `wg0.conf.lock`, so they never rewrite the file over each other.
 - **Backup key:** `sed -i '/t-boards-backup$/d' /root/.ssh/authorized_keys`.
+- **Restore from a dump** (since migration 0085, TB-28): roles are cluster-wide and a dump does not carry them, so
+  create `oq_owner` and `oq_console` first (`NOLOGIN`, the `DO … IF NOT EXISTS` block of
+  `apps/api/drizzle/0085_t_boards_oq_schema.sql`, also in `mac/restore-check.sh`), then `pg_restore` **without**
+  `--no-owner`, so the schema `oq`, its tables and its function stay `oq_owner`'s. With `--no-owner` (as
+  `mac/restore-check.sh` does on a throwaway container) they become `t_boards`'; the write guards still hold, since
+  they check `session_user`. A full restore loads data before it creates the triggers. A data-only restore of the
+  schema `oq` needs `--disable-triggers`: its triggers refuse every writer but `oq_console`. Then the runbook step of
+  card (c) gives `oq_console` its `LOGIN` and password again.
+- **The owner queue in the backups** (from phase 2, TB-28): the boards dump carries `oq.*` — the owner's items, notes
+  and answers. The Mac keeps the pulled dumps for 14 days (`mac/pull-backup.sh`), the same Mac and owner as the
+  console's `ops.db` (assumed acceptable, coordinator 14.11). A rehearsal uses a synthetic base, never a copy of a prod
+  dump (`docs/specs/owner-queue-move.md` §7).
+- **Migration 0085 on a release rollback:** the previous image keeps the schema `oq` (drizzle has no down
+  migrations). An empty `oq` is harmless; with data it stays the console's, and the previous image never reads it.
 
 ## Known limits
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import {
   afterEach,
   beforeEach,
@@ -353,6 +354,113 @@ describe("API integration: notebook PR and link sources", () => {
     );
     const pdf = await nb.owner("POST", "/sources/link", { url: PAGE_URL });
     expect([pdf.status, pdf.body.code]).toEqual([415, "LINK_PDF_UNSUPPORTED"]);
+  });
+
+  // TB-115: «Источники» show who added a link or a PR; a refresh keeps the
+  // first author, a synced or older source has none.
+  it("keeps who added a link or a PR: an agent by its session, a member by name", async () => {
+    const nb = await notebook();
+    mocks.page.mockImplementation(
+      async () =>
+        new Response("<title>Аренда</title><p>Аренда истекает через час.</p>", {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+    );
+    const byAgent = await nb.agentApi(
+      "POST",
+      nb.path("/sources/link"),
+      { url: PAGE_URL },
+      {},
+      "r.ai5m",
+    );
+    expect(byAgent.status).toBe(200);
+    mocks.page.mockImplementationOnce(
+      async () =>
+        new Response("# Аренда\n\nПродлена до пятницы.", {
+          headers: { "content-type": "text/markdown" },
+        }),
+    );
+    const refreshed = await nb.owner("POST", "/sources/link", {
+      url: PAGE_URL,
+    });
+    expect(refreshed.body.changed).toBe(true);
+
+    await linkRepo(nb.project.id, nb.ownerId);
+    mocks.pullsGet.mockResolvedValue(pullRequest("Аренда истекает через час."));
+    expect(
+      (await nb.owner("POST", "/sources/github-pr", { url: PR_URL })).status,
+    ).toBe(200);
+    await db.insert(schema.notebookSourceTable).values({
+      workspaceId: nb.workspace.id,
+      kind: "link",
+      ref: "https://93.184.216.34/old",
+      title: "Старая",
+      contentSha256: "0".repeat(64),
+      chars: 0,
+    });
+
+    const [ownerRow] = await db
+      .select({ name: schema.userTable.name })
+      .from(schema.userTable)
+      .where(eq(schema.userTable.id, nb.ownerId));
+    const listed = (await nb.owner("GET", "/sources")).body.sources as {
+      ref: string;
+      addedByKind: string | null;
+      addedBy: string | null;
+    }[];
+    const author = (ref: string) => {
+      const row = listed.find((source) => source.ref === ref);
+      return row && { kind: row.addedByKind, name: row.addedBy };
+    };
+    expect(author(PAGE_URL)).toEqual({ kind: "agent", name: "r.ai5m" });
+    expect(author("example/repo#7")).toEqual({
+      kind: "person",
+      name: ownerRow?.name,
+    });
+    expect(author("https://93.184.216.34/old")).toEqual({
+      kind: null,
+      name: null,
+    });
+  });
+
+  it("stores a member without a name as a nameless person, never their email", async () => {
+    // The member's actor name falls back to the email (forest/actor.ts);
+    // GET /sources shows the author to every member and agent.
+    const nb = await notebook();
+    const member = await addMember(nb.workspace.id, false);
+    await db
+      .update(schema.workspaceUserTable)
+      .set({ role: "admin" })
+      .where(eq(schema.workspaceUserTable.userId, member.id));
+    const [nameless] = await db
+      .update(schema.userTable)
+      .set({ name: "  " })
+      .where(eq(schema.userTable.id, member.id))
+      .returning();
+    if (!nameless) throw new Error("user not updated");
+    await linkRepo(nb.project.id, nb.ownerId);
+    mocks.pullsGet.mockResolvedValue(pullRequest("Аренда истекает через час."));
+    mockAuthenticatedSession(nameless);
+    const { app } = createApp();
+    const added = await app.request(`/api${nb.path("/sources/github-pr")}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: PR_URL }),
+    });
+    expect(added.status).toBe(200);
+
+    const listed = await nb.owner("GET", "/sources");
+    const source = (
+      listed.body.sources as {
+        ref: string;
+        addedByKind: string | null;
+        addedBy: string | null;
+      }[]
+    ).find((row) => row.ref === "example/repo#7");
+    expect(
+      source && { kind: source.addedByKind, name: source.addedBy },
+    ).toEqual({ kind: "person", name: null });
+    expect(JSON.stringify(listed.body)).not.toContain(member.email);
   });
 
   it("needs manage_settings to add a link or a PR", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { growth, MAX_GROWTH, SCALE } from "../fixtures/linear-time";
+import { growth, MAX_GROWTH, SCALE } from "../fixtures/linear-time.js";
 
 // TB-205: the time tests of redact and restore pass only if the growth check
 // tells linear work from quadratic work. These two jobs have a known growth.

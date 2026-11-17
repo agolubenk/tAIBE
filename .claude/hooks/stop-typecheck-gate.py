@@ -16,6 +16,8 @@ Claude Code v2.1.163+) — никогда не "decision":"block" и не меш
 Fail-safe: любая ошибка/таймаут → пустой вывод, exit 0.
 В worktree без своих зависимостей typecheck не запускается: результат был бы ложным
 (Node берёт node_modules основного checkout) — вместо него хинт с командой починки.
+Typecheck идёт через общий замок `.claude/scripts/heavy-gate.sh` без ожидания (HRH-124, зеркало SE-116):
+идёт чужой тяжёлый гейт — пропуск с хинтом, а не второй tsc на 3+ ГБ параллельно.
 """
 import json
 import os
@@ -28,6 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 EDIT_TOOLS = {"Write", "Edit", "MultiEdit"}
 TOP_LEVEL_DIRS = ("apps", "packages")
 BOARDS_CANDIDATES = ("boards", "t-boards/app")
+WRAPPER = Path(__file__).resolve().parents[1] / "scripts" / "heavy-gate.sh"
+BUSY = 75  # heavy-gate.sh при HEAVY_GATE_WAIT=0: замок занят, команда не запускалась
 
 
 def boards_tree(repo_root):
@@ -161,20 +165,46 @@ def main():
              % (", ".join(sorted(dirs)), problem))
         return
 
-    failed = []
-    for cwd, args in typecheck_commands(dirs, dc.REPO_ROOT):
-        try:
-            proc = subprocess.run(
-                args, cwd=str(cwd), capture_output=True, text=True,
-                timeout=SUBPROCESS_TIMEOUT_S,
-            )
-        except (subprocess.TimeoutExpired, OSError):
-            continue
-        if proc.returncode != 0:
-            failed.append((proc.stdout or proc.stderr or "").strip()[-MAX_OUTPUT:])
+    try:
+        hint = typecheck(dirs, dc.REPO_ROOT)
+    except OSError:
+        return
+    if hint:
+        emit(hint)
 
+
+def run_gated(cwd, args):
+    """(код, вывод) прогона под общим замком без ожидания; None — таймаут. Занято — код BUSY, команда не шла."""
+    env = dict(os.environ, HEAVY_GATE_WAIT="0", HEAVY_GATE_LABEL="stop-hook typecheck")
+    proc = subprocess.Popen(["bash", str(WRAPPER)] + args, cwd=str(cwd), stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, env=env)
+    try:
+        out, err = proc.communicate(timeout=SUBPROCESS_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.terminate()  # TERM обёртке гасит гейт и отпускает замок; SIGKILL оставил бы сироту
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return None
+    return proc.returncode, (out or err or "").strip()
+
+
+def typecheck(dirs, repo_root):
+    """Хинт для модели или None (чисто, таймаут). Замок занят — пропуск: Stop-хук не ждёт чужой гейт."""
+    names = ", ".join(sorted(dirs))
+    failed = []
+    for cwd, args in typecheck_commands(dirs, repo_root):
+        res = run_gated(cwd, args)
+        if res is None or res[0] == 0:
+            continue
+        if res[0] == BUSY:
+            return ("Typecheck skipped for %s — идёт чужой тяжёлый гейт (общий замок, SE-116). Проверь позже: "
+                    ".claude/scripts/heavy-gate.sh <команда typecheck>" % names)
+        failed.append(res[1][-MAX_OUTPUT:])
     if failed:  # пусто — всё чисто, хинт не нужен
-        emit("Typecheck FAILED for %s:\n%s" % (", ".join(sorted(dirs)), "\n---\n".join(failed)[-MAX_OUTPUT:]))
+        return "Typecheck FAILED for %s:\n%s" % (names, "\n---\n".join(failed)[-MAX_OUTPUT:])
+    return None
 
 
 if __name__ == "__main__":
