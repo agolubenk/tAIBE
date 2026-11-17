@@ -399,13 +399,16 @@ class CommandsTest(Base):
             m = L.read_json(L.ldir() / f"{CHILD}.surplus")
             self.assertEqual((m["pid"], m["role"], m["product"], m["slug"], m["coord"]), (700, "plan", "taibe", "taibe", False))
             self.assertEqual(L.main(args, sx), 4)                      # координатор ещё не подтверждён
-            self.assertEqual(L.main(["surplus", "--coord-done"], sx), 0)
+            done = ["surplus", "--coord-done", "--role", "plan", "--product", "taibe", "--slug", "taibe"]
+            self.assertEqual(L.main(done, sx), 0)
             self.assertEqual(L.main(args, sx), 3)                      # повтор — событие второй раз не нужно
             # Сессия линии — координатор, а просят plan: метку не ставить (её сняла бы автоуборка).
             (L.ldir() / f"{CHILD}.surplus").unlink()
             coord = FakeSys([P(700, 1, 700, "ttys001", "claude --settings /x/genome/taibe/coord.json"),
                              P(me, 700, me, "??", "python3 lineage.py surplus")], env={700: CHILD})
             self.assertEqual(L.main(args, coord), 2)
+            self.assertEqual(L.main(done, coord), 2)               # --coord-done новую метку не ставит
+            self.assertEqual(L.main(["surplus", "--coord-done"], coord), 2)  # и без роли — тоже
             self.assertFalse((L.ldir() / f"{CHILD}.surplus").exists())
 
     def test_retire_refuses_foreign_child_line(self):

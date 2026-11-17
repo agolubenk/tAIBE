@@ -143,7 +143,8 @@ def surplus_state(procs, line):
         return False
     m = L.read_json(L.lfile(line, ".surplus")) or {}
     s = procs.get(m.get("pid") if isinstance(m.get("pid"), int) else -1)
-    return s is not None and L.argv0(s) == "claude" and L.norm(s.start) == L.norm(m.get("start"))
+    return isinstance(m.get("role"), str) and bool(m["role"]) and s is not None and L.argv0(s) == "claude" \
+        and L.norm(s.start) == L.norm(m.get("start"))
 
 
 def cmd_surplus(sx, a):
@@ -171,11 +172,13 @@ def cmd_surplus(sx, a):
     # Метка только на сессию той самой роли: иначе (координатор без TAIBE_LINEAGE= будит роль, унаследованная линия)
     # она легла бы на координатора или другую роль, и автоуборка сняла бы рабочую сессию (линза корректности).
     got = role_of(who.command, line)
-    if a.role and got != (a.product, a.role):
+    if not a.role or got != (a.product, a.role):
         return L.die(f"линия {line} — сессия {got[1] or 'без роли'} ({got[0] or 'по умолчанию'}), не {a.role}: метку не ставлю")
     f, old = L.lfile(line, ".surplus"), L.read_json(L.lfile(line, ".surplus")) or {}
     same = old.get("pid") == who.pid and L.norm(old.get("start")) == L.norm(who.start)
-    if same and a.coord_done:
+    if a.coord_done:  # только отметка в своей метке; новую метку --coord-done не ставит
+        if not same:
+            return L.die(f"нет метки сессии линии {line} — --coord-done не ставит её")
         L.write_json(f, {**old, "coord": True})
         return 0
     if same:

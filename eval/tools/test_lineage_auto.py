@@ -181,8 +181,9 @@ class AutoTest(Base):
         self.sess(723, line="r.s3", role="frontend", idle_h=0.6)                                 # держатель, без метки
         self.sess(724, line="r.s4", role="backend", idle_h=0.6)                                  # метка чужого pid
         for pid, line in ((721, "r.s1"), (722, "r.s2")):
-            L.write_json(L.ldir() / f"{line}.surplus", {"line": line, "pid": pid, "start": ST})
-        L.write_json(L.ldir() / "r.s4.surplus", {"line": "r.s4", "pid": 999, "start": ST})
+            L.write_json(L.ldir() / f"{line}.surplus", {"line": line, "pid": pid, "start": ST, "role": "plan"})
+        L.write_json(L.ldir() / "r.s4.surplus", {"line": "r.s4", "pid": 999, "start": ST, "role": "backend"})
+        L.write_json(L.ldir() / "r.s3.surplus", {"line": "r.s3", "pid": 723, "start": ST})  # без роли — не в счёт
         v = self.verdicts(self.auto()[1])
         self.assertIn("СНЯТЬ: сверх доли владельца (d-team-surplus-1711), простой 36 мин", v[721])
         self.assertIn("сверх доли, простой 12 < 30 мин", v[722])
@@ -206,7 +207,7 @@ class AutoTest(Base):
         self.sess(731, line="r.m1", role="plan", idle_h=0.6, cwd=self.root)
         self.sess(732, line="r.m2", role="boards", idle_h=0.6)                                   # cwd — worktrees/x
         for pid, line in ((731, "r.m1"), (732, "r.m2")):
-            L.write_json(L.ldir() / f"{line}.surplus", {"line": line, "pid": pid, "start": ST})
+            L.write_json(L.ldir() / f"{line}.surplus", {"line": line, "pid": pid, "start": ST, "role": "plan"})
         v = self.verdicts(self.auto(unsaved={str(self.root): "незакоммиченное", str(self.wt): "незакоммиченное"})[1])
         self.assertIn("СНЯТЬ: сверх доли владельца", v[731])
         self.assertIn("основной checkout", v[731])
