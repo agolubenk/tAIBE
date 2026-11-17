@@ -1,8 +1,9 @@
 """
 Сбой merge-guard (pre-tool-use-merge-guard.py, SE-152): внутренняя ошибка разбора или решения роль не пропускает.
 
-Ожидаемый исход разбора — кавычка без пары или `\\` в конце текста (shlex; bash на них тоже даёт синтаксическую ошибку):
-решает грубый признак, как раньше. Любая другая ошибка (TypeError, IndexError, RecursionError, …) — находка «сбой
+Ожидаемый исход разбора — кавычка без пары или `\\` в конце текста (shlex; bash на них тоже даёт синтаксическую ошибку)
+и исчерпанный бюджет git (GitTimeout, merge_guard_git: штатный исход, не сбой): решает грубый признак, как раньше.
+Любая другая ошибка (TypeError, IndexError, RecursionError, …) — находка «сбой
 хука»: она идёт тем же путём, что и защищённое действие, — роли отказ с текстом ошибки, Контролю проход
 (control_verdict). Признак защищённого действия в вызове при сбое — отказ всем, как до SE-152.
 
@@ -14,6 +15,7 @@
 import json
 import re
 
+from merge_guard_git import GitTimeout
 from merge_guard_identity import control_verdict, live_sessions, load_control
 
 SHLEX = ("No closing quotation", "No escaped character")
@@ -21,8 +23,9 @@ MERGE_TOOL = re.compile(r"merge_pull_request|auto_merge")
 
 
 def expected(exc):
-    """Ожидаемый исход разбора: shlex не нашёл пары кавычке или символа после `\\` в конце текста."""
-    return isinstance(exc, ValueError) and str(exc) in SHLEX
+    """Ожидаемый исход разбора: shlex не нашёл пары кавычке или символа после `\\` в конце текста; бюджет git
+    исчерпан (GitTimeout — «пропуск, не отказ», merge_guard_git.start_budget; линза backend #444, B1)."""
+    return isinstance(exc, GitTimeout) or isinstance(exc, ValueError) and str(exc) in SHLEX
 
 
 def crash_text(exc):
@@ -40,13 +43,16 @@ def crash(exc, where=""):
 
 def crash_verdict(data, exc, fallback, get_sessions=live_sessions, get_control=load_control):
     """Причина отказа после сбоя decide целиком (main); None — проход. fallback — грубый признак (FALLBACK хука):
-    признак в вызове — отказ всем; без него Контроль идёт своим путём, роль — отказ. Сбой самой проверки — отказ."""
+    признак в вызове — отказ всем; без него ожидаемый исход (expected) — проход, как до SE-152; иначе Контроль идёт
+    своим путём, роль — отказ. Сбой самой проверки — отказ."""
     data = data if isinstance(data, dict) else {}
     inp = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
     tool = str(data.get("tool_name", ""))
     call = str(inp.get("command", "")) if tool == "Bash" else json.dumps(inp, ensure_ascii=False, default=str)
     if fallback.search(call) or MERGE_TOOL.search(tool):
         return f"merge-guard: сбой хука ({crash_text(exc)}), а в вызове признак защищённого действия."
+    if expected(exc):
+        return None
     try:
         control, err = get_control()
         why = err or control_verdict(str(data.get("session_id", "")), get_sessions(), control)
