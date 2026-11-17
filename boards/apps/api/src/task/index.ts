@@ -1,3 +1,4 @@
+import { taskAuthor, writerKind } from "../forest/author-kind";
 import { withVerifiedStorageObject } from "../storage/cleanup-queue";
 import { eq } from "drizzle-orm";
 import { HTTPException } from "hono/http-exception";
@@ -67,6 +68,7 @@ import updateTaskStatus from "./controllers/update-task-status";
 import updateTaskTitle from "./controllers/update-task-title";
 import {
   getDeferredDescriptionMatches,
+  getVisibleDeferredDescriptionMatches,
   getDescriptionPage,
   getMaskedDescriptionPage,
 } from "./description-pages";
@@ -786,6 +788,8 @@ const descriptionMatchesRoute = createRoute({
   path: "/description-matches/{projectId}",
   tags: ["Tasks"],
   summary: "Search descriptions omitted from task lists",
+  description:
+    "Follow `nextCursor` as `after` until it is null. A caller with an API key reads descriptions with secrets masked, so a match counts only outside a secret and a query with `[REDACTED:` finds nothing; its pages are windows of omitted descriptions, so a page can have no `ids` and still have a `nextCursor`.",
   middleware: [workspaceAccess.fromProject("projectId")] as const,
   request: { params: projectIdParam, query: descriptionMatchesQuery },
   responses: {
@@ -812,11 +816,11 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
     return c.json(
       maskForTokenCaller(
         c,
-        await getDeferredDescriptionMatches(
-          c.req.valid("param").projectId,
-          query,
-          after,
-        ),
+        await (
+          isTokenCaller(c)
+            ? getVisibleDeferredDescriptionMatches
+            : getDeferredDescriptionMatches
+        )(c.req.valid("param").projectId, query, after),
       ),
       200,
     );
@@ -939,6 +943,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       status,
       customFields,
       draftAssetIds,
+      author: writerKind(c),
     });
 
     return c.json(maskForTokenCaller(c, task), 200);
@@ -956,6 +961,7 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
           canUpdateTasks: await hasWorkspacePermission(c, {
             task: ["update"],
           }),
+          author: writerKind(c) === "agent" ? "agent" : await taskAuthor(id),
         }),
       ),
       200,
@@ -963,14 +969,13 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
   })
   .openapi(getTaskByTicketIdRoute, async (c) => {
     const { ticketId } = c.req.valid("param");
+    const task = await getTaskByTicketId(ticketId, c.get("userId"), {
+      ...c.req.valid("query"),
+      apiKeyScope: requestWorkspaceScope(c),
+    });
+    // TB-83: who created it, for the reader's trust.
     return c.json(
-      maskForTokenCaller(
-        c,
-        await getTaskByTicketId(ticketId, c.get("userId"), {
-          ...c.req.valid("query"),
-          apiKeyScope: requestWorkspaceScope(c),
-        }),
-      ),
+      maskForTokenCaller(c, { ...task, author: await taskAuthor(task.id) }),
       200,
     );
   })
@@ -983,7 +988,10 @@ const task = apiRouter<BaseVariables & { workspaceId: string }>()
       c.get("userId"),
     );
 
-    return c.json(maskForTokenCaller(c, task), 200);
+    return c.json(
+      maskForTokenCaller(c, { ...task, author: await taskAuthor(id) }),
+      200,
+    );
   })
   .openapi(moveTaskRoute, async (c) => {
     const { id } = c.req.valid("param");

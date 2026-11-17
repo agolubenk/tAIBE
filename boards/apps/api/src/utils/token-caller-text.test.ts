@@ -3,8 +3,9 @@ import { join as joinPath } from "node:path";
 import { type Context, Hono } from "hono";
 import { describe, expect, it } from "vite-plus/test";
 import { ApiError } from "../errors/api-error";
+import { encodeCursor } from "../forest/read/page-cursor";
 import {
-  maskForTokenCaller,
+  maskPageForTokenCaller,
   refuseMarkerForTokenCaller,
   restoreEachForTokenCaller,
 } from "./token-caller-text";
@@ -22,15 +23,10 @@ const ROUTERS = [
   "label/index.ts",
   "custom-field/index.ts",
   "external-link/index.ts",
-  // Reads that show card text and have no write-back of that text. Meta,
-  // work state, approvals, leases and logs stay raw: an agent writes them and
-  // their write routes restore no marker.
+  // Reads that show card text and have no write-back of that text. The
+  // forest routes are masked by TB-204 (#403).
   "notification/index.ts",
   "task-relation/index.ts",
-  "forest/routes/tree-routes.ts",
-  "forest/routes/graph-routes.ts",
-  "forest/routes/bugs-routes.ts",
-  "forest/routes/memory-routes.ts",
 ];
 const NO_TEXT = new Set([
   "stagedUploadRoute",
@@ -133,27 +129,6 @@ describe("restoreEachForTokenCaller (TB-144)", () => {
   });
 });
 
-describe("maskForTokenCaller keep (TB-178)", () => {
-  it("masks the text and returns a kept key byte for byte", async () => {
-    const cursor = Buffer.from(
-      "2026-11-14T15:00:00.000Z|k3x9q2m7v1z8p4r6t0w5y2bn",
-    ).toString("base64url");
-    const page = { title: `env ${SECRET}`, nextCursor: cursor };
-    const agent = await inRequest(true, (c) =>
-      maskForTokenCaller(c, page, ["nextCursor"]),
-    );
-    expect(agent.value).toEqual({ title: `env ${MARK}`, nextCursor: cursor });
-    expect(page.title).toBe(`env ${SECRET}`);
-    // Without keep, redact takes the cursor for a secret.
-    const whole = await inRequest(true, (c) => maskForTokenCaller(c, page));
-    expect(whole.value?.nextCursor).not.toBe(cursor);
-    const browser = await inRequest(false, (c) =>
-      maskForTokenCaller(c, page, ["nextCursor"]),
-    );
-    expect(browser.value).toBe(page);
-  });
-});
-
 describe("refuseMarkerForTokenCaller (TB-144)", () => {
   it("refuses a marker in a new value from a caller with a token", async () => {
     const { error } = await inRequest(true, (c) =>
@@ -177,5 +152,31 @@ describe("refuseMarkerForTokenCaller (TB-144)", () => {
       );
       expect(error).toBeUndefined();
     }
+  });
+});
+
+// TB-204: redact reads a page cursor (base64url, 66 characters) as a base64
+// secret; a masked cursor fails the next page with 400.
+describe("maskPageForTokenCaller (TB-204)", () => {
+  const secret = ["gh", "p_", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"].join("");
+  const cursor = encodeCursor({
+    at: new Date("2026-11-15T09:00:00.000Z"),
+    id: "x7k2m9p4q8r1s5t3v6w0y2z4",
+  });
+  const page = { items: [{ note: `key ${secret}` }], nextCursor: cursor };
+  const app = new Hono().get("/", (c) =>
+    c.json(maskPageForTokenCaller(c, page)),
+  );
+  const read = async (headers: Record<string, string>) =>
+    (await app.request("/", { headers })).json();
+
+  it("masks the items and keeps the cursor for a caller with a token", async () => {
+    const body = await read({ "x-api-key": "key" });
+    expect(body.nextCursor).toBe(cursor);
+    expect(JSON.stringify(body.items)).not.toContain(secret);
+  });
+
+  it("answers a caller without a token as it is", async () => {
+    expect(await read({})).toEqual(page);
   });
 });

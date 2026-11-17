@@ -198,7 +198,7 @@
         "boards"
       ],
       [
-        "Связь|Координатор|Менеджер|Ноушен|QA|Тестировщик|Проверка|coord",
+        "Связь|Координатор|Менеджер|Ноушен|(?<![a-z0-9])QA(?![a-z0-9])|Тестировщик|Проверка|coord",
         "coord"
       ],
       [
@@ -206,11 +206,11 @@
         "release"
       ],
       [
-        "backend-2|Бэкенд-2|роль 7",
+        "backend[- –]?2(?!\\d)|Бэкенд[- –]?2(?!\\d)|роль 7(?!\\d)",
         "backend-2"
       ],
       [
-        "frontend-2|Фронтенд-2|роль 8",
+        "frontend[- –]?2(?!\\d)|Фронтенд[- –]?2(?!\\d)|роль 8(?!\\d)",
         "frontend-2"
       ],
       [
@@ -230,6 +230,38 @@
   "system": {
     "mem_critical": 10,
     "mem_warn": 20,
+    "max_sessions": 14,
+    "terminal": "tmux",
+    "team": {
+      "total": 12,
+      "floor": 10,
+      "min_per_product": 2,
+      "split": {
+        "hr-helper": 6,
+        "taibe": 6
+      },
+      "split_item": "d-team-split"
+    },
+    "dev": {
+      "agents": [
+        "space.hrhelper.headroom",
+        "space.hrhelper.agents-tmux",
+        "space.hrhelper.nerve",
+        "space.hrhelper.t-boards-memory-proxy",
+        "space.hrhelper.t-boards-notebook-worker",
+        "space.hrhelper.t-boards-notebook-sync",
+        "space.hrhelper.reaper",
+        "space.hrhelper.evolve-daily",
+        "space.hrhelper.team-keeper"
+      ],
+      "apps_on": [
+        "com.electron.ollama"
+      ],
+      "apps_off": [
+        "com.docker.docker",
+        "com.electron.ollama"
+      ]
+    },
     "hub_health": "http://127.0.0.1:3050/health"
   },
   "budget": {

@@ -194,10 +194,23 @@ describe("API integration: forest felling", () => {
     expect(detected.body).toHaveLength(1);
     const sector = detected.body[0];
     expect(sector.treeIds.sort()).toEqual([a.root.id, b.root.id].sort());
+    // TB-221: the stored name has no "Sector" word; the UI adds it per locale.
+    expect(sector.name).toMatch(/^(Alpha|Beta) \+1$/);
+
+    // A name stored before TB-221 is read without the legacy English prefix.
+    await db
+      .update(schema.sectorTable)
+      .set({ name: `Sector: ${sector.name}` })
+      .where(eq(schema.sectorTable.id, sector.id));
+    const listed = await forest.agent("/sectors");
+    expect(listed.body.map((row: { name: string }) => row.name)).toEqual([
+      sector.name,
+    ]);
 
     const again = await forest.agent("/sectors/detect", {});
     expect(again.body[0].id).toBe(sector.id);
     expect(again.body[0].created).toBe(false);
+    expect(again.body[0].name).toBe(sector.name);
 
     const felled = await forest.owner("/fell", {
       kind: "sector",
