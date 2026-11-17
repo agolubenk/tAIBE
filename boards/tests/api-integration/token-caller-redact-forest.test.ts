@@ -28,7 +28,7 @@ describe("API integration: sectors, felling reasons and the journal for callers 
     await relate(beta.id, betaChild.id);
     await relate(alphaChild.id, betaChild.id, "related");
 
-    // The sector is named after a root: «Sector: <title> +1».
+    // The sector is named after a root: «<title> +1» (TB-221).
     const detected = await forest.agent("/sectors/detect", {});
     expect(detected.status).toBe(200);
     expect(detected.body).toHaveLength(1);

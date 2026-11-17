@@ -19,23 +19,26 @@ export function isTokenCaller(c: Context): boolean {
   );
 }
 
+/** For a caller with a token, every string of the response goes through redact. */
+export function maskForTokenCaller<T>(c: Context, value: T): T {
+  return isTokenCaller(c) ? redactDeep(value) : value;
+}
+
+/** A list page: the cursor of the next page, or null on the last page. */
+type CursorPage = { nextCursor: string | null };
+
 /**
- * For a caller with a token, every string of the response goes through redact.
- * `keep` names top-level keys that hold no card text and must come back byte
- * for byte: a base64url page cursor looks like a secret to redact (TB-178).
+ * A page for a caller with a token: every string in the mask, except the
+ * cursor. The cursor is base64url of a time and a row id, so it holds no
+ * text; but redact reads its 66 characters as a base64 secret, and a masked
+ * cursor makes the next page fail with 400 (TB-204).
  */
-export function maskForTokenCaller<T>(
+export function maskPageForTokenCaller<T extends CursorPage>(
   c: Context,
-  value: T,
-  keep: readonly Extract<keyof T, string>[] = [],
+  page: T,
 ): T {
-  if (!isTokenCaller(c)) return value;
-  const masked = redactDeep(value);
-  if (masked === value || !masked || typeof masked !== "object") return masked;
-  const raw = value as Record<string, unknown>;
-  const out = masked as Record<string, unknown>;
-  for (const key of keep) if (key in raw) out[key] = raw[key];
-  return masked;
+  if (!isTokenCaller(c)) return page;
+  return { ...redactDeep(page), nextCursor: page.nextCursor };
 }
 
 const KEEP_BLOCKS =

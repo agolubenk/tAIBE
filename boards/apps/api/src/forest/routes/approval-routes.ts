@@ -8,7 +8,10 @@ import {
   z,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
-import { maskForTokenCaller } from "../../utils/token-caller-text";
+import {
+  maskForTokenCaller,
+  maskPageForTokenCaller,
+} from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import {
@@ -219,10 +222,7 @@ export const approvalRoutes = apiRouter<
       ...toPublicApproval(approval),
       target: targetOf(approval),
     }));
-    return c.json(
-      maskForTokenCaller(c, { ...page, items }, ["nextCursor"]),
-      200,
-    );
+    return c.json(maskPageForTokenCaller(c, { ...page, items }), 200);
   })
   .openapi(decideApprovalRoute, async (c) => {
     const { workspaceId, approvalId } = c.req.valid("param");

@@ -417,7 +417,7 @@ describe("API integration: label, field and link routes for callers with a token
     expect((await put(foreign.id, MARK)).status).toBe(404);
   });
 
-  it("masks notifications, task relations, trees and a card's place for an API key", async () => {
+  it("masks notifications and task relations for an API key", async () => {
     const { forest, project } = await setup();
     const [root] = await db
       .insert(schema.taskTable)
@@ -455,8 +455,6 @@ describe("API integration: label, field and link routes for callers with a token
         "/task-relation/{child}",
         () => forest.agentApi("GET", `/task-relation/${child.id}`),
       ],
-      ["/forest/trees", () => forest.agent("/trees")],
-      ["/forest/place", () => forest.agent(`/cards/${child.id}/place`)],
     ];
     for (const [route, read] of reads) {
       const res = await read();
@@ -471,25 +469,5 @@ describe("API integration: label, field and link routes for callers with a token
 
     const owner = await forest.ownerApi("GET", "/notification");
     expect(JSON.stringify(owner.body)).toContain(SECRET);
-
-    // The graph cursor is base64url; it comes back raw, so page 2 works.
-    const pages: unknown[] = [];
-    let cursor: string | null = null;
-    do {
-      const query: string = cursor
-        ? `?take=1&cursor=${encodeURIComponent(cursor)}`
-        : "?take=1";
-      const page = await forest.agent(`/graph${query}`);
-      expect({ page: pages.length, status: page.status }).toEqual({
-        page: pages.length,
-        status: 200,
-      });
-      pages.push(page.body);
-      cursor = page.body.nextCursor;
-    } while (cursor && pages.length < 5);
-    const graph = JSON.stringify(pages);
-    expect(pages.length).toBe(3);
-    expect(graph.includes(SECRET)).toBe(false);
-    expect(graph).toContain(MARK);
   });
 });

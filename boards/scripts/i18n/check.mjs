@@ -5,9 +5,12 @@ import {
   getValueAtKey,
   loadLocales,
   PLURAL_CATEGORIES,
+  readJson,
+  schemaPath,
   setValueAtKey,
   writeJson,
 } from "./shared.mjs";
+import { schemaMatches } from "./schema-build.mjs";
 
 function pluralBase(key) {
   for (const category of PLURAL_CATEGORIES) {
@@ -219,9 +222,19 @@ for (const locale of filteredLocales) {
   }
 }
 
-if (!hasIssues) {
-  console.log("All locale files are in sync with en-US.");
+// schema.json is derived from en-US alone, so it is checked whatever locale
+// filter is given. --fix does not rewrite it: the generator output needs
+// `vp fmt`, so a stale schema fails the run even with --fix.
+const schemaStale = !schemaMatches(await readJson(schemaPath), reference.data);
+if (schemaStale) {
+  console.log(
+    "i18n/schema.json: does not match en-US. Run `pnpm i18n:schema` and commit the result.",
+  );
+}
+
+if (!hasIssues && !schemaStale) {
+  console.log("All locale files and schema.json are in sync with en-US.");
   process.exit(0);
 }
 
-process.exit(shouldFix ? 0 : 1);
+process.exit(shouldFix && !schemaStale ? 0 : 1);

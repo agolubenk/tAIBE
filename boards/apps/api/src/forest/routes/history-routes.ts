@@ -75,8 +75,6 @@ export const historyRoutes = apiRouter<
     const { take } = c.req.valid("query");
     await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
     const entries = await listCardHistory(taskId, take ?? HISTORY_DEFAULT);
-    // TB-144: the changes keep old titles and descriptions; a caller with a
-    // token reads them masked, as it reads the task (TB-143).
     return c.json(maskForTokenCaller(c, { entries }), 200);
   })
   .openapi(rollbackRoute, async (c) => {
@@ -89,5 +87,5 @@ export const historyRoutes = apiRouter<
       actor: resolveForestActor(c),
       headers: readAgentHeaders(c),
     });
-    return c.json(result, 200);
+    return c.json(maskForTokenCaller(c, result), 200);
   });
