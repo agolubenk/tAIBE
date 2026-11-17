@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
-import { grillTemplate } from "./fixtures.test-helper";
-import { type FormField, formTemplateSchema } from "./schema";
-import { findShowIfCycle } from "./show-if";
+import { grillTemplate } from "./fixtures.test-helper.js";
+import { type FormField, formTemplateSchema } from "./schema.js";
+import { findShowIfCycle } from "./show-if.js";
 
 const template = (fields: unknown[]) => ({
   form: "probe",

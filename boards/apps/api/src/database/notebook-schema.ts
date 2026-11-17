@@ -31,6 +31,8 @@ const tsvector = customType<{ data: string }>({
 });
 
 export type NotebookSourceKind = "repo-doc" | "card" | "github-pr" | "link";
+// TB-115: who added a fetched page or pull request to «Источники».
+export type SourceAuthorKind = "agent" | "person";
 
 export const notebookSourceTable = pgTable(
   "notebook_source",
@@ -50,6 +52,11 @@ export const notebookSourceTable = pgTable(
     title: text("title").notNull(),
     contentSha256: text("content_sha256").notNull(),
     chars: integer("chars").notNull(),
+    // TB-115: the agent (its name carries the session) or the member who
+    // first added a link or a pull request. A refresh keeps the first author.
+    // Null: a synced source (repo doc, card) or one added before the column.
+    addedByKind: text("added_by_kind").$type<SourceAuthorKind>(),
+    addedBy: text("added_by"),
     updatedAt: timestamp("updated_at", { mode: "date" })
       .default(utcNow)
       .notNull(),
@@ -158,6 +165,16 @@ export type NotebookCitation = {
   heading: string;
 };
 
+// D-018 (owner, d-0111-d18; storage d-taibe-tb134-usage-1411 = A): the tokens
+// the provider reported for one model call. input is the provider's prompt
+// count and holds cached, as OpenAI-style prompt_tokens does; cached is the
+// part of input read from the provider's cache.
+export type NotebookUsage = {
+  input: number;
+  output: number;
+  cached: number;
+};
+
 export const notebookMessageTable = pgTable(
   "notebook_message",
   {
@@ -185,6 +202,8 @@ export const notebookMessageTable = pgTable(
       .default([]),
     // Set only when a cloud model answered: the daily cap counts these.
     model: text("model"),
+    // Null when no model answered or the provider sent no usage.
+    usage: jsonb("usage").$type<NotebookUsage>(),
     createdBy: text("created_by").references(() => userTable.id, {
       onDelete: "set null",
       onUpdate: "cascade",

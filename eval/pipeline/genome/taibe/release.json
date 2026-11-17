@@ -55,6 +55,10 @@
       "mcp__notion"
     ]
   },
+  "disabledMcpjsonServers": [
+    "ai-council",
+    "notion"
+  ],
   "env": {
     "CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH": "600",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000",
