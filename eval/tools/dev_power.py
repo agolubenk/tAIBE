@@ -3,16 +3,18 @@
 
 Включить (`agents_up.py`, ярлык «Разработка ВКЛ», вход в систему): службы launchd из system.dev.agents
 (instances/_shared.json) загружаются, если их сняли; сервер tmux ролей и окна сервисов; приложения
-system.dev.apps_on (Ollama); последним — хаб MCP, если молчит. Docker не запускается — он для тестов.
+system.dev.apps_on (Ollama); хаб MCP, если молчит; затем команда ролей по продуктам (team_plan.py up: 12 ролей,
+доли — из очереди владельца, при нехватке памяти — 10). Docker не запускается — он для тестов. Сторож
+space.hrhelper.team-keeper раз в 10 мин доводит команду до плана.
 Выключить (`agents_up.py --down`, ярлык «Разработка ВЫКЛ»): ждёт конца git и evolve; те же службы снимаются
 (launchctl bootout — до «ВКЛ» или следующего входа), хаб и serena останавливаются, приложения system.dev.apps_off
 закрываются (Docker — только без работающих контейнеров или с подтверждением). Остаются memguard, резервные копии,
 WireGuard и то, что запущено руками: сессии Claude вне tmux, claude-mem, VS Code — их список с памятью печатается.
-Роли в tmux закрываются; их список сохраняется, «ВКЛ» печатает команду, чтобы поднять их снова.
+Роли в tmux закрываются; «ВКЛ» открывает их снова по плану команды.
 Код при входе — из основного checkout (как Нерв и хуки): доверие то же.
 
-  python3 -I eval/tools/dev_power.py install     ярлыки на рабочем столе и автозагрузка (space.hrhelper.dev-up)
-  python3 -I eval/tools/dev_power.py uninstall   убрать ярлыки и автозагрузку (службы не трогаются)
+  python3 -I eval/tools/dev_power.py install     ярлыки, автозагрузка (space.hrhelper.dev-up) и сторож команды
+  python3 -I eval/tools/dev_power.py uninstall   убрать ярлыки, автозагрузку и сторож (службы не трогаются)
 """
 import os
 import plistlib
@@ -28,6 +30,7 @@ sys.path.insert(0, str(TOOLS))
 import tmux_host as T  # noqa: E402
 
 LABEL_UP = "space.hrhelper.dev-up"
+LABEL_KEEPER = "space.hrhelper.team-keeper"  # в system.dev.agents: «ВЫКЛ» снимает его, «ВКЛ» возвращает
 DESKTOP_ON, DESKTOP_OFF = "Разработка ВКЛ.command", "Разработка ВЫКЛ.command"
 FIRST = "space.hrhelper.headroom"  # включение: сначала API сессий; выключение — он последним
 LABEL_RE = re.compile(r"space\.hrhelper\.[a-z0-9-]+")
@@ -154,34 +157,6 @@ def wait_quiet(log):
     return busy()
 
 
-def roles_file():
-    return T.conf_dir() / "roles-before-off.txt"
-
-
-def save_roles():
-    """Окна ролей (не ops) → файл: «ВКЛ» напомнит, какие роли поднять."""
-    out = T.tmux("list-windows", "-a", "-F", "#{session_name} #{window_name}").stdout.split("\n")
-    roles = [ln for ln in out if ln.strip() and not ln.startswith("ops ")]
-    if roles:
-        roles_file().parent.mkdir(parents=True, exist_ok=True)
-        roles_file().write_text("\n".join(roles) + "\n", encoding="utf-8")
-    return roles
-
-
-def roles_hint():
-    """Команды spawn_session.sh для ролей, закрытых «ВЫКЛ»; файл читается один раз."""
-    try:
-        rows = [ln.split() for ln in roles_file().read_text(encoding="utf-8").splitlines() if ln.strip()]
-        roles_file().unlink()
-    except OSError:
-        return []
-    by = {}
-    for product, win in (r for r in rows if len(r) == 2):
-        by.setdefault(product, []).append(re.sub(r"-[a-z0-9]{4}$", "", win))
-    return [f"bash eval/tools/spawn_session.sh --launch --product {p} --roles {','.join(dict.fromkeys(r))}"
-            for p, r in by.items()]
-
-
 def leftovers():
     """Что осталось после «ВЫКЛ» (запущено руками): имя → (число, МБ)."""
     r = run("ps", "-axo", "rss=,command=")
@@ -219,17 +194,37 @@ def desktop_text(down):
     ])
 
 
-def up_plist():
+def agent_plist(label, script, args, log_name, **when):
     path = ":".join(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
                      str(home() / ".local" / "bin")])
-    log = str(home() / "Library" / "Logs" / "taibe-dev-up.log")
+    log = str(home() / "Library" / "Logs" / log_name)
     return plistlib.dumps({
-        "Label": LABEL_UP,
-        "ProgramArguments": [python(), "-I", str(T.layer_tools() / "agents_up.py")],
+        "Label": label,
+        "ProgramArguments": [python(), "-I", str(T.layer_tools() / script), *args],
         "EnvironmentVariables": {"PATH": path, "LANG": "en_US.UTF-8"},
-        "RunAtLoad": True,  # один раз при входе; сами службы держит launchd
+        **when,
         "StandardOutPath": log, "StandardErrorPath": log,
     })
+
+
+def up_plist():
+    # Один раз при входе: службы, затем команда ролей (team_plan.py up); сами службы держит launchd.
+    return agent_plist(LABEL_UP, "agents_up.py", [], "taibe-dev-up.log", RunAtLoad=True)
+
+
+def keeper_plist():
+    # Сторож команды: раз в 10 мин открывает недостающие роли и меняет потолок 12/10 по памяти (team_plan.py).
+    return agent_plist(LABEL_KEEPER, "team_plan.py", ["up"], "taibe-team.log", StartInterval=600)
+
+
+def trim_log(name, limit=1 << 20):
+    """Журнал сторожа и входа пишется раз в 10 мин — больше 1 МБ обрезается до последних 256 КБ."""
+    p = home() / "Library" / "Logs" / name
+    try:
+        if p.stat().st_size > limit:
+            p.write_bytes(p.read_bytes()[-(limit // 4):])
+    except OSError:
+        pass
 
 
 def write(path, data, mode):
@@ -245,17 +240,22 @@ def install(log=print):
     write(desk / DESKTOP_ON, desktop_text(False), 0o755)
     write(desk / DESKTOP_OFF, desktop_text(True), 0o755)
     log(f"ярлыки: «{DESKTOP_ON}», «{DESKTOP_OFF}» на рабочем столе")
-    write(plist(LABEL_UP), up_plist(), 0o600)
-    if loaded(LABEL_UP):
-        run("launchctl", "bootout", f"{domain()}/{LABEL_UP}")
-    r = run("launchctl", "bootstrap", domain(), str(plist(LABEL_UP)), timeout=300)
-    log(f"автозагрузка {LABEL_UP}: " + ("при каждом входе (и сейчас)" if r.returncode == 0 else r.stderr.strip()))
-    return 0 if r.returncode == 0 else 1
+    rc = 0
+    for label, data, what in ((LABEL_KEEPER, keeper_plist(), "сторож команды: раз в 10 мин"),
+                              (LABEL_UP, up_plist(), "автозагрузка: при каждом входе (и сейчас)")):
+        write(plist(label), data, 0o600)
+        if loaded(label):
+            run("launchctl", "bootout", f"{domain()}/{label}")
+        r = run("launchctl", "bootstrap", domain(), str(plist(label)), timeout=300)
+        rc |= r.returncode
+        log(f"{label}: " + (what if r.returncode == 0 else r.stderr.strip()))
+    return 0 if rc == 0 else 1
 
 
 def uninstall(log=print):
-    run("launchctl", "bootout", f"{domain()}/{LABEL_UP}")
-    for p in (plist(LABEL_UP), home() / "Desktop" / DESKTOP_ON, home() / "Desktop" / DESKTOP_OFF):
+    for label in (LABEL_UP, LABEL_KEEPER):
+        run("launchctl", "bootout", f"{domain()}/{label}")
+    for p in (plist(LABEL_UP), plist(LABEL_KEEPER), home() / "Desktop" / DESKTOP_ON, home() / "Desktop" / DESKTOP_OFF):
         p.unlink(missing_ok=True)
     log("ярлыки и автозагрузка убраны; службы не тронуты")
     return 0

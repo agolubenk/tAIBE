@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """dev_power.py и agents_up.py --down: порядок служб (headroom первым при включении, последним при выключении);
 загружается только свой plist; метки и bundle id — по спискам, в AppleScript — аргументом; Docker с контейнерами —
-только с подтверждением; ярлыки и автозагрузка; роли, закрытые «ВЫКЛ», — команда для «ВКЛ»; выключение при живых
+только с подтверждением; ярлыки, автозагрузка и сторож команды; выключение при живых
 сессиях без терминала — отказ. launchctl, osascript, open, docker и pgrep подменены.
 
 Run: python3 -I eval/tools/test_dev_power.py
@@ -114,17 +114,6 @@ class AgentsTest(Base):
         self.assertNotIn("com.docker.docker", self.running)
 
 
-class RolesTest(Base):
-    def test_roles_saved_and_hinted_once(self):
-        out = "taibe coord-ab12\ntaibe backend-2-cd34\nops health\nhr-helper plan-ef56\n"
-        with mock.patch.object(D.T, "tmux", lambda *a: subprocess.CompletedProcess(a, 0, out, "")):
-            D.save_roles()
-        hint = D.roles_hint()
-        self.assertEqual(hint, ["bash eval/tools/spawn_session.sh --launch --product taibe --roles coord,backend-2",
-                                "bash eval/tools/spawn_session.sh --launch --product hr-helper --roles plan"])
-        self.assertEqual(D.roles_hint(), [])
-
-
 class InstallTest(Base):
     def test_install_writes_shortcuts_and_login_agent(self):
         self.assertEqual(D.install(lambda m: None), 0)
@@ -136,13 +125,16 @@ class InstallTest(Base):
         self.assertTrue(d["RunAtLoad"])
         self.assertNotIn("KeepAlive", d)  # один раз при входе
         self.assertTrue(d["ProgramArguments"][-1].endswith("agents_up.py"))
-        self.assertEqual(self.acts("bootstrap"), [D.LABEL_UP])
+        self.assertEqual(self.acts("bootstrap"), [D.LABEL_KEEPER, D.LABEL_UP])
+        keeper = plistlib.loads(D.plist(D.LABEL_KEEPER).read_bytes())
+        self.assertEqual((keeper["StartInterval"], keeper["ProgramArguments"][-2:][1]), (600, "up"))
 
     def test_uninstall(self):
         D.install(lambda m: None)
         D.uninstall(lambda m: None)
         self.assertFalse((self.home / "Desktop" / D.DESKTOP_ON).exists())
         self.assertFalse(D.plist(D.LABEL_UP).exists())
+        self.assertFalse(D.plist(D.LABEL_KEEPER).exists())
 
     def test_dev_home_only_in_tests(self):
         with mock.patch.dict(os.environ, {"TAIBE_DEV_TEST": ""}):
