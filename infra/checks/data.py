@@ -5,9 +5,13 @@
 - board plans `eval/board/plan-*.json`: unique keys, a known status and priority, `parent`/`blocks`/`related` point
   to cards that exist (in any plan or the seed), no subtask cycles;
 - the owner-decision ledger `eval/data/decisions.jsonl`: id, q, a, source, ISO date on every line;
-- drizzle migrations `boards/apps/api/drizzle/`: the journal is sequential (`idx` 0…n), `when` strictly grows
-  (drizzle skips a migration whose `when` is not newer — the 0077 collision of 31.10), every journal entry has its
-  `.sql` and snapshot, and every `.sql` is in the journal.
+- drizzle migrations `boards/apps/api/drizzle/`: the journal is sequential (`idx` 0…n, the tag number equals
+  `idx`), `when` strictly grows (drizzle skips a migration whose `when` is not newer — the 0077 collision of 31.10),
+  every journal entry has its `.sql` and its snapshot, each snapshot's `prevId` is the id of the snapshot before it,
+  and every `.sql` is in the journal (OPS-74);
+- the owner-queue schema `oq` in the boards' Postgres (TB-28, `docs/specs/owner-queue-move.md` §5.2): the boards'
+  code under `boards/apps/` and `boards/packages/` holds no SQL to `oq.*` — the ops console is its only writer, and the
+  boards app connects as a superuser. Only the migrations create the schema.
 """
 import glob
 import json
@@ -22,6 +26,11 @@ STATUSES = {'to-do', 'in-progress', 'in-review', 'done', 'archived', 'planned', 
 PRIORITIES = {'no-priority', 'low', 'medium', 'high', 'urgent', 'critical'}
 DRIZZLE = 'boards/apps/api/drizzle'
 DATE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+OQ_CODE = ('boards/apps/', 'boards/packages/')
+OQ_EXT = ('.ts', '.tsx', '.js', '.mjs', '.cjs', '.sql', '.sh')
+# A table of the schema, the schema itself in DDL or search_path, a drizzle pgSchema("oq").
+OQ_SQL = re.compile(r'''\boq"?\s*\.\s*"?(docs|events|files)\b|\bschema\s+"?oq\b|search_path[^;\n]*\boq\b|'''
+                    r'''pgSchema\(\s*['"`]oq['"`]''', re.IGNORECASE)
 
 
 def json_files(root, files):
@@ -114,6 +123,18 @@ def decisions(root):
     return out
 
 
+def _snapshot(base, tag):
+    """The drizzle-kit snapshot of a journal entry (`meta/<NNNN>_snapshot.json`), or None if there is none."""
+    path = os.path.join(base, 'meta', '%s_snapshot.json' % tag.split('_', 1)[0])
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding='utf-8') as f:
+        try:
+            return json.load(f)
+        except ValueError:
+            return {}  # reported by json_files
+
+
 def drizzle(root):
     out = []
     base = os.path.join(root, DRIZZLE)
@@ -123,21 +144,30 @@ def drizzle(root):
     rel = os.path.relpath(journal, root)
     with open(journal, encoding='utf-8') as f:
         entries = json.load(f).get('entries', [])
-    last_when, tags = None, set()
+    last_when, tags, prev = None, set(), None
     for i, e in enumerate(entries):
         tag = e.get('tag', '')
         tags.add(tag)
         if e.get('idx') != i:
             out.append(Finding('data', 'error', rel, 0, 'entry %s: idx %s, expected %d' % (tag, e.get('idx'), i)))
+        if tag.split('_', 1)[0] != '%04d' % i:
+            # two PRs took the same number and one was appended after a rebase without renumbering (0084, 15.11)
+            out.append(Finding('data', 'error', rel, 0, '%s: number in the tag is not %04d — renumber it' % (tag, i)))
         if last_when is not None and e.get('when', 0) <= last_when:
             out.append(Finding('data', 'error', rel, 0, '%s: when %s is not newer than the previous %s — drizzle '
                                'would skip it on existing databases' % (tag, e.get('when'), last_when)))
         last_when = e.get('when', 0)
         if not os.path.isfile(os.path.join(base, tag + '.sql')):
             out.append(Finding('data', 'error', rel, 0, '%s: no %s.sql' % (tag, tag)))
-        if not os.path.isfile(os.path.join(base, 'meta', '%s_snapshot.json' % tag.split('_', 1)[0])):
-            out.append(Finding('data', 'warning', rel, 0, '%s: no snapshot (next db:generate diffs against an older one)'
+        snap = _snapshot(base, tag)
+        if snap is None:
+            # without it the next db:generate diffs against an older snapshot and emits this migration again
+            out.append(Finding('data', 'error', rel, 0, '%s: no snapshot — generate the migration with db:generate'
                                % tag))
+        elif prev and snap.get('prevId') != prev[1].get('id'):
+            out.append(Finding('data', 'error', rel, 0, '%s: snapshot prevId %s is not the id of %s — regenerate it '
+                               'on top of the journal' % (tag, str(snap.get('prevId'))[:8], prev[0])))
+        prev = (tag, snap) if snap else None
     for sql in sorted(glob.glob(os.path.join(base, '*.sql'))):
         tag = os.path.basename(sql)[:-4]
         if tag not in tags:
@@ -146,5 +176,18 @@ def drizzle(root):
     return out
 
 
+def oq_schema(root, files, read_text):
+    out = []
+    for path in files:
+        if not path.startswith(OQ_CODE) or path.startswith(DRIZZLE + '/') or not path.endswith(OQ_EXT):
+            continue
+        for n, line in enumerate((read_text(root, path) or '').splitlines(), 1):
+            if OQ_SQL.search(line):
+                out.append(Finding('data', 'error', path, n, 'SQL to the owner-queue schema oq.*: the ops console is '
+                                   'its only writer, the boards read it through the console API (TB-28)'))
+    return out
+
+
 def run(root, files, read_text):
-    return json_files(root, files) + plans(root) + decisions(root) + drizzle(root)
+    return (json_files(root, files) + plans(root) + decisions(root) + drizzle(root)
+            + oq_schema(root, files, read_text))

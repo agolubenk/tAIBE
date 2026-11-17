@@ -14,7 +14,7 @@ test('ни один текст бота, который видит владел�
   for (const f of readdirSync(DIR).filter((n) => n.endsWith('.mjs'))) {
     readFileSync(join(DIR, f), 'utf8').split('\n').forEach((line, i) => {
       const code = line.replace(/^\s*(\/\/|\*|\/\*).*$/, '').replace(/\/\/ .*$/, '');
-      // Строки в кавычках и шаблонах; служебные имена (watchKey, комментарии) не проверяем.
+      // Строки в кавычках и шаблонах; служебные имена и комментарии не проверяем.
       for (const m of code.matchAll(/'([^'\\]|\\.)*'|`([^`\\]|\\.)*`/g)) {
         if (/артефакт|claude\.ai/i.test(m[0])) bad.push(`${f}:${i + 1} ${m[0].slice(0, 80)}`);
       }
@@ -24,8 +24,8 @@ test('ни один текст бота, который видит владел�
 });
 
 test('ошибка сохранения ответа предлагает /queue, а не артефакт (zp9wxy8x)', () => {
-  const mirror = readFileSync(join(DIR, 'mirror.mjs'), 'utf8');
-  assert.match(mirror, /Страница не смогла сохранить ответ в общую базу\. Повторите или ответьте на странице \/queue\./);
+  const save = readFileSync(join(DIR, 'save-confirm.mjs'), 'utf8');
+  assert.match(save, /Страница не смогла сохранить ответ в общую базу\. Повторите или ответьте на странице \/queue\./);
 });
 
 function notesHarness(confirmations) {

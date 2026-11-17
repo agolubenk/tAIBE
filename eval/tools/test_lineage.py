@@ -25,6 +25,7 @@ import lineage_reap as R  # noqa: E402
 import lineage_retire as LR  # noqa: E402
 
 TERMINAL = "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"
+TMUX_SERVER = "/opt/homebrew/bin/tmux -D -L agents -f /x/agents.conf"  # сервер сессий под launchd (OPS-82)
 ST = "Wed Nov  4 20:00:00 2026"
 CHILD, PARENT = "r.ab12.cd34", "r.ab12"
 # SE-57: линия из 60 сегментов — 302 символа; файл с таким именем macOS не создаст (Errno 63, предел 255)
@@ -36,7 +37,8 @@ SESSION_ENV = ("TAIBE_PRODUCT", "TAIBE_LINEAGE")
 
 
 def clean_env(**extra):
-    return {**{k: v for k, v in os.environ.items() if k not in SESSION_ENV}, **extra}
+    # SPAWN_TERMINAL=terminal: проверки окна Terminal не зависят от system.terminal в instances/_shared.json (OPS-82)
+    return {**{k: v for k, v in os.environ.items() if k not in SESSION_ENV}, "SPAWN_TERMINAL": "terminal", **extra}
 
 
 def P(pid, ppid, pgid, tty, cmd, start=ST):
@@ -171,6 +173,35 @@ class WatchTest(Base):
         self.assertNotIn(300, sx.p)
         self.assertIn(400, sx.p)
         self.assertEqual(sx.osa_calls, [("/dev/ttys005", "19220")])
+
+    def tmux_close(self, rec, host=TMUX_SERVER):
+        """Предшественник в панели tmux (OPS-82): close_pane подменён — что сторож ему передал."""
+        sx = FakeSys(tree(pred_host=host), env={400: CHILD, 300: PARENT})
+        L.write_json(L.ldir() / f"{PARENT}.json", rec)
+        sx.at(10, self.ack)
+        calls = []
+        import tmux_host
+        with mock.patch.object(tmux_host, "close_pane", lambda r, tty, log: calls.append((r.get("pane"), tty))):
+            self.assertEqual(self.run_watch(sx), 0, self.lines)
+        return sx, calls
+
+    def test_tmux_pane_closed_by_record(self):
+        rec = {"terminal": "tmux", "pane": "%7", "tty": "/dev/ttys005", "pane_pid": "200", "server": "100:1"}
+        sx, calls = self.tmux_close(rec)
+        self.assertEqual(L.host({100: P(100, 1, 100, "??", TMUX_SERVER)}, P(9, 100, 9, "", "x")), "tmux")
+        self.assertNotIn(300, sx.p)
+        self.assertEqual(calls, [("%7", "/dev/ttys005")])
+        self.assertEqual(sx.osa_calls, [])                        # окна Terminal нет
+        self.assertNotIn((201, signal.SIGHUP), sx.sent)           # HUP панели шлёт сам kill-pane
+
+    def test_tmux_host_without_tmux_record_keeps_pane(self):
+        _, calls = self.tmux_close({"terminal": "terminal", "window_id": "5", "tty": "/dev/ttys005"})
+        self.assertEqual(calls, [])
+        self.assertIn("панель не трогаю", " ".join(self.lines))
+
+    def test_tmux_record_in_terminal_keeps_window(self):
+        sx, calls = self.tmux_close({"terminal": "tmux", "pane": "%7", "tty": "/dev/ttys005"}, host=TERMINAL)
+        self.assertEqual((calls, sx.osa_calls), ([], []))
 
     def test_successor_died_after_ack(self):
         sx = self.fake()
