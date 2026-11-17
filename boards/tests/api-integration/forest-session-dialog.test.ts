@@ -33,7 +33,10 @@ async function feed(forest: Forest, taskId: string) {
 }
 
 // R-026, AC-010: linked sessions talk on the card; the talk is archived and
-// stays readable.
+// stays readable. Every comment also carries its author mark (TB-83): an
+// agent's key writes `agent`, the owner's session `human`.
+const AGENT = { author: "agent" };
+const HUMAN = { author: "human" };
 describe("API integration: dialog of linked sessions", () => {
   beforeEach(resetTestDatabase);
 
@@ -61,27 +64,29 @@ describe("API integration: dialog of linked sessions", () => {
     const byReviewer = { ...episode, session: "reviewer" };
     expect(
       (await comment(forest, task.id, "writer: plan", "writer")).eventData,
-    ).toEqual({ dialog: byWriter });
+    ).toEqual({ ...AGENT, dialog: byWriter });
     expect(
       (await comment(forest, task.id, "reviewer: ok", "reviewer", "pair-1"))
         .eventData,
-    ).toEqual({ dialog: byReviewer });
+    ).toEqual({ ...AGENT, dialog: byReviewer });
     expect(
       (await comment(forest, task.id, "rival: note", "rival")).eventData,
-    ).toBeNull();
+    ).toEqual(AGENT);
     const owner = await forest.ownerApi("POST", `/comment/${task.id}`, {
       content: "owner: fine",
     });
-    expect(owner.body.eventData).toBeNull();
+    expect(owner.body.eventData).toEqual(HUMAN);
 
     const open = await feed(forest, task.id);
     expect(open.get("writer: plan")).toEqual({
+      ...AGENT,
       dialog: { ...byWriter, open: true },
     });
     expect(open.get("reviewer: ok")).toEqual({
+      ...AGENT,
       dialog: { ...byReviewer, open: true },
     });
-    expect(open.get("rival: note")).toBeNull();
+    expect(open.get("rival: note")).toEqual(AGENT);
 
     const released = await forest.agent(
       "/leases/release",
@@ -91,6 +96,7 @@ describe("API integration: dialog of linked sessions", () => {
     expect(released.body).toEqual({ released: true });
     const archived = await feed(forest, task.id);
     expect(archived.get("writer: plan")).toEqual({
+      ...AGENT,
       dialog: { ...byWriter, open: false },
     });
   });
@@ -110,6 +116,7 @@ describe("API integration: dialog of linked sessions", () => {
       .where(eq(schema.taskTable.id, task.id));
 
     expect((await feed(forest, task.id)).get("writer: done")).toEqual({
+      ...AGENT,
       dialog: {
         groupKey: "pair-2",
         fencingToken: lease.body.fencingToken,
@@ -141,7 +148,7 @@ describe("API integration: dialog of linked sessions", () => {
       eventData: { ...forged, kept: 1 },
     });
     expect(created.status).toBe(200);
-    expect(created.body.eventData).toEqual({ kept: 1 });
+    expect(created.body.eventData).toEqual({ kept: 1, ...HUMAN });
 
     // A row written before the fix: the feed does not add `open` to it.
     await db.insert(schema.activityTable).values({
@@ -152,16 +159,16 @@ describe("API integration: dialog of linked sessions", () => {
       eventData: forged,
     });
     const items = await feed(forest, task.id);
-    expect(items.get("forged")).toEqual({ kept: 1 });
+    expect(items.get("forged")).toEqual({ kept: 1, ...HUMAN });
     expect(items.get("old forged")).toEqual(forged);
   });
 
-  it("marks nothing on a solo lease", async () => {
+  it("marks no dialog on a solo lease", async () => {
     const forest = await createForest();
     const task = await addTask(forest.project.id);
     await forest.agent("/leases", { taskId: task.id }, "solo");
     expect(
       (await comment(forest, task.id, "solo: note", "solo")).eventData,
-    ).toBeNull();
+    ).toEqual(AGENT);
   });
 });
