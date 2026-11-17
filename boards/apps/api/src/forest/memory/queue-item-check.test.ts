@@ -9,6 +9,7 @@ const config: OwnerQueueConfig = {
   tokenFile: "/nonexistent/token",
   tokenName: "token:t-boards",
   products: new Map([["ws-1", "taibe"]]),
+  plan: { products: new Map() },
 };
 
 function clientGetting(get: QueueClient["get"]) {
@@ -25,6 +26,9 @@ function clientGetting(get: QueueClient["get"]) {
       throw new Error("not used");
     },
     history: async () => [],
+    list: async () => {
+      throw new Error("not used");
+    },
   });
   return { client, asked };
 }

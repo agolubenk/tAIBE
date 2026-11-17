@@ -8,7 +8,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
 import type { ForestActor } from "../forest/actor";
 import { writeJournal } from "../forest/journal";
-import { callDetail } from "./call-detail";
+import { callDetail, callTarget } from "./call-detail";
 import type { McpRole } from "./tool-scope/roles";
 import { collectTools, registerScoped } from "./tool-scope/scoped-tools";
 import {
@@ -115,7 +115,7 @@ function journalFormatFallback(userId: string) {
 
 // R-036: every call, with its arguments and answer size. The workspace stays
 // empty: the agent names it in the arguments, and a wrong one must not lose
-// the row on the foreign key.
+// the row on the foreign key. A call about a card is filed under it (TB-44).
 function journalCall(userId: string) {
   const actor = bearerActor(userId);
   return (call: ToolCall) => {
@@ -123,8 +123,7 @@ function journalCall(userId: string) {
       workspaceId: null,
       actor,
       action: "mcp.call",
-      targetType: "mcp_tool",
-      targetId: call.tool,
+      ...callTarget(call),
       outcome: call.ok ? "allowed" : "denied",
       detail: callDetail(call),
     }).catch((e: unknown) =>

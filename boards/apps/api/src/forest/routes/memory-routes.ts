@@ -9,6 +9,7 @@ import {
 import getTaskByTicketId from "../../task/controllers/get-task-by-ticket-id";
 import { requestWorkspaceScope } from "../../utils/api-key-workspace-scope";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import {
   labelBySource,
@@ -32,11 +33,11 @@ const getMemoryRoute = createRoute({
   tags: ["Forest"],
   summary: "List claude-mem observations about a card",
   description:
-    "For each of the card's keys — its id, board key, Backlog ID and the owner-queue items of its «да» requests, up to 6 — how many claude-mem observations name it exactly and the 5 newest titles. Read-only, through the Mac memory proxy; when the proxy is down the last answer is returned, marked stale, for up to 24 hours.",
+    "For each of the card's keys — its id, board key, Backlog ID and the owner-queue items of its «да» requests, up to 6 — how many claude-mem observations name it exactly and the 5 newest titles. Read-only, through the Mac memory proxy; when the proxy is down the last answer is returned, marked stale, for up to 24 hours. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["read"] }),
-  ],
+  ] as const,
   request: { params: cardParam },
   responses: {
     200: jsonResponse("The card's observations", cardMemorySchema),
@@ -56,7 +57,7 @@ const lookupMemoryRoute = createRoute({
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["read"] }),
-  ],
+  ] as const,
   request: { params: memoryLookupParam, query: memoryLookupQuery },
   responses: {
     200: jsonResponse("The observations", cardMemorySchema),
@@ -72,11 +73,21 @@ async function searchMemory(keys: MemoryKey[]) {
   return labelBySource(memory, keys);
 }
 
+// TB-192: titles come from the claude-mem summarizer and can hold a secret.
+// A token caller feeds a model and reads them masked; the web app does not
+// (TB-143 decision (a)). Read-only, so nothing is restored on write. Both
+// routes answer through it: the lookup returns the same titles.
 export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(getMemoryRoute, async (c) => {
     const { workspaceId, taskId } = c.req.valid("param");
     await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
-    return c.json(await searchMemory(await loadCardMemoryKeys(taskId)), 200);
+    return c.json(
+      maskForTokenCaller(
+        c,
+        await searchMemory(await loadCardMemoryKeys(taskId)),
+      ),
+      200,
+    );
   })
   .openapi(lookupMemoryRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -89,7 +100,10 @@ export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     if (queueItemId) {
       await assertQueueItemVisible(workspaceId, queueItemId);
       return c.json(
-        await searchMemory([{ key: queueItemId, source: "queue" }]),
+        maskForTokenCaller(
+          c,
+          await searchMemory([{ key: queueItemId, source: "queue" }]),
+        ),
         200,
       );
     }
@@ -99,5 +113,11 @@ export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       apiKeyScope: requestWorkspaceScope(c),
     });
     await assertTaskInWorkspace(task.id, workspaceId, userId);
-    return c.json(await searchMemory(await loadCardMemoryKeys(task.id)), 200);
+    return c.json(
+      maskForTokenCaller(
+        c,
+        await searchMemory(await loadCardMemoryKeys(task.id)),
+      ),
+      200,
+    );
   });

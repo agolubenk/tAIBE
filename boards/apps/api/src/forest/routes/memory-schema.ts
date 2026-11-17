@@ -10,7 +10,8 @@ import { workspaceParam } from "./schema";
 const memoryLineSchema = z.object({
   id: z.number().int(),
   title: z.string().nullable().openapi({
-    description: "The observation's title, at most 120 characters.",
+    description:
+      "The observation's title, at most 120 characters; a cut inside a word drops that word. For a caller with a token a secret in it reads [REDACTED:<kind>].",
   }),
   project: z.string(),
   createdAt: z.string(),
