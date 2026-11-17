@@ -90,6 +90,7 @@ describe("callModel", () => {
       ok: true,
       content: "Ответ A",
       model: "a-model",
+      usage: null,
     });
     expect(urls(fetch)).toEqual(["https://a.test/v1/chat/completions"]);
     expect(warn).not.toHaveBeenCalled();
@@ -104,6 +105,7 @@ describe("callModel", () => {
       ok: true,
       content: "Ответ B",
       model: "b-model",
+      usage: null,
     });
     expect(urls(fetch)).toEqual([
       "https://a.test/v1/chat/completions",

@@ -1,3 +1,4 @@
+import type { NotebookUsage } from "../../database/notebook-schema";
 import { withoutOutboundTelemetry } from "../../utils/sensitive-outbound";
 import { urlOrigin } from "./base-url";
 
@@ -66,7 +67,11 @@ export type ChatConfig = {
   thinking?: string;
 };
 
-export type ChatAnswer = { content: string; model: string };
+export type ChatAnswer = {
+  content: string;
+  model: string;
+  usage: NotebookUsage | null;
+};
 
 const OPENROUTER = "https://openrouter.ai";
 
@@ -103,6 +108,35 @@ export function answerText(body: unknown): string {
     throw new LlmError("response");
   }
   return content.trim();
+}
+
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+// D-018: the provider's own token counts. OpenAI and OpenRouter put the cache
+// in prompt_tokens_details.cached_tokens, DeepSeek in prompt_cache_hit_tokens;
+// both count it inside prompt_tokens. A missing or odd usage is null, never a
+// guess: the answer itself is not lost over it.
+export function providerUsage(body: unknown): NotebookUsage | null {
+  const usage = (body as { usage?: unknown } | null)?.usage as
+    | {
+        prompt_tokens?: unknown;
+        completion_tokens?: unknown;
+        prompt_tokens_details?: { cached_tokens?: unknown } | null;
+        prompt_cache_hit_tokens?: unknown;
+      }
+    | null
+    | undefined;
+  if (!usage || typeof usage !== "object") return null;
+  const input = usage.prompt_tokens;
+  const output = usage.completion_tokens;
+  if (!isCount(input) || !isCount(output)) return null;
+  const cached =
+    usage.prompt_tokens_details?.cached_tokens ??
+    usage.prompt_cache_hit_tokens ??
+    0;
+  if (!isCount(cached) || cached > input) return null;
+  return { input, output, cached };
 }
 
 export async function chatCompletion(
@@ -146,7 +180,11 @@ export async function chatCompletion(
       throw new LlmError("http", response.status);
     }
     const body = await readBoundedJson(response);
-    return { content: answerText(body), model: answeredModel(body, config) };
+    return {
+      content: answerText(body),
+      model: answeredModel(body, config),
+      usage: providerUsage(body),
+    };
   } catch (error) {
     if (error instanceof LlmError) throw error;
     if (signal.aborted) throw new LlmError("timeout");

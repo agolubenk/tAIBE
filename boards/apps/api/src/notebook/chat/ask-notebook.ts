@@ -4,6 +4,7 @@ import db from "../../database";
 import {
   type NotebookCitation,
   type NotebookMessageStatus,
+  type NotebookUsage,
   notebookMessageTable,
   notebookThreadTable,
 } from "../../database/notebook-schema";
@@ -65,6 +66,8 @@ type Outcome = {
   status: NotebookMessageStatus;
   content: string;
   model: string | null;
+  // D-018: only an answered call carries the provider's usage.
+  usage?: NotebookUsage | null;
 };
 
 async function writeAnswer(
@@ -86,7 +89,12 @@ async function writeAnswer(
   }
   const reply = await callModel(points, messages);
   if (reply.ok) {
-    return { status: "answered", content: reply.content, model: reply.model };
+    return {
+      status: "answered",
+      content: reply.content,
+      model: reply.model,
+      usage: reply.usage,
+    };
   }
   return {
     status: reply.limited ? "rate-limited" : "failed",
@@ -100,6 +108,9 @@ export async function askNotebook(input: {
   threadId?: string;
   question: string;
   userId: string | null;
+  // A caller with a token (TB-196): a source is cited only if the question
+  // finds it in visible text, else a citation tells what a secret holds.
+  tokenCaller?: boolean;
 }) {
   const thread = input.threadId
     ? await findThread(input.workspaceId, input.threadId)
@@ -134,6 +145,7 @@ export async function askNotebook(input: {
     limit: ANSWER_SOURCES,
     mode: "hybrid",
     embedModel: settings.embedModel,
+    tokenCaller: input.tokenCaller,
   });
   const citations: NotebookCitation[] = hits.map((hit, i) => ({
     n: i + 1,

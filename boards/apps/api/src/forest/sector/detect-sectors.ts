@@ -3,6 +3,7 @@ import db from "../../database";
 import { sectorTable, sectorTreeTable } from "../../database/forest-schema";
 import { taskTable } from "../../database/schema";
 import { groupSectors, type RootPair, sectorSignature } from "./group-sectors";
+import { detectedSectorName, sectorName } from "./sector-name";
 
 export const SECTOR_PAIR_LIMIT = 10_000;
 const DETECTED_BY = "links-v1";
@@ -80,7 +81,10 @@ export async function detectSectors(workspaceId: string) {
     const sectors: DetectedSector[] = [];
     for (const [index, treeIds] of groups.entries()) {
       const signature = signatures[index] as string;
-      const name = `Sector: ${titleOf.get(treeIds[0] as string) ?? treeIds[0]} +${treeIds.length - 1}`;
+      const name = detectedSectorName(
+        titleOf.get(treeIds[0] as string) ?? (treeIds[0] as string),
+        treeIds.length,
+      );
       const [inserted] = await tx
         .insert(sectorTable)
         .values({ workspaceId, name, detectedBy: DETECTED_BY, signature })
@@ -106,7 +110,7 @@ export async function detectSectors(workspaceId: string) {
       if (existing) {
         sectors.push({
           id: existing.id,
-          name: existing.name,
+          name: sectorName(existing.name),
           treeIds,
           created: false,
         });

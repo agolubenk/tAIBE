@@ -1,3 +1,4 @@
+import type { NotebookUsage } from "../../database/notebook-schema";
 import type {
   ModelChain,
   ModelPoint,
@@ -18,11 +19,11 @@ export const CHAIN_DEADLINE_MS = 120_000;
 const CALL_TIMEOUT_MS = 60_000;
 
 export type ModelReply =
-  | { ok: true; content: string; model: string }
+  | { ok: true; content: string; model: string; usage: NotebookUsage | null }
   | { ok: false; limited: boolean; model: string };
 
 type PointResult =
-  | { ok: true; content: string; model: string }
+  | { ok: true; content: string; model: string; usage: NotebookUsage | null }
   | { ok: false; limited: boolean; reason: string };
 
 // Failed calls per point since the API started; the notebook runs on one API
