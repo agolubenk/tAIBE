@@ -10,6 +10,9 @@
       наследник после приёма, перевзвода Monitor и кронов: квитанция <TAIBE_LINEAGE>.ack (pid и старт его claude)
   lineage.py retire --child L [--role K] [--timeout 5400] [--foreground]
       spawn_session.sh --handoff: отцепленный сторож ждёт квитанцию L, проверяет наследника и снимает предшественника
+  lineage.py seat --product S --line L --succ-tty /dev/ttysNNN --guard DIR [--guard DIR]
+      spawn_session.sh --launch после подъёма release: мёртвую запись Контроля продукта — новому release (SE-155,
+      lineage_seat.py; только сторож команды или «ВКЛ», не агентская сессия)
   lineage.py reap [--idle-hours 24] [--include-waiting] [--prune-days 30] [--kill [--yes]]
       без флагов — список и чистка записей линий старше --prune-days; --kill — действие владельца, только по списку последнего показа (≤ 10 мин)
   lineage.py reap --auto [--apply] [--summary] [--ack-minutes 30] [--auto-idle-hours 8] [--window-minutes 10]
@@ -454,13 +457,15 @@ def main(argv=None, sx=None):
     from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
     from lineage_close import add_autoclose_args, add_exited_args, cmd_autoclose, cmd_exited  # noqa: E402
+    from lineage_seat import add_seat_args, cmd_seat  # noqa: E402 — Контроль новому release после «ВКЛ» (SE-155)
     add_reap_args(sub.add_parser("reap"))
     add_autoclose_args(sub.add_parser("autoclose"))
     add_exited_args(sub.add_parser("exited"))
+    add_seat_args(sub.add_parser("seat"))
     a = ap.parse_args(argv)
     sx = sx or Sys()
     return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire,
-            "reap": cmd_reap, "autoclose": cmd_autoclose, "exited": cmd_exited}[a.cmd](sx, a)
+            "reap": cmd_reap, "autoclose": cmd_autoclose, "exited": cmd_exited, "seat": cmd_seat}[a.cmd](sx, a)
 
 
 if __name__ == "__main__":
