@@ -101,7 +101,7 @@ try {
   // Описание бота — чтобы в Telegram было видно, что это.
   await sendAndWait('/setdescription', [{ kind: 'pick', re: /choose a bot|выберите/i }]).catch(() => null);
   await sendAndWait(`@${username}`, [{ kind: 'desc', re: /description|описание/i }]).catch(() => null);
-  await sendAndWait('Личный бот владельца HR Helper: очередь решений, мёржей и проверок — зеркало артефакта.', [{ kind: 'ok', re: /success|updated|обновл/i }]).catch(() => null);
+  await sendAndWait('Личный бот владельца HR Helper: очередь решений, мёржей и проверок — зеркало страницы /queue ops-консоли.', [{ kind: 'ok', re: /success|updated|обновл/i }]).catch(() => null);
 
   const code = store.pairingCode();
   if (code) {
