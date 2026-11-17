@@ -134,13 +134,20 @@ def owner_split(team, slugs, log=lambda m: None):
             return got, "очередь"
     except ERRORS as exc:
         log(f"  очередь не ответила ({exc.__class__.__name__}) — доли из последнего ответа")
+    return local_split(team, slugs, base)
+
+
+def local_split(team, slugs, base=None):
+    """Доли без сети: последний ответ, который принял сторож (кэш, раз в 10 мин), иначе конфиг."""
+    total, least = int(team["total"]), int(team["min_per_product"])
     try:
         got = parse_split(json.loads(cache_path().read_text(encoding="utf-8")), slugs, total, least)
         if got:
             return got, "последний ответ"
     except ERRORS:
         pass
-    return base, "конфиг"
+    return base or parse_split([int((team.get("split") or {}).get(s, 0)) for s in slugs], slugs, total, least) or dict(
+        zip(slugs, [total // len(slugs) + (i < total % len(slugs)) for i in range(len(slugs))])), "конфиг"
 
 
 def allocate(split, roles):
@@ -424,12 +431,13 @@ def show():
 
 def keep(slug, role, log=lambda m: None):
     """Роль в доле владельца? Лишняя (сверх доли) доделывает сессию и наследника не открывает: так новая доля встаёт,
-    когда лишние роли закончили сессию, и работающая роль не обрывается (d-team-surplus-1711). Не знаем — оставить."""
+    когда лишние роли закончили сессию, и работающая роль не обрывается (d-team-surplus-1711). Не знаем — оставить.
+    Без сети: доли — из кэша сторожа (раз в 10 мин), передача смены на исходе контекста не ждёт очередь."""
     try:
         team, _, _, _, roles, _ = config()
         if role not in roles.get(slug, ()):
             return True, ""  # не роль команды (сессия владельца, продукт выключен) — не наша забота
-        split, _ = owner_split(team, list(roles), log)
+        split, _ = local_split(team, list(roles))
         alloc = allocate(split, roles)
         return (slug, role) in plan(alloc, roles), " · ".join(f"{s} {n}" for s, n in alloc.items())
     except Exception as exc:  # noqa: BLE001 — сбой не должен оставить роль без наследника

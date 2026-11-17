@@ -327,13 +327,15 @@ class KeepTest(Base):
 
     def keep(self, slug, role):
         def oq(path, root=None, method="GET", data=None):
-            return {"data": {"choice": self.choice}} if path.startswith("checks/") and self.choice else None
+            raise AssertionError("keep ходит в сеть")  # передача смены на исходе контекста не ждёт очередь
+        if self.choice and self.choice != "pause":
+            (Path(self.tmp.name) / "team-split.json").write_text(json.dumps([int(x) for x in self.choice.split("-")]))
         with mock.patch.object(TP, "config", lambda: (TEAM, 20, 10, 14, ROLES, {"hr-helper": "/h", "taibe": "/t"})), \
                 mock.patch.object(TP.Q, "oq_request", oq):
             return TP.keep(slug, role)
 
     def test_surplus_after_share_change(self):
-        self.choice = "8-4"
+        self.choice = "8-4"  # кэш сторожа: последний принятый ответ
         self.assertEqual(self.keep("taibe", "plan"), (False, "hr-helper 8 · taibe 4"))
         self.assertTrue(self.keep("taibe", "frontend")[0])
         self.assertTrue(self.keep("hr-helper", "boards")[0])

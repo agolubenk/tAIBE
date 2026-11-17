@@ -146,7 +146,7 @@ def surplus_run(keep_rc):
 
 
 for name, keep_rc, want_rc, marker in [
-    ("surplus role: no successor, exit 5", 3, 5, "сверх доли владельца (hr-helper 8 · taibe 4)"),
+    ("surplus role: no successor, exit 5", 3, 5, "is surplus over the owner split (hr-helper 8 · taibe 4"),
     ("role in the split: successor as before", 0, 0, "/genome/taibe/boards.json"),
     ("keep check fails: successor as before", 1, 0, "/genome/taibe/boards.json"),
 ]:

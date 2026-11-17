@@ -174,6 +174,21 @@ class AutoTest(Base):
         self.assertIn("открыта не spawn_session.sh", v[717])
         self.assertIn("открыта не spawn_session.sh", v[718])
 
+    def test_surplus_role_taken_after_30_min_idle(self):
+        """d-team-surplus-1711: роль сверх доли (метка lineage.py surplus) — не держатель; снять после 30 мин простоя."""
+        self.sess(721, line="r.s1", role="plan", idle_h=0.6)                                     # сверх доли, 36 мин
+        self.sess(722, line="r.s2", role="boards", idle_h=0.2)                                   # сверх доли, 12 мин
+        self.sess(723, line="r.s3", role="frontend", idle_h=0.6)                                 # держатель, без метки
+        self.sess(724, line="r.s4", role="backend", idle_h=0.6)                                  # метка чужого pid
+        for pid, line in ((721, "r.s1"), (722, "r.s2")):
+            L.write_json(L.ldir() / f"{line}.surplus", {"line": line, "pid": pid, "start": ST})
+        L.write_json(L.ldir() / "r.s4.surplus", {"line": "r.s4", "pid": 999, "start": ST})
+        v = self.verdicts(self.auto()[1])
+        self.assertIn("СНЯТЬ: сверх доли владельца (d-team-surplus-1711), простой 36 мин", v[721])
+        self.assertIn("сверх доли, простой 12 < 30 мин", v[722])
+        self.assertIn("простой 0.6 < 8 ч", v[723])  # без метки — обычное правило простоя
+        self.assertIn("простой 0.6 < 8 ч", v[724])  # метка чужого pid не в счёт
+
     def test_protections_beat_every_criterion(self):
         self.sess(721, line="r.m1", role=None, idle_h=50, cwd=self.dir / "dev")           # мост в общем корне
         self.sess(722, line="r.m2", role=None, idle_h=50, cwd="/elsewhere")               # чужой проект

@@ -94,10 +94,11 @@ def role_rows(sx, root, product=None):
 
 
 def live_roles(rows):
-    """Роль → её живая сессия; сменённые наследником (квитанция или живой потомок той же роли) не в счёт."""
+    """Роль → её живая сессия; сменённые наследником (квитанция или живой потомок той же роли) и роли сверх доли
+    владельца, закончившие смену (метка lineage.py surplus), не в счёт: их место сторож отдаёт новой доле."""
     best = {}
     for r in rows:
-        if r["ack"] or R.successor_gen(rows, r):
+        if r["ack"] or r.get("surplus") or R.successor_gen(rows, r):
             continue
         if r["role"] not in best or r["age_h"] < best[r["role"]]["age_h"]:
             best[r["role"]] = r

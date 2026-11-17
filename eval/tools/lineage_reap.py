@@ -64,6 +64,8 @@ def add_reap_args(p):
                    help="--auto: окно линии закрывается не раньше стольких минут после выхода claude с кодом 0")
     p.add_argument("--ack-minutes", type=float, default=30.0,
                    help="--auto: предшественник снимается, если проверенной квитанции наследника не меньше стольких минут")
+    p.add_argument("--surplus-idle-minutes", type=float, default=30.0,
+                   help="--auto: роль сверх доли владельца (метка lineage.py surplus) снимается после такого простоя")
     p.add_argument("--auto-idle-hours", type=float, default=8.0,
                    help="--auto: простой, после которого сессия — кандидат (не держатель роли, без незакоммиченного)")
     p.add_argument("--keep-cwd", action="append", default=[],
@@ -80,7 +82,7 @@ def prune_lineage_dir(days, now=None):
     cutoff = (now if now is not None else time.time()) - days * 86400
     n = 0
     for f in L.ldir().glob("*"):
-        if f.name == "reap-list.json" or f.suffix not in {".json", ".ack", ".log"} or not f.is_file():
+        if f.name == "reap-list.json" or f.suffix not in {".json", ".ack", ".log", ".surplus"} or not f.is_file():
             continue
         try:
             if f.stat().st_mtime < cutoff:
@@ -133,6 +135,43 @@ def ack_state(procs, line):
     return state
 
 
+def surplus_state(procs, line):
+    """Метка «сверх доли владельца» (lineage.py surplus) этой самой сессии: pid и старт совпали с живым claude."""
+    if not L.valid_line(line or ""):
+        return False
+    m = L.read_json(L.lfile(line, ".surplus")) or {}
+    s = procs.get(m.get("pid") if isinstance(m.get("pid"), int) else -1)
+    return s is not None and L.argv0(s) == "claude" and L.norm(s.start) == L.norm(m.get("start"))
+
+
+def cmd_surplus(sx, a):
+    """Роль сверх доли владельца (spawn_session.sh --handoff, код 5): метка <линия>.surplus с pid и стартом своего
+    claude. По ней сторож команды не считает сессию живой ролью, а автоуборка снимает её после простоя. Код 0 — метка
+    новая, 3 — такая же уже была (повтор handoff: событие координатору второй раз не нужно)."""
+    procs = sx.procs()
+    me = L.ancestor_claude(procs, os.getpid())
+    line = os.environ.get("TAIBE_LINEAGE", "") or (L.session_line(sx, me) if me else None) or ""
+    if not L.valid_line(line):
+        return L.die("нет линии роли (TAIBE_LINEAGE или первый промпт своей сессии)")
+    # Своя линия — свой claude; чужая (координатор будит спящую роль: TAIBE_LINEAGE=<линия роли> … --no-retire) —
+    # живой claude этой линии из sessions/, иначе метка легла бы на координатора.
+    who = me if me is not None and L.session_line(sx, me) == line else None
+    for f in ([] if who else sorted(L.sessions_dir().glob("*.json"))):
+        d = L.read_json(f)
+        p = procs.get(d.get("pid")) if isinstance(d, dict) and isinstance(d.get("pid"), int) else None
+        if p is not None and L.argv0(p) == "claude" and L.norm(p.start) == L.norm(d.get("procStart")) \
+                and L.session_line(sx, p) == line:
+            who = p
+            break
+    if who is None:
+        return L.die(f"нет живой сессии линии {line}")
+    f, old = L.lfile(line, ".surplus"), L.read_json(L.lfile(line, ".surplus")) or {}
+    if old.get("pid") == who.pid and L.norm(old.get("start")) == L.norm(who.start):
+        return 3
+    L.write_json(f, {"line": line, "pid": who.pid, "start": who.start, "handoff": a.handoff, "at": L.stamp()})
+    return 0
+
+
 def successor_gen(rows, r):
     """Поколение самого дальнего живого наследника той же роли (линия начинается с «<линия>.»); 0 — его нет.
     Префикс с точкой: сиблинг r.a1.b2 для r.a1.c3 и r.a10.x для r.a1 наследниками не считаются."""
@@ -173,6 +212,7 @@ def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
                 current[pr] = (key, r["pid"])
     for r in rows:
         r["ack"] = ack_state(procs, r["line"])
+        r["surplus"] = surplus_state(procs, r["line"])
         is_current = r["role"] is not None and current[(r["product"], r["role"])][1] == r["pid"]
         gen = successor_gen(rows, r)
         r["cand"] = False

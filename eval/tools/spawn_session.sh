@@ -2,7 +2,8 @@
 # Открыть новую сессию Claude Code в отдельном окне терминала: наследник по handoff или запуск роли Т3.
 #
 #   bash eval/tools/spawn_session.sh --handoff FILE [--role KEY]     наследник (бюджет окна, хук context-threshold);
-#                                         роль сверх доли владельца (team_plan.py keep) — код 5, наследника нет
+#                                         роль сверх доли владельца (team_plan.py keep) — код 5, наследника нет:
+#                                         в том числе вторая сессия (backend-2, frontend-2), открытая руками при 6-6
 #   bash eval/tools/spawn_session.sh --launch --role KEY             запуск роли по её пусковому файлу
 #   bash eval/tools/spawn_session.sh --launch --roles all|coord,release,…   несколько ролей, по порядку 1→5→4→3→2→6
 #   bash eval/tools/spawn_session.sh --status | --stop                 роли продукта и пульс нерва | команды kill для владельца
@@ -420,20 +421,38 @@ elif [ -n "$HANDOFF" ]; then
     python3 -I "$TOOLS/../evolve/dupes.py" --against-l1 "$HANDOFF" --max-waste "${SPAWN_MAX_WASTE:-300}" --top 5 >&2 \
       || echo "# spawn_session: handoff повторяет постоянный контекст — в следующий раз пиши только дельту" >&2
   fi
-  # Роль сверх доли владельца (кнопка «Роли» в /queue сменила долю) наследника не открывает: доделывает сессию и
-  # уходит, её дела берёт координатор продукта (решение d-team-surplus-1711). Сбой проверки — наследник как раньше.
-  # --dry-run проверку не делает (она читает очередь), если не попросили SPAWN_SURPLUS_CHECK=on; off — не делать вовсе.
+  # Роль сверх доли владельца (кнопка «Роли» в /queue сменила долю) наследника не открывает: доделывает сессию, метка
+  # lineage.py surplus — сторож команды больше не считает её ролью и отдаёт место новой доле, автоуборка снимает её
+  # после 30 мин простоя; дела — координатору продукта (решение d-team-surplus-1711). Доли — из кэша сторожа, без сети.
+  # Сбой проверки — наследник как раньше. --dry-run проверку не делает, если не SPAWN_SURPLUS_CHECK=on; off — никогда.
   surplus_check="${SPAWN_SURPLUS_CHECK:-}"
   [ -n "$surplus_check" ] || { [ "$DRY" = 1 ] && surplus_check=off || surplus_check=on; }
   if [ -n "$ROLE" ] && [ -n "$PRODUCT" ] && [ "$surplus_check" = on ]; then
     rc=0
     split="$(python3 -I "${SPAWN_TEAM_PLAN:-$TOOLS/team_plan.py}" keep "$PRODUCT" "$ROLE" 2>/dev/null)" || rc=$?
     if [ "$rc" = 3 ]; then
-      echo "spawn_session: роль $ROLE ($PRODUCT) — сверх доли владельца ($split): наследника не открываю." \
-        "Дела переданы координатору продукта. Допиши work_state и закончи сессию." >&2
-      [ "$DRY" = 1 ] || python3 -I "${SPAWN_NERVE:-$TOOLS/../nerve/nerve.py}" emit coord --product "$PRODUCT" \
-        "Role $ROLE of $PRODUCT ends as surplus over the owner split ($split, decision d-team-surplus-1711): no successor. Take its open work: handoff $HANDOFF." \
-        >/dev/null 2>&1 || echo "# spawn_session: событие координатору не записано — передай handoff сам" >&2
+      if [ "$RETIRE" = off ]; then  # --no-retire: роль будит координатор (скилл successor-handoff, «кэш окна»)
+        echo "spawn_session: role $ROLE ($PRODUCT) is surplus over the owner split ($split, decision d-team-surplus-1711)." \
+          "Do not wake it. Take its open work from the handoff $HANDOFF. The Mac closes its session after 30 min idle." >&2
+      else
+        echo "spawn_session: role $ROLE ($PRODUCT) is surplus over the owner split ($split, decision d-team-surplus-1711)." \
+          "No successor opens. 1. Write work_state. 2. Release your inbox claims (oq_agent_status release, note: to coord)." \
+          "3. Do not start new work. 4. Do not wait for a successor ack and do not run spawn_session.sh again." \
+          "The Mac closes this session after 30 min idle." >&2
+      fi
+      mark=0
+      [ "$DRY" = 1 ] || python3 -I "$TOOLS/lineage.py" surplus --handoff "$HANDOFF" >/dev/null 2>&1 || mark=$?
+      if [ "$mark" = 3 ]; then
+        echo "spawn_session: the coordinator already has your handoff." >&2
+      elif [ "$DRY" = 0 ] && python3 -I "${SPAWN_NERVE:-$TOOLS/../nerve/nerve.py}" emit coord --product "$PRODUCT" \
+        "Role $ROLE ($PRODUCT) ends: it is surplus over the owner split ($split, d-team-surplus-1711). No successor opens. 1. Read the handoff $HANDOFF. 2. Take its PRs, cards and work_state. 3. Take its owner-queue items: owner answers to them go to role $ROLE, which has no session." \
+        >/dev/null 2>&1; then
+        echo "spawn_session: the coordinator has your handoff." >&2
+      elif [ "$DRY" = 0 ]; then
+        echo "spawn_session: the event to coord failed. Run: python3 -I $TOOLS/../nerve/nerve.py emit coord" \
+          "--product $PRODUCT \"Take the handoff $HANDOFF of surplus role $ROLE\"" >&2
+      fi
+      [ "$mark" = 0 ] || [ "$mark" = 3 ] || echo "# spawn_session: метка lineage.py surplus не записана ($mark) — место освободит «ВЫКЛ → ВКЛ»" >&2
       exit 5
     fi
   fi

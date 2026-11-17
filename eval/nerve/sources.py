@@ -218,8 +218,13 @@ def poll_queue(ctx):
             continue
         target = ctx.for_item(c["id"], product.get(c["id"]))
         role = route_source(str(it.get("source", "")), target.cfg["queue"]["source_roles"])
-        _emit_to(ctx, target, key, "owner.answer", NERVOUS, [role],
-                 f"ответ владельца {c['id']}: {label}{' · есть заметка' if a.get('note') else ''}", "queue")
+        # Роль-автор без сессии (сверх доли владельца — d-team-surplus-1711 — или закрыта), а другие роли продукта живы:
+        # ответ и координатору, иначе его никто не прочтёт. Живых нет вовсе (ночь, CI) — как раньше, только роли.
+        live = active_roles(target) if role != "coord" else []
+        orphan = bool(live) and role not in live
+        _emit_to(ctx, target, key, "owner.answer", NERVOUS, [role, "coord"] if orphan else [role],
+                 f"ответ владельца {c['id']}: {label}{' · есть заметка' if a.get('note') else ''}"
+                 + (f" · роль {role} без сессии — возьми, coord" if orphan else ""), "queue")
     for iid, it in items.items():
         if it.get("kind") != "inbox" or it.get("archived"):
             continue

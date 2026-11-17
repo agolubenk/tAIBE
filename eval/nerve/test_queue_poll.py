@@ -97,6 +97,34 @@ class QueuePollTest(unittest.TestCase):
         sources.poll_queue(self.ctx)
         self.assertEqual([e["text"] for e in self.events() if e["kind"] == "owner.answer"], ["ответ владельца d-1: yes"])
 
+    def test_answer_to_role_without_session_also_goes_to_coord(self):
+        """d-team-surplus-1711: роль-автор закончила смену сверх доли — ответ владельца и координатору."""
+        check = {"id": "d-1", "version": 2, "data": {"choice": "yes", "done": True, "at": "2026-10-28T07:00:00Z"}}
+        sources.run = FakeCurl({"items": [_item(1)], "checks": [check]})  # source «Контроль» → release
+        real = sources.map_roles
+        self.addCleanup(setattr, sources, "map_roles", real)
+        sources.map_roles = lambda ctx: {"coord": ("x", 0), "plan": ("y", 0)}
+        sources.poll_queue(self.ctx)
+        ev = [e for e in self.events() if e["kind"] == "owner.answer"]
+        self.assertEqual(sorted(ev[0]["to"]), ["coord", "release"])
+        self.assertIn("роль release без сессии", ev[0]["text"])
+
+    def test_answer_to_live_role_or_when_nobody_is_live_stays_with_the_role(self):
+        check = {"id": "d-1", "version": 2, "data": {"choice": "yes", "done": True, "at": "2026-10-28T07:00:00Z"}}
+        real = sources.map_roles
+        self.addCleanup(setattr, sources, "map_roles", real)
+        for live in ({"release": ("x", 0)}, {}):
+            sources._OQ_CACHE.clear()
+            self.ctx.state = {}
+            sources.run = FakeCurl({"items": [_item(1)], "checks": [check]})
+            sources.map_roles = lambda ctx, live=live: live
+            d = tempfile.mkdtemp()
+            self.ctx = QueueCtx(d)
+            self.d = d
+            sources.poll_queue(self.ctx)
+            ev = [e for e in self.events() if e["kind"] == "owner.answer"]
+            self.assertEqual(ev[0]["to"], ["release"], live)
+
     def test_bytes_roll_over_by_local_day(self):
         sources.run = FakeCurl({"items": [], "checks": []})
         sources.poll_queue(self.ctx)

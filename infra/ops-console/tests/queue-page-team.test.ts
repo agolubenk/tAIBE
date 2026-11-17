@@ -90,7 +90,7 @@ describe('тост после выбора', () => {
     const roomy = { ...MAC, live: 10 }
     expect(P.oqtSavedText(opt, false, roomy, NOW)).toBe('Сохранено: HR 8 · tAIBE 4. Mac начнёт применять в течение 10 минут. Открытые роли не закрываются.')
     expect(P.oqtSavedText(opt, true, { ...roomy, pause: 'queue', hold: 'включена пауза' }, NOW)).toContain('в течение 10 минут и снимет паузу')
-    expect(P.oqtSavedText(opt, false, MAC, NOW)).toBe('Сохранено: HR 8 · tAIBE 4. Все 12 мест заняты, открытые роли не закрываются. Новая доля заработает, когда лишние роли закончат свою сессию (обычно за несколько часов), или сразу после «Разработка ВЫКЛ → ВКЛ».')
+    expect(P.oqtSavedText(opt, false, MAC, NOW)).toBe('Сохранено: HR 8 · tAIBE 4. Все 12 мест заняты. Лишние роли доделают свою сессию и не продлятся — новая доля наступит за несколько часов. Сразу — «Разработка ВЫКЛ → ВКЛ», но это прервёт работу всех ролей.')
     expect(P.oqtSavedText(opt, false, { ...MAC, seen: false }, NOW)).toBe('Сохранено: HR 8 · tAIBE 4. Открытые роли не закрываются.')
     expect(P.oqtSavedText({ id: 'pause', label: 'Пауза' }, false, MAC, NOW))
       .toBe('Пауза сохранена. Через 10 минут Mac перестанет открывать новые роли. Открытые роли продолжают работать.')
