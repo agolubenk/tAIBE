@@ -54,6 +54,7 @@ export function ApprovalsTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={approvals.isLoading}
         isError={approvals.isError}
+        onRetry={() => void approvals.refetch()}
         isEmpty={!approvals.data?.items.length}
         empty={t("workspace:forest.approvals.empty")}
       >

@@ -1,3 +1,4 @@
+import type { NotebookUsage } from "../../database/notebook-schema";
 import {
   type ChatMessage,
   chatCompletion,
@@ -9,7 +10,7 @@ import {
 export const RATE_LIMIT_WAIT_MAX_MS = 20_000;
 
 export type ModelReply =
-  | { ok: true; content: string }
+  | { ok: true; content: string; usage: NotebookUsage | null }
   | { ok: false; limited: boolean };
 
 // One model call for the notebook (answers and briefs): a short rate limit is
@@ -22,8 +23,13 @@ export async function callModel(
 ): Promise<ModelReply> {
   for (let attempt = 0; ; attempt++) {
     try {
-      const content = await chatCompletion(config, key, messages, options);
-      return { ok: true, content };
+      const { text, usage } = await chatCompletion(
+        config,
+        key,
+        messages,
+        options,
+      );
+      return { ok: true, content: text, usage };
     } catch (error) {
       const limited =
         error instanceof LlmError && error.reason === "rate-limited";

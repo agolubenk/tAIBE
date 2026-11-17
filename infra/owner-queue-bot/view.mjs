@@ -67,6 +67,17 @@ function modeLine(snap, hint) {
   return '⏳ страница подключается к базе…';
 }
 
+/**
+ * Снимок части пунктов (ids) поверх полного base: шапка, разделы и «Ход работ» — из part, пункты ids — из part
+ * (пропавший со страницы — убран), остальные — из base. Полного ещё нет — part как есть.
+ */
+export function mergeItems(base, part, ids) {
+  if (!base?.items) return part;
+  const want = new Set(ids);
+  const fresh = new Map(part.items.map((it) => [it.id, it]));
+  return { ...part, items: base.items.filter((it) => !want.has(it.id) || fresh.has(it.id)).map((it) => fresh.get(it.id) || it) };
+}
+
 // Входящее закрывает агент («сделано») или владелец («Принято»); остальные пункты — только ответ владельца.
 const isClosed = (it) => it.done || (it.kind === 'inbox' && it.agentStatus === 'done');
 const openOf = (snap, kind) => snap.items.filter((it) => it.kind === kind && !isClosed(it));
@@ -77,7 +88,7 @@ export function menuFingerprint(snap) {
   return JSON.stringify([snap.progress, snap.mode, snap.checkedAt, snap.news[0], ...Object.keys(KINDS).map((k) => openOf(snap, k).length), freshOf(snap).length]);
 }
 
-export function menuView(snap, { notify, hint = 'нужен вход в claude.ai в браузере бота' }) {
+export function menuView(snap, { notify, hint = 'проверьте, что ops-консоль доступна и токен бота не отозван' }) {
   const lines = [`<b>${esc(snap.title)}</b>`, `${esc(snap.progress)} · ${esc(snap.checkedAt)}`, modeLine(snap, esc(hint))];
   if (snap.news[0]) lines.push('', plainSafe(sanitizeTg(snap.news[0])));
   lines.push('');
@@ -107,8 +118,11 @@ function plainSafe(html) {
   return html.length <= 1400 ? html : esc(cut(plain(html), 1400));
 }
 
+/** Держатель входящего молчит (метка страницы «🔇 …», карточка HR xuc5csrv) — знак в списке открытых входящих. */
+const silentHolder = (it) => typeof it.holder === 'string' && it.holder.startsWith('🔇');
+
 function itemMarks(it) {
-  return (it.done ? '✅ ' : '') + (it.agentStatus ? (ST_ICON[it.agentStatus] || '🤖') + ' ' : '') + (it.src === 'db' ? '🆕 ' : '');
+  return (it.done ? '✅ ' : '') + (it.agentStatus ? (ST_ICON[it.agentStatus] || '🤖') + ' ' : '') + (silentHolder(it) ? '🔇 ' : '') + (it.src === 'db' ? '🆕 ' : '');
 }
 
 function listKeyboard(list) {
@@ -144,7 +158,7 @@ export function sectionView(snap, kind, { page = 0, showDone = false } = {}) {
 export function freshView(snap) {
   const list = freshOf(snap);
   return {
-    text: `🆕 <b>Пункты от сессий</b> — открыто ${list.length}\n\nИх добавили агенты через базу артефакта; у каждого пометка «от: …».`,
+    text: `🆕 <b>Пункты от сессий</b> — открыто ${list.length}\n\nИх добавили агенты через очередь; у каждого пометка «от: …».`,
     keyboard: [...listKeyboard(list.slice(0, 30)), [btn('🏠 Меню', 'm')]],
   };
 }
@@ -205,6 +219,7 @@ function answerBlock(it) {
   if (it.done) lines.push(`✅ <b>${esc(cut(it.summary.replace(/^✓\s*/, ''), 300) || 'Сделано')}</b>`);
   else lines.push(it.kind === 'decision' ? '⏳ <b>Ждёт вашего выбора</b>' : `⏳ <b>Ждёт отметки «${esc(it.doneLabel || 'Сделано')}»</b>`);
   if (it.agentStatus) lines.push(`${ST_ICON[it.agentStatus] || '🤖'} Агент: <b>${esc(it.agentStatusText)}</b>${it.agentNote ? ' — ' + esc(cut(it.agentNote, 400)) : ''}`);
+  if (it.holder) lines.push(silentHolder(it) ? `<b>${esc(cut(it.holder, 200))}</b>` : esc(cut(it.holder, 200)));
   if (it.note) lines.push(`📝 ${esc(it.fieldLabel || 'Комментарий')}: <i>${esc(cut(it.note, 600))}</i>`);
   if (it.saveErr) lines.push('⚠️ Не сохранилось у агента — повторите');
   else if (it.saved) lines.push(`<i>${esc(it.saved)}</i>`);
@@ -298,8 +313,42 @@ export function agentNotice(it) {
   };
 }
 
+const mskTime = (ms) => new Date(ms).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
+const minutes = (ms) => Math.max(0, Math.round(ms / 60_000));
+
+/** Причина, по которой страница бота осталась без базы, — по записи связи страницы (snapshotPage conn). */
+export function connReason(conn) {
+  if (!conn || (!conn.errAt && !conn.okAt)) return 'страница не получила доступ к базе консоли (опроса не было)';
+  if (!conn.errAt) return 'страница потеряла общую базу, хотя консоль отвечала';
+  const s = conn.status;
+  if (s === 401 || s === 403) return `консоль не приняла токен бота (ответ ${s}): токен отозван или истёк`;
+  if (s >= 500) return `консоль ответила ошибкой ${s} — так бывает, пока консоль перезапускается при выкатке`;
+  if (s) return `консоль ответила ${s}${conn.err && conn.err !== `HTTP ${s}` ? `: ${conn.err}` : ''}`;
+  return `консоль не ответила по сети${conn.err ? ` (${conn.err})` : ''}`;
+}
+
+/**
+ * Сигнал «страница без базы» с подробностями (просьба владельца 14.11): причина, последний удачный ответ консоли,
+ * что бот сделает дальше и что проверить, если связь не вернётся. now и nextReloadMs — мс.
+ */
+export function localNotice(conn, { now, nextReloadMs, hint }) {
+  const lines = ['🟠 <b>Очередь не подключилась к консоли</b> — ответы не сохраняются.', `Причина: ${esc(connReason(conn))}.`];
+  lines.push(conn?.okAt
+    ? `Последний удачный ответ консоли — ${mskTime(conn.okAt)} МСК (${minutes(now - conn.okAt)} мин назад).`
+    : 'Удачных ответов консоли с открытия страницы не было.');
+  if (conn?.fails > 1) lines.push(`Неудачных опросов подряд: ${conn.fails}.`);
+  lines.push(`Бот перезагрузит страницу через ${Math.max(1, minutes(nextReloadMs))} мин и напишет, когда связь вернётся.`);
+  if (hint) lines.push(`Если связь не вернётся: ${esc(hint)}`);
+  return { text: lines.join('\n') };
+}
+
+/** Связь вернулась: сколько её не было (с первого сигнала). */
+export function backNotice(downMs) {
+  return { text: `🟢 Страница снова подключена к общей базе — ответы сохраняются. Связи не было около ${Math.max(1, minutes(downMs))} мин.` };
+}
+
 export const HELP = [
-  '<b>Бот «Очередь владельца»</b> повторяет артефакт: те же пункты, кнопки и ответы, сохранение в ту же базу.',
+  '<b>Бот «Очередь владельца»</b> повторяет страницу /queue ops-консоли: те же пункты, кнопки и ответы, сохранение в ту же базу.',
   '',
   '/menu — сводка и разделы (сводка обновляется сама)',
   '/decisions · /merges · /server · /checks · /inbox — разделы',
