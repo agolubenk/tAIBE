@@ -255,8 +255,8 @@ Mac LaunchAgent ── ssh по туннелю, forced `cat latest.dump` ──�
 - Ключ забора бэкапов принимает подключения только с 10.77.0.2 (Mac).
 - Загрузка картинок требует S3 (`isStorageConfigured`). S3 нет, поэтому загрузки выключены. Все данные хранятся в
   Postgres и попадают в дамп.
-- `NOTIFICATION_SECRET_ENCRYPTION_KEY` читается только из env. Каналы уведомлений с секретами выключены, пока у
-  переменной нет `_FILE`.
+- ~~`NOTIFICATION_SECRET_ENCRYPTION_KEY` читается только из env.~~ Снято в TB-19 (14.11): ключ — файл
+  `secrets/notification_secret_key`, его создаёт `install.sh` (`deploy/vps/README.md`, «Secrets»).
 - Лимиты памяти временные: app 1 ГБ, postgres 256 МБ, tls 64 МБ, backup 128 МБ. Замера K-6 до деплоя не было: окно
   сократили до 01.11. Замер — `docker stats` на VPS в первые сутки, потом правка `compose.yml`.
 - С самого VPS адрес `10.77.0.1:443` попадает на edge nginx (OUTPUT DNAT Docker). Локальным клиентам на VPS — боту,

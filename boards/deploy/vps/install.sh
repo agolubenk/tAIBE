@@ -72,6 +72,22 @@ ensure_certificate() {
 
 random_hex() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
 
+# notification_secret_key seals the ntfy / Gotify tokens and webhook secrets a
+# user saves (TB-19). A file that is there is never replaced: a new key leaves
+# the saved ones unreadable. A key still in .env goes into the file as it is,
+# so whatever it sealed opens; this script drops it from .env right after.
+ensure_notification_key() {
+  local file="$ROOT/secrets/notification_secret_key" key=""
+  [ -s "$file" ] && return 0
+  [ -f "$ROOT/.env" ] && key="$(sed -n 's/^NOTIFICATION_SECRET_ENCRYPTION_KEY=//p' "$ROOT/.env" | tail -1)"
+  case "$key" in \"*\" | \'*\') key="${key:1:${#key}-2}" ;; esac # as compose reads .env
+  (
+    umask 077
+    if [ -n "$key" ]; then printf '%s' "$key"; else random_hex; fi >"$file"
+  )
+  if [ -n "$key" ]; then log "секрет notification_secret_key перенесён из .env"; else log "создан секрет notification_secret_key"; fi
+}
+
 ensure_secrets() {
   install -d -m 0711 "$ROOT/secrets"
   local name file
@@ -94,7 +110,8 @@ ensure_secrets() {
     chown 1001:1001 "$ROOT/secrets/$name"
     chmod 0400 "$ROOT/secrets/$name"
   done
-  for optional in notion_token notebook_llm_key claude_mem_proxy_token; do
+  ensure_notification_key
+  for optional in notion_token notebook_llm_key claude_mem_proxy_token notification_secret_key; do
     if [ -f "$ROOT/secrets/$optional" ]; then
       chown 1001:1001 "$ROOT/secrets/$optional"
       chmod 0400 "$ROOT/secrets/$optional"
