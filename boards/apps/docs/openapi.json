@@ -4616,6 +4616,13 @@
             ],
             "format": "date-time"
           },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Send it back as expectedMetaRevision so a change made since your read is not overwritten. null: the card has no fields yet."
+          },
           "mirrored": {
             "type": "boolean",
             "description": "Notion is the source of this card's Notion fields: it came from a Notion page and the mirror runs for the workspace (R-081). They are read-only while true."
@@ -4639,6 +4646,7 @@
           "contextPack",
           "updatedBy",
           "updatedAt",
+          "revision",
           "mirrored"
         ]
       },
@@ -4916,6 +4924,13 @@
                 ],
                 "format": "date-time"
               },
+              "revision": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Send it back as expectedMetaRevision so a change made since your read is not overwritten. null: the card has no fields yet."
+              },
               "mirrored": {
                 "type": "boolean",
                 "description": "Notion is the source of this card's Notion fields: it came from a Notion page and the mirror runs for the workspace (R-081). They are read-only while true."
@@ -4938,6 +4953,7 @@
               "contextPack",
               "updatedBy",
               "updatedAt",
+              "revision",
               "mirrored"
             ]
           },
@@ -5282,6 +5298,87 @@
           "fetchedAt",
           "scanned",
           "items"
+        ]
+      },
+      "ForestCardCost": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer",
+            "description": "Answered MCP calls that named this card by taskId since TB-44."
+          },
+          "tokens": {
+            "type": "integer",
+            "description": "Tokens of those answers, counted with o200k_base (D-018): what agents read about the card, not what their models spent."
+          },
+          "actors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor": {
+                  "type": "string",
+                  "description": "Who called: bearer:<user id> for a remote MCP client."
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "tokens": {
+                  "type": "integer"
+                },
+                "firstAt": {
+                  "type": "string"
+                },
+                "lastAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actor",
+                "calls",
+                "tokens",
+                "firstAt",
+                "lastAt"
+              ]
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More than 50 actors; the totals still count them all."
+          },
+          "card": {
+            "type": "object",
+            "properties": {
+              "tokens": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "costUsd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "tokens",
+              "costUsd"
+            ],
+            "description": "What the card's writers entered from provider usage: input + output tokens, cache priced into costUsd."
+          }
+        },
+        "required": [
+          "taskId",
+          "calls",
+          "tokens",
+          "actors",
+          "truncated",
+          "card"
         ]
       },
       "ForestMirrorRuns": {
@@ -6742,6 +6839,25 @@
                   "type": "integer",
                   "description": "Length of the stored text. Absent for a caller with a token, except for repo-doc."
                 },
+                "addedByKind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "agent",
+                    "person",
+                    null
+                  ],
+                  "description": "Who added a link or a pull request; null for a synced source or one added before authors were kept."
+                },
+                "addedBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The agent's name with its session, or the member's name."
+                },
                 "updatedAt": {
                   "type": "string",
                   "format": "date-time"
@@ -6758,6 +6874,8 @@
                 "kind",
                 "ref",
                 "title",
+                "addedByKind",
+                "addedBy",
                 "updatedAt",
                 "chunks",
                 "embedded"
@@ -9561,12 +9679,32 @@
                 },
                 "calls": {
                   "type": "integer"
+                },
+                "withUsage": {
+                  "type": "integer",
+                  "description": "Calls of today whose provider reported token usage; the token sums are over these calls only."
+                },
+                "input": {
+                  "type": "integer",
+                  "description": "Prompt tokens the provider reported today, the cached part included (D-018)."
+                },
+                "output": {
+                  "type": "integer",
+                  "description": "Completion tokens the provider reported today."
+                },
+                "cached": {
+                  "type": "integer",
+                  "description": "The part of input the provider read from its cache; priced lower."
                 }
               },
               "required": [
                 "workspaceId",
                 "name",
-                "calls"
+                "calls",
+                "withUsage",
+                "input",
+                "output",
+                "cached"
               ]
             }
           }
@@ -26880,7 +27018,7 @@
           "Forest"
         ],
         "summary": "Change a card's Notion and agent fields",
-        "description": "Sends only the fields to change; null clears one. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only.",
+        "description": "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only.",
         "parameters": [
           {
             "schema": {
@@ -26998,6 +27136,14 @@
                     ],
                     "minLength": 1,
                     "maxLength": 2000
+                  },
+                  "expectedMetaRevision": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "The revision from the read. If the fields changed since, the write is refused with 409 revision_conflict and the current revision. null: write only if the card has no fields yet. Omitted: no check."
                   }
                 },
                 "additionalProperties": false
@@ -27047,7 +27193,7 @@
             }
           },
           "409": {
-            "description": "No live lease of this session, or the Backlog ID is taken",
+            "description": "No live lease of this session, the Backlog ID is taken, or revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision)",
             "content": {
               "application/json": {
                 "schema": {
@@ -27352,6 +27498,79 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ForestCardMemory"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing task:read permission or project access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/forest/{workspaceId}/cards/{taskId}/cost": {
+      "get": {
+        "operationId": "getForestCardCost",
+        "tags": [
+          "Forest"
+        ],
+        "summary": "Get a card's MCP spend",
+        "description": "Answered MCP calls about the card and the tokens of their answers, per caller, from the journal (R-036). Calls journaled before TB-44 and calls by ticket ID are not counted. The card's own tokens and costUsd come alongside.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "taskId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The card's spend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForestCardCost"
                 }
               }
             }
@@ -28761,6 +28980,110 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotebookPruned"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing workspace:manage_settings permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/notebook/{workspaceId}/sources/remove": {
+      "post": {
+        "operationId": "removeNotebookSource",
+        "tags": [
+          "Notebook"
+        ],
+        "summary": "Remove one added page or pull request from the notebook",
+        "description": "Deletes one link or github-pr source with its chunks. The synced kinds are refused: their next sync would bring them back. A ref that is already gone answers deleted: 0.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "link",
+                      "github-pr"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "The ref the sources list shows: the URL of a page or owner/repo#n of a pull request."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ref"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Source removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotebookPruned"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a link or github-pr source, or no ref",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }

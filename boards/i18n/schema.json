@@ -7046,6 +7046,9 @@
 						"toastMoveError": {
 							"type": "string"
 						},
+						"toastMoveTemplateConflict": {
+							"type": "string"
+						},
 						"tasksTitle": {
 							"type": "string"
 						},
@@ -7107,6 +7110,7 @@
 						"toastMoved",
 						"toastMovedWithUnassigned",
 						"toastMoveError",
+						"toastMoveTemplateConflict",
 						"tasksTitle",
 						"moveTargetLabel",
 						"moveDialogTitle",
@@ -14976,6 +14980,181 @@
 						"toast",
 						"place"
 					]
+				},
+				"forms": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"required": {
+							"type": "string"
+						},
+						"yes": {
+							"type": "string"
+						},
+						"no": {
+							"type": "string"
+						},
+						"intervalFrom": {
+							"type": "string"
+						},
+						"intervalTo": {
+							"type": "string"
+						},
+						"addNote": {
+							"type": "string"
+						},
+						"note": {
+							"type": "string"
+						},
+						"issues": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"required": {
+									"type": "string"
+								},
+								"wrongType": {
+									"type": "string"
+								},
+								"outOfRange": {
+									"type": "string"
+								},
+								"invalidOption": {
+									"type": "string"
+								},
+								"invalidInterval": {
+									"type": "string"
+								},
+								"tooLong": {
+									"type": "string"
+								},
+								"unknownField": {
+									"type": "string"
+								},
+								"versionMismatch": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"required",
+								"wrongType",
+								"outOfRange",
+								"invalidOption",
+								"invalidInterval",
+								"tooLong",
+								"unknownField",
+								"versionMismatch"
+							]
+						},
+						"title": {
+							"type": "string"
+						},
+						"loadError": {
+							"type": "string"
+						},
+						"retry": {
+							"type": "string"
+						},
+						"progress": {
+							"type": "string"
+						},
+						"status": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"draft": {
+									"type": "string"
+								},
+								"submitted": {
+									"type": "string"
+								},
+								"changed": {
+									"type": "string"
+								}
+							},
+							"required": ["draft", "submitted", "changed"]
+						},
+						"save": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"pending": {
+									"type": "string"
+								},
+								"saving": {
+									"type": "string"
+								},
+								"saved": {
+									"type": "string"
+								},
+								"failed": {
+									"type": "string"
+								},
+								"invalid": {
+									"type": "string"
+								},
+								"rowVersion": {
+									"type": "string"
+								},
+								"versionMismatch": {
+									"type": "string"
+								},
+								"forbidden": {
+									"type": "string"
+								},
+								"tooLarge": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"pending",
+								"saving",
+								"saved",
+								"failed",
+								"invalid",
+								"rowVersion",
+								"versionMismatch",
+								"forbidden",
+								"tooLarge"
+							]
+						},
+						"reload": {
+							"type": "string"
+						},
+						"submit": {
+							"type": "string"
+						},
+						"resubmit": {
+							"type": "string"
+						},
+						"submitIssues": {
+							"type": "string"
+						},
+						"export": {
+							"type": "string"
+						}
+					},
+					"required": [
+						"required",
+						"yes",
+						"no",
+						"intervalFrom",
+						"intervalTo",
+						"addNote",
+						"note",
+						"issues",
+						"title",
+						"loadError",
+						"retry",
+						"progress",
+						"status",
+						"save",
+						"reload",
+						"submit",
+						"resubmit",
+						"submitIssues",
+						"export"
+					]
 				}
 			},
 			"required": [
@@ -15024,7 +15203,8 @@
 				"filterBar",
 				"filterMenu",
 				"shortcuts",
-				"card"
+				"card",
+				"forms"
 			]
 		},
 		"invitations": {
@@ -16969,6 +17149,18 @@
 								"refresh": {
 									"type": "string"
 								},
+								"remove": {
+									"type": "string"
+								},
+								"removeTitle": {
+									"type": "string"
+								},
+								"removeDescription": {
+									"type": "string"
+								},
+								"removeConfirm": {
+									"type": "string"
+								},
 								"toast": {
 									"type": "object",
 									"additionalProperties": false,
@@ -16979,11 +17171,23 @@
 										"unchanged": {
 											"type": "string"
 										},
+										"removed": {
+											"type": "string"
+										},
+										"removeError": {
+											"type": "string"
+										},
 										"error": {
 											"type": "string"
 										}
 									},
-									"required": ["added", "unchanged", "error"]
+									"required": [
+										"added",
+										"unchanged",
+										"removed",
+										"removeError",
+										"error"
+									]
 								},
 								"errors": {
 									"type": "object",
@@ -17064,6 +17268,18 @@
 										"GITHUB_NO_ACCESS",
 										"SOURCE_TOO_MANY_CHUNKS"
 									]
+								},
+								"addedByAgent": {
+									"type": "string"
+								},
+								"addedByPerson": {
+									"type": "string"
+								},
+								"addedByMember": {
+									"type": "string"
+								},
+								"addedByUnknown": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -17072,8 +17288,16 @@
 								"chunks",
 								"add",
 								"refresh",
+								"remove",
+								"removeTitle",
+								"removeDescription",
+								"removeConfirm",
 								"toast",
-								"errors"
+								"errors",
+								"addedByAgent",
+								"addedByPerson",
+								"addedByMember",
+								"addedByUnknown"
 							]
 						}
 					},

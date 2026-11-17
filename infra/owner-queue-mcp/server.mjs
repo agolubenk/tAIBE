@@ -13,9 +13,11 @@ import { FILE_ID, ITEM_ID, alreadySaved, ensureDir, extOf, fileRoots, filesState
 import { briefDoc, filterDocs, fitList, getBrief, historyOut, pageList, replyText, snapshots, writeAck } from './list.mjs';
 import { protocolText } from './protocol.mjs';
 import { createDeltaMirror } from './delta.mjs';
+import { request, timeoutsFromEnv } from './http.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BASE = `${(process.env.OQ_URL || 'https://ops.admin.hrhelper.space').replace(/\/$/, '')}/api/oq/v1`;
+const TIMEOUTS = timeoutsFromEnv();
 
 /** Основной продукт очереди (server/queue/product-boards.ts консоли): его токен — OQ_TOKEN. */
 export const DEFAULT_PRODUCT = 'hr-helper';
@@ -104,15 +106,7 @@ function api(method, path, body) {
 async function apiWith(tok, method, path, body, name = tokenName(PRODUCT)) {
   if (!tok && ENV_PRODUCT.error && !RELAY_MODE) throw new Error(`Продукт сессии не определён: ${ENV_PRODUCT.error}. Исправьте переменную и переподключите /mcp`);
   if (!tok) throw new Error(`Нет токена очереди: ${name} в окружении или в Keychain (security add-generic-password -U -s hr-helper-mcp -a ${name} -w <токен>)`);
-  const res = await fetch(BASE + path, {
-    method,
-    headers: { Authorization: `Bearer ${tok}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(20_000),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(json.error || `HTTP ${res.status}`), { status: res.status });
-  return json;
+  return request({ base: BASE, token: tok, method, path, body, timeouts: TIMEOUTS });
 }
 
 const COLL = { type: 'string', enum: ['checks', 'items', 'work'] };
@@ -192,7 +186,7 @@ function workBrief(d) {
 const TOOLS = [
   {
     name: 'oq_list',
-    description: 'Список документов коллекции. Ответ — до 95 тыс. символов (дорого для контекста): {total, asOf, docs, next_offset?, '
+    description: 'Список документов коллекции, по 20 (limit до 30). Ответ — до 95 тыс. символов (дорого для контекста): {total, asOf, docs, next_offset? и more «ещё N», '
       + 'shown + truncated? — окно урезал потолок размера, oversized? — id документов больше потолка, их целиком — oq_get, '
       + 'serverCapped? — консоль обрезала список, пояснение в поле}. '
       + 'Сначала сузьте: ответы владельца, которые вы не прочли, — checks с unread: true; обзор — brief: true (длинные строки — '
@@ -204,7 +198,7 @@ const TOOLS = [
       properties: {
         collection: COLL,
         open_only: { type: 'boolean', description: 'items: только открытые владельцу и не archived — без ответа или «ждёт вас снова» (ответил, а сессия после ответа поставила blocked); правило — у сервера, как на /queue' },
-        limit: { type: 'number', description: 'по умолчанию 50, от 1 до 500 (вне границ — ближайшая)' },
+        limit: { type: 'number', description: 'по умолчанию 20, от 1 до 30 (вне границ — ближайшая); с ids — по умолчанию все названные, до 500' },
         offset: { type: 'number', description: 'с какого документа после фильтров — next_offset прошлого ответа; по умолчанию 0 (свежий список)' },
         as_of: { type: 'string', description: 'asOf прошлого ответа — продолжить обход по тому же снимку' },
         ids: { type: 'array', items: { type: 'string' }, description: 'только эти id' },
@@ -245,7 +239,7 @@ const TOOLS = [
           && !(d.data.kind === 'inbox' && answered.get(d.id)?.agentStatus === 'done'));
       }
       list = filterDocs(collection, list, filters);
-      const { from, docs: shown } = pageList(list, { offset, limit });
+      const { from, docs: shown } = pageList(list, { offset, limit, ids: filters.ids });
       const summary = collection === 'items' && shown.some((d) => d.data.kind === 'inbox') ? await filesSummary() : {};
       const rows = shown.map((d) => (collection === 'items'
         ? { id: d.id, version: d.version, ...(d.product ? { product: d.product } : {}), kind: d.data.kind, title: d.data.title, source: d.data.source, added: d.data.added, archived: d.data.archived,
@@ -509,7 +503,7 @@ if (isMain && RELAY_MODE) {
   else if (!t.value) fail(`нет ${t.name} для продукта ${a.product} (env или Keychain: security add-generic-password -U -s hr-helper-mcp -a ${t.name} -w <токен>)`);
   else {
     const relayApi = (method, path, body) => apiWith(t.value, method, path, body, t.name);
-    import('./relay.mjs').then((m) => m.relayLoop(a.session, { BASE, TOKEN: t.value, api: relayApi, product: a.product }));
+    import('./relay.mjs').then((m) => m.relayLoop(a.session, { BASE, TOKEN: t.value, api: relayApi, product: a.product, timeouts: TIMEOUTS }));
   }
 } else if (isMain) {
   createInterface({ input: process.stdin }).on('line', (line) => {

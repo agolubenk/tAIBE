@@ -1,4 +1,4 @@
-import { answersDocSchema, formTemplateSchema } from "@kaneo/forms";
+import { answersDocSchema, formTemplateSchema, LIMITS } from "@kaneo/forms";
 import { z } from "../openapi";
 
 // R-027 (TB-173): the template and the answers are checked by @kaneo/forms,
@@ -6,8 +6,8 @@ import { z } from "../openapi";
 
 /** A template is at most 200 fields; the grill's 53 fields are 21 KB. */
 export const TEMPLATE_BODY_MAX = 256 * 1024;
-/** Answers: up to 10 000 characters per text field; the grill is 37 KB. */
-export const ANSWERS_BODY_MAX = 512 * 1024;
+/** Answers: the same limit the web checks before it sends (LIMITS.answersBody). */
+export const ANSWERS_BODY_MAX = LIMITS.answersBody;
 
 export const workspaceIdParam = z.object({ workspaceId: z.string() });
 

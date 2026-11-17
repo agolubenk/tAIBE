@@ -128,6 +128,21 @@ class ErrorsTest(unittest.TestCase):
         edit(self.d, "_shared.json", lambda d: d.update(default_product="nope"))
         self.fails("default_product")
 
+    def test_wt_sweep_switch_is_a_product_field(self):
+        """OPS-81 (линза плана #445): выключатель повторной уборки — поле продукта; файл читается, поле доходит до
+        конфига продукта и до config.json продукта по умолчанию, и проход уборки выключен. В _shared — ошибка."""
+        import wt_sweep
+        for name in ("taibe.json", "hr-helper.json"):
+            edit(self.d, name, lambda d: d["github"].update(wt_sweep_minutes=0))
+        shared, products = P.load(self.d)
+        for slug in ("taibe", "hr-helper"):
+            cfg = P.config_for(slug, shared, products)
+            self.assertEqual(cfg["github"]["wt_sweep_minutes"], 0)
+            self.assertFalse(wt_sweep.due(type("Ctx", (), {"cfg": cfg, "state": {}})()))
+        self.assertEqual(json.loads(P.render_text(shared, products))["github"]["wt_sweep_minutes"], 0)
+        edit(self.d, "_shared.json", lambda d: d.setdefault("github", {}).update(wt_sweep_minutes=0))
+        self.fails("wt_sweep_minutes")
+
     def test_paths_are_not_secrets(self):
         self.assertIsNone(P.SECRET_RE.search("/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state"))
 

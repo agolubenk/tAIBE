@@ -206,6 +206,11 @@
     ],
     "match": "-taibe(-|\\d|$)"
   },
+  "genome": {
+    "disabledMcpjsonServers": [
+      "ai-council"
+    ]
+  },
   "council": {
     "stack": "aiBoards&eval (tAIBE: доски — Hono + Drizzle + PostgreSQL, React + Vite; eval и слой — Python stdlib)",
     "default_roots": ["boards", "eval", "infra"],
