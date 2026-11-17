@@ -61,7 +61,8 @@ class FakeEl {
 
 const SHA = 'a'.repeat(40)
 
-function mountPage(docs: Array<{ id: string; data: Record<string, unknown> }>, info: Record<string, unknown>) {
+// layout 'one' — раскладка «одной очередью»: мёржи в общем списке #sec-queue, раздел #sec-merge пуст и скрыт.
+function mountPage(docs: Array<{ id: string; data: Record<string, unknown> }>, info: Record<string, unknown>, layout: 'sections' | 'one' = 'sections') {
   const items = ['m-1', 'm-2'].map((id) => {
     const el = new FakeEl('item')
     el.dataset.id = id
@@ -78,8 +79,9 @@ function mountPage(docs: Array<{ id: string; data: Record<string, unknown> }>, i
     window: { __oqDocs: (col: string) => (col === 'items' ? docs : []), confirm, alert: vi.fn() },
     document: {
       body: {},
-      querySelectorAll: (sel: string) => (sel.startsWith('#sec-merge .item') ? items : []),
-      querySelector: (sel: string) => (sel === '#sec-merge .sec-head' ? head : null),
+      querySelectorAll: (sel: string) =>
+        (layout === 'one' ? sel.includes('#sec-queue .item[data-kind="merge"][data-id]') : sel.startsWith('#sec-merge .item')) ? items : [],
+      querySelector: (sel: string) => (sel === (layout === 'one' ? '#sec-queue .sec-head' : '#sec-merge .sec-head') ? head : null),
       createElement: () => new FakeEl(),
     },
     fetch: (url: string, init: { method: string }) => {
@@ -97,7 +99,7 @@ function mountPage(docs: Array<{ id: string; data: Record<string, unknown> }>, i
   runInNewContext(ENHANCE_JS, sandbox)
   const button = (id: string) => items.find((i) => i.dataset.id === id)!.querySelector('.oq-merge')!
   const saved = (id: string) => items.find((i) => i.dataset.id === id)!.querySelector('.saved')!.textContent
-  return { button, saved, calls, confirm, mutate: () => onMutation() }
+  return { button, saved, calls, confirm, head, mutate: () => onMutation() }
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
@@ -142,6 +144,14 @@ describe('кнопка «Влить» на странице очереди', () 
     docs[0]!.data.base = 'main'
     page.mutate()
     expect(page.button('m-1')).toMatchObject({ disabled: false, textContent: 'Влить сейчас…' })
+  })
+
+  it('по разделам и «одной очередью» — «Влить» у мёржа и «Перезапустить деплой» в заголовке списка на месте', () => {
+    for (const layout of ['sections', 'one'] as const) {
+      const page = mountPage([{ id: 'm-2', data: { kind: 'merge', pr: 2, sha: SHA, base: 'main' } }], info({}), layout)
+      expect(page.button('m-2'), layout).toMatchObject({ disabled: false, textContent: 'Влить сейчас…' })
+      expect(page.head.querySelector('.oq-redeploy')?.textContent, layout).toBe('Перезапустить деплой')
+    }
   })
 
   it('короткий SHA в пункте — не одобрение', () => {
