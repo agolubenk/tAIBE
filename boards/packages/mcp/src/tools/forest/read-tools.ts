@@ -44,7 +44,7 @@ export function registerForestReadTools(
     "forest_list_logs",
     {
       description:
-        "List felled trees (timber logs), newest first. q searches titles, descriptions and kept history.",
+        "List felled trees (timber logs), newest first. q searches titles, descriptions and kept history. A page may hold fewer items than take, or none, while nextCursor is set: logs that match only inside a secret are skipped. Page on until nextCursor is null.",
       inputSchema: z.object({
         workspaceId: id,
         q: z.string().trim().min(1).max(200).optional(),

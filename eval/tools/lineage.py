@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Линия сессий: предшественник уходит сам после проверенного приёма, закончившиеся сессии убираются по списку.
 
-  lineage.py record --line L --terminal terminal|iterm|print [--window-id N] [--tty /dev/ttysNNN] [--role K]
-      spawn_session.sh при открытии окна: id окна и tty вкладки → <каталог>/<L>.json
+  lineage.py record --line L --terminal terminal|iterm|tmux|print [--window-id N] [--tty /dev/ttysNNN] [--role K]
+                    [--pane %N --pane-pid PID --server PID:START]
+      spawn_session.sh при открытии окна: id окна и tty вкладки (у tmux — и панели) → <каталог>/<L>.json
   lineage.py line
       своя линия: TAIBE_LINEAGE → «Линия:» в аргументах claude → первый промпт транскрипта (сессия после --resume)
   lineage.py ack
@@ -38,7 +39,7 @@ from pathlib import Path
 Proc = namedtuple("Proc", "pid ppid pgid tty start command")
 LINE_RE = re.compile(r"^r(\.[a-z0-9]+)*$")
 LINE_ARG_RE = re.compile(r"Линия: (r(?:\.[a-z0-9]+)+)")  # в первом сообщении, которое пишет spawn_session.sh
-LAUNCHER_RE = re.compile(r"/claude-spawn\.[A-Za-z0-9]+/[a-z]+\.sh(\s|$)")  # пусковой скрипт spawn_session.sh
+LAUNCHER_RE = re.compile(r"/claude-spawn\.[A-Za-z0-9]+/[a-z]+(?:-[2-9])?\.sh(\s|$)")  # пусковой скрипт spawn_session.sh
 SHELLS = {"login", "zsh", "bash", "sh", "fish", "tcsh", "csh"}
 TERM_WAIT = 10          # с между TERM и KILL
 TAP_WAIT = 180          # с на взвод Monitor наследника (nerve.py tap <роль>)
@@ -359,6 +360,8 @@ def host(procs, p):
     while pid in procs and pid not in seen and pid > 1:
         seen.add(pid)
         c = procs[pid].command
+        if os.path.basename(c.split(" ", 1)[0]) == "tmux":  # сервер tmux: панели — его дети, приложение терминала выше нет
+            return "tmux"
         if "/Terminal.app/" in c:
             return "terminal"
         if "iTerm" in c:
@@ -387,8 +390,11 @@ def make_log(stream):
 def cmd_record(sx, a):
     if not valid_line(a.line):
         return die(f"плохая линия: {a.line!r}")
-    write_json(lfile(a.line, ".json"), {"line": a.line, "terminal": a.terminal, "window_id": a.window_id or None,
-                                            "tty": a.tty or None, "role": a.role or None, "at": stamp()})
+    rec = {"line": a.line, "terminal": a.terminal, "window_id": a.window_id or None, "tty": a.tty or None,
+           "role": a.role or None, "at": stamp()}
+    if a.terminal == "tmux":  # панель закрывается, только если все три совпали (tmux_host.close_pane)
+        rec.update(pane=a.pane or None, pane_pid=a.pane_pid or None, server=a.server or None)
+    write_json(lfile(a.line, ".json"), rec)
     return 0
 
 
@@ -426,10 +432,13 @@ def main(argv=None, sx=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("record")
     r.add_argument("--line", required=True)
-    r.add_argument("--terminal", choices=["terminal", "iterm", "print"], required=True)
+    r.add_argument("--terminal", choices=["terminal", "iterm", "tmux", "print"], required=True)
     r.add_argument("--window-id", default="")
     r.add_argument("--tty", default="")
     r.add_argument("--role", default="")
+    r.add_argument("--pane", default="", help="tmux: id панели (%%N)")
+    r.add_argument("--pane-pid", default="", help="tmux: pid пусковой оболочки панели")
+    r.add_argument("--server", default="", help="tmux: pid:start_time сервера")
     sub.add_parser("ack")
     sub.add_parser("line")
     t = sub.add_parser("retire")

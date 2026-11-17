@@ -209,7 +209,7 @@ The root `package.json` includes scripts to keep locale files in sync:
 
 | Command | Description |
 | ------- | ----------- |
-| `pnpm i18n:check [locale]` | Compares `en-US.json` with the other locale files and reports missing or extra keys. You can filter by locale, for example `pnpm i18n:check de-DE`. |
+| `pnpm i18n:check [locale]` | Compares `en-US.json` with the other locale files and reports missing or extra keys. You can filter by locale, for example `pnpm i18n:check de-DE`. It also fails when `i18n/schema.json` no longer matches `en-US.json`; run `pnpm i18n:schema` then. |
 | `pnpm i18n:check:fix [locale]` | Adds missing keys to other locale files using the English source text from `en-US.json`. |
 | `pnpm i18n:report` | Scans `.ts` and `.tsx` files in the React app and reports missing keys, unused locale keys, and dynamic translation calls that static analysis cannot verify. |
 | `pnpm i18n:report:fix` | Removes unused keys from `en-US.json` and the other locale files. |
