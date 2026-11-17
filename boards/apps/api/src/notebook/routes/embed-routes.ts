@@ -9,7 +9,11 @@ import {
 import { boundedRequestBody } from "../../utils/bounded-request-body";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
-import { markWorkerSeen, waitForEmbedWork } from "../embed/embed-queue";
+import {
+  embedWorkGeneration,
+  markWorkerSeen,
+  waitForEmbedWork,
+} from "../embed/embed-queue";
 import { claimEmbedWork, saveEmbeddings } from "../embed/embed-work";
 import { notebookEmbedModel } from "../../notebook-model/effective-notebook-model";
 import {
@@ -72,9 +76,12 @@ async function takeEmbedWork(
 ) {
   let model = await notebookEmbedModel();
   markWorkerSeen(workspaceId);
+  // Read before the claim: work that arrives while the claim waits for the
+  // database must wake this poll, not find nobody parked (TB-212).
+  const seen = embedWorkGeneration(workspaceId);
   let items = await claimEmbedWork(workspaceId, model);
   if (!items.length && wait > 0) {
-    await waitForEmbedWork(workspaceId, wait * 1000, signal);
+    await waitForEmbedWork(workspaceId, wait * 1000, signal, seen);
     markWorkerSeen(workspaceId);
     if (!signal.aborted) {
       // The admin may have switched the embedding model during the wait.
