@@ -24,6 +24,27 @@ LIVE_HR = "8e070000-aaaa-4bbb-8ccc-000000000004"
 LIVE_TB = "f4c30000-aaaa-4bbb-8ccc-000000000005"
 NOBODY = "77770000-aaaa-4bbb-8ccc-000000000006"
 KEEPER = 500
+TOOLS, GENOME = "/x/eval/tools", "/x/eval/pipeline/genome"
+PYTHON = "/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+# Пусковой скрипт release под окном наследника (tree(): zsh 211 на ttys006) — как spawn_session.sh в tmux и Terminal
+LAUNCH = P(212, 211, 212, "ttys006", "/bin/bash /var/folders/T//claude-spawn.w8u1L3/release.sh")
+
+
+def release_cmd(genome="taibe/release.json"):
+    return f"claude --settings {GENOME}/{genome} --name taibe-release-x Сборка Т3"
+
+
+def fake_exe(p):
+    """Путь файла по ядру у поддельного процесса: bash и python — системные, остальное — первое слово argv."""
+    if p is None:
+        return None
+    a0 = p.command.split()[0]
+    name = os.path.basename(a0)
+    if name == "bash":
+        return "/bin/bash"
+    if name.lower().startswith("python"):
+        return PYTHON
+    return a0 if a0.startswith("/") else "/usr/bin/" + name
 
 
 def keeper_chain(top_cmd="/usr/bin/python3 -I /x/eval/tools/team_plan.py up 4", top_ppid=1):
@@ -53,6 +74,7 @@ class SeatTest(Base):
             (d / ".git").mkdir()
         self.roots = {"hr-helper": str(self.hr), "taibe": str(self.tb)}
         self.extra = []  # живые сессии сверх tree()
+        self.exes = {}   # pid → путь файла по ядру, если не тот, что даёт argv (поддельный argv)
         self.talk(DEAD_TB, self.tb)
         self.talk(DEAD_TB2, self.tb / "worktrees" / "fix" / "x")
         self.talk(DEAD_HR, self.hr)
@@ -82,9 +104,12 @@ class SeatTest(Base):
         self.extra.append(P(pid, 211, pid, tty, "claude --settings /x/genome/release.json"))
         self.sess(pid, sid, cwd)
 
-    def sx(self, caller=None, me=502, jobs=None, env=None):
-        sx = FakeSys(tree() + (caller if caller is not None else keeper_chain()) + self.extra, env=env or {400: CHILD})
-        sx.me = me
+    def sx(self, caller=None, me=502, jobs=None, env=None, genome="taibe/release.json"):
+        procs = [p._replace(command=release_cmd(genome)) if p.pid == 400 else p for p in tree(successor_parent=212)]
+        sx = FakeSys(procs + [LAUNCH] + (caller if caller is not None else keeper_chain()) + self.extra,
+                     env=env or {400: CHILD})
+        sx.me, sx.tools = me, TOOLS
+        sx.exe_path = lambda pid: self.exes.get(pid) or fake_exe(sx.p.get(pid))
         sx.job_pid = lambda label: (jobs if jobs is not None else {S.LABELS[0]: KEEPER}).get(label)
         return sx
 
@@ -163,6 +188,16 @@ class SeatTest(Base):
         self.assert_untouched(self.tb, [DEAD_TB])
         self.assertIn("team_plan.py", self.lines[-1])
 
+    def test_launchd_job_must_be_the_caller_itself(self):
+        """Задача сторожа запустила процесс, а уже он — team_plan.py up: вызов не задача launchd, отказ."""
+        chain = keeper_chain()
+        chain.insert(1, P(503, KEEPER, KEEPER, "??", "/usr/bin/python3 -I /x/eval/tools/team_plan.py up 4"))
+        chain[2] = chain[2]._replace(ppid=503)
+        self.put(self.tb, [DEAD_TB])
+        self.assertFalse(self.run_seat(self.sx(caller=chain)))
+        self.assert_untouched(self.tb, [DEAD_TB])
+        self.assertIn("не задача launchd", self.lines[-1])
+
     def test_login_job_allowed(self):
         self.put(self.tb, [DEAD_TB])
         chain = keeper_chain(top_cmd="/usr/bin/python3 -I /x/eval/tools/agents_up.py")
@@ -201,9 +236,71 @@ class SeatTest(Base):
     def test_successor_started_from_claude_refused(self):
         self.put(self.tb, [DEAD_TB])
         sx = self.sx()
-        sx.p[400] = P(400, 302, 400, "ttys006", "claude --settings /x/genome/release.json")
+        sx.p[400] = P(400, 302, 400, "ttys006", release_cmd())
         self.assertFalse(self.run_seat(sx))
         self.assert_untouched(self.tb, [DEAD_TB])
+
+    # Claude-линза #457, B1: слово team_plan.py в argv и подстрока /Terminal.app/ больше не пропуск.
+    def test_sh_c_with_caller_word_in_terminal_window_refused(self):
+        chain = window_chain()[:3] + [
+            P(603, 602, 602, "ttys007", "sh -c python3 -I /x/eval/tools/lineage.py seat team_plan.py"),
+            P(605, 603, 602, "ttys007", "python3 -I /x/eval/tools/lineage.py seat --product taibe")]
+        self.put(self.tb, [DEAD_TB])
+        self.assertFalse(self.run_seat(self.sx(caller=chain, me=605, jobs={})))
+        self.assert_untouched(self.tb, [DEAD_TB])
+        self.assertIn("родитель seat", self.lines[-1])
+
+    def test_faked_argv_refused_by_kernel_path(self):
+        """argv любого звена задаёт execv: путь файла по ядру решает. spawn — bash из /tmp, вызов — sh под argv
+        python, окно — script (pty) с путём Terminal.app в аргументах."""
+        for pid, exe in ((604, "/private/tmp/x/bash"), (603, "/bin/sh"), (600, "/usr/bin/script")):
+            with self.subTest(pid=pid, exe=exe):
+                self.exes = {pid: exe}
+                self.put(self.tb, [DEAD_TB])
+                self.assertFalse(self.run_seat(self.sx(caller=window_chain(), me=605, jobs={})))
+                self.assert_untouched(self.tb, [DEAD_TB])
+
+    def test_spawn_and_caller_argv_by_position(self):
+        spawn = "bash /x/eval/tools/spawn_session.sh --launch --product taibe --role release"
+        bad = {1: [spawn.replace("release", "backend"), spawn.replace(" --launch", ""),
+                   spawn.replace("/x/eval/tools", "/x/worktrees/fix/a/eval/tools"), spawn + " --role release"],
+               0: ["/usr/bin/python3 -I /x/eval/tools/team_plan.py down", "/usr/bin/python3 -I eval/tools/team_plan.py up",
+                   "/usr/bin/python3 /x/eval/tools/team_plan.py up", "/usr/bin/python3 -I /x/other.py team_plan.py up",
+                   # путь — значение опции, а исполняется ./up из cwd
+                   "/usr/bin/python3 -W /x/eval/tools/team_plan.py up", "/usr/bin/python3 -X /x/eval/tools/agents_up.py"]}
+        for i, cmds in bad.items():
+            for cmd in cmds:
+                with self.subTest(cmd):
+                    chain = keeper_chain()
+                    chain[i] = chain[i]._replace(command=cmd)
+                    self.put(self.tb, [DEAD_TB])
+                    self.assertFalse(self.run_seat(self.sx(caller=chain)))
+                    self.assert_untouched(self.tb, [DEAD_TB])
+
+    def test_successor_bound_to_release_launcher_and_genome(self):
+        cases = [("геном backend", lambda sx: sx.p.update({400: sx.p[400]._replace(command=release_cmd("taibe/backend.json"))})),
+                 ("геном HR для tAIBE", lambda sx: sx.p.update({400: sx.p[400]._replace(command=release_cmd("release.json"))})),
+                 ("пусковой скрипт backend", lambda sx: sx.p.update({212: LAUNCH._replace(command=LAUNCH.command.replace(
+                     "release.sh", "backend.sh"))})),
+                 ("claude прямо под zsh окна", lambda sx: sx.p.update({400: sx.p[400]._replace(ppid=211)})),
+                 ("пусковой скрипт не системным bash", lambda sx: self.exes.update({212: "/private/tmp/bash"}))]
+        for name, spoil in cases:
+            with self.subTest(name):
+                self.exes = {}
+                sx = self.sx()
+                spoil(sx)
+                self.put(self.tb, [DEAD_TB])
+                self.assertFalse(self.run_seat(sx))
+                self.assert_untouched(self.tb, [DEAD_TB])
+
+    def test_tools_dir_only_in_main_checkout(self):
+        (self.tb / "eval" / "tools").mkdir(parents=True)
+        with mock.patch.object(S, "__file__", str(self.tb / "eval" / "tools" / "lineage_seat.py")):
+            self.assertEqual(S.tools_dir(object()), os.path.realpath(self.tb / "eval" / "tools"))
+        copy = self.dir / "copy" / "eval" / "tools"
+        copy.mkdir(parents=True)
+        with mock.patch.object(S, "__file__", str(copy / "lineage_seat.py")):
+            self.assertIsNone(S.tools_dir(object()))
 
     def test_live_entry_appears_under_lock_refused(self):
         self.sess(700, LIVE_TB, self.tb)  # реестр есть, процесса ещё нет: при планировании запись не живая и не наша
@@ -226,7 +323,8 @@ class SeatTest(Base):
         self.sess(400, SUCC, self.hr)
         self.put(self.hr, [DEAD_HR])
         self.put(self.tb, [DEAD_TB, DEAD_HR])
-        self.assertTrue(self.run_seat(product="hr-helper", guard=[self.hr, self.tb]), self.lines)
+        self.assertTrue(self.run_seat(self.sx(genome="release.json"), product="hr-helper", guard=[self.hr, self.tb]),
+                        self.lines)
         self.assertEqual(self.get(self.hr), [SUCC])
         self.assertEqual(self.get(self.tb), [DEAD_TB, SUCC])
 
