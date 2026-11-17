@@ -3,14 +3,22 @@ import { HTTPException } from "hono/http-exception";
 import db from "../../database";
 import { activityTable, taskTable } from "../../database/schema";
 import { publishEvent } from "../../events";
+import { type AuthorKind, markEdit } from "../../forest/author-kind";
 import { deleteOrphanedAssets } from "../../storage/cleanup-assets";
 
-async function updateComment(userId: string, id: string, content: string) {
+async function updateComment(
+  userId: string,
+  id: string,
+  content: string,
+  // TB-83 / SE-84: who edits it; an agent's edit marks the comment agent.
+  editor?: AuthorKind,
+) {
   const [existing] = await db
     .select({
       id: activityTable.id,
       content: activityTable.content,
       taskId: activityTable.taskId,
+      eventData: activityTable.eventData,
     })
     .from(activityTable)
     .where(
@@ -30,7 +38,7 @@ async function updateComment(userId: string, id: string, content: string) {
 
   const [updated] = await db
     .update(activityTable)
-    .set({ content })
+    .set({ content, eventData: markEdit(existing.eventData, editor) })
     .where(
       and(
         eq(activityTable.id, id),

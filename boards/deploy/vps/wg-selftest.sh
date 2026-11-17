@@ -105,7 +105,7 @@ setup "$k2" phone full
 grep -q "^PresharedKey" /tmp/out && fail "re-run printed the PresharedKey again"
 echo "ok: re-run changes nothing, new peers get a PresharedKey and MTU 1380"
 
-redirects="$(iptables -t nat -S PREROUTING | grep -c REDIRECT)"
+redirects="$(iptables -t nat -S PREROUTING | grep -c REDIRECT || true)"
 [ "$redirects" = 1 ] || fail "redirects: $redirects"
 iptables -t nat -C PREROUTING -i wg0 -d 10.77.0.1/32 -p tcp --dport 443 -j REDIRECT --to-ports 8443 || fail "redirect not bound to the tunnel address"
 chain() {
@@ -233,6 +233,31 @@ rm -r /opt/t-boards
 setup "$k2" phone full
 echo "ok: claude-mem proxy address from .env, outside the tunnel falls back"
 
+# SSH to the Mac from a phone (OPS-82): only the listed tunnel addresses, both directions, ahead of the drops;
+# the Mac itself and addresses outside the tunnel are skipped. --rules needs no device key.
+mkdir -p /opt/t-boards
+printf "WG_MAC_SSH_FROM=10.77.0.3 10.77.0.2 10.77.0.3 192.168.1.9 # phone\r\n" >/opt/t-boards/.env
+bash /kit/wg-setup.sh --rules >/tmp/out 2>&1 </dev/null || { cat /tmp/out; fail "wg-setup.sh --rules"; }
+{
+  chain 10.77.0.2 37702 | sed -n 1,3p
+  echo "-A TB-WG -s 10.77.0.3/32 -d 10.77.0.2/32 -i wg0 -o wg0 -p tcp -m tcp --dport 22 -j ACCEPT"
+  echo "-A TB-WG -s 10.77.0.2/32 -d 10.77.0.3/32 -i wg0 -o wg0 -p tcp -m tcp --sport 22 -m conntrack --ctstate ESTABLISHED -j ACCEPT"
+  chain 10.77.0.2 37702 | sed -n "4,\$p"
+} | diff - <(iptables -S TB-WG | tail -n +2) || fail "SSH to the Mac: chain"
+grep -q "10.77.0.2 — не адрес" /tmp/out && grep -q "192.168.1.9 — не адрес" /tmp/out || fail "SSH to the Mac: bad addresses not skipped"
+grep -q "правила применены: SSH к Mac — 1 устройств" /tmp/out || fail "SSH to the Mac: --rules summary (duplicates, comment)"
+printf -- "-A TB-WG-OUT -d 10.77.0.2/32 -o wg0 -p tcp -m tcp --dport 37702 -j DROP\n-A TB-WG-OUT -d 10.77.0.2/32 -o wg0 -p tcp -m tcp --dport 22 -j DROP\n" |
+  diff - <(iptables -S TB-WG-OUT | tail -n +2) || fail "SSH to the Mac: the VPS host is not shut out of it"
+printf "WG_MAC_SSH_FROM=10.77.0.2\n" >/opt/t-boards/.env
+bash /kit/wg-setup.sh --rules >/tmp/out 2>&1 </dev/null || { cat /tmp/out; fail "wg-setup.sh --rules, no device address"; }
+grep -q "адресов устройств в нём нет" /tmp/out || fail "SSH to the Mac: empty list not reported"
+rm -r /opt/t-boards
+bash /kit/wg-setup.sh --rules >/tmp/out 2>&1 </dev/null || { cat /tmp/out; fail "wg-setup.sh --rules without .env"; }
+iptables -S TB-WG | tail -n +2 | diff <(chain 10.77.0.2 37702) - || fail "SSH rules left after WG_MAC_SSH_FROM removed"
+[ "$(iptables -S TB-WG-OUT | tail -n +2)" = "-A TB-WG-OUT -d 10.77.0.2/32 -o wg0 -p tcp -m tcp --dport 37702 -j DROP" ] || fail "host SSH drop left after WG_MAC_SSH_FROM removed"
+grep -q "WG_MAC_SSH" /kit/install.sh || fail "install.sh drops WG_MAC_SSH_FROM when it rewrites .env"
+echo "ok: SSH to the Mac only from WG_MAC_SSH_FROM, both directions ahead of the drops; --rules without a device key"
+
 # wg-issue.sh: the server makes the keys; the same PresharedKey goes to the peer and the profile.
 issue() { bash /kit/wg-issue.sh "$@" >/tmp/conf 2>/tmp/log </dev/null || { cat /tmp/log; fail "wg-issue.sh $*"; }; }
 for i in 1 2 3 4 5; do : >/etc/wireguard/wg0.conf.bak-20200101-00000$i; done
@@ -250,7 +275,7 @@ issue laptop split
 bash /kit/wg-issue.sh --revoke tablet >/dev/null 2>&1 </dev/null || fail "revoke tablet"
 grep -qF "$tablet_psk" /etc/wireguard/wg0.conf && fail "revoked device left its PresharedKey"
 [ "$(psk_of mac)" = "$mac_psk" ] || fail "revoke changed the mac PresharedKey"
-backups="$(ls /etc/wireguard | grep -c "^wg0.conf.bak-")"
+backups="$(ls /etc/wireguard | grep -c "^wg0.conf.bak-" || true)"
 [ "$backups" = 3 ] || fail "backups kept: $backups"
 # At least one real backup is newer than the five planted ones, so the three oldest must be gone.
 ls /etc/wireguard | grep -q "^wg0.conf.bak-20200101-00000[123]$" && fail "oldest backups kept"
@@ -305,7 +330,8 @@ held; issue locked split; [ -f /tmp/held ] || fail "wg-issue.sh did not wait for
 bash /kit/wg-issue.sh --revoke locked >/dev/null 2>&1 </dev/null || fail "revoke locked"
 
 # wg-psk.sh changes one peer, live and in the file; the key shows up in no output.
-mac_pub="$(grep -A2 "^# mac (" /etc/wireguard/wg0.conf | sed -n "s/^PublicKey = //p")"
+mac_pub="$(grep -A2 "^# mac (" /etc/wireguard/wg0.conf | sed -n "s/^PublicKey = //p" || true)"
+[ -n "$mac_pub" ] || fail "mac peer not found in wg0.conf"
 new_psk="$(wg genpsk)"
 held
 printf %s "$new_psk" | bash /kit/wg-psk.sh 10.77.0.2 >/tmp/out 2>&1 || { cat /tmp/out; fail "wg-psk.sh set"; }
