@@ -66,7 +66,7 @@ def own_line(sid):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod.transcript_line(sid)
-    except (OSError, ImportError, AttributeError, SyntaxError):
+    except Exception:  # noqa: BLE001 — любой сбой = линии нет, значит отказ, а не проход хука
         return None
 
 

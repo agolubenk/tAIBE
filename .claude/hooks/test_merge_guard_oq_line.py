@@ -46,6 +46,21 @@ class OqLine(unittest.TestCase):
         self.assertIsNotNone(verdict("r.62u1", tool="mcp__hub__owner-queue_1mcp_oq_agent_status"))
         self.assertIsNone(verdict("r.62u1.4rn2", tool="mcp__hub__owner-queue_1mcp_oq_agent_status"))
 
+    def test_broken_lineage_code_means_no_line(self):
+        # любой сбой кода линии (не только OSError) — линии нет, значит отказ, а не падение хука (= проход)
+        import merge_guard_identity as ident
+        with tempfile.TemporaryDirectory() as d:
+            tools = Path(d) / "eval" / "tools"
+            tools.mkdir(parents=True)
+            (tools / "lineage.py").write_text("raise RuntimeError('сломан')\n", "utf-8")
+            old = ident.MAIN_ROOT
+            ident.MAIN_ROOT = Path(d)
+            try:
+                self.assertIsNone(own_line(SID))
+                self.assertIsNotNone(oq_identity(TOOL, {"id": "i-1", "session": "r.62u1.4rn2"}, SID, lambda: SESSIONS))
+            finally:
+                ident.MAIN_ROOT = old
+
     def test_own_line_reads_first_prompt_only(self):
         with tempfile.TemporaryDirectory() as d:
             proj = Path(d) / "-x"
