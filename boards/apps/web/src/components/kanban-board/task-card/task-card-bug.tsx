@@ -2,6 +2,7 @@ import { Bug } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import useBoardBugs from "@/hooks/queries/forest/use-board-bugs";
+import { getSeverityLabel } from "@/lib/i18n/domain";
 
 type TaskCardBugProps = {
   workspaceId: string;
@@ -25,7 +26,9 @@ export function TaskCardBug({
     <Badge variant="error">
       <Bug aria-hidden="true" className="size-3" />
       {t("tasks:card.kind.bug")}
-      {bug.severity && <span className="opacity-80">· {bug.severity}</span>}
+      {bug.severity && (
+        <span className="opacity-80">· {getSeverityLabel(bug.severity)}</span>
+      )}
     </Badge>
   );
 }

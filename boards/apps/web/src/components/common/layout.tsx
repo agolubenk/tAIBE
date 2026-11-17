@@ -8,6 +8,7 @@ import { useUserPreferencesEffects } from "@/hooks/use-user-preferences-effects"
 import { cn } from "@/lib/cn";
 import { useBackgroundStore } from "@/store/background";
 import { useUserPreferencesStore } from "@/store/user-preferences";
+import { MAIN_CONTENT_ID, SkipToContent } from "./skip-to-content";
 
 type LayoutProps = {
   children: ReactNode;
@@ -62,10 +63,14 @@ function Layout({ children, className }: LayoutProps) {
           } as React.CSSProperties
         }
       >
+        <SkipToContent />
         <AppSidebar />
         <SidebarInset
+          id={MAIN_CONTENT_ID}
+          // Focus target of the skip link; not a Tab stop.
+          tabIndex={-1}
           className={cn(
-            "m-2 flex flex-1 flex-col overflow-auto rounded-xl border border-border/80 bg-background shadow-sm/5",
+            "m-2 flex flex-1 flex-col overflow-auto rounded-xl border border-border/80 bg-background shadow-sm/5 outline-none",
             "md:peer-data-[variant=inset]:peer-data-[state=collapsed]:border-0",
             {
               "before:content-[''] before:absolute before:inset-0 before:bg-cover before:bg-center before:bg-(image:--bg) before:pointer-events-none":

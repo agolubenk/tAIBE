@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type ForestListStateProps = {
@@ -7,6 +8,9 @@ type ForestListStateProps = {
   isError: boolean;
   isEmpty: boolean;
   empty: string;
+  // Refetches the failed list in place: without it a dropped request on a slow
+  // network leaves the tab dead until the whole page reloads (TB-218).
+  onRetry: () => void;
   children: ReactNode;
 };
 
@@ -16,6 +20,7 @@ export function ForestListState({
   isError,
   isEmpty,
   empty,
+  onRetry,
   children,
 }: ForestListStateProps) {
   const { t } = useTranslation();
@@ -31,9 +36,14 @@ export function ForestListState({
   }
   if (isError) {
     return (
-      <p role="alert" className="py-6 text-muted-foreground text-sm">
-        {t("workspace:forest.loadError")}
-      </p>
+      <div className="flex flex-wrap items-center gap-3 py-6">
+        <p role="alert" className="text-muted-foreground text-sm">
+          {t("workspace:forest.loadError")}
+        </p>
+        <Button size="sm" variant="outline" onClick={onRetry}>
+          {t("common:error.tryAgain")}
+        </Button>
+      </div>
     );
   }
   if (isEmpty) {

@@ -67,12 +67,18 @@ export function parseKeys(searchParams) {
   return { keys: parsed };
 }
 
+// A cut inside a word drops the whole word. The API masks secrets in titles
+// for a caller with a token, and its patterns match only whole tokens: half
+// of a key cut here would pass the mask.
 function clip(title) {
   if (title == null) return null;
   const chars = [...title];
-  return chars.length > TITLE_MAX
-    ? `${chars.slice(0, TITLE_MAX - 1).join("")}…`
-    : title;
+  if (chars.length <= TITLE_MAX) return title;
+  const head = chars.slice(0, TITLE_MAX - 1).join("");
+  const whole = /\s/u.test(chars[TITLE_MAX - 1])
+    ? head
+    : head.replace(/\S+$/u, "");
+  return `${whole.trimEnd()}…`;
 }
 
 function columns(db, table) {

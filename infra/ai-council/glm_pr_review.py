@@ -12,7 +12,8 @@
 линзу, и агент запускал её снова. Теперь:
 
 * вызов — не больше `--attempts` попыток по `--attempt-timeout` с (330: дольше обрыва Z.AI, чтобы пришёл
-  его 502, а не локальный таймаут — тот ставит маркер сбоя провайдера на 5 мин);
+  его 502, а не локальный таймаут — тот ставит маркер сбоя провайдера на 5 мин). У `--backend opencode` попытка
+  одна, её умолчание — `opencode_client.ATTEMPT_TIMEOUT` (OPS-53: opencode отвечает дольше 330 с);
 * линза с `"split": true` (по умолчанию — корректность) идёт частями по файлам: ядро отдельно от тестов и UI,
   часть не больше `--chunk-chars` символов; сгенерированное (lock-файлы, снапшоты) не отправляется ни одной линзе;
 * квота подписки, лимит бюджета, ошибка конфигурации или недоступная сеть — ревью останавливается сразу;
@@ -21,13 +22,15 @@
 * общий потолок `--deadline-min`: новый вызов после него не начинается. Что не прошло — в `_meta.not_passed`
   и в коде выхода: эти линзы подхватывает другой рецензент.
 
-Линзы — JSON {"имя": "фокус"} или {"имя": {"focus": "…", "split": true}}. Дифф и описание — `gh pr diff/view`
-или `--diff-file`/`--body-file` (env PR_DIFF_FILE/PR_BODY — как у прежней версии из handoff).
+Линзы — JSON {"имя": "фокус"} или {"имя": {"focus": "…", "split": true}}. Дифф и описание — `gh pr diff/view -R`
+или `--diff-file`/`--body-file` (env PR_DIFF_FILE/PR_BODY — как у прежней версии из handoff). Репозиторий PR и
+run_id `<продукт>:pr-<N>` — `pr_repo.py` (`--repo`, GH_REPO или папка вызывающего; SE-80, Ф1а).
 Выход: 0 — все линзы прошли (вердикт может быть fail); 2 — часть не прошла; 3 — квота/бюджет; 1 — запуск.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -39,6 +42,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+
+import pr_repo                      # noqa: E402
 
 DEFAULT_LENSES: dict = {
     "корректность и отказы": {
@@ -62,6 +67,7 @@ SYSTEM = (
     '"scenario":"...","fix":"..."}],"checked":["..."]}'
 )
 BODY_CHARS = 5000
+GLM_ATTEMPT_TIMEOUT = 330  # дольше обрыва Z.AI (~300 с): приходит его 502, а не локальный таймаут
 EXIT_OK, EXIT_START, EXIT_NOT_PASSED, EXIT_LIMIT = 0, 1, 2, 3
 
 # ── дифф → части ─────────────────────────────────────────────────────────────
@@ -280,18 +286,47 @@ def _finish_lens(rec: dict) -> None:
     rec["error"] = "; ".join(f"{p['part']}: {p['error']}" for p in parts if p["error"])[:1000]
 
 
+def resume_mismatch(prior: dict | None, pr: str, diff_sha: str) -> str:
+    """Почему прошлый отчёт нельзя продолжить: другой PR или другой дифф (новые коммиты). Пусто — можно."""
+    if not prior:
+        return ""
+    meta = prior.get("_meta") or {}
+    if str(meta.get("pr")) != str(pr):
+        return f"отчёт PR {meta.get('pr')}, а ревьюится {pr}"
+    if meta.get("diff_sha") != diff_sha:
+        return "дифф изменился после прошлого прогона (или отчёт без diff_sha)"
+    return ""
+
+
+def _carry_part(rec: dict, prior: dict | None, lens: str, label: str) -> bool:
+    """--resume: часть, прошедшая в прошлом отчёте (другой рецензент цепочки), переносится как есть, без вызова."""
+    prev = (prior or {}).get(lens) or {}
+    done = next((p for p in prev.get("parts") or [] if p.get("part") == label and p.get("ok")), None)
+    if not done:
+        return False
+    rec["parts"].append({**done, "reviewer": done.get("reviewer") or (prior or {}).get("_meta", {}).get("backend", "glm")})
+    rec["findings"].extend(f for f in prev.get("findings") or [] if f.get("part", label) == label)
+    rec["checked"].extend(c for c in prev.get("checked") or [] if c not in rec["checked"])
+    return True
+
+
 def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_tokens: int, deadline_s: float,
-               breaker: int = 2, clock=time.monotonic, on_progress=None, log=print) -> tuple[dict, int]:
-    """Вызовы по одному. Возвращает (отчёт, код выхода)."""
-    out: dict = {"_meta": {"pr": pr, "model": model, "calls": len(calls), "stopped": "", "not_passed": []}}
+               breaker: int = 2, clock=time.monotonic, on_progress=None, log=print, prior: dict | None = None,
+               backend: str = "glm", diff_sha: str = "", run_id: str = "") -> tuple[dict, int]:
+    """Вызовы по одному. Возвращает (отчёт, код выхода). prior — отчёт прошлого рецензента цепочки (--resume)."""
+    run_id = run_id or f"pr-{pr}"
+    out: dict = {"_meta": {"pr": pr, "run_id": run_id, "model": model, "backend": backend, "calls": len(calls),
+                           "stopped": "", "not_passed": [], "diff_sha": diff_sha}}
     started, stop, stop_kind = clock(), "", ""
     in_row: dict = {}         # линза → ответов 5xx подряд
     dropped: dict = {}        # линза → почему её оставшиеся части не идут
     for call in calls:
         rec = out.setdefault(call.lens, _lens_record())
         label = call.part.label if call.part else "весь дифф"
+        if _carry_part(rec, prior, call.lens, label):
+            continue
         part = {"part": label, "files": call.part.files if call.part else [], "attempted": False, "ok": False,
-                "seconds": 0, "verdict": None, "error": "", "kind": ""}
+                "seconds": 0, "verdict": None, "error": "", "kind": "", "reviewer": backend}
         rec["parts"].append(part)
         if not stop and clock() - started > deadline_s:
             stop, stop_kind = f"потолок {round(deadline_s / 60)} мин на всё ревью", "deadline"
@@ -301,7 +336,7 @@ def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_token
             continue
         t0 = clock()
         part["attempted"] = True
-        res = client.chat(f"pr-{pr}", f"pr_review.{call.lens}", model,
+        res = client.chat(run_id, f"pr_review.{call.lens}", model,
                           [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt_of(call)}],
                           temperature=0.2, max_tokens=max_tokens)
         part["seconds"] = round(clock() - t0)
@@ -328,10 +363,13 @@ def run_review(client, calls: list, *, pr: str, model: str, prompt_of, max_token
         _log_part(log, call.lens, part, rec)
         if on_progress:
             on_progress(out)
+    reviewers: dict = {}
     for name, rec in out.items():
         if name != "_meta":
             _finish_lens(rec)
             out["_meta"]["not_passed"] += [f"{name} ({p['part']})" for p in rec["parts"] if not p["ok"]]
+            reviewers[name] = sorted({p.get("reviewer", backend) for p in rec["parts"] if p["ok"]})
+    out["_meta"]["reviewers"] = reviewers
     out["_meta"]["stopped"] = stop
     out["_meta"]["dropped_lenses"] = dropped
     code = (EXIT_LIMIT if stop_kind in ("quota", "budget") else EXIT_START if stop_kind == "config"
@@ -352,45 +390,48 @@ def _parse_args(argv):
     ap = argparse.ArgumentParser(description="Ревью PR на GLM по линзам (см. шапку модуля).")
     ap.add_argument("pr")
     ap.add_argument("out", type=Path)
-    ap.add_argument("model", nargs="?", default="glm-5")
+    ap.add_argument("model", nargs="?", default="",
+                    help="glm: glm-5; opencode: $OPENCODE_REVIEW_MODEL или opencode-go/glm-5.3")
     ap.add_argument("lenses", nargs="?", default="", help="JSON-файл линз; пусто — линзы по умолчанию")
     ap.add_argument("max_tokens", nargs="?", type=int, default=6000)
     ap.add_argument("--attempts", type=int, default=2, help="попыток на вызов (5xx, перегрузка)")
-    ap.add_argument("--attempt-timeout", type=int, default=330, help="секунд на попытку")
+    ap.add_argument("--attempt-timeout", type=int, default=0,
+                    help="секунд на попытку; 0 — по рецензенту: glm 330, opencode — opencode_client.ATTEMPT_TIMEOUT")
     ap.add_argument("--chunk-chars", type=int, default=24000, help="размер части для линз с делением")
     ap.add_argument("--deadline-min", type=float, default=45.0, help="потолок на всё ревью")
     ap.add_argument("--breaker", type=int, default=2, help="ответов 5xx подряд в линзе — её остаток не идёт")
     ap.add_argument("--diff-file", default=os.environ.get("PR_DIFF_FILE", ""))
     ap.add_argument("--body-file", default="")
+    ap.add_argument("--repo", default="", help="репозиторий PR owner/name; иначе GH_REPO или папка вызывающего")
     ap.add_argument("--dry-run", action="store_true", help="только план вызовов, без сети и базы")
-    return ap.parse_args(argv)
-
-
-def _inputs(args) -> tuple[str, str]:
-    if args.diff_file:
-        diff = Path(args.diff_file).read_text()
-        body = Path(args.body_file).read_text() if args.body_file else os.environ.get("PR_BODY", "")
-        return diff, body
-    gh = dict(cwd=HERE, capture_output=True, text=True, check=True)
-    diff = subprocess.run(["gh", "pr", "diff", args.pr], **gh).stdout
-    body = (Path(args.body_file).read_text() if args.body_file
-            else subprocess.run(["gh", "pr", "view", args.pr, "--json", "body", "--jq", ".body"], **gh).stdout)
-    return diff, body
+    ap.add_argument("--backend", choices=("glm", "opencode"), default="glm",
+                    help="кто рецензирует; цепочка opencode → glm → Claude — review_chain.sh")
+    ap.add_argument("--resume", default="", help="отчёт прошлого рецензента: прошедшие части не повторяются")
+    args = ap.parse_args(argv)
+    args.model = args.model or ("glm-5" if args.backend == "glm"
+                                else os.environ.get("OPENCODE_REVIEW_MODEL", "opencode-go/glm-5.3"))
+    if args.attempt_timeout <= 0:  # 330 — под обрыв Z.AI; opencode отвечает дольше (OPS-53)
+        from opencode_client import ATTEMPT_TIMEOUT
+        args.attempt_timeout = GLM_ATTEMPT_TIMEOUT if args.backend == "glm" else ATTEMPT_TIMEOUT
+    return args
 
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
     try:
         lenses = json.loads(Path(args.lenses).read_text()) if args.lenses else DEFAULT_LENSES
-        diff, body = _inputs(args)
+        repo = pr_repo.resolve_repo(args.repo, probe=not args.diff_file)
+        diff, body = pr_repo.pr_inputs(args.pr, repo, diff_file=args.diff_file, body_file=args.body_file)
         calls, skipped, whole = plan_calls(lenses, diff, max(args.chunk_chars, 2000))
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"запуск: {exc}", file=sys.stderr)
         return EXIT_START
-    all_files = [path for path, _ in split_diff(diff)]
+    all_files, run_id = [path for path, _ in split_diff(diff)], pr_repo.run_id(repo, args.pr)
     per_lens: dict = {}
     for c in calls:
         per_lens.setdefault(c.lens, []).append(c.part.label if c.part else "весь дифф")
+    # Репозиторий видно до первого вызова: PR HR из папки tAIBE без --repo — это PR tAIBE с тем же номером.
+    print(f"PR {args.pr}: репозиторий {repo or '— (дифф из файла)'}, run_id {run_id}", flush=True)
     print(f"план: {len(per_lens)} линз, {len(calls)} вызовов; дифф {len(diff)} симв., файлов {len(all_files)}"
           + (f"; не отправлены (сгенерированные): {', '.join(skipped)}" if skipped else ""), flush=True)
     for name, labels in per_lens.items():
@@ -400,39 +441,57 @@ def main(argv=None) -> int:
         return EXIT_OK
     if args.dry_run:
         return EXIT_OK
-
-    import cloud
-    import config as cfg_mod
-    import glm_mode
-    from store import DB_PATH, Store
-    if not DB_PATH.exists():
-        print(f"нет {DB_PATH} — квота и бюджет не видны; запускайте из основного checkout", file=sys.stderr)
+    try:
+        prior = json.loads(Path(args.resume).read_text()) if args.resume and Path(args.resume).exists() else None
+    except (OSError, ValueError) as exc:
+        print(f"запуск: --resume {args.resume}: {exc}", file=sys.stderr)
         return EXIT_START
-    cfg = cfg_mod.load(HERE / "config.toml", strict=False)
+    diff_sha = hashlib.sha256(diff.encode()).hexdigest()[:16]
+    stale = resume_mismatch(prior, args.pr, diff_sha)
+    if stale:
+        print(f"--resume не применён: {stale} — все части ревьюятся заново", flush=True)
+        prior = None
     body = body or ""
 
     def save(report: dict) -> None:
         args.out.write_text(json.dumps(report, ensure_ascii=False, indent=1))
 
-    with Store() as store:
-        client = cloud.build(cfg, store=store, logger=lambda m: print(m, flush=True))
-        glm_mode.apply_budget(client, cfg, True)      # лимиты режима GLM 5.x; платный контур закрыт
-        client.max_retries = max(args.attempts, 1) - 1
-        for node in client.providers.values():
-            node["timeout"] = args.attempt_timeout
-        report, code = run_review(
+    def review(client) -> tuple[dict, int]:
+        return run_review(
             client, calls, pr=args.pr, model=args.model, max_tokens=args.max_tokens,
             prompt_of=lambda c: build_prompt(c, body, whole, skipped, all_files),
             deadline_s=args.deadline_min * 60, breaker=max(args.breaker, 1),
-            on_progress=save, log=lambda m: print(m, flush=True))
-    report["_meta"].update(attempts=args.attempts, attempt_timeout=args.attempt_timeout,
+            on_progress=save, log=lambda m: print(m, flush=True), prior=prior, backend=args.backend,
+            diff_sha=diff_sha, run_id=run_id)
+
+    if args.backend == "opencode":
+        from opencode_client import OpencodeClient
+        report, code = review(OpencodeClient(timeout=args.attempt_timeout))
+    else:
+        import cloud
+        import config as cfg_mod
+        import glm_mode
+        from store import DB_PATH, Store
+        if not DB_PATH.exists():
+            print(f"нет {DB_PATH} — квота и бюджет не видны; запускайте из основного checkout", file=sys.stderr)
+            return EXIT_START
+        cfg = cfg_mod.load(HERE / "config.toml", strict=False)
+        with Store() as store:
+            client = cloud.build(cfg, store=store, logger=lambda m: print(m, flush=True))
+            glm_mode.apply_budget(client, cfg, True)      # лимиты режима GLM 5.x; платный контур закрыт
+            client.max_retries = max(args.attempts, 1) - 1
+            for node in client.providers.values():
+                node["timeout"] = args.attempt_timeout
+            report, code = review(client)
+    report["_meta"].update(repo=repo, attempts=args.attempts, attempt_timeout=args.attempt_timeout,
                            chunk_chars=args.chunk_chars, skipped_generated=skipped)
     save(report)
     meta = report["_meta"]
     print(f"\nитог: {sum(1 for k, v in report.items() if k != '_meta' and v['ok'])}/{len(per_lens)} линз прошли"
           + (f"; остановлено — {meta['stopped']}" if meta["stopped"] else ""))
     if meta["not_passed"]:
-        print("не пройдены на GLM (подхватить другим рецензентом): " + "; ".join(meta["not_passed"]))
+        nxt = "GLM (review_chain.sh)" if args.backend == "opencode" else "Claude, не больше 2 линз-агентов"
+        print(f"не пройдены на {args.backend} (подхватить: {nxt}): " + "; ".join(meta["not_passed"]))
     return code
 
 

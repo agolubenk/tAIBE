@@ -54,8 +54,9 @@ Meeting Intelligence, воркфлоу, hh.ru и Huntflow. Монорепо Nest
    `~/.claude.json`, подхватывается при старте) — тот же сервер по stdio:
    ```
    import sys; sys.path.insert(0, '<H4>/tools'); from oq_call import Client   # H4 = handoff/2026-10-18
-   c = Client(); ok, text = c.tool('oq_list', {'collection': 'items', 'open_only': True, 'limit': 500}); c.close()
+   c = Client(); ok, text = c.tool('oq_list', {'collection': 'items', 'open_only': True, 'limit': 30}); c.close()
    ```
+   `limit` — до 30 (SE-45): есть поле `more` («ещё N») — следующая страница с `offset = next_offset` и `as_of = asOf`.
    CLI `oq_call.py` режет успешный ответ до 160 символов — для чтения импортируй клиент. Запись — только с `if_version`
    из свежего `oq_get`. Дельта против этого файла: ответы владельца, мержи и деплои после 19.10 21:25.
 3. `git fetch`, `gh pr list`, `gh run list --workflow deploy-contabo.yml -L 3`; прод — одной командой
