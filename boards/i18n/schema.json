@@ -17226,6 +17226,9 @@
 										"LINK_EMPTY": {
 											"type": "string"
 										},
+										"LINK_BUSY": {
+											"type": "string"
+										},
 										"PR_INVALID_URL": {
 											"type": "string"
 										},
@@ -17260,6 +17263,7 @@
 										"LINK_CONTENT_TYPE",
 										"LINK_PDF_UNSUPPORTED",
 										"LINK_EMPTY",
+										"LINK_BUSY",
 										"PR_INVALID_URL",
 										"PR_REPO_NOT_LINKED",
 										"PR_NOT_FOUND",
