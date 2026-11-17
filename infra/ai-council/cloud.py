@@ -396,7 +396,10 @@ class CloudClient:
 
     def _check_rate_limit(self, model: str) -> tuple[bool, str]:
         """Ограничения вида «не чаще N раз за M минут». Считаются по своему же журналу:
-        провайдер остаток не отдаёт, а превышение стоит 429 и потерянного времени."""
+        провайдер остаток не отдаёт, а превышение стоит 429 и потерянного времени.
+        Счёт — все ушедшие в сеть запросы, удачные и нет (как суточный потолок ниже): провайдер считает запросы,
+        а не ответы. Без неудачных серия ошибок пускала в окно больше запросов, чем потолок (OPS-22).
+        Отказы по бюджету (`refused`) в сеть не ушли — их не считаем."""
         provider = self.provider_of(model)
         limits = (self.rate_limits or {}).get(provider) or {}
         if not limits or self.store is None:
@@ -411,8 +414,8 @@ class CloudClient:
             if cap <= 0:
                 return False, f"лимит частоты {provider}: вызовы запрещены ({key}={cap})"
             row = self.store.q1(
-                "SELECT COUNT(*) n FROM cloud_usage WHERE provider = ? AND ok = 1 "
-                "AND created_at >= ?", (provider, now_ts - minutes * 60),
+                "SELECT COUNT(*) n FROM cloud_usage WHERE provider = ? "
+                "AND (refused IS NULL OR refused = '') AND created_at >= ?", (provider, now_ts - minutes * 60),
             ) or {}
             used = int(row.get("n") or 0)
             if used >= cap:

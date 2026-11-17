@@ -22,6 +22,10 @@ The web board searches omitted descriptions through
 `GET /api/task/description-matches/{projectId}?query=…`, following `nextCursor`
 as `after` until it is null. Searches match literal case-insensitive substrings;
 `%` and `_` have no wildcard meaning. This endpoint requires project access.
+A caller with an API key reads descriptions with secrets masked, so a match
+counts only outside a secret, and a query with `[REDACTED:` finds nothing. Its
+pages are windows of omitted descriptions, so a page can have no `ids` and still
+have a `nextCursor`: keep following it until it is null.
 Public details use `/api/public-project/{id}/task/{taskId}/description`; visibility
 and task ownership are checked on every page. A description timeout returns `503`
 and can be retried.
