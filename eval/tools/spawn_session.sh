@@ -174,9 +174,6 @@ child_lineage() {
 }
 generation() { printf '%s' "$1" | tr -cd '.' | wc -c | tr -d ' '; }
 
-# Первые 12 знаков sha256 от stdin (48 бит: сотни версий генома и промпта без совпадений, строка запуска короче).
-sha12() { python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:12])'; }
-
 # Файл, который новая сессия читает первым, → stdout: handoff или пусковой файл роли ($1).
 first_file() {
   local base
@@ -185,18 +182,10 @@ first_file() {
   printf '%s' "$PROMPT_DIR/$(role_num "$base")-$base.md"
 }
 
-# Строка запуска (TB-131) → stdout. $1 — геном (пусто — без генома), $2 — линия, $3 — роль, $4 — шаблон сообщения
-# (first_message с линией «-» и именем <name>). prompt — версия входа сессии: содержимое first_file, «\n» и шаблон,
-# в котором пути заменены на <file> и <tools>. Две сессии одной роли — один prompt; правка пускового файла или текста —
-# другой.
+# Строка запуска (TB-131, launch_line.py) → stdout. $1 — геном (пусто — без), $2 — линия, $3 — роль, $4 — шаблон.
 launch_line() {
-  local g="-" p="${2%.*}" f t
-  [ -z "$1" ] || g="$(sha12 < "$1")"
-  [ "$p" != r ] || p="-"  # поколение 1 (r.xxxx): родителя-сессии нет, корень «r» — не сессия
-  f="$(first_file "$3")"
-  t="${4//"$f"/<file>}"
-  t="${t//"$TOOLS"/<tools>}"
-  printf ' Запуск: parent=%s genome=%s prompt=%s wake=%s.' "$p" "$g" "$({ cat "$f"; printf '\n%s' "$t"; } | sha12)" "$WAKE"
+  printf '%s' "$4" | python3 -I "$TOOLS/launch_line.py" --genome "$1" --lineage "$2" --file "$(first_file "$3")" \
+    --tools "$TOOLS" --wake "$WAKE"
 }
 
 # Имя сессии для claude --name: продукт, роль и хвост линии (hr-helper-boards-ab12, taibe-coord-k3z4). Claude Code
@@ -263,7 +252,7 @@ spawn_one() {
   # Шаблон — первое сообщение с линией «-» (поколение 0) и именем <name>: без линии, хвоста линии в имени и строки
   # запуска; нет пускового файла — стоп здесь.
   tmpl="$(first_message "$role" "-" "<name>")"
-  line="$(launch_line "$genome" "$lineage" "$role" "$tmpl")"
+  line="$(launch_line "$genome" "$lineage" "$role" "$tmpl")" || die "строка запуска не собрана (launch_line.py)"
   msg="$(first_message "$role" "$lineage" "$name" "$line")"
   # Сервер tmux не отвечает (нет tmux, LaunchAgent не поднялся) — окно Terminal, как до OPS-82 (README, PR 2 п. 4).
   if [ "$TERMINAL" = tmux ] && [ "$DRY" = 0 ] && ! python3 -I "$TOOLS/tmux_host.py" ensure >&2; then

@@ -88,7 +88,7 @@ for name, ok in [
 with tempfile.TemporaryDirectory() as tmp:
     tools = Path(tmp) / "layer" / "tools"
     tools.mkdir(parents=True)
-    for f in ("spawn_session.sh", "team_status.py", "lineage.py"):
+    for f in ("spawn_session.sh", "team_status.py", "lineage.py", "launch_line.py"):
         (tools / f).write_bytes((SCRIPT.parent / f).read_bytes())
     (tools.parent / "pipeline").mkdir()
     (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
@@ -189,6 +189,7 @@ def osa_run(terminal, rc, start, launch=False):
         tools = Path(tmp) / "layer" / "tools"
         tools.mkdir(parents=True)
         (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        (tools / "launch_line.py").write_bytes((SCRIPT.parent / "launch_line.py").read_bytes())
         for f in ("lineage.py", "team_status.py"):
             (tools / f).write_text(FAKE_PY, encoding="utf-8")
         (tools.parent / "pipeline").mkdir()
@@ -486,6 +487,7 @@ def tmux_run(ensure_rc=0, attach=False, open_rc=""):
         tools = Path(tmp) / "layer" / "tools"
         tools.mkdir(parents=True)
         (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        (tools / "launch_line.py").write_bytes((SCRIPT.parent / "launch_line.py").read_bytes())
         for f, text in (("tmux_host.py", FAKE_HOST), ("lineage.py", FAKE_ARGV), ("team_status.py", FAKE_PY)):
             (tools / f).write_text(text, encoding="utf-8")
         fake_bin = Path(tmp) / "bin"
