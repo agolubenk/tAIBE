@@ -262,7 +262,13 @@
         "com.electron.ollama"
       ]
     },
-    "hub_health": "http://127.0.0.1:3050/health"
+    "hub_health": "http://127.0.0.1:3050/health",
+    "serena_mcp": [
+      "http://127.0.0.1:9121/mcp"
+    ],
+    "launch_agents": [
+      "space.hrhelper.mcp-hub"
+    ]
   },
   "budget": {
     "quota5h_default": 16.0,
