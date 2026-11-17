@@ -149,6 +149,8 @@ dialog.sheet .compose { background: var(--surface); }
 .relay-st.warn, .relay-st .warn { color: var(--warn); }
 .relay-st code { font-family: var(--font-mono); font-size: 12px; }
 .relay-st .copy { margin-left: 6px; }
+.holder-st { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.holder-st.warn { color: var(--warn); }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
 .status-row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; font-size: 13px; color: var(--muted); }
 .mode { display: inline-flex; align-items: center; gap: 6px; }
@@ -452,7 +454,9 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 @media (min-width: 641px) and (max-width: 1399.98px) { .hb-to-dec { display: inline-flex; } }
 /* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди. Шапка — одна строка (просьба владельца
    10.11): у кнопок вместо названий значки (название — в aria-label и title), выбор продукта забирает оставшееся место. */
+.rm-range { justify-self: start; }
 @media (max-width: 640px) {
+  .rm-range { display: none; }
   .col-reports { display: none; }
   .hb-reports { display: inline-flex; }
   .hb-long, #jump-dash { display: none; }
@@ -643,6 +647,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
     <div class="card" id="card-roadmap">
       <h3>Роадмап по неделям</h3>
       <p class="sub">Вехи по направлениям: залитый ромб — достигнута, пустой — по плану, с красной обводкой — просрочена.</p>
+      <button class="toggle rm-range" id="rm-range" type="button" aria-pressed="false">Весь горизонт</button>
       <div class="rm-scroll"><div class="rm" id="roadmap"></div></div>
     </div>
     <details class="card rep-card" id="report-card">
@@ -985,7 +990,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       ? '<textarea class="field" id="note-' + it.id + '" placeholder="' + esc(ph) + '"></textarea>'
       : '<input class="field" type="text" id="note-' + it.id + '" placeholder="' + esc(ph) + '">';
     answer += '<label class="answer-label" for="note-' + it.id + '">' + esc(fieldLabel) + '</label>' + area;
-    answer += '<span class="summary-answer"></span>' + (it.kind === 'inbox' ? '<span class="relay-st" hidden></span>' : '') + '<span class="agent-status"></span><button type="button" class="reopen">Изменить ответ</button><span class="saved" aria-live="polite"></span></div>';
+    answer += '<span class="summary-answer"></span>' + (it.kind === 'inbox' ? '<span class="relay-st" hidden></span><span class="holder-st" hidden></span>' : '') + '<span class="agent-status"></span><button type="button" class="reopen">Изменить ответ</button><span class="saved" aria-live="polite"></span></div>';
     // Вложения — вне .item-body: бот очереди переносит тело пункта в сообщение, список файлов ему не нужен.
     var filesHtml = it.kind === 'inbox' && FILES ? FILES.cardHtml(it) : '';
     var kindHtml = KIND_NAME[it.kind] ? '<span class="item-kind">' + KIND_NAME[it.kind] + '</span>' : '';
@@ -1192,7 +1197,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       : 'Ответы сохраняются только в этом браузере — продублируйте важное в чате';
   }
 
-  function fmtTime(iso) { try { return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+  // Форматтеры Intl — один на формат: toLocale*String собирает новый на каждый вызов, а страница форматирует время у
+  // каждого пункта и тысячи дат «Хода работ» на каждое изменение данных (профиль OPS-76: половина времени renderDash).
+  var FMT_HM = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  function fmtTime(iso) { try { return FMT_HM.format(new Date(iso)); } catch (e) { return ''; } }
 
   function render() {
     placeItems();
@@ -1371,6 +1379,9 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   }
   function apply(snap) {
     LIVE.checks = true;
+    // Снимок пришёл после сбоя опроса (подмена базы повторяет его, когда консоль снова ответила): ответы снова
+    // сохраняются — страница возвращается к общей базе сама, без перезагрузки ботом или владельцем.
+    if (remote && modeEl.dataset.mode === 'local') setMode('shared');
     rowsOf(snap).forEach(function (r) {
       // Снимок, снятый до своего сохранения (медленная сеть), — не тот ответ, от которого правят дальше: он откатил бы
       // базу правки, и следующая правка получила бы ложный 409 (ревью «Контроля» #324, minor).
@@ -1389,9 +1400,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         if (typeof r.data.note === 'string') e.note = r.data.note;
         if (typeof r.data.at === 'string') e.at = r.data.at;
       }
-      if (typeof r.data.agentStatus === 'string') e.agentStatus = r.data.agentStatus;
-      if (typeof r.data.agentNote === 'string') e.agentNote = r.data.agentNote;
-      if (typeof r.data.agentAt === 'string') e.agentAt = r.data.agentAt;
+      agentFieldsInto(e, r.data);
     });
     saveLocal(); render();
   }
@@ -1546,6 +1555,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         key: board ? c.key : '', ws: board ? c.ws : '', archived: old,
         t: typeof c.t === 'string' ? c.t.slice(0, 160) : '', k: c.k === 'bug' ? 'bug' : 'task',
         s: typeof c.s === 'string' ? c.s.slice(0, 12) : '', st: st, c: typeof c.c === 'string' ? c.c.slice(0, 24) : '',
+        mark: typeof c.mark === 'string' ? c.mark.slice(0, 24) : '',
         closed: !!CARD_DONE[st], review: !!CARD_REVIEW[st],
       };
     }).filter(Boolean).sort(function (a, b) {
@@ -1643,7 +1653,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return '<li' + (c.closed ? ' class="is-closed"' : '') + '><span class="sev sev-' + esc(c.s || 'none') + '">' + esc(c.s || kind) + '</span>' +
       (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc((c.key + ' ' + (c.t || '')).trim()) + '</a>'
         : '<span>' + esc(c.t || 'карточка') + ' (архив)</span>') +
-      '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + '</small></li>';
+      '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + (c.mark ? ' · ' + esc(c.mark) : '') + '</small></li>';
   }
   function statsFromDb(d) {
     if (!d || d.kind !== 'stats') return null;
@@ -1835,6 +1845,30 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (live) return { k: 'sending', session: live.session };
     return { k: 'off' };
   }
+  // Держатель входящего (карточка HR xuc5csrv, решение владельца d-silent-holder-1511 «a»). У входящего со статусом
+  // «взял / в работе / ждёт»: online — у сессии agentBy или её наследника по линии (agentBy.<…>) живая автопередача
+  // своего продукта; silent — живой нет, а последняя запись агента (agentAt) старше 4 ч; иначе null. Только метка:
+  // захват снимает сервер через 12 ч, как раньше (CLAIM_TTL_MS); помеченные смотрит координатор в 09:30.
+  // relay null — ответа /relay ещё нет или консоль без него: про пульс не знаем, молчим.
+  var HOLDER_SILENT_MS = 4 * 3600000;
+  // Поля агента из строки снимка checks (документ целиком) — в запись страницы. agentBy, которого нет в снимке,
+  // стирается: release снимает захват (сервер удаляет agentBy, статус и заметку оставляет), и без этого метка
+  // называла бы держателем сессию, которая пункт уже отпустила (линза фронтенда #414, N1).
+  function agentFieldsInto(e, data) {
+    ['agentStatus', 'agentNote', 'agentAt'].forEach(function (k) { if (typeof data[k] === 'string') e[k] = data[k]; });
+    if (typeof data.agentBy === 'string') e.agentBy = data.agentBy; else delete e.agentBy;
+    return e;
+  }
+  function holderState(relay, e, now, product) {
+    if (!relay || !Array.isArray(relay.sessions) || !e || ['taken', 'doing', 'blocked'].indexOf(e.agentStatus) < 0) return null;
+    var by = typeof e.agentBy === 'string' ? e.agentBy : '';
+    if (by && relay.sessions.some(function (s) {
+      return relaySessionFits(s, product) && s.alive && typeof s.session === 'string' && (s.session === by || s.session.indexOf(by + '.') === 0);
+    })) return { k: 'online', session: by };
+    var at = Date.parse(e.agentAt || '');
+    if (isNaN(at) || !(now - at > HOLDER_SILENT_MS)) return null;
+    return { k: 'silent', session: by, hours: Math.floor((now - at) / 3600000) };
+  }
   // Снимок checks несёт ответ владельца (done, choice, note, at). Брать его, только если здесь нет своей несохранённой
   // правки (pending: сохранение идёт, ждёт повтора или не удалось) и своя правка не новее снимка: снимок, снятый до
   // сохранения, иначе откатил бы ответ, а следующее сохранение отправило бы старое поверх нового.
@@ -1883,6 +1917,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   // Роадмап по неделям (400dd…fead): на горизонте в ~38 недель неделе достаётся 15–22 px, а подписи «5 окт – 11 окт»
   // нужно ~84 px — тогда шкала подписывается месяцами, а недели остаются линиями.
   var RM_WEEK_LABEL_PX = 84;
+  // Окно роадмапа в неделях для полосы шириной laneW: столько недель, сколько помещается с недельной подписью
+  // (RM_WEEK_LABEL_PX на неделю), от 3 до 10: на самой узкой полосе (300 px) 3 недели по 100 px — подписи недельные;
+  // назад — до 2 (четверть окна), остальное — вперёд от текущей недели.
+  function rmWindowWeeks(laneW) {
+    var total = Math.max(3, Math.min(10, Math.floor(laneW / RM_WEEK_LABEL_PX)));
+    return { total: total, back: Math.min(2, Math.floor(total / 4)) };
+  }
   function roadmapLabelMode(pxPerWeek) { return pxPerWeek >= RM_WEEK_LABEL_PX ? 'weeks' : 'months'; }
   var RM_MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
   /** Подпись месяца шкалы: год — у первой подписи и у января. */
@@ -1907,6 +1948,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     });
     return out;
   }
+  /**
+   * «N просрочено до окна» (решение продукта #347): из просроченных (late) — те, чей план раньше начала окна a. Веху,
+   * которая уже стоит меткой в окне (ms: факт end в окне, план раньше), второй раз не считаем (линза фронтенда #347).
+   */
+  function roadmapBefore(late, ms, a) {
+    return late.filter(function (w) { var d = planEndOf(w); return !!d && d < a && ms.indexOf(w) < 0; });
+  }
   // Ссылка «#item=<id>» из колонки «Связь» на /deploys → id пункта или ''. Шаблон — DOC_ID сервера (store.ts): без
   // кавычек и скобок, поэтому id можно подставить в селектор [data-id="…"].
   function targetFromHash(hash) {
@@ -1917,6 +1965,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return /^[A-Za-z0-9_.~:@+-]{1,80}$/.test(id) ? id : '';
   }
   /* oq-pure:end */
+  // Окно роадмапа (rmWindowWeeks) или весь горизонт — выбор в этом браузере (oq-roadmap-range).
+  var RM_RANGE_KEY = 'oq-roadmap-range', RM_RANGE = 'window';
+  try { RM_RANGE = localStorage.getItem(RM_RANGE_KEY) === 'all' ? 'all' : 'window'; } catch (e) { RM_RANGE = 'window'; }
+  function rmWindowOn() { return RM_RANGE !== 'all' && !(window.matchMedia && window.matchMedia('(max-width: 640px)').matches); }
 
   // Базовые направления — потоки агентов; продуктовые блоки и переименования — документы work/track-<id>.
   var SEED_TRACKS = [
@@ -2016,9 +2068,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function dayOf(iso) { var t = new Date(iso); return isNaN(t) ? null : new Date(t.getFullYear(), t.getMonth(), t.getDate()); }
   function today0() { var n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
   function addD(d, k) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + k); }
-  function fmtD(d) { return d ? d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '') : '—'; }
-  function fmtDT(t) { return t.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace('.', ''); }
-  function nf(v, dec) { return Number(v).toLocaleString('ru-RU', { maximumFractionDigits: dec || 0 }); }
+  var FMT_DAY = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
+  var FMT_DT = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  var FMT_NUM = {};
+  // Неверная дата — прочерк: format() бросает исключение там, где toLocale*String писал «Invalid Date».
+  function fmtD(d) { return d && !isNaN(d) ? FMT_DAY.format(d).replace('.', '') : '—'; }
+  function fmtDT(t) { return t && !isNaN(t) ? FMT_DT.format(t).replace('.', '') : '—'; }
+  function nf(v, dec) { var k = dec || 0; return (FMT_NUM[k] || (FMT_NUM[k] = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: k }))).format(Number(v)); }
   var ST_COLOR = { done: 'var(--st-good)', doing: 'var(--st-warn)', blocked: 'var(--st-crit)', planned: 'var(--st-none)' };
   var ST_NAME = { done: 'сделано', doing: 'в работе', blocked: 'ждёт', planned: 'в плане' };
 
@@ -2490,8 +2546,19 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function roadmap(ws, t) {
     var host = document.getElementById('roadmap'), a = t, b = t;
     ws.forEach(function (w) { ['planStart', 'planEnd', 'start', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && d < a) a = d; if (d && d > b) b = d; }); });
+    // Окно ближайших недель (карточка HR vb1ea4jq): по умолчанию — целые недели вокруг сегодня, столько, сколько
+    // помещается с недельными подписями (до 2 назад и до 10 всего); «Весь горизонт» — прежний вид месяцами.
+    // Телефон — всегда весь горизонт, как было.
+    var win = rmWindowOn();
+    if (win) {
+      var wk = rmWindowWeeks(Math.max(300, (host.clientWidth || 720) - 150)), m0 = addD(t, -((t.getDay() + 6) % 7));
+      var wa = addD(m0, -7 * wk.back), wb = addD(m0, 7 * (wk.total - wk.back) - 1);
+      if (a < wa) a = wa;
+      if (b > wb) b = wb;
+    }
     a = addD(a, -((a.getDay() + 6) % 7)); b = addD(b, 6 - ((b.getDay() + 6) % 7));
     var nd = diffD(b, a) + 1;
+    var inWin = function (d) { return !!d && d >= a && d <= b; };
     function P(d, half) { return ((diffD(d, a) + (half ? 0.5 : 0)) * 100 / nd).toFixed(2) + '%'; }
     // Подпись вехи шириной 112 px у края полосы прижимается внутрь — как в placeRoadmapLabels
     function PL(d) { return 'clamp(56px, ' + P(d, true) + ', calc(100% - 56px))'; }
@@ -2499,7 +2566,8 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var laneW = Math.max(300, (host.clientWidth || 720) - 150), dx = laneW / nd;
     var lines = '', heads = '';
     for (var d = a; d <= b; d = addD(d, 7)) lines += '<span class="rm-wk" style="left:' + P(d) + '"></span>';
-    if (roadmapLabelMode(dx * 7) === 'weeks') {
+    var byWeeks = roadmapLabelMode(dx * 7) === 'weeks';
+    if (byWeeks) {
       for (var dw = a; dw <= b; dw = addD(dw, 7)) heads += '<span class="rm-wk" style="left:' + P(dw) + '">' + esc(fmtD(dw) + ' – ' + fmtD(addD(dw, 6))) + '</span>';
     } else {
       // Месяцы: первый неполный — подписью в начале, если до следующего месяца хватает места; дальше — с 1-го числа
@@ -2513,33 +2581,49 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       }
     }
     var now = '<span class="rm-now" style="left:' + P(t, true) + '"' + tipAttr(['Сегодня', fmtD(t)]) + '></span>';
-    var o = '<div class="rm-row rm-head"><div class="rm-name">Неделя</div><div class="rm-lane">' + heads + '</div></div>';
+    // Заголовок столбца — по подписям шкалы: над месяцами «Неделя» вводила в заблуждение (карточка HR epz36yxj).
+    var o = '<div class="rm-row rm-head"><div class="rm-name">' + (byWeeks ? 'Неделя' : 'Месяц') + '</div><div class="rm-lane">' + heads + '</div></div>';
     REP.tracksIn(TRACKS, ws).forEach(function (tr) {
       var list = ws.filter(function (w) { return w.track === tr.id; }), lo = null, hi = null;
       list.forEach(function (w) { ['planStart', 'start'].forEach(function (k) { var d = dParse(w[k]); if (d && (!lo || d < lo)) lo = d; }); ['planEnd', 'end'].forEach(function (k) { var d = dParse(w[k]); if (d && (!hi || d > hi)) hi = d; }); });
       var done = list.filter(function (w) { return w.status === 'done'; }).length;
       var lane = lines;
-      if (lo && hi) lane += '<span class="rm-span" style="left:' + P(lo) + ';width:' + ((diffD(hi, lo) + 1) * 100 / nd).toFixed(2) + '%;background:' + tr.c + '"></span>';
+      if (lo && lo < a) lo = a;
+      if (hi && hi > b) hi = b;
+      if (lo && hi && lo <= hi) lane += '<span class="rm-span" style="left:' + P(lo) + ';width:' + ((diffD(hi, lo) + 1) * 100 / nd).toFixed(2) + '%;background:' + tr.c + '"></span>';
       var late = list.filter(function (w) { return w.status !== 'done' && lagOf(w, t) > 0; });
-      var ms = list.filter(function (w) { return w.milestone && (dParse(w.end) || planEndOf(w)); });
+      var msAll = list.filter(function (w) { return w.milestone && (dParse(w.end) || planEndOf(w)); });
+      var ms = msAll.filter(function (w) { return inWin(dParse(w.end) || planEndOf(w)); });
+      // Просрочено до начала окна (линза фронтенда #347, решение продукта): в окне такой задачи не видно, а просрочка —
+      // главный красный сигнал. Число — у названия полосы, названия, план и отставание — в подсказке. Просроченную веху
+      // считаем здесь, а не во «вне окна»; веху с меткой в окне — только меткой (roadmapBefore в блоке oq-pure).
+      var before = win ? roadmapBefore(late, ms, a) : [];
+      var away = msAll.filter(function (w) { return !inWin(dParse(w.end) || planEndOf(w)) && before.indexOf(w) < 0; }).length;
       var marks = ms.map(function (w) {
         var at = dParse(w.end) || planEndOf(w), isLate = w.status !== 'done' && lagOf(w, t) > 0;
         return { w: w, at: at, isLate: isLate, x: (diffD(at, a) + 0.5) * dx, prio: isLate ? 0 : w.status === 'done' ? 2 : 1 };
       });
       var levels = placeRoadmapLabels(marks, laneW, 112, 8);
+      // Вехи без подписи (не влезли рядом с соседями): их название — только в подсказке, а на снимке бота (/charts)
+      // подсказок нет. Число — у названия полосы, названия и даты — в её подсказке (карточка HR u68lwzb1).
+      var hidden = marks.filter(function (m, i) { return !levels[i]; });
       marks.forEach(function (m, i) {
         var w = m.w;
         lane += '<span class="rm-ms' + (w.status === 'done' ? ' done' : '') + (m.isLate ? ' late' : '') + '" style="left:' + P(m.at, true) + ';color:' + tr.c + '"' + tipAttr([w.title, (w.status === 'done' ? 'достигнута ' : 'план ') + fmtD(m.at), w.note]) + '></span>';
         if (levels[i]) lane += '<span class="rm-lbl ' + levels[i] + '" style="left:' + PL(m.at) + '"' + tipAttr([w.title, (w.status === 'done' ? 'достигнута ' : 'план ') + fmtD(m.at), w.note]) + '>' + esc(w.title.split(':')[0].slice(0, 34)) + '<small>' + esc(fmtD(m.at)) + '</small></span>';
       });
-      if (!ms.length && late.length) {
+      if (win) late = late.filter(function (w) { return inWin(planEndOf(w)); });
+      if (!msAll.length && late.length) {
         late.forEach(function (w, i) {
           var at = planEndOf(w);
           lane += '<span class="rm-ms late" style="left:' + P(at, true) + ';color:' + tr.c + '"' + tipAttr([w.title, 'план ' + fmtD(at) + ' · отставание ' + lagOf(w, t) + ' дн.', w.note]) + '></span>';
         });
         lane += '<span class="rm-lbl dn" style="left:' + PL(planEndOf(late[0])) + '">просрочено: ' + late.length + '<small>с ' + esc(fmtD(planEndOf(late[late.length - 1]))) + '</small></span>';
       }
-      o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small></span></div><div class="rm-lane">' + lane + now + '</div></div>';
+      o += '<div class="rm-row"><div class="rm-name"><span class="trk"><i style="background:' + tr.c + '"></i></span><span>' + esc(tr.name) + '<br><small style="font-weight:400;color:var(--muted)">сделано ' + done + ' из ' + list.length + '</small>' +
+        (hidden.length ? '<br><small class="rm-hidden"' + tipAttr(hidden.map(function (m) { return m.w.title + ' — ' + fmtD(m.at); })) + '>+' + hidden.length + ' ' + plural(hidden.length, 'веха', 'вехи', 'вех') + ' без подписи</small>' : '') +
+        (before.length ? '<br><small class="rm-before is-late"' + tipAttr(before.map(function (w) { return w.title + ' — план ' + fmtD(planEndOf(w)) + ', отставание ' + lagOf(w, t) + ' дн.'; })) + '>' + before.length + ' просрочено до окна</small>' : '') +
+        (away ? '<br><small class="rm-away">' + away + ' ' + plural(away, 'веха', 'вехи', 'вех') + ' вне окна</small>' : '') + '</span></div><div class="rm-lane">' + lane + now + '</div></div>';
     });
     host.innerHTML = ws.length ? o : '<p class="empty" style="padding:10px">' + noRows('Нет задач.') + '</p>';
   }
@@ -2632,7 +2716,20 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { paintScope(ws); } catch (e) { /* подписи продукта необязательны */ }
     try { jumpDash(c, ws, lag, st); } catch (e) { /* числа в шапке необязательны */ }
     document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
-      : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
+      : dashReady() ? 'обновлено ' + FMT_HM.format(new Date()) : 'загружаю…';
+  }
+  // Переключатель окна роадмапа: подпись постоянная — «Весь горизонт», состояние — aria-pressed (линза фронтенда #347:
+  // меняющаяся подпись вместе с aria-pressed читалась диктором наоборот). Перерисовывается только роадмап.
+  var rmRangeBtn = document.getElementById('rm-range');
+  function paintRmRange() { rmRangeBtn.setAttribute('aria-pressed', String(RM_RANGE === 'all')); }
+  if (rmRangeBtn) {
+    paintRmRange();
+    rmRangeBtn.addEventListener('click', function () {
+      RM_RANGE = RM_RANGE === 'all' ? 'window' : 'all';
+      try { localStorage.setItem(RM_RANGE_KEY, RM_RANGE); } catch (e) { /* приватное окно — до перезагрузки */ }
+      paintRmRange();
+      try { roadmap(workList(), today0()); } catch (e) { document.getElementById('roadmap').textContent = 'Роадмап не построился: ' + e.message; }
+    });
   }
   if (window.ResizeObserver) {
     new ResizeObserver(function () {
@@ -2805,6 +2902,18 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var html = d || e.agentStatus || !relay ? '' : old ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id, product);
     if (rl.innerHTML !== html) rl.innerHTML = html;
     rl.hidden = !html;
+    paintHolder(el, e, d, product);
+  }
+  // Метка держателя у входящего со статусом агента (holderState); бот читает её из .holder-st (frame-scripts.mjs).
+  function paintHolder(el, e, d, product) {
+    var hl = el.querySelector('.holder-st');
+    if (!hl) return;
+    var x = d ? null : holderState(relay, e, Date.now(), product), who = x && x.session ? ' ' + esc(x.session) : '';
+    var html = !x ? '' : x.k === 'online' ? '🟢 Держатель' + who + ' в сети'
+      : '🔇 Держатель' + who + ' молчит ' + x.hours + ' ч — координатор передаст пункт живой сессии (проверка в 09:30)';
+    if (hl.innerHTML !== html) hl.innerHTML = html;
+    hl.classList.toggle('warn', !!x && x.k === 'silent');
+    hl.hidden = !html;
   }
   // Продукты строки «Автопередача»: выбранный в фильтре, иначе все продукты владельца (основной — первым).
   function relayProducts() {

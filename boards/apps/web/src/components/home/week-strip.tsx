@@ -36,7 +36,9 @@ export function WeekStrip({ tasks, workspaceId }: WeekStripProps) {
       ref={scrollerRef}
       className="relative overflow-x-auto rounded-xl border border-border bg-card"
     >
-      <ol className="flex min-w-[46rem] divide-x divide-border/70">
+      {/* A phone scrolls the week: 9rem days and two-line titles keep the
+          names readable instead of ~6 letters (TB-226). */}
+      <ol className="flex min-w-[63rem] divide-x divide-border/70 sm:min-w-[46rem]">
         {week.map((day) => (
           <li
             key={day.date.toISOString()}
@@ -103,7 +105,10 @@ export function WeekStrip({ tasks, workspaceId }: WeekStripProps) {
                         ? task.projectSlug
                         : `${task.projectSlug}-${task.number}`}
                   </span>
-                  <span className="truncate text-foreground text-xs">
+                  <span
+                    className="line-clamp-2 break-words text-foreground text-xs"
+                    title={task.title}
+                  >
                     {task.title}
                   </span>
                 </Link>
