@@ -164,4 +164,7 @@ def visible_name(exe, hidden):
     """SE-78: `"$D/swiftc"` — путь из переменной, но последняя часть буквальная и не git/gh/curl: догадки «это git»
     нет. Догадка остаётся, если имя не видно (`$X`, `$D/$(…)`, `$D/g*`) или значение невидимо (hidden)."""
     base = exe.rpartition("/")[2] if "/" in exe else ""
+    # `${=D}`, `${(z)D}`, `$@`, `$1`, `${a[@]}` делятся на слова, а VAR их имён не видит — значение невидимо
+    if re.search(r"\$(?![A-Za-z_]|\{[A-Za-z_])|\[[@*]\]", exe):
+        return False
     return bool(not hidden and re.fullmatch(r"[\w.+-]+", base) and SUBST not in base and base.lower() not in GUESSED)

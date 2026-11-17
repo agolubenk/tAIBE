@@ -25,7 +25,12 @@ for form in ("$D/git push origin HEAD:main", "\"$D/gh\" pr merge 1", "$D/GIT pus
              "$D/$(echo gh) pr merge 1", "$D/g* push origin HEAD:main", "$D/swiftc gh pr merge 1",
              "read D < d.txt; $D/swiftc push origin HEAD:main", "D=$(cat d.txt); \"$D/swiftc\" \"$1\" \"$2\" \"$3\"",
              "\"$D/curl\" -X PUT https://api.github.com/repos/o/r/pulls/1/merge", "\"$S\" -sdk \"$K\" \"$1\" \"$@\"",
-             "S=\"${DEV:-$(xcode-select -p)}/usr/bin/swiftc\"; \"$S\" -sdk \"$K\" \"$@\""):
+             "S=\"${DEV:-$(xcode-select -p)}/usr/bin/swiftc\"; \"$S\" -sdk \"$K\" \"$@\"",
+             # Claude-линза #458 B1: раскрытие делится на слова, а имени переменной VAR не видит
+             "read D < d.txt; ${=D}/swiftc push origin HEAD:main", "read D < d.txt; \"${=D}/swiftc\" push origin HEAD:main",
+             "read D < d.txt; ${(z)D}/swiftc push origin HEAD:main", "D=$(cat d.txt); ${=D}/swiftc push origin HEAD:main",
+             "set -- git -c a.b=; \"$@/swiftc\" push origin HEAD:main",
+             "bash -c '$0/swiftc push origin HEAD:main' 'git -c a.b='"):
     bash(f"SE-78: имя git/gh/curl, не видно или значение невидимо — догадка: {form!r}", form, True, cwd=se78)
 # Модуль: имя без пути, скрытое и подстановка — не «видимое».
 for exe, hidden, want in (("$D/swiftc", False, True), ("$D/GIT", False, False), ("swiftc", False, False),
