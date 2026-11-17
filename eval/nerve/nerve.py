@@ -20,6 +20,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -29,6 +30,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import actions  # noqa: E402
+import budget  # noqa: E402
+import gh_source  # noqa: E402
+import digest  # noqa: E402
 import sources  # noqa: E402
 from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
 
@@ -54,6 +58,14 @@ def local_tz():
     return datetime.now().astimezone().tzinfo
 
 
+def _id_matches(pattern, item_id):
+    """`queue.match` (SE-109) — `re.search` по id пункта; битое выражение не роняет проход: тогда подстрока."""
+    try:
+        return re.search(pattern, item_id) is not None
+    except re.error:
+        return pattern in item_id
+
+
 class Ctx:
     def __init__(self, cfg, state_dir, deliver=True):
         self.cfg = cfg
@@ -68,20 +80,23 @@ class Ctx:
         self.emitted = 0
         self.peers = None              # {slug: Ctx} других активных продуктов (attach_peers), None — не собраны
 
-    def emit(self, key, kind, cls, to, text, src=""):
-        ok = self.journal.emit(key, kind, cls, to if self.deliver else [], text, src)
+    def emit(self, key, kind, cls, to, text, src="", **extra):
+        ok = self.journal.emit(key, kind, cls, to if self.deliver else [], text, src, **extra)
         self.emitted += ok
         return ok
 
     def for_item(self, item_id, product=None):
-        """R-6: продукт пункта очереди. Сначала поле `product` документа (владелец выбирает продукт пункта, v2-lite
-        #95): продукт из peers — он, иной — продукт по умолчанию. Поля нет — по `queue.match` (id содержит `-taibe-`)."""
+        """R-6: продукт пункта очереди. Поле `product` документа с продуктом из peers — он. Иначе — `queue.match`,
+        даже если поле называет продукт по умолчанию (SE-88): консоль заполняет поле сама по началу id (`products.ts`
+        namespaceOf: `taibe-…` → taibe, иначе HR), поэтому `d-taibe-…` приходит с HR. `queue.match` — регулярное
+        выражение для `re.search` по id (SE-109: `-taibe(-|\\d|$)` ловит и `m-taibe310-1411`). `products.py`
+        проверяет его при загрузке, битое здесь сравнивается как подстрока. Нет совпадения — продукт по умолчанию."""
         peers = self.peers or {}
-        if product:
-            return peers.get(product, self)
+        if product in peers:
+            return peers[product]
         for peer in peers.values():
             match = (peer.cfg.get("queue") or {}).get("match")
-            if match and match in str(item_id):
+            if match and _id_matches(match, str(item_id)):
                 return peer
         return self
 
@@ -121,7 +136,7 @@ def peer_emit(peer, write):
         return False
 
 
-POLLS = [("github", sources.poll_github), ("queue", sources.poll_queue), ("system", sources.poll_system),
+POLLS = [("github", gh_source.poll_github), ("queue", sources.poll_queue), ("system", sources.poll_system),
          ("budget", actions.poll_budget)]
 
 
@@ -158,7 +173,7 @@ def one_pass(ctx, polls=None, finish=True):
 # ---------- Продукты (OPS-25) ----------
 
 # Свой репо продукта. Очередь и бюджет аккаунта общие — их обходит проход по умолчанию и раздаёт продуктам (Ф2b).
-PRODUCT_POLLS = [("github", sources.poll_github)]
+PRODUCT_POLLS = [("github", gh_source.poll_github)]
 
 
 def load_products():
@@ -378,7 +393,7 @@ def cmd_tap(cfg, a):
                 else:
                     print(fmt(r, tz), flush=True)
             else:
-                cur["pending"].append(r["text"])
+                digest.pend(cur, r)
         if not pause and cur["held"]:
             for line in cur["held"]:
                 print(line + " (придержано на время лимита)", flush=True)
@@ -386,11 +401,10 @@ def cmd_tap(cfg, a):
         every = timedelta(minutes=tc["digest_minutes"] * (tc["batch_factor"] if mode.get("batch") else 1))
         due = now - datetime.fromisoformat(cur["last_flush"]) >= every
         if cur["pending"] and due and not pause and mode.get("phase", "day") == "day":
-            n = len(cur["pending"])
-            head = " · ".join(cur["pending"][: tc["digest_max"]])
-            more = f" · ещё {n - tc['digest_max']}" if n > tc["digest_max"] else ""
-            print(f"НЕРВ {datetime.now(tz):%H:%M} дайджест ({n}): {head}{more}", flush=True)
-            cur["pending"] = []
+            line = digest.line(digest.fresh(cur, pdir), tc["digest_max"])   # SE-106: pr.changes на сменённой голове выпадает
+            if line:
+                print(f"НЕРВ {datetime.now(tz):%H:%M} {line}", flush=True)
+            cur["pending"], cur["changes_meta"] = [], []
             cur["last_flush"] = now_iso()
         elif not cur["pending"]:
             cur["last_flush"] = now_iso() if due else cur["last_flush"]
@@ -438,6 +452,7 @@ def cmd_status(cfg, a):
     b = st.get("budget", {})
     print(f"пульс: {st.get('heartbeat', '—')}")
     print(f"режим: {json.dumps(mode, ensure_ascii=False)}")
+    print(budget.shares_text(mode))
     print(f"лимит: {json.dumps(b.get('limit'), ensure_ascii=False)}")
     waves = b.get("waves", [])
     print(f"волн лимита окна: {len(waves)}; последние: " +

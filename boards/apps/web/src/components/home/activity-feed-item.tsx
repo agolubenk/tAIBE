@@ -50,7 +50,9 @@ export function ActivityFeedItem({
               projectId: activity.projectId,
               taskId: activity.taskId,
             }}
-            className="min-w-0 truncate hover:text-foreground"
+            // max-sm:py-1 — a 24 px touch target on a phone (TB-223); touch-hitbox
+            // would not work here: truncate clips its ::after.
+            className="min-w-0 truncate hover:text-foreground max-sm:py-1"
           >
             <span className="font-medium">
               {activity.taskNumber == null
