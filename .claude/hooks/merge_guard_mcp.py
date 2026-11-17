@@ -56,8 +56,23 @@ def mcp_paths(inp):
             yield from ([v] if isinstance(v, str) else [x for x in v if isinstance(x, str)] if isinstance(v, list) else [])
 
 
-def oq_identity(tool, inp, sid, get_sessions):
+def own_line(sid):
+    """Линия сессии (r.<…>) из первого промпта её транскрипта — его пишет spawn_session.sh. Код линии берётся из
+    основного checkout: копию в worktree могли изменить. None — линии нет или её не прочесть."""
+    import importlib.util
+    from merge_guard_identity import MAIN_ROOT
+    try:
+        spec = importlib.util.spec_from_file_location("lineage", MAIN_ROOT / "eval" / "tools" / "lineage.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.transcript_line(sid)
+    except (OSError, ImportError, AttributeError, SyntaxError):
+        return None
+
+
+def oq_identity(tool, inp, sid, get_sessions, get_line=own_line):
     """None — пропустить; иначе причина отказа. `session` у oq_agent_status — захват входящего (409 у чужой сессии).
+    Своё — имя из реестра, его хвост или своя линия (OPS-88: наследника по линии сервер узнаёт только по r.<…>).
     source у items и session у work не проверяются: Координатор законно ставит их за исполнителя."""
     if not re.search(r"owner.?queue", tool) or mcp_op(tool) != "oq_agent_status" or not inp.get("session"):
         return None
@@ -68,4 +83,6 @@ def oq_identity(tool, inp, sid, get_sessions):
         return "в oq_agent_status session — только своё имя, а этой сессии нет в реестре ~/.claude/sessions"
     if value in (name, name.rsplit("-", 1)[-1]):
         return None
-    return f"в oq_agent_status session — только своё имя ({name}), а не «{value[:60]}»"
+    if value.startswith("r.") and value == get_line(sid):
+        return None
+    return f"в oq_agent_status session — только своё имя ({name}) или своя линия, а не «{value[:60]}»"
