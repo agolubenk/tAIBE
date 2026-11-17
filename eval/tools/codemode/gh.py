@@ -2,9 +2,11 @@
 
 `gh api -f k=v` без `-X` сам переходит на POST, а `gh api graphql` всегда POST. Поэтому у `api` — белый список флагов,
 а не список запретов: `-X`/`--method`, `-f`/`-F`/`--field`/`--raw-field`, `--input`, слитые формы (`-XPOST`,
-`--method=PATCH`) и любой незнакомый флаг — NotAllowed. Заголовок — только `Accept`. Тайм-аут — 2 с (R-7)."""
+`--method=PATCH`) и любой незнакомый флаг — NotAllowed. Заголовок — только `Accept`. Тайм-аут — 2 с (R-7).
+Слитые короткие флаги чтения с `w` (`-cw`, `-vw`) — отказ: pflag раскрыл бы их в `-w`, то есть браузер."""
 import json
 import os
+import re
 import subprocess
 
 from . import NotAllowed, SourceDown
@@ -12,6 +14,7 @@ from . import NotAllowed, SourceDown
 TIMEOUT = 2.0
 READ = {("pr", "view"), ("pr", "checks"), ("pr", "list"), ("run", "list"), ("run", "view")}
 NEVER = {"--web", "-w", "--watch"}   # браузер или ожидание — это не чтение за 2 с
+SHORTS = re.compile(r"-[A-Za-z]{2,}")   # связка коротких флагов без значения: -cw = -c -w
 API_FLAGS = {"--paginate": False, "--slurp": False, "-i": False, "--include": False, "-q": True, "--jq": True,
              "-t": True, "--template": True, "--cache": True, "-H": True, "--header": True}   # флаг → есть значение
 FORMAT_FLAGS = {"-q", "--jq", "-t", "--template"}
@@ -51,7 +54,7 @@ def check(args):
     if "--" in args:
         raise NotAllowed("gh: «--» не принимается")
     if tuple(args[:2]) in READ:
-        bad = [a for a in args[2:] if a.partition("=")[0] in NEVER]
+        bad = [a for a in args[2:] if a.partition("=")[0] in NEVER or (SHORTS.fullmatch(a) and "w" in a)]
         if bad:
             raise NotAllowed(f"gh {args[0]} {args[1]} {bad[0]}: не чтение")
         return
@@ -76,8 +79,9 @@ def run(args, *, timeout=TIMEOUT, runner=subprocess.run):
         p = runner(["gh", *args], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except subprocess.TimeoutExpired:
         raise SourceDown("gh", f"тайм-аут {timeout:g} с") from None
-    except FileNotFoundError:
-        raise SourceDown("gh", "нет команды gh") from None
+    except OSError as e:   # нет файла, нет прав на запуск и др. — отказ источника, не traceback (R-7)
+        why = "нет команды gh" if isinstance(e, FileNotFoundError) else f"не запускается: {type(e).__name__}"
+        raise SourceDown("gh", why) from None
     if p.returncode != 0:
         first = next((s.strip() for s in (p.stderr or "").splitlines() if s.strip()), "")
         raise SourceDown("gh", first[:120] or f"код {p.returncode}")

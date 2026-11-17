@@ -2,12 +2,14 @@
 """Тесты code mode C-1 (SE-159, спека `docs/specs/code-mode.md`): AC-1 (`pr`), AC-4 (net, gh, R-3), AC-5 (R-7), AC-7.
 Без сети: подменённый opener и runner, HTTP-сервер на 127.0.0.1 для переадресации, 503 и тайм-аута."""
 import contextlib
+import http.client
 import http.server
 import io
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -62,17 +64,39 @@ class Net(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(NotAllowed):
                 net.check_url(bad, self.HOSTS)
 
-    def test_allowed_hosts_from_env_and_queue_config(self):
+    def test_allowed_hosts_from_env_and_instances(self):
         hosts = net.allowed_hosts(env={"T_BOARDS_URL": "https://boards.example"})
         self.assertIn("boards.example", hosts)
         self.assertNotIn("d4dev.admin.hrhelper.space", hosts)
-        self.assertIn("ops.admin.hrhelper.space", net.allowed_hosts(env={}))   # instances/_shared.json queue.url
+        with open(os.path.join(net.ROOT, "instances", "_shared.json"), encoding="utf-8") as f:
+            shared = json.load(f)
+        want = {net.urllib.parse.urlsplit(shared[k]["url"]).hostname for k in ("boards", "queue")}
+        self.assertEqual(net.allowed_hosts(env={}), want)   # без T_BOARDS_URL — boards.url и queue.url
+        with tempfile.TemporaryDirectory() as root:   # другой инстанс: хосты — из его instances/, не из кода
+            os.mkdir(os.path.join(root, "instances"))
+            self.assertEqual(net.allowed_hosts(root, env={}), set())
+            with open(os.path.join(root, "instances", "_shared.json"), "w", encoding="utf-8") as f:
+                json.dump({"boards": {"url": "https://b.other"}, "queue": {"url": 5}}, f)
+            self.assertEqual(net.allowed_hosts(root, env={}), {"b.other"})
 
     def test_bad_session_label_is_caller_error(self):
         for label in ("", "a" * 81, "роль\n6", "x;y"):
             with self.subTest(label=label), self.assertRaises(ValueError):
                 net.get("http://127.0.0.1:1/", source="board", session=label, opener=FakeOpener())
         self.assertTrue(net.session_ok("successor bb · роль 6"[:10]))
+
+    def test_http_protocol_error_is_source_failure(self):
+        class Broken:
+            def __init__(self, exc):
+                self.exc = exc
+
+            def open(self, req, timeout):
+                raise self.exc
+        for exc, name in ((http.client.IncompleteRead(b"x"), "IncompleteRead"),
+                          (http.client.BadStatusLine("x"), "BadStatusLine")):
+            with self.subTest(name=name), self.assertRaises(SourceDown) as e:
+                net.get("http://127.0.0.1:1/", source="queue", opener=Broken(exc))
+            self.assertEqual(str(e.exception), f"queue: недоступно (нет связи ({name}))")
 
     def test_not_json_and_too_big(self):
         with self.assertRaises(SourceDown) as e:
@@ -146,7 +170,8 @@ class Gh(unittest.TestCase):
                      ["api", "/graphql?x=1"], ["api", "repos/o/r", "-H", "X-HTTP-Method-Override: POST"],
                      ["api", "https://evil.example/x"], ["api", "repos/o/r", "--", "-X"], ["pr", "view", "1", "--web"],
                      ["pr", "checks", "1", "--watch"], ["run", "rerun", "1"], ["workflow", "run", "x"], ["api"], [],
-                     ["api", "repos/a", "repos/b"]):
+                     ["api", "repos/a", "repos/b"], ["pr", "view", "474", "-cw"], ["run", "view", "1", "-vw"],
+                     ["pr", "view", "1", "-w=true"]):
             with self.subTest(args=args), self.assertRaises(NotAllowed):
                 gh.check(args)
 
@@ -155,7 +180,7 @@ class Gh(unittest.TestCase):
                      ["pr", "list", "--state", "open"], ["run", "list", "-L", "5"], ["run", "view", "9", "--log"],
                      ["api", "repos/o/r/pulls?per_page=1", "--paginate", "-q", ".[].number"],
                      ["api", "-H", "Accept: application/vnd.github+json", "repos/o/r"],
-                     ["api", "repos/o/r", "--jq=.x"]):
+                     ["api", "repos/o/r", "--jq=.x"], ["pr", "view", "1", "-c"], ["run", "view", "1", "-v"]):
             with self.subTest(args=args):
                 gh.check(args)
 
@@ -179,6 +204,7 @@ class Gh(unittest.TestCase):
             "gh: недоступно (код 4)": mock.Mock(return_value=subprocess.CompletedProcess([], 4, "", "")),
             "gh: недоступно (ответ не JSON)": mock.Mock(return_value=subprocess.CompletedProcess([], 0, "<x>", "")),
             "gh: недоступно (нет команды gh)": mock.Mock(side_effect=FileNotFoundError("gh")),
+            "gh: недоступно (не запускается: PermissionError)": mock.Mock(side_effect=PermissionError(13, "x")),
         }
         for want, runner in cases.items():
             with self.subTest(want=want), self.assertRaises(SourceDown) as e:
@@ -292,6 +318,20 @@ class Recipe(unittest.TestCase):
             pr.fetch(1, "o/r", run=lambda args: {"number": 1})
         self.assertEqual(str(e.exception), "gh: недоступно (схема ответа: нет headRefOid)")
 
+    def test_nested_schema_change_is_source_failure(self):
+        for kw, name in (({"labels": ["x"]}, "AttributeError"), ({"labels": 5}, "TypeError"),
+                         ({"comments": [1]}, "AttributeError"), ({"statusCheckRollup": [None]}, "AttributeError"),
+                         ({"statusCheckRollup": "x"}, "AttributeError")):
+            with self.subTest(kw=kw), self.assertRaises(SourceDown) as e:
+                pr.recipe(1, product="taibe", run=lambda args, kw=kw: fixture(**kw))
+            self.assertEqual(str(e.exception), f"gh: недоступно (схема ответа: {name})")
+
+    def test_odd_names_still_render(self):
+        s = self.summary(labels=[{"name": 5}, {}], title=7,
+                         statusCheckRollup=[{"name": 3, "conclusion": "FAILURE"}])
+        self.assertIn("метки: 5, ?", pr.render(s))
+        self.assertIn("fail: 3", pr.render(s))
+
 
 class Entry(unittest.TestCase):
     def run_main(self, argv, run):
@@ -321,6 +361,10 @@ class Entry(unittest.TestCase):
             raise SourceDown("gh", "тайм-аут 2 с")
         rc, so, se = self.run_main(["pr", "5", "--product", "taibe"], down)
         self.assertEqual((rc, so, se), (3, "", "gh: недоступно (тайм-аут 2 с)\n"))
+
+    def test_nested_schema_one_line_code_3(self):
+        rc, so, se = self.run_main(["pr", "5", "--product", "taibe"], lambda args: fixture(labels=["x"]))
+        self.assertEqual((rc, so, se), (3, "", "gh: недоступно (схема ответа: AttributeError)\n"))
 
     def test_unknown_product_code_2(self):
         rc, _, se = self.run_main(["pr", "5", "--product", "nope"], lambda args: fixture())

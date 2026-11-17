@@ -50,7 +50,7 @@ def summarize(d, lens_roles, team_roles, min_lenses):
     for c in d.get("statusCheckRollup") or []:
         state = str(c.get("conclusion") or c.get("status") or c.get("state") or "").upper()   # как gh_source
         states.append(state)
-        checks[_bucket(state)].append(c.get("name") or c.get("context") or "?")
+        checks[_bucket(state)].append(str(c.get("name") or c.get("context") or "?"))
     said = [v for c in d.get("comments") or [] if (v := quorum.parse_verdict(c.get("body"), lens_roles, team_roles))]
     verdicts = quorum.with_body(quorum.body_verdicts(body, lens_roles, team_roles), said, head)
     last = quorum.last_on_head(verdicts, head)
@@ -58,9 +58,9 @@ def summarize(d, lens_roles, team_roles, min_lenses):
              if not quorum.on_head(v["sha"], head)}
     author = quorum.body_author(body, team_roles)
     ok, approved, changes, ci = quorum.quorum(verdicts, head, states, min_lenses, author)
-    return {"pr": d.get("number"), "title": (d.get("title") or "")[:80], "state": d.get("state"),
+    return {"pr": d.get("number"), "title": str(d.get("title") or "")[:80], "state": d.get("state"),
             "draft": bool(d.get("isDraft")), "head": head, "base": d.get("baseRefName"),
-            "mergeable": d.get("mergeable"), "labels": [x.get("name") for x in d.get("labels") or []],
+            "mergeable": d.get("mergeable"), "labels": [str(x.get("name") or "?") for x in d.get("labels") or []],
             "author": author, "ci": ci, "checks": checks, "on_head": dict(sorted(last.items())),
             "older": {k: v for k, v in sorted(older.items()) if k not in last},
             "approved": approved, "changes": changes, "min_lenses": min_lenses, "quorum": ok,
@@ -97,5 +97,12 @@ def render(s):
 
 
 def recipe(n, product=None, repo=None, run=gh.run):
+    """Итог `summarize`. Вложенная схема ответа изменилась (метки, комментарии, проверки не те) — отказ источника
+    одной строкой (R-7), не traceback. Заголовок и имена меток и проверок `summarize` приводит к строке, поэтому
+    `render` на итоге не падает."""
     _, cfg_repo, lens_roles, team_roles, min_lenses = config(product)
-    return summarize(fetch(n, repo or cfg_repo, run), lens_roles, team_roles, min_lenses)
+    d = fetch(n, repo or cfg_repo, run)
+    try:
+        return summarize(d, lens_roles, team_roles, min_lenses)
+    except (AttributeError, TypeError, KeyError, ValueError) as e:
+        raise SourceDown("gh", f"схема ответа: {type(e).__name__}") from None

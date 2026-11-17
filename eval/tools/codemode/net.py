@@ -1,7 +1,8 @@
 """Транспорт HTTP для доски и очереди (R-1 п. 1, R-5). Метод — константа GET, параметра метода и тела запроса нет.
 Переадресацию транспорт не выполняет: она могла бы увести запрос на другой хост. Хосты: `127.0.0.1` по http, по https —
-только хост доски (`T_BOARDS_URL`, иначе адрес по умолчанию из `infra/scripts/dev-ai/mcp-t-boards.sh`) и хост очереди
-(`queue.url` в `instances/_shared.json`). Тайм-аут — 2 с на вызов (R-7)."""
+только хост доски (`T_BOARDS_URL`, иначе `boards.url`) и хост очереди (`queue.url`) из `instances/_shared.json`.
+Тайм-аут — 2 с на вызов (R-7)."""
+import http.client
 import json
 import os
 import socket
@@ -17,7 +18,6 @@ METHOD = "GET"
 TIMEOUT = 2.0
 MAX_BYTES = 4 * 1024 * 1024
 SESSION_HEADER = "x-t-boards-session"
-BOARD_URL = "https://d4dev.admin.hrhelper.space"   # как KANEO_API_URL по умолчанию в mcp-t-boards.sh
 LOCAL = "127.0.0.1"
 
 
@@ -28,15 +28,27 @@ def session_ok(label):
         ch.isalnum() or ch in " ._:/#-" for ch in label)
 
 
+def _url(shared, key):
+    v = shared.get(key) if isinstance(shared, dict) else None
+    v = v.get("url") if isinstance(v, dict) else None
+    return v if isinstance(v, str) else None
+
+
 def allowed_hosts(root=ROOT, env=None):
-    """Хосты для https: доска и очередь. 127.0.0.1 разрешён всегда (и по http)."""
+    """Хосты для https: доска (`T_BOARDS_URL`, иначе `boards.url`) и очередь (`queue.url`) из `instances/_shared.json`
+    — настройки инстанса, не константы кода. 127.0.0.1 разрешён всегда (и по http)."""
     env = os.environ if env is None else env
-    hosts = {urllib.parse.urlsplit(env.get("T_BOARDS_URL") or BOARD_URL).hostname}
     try:
         with open(os.path.join(root, "instances", "_shared.json"), encoding="utf-8") as f:
-            hosts.add(urllib.parse.urlsplit(json.load(f)["queue"]["url"]).hostname)
-    except (OSError, ValueError, KeyError, TypeError):
-        pass   # нет конфига очереди — к очереди транспорт не пойдёт
+            shared = json.load(f)
+    except (OSError, ValueError):
+        shared = {}   # нет конфига — к доске (без T_BOARDS_URL) и к очереди транспорт не пойдёт
+    hosts = set()
+    for url in (env.get("T_BOARDS_URL") or _url(shared, "boards"), _url(shared, "queue")):
+        try:
+            hosts.add(urllib.parse.urlsplit(url or "").hostname)
+        except ValueError:
+            pass
     return {h for h in hosts if h}
 
 
@@ -95,7 +107,7 @@ def get(url, *, source, session=None, token=None, timeout=TIMEOUT, hosts=None, o
             body = r.read(MAX_BYTES + 1)
     except urllib.error.HTTPError as e:
         raise SourceDown(source, f"HTTP {e.code}") from None
-    except (urllib.error.URLError, OSError) as e:
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:   # HTTPException: IncompleteRead и др.
         if _timed_out(e):
             raise SourceDown(source, f"тайм-аут {timeout:g} с") from None
         reason = getattr(e, "reason", e)
