@@ -21,6 +21,9 @@
   python3 -I eval/tools/team_plan.py plan      что должно быть открыто и что открыто (ничего не запускает)
   python3 -I eval/tools/team_plan.py up [N]    открыть недостающие роли (не больше N за запуск; «ВКЛ», вход, сторож)
   python3 -I eval/tools/team_plan.py pause     сторож и «ВКЛ» не открывают роли (resume — снова открывают)
+  python3 -I eval/tools/team_plan.py keep SLUG ROLE   код 0 — роль в доле, наследник открывается; 3 — роль сверх
+                                               доли владельца: наследника нет (spawn_session.sh --handoff, решение
+                                               d-team-surplus-1711); сбой и роль вне команды — 0
 """
 import fcntl
 import http.client
@@ -419,8 +422,27 @@ def show():
     return 0
 
 
+def keep(slug, role, log=lambda m: None):
+    """Роль в доле владельца? Лишняя (сверх доли) доделывает сессию и наследника не открывает: так новая доля встаёт,
+    когда лишние роли закончили сессию, и работающая роль не обрывается (d-team-surplus-1711). Не знаем — оставить."""
+    try:
+        team, _, _, _, roles, _ = config()
+        if role not in roles.get(slug, ()):
+            return True, ""  # не роль команды (сессия владельца, продукт выключен) — не наша забота
+        split, _ = owner_split(team, list(roles), log)
+        alloc = allocate(split, roles)
+        return (slug, role) in plan(alloc, roles), " · ".join(f"{s} {n}" for s, n in alloc.items())
+    except Exception as exc:  # noqa: BLE001 — сбой не должен оставить роль без наследника
+        log(f"keep: {exc.__class__.__name__} — роль оставляю")
+        return True, ""
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "keep" and len(argv) == 4:
+        ok, split = keep(argv[2], argv[3], lambda m: print(m, file=sys.stderr))
+        print(split)
+        return 0 if ok else 3
     if cmd == "up" and len(argv) <= 3:
         return up(int(argv[2]) if len(argv) == 3 and argv[2].isdigit() else None)
     if cmd == "plan" and len(argv) == 2:

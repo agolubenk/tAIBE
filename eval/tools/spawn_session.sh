@@ -1,7 +1,8 @@
 #!/bin/bash
 # Открыть новую сессию Claude Code в отдельном окне терминала: наследник по handoff или запуск роли Т3.
 #
-#   bash eval/tools/spawn_session.sh --handoff FILE [--role KEY]     наследник (бюджет окна, хук context-threshold)
+#   bash eval/tools/spawn_session.sh --handoff FILE [--role KEY]     наследник (бюджет окна, хук context-threshold);
+#                                         роль сверх доли владельца (team_plan.py keep) — код 5, наследника нет
 #   bash eval/tools/spawn_session.sh --launch --role KEY             запуск роли по её пусковому файлу
 #   bash eval/tools/spawn_session.sh --launch --roles all|coord,release,…   несколько ролей, по порядку 1→5→4→3→2→6
 #   bash eval/tools/spawn_session.sh --status | --stop                 роли продукта и пульс нерва | команды kill для владельца
@@ -418,6 +419,23 @@ elif [ -n "$HANDOFF" ]; then
   elif [ -f "$TOOLS/../evolve/dupes.py" ] && command -v python3 >/dev/null 2>&1; then
     python3 -I "$TOOLS/../evolve/dupes.py" --against-l1 "$HANDOFF" --max-waste "${SPAWN_MAX_WASTE:-300}" --top 5 >&2 \
       || echo "# spawn_session: handoff повторяет постоянный контекст — в следующий раз пиши только дельту" >&2
+  fi
+  # Роль сверх доли владельца (кнопка «Роли» в /queue сменила долю) наследника не открывает: доделывает сессию и
+  # уходит, её дела берёт координатор продукта (решение d-team-surplus-1711). Сбой проверки — наследник как раньше.
+  # --dry-run проверку не делает (она читает очередь), если не попросили SPAWN_SURPLUS_CHECK=on; off — не делать вовсе.
+  surplus_check="${SPAWN_SURPLUS_CHECK:-}"
+  [ -n "$surplus_check" ] || { [ "$DRY" = 1 ] && surplus_check=off || surplus_check=on; }
+  if [ -n "$ROLE" ] && [ -n "$PRODUCT" ] && [ "$surplus_check" = on ]; then
+    rc=0
+    split="$(python3 -I "${SPAWN_TEAM_PLAN:-$TOOLS/team_plan.py}" keep "$PRODUCT" "$ROLE" 2>/dev/null)" || rc=$?
+    if [ "$rc" = 3 ]; then
+      echo "spawn_session: роль $ROLE ($PRODUCT) — сверх доли владельца ($split): наследника не открываю." \
+        "Дела переданы координатору продукта. Допиши work_state и закончи сессию." >&2
+      [ "$DRY" = 1 ] || python3 -I "${SPAWN_NERVE:-$TOOLS/../nerve/nerve.py}" emit coord --product "$PRODUCT" \
+        "Role $ROLE of $PRODUCT ends as surplus over the owner split ($split, decision d-team-surplus-1711): no successor. Take its open work: handoff $HANDOFF." \
+        >/dev/null 2>&1 || echo "# spawn_session: событие координатору не записано — передай handoff сам" >&2
+      exit 5
+    fi
   fi
   spawn_one "$ROLE"
   [ "$SPAWN_FAILED" = 0 ] || exit 4  # наследника нет — предшественник остаётся, сторож не нужен

@@ -127,6 +127,35 @@ for name, flags in [("print", ["--terminal", "print"]), ("keep-window", ["--keep
         print("FAIL: %s keeps exec and no autoclose" % name)
         print("\n".join(out))
 
+# d-team-surplus-1711: роль сверх доли владельца (team_plan.py keep — код 3) наследника не открывает, код 5, событие
+# координатору продукта; в доле (0) и при сбое проверки (любой другой код) — наследник как раньше.
+def surplus_run(keep_rc):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        fake = Path(tmp) / "team_plan_fake.py"
+        fake.write_text("import sys\nprint('hr-helper 8 · taibe 4')\nsys.exit(%d)\n" % keep_rc, encoding="utf-8")
+        nerve = Path(tmp) / "nerve_fake.py"
+        log = Path(tmp) / "nerve.log"
+        nerve.write_text("import sys\nopen(%r, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n" % str(log), encoding="utf-8")
+        env = clean_env(TMPDIR=tmp, TAIBE_PRODUCT="taibe", SPAWN_SURPLUS_CHECK="on", SPAWN_TEAM_PLAN=str(fake),
+                        SPAWN_NERVE=str(nerve))
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--role", "boards", "--dry-run",
+                              "--cwd", tmp], capture_output=True, text=True, env=env, timeout=30)
+        return run.returncode, run.stdout + run.stderr, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+for name, keep_rc, want_rc, marker in [
+    ("surplus role: no successor, exit 5", 3, 5, "сверх доли владельца (hr-helper 8 · taibe 4)"),
+    ("role in the split: successor as before", 0, 0, "/genome/taibe/boards.json"),
+    ("keep check fails: successor as before", 1, 0, "/genome/taibe/boards.json"),
+]:
+    rc, out, _ = surplus_run(keep_rc)
+    if rc != want_rc or marker not in out:
+        failed += 1
+        print("FAIL:", name, rc)
+        print(out)
+
 # OPS-25: продукт — --product, иначе TAIBE_PRODUCT из env (наследник берёт продукт предшественника), иначе по умолчанию.
 def product_run(env_extra, *flags):
     with tempfile.TemporaryDirectory() as tmp:
