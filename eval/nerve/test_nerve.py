@@ -946,6 +946,22 @@ class GithubPollTest(unittest.TestCase):
         self.assertEqual(len(passes(3, heads=new)), 1, "одно событие на голову списка")
         self.assertEqual(len(passes(5, listed=new, heads=newer, upd="2026-11-04T10:05:00Z")), 2, "новая голова списка")
 
+    def test_stale_count_resets_after_a_pass_that_parses_the_pr(self):
+        """SE-134: PR меняется каждый проход (основной путь, не перепроверка CI). Удачный разбор тоже обнуляет счёт."""
+        old, new, minute = "d7" * 20, "d8" * 20, iter(range(60))
+
+        def passes(count, heads=None):
+            for _ in range(count):
+                sources.run = FakeGh([_pr(499, old, upd=f"2026-11-04T10:{next(minute):02d}:00Z")],
+                                     heads={499: heads} if heads else None)
+                gh_source.poll_github(self.ctx)
+            return [t for k, t in self.kinds() if k == "pr.stale"]
+
+        passes(4, heads=new)
+        self.assertEqual(passes(1), [], "разобран: счёт с нуля")
+        self.assertEqual(passes(4, heads=new), [])
+        self.assertEqual(len(passes(1, heads=new)), 1)
+
     def test_head_without_checks_waits_for_ci(self):
         """SE-126: сразу после push у головы нет ни одной проверки. Три approve — ожидание CI, а не pr.quorum с «CI ok»."""
         head = "e" * 40
