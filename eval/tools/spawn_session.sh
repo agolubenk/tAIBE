@@ -436,8 +436,9 @@ elif [ -n "$HANDOFF" ]; then
           "Do not wake it. Take its open work from the handoff $HANDOFF. The Mac closes its session after 30 min idle." >&2
       else
         echo "spawn_session: role $ROLE ($PRODUCT) is surplus over the owner split ($split, decision d-team-surplus-1711)." \
-          "No successor opens. 1. Commit and push your WIP branch, then write work_state (in your own worktree," \
-          "uncommitted work keeps this session open). 2. Release your inbox claims (oq_agent_status release, note: to coord). 3. Do not start new work." \
+          "No successor opens. 1. Commit and push your WIP branch, then write work_state. Uncommitted files stay on disk;" \
+          "this session closes after 30 min idle (a session whose folder is its own worktree stays open while the" \
+          "worktree has uncommitted work). 2. Release your inbox claims (oq_agent_status release, note: to coord). 3. Do not start new work." \
           "4. Do not wait for a successor ack and do not run spawn_session.sh again. The Mac closes this session after" \
           "30 min idle." >&2
       fi
