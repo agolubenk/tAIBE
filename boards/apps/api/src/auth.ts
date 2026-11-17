@@ -732,6 +732,13 @@ export const auth = betterAuth({
       // t-boards: metadata.workspaceId limits a key to one workspace (R-002).
       enableMetadata: true,
       apiKeyHeaders: "x-api-key",
+      // TB-136: new keys are tbk_ + 64 letters, so the format rules of
+      // @kaneo/redact and infra/checks/secrets_scan.py catch them anywhere.
+      // A key is checked by the hash of the whole string, so keys issued
+      // before the prefix keep working. `start` keeps six key characters
+      // after the prefix, as before.
+      defaultPrefix: "tbk_",
+      startingCharactersConfig: { charactersLength: 10 },
       rateLimit: {
         enabled: true,
         maxRequests: 100,

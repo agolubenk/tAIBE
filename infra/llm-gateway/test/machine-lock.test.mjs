@@ -16,6 +16,7 @@ const TOKEN = 'test-token'
 const COUNCIL = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'ai-council')
 const dir = mkdtempSync(join(tmpdir(), 'gw-lock-'))
 const LOCK = join(dir, 'ollama-local.lock')
+const LOCKED = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'dev-ai', 'ollama-locked.py')
 
 // Пик одновременных инференсов на Mac: фейковая Ollama (шлюз) и «инференс» консилиума пишут в один счётчик.
 let active = 0
@@ -132,7 +133,7 @@ test('замок занят дольше GW_LOCAL_MAX_WAIT_MS — 503 с при�
     await c.seen('in')
     const r = await ask(`http://127.0.0.1:${short.server.address().port}`)
     assert.equal(r.status, 503)
-    assert.match((await r.json()).error.message, /консилиум/)
+    assert.match((await r.json()).error.message, /дольше 0\.3 с: pid \d+ \(council\)$/)
     assert.equal(peak, 1)
   } finally {
     c.child.kill('SIGKILL')
@@ -237,4 +238,57 @@ test('нет stdio у держателя (EMFILE) — failed, без исклю�
   const r = await acquireMachineLock({ path: LOCK, waitMs: 100, spawnImpl })
   assert.ok(r.failed)
   await new Promise((done) => setImmediate(done)) // 'error' уже пришёл и не роняет процесс
+})
+
+// OPS-33: прогрев и установка моделей берут тот же замок через ollama-locked.py.
+function locked(args) {
+  const child = spawn('python3', ['-I', LOCKED, ...args], { env: { ...process.env, AI_COUNCIL_LOCAL_LOCK: LOCK }, stdio: ['ignore', 'pipe', 'pipe'] })
+  let out = ''
+  let err = ''
+  const waiters = []
+  child.stdout.on('data', (d) => {
+    out += d
+    waiters.splice(0).forEach((w) => w())
+  })
+  child.stderr.on('data', (d) => (err += d))
+  const seen = (s) => new Promise((r) => (out.includes(s) ? r() : waiters.push(() => out.includes(s) && r())))
+  return { child, seen, done: new Promise((r) => child.on('exit', (code) => r({ code, out, err }))) }
+}
+
+test('прогрев под замком (ollama-locked.py) — шлюз его ждёт, 503 называет «warmup <модель>», пик 1', async () => {
+  const short = await makeGw({ GW_LOCAL_MAX_WAIT_MS: '300' })
+  peak = 0
+  const w = locked(['--who', 'warmup loc:8k', '--wait', '5', '--', 'python3', '-c', 'import time; print("in", flush=True); time.sleep(1)'])
+  try {
+    await w.seen('in')
+    enter()
+    const r = await ask(`http://127.0.0.1:${short.server.address().port}`)
+    assert.equal(r.status, 503)
+    assert.match((await r.json()).error.message, /: pid \d+ \(warmup loc:8k\)$/)
+    const queued = ask() // обычный шлюз (180 с) дожидается конца прогрева
+    leave()
+    assert.equal((await w.done).code, 0)
+    assert.equal((await queued).status, 200)
+    assert.equal(peak, 1)
+  } finally {
+    short.server.close()
+  }
+})
+
+test('ollama-locked.py: код команды; замок занят дольше --wait — 75, команда не запущена, держатель в stderr', async () => {
+  const { existsSync } = await import('node:fs')
+  const marker = join(dir, 'ran')
+  const c = council(1_500)
+  await c.seen('in')
+  const busy = await locked(['--who', 'warmup x', '--wait', '0.3', '--', 'python3', '-c', `open(${JSON.stringify(marker)}, "w")`]).done
+  assert.equal(busy.code, 75)
+  assert.match(busy.err, /\(council\)/)
+  assert.equal(existsSync(marker), false, 'без замка команда не запускается')
+  await c.exited
+  assert.equal((await locked(['--', 'python3', '-c', 'import sys; sys.exit(7)']).done).code, 7)
+  assert.equal((await locked(['--', '/nonexistent/cmd']).done).code, 127)
+  assert.equal((await locked(['--who', 'x']).done).code, 2, 'без команды — ошибка аргументов')
+  const again = await acquireMachineLock({ path: LOCK, waitMs: 500 })
+  assert.ok(again.held, 'после команды замок свободен')
+  again.release()
 })
