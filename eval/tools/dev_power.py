@@ -190,7 +190,7 @@ def desktop_text(down):
         "# Пишет eval/tools/dev_power.py install — правка руками перезапишется.",
         f"echo 'Разработка: {'выключаю' if down else 'включаю — это окно станет окном ролей (tmux)'}…'",
         f"{shlex.quote(python())} -I {shlex.quote(str(up))}" + (" --down" if down else " --attach"),
-        "echo; echo 'Готово — окно можно закрыть.'",
+        "echo; echo " + ("'Готово — окно можно закрыть.'" if down else "'Окно можно закрыть — роли работают дальше.'"),
         "",
     ])
 

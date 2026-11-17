@@ -172,7 +172,8 @@ class Attach(Base):
                 mock.patch.object(A.subprocess, "Popen", lambda cmd, **kw: self.bg.append((cmd, kw))), \
                 mock.patch.object(A.os, "execvp", lambda f, args: self.execs.append(args)), \
                 mock.patch.object(sys.stdin, "isatty", lambda: tty), \
-                mock.patch("builtins.input", lambda p: self.asked.append(p)), mock.patch("builtins.print"):
+                mock.patch("builtins.input", getattr(self, "input_hook", None) or self.asked.append), \
+                mock.patch("builtins.print"):
             os.environ.pop("TMUX", None)
             if tmux_env:
                 os.environ["TMUX"] = tmux_env
@@ -192,6 +193,13 @@ class Attach(Base):
         self.up(summary=1)
         self.assertEqual(len(self.asked), 1)
         self.assertEqual(len(self.execs), 1)
+
+    def test_ctrl_c_at_enter_no_attach(self):
+        def stop(prompt):
+            raise KeyboardInterrupt
+        self.input_hook = stop
+        self.assertEqual(self.up(summary=1), 1)
+        self.assertEqual(self.execs, [])
 
     def test_no_server_no_attach(self):
         self.assertEqual(self.up(server=None), 1)

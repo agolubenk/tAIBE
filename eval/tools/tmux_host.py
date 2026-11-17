@@ -161,6 +161,8 @@ def conf_text(py, tools):
         "set -g set-titles on",
         'set -g set-titles-string "#S · #W"',
         "set -g status-interval 15",
+        "set -g status-left-length 40",
+        'set -g status-left "[#S] Ctrl+b: w окна, d выйти "',  # подсказка владельцу: экран tmux закрывает ярлык
         "set -g status-right-length 70",
         f'set -g status-right "#({run} status-line)"',
         f'setw -g window-status-format "{mark}#I:#W#[default]"',
