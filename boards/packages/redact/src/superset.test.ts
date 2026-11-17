@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import { redact as baseRedact } from "../fixtures/redact-base";
-import { redact as base378Redact } from "../fixtures/redact-base-221e381b4";
-import { redact as baseBoardRedact } from "../fixtures/redact-base-be1b3ffe1";
-import { redact, type RedactHit } from "./index";
+import { redact as baseRedact } from "../fixtures/redact-base.js";
+import { redact as base378Redact } from "../fixtures/redact-base-221e381b4.js";
+import { redact as baseBoardRedact } from "../fixtures/redact-base-be1b3ffe1.js";
+import { redact, type RedactHit } from "./index.js";
 
 // Coord, #375 (TB-198): a change of the search may only add masks. Every
 // character of a secret value that a base masks, redact() masks too. Two

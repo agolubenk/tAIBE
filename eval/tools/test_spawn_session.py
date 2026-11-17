@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "spawn_session.sh"
@@ -161,6 +162,90 @@ if rc == 0 or "нет продукта nope" not in out:
     print("FAIL: unknown product is refused")
     print(out)
 
+# SE-93: окно открыто, только если пусковой скрипт стартовал — он удаляет свою папку. Terminal вернул -1712, окна не
+# было, а скрипт писал «открыто», записывал линию и запускал сторожа retire без наследника. Подмены в копии слоя:
+# osascript (FAKE_RC — код, FAKE_START=1 — «окно открылось»: папка скрипта удаляется), lineage.py и team_status.py
+# пишут в журнал свой подкоманду — настоящий нерв и launchd не трогаются.
+FAKE_OSA = r"""#!/bin/bash
+echo osascript >>"$FAKE_LOG"
+l="$(printf '%s' "$*" | sed -n "s|.*/bin/bash '\([^']*\)'.*|\1|p")"
+if [ "${FAKE_START:-0}" = 1 ] && [ -n "$l" ]; then rm -rf "$(dirname "$l")"; fi
+if [ "${FAKE_RC:-0}" = 0 ]; then echo "123 /dev/ttys009"; exit 0; fi
+echo "execution error: Terminal got an error: AppleEvent timed out. (-1712)" >&2
+exit "$FAKE_RC"
+"""
+FAKE_PY = """import os, sys
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write(sys.argv[1] + "\\n")
+if sys.argv[1] == "wait":
+    sys.exit(1)
+print("нерв: подмена")
+"""
+
+
+def osa_run(terminal, rc, start, launch=False):
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = Path(tmp) / "layer" / "tools"
+        tools.mkdir(parents=True)
+        (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        for f in ("lineage.py", "team_status.py"):
+            (tools / f).write_text(FAKE_PY, encoding="utf-8")
+        (tools.parent / "pipeline").mkdir()
+        (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
+        fake_bin = Path(tmp) / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "osascript").write_text(FAKE_OSA, encoding="utf-8")
+        (fake_bin / "osascript").chmod(0o755)
+        handoff = Path(tmp) / "h.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        log = Path(tmp) / "fake.log"
+        env = clean_env(PATH=f"{fake_bin}:{os.environ['PATH']}", TMPDIR=tmp, TAIBE_LINEAGE="r.ab12", FAKE_RC=str(rc),
+                        FAKE_START="1" if start else "0", FAKE_LOG=str(log), SPAWN_START_WAIT="1")
+        if launch:
+            args = ["--launch", "--roles", "plan,coord", "--force", "--prompt-dir",
+                    str(SCRIPT.parent.parent / "prompts" / "launch-3010" / "roles")]
+        else:
+            args = ["--handoff", str(handoff)]
+        run = subprocess.run(["bash", str(tools / "spawn_session.sh"), *args, "--terminal", terminal, "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+        calls = log.read_text(encoding="utf-8").split() if log.exists() else []
+        return run.returncode, run.stdout + run.stderr, calls, list(Path(tmp).glob("claude-spawn.*"))
+
+
+for terminal in ("terminal", "iterm"):
+    rc, out, calls, left = osa_run(terminal, 1, start=False)
+    for name, ok in [
+        (f"{terminal}: osascript error -> code 4", rc == 4),
+        (f"{terminal}: no «открыто», hint --terminal print", "открыто:" not in out and "--terminal print" in out),
+        (f"{terminal}: no lineage record, no retire guard", "record" not in calls and "retire" not in calls),
+        (f"{terminal}: launcher folder removed — a late window starts nothing", left == []),
+    ]:
+        if not ok:
+            failed += 1
+            print("FAIL:", name, rc, calls, left)
+            print(out)
+    rc, out, calls, _ = osa_run(terminal, 0, start=True)
+    if not (rc == 0 and "открыто:" in out and calls.count("record") == 1 and "retire" in calls):
+        failed += 1
+        print(f"FAIL: {terminal}: window opened -> record, «открыто», retire", rc, calls)
+        print(out)
+rc, out, calls, _ = osa_run("terminal", 1, start=True)  # -1712 пришёл, но окно всё же открылось
+if not (rc == 0 and "открыто:" in out and "record" in calls and "retire" in calls and "код 1, но пусковой" in out):
+    failed += 1
+    print("FAIL: osascript error but the launcher started -> opened with a warning", rc, calls)
+    print(out)
+rc, out, calls, _ = osa_run("terminal", 0, start=False)  # osascript без ошибки, а скрипт не стартовал
+if not (rc == 4 and "открыто:" not in out and "record" not in calls and "retire" not in calls):
+    failed += 1
+    print("FAIL: osascript ok but the launcher never started -> code 4", rc, calls)
+    print(out)
+rc, out, calls, _ = osa_run("terminal", 1, start=False, launch=True)
+if not (rc == 4 and calls.count("osascript") == 1 and "plan — НЕ открыта: окно не открылось" in out
+        and "дальше не открывал: окно plan не открылось" in out and "coord —" not in out and "wait" not in calls):
+    failed += 1
+    print("FAIL: --launch stops after the first window that did not open", rc, calls)
+    print(out)
+
 # Вторая сессия роли (решения владельца 14.11): ключ backend-2 и роль 7, а геном и пусковой файл — базовой роли.
 def second_run(product, *flags):
     with tempfile.TemporaryDirectory() as tmp:
@@ -204,6 +289,153 @@ rc, out = second_run("taibe", "--launch", "--roles", "all")
 if rc != 0 or "backend-2" in out or "boards — команда напечатана" not in out:
     failed += 1
     print("FAIL: --roles all opens the six base roles only")
+    print(out)
+
+# 15.11: имя сессии (claude --name) — продукт, роль, хвост линии; в заголовке окна, строке ввода и ListAgents.
+def name_run(handoff_dir, env_extra, *flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / handoff_dir
+        folder.mkdir(parents=True)
+        handoff = folder / "HANDOFF.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = clean_env(**{"TMPDIR": tmp, "TAIBE_LINEAGE": "r.ab12", **env_extra})
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp, *flags],
+                             capture_output=True, text=True, env=env, timeout=30)
+        return run.returncode, run.stdout + run.stderr
+
+
+TAIL = r"[a-z0-9]{4}"
+for name, handoff_dir, env_extra, flags, want in [
+    ("role successor: product, role and lineage tail", "2026-11-15/boards", {"TAIBE_PRODUCT": ""}, ["--role", "boards"],
+     rf"--name 'hr-helper-boards-{TAIL}'"),
+    ("tAIBE successor keeps its product in the name", "2026-11-15", {"TAIBE_PRODUCT": "taibe"}, ["--role", "coord"],
+     rf"--name 'taibe-coord-{TAIL}'"),
+    ("second session: own key in the name", "x", {"TAIBE_PRODUCT": ""}, ["--role", "backend-2", "--no-retire"],
+     rf"--name 'hr-helper-backend-2-{TAIL}'"),
+    ("no role: topic from the handoff folder", "handoff/2026-11-15/queue-lane", {"TAIBE_PRODUCT": "taibe"}, [],
+     rf"--name 'taibe-queue-lane-{TAIL}'"),
+    ("no role, date folder: session", "handoff/2026-11-15", {"TAIBE_PRODUCT": "taibe"}, [],
+     rf"--name 'taibe-session-{TAIL}'"),
+    ("exec launcher (--keep-window) passes the name too", "2026-11-15/boards", {"TAIBE_PRODUCT": ""},
+     ["--role", "boards", "--keep-window"], rf"exec \"\$\{{CLAUDE_BIN:-claude\}}\" --settings '[^']+/genome/boards\.json' --name 'hr-helper-boards-{TAIL}' \"\$m\""),
+]:
+    rc, out = name_run(handoff_dir, env_extra, *flags)
+    got = re.search(want, out)
+    # имя в первом сообщении то же, что в --name: наследник называет себя, не гадая по ListAgents
+    said = got and re.search(r"Твоё имя в списке сессий и в заголовке окна — %s\." % re.escape(
+        re.search(r"--name '([^']+)'", got.group(0)).group(1)), out)
+    if rc != 0 or not got or not said:
+        failed += 1
+        print("FAIL:", name, rc, bool(got), bool(said))
+        print(out)
+
+# OPS-82: окно tmux. Пусковой скрипт без autoclose — панель закрывается сама; код ≠ 0, Enter и --keep-window оставляют
+# оболочку. Без --terminal и SPAWN_TERMINAL — system.terminal из instances/_shared.json.
+def tmux_launcher(env_extra, *flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp, *flags],
+                             capture_output=True, text=True, env=clean_env(TMPDIR=tmp, **env_extra), timeout=30)
+        return run.returncode, run.stdout.splitlines()
+
+
+for name, env_extra, flags, last in [
+    ("tmux: exit 0 closes the pane", {}, ["--terminal", "tmux"], "exit 0"),
+    ("tmux --keep-window: shell stays", {}, ["--terminal", "tmux", "--keep-window"],
+     'keep "claude вышел — окно оставлено (--keep-window)"'),
+    ("default terminal is system.terminal (tmux)", {"SPAWN_TERMINAL": ""}, [], "exit 0"),
+]:
+    rc, out = tmux_launcher(env_extra, *flags)
+    body = out[out.index("set -m"):] if "set -m" in out else []
+    body = body[:-1] if body and body[-1].startswith("Наследник") else body  # dry-run печатает и первое сообщение
+    ok = (rc == 0 and body[-1:] == [last] and any(ln.startswith("keep() {") for ln in body)
+          and any(ln.startswith('[ "$rc" = 0 ] || keep ') for ln in body)
+          and not any("autoclose" in ln or ln.startswith("exec ") for ln in out))
+    if not ok:
+        failed += 1
+        print("FAIL:", name)
+        print("\n".join(out))
+
+# Открытие окна tmux: подмены tmux_host.py (open — «стартует» пусковой скрипт), lineage.py и team_status.py в копии слоя.
+FAKE_HOST = r"""import os, shutil, sys
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write("host-" + sys.argv[1] + "\n")
+if sys.argv[1] == "ensure":
+    sys.exit(int(os.environ.get("FAKE_ENSURE", "0")))
+if sys.argv[1] == "default-terminal":
+    print("tmux")
+if sys.argv[1] == "open":
+    if os.environ.get("FAKE_OPEN_RC"):
+        sys.exit(int(os.environ["FAKE_OPEN_RC"]))
+    shutil.rmtree(os.path.dirname(sys.argv[sys.argv.index("--launcher") + 1]), ignore_errors=True)
+    print("@3 %7 /dev/ttys021 4242 100:200")
+    if os.environ.get("FAKE_ATTACH"):
+        print("tmux -L agents attach -t '=x'")
+"""
+FAKE_ARGV = """import os, sys
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write(" ".join(sys.argv[1:]) + "\\n")
+"""
+
+
+def tmux_run(ensure_rc=0, attach=False, open_rc=""):
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = Path(tmp) / "layer" / "tools"
+        tools.mkdir(parents=True)
+        (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        for f, text in (("tmux_host.py", FAKE_HOST), ("lineage.py", FAKE_ARGV), ("team_status.py", FAKE_PY)):
+            (tools / f).write_text(text, encoding="utf-8")
+        fake_bin = Path(tmp) / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "osascript").write_text(FAKE_OSA, encoding="utf-8")
+        (fake_bin / "osascript").chmod(0o755)
+        handoff = Path(tmp) / "h.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        log = Path(tmp) / "fake.log"
+        env = clean_env(PATH=f"{fake_bin}:{os.environ['PATH']}", TMPDIR=tmp, TAIBE_LINEAGE="r.ab12", FAKE_LOG=str(log),
+                        FAKE_RC="0", FAKE_START="1", SPAWN_TERMINAL="",
+                        FAKE_ENSURE=str(ensure_rc), FAKE_ATTACH="1" if attach else "", FAKE_OPEN_RC=open_rc,
+                        SPAWN_START_WAIT="30")  # отказ open — сразу, а не через 30 с ожидания скрипта
+        run = subprocess.run(["bash", str(tools / "spawn_session.sh"), "--handoff", str(handoff), "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+        calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        return run.returncode, run.stdout + run.stderr, calls
+
+
+rc, out, calls = tmux_run()
+record = next((c for c in calls if c.startswith("record ")), "")
+retire = next((c for c in calls if c.startswith("retire ")), "")
+for name, ok in [
+    ("tmux: window opened", rc == 0 and "host-open" in calls and "открыто:" in out),
+    ("tmux: record has pane, launcher pid and server",
+     "--terminal tmux --window-id @3 --tty /dev/ttys021" in record
+     and "--pane %7 --pane-pid 4242 --server 100:200" in record),
+    ("tmux: retire guard gets the pane tty", "--succ-tty /dev/ttys021" in retire),
+    ("tmux: owner attached — no Terminal window", "osascript" not in calls),
+]:
+    if not ok:
+        failed += 1
+        print("FAIL:", name, rc, calls)
+        print(out)
+rc, out, calls = tmux_run(attach=True)
+if not (rc == 0 and calls.count("osascript") == 1):
+    failed += 1
+    print("FAIL: tmux: nobody attached — one Terminal window with attach", rc, calls)
+    print(out)
+rc, out, calls = tmux_run(ensure_rc=1)
+if not (rc == 0 and "host-open" not in calls and "osascript" in calls
+        and any(c.startswith("record ") and "--terminal terminal" in c for c in calls)
+        and "сервер tmux не отвечает" in out):
+    failed += 1
+    print("FAIL: tmux server down -> Terminal window as before", rc, calls)
+    print(out)
+t0 = time.monotonic()
+rc, out, calls = tmux_run(open_rc="1")
+if not (rc == 4 and time.monotonic() - t0 < 20 and not any(c.startswith(("record ", "retire ")) for c in calls)
+        and "--terminal terminal" in out):
+    failed += 1
+    print("FAIL: tmux open failed -> code 4 at once, no record, hint --terminal terminal", rc, calls)
     print(out)
 
 print("spawn_session: %d failed" % failed)

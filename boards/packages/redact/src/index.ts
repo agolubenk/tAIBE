@@ -1,4 +1,4 @@
-import { pem } from "./pem";
+import { pem } from "./pem.js";
 
 export type SecretKind =
   | "api_key"

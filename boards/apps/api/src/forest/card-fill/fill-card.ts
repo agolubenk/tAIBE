@@ -1,5 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import createComment from "../../activity/controllers/create-comment";
+import { authorOfActor } from "../author-kind";
 import db from "../../database";
 import { agentProfileTable } from "../../database/forest-schema";
 import {
@@ -118,7 +119,13 @@ async function commentMove(move: CardMove) {
     `${await ownerMention(move.actor.userId)}«${from}» → «${to}»${move.note ? `: ${move.note}` : ""}`,
   ];
   if (move.link) lines.push(move.link);
-  await createComment(move.taskId, move.actor.userId, lines.join("\n\n"));
+  await createComment(
+    move.taskId,
+    move.actor.userId,
+    lines.join("\n\n"),
+    undefined,
+    authorOfActor(move.actor),
+  );
 }
 
 // A settings read that fails keeps the default (on): the status change is
