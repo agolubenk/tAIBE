@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Разработка на Mac: включить, выключить, ярлыки и автозагрузка (OPS-82, владелец 16.11).
 
-Включить (`agents_up.py`, ярлык «Разработка ВКЛ», вход в систему): службы launchd из system.dev.agents
+Включить (`agents_up.py`, ярлык «Разработка ВКЛ» — `--attach`: роли в фоне, окно ярлыка становится окном ролей tmux;
+вход в систему — без окна): службы launchd из system.dev.agents
 (instances/_shared.json) загружаются, если их сняли; сервер tmux ролей и окна сервисов; приложения
 system.dev.apps_on (Ollama); хаб MCP, если молчит; затем команда ролей по продуктам (team_plan.py up: 12 ролей,
 доли — из очереди владельца, при нехватке памяти — 10). Docker не запускается — он для тестов. Сторож
@@ -187,9 +188,9 @@ def desktop_text(down):
     return "\n".join([
         "#!/bin/zsh",
         "# Пишет eval/tools/dev_power.py install — правка руками перезапишется.",
-        f"echo 'Разработка: {'выключаю' if down else 'включаю'}…'",
-        f"{shlex.quote(python())} -I {shlex.quote(str(up))}" + (" --down" if down else ""),
-        "echo; echo 'Готово — окно можно закрыть.'",
+        f"echo 'Разработка: {'выключаю' if down else 'включаю — это окно станет окном ролей (tmux)'}…'",
+        f"{shlex.quote(python())} -I {shlex.quote(str(up))}" + (" --down" if down else " --attach"),
+        "echo; echo " + ("'Готово — окно можно закрыть.'" if down else "'Окно можно закрыть — роли работают дальше.'"),
         "",
     ])
 
