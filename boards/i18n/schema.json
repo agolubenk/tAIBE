@@ -3363,9 +3363,33 @@
 								},
 								"empty": {
 									"type": "string"
+								},
+								"tokens": {
+									"type": "string"
+								},
+								"coverage_one": {
+									"type": "string"
+								},
+								"coverage_zero": {
+									"type": "string"
+								},
+								"coverage_two": {
+									"type": "string"
+								},
+								"coverage_few": {
+									"type": "string"
+								},
+								"coverage_many": {
+									"type": "string"
+								},
+								"coverage_other": {
+									"type": "string"
+								},
+								"noProviderData": {
+									"type": "string"
 								}
 							},
-							"required": ["title", "empty"]
+							"required": ["title", "empty", "tokens", "noProviderData"]
 						},
 						"validation": {
 							"type": "object",
