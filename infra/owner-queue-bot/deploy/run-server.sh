@@ -31,9 +31,23 @@ docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET" >/
 # снимет и сам (profile-lock.mjs), но так надёжнее.
 docker stop -t 30 "$NAME" >/dev/null 2>&1 || true
 docker rm -f "$NAME" >/dev/null 2>&1 || true
+
+# Лимит памяти 2 ГБ: на 1 ГБ ядро убивало Chromium в контейнере (15.11, OPS-76). Лимит — потолок, а не резерв:
+# если хосту не хватит памяти, `--oom-score-adj 500` делает бота первой жертвой ядра вместо процесса продукта.
+# Свободная память хоста — до запуска; swap = лимит: свопа у контейнера нет, общий диск он не грузит.
+MEM_MB=2048
+mem="$(awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || true)"
+case "$mem" in
+  '' | *[!0-9]*) echo "!! память хоста неизвестна (нет MemAvailable в /proc/meminfo), лимит бота ${MEM_MB} МБ" ;;
+  *)
+    echo "== свободно памяти хоста: ${mem} МБ, лимит бота ${MEM_MB} МБ"
+    [ "$mem" -ge "$MEM_MB" ] || echo "!! свободной памяти меньше лимита бота: при пике ядро будет убивать бота — передайте это число Контролю"
+    ;;
+esac
+
 docker run -d --name "$NAME" --restart unless-stopped --init \
   --network "$NET" \
-  --memory 1g --memory-swap 1g --cpus 1 --pids-limit 512 --shm-size 256m \
+  --memory "${MEM_MB}m" --memory-swap "${MEM_MB}m" --oom-score-adj 500 --cpus 1 --pids-limit 512 --shm-size 256m \
   --cap-drop ALL --cap-add SYS_CHROOT --security-opt no-new-privileges \
   --security-opt seccomp="$SRC/deploy/seccomp-chromium.json" \
   --read-only --tmpfs /tmp:rw,nosuid,size=256m -e HOME=/tmp \

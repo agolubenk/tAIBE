@@ -38,7 +38,7 @@ export function UpNext({
             <Link
               to="/dashboard/workspace/$workspaceId/my-tasks"
               params={{ workspaceId }}
-              className="shrink-0 font-medium text-[13px] text-muted-foreground hover:text-foreground"
+              className="touch-hitbox relative shrink-0 font-medium text-[13px] text-muted-foreground hover:text-foreground"
             >
               {t("workspace:home.upNext.viewAll")}
             </Link>
