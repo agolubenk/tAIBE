@@ -124,9 +124,10 @@ test('ключ OpenRouter вместо токена — 401 с подсказк�
   assert.doesNotMatch(text, /secretvalue/)
 })
 
-test('без токена — 401, health открыт', async () => {
+test('без токена — 401 говорит, откуда взять токен (OPS-33: профиль Continue); health открыт', async () => {
   const r = await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{}' })
   assert.equal(r.status, 401)
+  assert.match((await r.json()).error.message, /npm run llm-gateway:sync .*LLM_GATEWAY_TOKEN/)
   assert.equal((await fetch(`${base}/health`)).status, 200)
 })
 

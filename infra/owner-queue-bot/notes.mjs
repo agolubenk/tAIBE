@@ -36,11 +36,13 @@ export function createNotes({ tg, mirror, snap, send, log }) {
     const note = (p.multiline ? text : text.replace(/\s*\n\s*/g, ' ')).slice(0, NOTE_MAX);
     const res = await mirror.act(p.id, 'note', note, (d) => (d.note || '') === note);
     if (!res.ok) return send(chatId, { text: `⚠️ ${esc(res.error)}\nТекст не потерян — пришлите «💾 Сохранить» ещё раз или /cancel.` });
-    pending.delete(chatId);
+    // Буфер — только после подтверждения из базы (GLM-ревью #213, карточка HR h1vza7dp): запись могла не дойти, и
+    // без буфера текст уже не отправить повторно. Не подтверждено — поле остаётся открытым с тем же текстом.
+    if (res.confirmed) pending.delete(chatId);
     log(`текст в поле: ${p.id}, ${note.length} симв.`);
     const s = await snap();
     const it = s.items.find((x) => x.id === p.id);
-    await send(chatId, { text: `💾 ${note ? `Сохранено (${note.length} симв.)` : 'Поле очищено'}${res.confirmed ? ' — агенты видят.' : '; подтверждение из базы ещё не пришло.'}${text.length > NOTE_MAX ? `\nОбрезано до ${NOTE_MAX} символов, как на странице.` : ''}` });
+    await send(chatId, { text: `💾 ${note ? `Сохранено (${note.length} симв.)` : 'Поле очищено'}${res.confirmed ? ' — агенты видят.' : `; подтверждение из базы ещё не пришло. Текст остался в поле — ${p.multiline ? '«💾 Сохранить» отправит его ещё раз' : 'пришлите текст ещё раз'}, /cancel — закрыть поле.`}${text.length > NOTE_MAX ? `\nОбрезано до ${NOTE_MAX} символов, как на странице.` : ''}` });
     if (it) {
       const msgs = itemMessages(it, { next: nextOpen(s, it) });
       await send(chatId, msgs[msgs.length - 1]);
@@ -58,7 +60,8 @@ export function createNotes({ tg, mirror, snap, send, log }) {
       text = await tg.downloadText(doc.file_id, 1_000_000);
     }
     if (!text) return send(chatId, { text: 'Нужен текст или текстовый файл.' });
-    p.buf.push(text);
+    // Однострочное поле — одно сообщение и есть весь текст: повтор после неподтверждённой записи заменяет буфер.
+    if (p.multiline) p.buf.push(text); else p.buf = [text];
     p.at = Date.now();
     if (!p.multiline) return save(chatId, p.buf.join('\n'));
     const total = p.buf.join('\n').length;

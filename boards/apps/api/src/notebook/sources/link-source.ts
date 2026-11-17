@@ -6,6 +6,7 @@ import {
 import { fetchLink, linkRefusal } from "./link-fetch";
 import { withLinkSlot } from "./link-slots";
 import { linkSourceText } from "./link-text";
+import type { SourceAuthor } from "./source-author";
 import { upsertSource } from "./upsert-source";
 
 // The ref is what the member pasted, without the fragment: the same page
@@ -36,7 +37,11 @@ export function linkRef(input: string) {
   return url;
 }
 
-export async function addLinkSource(workspaceId: string, input: string) {
+export async function addLinkSource(
+  workspaceId: string,
+  input: string,
+  addedBy?: SourceAuthor,
+) {
   const url = linkRef(input);
   const fetched = await withLinkSlot(workspaceId, () => fetchLink(url));
   const page = linkSourceText(url, fetched);
@@ -61,6 +66,7 @@ export async function addLinkSource(workspaceId: string, input: string) {
     title: page.title,
     text: page.text,
     maxChunks: FETCHED_SOURCE_CHUNKS_MAX,
+    addedBy,
   });
   return { ...stored, kind: "link" as const, ref: url.href, title: page.title };
 }
