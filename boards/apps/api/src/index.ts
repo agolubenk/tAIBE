@@ -109,6 +109,7 @@ import {
   isPublicAsset,
 } from "./utils/authorize-asset-access";
 import { getInvitationDetails } from "./utils/check-registration-allowed";
+import { authRateLimitWarning } from "./utils/auth-rate-limit";
 import { clientIpMiddleware } from "./utils/client-ip";
 import { migrateApiKeyReferenceId } from "./utils/migrate-apikey-reference-id";
 import { migrateNotificationPreferencesSchema } from "./utils/migrate-notification-preferences-schema";
@@ -1136,6 +1137,9 @@ export async function startServer(
     console.error("❌ Database migration failed!", error);
     process.exit(1);
   }
+
+  const rateLimitWarning = authRateLimitWarning();
+  if (rateLimitWarning) console.warn(rateLimitWarning);
 
   let shuttingDown = false;
 

@@ -91,6 +91,7 @@ environment variables (N-007).
 | `notion_token` | 0400, owner 1001. Optional: the owner puts it there |
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
 | `oq_token` | 0400, owner 1001. The owner-queue agent token of t-boards (TB-102, «Owner queue» below). The owner issues it in the ops-console; `install.sh` never makes it. Read on every call |
+| `smtp_password` | 0400, owner 1001. Optional: the SMTP password («Sign-in limits and mail» below). `install.sh` never makes it |
 | `claude_mem_proxy_token` | 0400, owner 1001. The Mac memory proxy token (OPS-19). The Mac owns it: `mac/memory-agent.sh token` makes it, `mac/memory-token-push.sh` delivers it. `install.sh` never makes it and warns while it is missing. The app reads it on every request |
 
 `install.sh` generates the first three once and never overwrites them. The database password only takes effect when the
@@ -161,6 +162,37 @@ applies the owner's answer itself. It is off until all four are set:
 
 `install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
 While it is off, the journal has one `queue.skip` row per start and «да» works in the t-boards UI.
+
+## Sign-in limits and mail (TB-31)
+
+**Limiter.** Sign-in, sign-up, magic link and the fresh sign-in window (`/tb/reauth/*`) are limited per client IP on
+every install: for example, 5 sign-ins per minute from one address, then `429` with `Retry-After`. The client IP is
+read from `X-Forwarded-For` only when the peer is in `TRUSTED_PROXIES`. In `compose.yml` it is a constant:
+`10.78.0.1/32,127.0.0.0/8,::1/128` — the `tb` bridge gateway, which is the peer of every request from `tls`, and
+loopback. The rest of the `tb` subnet is not trusted, so postgres or backup cannot choose an address.
+
+- If `TRUSTED_PROXIES` is empty, the app trusts only loopback and writes a warning at start. Behind any other proxy all
+  clients then share one bucket: the 6th sign-in in a minute is refused for everybody. Another install behind a proxy
+  sets `TRUSTED_PROXIES` to that proxy's address or subnet.
+- The VPS host is trusted: any process on it that calls `127.0.0.1:5180` arrives as `10.78.0.1` and can set
+  `X-Forwarded-For` to choose its bucket. Clients from the tunnel cannot: `tls` replaces their `X-Forwarded-For` with
+  `$remote_addr` (`tls.conf.template`).
+- One tunnel peer is one bucket: the Mac (`10.77.0.2`) shares its limits with everything behind it.
+- Off: `DISABLE_AUTH_RATE_LIMIT=true` in `/opt/t-boards/.env`, then `docker compose -p t-boards up -d app`. The app
+  warns at start while it is off. `install.sh` keeps the line.
+
+**Mail.** Off until `SMTP_HOST` and `SMTP_FROM` are set; without it there are no sign-in codes, magic links or
+password resets by mail.
+
+1. Add to `/opt/t-boards/.env`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_FROM`. An empty `SMTP_SECURE` means TLS
+   from the first byte (port 465). A provider on 587 with STARTTLS needs `SMTP_SECURE=false`; STARTTLS stays required
+   unless `SMTP_REQUIRE_TLS=false` (a local relay only).
+2. Put the password into `/opt/t-boards/secrets/smtp_password` (0400, owner 1001), never on the command line:
+   `install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/smtp_password`, then paste and Ctrl-D.
+3. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
+
+The app waits at most 10 s for the connection and the greeting and 30 s on the socket. It never logs the SMTP
+dialogue. `install.sh` keeps the `SMTP_*` lines and the password file on every update.
 
 ## Agents' MCP on the Mac (TB-105)
 

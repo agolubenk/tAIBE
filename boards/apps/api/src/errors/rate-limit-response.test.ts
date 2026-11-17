@@ -14,6 +14,7 @@ describe("withJsonRateLimit", () => {
 
     expect(response.status).toBe(429);
     expect(response.headers.get("x-retry-after")).toBe("42");
+    expect(response.headers.get("retry-after")).toBe("42");
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(await response.json()).toEqual({
       message: "Too many requests. Please try again later.",
@@ -50,6 +51,32 @@ describe("withJsonRateLimit", () => {
     );
 
     expect(await withJsonRateLimit(original)).toBe(original);
+  });
+
+  it("adds Retry-After to a standard 429 that has only X-Retry-After", async () => {
+    const response = await withJsonRateLimit(
+      Response.json(
+        { message: "Too many requests", code: "RATE_LIMITED" },
+        { status: 429, headers: { "X-Retry-After": "7" } },
+      ),
+    );
+
+    expect(response.headers.get("retry-after")).toBe("7");
+    expect(await response.json()).toEqual({
+      message: "Too many requests",
+      code: "RATE_LIMITED",
+    });
+  });
+
+  it("keeps a Retry-After that is already set", async () => {
+    const response = await withJsonRateLimit(
+      new Response("x", {
+        status: 429,
+        headers: { "Retry-After": "5", "X-Retry-After": "9" },
+      }),
+    );
+
+    expect(response.headers.get("retry-after")).toBe("5");
   });
 
   it("keeps other responses", async () => {

@@ -79,6 +79,7 @@ import {
 } from "./utils/check-registration-allowed";
 import { checkWorkspaceName } from "./utils/check-workspace-name";
 import { mapCustomOAuthProfileToUser } from "./utils/custom-oauth-profile";
+import { authRateLimitOptions } from "./utils/auth-rate-limit";
 import { resolveFileSecret } from "./utils/file-secret";
 import { generateDemoName } from "./utils/generate-demo-name";
 import { getEmailRequestContext } from "./utils/email-request-context";
@@ -763,19 +764,8 @@ export const auth = betterAuth({
       enabled: false,
     },
   },
-  rateLimit: {
-    // Enable in cloud; self-hosted instances opt in by setting KANEO_CLOUD.
-    // Default better-auth rate-limit only kicks in for production; we keep the
-    // global limits conservative and tighten signup/invite via customRules.
-    enabled: isCloud(),
-    window: 10,
-    max: 100,
-    customRules: {
-      "/sign-up/email": { window: 60, max: 3 },
-      "/sign-in/anonymous": { window: 60, max: 3 },
-      "/organization/invite-member": { window: 60, max: 5 },
-    },
-  },
+  // TB-31 R-8: on by default; rules and the switch in utils/auth-rate-limit.ts.
+  rateLimit: authRateLimitOptions(),
   databaseHooks: {
     session: {
       create: {
