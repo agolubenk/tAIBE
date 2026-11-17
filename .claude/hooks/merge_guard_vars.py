@@ -155,3 +155,13 @@ def expand_vars(argv, env):
         if len(out) > MAX_VARIANTS:
             out, overflow = out[:MAX_VARIANTS], True
     return out, overflow
+
+
+GUESSED = {"git", "gh", "curl", "wget", "http", "xh"}  # имена догадки: `$D/GIT` на macOS — тот же git (регистр)
+
+
+def visible_name(exe, hidden):
+    """SE-78: `"$D/swiftc"` — путь из переменной, но последняя часть буквальная и не git/gh/curl: догадки «это git»
+    нет. Догадка остаётся, если имя не видно (`$X`, `$D/$(…)`, `$D/g*`) или значение невидимо (hidden)."""
+    base = exe.rpartition("/")[2] if "/" in exe else ""
+    return bool(not hidden and re.fullmatch(r"[\w.+-]+", base) and SUBST not in base and base.lower() not in GUESSED)
