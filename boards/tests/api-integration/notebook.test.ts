@@ -122,12 +122,16 @@ describe("API integration: notebook", () => {
       text: LEASE_DOC,
     });
 
-    const work = await nb.worker("GET", "/embed/work?wait=0");
+    const work = await nb.worker("POST", "/embed/work?wait=0");
     expect(work.status).toBe(200);
     const chunks: Item[] = work.body.items;
     expect(chunks.map((item) => item.kind)).toEqual(["chunk", "chunk"]);
     expect(chunks[0]?.text.startsWith("Лес › Аренда\n\n")).toBe(true);
     // Leased: a second poll does not hand the same chunks out again.
+    expect((await nb.worker("POST", "/embed/work?wait=0")).body.items).toEqual(
+      [],
+    );
+    // The deprecated GET (an older worker copy) leases the same way (TB-97).
     expect((await nb.worker("GET", "/embed/work?wait=0")).body.items).toEqual(
       [],
     );
@@ -153,7 +157,7 @@ describe("API integration: notebook", () => {
     const search = nb.owner("POST", "/search", {
       query: "чем заканчивается история",
     });
-    const poll = await nb.worker("GET", "/embed/work?wait=5");
+    const poll = await nb.worker("POST", "/embed/work?wait=5");
     const [query] = poll.body.items as Item[];
     expect(query).toMatchObject({
       kind: "query",
@@ -265,6 +269,7 @@ describe("API integration: notebook", () => {
         text: "x",
       }),
     ).toBe(403);
+    expect(await as(member, "POST", "/embed/work")).toBe(403);
     expect(await as(member, "GET", "/embed/work")).toBe(403);
     expect([403, 404]).toContain(
       await as(outsider, "POST", "/search", { query: "аренда" }),

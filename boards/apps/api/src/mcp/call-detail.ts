@@ -19,13 +19,30 @@ function cut(text: string) {
 
 // R-036: what an MCP call journals. Secrets in the arguments are replaced by
 // a label before the row is written and before the cut, so a cut never splits
-// a secret past the detector (D-011).
+// a secret past the detector (D-011). The tool is named here because a call
+// about a card is filed under the card (callTarget).
 export function callDetail(call: ToolCall) {
   const args = cut(redact(JSON.stringify(call.args ?? null)).text);
   return JSON.stringify({
+    tool: call.tool,
     bytes: call.bytes,
     tokens: call.tokens,
     ms: call.ms,
     args,
   });
+}
+
+// A board task id: what createId and the seeds produce. Anything else (a
+// pasted URL, a secret) is never written as a target.
+const TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+// TB-44: an answered call that names a card by taskId is filed under the card,
+// so its tokens add up per card. A refused call, or one without a taskId
+// (search, list_tasks, get_task_by_ticket_id), stays under the tool.
+export function callTarget(call: ToolCall) {
+  const taskId = (call.args as { taskId?: unknown } | null)?.taskId;
+  if (call.ok && typeof taskId === "string" && TASK_ID.test(taskId)) {
+    return { targetType: "task", targetId: taskId };
+  }
+  return { targetType: "mcp_tool", targetId: call.tool };
 }
