@@ -143,16 +143,34 @@ describe("TaskLayout rail (TB-230)", () => {
     expect(screen.queryByTestId("rail")).toBeNull();
   });
 
-  it("follows a resize across lg in both directions", () => {
+  it("mounts the rail when a phone-width screen grows past lg", () => {
     const viewport = stubViewport(390);
     renderLayout();
     expect(screen.queryByTestId("rail")).toBeNull();
 
     act(() => viewport.resize(1440));
     expect(screen.getByTestId("rail")).not.toBeNull();
+  });
+
+  it("keeps the rail mounted after the screen was wide (Claude lens #426 B1)", () => {
+    // A tablet turned from landscape to portrait: the rail's open dialog
+    // (card meta draft) lives in its state and must survive.
+    const viewport = stubViewport(1440);
+    renderLayout();
+    const rail = screen.getByTestId("rail");
 
     act(() => viewport.resize(390));
-    expect(screen.queryByTestId("rail")).toBeNull();
+    expect(screen.getByTestId("rail")).toBe(rail);
+
+    act(() => viewport.resize(1440));
+    expect(screen.getByTestId("rail")).toBe(rail);
+  });
+
+  it("mounts the rail without matchMedia", () => {
+    vi.stubGlobal("matchMedia", undefined);
+    renderLayout();
+
+    expect(screen.getByTestId("rail")).not.toBeNull();
   });
 
   it("removes its media listener on unmount", () => {
