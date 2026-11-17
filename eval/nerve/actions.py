@@ -42,11 +42,42 @@ def quota5(st, cfg):
     return q if q else cfg["budget"]["quota5h_default"]
 
 
+EVOLVE_DIR = os.path.expanduser(os.environ.get("EVOLVE_STATE_DIR") or "~/.claude/evolve")  # как daily_steps.STATE_DIR
+
+
+def product_roots(ctx):
+    """{slug: repo_root} всех продуктов instances/, и неактивных: их сессии тоже тратят окно (SE-66). Сломанный
+    instances/ не останавливает бюджет: тогда только свой продукт, остальное — unattributed."""
+    try:
+        import products
+        _, items = products.load()
+        return {slug: d["repo_root"] for slug, d in items.items()}
+    except (ImportError, OSError, ValueError, KeyError):
+        return {ctx.cfg.get("slug") or "default": ctx.cfg.get("repo_root")}
+
+
+def product_shares(meter, st_meter, share5, q, ws, now_l, evolve_dir=EVOLVE_DIR):
+    """Поля mode.json о долях окна по продуктам (SE-66). Сначала только измерение: решения режима от них не зависят,
+    поэтому сбой здесь режим и лимит не держит — вместо долей в mode.json причина (share5_by_error)."""
+    try:
+        by = meter.by_product(ws, now_l)
+        overhead, unknown = budget.evolve_overhead(evolve_dir, ws, now_l)
+        out = {"share5_by": budget.shares(share5, by, overhead, q)}
+        if unknown:
+            out["overhead_unknown"] = unknown
+        since = _dt(st_meter.get("products_from"))
+        if since:
+            out.update(products_from=_iso(since.astimezone(now_l.tzinfo)), products_partial=since > ws)
+        return out
+    except Exception as e:  # noqa: BLE001 — измерение не валит poll_budget до write_mode
+        return {"share5_by_error": f"{type(e).__name__}: {e}"[:200]}
+
+
 def poll_budget(ctx):
     cfg = ctx.cfg
     b = cfg["budget"]
     st = ctx.state.setdefault("budget", {"meter": {}, "waves": [], "limit": None, "checked": "", "warned": ""})
-    meter = budget.Meter(st["meter"])
+    meter = budget.Meter(st["meter"], products=budget.Products(product_roots(ctx)))
     limits = meter.update(ctx.projects_root, ctx.now)
     if not st["waves"] and not st.get("calibrated"):
         st["waves"] = calibrate_waves(ctx, meter)
@@ -89,6 +120,7 @@ def poll_budget(ctx):
     mode = budget.decide_mode(now_l, share5, _dt(lim["resume"]) if lim else None, cfg)
     mode.update(quota5=round(q, 1), used5=round(used, 1), window_from=_iso(ws),
                 week_usd=round(meter.total(budget.week_start(now_l, *_week(cfg))), 1), at=_iso(now_l))
+    mode.update(product_shares(meter, st["meter"], share5, q, ws, now_l))
     ctx.write_mode(mode)
 
 

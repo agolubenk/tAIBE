@@ -412,6 +412,7 @@ cmd_start() {
   python3 -c 'import mcp' 2>/dev/null \
     || echo "⚠ python3 ($(command -v python3)) без пакета mcp — ai-council в хабе не стартует" >&2
   ensure_service serena || rc=1
+  python3 -I "$SCRIPT_DIR/mcp-hub-stale.py" "$CONFIG_DIR"  # замки 1mcp прошлой загрузки — в сторону (OPS-82)
   ensure_service hub || rc=1
   if serena_taibe_enabled; then ensure_service serena-taibe || rc=1; fi
   cmd_status

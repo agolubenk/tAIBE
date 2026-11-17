@@ -65,6 +65,7 @@ export function ChatTab({
           <ForestListState
             isLoading={threads.isLoading}
             isError={threads.isError}
+            onRetry={() => void threads.refetch()}
             isEmpty={list.length === 0}
             empty={t("workspace:notebook.chat.threadsEmpty")}
           >
