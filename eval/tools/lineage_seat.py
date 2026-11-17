@@ -1,8 +1,12 @@
 """Контроль новому release после «ВКЛ» (SE-155): у продукта в списках Контроля нет живой записи, а мёртвая — ровно
 одна — сторож команды заменяет её на sessionId только что открытого release.
 
-Вписывает только team_plan.py up (решение координатора 17.11, SE-155 Q1 = A): сторож команды и вход под launchd
-(space.hrhelper.team-keeper, space.hrhelper.dev-up) или «ВКЛ» в окне Terminal. Агентская сессия Контроль не создаёт.
+Вписывает только release, которого spawn_session.sh открыл из team_plan.py up (решение координатора 17.11, SE-155
+Q1 = A): сторож команды и вход под launchd (space.hrhelper.team-keeper, space.hrhelper.dev-up) или «ВКЛ» в окне
+Terminal. Агентская сессия, которая зовёт seat из своего дерева процессов или подделывает argv, Контроль не создаёт.
+Граница доверия — пользователь macOS (PR #457, линза продукта): plist сторожа, «ВКЛ».command, python сторожа (группа
+admin), /opt/homebrew, файл claude, PATH и BASH_ENV вызова пишет тот же пользователь, под которым работают агенты.
+Процесс, который нарочно готовит это окружение, от сторожа не отличить; такой обход — нарушение правил, не случай.
 Любое сомнение — ни одной записи (fail-closed), владельцу остаётся s-пункт, как до SE-155:
 - Код: seat запущен из eval/tools основного checkout (не worktree и не копия).
 - Вызов (Claude-линза #457, B1): в цепочке предков seat нет claude. argv звеньев — по позиции, исполняемый файл — по
@@ -39,7 +43,8 @@ LABELS = ("space.hrhelper.team-keeper", "space.hrhelper.dev-up")  # = dev_power.
 TERMINAL_EXES = ("/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
                  "/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
                  "/Applications/iTerm.app/Contents/MacOS/iTerm2")
-# Системные папки bash и python: /tmp, $HOME и worktree — нет (там файл подложит кто угодно)
+# Папки, где лежат bash и python сторожа и «ВКЛ». Отсев путей /tmp, $HOME и worktree, не граница доверия: в
+# /opt/homebrew и в python.org-фреймворке (root:admin, rwxrwxr-x) пишет и пользователь из группы admin.
 SYSTEM_DIRS = ("/bin/", "/usr/bin/", "/opt/homebrew/", "/usr/local/", "/Library/Frameworks/Python.framework/",
                "/Library/Developer/CommandLineTools/", "/Applications/Xcode.app/")
 LAUNCHER_RE = re.compile(r"/bin/bash \S+/claude-spawn\.[A-Za-z0-9]+/release\.sh")  # пусковой скрипт release
