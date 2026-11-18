@@ -8,7 +8,7 @@ export type ReauthMethod = (typeof REAUTH_METHODS)[number];
 
 // Paths under the better-auth base path (`/api/auth`), all POST with a session cookie.
 export const REAUTH_ROUTES = {
-  password: "/tb/reauth/password",
+  password: "/tb/reauth/password", // checks: allow-secret — route path, not a secret
   sendCode: "/tb/reauth/send-code",
   verifyCode: "/tb/reauth/verify-code",
 } as const;
