@@ -127,13 +127,11 @@ def dir_vars(env, cwd, old=None):
     """$PWD, $OLDPWD и $HOME — их значения известны без выполнения (в кавычках shlex: expand_vars делит подставленное
     на слова). Прежняя папка неизвестна — $OLDPWD остаётся словом, и `cd $OLDPWD` уходит в LOST."""
     env.setdefault("HOME", [shlex.quote(os.path.expanduser("~"))])
-    for name, value in (("PWD", cwd), ("OLDPWD", old)):
-        env.pop(name, None)
-        if value is not None and re.search(r"\s", value):
-            # bash делит `$PWD` без кавычек по пробелам: значение в кавычках солгало бы — имя невидимо (#458 B2)
-            env[BLIND] = list(dict.fromkeys(env.get(BLIND, []) + [name]))
-        elif value is not None:
-            env[name] = [shlex.quote(value)]
+    env["PWD"] = [shlex.quote(cwd)]
+    if old is None:
+        env.pop("OLDPWD", None)
+    else:
+        env["OLDPWD"] = [shlex.quote(old)]
     return env
 
 
