@@ -100,7 +100,9 @@ def poll_budget(ctx):
             ctx.emit_account(f"limit:resume:{lim['reset']}", "limit.resume", NERVOUS, roles,
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
-            if now_l >= _dt(lim["resume"]):  # ранний подъём — аккаунт сменил владелец; ложный съел бы Esc сброса
+            # Сброс прошёл — Esc, и ночью тоже (resume там 08:30, а подъём идёт веткой early). До сброса — смена
+            # аккаунта владельцем: клавиш нет, ложный подъём не съест Esc сброса.
+            if now_l >= _dt(lim["reset"]):
                 unstick_roles(ctx, lim["reset"])
             lim = None
 
@@ -147,8 +149,8 @@ def unstick_roles(ctx, reset):
         return
     for d in done:
         ctx.emit(pre + d["line"], "limit.unstick", DIGEST, ["coord"],
-                 f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}): меню лимита — {d['action']}; sha256 "
-                 f"строк меню {d['sha256'][:16]}", "budget", sha256=d["sha256"])
+                 f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}): меню лимита — {d['action']}"
+                 + (f"; sha256 {d['sha256'][:16]}" if d["sha256"] else ""), "budget", sha256=d["sha256"])
 
 
 def _on_limit(ctx, st, meter, ts, text):

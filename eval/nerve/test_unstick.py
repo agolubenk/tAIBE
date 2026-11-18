@@ -63,8 +63,15 @@ class UnstickRolesTest(unittest.TestCase):
                          [(f"limit:unstick:{RESET}:r.ab12", "limit.unstick", "digest", ["coord"]),
                           (f"limit:unstick:{RESET}:r.cd34", "limit.unstick", "digest", ["coord"])])
         self.assertEqual(recs[0]["sha256"], "a" * 64)
-        self.assertEqual(recs[0]["text"], "backend (r.ab12, панель %7): меню лимита — esc, enter; sha256 строк меню "
-                                          + "a" * 16)
+        self.assertEqual(recs[0]["text"], "backend (r.ab12, панель %7): меню лимита — esc, enter; sha256 " + "a" * 16)
+
+    def test_a_line_without_a_hash_has_no_hash_part(self):
+        ctx = Ctx(self.d)
+        with self.fake([{"line": "r.ab12", "role": "", "pane": "%7", "action": "no keys: status menu, no screen",
+                         "sha256": ""}]):
+            actions.unstick_roles(ctx, RESET)
+        self.assertEqual(self.records()[0]["text"], "роль (r.ab12, панель %7): меню лимита — no keys: status menu, "
+                                                    "no screen")
 
     def test_off_without_delivery_or_the_switch(self):
         no_key = Ctx(self.d)
@@ -123,6 +130,17 @@ class PollBudgetTest(unittest.TestCase):
             un.assert_not_called()
             self.assertIsNone(ctx.state["budget"]["limit"])  # the lift itself still goes out
             self.assertEqual([r["kind"] for r in read_from(os.path.join(d, "j.jsonl"), 0)[0]], ["limit.resume"])
+
+    def test_a_night_reset_lifted_before_the_morning_calls_unstick(self):  # Claude lens B1 on #483
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Ctx(d)
+            reset = "2026-10-28T01:40+03:00"
+            limit = {"kind": "session", "hit": actions._iso(datetime(2026, 10, 28, 0, 50, tzinfo=MSK)),
+                     "reset": reset, "resume": "2026-10-28T08:30+03:00"}
+            self.poll(ctx, limit, at=datetime(2026, 10, 28, 1, 30, tzinfo=MSK), spent=1.0).assert_not_called()
+            un = self.poll(ctx, limit, at=datetime(2026, 10, 28, 1, 42, tzinfo=MSK), spent=1.0)
+            un.assert_called_once_with(ctx, reset)
+            self.assertIsNone(ctx.state["budget"]["limit"])
 
     def test_a_manual_resume_event_calls_nothing(self):  # N3 (d)
         with tempfile.TemporaryDirectory() as d:

@@ -32,7 +32,10 @@ if a[0] == "capture-pane":
     pane = a[a.index("-t") + 1]
     n = sum(1 for c in calls if c[0] == "send-keys" and c[2] == pane)
     screens = spec["screens"].get(pane, [""])
-    sys.stdout.write(screens[min(n, len(screens) - 1)])
+    shown = screens[min(n, len(screens) - 1)]
+    if shown is None:  # capture-pane failed
+        sys.exit(1)
+    sys.stdout.write(shown)
     sys.exit(0)
 if a[0] == "send-keys":
     for path, data in spec.get("on_key", {}).get(a[2], []):
@@ -210,6 +213,26 @@ class UnstickTest(Base):
         self.spec({self.PANE: [MENU, PREFILLED]})
         self.assertEqual(self.run_unstick(fresh=lambda line: line != self.LINE), [])
         self.assertEqual([c[0] for c in self.calls()], ["list-panes", "display-message"])  # no screen, no key
+
+    def test_status_menu_but_another_screen_is_a_line_without_keys(self):  # Claude lens non-blocker 1 on #483
+        for screen in (EMPTY, PERMISSION):
+            with self.subTest(screen[-40:]):
+                self.log.unlink(missing_ok=True)
+                self.spec({self.PANE: [screen]})
+                done = self.run_unstick()
+                self.assertEqual([(d["action"], d["sha256"]) for d in done],
+                                 [(U.NO_MATCH, U.digest(U.bottom(screen)[-U.MENU_MAX:]))])
+                self.assertEqual(self.keys(), [])
+        self.log.unlink()
+        self.spec({self.PANE: [None]})
+        self.assertEqual([(d["action"], d["sha256"]) for d in self.run_unstick()], [(U.NO_SCREEN, "")])
+        self.assertEqual(self.keys(), [])
+
+    def test_no_screen_is_read_when_the_status_is_not_the_menu(self):  # one capture only where the status says menu
+        self.session(self.PID, "busy")
+        self.spec({self.PANE: [MENU]})
+        self.assertEqual(self.run_unstick(), [])
+        self.assertEqual([c[0] for c in self.calls()], ["list-panes", "display-message"])
 
     def test_a_failure_on_one_pane_keeps_the_others(self):  # backend N2 on #483
         self.record("r.cd34", "plan", "%8", "/dev/ttys006", "4300")

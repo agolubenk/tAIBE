@@ -44,6 +44,8 @@ INPUT_ZONE = 6       # строка ввода — среди последних
 PREFILL = "continue"
 TEXT = "лимит снят: продолжай с work_state"
 SETTLE = 1.5         # с: экран после клавиши
+NO_MATCH = "no keys: status menu, screen differs"
+NO_SCREEN = "no keys: status menu, no screen"
 
 
 def tidy(line):
@@ -132,12 +134,17 @@ def digest(lines):
     return hashlib.sha256(json.dumps(lines, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-def unstick_pane(sx, pane, tty, sleep):
-    """Одна панель: (действие, sha256 строк меню) или None — меню нет, клавиш не было."""
-    before = screen(pane)
-    menu = menu_lines(before) if before is not None else None
-    if menu is None or not in_menu(sessions_on(sx, tty)):
+def unstick_pane(sx, pane, tty, sleep, procs=None):
+    """Одна панель: (действие, sha256) или None — по статусу меню нет, клавиш не было. sha256 — строк меню; если
+    статус — меню, а экран не совпал или не снят, — нижнего блока экрана (или ''), и клавиш нет."""
+    if not in_menu(sessions_on(sx, tty, procs)):
         return None
+    before = screen(pane)
+    if before is None:
+        return NO_SCREEN, ""
+    menu = menu_lines(before)
+    if menu is None:  # живая раскладка не та, что в тестах: приёмка отличит это от «меню не было»
+        return NO_MATCH, digest(bottom(before)[-MENU_MAX:])
     sha = digest(menu)
     if not keys(pane, "Escape"):
         return "esc failed", sha
@@ -145,7 +152,7 @@ def unstick_pane(sx, pane, tty, sleep):
     after = screen(pane)
     if after is None or menu_lines(after) is not None:
         return "esc; menu stayed", sha
-    if any(s.get("status") == "waiting" for s in sessions_on(sx, tty)):
+    if any(s.get("status") == "waiting" for s in sessions_on(sx, tty, procs)):
         return "esc; another dialog", sha
     text = draft(after)
     if text == PREFILL:
@@ -163,11 +170,11 @@ def unstick(fresh, sx=None, sleep=time.sleep):
     [{line, role, pane, action, sha256}] — только панели, где была клавиша."""
     sx = sx or L.Sys()
     done = []
-    for line, role, pane, tty in role_panes():
-        if not fresh(line):
-            continue
+    panes = [p for p in role_panes() if fresh(p[0])]
+    procs = sx.procs() if panes else None  # один `ps -A` на сброс
+    for line, role, pane, tty in panes:
         try:
-            got = unstick_pane(sx, pane, tty, sleep)
+            got = unstick_pane(sx, pane, tty, sleep, procs)
         except Exception as e:  # noqa: BLE001 — клавиши прошлых панелей уже нажаты: их строки и ключи не теряются
             got = (f"error: {type(e).__name__}", "")
         if got:
