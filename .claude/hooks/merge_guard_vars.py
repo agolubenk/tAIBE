@@ -127,11 +127,13 @@ def dir_vars(env, cwd, old=None):
     """$PWD, $OLDPWD и $HOME — их значения известны без выполнения (в кавычках shlex: expand_vars делит подставленное
     на слова). Прежняя папка неизвестна — $OLDPWD остаётся словом, и `cd $OLDPWD` уходит в LOST."""
     env.setdefault("HOME", [shlex.quote(os.path.expanduser("~"))])
-    env["PWD"] = [shlex.quote(cwd)]
-    if old is None:
-        env.pop("OLDPWD", None)
-    else:
-        env["OLDPWD"] = [shlex.quote(old)]
+    for name, value in (("PWD", cwd), ("OLDPWD", old)):
+        env.pop(name, None)
+        if value is not None and re.search(r"\s", value):
+            # bash делит `$PWD` без кавычек по пробелам: значение в кавычках солгало бы — имя невидимо (#458 B2)
+            env[BLIND] = list(dict.fromkeys(env.get(BLIND, []) + [name]))
+        elif value is not None:
+            env[name] = [shlex.quote(value)]
     return env
 
 
@@ -161,9 +163,8 @@ GUESSED = {"git", "gh", "curl", "wget", "http", "xh"}  # имена догадк
 
 
 # Имена, которые оболочка пишет без присваивания в команде (read без имени, mapfile, getopts, $_, zsh $argv/$match):
-# BLIND их не видит — значение невидимо (Claude-линза #458 B1'). PWD/OLDPWD: dir_vars держит папку в кавычках, а
-# bash делит `$PWD` без кавычек после `cd` в папку с пробелом (линза backend #458 B2)
-SHELL_SET = {"_", "REPLY", "reply", "MAPFILE", "OPTARG", "argv", "BASH_REMATCH", "match", "MATCH", "PWD", "OLDPWD"}
+# BLIND их не видит — значение невидимо (Claude-линза #458 B1')
+SHELL_SET = {"_", "REPLY", "reply", "MAPFILE", "OPTARG", "argv", "BASH_REMATCH", "match", "MATCH"}
 
 
 def visible_name(exe, hidden):
