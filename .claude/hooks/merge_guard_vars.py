@@ -161,8 +161,9 @@ GUESSED = {"git", "gh", "curl", "wget", "http", "xh"}  # имена догадк
 
 
 # Имена, которые оболочка пишет без присваивания в команде (read без имени, mapfile, getopts, $_, zsh $argv/$match):
-# BLIND их не видит — значение невидимо (Claude-линза #458 B1')
-SHELL_SET = {"_", "REPLY", "reply", "MAPFILE", "OPTARG", "argv", "BASH_REMATCH", "match", "MATCH"}
+# BLIND их не видит — значение невидимо (Claude-линза #458 B1'). PWD/OLDPWD: dir_vars держит папку в кавычках, а
+# bash делит `$PWD` без кавычек после `cd` в папку с пробелом (линза backend #458 B2)
+SHELL_SET = {"_", "REPLY", "reply", "MAPFILE", "OPTARG", "argv", "BASH_REMATCH", "match", "MATCH", "PWD", "OLDPWD"}
 
 
 def visible_name(exe, hidden):
