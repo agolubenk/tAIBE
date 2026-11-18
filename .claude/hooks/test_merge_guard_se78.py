@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_testkit import ROOT, bash, check, finish, mg, repo_on  # noqa: E402
+import merge_guard_vars as mv  # noqa: E402
 
 se78 = repo_on("main", "se78")
 (se78 / "tc.sh").write_text(  # apps/mobile-ios/scripts/typecheck.sh (HR_Helper-v2): ложная «запись в main»
@@ -54,15 +55,25 @@ bash("SE-173: запись в .claude/rules через \"$PWD/..\" из папк
 for form in ("bash -c 'cd \"g -c a.b=\"; $PWD/swiftc push origin HEAD:main'",
              "sh -c \"cd 'g -c a.b=' && \\$PWD/swiftc push origin HEAD:main\"",
              "eval 'cd \"g -c a.b=\"; $PWD/swiftc push origin HEAD:main'",
-             "cd g*; $PWD/swiftc push origin HEAD:main", "cd \"$(cat d.txt)\"; $PWD/swiftc push origin HEAD:main"):
+             "cd g*; $PWD/swiftc push origin HEAD:main", "cd \"$(cat d.txt)\"; $PWD/swiftc push origin HEAD:main",
+             # Claude-линза #480 B1: код без `;&|` — слово с пробелом тоже было в кавычках
+             "cd \"g -c a.b=\"; bash -c '$PWD/swiftc push origin HEAD:main'",
+             "cd \"g -c a.b=\"; bash -c \"$PWD/swiftc push origin HEAD:main\"",
+             "bash -c $'cd \"g -c a.b=\"\\n$PWD/swiftc push origin HEAD:main'",
+             # B2: признак «неизвестно» в скобках — буква после `${PWD}` не меняет имя
+             "cd \"g -c a.b=\"; ${PWD}x/swiftc push origin HEAD:main", "cd g*; ${PWD}x/swiftc push origin HEAD:main",
+             "cd \"$(cat d.txt)\"; ${PWD}x/swiftc push origin HEAD:main",
+             "G=a; read G < d.txt; ${G}y/swiftc push origin HEAD:main"):
     bash(f"SE-175: $PWD не тот, что видит разбор — догадка: {form!r}", form, True, cwd=se78)
 for form in ("bash -c 'cd sub; $PWD/swiftc -typecheck'", "bash -c 'echo $PWD; ls'", "cd s*; $PWD/swiftc -typecheck",
-             "cd sub; $PWD/swiftc push origin HEAD:main", "$HOME/bin/swiftc push origin HEAD:main"):
+             "cd sub; $PWD/swiftc push origin HEAD:main", "$HOME/bin/swiftc push origin HEAD:main",
+             "bash -c '$PWD/swiftc -typecheck'", "bash -c \"ls $PWD/sub\""):  # #480 B1: цена — вариант, не отказ
     bash(f"SE-175: имя видно, папка без пробела — проход: {form!r}", form, False, cwd=se78)
 home = os.environ.get("HOME")
 os.environ["HOME"] = str(se78 / "g -c a.b=")  # домашняя папка с пробелом: `$HOME` без кавычек bash делит так же
 try:
-    for form in ("$HOME/swiftc push origin HEAD:main", "cd; $PWD/swiftc push origin HEAD:main"):
+    for form in ("$HOME/swiftc push origin HEAD:main", "cd; $PWD/swiftc push origin HEAD:main",
+                 "${HOME}x/swiftc push origin HEAD:main"):  # Claude-линза #480 B2
         bash(f"SE-175: HOME с пробелом — догадка: {form!r}", form, True, cwd=se78)
     os.environ["HOME"] = str(se78 / "a b")  # в кавычках значение HOME известно: скрипт читается
     bash("SE-175: HOME с пробелом, \"$HOME/m.sh\" в кавычках — значение известно", "bash \"$HOME/m.sh\"", True, cwd=se78)
@@ -72,5 +83,9 @@ finally:
 for exe, hidden, want in (("$D/swiftc", False, True), ("$D/GIT", False, False), ("swiftc", False, False),
                           ("$D/swiftc", True, False), ("$D/" + mg.SUBST, False, False)):
     check(f"SE-78 visible_name({exe!r}, {hidden})", mg.visible_name(exe, hidden) != want or None, False)
+# Claude-линза #480, не блокер 4: папка LOST — $PWD невидим (S5 держится и на LOST_DIR, тест хука отката не видит).
+lost = mv.dir_vars({}, mv.LOST)
+check("SE-175 dir_vars(LOST): PWD в BLIND, признак ${PWD}",
+      None if "PWD" in lost[mv.BLIND] and "${PWD}" in lost["PWD"] else lost, False)
 
 finish(" — SE-78, имя команды видно")

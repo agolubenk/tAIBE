@@ -24,7 +24,7 @@ VAR = re.compile(r"\$\{?([^\W\d]\w*)")
 MAX_VARIANTS = 16
 LOST = "/.merge-guard-lost-dir"  # папка shell, которую разбор не видит (`cd "$X"`, `cd $(…)`), см. merge_guard_dirs
 GLOB = re.compile(r"[*?[]")  # `cd g*`: какую папку выберет shell, разбор не знает
-CODE = re.compile(r"[;&|\n]")  # слово с разделителем команд — текст в кавычках: код для `bash -c`, `eval`, `find -exec sh -c`
+CODE = re.compile(r"[;&|\s]")  # разделитель или пробел в слове — оно в кавычках: код `bash -c`, `eval` (#480 B1)
 
 
 def is_lost(path):
@@ -56,7 +56,7 @@ def add(env, name, values):
 def unknown(env, names):
     """К значениям известных переменных — «неизвестно»; $PWD и $OLDPWD ведёт разбор папок (dir_vars)."""
     for n in [n for n in names if n in env and n not in ("PWD", "OLDPWD")]:
-        add(env, n, ["$" + n])
+        add(env, n, ["${" + n + "}"])  # в скобках: `${G}y` — не имя `Gy` (Claude-линза #480 B2)
 
 
 def mentioned(names, argv, rest):
@@ -146,11 +146,12 @@ def dir_vars(env, cwd, old=None):
 
 def _dir_var(env, name, value):
     """В кавычках — точное значение: скрипт `"$PWD/m.sh"`, цель `"$PWD/../x"`. Если bash подставит не то, что видит
-    разбор, — ещё вариант «неизвестно» (`$ИМЯ`), и имя невидимо (BLIND): пробельный символ (без кавычек bash делит
-    значение на слова, #458 B2), маска (`cd g*` — папку выберет shell) и LOST (SE-175)."""
+    разбор, — ещё вариант «неизвестно» (`${ИМЯ}`: `${PWD}x` — не имя `PWDx`, #480 B2), и имя невидимо (BLIND):
+    пробельный символ (без кавычек bash делит значение на слова, #458 B2), маска (`cd g*` — папку выберет shell) и LOST
+    (SE-175)."""
     env[name] = [shlex.quote(value)]
     if re.search(r"\s", value) or GLOB.search(value) or is_lost(value):
-        env[name].append("$" + name)
+        env[name].append("${" + name + "}")
         env[BLIND] = list(dict.fromkeys(env.get(BLIND, []) + [name]))
 
 
