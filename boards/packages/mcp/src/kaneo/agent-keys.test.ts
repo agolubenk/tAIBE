@@ -150,4 +150,70 @@ describe("KaneoClient with agent sessions (R-010)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(bearer(fetchMock.mock.calls[0] ?? [])).toBe("Bearer owner-key");
   });
+
+  // TB-31 R-5, owner taibe-d-tb31-agent-key-1811 = A.
+  const notFresh = () =>
+    new Response(
+      JSON.stringify({
+        code: "SESSION_NOT_FRESH",
+        message: "Confirm it's you to continue.",
+        methods: ["password"],
+      }),
+      { status: 403 },
+    );
+
+  function deviceClient(tokens: string[], usingApiKey = false) {
+    const getAccessToken = vi.fn();
+    for (const token of tokens) getAccessToken.mockResolvedValueOnce(token);
+    const auth = { usingApiKey, getAccessToken, clearToken: vi.fn() };
+    const kaneo = new KaneoClient({
+      baseUrl: "https://api.example.com",
+      auth: auth as never,
+      agentSessions: true,
+    });
+    return { auth, kaneo };
+  }
+
+  it("signs in on the device once more when an old device session is refused", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(notFresh())
+      .mockResolvedValueOnce(issued("agent-key"))
+      .mockResolvedValueOnce(new Response("[]", { status: 200 }));
+    globalThis.fetch = fetchMock as typeof fetch;
+    const { auth, kaneo } = deviceClient(["old", "old", "new"]);
+
+    await withAgentIdentity(bb, () => kaneo.json("/api/project"));
+
+    expect(auth.clearToken).toHaveBeenCalledTimes(1);
+    expect(bearer(fetchMock.mock.calls[1] ?? [])).toBe("Bearer new");
+    expect(bearer(fetchMock.mock.calls[2] ?? [])).toBe("Bearer agent-key");
+  });
+
+  it("keeps a token another call already renewed, and asks only once", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(notFresh())
+      .mockResolvedValueOnce(notFresh());
+    globalThis.fetch = fetchMock as typeof fetch;
+    const { auth, kaneo } = deviceClient(["old", "new", "new"]);
+
+    await expect(
+      withAgentIdentity(bb, () => kaneo.json("/api/project")),
+    ).rejects.toThrow("Confirm it's you to continue.");
+    expect(auth.clearToken).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a key is never signed in again", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(notFresh());
+    globalThis.fetch = fetchMock as typeof fetch;
+    const { auth, kaneo } = deviceClient(["owner-key"], true);
+
+    await expect(
+      withAgentIdentity(bb, () => kaneo.json("/api/project")),
+    ).rejects.toThrow("Confirm it's you to continue.");
+    expect(auth.clearToken).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
