@@ -46,6 +46,7 @@ from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 from merge_guard_tmux import TMUX, classify_tmux  # noqa: E402  окна сессий в tmux — только владелец (OPS-82)
 from merge_guard_crash import crash_verdict  # noqa: E402  сбой decide — роли отказ (SE-152); сбой разбора — в settled
+from merge_guard_home import HOME_WRITE, MORE_WRITES, home_protected  # noqa: E402  файлы ~, которые shell выполняет до команды (SE-98)
 
 
 GUARDED_CLAUDE_FILES = {"settings.json", "settings.local.json", "merge-guard.json", "merge-guard.local.json"}
@@ -53,7 +54,7 @@ GUARDED_CLAUDE_DIRS = ("rules", "hooks")
 
 FALLBACK = re.compile(  # разбор упал — защищённой считается команда, где есть хоть один из этих признаков
     r"gh\s+pr\s+merge|gh\s+workflow\s+run|gh\s+run\s+rerun|\bgit\b[^\n;|&]*\bpush\b|/merge\b|mergePullRequest"
-    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)", re.I
+    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard)|" + HOME_WRITE.pattern, re.I  # HOME_WRITE: SE-98
 )  # re.I: APFS не различает регистр — `.CLAUDE/rules` (SE-94, HR IS-245)
 # Конфиг git из окружения: его содержимое хук не видит.
 GIT_ENV = re.compile(r"\b(GIT_CONFIG\w*|GIT_DIR|GIT_COMMON_DIR|HOME|XDG_CONFIG_HOME)=")
@@ -75,10 +76,7 @@ def protected_path(path_str, cwd, roots):
         return f"{path_str} после cd в папку, которую разбор не видит (пишите по абсолютному пути),"
     p = os.path.realpath(p)
     f = p.casefold()  # APFS: `.CLAUDE/settings.json` — тот же файл (SE-94, HR IS-245); на Linux худшее — ложный отказ
-    home = os.path.realpath(HOME_CLAUDE).casefold()
-    if f == os.path.join(home, "sessions") or f.startswith(os.path.join(home, "sessions") + "/"):
-        return p
-    if f in (os.path.join(home, "settings.json"), os.path.join(home, "settings.local.json")):
+    if home_protected(f, HOME_CLAUDE):  # реестр сессий, снимки shell, файлы запуска shell (SE-98)
         return p
     for root in roots:
         claude = os.path.join(os.path.realpath(root), ".claude").casefold()
@@ -89,7 +87,7 @@ def protected_path(path_str, cwd, roots):
     return None
 
 
-INTERP_WRITE = re.compile(r"""open\([^\n]*?,\s*(mode\s*=\s*)?['"][wax][+bt]*['"]|write_text|write_bytes|writeFile|appendFile|unlink|remove\(|rename|replace\(|rmSync|rmtree""")
+INTERP_WRITE = re.compile(r"""open\([^\n]*?,\s*(mode\s*=\s*)?['"][wax][+bt]*['"]|write_text|write_bytes|writeFile|appendFile|unlink|remove\(|rename|replace\(|rmSync|rmtree""" + MORE_WRITES)
 # Путь собран из частей: '.claude' и защищённое имя отдельными строками (os.path.join, Path / …).
 JOINED_CLAUDE = re.compile(r"""['"]\.claude['"].{0,80}?['"](rules|hooks|settings(\.local)?\.json|merge-guard(\.local)?\.json)['"/]""", re.S | re.I)
 
@@ -135,6 +133,8 @@ def interp_found(text, cwd, roots, by_line=False):
                 found.append(("file", p))
         if JOINED_CLAUDE.search(chunk):
             found.append(("file", ".claude/… (путь собран из частей — правьте через Edit)"))
+        if (m := HOME_WRITE.search(chunk)) and not any(k == "file" for k, _ in found):
+            found.append(("file", f"{m.group(0)} (файл, который shell выполняет до команды)"))
     return found
 
 

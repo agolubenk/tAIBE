@@ -18,12 +18,18 @@ export type ForestActor = {
   userId: string;
 };
 
-const SESSION_LABEL_HEADER = "x-t-boards-session";
+export const SESSION_LABEL_HEADER = "x-t-boards-session";
 const SESSION_LABEL_PATTERN = /^[\p{L}\p{N} ._:/#-]{1,80}$/u;
 
-function sessionLabel(c: Context): string | null {
-  const raw = c.req.header(SESSION_LABEL_HEADER)?.trim();
+// A label the client gives its session. It names the session inside the
+// credential's actor; it never changes whose credential it is.
+export function parseSessionLabel(header: string | undefined): string | null {
+  const raw = header?.trim();
   return raw && SESSION_LABEL_PATTERN.test(raw) ? raw : null;
+}
+
+function sessionLabel(c: Context): string | null {
+  return parseSessionLabel(c.req.header(SESSION_LABEL_HEADER));
 }
 
 // The owner's «да» counts only from the owner's own browser session (N-011):

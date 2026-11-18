@@ -26,24 +26,6 @@
     "title": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal",
     "since": "2026-11-01"
    },
-   "GHSA-587h-7wmj-h5pm": {
-    "module": "vite",
-    "severity": "high",
-    "title": "launch-editor: `fs.existsSync()` existence check can be bypassed on Windows",
-    "since": "2026-11-01"
-   },
-   "GHSA-5r4p-p66f-jhc7": {
-    "module": "hono",
-    "severity": "moderate",
-    "title": "Hono: `serveStatic` decodes the request path a second time, leading to bypass of middleware on static paths",
-    "since": "2026-11-01"
-   },
-   "GHSA-698v-4r3x-3vcv": {
-    "module": "vite",
-    "severity": "moderate",
-    "title": "launch-editor: escapeCmdArgs() omits % escaping on Windows",
-    "since": "2026-11-01"
-   },
    "GHSA-6pq8-jhm2-2vcw": {
     "module": "qs",
     "severity": "moderate",
@@ -62,22 +44,16 @@
     "title": "Nodemailer: A nested comment ends early in addressparser, releasing the rest of the comment as a recipient",
     "since": "2026-11-01"
    },
-   "GHSA-9jrq-w75r-8gcw": {
-    "module": "vite",
-    "severity": "low",
-    "title": "Vite: Cross origin script execution through Vite custom middleware",
-    "since": "2026-11-01"
+   "GHSA-fc5q-39xc-vjpf": {
+    "module": "picomatch",
+    "severity": "high",
+    "title": "picomatch vulnerable to ReDoS through single-branch repeated extglobs",
+    "since": "2026-11-17"
    },
    "GHSA-g3hv-75wg-m249": {
     "module": "minimatch",
     "severity": "moderate",
     "title": "minimatch has potential denial of service via globparts amplification",
-    "since": "2026-11-01"
-   },
-   "GHSA-gcqx-w48m-w2h4": {
-    "module": "deepmerge",
-    "severity": "low",
-    "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
     "since": "2026-11-01"
    },
    "GHSA-h3mg-xc3c-68pw": {
@@ -110,40 +86,16 @@
     "title": "Vitest: Code injection via unauthenticated manual mock registration",
     "since": "2026-11-01"
    },
-   "GHSA-r825-w8mm-5pxw": {
-    "module": "vite",
-    "severity": "moderate",
-    "title": "launch-editor: Editor CLI flag misinterpretation causing arbitrary command execution for some editors",
-    "since": "2026-11-01"
-   },
-   "GHSA-rmxm-3fg6-px4f": {
-    "module": "@hono/node-server",
-    "severity": "moderate",
-    "title": "@hono/node-server: `serveStatic` decodes the request path a second time, leading to bypass of middleware on static paths",
-    "since": "2026-11-01"
-   },
    "GHSA-rpw4-54j3-4h4q": {
     "module": "ip-address",
     "severity": "moderate",
     "title": "ip-address: Address6.isLinkLocal() recognizes fe80::/64 rather than fe80::/10, allowing SSRF and trust-boundary bypass t",
     "since": "2026-11-01"
    },
-   "GHSA-rq7h-c2jc-7f22": {
-    "module": "vite",
-    "severity": "moderate",
-    "title": "Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine",
-    "since": "2026-11-01"
-   },
    "GHSA-rxp7-6hxx-x8q5": {
     "module": "ip-address",
     "severity": "moderate",
     "title": "ip-address: Address6 matches a zone identifier in quadratic time ahead of its length limit, allowing a single long strin",
-    "since": "2026-11-01"
-   },
-   "GHSA-vfpm-58rq-9qcg": {
-    "module": "vite",
-    "severity": "moderate",
-    "title": "Vite: First 4 bytes of files outside of `server.fs` setting is exposed by `?vite-wasm-instance`",
     "since": "2026-11-01"
    },
    "GHSA-w74x-v6f9-j3xg": {

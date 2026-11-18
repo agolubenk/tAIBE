@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { cardCost } from "../read/card-cost";
 import { assertTaskInWorkspace } from "../task-scope";
@@ -37,5 +38,5 @@ export const costRoutes = apiRouter<
 >().openapi(getCostRoute, async (c) => {
   const { workspaceId, taskId } = c.req.valid("param");
   await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
-  return c.json(await cardCost(taskId), 200);
+  return c.json(maskForTokenCaller(c, await cardCost(taskId)), 200);
 });

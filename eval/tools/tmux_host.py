@@ -161,6 +161,8 @@ def conf_text(py, tools):
         "set -g set-titles on",
         'set -g set-titles-string "#S · #W"',
         "set -g status-interval 15",
+        "set -g status-left-length 40",
+        'set -g status-left "[#S] Ctrl+b: w окна, d выйти "',  # подсказка владельцу: экран tmux закрывает ярлык
         "set -g status-right-length 70",
         f'set -g status-right "#({run} status-line)"',
         f'setw -g window-status-format "{mark}#I:#W#[default]"',
@@ -275,6 +277,12 @@ def launcher_ok(path):
             and second == "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE")
 
 
+def claim_attach():
+    """Окно attach уже открывается (ярлык «ВКЛ»): ближайшие ATTACH_GAP с роли не откроют своё."""
+    conf_dir().mkdir(parents=True, exist_ok=True)
+    write_private(conf_dir() / f"{socket()}.attach", str(time.time()))
+
+
 def want_attach():
     """Окно attach: к серверу никто не подключён и его не просили последние ATTACH_GAP с (Terminal и zsh поднимают
     клиента дольше, чем открывается следующая роль, — иначе снова окно на роль)."""
@@ -286,7 +294,7 @@ def want_attach():
             return False
     except OSError:
         pass
-    write_private(mark, str(time.time()))
+    claim_attach()
     return True
 
 
