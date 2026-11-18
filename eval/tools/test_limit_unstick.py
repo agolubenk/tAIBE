@@ -48,7 +48,36 @@ sys.exit(rc)
 SERVER = "100:200"
 # The menu as the 2.1.326 source builds it: the title of the dialog, numbered options, the key guide. Assumed layout
 # (frame, pointer, guide text): the live capture is still to come (N2 on SE-174).
-MENU = """  ⎿  Automatic continue stopped after repeated usage limit hits · This task will not resume on its own
+# Живой снимок владельца 18.11 (пункт taibe-c-limit-menu-1811, панель %13, Claude Code 2.1.327); текст переписки
+# заменён. Пустые строки снимок отбросил (grep -v), capture-pane их даёт — bottom() их тоже отбрасывает.
+MENU = """  Роль ждёт задачу.
+⏺ Automatic continue stopped after repeated usage limit hits · This task will not
+  resume on its own (/rate-limit-options to try again)
+
+❯ /rate-limit-options
+───────────────────────────────────────────────────────────────────────────────────────────────
+  What do you want to do?
+
+  ❯ 1. Stop and wait for limit to reset
+    2. Wait here, then continue automatically shortly
+    3. Add funds to continue with usage credits
+    4. Upgrade your plan
+
+  Enter to confirm · Esc to cancel
+───────────────────────────────────────────────────────────────────────────── taibe-plan-czc6 ─
+"""
+EMPTY = """  resume on its own (/rate-limit-options to try again)
+
+───────────────────────────────────────────────────────────────────────────── taibe-plan-czc6 ─
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)                 ✔ Update installed · /restart to apply
+                                                        new task? /clear to save 170.5k tokens
+"""
+PREFILLED = EMPTY.replace("❯ ", "❯ continue")
+DRAFT = EMPTY.replace("❯ ", "❯ исправь тест")
+# Раскладка в рамке — предположение до снимка; матч её тоже принимает.
+BOXED = """  ⎿  Automatic continue stopped after repeated usage limit hits · This task will not resume on its own
 
 ╭────────────────────────────────────────────────────────────╮
 │ What do you want to do?                                    │
@@ -59,15 +88,6 @@ MENU = """  ⎿  Automatic continue stopped after repeated usage limit hits · T
 │ Enter to confirm · Esc to cancel                           │
 ╰────────────────────────────────────────────────────────────╯
 """
-PREFILLED = """  ⎿  Automatic continue stopped after repeated usage limit hits
-
-────────────────────────────────────────────────────────────────
-> continue
-────────────────────────────────────────────────────────────────
-  ? for shortcuts
-"""
-EMPTY = PREFILLED.replace("> continue", ">")
-DRAFT = PREFILLED.replace("> continue", "> исправь тест")
 PERMISSION = MENU + """
 ╭────────────────────────────────────────────────────────────╮
 │ Bash command                                               │
@@ -134,20 +154,23 @@ class MatchTest(Base):
         lines = U.menu_lines(MENU)
         self.assertEqual(U.tidy(lines[0]), U.TITLE)
         self.assertIsNone(U.menu_lines(PERMISSION))
+        self.assertIsNotNone(U.menu_lines(BOXED))
+        typed = MENU.replace("  Enter to confirm", "❯ continue\n  Enter to confirm")  # a menu text in the transcript
         for screen in (PREFILLED, MENU.replace("2. Wait here", "2. Use extra usage"), MENU + "\nuser text\n",
-                       MENU.replace("What do you want to do?", "What do you want to do now?")):
+                       MENU.replace("What do you want to do?", "What do you want to do now?"), MENU + "❯\n",
+                       typed, MENU + "  ⏵⏵ auto mode on (shift+tab to cycle)\n"):
             with self.subTest(screen[-60:]):
                 self.assertIsNone(U.menu_lines(screen))
 
     def test_a_long_block_is_not_the_menu(self):
-        options = "".join(f"│   {i}. Stop and wait for limit to reset\n" for i in range(3, 3 + U.MENU_MAX))
-        self.assertIsNone(U.menu_lines(MENU.replace("│ Enter to confirm", options + "│ Enter to confirm")))
+        options = "".join(f"    {i}. Stop and wait for limit to reset\n" for i in range(5, 5 + U.MENU_MAX))
+        self.assertIsNone(U.menu_lines(MENU.replace("  Enter to confirm", options + "  Enter to confirm")))
 
     def test_options_in_another_order_and_armed_wait_match(self):
         other = MENU.replace("1. Stop and wait for limit to reset", "1. Upgrade your plan") \
-            .replace("2. Wait here", "3. Stop and wait for limit to reset\n│   2. Wait here")
+            .replace("4. Upgrade your plan", "4. Stop and wait for limit to reset")
         self.assertIsNotNone(U.menu_lines(other))
-        armed = MENU.replace("Wait here, then continue automatically at 5pm", "Don’t continue automatically")
+        armed = MENU.replace("Wait here, then continue automatically shortly", "Don’t continue automatically")
         self.assertIsNotNone(U.menu_lines(armed))
 
     def test_draft_of_the_input_line(self):

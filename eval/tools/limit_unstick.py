@@ -39,8 +39,9 @@ GUIDE_RE = re.compile(r".*\b(?:Esc|Enter)\b.*\b(?:cancel|confirm|select)\b.*", r
 PROMPT_RE = re.compile(r"[>❯](?:\s(?P<draft>.*))?")
 FRAME = "│┃╭╮╰╯─━┌┐└┘❯› \t"
 RULE = set("─━-╭╮╰╯┌┐└┘")
+NAMED_RULE_RE = re.compile(r"[─━]{8,}\s+[^─━│┃\s][^─━│┃]{0,63}?\s+[─━]{1,8}")  # «──── taibe-plan-czc6 ─» (живой снимок)
 MENU_MAX = 12        # строк в блоке меню после заголовка — больше не бывает
-INPUT_ZONE = 6       # строка ввода — среди последних непустых строк
+INPUT_ZONE = 8       # строка ввода — среди последних непустых строк (под ней линия и 1–3 строки статуса)
 PREFILL = "continue"
 TEXT = "лимит снят: продолжай с work_state"
 SETTLE = 1.5         # с: экран после клавиши
@@ -62,7 +63,8 @@ def menu_lines(screen):
     heads = [i for i, ln in enumerate(lines) if tidy(ln) == TITLE]
     if not heads:
         return None
-    block = [x for x in (tidy(ln) for ln in lines[heads[-1] + 1:]) if x]  # рамка окна меню — пустая после tidy
+    # Линии (и с именем сессии внизу) и пустые строки рамки — не строки меню. Строка ввода «❯» остаётся и не проходит.
+    block = [tidy(ln) for ln in lines[heads[-1] + 1:] if not rule(ln) and ln.strip("│┃ \t")]
     if not block or len(block) > MENU_MAX:
         return None
     if not all(OPTION_RE.fullmatch(x) or GUIDE_RE.fullmatch(x) for x in block):
@@ -73,8 +75,9 @@ def menu_lines(screen):
 
 
 def rule(line):
+    """Линия рамки: только знаки линии или линия с именем сессии внутри (живой снимок 18.11)."""
     s = line.strip()
-    return len(s) >= 8 and set(s) <= RULE
+    return len(s) >= 8 and set(s) <= RULE or bool(NAMED_RULE_RE.fullmatch(s))
 
 
 def draft(screen):
