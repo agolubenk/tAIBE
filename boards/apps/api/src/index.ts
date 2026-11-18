@@ -110,7 +110,9 @@ import {
   isPublicAsset,
 } from "./utils/authorize-asset-access";
 import { getInvitationDetails } from "./utils/check-registration-allowed";
+import { authRateLimitWarning } from "./utils/auth-rate-limit";
 import { clientIpMiddleware } from "./utils/client-ip";
+import { exposeRetryAfter } from "./utils/expose-retry-after";
 import { migrateApiKeyReferenceId } from "./utils/migrate-apikey-reference-id";
 import { migrateNotificationPreferencesSchema } from "./utils/migrate-notification-preferences-schema";
 import { migrateSessionColumn } from "./utils/migrate-session-column";
@@ -294,6 +296,8 @@ export function createApp() {
 
   const api = new OpenAPIHono<ApiVariables>({ defaultHook: validationHook });
 
+  // Outer: runs after applyApiKeyHeaders (TB-31 R-8).
+  api.use("*", exposeRetryAfter);
   api.use("*", applyApiKeyHeaders);
 
   const apiKeyRateLimited = api.openAPIRegistry.registerComponent(
@@ -1140,6 +1144,9 @@ export async function startServer(
     console.error("❌ Database migration failed!", error);
     process.exit(1);
   }
+
+  const rateLimitWarning = authRateLimitWarning();
+  if (rateLimitWarning) console.warn(rateLimitWarning);
 
   let shuttingDown = false;
 
