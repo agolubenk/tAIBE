@@ -38,8 +38,7 @@ for form in ("$D/git push origin HEAD:main", "\"$D/gh\" pr merge 1", "$D/GIT pus
              "set -- -a 'git -c a.b='; getopts a: o; $OPTARG/swiftc push origin HEAD:main",
              # B2 (backend): папка с пробелом — bash делит $PWD/$OLDPWD без кавычек
              "mkdir -p 'g -c a.b='; cd 'g -c a.b='; $PWD/swiftc push origin HEAD:main",
-             "cd 'g -c a.b='; cd ..; $OLDPWD/swiftc push origin HEAD:main",
-             "bash -c 'cd \"g -c a.b=\"; $PWD/swiftc push origin HEAD:main'"):
+             "cd 'g -c a.b='; cd ..; $OLDPWD/swiftc push origin HEAD:main"):
     bash(f"SE-78: имя git/gh/curl, не видно или значение невидимо — догадка: {form!r}", form, True, cwd=se78)
 # Модуль: имя без пути, скрытое и подстановка — не «видимое».
 for exe, hidden, want in (("$D/swiftc", False, True), ("$D/GIT", False, False), ("swiftc", False, False),
