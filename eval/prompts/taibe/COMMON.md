@@ -17,6 +17,11 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
    `approve` or `changes`, and the head SHA after it (`Бэкенд: approve на 46b9f87e1`) — the Nerve quorum
    (`eval/nerve/quorum.py`) reads only this line. A PR body has one line «роль N — автор» (your role number from
    `instances/<slug>.json` `team.roles`); the Nerve quorum drops the author's approve only by this line (SE-121).
+   Carry by delta (coordinator 13.11 and 17.11): if a new head has only the accepted finding of lens X, write
+   «дельта = принятая находка <X>» in the assign. Only X checks the new head. Each other lens writes one line
+   `Линза <name> (роль N): approve переношу на <sha>` (the quorum counts this form). If the new head has new logic or a
+   file outside the finding, all lenses do a full round. The Claude lens is the release chain.
+   It is extra to the role lenses and is not a gate. Release does not give it on its own PR.
 5. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
 
 ## Board
