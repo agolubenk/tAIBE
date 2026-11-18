@@ -68,6 +68,19 @@ class NightlyContextAuditTest(unittest.TestCase):
         self.assertNotIn('usd', out)
         self.assertEqual(steps.audit_line(out, 'd'), '')
 
+    def test_a_report_of_another_form_is_an_error(self):  # #478, Control N2
+        tool = os.path.join(self.wt, 'eval', 'tools', 'context_audit.py')
+        for why, rep in {'cold without n': {'total': 1.0, 'cold': {'x': {'usd': 1.0}}}, 'a list': [1]}.items():
+            with self.subTest(why):
+                with open(tool, 'w') as f:
+                    f.write('import json, sys\njson.dump(%s, open(sys.argv[sys.argv.index("--json") + 1], "w"))\n'
+                            % json.dumps(rep))
+                out = steps.context_audit(self.wt)
+                self.assertEqual(out['exit'], 0)
+                self.assertIn('report of another form', out['error'])
+                self.assertNotIn('usd', out)
+                self.assertEqual(steps.audit_line(out, 'd'), '')
+
     def test_timeout_does_not_break_the_night(self):
         with open(os.path.join(self.wt, 'eval', 'tools', 'context_audit.py'), 'w') as f:
             f.write(STUB)

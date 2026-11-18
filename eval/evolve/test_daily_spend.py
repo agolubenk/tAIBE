@@ -97,6 +97,38 @@ class NightlySpendTest(unittest.TestCase):
             sp.TimeoutExpired = TimeoutError
             self.assertEqual(steps.layer_metrics(self.wt)['spend'], {'usd': 1.0})
 
+    def test_a_report_of_another_form_is_an_error_not_the_end_of_the_night(self):  # #478, Control N1
+        forms = {'attribution without kind': dict(REPORT, attribution=[{'usd': 1.0}]),
+                 'by_product without product': dict(REPORT, by_product=[{'usd': 1.0}]),
+                 'merged as a list': dict(REPORT, merged=[1, 2]),
+                 'a list': [REPORT]}
+        for why, rep in forms.items():
+            with self.subTest(why):
+                with open(self.tool, 'w', encoding='utf-8') as f:
+                    f.write('import json, sys\njson.dump(%s, open(sys.argv[sys.argv.index("--json") + 1], "w"))\n'
+                            % json.dumps(rep))
+                out = steps.spend_night(self.wt, datetime.date(2026, 11, 17))
+                self.assertEqual((out['exit'], out['day']), (0, '2026-11-17'))
+                self.assertIn('report of another form', out['error'])
+                self.assertNotIn('usd', out)
+                self.assertEqual(steps.spend_line(out), '')
+                self.assertEqual(steps.spend_nerve('/nowhere', out), 'no line')
+
+    def test_one_metric_fails_alone(self):  # #478, Control N1: one failed metric never stops the night
+        open(os.path.join(self.wt, 'eval', 'tools', 'ctx_budget.py'), 'w').close()
+        answers = [mock.Mock(stdout='{"l1": 1}', stderr='', returncode=0), TimeoutError('dupes hung'),
+                   OSError('no python')]
+        with mock.patch.object(steps, 'subprocess') as sp, \
+                mock.patch.object(steps, 'context_audit', lambda wt: {}), \
+                mock.patch.object(steps, 'spend_night', lambda wt: {'usd': 1.0}):
+            sp.TimeoutExpired = TimeoutError
+            sp.run.side_effect = answers
+            out = steps.layer_metrics(self.wt)
+        self.assertIn('report of another form: AttributeError', out['catalog']['error'])
+        self.assertEqual(out['dupes'], {'error': 'dupes hung'})
+        self.assertEqual(out['ctx_budget'], {'exit': None, 'error': 'no python'})
+        self.assertEqual(out['spend'], {'usd': 1.0})
+
 
 class SpendLineTest(unittest.TestCase):
     def test_line(self):
