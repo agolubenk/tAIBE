@@ -200,7 +200,7 @@ describe("KaneoClient with agent sessions (R-010)", () => {
 
     await expect(
       withAgentIdentity(bb, () => kaneo.json("/api/project")),
-    ).rejects.toThrow("Confirm it's you to continue.");
+    ).rejects.toThrow("SESSION_NOT_FRESH) even after a new device sign-in");
     expect(auth.clearToken).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -212,7 +212,7 @@ describe("KaneoClient with agent sessions (R-010)", () => {
 
     await expect(
       withAgentIdentity(bb, () => kaneo.json("/api/project")),
-    ).rejects.toThrow("Confirm it's you to continue.");
+    ).rejects.toThrow("SESSION_NOT_FRESH");
     expect(auth.clearToken).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
