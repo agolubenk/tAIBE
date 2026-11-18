@@ -10,6 +10,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import products as P  # noqa: E402
+import sources  # noqa: E402
 
 
 def copy_instances():
@@ -52,6 +53,18 @@ class RenderTest(unittest.TestCase):
             self.assertTrue(match.search(item_id), item_id)
         for item_id in ("d-hr-x-1411", "d-1", "d-taibeta-1", "taibe-m-93"):
             self.assertFalse(match.search(item_id), item_id)
+
+    def test_taibe_answer_on_a_role_6_item_goes_to_boards(self):
+        """SE-99: «boards» и «роль 6» в source — роль boards, если раньше не совпало слово другой роли (правило
+        последнее). Источники — из живой очереди 14.11; прочие — как до правки."""
+        rules = P.config_for("taibe")["queue"]["source_roles"]
+        cases = {"boards (роль 6)": "boards", "taibe boards r.37tl": "boards", "Инструменты — boards": "boards",
+                 "роль 6 boards, r.7hxk.2y32": "boards", "backup-pull-mac-12 (роль 6, автор #544)": "boards",
+                 "t-boards (роль 6)": "boards",
+                 "coord r.sio1 / boards r.ngjc (APP-580)": "coord", "t3-coord (роль 1) по просьбе t3-boards": "coord",
+                 "copilot-tboards-migration": "coord", "Координатор r.x": "coord", "release r.x": "release",
+                 "backend r.x": "backend", "frontend r.x": "frontend", "plan r.x": "plan", "taibe-59": "coord"}
+        self.assertEqual({s: sources.route_source(s, rules) for s in cases}, cases)
 
 
 class GetTest(unittest.TestCase):
@@ -127,6 +140,21 @@ class ErrorsTest(unittest.TestCase):
     def test_unknown_default(self):
         edit(self.d, "_shared.json", lambda d: d.update(default_product="nope"))
         self.fails("default_product")
+
+    def test_wt_sweep_switch_is_a_product_field(self):
+        """OPS-81 (линза плана #445): выключатель повторной уборки — поле продукта; файл читается, поле доходит до
+        конфига продукта и до config.json продукта по умолчанию, и проход уборки выключен. В _shared — ошибка."""
+        import wt_sweep
+        for name in ("taibe.json", "hr-helper.json"):
+            edit(self.d, name, lambda d: d["github"].update(wt_sweep_minutes=0))
+        shared, products = P.load(self.d)
+        for slug in ("taibe", "hr-helper"):
+            cfg = P.config_for(slug, shared, products)
+            self.assertEqual(cfg["github"]["wt_sweep_minutes"], 0)
+            self.assertFalse(wt_sweep.due(type("Ctx", (), {"cfg": cfg, "state": {}})()))
+        self.assertEqual(json.loads(P.render_text(shared, products))["github"]["wt_sweep_minutes"], 0)
+        edit(self.d, "_shared.json", lambda d: d.setdefault("github", {}).update(wt_sweep_minutes=0))
+        self.fails("wt_sweep_minutes")
 
     def test_paths_are_not_secrets(self):
         self.assertIsNone(P.SECRET_RE.search("/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state"))

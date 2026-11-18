@@ -115,6 +115,7 @@ write_files() {
   install -m 0700 "$here/wg-issue.sh" "$ROOT/wg-issue.sh"
   install -m 0700 "$here/wg-psk.sh" "$ROOT/wg-psk.sh"
   install -m 0700 "$here/mirror-setup.sh" "$ROOT/mirror-setup.sh"
+  install -m 0700 "$here/mem-stats.sh" "$ROOT/mem-stats.sh"
   bash "$here/render-tls.sh" "$here/tls.conf.template" "$ROOT/tls.conf" \
     "$WG_ADDR:$TLS_PORT" "$DOMAIN" 127.0.0.1:5180 || die "tls.conf не отрендерился"
 
@@ -123,7 +124,7 @@ write_files() {
   [ -f "$ROOT/.env" ] && cp -a "$ROOT/.env" "$ROOT/.env.prev"
   local kept=""
   if [ -f "$ROOT/.env.prev" ]; then
-    kept="$(grep -E '^(NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ)_' "$ROOT/.env.prev" || true)"
+    kept="$(grep -E '^(NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH)_' "$ROOT/.env.prev" || true)"
   fi
   {
     echo "TB_IMAGE=t-boards:$TB_TAG"

@@ -67,6 +67,17 @@ function modeLine(snap, hint) {
   return '⏳ страница подключается к базе…';
 }
 
+/**
+ * Снимок части пунктов (ids) поверх полного base: шапка, разделы и «Ход работ» — из part, пункты ids — из part
+ * (пропавший со страницы — убран), остальные — из base. Полного ещё нет — part как есть.
+ */
+export function mergeItems(base, part, ids) {
+  if (!base?.items) return part;
+  const want = new Set(ids);
+  const fresh = new Map(part.items.map((it) => [it.id, it]));
+  return { ...part, items: base.items.filter((it) => !want.has(it.id) || fresh.has(it.id)).map((it) => fresh.get(it.id) || it) };
+}
+
 // Входящее закрывает агент («сделано») или владелец («Принято»); остальные пункты — только ответ владельца.
 const isClosed = (it) => it.done || (it.kind === 'inbox' && it.agentStatus === 'done');
 const openOf = (snap, kind) => snap.items.filter((it) => it.kind === kind && !isClosed(it));
@@ -107,8 +118,11 @@ function plainSafe(html) {
   return html.length <= 1400 ? html : esc(cut(plain(html), 1400));
 }
 
+/** Держатель входящего молчит (метка страницы «🔇 …», карточка HR xuc5csrv) — знак в списке открытых входящих. */
+const silentHolder = (it) => typeof it.holder === 'string' && it.holder.startsWith('🔇');
+
 function itemMarks(it) {
-  return (it.done ? '✅ ' : '') + (it.agentStatus ? (ST_ICON[it.agentStatus] || '🤖') + ' ' : '') + (it.src === 'db' ? '🆕 ' : '');
+  return (it.done ? '✅ ' : '') + (it.agentStatus ? (ST_ICON[it.agentStatus] || '🤖') + ' ' : '') + (silentHolder(it) ? '🔇 ' : '') + (it.src === 'db' ? '🆕 ' : '');
 }
 
 function listKeyboard(list) {
@@ -205,6 +219,7 @@ function answerBlock(it) {
   if (it.done) lines.push(`✅ <b>${esc(cut(it.summary.replace(/^✓\s*/, ''), 300) || 'Сделано')}</b>`);
   else lines.push(it.kind === 'decision' ? '⏳ <b>Ждёт вашего выбора</b>' : `⏳ <b>Ждёт отметки «${esc(it.doneLabel || 'Сделано')}»</b>`);
   if (it.agentStatus) lines.push(`${ST_ICON[it.agentStatus] || '🤖'} Агент: <b>${esc(it.agentStatusText)}</b>${it.agentNote ? ' — ' + esc(cut(it.agentNote, 400)) : ''}`);
+  if (it.holder) lines.push(silentHolder(it) ? `<b>${esc(cut(it.holder, 200))}</b>` : esc(cut(it.holder, 200)));
   if (it.note) lines.push(`📝 ${esc(it.fieldLabel || 'Комментарий')}: <i>${esc(cut(it.note, 600))}</i>`);
   if (it.saveErr) lines.push('⚠️ Не сохранилось у агента — повторите');
   else if (it.saved) lines.push(`<i>${esc(it.saved)}</i>`);

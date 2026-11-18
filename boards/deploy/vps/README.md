@@ -45,6 +45,11 @@ the tunnel:
   After changing that address in `.env`, re-run
   `wg-setup.sh` with the Mac's key; `install.sh` warns while the rules disagree and stops if the app did not get its
   address (subnet `10.78.0.0/28` taken).
+- devices of the tunnel do not reach each other, with one exception (OPS-82): the addresses in `WG_MAC_SSH_FROM`
+  (`/opt/t-boards/.env`, space-separated) may open TCP 22 on the Mac's tunnel address (`CLAUDE_MEM_WORKER_HOST`),
+  and only the replies of that SSH come back; while the list is set, the VPS host itself may not reach the Mac's 22
+  (`TB-WG-OUT`). `install.sh` keeps the variable when it rewrites `.env`. That is the owner's phone looking at the agent sessions —
+  [`docs/guides/phone-access.md`](../../../docs/guides/phone-access.md). After changing it: `wg-setup.sh --rules`.
 
 `ip_forward` stays on through `/etc/sysctl.d/99-t-boards-wg.conf`.
 
@@ -52,7 +57,7 @@ the tunnel:
 
 | File | Where it runs | What it does |
 |---|---|---|
-| `wg-setup.sh` | VPS | `wg-setup.sh <public key> <device> split\|full`. The first run creates wg0 (10.77.0.0/24, UDP 51820) and the rules script. Later runs add a peer and upgrade a wg0 from the first kit. Prints the config block for the device with `MTU = 1380`. A new peer gets a PresharedKey, printed once in that block; a peer that is already there is never given one, since that would cut off the device |
+| `wg-setup.sh` | VPS | `wg-setup.sh <public key> <device> split\|full`; `wg-setup.sh --rules` only rewrites and applies the firewall rules (after a change of `.env`). The first run creates wg0 (10.77.0.0/24, UDP 51820) and the rules script. Later runs add a peer and upgrade a wg0 from the first kit. Prints the config block for the device with `MTU = 1380`. A new peer gets a PresharedKey, printed once in that block; a peer that is already there is never given one, since that would cut off the device |
 | `wg-issue.sh` | VPS | `wg-issue.sh <device> split\|full` makes the keypair and the PresharedKey on the VPS and prints a ready profile (stdout) and a QR (stderr). Both carry the device's private key and PresharedKey: save the profile as `(umask 077; ssh root@VPS 'bash /opt/t-boards/wg-issue.sh phone split' > phone.conf)` and delete it after the import, never redirect stderr to a file or a log, and do not run it through an agent, whose transcript would keep the keys. `--revoke <device>` removes the peer |
 | `wg-psk.sh` | VPS | Sets or removes the PresharedKey of one peer by its tunnel address. The address is required. The key never goes into argv or shell history: `ssh -t root@VPS 'bash /opt/t-boards/wg-psk.sh 10.77.0.2'` asks for it with hidden input, or `wg genpsk \| tee >(pbcopy) \| ssh root@VPS 'bash /opt/t-boards/wg-psk.sh 10.77.0.2'`; clear the clipboard after pasting it on the device. Rollback `bash wg-psk.sh --remove 10.77.0.2`. Not through `base64 -d \| bash`: there stdin is the script itself, and wg-psk.sh would read its tail as the key. A failed run leaves `wg0.conf.bak-psk` and prints the rollback, which clears that peer's live key first (an older `wg syncconf` keeps it); the next run stops and prints it again until it is used |
 | `wg-selftest.sh` | Mac | Runs the three scripts above in a privileged container with real iptables. Covers split, full, a re-run, PresharedKey and MTU, the shared lock in all three, wg-psk.sh on the live interface and its refusals, backup retention (idle re-runs, several edits in one second, a clock set back, the stop at the 99th) and file modes, live packets to the memory proxy (only the app gets through, also after a Docker restart and when wg0 starts before Docker), the `install.sh` check of those rules, the first-kit upgrade and stop |
@@ -62,14 +67,17 @@ the tunnel:
 | `compose.yml` | VPS | postgres, app, tls, backup |
 | `tls.conf.template` | VPS | `install.sh` renders it into `/opt/t-boards/tls.conf` |
 | `backup.sh` | VPS, backup container | Dumps every 2 h and checks each dump with `pg_restore --list`. Keeps 3 days; `latest.dump` points at the newest |
+| `mem-stats.sh` | VPS | TB-124: `sample [minutes] [step_s]` writes `docker stats` of the project's containers (used and limit, MiB) into `mem-stats/mem-<UTC>.tsv`, default 24 h every 60 s; `report` prints samples, p95, peak, the current limit and a suggested one (peak × 1.5, a multiple of 32 MiB, at least 64), then restarts and OOM kills. Reads only names and memory numbers |
 | `mirror-setup.sh` | VPS | Turns the Notion mirror on: asks for the token, checks it reads every database, writes the workspace and databases into `.env`, recreates the app |
 | `backup-key.sh` | VPS | Adds the Mac pull key with `restrict`, `from="10.77.0.2"` and `command="cat latest.dump"` |
 | `mac/backup-agent.sh` | Mac | `key` / `install` / `remove` for the pull key and the LaunchAgent, which runs every 2 h |
 | `mac/pull-backup.sh` | Mac, launchd | Pulls `latest.dump`, checks the `PGDMP` header, skips duplicates, keeps 14 days |
-| `mac/restore-check.sh` | Mac | AC-004: restores a dump into a throwaway Postgres and prints the row counts |
+| `mac/restore-check.sh` | Mac | AC-004: restores a dump into a throwaway Postgres and prints the row counts. It creates the roles `oq_owner` and `oq_console` before `pg_restore` (a dump does not carry roles) and prints `oq_guards` — the owner-queue write triggers that came back (3 since migration 0085) |
 | `mac/memory-agent.sh` | Mac | `token` / `install` / `check` / `remove` for the read-only claude-mem proxy `mac/memory-proxy.mjs` (LaunchAgent). `token` makes `~/.t-boards-memory/proxy_token` once (600, directory 700) and never prints it. `check` expects 401 without the header, 200 with it and 405 for POST; without the token file, 200 and 405 |
 | `mac/memory-token-push.sh` | Mac | `memory-token-push.sh <vps host>` sends that token to `secrets/claude_mem_proxy_token` on ssh's stdin (never argv, stdout or history), then `up -d app` |
 | `selftest.sh` | Mac | Proves the whole kit locally before a delivery |
+| `../check-dist-esm.mjs` | CI (build job), Mac | After `pnpm build`: every relative import in `packages/*/dist` of an ESM package names a file, and every library entry imports under plain Node. Without it an extensionless import (`./index`) passes vitest and typecheck and crash-loops the image |
+| `../check-dockerfile-deps.mjs` | CI (build job), Mac | Static, no docker build: each `Dockerfile.kaneo` stage that copies `apps/<app>` also copies every workspace package the app needs (direct, and through `packages/*`). Without it a missing package (`@kaneo/forms` in web-builder, TB-234) fails only in the image build before a deploy |
 
 ## Secrets
 
@@ -147,7 +155,9 @@ applies the owner's answer itself. It is off until all four are set:
    `install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/oq_token`, then paste and Ctrl-D.
 3. Add to `/opt/t-boards/.env`: `OQ_URL=https://ops.admin.hrhelper.space`, `OQ_TOKEN_NAME=t-boards`,
    `OQ_WORKSPACE_PRODUCTS=<workspaceId>=hr-helper,<workspaceId>=hr-helper` (Lavaeon and aiBoards&eval; a workspace not
-   listed gets no items, only the t-boards UI).
+   listed gets no items, only the t-boards UI). The plan rows follow the board (TB-106) by the plan product: add
+   `OQ_PLAN_PRODUCTS=lth89qy6f8j1greiy4c5cn23=taibe` (aiBoards&eval plans under `w-taibe-*`, its off-plan row is
+   `w-taibe-unplanned`). A workspace not listed there plans under its `OQ_WORKSPACE_PRODUCTS` product; items keep it.
 4. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
 
 `install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
@@ -167,6 +177,20 @@ changes `boards/packages/mcp` (a new tool or field), do this after it on the Mac
 `npm run mcp-hub:status` and `mcp-hub:check` warn when the source is newer than the build or the running process is
 older than the build. On 12.11 a stale build dropped `doneRef`, and no agent could request `close_task`.
 
+## SSR push-back (TB-160)
+
+The registry pushes approved versions back into the repo of their product (spec RU-9): at night, and at once after
+a rollback. Each workspace has its own repo and branch; there is no default repo. A workspace that is not listed is
+not pushed, and its versions stay served.
+
+- `SSR_PUSH_GITHUB_TOKEN` — the GitHub token. Without it push-back is off.
+- `SSR_PUSH_TARGETS=<workspaceId>=<owner>/<repo>@<branch>,…` — for example Lavaeon → `HR_Helper-v2@main`,
+  aiBoards&eval → `tAIBE@<branch>`. A malformed entry or a workspace named twice is left out, with one log line.
+- `SSR_PUSH_GITHUB_REPO` and `SSR_PUSH_GITHUB_BRANCH` (one repo for every workspace) are ignored, with a log line.
+
+`compose.yml` does not pass these variables to the app yet, and `install.sh` does not keep them in `.env`, so
+push-back is off on the server. Turning it on is an owner item: the token, the targets and the two deploy lines.
+
 ## Products
 
 `install.sh` seeds three products owned by the admin: HR Helper / Lavaeon, aiBoards&eval and Financial terminal.
@@ -185,6 +209,20 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
   `wg0.conf.bak-<time>`; only the newest three stay, since they hold the server PrivateKey. A re-run that changes nothing makes no copy. The three scripts take one
   lock, `wg0.conf.lock`, so they never rewrite the file over each other.
 - **Backup key:** `sed -i '/t-boards-backup$/d' /root/.ssh/authorized_keys`.
+- **Restore from a dump** (since migration 0085, TB-28): roles are cluster-wide and a dump does not carry them, so
+  create `oq_owner` and `oq_console` first (`NOLOGIN`, the `DO … IF NOT EXISTS` block of
+  `apps/api/drizzle/0085_t_boards_oq_schema.sql`, also in `mac/restore-check.sh`), then `pg_restore` **without**
+  `--no-owner`, so the schema `oq`, its tables and its function stay `oq_owner`'s. With `--no-owner` (as
+  `mac/restore-check.sh` does on a throwaway container) they become `t_boards`'; the write guards still hold, since
+  they check `session_user`. A full restore loads data before it creates the triggers. A data-only restore of the
+  schema `oq` needs `--disable-triggers`: its triggers refuse every writer but `oq_console`. Then the runbook step of
+  card (c) gives `oq_console` its `LOGIN` and password again.
+- **The owner queue in the backups** (from phase 2, TB-28): the boards dump carries `oq.*` — the owner's items, notes
+  and answers. The Mac keeps the pulled dumps for 14 days (`mac/pull-backup.sh`), the same Mac and owner as the
+  console's `ops.db` (assumed acceptable, coordinator 14.11). A rehearsal uses a synthetic base, never a copy of a prod
+  dump (`docs/specs/owner-queue-move.md` §7).
+- **Migration 0085 on a release rollback:** the previous image keeps the schema `oq` (drizzle has no down
+  migrations). An empty `oq` is harmless; with data it stays the console's, and the previous image never reads it.
 
 ## Known limits
 
@@ -192,7 +230,12 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
   and is covered by the dump.
 - `NOTIFICATION_SECRET_ENCRYPTION_KEY` is read only from env. Notification channels that store secrets stay off until
   the variable supports `_FILE`.
-- Memory limits (app 1 GB, postgres 256 MB) are provisional until the K-6 measurements (R-005).
+- Memory limits (app 1 GB, postgres 256 MB, tls 64 MB, backup 128 MB) are provisional until the first day on the VPS
+  is measured (R-005, TB-124). The day after a deploy: `systemd-run --unit=tb-mem-stats --collect
+  /opt/t-boards/mem-stats.sh sample` (detached from SSH; stop early with `systemctl stop tb-mem-stats`), then
+  `bash /opt/t-boards/mem-stats.sh report`. The report goes to the TB-124 card, and the new limits in `compose.yml`
+  are the owner's decision. A local reference: app 237 MB idle and 337 MB at peak on 120 synthetic cards
+  (`boards/docs/impl/impl-k6-measurements.md`).
 - A device without `/etc/hosts` (a phone) needs a DNS override for the subdomain. There is no DNS server in the
   tunnel yet.
 - The backup pull key accepts only `10.77.0.2`, the first peer. The Mac has to be added first.

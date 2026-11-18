@@ -5,11 +5,13 @@ descendant gets its own lineage id under its parent's.
 
 Run: python3 -I eval/tools/test_spawn_session.py   (exit 1 on mismatch; --dry-run only, nothing is launched)
 """
+import hashlib
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "spawn_session.sh"
@@ -86,7 +88,7 @@ for name, ok in [
 with tempfile.TemporaryDirectory() as tmp:
     tools = Path(tmp) / "layer" / "tools"
     tools.mkdir(parents=True)
-    for f in ("spawn_session.sh", "team_status.py", "lineage.py"):
+    for f in ("spawn_session.sh", "team_status.py", "lineage.py", "launch_line.py"):
         (tools / f).write_bytes((SCRIPT.parent / f).read_bytes())
     (tools.parent / "pipeline").mkdir()
     (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
@@ -187,6 +189,7 @@ def osa_run(terminal, rc, start, launch=False):
         tools = Path(tmp) / "layer" / "tools"
         tools.mkdir(parents=True)
         (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        (tools / "launch_line.py").write_bytes((SCRIPT.parent / "launch_line.py").read_bytes())
         for f in ("lineage.py", "team_status.py"):
             (tools / f).write_text(FAKE_PY, encoding="utf-8")
         (tools.parent / "pipeline").mkdir()
@@ -288,6 +291,255 @@ rc, out = second_run("taibe", "--launch", "--roles", "all")
 if rc != 0 or "backend-2" in out or "boards — команда напечатана" not in out:
     failed += 1
     print("FAIL: --roles all opens the six base roles only")
+    print(out)
+
+# TB-131: строка запуска сразу за меткой линии; хэш генома — от файла --settings, хэш промпта — от сообщения без строки.
+LAUNCH_RE = re.compile(r" Запуск: parent=(\S+) genome=([0-9a-f]{12}|-) prompt=([0-9a-f]{12}) wake=(\w+)\.")
+NAME_RE = re.compile(r" Твоё имя в списке сессий и в заголовке окна — (\S+)\.")
+
+
+def sha12(data):
+    return hashlib.sha256(data).hexdigest()[:12]
+
+
+def launch_run(*flags, lineage="r.ab12"):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = clean_env(**{"TMPDIR": tmp, "TAIBE_PRODUCT": "", "TAIBE_LINEAGE": lineage,
+                           "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
+                           "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"),
+                           "NERVE_PLIST": os.path.join(tmp, "none.plist")})
+        flags = [str(handoff) if a == "HANDOFF" else a for a in flags]
+        run = subprocess.run(["bash", str(SCRIPT), *flags, "--dry-run", "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+    msg = next((ln for ln in run.stdout.splitlines() if "Линия: " in ln), "")
+    genome = re.search(r"--settings '([^']+)'", run.stdout)
+    return run.returncode, msg, genome.group(1) if genome else None, run.stdout + run.stderr
+
+
+# Корень «r» — не сессия: у поколения 1 (r.xxxx) parent «-».
+for name, flags, wake, has_genome, lineage, parent in [
+    ("launch: wake human by default", ["--launch", "--role", "backend", "--product", "taibe"], "human", True,
+     "r.ab12", "r.ab12"),
+    ("launch --wake timer", ["--launch", "--role", "backend", "--product", "taibe", "--wake", "timer"], "timer", True,
+     "r.ab12", "r.ab12"),
+    ("handoff with a role: wake peer by default", ["--handoff", "HANDOFF", "--role", "boards", "--no-retire"], "peer",
+     True, "r.ab12", "r.ab12"),
+    ("handoff without a role: no genome", ["--handoff", "HANDOFF", "--no-retire"], "peer", False, "r.ab12", "r.ab12"),
+    ("generation 1: no parent session", ["--launch", "--role", "backend", "--product", "taibe"], "human", True, "r", "-"),
+]:
+    rc, msg, genome, out = launch_run(*flags, lineage=lineage)
+    m = LAUNCH_RE.search(msg)
+    problems = []
+    if rc != 0 or not m:
+        problems.append("no launch line")
+    else:
+        if "в очереди." + m.group(0) not in msg:
+            problems.append("launch line is not right after the lineage tag")
+        if m.group(1) != parent:
+            problems.append("parent %s, want %s" % (m.group(1), parent))
+        want_genome = sha12(Path(genome).read_bytes()) if (has_genome and genome) else "-"
+        if m.group(2) != want_genome:
+            problems.append("genome %s, want %s" % (m.group(2), want_genome))
+        if m.group(4) != wake:
+            problems.append("wake " + m.group(4))
+        if len(m.group(0)) > 120:
+            problems.append("launch line longer than 120 chars")
+    if problems:
+        failed += 1
+        print("FAIL:", name, problems)
+        print(out)
+for bad in (["--wake", "cron"], ["--wake"]):
+    rc, msg, _, out = launch_run("--launch", "--role", "backend", "--product", "taibe", *bad)
+    if rc == 0 or "--wake: human, peer или timer" not in out:
+        failed += 1
+        print("FAIL: --wake refused:", bad)
+        print(out)
+
+# prompt — версия входа, а не сессии (линзы release и plan #381): sha12(пусковой файл + "\n" + шаблон сообщения, где
+# линия «-», поколение 0, пути — <file> и <tools>). Одна роль и файл — один prompt; правка файла — другой.
+with tempfile.TemporaryDirectory() as pdir:
+    launch_file = Path(pdir) / "4-backend.md"
+
+    def prompt_of(lineage, role="backend"):
+        rc, msg, _, out = launch_run("--launch", "--role", role, "--product", "taibe", "--prompt-dir", pdir,
+                                     lineage=lineage)
+        m = LAUNCH_RE.search(msg)
+        return (m.group(3) if rc == 0 and m else None), msg, m, out
+
+    launch_file.write_text("пусковой файл v1\n", encoding="utf-8")
+    p1, msg1, m1, out1 = prompt_of("r.ab12")
+    p2, _, _, _ = prompt_of("r.cd34")
+    p_alias, _, _, _ = prompt_of("r.ab12", role="backend-2")
+    launch_file.write_text("пусковой файл v2\n", encoding="utf-8")
+    p3, _, _, _ = prompt_of("r.ab12")
+    want = None
+    if m1:
+        line = re.search(r"Линия: (r\.ab12\.[a-z0-9]{4}) \(поколение 2\)", msg1).group(0)
+        named = NAME_RE.search(msg1)
+        # имя сессии (#407) несёт хвост линии: в шаблоне оно — <name>, иначе у каждой сессии свой prompt
+        tmpl = (msg1.replace(m1.group(0), "", 1).replace(line, "Линия: - (поколение 0)", 1)
+                .replace(named.group(0) if named else "\0", " Твоё имя в списке сессий и в заголовке окна — <name>.", 1)
+                .replace(str(launch_file), "<file>").replace(str(SCRIPT.parent), "<tools>"))
+        want = sha12("пусковой файл v1\n".encode("utf-8") + b"\n" + tmpl.encode("utf-8"))
+    for name, ok in [
+        ("prompt: two sessions of one role and file share it", p1 is not None and p1 == p2),
+        ("prompt: an edit of the launch file changes it", p1 is not None and p3 is not None and p1 != p3),
+        ("prompt: the alias note of backend-2 changes it", p_alias is not None and p_alias != p1),
+        ("prompt = sha12(file + \\n + template)", want is not None and p1 == want),
+    ]:
+        if not ok:
+            failed += 1
+            print("FAIL:", name, p1, p2, p3, p_alias, want)
+            print(out1)
+
+# 15.11: имя сессии (claude --name) — продукт, роль, хвост линии; в заголовке окна, строке ввода и ListAgents.
+def name_run(handoff_dir, env_extra, *flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / handoff_dir
+        folder.mkdir(parents=True)
+        handoff = folder / "HANDOFF.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = clean_env(**{"TMPDIR": tmp, "TAIBE_LINEAGE": "r.ab12", **env_extra})
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp, *flags],
+                             capture_output=True, text=True, env=env, timeout=30)
+        return run.returncode, run.stdout + run.stderr
+
+
+TAIL = r"[a-z0-9]{4}"
+for name, handoff_dir, env_extra, flags, want in [
+    ("role successor: product, role and lineage tail", "2026-11-15/boards", {"TAIBE_PRODUCT": ""}, ["--role", "boards"],
+     rf"--name 'hr-helper-boards-{TAIL}'"),
+    ("tAIBE successor keeps its product in the name", "2026-11-15", {"TAIBE_PRODUCT": "taibe"}, ["--role", "coord"],
+     rf"--name 'taibe-coord-{TAIL}'"),
+    ("second session: own key in the name", "x", {"TAIBE_PRODUCT": ""}, ["--role", "backend-2", "--no-retire"],
+     rf"--name 'hr-helper-backend-2-{TAIL}'"),
+    ("no role: topic from the handoff folder", "handoff/2026-11-15/queue-lane", {"TAIBE_PRODUCT": "taibe"}, [],
+     rf"--name 'taibe-queue-lane-{TAIL}'"),
+    ("no role, date folder: session", "handoff/2026-11-15", {"TAIBE_PRODUCT": "taibe"}, [],
+     rf"--name 'taibe-session-{TAIL}'"),
+    ("exec launcher (--keep-window) passes the name too", "2026-11-15/boards", {"TAIBE_PRODUCT": ""},
+     ["--role", "boards", "--keep-window"], rf"exec \"\$\{{CLAUDE_BIN:-claude\}}\" --settings '[^']+/genome/boards\.json' --name 'hr-helper-boards-{TAIL}' \"\$m\""),
+]:
+    rc, out = name_run(handoff_dir, env_extra, *flags)
+    got = re.search(want, out)
+    # имя в первом сообщении то же, что в --name: наследник называет себя, не гадая по ListAgents
+    said = got and re.search(r"Твоё имя в списке сессий и в заголовке окна — %s\." % re.escape(
+        re.search(r"--name '([^']+)'", got.group(0)).group(1)), out)
+    if rc != 0 or not got or not said:
+        failed += 1
+        print("FAIL:", name, rc, bool(got), bool(said))
+        print(out)
+
+# OPS-82: окно tmux. Пусковой скрипт без autoclose — панель закрывается сама; код ≠ 0, Enter и --keep-window оставляют
+# оболочку. Без --terminal и SPAWN_TERMINAL — system.terminal из instances/_shared.json.
+def tmux_launcher(env_extra, *flags):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--dry-run", "--cwd", tmp, *flags],
+                             capture_output=True, text=True, env=clean_env(TMPDIR=tmp, **env_extra), timeout=30)
+        return run.returncode, run.stdout.splitlines()
+
+
+for name, env_extra, flags, last in [
+    ("tmux: exit 0 closes the pane", {}, ["--terminal", "tmux"], "exit 0"),
+    ("tmux --keep-window: shell stays", {}, ["--terminal", "tmux", "--keep-window"],
+     'keep "claude вышел — окно оставлено (--keep-window)"'),
+    ("default terminal is system.terminal (tmux)", {"SPAWN_TERMINAL": ""}, [], "exit 0"),
+]:
+    rc, out = tmux_launcher(env_extra, *flags)
+    body = out[out.index("set -m"):] if "set -m" in out else []
+    body = body[:-1] if body and body[-1].startswith("Наследник") else body  # dry-run печатает и первое сообщение
+    ok = (rc == 0 and body[-1:] == [last] and any(ln.startswith("keep() {") for ln in body)
+          and any(ln.startswith('[ "$rc" = 0 ] || keep ') for ln in body)
+          and not any("autoclose" in ln or ln.startswith("exec ") for ln in out))
+    if not ok:
+        failed += 1
+        print("FAIL:", name)
+        print("\n".join(out))
+
+# Открытие окна tmux: подмены tmux_host.py (open — «стартует» пусковой скрипт), lineage.py и team_status.py в копии слоя.
+FAKE_HOST = r"""import os, shutil, sys
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write("host-" + sys.argv[1] + "\n")
+if sys.argv[1] == "ensure":
+    sys.exit(int(os.environ.get("FAKE_ENSURE", "0")))
+if sys.argv[1] == "default-terminal":
+    print("tmux")
+if sys.argv[1] == "open":
+    if os.environ.get("FAKE_OPEN_RC"):
+        sys.exit(int(os.environ["FAKE_OPEN_RC"]))
+    shutil.rmtree(os.path.dirname(sys.argv[sys.argv.index("--launcher") + 1]), ignore_errors=True)
+    print("@3 %7 /dev/ttys021 4242 100:200")
+    if os.environ.get("FAKE_ATTACH"):
+        print("tmux -L agents attach -t '=x'")
+"""
+FAKE_ARGV = """import os, sys
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write(" ".join(sys.argv[1:]) + "\\n")
+"""
+
+
+def tmux_run(ensure_rc=0, attach=False, open_rc=""):
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = Path(tmp) / "layer" / "tools"
+        tools.mkdir(parents=True)
+        (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        (tools / "launch_line.py").write_bytes((SCRIPT.parent / "launch_line.py").read_bytes())
+        for f, text in (("tmux_host.py", FAKE_HOST), ("lineage.py", FAKE_ARGV), ("team_status.py", FAKE_PY)):
+            (tools / f).write_text(text, encoding="utf-8")
+        fake_bin = Path(tmp) / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "osascript").write_text(FAKE_OSA, encoding="utf-8")
+        (fake_bin / "osascript").chmod(0o755)
+        handoff = Path(tmp) / "h.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        log = Path(tmp) / "fake.log"
+        env = clean_env(PATH=f"{fake_bin}:{os.environ['PATH']}", TMPDIR=tmp, TAIBE_LINEAGE="r.ab12", FAKE_LOG=str(log),
+                        FAKE_RC="0", FAKE_START="1", SPAWN_TERMINAL="",
+                        FAKE_ENSURE=str(ensure_rc), FAKE_ATTACH="1" if attach else "", FAKE_OPEN_RC=open_rc,
+                        SPAWN_START_WAIT="30")  # отказ open — сразу, а не через 30 с ожидания скрипта
+        run = subprocess.run(["bash", str(tools / "spawn_session.sh"), "--handoff", str(handoff), "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+        calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        return run.returncode, run.stdout + run.stderr, calls
+
+
+rc, out, calls = tmux_run()
+record = next((c for c in calls if c.startswith("record ")), "")
+retire = next((c for c in calls if c.startswith("retire ")), "")
+for name, ok in [
+    ("tmux: window opened", rc == 0 and "host-open" in calls and "открыто:" in out),
+    ("tmux: record has pane, launcher pid and server",
+     "--terminal tmux --window-id @3 --tty /dev/ttys021" in record
+     and "--pane %7 --pane-pid 4242 --server 100:200" in record),
+    ("tmux: retire guard gets the pane tty", "--succ-tty /dev/ttys021" in retire),
+    ("tmux: owner attached — no Terminal window", "osascript" not in calls),
+]:
+    if not ok:
+        failed += 1
+        print("FAIL:", name, rc, calls)
+        print(out)
+rc, out, calls = tmux_run(attach=True)
+if not (rc == 0 and calls.count("osascript") == 1):
+    failed += 1
+    print("FAIL: tmux: nobody attached — one Terminal window with attach", rc, calls)
+    print(out)
+rc, out, calls = tmux_run(ensure_rc=1)
+if not (rc == 0 and "host-open" not in calls and "osascript" in calls
+        and any(c.startswith("record ") and "--terminal terminal" in c for c in calls)
+        and "сервер tmux не отвечает" in out):
+    failed += 1
+    print("FAIL: tmux server down -> Terminal window as before", rc, calls)
+    print(out)
+t0 = time.monotonic()
+rc, out, calls = tmux_run(open_rc="1")
+if not (rc == 4 and time.monotonic() - t0 < 20 and not any(c.startswith(("record ", "retire ")) for c in calls)
+        and "--terminal terminal" in out):
+    failed += 1
+    print("FAIL: tmux open failed -> code 4 at once, no record, hint --terminal terminal", rc, calls)
     print(out)
 
 print("spawn_session: %d failed" % failed)

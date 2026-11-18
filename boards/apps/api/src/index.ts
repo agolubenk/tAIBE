@@ -43,6 +43,7 @@ import { waitForDatabase } from "./database/wait-for-database";
 import discordIntegration from "./discord-integration";
 import { eventContext } from "./events";
 import externalLink from "./external-link";
+import form from "./form";
 import genericWebhookIntegration from "./generic-webhook-integration";
 import giteaIntegration, { handleGiteaWebhookRoute } from "./gitea-integration";
 import githubIntegration, {
@@ -82,6 +83,7 @@ import { descriptionPageQuery, listTasksQuery } from "./task/schema";
 import taskRelation from "./task-relation";
 // t-boards
 import agentIdentity from "./agent-identity";
+import agentJournal from "./agent-journal";
 import forest from "./forest";
 import notebook from "./notebook";
 import ssr from "./ssr";
@@ -930,6 +932,8 @@ export function createApp() {
   const taskRelationApi = api.route("/task-relation", taskRelation);
   const forestApi = api.route("/forest", forest);
   const agentIdentityApi = api.route("/agent-identity", agentIdentity);
+  // TB-135: not a workspace route, so a one-workspace key is refused (R-002).
+  const agentJournalApi = api.route("/agent-journal", agentJournal);
   const notebookApi = api.route("/notebook", notebook);
   const ssrApi = api.route("/ssr", ssr);
   const externalLinkApi = api.route("/external-link", externalLink);
@@ -937,6 +941,7 @@ export function createApp() {
   const invitationApi = api.route("/invitation", invitation);
   const workspaceApi = api.route("/workspace", workspace);
   const customFieldApi = api.route("/custom-field", customField);
+  const formApi = api.route("/form", form);
   const importApi = api.route("/import", importRoutes);
   const userApi = api.route("/user", user);
   const adminApi = api.route("/admin", admin);
@@ -1066,6 +1071,7 @@ export function createApp() {
     taskRelationApi,
     forestApi,
     agentIdentityApi,
+    agentJournalApi,
     notebookApi,
     ssrApi,
     telegramIntegrationApi,
@@ -1077,6 +1083,7 @@ export function createApp() {
     workflowRuleApi,
     workspaceApi,
     customFieldApi,
+    formApi,
     importApi,
     oauthApi,
   };
@@ -1235,6 +1242,7 @@ const {
   taskRelationApi,
   forestApi,
   agentIdentityApi,
+  agentJournalApi,
   notebookApi,
   ssrApi,
   telegramIntegrationApi,
@@ -1246,6 +1254,7 @@ const {
   workflowRuleApi,
   workspaceApi,
   customFieldApi,
+  formApi,
   importApi,
   oauthApi,
 } = createdApp;
@@ -1286,6 +1295,7 @@ export type AppType =
   | typeof taskRelationApi
   | typeof forestApi
   | typeof agentIdentityApi
+  | typeof agentJournalApi
   | typeof notebookApi
   | typeof ssrApi
   | typeof externalLinkApi
@@ -1293,6 +1303,7 @@ export type AppType =
   | typeof invitationApi
   | typeof workspaceApi
   | typeof customFieldApi
+  | typeof formApi
   | typeof importApi
   | typeof userApi
   | typeof adminApi
