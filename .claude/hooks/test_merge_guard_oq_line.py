@@ -66,8 +66,10 @@ class OqLine(unittest.TestCase):
             proj = Path(d) / "-x"
             proj.mkdir()
             rows = [
-                {"type": "user", "message": {"content": "Сборка Т3, роль 4. Линия: r.62u1.4rn2 (поколение 1)."}},
-                {"type": "user", "message": {"content": "Линия: r.zz99 — цитата чужой сессии"}},
+                {"type": "user", "message": {"content": ("Сборка Т3, ключ реестра backend, роль 4. Пусковой файл: /x — прочитай его первым и действуй по нему. "
+                                                         "Линия: r.62u1.4rn2 (поколение 2) — метка session на карточках и в очереди.")}},
+                {"type": "user", "message": {"content": ("Сборка Т3, ключ реестра frontend, роль 3. "
+                                                         "Линия: r.zz99 (поколение 1) — метка session на карточках и в очереди.")}},
             ]
             (proj / f"{SID}.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), "utf-8")
             old = os.environ.get("CLAUDE_PROJECTS_DIR")
