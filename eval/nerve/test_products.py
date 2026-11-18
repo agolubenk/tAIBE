@@ -166,10 +166,12 @@ class BaseRoleTest(unittest.TestCase):
                          ["backend", "frontend", "backend", "boards", "a-1", "x-10", ""])
 
     def test_both_products_have_second_sessions_after_the_six(self):
-        """Решения владельца 14.11: backend-2 (роль 7) и frontend-2 (роль 8) у tAIBE и HR."""
+        """Решения владельца 14.11: backend-2 (роль 7) и frontend-2 (роль 8) у tAIBE и HR; у HR ещё backend-3 (роль 9,
+        презентации, d-presentations-sessions-1811)."""
         _, products = P.load()
-        for slug in ("taibe", "hr-helper"):
-            self.assertEqual(products[slug]["team"]["roles"][6:], ["backend-2", "frontend-2"], slug)
+        want = {"taibe": ["backend-2", "frontend-2"], "hr-helper": ["backend-2", "frontend-2", "backend-3"]}
+        for slug, roles in want.items():
+            self.assertEqual(products[slug]["team"]["roles"][6:], roles, slug)
 
 
 class ProductDirTest(unittest.TestCase):
