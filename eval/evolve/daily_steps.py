@@ -244,17 +244,26 @@ def spend_line(s):
 
 def spend_nerve(repo, summary):
     """The line as one event to the tAIBE coordinator, through the main checkout's Nerve: an emit from a worktree
-    lands in that worktree's own journal (SE-171). Returns what happened (never raises)."""
+    lands in that worktree's own journal (SE-171). One line a day: a second run of the day (`cycle --force`) sends
+    nothing. Returns what happened (never raises)."""
     line = spend_line(summary)
     if not line:
         return 'no line'
+    if load_json('spend-sent.json', {}).get('day') == summary.get('day'):
+        return 'already sent for %s' % summary.get('day')
     try:
         res = subprocess.run([sys.executable, '-I', os.path.join(repo, 'eval/nerve/nerve.py'), 'emit', '--product',
                               'taibe', '--kind', 'report', 'coord', line], cwd=repo, capture_output=True, text=True,
                              timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return 'not emitted: %s' % e
-    return 'emitted' if res.returncode == 0 else 'not emitted: %s' % (res.stderr or res.stdout).strip()[-200:]
+    if res.returncode != 0:
+        return 'not emitted: %s' % (res.stderr or res.stdout).strip()[-200:]
+    try:
+        save_json('spend-sent.json', {'day': summary.get('day')})
+    except OSError as e:  # the line went out; a rerun may send it again
+        return 'emitted; not marked: %s' % e
+    return 'emitted'
 
 
 def audit_line(audit, date):

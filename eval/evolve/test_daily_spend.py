@@ -114,6 +114,13 @@ class SpendLineTest(unittest.TestCase):
 
 
 class SpendNerveTest(unittest.TestCase):
+    def setUp(self):
+        state = tempfile.TemporaryDirectory()
+        self.addCleanup(state.cleanup)
+        patcher = mock.patch.object(steps, 'STATE_DIR', state.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_emit_through_the_main_checkout(self):
         with tempfile.TemporaryDirectory() as repo:
             nerve = os.path.join(repo, 'eval', 'nerve', 'nerve.py')
@@ -126,9 +133,12 @@ class SpendNerveTest(unittest.TestCase):
             with open(os.path.join(os.path.dirname(nerve), 'argv'), encoding='utf-8') as f:
                 self.assertEqual(json.load(f), [os.path.realpath(repo), 'emit', '--product', 'taibe', '--kind',
                                                 'report', 'coord', LINE])
+            self.assertEqual(steps.spend_nerve(repo, summary), 'already sent for 2026-11-17')  # cycle --force
             with open(nerve, 'w', encoding='utf-8') as f:
                 f.write('import sys\nprint("неизвестная роль", file=sys.stderr)\nsys.exit(2)\n')
-            self.assertEqual(steps.spend_nerve(repo, summary), 'not emitted: неизвестная роль')
+            next_day = dict(summary, day='2026-11-18')
+            self.assertEqual(steps.spend_nerve(repo, next_day), 'not emitted: неизвестная роль')
+            self.assertEqual(steps.load_json('spend-sent.json', {}), {'day': '2026-11-17'})  # a failed day stays open
 
     def test_no_line_no_emit(self):
         with mock.patch.object(steps.subprocess, 'run') as run:
