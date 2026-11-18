@@ -2,6 +2,7 @@ import type { AnswersDoc, FormTemplate } from "@kaneo/forms";
 import { createId } from "@paralleldrive/cuid2";
 import { relations, sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   customType,
   foreignKey,
@@ -28,30 +29,38 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   },
 });
 
-export const userTable = pgTable("user", {
-  id: text("id")
-    .$defaultFn(() => createId())
-    .primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  emailVerified: boolean("email_verified")
-    .$defaultFn(() => false)
-    .notNull(),
-  image: text("image"),
-  locale: text("locale"),
-  createdAt: timestamp("created_at", { mode: "date" })
-    .default(utcNow)
-    .notNull(),
-  updatedAt: timestamp("updated_at", { mode: "date" })
-    .default(utcNow)
-    .$onUpdate(() => /* @__PURE__ */ new Date())
-    .notNull(),
-  isAnonymous: boolean("is_anonymous").default(false),
-  role: text("role"),
-  banned: boolean("banned").default(false),
-  banReason: text("ban_reason"),
-  banExpires: timestamp("ban_expires", { mode: "date" }),
-});
+export const userTable = pgTable(
+  "user",
+  {
+    id: text("id")
+      .$defaultFn(() => createId())
+      .primaryKey(),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    // TB-31 R-1: the username plugin; lower case, `displayUsername` as typed.
+    username: text("username").unique(),
+    displayUsername: text("display_username"),
+    emailVerified: boolean("email_verified")
+      .$defaultFn(() => false)
+      .notNull(),
+    image: text("image"),
+    locale: text("locale"),
+    createdAt: timestamp("created_at", { mode: "date" })
+      .default(utcNow)
+      .notNull(),
+    updatedAt: timestamp("updated_at", { mode: "date" })
+      .default(utcNow)
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    isAnonymous: boolean("is_anonymous").default(false),
+    role: text("role"),
+    banned: boolean("banned").default(false),
+    banReason: text("ban_reason"),
+    banExpires: timestamp("ban_expires", { mode: "date" }),
+  },
+  // TB-31: an email that differs only in case is the same address (s-tb119-smtp-3010: 0 such pairs).
+  (table) => [uniqueIndex("user_email_lower_unique").on(sql`lower(email)`)],
+);
 
 export const sessionTable = pgTable(
   "session",
@@ -153,7 +162,41 @@ export const verificationTable = pgTable(
       .$onUpdate(() => /* @__PURE__ */ new Date())
       .notNull(),
   },
-  (table) => [index("verification_identifier_idx").on(table.identifier)],
+  (table) => [
+    index("verification_identifier_idx").on(table.identifier),
+    // TB-31 R-4 (email change): one request per user, one reserve per address.
+    uniqueIndex("verification_tb_email_unique")
+      .on(table.identifier)
+      .where(sql`identifier like 'tb-email-%'`),
+  ],
+);
+
+// TB-31 R-6: the passkey plugin's table (@better-auth/passkey 1.7.15).
+export const passkeyTable = pgTable(
+  "passkey",
+  {
+    id: text("id")
+      .$defaultFn(() => createId())
+      .primaryKey(),
+    name: text("name"),
+    publicKey: text("public_key").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => userTable.id, { onDelete: "cascade" }),
+    credentialID: text("credential_id").notNull(),
+    // WebAuthn's sign counter is an unsigned 32-bit number: integer would overflow.
+    counter: bigint("counter", { mode: "number" }).notNull(),
+    deviceType: text("device_type").notNull(),
+    backedUp: boolean("backed_up").notNull(),
+    transports: text("transports"),
+    createdAt: timestamp("created_at", { mode: "date" }).default(utcNow),
+    aaguid: text("aaguid"),
+  },
+  (table) => [
+    index("passkey_user_id_idx").on(table.userId),
+    // One credential, one owner: a shared ID would sign in a random user.
+    uniqueIndex("passkey_credential_id_unique").on(table.credentialID),
+  ],
 );
 
 // Instance-wide settings an administrator changes at runtime, one JSON value
