@@ -89,13 +89,13 @@ class UnstickRolesTest(unittest.TestCase):
 class PollBudgetTest(unittest.TestCase):
     """The trigger is the reset in the daemon itself (S4): a `limit.resume` written by `nerve.py emit` calls nothing."""
 
-    def poll(self, ctx, limit):
-        ctx.now = datetime(2026, 10, 28, 14, 41, tzinfo=MSK).astimezone(timezone.utc)
+    def poll(self, ctx, limit, at=datetime(2026, 10, 28, 14, 41, tzinfo=MSK), spent=0.0):
+        ctx.now = at.astimezone(timezone.utc)
         ctx.state = {"budget": {"meter": {}, "waves": [], "limit": limit, "checked": "", "warned": "",
                                 "calibrated": "x"}}
         meter = mock.Mock()
         meter.update.return_value = []
-        meter.total.return_value = 0.0
+        meter.total.return_value = spent
         with mock.patch.object(budget, "Meter", return_value=meter), \
                 mock.patch.object(sources, "active_roles", return_value=["backend", "coord"]), \
                 mock.patch.object(actions, "unstick_roles") as un:
@@ -113,6 +113,16 @@ class PollBudgetTest(unittest.TestCase):
             self.assertIsNotNone(ctx.mode)
             later = dict(limit, resume=actions._iso(hit + timedelta(hours=8)))  # not yet
             self.poll(ctx, later).assert_not_called()
+
+    def test_an_early_lift_calls_nothing(self):  # backend N1 on #483: a false lift must not use the reset's Esc
+        with tempfile.TemporaryDirectory() as d:
+            ctx = Ctx(d)
+            hit = datetime(2026, 10, 28, 10, 52, tzinfo=MSK)
+            limit = {"kind": "session", "hit": actions._iso(hit), "reset": RESET, "resume": RESET}
+            un = self.poll(ctx, limit, at=datetime(2026, 10, 28, 12, 0, tzinfo=MSK), spent=1.0)
+            un.assert_not_called()
+            self.assertIsNone(ctx.state["budget"]["limit"])  # the lift itself still goes out
+            self.assertEqual([r["kind"] for r in read_from(os.path.join(d, "j.jsonl"), 0)[0]], ["limit.resume"])
 
     def test_a_manual_resume_event_calls_nothing(self):  # N3 (d)
         with tempfile.TemporaryDirectory() as d:

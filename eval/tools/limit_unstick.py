@@ -166,7 +166,10 @@ def unstick(fresh, sx=None, sleep=time.sleep):
     for line, role, pane, tty in role_panes():
         if not fresh(line):
             continue
-        got = unstick_pane(sx, pane, tty, sleep)
+        try:
+            got = unstick_pane(sx, pane, tty, sleep)
+        except Exception as e:  # noqa: BLE001 — клавиши прошлых панелей уже нажаты: их строки и ключи не теряются
+            got = (f"error: {type(e).__name__}", "")
         if got:
             done.append({"line": line, "role": role, "pane": pane, "action": got[0], "sha256": got[1]})
     return done

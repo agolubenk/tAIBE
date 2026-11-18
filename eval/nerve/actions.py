@@ -100,7 +100,8 @@ def poll_budget(ctx):
             ctx.emit_account(f"limit:resume:{lim['reset']}", "limit.resume", NERVOUS, roles,
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
-            unstick_roles(ctx, lim["reset"])
+            if now_l >= _dt(lim["resume"]):  # ранний подъём — аккаунт сменил владелец; ложный съел бы Esc сброса
+                unstick_roles(ctx, lim["reset"])
             lim = None
 
     q = quota5(st, cfg)

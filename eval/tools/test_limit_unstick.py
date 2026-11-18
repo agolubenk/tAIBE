@@ -211,6 +211,14 @@ class UnstickTest(Base):
         self.assertEqual(self.run_unstick(fresh=lambda line: line != self.LINE), [])
         self.assertEqual([c[0] for c in self.calls()], ["list-panes", "display-message"])  # no screen, no key
 
+    def test_a_failure_on_one_pane_keeps_the_others(self):  # backend N2 on #483
+        self.record("r.cd34", "plan", "%8", "/dev/ttys006", "4300")
+        self.spec({}, panes="%7 /dev/ttys005 4242\n%8 /dev/ttys006 4300\n")
+        with mock.patch.object(U, "unstick_pane", side_effect=[("esc, enter", "a" * 64), OSError("ps")]):
+            done = self.run_unstick()
+        self.assertEqual([(d["line"], d["action"], d["sha256"]) for d in done],
+                         [(self.LINE, "esc, enter", "a" * 64), ("r.cd34", "error: OSError", "")])
+
     def test_only_role_panes_of_this_server(self):  # S5
         screens = {p: [MENU, PREFILLED] for p in ("%7", "%8", "%9", "%10")}
         panes = "%7 /dev/ttys005 4242\n%8 /dev/ttys006 4300\n%9 /dev/ttys007 4400\n%10 /dev/ttys008 4500\n"
