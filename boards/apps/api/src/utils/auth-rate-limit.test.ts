@@ -27,6 +27,11 @@ describe("auth rate limit (TB-31 R-8)", () => {
       window: 60,
       max: 5,
     });
+    // TB-31 R-1: a login check per IP, not a way to list the logins.
+    expect(AUTH_RATE_LIMIT_RULES["/is-username-available"]).toEqual({
+      window: 60,
+      max: 10,
+    });
     expect(AUTH_RATE_LIMIT_RULES["/sign-in/magic-link"]).toEqual({
       window: 60,
       max: 3,

@@ -1,6 +1,7 @@
 import { REAUTH_ERRORS, type ReauthErrorBody } from "@kaneo/permissions";
 import { APIError, type getSessionFromCtx } from "better-auth/api";
 import { adminEmailChanges } from "../user/controllers/clear-email-verification-on-admin-change";
+import { setsLogin } from "../username/username-login";
 import { canUpdateUsers } from "./admin-role";
 import { availableMethods } from "./methods";
 import { isSessionFresh } from "./store";
@@ -32,7 +33,8 @@ export type SessionResolver = (
  * the account like an email change does (owner, taibe-d-tb31-scope-1811 = A).
  * `/device/approve` gives a device a session that issues agent keys without a
  * confirmation (owner, taibe-d-tb31-agent-key-1811 = A): the approval is the
- * confirmation. The passkey routes, the username and the email change follow.
+ * confirmation. `/update-user` that sets the login (R-1) is guarded: the login
+ * signs in like the email does. The passkey routes and the email change follow.
  */
 const ALWAYS_GUARDED = new Set([
   "/api-key/create",
@@ -47,6 +49,7 @@ const ALWAYS_GUARDED = new Set([
 /** What a route needs: always a fresh session, only for an email change, or nothing. */
 function guardKind(ctx: GuardContext): "always" | "admin-email" | null {
   if (ALWAYS_GUARDED.has(ctx.path)) return "always";
+  if (ctx.path === "/update-user") return setsLogin(ctx.body) ? "always" : null;
   if (ctx.path !== "/admin/update-user") return null;
   const data = (ctx.body as { data?: unknown } | undefined)?.data;
   if (!data || typeof data !== "object" || !Object.hasOwn(data, "email"))

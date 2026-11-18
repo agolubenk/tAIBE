@@ -32,6 +32,7 @@ import {
   magicLink,
   openAPI,
   organization,
+  username,
 } from "better-auth/plugins";
 import type { AccessControl } from "better-auth/plugins/access";
 import type { UserWithAnonymous } from "better-auth/plugins/anonymous";
@@ -86,6 +87,10 @@ import { ADMIN_PLUGIN_OPTIONS } from "./reauth/admin-role";
 import { assertFreshSession, type GuardSession } from "./reauth/guard";
 import { reauthPlugin } from "./reauth/plugin";
 import { markInteractiveSession } from "./reauth/session-hook";
+import {
+  assertUsernameRequest,
+  USERNAME_PLUGIN_OPTIONS,
+} from "./username/username-login";
 import { getEmailRequestContext } from "./utils/email-request-context";
 import { getDefaultCookieAttributes } from "./utils/get-default-cookie-attributes";
 import { getInvitationEmailSubject } from "./utils/get-invitation-email-subject";
@@ -369,6 +374,7 @@ export const auth = betterAuth({
         ]
       : []),
     lastLoginMethod(),
+    username(USERNAME_PLUGIN_OPTIONS),
     magicLink({
       disableSignUp: isPasswordRegistrationDisabled,
       sendMagicLink: async ({ email, url }, ctx) => {
@@ -876,6 +882,7 @@ export const auth = betterAuth({
     before: createAuthMiddleware(async (ctx) => {
       // TB-31 R-5: protected actions need a fresh session first.
       await assertFreshSession(ctx, sessionForGuard);
+      await assertUsernameRequest(ctx, sessionForGuard);
 
       if (ctx.path === "/admin/remove-user") {
         await prepareAdminUserRemoval(ctx);

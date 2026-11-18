@@ -15,6 +15,7 @@ export const AUTH_RATE_LIMIT_RULES: Record<string, Rule> = {
   "/organization/invite-member": { window: 60, max: 5 },
   "/sign-in/email": { window: 60, max: 5 },
   "/sign-in/username": { window: 60, max: 5 },
+  "/is-username-available": { window: 60, max: 10 },
   "/sign-in/magic-link": { window: 60, max: 3 },
   "/sign-in/email-otp": { window: 60, max: 3 },
   [REAUTH_ROUTES.password]: { window: 60, max: 5 },

@@ -137,3 +137,13 @@ export {
   type ReauthErrorBody,
   type ReauthMethod,
 } from "./reauth.js";
+
+export {
+  isAllowedUsername,
+  isEmailLogin,
+  RESERVED_USERNAMES,
+  USERNAME_MAX_LENGTH,
+  USERNAME_MIN_LENGTH,
+  type UsernameProblem,
+  usernameProblem,
+} from "./username.js";
