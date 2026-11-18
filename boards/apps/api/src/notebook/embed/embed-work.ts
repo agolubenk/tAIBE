@@ -1,7 +1,7 @@
-import { redact } from "@kaneo/redact";
 import { and, eq, isNull, ne, notInArray, or } from "drizzle-orm";
 import db from "../../database";
 import { notebookChunkTable } from "../../database/notebook-schema";
+import { maskPassage, textNear } from "../chunk/mask-chunk-edges";
 import {
   leaseChunks,
   leasedChunkIds,
@@ -28,15 +28,19 @@ export type EmbedResult = {
 };
 
 // TB-196: the embedding worker is a token caller and its model may run at an
-// outside provider, so a chunk goes to it masked. Vectors embedded before
-// this change stay until their chunk changes or the model does. The text is
-// masked before the heading is glued to it: a heading that ends with a label
+// outside provider, so a chunk goes to it masked, also a secret cut at its
+// edge (TB-203). Vectors embedded before this change stay until their chunk
+// changes or the model does. A heading that ends with a label
 // ("Authorization: Bearer") took the first word of the text as its value,
-// and the secret after the text's own label stayed open (Claude #388 B1).
-const chunkPassage = (heading: string, text: string) => {
-  const masked = redact(text).text;
-  return redact(heading ? `${heading}\n\n${masked}` : masked).text;
-};
+// and the secret after the text's own label stayed open (Claude #388 B1):
+// maskPassage reads the text on its own too.
+const chunkPassage = (chunk: {
+  heading: string;
+  text: string;
+  before: string | null;
+  after: string | null;
+}) =>
+  maskPassage(chunk.heading, chunk.text, chunk.before ?? "", chunk.after ?? "");
 
 // Search queries first: someone is waiting on them.
 export async function claimEmbedWork(
@@ -50,11 +54,13 @@ export async function claimEmbedWork(
   const room = EMBED_CHUNK_BATCH - items.length;
   if (room <= 0) return items;
   const leased = leasedChunkIds(workspaceId);
-  const chunks = await db
+  const claimed = db
     .select({
       id: notebookChunkTable.id,
       heading: notebookChunkTable.heading,
       text: notebookChunkTable.text,
+      sourceId: notebookChunkTable.sourceId,
+      ordinal: notebookChunkTable.ordinal,
     })
     .from(notebookChunkTable)
     .where(
@@ -68,7 +74,19 @@ export async function claimEmbedWork(
       ),
     )
     .orderBy(notebookChunkTable.sourceId, notebookChunkTable.ordinal)
-    .limit(room);
+    .limit(room)
+    .as("claimed");
+  // The neighbours of the claimed rows only (textNear).
+  const chunks = await db
+    .select({
+      id: claimed.id,
+      heading: claimed.heading,
+      text: claimed.text,
+      before: textNear(-1, "claimed"),
+      after: textNear(1, "claimed"),
+    })
+    .from(claimed)
+    .orderBy(claimed.sourceId, claimed.ordinal);
   leaseChunks(
     workspaceId,
     chunks.map(({ id }) => id),
@@ -77,7 +95,7 @@ export async function claimEmbedWork(
     items.push({
       kind: "chunk",
       id: chunk.id,
-      text: chunkPassage(chunk.heading, chunk.text),
+      text: chunkPassage(chunk),
     });
   }
   return items;
