@@ -187,6 +187,18 @@ export async function pushChangeset(
     };
   }
 
+  // No target, no GitHub call: the versions stay served, nothing is lost.
+  const target = targets.get(workspaceId);
+  if (!target) {
+    return {
+      pushed: false,
+      commitSha: null,
+      files: [],
+      conflicts: [],
+      reason: "no_target",
+    };
+  }
+
   // Integrity guard (TB-94): one bad blob aborts the whole push before any
   // GitHub call, like the allowlist guard; the paths go to the server log.
   const broken = blobIntegrityFailures(changeset);
@@ -205,18 +217,6 @@ export async function pushChangeset(
   const files = changeset.filter(
     (file): file is ChangesetFile => file.content !== null,
   );
-
-  // No target, no GitHub call: the versions stay served, nothing is lost.
-  const target = targets.get(workspaceId);
-  if (!target) {
-    return {
-      pushed: false,
-      commitSha: null,
-      files: [],
-      conflicts: [],
-      reason: "no_target",
-    };
-  }
 
   const repoFiles = await readRepoFiles(
     target,
