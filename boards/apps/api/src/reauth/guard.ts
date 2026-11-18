@@ -28,13 +28,17 @@ export type SessionResolver = (
 /**
  * TB-31 R-5, slice A. `/list-sessions` and `/unlink-account` are here
  * because `session.freshAge` is 0: better-auth no longer checks them itself.
- * Slice B adds the passkey routes, the username and the email change.
+ * Slice B: an admin setting a user's password or signing in as a user takes
+ * the account like an email change does (owner, taibe-d-tb31-scope-1811 = A).
+ * The passkey routes, the username and the email change follow.
  */
 const ALWAYS_GUARDED = new Set([
   "/api-key/create",
   "/delete-user",
   "/list-sessions",
   "/unlink-account",
+  "/admin/set-user-password",
+  "/admin/impersonate-user",
 ]);
 
 /** What a route needs: always a fresh session, only for an email change, or nothing. */
