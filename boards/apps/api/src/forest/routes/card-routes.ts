@@ -6,11 +6,13 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import { readAgentHeaders } from "../agent-guard/agent-headers";
 import { loadCardMeta, toCardMeta } from "../card/card-meta";
 import { cardMetaWrite } from "../card/card-patch";
+import { restoreMetaText } from "../card/restore-meta-text";
 import { setCardMeta } from "../card/set-card-meta";
 import { assertTaskInWorkspace } from "../task-scope";
 import { cardMetaSchema, cardParam } from "./card-schema";
@@ -70,7 +72,10 @@ export const cardRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(getCardMetaRoute, async (c) => {
     const { workspaceId, taskId } = c.req.valid("param");
     await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
-    return c.json(toCardMeta(taskId, await loadCardMeta(taskId)), 200);
+    return c.json(
+      maskForTokenCaller(c, toCardMeta(taskId, await loadCardMeta(taskId))),
+      200,
+    );
   })
   .openapi(setCardMetaRoute, async (c) => {
     const { workspaceId, taskId } = c.req.valid("param");
@@ -81,8 +86,8 @@ export const cardRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       taskId,
       actor: resolveForestActor(c),
       headers: readAgentHeaders(c),
-      patch,
+      patch: await restoreMetaText(c, taskId, patch),
       expectedRevision: expectedMetaRevision,
     });
-    return c.json(meta, 200);
+    return c.json(maskForTokenCaller(c, meta), 200);
   });

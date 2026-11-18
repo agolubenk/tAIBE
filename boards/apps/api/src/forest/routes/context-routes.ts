@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { buildCardContext } from "../context/card-context";
 import { assertTaskInWorkspace } from "../task-scope";
@@ -38,5 +39,8 @@ export const contextRoutes = apiRouter<
   const { workspaceId, taskId } = c.req.valid("param");
   const userId = c.get("userId");
   await assertTaskInWorkspace(taskId, workspaceId, userId);
-  return c.json(await buildCardContext(taskId, workspaceId, userId), 200);
+  return c.json(
+    maskForTokenCaller(c, await buildCardContext(taskId, workspaceId, userId)),
+    200,
+  );
 });

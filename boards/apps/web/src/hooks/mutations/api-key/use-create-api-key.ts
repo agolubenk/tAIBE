@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth-client";
+import { throwIfNotFresh } from "@/lib/reauth/reauth-errors";
 import type {
   CreateApiKeyClientRequest,
   CreateApiKeyResponse,
@@ -18,6 +19,8 @@ function useCreateApiKey() {
       });
 
       if (result.error) {
+        // TB-31 R-5: the key outlives a password reset, so it needs a fresh sign-in.
+        throwIfNotFresh(result.error);
         throw new Error(result.error.message);
       }
 

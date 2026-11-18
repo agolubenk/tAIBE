@@ -23,6 +23,7 @@ import saveTaskFormAnswers, {
   saveBodyOf,
 } from "@/fetchers/task-form/save-task-form-answers";
 import { taskFormsKey } from "@/hooks/queries/task-form/use-task-forms";
+import { useWarnBeforeUnload } from "@/hooks/use-warn-before-unload";
 import { answersDoc, mergeIssues, withAnswer } from "./form-state";
 
 // TB-173 F1/F2: every change is saved as a draft one second after the last
@@ -45,6 +46,13 @@ export type SaveState =
   | { kind: "saving" }
   | { kind: "saved" }
   | { kind: "failed"; failure: SaveFailure };
+
+// The server does not hold the newest answers yet.
+const UNSAVED: ReadonlySet<SaveState["kind"]> = new Set([
+  "pending",
+  "saving",
+  "failed",
+]);
 
 export type FormMeta = {
   status: TaskFormStatus;
@@ -220,6 +228,11 @@ export function useFormAutosave(taskId: string, form: TaskForm) {
       flush();
     };
   }, []);
+
+  // TB-236: closing the tab before the answers are saved asks first. A save in
+  // flight counts too: the tab drops it, and the hidden-tab flush above sends
+  // only answers changed after it started.
+  useWarnBeforeUnload(UNSAVED.has(saveState.kind));
 
   return { answers, meta, saveState, issues, change, submit, retry };
 }

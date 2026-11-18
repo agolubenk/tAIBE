@@ -14,12 +14,25 @@ import {
   ssrEntityTable,
 } from "../../apps/api/src/database/ssr-schema";
 import { approveDraft } from "../../apps/api/src/ssr/approve";
+import type { PushTarget } from "../../apps/api/src/ssr/push-target";
 import { pushChangeset } from "../../apps/api/src/ssr/pushback";
 import { resetTestDatabase } from "./helpers/database";
 import { createForest } from "./helpers/forest";
 
 const sha256 = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
+
+// The workspace has its own target (TB-160): the guard is checked where a push
+// would really go, not stopped earlier by `no_target`.
+const push = (workspaceId: string) =>
+  pushChangeset(
+    workspaceId,
+    "test push",
+    undefined,
+    new Map<string, PushTarget>([
+      [workspaceId, { repo: "owner/repo", branch: "main" }],
+    ]),
+  );
 
 const path = ".claude/skills/integrity/NOTE.md";
 const text = "approved bytes";
@@ -73,7 +86,7 @@ describe("API integration: SSR push-back checks blob bytes against their sha (TB
       .set({ content: "tampered bytes" })
       .where(eq(ssrBlobTable.sha256, sha256(text)));
 
-    const result = await pushChangeset(workspaceId, "test push");
+    const result = await push(workspaceId);
 
     expect(result).toEqual({
       pushed: false,
@@ -90,7 +103,7 @@ describe("API integration: SSR push-back checks blob bytes against their sha (TB
     const workspaceId = await servedFile();
     await db.delete(ssrBlobTable).where(eq(ssrBlobTable.sha256, sha256(text)));
 
-    const result = await pushChangeset(workspaceId, "test push");
+    const result = await push(workspaceId);
 
     expect(result.pushed).toBe(false);
     expect(result.reason).toBe(`blob_integrity: 1 file(s), first ${path}`);
@@ -101,10 +114,13 @@ describe("API integration: SSR push-back checks blob bytes against their sha (TB
     const workspaceId = await servedFile();
 
     // The stubbed GitHub answers 500: reaching it is the proof the guard passed.
-    await expect(pushChangeset(workspaceId, "test push")).rejects.toThrow(
+    await expect(push(workspaceId)).rejects.toThrow(
       `GitHub contents ${path}: HTTP 500`,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/repos/owner/repo/contents/",
+    );
     expect(errorLog).not.toHaveBeenCalled();
   });
 });
