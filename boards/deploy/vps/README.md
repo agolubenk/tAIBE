@@ -183,12 +183,18 @@ token file and `SSR_PUSH_TARGETS` are set:
    with one log line.
 4. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
 5. Check, without printing the token:
-   `docker compose -p t-boards exec -T app node -e 'let t = ""; try { t = require("fs").readFileSync(process.env.SSR_PUSH_GITHUB_TOKEN_FILE, "utf8").trim(); } catch {} console.log(t ? "token: present" : "token: missing", "| targets:", process.env.SSR_PUSH_TARGETS || "(none)")'`.
-   That GitHub takes the token for a repo (200; 401 — a wrong token, 404 — the repo is not in its access list):
-   `docker compose -p t-boards exec -T app node -e 'const t = require("fs").readFileSync(process.env.SSR_PUSH_GITHUB_TOKEN_FILE, "utf8").trim(); fetch("https://api.github.com/repos/<owner>/<repo>", { headers: { Authorization: "Bearer " + t } }).then(r => console.log(r.status))'`.
+   `docker compose -p t-boards exec -T app node -e 'let t = "", e = ""; try { t = require("fs").readFileSync(process.env.SSR_PUSH_GITHUB_TOKEN_FILE, "utf8").trim(); } catch (x) { e = x.code; } console.log(t ? "token: present" : "token: missing " + e, "| targets:", process.env.SSR_PUSH_TARGETS || "(none)")'`.
+   `EACCES` means the file is not owned by 1001: run the `install` line of step 2 again.
+   That the token may write to a repo (201; 401 — a wrong token, 403 or 404 — no write access to this repo). A read
+   check is not enough: a public repo answers 200 to any token. The call makes one empty blob, which nothing refers to:
+   `docker compose -p t-boards exec -T app node -e 'const t = require("fs").readFileSync(process.env.SSR_PUSH_GITHUB_TOKEN_FILE, "utf8").trim(); fetch("https://api.github.com/repos/<owner>/<repo>/git/blobs", { method: "POST", headers: { Authorization: "Bearer " + t }, body: JSON.stringify({ content: "", encoding: "utf-8" }) }).then(r => console.log(r.status))'`.
+6. If a token was ever put into `.env` by the earlier instructions, revoke it on GitHub: a copy stays in `.env.prev`
+   until the next `install.sh`.
 
 The app reads the token file on every push, so a rotation is a new file, with no restart. Without the file the nightly
 job logs one line `SSR push-back skipped: no GitHub token: …` and a rollback answers `push.reason: "not_configured"`.
+A file that is not one token line (a second line, a space or a control character inside, over 255 characters) counts
+as no token, with the same line.
 `install.sh` keeps the `SSR_PUSH_TARGETS` line of `.env` on every update and logs one line while the token file is
 missing. The old `SSR_PUSH_GITHUB_TOKEN` variable is ignored (the token is in the file only), and so are
 `SSR_PUSH_GITHUB_REPO` and `SSR_PUSH_GITHUB_BRANCH` (one repo for every workspace), each with a log line. Off again:
@@ -238,9 +244,6 @@ changes `boards/packages/mcp` (a new tool or field), do this after it on the Mac
 
 `npm run mcp-hub:status` and `mcp-hub:check` warn when the source is newer than the build or the running process is
 older than the build. On 12.11 a stale build dropped `doneRef`, and no agent could request `close_task`.
-
-`compose.yml` does not pass these variables to the app yet, and `install.sh` does not keep them in `.env`, so
-push-back is off on the server. Turning it on is an owner item: the token, the targets and the two deploy lines.
 
 ## Products
 

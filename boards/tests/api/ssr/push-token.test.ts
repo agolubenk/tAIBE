@@ -58,6 +58,30 @@ describe("resolvePushToken", () => {
       }),
     ).toEqual({ reason: `${FILE} is empty` });
   });
+
+  it("refuses a file that is not one token line and keeps the token out of reason", () => {
+    const reason = `${FILE} is not one token line (a space, a line break or a control character inside, or over 255 characters)`;
+    for (const raw of [
+      `${SYNTHETIC}\nnote\n`,
+      `${SYNTHETIC}\rnote`,
+      `${SYNTHETIC}\u0000note`,
+      `${SYNTHETIC} note`,
+      "x".repeat(256),
+    ]) {
+      const result = resolvePushToken({
+        env: { SSR_PUSH_GITHUB_TOKEN_FILE: FILE },
+        readFile: () => raw,
+      });
+      expect(result).toEqual({ reason });
+      expect(result.reason).not.toContain(SYNTHETIC);
+    }
+    expect(
+      resolvePushToken({
+        env: { SSR_PUSH_GITHUB_TOKEN_FILE: FILE },
+        readFile: () => `${"x".repeat(255)}\n`,
+      }),
+    ).toEqual({ token: "x".repeat(255) });
+  });
 });
 
 describe("resolvePushToken on a real file", () => {

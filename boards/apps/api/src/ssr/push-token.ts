@@ -6,6 +6,10 @@ import { readFileSync } from "node:fs";
 // token the owner delivers or rotates needs no restart. No variable, no file,
 // an unreadable or an empty file: push-back stays off and `reason` says why.
 // `reason` names the path and the error code, never the token.
+// A token is one line of visible ASCII, at most 255 characters. Anything else
+// (a second line, CR, NUL, a space inside, a huge file) is refused here: fetch
+// would throw with the whole Authorization value in the error text, and the
+// nightly job logs that error (Claude lens on #239, B1).
 export type PushToken =
   | { token: string; reason?: undefined }
   | { token?: undefined; reason: string };
@@ -18,6 +22,7 @@ export type PushTokenOptions = {
 };
 
 const LEGACY = "SSR_PUSH_GITHUB_TOKEN";
+const TOKEN_LINE = /^[\x21-\x7e]{1,255}$/;
 
 export function resolvePushToken(options: PushTokenOptions = {}): PushToken {
   const env = options.env ?? process.env;
@@ -39,6 +44,11 @@ export function resolvePushToken(options: PushTokenOptions = {}): PushToken {
   }
   const token = raw.trim();
   if (!token) return { reason: `${path} is empty${legacy}` };
+  if (!TOKEN_LINE.test(token)) {
+    return {
+      reason: `${path} is not one token line (a space, a line break or a control character inside, or over 255 characters)${legacy}`,
+    };
+  }
   return { token };
 }
 
