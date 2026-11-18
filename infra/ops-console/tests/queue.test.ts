@@ -288,6 +288,23 @@ describe('входящие из Telegram (kind: inbox)', () => {
     expect((await st({ agentBy: 'r.other' }, { release: true })).status).toBe(409)
   })
 
+  it('OPS-55: захват предка по линии отпускает наследник; предок, сосед и «префикс без точки» — нет', async () => {
+    await bearer(owner).put('/db/items/i-release-heir', { data: inbox() })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-release-heir', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentBy: 'r.0afd' })).status).toBe(200)
+    expect((await st({ agentBy: 'r.0afdx' }, { release: true })).status).toBe(409)
+    expect((await st({ agentBy: 'r.sio1' }, { release: true })).status).toBe(409)
+    const rel = await st({ agentNote: 'поколение 2 уходит без наследника', agentBy: 'r.0afd.8pa4' }, { release: true })
+    expect(rel.status).toBe(200)
+    expect(rel.json.data.agentBy).toBeUndefined()
+    expect((await st({ agentStatus: 'taken', agentBy: 'r.sio1' })).status).toBe(200)
+    // Обратное не работает: предок не отпускает захват потомка.
+    await bearer(owner).put('/db/items/i-release-anc', { data: inbox() })
+    const anc = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-release-anc', { data, ...extra })
+    expect((await anc({ agentStatus: 'doing', agentBy: 'r.0afd.8pa4' })).status).toBe(200)
+    expect((await anc({ agentBy: 'r.0afd' }, { release: true })).status).toBe(409)
+  })
+
   it('release — только у входящих: у обычного пункта захвата нет, подпись agentBy не стирается (линза безопасности HR #521)', async () => {
     await bearer(owner).put('/db/items/d-release', { data: decision })
     const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/d-release', { data, ...extra })
@@ -521,10 +538,10 @@ describe('страница /queue', () => {
     expect(scriptSrc(res)).toContain(`'sha256-${sha256(theme, 'base64')}'`)
     // Внешние — после </main>, порядок прежний: подмена базы, правило «открыт ли пункт» (то же, что у ?open=1),
     // вложения (форма и карточки берут window.__oqFiles при запуске), данные «Хода работ» (window.__oqReports), его
-    // группировка (window.__oqLanes), код страницы, кнопки мёржа.
+    // группировка (window.__oqLanes), код страницы, кнопки мёржа, выбор продукта, кнопка «Роли» команды Mac, «Памятки».
     const srcs = srcsOf(html)
     expect(srcs.map((s) => s.replace(/^\/queue\/assets\/([a-z-]+)\.[0-9a-f]{16}\.js$/, '$1'))).toEqual([
-      'shim', 'open-rule', 'files', 'reports', 'lanes', 'page', 'enhance', 'products',
+      'shim', 'open-rule', 'files', 'reports', 'lanes', 'page', 'enhance', 'products', 'team', 'memos',
     ])
     expect(html.indexOf(srcs[0] ?? '<нет>')).toBeGreaterThan(html.indexOf('</main>'))
     const bodies = await Promise.all(srcs.map(async (s) => (await app.request(s, { headers: { Cookie: cookie } })).text()))
