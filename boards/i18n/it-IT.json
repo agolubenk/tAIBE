@@ -229,7 +229,10 @@
 			"passwordRequired": "Inserisci la tua password.",
 			"passwordTooShort": "Usa almeno 8 caratteri.",
 			"disposableEmail": "Usa un indirizzo email permanente. Con gli indirizzi usa e getta non è possibile creare account.",
-			"continueWithEmail": "Continua con l'email"
+			"continueWithEmail": "Continua con l'email",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "Controlla la tua Email",
@@ -284,7 +287,11 @@
 			"sendFailed": "Invio del codice di verifica fallito"
 		},
 		"signInForm": {
-			"failedSignIn": "Accesso fallito"
+			"failedSignIn": "Accesso fallito",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "Accetta Invito",
@@ -642,7 +649,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "Usi questo indirizzo per accedere."
+			"emailHint": "Usi questo indirizzo per accedere.",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Notifiche",

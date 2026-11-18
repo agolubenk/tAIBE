@@ -229,7 +229,10 @@
 			"passwordRequired": "Nhập mật khẩu của bạn.",
 			"passwordTooShort": "Dùng ít nhất 8 ký tự.",
 			"disposableEmail": "Hãy dùng địa chỉ email cố định. Không thể tạo tài khoản bằng địa chỉ email dùng một lần.",
-			"continueWithEmail": "Tiếp tục với email"
+			"continueWithEmail": "Tiếp tục với email",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "Kiểm tra email",
@@ -284,7 +287,11 @@
 			"sendFailed": "Không thể gửi mã xác minh"
 		},
 		"signInForm": {
-			"failedSignIn": "Đăng nhập thất bại"
+			"failedSignIn": "Đăng nhập thất bại",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "Chấp nhận lời mời",
@@ -632,7 +639,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "Bạn đăng nhập bằng địa chỉ này."
+			"emailHint": "Bạn đăng nhập bằng địa chỉ này.",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Thông báo",

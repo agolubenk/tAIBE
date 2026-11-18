@@ -229,7 +229,10 @@
 			"passwordRequired": "パスワードを入力してください。",
 			"passwordTooShort": "8文字以上で入力してください。",
 			"disposableEmail": "恒久的なメールアドレスを使用してください。使い捨てのメールアドレスではアカウントを作成できません。",
-			"continueWithEmail": "メールアドレスで続ける"
+			"continueWithEmail": "メールアドレスで続ける",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "メールを確認してください",
@@ -284,7 +287,11 @@
 			"sendFailed": "認証コードの送信に失敗しました"
 		},
 		"signInForm": {
-			"failedSignIn": "サインインに失敗しました"
+			"failedSignIn": "サインインに失敗しました",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "招待を承諾",
@@ -632,7 +639,26 @@
 				"success": "アカウントを削除しました",
 				"error": "アカウントの削除に失敗しました"
 			},
-			"emailHint": "このアドレスでサインインします。"
+			"emailHint": "このアドレスでサインインします。",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "通知",

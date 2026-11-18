@@ -229,7 +229,10 @@
 			"passwordRequired": "Masukkan kata sandi Anda.",
 			"passwordTooShort": "Gunakan minimal 8 karakter.",
 			"disposableEmail": "Gunakan alamat email permanen. Alamat email sekali pakai tidak dapat digunakan untuk membuat akun.",
-			"continueWithEmail": "Lanjutkan dengan email"
+			"continueWithEmail": "Lanjutkan dengan email",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "Periksa Email Anda",
@@ -284,7 +287,11 @@
 			"sendFailed": "Gagal mengirim kode verifikasi"
 		},
 		"signInForm": {
-			"failedSignIn": "Gagal masuk"
+			"failedSignIn": "Gagal masuk",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "Terima Undangan",
@@ -632,7 +639,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "Anda masuk dengan alamat ini."
+			"emailHint": "Anda masuk dengan alamat ini.",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Notifikasi",

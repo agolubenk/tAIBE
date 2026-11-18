@@ -59,7 +59,7 @@ export const userTable = pgTable(
     banExpires: timestamp("ban_expires", { mode: "date" }),
   },
   // TB-31: an email that differs only in case is the same address (s-tb119-smtp-3010: 0 such pairs).
-  (table) => [uniqueIndex("user_email_lower_unique").on(sql`lower(email)`)],
+  () => [uniqueIndex("user_email_lower_unique").on(sql`lower(email)`)],
 );
 
 export const sessionTable = pgTable(

@@ -229,7 +229,10 @@
 			"passwordRequired": "Enter your password.",
 			"passwordTooShort": "Use at least 8 characters.",
 			"disposableEmail": "Use a permanent email address. Disposable addresses cannot create accounts.",
-			"continueWithEmail": "Continue with email"
+			"continueWithEmail": "Continue with email",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address."
 		},
 		"checkEmail": {
 			"pageTitle": "Check Your Email",
@@ -284,7 +287,11 @@
 			"sendFailed": "Failed to send verification code"
 		},
 		"signInForm": {
-			"failedSignIn": "Failed to sign in"
+			"failedSignIn": "Failed to sign in",
+			"invalidCredentials": "Wrong username or password",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+			"offline": "No connection to the server"
 		},
 		"invitation": {
 			"pageTitleAccept": "Accept Invitation",
@@ -923,7 +930,26 @@
 				"success": "Your account has been deleted",
 				"error": "Failed to delete account"
 			},
-			"emailHint": "You sign in with this address."
+			"emailHint": "You sign in with this address.",
+			"login": {
+				"label": "Username",
+				"placeholder": "ivan42",
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button.",
+				"emptyHint": "Set a username to sign in without your email.",
+				"problems": {
+					"tooShort": "Use at least 3 characters.",
+					"tooLong": "Use at most 30 characters.",
+					"invalid": "Use only Latin letters and digits.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"offline": "No connection to the server.",
+					"failed": "Could not save the username."
+				}
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Notifications",

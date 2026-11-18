@@ -229,7 +229,10 @@
 			"passwordRequired": "Parolanızı girin.",
 			"passwordTooShort": "En az 8 karakter kullanın.",
 			"disposableEmail": "Kalıcı bir e-posta adresi kullanın. Geçici adreslerle hesap oluşturulamaz.",
-			"continueWithEmail": "E-posta ile devam et"
+			"continueWithEmail": "E-posta ile devam et",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "E-postanızı Kontrol Edin",
@@ -284,7 +287,11 @@
 			"sendFailed": "Doğrulama kodu gönderilemedi"
 		},
 		"signInForm": {
-			"failedSignIn": "Giriş başarısız"
+			"failedSignIn": "Giriş başarısız",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "Daveti Kabul Et",
@@ -637,7 +644,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "Bu adresle oturum açarsınız."
+			"emailHint": "Bu adresle oturum açarsınız.",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Bildirimler",

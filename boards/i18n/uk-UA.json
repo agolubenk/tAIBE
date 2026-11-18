@@ -229,7 +229,10 @@
 			"passwordRequired": "Введіть пароль.",
 			"passwordTooShort": "Використовуйте щонайменше 8 символів.",
 			"disposableEmail": "Використовуйте постійну адресу електронної пошти. З одноразовими адресами не можна створити обліковий запис.",
-			"continueWithEmail": "Продовжити через електронну пошту"
+			"continueWithEmail": "Продовжити через електронну пошту",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "Перевірте пошту",
@@ -284,7 +287,11 @@
 			"sendFailed": "Не вдалося надіслати код підтвердження"
 		},
 		"signInForm": {
-			"failedSignIn": "Не вдалося увійти"
+			"failedSignIn": "Не вдалося увійти",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "Прийняти запрошення",
@@ -647,7 +654,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "Ви входите з цією адресою."
+			"emailHint": "Ви входите з цією адресою.",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Сповіщення",

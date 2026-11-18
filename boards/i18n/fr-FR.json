@@ -229,7 +229,10 @@
 			"passwordRequired": "Saisissez votre mot de passe.",
 			"passwordTooShort": "Utilisez au moins 8 caractères.",
 			"disposableEmail": "Utilisez une adresse e-mail permanente. Les adresses jetables ne permettent pas de créer un compte.",
-			"continueWithEmail": "Continuer avec l'e-mail"
+			"continueWithEmail": "Continuer avec l'e-mail",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "Vérifier vos mails",
@@ -284,7 +287,11 @@
 			"sendFailed": "Échec de l'envoi du code de vérification"
 		},
 		"signInForm": {
-			"failedSignIn": "Échec de la connexion"
+			"failedSignIn": "Échec de la connexion",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "Accepter l'invitation",
@@ -642,7 +649,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "Vous vous connectez avec cette adresse."
+			"emailHint": "Vous vous connectez avec cette adresse.",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Notifications",

@@ -229,7 +229,10 @@
 			"passwordRequired": "Εισάγετε τον κωδικό πρόσβασής σας.",
 			"passwordTooShort": "Χρησιμοποιήστε τουλάχιστον 8 χαρακτήρες.",
 			"disposableEmail": "Χρησιμοποιήστε μια μόνιμη διεύθυνση email. Με προσωρινές διευθύνσεις δεν μπορούν να δημιουργηθούν λογαριασμοί.",
-			"continueWithEmail": "Συνέχεια με email"
+			"continueWithEmail": "Συνέχεια με email",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "Ελέγξτε το email σας",
@@ -284,7 +287,11 @@
 			"sendFailed": "Αποτυχία αποστολής κωδικού επαλήθευσης"
 		},
 		"signInForm": {
-			"failedSignIn": "Αποτυχία σύνδεσης"
+			"failedSignIn": "Αποτυχία σύνδεσης",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "Αποδοχή πρόσκλησης",
@@ -637,7 +644,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "Συνδέεστε με αυτήν τη διεύθυνση."
+			"emailHint": "Συνδέεστε με αυτήν τη διεύθυνση.",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Ειδοποιήσεις",

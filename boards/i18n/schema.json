@@ -895,6 +895,15 @@
 						},
 						"continueWithEmail": {
 							"type": "string"
+						},
+						"loginOrEmail": {
+							"type": "string"
+						},
+						"loginOrEmailPlaceholder": {
+							"type": "string"
+						},
+						"invalidLogin": {
+							"type": "string"
 						}
 					},
 					"required": [
@@ -912,7 +921,10 @@
 						"passwordRequired",
 						"passwordTooShort",
 						"disposableEmail",
-						"continueWithEmail"
+						"continueWithEmail",
+						"loginOrEmail",
+						"loginOrEmailPlaceholder",
+						"invalidLogin"
 					]
 				},
 				"checkEmail": {
@@ -1123,9 +1135,27 @@
 					"properties": {
 						"failedSignIn": {
 							"type": "string"
+						},
+						"invalidCredentials": {
+							"type": "string"
+						},
+						"rateLimited": {
+							"type": "string"
+						},
+						"rateLimitedFor": {
+							"type": "string"
+						},
+						"offline": {
+							"type": "string"
 						}
 					},
-					"required": ["failedSignIn"]
+					"required": [
+						"failedSignIn",
+						"invalidCredentials",
+						"rateLimited",
+						"rateLimitedFor",
+						"offline"
+					]
 				},
 				"invitation": {
 					"type": "object",
@@ -3684,6 +3714,83 @@
 						},
 						"emailHint": {
 							"type": "string"
+						},
+						"login": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"label": {
+									"type": "string"
+								},
+								"placeholder": {
+									"type": "string"
+								},
+								"save": {
+									"type": "string"
+								},
+								"saved": {
+									"type": "string"
+								},
+								"saveHint": {
+									"type": "string"
+								},
+								"emptyHint": {
+									"type": "string"
+								},
+								"problems": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"tooShort": {
+											"type": "string"
+										},
+										"tooLong": {
+											"type": "string"
+										},
+										"invalid": {
+											"type": "string"
+										},
+										"reserved": {
+											"type": "string"
+										},
+										"taken": {
+											"type": "string"
+										},
+										"rateLimited": {
+											"type": "string"
+										},
+										"rateLimitedFor": {
+											"type": "string"
+										},
+										"offline": {
+											"type": "string"
+										},
+										"failed": {
+											"type": "string"
+										}
+									},
+									"required": [
+										"tooShort",
+										"tooLong",
+										"invalid",
+										"reserved",
+										"taken",
+										"rateLimited",
+										"rateLimitedFor",
+										"offline",
+										"failed"
+									]
+								}
+							},
+							"required": [
+								"label",
+								"placeholder",
+								"save",
+								"saved",
+								"saveHint",
+								"emptyHint",
+								"problems"
+							]
 						}
 					},
 					"required": [
@@ -3699,7 +3806,8 @@
 						"validation",
 						"avatar",
 						"deleteAccount",
-						"emailHint"
+						"emailHint",
+						"login"
 					]
 				},
 				"notificationsPage": {

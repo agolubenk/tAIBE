@@ -229,7 +229,10 @@
 			"passwordRequired": "請輸入密碼。",
 			"passwordTooShort": "請至少使用 8 個字元。",
 			"disposableEmail": "請使用長期有效的電子郵件地址。拋棄式地址無法建立帳號。",
-			"continueWithEmail": "使用電子郵件繼續"
+			"continueWithEmail": "使用電子郵件繼續",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "請查看你的電子郵件",
@@ -284,7 +287,11 @@
 			"sendFailed": "無法寄送驗證碼"
 		},
 		"signInForm": {
-			"failedSignIn": "登入失敗"
+			"failedSignIn": "登入失敗",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "接受邀請",
@@ -631,7 +638,26 @@
 				"success": "你的帳號已刪除",
 				"error": "刪除帳號失敗"
 			},
-			"emailHint": "你使用此地址登入。"
+			"emailHint": "你使用此地址登入。",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "通知",

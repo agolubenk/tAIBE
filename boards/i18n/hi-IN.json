@@ -229,7 +229,10 @@
 			"passwordRequired": "अपना पासवर्ड दर्ज करें।",
 			"passwordTooShort": "कम से कम 8 वर्णों का उपयोग करें।",
 			"disposableEmail": "स्थायी ईमेल पते का उपयोग करें। अस्थायी पतों से खाते नहीं बनाए जा सकते।",
-			"continueWithEmail": "ईमेल के साथ जारी रखें"
+			"continueWithEmail": "ईमेल के साथ जारी रखें",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "अपना ईमेल जाँचें",
@@ -284,7 +287,11 @@
 			"sendFailed": "सत्यापन कोड भेजने में विफल"
 		},
 		"signInForm": {
-			"failedSignIn": "साइन इन विफल"
+			"failedSignIn": "साइन इन विफल",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "निमंत्रण स्वीकार करें",
@@ -637,7 +644,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "आप इसी पते से साइन इन करते हैं।"
+			"emailHint": "आप इसी पते से साइन इन करते हैं।",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "सूचनाएँ",

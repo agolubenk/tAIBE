@@ -1,6 +1,7 @@
 import type { UseFormReturn } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { AvatarRow } from "@/components/settings/profile/avatar-row";
+import { LoginRow } from "@/components/settings/profile/login-row";
 import { SettingsCard } from "@/components/settings/settings-card";
 import { SettingsFormRow } from "@/components/settings/settings-form-row";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -10,7 +11,15 @@ import { Input } from "@/components/ui/input";
 
 type ProfileDetailsSectionProps = {
   form: UseFormReturn<{ name: string }>;
-  user: { name?: string; email?: string; image?: string | null } | undefined;
+  user:
+    | {
+        name?: string;
+        email?: string;
+        image?: string | null;
+        username?: string | null;
+        displayUsername?: string | null;
+      }
+    | undefined;
   refetchUser: () => Promise<unknown>;
 };
 
@@ -50,6 +59,10 @@ export function ProfileDetailsSection({
             />
           </form>
         </Form>
+        <LoginRow
+          current={user?.displayUsername ?? user?.username}
+          refetchUser={refetchUser}
+        />
         <SettingsRow
           stack
           title={t("settings:informationPage.email")}
