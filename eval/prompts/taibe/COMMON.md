@@ -17,6 +17,11 @@ the table «Кто чем владеет»: `docs/plans/roadmap/nerve-per-produc
    `approve` or `changes`, and the head SHA after it (`Бэкенд: approve на 46b9f87e1`) — the Nerve quorum
    (`eval/nerve/quorum.py`) reads only this line. A PR body has one line «роль N — автор» (your role number from
    `instances/<slug>.json` `team.roles`); the Nerve quorum drops the author's approve only by this line (SE-121).
+   Carry by delta (coordinator 13.11 and 17.11): if a new head has only the accepted finding of lens X, write
+   «дельта = принятая находка <X>» in the assign. Only X checks the new head. Each other lens writes one line
+   `Линза <name> (роль N): approve переношу на <sha>` (the quorum counts this form). If the new head has new logic or a
+   file outside the finding, all lenses do a full round. The Claude lens is the release chain.
+   It is extra to the role lenses and is not a gate. Release does not give it on its own PR.
 5. Your work state: `work_state_read <key>-taibe` (not `<key>-t3`: that list belongs to the HR role).
 
 ## Board
@@ -46,7 +51,11 @@ TB «t-boards» `mf6jpr5wftbgr3z93lvw807v`, SE «supertick-eval» `tl3j7yc2mc7ly
 - Work in `worktrees/<track>/<topic>`. Do not commit in the main checkout.
 - Next card: when your card goes to review or merges, run `python3 -I eval/tools/queue_focus.py --plan --product
   taibe`. Take the first item and its lease (`forest_acquire_lease`). If the lease is taken, take the next item.
-  After a merge, request the card's close in the same step.
+  After the lease, run `get_task`. If the status is not `new` or `to-do`, release the lease and take the next item.
+- Leases: release the lease in the same step that moves the card to review. Do not renew leases with a cron, a loop
+  or a timer. A hand-off has no leases. Details: `T-BOARDS.md`, «Цикл работы с карточкой», steps 4–5.
+- Close: Control (role 5) requests the close after the merge. If your merged PR has no `docs/plans/done/` entry for
+  the card, add the entry in a docs PR.
 - Switch your lane only for an owner inbox item with `urgency: now`, an inbox alert (always), a production failure
   or an owner stop. Put any other signal (a Nerve digest, a finding, an idea, an inbox item with `urgency: queue`) as
   a card in the plan's backlog row and continue your card.
