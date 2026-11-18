@@ -6622,6 +6622,40 @@
           "expiresAt"
         ]
       },
+      "ReauthError": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiError"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "methods": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "password",
+                    "emailCode"
+                  ]
+                },
+                "description": "On SESSION_NOT_FRESH: the ways this person can confirm it is them now. Empty when impersonated.",
+                "example": [
+                  "password",
+                  "emailCode"
+                ]
+              },
+              "impersonated": {
+                "type": "boolean",
+                "enum": [
+                  true
+                ],
+                "description": "On SESSION_NOT_FRESH of an impersonated session: no confirmation is possible."
+              }
+            }
+          }
+        ]
+      },
       "IssueAgentKeyBody": {
         "type": "object",
         "properties": {
@@ -28628,7 +28662,7 @@
           "Agents"
         ],
         "summary": "Issue a key for an agent session",
-        "description": "Gets or creates the agent of the caller, harness and session — a user of its own that cannot sign in — copies the caller's workspace memberships onto it (owner becomes admin) and returns a key valid for a day. Cards, comments and the journal then show the agent's name, not the caller's. An agent idle for a day is in the archive; asking again brings it back with its name and history while the caller has fewer than 50 active agents. Only a person's session or unscoped key may call it.",
+        "description": "Gets or creates the agent of the caller, harness and session — a user of its own that cannot sign in — copies the caller's workspace memberships onto it (owner becomes admin) and returns a key valid for a day. Cards, comments and the journal then show the agent's name, not the caller's. An agent idle for 5 hours is in the archive; asking again brings it back with its name and history while the caller has fewer than 200 active agents. Only a person's session or unscoped key may call it. A browser session needs a fresh sign-in (SESSION_NOT_FRESH otherwise); a session from the device flow (kaneo-cli, kaneo-mcp) and a key do not.",
         "requestBody": {
           "required": true,
           "content": {
@@ -28671,11 +28705,11 @@
             }
           },
           "403": {
-            "description": "The caller is an agent or a one-workspace key, the agent is disabled, or the caller already has 200 active agents",
+            "description": "The caller is an agent or a one-workspace key, the agent is disabled, the caller already has 200 active agents, or a browser session must confirm it is the person (SESSION_NOT_FRESH)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiError"
+                  "$ref": "#/components/schemas/ReauthError"
                 }
               }
             }

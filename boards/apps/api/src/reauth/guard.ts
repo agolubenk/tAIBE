@@ -30,7 +30,9 @@ export type SessionResolver = (
  * because `session.freshAge` is 0: better-auth no longer checks them itself.
  * Slice B: an admin setting a user's password or signing in as a user takes
  * the account like an email change does (owner, taibe-d-tb31-scope-1811 = A).
- * The passkey routes, the username and the email change follow.
+ * `/device/approve` gives a device a session that issues agent keys without a
+ * confirmation (owner, taibe-d-tb31-agent-key-1811 = A): the approval is the
+ * confirmation. The passkey routes, the username and the email change follow.
  */
 const ALWAYS_GUARDED = new Set([
   "/api-key/create",
@@ -39,6 +41,7 @@ const ALWAYS_GUARDED = new Set([
   "/unlink-account",
   "/admin/set-user-password",
   "/admin/impersonate-user",
+  "/device/approve",
 ]);
 
 /** What a route needs: always a fresh session, only for an email change, or nothing. */
@@ -71,11 +74,38 @@ async function adminEmailNeedsFresh(
   return adminEmailChanges(userId, email);
 }
 
-export function notFreshError(body: Omit<ReauthErrorBody, "message">) {
-  return new APIError("FORBIDDEN", {
-    message: "Confirm it's you to continue.",
-    ...body,
-  });
+export const NOT_FRESH_MESSAGE = "Confirm it's you to continue.";
+
+export type NotFreshBody = Omit<ReauthErrorBody, "message">;
+
+export function notFreshError(body: NotFreshBody) {
+  return new APIError("FORBIDDEN", { message: NOT_FRESH_MESSAGE, ...body });
+}
+
+/**
+ * The SESSION_NOT_FRESH body for a session that may not act now, or null.
+ * An impersonated session never may: the person behind it is the admin.
+ * `alsoPasses` lets a route accept another mark (the device flow's).
+ */
+export async function staleSessionRefusal(
+  session: GuardSession["session"],
+  userId: string,
+  alsoPasses?: (sessionId: string, userId: string) => Promise<boolean>,
+): Promise<NotFreshBody | null> {
+  // `impersonatedBy` comes from the admin plugin's session fields.
+  if (session.impersonatedBy) {
+    return {
+      code: REAUTH_ERRORS.sessionNotFresh,
+      methods: [],
+      impersonated: true,
+    };
+  }
+  if (alsoPasses && (await alsoPasses(session.id, userId))) return null;
+  if (await isSessionFresh(session.id, userId)) return null;
+  return {
+    code: REAUTH_ERRORS.sessionNotFresh,
+    methods: await availableMethods(userId, false),
+  };
 }
 
 /**
@@ -97,17 +127,6 @@ export async function assertFreshSession(
   const { session, user } = found;
   if (kind === "admin-email" && !(await adminEmailNeedsFresh(ctx, user.role)))
     return;
-  // `impersonatedBy` comes from the admin plugin's session fields.
-  if ((session as { impersonatedBy?: string | null }).impersonatedBy) {
-    throw notFreshError({
-      code: REAUTH_ERRORS.sessionNotFresh,
-      methods: [],
-      impersonated: true,
-    });
-  }
-  if (await isSessionFresh(session.id, user.id)) return;
-  throw notFreshError({
-    code: REAUTH_ERRORS.sessionNotFresh,
-    methods: await availableMethods(user.id, false),
-  });
+  const refused = await staleSessionRefusal(session, user.id);
+  if (refused) throw notFreshError(refused);
 }

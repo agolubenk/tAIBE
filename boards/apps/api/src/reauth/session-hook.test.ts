@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const store = vi.hoisted(() => ({ markSessionFresh: vi.fn() }));
+const device = vi.hoisted(() => ({ markDeviceSession: vi.fn() }));
 vi.mock("./store", () => store);
+vi.mock("./device-session", () => device);
 
 const { isInteractiveSignIn, markInteractiveSession } =
   await import("./session-hook");
@@ -11,6 +13,8 @@ const session = { id: "s1", userId: "u1" };
 beforeEach(() => {
   store.markSessionFresh.mockReset();
   store.markSessionFresh.mockResolvedValue(undefined);
+  device.markDeviceSession.mockReset();
+  device.markDeviceSession.mockResolvedValue(undefined);
 });
 
 describe("TB-31 R-5: the mark on a new session", () => {
@@ -38,23 +42,35 @@ describe("TB-31 R-5: the mark on a new session", () => {
     expect(store.markSessionFresh).toHaveBeenCalledWith("s1", "u1");
   });
 
-  it("does not mark impersonation, a missing context or another path", async () => {
-    await markInteractiveSession(
-      { ...session, impersonatedBy: "admin" },
-      { path: "/sign-in/email" },
-    );
-    await markInteractiveSession(session, null);
+  it("marks a device-flow session as a device session, not as fresh", async () => {
     await markInteractiveSession(session, { path: "/device/token" });
+    expect(device.markDeviceSession).toHaveBeenCalledWith("s1", "u1");
     expect(store.markSessionFresh).not.toHaveBeenCalled();
+  });
+
+  it("does not mark impersonation, a missing context or another path", async () => {
+    for (const path of ["/sign-in/email", "/device/token"]) {
+      await markInteractiveSession(
+        { ...session, impersonatedBy: "admin" },
+        { path },
+      );
+    }
+    await markInteractiveSession(session, null);
+    await markInteractiveSession(session, { path: "/sign-up/email" });
+    expect(store.markSessionFresh).not.toHaveBeenCalled();
+    expect(device.markDeviceSession).not.toHaveBeenCalled();
   });
 
   it("never throws: a failed mark must not fail the sign-in", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     store.markSessionFresh.mockRejectedValue(new Error("db down"));
-    await expect(
-      markInteractiveSession(session, { path: "/sign-in/email" }),
-    ).resolves.toBeUndefined();
-    expect(error).toHaveBeenCalled();
+    device.markDeviceSession.mockRejectedValue(new Error("db down"));
+    for (const path of ["/sign-in/email", "/device/token"]) {
+      await expect(
+        markInteractiveSession(session, { path }),
+      ).resolves.toBeUndefined();
+    }
+    expect(error).toHaveBeenCalledTimes(2);
     error.mockRestore();
   });
 });
