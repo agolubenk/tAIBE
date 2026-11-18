@@ -181,8 +181,11 @@ def load(instances=INSTANCES):
         if data.get("slug") != slug or not SLUG_RE.match(slug):
             raise ProductError(f"instances/{name}: slug «{data.get('slug')}» — нужен «{slug}» формата {SLUG_RE.pattern}")
         for path in REQUIRED:
-            if _get(data, path) is None:
+            value = _get(data, path)
+            if value is None:
                 raise ProductError(f"instances/{name}: нет обязательного поля {path}")
+            if isinstance(value, str) and not value.strip():   # SE-172: `get` отдал бы "" с кодом 0
+                raise ProductError(f"instances/{name}: пустое обязательное поле {path}")
         _check_match(name, _get(data, "queue.match"))
         products[slug] = data
     default = shared.get("default_product")
