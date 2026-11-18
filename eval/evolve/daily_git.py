@@ -30,7 +30,9 @@ MANUAL_ONLY = ('eval/prompts/lens-*', '*.py', '*.sh', '.claude/rules/*', '*CLAUD
 BRANCH_PREFIX = 'evolve/'
 TRAILER = 'Evolve-Run: '
 MAX_MERGE_FILES = 12
-OPEN_PRS_LIMIT = 50       # SE-63: `gh pr list --limit`; a full list may hide an evolve PR — closed on doubt
+# SE-63: `gh pr list --limit`; a full list may hide an evolve PR — closed on doubt. SE-107: 50 hid the run's own PRs
+# once 50+ PRs were open (109 on 14.11): cases waited every night and merge_ready never saw #141. gh pages by itself.
+OPEN_PRS_LIMIT = 1000
 OPEN_PRS_TRIES = 3        # one call and two retries before «GitHub did not answer»
 OPEN_PRS_PAUSE_S = 5
 
@@ -258,7 +260,7 @@ def superseded(verdicts, body):
 def merge_ready(repo, base, verdicts, enabled, records, dry=False):
     """Merge the run's own open PRs that pass every gate, through `gh pr merge --auto --match-head-commit`.
     Returns one row per PR the run opened."""
-    raw = gh(repo, 'pr', 'list', '--base', base, '--state', 'open', '--limit', '50',
+    raw = gh(repo, 'pr', 'list', '--base', base, '--state', 'open', '--limit', str(OPEN_PRS_LIMIT),
              '--json', 'number,headRefName,headRefOid,isDraft,body,url')
     required = None
     rows = []
