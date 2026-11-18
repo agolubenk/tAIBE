@@ -11,11 +11,12 @@
   строки), репозиторий — из `-R`/`--repo`, иначе репозиторий продукта записи с командой.
 - Время события — время первой записи его requestId; сравнение со временем вызова — включительно.
 - Окно линзы PR N — от первого view/diff/checkout N захода до comment/review N. Заход — просмотры N, между
-  которыми не больше LENS_GAP (1 ч) и нет work_state с карточкой или веткой; comment/review дальше LENS_GAP от
+  которыми не больше LENS_GAP (1 ч) и нет work_state другой работы; comment/review дальше LENS_GAP от
   последнего просмотра окна не даёт. work_state после последнего просмотра заход не режет: вердикт без нового
   просмотра закрывает его. Второй comment/review продлевает окно, если он не дальше LENS_GAP от первого и между ними
-  нет work_state с карточкой или веткой и событий другого PR. Окно без comment/review отбрасывается. Окна
-  пересекаются — побеждает открытое позже.
+  нет work_state другой работы и событий другого PR. Окно без comment/review отбрасывается. Окна
+  пересекаются — побеждает открытое позже. work_state другой работы ведёт к другому PR или к карточке без PR;
+  state своего PR и ветка без PR и без карточки (`board-agents`) заход не режут.
 - Субагент видит свои события и события родителя.
 - Порядок: окно линзы → ветка work_state → PR с этой headRefName → карточка work_state → PR, в теле которого id
   карточки → только карточка → карточка аренды (если сессия арендовала ровно одну) → «не отнесено».
@@ -33,12 +34,13 @@ import sys
 from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Подпись «не отнесено» — одна с долей окна Нерва. В конец пути: модули eval/tools не перекрываются.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'nerve'))
 import transcript as tr  # noqa: E402
-
-UNATTRIBUTED = 'unattributed'
+from budget import SHARE_LABELS, UNATTRIBUTED  # noqa: E402
 OPEN, CLOSE = frozenset(('view', 'diff', 'checkout')), frozenset(('comment', 'review'))
 # Команда gh pr, а не текст внутри аргумента другой команды (`nerve.py emit "… gh pr diff 163"`, backend #417).
-GH_PR_RE = re.compile(r'(?:^|[;&|(`\n]|\b(?:do|then|else)\s)\s*(?:\w+=\S*\s+)*gh\s+pr\s+'
+GH_PR_RE = re.compile(r'(?:^|[;&|(`\n]|\b(?:do|then|else)\s)[ \t]*(?:\w+=[^\s;&|]*[ \t]+)*gh\s+pr\s+'
                       r'(view|diff|checkout|comment|review)\s+#?(\d+)\b([^\n;&|]*)')
 REPO_RE = re.compile(r'(?:^|\s)(?:-R|--repo)(?:\s+|=)([\w.-]+/[\w.-]+)')
 CARD_RE = r'\b[a-z][a-z0-9]{23}\b'
@@ -124,8 +126,10 @@ class Timeline:
     def add(self, t, kind, value):
         self.events.append((t, len(self.events), kind, value))
 
-    def build(self, own=None):
-        """Окна линз, состояние work_state и аренды по времени. own — события субагента поверх событий родителя."""
+    def build(self, own=None, lead=None):
+        """Окна линз, состояние work_state и аренды по времени. own — события субагента поверх событий родителя.
+        lead(карточка, ветка, t, repo) — номер PR, к которому ведёт work_state (Ledger.leads); без lead любой
+        work_state с карточкой или веткой — другая работа."""
         # По (время, порядок): значения разных видов не сравнимы; при равенстве родитель раньше субагента.
         evs = sorted(self.events + (own.events if own else []), key=lambda e: e[:2])
         # views: PR → (начало захода, последний просмотр); cut: заходы, после которых была другая работа;
@@ -149,8 +153,8 @@ class Timeline:
             elif kind == 'state':
                 states.append((t,) + value)
                 if any(value):  # другая работа (B1, B2): следующий просмотр — новый заход, вердикт окно не продлевает;
-                    cut.update(views)  # уже открытый заход state не режет: вердикт без нового просмотра — строка 3
-                    last = {}
+                    cut.update(pr for pr in views if _other(pr, value, t, lead))  # открытый заход state не режет:
+                    last = {pr: w for pr, w in last.items() if not _other(pr, value, t, lead)}  # вердикт — строка 3
             elif kind == 'lease':
                 leases.add(value)
         self.windows = sorted(windows, key=lambda w: w[:2])  # repo бывает None: значения не сравниваем (N3)
@@ -173,6 +177,16 @@ class Timeline:
         """(карточка, ветка) последнего work_state не позже t."""
         i = bisect.bisect_right(self.state_times, t)
         return self.states[i - 1][1:] if i else (None, None)
+
+
+def _other(pr, state, t, lead):
+    """work_state state — другая работа для захода PR pr = (repo, N): ведёт к другому PR или к карточке без PR.
+    State своего PR и ветка без PR и без карточки (`board-agents`) заход не режут: N1 Claude-линзы #417 на
+    9c9e59d32 — ≈ $21 из $4 129 за 72 ч уходило в «не отнесено». Репозиторий захода неизвестен — прежнее правило."""
+    if lead is None or pr[0] is None:
+        return True
+    n = lead(state[0], state[1], t, pr[0])
+    return n != pr[1] if n is not None else state[0] is not None
 
 
 def pick(prs, t):
@@ -219,20 +233,22 @@ class Ledger:
     def call(self, sid, path, is_sub, t, product, usd):
         self.calls.append((sid, path if is_sub else None, t, product, usd))
 
+    def leads(self, card, branch, t, repo):
+        """PR, к которому ведёт work_state в момент t: по ветке, затем по id карточки в теле; иначе None."""
+        if not repo:
+            return None
+        return ((branch and pick(self.by_branch.get((repo, branch)), t)) or
+                (card and pick(self.by_card.get((repo, card)), t)) or None)
+
     def target(self, line, t, repo):
         """Цель вызова: ('pr', repo, N), ('task', id) или UNATTRIBUTED."""
         pr = line.lens(t)
         if pr:
             return 'pr', pr[0] or repo, pr[1]
         task, branch = line.state(t)
-        if branch and repo:
-            n = pick(self.by_branch.get((repo, branch)), t)
-            if n:
-                return 'pr', repo, n
-        if task and repo:
-            n = pick(self.by_card.get((repo, task)), t)
-            if n:
-                return 'pr', repo, n
+        n = self.leads(task, branch, t, repo)
+        if n:
+            return 'pr', repo, n
         if task:
             return 'task', task
         if line.lease:
@@ -246,8 +262,8 @@ class Ledger:
             key = (sid, sub)
             if key not in built:
                 parent = self.lines.get((sid, None), Timeline())
-                built[key] = (Timeline().build(parent) if sub is None else
-                              _merged(parent, self.lines.get(key)))
+                built[key] = (Timeline().build(parent, self.leads) if sub is None else
+                              _merged(parent, self.lines.get(key), self.leads))
             goal = self.target(built[key], t, self.by_slug.get(product))
             agg = out.setdefault(goal, {'calls': 0, 'usd': 0.0})
             agg['calls'] += 1
@@ -255,16 +271,22 @@ class Ledger:
         return out
 
 
-def _merged(parent, own):
+def _merged(parent, own, lead=None):
     line = Timeline()
     line.events = list(parent.events)
-    return line.build(own)
+    return line.build(own, lead)
+
+
+def merged(prs, since, until):
+    """{repo: число PR, влитых в [since, until)} — знаменатель «$ на влитый PR» (план v1.1: траты окна / влитые PR)."""
+    return {repo: sum(1 for p in items if p.get('mergedAt') and since <= tr.local_time(p['mergedAt']) < until)
+            for repo, items in prs.items()}
 
 
 def label(goal):
-    """Строка цели для отчёта: agolubenk/tAIBE#410, card <id>, unattributed."""
+    """Строка цели для отчёта: agolubenk/tAIBE#410, card <id>, «не отнесено» (подпись доли окна Нерва)."""
     if goal == UNATTRIBUTED:
-        return UNATTRIBUTED
+        return SHARE_LABELS[UNATTRIBUTED]
     if goal[0] == 'pr':
         return f'{goal[1]}#{goal[2]}'
     return f'card {goal[1]}'
@@ -286,7 +308,7 @@ def text(rows_, total, top=15):
         return f'{x / total:.0%}' if total else '—'
     lines = ['3. К чему отнесено (PR 2 GL-1): ' + ', '.join(
         f'{name} {share(kinds.get(kind, 0.0))}' for kind, name in (('pr', 'PR'), ('task', 'карточки'),
-                                                                    (UNATTRIBUTED, UNATTRIBUTED))),
+                                                                    (UNATTRIBUTED, SHARE_LABELS[UNATTRIBUTED]))),
              '| цель | вызовов | $ | доля |', '|---|---|---|---|']
     lines += [f"| {r['target']} | {r['calls']} | {r['usd']:.2f} | {share(r['usd'])} |" for r in rows_[:top]]
     if len(rows_) > top:
