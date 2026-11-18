@@ -101,6 +101,9 @@ class NightlySpendTest(unittest.TestCase):
         forms = {'attribution without kind': dict(REPORT, attribution=[{'usd': 1.0}]),
                  'by_product without product': dict(REPORT, by_product=[{'usd': 1.0}]),
                  'merged as a list': dict(REPORT, merged=[1, 2]),
+                 'ctx_median as text': dict(REPORT, ctx_median='12K'),  # #485 backend B1
+                 'merged count as text': dict(REPORT, merged={'r': '3'}),
+                 'usd as text': dict(REPORT, usd='1000'),
                  'a list': [REPORT]}
         for why, rep in forms.items():
             with self.subTest(why):
