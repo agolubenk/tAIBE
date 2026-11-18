@@ -31,9 +31,10 @@ describe("auth rate limit (TB-31 R-8)", () => {
       window: 60,
       max: 3,
     });
+    // The email-otp plugin's own limit; a custom rule must not loosen it.
     expect(AUTH_RATE_LIMIT_RULES["/sign-in/email-otp"]).toEqual({
       window: 60,
-      max: 5,
+      max: 3,
     });
     expect(AUTH_RATE_LIMIT_RULES["/tb/reauth/password"]).toEqual({
       window: 60,

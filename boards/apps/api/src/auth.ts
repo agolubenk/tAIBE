@@ -82,6 +82,7 @@ import { mapCustomOAuthProfileToUser } from "./utils/custom-oauth-profile";
 import { authRateLimitOptions } from "./utils/auth-rate-limit";
 import { resolveFileSecret } from "./utils/file-secret";
 import { generateDemoName } from "./utils/generate-demo-name";
+import { ADMIN_PLUGIN_OPTIONS } from "./reauth/admin-role";
 import { assertFreshSession, type GuardSession } from "./reauth/guard";
 import { reauthPlugin } from "./reauth/plugin";
 import { markInteractiveSession } from "./reauth/session-hook";
@@ -754,10 +755,8 @@ export const auth = betterAuth({
       validateClient: async (clientId) =>
         getDeviceAuthClientIds().has(clientId),
     }),
-    adminPlugin({
-      defaultRole: "user",
-      adminRoles: ["admin"],
-    }),
+    // The guard reads the same options (reauth/admin-role.ts, release N14).
+    adminPlugin(ADMIN_PLUGIN_OPTIONS),
     openAPI(),
     reauthPlugin(),
   ],

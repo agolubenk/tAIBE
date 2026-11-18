@@ -1,6 +1,7 @@
 import { REAUTH_ERRORS, type ReauthErrorBody } from "@kaneo/permissions";
 import { APIError, type getSessionFromCtx } from "better-auth/api";
 import { adminEmailChanges } from "../user/controllers/clear-email-verification-on-admin-change";
+import { canUpdateUsers } from "./admin-role";
 import { availableMethods } from "./methods";
 import { isSessionFresh } from "./store";
 
@@ -9,7 +10,7 @@ type GuardContext = Parameters<typeof getSessionFromCtx>[0];
 /** The session a guarded endpoint will act for. */
 export type GuardSession = {
   session: { id: string; impersonatedBy?: string | null };
-  user: { id: string };
+  user: { id: string; role?: string | null };
 };
 
 /**
@@ -36,18 +37,33 @@ const ALWAYS_GUARDED = new Set([
   "/unlink-account",
 ]);
 
-async function needsFreshSession(ctx: GuardContext): Promise<boolean> {
-  if (ALWAYS_GUARDED.has(ctx.path)) return true;
-  if (ctx.path !== "/admin/update-user") return false;
-  const body = ctx.body as { userId?: unknown; data?: unknown } | undefined;
-  const data = body?.data;
+/** What a route needs: always a fresh session, only for an email change, or nothing. */
+function guardKind(ctx: GuardContext): "always" | "admin-email" | null {
+  if (ALWAYS_GUARDED.has(ctx.path)) return "always";
+  if (ctx.path !== "/admin/update-user") return null;
+  const data = (ctx.body as { data?: unknown } | undefined)?.data;
   if (!data || typeof data !== "object" || !Object.hasOwn(data, "email"))
-    return false;
-  const userId = body?.userId;
-  const email = (data as { email?: unknown }).email;
+    return null;
+  return "admin-email";
+}
+
+/**
+ * `/admin/update-user` with an email needs a fresh session when the email
+ * changes. The target is read only for a role that may update users (release
+ * N14): for any other caller, the guard's 403 against the plugin's 403 would
+ * tell whether an email is that user's. Such a caller is guarded unread.
+ */
+async function adminEmailNeedsFresh(
+  ctx: GuardContext,
+  role: string | null | undefined,
+): Promise<boolean> {
+  const body = ctx.body as { userId?: unknown; data: { email?: unknown } };
+  const userId = body.userId;
+  const email = body.data.email;
   // better-auth coerces userId (`z.coerce.string()`): ["id"] acts on "id".
   // Anything but two strings is guarded, not guessed.
   if (typeof userId !== "string" || typeof email !== "string") return true;
+  if (!canUpdateUsers(role)) return true;
   return adminEmailChanges(userId, email);
 }
 
@@ -70,10 +86,13 @@ export async function assertFreshSession(
   resolveSession: SessionResolver,
 ): Promise<void> {
   if (!ctx.request) return;
-  if (!(await needsFreshSession(ctx))) return;
+  const kind = guardKind(ctx);
+  if (!kind) return;
   const found = await resolveSession(ctx.headers ?? ctx.request.headers);
   if (!found?.session) return;
   const { session, user } = found;
+  if (kind === "admin-email" && !(await adminEmailNeedsFresh(ctx, user.role)))
+    return;
   // `impersonatedBy` comes from the admin plugin's session fields.
   if ((session as { impersonatedBy?: string | null }).impersonatedBy) {
     throw notFreshError({
