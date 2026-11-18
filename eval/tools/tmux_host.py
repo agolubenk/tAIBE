@@ -19,8 +19,9 @@
 launchd, а не сессии, которая открыла окно (CLAUDECODE, TAIBE_LINEAGE, CLAUDE_CODE_SSE_PORT и песочница сессии в окна
 не попадают); `update-environment` пустой. Панель запускает пусковой скрипт через `<login shell> -l -i -c`, как окно
 Terminal: ANTHROPIC_BASE_URL (headroom) и PATH к claude приходят из ~/.zshrc.
-Закрывает панель только close_pane() — сторож lineage_retire; CLI для этого нет. Ввод, экран и закрытие окон tmux
-агентам запрещает merge-guard (merge_guard_tmux.py).
+Закрывает панель только close_pane() — сторож lineage_retire; CLI для этого нет. Клавиши в меню лимита — только
+limit_unstick.unstick() (SE-174), его зовёт демон Нерва. Ввод, экран и закрытие окон tmux агентам запрещает merge-guard
+(merge_guard_tmux.py).
 Тесты: TAIBE_TMUX — подставной tmux, TAIBE_TMUX_SOCKET — имя сервера, TAIBE_TMUX_SERVICE=off — без launchctl,
 TAIBE_TMUX_CONF_DIR — папка конфига.
 """
