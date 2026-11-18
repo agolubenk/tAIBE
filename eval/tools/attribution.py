@@ -278,7 +278,7 @@ def _merged(parent, own, lead=None):
 
 
 def merged(prs, since, until):
-    """{repo: число PR, влитых в [since, until)} — знаменатель «$ на влитый PR» (план v1.1: все траты окна / влитые PR)."""
+    """{repo: число PR, влитых в [since, until)} — знаменатель «$ на влитый PR» (план v1.1: траты окна / влитые PR)."""
     return {repo: sum(1 for p in items if p.get('mergedAt') and since <= tr.local_time(p['mergedAt']) < until)
             for repo, items in prs.items()}
 

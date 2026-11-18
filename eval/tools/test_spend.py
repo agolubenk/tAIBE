@@ -172,6 +172,8 @@ class ScanTest(Fixture):
                            env=dict(os.environ, HOME=self.tmp.name), capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('| 2026-11-15 | taibe | 6 | boards | 2 | 6 |', p.stdout)
+        self.assertIn('| 2026-11-15 | не отнесено |', p.stdout)  # одна подпись с долей окна Нерва (PR 3)
+        self.assertNotIn('unattributed', p.stdout)
         with open(out, encoding='utf-8') as f:
             self.assertEqual(json.load(f)['usd'], self.rep['usd'])
         bad = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'spend.py'), 'вчера'],

@@ -20,13 +20,13 @@ usage: python3 -I eval/tools/spend.py --hours 24 [--json out.json]
 - Роль, линия, ключ реестра — из первого сообщения сессии («роль N», «Линия: r.xxxx», «ключ реестра K»). Роли нет —
   «прочее»: доля «прочего» покажет, нужна ли метка.
 - Продукт — у каждого вызова, той же функцией, что доля окна Нерва (budget.Products, SE-66): cwd записи под repo_root
-  продукта из instances/*.json, иначе папка проекта сессии, иначе unattributed. Сессия, сменившая cwd на чужой репо,
-  делится между продуктами так же, как в budget.py: одна сессия — одна разбивка в обоих.
+  продукта из instances/*.json, иначе папка проекта сессии, иначе «не отнесено» (ключ unattributed). Сессия,
+  сменившая cwd на чужой репо, делится между продуктами так же, как в budget.py: одна сессия — одна разбивка в обоих.
 - День — местная дата вызова; окно [с, по] — по местному времени.
-- Цель вызова (PR, карточка или unattributed) — `--attribution`, правила в attribution.py (PR 2). С ним же — число PR,
+- Цель вызова (PR, карточка или «не отнесено») — `--attribution`, правила в attribution.py (PR 2). С ним же — число PR,
   влитых в окне (`merged`, по репозиториям): знаменатель «$ на влитый PR» — все траты окна / влитые PR (план v1.1).
-- Ночной прогон (PR 3): `eval/evolve/daily_steps.py` `spend_night` — вчерашний день в `~/.claude/evolve/spend/<день>.json`
-  (60 дней) и строка дня координатору в Нерв.
+- Ночной прогон (PR 3): `eval/evolve/daily_steps.py` `spend_night` — вчерашний день в
+  `~/.claude/evolve/spend/<день>.json` (60 дней) и строка дня координатору в Нерв.
 """
 import collections
 import json
@@ -42,7 +42,7 @@ sys.path.insert(0, HERE)
 sys.path.append(os.path.join(HERE, '..', 'nerve'))
 import prices  # noqa: E402
 import transcript as tr  # noqa: E402
-from budget import UNATTRIBUTED, Products, project_dir_name  # noqa: E402
+from budget import SHARE_LABELS, UNATTRIBUTED, Products, project_dir_name  # noqa: E402
 
 INSTANCES = os.path.join(HERE, '..', '..', 'instances')
 BANDS = ((250_000, '≤ 250K'), (500_000, '250–500K'), (1_000_000, '500K–1M'), (math.inf, '> 1M'))
@@ -261,11 +261,13 @@ def text(rep):
              + ' | '.join(n for _, n in BANDS) + ' |', '|---' * (11 + len(BANDS)) + '|']
     for g in rep['by_role']:
         bands = ' | '.join(share(g['bands'][n]['usd'], g['usd']) for _, n in BANDS)
-        lines.append(f"| {g['day']} | {g['product']} | {g['role']} | {g['key']} | {g['sessions']} | {g['calls']} | "
+        product = SHARE_LABELS.get(g['product'], g['product'])
+        lines.append(f"| {g['day']} | {product} | {g['role']} | {g['key']} | {g['sessions']} | {g['calls']} | "
                      f"{g['usd']:.2f} | {g['ctx_median'] / 1000:.0f}K | {g['ctx_p90'] / 1000:.0f}K | {g['cold']} | "
                      f"{g['compactions']} | {bands} |")
     lines += ['', '2. Продукты (доля $ дня)', '| день | продукт | $ | доля |', '|---|---|---|---|']
-    lines += [f"| {g['day']} | {g['product']} | {g['usd']:.2f} | {g['share']:.0%} |" for g in rep['by_product']]
+    lines += [f"| {g['day']} | {SHARE_LABELS.get(g['product'], g['product'])} | {g['usd']:.2f} | {g['share']:.0%} |"
+              for g in rep['by_product']]
     lines += ['', 'Полосы окна — доля $ роли за день. На подписке $ — мерило расхода лимита.']
     return '\n'.join(lines)
 
