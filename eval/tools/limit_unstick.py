@@ -41,7 +41,7 @@ FRAME = "│┃╭╮╰╯─━┌┐└┘❯› \t"
 RULE = set("─━-╭╮╰╯┌┐└┘")
 NAMED_RULE_RE = re.compile(r"[─━]{8,}\s+[^─━│┃\s][^─━│┃]{0,63}?\s+[─━]{1,8}")  # «──── taibe-plan-czc6 ─» (живой снимок)
 MENU_MAX = 12        # строк в блоке меню после заголовка — больше не бывает
-INPUT_ZONE = 8       # строка ввода — среди последних непустых строк (под ней линия и 1–3 строки статуса)
+INPUT_ZONE = 8       # линия, строка ввода, линия и до 5 строк статуса (живой экран — 2)
 PREFILL = "continue"
 TEXT = "лимит снят: продолжай с work_state"
 SETTLE = 1.5         # с: экран после клавиши
@@ -81,14 +81,15 @@ def rule(line):
 
 
 def draft(screen):
-    """Текст строки ввода Claude Code внизу экрана: '' — пусто, None — строки ввода не видно. Строка ввода —
-    «> текст» или «❯ текст» сразу под линией или верхом рамки."""
+    """Текст строки ввода Claude Code внизу экрана: '' — пусто, None — строки ввода не видно. Строка ввода — одна
+    строка «> текст» или «❯ текст» между двумя нижними линиями (рамкой) в последних INPUT_ZONE строках. Цитата
+    выше этой рамки не берётся, а другой ввод в рамке (режим bash «! …», черновик в несколько строк) — None."""
     lines = bottom(screen)[-INPUT_ZONE:]
-    for i in range(len(lines) - 1, 0, -1):
-        m = PROMPT_RE.fullmatch(lines[i].strip("│┃ \t"))
-        if m and rule(lines[i - 1]):
-            return (m.group("draft") or "").strip()
-    return None
+    rules = [i for i, ln in enumerate(lines) if rule(ln)]
+    if len(rules) < 2 or rules[-1] - rules[-2] != 2:
+        return None
+    m = PROMPT_RE.fullmatch(lines[rules[-1] - 1].strip("│┃ \t"))
+    return (m.group("draft") or "").strip() if m else None
 
 
 def role_panes():
@@ -170,7 +171,8 @@ def unstick_pane(sx, pane, tty, sleep, procs=None):
 
 def unstick(fresh, sx=None, sleep=time.sleep):
     """Все панели ролей с меню лимита. fresh(линия) — Esc этой линии за сброс ещё не было (S4).
-    [{line, role, pane, action, sha256}] — только панели, где была клавиша."""
+    [{line, role, pane, action, sha256}] — панели с клавишей и панели, где статус — меню, а клавиш нет (NO_MATCH,
+    NO_SCREEN, сбой панели)."""
     sx = sx or L.Sys()
     done = []
     panes = [p for p in role_panes() if fresh(p[0])]
