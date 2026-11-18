@@ -32,9 +32,11 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import lineage as L  # noqa: E402
 import lineage_reap as R  # noqa: E402
 
-# Номер — место ключа в team.roles (как role_num в spawn_session.sh); вторые сессии — после базовых ролей.
-ORDER = ("coord", "release", "backend", "frontend", "plan", "boards", "backend-2", "frontend-2")
-NUM = {"coord": 1, "plan": 2, "frontend": 3, "backend": 4, "release": 5, "boards": 6, "backend-2": 7, "frontend-2": 8}
+# Номер — место ключа в team.roles (как role_num в spawn_session.sh); вторые сессии — после базовых ролей. Роли
+# всех продуктов: у продукта может быть не каждая (backend-3 — только у HR), номер у роли один на все продукты.
+ORDER = ("coord", "release", "backend", "frontend", "plan", "boards", "backend-2", "frontend-2", "backend-3")
+NUM = {"coord": 1, "plan": 2, "frontend": 3, "backend": 4, "release": 5, "boards": 6, "backend-2": 7, "frontend-2": 8,
+       "backend-3": 9}
 LABEL = "space.hrhelper.nerve"  # до OPS-25 — один Нерв на Mac для всех продуктов
 # «Роли нет» — свой код: 1 Python отдаёт и на трейсбек (сбой импорта, исключение), и по нему открылась бы вторая
 # сессия живой роли.

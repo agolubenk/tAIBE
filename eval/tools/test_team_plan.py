@@ -31,7 +31,8 @@ class SplitTest(unittest.TestCase):
 
     def test_allocate_caps_by_roles_and_gives_rest_away(self):
         roles = {"a": ["coord", "release"], "b": list(TP.ORDER)}
-        self.assertEqual(TP.allocate({"a": 6, "b": 6}, roles), {"a": 2, "b": 8})
+        # b: своя доля 6 и остаток a (4), но не больше своих ролей — их 9 (backend-3, #477)
+        self.assertEqual(TP.allocate({"a": 6, "b": 6}, roles), {"a": 2, "b": 9})
 
     def test_plan_interleaves_by_rank(self):
         steps = TP.plan({"hr-helper": 3, "taibe": 2}, ROLES)

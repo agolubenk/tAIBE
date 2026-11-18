@@ -310,7 +310,7 @@ for name, product, flags, want in [
         failed += 1
         print("FAIL:", name, rc, missing)
         print(out)
-for bad in ("backend-3", "boards-2"):
+for bad in ("backend-4", "boards-2"):
     rc, out = second_run("taibe", "--launch", "--role", bad)
     if rc == 0 or f"неизвестная роль: {bad}" not in out:
         failed += 1
