@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_testkit import bash, check, finish, mg, repo_on  # noqa: E402
+from merge_guard_testkit import ROOT, bash, check, finish, mg, repo_on  # noqa: E402
 
 se78 = repo_on("main", "se78")
 (se78 / "tc.sh").write_text(  # apps/mobile-ios/scripts/typecheck.sh (HR_Helper-v2): ложная «запись в main»
@@ -39,8 +39,17 @@ for form in ("$D/git push origin HEAD:main", "\"$D/gh\" pr merge 1", "$D/GIT pus
              "set -- -a 'git -c a.b='; getopts a: o; $OPTARG/swiftc push origin HEAD:main",
              # B2 (backend): папка с пробелом — bash делит $PWD/$OLDPWD без кавычек
              "mkdir -p 'g -c a.b='; cd 'g -c a.b='; $PWD/swiftc push origin HEAD:main",
-             "cd 'g -c a.b='; cd ..; $OLDPWD/swiftc push origin HEAD:main"):
+             "cd 'g -c a.b='; cd ..; $OLDPWD/swiftc push origin HEAD:main",
+             "cd 'g\t-c\ta.b='; $PWD/swiftc push origin HEAD:main"):  # Claude-линза #479: табуляция
     bash(f"SE-78: имя git/gh/curl, не видно или значение невидимо — догадка: {form!r}", form, True, cwd=se78)
+# Claude-линза #479 B1/B2: в папке с пробелом `"$PWD/…"` в кавычках — точное значение; скрипт читается, цель записи видна.
+(se78 / "a b").mkdir(exist_ok=True)
+(se78 / "a b" / "m.sh").write_text("gh pr merge 1\n")
+for form in ("cd 'a b'; bash \"$PWD/m.sh\"", "cd 'a b'; \"$PWD/m.sh\"", "cd 'a b'; cd ..; source \"$OLDPWD/m.sh\""):
+    bash(f"SE-173: папка с пробелом, $PWD в кавычках — значение известно: {form!r}", form, True, cwd=se78)
+(ROOT / "x y").mkdir(exist_ok=True)
+bash("SE-173: запись в .claude/rules через \"$PWD/..\" из папки с пробелом",
+     "cd 'x y'; cp e \"$PWD/../.claude/rules/01-base.md\"", True, cwd=ROOT)
 # SE-175: код в кавычках (`bash -c`, `eval`) раскрывает `$PWD` после своего cd; папка из маски или LOST — не видна.
 for form in ("bash -c 'cd \"g -c a.b=\"; $PWD/swiftc push origin HEAD:main'",
              "sh -c \"cd 'g -c a.b=' && \\$PWD/swiftc push origin HEAD:main\"",
@@ -55,6 +64,8 @@ os.environ["HOME"] = str(se78 / "g -c a.b=")  # домашняя папка с �
 try:
     for form in ("$HOME/swiftc push origin HEAD:main", "cd; $PWD/swiftc push origin HEAD:main"):
         bash(f"SE-175: HOME с пробелом — догадка: {form!r}", form, True, cwd=se78)
+    os.environ["HOME"] = str(se78 / "a b")  # в кавычках значение HOME известно: скрипт читается
+    bash("SE-175: HOME с пробелом, \"$HOME/m.sh\" в кавычках — значение известно", "bash \"$HOME/m.sh\"", True, cwd=se78)
 finally:
     os.environ.pop("HOME") if home is None else os.environ.update(HOME=home)
 # Модуль: имя без пути, скрытое и подстановка — не «видимое».

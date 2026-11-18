@@ -133,7 +133,8 @@ def note_vars(argv, env):
 
 def dir_vars(env, cwd, old=None):
     """$PWD, $OLDPWD и $HOME — их значения известны без выполнения (в кавычках shlex: expand_vars делит подставленное
-    на слова). Прежняя папка неизвестна — $OLDPWD остаётся словом, и `cd $OLDPWD` уходит в LOST."""
+    на слова). Прежняя папка неизвестна — $OLDPWD остаётся словом, и `cd $OLDPWD` уходит в LOST. Папка, которую bash
+    подставит не так, как видит разбор (SE-173, SE-175), — см. _dir_var."""
     if "HOME" not in env:
         _dir_var(env, "HOME", os.path.expanduser("~"))
     for name, value in (("PWD", cwd), ("OLDPWD", old)):
@@ -144,12 +145,13 @@ def dir_vars(env, cwd, old=None):
 
 
 def _dir_var(env, name, value):
-    """Значение, которое bash подставит не тем, что видит разбор, — имя невидимо (BLIND): пробел (`$PWD` без кавычек
-    bash делит на слова, #458 B2), маска (`cd g*` — папку выберет shell) и LOST (SE-175)."""
+    """В кавычках — точное значение: скрипт `"$PWD/m.sh"`, цель `"$PWD/../x"`. Если bash подставит не то, что видит
+    разбор, — ещё вариант «неизвестно» (`$ИМЯ`), и имя невидимо (BLIND): пробельный символ (без кавычек bash делит
+    значение на слова, #458 B2), маска (`cd g*` — папку выберет shell) и LOST (SE-175)."""
+    env[name] = [shlex.quote(value)]
     if re.search(r"\s", value) or GLOB.search(value) or is_lost(value):
+        env[name].append("$" + name)
         env[BLIND] = list(dict.fromkeys(env.get(BLIND, []) + [name]))
-    else:
-        env[name] = [shlex.quote(value)]
 
 
 def substitute(t, env):
