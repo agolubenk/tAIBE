@@ -69,6 +69,46 @@ class BrokenHook(unittest.TestCase):
         data = {"tool_name": "mcp__hub__github_1mcp_merge_pull_request", "tool_input": {"pull_number": 1}}
         self.assertEqual(run(data, self.hook("raise ImportError\n"))["permissionDecision"], "deny")
 
+    def test_hook_gets_same_stdin(self):
+        # N1 линзы Claude: хук получает тот же stdin — без `sys.stdin = io.StringIO(raw)` он решал бы `{}`
+        hook = self.hook("import json, sys\ndef main():\n"
+                         "    print(json.dumps({'hookSpecificOutput': {'echo': sys.stdin.read()}}))\n")
+        data = bash("ls -la")
+        self.assertEqual(json.loads(run(data, hook)["echo"]), data)
+
+    def test_failure_path_covers_identity_classes(self):
+        # B2 линзы Claude на #472: при сбое загрузки признак — весь замок; классы, которые хук решает по личности
+        exc = ImportError("x")
+        full = "a" * 40
+        deny = [
+            ("mcp__github__rerun_failed_jobs", {"run_id": 1}),
+            ("mcp__hub__github_1mcp_run_workflow", {"workflow_id": "deploy.yml", "ref": "board-agents"}),
+            ("mcp__github__push_files", {"branch": "board-agents"}),
+            ("mcp__github__create_or_update_file", {"path": "a"}),
+            ("mcp__hub__owner-queue_1mcp_oq_patch", {"collection": "items", "id": "m-472", "data": {"archived": True}}),
+            ("mcp__owner-queue__oq_put", {"collection": "items", "id": "taibe-m-b7-1811", "data": {"title": "t"}}),
+            ("mcp__owner-queue__oq_patch", {"collection": "items", "id": "d-1", "data": {"sha": full, "base": "main"}}),
+            ("mcp__owner-queue__oq_put", {"collection": "items", "id": "x-1", "data": {"kind": "merge", "pr": 1}}),
+            ("Bash", {"command": "gh api -X POST repos/o/r/merges -f base=board-agents -f head=f"}),
+            ("Bash", {"command": "gh api -X POST repos/o/r/actions/runs/1/rerun"}),
+            ("Bash", {"command": "gh api graphql -f query='mutation{enablePullRequestAutoMerge(input:{})}'"}),
+            ("Bash", {"command": "git -C /x \\\n  push origin HEAD:board-agents"}),
+            ("Bash", {"command": "cd .claude && sed -i '' s/a/b/ hooks/merge_guard_home.py"}),
+            ("Monitor", {"command": "gh\tpr\tmerge 5"}),
+        ]
+        for tool, inp in deny:
+            with self.subTest(tool=tool, inp=inp):
+                self.assertIsNotNone(entry.failure_reason({"tool_name": tool, "tool_input": inp}, exc))
+        allow = [
+            ("mcp__github__pull_request_read", {"pullNumber": 1}),
+            ("mcp__owner-queue__oq_put", {"collection": "items", "id": "taibe-d-x-1811", "data": {"title": "t"}}),
+            ("mcp__owner-queue__oq_put", {"collection": "work", "id": "w-m-1", "data": {"sha": full}}),
+            ("Bash", {"command": "gh pr view 1"}),
+        ]
+        for tool, inp in allow:
+            with self.subTest(tool=tool, inp=inp):
+                self.assertIsNone(entry.failure_reason({"tool_name": tool, "tool_input": inp}, exc))
+
     def test_bad_json_and_non_object_input(self):
         hook = self.hook("raise ImportError\n")
         self.assertIsNone(run("{не json", hook))
@@ -95,6 +135,19 @@ class RealHook(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         got = json.loads(proc.stdout)["hookSpecificOutput"]
         self.assertEqual(got["permissionDecision"], "deny")
+        self.assertNotIn("сбой хука", got["permissionDecisionReason"])  # решил хук по личности, а не путь сбоя
+
+    def test_broken_home_module_does_not_break_entry(self):
+        # B1 линзы Claude: шаблон модуля файлов ~ со встроенным флагом не роняет вход на уровне модуля
+        import shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(HERE / "merge_guard_entry.py", tmp)
+            Path(tmp, "merge_guard_home.py").write_text("import re\nHOME_WRITE = re.compile('(?i)x')\n", "utf-8")
+            Path(tmp, "pre-tool-use-merge-guard.py").write_text("raise ImportError('сломан')\n", "utf-8")
+            proc = subprocess.run([sys.executable, "-I", str(Path(tmp, "merge_guard_entry.py"))],
+                                  input=json.dumps(bash("gh pr merge 1")), capture_output=True, text=True, timeout=20)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_entry_fallback_covers_hook_fallback(self):
         # Хук держит свой FALLBACK (SE-98, SE-152); вход не должен быть уже: всё, что ловит хук, ловит и вход —
@@ -104,7 +157,7 @@ class RealHook(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("mg_hook_for_test", HERE / "pre-tool-use-merge-guard.py")
         hook = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(hook)
-        spare = re.compile(entry.FALLBACK.pattern.replace(entry.HOME, entry.HOME_SPARE), re.I)
+        spare = entry.SPARE
         forms = ["gh pr merge 1", "GH  PR  MERGE 1", "git -C x push origin HEAD:main", "mergePullRequest(id: 1)",
                  "curl -X PUT https://api.github.com/repos/o/r/pulls/1/merge", "gh workflow run d.yml", "gh run rerun 1",
                  "curl -X POST https://api.github.com/repos/o/r/dispatches", "cat .claude/rules/x.md",
