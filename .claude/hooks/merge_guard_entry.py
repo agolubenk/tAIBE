@@ -5,6 +5,11 @@ PreToolUse — вход merge-guard (SE-168). Хук `pre-tool-use-merge-guard.p
 без решения — вызов проходил. Этот файл грузит хук внутри `try`: любой сбой загрузки или разбора решается так же, как
 сбой разбора в `main()` хука — отказ, если в вызове есть признак защищённого действия (FALLBACK), иначе проход.
 Здесь только stdlib: файл должен загружаться, даже когда сломан любой модуль хука.
+
+Сбой внутри decide хук решает сам (crash_verdict, SE-152): там модули целы, и Контроль идёт своим путём. Сюда доходят
+только сбой загрузки и исключения мимо `except Exception` хука (SystemExit и т. п.). Личность здесь не проверить —
+модули проверки могут быть сломаны, — поэтому решает только признак. FALLBACK входа не уже FALLBACK хука: то же ядро,
+любой путь `.claude/` и файлы ~, которые shell выполняет до команды (HOME_WRITE, SE-98). Это сверяет тест.
 """
 import importlib.util
 import io
@@ -13,11 +18,19 @@ import re
 import sys
 from pathlib import Path
 
+HOOK = Path(__file__).resolve().with_name("pre-tool-use-merge-guard.py")
+sys.path.insert(0, str(HOOK.parent))  # python3 -I не кладёт папку скрипта в sys.path — как в хуке
+# Модуль файлов ~ сломан — любое имя rc/profile/env/login/logout-файла в точке (шире SHELL_INIT хука)
+HOME_SPARE = r"(?<![\w.])\.\w*(rc|profile|env|login|logout)(?![\w.])"
+try:  # файлы ~ из модуля хука (SE-98)
+    from merge_guard_home import HOME_WRITE
+    HOME = HOME_WRITE.pattern
+except Exception:  # noqa: BLE001 — вход не падает из-за модуля хука
+    HOME = HOME_SPARE
 FALLBACK = re.compile(  # разбор упал — защищённой считается команда, где есть хоть один из этих признаков
     r"gh\s+pr\s+merge|gh\s+workflow\s+run|gh\s+run\s+rerun|\bgit\b[^\n;|&]*\bpush\b|/merge\b|mergePullRequest"
-    r"|/dispatches|\.claude/(rules|hooks|settings|merge-guard|sessions)", re.I
+    r"|/dispatches|\.claude/|" + HOME, re.I  # `.claude/` — любой путь: шире списка хука
 )  # re.I: APFS не различает регистр — `.CLAUDE/rules` (SE-94, HR IS-245)
-HOOK = Path(__file__).resolve().with_name("pre-tool-use-merge-guard.py")
 
 
 def failure_reason(data, exc):

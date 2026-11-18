@@ -87,9 +87,34 @@ class RealHook(unittest.TestCase):
                               capture_output=True, text=True, timeout=20)
         self.assertEqual((proc.returncode, proc.stdout.strip()), (0, ""), proc.stderr)
 
-    def test_hook_uses_entry_fallback(self):
+    def test_entry_fallback_covers_hook_fallback(self):
+        # Хук держит свой FALLBACK (SE-98, SE-152); вход не должен быть уже: всё, что ловит хук, ловит и вход —
+        # и с модулем файлов ~, и без него (HOME_SPARE).
+        import importlib.util
+        import re
+        spec = importlib.util.spec_from_file_location("mg_hook_for_test", HERE / "pre-tool-use-merge-guard.py")
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        spare = re.compile(entry.FALLBACK.pattern.replace(entry.HOME, entry.HOME_SPARE), re.I)
+        forms = ["gh pr merge 1", "GH  PR  MERGE 1", "git -C x push origin HEAD:main", "mergePullRequest(id: 1)",
+                 "curl -X PUT https://api.github.com/repos/o/r/pulls/1/merge", "gh workflow run d.yml", "gh run rerun 1",
+                 "curl -X POST https://api.github.com/repos/o/r/dispatches", "cat .claude/rules/x.md",
+                 "vi .CLAUDE/Hooks/a.py", "cp x .claude/settings.json", "rm .claude/merge-guard.json",
+                 "echo x > ~/.claude/sessions/1.json", "ls ~/.claude/shell-snapshots", "cat ~/.claude/session-env/a"]
+        import merge_guard_home
+        forms += [f"echo x >> ~/{n}" for n in sorted(merge_guard_home.SHELL_INIT)]
+        for form in forms:
+            with self.subTest(form):
+                self.assertTrue(hook.FALLBACK.search(form), "форма не ловится хуком — тест устарел")
+                self.assertTrue(entry.FALLBACK.search(form))
+                self.assertTrue(spare.search(form))
+        for form in ("ls", "echo hi", "cat README.md", "git status", "gh pr view 1"):
+            with self.subTest(form):
+                self.assertIsNone(entry.FALLBACK.search(form))
+
+    def test_hook_unchanged_and_in_limit(self):
         src = (HERE / "pre-tool-use-merge-guard.py").read_text("utf-8")
-        self.assertIn("from merge_guard_entry import FALLBACK, failure_reason", src)
+        self.assertNotIn("merge_guard_entry", src)  # хук не зависит от входа: вход грузит его, не наоборот
         self.assertLessEqual(len(src.splitlines()), 500)
 
 
