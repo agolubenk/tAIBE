@@ -45,18 +45,19 @@ PATTERNS = [
 # TB-199, as redact after #375/#378 and the TB-199 PR: the separator is `=`, `:`, `:=` (Go, Pascal) or `=>` (PHP,
 # Ruby, Perl); `==` and `===` compare.
 # A name right after `${` takes a value too (${DB_PASSWORD="<v>"}, ${NAME:=<v>}); `${NAME:?…}` and the like are
-# skipped in scan_line (TB-200).
+# skipped in scan_line (TB-200). The value ends at `}` as at `,` and `;` (TB-214): it took the `}` of an unquoted
+# ${NAME:=<v>}, and CODE_CHARS dropped it.
 SEPARATOR = r'(?::=|=>|=(?!=)|:)'
 # A credential name in any case, also as the end of a longer name (x-api-key, "api_key" in JSON); quotes optional.
 ASSIGNED = re.compile(r'(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token'
-                      r'|private[_-]?key)\b["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;]{12,})')
+                      r'|private[_-]?key)\b["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;}]{12,})')
 # Environment style, uppercase only: any NAME ending in API_KEY, TOKEN, SECRET or PASSWORD (T_BOARDS_API_KEY=,
 # GITHUB_TOKEN:). `\b` does not fire after `_`, so ASSIGNED misses these names. The name starts where a run of
 # [A-Z0-9_] starts, also after a lowercase prefix (foo_API_KEY, app_CLIENT_SECRET), and has at most 64 characters
 # before the suffix: an open [A-Z0-9_]* that may start after every `_` made a long run of `_` quadratic (64 000
 # characters: 12 s, TB-136 security lens).
 ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))'
-                          r'["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;]{12,})')
+                          r'["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;}]{12,})')
 # Long runs of the base64 alphabet mixing upper, lower and digits with high entropy: encoded key material. The same
 # thresholds as the base64 rule in redact; hex digests are single-case and never reach it.
 BASE64 = re.compile(r'[A-Za-z0-9+/]{64,}={0,2}')
@@ -89,8 +90,12 @@ HUMPED_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)+$')
 # the value, and CODE_CHARS drops it there.
 TYPE_CONTEXT = (',', ';', ')')
 # TB-200: Laravel validation rules, lowercase words joined by `|`, each with an optional `:argument`
-# ('password' => 'required|string|min:8|confirmed').
-VALIDATION_RULES = re.compile(r'^[a-z_]+(?::[^|]*)?(?:\|[a-z_]+(?::[^|]*)?)+$')
+# ('password' => 'required|string|min:8|confirmed'). TB-214: a list counts as rules only if one of its rules is in
+# RULE_WORDS and each argument of 12+ characters is a lowercase name (same:password_confirmation). With any argument
+# and any words, `API_KEY=<word>:<20 random characters>|<word>` was dropped: 0 of 2000 found (backend lens on #408).
+RULE_NAME = re.compile(r'[a-z_]+')
+RULE_WORDS = frozenset(('required', 'nullable', 'sometimes', 'bail', 'string', 'confirmed'))
+RULE_ARGUMENT = re.compile(r'[a-z_./*-]+')
 # Words carry less entropy than a key (correcthorsebatterystaple: 3.36). After a password name a letters-only value of
 # 20+ characters needs 3.0; a shorter one is mostly a word or a placeholder (passwordhash: 2.86) and needs 3.5.
 PASSPHRASE = re.compile(r'^[A-Za-z]{20,}$')
@@ -142,7 +147,21 @@ def secret_chars(value):
     validation rules."""
     if len(value) < 8 or not PRINTABLE.match(value) or CODE_CHARS.search(value):
         return False
-    return not (DOTTED_NAME.match(value) or JOINED_WORDS.match(value) or VALIDATION_RULES.match(value))
+    return not (DOTTED_NAME.match(value) or JOINED_WORDS.match(value) or validation_rules(value))
+
+
+def validation_rules(value):
+    """TB-200, TB-214: a list of Laravel validation rules (required|string|min:8), see RULE_WORDS."""
+    rules = value.split('|')
+    if len(rules) < 2:
+        return False
+    names = set()
+    for rule in rules:
+        name, _, argument = rule.partition(':')
+        if not RULE_NAME.fullmatch(name) or len(argument) >= 12 and not RULE_ARGUMENT.fullmatch(argument):
+            return False
+        names.add(name)
+    return not names.isdisjoint(RULE_WORDS)
 
 
 def shell_test(line, m):
