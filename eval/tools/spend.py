@@ -23,8 +23,10 @@ usage: python3 -I eval/tools/spend.py --hours 24 [--json out.json]
   продукта из instances/*.json, иначе папка проекта сессии, иначе unattributed. Сессия, сменившая cwd на чужой репо,
   делится между продуктами так же, как в budget.py: одна сессия — одна разбивка в обоих.
 - День — местная дата вызова; окно [с, по] — по местному времени.
-- Цель вызова (PR, карточка или unattributed) — `--attribution`, правила в attribution.py (PR 2). Ночной прогон и
-  строка в сводке — PR 3.
+- Цель вызова (PR, карточка или unattributed) — `--attribution`, правила в attribution.py (PR 2). С ним же — число PR,
+  влитых в окне (`merged`, по репозиториям): знаменатель «$ на влитый PR» — все траты окна / влитые PR (план v1.1).
+- Ночной прогон (PR 3): `eval/evolve/daily_steps.py` `spend_night` — вчерашний день в `~/.claude/evolve/spend/<день>.json`
+  (60 дней) и строка дня координатору в Нерв.
 """
 import collections
 import json
@@ -237,9 +239,13 @@ def report(roll, subagents, since, until):
                      ctx_max=max(r['ctx'], default=0), parts={k: round(v, 4) for k, v in r['parts'].items()},
                      bands=rounded(r['bands']))
                 for r in sorted(rolls, key=lambda x: (x['day'], -x['usd']))]
+    ctx = [c for r in rolls for c in r['ctx']]
+    bands = {name: {'calls': sum(r['bands'][name]['calls'] for r in rolls),
+                    'usd': sum(r['bands'][name]['usd'] for r in rolls)} for _, name in BANDS}
     return {'since': since.strftime('%Y-%m-%d %H:%M'), 'until': until.strftime('%Y-%m-%d %H:%M'),
             'sessions': len({r['sid'] for r in rolls}), 'subagents': subagents,
             'calls': sum(r['calls'] for r in rolls), 'usd': round(total, 4),
+            'ctx_median': median(ctx), 'ctx_p90': p90(ctx), 'bands': rounded(bands),
             'by_role': group(rolls, ('product', 'role', 'key')), 'by_product': by_product, 'rollups': sessions}
 
 
@@ -293,7 +299,11 @@ def main(argv):
     print(text(rep))
     if sink:
         rep['attribution'] = attribution.rows(sink.resolve())
+        rep['merged'] = attribution.merged(sink.prs, since, until)
         print('\n' + attribution.text(rep['attribution'], rep['usd']))
+        n = sum(rep['merged'].values())
+        per_pr = f"{rep['usd'] / n:.2f}" if n else '—'
+        print(f'\nВлито PR в окне: {n}; $ на влитый PR: {per_pr}.')
     if out:
         with open(out, 'w', encoding='utf-8') as f:
             json.dump(rep, f, ensure_ascii=False, indent=1)

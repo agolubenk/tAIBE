@@ -28,6 +28,8 @@ HUB = os.path.expanduser(os.environ.get('EVOLVE_HUB') or
 CARD, WORKSPACE = 'SE-49', 'lth89qy6f8j1greiy4c5cn23'
 STATE_DIR = os.path.expanduser(os.environ.get('EVOLVE_STATE_DIR') or '~/.claude/evolve')
 AUDIT_KEEP = 30  # nightly context-audit files kept in runs/ (one a night)
+SPEND_KEEP = 60  # nightly spend reports kept in spend/ (one a day): the weekly GL-1 table reads them
+UNATTRIBUTED = ('unattributed', 'не отнесено')  # key and label of budget.SHARE_LABELS (eval/nerve, SE-66)
 CLAUDE_OVERRIDE = 'abJudgeClaude.on'  # in STATE_DIR: the owner's local «on» for nightly Claude judges
 MERGE_OVERRIDE = 'evolveAutoMerge.on'  # in STATE_DIR: the owner's local «on» for the run's auto-merge of safe PRs
 BASE = 'board-agents'  # tAIBE's default branch: where the run's PRs go
@@ -143,7 +145,30 @@ def layer_metrics(wt):
     else:
         out['ctx_budget'] = 'skipped: eval/tools/ctx_budget.py is not in this revision'
     out['context_audit'] = context_audit(wt)
+    out['spend'] = spend_night(wt)
     return out
+
+
+def nightly_json(tool, args, path, keep_glob, keep, timeout=600):
+    """Runs a read-only report tool of the run worktree into path, keeps the last `keep` files of keep_glob and
+    returns (data, None) or (None, the failure for the run report). A failure never stops the night's other steps."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path):  # a second run of the day must not report the first one's numbers
+            os.remove(path)
+        res = subprocess.run([sys.executable, '-I', tool, *args, '--json', path],
+                             capture_output=True, text=True, timeout=timeout)
+        for old in sorted(glob.glob(keep_glob))[:-keep]:
+            os.remove(old)
+    except (OSError, subprocess.TimeoutExpired) as e:  # the night's other metrics and the A/B run go on
+        return None, {'exit': None, 'error': str(e)[-300:]}
+    try:
+        if res.returncode != 0:
+            raise ValueError('exit %d' % res.returncode)
+        with open(path, encoding='utf-8') as f:
+            return json.load(f), None
+    except (OSError, ValueError):
+        return None, {'exit': res.returncode, 'error': (res.stderr or res.stdout).strip()[-300:]}
 
 
 def context_audit(wt):
@@ -153,26 +178,83 @@ def context_audit(wt):
     if not os.path.isfile(tool):
         return {'skipped': 'eval/tools/context_audit.py is not in this revision'}
     path = os.path.join(STATE_DIR, 'runs', 'context-audit-%s.json' % now().strftime('%Y%m%d'))
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if os.path.exists(path):  # a second run of the day must not report the first one's numbers
-            os.remove(path)
-        res = subprocess.run([sys.executable, '-I', tool, '--hours', '24', '--all', '--json', path],
-                             capture_output=True, text=True, timeout=600)
-        for old in sorted(glob.glob(os.path.join(STATE_DIR, 'runs', 'context-audit-*.json')))[:-AUDIT_KEEP]:
-            os.remove(old)
-    except (OSError, subprocess.TimeoutExpired) as e:  # the night's other metrics and the A/B run go on
-        return {'exit': None, 'error': str(e)[-300:]}
-    try:
-        if res.returncode != 0:
-            raise ValueError('exit %d' % res.returncode)
-        with open(path, encoding='utf-8') as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {'exit': res.returncode, 'error': (res.stderr or res.stdout).strip()[-300:]}
-    return {'exit': res.returncode, 'file': path, 'usd': data.get('total'),
+    data, err = nightly_json(tool, ['--hours', '24', '--all'], path,
+                             os.path.join(STATE_DIR, 'runs', 'context-audit-*.json'), AUDIT_KEEP)
+    if err:
+        return err
+    return {'exit': 0, 'file': path, 'usd': data.get('total'),
             'cold': {k: {'n': v['n'], 'usd': round(v['usd'], 2)} for k, v in (data.get('cold') or {}).items()},
             'generations': data.get('generations')}
+
+
+def spend_night(wt, day=None):
+    """GL-1 (plan v1.1 on the card, PR 3): yesterday's spend by the API price list — sessions, roles, products,
+    window bands, the target of each call and the PRs merged that day (`eval/tools/spend.py --attribution`). Reads
+    transcripts and `gh pr list`; the report stays in spend/<day>.json (SPEND_KEEP days) for the weekly table."""
+    tool = os.path.join(wt, 'eval/tools/spend.py')
+    if not os.path.isfile(tool):
+        return {'skipped': 'eval/tools/spend.py is not in this revision'}
+    day = day or now().date() - datetime.timedelta(days=1)
+    span = [d.strftime('%Y-%m-%d 00:00') for d in (day, day + datetime.timedelta(days=1))]
+    path = os.path.join(STATE_DIR, 'spend', '%s.json' % day.isoformat())
+    data, err = nightly_json(tool, span + ['--attribution'], path, os.path.join(STATE_DIR, 'spend', '*.json'),
+                             SPEND_KEEP, timeout=900)
+    return err or dict(spend_summary(data), exit=0, file=path, day=day.isoformat())
+
+
+def spend_summary(rep):
+    """The day's figures for the line: $, calls, $ per merged PR (all spend / merged PRs, like the base $68 → $37),
+    shares of $ by target kind, product and window band; context per call is reference only (plan v1.2)."""
+    usd = rep.get('usd') or 0.0
+    def shares(pairs):
+        out = {}
+        for key, value in pairs:
+            out[key] = out.get(key, 0.0) + value
+        return {k: round(v / usd, 3) for k, v in out.items()} if usd else {}
+    merged = sum((rep.get('merged') or {}).values())
+    return {'usd': round(usd, 2), 'calls': rep.get('calls'), 'sessions': rep.get('sessions'), 'merged': merged,
+            'per_pr': round(usd / merged, 2) if merged else None,
+            'targets': shares((r['kind'], r['usd']) for r in rep.get('attribution') or ()),
+            'products': shares((g['product'], g['usd']) for g in rep.get('by_product') or ()),
+            'bands': shares((k, v['usd']) for k, v in (rep.get('bands') or {}).items()),
+            'ctx_median': rep.get('ctx_median'), 'ctx_p90': rep.get('ctx_p90')}
+
+
+def spend_line(s):
+    """The day's one line for the coordinator (GL-1 plan v1.1, «Где видно» 1); '' without money."""
+    if not isinstance(s, dict) or not s.get('usd'):
+        return ''
+    def pct(d, key):
+        return '%.0f' % (d.get(key, 0.0) * 100)
+    def label(key):
+        return UNATTRIBUTED[1] if key == UNATTRIBUTED[0] else key
+    day = datetime.date.fromisoformat(s['day']).strftime('%d.%m') if s.get('day') else '—'
+    per_pr = '$%.0f (%d PR)' % (s['per_pr'], s['merged']) if s.get('per_pr') else 'нет влитых PR'
+    t = s.get('targets') or {}
+    products = ' · '.join('%s %s %%' % (label(k), pct(s['products'], k))
+                          for k in sorted(s.get('products') or {}, key=lambda k: -s['products'][k]))
+    bands = ' / '.join(pct(s.get('bands') or {}, k) for k in s.get('bands') or {})
+    return ('GL-1 расход %s: $%.0f, вызовов %s, сессий %s; $ на влитый PR — %s, цель ≈ $20; PR / карточки / %s — '
+            '%s / %s / %s %%; продукты: %s (решение 60/40); контекст вызова — медиана %.0fK, p90 %.0fK (справочно); '
+            'доля $ по полосам окна %s — %s %%') % (
+        day, s['usd'], s.get('calls'), s.get('sessions'), per_pr, UNATTRIBUTED[1], pct(t, 'pr'), pct(t, 'task'),
+        pct(t, UNATTRIBUTED[0]), products or '—', (s.get('ctx_median') or 0) / 1000, (s.get('ctx_p90') or 0) / 1000,
+        ' / '.join(s.get('bands') or {}) or '—', bands or '—')
+
+
+def spend_nerve(repo, summary):
+    """The line as one event to the tAIBE coordinator, through the main checkout's Nerve: an emit from a worktree
+    lands in that worktree's own journal (SE-171). Returns what happened (never raises)."""
+    line = spend_line(summary)
+    if not line:
+        return 'no line'
+    try:
+        res = subprocess.run([sys.executable, '-I', os.path.join(repo, 'eval/nerve/nerve.py'), 'emit', '--product',
+                              'taibe', '--kind', 'report', 'coord', line], cwd=repo, capture_output=True, text=True,
+                             timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 'not emitted: %s' % e
+    return 'emitted' if res.returncode == 0 else 'not emitted: %s' % (res.stderr or res.stdout).strip()[-200:]
 
 
 def audit_line(audit, date):

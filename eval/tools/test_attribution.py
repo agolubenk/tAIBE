@@ -4,10 +4,11 @@ import os
 import sys
 import contextlib
 import io
+import subprocess
 import tempfile
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -341,6 +342,27 @@ class LedgerTest(unittest.TestCase):
         parent = [(t(10), 'open', (None, 415)), (t(10, 30), 'close', (None, 415))]
         self.assertEqual(self.target(parent, t(10, 10)), ('pr', REPO, 415))
         self.assertEqual(self.target([], t(10, 10), sub_events=parent), ('pr', REPO, 415))
+
+
+class MergedTest(unittest.TestCase):
+    def test_merged_in_half_open_window(self):
+        """Знаменатель «$ на влитый PR»: PR, влитые в [с, по); #150 влит 13.11 10:00Z."""
+        at_merge = at.tr.local_time('2026-11-13T10:00:00Z')
+        self.assertEqual(at.merged(PRS, at_merge, at_merge + timedelta(hours=1)), {REPO: 1})
+        self.assertEqual(at.merged(PRS, at_merge - timedelta(hours=1), at_merge), {REPO: 0})
+
+    def test_cli_writes_merged_and_per_pr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prs, out = os.path.join(tmp, 'prs.json'), os.path.join(tmp, 'out.json')
+            with open(prs, 'w', encoding='utf-8') as f:
+                json.dump(PRS, f)
+            p = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'spend.py'), '2026-11-13 00:00',
+                                '2026-11-14 00:00', '--attribution', '--prs', prs, '--json', out],
+                               env=dict(os.environ, HOME=tmp), capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn('Влито PR в окне: 1; $ на влитый PR: 0.00.', p.stdout)
+            with open(out, encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['merged'], {REPO: 1})
 
 
 class ScanTest(unittest.TestCase):
