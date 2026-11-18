@@ -45,6 +45,7 @@ from merge_guard_partial import PARTIAL, settle, settled, tokens_before_error  #
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 from merge_guard_tmux import TMUX, classify_tmux  # noqa: E402  окна сессий в tmux — только владелец (OPS-82)
+from merge_guard_crash import crash_verdict  # noqa: E402  сбой decide — роли отказ (SE-152); сбой разбора — в settled
 from merge_guard_home import HOME_WRITE, MORE_WRITES, home_protected  # noqa: E402  файлы ~, которые shell выполняет до команды (SE-98)
 
 
@@ -207,7 +208,7 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         is_interp_script = interp if interp is not None else bool(re.match(r"#!.*(python|node|perl|ruby|osascript)", text))
         # `zsh -i < x.zsh`: интерактивный zsh со stdin не считает `#` комментарием — разбор и без снятия (SE-77)
         keep = comment_char_seen(whole[3], text, whole[4][1]) or (s in stdin_files and zsh_interactive(a))
-        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path, keep))
+        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path, keep), s)
         found += got  # разобран до ошибки — находки части и грубый признак по тексту скрипта: в `bash x.sh` его нет
         if partial and FALLBACK.search(text if is_interp_script or keep else uncommented(text)):
             found.append((UNPARSED, s))
@@ -485,11 +486,8 @@ def main():
         return
     try:
         reason = decide(data)
-    except Exception as exc:  # сбой хука не должен ни пропускать мёрж, ни блокировать всё подряд
-        cmd = json.dumps(data.get("tool_input"), ensure_ascii=False) if data.get("tool_name") != "Bash" else \
-            str((data.get("tool_input") or {}).get("command", ""))
-        reason = (f"merge-guard: сбой хука ({exc.__class__.__name__}), а в вызове признак защищённого действия."
-                  if FALLBACK.search(cmd) or re.search(r"merge_pull_request|auto_merge", str(data.get("tool_name"))) else None)
+    except Exception as exc:  # сбой хука: признак в вызове — отказ всем; иначе роли отказ, Контроль — своим путём
+        reason = crash_verdict(data, exc, FALLBACK)
     if reason:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}},
