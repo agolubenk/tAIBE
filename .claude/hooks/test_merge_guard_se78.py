@@ -2,6 +2,7 @@
 SE-78: путь команды из переменной с видимым именем (`"$D/swiftc"`) — не догадка «это git». Перенос #271 на базу 17.11:
 отдельный файл, хук на пределе 500 строк. Запуск: python3 .claude/hooks/test_merge_guard_se78.py
 """
+import os
 import sys
 from pathlib import Path
 
@@ -40,6 +41,22 @@ for form in ("$D/git push origin HEAD:main", "\"$D/gh\" pr merge 1", "$D/GIT pus
              "mkdir -p 'g -c a.b='; cd 'g -c a.b='; $PWD/swiftc push origin HEAD:main",
              "cd 'g -c a.b='; cd ..; $OLDPWD/swiftc push origin HEAD:main"):
     bash(f"SE-78: имя git/gh/curl, не видно или значение невидимо — догадка: {form!r}", form, True, cwd=se78)
+# SE-175: код в кавычках (`bash -c`, `eval`) раскрывает `$PWD` после своего cd; папка из маски или LOST — не видна.
+for form in ("bash -c 'cd \"g -c a.b=\"; $PWD/swiftc push origin HEAD:main'",
+             "sh -c \"cd 'g -c a.b=' && \\$PWD/swiftc push origin HEAD:main\"",
+             "eval 'cd \"g -c a.b=\"; $PWD/swiftc push origin HEAD:main'",
+             "cd g*; $PWD/swiftc push origin HEAD:main", "cd \"$(cat d.txt)\"; $PWD/swiftc push origin HEAD:main"):
+    bash(f"SE-175: $PWD не тот, что видит разбор — догадка: {form!r}", form, True, cwd=se78)
+for form in ("bash -c 'cd sub; $PWD/swiftc -typecheck'", "bash -c 'echo $PWD; ls'", "cd s*; $PWD/swiftc -typecheck",
+             "cd sub; $PWD/swiftc push origin HEAD:main", "$HOME/bin/swiftc push origin HEAD:main"):
+    bash(f"SE-175: имя видно, папка без пробела — проход: {form!r}", form, False, cwd=se78)
+home = os.environ.get("HOME")
+os.environ["HOME"] = str(se78 / "g -c a.b=")  # домашняя папка с пробелом: `$HOME` без кавычек bash делит так же
+try:
+    for form in ("$HOME/swiftc push origin HEAD:main", "cd; $PWD/swiftc push origin HEAD:main"):
+        bash(f"SE-175: HOME с пробелом — догадка: {form!r}", form, True, cwd=se78)
+finally:
+    os.environ.pop("HOME") if home is None else os.environ.update(HOME=home)
 # Модуль: имя без пути, скрытое и подстановка — не «видимое».
 for exe, hidden, want in (("$D/swiftc", False, True), ("$D/GIT", False, False), ("swiftc", False, False),
                           ("$D/swiftc", True, False), ("$D/" + mg.SUBST, False, False)):

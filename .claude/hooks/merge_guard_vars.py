@@ -22,6 +22,14 @@ BLIND = "\0blind"  # ключ env: имена, заданные невидимо
 ASSIGN = re.compile(r"([^\W\d]\w*)(\[.*\])?(\+?)=(.*)", re.S)  # `A=…`, `A+=…`, `a[1]=…`; в zsh имя — и не ASCII
 VAR = re.compile(r"\$\{?([^\W\d]\w*)")
 MAX_VARIANTS = 16
+LOST = "/.merge-guard-lost-dir"  # папка shell, которую разбор не видит (`cd "$X"`, `cd $(…)`), см. merge_guard_dirs
+GLOB = re.compile(r"[*?[]")  # `cd g*`: какую папку выберет shell, разбор не знает
+CODE = re.compile(r"[;&|\n]")  # слово с разделителем команд — текст в кавычках: код для `bash -c`, `eval`, `find -exec sh -c`
+
+
+def is_lost(path):
+    """Путь от папки, которую разбор не видит (LOST): что там лежит, не прочесть."""
+    return path == LOST or path.startswith(LOST + "/")
 
 
 def exact(name):
@@ -126,15 +134,22 @@ def note_vars(argv, env):
 def dir_vars(env, cwd, old=None):
     """$PWD, $OLDPWD и $HOME — их значения известны без выполнения (в кавычках shlex: expand_vars делит подставленное
     на слова). Прежняя папка неизвестна — $OLDPWD остаётся словом, и `cd $OLDPWD` уходит в LOST."""
-    env.setdefault("HOME", [shlex.quote(os.path.expanduser("~"))])
+    if "HOME" not in env:
+        _dir_var(env, "HOME", os.path.expanduser("~"))
     for name, value in (("PWD", cwd), ("OLDPWD", old)):
         env.pop(name, None)
-        if value is not None and re.search(r"\s", value):
-            # bash делит `$PWD` без кавычек по пробелам: значение в кавычках солгало бы — имя невидимо (#458 B2)
-            env[BLIND] = list(dict.fromkeys(env.get(BLIND, []) + [name]))
-        elif value is not None:
-            env[name] = [shlex.quote(value)]
+        if value is not None:
+            _dir_var(env, name, value)
     return env
+
+
+def _dir_var(env, name, value):
+    """Значение, которое bash подставит не тем, что видит разбор, — имя невидимо (BLIND): пробел (`$PWD` без кавычек
+    bash делит на слова, #458 B2), маска (`cd g*` — папку выберет shell) и LOST (SE-175)."""
+    if re.search(r"\s", value) or GLOB.search(value) or is_lost(value):
+        env[BLIND] = list(dict.fromkeys(env.get(BLIND, []) + [name]))
+    else:
+        env[name] = [shlex.quote(value)]
 
 
 def substitute(t, env):
@@ -150,9 +165,11 @@ def expand_vars(argv, env):
     """Варианты argv после подстановки известных переменных (цикл даёт по варианту на значение) и признак, что
     вариантов больше 16 и часть отброшена. Подставленное делится на слова, как без кавычек: `C="gh pr merge"; $C 1`."""
     out, overflow = [[]], False
-    for t in argv:
+    for i, t in enumerate(argv):
         texts = substitute(t, env)
         opts = [words(o) for o in texts] if texts != [t] else [[t]]
+        if i and texts != [t] and CODE.search(t):  # `bash -c 'cd "a b"; $PWD/x'`: в кавычках `$PWD` раскроет вложенный
+            opts = [[t]] + opts  # shell уже после своего cd — и слово как есть, первым: переполнение его не отбросит (SE-175)
         out = [x + o for x in out for o in opts]
         if len(out) > MAX_VARIANTS:
             out, overflow = out[:MAX_VARIANTS], True
