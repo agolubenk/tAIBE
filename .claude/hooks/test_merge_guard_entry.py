@@ -87,6 +87,15 @@ class RealHook(unittest.TestCase):
                               capture_output=True, text=True, timeout=20)
         self.assertEqual((proc.returncode, proc.stdout.strip()), (0, ""), proc.stderr)
 
+    def test_entry_with_real_hook_denies_merge_from_role(self):
+        # сквозной путь (линза backend на #472): вход + настоящий хук, мёрж PR из сессии не Контроля — отказ
+        proc = subprocess.run([sys.executable, "-I", str(HERE / "merge_guard_entry.py")],
+                              input=json.dumps(bash("gh pr merge 1 --squash")), capture_output=True, text=True,
+                              timeout=20)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        got = json.loads(proc.stdout)["hookSpecificOutput"]
+        self.assertEqual(got["permissionDecision"], "deny")
+
     def test_entry_fallback_covers_hook_fallback(self):
         # Хук держит свой FALLBACK (SE-98, SE-152); вход не должен быть уже: всё, что ловит хук, ловит и вход —
         # и с модулем файлов ~, и без него (HOME_SPARE).
