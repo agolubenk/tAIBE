@@ -20,7 +20,8 @@
       "release",
       "boards",
       "backend-2",
-      "frontend-2"
+      "frontend-2",
+      "backend-3"
     ],
     "active_hours": 8
   },
@@ -212,6 +213,10 @@
       [
         "frontend[- –]?2(?!\\d)|Фронтенд[- –]?2(?!\\d)|роль 8(?!\\d)",
         "frontend-2"
+      ],
+      [
+        "backend[- –]?3(?!\\d)|Бэкенд[- –]?3(?!\\d)|роль 9(?!\\d)",
+        "backend-3"
       ],
       [
         "Бэкенд|backend|Данные",

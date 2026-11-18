@@ -257,7 +257,7 @@ class QuorumTest(unittest.TestCase):
 
     def test_author_roles_add_second_sessions(self):
         roles = CFG["team"]["roles"]
-        self.assertEqual(quorum.author_roles("backend", roles), ["backend", "backend-2"])
+        self.assertEqual(quorum.author_roles("backend", roles), ["backend", "backend-2", "backend-3"])
         self.assertEqual(quorum.author_roles("frontend", roles), ["frontend", "frontend-2"])
         self.assertEqual(quorum.author_roles("coord", roles), ["coord"])
         self.assertEqual(quorum.author_roles("backend", ["backend"]), ["backend"])
@@ -299,7 +299,7 @@ class QuorumTest(unittest.TestCase):
         for body, want in (("Линзы: роль 6 — автор. Нужны 3 линзы ролей не автора.", "boards"),
                            ("Lenses: role 4 - author", "backend"), ("**Роль 7 – автор**", "backend-2"),
                            ("роль 4 — автора не считаем", None), ("> роль 4 — автор\nтекст", None),
-                           ("роль 9 — автор", None), ("роль 0 — автор", None),
+                           ("роль 9 — автор", "backend-3"), ("роль 10 — автор", None), ("роль 0 — автор", None),
                            ("Нужны 3 линзы ролей не автора", None), ("", None),
                            (None, None), ("строка\nроль 2 — автор\nроль 5 — автор", "plan")):
             self.assertEqual(quorum.body_author(body, roles), want, body)
@@ -592,7 +592,7 @@ class GithubPollTest(unittest.TestCase):
         sources.run = FakeGh([_pr(480, "c" * 40)], comments={480: ["**Линза плана (роль 2) — CHANGES на ccccccc**"]})
         gh_source.poll_github(self.ctx)
         rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.changes"]
-        self.assertEqual([e["to"] for e in rec], [["backend", "backend-2"]])
+        self.assertEqual([e["to"] for e in rec], [["backend", "backend-2", "backend-3"]])
 
     def test_author_approve_is_named_once_and_does_not_make_quorum(self):
         """SE-121: тело называет автора backend; его approve не засчитан: одно pr.own Контролю на голову, потом
@@ -1306,7 +1306,9 @@ class TapTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             wj(os.path.join(d, "mode.json"), {"phase": "night"})
             open(os.path.join(d, "journal.jsonl"), "w").close()
+            # run_products ведёт учёт прохода (SE-70: длительности, пульс) — с подменённым Ctx он не нужен
             with mock.patch.object(nerve, "STATE_DIR", d), mock.patch.object(nerve, "one_pass"), \
+                    mock.patch.object(nerve, "run_products"), \
                     mock.patch.object(nerve, "Ctx"), mock.patch.object(nerve, "wakes_on", return_value=False), \
                     mock.patch.object(nerve.time, "sleep", side_effect=Slept) as sleep:
                 with self.assertRaises(Slept):
@@ -1409,7 +1411,7 @@ class EmitTest(unittest.TestCase):
     def test_emit_refuses_unknown_role(self):
         with tempfile.TemporaryDirectory() as d:
             open(os.path.join(d, "journal.jsonl"), "w").close()
-            for target in ("tboards", "9", "backend-3", "backend,review", ","):
+            for target in ("tboards", "10", "backend-4", "backend,review", ","):
                 p = self.nerve(d, "emit", target, "никому")
                 self.assertEqual(p.returncode, 2, target)
                 self.assertIn("ничего не записано", p.stderr, target)
@@ -1421,7 +1423,7 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "tap", "backend,release", "--once").returncode, 2)
             self.assertEqual(self.nerve(d, "tap", "selftest", "--once").returncode, 0, "split/6-verify.sh")
             self.assertTrue(os.path.exists(os.path.join(d, "tap-selftest.json")))
-            for n in ("0", "9", "99"):
+            for n in ("0", "10", "99"):
                 self.assertEqual(self.nerve(d, "tap", n, "--once").returncode, 2, f"emit не запишет «{n}»")
                 self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
 
