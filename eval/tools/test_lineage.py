@@ -388,6 +388,29 @@ class CommandsTest(Base):
         a = L.read_json(L.ldir() / f"{CHILD}.ack")
         self.assertEqual((a["pid"], a["start"]), (700, ST))
 
+    def test_surplus_mark_only_on_that_role(self):
+        """d-team-surplus-1711: метка сверх доли — только на claude той самой роли; повтор — 4, затем 3 после coord."""
+        me = os.getpid()
+        sx = FakeSys([P(700, 1, 700, "ttys001", "claude --settings /x/genome/taibe/plan.json"),
+                      P(me, 700, me, "??", "python3 lineage.py surplus")], env={700: CHILD})
+        args = ["surplus", "--role", "plan", "--product", "taibe", "--slug", "taibe", "--handoff", "/h.md"]
+        with mock.patch.dict(os.environ, {"TAIBE_LINEAGE": CHILD}), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(L.main(args, sx), 0)
+            m = L.read_json(L.ldir() / f"{CHILD}.surplus")
+            self.assertEqual((m["pid"], m["role"], m["product"], m["slug"], m["coord"]), (700, "plan", "taibe", "taibe", False))
+            self.assertEqual(L.main(args, sx), 4)                      # координатор ещё не подтверждён
+            done = ["surplus", "--coord-done", "--role", "plan", "--product", "taibe", "--slug", "taibe"]
+            self.assertEqual(L.main(done, sx), 0)
+            self.assertEqual(L.main(args, sx), 3)                      # повтор — событие второй раз не нужно
+            # Сессия линии — координатор, а просят plan: метку не ставить (её сняла бы автоуборка).
+            (L.ldir() / f"{CHILD}.surplus").unlink()
+            coord = FakeSys([P(700, 1, 700, "ttys001", "claude --settings /x/genome/taibe/coord.json"),
+                             P(me, 700, me, "??", "python3 lineage.py surplus")], env={700: CHILD})
+            self.assertEqual(L.main(args, coord), 2)
+            self.assertEqual(L.main(done, coord), 2)               # --coord-done новую метку не ставит
+            self.assertEqual(L.main(["surplus", "--coord-done"], coord), 2)  # и без роли — тоже
+            self.assertFalse((L.ldir() / f"{CHILD}.surplus").exists())
+
     def test_retire_refuses_foreign_child_line(self):
         with mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT}), mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(L.main(["retire", "--child", "r.other.x1y2", "--foreground"], FakeSys([])), 2)

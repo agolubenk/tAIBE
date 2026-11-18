@@ -473,6 +473,12 @@ def main(argv=None, sx=None):
     r.add_argument("--server", default="", help="tmux: pid:start_time сервера")
     sub.add_parser("ack")
     sub.add_parser("line")
+    sp = sub.add_parser("surplus")
+    sp.add_argument("--handoff", default="")
+    sp.add_argument("--role", default="")
+    sp.add_argument("--product", default="", help="ключ генома: '' — продукт по умолчанию, иначе slug")
+    sp.add_argument("--slug", default="", help="slug продукта (instances/): по нему метка сверяется с долей")
+    sp.add_argument("--coord-done", action="store_true", help="координатор получил handoff (событие Нерва записано)")
     t = sub.add_parser("retire")
     t.add_argument("--child", required=True)
     t.add_argument("--role", default="")
@@ -483,7 +489,7 @@ def main(argv=None, sx=None):
                    help="папка со списком Контроля: если предшественник — Контроль, он переходит наследнику (IS-233)")
     t.add_argument("--succ-tty", default="", metavar="TTY",
                    help="tty окна наследника от spawn_session.sh (/dev/ttysNNN); пусто — Контроль не передаётся")
-    from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
+    from lineage_reap import add_reap_args, cmd_reap, cmd_surplus  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
     from lineage_close import add_autoclose_args, add_exited_args, cmd_autoclose, cmd_exited  # noqa: E402
     add_reap_args(sub.add_parser("reap"))
@@ -491,7 +497,7 @@ def main(argv=None, sx=None):
     add_exited_args(sub.add_parser("exited"))
     a = ap.parse_args(argv)
     sx = sx or Sys()
-    return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire,
+    return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "surplus": cmd_surplus, "retire": cmd_retire,
             "reap": cmd_reap, "autoclose": cmd_autoclose, "exited": cmd_exited}[a.cmd](sx, a)
 
 

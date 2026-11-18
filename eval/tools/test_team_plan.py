@@ -322,6 +322,34 @@ class QueuePauseTest(Base):
         self.assertEqual(self.state()["live"], 12)  # своё состояние на Mac записано
 
 
+class KeepTest(Base):
+    """d-team-surplus-1711: роль сверх доли владельца наследника не открывает."""
+
+    def keep(self, slug, role):
+        def oq(path, root=None, method="GET", data=None):
+            raise AssertionError("keep ходит в сеть")  # передача смены на исходе контекста не ждёт очередь
+        if self.choice and self.choice != "pause":
+            (Path(self.tmp.name) / "team-split.json").write_text(json.dumps([int(x) for x in self.choice.split("-")]))
+        with mock.patch.object(TP, "config", lambda: (TEAM, 20, 10, 14, ROLES, {"hr-helper": "/h", "taibe": "/t"})), \
+                mock.patch.object(TP.Q, "oq_request", oq):
+            return TP.keep(slug, role)
+
+    def test_surplus_after_share_change(self):
+        self.choice = "8-4"  # кэш сторожа: последний принятый ответ
+        self.assertEqual(self.keep("taibe", "plan"), (False, "hr-helper 8 · taibe 4"))
+        self.assertTrue(self.keep("taibe", "frontend")[0])
+        self.assertTrue(self.keep("hr-helper", "boards")[0])
+
+    def test_unknown_role_and_errors_keep_the_successor(self):
+        self.assertEqual(self.keep("taibe", "owner"), (True, ""))  # не роль команды
+        with mock.patch.object(TP, "config", side_effect=OSError("instances")):
+            self.assertEqual(TP.keep("taibe", "plan"), (True, ""))
+
+    def test_pause_does_not_stop_a_successor(self):
+        self.choice = "pause"
+        self.assertTrue(self.keep("taibe", "plan")[0])  # пауза — не открывать новые, смена роли — не новая
+
+
 class LimitTest(unittest.TestCase):
     def test_past_limit_ignored(self):
         with tempfile.TemporaryDirectory() as d:
