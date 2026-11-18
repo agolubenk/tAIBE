@@ -112,7 +112,14 @@ describe("SSR push-back deploy wiring", () => {
     expect(install).toMatch(
       /for optional in [^;\n]*\bssr_push_github_token\b[^;\n]*; do/,
     );
-    expect(install).toContain("SSR_PUSH_TARGETS=)");
+    // The pattern that keeps the owner's lines from the old .env: tested on
+    // lines, not on its text, so other kept settings can share the group.
+    const kept = install.match(/grep -E '([^']+)' "\$ROOT\/\.env\.prev"/)?.[1];
+    expect(kept).toBeDefined();
+    const keeps = new RegExp(kept ?? "$^");
+    expect(keeps.test("SSR_PUSH_TARGETS=ws1=owner/repo@main")).toBe(true);
+    expect(keeps.test("DISABLE_AUTH_RATE_LIMIT=true")).toBe(true);
+    expect(keeps.test("SSR_PUSH_TARGETS_OLD=x")).toBe(false);
     expect(install).toMatch(
       /for var in [^;\n]*\bSSR_PUSH_TARGETS\b[^;\n]*; do/,
     );
