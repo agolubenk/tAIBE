@@ -67,6 +67,14 @@ export class FakeQueue {
         structuredClone(
           (this.events.get(this.key(collection, id)) ?? []).slice(0, 50),
         ),
+      // The console answers a whole collection in one page.
+      list: async (collection) => ({
+        docs: [...this.docs.entries()]
+          .filter(([key]) => key.startsWith(`${collection}/`))
+          .map(([, doc]) => structuredClone(doc)),
+        nextOffset: null,
+        truncated: false,
+      }),
     };
   }
 

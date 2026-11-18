@@ -6,6 +6,7 @@ import CreateTaskModal from "@/components/shared/modals/create-task-modal";
 import { useUpdateTask } from "@/hooks/mutations/task/use-update-task";
 import { useWorkspacePermission } from "@/hooks/use-workspace-permission";
 import { getColumnIcon } from "@/lib/column";
+import { getStatusDisplayLabel } from "@/lib/i18n/domain";
 import { toast } from "@/lib/toast";
 import useProjectStore from "@/store/project";
 import type { ProjectWithTasks } from "@/types/project";
@@ -63,7 +64,7 @@ export function ColumnHeader({
           {getColumnIcon(column.id, column.isFinal, column.icon)}
         </span>
         <span className="truncate text-sm font-medium text-foreground/95">
-          {column.name}
+          {getStatusDisplayLabel(column.id, column.name)}
         </span>
         <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
           {column.tasks.length}

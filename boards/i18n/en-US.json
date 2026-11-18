@@ -558,6 +558,41 @@
 				"description": "You'll come right back here to review it.",
 				"submit": "Sign in"
 			}
+		},
+		"reauth": {
+			"title": "Confirm it's you",
+			"description": "This action needs a recent sign-in. Confirm it's you to continue.",
+			"password": {
+				"label": "Password",
+				"submit": "Confirm"
+			},
+			"code": {
+				"explain": "We'll send a {{length}}-digit code to your email.",
+				"send": "Send code",
+				"sent": "The code is in your email. It works for {{minutes}} min.",
+				"label": "Code from the email",
+				"submit": "Confirm",
+				"resend": "Send a new code"
+			},
+			"usePassword": "Use your password instead",
+			"useCode": "Use a code from your email instead",
+			"lockedOut": "Too many failed tries: the password is off for up to an hour.",
+			"impersonated": "Not available while you act as another user.",
+			"noMethod": "Your account has no way to confirm it's you. Set a password: reset it by email from the sign-in page. Without email, ask an administrator.",
+			"errors": {
+				"invalidPassword": "Wrong password.",
+				"invalidCode": "Wrong code. Check it and try again.",
+				"codeExpired": "This code no longer works. Send a new code.",
+				"methodUnavailable": "This way is no longer available. Pick another one.",
+				"emailDeliveryFailed": "We couldn't send the email. Try again later.",
+				"impersonated": "Not available while you act as another user.",
+				"offline": "No connection to the server. Check your network and try again.",
+				"rateLimited": "Too many tries. Wait a minute and try again.",
+				"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+				"signedOut": "Your session has ended. Sign in again.",
+				"failed": "Couldn't confirm. Try again.",
+				"stillNotFresh": "The confirmation didn't apply. Try the action again."
+			}
 		}
 	},
 	"settings": {
@@ -886,8 +921,7 @@
 				"confirmLabel": "Type {{email}} to confirm",
 				"confirm": "Delete account",
 				"success": "Your account has been deleted",
-				"error": "Failed to delete account",
-				"sessionTooOld": "For security, sign out and sign back in before deleting your account."
+				"error": "Failed to delete account"
 			},
 			"emailHint": "You sign in with this address."
 		},
@@ -1732,6 +1766,7 @@
 			"toastMoved": "Project moved successfully",
 			"toastMovedWithUnassigned": "Project moved successfully. {{taskCount}} task(s) were unassigned.",
 			"toastMoveError": "Failed to move project",
+			"toastMoveTemplateConflict": "The destination workspace has a form template with the same name and version but different fields. Publish one of them as a new version through the API or MCP, then move the project again.",
 			"tasksTitle": "Tasks",
 			"moveTargetLabel": "Workspace",
 			"moveDialogTitle": "Move to another workspace?",
@@ -2603,7 +2638,8 @@
 			"myTasks": "My tasks",
 			"invitePeople": "Invite people",
 			"forest": "Forest",
-			"notebook": "SSR (sessions, skills & rules)"
+			"notebook": "SSR (sessions, skills & rules)",
+			"skipToContent": "Skip to content"
 		},
 		"projectList": {
 			"viewProject": "View Project",
@@ -2989,6 +3025,12 @@
 			"medium": "Medium",
 			"high": "High",
 			"urgent": "Urgent"
+		},
+		"severity": {
+			"critical": "Critical",
+			"high": "High",
+			"medium": "Medium",
+			"low": "Low"
 		},
 		"view": {
 			"board": "Board",
@@ -3497,6 +3539,10 @@
 			"showMore": "Show more",
 			"showLess": "Show less",
 			"showAll": "Show all ({{total}})",
+			"forest": {
+				"title": "Forest",
+				"openPage": "Forest — on the full page"
+			},
 			"sections": {
 				"approvals": "Waiting for «да»",
 				"lease": "Lease",
@@ -3607,6 +3653,50 @@
 				"progress": "{{done}} of {{total}} done",
 				"none": "None"
 			}
+		},
+		"forms": {
+			"required": "required",
+			"yes": "Yes",
+			"no": "No",
+			"intervalFrom": "From",
+			"intervalTo": "To",
+			"addNote": "Add a note",
+			"note": "Note",
+			"issues": {
+				"required": "Answer this question.",
+				"wrongType": "This value does not fit the question.",
+				"outOfRange": "The value is out of range.",
+				"invalidOption": "Choose one of the options.",
+				"invalidInterval": "Fill in both ends; the start must not be after the end.",
+				"tooLong": "The text is too long.",
+				"unknownField": "This question is not in the form.",
+				"versionMismatch": "The form has a new version. Reload it to answer."
+			},
+			"title": "Forms",
+			"loadError": "Forms did not load.",
+			"retry": "Retry",
+			"progress": "{{answered}} of {{total}}",
+			"status": {
+				"draft": "Draft",
+				"submitted": "Submitted",
+				"changed": "Changed after submit"
+			},
+			"save": {
+				"pending": "Unsaved changes",
+				"saving": "Saving…",
+				"saved": "Saved",
+				"failed": "Not saved. Your answers stay on this page.",
+				"invalid": "Some answers are not saved: fix the marked questions.",
+				"rowVersion": "The form was changed in another tab. Reload it; changes made here after the last save will be lost.",
+				"versionMismatch": "The form has a new version. Reload it to answer.",
+				"forbidden": "You cannot change the answers of this form.",
+				"tooLarge": "The answers are too large to save. Shorten the long text, and the form saves by itself."
+			},
+			"reload": "Reload form",
+			"submit": "Submit",
+			"resubmit": "Submit again",
+			"submitIssues": "Answer the marked questions to submit.",
+			"export": "Download JSON"
 		}
 	},
 	"invitations": {
@@ -4084,9 +4174,15 @@
 					"hint": "A web page (HTML, Markdown or plain text, up to 2 MB) is read once; a pull request comes through the GitHub App with its discussion. Adding the same link again refreshes it. PDF is not supported yet."
 				},
 				"refresh": "Refresh {{title}}",
+				"remove": "Remove {{title}}",
+				"removeTitle": "Remove this source from the notebook?",
+				"removeDescription": "{{title}} and its chunks leave the notebook, and answers stop citing it. You can add the link again later.",
+				"removeConfirm": "Remove",
 				"toast": {
 					"added": "In the notebook: {{title}}",
 					"unchanged": "Nothing changed: {{title}}",
+					"removed": "Removed from the notebook: {{title}}",
+					"removeError": "Could not remove the source",
 					"error": "Could not add the source"
 				},
 				"errors": {
@@ -4108,7 +4204,11 @@
 					"GITHUB_UNAVAILABLE": "GitHub did not answer. Try again, or reconnect the integration.",
 					"GITHUB_NO_ACCESS": "The GitHub App may not read this repository's pull requests. Grant it pull request access, or reconnect the integration.",
 					"SOURCE_TOO_MANY_CHUNKS": "The text splits into too many parts for one source (at most 2000)."
-				}
+				},
+				"addedByAgent": "Added by agent {{name}}",
+				"addedByPerson": "Added by {{name}}",
+				"addedByMember": "Added by: a member",
+				"addedByUnknown": "Added by: unknown"
 			}
 		},
 		"ssr": {

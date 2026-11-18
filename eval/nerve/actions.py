@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import budget
 import sources
-from journal import NERVOUS
+from journal import DIGEST, NERVOUS
 
 
 def _iso(dt):
@@ -42,11 +42,42 @@ def quota5(st, cfg):
     return q if q else cfg["budget"]["quota5h_default"]
 
 
+EVOLVE_DIR = os.path.expanduser(os.environ.get("EVOLVE_STATE_DIR") or "~/.claude/evolve")  # как daily_steps.STATE_DIR
+
+
+def product_roots(ctx):
+    """{slug: repo_root} всех продуктов instances/, и неактивных: их сессии тоже тратят окно (SE-66). Сломанный
+    instances/ не останавливает бюджет: тогда только свой продукт, остальное — unattributed."""
+    try:
+        import products
+        _, items = products.load()
+        return {slug: d["repo_root"] for slug, d in items.items()}
+    except (ImportError, OSError, ValueError, KeyError):
+        return {ctx.cfg.get("slug") or "default": ctx.cfg.get("repo_root")}
+
+
+def product_shares(meter, st_meter, share5, q, ws, now_l, evolve_dir=EVOLVE_DIR):
+    """Поля mode.json о долях окна по продуктам (SE-66). Сначала только измерение: решения режима от них не зависят,
+    поэтому сбой здесь режим и лимит не держит — вместо долей в mode.json причина (share5_by_error)."""
+    try:
+        by = meter.by_product(ws, now_l)
+        overhead, unknown = budget.evolve_overhead(evolve_dir, ws, now_l)
+        out = {"share5_by": budget.shares(share5, by, overhead, q)}
+        if unknown:
+            out["overhead_unknown"] = unknown
+        since = _dt(st_meter.get("products_from"))
+        if since:
+            out.update(products_from=_iso(since.astimezone(now_l.tzinfo)), products_partial=since > ws)
+        return out
+    except Exception as e:  # noqa: BLE001 — измерение не валит poll_budget до write_mode
+        return {"share5_by_error": f"{type(e).__name__}: {e}"[:200]}
+
+
 def poll_budget(ctx):
     cfg = ctx.cfg
     b = cfg["budget"]
     st = ctx.state.setdefault("budget", {"meter": {}, "waves": [], "limit": None, "checked": "", "warned": ""})
-    meter = budget.Meter(st["meter"])
+    meter = budget.Meter(st["meter"], products=budget.Products(product_roots(ctx)))
     limits = meter.update(ctx.projects_root, ctx.now)
     if not st["waves"] and not st.get("calibrated"):
         st["waves"] = calibrate_waves(ctx, meter)
@@ -69,6 +100,10 @@ def poll_budget(ctx):
             ctx.emit_account(f"limit:resume:{lim['reset']}", "limit.resume", NERVOUS, roles,
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
+            # Сброс прошёл — Esc, и ночью тоже (resume там 08:30, а подъём идёт веткой early). До сброса — смена
+            # аккаунта владельцем: клавиш нет, ложный подъём не съест Esc сброса.
+            if now_l >= _dt(lim["reset"]):
+                unstick_roles(ctx, lim["reset"])
             lim = None
 
     q = quota5(st, cfg)
@@ -89,6 +124,7 @@ def poll_budget(ctx):
     mode = budget.decide_mode(now_l, share5, _dt(lim["resume"]) if lim else None, cfg)
     mode.update(quota5=round(q, 1), used5=round(used, 1), window_from=_iso(ws),
                 week_usd=round(meter.total(budget.week_start(now_l, *_week(cfg))), 1), at=_iso(now_l))
+    mode.update(product_shares(meter, st["meter"], share5, q, ws, now_l))
     ctx.write_mode(mode)
 
 
@@ -96,6 +132,25 @@ def _week(cfg):
     w = cfg["budget"]["week_reset"]
     hh, mm = (int(x) for x in w["time"].split(":"))
     return w["weekday"], hh, mm
+
+
+def unstick_roles(ctx, reset):
+    """SE-174: в момент сброса закрыть меню лимита Claude Code в панелях ролей (eval/tools/limit_unstick.py). Триггер —
+    сброс в самом демоне, не событие журнала (S4). Один Esc на линию за сброс — ключ журнала. Сбой не валит бюджет."""
+    if not ctx.deliver or not ctx.cfg["budget"].get("unstick"):  # выключатель — budget.unstick в instances/_shared.json
+        return
+    pre = f"limit:unstick:{reset}:"
+    try:
+        import limit_unstick
+        done = limit_unstick.unstick(lambda line: pre + line not in ctx.journal.keys)
+    except Exception as e:  # noqa: BLE001 — tmux или ps недоступны: роли ждут владельца, как до SE-174
+        ctx.emit(f"{pre}error", "nerve.error", DIGEST, ["release"], f"меню лимита не закрыто: {type(e).__name__}: "
+                 f"{e}"[:200], "budget")
+        return
+    for d in done:
+        ctx.emit(pre + d["line"], "limit.unstick", DIGEST, ["coord"],
+                 f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}): меню лимита — {d['action']}"
+                 + (f"; sha256 {d['sha256'][:16]}" if d["sha256"] else ""), "budget", sha256=d["sha256"])
 
 
 def _on_limit(ctx, st, meter, ts, text):

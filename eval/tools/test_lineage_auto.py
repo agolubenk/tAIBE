@@ -24,7 +24,7 @@ sys.path.insert(0, HERE)
 import lineage as L  # noqa: E402
 import lineage_auto as A  # noqa: E402
 import lineage_close as C  # noqa: E402
-from test_lineage import ST, TERMINAL, Base, FakeSys, P  # noqa: E402
+from test_lineage import ST, TERMINAL, Base, FakeSys, P, clean_env  # noqa: E402
 
 NOW = 1.8e9                                   # часы FakeSys (с от эпохи)
 TERM_START = "Thu Jan  1 00:00:00 2026"       # Terminal запущен раньше любой записи линии
@@ -174,6 +174,45 @@ class AutoTest(Base):
         self.assertIn("открыта не spawn_session.sh", v[717])
         self.assertIn("открыта не spawn_session.sh", v[718])
 
+    def test_surplus_role_taken_after_30_min_idle(self):
+        """d-team-surplus-1711: роль сверх доли (метка lineage.py surplus) — не держатель; снять после 30 мин простоя."""
+        self.sess(721, line="r.s1", role="plan", idle_h=0.6)                                     # сверх доли, 36 мин
+        self.sess(722, line="r.s2", role="boards", idle_h=0.2)                                   # сверх доли, 12 мин
+        self.sess(723, line="r.s3", role="frontend", idle_h=0.6)                                 # держатель, без метки
+        self.sess(724, line="r.s4", role="backend", idle_h=0.6)                                  # метка чужого pid
+        for pid, line in ((721, "r.s1"), (722, "r.s2")):
+            L.write_json(L.ldir() / f"{line}.surplus", {"line": line, "pid": pid, "start": ST, "role": "plan"})
+        L.write_json(L.ldir() / "r.s4.surplus", {"line": "r.s4", "pid": 999, "start": ST, "role": "backend"})
+        L.write_json(L.ldir() / "r.s3.surplus", {"line": "r.s3", "pid": 723, "start": ST})  # без роли — не в счёт
+        v = self.verdicts(self.auto()[1])
+        self.assertIn("СНЯТЬ: сверх доли владельца (d-team-surplus-1711), простой 36 мин", v[721])
+        self.assertIn("сверх доли, простой 12 < 30 мин", v[722])
+        self.assertIn("простой 0.6 < 8 ч", v[723])  # без метки — обычное правило простоя
+        self.assertIn("простой 0.6 < 8 ч", v[724])  # метка чужого pid не в счёт
+
+    def test_surplus_mark_holds_after_split_comes_back(self):
+        """Владелец вернул долю: сессия с меткой уже передала смену и не работает — её всё равно снять, иначе она
+        держала бы роль впустую; сторож откроет роль заново (линза продукта #471)."""
+        import team_plan as TP
+        self.sess(741, line="r.b1", role="plan", idle_h=0.6)
+        L.write_json(L.ldir() / "r.b1.surplus", {"line": "r.b1", "pid": 741, "start": ST, "role": "plan", "slug": "taibe"})
+        with mock.patch.object(TP, "keep", lambda slug, role, log=None: (True, "hr-helper 6 · taibe 6")):
+            v = self.verdicts(self.auto()[1])
+        self.assertIn("СНЯТЬ: сверх доли владельца", v[741])
+
+    def test_surplus_in_dirty_main_checkout_is_taken_own_worktree_is_not(self):
+        """Основной checkout общий и всегда «грязный» (53–60 строк на Mac 17.11): роль сверх доли там не держится вечно;
+        в своём worktree несохранённое по-прежнему держит сессию."""
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        self.sess(731, line="r.m1", role="plan", idle_h=0.6, cwd=self.root)
+        self.sess(732, line="r.m2", role="boards", idle_h=0.6)                                   # cwd — worktrees/x
+        for pid, line in ((731, "r.m1"), (732, "r.m2")):
+            L.write_json(L.ldir() / f"{line}.surplus", {"line": line, "pid": pid, "start": ST, "role": "plan"})
+        v = self.verdicts(self.auto(unsaved={str(self.root): "незакоммиченное", str(self.wt): "незакоммиченное"})[1])
+        self.assertIn("СНЯТЬ: сверх доли владельца", v[731])
+        self.assertIn("основной checkout", v[731])
+        self.assertIn("незакоммиченное в папке", v[732])
+
     def test_protections_beat_every_criterion(self):
         self.sess(721, line="r.m1", role=None, idle_h=50, cwd=self.dir / "dev")           # мост в общем корне
         self.sess(722, line="r.m2", role=None, idle_h=50, cwd="/elsewhere")               # чужой проект
@@ -187,8 +226,8 @@ class AutoTest(Base):
         v = self.verdicts(self.auto()[1])
         self.assertIn("общий корень проектов", v[721])
         self.assertIn("чужой проект", v[722])
-        self.assertIn("не в Terminal (vscode)", v[723])
-        self.assertIn("не в Terminal (other)", v[724])
+        self.assertIn("не в Terminal и не в tmux (vscode)", v[723])
+        self.assertIn("не в Terminal и не в tmux (other)", v[724])
         self.assertIn("СНЯТЬ", v[725])                                   # квитанция наследника-моста годится
         self.assertIn("своя сессия", v[700])
 
@@ -416,9 +455,9 @@ class LauncherIntegrationTest(unittest.TestCase):
             stub = Path(tmp) / "osa.sh"
             stub.write_text(f'#!/bin/sh\ncat >/dev/null\necho "$@" >> {calls}\necho "closed 1"\n')
             stub.chmod(0o700)
-            env = {**os.environ, "TMPDIR": tmp, "TAIBE_LINEAGE": "r.zz", "TAIBE_LINEAGE_DIR": f"{tmp}/lin",
-                   "LINEAGE_OSASCRIPT": str(stub), "CLAUDE_BIN": claude_bin,
-                   "SPAWN_CLOSE_DELAY": "1" if enter_after is None else "3"}
+            env = clean_env(TMPDIR=tmp, TAIBE_LINEAGE="r.zz", TAIBE_LINEAGE_DIR=f"{tmp}/lin",
+                            LINEAGE_OSASCRIPT=str(stub), CLAUDE_BIN=claude_bin,
+                            SPAWN_CLOSE_DELAY="1" if enter_after is None else "3")
             dry = subprocess.run(["bash", os.path.join(HERE, "spawn_session.sh"), "--handoff", str(handoff),
                                   "--dry-run", "--cwd", tmp], capture_output=True, text=True, env=env, timeout=30)
             lines = dry.stdout.splitlines()
