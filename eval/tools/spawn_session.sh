@@ -1,23 +1,44 @@
 #!/bin/bash
 # Открыть новую сессию Claude Code в отдельном окне терминала: наследник по handoff или запуск роли Т3.
 #
-#   bash eval/tools/spawn_session.sh --handoff FILE [--role KEY]     наследник (бюджет окна, хук context-threshold)
+#   bash eval/tools/spawn_session.sh --handoff FILE [--role KEY]     наследник (бюджет окна, хук context-threshold);
+#                                         роль сверх доли владельца (team_plan.py keep) — код 5, наследника нет:
+#                                         в том числе вторая сессия (backend-2, frontend-2), открытая руками при 6-6
 #   bash eval/tools/spawn_session.sh --launch --role KEY             запуск роли по её пусковому файлу
 #   bash eval/tools/spawn_session.sh --launch --roles all|coord,release,…   несколько ролей, по порядку 1→5→4→3→2→6
 #   bash eval/tools/spawn_session.sh --status | --stop                 роли продукта и пульс нерва | команды kill для владельца
 #
+# Вторая сессия роли — backend-2 (роль 7) и frontend-2 (роль 8), номера — по team.roles: свой ключ в Нерве, тапе,
+# work_state и метке session, а геном и пусковой файл — базовой роли (4-backend.md). --roles all их не открывает:
+# --roles backend-2,frontend-2.
 # --launch идемпотентен (OPS-24): сначала поднимает нерв (не загружен → bootstrap, молчит → kickstart), живую роль
 # продукта пропускает («жива: …»), после открытия ждёт сессию новой линии до SPAWN_WAIT с (90), затем следующую роль;
 # в конце печатает итог. --force — открыть и при живой роли. Продукт — основной checkout папки --cwd (team_status.py).
+# Пропуск (OPS-82): перед каждой ролью team_status.py gate — свободно памяти < system.mem_warn или сессий Claude на Mac
+# ≥ system.max_sessions (instances/_shared.json) → роль и следующие не открываются, причина с цифрами — в итог.
+# SPAWN_GATE=off — открыть всё равно. --handoff пропуск не проверяет: наследник сменяет предшественника.
 # (в инстансе HR_Helper-v2 скрипт лежит в supertick-eval/tools/ — работает так же; корень дерева берётся из его места)
 # Продукт (OPS-25): --product SLUG, иначе $TAIBE_PRODUCT (его ставит геном роли — наследник берёт продукт
 # предшественника), иначе продукт по умолчанию из instances/. У продукта не по умолчанию — геном
 # genome/<slug>/<роль>.json, пусковые файлы eval/prompts/<slug>/roles/, а --launch без --cwd открывается в его repo_root.
 # Пусковой скрипт экспортирует TAIBE_PRODUCT.
-# Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|print (print — только напечатать
-# команду для вкладки терминала VS Code) · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
+# Опции: --cwd DIR (по умолчанию текущая папка: наследник открывается в том же worktree) · --terminal terminal|iterm|tmux|print (print — только напечатать
+# команду для вкладки терминала VS Code; без опции — $SPAWN_TERMINAL, иначе system.terminal в instances/_shared.json)
+# · --prompt-dir DIR (пусковые файлы ролей) · --dry-run (ничего не открывать)
+# tmux (OPS-82): роль — окно сервера `tmux -L agents` (tmux_host.py: LaunchAgent, сессия tmux на продукт, окно на роль),
+# все роли — в одном окне Terminal с attach (открывается само, если к серверу никто не подключён). Сервер не отвечает —
+# окно Terminal, как раньше. Окно tmux закрывается само, когда пусковой скрипт вышел; код ≠ 0, Enter в отсчёте и
+# --keep-window оставляют в нём оболочку. Сторож retire закрывает панель предшественника по записи линии (id панели,
+# pid пусковой оболочки, сервер).
 # · --no-retire (или SPAWN_RETIRE=off): после --handoff предшественник не снимается сам
 # · --keep-window (или SPAWN_AUTOCLOSE=off): окно Terminal не закрывается само после выхода claude.
+# Окно открыто, только если пусковой скрипт стартовал за SPAWN_START_WAIT с (30; он удаляет свою папку). Иначе — код 4,
+# подсказка --terminal print, линия не записана, сторож retire не запущен, --launch дальше не открывает (SE-93).
+# · --wake human|peer|timer — причина пробуждения (TB-131): по умолчанию peer у --handoff, иначе human.
+# Строка запуска (TB-131) идёт сразу за меткой линии: «Запуск: parent=<линия родителя> genome=<sha> prompt=<sha>
+# wake=<причина>.» parent у поколения 1 — «-». sha — первые 12 знаков sha256: геном — файла --settings («-» без
+# генома), промпт — пускового файла или handoff вместе с шаблоном сообщения (launch_line). Тексты промптов не уходят
+# никуда; запись значений — шаг 2.
 # Окно Terminal закрывается само, когда claude в нём вышел с кодом 0: 10 с отсчёта (Enter — оставить), затем
 # lineage.py autoclose — окно этой линии, одна вкладка, в ней только shell; настройка Terminal «When the shell exits»
 # не важна. Код ≠ 0 — окно остаётся. Код выхода пишется в запись линии (lineage.py exited) для автоуборки.
@@ -29,16 +50,17 @@
 # Не вышло — Контроль и предшественник остаются как были, владельцу — прежний s-пункт (lineage_guard.py, IS-233).
 # Роль Т3 получает свой геном (--settings genome/<ключ>.json; в нём модель opus[1m] и сжатие на 300K без наследника —
 # SE-62, SE-55; обёртка CLAUDE_BIN для окна не нужна) и первое сообщение «Сборка Т3, ключ реестра <ключ>…» —
-# по нему включается правило 90 и Нерв узнаёт роль. Окно открывает osascript: первый раз macOS спросит разрешение
+# по нему включается правило 90 и Нерв узнаёт роль. Каждая сессия получает имя claude --name <продукт>-<роль>-<хвост
+# линии> (session_name): оно в заголовке окна терминала, в строке ввода и в ListAgents. Окно открывает osascript: первый раз macOS спросит разрешение
 # на управление Terminal. Только bash 3.2 (системный на macOS): без ассоциативных массивов.
 set -euo pipefail
 
 TOOLS="$(cd "$(dirname "$0")" && pwd)"
 CWD="$PWD"
-TERMINAL="${SPAWN_TERMINAL:-terminal}"
+TERMINAL="${SPAWN_TERMINAL:-}"
 PROMPT_DIR=""
 HANDOFF="" ROLE="" ROLES="" LAUNCH=0 DRY=0 RETIRE="${SPAWN_RETIRE:-on}" FORCE=0 INFO=""
-PRODUCT="" CWD_SET=0
+PRODUCT="" CWD_SET=0 WAKE=""
 CLOSE="${SPAWN_AUTOCLOSE:-on}"
 DELAY="${SPAWN_CLOSE_DELAY:-10}"  # с отсчёта перед закрытием окна (Enter — оставить)
 case "$DELAY" in ''|*[!0-9]*) DELAY=10 ;; esac
@@ -63,12 +85,18 @@ while [ $# -gt 0 ]; do
     --no-retire) RETIRE=off; shift ;;
     --keep-window) CLOSE=off; shift ;;
     --force) FORCE=1; shift ;;
+    --wake) [ $# -ge 2 ] || die "--wake: human, peer или timer"; WAKE="$2"; shift 2 ;;
     --status) INFO=status; shift ;;
     --stop) INFO=stop; shift ;;
     -h|--help) awk 'NR>1{if(/^#/)print;else exit}' "$0"; exit 0 ;;  # шапка до первой строки кода — без номеров строк
     *) die "неизвестный аргумент: $1" ;;
   esac
 done
+# Причина пробуждения: human — запустил владелец, peer — сессия (handoff), timer — расписание.
+if [ -z "$WAKE" ]; then
+  if [ -n "$HANDOFF" ]; then WAKE=peer; else WAKE=human; fi
+fi
+case "$WAKE" in human|peer|timer) ;; *) die "--wake: human, peer или timer" ;; esac
 
 # Продукт и его поля — из instances/ через products.py; без них (копия слоя в хосте) — как до OPS-25.
 PRODUCTS_PY="$TOOLS/../nerve/products.py"
@@ -117,14 +145,22 @@ if [ -n "$PRODUCT_SUB" ]; then
 else
   PROMPT_DIR="${PROMPT_DIR:-$(in_tree_product prompts/launch-3010/roles)}"
 fi
-case "$TERMINAL" in terminal|iterm|print) ;; *) die "--terminal: terminal, iterm или print" ;; esac
+# Терминал по умолчанию — system.terminal в instances/_shared.json (tmux_host.py default-terminal); без него — terminal.
+[ -n "$TERMINAL" ] || TERMINAL="$(python3 -I "$TOOLS/tmux_host.py" default-terminal 2>/dev/null)" || TERMINAL=""
+[ -n "$TERMINAL" ] || TERMINAL=terminal
+case "$TERMINAL" in terminal|iterm|tmux|print) ;; *) die "--terminal: terminal, iterm, tmux или print" ;; esac
 
+# Номер — место ключа в team.roles instances/<slug>.json (тест сверяет): так роль 7 и в Нерве (emit 7), и в подписи линзы.
+ROLE_LIST="coord plan frontend backend release boards backend-2 frontend-2"
 role_num() {
   case "$1" in
     coord) echo 1 ;; plan) echo 2 ;; frontend) echo 3 ;; backend) echo 4 ;; release) echo 5 ;; boards) echo 6 ;;
+    backend-2) echo 7 ;; frontend-2) echo 8 ;;
     *) return 1 ;;
   esac
 }
+# Базовая роль второй сессии: backend-2 → backend (то же правило — base_role в eval/nerve/products.py).
+role_base() { case "$1" in *-[2-9]) printf '%s' "${1%-*}" ;; *) printf '%s' "$1" ;; esac; }
 
 # Линия потомков: у каждой новой сессии свой id — id родителя (TAIBE_LINEAGE, корень «r») + 4 случайных символа;
 # поколение — число точек. Один шаблон запуска делает сессии единообразными, id — различимыми в журналах, на
@@ -140,40 +176,92 @@ child_lineage() {
 }
 generation() { printf '%s' "$1" | tr -cd '.' | wc -c | tr -d ' '; }
 
-# Первое сообщение новой сессии → stdout. $2 — id линии новой сессии.
+# Файл, который новая сессия читает первым, → stdout: handoff или пусковой файл роли ($1).
+first_file() {
+  local base
+  if [ -n "$HANDOFF" ]; then printf '%s' "$HANDOFF"; return; fi
+  base="$(role_base "$1")"
+  printf '%s' "$PROMPT_DIR/$(role_num "$base")-$base.md"
+}
+
+# Строка запуска (TB-131, launch_line.py) → stdout. $1 — геном (пусто — без), $2 — линия, $3 — роль, $4 — шаблон.
+launch_line() {
+  printf '%s' "$4" | python3 -I "$TOOLS/launch_line.py" --genome "$1" --lineage "$2" --file "$(first_file "$3")" \
+    --tools "$TOOLS" --wake "$WAKE"
+}
+
+# Имя сессии для claude --name: продукт, роль и хвост линии (hr-helper-boards-ab12, taibe-coord-k3z4). Claude Code
+# показывает его в заголовке окна терминала, в строке ввода и в ListAgents: владелец видит, кто в окне, как его зовут
+# и к какому продукту он относится (15.11; без имени заголовок — тема разговора, у двух продуктов одинаковая).
+# Хвост линии свой у каждой сессии, поэтому предшественник и наследник одной роли не путаются. Наследник без роли
+# получает тему по папке handoff (…/queue-lane/HANDOFF-….md → queue-lane), папка-дата или пусто — «session».
+session_name() {
+  local role="$1" lineage="$2" who
+  who="$role"
+  if [ -z "$who" ]; then
+    who="$(basename "$(dirname "${HANDOFF:-/}")")"
+    case "$who" in ''|.|/|[0-9][0-9][0-9][0-9]-[0-9]*) who=session ;; esac
+  fi
+  printf '%s-%s-%s' "${PRODUCT:-$(basename "$CWD")}" "$who" "${lineage##*.}" \
+    | tr 'A-Z_ ' 'a-z--' | LC_ALL=C tr -cd 'a-z0-9.-'
+}
+
+# Первое сообщение новой сессии → stdout. $2 — id линии новой сессии, $3 — её имя (session_name), $4 — строка запуска
+# (сразу за меткой линии).
 first_message() {
-  local role="$1" lineage="$2" num file tag
-  tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди."
+  local role="$1" lineage="$2" name="$3" launch="${4:-}" num file tag
+  tag=" Линия: $lineage (поколение $(generation "$lineage")) — метка session на карточках и в очереди.$launch Твоё имя в списке сессий и в заголовке окна — $name."
   if [ -n "$HANDOFF" ]; then
     # Квитанция — последним шагом приёма: по ней сторож снимает предшественника, Monitor и кроны к этому времени свои.
     tag="$tag Последним шагом приёма (после Monitor, если ты его взводишь) выполни: python3 -I $TOOLS/lineage.py ack — по этой квитанции предшественник закроется сам."
     if [ -n "$role" ]; then
-      num="$(role_num "$role")" || die "неизвестная роль: $role (coord plan frontend backend release boards)"
-      printf 'Сборка Т3, ключ реестра %s, роль %s, наследник. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику не пиши: квитанция приёма — lineage.py ack (SE-41).%s' "$role" "$num" "$HANDOFF" "$tag"
+      num="$(role_num "$role")" || die "неизвестная роль: $role ($ROLE_LIST)"
+      printf 'Сборка Т3, ключ реестра %s, роль %s, наследник. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику не пиши: квитанция приёма — lineage.py ack (SE-41).%s%s' "$role" "$num" "$HANDOFF" "$(alias_note "$role")" "$tag"
     else
       printf 'Наследник сессии. Handoff: %s — прочитай его первым, сверь факты с живыми источниками (скилл successor-handoff) и действуй по нему. Предшественнику не пиши: квитанция приёма — lineage.py ack (SE-41).%s' "$HANDOFF" "$tag"
     fi
     return
   fi
-  num="$(role_num "$role")" || die "неизвестная роль: $role (coord plan frontend backend release boards)"
-  file="$PROMPT_DIR/$num-$role.md"
+  num="$(role_num "$role")" || die "неизвестная роль: $role ($ROLE_LIST)"
+  file="$(first_file "$role")"
   [ -f "$file" ] || die "нет пускового файла $file"
-  printf 'Сборка Т3, ключ реестра %s, роль %s. Пусковой файл: %s — прочитай его первым и действуй по нему.%s' \
-    "$role" "$num" "$file" "$tag"
+  printf 'Сборка Т3, ключ реестра %s, роль %s. Пусковой файл: %s — прочитай его первым и действуй по нему.%s%s' \
+    "$role" "$num" "$file" "$(alias_note "$role")" "$tag"
+}
+
+# Вторая сессия читает пусковой файл базовой роли: в нём ключ базовой роли, а тап, work_state и метка — свои.
+alias_note() {
+  local role="$1" base
+  base="$(role_base "$role")"
+  [ "$base" != "$role" ] || return 0
+  printf ' Ты — вторая сессия роли %s (роль %s): пусковой файл и геном общие с ней. Где в пусковых файлах ключ %s, бери свой ключ %s — тап Нерва, work_state, метка session, source пунктов очереди владельца; подпись линзы — «(роль %s)». Списки work_state и карточки роли %s — первой сессии: карточки бери только по назначению координатора.' \
+    "$base" "$(role_num "$base")" "$base" "$role" "$(role_num "$role")" "$base"
 }
 
 # Одна сессия: пусковой скрипт в $TMPDIR, затем окно терминала (или печать команды).
 spawn_one() {
-  local role="$1" msg genome="" dir launcher cmd lineage out wid tty
+  local role="$1" msg tmpl line genome="" dir launcher cmd lineage out="" wid tty osa name args pane ppid server att
   lineage="$(child_lineage)"
   SPAWNED_LINE="$lineage"
   SPAWNED_TTY=""
-  msg="$(first_message "$role" "$lineage")"
+  name="$(session_name "$role" "$lineage")"
+  args="--name $(sq "$name")"
   if [ -n "$role" ]; then
-    genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$role.json")"
+    genome="$(in_tree_product "pipeline/genome/$PRODUCT_SUB$(role_base "$role").json")"
     [ -f "$genome" ] || die "нет генома $genome (build.py собирает его из roles.json)"
+    args="--settings $(sq "$genome") $args"
   fi
-  if [ "$TERMINAL" != print ] && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
+  # Шаблон — первое сообщение с линией «-» (поколение 0) и именем <name>: без линии, хвоста линии в имени и строки
+  # запуска; нет пускового файла — стоп здесь.
+  tmpl="$(first_message "$role" "-" "<name>")"
+  line="$(launch_line "$genome" "$lineage" "$role" "$tmpl")" || die "строка запуска не собрана (launch_line.py)"
+  msg="$(first_message "$role" "$lineage" "$name" "$line")"
+  # Сервер tmux не отвечает (нет tmux, LaunchAgent не поднялся) — окно Terminal, как до OPS-82 (README, PR 2 п. 4).
+  if [ "$TERMINAL" = tmux ] && [ "$DRY" = 0 ] && ! python3 -I "$TOOLS/tmux_host.py" ensure >&2; then
+    TERMINAL=terminal
+    echo "# spawn_session: сервер tmux не отвечает — окно Terminal" >&2
+  fi
+  if { [ "$TERMINAL" = terminal ] || [ "$TERMINAL" = iterm ]; } && [ "$DRY" = 0 ] && ! command -v osascript >/dev/null 2>&1; then
     echo "# osascript нет (Linux/SSH) — окно не открыть, команда ниже (и без autoclose)" >&2
     TERMINAL=print
   fi
@@ -203,11 +291,7 @@ spawn_one() {
       # Ctrl-C и сторож retire снимают его группу. Код ≠ 0 (сбой, KILL) — окно остаётся, видна причина. Закрывает
       # отцепленный lineage.py autoclose после выхода скрипта: только окно этой линии и только если в нём один shell.
       echo "set -m"
-      if [ -n "$genome" ]; then
-        echo "\"\${CLAUDE_BIN:-claude}\" --settings $(sq "$genome") \"\$m\"; rc=\$?"
-      else
-        echo "\"\${CLAUDE_BIN:-claude}\" \"\$m\"; rc=\$?"
-      fi
+      echo "\"\${CLAUDE_BIN:-claude}\" $args \"\$m\"; rc=\$?"
       # Код выхода — в запись линии: автоуборка закрывает только окна с кодом 0 и не раньше чем через 10 мин.
       echo "L=$(sq "$TOOLS/lineage.py")"
       echo "python3 -I \"\$L\" exited --rc \"\$rc\" >/dev/null 2>&1 </dev/null || true"
@@ -216,10 +300,24 @@ spawn_one() {
       echo "if read -r -t $DELAY _; then python3 -I \"\$L\" exited --rc 0 --keep >/dev/null 2>&1 </dev/null || true; echo \"окно оставлено\"; exit 0; fi"
       echo "python3 -I \"\$L\" autoclose --tty \"\$(tty)\" --pid \$\$ >/dev/null 2>&1 </dev/null || true"
       echo "exit 0"
-    elif [ -n "$genome" ]; then
-      echo "exec \"\${CLAUDE_BIN:-claude}\" --settings $(sq "$genome") \"\$m\""
+    elif [ "$TERMINAL" = tmux ]; then
+      # Окно tmux закрывается само, когда скрипт вышел (remain-on-exit off): отцепленный autoclose не нужен. Код ≠ 0,
+      # Enter в отсчёте, --keep-window — вместо выхода оболочка входа: окно остаётся, причина видна.
+      echo "set -m"
+      echo "\"\${CLAUDE_BIN:-claude}\" $args \"\$m\"; rc=\$?"
+      echo "L=$(sq "$TOOLS/lineage.py")"
+      echo "python3 -I \"\$L\" exited --rc \"\$rc\" >/dev/null 2>&1 </dev/null || true"
+      echo "keep() { echo \"\$1\"; exec \"\${SHELL:-/bin/sh}\" -l; }"
+      echo "[ \"\$rc\" = 0 ] || keep \"claude вышел с кодом \$rc — окно оставлено\""
+      if [ "$CLOSE" = on ]; then
+        echo "echo \"claude вышел. Окно закроется через $DELAY с — Enter, чтобы оставить.\""
+        echo "if read -r -t $DELAY _; then python3 -I \"\$L\" exited --rc 0 --keep >/dev/null 2>&1 </dev/null || true; keep \"окно оставлено\"; fi"
+        echo "exit 0"
+      else
+        echo "keep \"claude вышел — окно оставлено (--keep-window)\""
+      fi
     else
-      echo "exec \"\${CLAUDE_BIN:-claude}\" \"\$m\""
+      echo "exec \"\${CLAUDE_BIN:-claude}\" $args \"\$m\""
     fi
   } > "$launcher"
   chmod 700 "$launcher"
@@ -232,35 +330,85 @@ spawn_one() {
     record "$lineage" print "" "" "$role"
     return
   fi
-  if [ "$TERMINAL" = iterm ]; then
-    osascript -e "tell application \"iTerm\" to create window with default profile command \"$cmd\"" >/dev/null
-    record "$lineage" iterm "" "" "$role"
+  osa=0
+  if [ "$TERMINAL" = tmux ]; then
+    out="$(python3 -I "$TOOLS/tmux_host.py" open --product "${PRODUCT:-$(basename "$CWD")}" --name "$name" --cwd "$CWD" \
+      --launcher "$launcher")" || { osa=$?; out=""; }
+    if [ -z "$out" ]; then  # окна нет — ждать старта скрипта незачем
+      rm -rf "$dir"
+      echo "spawn_session: окно ${role:-наследника} не открылось (tmux, код $osa). Линия не записана, сторож не запущен." \
+        "Вручную: тот же вызов с --terminal terminal" >&2
+      SPAWN_FAILED=1
+      return
+    fi
+  elif [ "$TERMINAL" = iterm ]; then
+    osascript -e "tell application \"iTerm\" to create window with default profile command \"$cmd\"" >/dev/null || osa=$?
   else
     # id окна и tty вкладки — сразу при открытии: у окна нет tty, у вкладки нет id; по ним сторож закроет именно его.
     out="$(osascript -e 'tell application "Terminal"' -e "set t to do script \"$cmd\"" -e 'activate' \
       -e 'try' -e 'set w to first window whose tabs contains t' -e 'return ((id of w) as text) & " " & (tty of t)' \
-      -e 'on error' -e 'return "- " & (tty of t)' -e 'end try' -e 'end tell')" || out=""
+      -e 'on error' -e 'return "- " & (tty of t)' -e 'end try' -e 'end tell')" || { osa=$?; out=""; }
+  fi
+  # Окно открыто, только если пусковой скрипт стартовал (SE-93). Код osascript — не признак: Terminal вернул -1712
+  # (ответ не пришёл за 2 мин), окна не было, а скрипт писал «открыто» и запускал сторожа без наследника.
+  if ! launcher_started "$dir"; then
+    rm -rf "$dir"  # окно, открывшееся позже, не найдёт скрипт: наследника без записи линии не будет
+    echo "spawn_session: окно ${role:-наследника} не открылось ($TERMINAL) — код $osa, пусковой скрипт не стартовал" \
+      "за ${SPAWN_START_WAIT:-30} с. Линия не записана, сторож не запущен. Вручную: тот же вызов с --terminal print" >&2
+    SPAWN_FAILED=1
+    return
+  fi
+  [ "$osa" = 0 ] || echo "# spawn_session: открытие вернуло код $osa, но пусковой скрипт стартовал — окно открыто" >&2
+  if [ "$TERMINAL" = iterm ]; then
+    record "$lineage" iterm "" "" "$role"
+  elif [ "$TERMINAL" = tmux ]; then
+    # «окно панель tty pid-панели сервер»; второй строкой — attach, если к серверу никто не подключён.
+    read -r wid pane tty ppid server <<< "$(printf '%s\n' "$out" | sed -n 1p)"
+    case "$tty" in /dev/*) ;; *) tty="" ;; esac  # macOS /dev/ttysN, Linux /dev/pts/N
+    record "$lineage" tmux "$wid" "$tty" "$role" "$pane" "$ppid" "$server"
+    SPAWNED_TTY="$tty"
+    att="$(printf '%s\n' "$out" | sed -n 2p)"
+    if [ -n "$att" ] && command -v osascript >/dev/null 2>&1; then
+      # Одно окно Terminal на все роли: владелец видит новую роль так же сразу, как раньше видел её окно.
+      osascript -e 'tell application "Terminal"' -e "do script \"$att\"" -e 'activate' -e 'end tell' >/dev/null 2>&1 \
+        || echo "# spawn_session: окно с attach не открылось — вручную: $att" >&2
+    elif [ -n "$att" ]; then
+      echo "# роли — окна tmux: $att" >&2
+    fi
+  else
     wid="${out%% *}"; tty="${out#* }"
     case "$wid" in *[!0-9]*|"") wid="" ;; esac
     case "$tty" in /dev/tty*) ;; *) tty="" ;; esac
     record "$lineage" terminal "$wid" "$tty" "$role"
     SPAWNED_TTY="$tty"
   fi
-  echo "открыто: ${role:-наследник} → $launcher"
+  echo "открыто: ${role:-наследник} ($name) → $launcher"
 }
 
-# Запись линии (окно, tty) для сторожа и reap_sessions.sh. Сбой — предупреждение: окно уже открыто.
+# Пусковой скрипт стартовал: прочитав текст, он удаляет свою папку. Ждём до SPAWN_START_WAIT с (30).
+launcher_started() {
+  local i=0 n=$(( ${SPAWN_START_WAIT:-30} * 2 ))
+  while [ -d "$1" ]; do
+    [ "$i" -lt "$n" ] || return 1
+    sleep 0.5
+    i=$((i + 1))
+  done
+}
+
+# Запись линии (окно, tty; у tmux — ещё панель, pid пусковой оболочки, сервер) для сторожа и reap_sessions.sh.
+# Сбой — предупреждение: окно уже открыто.
 record() {
   python3 -I "$TOOLS/lineage.py" record --line "$1" --terminal "$2" --window-id "$3" --tty "$4" --role "$5" \
+    ${6:+--pane "$6"} ${7:+--pane-pid "$7"} ${8:+--server "$8"} \
     || echo "# spawn_session: запись линии $1 не сохранена — окно закроется только по tty" >&2
 }
 
 # Одна роль в --launch: живую пропустить, иначе открыть и дождаться её сессии. Итог — строкой в SUMMARY.
-SUMMARY=""
+SUMMARY="" SPAWN_FAILED=0 GATE_CLOSED=0
 note() { SUMMARY="$SUMMARY$(printf '\n  %s' "$*")"; }
 launch_role() {
   local r="$1" live rc got
-  role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
+  role_num "$r" >/dev/null || die "неизвестная роль: $r ($ROLE_LIST)"
   if [ "$FORCE" = 0 ]; then
     rc=0; live="$(python3 -I "$TOOLS/team_status.py" live --role "$r" --cwd "$CWD" ${PRODUCT:+--product "$PRODUCT"} 2>&1)" || rc=$?
     if [ "$rc" = 0 ]; then echo "жива: $r · $live"; note "$r — жива, не открывал: $live"; return; fi
@@ -268,7 +416,16 @@ launch_role() {
     # сломалась: вторая сессия той же роли хуже, чем пропуск, видный в итоге.
     if [ "$rc" != 3 ]; then echo "# $r: проверка живой роли не прошла: $live" >&2; note "$r — НЕ открыта: проверка не прошла (--force — открыть)"; return; fi
   fi
+  # Пропуск (OPS-82): мало памяти или сессий Claude на Mac уже max_sessions — роль не открываем. Проверка — перед
+  # каждой ролью: предыдущая уже заняла память. Сломанная проверка (rc ≠ 0 и ≠ 3) запуск не держит — только в итог.
+  if [ "${SPAWN_GATE:-on}" != off ] && [ "$DRY" = 0 ] && [ "$TERMINAL" != print ]; then
+    rc=0; gate="$(python3 -I "$TOOLS/team_status.py" gate 2>&1)" || rc=$?
+    if [ "$rc" = 3 ]; then
+      echo "# $r: $gate" >&2; note "$r — НЕ открыта: $gate (SPAWN_GATE=off — открыть всё равно)"; GATE_CLOSED=1; return
+    elif [ "$rc" != 0 ]; then note "$r — пропуск не проверен: $gate"; fi
+  fi
   spawn_one "$r"
+  if [ "$SPAWN_FAILED" = 1 ]; then note "$r — НЕ открыта: окно не открылось (--terminal print — вручную)"; return; fi
   if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then note "$r — команда напечатана"; return; fi
   echo "жду сессию $r (до ${SPAWN_WAIT:-90} с)…"
   got="$(python3 -I "$TOOLS/team_status.py" wait --role "$r" --line "$SPAWNED_LINE" --timeout "${SPAWN_WAIT:-90}" 2>&1)" \
@@ -293,7 +450,51 @@ elif [ -n "$HANDOFF" ]; then
     python3 -I "$TOOLS/../evolve/dupes.py" --against-l1 "$HANDOFF" --max-waste "${SPAWN_MAX_WASTE:-300}" --top 5 >&2 \
       || echo "# spawn_session: handoff повторяет постоянный контекст — в следующий раз пиши только дельту" >&2
   fi
+  # Роль сверх доли владельца (кнопка «Роли» в /queue сменила долю) наследника не открывает: доделывает сессию, метка
+  # lineage.py surplus — сторож команды больше не считает её ролью и отдаёт место новой доле, автоуборка снимает её
+  # после 30 мин простоя; дела — координатору продукта (решение d-team-surplus-1711). Доли — из кэша сторожа, без сети.
+  # Сбой проверки — наследник как раньше. --dry-run проверку не делает, если не SPAWN_SURPLUS_CHECK=on; off — никогда.
+  surplus_check="${SPAWN_SURPLUS_CHECK:-}"
+  [ -n "$surplus_check" ] || { [ "$DRY" = 1 ] && surplus_check=off || surplus_check=on; }
+  if [ -n "$ROLE" ] && [ -n "$PRODUCT" ] && [ "$surplus_check" = on ]; then
+    rc=0
+    split="$(python3 -I "${SPAWN_TEAM_PLAN:-$TOOLS/team_plan.py}" keep "$PRODUCT" "$ROLE" 2>/dev/null)" || rc=$?
+    if [ "$rc" = 3 ]; then
+      if [ "$RETIRE" = off ]; then  # --no-retire: роль будит координатор (скилл successor-handoff, «кэш окна»)
+        echo "spawn_session: role $ROLE ($PRODUCT) is surplus over the owner split ($split, decision d-team-surplus-1711)." \
+          "Do not wake it. Take its open work from the handoff $HANDOFF. The Mac closes its session after 30 min idle." >&2
+      else
+        echo "spawn_session: role $ROLE ($PRODUCT) is surplus over the owner split ($split, decision d-team-surplus-1711)." \
+          "No successor opens. 1. Commit and push your WIP branch, then write work_state. Uncommitted files stay on disk;" \
+          "this session closes after 30 min idle (a session whose folder is its own worktree stays open while the" \
+          "worktree has uncommitted work). 2. Release your inbox claims (oq_agent_status release, note: to coord). 3. Do not start new work." \
+          "4. Do not wait for a successor ack and do not run spawn_session.sh again. The Mac closes this session after" \
+          "30 min idle." >&2
+      fi
+      mark=0
+      [ "$DRY" = 1 ] || python3 -I "$TOOLS/lineage.py" surplus --handoff "$HANDOFF" --role "$ROLE" \
+        --product "${PRODUCT_SUB%/}" --slug "$PRODUCT" >/dev/null 2>&1 || mark=$?
+      if [ "$mark" = 3 ]; then
+        echo "spawn_session: the coordinator already has your handoff." >&2
+      elif [ "$DRY" = 0 ] && python3 -I "${SPAWN_NERVE:-$TOOLS/../nerve/nerve.py}" emit coord --product "$PRODUCT" \
+        "Role $ROLE ($PRODUCT) ends: it is surplus over the owner split ($split, d-team-surplus-1711). No successor opens. 1. Read the handoff $HANDOFF. 2. Take its PRs, cards and work_state. 3. Take its owner-queue items: the Nerve also sends owner answers to them to you." \
+        >/dev/null 2>&1; then
+        python3 -I "$TOOLS/lineage.py" surplus --coord-done --role "$ROLE" --product "${PRODUCT_SUB%/}" \
+          --slug "$PRODUCT" >/dev/null 2>&1 || true
+        echo "spawn_session: the coordinator has your handoff." >&2
+      elif [ "$DRY" = 0 ]; then
+        echo "spawn_session: the event to coord failed. Run: python3 -I $TOOLS/../nerve/nerve.py emit coord" \
+          "--product $PRODUCT \"Take the handoff $HANDOFF of surplus role $ROLE\"" >&2
+      fi
+      if [ "$mark" != 0 ] && [ "$mark" != 3 ] && [ "$mark" != 4 ]; then
+        echo "spawn_session: the surplus mark failed ($mark). This session still counts as a role; the slot frees only" \
+          "after «Разработка ВЫКЛ → ВКЛ». Tell coord." >&2
+      fi
+      exit 5
+    fi
+  fi
   spawn_one "$ROLE"
+  [ "$SPAWN_FAILED" = 0 ] || exit 4  # наследника нет — предшественник остаётся, сторож не нужен
   # Предшественник уходит сам: сторож ждёт квитанцию наследника и проверяет его, модель в этом не участвует.
   if [ "$DRY" = 0 ] && [ "$RETIRE" != off ]; then
     # --guard: если предшественник — Контроль, сторож впишет наследника в список Контроля этих папок (IS-233).
@@ -319,7 +520,7 @@ elif [ "$LAUNCH" = 1 ]; then
   fi
   # Весь список — до нерва и первой роли: опечатка в третьей не должна срывать запуск после двух открытых.
   for r in $(echo "$ROLES" | tr ',' ' '); do
-    role_num "$r" >/dev/null || die "неизвестная роль: $r (coord plan frontend backend release boards)"
+    role_num "$r" >/dev/null || die "неизвестная роль: $r ($ROLE_LIST)"
   done
   # Сначала нерв: роли без него не получают назначений. Сбой — в итог, запуск ролей не останавливает.
   if [ "$DRY" = 1 ]; then nerve="$(python3 -I "$TOOLS/team_status.py" nerve 2>&1)" || true
@@ -327,9 +528,15 @@ elif [ "$LAUNCH" = 1 ]; then
   echo "$nerve"
   # Следующая роль — после того, как сессия предыдущей появилась (wait): окна не стартуют разом, MCP и индексация
   # не толкаются. Сессия не появилась — таймаут в итог, дальше по порядку.
-  for r in $(echo "$ROLES" | tr ',' ' '); do launch_role "$r"; done
+  # Окно не открылось — остальные роли не открываем: Terminal завис, и каждая следующая ждала бы те же 2 мин.
+  for r in $(echo "$ROLES" | tr ',' ' '); do
+    launch_role "$r"
+    [ "$SPAWN_FAILED" = 0 ] || { note "дальше не открывал: окно $r не открылось"; break; }
+    [ "$GATE_CLOSED" = 0 ] || { note "дальше не открывал: пропуск закрыт"; break; }
+  done
   echo "итог ($(basename "${MAIN:-$CWD}")):$SUMMARY"
   python3 -I "$TOOLS/team_status.py" nerve 2>&1 | sed 's/^/  /' || true
+  [ "$SPAWN_FAILED" = 0 ] || exit 4
 else
   die "нужен --handoff FILE или --launch (см. --help)"
 fi

@@ -1,5 +1,5 @@
 """Сторож retire для lineage.py (свой модуль — лимит 500 строк): ждёт квитанцию наследника, проверяет его и снимает
-предшественника — процессы, окно Terminal, shell-остатки на tty."""
+предшественника — процессы, окно Terminal или панель tmux, shell-остатки на tty."""
 import os
 import re
 import signal
@@ -79,9 +79,17 @@ def terminate(sx, p, protect, log):
 
 
 def close_window(sx, procs, p, rec, log):
-    """Окно Terminal сессии p. procs — снимок до снятия (после него цепочку предков уже не пройти)."""
+    """Окно Terminal (или панель tmux) сессии p. procs — снимок до снятия (после него цепочку предков уже не пройти).
+    True — закрыто окно Terminal, остаткам на tty нужен HUP."""
     kind = (rec or {}).get("terminal") or ""
     where = host(procs, p)
+    if where == "tmux" or kind == "tmux":  # OPS-82: панель — только по записи линии, ни по tty, ни по имени окна
+        if where != kind or p.tty in ("", "??", "-"):
+            log(f"панель не трогаю: хост {where}, запись {kind or '—'}")
+            return False
+        import tmux_host  # здесь, а не наверху: путь Terminal от tmux не зависит
+        tmux_host.close_pane(rec, "/dev/" + p.tty, log)
+        return False  # kill-pane сам шлёт HUP процессам панели
     if where != "terminal" or kind in ("iterm", "print"):
         log(f"окно не трогаю: хост {where}{', запись ' + kind if kind else ''}")
         return False

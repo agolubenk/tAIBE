@@ -9,6 +9,7 @@ import {
   pullRequestTitle,
 } from "./github-pr-text";
 import { linkedRepositories, repositoryKey } from "./linked-repositories";
+import type { SourceAuthor } from "./source-author";
 import { upsertSource } from "./upsert-source";
 
 async function linkedRepository(workspaceId: string, pr: PullRequestRef) {
@@ -77,7 +78,11 @@ async function readPullRequest(config: GitHubConfig, number: number) {
 }
 
 // Adding the same PR again ("Refresh") re-reads it and replaces its text.
-export async function addPullRequestSource(workspaceId: string, input: string) {
+export async function addPullRequestSource(
+  workspaceId: string,
+  input: string,
+  addedBy?: SourceAuthor,
+) {
   const ref = parsePullRequestRef(input);
   const config = await linkedRepository(workspaceId, ref);
   const { pr, comments } = await readPullRequest(config, ref.number);
@@ -89,6 +94,7 @@ export async function addPullRequestSource(workspaceId: string, input: string) {
     title,
     text: pullRequestText(ref.ref, pr, comments).slice(0, SOURCE_TEXT_MAX),
     maxChunks: FETCHED_SOURCE_CHUNKS_MAX,
+    addedBy,
   });
   return { ...stored, kind: "github-pr" as const, ref: ref.ref, title };
 }

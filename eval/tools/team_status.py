@@ -5,18 +5,24 @@
   python3 -I eval/tools/team_status.py live --role KEY [--cwd DIR]     живая роль → «pid имя статус …», rc 0; нет — rc 3
                                                                        (другой rc — проверка сломалась, роль не открывать)
   python3 -I eval/tools/team_status.py wait --role KEY --line LINE [--timeout 90]   сессия этой линии поднялась → rc 0
-  python3 -I eval/tools/team_status.py status [--cwd DIR | --all]      роли по порядку 1→5→4→3→2→6 и пульс нерва; --all — по продуктам
+  python3 -I eval/tools/team_status.py status [--cwd DIR | --all]      роли по порядку 1→5→4→3→2→6→7→8 и пульс нерва; --all — по продуктам
   python3 -I eval/tools/team_status.py stop [--cwd DIR]                команды kill живых ролей для владельца; сам не снимает
   python3 -I eval/tools/team_status.py nerve [--fix]                   пульс; --fix: не загружен → bootstrap, молчит → kickstart
+  python3 -I eval/tools/team_status.py gate                            пропуск на новую сессию: rc 0 — открыт, rc 3 — закрыт
+                                                                       (свободно памяти < system.mem_warn или сессий Claude
+                                                                       на Mac ≥ system.max_sessions; OPS-82)
 
 Продукт — основной checkout папки --cwd вместе с его worktree. Живая роль — самая молодая живая сессия Claude Code
-с геномом роли (`/genome/<ключ>.json` в аргументах), папкой внутри продукта и без наследника (ни квитанции, ни живой
+с геномом роли (`/genome/<ключ>.json` в аргументах; вторая сессия backend-2 — геном backend и свой ключ
+в первом сообщении, lineage_reap.role_of), папкой внутри продукта и без наследника (ни квитанции, ни живой
 сессии той же роли с линией «<линия>.…»). Самая длинная линия не подходит: новая корневая линия после перезапуска
 команды короче старых.
 """
 import argparse
 import os
 import plistlib
+import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -26,13 +32,17 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import lineage as L  # noqa: E402
 import lineage_reap as R  # noqa: E402
 
-ORDER = ("coord", "release", "backend", "frontend", "plan", "boards")
-NUM = {"coord": 1, "plan": 2, "frontend": 3, "backend": 4, "release": 5, "boards": 6}
+# Номер — место ключа в team.roles (как role_num в spawn_session.sh); вторые сессии — после базовых ролей.
+ORDER = ("coord", "release", "backend", "frontend", "plan", "boards", "backend-2", "frontend-2")
+NUM = {"coord": 1, "plan": 2, "frontend": 3, "backend": 4, "release": 5, "boards": 6, "backend-2": 7, "frontend-2": 8}
 LABEL = "space.hrhelper.nerve"  # до OPS-25 — один Нерв на Mac для всех продуктов
 # «Роли нет» — свой код: 1 Python отдаёт и на трейсбек (сбой импорта, исключение), и по нему открылась бы вторая
 # сессия живой роли.
 RC_MISSING = 3
 WAIT_POLL = 2.0
+# Пропуск (OPS-82): метрика памяти — та же, что у Нерва (eval/nerve/sources.py poll_system, MEM_RE).
+MEM_RE = re.compile(r"free percentage:\s*(\d+)%")
+GATE_DEFAULTS = {"mem_warn": 20, "max_sessions": 10}
 
 
 class Sys(L.Sys):
@@ -42,6 +52,18 @@ class Sys(L.Sys):
         except (OSError, subprocess.SubprocessError) as exc:
             return 127, f"launchctl недоступен: {exc}"
         return r.returncode, (r.stdout + r.stderr).strip()
+
+    def mem_free(self):
+        """Свободно памяти, % («System-wide memory free percentage» из memory_pressure); нет утилиты или числа — None."""
+        mp = shutil.which("memory_pressure")
+        if not mp:
+            return None
+        try:
+            out = subprocess.run([mp], capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        m = MEM_RE.search(out)
+        return int(m.group(1)) if m else None
 
 
 def product_root(cwd):
@@ -72,10 +94,11 @@ def role_rows(sx, root, product=None):
 
 
 def live_roles(rows):
-    """Роль → её живая сессия; сменённые наследником (квитанция или живой потомок той же роли) не в счёт."""
+    """Роль → её живая сессия; сменённые наследником (квитанция или живой потомок той же роли) и роли сверх доли
+    владельца, закончившие смену (метка lineage.py surplus), не в счёт: их место сторож отдаёт новой доле."""
     best = {}
     for r in rows:
-        if r["ack"] or R.successor_gen(rows, r):
+        if r["ack"] or r.get("surplus") or R.successor_gen(rows, r):
             continue
         if r["role"] not in best or r["age_h"] < best[r["role"]]["age_h"]:
             best[r["role"]] = r
@@ -103,8 +126,7 @@ def find_line(sx, role, line, since):
         p = procs.get(d["pid"])
         if p is None or L.argv0(p) != "claude" or L.norm(p.start) != L.norm(d.get("procStart")):
             continue
-        m = R.ROLE_RE.search(p.command)
-        if m and m.group(2) == role and L.session_line(sx, p) == line:
+        if R.role_of(p.command, line)[1] == role and L.session_line(sx, p) == line:
             return {"pid": p.pid, "name": d.get("name") or "", "status": d.get("status") or "?"}
     return None
 
@@ -284,6 +306,53 @@ def cmd_nerve(sx, a):
     return rc if rc else (0 if st["installed"] else 1)
 
 
+def gate_limits():
+    """mem_warn и max_sessions из instances/_shared.json (system); без instances или ключа — GATE_DEFAULTS."""
+    lim = dict(GATE_DEFAULTS)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nerve"))
+    try:
+        import products as P
+        system = P.load()[0].get("system") or {}
+    except Exception:  # noqa: BLE001 — копия слоя без instances/
+        return lim
+    lim.update({k: int(system[k]) for k in lim if isinstance(system.get(k), (int, float))})
+    return lim
+
+
+def live_sessions(sx):
+    """Живые сессии Claude Code на машине (все продукты): файл сессии, живой pid того же старта, argv0 claude.
+    Сессия на паузе (SIGSTOP) — тоже живая: память она держит. Фоновые сессии claude-mem (папка
+    ~/.claude-mem/observer-sessions) — не сессии людей и ролей: их держит сам claude-mem, память видна в mem_warn."""
+    procs = sx.procs()
+    n = 0
+    for f in L.sessions_dir().glob("*.json"):
+        d = L.read_json(f)
+        if not isinstance(d, dict) or not isinstance(d.get("pid"), int):
+            continue
+        if "/.claude-mem/" in str(d.get("cwd") or ""):
+            continue
+        p = procs.get(d["pid"])
+        if p is not None and L.argv0(p) == "claude" and L.norm(p.start) == L.norm(d.get("procStart")):
+            n += 1
+    return n
+
+
+def cmd_gate(sx, a):
+    lim = gate_limits()
+    free, n = sx.mem_free(), live_sessions(sx)
+    why = []
+    if free is not None and free < lim["mem_warn"]:
+        why.append(f"свободно памяти {free}% < mem_warn {lim['mem_warn']}%")
+    if n >= lim["max_sessions"]:
+        why.append(f"сессий Claude {n} ≥ max_sessions {lim['max_sessions']}")
+    facts = f"память {'—' if free is None else f'{free}%'} (memory_pressure), сессий {n}/{lim['max_sessions']}"
+    if why:
+        print(f"пропуск закрыт: {'; '.join(why)} · {facts}")
+        return RC_MISSING
+    print(f"пропуск открыт: {facts}")
+    return 0
+
+
 def main(argv=None, sx=None):
     ap = argparse.ArgumentParser(prog="team_status.py", description=__doc__.split("\n", 1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -301,11 +370,12 @@ def main(argv=None, sx=None):
     w.add_argument("--timeout", type=float, default=90.0)
     n = sub.add_parser("nerve")
     n.add_argument("--fix", action="store_true")
+    sub.add_parser("gate")
     a = ap.parse_args(argv)
     sx = sx or Sys()
     try:
         return {"live": cmd_live, "wait": cmd_wait, "status": cmd_status, "stop": cmd_stop,
-                "nerve": cmd_nerve}[a.cmd](sx, a)
+                "nerve": cmd_nerve, "gate": cmd_gate}[a.cmd](sx, a)
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"team_status: {exc}", file=sys.stderr)
         return 2

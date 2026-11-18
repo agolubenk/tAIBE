@@ -138,8 +138,8 @@ echo "→ FIM-шаблон виден клиенту:"
 ollama show "$FIM_TAG" --modelfile | grep -A3 "TEMPLATE" | head -5
 
 if [[ "${RUN_SMOKE:-0}" == "1" ]]; then
-  echo "→ Тестовая генерация (грузит ~13 ГБ, минута-другая)…"
-  ollama run "$TAG" "Ответь одним словом: ok"
+  echo "→ Тестовая генерация (грузит ~13 ГБ, минута-другая; под замком локального инференса — OPS-33)…"
+  python3 -I "$SCRIPT_DIR/ollama-locked.py" --who "setup $TAG" --wait 600 -- ollama run "$TAG" "Ответь одним словом: ok"
 fi
 
 echo ""
