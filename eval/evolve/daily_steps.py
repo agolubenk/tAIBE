@@ -6,6 +6,7 @@ only."""
 import datetime
 import glob
 import json
+import math
 import os
 import re
 import subprocess
@@ -125,12 +126,19 @@ def post_card(line):
 
 
 def num(x, empty=False):
-    """A number of a report for the run report and the day's lines; None only if `empty`. Any other value raises
-    TypeError: summarize() makes it the metric's error, and the lines never format a string (#485, backend B1)."""
+    """A finite number of a report for the run report and the day's lines; None only if `empty`. Any other value
+    raises TypeError or ValueError: summarize() makes it the metric's error, and the lines never format a string,
+    NaN, inf or an int beyond float (#485: backend B1, Control non-blockers)."""
     if x is None and empty:
         return None
     if isinstance(x, bool) or not isinstance(x, (int, float)):
         raise TypeError('not a number: %r' % (x,))
+    try:
+        finite = math.isfinite(x)
+    except OverflowError:  # an int that '%.0f' cannot format
+        finite = False
+    if not finite:
+        raise ValueError('not a finite number: %.40r' % (x,))
     return x
 
 
@@ -231,7 +239,9 @@ def spend_night(wt, day=None):
     data, err = nightly_json(tool, span + ['--attribution'], path, os.path.join(STATE_DIR, 'spend', '*.json'),
                              SPEND_KEEP, timeout=900)
     extra = {'exit': 0, 'file': path, 'day': day.isoformat()}
-    return err or summarize(lambda d: dict(spend_summary(d), **extra), data, **extra)
+    if err:  # the day goes with the failure: its line says which night did not count
+        return dict(err, day=extra['day'])
+    return summarize(lambda d: dict(spend_summary(d), **extra), data, **extra)
 
 
 def spend_summary(rep):
@@ -253,14 +263,20 @@ def spend_summary(rep):
 
 
 def spend_line(s):
-    """The day's one line for the coordinator (GL-1 plan v1.1, «Где видно» 1); '' without money."""
+    """The day's one line for the coordinator (GL-1 plan v1.1, «Где видно» 1); '' without money. A failed metric
+    gives a short line without a sum, not silence (#485, product): the cause class only, the text — in the report."""
+    if isinstance(s, dict) and s.get('error') is not None:  # a tool that exits silently gives ''
+        why = ('отчёт другой формы' if str(s['error']).startswith('report of another form') else
+               'сбой инструмента' + ('' if s.get('exit') is None else ' (exit %s)' % s['exit']))
+        return 'GL-1 расход %s: метрика не посчитана — %s; подробности — в отчёте ночи (runs/latest.json)' % (
+            short_day(s), why)
     if not isinstance(s, dict) or not s.get('usd'):
         return ''
     def pct(d, key):
         return '%.0f' % (d.get(key, 0.0) * 100)
     def label(key):
         return UNATTRIBUTED[1] if key == UNATTRIBUTED[0] else key
-    day = datetime.date.fromisoformat(s['day']).strftime('%d.%m') if s.get('day') else '—'
+    day = short_day(s)
     per_pr = '$%.0f (%d PR)' % (s['per_pr'], s['merged']) if s.get('per_pr') else 'нет влитых PR'
     t = s.get('targets') or {}
     products = ' · '.join('%s %s %%' % (label(k), pct(s['products'], k))
@@ -274,14 +290,21 @@ def spend_line(s):
         ' / '.join(s.get('bands') or {}) or '—', bands or '—')
 
 
+def short_day(s):
+    """'17.11' of the summary's ISO day, '—' without one."""
+    return datetime.date.fromisoformat(s['day']).strftime('%d.%m') if s.get('day') else '—'
+
+
 def spend_nerve(repo, summary):
     """The line as one event to the tAIBE coordinator, through the main checkout's Nerve: an emit from a worktree
     lands in that worktree's own journal (SE-171). One line a day: a second run of the day (`cycle --force`) sends
-    nothing. Returns what happened (never raises)."""
+    nothing, but after a failed metric's line a run with numbers still sends them. Returns what happened (never
+    raises)."""
     line = spend_line(summary)
     if not line:
         return 'no line'
-    if load_json('spend-sent.json', {}).get('day') == summary.get('day'):
+    failed, sent = summary.get('error') is not None, load_json('spend-sent.json', {})
+    if sent.get('day') == summary.get('day') and (failed or not sent.get('failed')):
         return 'already sent for %s' % summary.get('day')
     try:
         res = subprocess.run([sys.executable, '-I', os.path.join(repo, 'eval/nerve/nerve.py'), 'emit', '--product',
@@ -292,7 +315,7 @@ def spend_nerve(repo, summary):
     if res.returncode != 0:
         return 'not emitted: %s' % (res.stderr or res.stdout).strip()[-200:]
     try:
-        save_json('spend-sent.json', {'day': summary.get('day')})
+        save_json('spend-sent.json', dict({'day': summary.get('day')}, **({'failed': True} if failed else {})))
     except OSError as e:  # the line went out; a rerun may send it again
         return 'emitted; not marked: %s' % e
     return 'emitted'

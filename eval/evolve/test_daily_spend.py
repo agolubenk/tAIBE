@@ -28,6 +28,7 @@ REPORT = {'usd': 1000.0, 'calls': 9000, 'sessions': 30, 'merged': {'agolubenk/tA
           'bands': {'≤ 250K': {'calls': 1, 'usd': 700.0}, '250–500K': {'calls': 1, 'usd': 200.0},
                     '500K–1M': {'calls': 1, 'usd': 100.0}, '> 1M': {'calls': 0, 'usd': 0.0}},
           'ctx_median': 121_400, 'ctx_p90': 262_000}
+FAIL_LINE = 'GL-1 расход 17.11: метрика не посчитана — %s; подробности — в отчёте ночи (runs/latest.json)'
 LINE = ('GL-1 расход 17.11: $1000, вызовов 9000, сессий 30; $ на влитый PR — $40 (25 PR), цель ≈ $20; '
         'PR / карточки / не отнесено — 56 / 5 / 39 %; продукты: taibe 61 % · hr-helper 37 % · не отнесено 2 % '
         '(решение 60/40); контекст вызова — медиана 121K, p90 262K (справочно); '
@@ -86,8 +87,10 @@ class NightlySpendTest(unittest.TestCase):
         self.assertEqual(steps.spend_night(self.wt), {'skipped': 'eval/tools/spend.py is not in this revision'})
         self.write_tool('sys.exit(3)')
         out = steps.spend_night(self.wt, datetime.date(2026, 11, 17))
-        self.assertEqual(out['exit'], 3)
-        self.assertEqual(steps.spend_line(out), '')
+        self.assertEqual((out['exit'], out['day']), (3, '2026-11-17'))
+        self.assertEqual(steps.spend_line(out), FAIL_LINE % 'сбой инструмента (exit 3)')  # #485, product
+        self.assertEqual(steps.spend_line({'exit': None, 'error': 'timed out'}),
+                         FAIL_LINE.replace('17.11', '—') % 'сбой инструмента')
 
     def test_layer_metrics_carries_the_spend(self):
         with mock.patch.object(steps, 'subprocess') as sp, \
@@ -102,20 +105,23 @@ class NightlySpendTest(unittest.TestCase):
                  'by_product without product': dict(REPORT, by_product=[{'usd': 1.0}]),
                  'merged as a list': dict(REPORT, merged=[1, 2]),
                  'ctx_median as text': dict(REPORT, ctx_median='12K'),  # #485 backend B1
+                 'ctx_p90 as text': dict(REPORT, ctx_p90='262K'),
+                 'ctx_median NaN': dict(REPORT, ctx_median=float('nan')),
+                 'usd inf': dict(REPORT, usd=float('inf')),
                  'merged count as text': dict(REPORT, merged={'r': '3'}),
                  'usd as text': dict(REPORT, usd='1000'),
                  'a list': [REPORT]}
         for why, rep in forms.items():
             with self.subTest(why):
                 with open(self.tool, 'w', encoding='utf-8') as f:
-                    f.write('import json, sys\njson.dump(%s, open(sys.argv[sys.argv.index("--json") + 1], "w"))\n'
+                    f.write('import json, sys\n'
+                            'json.dump(json.loads(%r), open(sys.argv[sys.argv.index("--json") + 1], "w"))\n'
                             % json.dumps(rep))
                 out = steps.spend_night(self.wt, datetime.date(2026, 11, 17))
                 self.assertEqual((out['exit'], out['day']), (0, '2026-11-17'))
                 self.assertIn('report of another form', out['error'])
                 self.assertNotIn('usd', out)
-                self.assertEqual(steps.spend_line(out), '')
-                self.assertEqual(steps.spend_nerve('/nowhere', out), 'no line')
+                self.assertEqual(steps.spend_line(out), FAIL_LINE % 'отчёт другой формы')  # a line, no sum
 
     def test_one_metric_fails_alone(self):  # #478, Control N1: one failed metric never stops the night
         open(os.path.join(self.wt, 'eval', 'tools', 'ctx_budget.py'), 'w').close()
@@ -178,8 +184,24 @@ class SpendNerveTest(unittest.TestCase):
     def test_no_line_no_emit(self):
         with mock.patch.object(steps.subprocess, 'run') as run:
             self.assertEqual(steps.spend_nerve('/nowhere', None), 'no line')
-            self.assertEqual(steps.spend_nerve('/nowhere', {'exit': 3, 'error': 'x'}), 'no line')
+            self.assertEqual(steps.spend_nerve('/nowhere', {'skipped': 'x'}), 'no line')
         run.assert_not_called()
+
+    def test_a_failed_metric_line_then_the_numbers(self):  # #485, product: the failed night is not silence
+        with tempfile.TemporaryDirectory() as repo:
+            nerve = os.path.join(repo, 'eval', 'nerve', 'nerve.py')
+            os.makedirs(os.path.dirname(nerve))
+            with open(nerve, 'w', encoding='utf-8') as f:
+                f.write('import json, os, sys\nwith open(os.path.join(os.path.dirname(__file__), "lines"), "a") as f:\n'
+                        '    f.write(sys.argv[-1] + "\\n")\n')
+            failed = {'exit': 0, 'day': '2026-11-17', 'error': 'report of another form: TypeError: x'}
+            good = dict(steps.spend_summary(REPORT), day='2026-11-17')
+            self.assertEqual([steps.spend_nerve(repo, s) for s in (failed, failed, good, good, failed)],
+                             ['emitted'] + ['already sent for 2026-11-17'] + ['emitted'] +
+                             ['already sent for 2026-11-17'] * 2)
+            with open(os.path.join(os.path.dirname(nerve), 'lines'), encoding='utf-8') as f:
+                self.assertEqual(f.read().splitlines(), [FAIL_LINE % 'отчёт другой формы', LINE])
+            self.assertEqual(steps.load_json('spend-sent.json', {}), {'day': '2026-11-17'})
 
 
 class NightEmitTest(RepoTest):

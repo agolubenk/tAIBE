@@ -76,11 +76,17 @@ class NightlyContextAuditTest(unittest.TestCase):
                  'generations without call_usd': {'total': 1.0, 'generations': {'w1': {'handoff_share': 0.1}}},
                  'generations as a list': {'total': 1.0, 'generations': [1]},
                  'total as text': {'total': '1.0'}, 'life_min as text': {'total': 1.0, 'generations': {
-                     'w1': {'life_min': '30', 'call_usd': 0.1}}}}
+                     'w1': {'life_min': '30', 'call_usd': 0.1}}},
+                 'call_usd as text': {'total': 1.0, 'generations': {'w1': {'life_min': 30, 'call_usd': '0.1'}}},
+                 'handoff_share as text': {'total': 1.0, 'generations': {
+                     'w1': {'life_min': 30, 'call_usd': 0.1, 'handoff_share': '22 %'}}},
+                 'total NaN': {'total': float('nan')}, 'total inf': {'total': float('inf')},
+                 'cold usd beyond float': {'total': 1.0, 'cold': {'x': {'n': 1, 'usd': 10 ** 400}}}}
         for why, rep in forms.items():
             with self.subTest(why):
                 with open(tool, 'w') as f:
-                    f.write('import json, sys\njson.dump(%s, open(sys.argv[sys.argv.index("--json") + 1], "w"))\n'
+                    f.write('import json, sys\n'
+                            'json.dump(json.loads(%r), open(sys.argv[sys.argv.index("--json") + 1], "w"))\n'
                             % json.dumps(rep))
                 out = steps.context_audit(self.wt)
                 self.assertEqual(out['exit'], 0)
