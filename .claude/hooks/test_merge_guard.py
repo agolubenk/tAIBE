@@ -442,6 +442,7 @@ import test_merge_guard_pathcase  # noqa: E402,F401  — защищённый п
 import test_merge_guard_visibility  # noqa: E402,F401  — смена видимости репозитория, Контролю тоже нет (IS-124, SE-91)
 import test_merge_guard_lines  # noqa: E402,F401  — склейка строк `\`⏎ (SE-83)
 import test_merge_guard_tmux  # noqa: E402,F401  — окна сессий в tmux: агенту только чтение (OPS-82)
+import test_merge_guard_alias  # noqa: E402,F401  — инструмент под другим именем: регистр, ссылка, копия (SE-90)
 
 # --- бюджет git ---
 mg_git = sys.modules["merge_guard_git"]
