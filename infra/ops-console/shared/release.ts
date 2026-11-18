@@ -33,14 +33,19 @@ export function compareReleaseVersions(a: ReleaseTuple, b: ReleaseTuple): number
 }
 
 /**
- * Один шаг на выпуск, а не на PR: есть feature → B+1, C=D=0; иначе есть fix → C+1, D=0; иначе D+1.
+ * Счёт по PR (OPS-84, решение владельца taibe-d-ops84-version-1711 = B): каждая feature +1 к B, каждый fix +1 к C.
+ * Рост B обнуляет C до счёта fix; рост B или C обнуляет D. Прочие PR дают +1 к D, только если в выпуске нет feature
+ * и fix. Пример: v.0.1.2.3 и 33 коммита (12 feature, 16 fix, 5 прочих) → v.0.13.16.0.
  * A не меняется никогда. Нет изменений или сегмент вышел бы за 9999 — предложения нет (null).
  */
 export function bumpReleaseVersion(t: ReleaseTuple, kinds: readonly ChangeKind[]): ReleaseTuple | null {
   if (kinds.length === 0) return null
   const [a, b, c, d] = t
-  const next: ReleaseTuple = kinds.includes('feature') ? [a, b + 1, 0, 0] : kinds.includes('fix') ? [a, b, c + 1, 0] : [a, b, c, d + 1]
-  return next.some((n) => n > RELEASE_SEGMENT_MAX) ? null : next
+  const n = { feature: 0, fix: 0, other: 0 }
+  for (const k of kinds) n[k] += 1
+  const next: ReleaseTuple =
+    n.feature > 0 ? [a, b + n.feature, n.fix, 0] : n.fix > 0 ? [a, b, c + n.fix, 0] : [a, b, c, d + n.other]
+  return next.some((x) => x > RELEASE_SEGMENT_MAX) ? null : next
 }
 
 // ── Контракт ответов ──────────────────────────────────────────────────────────

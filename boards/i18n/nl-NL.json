@@ -558,6 +558,41 @@
 				"description": "Daarna kom je meteen hier terug om het te controleren.",
 				"submit": "Inloggen"
 			}
+		},
+		"reauth": {
+			"code": {
+				"explain": "We'll send a {{length}}-digit code to your email.",
+				"label": "Code from the email",
+				"resend": "Send a new code",
+				"send": "Send code",
+				"sent": "The code is in your email. It works for {{minutes}} min.",
+				"submit": "Confirm"
+			},
+			"description": "This action needs a recent sign-in. Confirm it's you to continue.",
+			"errors": {
+				"codeExpired": "This code no longer works. Send a new code.",
+				"emailDeliveryFailed": "We couldn't send the email. Try again later.",
+				"failed": "Couldn't confirm. Try again.",
+				"impersonated": "Not available while you act as another user.",
+				"invalidCode": "Wrong code. Check it and try again.",
+				"invalidPassword": "Wrong password.",
+				"methodUnavailable": "This way is no longer available. Pick another one.",
+				"offline": "No connection to the server. Check your network and try again.",
+				"rateLimited": "Too many tries. Wait a minute and try again.",
+				"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+				"signedOut": "Your session has ended. Sign in again.",
+				"stillNotFresh": "The confirmation didn't apply. Try the action again."
+			},
+			"impersonated": "Not available while you act as another user.",
+			"lockedOut": "Too many failed tries: the password is off for up to an hour.",
+			"noMethod": "Your account has no way to confirm it's you. Set a password: reset it by email from the sign-in page. Without email, ask an administrator.",
+			"password": {
+				"label": "Password",
+				"submit": "Confirm"
+			},
+			"title": "Confirm it's you",
+			"useCode": "Use a code from your email instead",
+			"usePassword": "Use your password instead"
 		}
 	},
 	"settings": {
@@ -599,8 +634,7 @@
 				"modalTitle": "Delete your account?",
 				"sectionTitle": "Danger zone",
 				"success": "Your account has been deleted",
-				"title": "Delete account",
-				"sessionTooOld": "For security, sign out and sign back in before deleting your account."
+				"title": "Delete account"
 			},
 			"emailHint": "Met dit adres log je in."
 		},

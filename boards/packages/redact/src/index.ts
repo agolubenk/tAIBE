@@ -1,3 +1,5 @@
+import { pem } from "./pem.js";
+
 export type SecretKind =
   | "api_key"
   | "jwt"
@@ -10,7 +12,7 @@ export type SecretKind =
 
 export type RedactHit = { kind: SecretKind; start: number; end: number };
 
-type Detector = (text: string) => RedactHit[];
+export type Detector = (text: string) => RedactHit[];
 
 function collect(pattern: RegExp, kind: SecretKind): Detector {
   return (text) => {
@@ -161,26 +163,6 @@ function innerHits(
   }
   return hits;
 }
-
-// PEM blocks end in "KEY-----", PGP key blocks in "KEY BLOCK-----".
-// A BEGIN line up to the nearest END line. Not one lazy regex: from every
-// BEGIN without an END it scans to the end of the text, so 256 KB of BEGIN
-// lines took 1.3 s (TB-136 security lens). If a BEGIN has no END after it, a
-// later BEGIN has none either, so the scan stops there.
-const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]*KEY(?: BLOCK)?-----/g;
-const PEM_END = /-----END [A-Z0-9 ]*KEY(?: BLOCK)?-----/g;
-
-const pem: Detector = (text) => {
-  const hits: RedactHit[] = [];
-  PEM_BEGIN.lastIndex = 0;
-  for (let begin = PEM_BEGIN.exec(text); begin; begin = PEM_BEGIN.exec(text)) {
-    PEM_END.lastIndex = PEM_BEGIN.lastIndex;
-    if (!PEM_END.exec(text)) break;
-    hits.push({ kind: "pem", start: begin.index, end: PEM_END.lastIndex });
-    PEM_BEGIN.lastIndex = PEM_END.lastIndex;
-  }
-  return hits;
-};
 
 // The user and the password have at most 256 characters each: unbounded,
 // they ran to the end of the text from every scheme of a "postgres://a:" run.
