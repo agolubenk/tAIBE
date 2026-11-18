@@ -8,6 +8,8 @@
                  claude той же линии, не в дереве предшественника) и ей не меньше --ack-minutes;
         idle   — сессию, которую открыл spawn_session.sh (есть запись линии), простой ≥ --auto-idle-hours, статус idle;
                  открытые владельцем вручную — никогда;
+        surplus — роль сверх доли владельца, закончившую смену (метка lineage.py surplus, d-team-surplus-1711):
+                 простой ≥ 30 мин (--surplus-idle-minutes), статус idle, есть запись линии (Terminal или tmux);
         window — окно линии, когда claude этой линии уже нет: в записи код выхода 0 (не --keep) не меньше
                  --window-minutes назад, одна вкладка, тот же tty, в ней только shell. Окна без записи — никогда.
       Для ack и idle одинаково: не держатель роли (как team_status.py live), в папке нет незакоммиченного, коммитов
@@ -107,6 +109,14 @@ def criterion(sx, procs, r, a):
         return None, f"квитанция {child} свежая ({age:.0f} < {a.ack_minutes:g} мин)"
     if r["status"] != "idle":
         return None, "ждёт ввода"
+    if r.get("surplus"):
+        rec = L.read_json(L.lfile(r["line"], ".json")) if L.valid_line(r["line"] or "") else None
+        if not (isinstance(rec, dict) and rec.get("line") == r["line"] and rec.get("terminal") in ("terminal", "tmux")):
+            return None, "сверх доли, но открыта не spawn_session.sh — только руками"
+        mins = a.surplus_idle_minutes
+        if r["idle_h"] * 60 < mins:
+            return None, f"сверх доли, простой {r['idle_h'] * 60:.0f} < {mins:g} мин"
+        return "surplus", f"сверх доли владельца (d-team-surplus-1711), простой {r['idle_h'] * 60:.0f} мин"
     if line_record(r["line"]) is None:
         return None, "открыта не spawn_session.sh — простой не в счёт"
     if r["idle_h"] < a.auto_idle_hours:
@@ -132,10 +142,20 @@ def decide(sx, procs, r, ctx, a):
         return None, why
     if r["pid"] in ctx["holders"]:
         return None, "держатель роли"
+    if kind == "surplus" and main_checkout(r["cwd"]):
+        # Основной checkout общий: его несохранённое — не этой сессии (роли работают в worktree), снятие процесса
+        # файлов не трогает, handoff уже у координатора. Иначе роль сверх доли висела бы вечно (линза ресурсов).
+        return kind, why + ", основной checkout — несохранённое общее, не этой сессии"
     lost = sx.unsaved(r["cwd"])
     if lost:
         return None, f"{lost} в папке"
     return kind, why + ", не держатель роли, в папке всё сохранено"
+
+
+def main_checkout(cwd):
+    """Папка — основной checkout репозитория (.git — каталог), не свой worktree сессии (.git — файл)."""
+    root = R.git_root(cwd or "")
+    return bool(root) and os.path.realpath(root) == os.path.realpath(cwd) and os.path.isdir(os.path.join(root, ".git"))
 
 
 def parse_windows(out):
@@ -239,8 +259,10 @@ def show(rows, wplan, a, roots, keep, out=None):
 def recheck(sx, r):
     """Перед самым снятием: ход мог начаться, в папке могло появиться несохранённое."""
     st = sx.status(r["pid"])
-    if st not in (("idle",) if r["auto"] == "idle" else ("idle", "waiting")):
+    if st not in (("idle",) if r["auto"] in ("idle", "surplus") else ("idle", "waiting")):
         return f"пропуск: статус стал {st}"
+    if r["auto"] == "surplus" and main_checkout(r["cwd"]):
+        return ""
     lost = sx.unsaved(r["cwd"])
     return f"пропуск: {lost} в папке" if lost else ""
 
@@ -285,7 +307,8 @@ def cmd_auto(sx, a):
     todo = [r for r in rows if r["auto"]]
     wtodo = [w for w in wplan if w["kind"]]
     summary = {"sessions": len(rows), "ack": sum(r["auto"] == "ack" for r in todo),
-               "idle": sum(r["auto"] == "idle" for r in todo), "windows": len(wtodo)}
+               "idle": sum(r["auto"] == "idle" for r in todo), "surplus": sum(r["auto"] == "surplus" for r in todo),
+               "windows": len(wtodo)}
     if not a.apply:
         sig = sorted([[r["auto"], r["pid"], L.norm(r["start"])] for r in todo] + [["window", w["line"], w["wid"]]
                                                                                     for w in wtodo])
@@ -298,7 +321,7 @@ def cmd_auto(sx, a):
                          "why": w["why"]})
             journal({"mode": "dry", "summary": summary})
         print(f"\nсессий {summary['sessions']}; снял бы: {len(todo)} (квитанция {summary['ack']}, простой "
-              f"{summary['idle']}), окон закрыл бы: {len(wtodo)}. Снимает только launchd владельца "
+              f"{summary['idle']}, сверх доли {summary['surplus']}), окон закрыл бы: {len(wtodo)}. Снимает только launchd владельца "
               f"(reaper_launchd.sh install --apply); сводка — reap_sessions.sh --auto --summary")
         return 0
     before = sx.metrics()

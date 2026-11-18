@@ -4,6 +4,7 @@
 
 Решений не принимает. Отдельный модуль — чтобы merge_guard_shell.py и хук оставались в пределе 500 строк (01-base).
 """
+from merge_guard_crash import crash
 from merge_guard_shell import _lexer
 
 PARTIAL = "\0partial"  # находка-метка: текст разобран только до ошибки (tokens_before_error)
@@ -28,10 +29,10 @@ def settle(found):
     return rest, len(rest) < len(found)
 
 
-def settled(run):
-    """settle(run()) и почему разобран не весь текст. run() упал — ([], True, имя исключения): как у неразобранного,
-    решает грубый признак."""
+def settled(run, where=""):
+    """settle(run()) и почему разобран не весь текст. run() упал — (crash(exc, where), True, имя исключения): как у
+    неразобранного, решает грубый признак; сбой не по кавычкам — ещё и находка «сбой хука»: роли отказ (SE-152)."""
     try:
         return (*settle(run()), "кавычки не сошлись")
     except Exception as exc:
-        return [], True, exc.__class__.__name__
+        return crash(exc, where), True, exc.__class__.__name__

@@ -5,6 +5,7 @@ descendant gets its own lineage id under its parent's.
 
 Run: python3 -I eval/tools/test_spawn_session.py   (exit 1 on mismatch; --dry-run only, nothing is launched)
 """
+import hashlib
 import os
 import re
 import subprocess
@@ -87,7 +88,7 @@ for name, ok in [
 with tempfile.TemporaryDirectory() as tmp:
     tools = Path(tmp) / "layer" / "tools"
     tools.mkdir(parents=True)
-    for f in ("spawn_session.sh", "team_status.py", "lineage.py"):
+    for f in ("spawn_session.sh", "team_status.py", "lineage.py", "launch_line.py"):
         (tools / f).write_bytes((SCRIPT.parent / f).read_bytes())
     (tools.parent / "pipeline").mkdir()
     (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
@@ -126,6 +127,35 @@ for name, flags in [("print", ["--terminal", "print"]), ("keep-window", ["--keep
         failed += 1
         print("FAIL: %s keeps exec and no autoclose" % name)
         print("\n".join(out))
+
+# d-team-surplus-1711: роль сверх доли владельца (team_plan.py keep — код 3) наследника не открывает, код 5, событие
+# координатору продукта; в доле (0) и при сбое проверки (любой другой код) — наследник как раньше.
+def surplus_run(keep_rc):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        fake = Path(tmp) / "team_plan_fake.py"
+        fake.write_text("import sys\nprint('hr-helper 8 · taibe 4')\nsys.exit(%d)\n" % keep_rc, encoding="utf-8")
+        nerve = Path(tmp) / "nerve_fake.py"
+        log = Path(tmp) / "nerve.log"
+        nerve.write_text("import sys\nopen(%r, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n" % str(log), encoding="utf-8")
+        env = clean_env(TMPDIR=tmp, TAIBE_PRODUCT="taibe", SPAWN_SURPLUS_CHECK="on", SPAWN_TEAM_PLAN=str(fake),
+                        SPAWN_NERVE=str(nerve))
+        run = subprocess.run(["bash", str(SCRIPT), "--handoff", str(handoff), "--role", "boards", "--dry-run",
+                              "--cwd", tmp], capture_output=True, text=True, env=env, timeout=30)
+        return run.returncode, run.stdout + run.stderr, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+for name, keep_rc, want_rc, marker in [
+    ("surplus role: no successor, exit 5", 3, 5, "is surplus over the owner split (hr-helper 8 · taibe 4"),
+    ("role in the split: successor as before", 0, 0, "/genome/taibe/boards.json"),
+    ("keep check fails: successor as before", 1, 0, "/genome/taibe/boards.json"),
+]:
+    rc, out, _ = surplus_run(keep_rc)
+    if rc != want_rc or marker not in out:
+        failed += 1
+        print("FAIL:", name, rc)
+        print(out)
 
 # OPS-25: продукт — --product, иначе TAIBE_PRODUCT из env (наследник берёт продукт предшественника), иначе по умолчанию.
 def product_run(env_extra, *flags):
@@ -188,6 +218,7 @@ def osa_run(terminal, rc, start, launch=False):
         tools = Path(tmp) / "layer" / "tools"
         tools.mkdir(parents=True)
         (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        (tools / "launch_line.py").write_bytes((SCRIPT.parent / "launch_line.py").read_bytes())
         for f in ("lineage.py", "team_status.py"):
             (tools / f).write_text(FAKE_PY, encoding="utf-8")
         (tools.parent / "pipeline").mkdir()
@@ -291,6 +322,107 @@ if rc != 0 or "backend-2" in out or "boards — команда напечата�
     print("FAIL: --roles all opens the six base roles only")
     print(out)
 
+# TB-131: строка запуска сразу за меткой линии; хэш генома — от файла --settings, хэш промпта — от сообщения без строки.
+LAUNCH_RE = re.compile(r" Запуск: parent=(\S+) genome=([0-9a-f]{12}|-) prompt=([0-9a-f]{12}) wake=(\w+)\.")
+NAME_RE = re.compile(r" Твоё имя в списке сессий и в заголовке окна — (\S+)\.")
+
+
+def sha12(data):
+    return hashlib.sha256(data).hexdigest()[:12]
+
+
+def launch_run(*flags, lineage="r.ab12"):
+    with tempfile.TemporaryDirectory() as tmp:
+        handoff = Path(tmp) / "handoff.md"
+        handoff.write_text("x\n", encoding="utf-8")
+        env = clean_env(**{"TMPDIR": tmp, "TAIBE_PRODUCT": "", "TAIBE_LINEAGE": lineage,
+                           "CLAUDE_SESSIONS_DIR": os.path.join(tmp, "sess"),
+                           "TAIBE_LINEAGE_DIR": os.path.join(tmp, "lin"),
+                           "NERVE_PLIST": os.path.join(tmp, "none.plist")})
+        flags = [str(handoff) if a == "HANDOFF" else a for a in flags]
+        run = subprocess.run(["bash", str(SCRIPT), *flags, "--dry-run", "--cwd", tmp],
+                             capture_output=True, text=True, env=env, timeout=60)
+    msg = next((ln for ln in run.stdout.splitlines() if "Линия: " in ln), "")
+    genome = re.search(r"--settings '([^']+)'", run.stdout)
+    return run.returncode, msg, genome.group(1) if genome else None, run.stdout + run.stderr
+
+
+# Корень «r» — не сессия: у поколения 1 (r.xxxx) parent «-».
+for name, flags, wake, has_genome, lineage, parent in [
+    ("launch: wake human by default", ["--launch", "--role", "backend", "--product", "taibe"], "human", True,
+     "r.ab12", "r.ab12"),
+    ("launch --wake timer", ["--launch", "--role", "backend", "--product", "taibe", "--wake", "timer"], "timer", True,
+     "r.ab12", "r.ab12"),
+    ("handoff with a role: wake peer by default", ["--handoff", "HANDOFF", "--role", "boards", "--no-retire"], "peer",
+     True, "r.ab12", "r.ab12"),
+    ("handoff without a role: no genome", ["--handoff", "HANDOFF", "--no-retire"], "peer", False, "r.ab12", "r.ab12"),
+    ("generation 1: no parent session", ["--launch", "--role", "backend", "--product", "taibe"], "human", True, "r", "-"),
+]:
+    rc, msg, genome, out = launch_run(*flags, lineage=lineage)
+    m = LAUNCH_RE.search(msg)
+    problems = []
+    if rc != 0 or not m:
+        problems.append("no launch line")
+    else:
+        if "в очереди." + m.group(0) not in msg:
+            problems.append("launch line is not right after the lineage tag")
+        if m.group(1) != parent:
+            problems.append("parent %s, want %s" % (m.group(1), parent))
+        want_genome = sha12(Path(genome).read_bytes()) if (has_genome and genome) else "-"
+        if m.group(2) != want_genome:
+            problems.append("genome %s, want %s" % (m.group(2), want_genome))
+        if m.group(4) != wake:
+            problems.append("wake " + m.group(4))
+        if len(m.group(0)) > 120:
+            problems.append("launch line longer than 120 chars")
+    if problems:
+        failed += 1
+        print("FAIL:", name, problems)
+        print(out)
+for bad in (["--wake", "cron"], ["--wake"]):
+    rc, msg, _, out = launch_run("--launch", "--role", "backend", "--product", "taibe", *bad)
+    if rc == 0 or "--wake: human, peer или timer" not in out:
+        failed += 1
+        print("FAIL: --wake refused:", bad)
+        print(out)
+
+# prompt — версия входа, а не сессии (линзы release и plan #381): sha12(пусковой файл + "\n" + шаблон сообщения, где
+# линия «-», поколение 0, пути — <file> и <tools>). Одна роль и файл — один prompt; правка файла — другой.
+with tempfile.TemporaryDirectory() as pdir:
+    launch_file = Path(pdir) / "4-backend.md"
+
+    def prompt_of(lineage, role="backend"):
+        rc, msg, _, out = launch_run("--launch", "--role", role, "--product", "taibe", "--prompt-dir", pdir,
+                                     lineage=lineage)
+        m = LAUNCH_RE.search(msg)
+        return (m.group(3) if rc == 0 and m else None), msg, m, out
+
+    launch_file.write_text("пусковой файл v1\n", encoding="utf-8")
+    p1, msg1, m1, out1 = prompt_of("r.ab12")
+    p2, _, _, _ = prompt_of("r.cd34")
+    p_alias, _, _, _ = prompt_of("r.ab12", role="backend-2")
+    launch_file.write_text("пусковой файл v2\n", encoding="utf-8")
+    p3, _, _, _ = prompt_of("r.ab12")
+    want = None
+    if m1:
+        line = re.search(r"Линия: (r\.ab12\.[a-z0-9]{4}) \(поколение 2\)", msg1).group(0)
+        named = NAME_RE.search(msg1)
+        # имя сессии (#407) несёт хвост линии: в шаблоне оно — <name>, иначе у каждой сессии свой prompt
+        tmpl = (msg1.replace(m1.group(0), "", 1).replace(line, "Линия: - (поколение 0)", 1)
+                .replace(named.group(0) if named else "\0", " Твоё имя в списке сессий и в заголовке окна — <name>.", 1)
+                .replace(str(launch_file), "<file>").replace(str(SCRIPT.parent), "<tools>"))
+        want = sha12("пусковой файл v1\n".encode("utf-8") + b"\n" + tmpl.encode("utf-8"))
+    for name, ok in [
+        ("prompt: two sessions of one role and file share it", p1 is not None and p1 == p2),
+        ("prompt: an edit of the launch file changes it", p1 is not None and p3 is not None and p1 != p3),
+        ("prompt: the alias note of backend-2 changes it", p_alias is not None and p_alias != p1),
+        ("prompt = sha12(file + \\n + template)", want is not None and p1 == want),
+    ]:
+        if not ok:
+            failed += 1
+            print("FAIL:", name, p1, p2, p3, p_alias, want)
+            print(out1)
+
 # 15.11: имя сессии (claude --name) — продукт, роль, хвост линии; в заголовке окна, строке ввода и ListAgents.
 def name_run(handoff_dir, env_extra, *flags):
     with tempfile.TemporaryDirectory() as tmp:
@@ -384,6 +516,7 @@ def tmux_run(ensure_rc=0, attach=False, open_rc=""):
         tools = Path(tmp) / "layer" / "tools"
         tools.mkdir(parents=True)
         (tools / "spawn_session.sh").write_bytes(SCRIPT.read_bytes())
+        (tools / "launch_line.py").write_bytes((SCRIPT.parent / "launch_line.py").read_bytes())
         for f, text in (("tmux_host.py", FAKE_HOST), ("lineage.py", FAKE_ARGV), ("team_status.py", FAKE_PY)):
             (tools / f).write_text(text, encoding="utf-8")
         fake_bin = Path(tmp) / "bin"

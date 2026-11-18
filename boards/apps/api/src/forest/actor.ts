@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { BaseVariables } from "../openapi";
+import { isTokenCaller } from "../utils/token-caller-text";
 
 // owner-queue is internal: the owner's answer read from the owner queue
 // (TB-102 R-3). No HTTP route and no token resolves to it.
@@ -18,12 +19,18 @@ export type ForestActor = {
   userId: string;
 };
 
-const SESSION_LABEL_HEADER = "x-t-boards-session";
+export const SESSION_LABEL_HEADER = "x-t-boards-session";
 const SESSION_LABEL_PATTERN = /^[\p{L}\p{N} ._:/#-]{1,80}$/u;
 
-function sessionLabel(c: Context): string | null {
-  const raw = c.req.header(SESSION_LABEL_HEADER)?.trim();
+// A label the client gives its session. It names the session inside the
+// credential's actor; it never changes whose credential it is.
+export function parseSessionLabel(header: string | undefined): string | null {
+  const raw = header?.trim();
   return raw && SESSION_LABEL_PATTERN.test(raw) ? raw : null;
+}
+
+function sessionLabel(c: Context): string | null {
+  return parseSessionLabel(c.req.header(SESSION_LABEL_HEADER));
 }
 
 // The owner's «да» counts only from the owner's own browser session (N-011):
@@ -36,10 +43,6 @@ export function resolveForestActor<E extends { Variables: BaseVariables }>(
   if (!userId) throw new HTTPException(401, { message: "Unauthorized" });
 
   const apiKey = c.get("apiKey");
-  const hasToken =
-    Boolean(apiKey) ||
-    Boolean(c.req.header("authorization")) ||
-    Boolean(c.req.header("x-api-key"));
   const label = sessionLabel(c);
 
   // R-010: an agent user is one session already; its id outlives key rotation.
@@ -53,7 +56,8 @@ export function resolveForestActor<E extends { Variables: BaseVariables }>(
     return { kind: "agent", id: `agent:${userId}`, name: agentName, userId };
   }
 
-  if (hasToken) {
+  // TB-144: one test of "holds a token" for the actor and the text mask.
+  if (isTokenCaller(c)) {
     const base = apiKey ? `key:${apiKey.id}` : `bearer:${userId}`;
     return {
       kind: "agent",

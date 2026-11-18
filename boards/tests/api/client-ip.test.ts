@@ -22,6 +22,15 @@ describe("trusted client IP resolution", () => {
       "203.0.113.5",
     );
   });
+  it("trusts the VPS bridge gateway, also as an IPv4-mapped peer (TB-31 R-8)", () => {
+    // deploy/vps/compose.yml: the tb network gateway and loopback.
+    const resolve = createClientIpResolver("10.78.0.1/32,127.0.0.0/8,::1/128");
+    expect(resolve("10.78.0.1", "10.77.0.2")).toBe("10.77.0.2");
+    expect(resolve("::ffff:10.78.0.1", "10.77.0.3")).toBe("10.77.0.3");
+    // Another container of the same network cannot choose its bucket.
+    expect(resolve("10.78.0.9", "10.77.0.2")).toBe("10.78.0.9");
+    expect(resolve("::ffff:10.78.0.9", "10.77.0.2")).toBe("::ffff:10.78.0.9");
+  });
   it("supports explicit Docker proxy subnets and IPv6 chains", () => {
     const resolve = createClientIpResolver(
       "127.0.0.0/8, 172.25.0.0/24, fd00:1234::/64",

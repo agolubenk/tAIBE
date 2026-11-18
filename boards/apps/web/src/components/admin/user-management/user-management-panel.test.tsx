@@ -18,6 +18,7 @@ import {
 import useAdminUsers, {
   type AdminUser,
 } from "@/hooks/queries/admin/use-admin-users";
+import { SessionNotFreshError } from "@/lib/reauth/reauth-errors";
 import UserManagementPanel from "./user-management-panel";
 
 vi.mock("react-i18next", () => ({
@@ -213,6 +214,42 @@ describe("UserManagementPanel", () => {
       email: "ada@example.com",
     });
     expect(updateUserMock.mock.calls[0]?.[0]).not.toHaveProperty("role");
+  });
+
+  it("puts the saved email back when the fresh sign-in window is cancelled", async () => {
+    vi.useRealTimers();
+    useAdminUsersMock.mockReturnValue(success(1, [user()]));
+    updateUserMock.mockRejectedValueOnce(
+      new SessionNotFreshError({
+        code: "SESSION_NOT_FRESH",
+        message: "",
+        methods: ["password"],
+      }),
+    );
+    render(<UserManagementPanel />);
+
+    openEditDialog();
+    const email = document.getElementById(
+      "admin-user-email",
+    ) as HTMLInputElement;
+    fireEvent.change(email, { target: { value: "new@example.com" } });
+    fireEvent.change(document.getElementById("admin-user-name") as Element, {
+      target: { value: "Ada King" },
+    });
+    submitEdit();
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "auth:reauth.title",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "common:actions.cancel" }),
+    );
+
+    await waitFor(() => expect(email.value).toBe("ada@example.com"));
+    expect(
+      (document.getElementById("admin-user-name") as HTMLInputElement).value,
+    ).toBe("Ada King");
+    expect(updateUserMock).toHaveBeenCalledTimes(1);
   });
 
   it("strips only the admin token when a multi-role account is demoted", async () => {
