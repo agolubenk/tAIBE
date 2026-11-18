@@ -33,7 +33,7 @@ from merge_guard_launch import (awk_programs, implied_commands, make_files, pack
                                 read_names)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
 from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E402
-from merge_guard_vars import BLIND, VAR, words  # noqa: E402
+from merge_guard_vars import BLIND, VAR, visible_name, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name, cut_heredocs,  # noqa: E402
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
@@ -334,8 +334,8 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
             found += more + (classify_argv(normalize(b), cwd, roots, depth + 1, git_env, whole, b[0], stdin_files, procs,
                                            hid) if b else [])
         g = "blind" if hidden else True  # имя задано невидимо: голый push на main — тоже отказ (classify_git)
-        kind = kind or (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
-                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd))
+        kind = kind or (None if visible_name(exe, hidden) else (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
+                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd)))
         tail = strip_prefix(a[1:])  # `$X` раскроется и в пусто, и в префикс (`$SUDO`, `${DRY:+echo}`): `$X gh pr merge 1`
         if tail:
             found += classify_argv(normalize(tail), cwd, roots, depth, git_env, whole, tail[0], stdin_files, procs, hid)
