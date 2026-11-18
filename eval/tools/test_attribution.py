@@ -5,6 +5,7 @@ import sys
 import contextlib
 import io
 import tempfile
+import time
 import unittest
 from datetime import datetime
 from unittest import mock
@@ -73,6 +74,20 @@ class EventsTest(unittest.TestCase):
         for block, want in cases:
             with self.subTest(block):
                 self.assertEqual(at.block_events(block), want)
+
+    def test_prefix_is_linear_and_matches_the_same(self):
+        """Префикс `GH_PR_RE` не переходит через перевод строки (нит линзы backend #417 на f381b43e2: 8000 знаков
+        `x=\\n` — 99 мс на прежнем `\\s*(?:\\w+=\\S*\\s+)*`)."""
+        cases = [('x=1\ngh pr view 3', [('view', '3')]), ('FOO=a BAR= gh pr view 4', [('view', '4')]),
+                 ('FOO=a;gh pr view 5', [('view', '5')]), ('A=b\tgh pr diff 6', [('diff', '6')]),
+                 ('FOO=a\n  gh pr comment 7', [('comment', '7')]), ('echo FOO=a gh pr view 8', []),
+                 ('FOO=a;b gh pr view 9', [])]  # в shell gh здесь — аргумент b: значение присваивания не идёт за `;`
+        for text, want in cases:
+            with self.subTest(text):
+                self.assertEqual([m.group(1, 2) for m in at.GH_PR_RE.finditer(text)], want)
+        started = time.perf_counter()
+        self.assertEqual(list(at.GH_PR_RE.finditer('x=\n' * 8000)), [])
+        self.assertLess(time.perf_counter() - started, 0.05)
 
     def test_pr_jq_scans_card_ids(self):
         self.assertIn('scan("\\\\b[a-z][a-z0-9]{23}\\\\b")', at.PR_JQ)
@@ -168,7 +183,7 @@ class LedgerTest(unittest.TestCase):
             own.add(*e)
         parent = at.Timeline()
         parent.events = list(lg.lines[('s', None)].events)
-        return lg.target(parent.build(own), when, REPO)
+        return lg.target(parent.build(own, lg.leads), when, REPO)
 
     def test_order(self):
         lens = [(t(10), 'open', (None, 415)), (t(10, 30), 'close', (None, 415))]
@@ -233,6 +248,53 @@ class LedgerTest(unittest.TestCase):
         for name, events, sub, want in rows:
             with self.subTest(name):
                 self.assertEqual([(w, self.target(events, w, sub)) for w, _ in want], want)
+
+    def test_state_of_own_pr_or_no_pr_keeps_visit(self):
+        """N1 Claude-линзы #417 на 9c9e59d32 — строки 2 и 3 таблицы вместе: просмотр #377 в 10:00, work_state в 10:10,
+        проверка головы в 10:29, вердикт в 10:30. State своего PR и ветка без PR и без карточки (`board-agents`) —
+        не другая работа: вся линза на #377. State другого PR или карточки без PR режет заход: 10:05 «не отнесено»."""
+        # Репозиторий захода — как у Ledger.record: `gh pr` без -R идёт в репозиторий продукта записи.
+        view, comment = (lambda h, m=0: (t(h, m), 'open', (REPO, 377))), (lambda h, m=0: (t(h, m), 'close', (REPO, 377)))
+        lens = ('pr', REPO, 377)
+        rows = [('своя карточка и ветка', (CARD2, 'fix/se122-qa-anchor'), lens, lens),
+                ('своя карточка без ветки', (CARD2, None), lens, lens),
+                ('board-agents', (None, 'board-agents'), lens, lens),
+                ('ветка другого PR', (None, 'fix/se74-nerve-lens-names'), at.UNATTRIBUTED, ('pr', REPO, 202)),
+                ('карточка без PR', ('abcdefghijklmnopqrstuvwx', None), at.UNATTRIBUTED,
+                 ('task', 'abcdefghijklmnopqrstuvwx'))]
+        for name, state, at_5, at_20 in rows:
+            with self.subTest(name):
+                events = [view(10), (t(10, 10), 'state', state), view(10, 29), comment(10, 30)]
+                self.assertEqual([self.target(events, w) for w in (t(10, 5), t(10, 20), t(10, 30))],
+                                 [at_5, at_20, lens])
+
+    def test_state_of_own_pr_keeps_verdict_extension(self):
+        """G7 с N1: вердикт #377 в 10:01, state своего PR или `board-agents` в 10:05, второй вердикт в 10:59 — 10:30
+        на #377; state ветки другого PR — нет."""
+        for state, want in (((CARD2, 'fix/se122-qa-anchor'), ('pr', REPO, 377)), ((None, 'board-agents'), ('pr', REPO, 377)),
+                            ((None, 'fix/se74-nerve-lens-names'), ('pr', REPO, 202))):
+            with self.subTest(state):
+                events = [(t(10), 'open', (REPO, 377)), (t(10, 1), 'close', (REPO, 377)), (t(10, 5), 'state', state),
+                          (t(10, 59), 'close', (REPO, 377))]
+                self.assertEqual(self.target(events, t(10, 30)), want)
+
+    def test_resolve_passes_leads_to_session_and_subagent(self):
+        """N1 и в свёртке resolve(): `board-agents` посреди линзы не режет заход ни сессии, ни её субагента."""
+        lg = ledger()
+        lg.lines[('s', None)] = at.Timeline()
+        for e in ((t(10), 'open', (REPO, 377)), (t(10, 10), 'state', (None, 'board-agents')),
+                  (t(10, 29), 'open', (REPO, 377)), (t(10, 30), 'close', (REPO, 377))):
+            lg.lines[('s', None)].add(*e)
+        lg.lines[('s', 'a.jsonl')] = at.Timeline()
+        lg.calls = [('s', None, t(10, 5), 'taibe', 1.0), ('s', 'a.jsonl', t(10, 6), 'taibe', 2.0)]
+        self.assertEqual(lg.resolve(), {('pr', REPO, 377): {'calls': 2, 'usd': 3.0}})
+
+    def test_unattributed_label_is_the_nerve_label(self):
+        """Одна подпись с долей окна Нерва (budget.SHARE_LABELS): ключ `unattributed`, в отчёте «не отнесено»."""
+        self.assertEqual(at.label(at.UNATTRIBUTED), 'не отнесено')
+        out = at.text(at.rows({at.UNATTRIBUTED: {'calls': 1, 'usd': 1.0}}), 1.0)
+        self.assertIn('не отнесено 100%', out)
+        self.assertNotIn('unattributed', out)
 
     def test_branch_prefers_open_pr(self):
         self.assertEqual(self.target([(t(9), 'state', (None, 'fix/se74-nerve-lens-names'))], t(11)), ('pr', REPO, 202))
