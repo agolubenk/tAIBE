@@ -15,6 +15,7 @@ import {
   getMcpAuthorizationRequest,
   registerMcpClient,
 } from "./controllers/oauth-consent";
+import { parseSessionLabel, SESSION_LABEL_HEADER } from "../forest/actor";
 import { createModernMcpHandler } from "./modern";
 import { isMcpRole, MCP_ROLES, ROLE_HEADER } from "./tool-scope/roles";
 import { exchangeCode } from "./oauth";
@@ -339,7 +340,14 @@ mcp.all("/mcp", async (c) => {
       400,
     );
   }
-  const session: McpSession = { ...authResult, role };
+  // TB-135: the client's session label names its rows in the journal; the
+  // credential still decides who the caller is.
+  const label = parseSessionLabel(c.req.header(SESSION_LABEL_HEADER));
+  const session: McpSession = {
+    ...authResult,
+    role,
+    ...(label ? { label } : {}),
+  };
 
   if (!(await isLegacyRequest(c.req.raw.clone()))) {
     const modern = createModernMcpHandler(session, internalApiUrl);

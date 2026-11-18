@@ -64,6 +64,64 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual((v["lens"], v["verdict"]), ("coord", "changes"))
         self.assertIsNone(pv("Спасибо, посмотрю позже"))
 
+    def test_lens_name_signs_a_verdict(self):
+        """SE-74: линзы tAIBE подписываются названием линзы, без слова «линза» (на 30 PR потеряно 28 из 134 вердиктов).
+        Ключ — по-прежнему «роль N», затем lens_roles, затем само название."""
+        cases = {
+            "корректность: approve на b78da37c7": ("корректность", "approve", "b78da37c7"),
+            "ресурсы: approve на 18640d845": ("ресурсы", "approve", "18640d845"),
+            "Ресурсы (план, роль 2): changes на 8916b7a6e": ("plan", "changes", "8916b7a6e"),
+            "ресурсы (роль 4): approve на 18640d845": ("backend", "approve", "18640d845"),
+            "ресурсы сервер→браузер (роль 4): approve на b78da37c7": ("backend", "approve", "b78da37c7"),
+            "корректность (роль 4): approve на 2e946a8a5": ("backend", "approve", "2e946a8a5"),
+            "Инструмент: approve на 2e946a8a5": ("инструмент", "approve", "2e946a8a5"),
+            "Инструмент (.claude/skills): changes на 2e946a8a5": ("инструмент", "changes", "2e946a8a5"),
+            "Документы/корректность: approve на 2e946a8a5": ("документы/корректность", "approve", "2e946a8a5"),
+            "Resources: approve on 2e946a8a5": ("resources", "approve", "2e946a8a5"),
+        }
+        for body, want in cases.items():
+            v = pv(body)
+            self.assertEqual((v["lens"], v["verdict"], v["sha"]) if v else None, want, body)
+        for body in ("Ответ линзе ресурсов (changes на 8916b7a6e) — голова fda5df42c. `daily_git.run_net`: …",
+                     "Ответ Контролю (changes на fda5df42c) — голова 66f6273c3.",
+                     "Ресурсы: changes на 8916b7a6e учтены", "Автор, корректность: approve на 2e946a8a5"):
+            self.assertIsNone(pv(body), body)
+        # «<линза> (роль N)» — подпись Т3 с 13.11: «boards (роль 6)» не узнавалась ни словом, ни lens_roles.
+        roles = ["coord", "plan", "frontend", "backend", "release", "boards"]
+        for body, want in {"boards (роль 6): approve на 6da688033": ("boards", "approve", "6da688033"),
+                           "boards (роль 6): approve переношу на 707414982": ("boards", "approve", "707414982"),
+                           "frontend (роль 3): changes на 77bdb4ae9": ("frontend", "changes", "77bdb4ae9")}.items():
+            v = quorum.parse_verdict(body, [], roles)
+            self.assertEqual((v["lens"], v["verdict"], v["sha"]) if v else None, want, body)
+        for body in ("boards (роль 9): approve на 6da688033", "Ответ (роль 6): approve на 6da688033",
+                     "frontend, автор (роль 3): approve на 77bdb4ae9", "boards: approve на 6da688033"):
+            self.assertIsNone(quorum.parse_verdict(body, [], roles), body)
+        head = "b78da37c7" + "0" * 31
+        vs = [pv(x) for x in ("Продукт (план, роль 2): approve на b78da37c7",
+                              "ресурсы сервер→браузер (роль 4): approve на b78da37c7",
+                              "корректность: approve на b78da37c7")]
+        # Пустой список проверок — pending (SE-126): кворум считается на зелёном CI.
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS"])[:2], (True, ["backend", "plan", "корректность"]))
+
+    def test_role_number_signs_a_verdict(self):
+        """SE-139: «Роль 2: approve на <sha>» и «Инструменты (роль 6): …» нерв не засчитывал — у #406 одна линза
+        из трёх. «роль N» из team.roles — линза этой роли; подпись со словом «автор» — не линза (SE-121)."""
+        sha = "2448b3ee10a04288828c83fc6be0bade9870484d"
+        for body, want in {f"Роль 2: approve на {sha}": "plan",
+                           f"Инструменты (роль 6): approve на {sha}": "boards",
+                           f"Инструменты (роль 6, линия r.37tl): approve на {sha} · дельта = слияние": "boards",
+                           f"Линза «инструменты» (роль 6, линия r.37tl.37uf): approve на {sha} — перенос": "boards",
+                           f"**Роль 5:** changes на {sha}": "release"}.items():
+            v = pv(body)
+            self.assertEqual((v["lens"], v["sha"]) if v else None, (want, sha), body)
+        for body in (f"роль 3 — автор: approve на {sha}", f"Роль 3, автор: approve на {sha}",
+                     f"Роль {len(TEAM) + 1}: approve на {sha}"):
+            self.assertIsNone(pv(body), body)
+        head = sha
+        vs = [pv(x) for x in (f"Роль 2: approve на {sha}", f"Инструменты (роль 6): approve на {sha}",
+                              f"Контроль (роль 5): approve на {sha}")]
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS"])[:2], (True, ["boards", "plan", "release"]))
+
     def test_old_approve_sha_still_counts(self):
         """Прежний формат: «approve <sha>», «approve на <sha>», «approve @<sha>», «changes at <sha>»."""
         self.assertEqual(pv("**Бэкенд: approve 46b9f87e1**"),
