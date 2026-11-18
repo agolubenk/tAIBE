@@ -288,6 +288,23 @@ describe('входящие из Telegram (kind: inbox)', () => {
     expect((await st({ agentBy: 'r.other' }, { release: true })).status).toBe(409)
   })
 
+  it('OPS-55: захват предка по линии отпускает наследник; предок, сосед и «префикс без точки» — нет', async () => {
+    await bearer(owner).put('/db/items/i-release-heir', { data: inbox() })
+    const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-release-heir', { data, ...extra })
+    expect((await st({ agentStatus: 'doing', agentBy: 'r.0afd' })).status).toBe(200)
+    expect((await st({ agentBy: 'r.0afdx' }, { release: true })).status).toBe(409)
+    expect((await st({ agentBy: 'r.sio1' }, { release: true })).status).toBe(409)
+    const rel = await st({ agentNote: 'поколение 2 уходит без наследника', agentBy: 'r.0afd.8pa4' }, { release: true })
+    expect(rel.status).toBe(200)
+    expect(rel.json.data.agentBy).toBeUndefined()
+    expect((await st({ agentStatus: 'taken', agentBy: 'r.sio1' })).status).toBe(200)
+    // Обратное не работает: предок не отпускает захват потомка.
+    await bearer(owner).put('/db/items/i-release-anc', { data: inbox() })
+    const anc = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/i-release-anc', { data, ...extra })
+    expect((await anc({ agentStatus: 'doing', agentBy: 'r.0afd.8pa4' })).status).toBe(200)
+    expect((await anc({ agentBy: 'r.0afd' }, { release: true })).status).toBe(409)
+  })
+
   it('release — только у входящих: у обычного пункта захвата нет, подпись agentBy не стирается (линза безопасности HR #521)', async () => {
     await bearer(owner).put('/db/items/d-release', { data: decision })
     const st = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => bearer(agent).patch('/db/checks/d-release', { data, ...extra })
