@@ -110,8 +110,19 @@ export async function issueCode(sessionId: string): Promise<string> {
   return code;
 }
 
-export async function dropCode(sessionId: string) {
-  await db.delete(table).where(eq(table.identifier, codeId(sessionId)));
+/**
+ * Removes the code only while it is still this one: if a later send-code
+ * already replaced it, the later code stays valid.
+ */
+export async function dropCode(sessionId: string, code: string) {
+  await db.transaction(async (tx) => {
+    const id = codeId(sessionId);
+    await lock(tx, id);
+    const row = await liveRow(tx, id);
+    if (row && parseCode(row.value)?.hash === sha256(code)) {
+      await tx.delete(table).where(eq(table.identifier, id));
+    }
+  });
 }
 
 export type CodeCheck = "ok" | "invalid" | "exhausted" | "expired";

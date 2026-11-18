@@ -3,9 +3,27 @@ import { and, eq, isNotNull, like } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import db, { schema } from "../../apps/api/src/database";
 import { createApp } from "../../apps/api/src/index";
-import { collectCookies, signUpWithSession } from "./helpers/auth-session";
+import {
+  checkCode,
+  dropCode,
+  issueCode,
+} from "../../apps/api/src/reauth/store";
+import { collectCookies } from "./helpers/auth-session";
 import { resetTestDatabase } from "./helpers/database";
 import { createWorkspaceMember } from "./helpers/fixtures";
+import {
+  ageSessions,
+  countSessions,
+  expectError,
+  expectNotFresh,
+  get,
+  PASSWORD,
+  person,
+  post,
+  sessionIdOf,
+  staleSessions,
+  userExists,
+} from "./helpers/reauth";
 
 // TB-31 R-5, slice A. The email code needs SMTP; the switch and the sender
 // are mocked, so no mail leaves the test.
@@ -18,92 +36,6 @@ vi.mock("@kaneo/email", async (original) => ({
   isSmtpConfigured: () => mail.smtp,
   sendReauthCodeEmail: mail.send,
 }));
-
-type App = ReturnType<typeof createApp>["app"];
-const PASSWORD = "correct horse battery staple";
-
-function post(app: App, path: string, cookies: string, body: unknown = {}) {
-  return app.request(`/api/auth${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", cookie: cookies },
-    body: JSON.stringify(body),
-  });
-}
-
-function get(app: App, path: string, cookies: string) {
-  return app.request(`/api/auth${path}`, { headers: { cookie: cookies } });
-}
-
-async function person(app: App, role?: "admin") {
-  return signUpWithSession(app, {
-    email: `${randomUUID()}@example.com`,
-    name: "Person",
-    role,
-  });
-}
-
-/** The session is no longer fresh: its mark is gone. */
-async function staleSessions(userId: string) {
-  const sessions = await db
-    .select({ id: schema.sessionTable.id })
-    .from(schema.sessionTable)
-    .where(eq(schema.sessionTable.userId, userId));
-  for (const { id } of sessions) {
-    await db
-      .delete(schema.verificationTable)
-      .where(eq(schema.verificationTable.identifier, `tb-reauth:${id}`));
-  }
-  return sessions.map(({ id }) => id);
-}
-
-async function sessionIdOf(app: App, cookies: string) {
-  const response = await get(app, "/get-session", cookies);
-  const body = (await response.json()) as { session: { id: string } };
-  return body.session.id;
-}
-
-async function countSessions(userId: string) {
-  const rows = await db
-    .select({ id: schema.sessionTable.id })
-    .from(schema.sessionTable)
-    .where(eq(schema.sessionTable.userId, userId));
-  return rows.length;
-}
-
-async function ageSessions(userId: string, hours: number) {
-  await db
-    .update(schema.sessionTable)
-    .set({ createdAt: new Date(Date.now() - hours * 3600 * 1000) })
-    .where(eq(schema.sessionTable.userId, userId));
-}
-
-async function expectNotFresh(response: Response, methods: string[]) {
-  expect(response.status).toBe(403);
-  expect(await response.json()).toMatchObject({
-    code: "SESSION_NOT_FRESH",
-    methods,
-  });
-}
-
-async function expectError(
-  response: Response,
-  status: number,
-  code: string,
-  methods?: string[],
-) {
-  expect(response.status).toBe(status);
-  const body = (await response.json()) as { code: string; methods?: string[] };
-  expect(body.code).toBe(code);
-  if (methods) expect(body.methods).toEqual(methods);
-}
-
-async function userExists(userId: string) {
-  const rows = await db
-    .select({ id: schema.userTable.id })
-    .from(schema.userTable)
-    .where(eq(schema.userTable.id, userId));
-  return rows.length === 1;
-}
 
 async function failRow(userId: string) {
   const [row] = await db
@@ -474,5 +406,22 @@ describe("TB-31 R-5: impersonation and keys", () => {
     expect((await response.json()) as { code: string }).toMatchObject({
       code: "SESSION_REQUIRED",
     });
+  });
+});
+
+describe("TB-31 R-5: a failed send drops only its own code", () => {
+  it("keeps a later code when an earlier send fails after it", async () => {
+    const sessionId = randomUUID();
+    const first = await issueCode(sessionId);
+    const second = await issueCode(sessionId);
+    await dropCode(sessionId, first);
+    expect(await checkCode(sessionId, second)).toBe("ok");
+  });
+
+  it("drops the code when it is still the current one", async () => {
+    const sessionId = randomUUID();
+    const code = await issueCode(sessionId);
+    await dropCode(sessionId, code);
+    expect(await checkCode(sessionId, code)).toBe("expired");
   });
 });

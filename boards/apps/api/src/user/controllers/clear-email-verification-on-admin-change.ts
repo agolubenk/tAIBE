@@ -15,13 +15,15 @@ export async function adminEmailChanges(
   userId: unknown,
   email: unknown,
 ): Promise<boolean> {
-  if (typeof userId !== "string") {
+  if (userId === undefined || userId === null) {
     return false;
   }
+  // The same coercion as better-auth's admin body (`z.coerce.string()`), so
+  // ["id"] finds the user the update will change (TB-31 R-5, B2).
   const [current] = await db
     .select({ email: schema.userTable.email })
     .from(schema.userTable)
-    .where(eq(schema.userTable.id, userId))
+    .where(eq(schema.userTable.id, String(userId)))
     .limit(1);
   if (!current) {
     return false;

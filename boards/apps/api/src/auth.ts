@@ -82,7 +82,7 @@ import { mapCustomOAuthProfileToUser } from "./utils/custom-oauth-profile";
 import { authRateLimitOptions } from "./utils/auth-rate-limit";
 import { resolveFileSecret } from "./utils/file-secret";
 import { generateDemoName } from "./utils/generate-demo-name";
-import { assertFreshSession } from "./reauth/guard";
+import { assertFreshSession, type GuardSession } from "./reauth/guard";
 import { reauthPlugin } from "./reauth/plugin";
 import { markInteractiveSession } from "./reauth/session-hook";
 import { getEmailRequestContext } from "./utils/email-request-context";
@@ -876,7 +876,7 @@ export const auth = betterAuth({
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
       // TB-31 R-5: protected actions need a fresh session first.
-      await assertFreshSession(ctx);
+      await assertFreshSession(ctx, sessionForGuard);
 
       if (ctx.path === "/admin/remove-user") {
         await prepareAdminUserRemoval(ctx);
@@ -1118,3 +1118,15 @@ export const auth = betterAuth({
     }),
   },
 });
+
+/**
+ * TB-31 R-5: the session the fresh-session guard checks. `auth.api.getSession`
+ * runs every before hook, so a Bearer token resolves to the same session the
+ * endpoint will act for (see `SessionResolver` in reauth/guard.ts).
+ */
+function sessionForGuard(headers: Headers): Promise<GuardSession | null> {
+  return auth.api.getSession({
+    headers,
+    query: { disableCookieCache: true, disableRefresh: true },
+  });
+}

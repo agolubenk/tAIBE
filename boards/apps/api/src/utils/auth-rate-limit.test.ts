@@ -31,6 +31,10 @@ describe("auth rate limit (TB-31 R-8)", () => {
       window: 60,
       max: 3,
     });
+    expect(AUTH_RATE_LIMIT_RULES["/sign-in/email-otp"]).toEqual({
+      window: 60,
+      max: 5,
+    });
     expect(AUTH_RATE_LIMIT_RULES["/tb/reauth/password"]).toEqual({
       window: 60,
       max: 5,

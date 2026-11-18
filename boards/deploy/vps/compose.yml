@@ -37,10 +37,11 @@ services:
       # Secrets come from files only (N-007).
       POSTGRES_PASSWORD_FILE: /run/tb-secrets/postgres_password
       AUTH_SECRET_FILE: /run/tb-secrets/auth_secret
-      # TB-31 R-8: the sign-in limiter counts per client IP. tls reaches the
-      # app through the tb bridge, so the peer is the gateway 10.78.0.1; trust
-      # it (not the whole subnet) and loopback, and read X-Forwarded-For, which
-      # tls sets to $remote_addr. Without it all clients share one bucket.
+      # TB-31 R-8: the sign-in limiter counts per client IP. The API's peer is
+      # the image's own nginx (127.0.0.1), which appends its peer, the tb bridge
+      # gateway 10.78.0.1, to X-Forwarded-For; tls sets that header to
+      # $remote_addr. Trust both hops (not the whole subnet), so the client is
+      # the first untrusted address. Without it all clients share one bucket.
       TRUSTED_PROXIES: 10.78.0.1/32,127.0.0.0/8,::1/128
       # "true" turns the limiter off (README «Sign-in limits and mail»).
       DISABLE_AUTH_RATE_LIMIT: ${DISABLE_AUTH_RATE_LIMIT:-}

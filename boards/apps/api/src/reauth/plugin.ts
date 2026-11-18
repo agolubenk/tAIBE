@@ -160,7 +160,7 @@ export const reauthPlugin = () =>
             sent = false;
           }
           if (!sent) {
-            await dropCode(session.id);
+            await dropCode(session.id, code);
             throw reauthError("BAD_GATEWAY", REAUTH_ERRORS.emailDeliveryFailed);
           }
           return ctx.json({ status: true as const });
