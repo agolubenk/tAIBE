@@ -124,24 +124,52 @@ def post_card(line):
         return 'not posted: %s' % e
 
 
+def num(x, empty=False):
+    """A number of a report for the run report and the day's lines; None only if `empty`. Any other value raises
+    TypeError: summarize() makes it the metric's error, and the lines never format a string (#485, backend B1)."""
+    if x is None and empty:
+        return None
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        raise TypeError('not a number: %r' % (x,))
+    return x
+
+
+def summarize(shape, data, **extra):
+    """shape(data) for the run report, or `extra` with the error: a report of another form (the run worktree's tool
+    ahead of this code) must not stop the night's A/B run and judges (#478, Control N1, N2)."""
+    try:
+        return shape(data)
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        return dict(extra, error=('report of another form: %s: %s' % (type(e).__name__, e))[:300])
+
+
 def layer_metrics(wt):
+    """The night's layer metrics. Each one fails alone: a tool that cannot start, hangs or reports another form
+    gives its own error, and the next metric and the A/B run go on."""
     out = {}
     for name, cmd in (('catalog', ['catalog.py', '--root', wt, '--json']), ('dupes', ['dupes.py', '--root', wt,
                                                                                       '--l1', '--json'])):
-        res = subprocess.run([sys.executable, '-I', os.path.join(wt, 'eval/evolve', cmd[0]), *cmd[1:]],
-                             capture_output=True, text=True, timeout=300)
+        try:
+            res = subprocess.run([sys.executable, '-I', os.path.join(wt, 'eval/evolve', cmd[0]), *cmd[1:]],
+                                 capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            out[name] = {'error': str(e)[-300:]}
+            continue
         try:
             data = json.loads(res.stdout)
         except ValueError:
             out[name] = {'error': (res.stderr or res.stdout).strip()[:300]}
             continue
-        out[name] = ({'l1': {r: v['total'] for r, v in data['l1'].items()}, 'budget': data['budget'],
-                      'over': data['over']} if name == 'catalog' else
-                     {'clusters': len(data['clusters']), 'l1_waste': data['l1_waste']})
+        out[name] = summarize(lambda d, n=name: (
+            {'l1': {r: v['total'] for r, v in d['l1'].items()}, 'budget': d['budget'], 'over': d['over']}
+            if n == 'catalog' else {'clusters': len(d['clusters']), 'l1_waste': d['l1_waste']}), data)
     tool = os.path.join(wt, 'eval/tools/ctx_budget.py')
     if os.path.isfile(tool):
-        res = subprocess.run([sys.executable, '-I', tool, 'learn'], capture_output=True, text=True, timeout=600)
-        out['ctx_budget'] = {'exit': res.returncode, 'tail': (res.stdout + res.stderr).strip()[-300:]}
+        try:
+            res = subprocess.run([sys.executable, '-I', tool, 'learn'], capture_output=True, text=True, timeout=600)
+            out['ctx_budget'] = {'exit': res.returncode, 'tail': (res.stdout + res.stderr).strip()[-300:]}
+        except (OSError, subprocess.TimeoutExpired) as e:
+            out['ctx_budget'] = {'exit': None, 'error': str(e)[-300:]}
     else:
         out['ctx_budget'] = 'skipped: eval/tools/ctx_budget.py is not in this revision'
     out['context_audit'] = context_audit(wt)
@@ -182,9 +210,12 @@ def context_audit(wt):
                              os.path.join(STATE_DIR, 'runs', 'context-audit-*.json'), AUDIT_KEEP)
     if err:
         return err
-    return {'exit': 0, 'file': path, 'usd': data.get('total'),
-            'cold': {k: {'n': v['n'], 'usd': round(v['usd'], 2)} for k, v in (data.get('cold') or {}).items()},
-            'generations': data.get('generations')}
+    return summarize(lambda d: {
+        'exit': 0, 'file': path, 'usd': num(d.get('total'), True),
+        'cold': {k: {'n': v['n'], 'usd': round(num(v['usd']), 2)} for k, v in (d.get('cold') or {}).items()},
+        'generations': {k: dict(v, life_min=num(v['life_min']), call_usd=num(v['call_usd']),
+                                handoff_share=num(v.get('handoff_share'), True))
+                        for k, v in (d.get('generations') or {}).items()}}, data, exit=0, file=path)
 
 
 def spend_night(wt, day=None):
@@ -199,25 +230,26 @@ def spend_night(wt, day=None):
     path = os.path.join(STATE_DIR, 'spend', '%s.json' % day.isoformat())
     data, err = nightly_json(tool, span + ['--attribution'], path, os.path.join(STATE_DIR, 'spend', '*.json'),
                              SPEND_KEEP, timeout=900)
-    return err or dict(spend_summary(data), exit=0, file=path, day=day.isoformat())
+    extra = {'exit': 0, 'file': path, 'day': day.isoformat()}
+    return err or summarize(lambda d: dict(spend_summary(d), **extra), data, **extra)
 
 
 def spend_summary(rep):
     """The day's figures for the line: $, calls, $ per merged PR (all spend / merged PRs, like the base $68 → $37),
     shares of $ by target kind, product and window band; context per call is reference only (plan v1.2)."""
-    usd = rep.get('usd') or 0.0
+    usd = num(rep.get('usd'), True) or 0.0
     def shares(pairs):
         out = {}
         for key, value in pairs:
-            out[key] = out.get(key, 0.0) + value
+            out[key] = out.get(key, 0.0) + num(value)
         return {k: round(v / usd, 3) for k, v in out.items()} if usd else {}
-    merged = sum((rep.get('merged') or {}).values())
+    merged = sum(num(n) for n in (rep.get('merged') or {}).values())
     return {'usd': round(usd, 2), 'calls': rep.get('calls'), 'sessions': rep.get('sessions'), 'merged': merged,
             'per_pr': round(usd / merged, 2) if merged else None,
             'targets': shares((r['kind'], r['usd']) for r in rep.get('attribution') or ()),
             'products': shares((g['product'], g['usd']) for g in rep.get('by_product') or ()),
             'bands': shares((k, v['usd']) for k, v in (rep.get('bands') or {}).items()),
-            'ctx_median': rep.get('ctx_median'), 'ctx_p90': rep.get('ctx_p90')}
+            'ctx_median': num(rep.get('ctx_median'), True), 'ctx_p90': num(rep.get('ctx_p90'), True)}
 
 
 def spend_line(s):
