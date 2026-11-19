@@ -34,7 +34,9 @@ export type SessionResolver = (
  * `/device/approve` gives a device a session that issues agent keys without a
  * confirmation (owner, taibe-d-tb31-agent-key-1811 = A): the approval is the
  * confirmation. `/update-user` that sets the login (R-1) is guarded: the login
- * signs in like the email does. The passkey routes and the email change follow.
+ * signs in like the email does. Adding and removing a passkey (R-6) is guarded
+ * here, not by the plugin's `freshSessionMiddleware`: that one reads the
+ * session age, and `freshAge` is 0. The email change follows.
  */
 const ALWAYS_GUARDED = new Set([
   "/api-key/create",
@@ -44,6 +46,9 @@ const ALWAYS_GUARDED = new Set([
   "/admin/set-user-password",
   "/admin/impersonate-user",
   "/device/approve",
+  "/passkey/generate-register-options",
+  "/passkey/verify-registration",
+  "/passkey/delete-passkey",
 ]);
 
 /** What a route needs: always a fresh session, only for an email change, or nothing. */

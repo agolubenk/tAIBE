@@ -80,6 +80,22 @@ describe("sign-in limiter per client IP (TB-31 R-8)", () => {
       const other = await signIn(server, "10.77.0.3");
       expect(other.status, await other.text()).toBe(401);
     });
+
+    it("gives the open passkey options 20 calls a minute, then a 429 (R-6)", async () => {
+      const { port } = server.address() as AddressInfo;
+      const options = () =>
+        fetch(
+          `http://127.0.0.1:${port}/api/auth/passkey/generate-authenticate-options`,
+          { headers: { "x-forwarded-for": "10.77.0.4" } },
+        );
+      for (let i = 0; i < 20; i++) {
+        const response = await options();
+        expect(response.status, await response.text()).toBe(200);
+      }
+      const limited = await options();
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toMatchObject({ code: "RATE_LIMITED" });
+    });
   });
 
   describe("without a trusted proxy", () => {

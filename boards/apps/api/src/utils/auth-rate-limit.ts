@@ -16,6 +16,10 @@ export const AUTH_RATE_LIMIT_RULES: Record<string, Rule> = {
   "/sign-in/email": { window: 60, max: 5 },
   "/sign-in/username": { window: 60, max: 5 },
   "/is-username-available": { window: 60, max: 10 },
+  // R-6: options are open without a session and write a `verification` row
+  // and a cookie on each call; verification checks a signature.
+  "/passkey/generate-authenticate-options": { window: 60, max: 20 },
+  "/passkey/verify-authentication": { window: 60, max: 10 },
   "/sign-in/magic-link": { window: 60, max: 3 },
   "/sign-in/email-otp": { window: 60, max: 3 },
   [REAUTH_ROUTES.password]: { window: 60, max: 5 },

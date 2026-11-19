@@ -1,5 +1,6 @@
 import { revokeUserConnections, revokeWorkspaceConnections } from "./ws";
 import { apiKey } from "@better-auth/api-key";
+import { passkey } from "@better-auth/passkey";
 import {
   isSmtpConfigured,
   OTP_EXPIRY_SECONDS,
@@ -83,6 +84,8 @@ import { mapCustomOAuthProfileToUser } from "./utils/custom-oauth-profile";
 import { authRateLimitOptions } from "./utils/auth-rate-limit";
 import { resolveFileSecret } from "./utils/file-secret";
 import { generateDemoName } from "./utils/generate-demo-name";
+import { passkeyOptions } from "./passkey/passkey-options";
+import { passkeyHooksPlugin } from "./passkey/passkey-plugin";
 import { ADMIN_PLUGIN_OPTIONS } from "./reauth/admin-role";
 import { assertFreshSession, type GuardSession } from "./reauth/guard";
 import { reauthPlugin } from "./reauth/plugin";
@@ -287,6 +290,7 @@ export const auth = betterAuth({
       teamMember: schema.teamMemberTable,
       apikey: schema.apikeyTable,
       deviceCode: schema.deviceCodeTable,
+      passkey: schema.passkeyTable,
     },
   }),
   user: {
@@ -375,6 +379,9 @@ export const auth = betterAuth({
       : []),
     lastLoginMethod(),
     username(USERNAME_PLUGIN_OPTIONS),
+    // TB-31 R-6: options and checks in passkey/.
+    passkey(passkeyOptions()),
+    passkeyHooksPlugin(),
     magicLink({
       disableSignUp: isPasswordRegistrationDisabled,
       sendMagicLink: async ({ email, url }, ctx) => {

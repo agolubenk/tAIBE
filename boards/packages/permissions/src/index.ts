@@ -122,6 +122,12 @@ export {
 } from "./pipeline-toggles.js";
 
 export {
+  PASSKEY_ERRORS,
+  PASSKEY_MAX_PER_USER,
+  type PasskeyError,
+} from "./passkey.js";
+
+export {
   isReauthMethod,
   isSessionNotFresh,
   REAUTH_CODE_LENGTH,

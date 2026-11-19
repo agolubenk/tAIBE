@@ -32,6 +32,14 @@ describe("auth rate limit (TB-31 R-8)", () => {
       window: 60,
       max: 10,
     });
+    // TB-31 R-6: open without a session; each call writes a challenge row.
+    expect(
+      AUTH_RATE_LIMIT_RULES["/passkey/generate-authenticate-options"],
+    ).toEqual({ window: 60, max: 20 });
+    expect(AUTH_RATE_LIMIT_RULES["/passkey/verify-authentication"]).toEqual({
+      window: 60,
+      max: 10,
+    });
     expect(AUTH_RATE_LIMIT_RULES["/sign-in/magic-link"]).toEqual({
       window: 60,
       max: 3,
