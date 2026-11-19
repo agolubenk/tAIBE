@@ -17,6 +17,42 @@
    }
   ]
  },
+ "nerve-emit-worktree": {
+  "fires": [
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "cd worktrees/fix/se-171 && python3 -I eval/nerve/nerve.py emit coord --product taibe \"PR 500 готов к линзам\""
+    }
+   },
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "python3 -I worktrees/fix/topic/eval/nerve/nerve.py emit plan \"r.1 готово\""
+    }
+   }
+  ],
+  "quiet": [
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "cd worktrees/fix/topic && git push -u origin fix/topic && cd ../../.. && python3 -I eval/nerve/nerve.py emit coord \"PR готов\""
+    }
+   },
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "python3 -I eval/nerve/nerve.py emit coord \"PR из worktrees/fix/topic готов\""
+    }
+   },
+   {
+    "tool": "Bash",
+    "input": {
+     "command": "cd worktrees/fix/topic && python3 -I eval/nerve/nerve.py tap k1"
+    }
+   }
+  ]
+ },
  "pr-merge": {
   "fires": [
    {
