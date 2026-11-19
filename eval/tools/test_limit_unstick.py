@@ -406,6 +406,29 @@ class IdleTest(Base):
                 self.assertEqual(self.outcomes(stuck=self.stuck()), [("idle", U.IDLE + why)])
                 self.assertEqual(self.keys(), [])
 
+    def test_continue_left_by_the_menu_gets_only_enter(self):  # backend on 4e1b03650: Esc leaves PREFILL in the input
+        for screens, action, sent, woke in (([PREFILLED, PREFILLED], "continue, enter", [["Enter"]], True),
+                                            ([PREFILLED, DRAFT], "continue; typed, no enter", [], False),
+                                            ([PREFILLED, None], "continue; no screen, no enter", [], False)):
+            with self.subTest(action):
+                self.log.unlink(missing_ok=True)
+                self.spec({self.PANE: screens}, by_capture=True)
+                got = self.run_unstick(stuck=self.stuck())
+                self.assertEqual([(d["kind"], d["action"], d["woke"]) for d in got], [("idle", U.IDLE + action, woke)])
+                self.assertEqual(self.keys(), sent)
+                self.assertEqual(self.slept, [], "no text, so no settle sleep")
+                self.slept.clear()
+
+    def test_an_esc_only_role_gets_enter_after_a_task_comes(self):  # coord 02:07 on #496: the D7 pass, then the later pass
+        self.session(self.PID, "waiting", "dialog open", sessionId="s1")
+        self.spec({self.PANE: [MENU, PREFILLED]})
+        first = self.run_unstick(stuck=self.stuck(), wake=False)
+        self.assertEqual([(d["action"], d["woke"]) for d in first], [("esc; no open task", False)])
+        later = self.run_unstick(stuck=self.stuck())  # the Esc made the session idle with continue in the input
+        self.assertEqual([(d["kind"], d["action"], d["woke"]) for d in later],
+                         [("idle", U.IDLE + "continue, enter", True)])
+        self.assertEqual(self.keys(), [["Escape"], ["Enter"]])
+
     def test_woke_after_the_enter(self):  # the wake queue pauses after this role
         self.spec({self.PANE: [EMPTY, TYPED]})
         self.assertEqual([(d["kind"], d["woke"]) for d in self.run_unstick(stuck=self.stuck())], [("idle", True)])

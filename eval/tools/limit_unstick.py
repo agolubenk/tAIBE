@@ -249,14 +249,18 @@ def unstick_pane(sx, pane, tty, sleep, procs=None, stuck=None, wake=True):
 
 
 def wake_idle(pane, sleep):
-    """D (SE-187): меню закрыто, сессия ждёт ввода. Клавиши — только TEXT и Enter, если на экране нет меню лимита и
-    строка ввода пуста (D3). Esc нет: вне меню он ничего не закрывает, а в чужом диалоге — отказ."""
+    """D (SE-187): меню закрыто, сессия ждёт ввода. На экране нет меню лимита (D3). Пустая строка ввода — TEXT и Enter;
+    в строке PREFILL — его Claude Code кладёт сам после Esc в меню (так ждёт и роль, отложенная D7) — только Enter.
+    Esc нет: вне меню он ничего не закрывает, а в чужом диалоге — отказ."""
     shown = screen(pane)
     if shown is None:
         return row("idle", IDLE + "no keys, no screen")
     if menu_lines(shown) is not None:  # статус не меню, а меню на экране — не наш случай
         return row("idle", IDLE + "no keys, menu on screen", digest(menu_lines(shown)))
     text = draft(shown)
+    if text == PREFILL:
+        tail, woke = finish(pane, PREFILL)
+        return row("idle", IDLE + PREFILL + tail, "", woke)
     if text != "":
         return row("idle", IDLE + ("no keys, input not empty" if text else "no keys, no input line"))
     tail, woke = type_text(pane, sleep)
