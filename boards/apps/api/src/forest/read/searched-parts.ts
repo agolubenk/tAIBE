@@ -1,3 +1,5 @@
+import { upToLastSpace } from "./uncut-text";
+
 // A log's searchText glues its fields with "\n" and is cut at
 // SEARCH_TEXT_CHARS; a caller with a token reads each field masked on its
 // own (TB-143). Masked glued, a title that ends with a label
@@ -24,17 +26,9 @@ export function searchedParts(searchText: string, fields: string[]): string[] {
       continue;
     }
     const rest = searchText.slice(at);
+    // The field that the cut ends: up to its last whitespace (uncut-text.ts).
     if (rest && field.startsWith(rest)) parts.push(upToLastSpace(rest));
     break;
   }
   return parts;
-}
-
-// The cut can fall inside a secret, and redact does not know a secret without
-// its end: a cut field is matched only up to its last whitespace (backend
-// lens #388, R2). The rule runs on read, so logs felled before it are
-// covered too.
-function upToLastSpace(text: string) {
-  const lastSpace = text.search(/\s\S*$/);
-  return lastSpace < 0 ? "" : text.slice(0, lastSpace);
 }

@@ -169,10 +169,15 @@ class SecondSessionTest(Roles):
     def test_numbers_follow_team_roles_of_every_product(self):
         import products as P
         _, products = P.load()
+        seen = set()
         for slug, cfg in products.items():
             roles = cfg["team"]["roles"]
-            self.assertEqual({r: i for i, r in enumerate(roles, 1)}, TS.NUM, slug)
-            self.assertEqual(set(TS.ORDER), set(roles), slug)
+            # Номер роли — её место в team.roles, один на все продукты; у продукта может быть не каждая роль
+            # (backend-3 — только у HR, #477).
+            self.assertEqual({r: i for i, r in enumerate(roles, 1)}, {r: TS.NUM.get(r) for r in roles}, slug)
+            seen |= set(roles)
+        self.assertEqual(set(TS.ORDER), set(TS.NUM))
+        self.assertEqual(seen, set(TS.ORDER))  # в ORDER нет роли, которой нет ни у одного продукта
 
 
 class WaitTest(Roles):

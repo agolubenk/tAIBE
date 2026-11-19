@@ -37,3 +37,15 @@ export async function sendPasswordResetEmail(
 ): Promise<void> {
   return undefined;
 }
+
+export async function sendReauthCodeEmail(
+  _to: string,
+  _subject: string,
+  _data: unknown,
+): Promise<EmailResult> {
+  return { success: true };
+}
+
+export function reauthCodeSubject(code: string, _locale?: string | null) {
+  return `${code} is your Kaneo confirmation code`;
+}

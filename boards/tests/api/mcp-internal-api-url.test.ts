@@ -8,6 +8,17 @@ vi.mock("../../apps/api/src/auth", () => ({
   auth: { api: { getSession: authMocks.getSession } },
 }));
 
+// TB-133: a tool call writes its journal row without waiting. Without a
+// database the insert failed after the test ended, and its console.error
+// reached the closing worker: `pnpm test` exited 1 with all tests green.
+const journalMocks = vi.hoisted(() => ({
+  writeJournal: vi.fn(async () => undefined),
+}));
+
+vi.mock("../../apps/api/src/forest/journal", () => ({
+  writeJournal: journalMocks.writeJournal,
+}));
+
 const protocolVersion = "2026-07-28";
 
 function toolRequest() {
@@ -53,6 +64,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.resetModules();
   authMocks.getSession.mockClear();
+  journalMocks.writeJournal.mockClear();
 });
 
 describe("MCP API URLs", () => {
@@ -88,6 +100,9 @@ describe("MCP API URLs", () => {
     expect(apiFetch).toHaveBeenCalledOnce();
     expect(String(apiFetch.mock.calls[0]?.[0])).toBe(
       "http://127.0.0.1:1337/api/auth/get-session",
+    );
+    expect(journalMocks.writeJournal).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "mcp.call", targetId: "whoami" }),
     );
   });
 

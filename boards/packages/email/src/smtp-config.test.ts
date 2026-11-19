@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vite-plus/test";
-import { getSmtpTransportOptions, isSmtpConfigured } from "./smtp-config";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
+import {
+  getSmtpTransportOptions,
+  isSmtpConfigured,
+  readSmtpPassword,
+} from "./smtp-config";
 
 describe("getSmtpTransportOptions", () => {
   it("omits auth when no credentials are configured", () => {
@@ -65,6 +79,15 @@ describe("getSmtpTransportOptions", () => {
     }
   });
 
+  it("bounds connection, greeting and socket waits and logs nothing", () => {
+    const options = getSmtpTransportOptions({ SMTP_HOST: "h" });
+    expect(options.connectionTimeout).toBe(10_000);
+    expect(options.greetingTimeout).toBe(10_000);
+    expect(options.socketTimeout).toBe(30_000);
+    expect("logger" in options).toBe(false);
+    expect("debug" in options).toBe(false);
+  });
+
   it("requires an explicit opt-out for relays without TLS", () => {
     const options = getSmtpTransportOptions({
       SMTP_SECURE: "false",
@@ -73,6 +96,65 @@ describe("getSmtpTransportOptions", () => {
     });
     expect(options.requireTLS).toBe(false);
     expect(options.ignoreTLS).toBe(false);
+  });
+});
+
+describe("readSmtpPassword", () => {
+  let directory = "";
+
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), "smtp-password-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("reads the file when SMTP_PASSWORD is not set", () => {
+    const file = join(directory, "smtp_password");
+    writeFileSync(file, "from-file\n", { mode: 0o400 });
+    const options = getSmtpTransportOptions({
+      SMTP_HOST: "smtp.example.com",
+      SMTP_USER: "me",
+      SMTP_PASSWORD_FILE: file,
+    });
+    expect(options.auth).toEqual({ user: "me", pass: "from-file" });
+  });
+
+  it("prefers SMTP_PASSWORD over the file", () => {
+    const file = join(directory, "smtp_password");
+    writeFileSync(file, "from-file", { mode: 0o400 });
+    expect(
+      readSmtpPassword({ SMTP_PASSWORD: "direct", SMTP_PASSWORD_FILE: file }),
+    ).toBe("direct");
+  });
+
+  it("treats a missing or empty file as no password, silently", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const empty = join(directory, "empty");
+    writeFileSync(empty, "\n");
+    expect(
+      readSmtpPassword({ SMTP_PASSWORD_FILE: join(directory, "absent") }),
+    ).toBeUndefined();
+    expect(readSmtpPassword({ SMTP_PASSWORD_FILE: empty })).toBeUndefined();
+    expect(
+      getSmtpTransportOptions({
+        SMTP_HOST: "relay.internal",
+        SMTP_USER: "me",
+        SMTP_PASSWORD_FILE: join(directory, "absent"),
+      }).auth,
+    ).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns with the code and path on other read errors, never the content", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // A directory instead of a file: EISDIR.
+    expect(readSmtpPassword({ SMTP_PASSWORD_FILE: directory })).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      `[smtp] SMTP_PASSWORD_FILE could not be read (EISDIR): ${directory}`,
+    );
   });
 });
 
