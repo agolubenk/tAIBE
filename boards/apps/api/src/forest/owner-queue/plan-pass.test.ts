@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   PLAN_WRITES_PER_RUN,
   type PlanStore,
+  planCheckIn,
   planPass,
   READ_BUDGET_MS,
+  THROTTLED_RUNS_ALERT,
 } from "./plan-pass";
 import type { BoardCard, RecentCard } from "./plan-types";
 import {
@@ -14,8 +16,10 @@ import {
   type QueueDoc,
   type QueuePage,
   QueueRejected,
+  QueueThrottled,
 } from "./queue-client";
 import type { OwnerQueueConfig } from "./queue-config";
+import { QUEUE_WRITES_PER_MINUTE, WRITES_PER_PASS } from "./queue-limits";
 
 const WS = "aiboards-eval";
 const NOW = new Date("2026-11-13T12:00:00Z");
@@ -50,12 +54,16 @@ const moved = (key: string, ws = WS): Moved => ({
 const card = (key: string, st = "to-do") => ({ key, ws: WS, k: "task", st });
 
 // The console's work rules: PATCH merges, a null field is removed, ifVersion
-// must match (409 otherwise). reject — docs the console refuses with 422.
+// must match (409 otherwise). reject — docs the console refuses with 422;
+// throttleAfter — the writes it takes before it answers 429 (the token's
+// minute is spent).
 class FakeWork {
   readonly docs = new Map<string, QueueDoc>();
   readonly patches: { id: string; data: Record<string, unknown> }[] = [];
   race = new Set<string>();
   reject = new Set<string>();
+  throttleAfter = Number.POSITIVE_INFINITY;
+  calls = 0;
   truncated = false;
   // Answer in pages of one doc, as a paging console would (no snapshot).
   paged = false;
@@ -92,6 +100,10 @@ class FakeWork {
         };
       },
       patch: async (_collection, id, data, ifVersion) => {
+        this.calls += 1;
+        if (this.calls > this.throttleAfter) {
+          throw new QueueThrottled("HTTP 429 Слишком много записей");
+        }
         const doc = this.docs.get(id);
         if (this.reject.has(id)) throw new QueueRejected("too large", 422);
         if (!doc || this.race.has(id) || doc.version !== ifVersion) {
@@ -172,6 +184,7 @@ describe("planPass (TB-106)", () => {
       skipped: 0,
       left: 0,
       refused: 0,
+      throttled: false,
       hourlyDone: false,
       dailyDone: false,
     });
@@ -215,6 +228,7 @@ describe("planPass (TB-106)", () => {
       skipped: 1,
       left: 0,
       refused: 0,
+      throttled: false,
       hourlyDone: false,
       dailyDone: false,
     });
@@ -239,6 +253,7 @@ describe("planPass (TB-106)", () => {
       skipped: 0,
       left: 0,
       refused: 1,
+      throttled: false,
       hourlyDone: true,
       dailyDone: false,
     });
@@ -269,7 +284,7 @@ describe("planPass (TB-106)", () => {
     ).rejects.toThrow("queue 503");
   });
 
-  it("writes 30 rows a run at most and leaves the rest for the next run", async () => {
+  it("writes PLAN_WRITES_PER_RUN rows a run at most and leaves the rest for the next run", async () => {
     const queue = new FakeWork();
     for (let i = 0; i < 35; i += 1) {
       queue.add(`w-${i}`, { status: "planned", cards: [card("TB-1")] });
@@ -279,8 +294,74 @@ describe("planPass (TB-106)", () => {
       written: PLAN_WRITES_PER_RUN,
       left: 35 - PLAN_WRITES_PER_RUN,
     });
-    expect(await run(queue, board)).toMatchObject({ written: 5, left: 0 });
+    expect(await run(queue, board)).toMatchObject({
+      written: 35 - PLAN_WRITES_PER_RUN,
+      left: 0,
+    });
     expect(await run(queue, board)).toMatchObject({ written: 0, left: 0 });
+  });
+
+  // TB-119: the queue takes 120 writes a minute per token; a minute holds two
+  // 30 s passes and one plan run.
+  it("keeps two 30 s passes and one plan run within the queue's 120 writes a minute", () => {
+    expect(QUEUE_WRITES_PER_MINUTE).toBe(120);
+    expect(PLAN_WRITES_PER_RUN).toBe(20);
+    expect(2 * WRITES_PER_PASS + PLAN_WRITES_PER_RUN).toBeLessThanOrEqual(
+      QUEUE_WRITES_PER_MINUTE,
+    );
+  });
+
+  it("stops writing on a 429 and leaves the rest for the next run without an error", async () => {
+    const queue = new FakeWork();
+    for (let i = 0; i < 5; i += 1) {
+      queue.add(`w-${i}`, { status: "planned", cards: [card("TB-1")] });
+    }
+    queue.throttleAfter = 2;
+    const board = store({ [`${WS}/TB-1`]: done });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await run(queue, board, true)).toEqual({
+      written: 2,
+      skipped: 0,
+      left: 3,
+      refused: 0,
+      throttled: true,
+      // Incomplete: the hourly part runs again next run.
+      hourlyDone: false,
+      dailyDone: false,
+    });
+    // One 429 call; the rest of the run does not call the queue.
+    expect(queue.calls).toBe(3);
+    // One warning for the 429, not one per row left.
+    expect(
+      warn.mock.calls.filter(([text]) => String(text).includes("429")),
+    ).toHaveLength(1);
+    warn.mockRestore();
+    queue.throttleAfter = Number.POSITIVE_INFINITY;
+    expect(await run(queue, board, true)).toMatchObject({
+      written: 3,
+      left: 0,
+      hourlyDone: true,
+    });
+  });
+
+  it("fails the check-in after a 429 in 3 runs in a row, not before, and on a refusal at once", () => {
+    const checkIn = planCheckIn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const throttled = { refused: 0, throttled: true };
+    const clean = { refused: 0, throttled: false };
+    for (let run = 1; run < THROTTLED_RUNS_ALERT; run += 1) {
+      expect(checkIn(throttled)).toEqual({ degraded: false });
+    }
+    expect(checkIn(throttled)).toEqual({ degraded: true });
+    expect(checkIn(throttled)).toEqual({ degraded: true });
+    expect(warn).toHaveBeenCalledTimes(1);
+    // A run without a 429 starts the count again.
+    expect(checkIn(clean)).toEqual({ degraded: false });
+    expect(checkIn(throttled)).toEqual({ degraded: false });
+    expect(checkIn({ refused: 1, throttled: false })).toEqual({
+      degraded: true,
+    });
+    warn.mockRestore();
   });
 
   it("reads the board only in mapped workspaces and runs F8 and F9 only hourly", async () => {

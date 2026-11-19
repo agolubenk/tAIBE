@@ -15,7 +15,12 @@ import {
   resetRejectedForTest,
   withoutPaused,
 } from "./each-row";
-import { httpQueueClient, QueueConflict, QueueRejected } from "./queue-client";
+import {
+  httpQueueClient,
+  QueueConflict,
+  QueueRejected,
+  QueueThrottled,
+} from "./queue-client";
 
 const rows = ["a", "b", "c"].map((id) => ({ id, workspaceId: "ws1" }));
 
@@ -202,6 +207,8 @@ describe("httpQueueClient status mapping (TB-110)", () => {
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toBeInstanceOf(QueueRejected);
       expect(error).not.toBeInstanceOf(QueueConflict);
+      // TB-119: the plan run tells a 429 from the others; the pass does not.
+      expect(error instanceof QueueThrottled).toBe(status === 429);
     }
   });
 });

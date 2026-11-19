@@ -48,6 +48,16 @@ export class QueueRejected extends Error {
   }
 }
 
+// 429 from the queue: this token spent its writes of the minute (120, shared
+// by the 30 s pass and the plan run). The plan run stops writing and leaves
+// the rest for the next run (TB-119); the 30 s pass ends and backs off.
+export class QueueThrottled extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QueueThrottled";
+  }
+}
+
 // The queue as the sync sees it (F17, F18); tests use an in-memory fake with
 // the same version rules.
 export interface QueueClient {
@@ -134,6 +144,7 @@ export function httpQueueClient(config: OwnerQueueConfig): QueueClient {
       if (response.status === 400 || response.status === 422) {
         throw new QueueRejected(message, response.status);
       }
+      if (response.status === 429) throw new QueueThrottled(message);
       throw new Error(message);
     }
     return json;

@@ -1,5 +1,5 @@
 import { expiryPass } from "./expiry-pass";
-import { planPass } from "./plan-pass";
+import { planCheckIn, planPass } from "./plan-pass";
 import { planStore } from "./plan-store";
 import { localDate, localTime } from "./plan-types";
 import { journalQueue } from "./queue-actor";
@@ -63,7 +63,10 @@ let dailyOn = "";
 // Every 5 minutes (scheduler): plan rows follow the board. A failure waits for
 // the next run and shows as a failed check-in, not as an exception per run.
 // A doc the queue refused (TB-125) also fails the check-in: the run goes on,
-// but that row does not follow the board until someone looks.
+// but that row does not follow the board until someone looks. So does a 429
+// in 3 runs in a row (TB-119, planCheckIn).
+const planRowsCheckIn = planCheckIn();
+
 export async function ownerQueuePlanRows(now: number = Date.now()) {
   const config = await configOrSkip();
   if (!config) return {};
@@ -85,7 +88,7 @@ export async function ownerQueuePlanRows(now: number = Date.now()) {
     );
     if (outcome.hourlyDone) hourlyAt = now;
     if (outcome.dailyDone) dailyOn = today;
-    return { degraded: outcome.refused > 0 };
+    return planRowsCheckIn(outcome);
   } catch (error) {
     console.error("owner-queue plan rows failed:", error);
     return { degraded: true };
