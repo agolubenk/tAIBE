@@ -64,6 +64,64 @@ class QuorumTest(unittest.TestCase):
         self.assertEqual((v["lens"], v["verdict"]), ("coord", "changes"))
         self.assertIsNone(pv("Спасибо, посмотрю позже"))
 
+    def test_lens_name_signs_a_verdict(self):
+        """SE-74: линзы tAIBE подписываются названием линзы, без слова «линза» (на 30 PR потеряно 28 из 134 вердиктов).
+        Ключ — по-прежнему «роль N», затем lens_roles, затем само название."""
+        cases = {
+            "корректность: approve на b78da37c7": ("корректность", "approve", "b78da37c7"),
+            "ресурсы: approve на 18640d845": ("ресурсы", "approve", "18640d845"),
+            "Ресурсы (план, роль 2): changes на 8916b7a6e": ("plan", "changes", "8916b7a6e"),
+            "ресурсы (роль 4): approve на 18640d845": ("backend", "approve", "18640d845"),
+            "ресурсы сервер→браузер (роль 4): approve на b78da37c7": ("backend", "approve", "b78da37c7"),
+            "корректность (роль 4): approve на 2e946a8a5": ("backend", "approve", "2e946a8a5"),
+            "Инструмент: approve на 2e946a8a5": ("инструмент", "approve", "2e946a8a5"),
+            "Инструмент (.claude/skills): changes на 2e946a8a5": ("инструмент", "changes", "2e946a8a5"),
+            "Документы/корректность: approve на 2e946a8a5": ("документы/корректность", "approve", "2e946a8a5"),
+            "Resources: approve on 2e946a8a5": ("resources", "approve", "2e946a8a5"),
+        }
+        for body, want in cases.items():
+            v = pv(body)
+            self.assertEqual((v["lens"], v["verdict"], v["sha"]) if v else None, want, body)
+        for body in ("Ответ линзе ресурсов (changes на 8916b7a6e) — голова fda5df42c. `daily_git.run_net`: …",
+                     "Ответ Контролю (changes на fda5df42c) — голова 66f6273c3.",
+                     "Ресурсы: changes на 8916b7a6e учтены", "Автор, корректность: approve на 2e946a8a5"):
+            self.assertIsNone(pv(body), body)
+        # «<линза> (роль N)» — подпись Т3 с 13.11: «boards (роль 6)» не узнавалась ни словом, ни lens_roles.
+        roles = ["coord", "plan", "frontend", "backend", "release", "boards"]
+        for body, want in {"boards (роль 6): approve на 6da688033": ("boards", "approve", "6da688033"),
+                           "boards (роль 6): approve переношу на 707414982": ("boards", "approve", "707414982"),
+                           "frontend (роль 3): changes на 77bdb4ae9": ("frontend", "changes", "77bdb4ae9")}.items():
+            v = quorum.parse_verdict(body, [], roles)
+            self.assertEqual((v["lens"], v["verdict"], v["sha"]) if v else None, want, body)
+        for body in ("boards (роль 9): approve на 6da688033", "Ответ (роль 6): approve на 6da688033",
+                     "frontend, автор (роль 3): approve на 77bdb4ae9", "boards: approve на 6da688033"):
+            self.assertIsNone(quorum.parse_verdict(body, [], roles), body)
+        head = "b78da37c7" + "0" * 31
+        vs = [pv(x) for x in ("Продукт (план, роль 2): approve на b78da37c7",
+                              "ресурсы сервер→браузер (роль 4): approve на b78da37c7",
+                              "корректность: approve на b78da37c7")]
+        # Пустой список проверок — pending (SE-126): кворум считается на зелёном CI.
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS"])[:2], (True, ["backend", "plan", "корректность"]))
+
+    def test_role_number_signs_a_verdict(self):
+        """SE-139: «Роль 2: approve на <sha>» и «Инструменты (роль 6): …» нерв не засчитывал — у #406 одна линза
+        из трёх. «роль N» из team.roles — линза этой роли; подпись со словом «автор» — не линза (SE-121)."""
+        sha = "2448b3ee10a04288828c83fc6be0bade9870484d"
+        for body, want in {f"Роль 2: approve на {sha}": "plan",
+                           f"Инструменты (роль 6): approve на {sha}": "boards",
+                           f"Инструменты (роль 6, линия r.37tl): approve на {sha} · дельта = слияние": "boards",
+                           f"Линза «инструменты» (роль 6, линия r.37tl.37uf): approve на {sha} — перенос": "boards",
+                           f"**Роль 5:** changes на {sha}": "release"}.items():
+            v = pv(body)
+            self.assertEqual((v["lens"], v["sha"]) if v else None, (want, sha), body)
+        for body in (f"роль 3 — автор: approve на {sha}", f"Роль 3, автор: approve на {sha}",
+                     f"Роль {len(TEAM) + 1}: approve на {sha}"):
+            self.assertIsNone(pv(body), body)
+        head = sha
+        vs = [pv(x) for x in (f"Роль 2: approve на {sha}", f"Инструменты (роль 6): approve на {sha}",
+                              f"Контроль (роль 5): approve на {sha}")]
+        self.assertEqual(quorum.quorum(vs, head, ["SUCCESS"])[:2], (True, ["boards", "plan", "release"]))
+
     def test_old_approve_sha_still_counts(self):
         """Прежний формат: «approve <sha>», «approve на <sha>», «approve @<sha>», «changes at <sha>»."""
         self.assertEqual(pv("**Бэкенд: approve 46b9f87e1**"),
@@ -199,7 +257,7 @@ class QuorumTest(unittest.TestCase):
 
     def test_author_roles_add_second_sessions(self):
         roles = CFG["team"]["roles"]
-        self.assertEqual(quorum.author_roles("backend", roles), ["backend", "backend-2"])
+        self.assertEqual(quorum.author_roles("backend", roles), ["backend", "backend-2", "backend-3"])
         self.assertEqual(quorum.author_roles("frontend", roles), ["frontend", "frontend-2"])
         self.assertEqual(quorum.author_roles("coord", roles), ["coord"])
         self.assertEqual(quorum.author_roles("backend", ["backend"]), ["backend"])
@@ -241,7 +299,7 @@ class QuorumTest(unittest.TestCase):
         for body, want in (("Линзы: роль 6 — автор. Нужны 3 линзы ролей не автора.", "boards"),
                            ("Lenses: role 4 - author", "backend"), ("**Роль 7 – автор**", "backend-2"),
                            ("роль 4 — автора не считаем", None), ("> роль 4 — автор\nтекст", None),
-                           ("роль 9 — автор", None), ("роль 0 — автор", None),
+                           ("роль 9 — автор", "backend-3"), ("роль 10 — автор", None), ("роль 0 — автор", None),
                            ("Нужны 3 линзы ролей не автора", None), ("", None),
                            (None, None), ("строка\nроль 2 — автор\nроль 5 — автор", "plan")):
             self.assertEqual(quorum.body_author(body, roles), want, body)
@@ -413,9 +471,10 @@ class FakeGh:
     FILES = ["apps/backend/src/x.ts"]
 
     def __init__(self, open_prs, merged=(), broken=(), comments=None, closed=(), ci=None, mute=(), files=None,
-                 bodies=None):
+                 bodies=None, heads=None):
         self.open_prs, self.merged, self.broken = open_prs, set(merged), set(broken)
         self.files, self.bodies = files or {}, bodies or {}   # номер → пути файлов, тело PR
+        self.heads = heads or {}    # номер → голова в gh pr view, если она новее списка (push между запросами)
         self.mute = set(mute)       # номера, у которых падает чтение комментариев
         self.ci = ci or {}          # номер → статус CI (или кортеж статусов) в gh pr view; по умолчанию SUCCESS
         self.closed = set(closed)   # закрыты без мёржа; остальные номера вне merged — OPEN
@@ -459,6 +518,9 @@ class FakeGh:
                  "closedAt": None if state == "OPEN" else "2026-11-04T15:55:00Z"}
             if "body" in cmd[cmd.index("--json") + 1].split(","):
                 d["body"] = self.bodies.get(n, "")
+            if "headRefOid" in cmd[cmd.index("--json") + 1].split(","):
+                d["headRefOid"] = self.heads.get(n) or next((p["head"]["sha"] for p in self.open_prs
+                                                             if p["number"] == n), None)
             return 0, json.dumps(d), ""
         raise AssertionError(f"неожиданный вызов: {cmd}")
 
@@ -530,7 +592,7 @@ class GithubPollTest(unittest.TestCase):
         sources.run = FakeGh([_pr(480, "c" * 40)], comments={480: ["**Линза плана (роль 2) — CHANGES на ccccccc**"]})
         gh_source.poll_github(self.ctx)
         rec = [e for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0] if e["kind"] == "pr.changes"]
-        self.assertEqual([e["to"] for e in rec], [["backend", "backend-2"]])
+        self.assertEqual([e["to"] for e in rec], [["backend", "backend-2", "backend-3"]])
 
     def test_author_approve_is_named_once_and_does_not_make_quorum(self):
         """SE-121: тело называет автора backend; его approve не засчитан: одно pr.own Контролю на голову, потом
@@ -600,7 +662,7 @@ class GithubPollTest(unittest.TestCase):
         gh_source.poll_github(self.ctx)
         gh_source.poll_github(self.ctx)
         views = [c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]]
-        self.assertEqual(views, ["files,statusCheckRollup,body", "statusCheckRollup"])
+        self.assertEqual(views, ["files,statusCheckRollup,body,headRefOid", "statusCheckRollup,headRefOid"])
 
     def test_new_head_after_changes_goes_to_the_lens_role(self):
         sources.run = FakeGh([_pr(479, "a" * 40)], comments={479: ["**Линза корректности (роль 4) — CHANGES на aaaaaaa**"]})
@@ -887,7 +949,76 @@ class GithubPollTest(unittest.TestCase):
         self.assertIn(("pr.quorum", "#486 собран: approve backend, boards, plan на fffffffff, CI ok"), self.kinds())
         self.assertFalse(self.ctx.state["github"]["prs"]["486"]["await_ci"])
         self.assertEqual([c[c.index("--json") + 1] for c in fake.calls if c[:3] == ["gh", "pr", "view"]],
-                         ["statusCheckRollup,body"], "проверки и тело (SE-50) одним view, без файлов")
+                         ["statusCheckRollup,body,headRefOid"], "проверки, тело (SE-50) и голова — одним view")
+
+    def test_checks_of_a_newer_head_are_not_taken_for_the_listed_one(self):
+        """SE-131 N1: push между `gh pr list` и `gh pr view` — view отдаёт проверки новой головы. Раньше они
+        записывались к голове из списка, и кворум старой головы мог собраться по чужому CI."""
+        old, new = "c3c3c3c3c" + "0" * 31, "c4c4c4c4c" + "0" * 31
+        three = [f"{x}: approve на c3c3c3c3c" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+        sources.run = FakeGh([_pr(494, old)], comments={494: three}, ci={494: "IN_PROGRESS"})
+        gh_source.poll_github(self.ctx)
+        p = self.ctx.state["github"]["prs"]["494"]
+        self.assertTrue(p["await_ci"])
+        sources.run = FakeGh([_pr(494, old)], comments={494: three}, heads={494: new})   # перепроверка CI
+        gh_source.poll_github(self.ctx)
+        self.assertEqual((p["head"], p["checks"]), (old, ["IN_PROGRESS"]))
+        sources.run = FakeGh([_pr(494, old), _pr(495, old)], comments={495: three}, heads={494: new, 495: new})
+        gh_source.poll_github(self.ctx)                                                # разбор нового PR
+        q = self.ctx.state["github"]["prs"]["495"]
+        self.assertEqual((q["head"], q["updated"]), ("", ""), "не разобран: следующий проход — по новой голове")
+        self.assertNotIn("pr.quorum", [k for k, _ in self.kinds()])
+
+    def test_stale_head_in_a_pass_does_not_end_the_backfill(self):
+        """Линза Claude #397, п. 2: давний PR дважды подряд с другой головой в gh pr view — второй проход (fresh 0)
+        кончал догон, и третий давал ложное «#N открыт»."""
+        old, new = "c6" * 20, "c7" * 20
+        for _ in range(2):
+            sources.run = FakeGh([_pr(500, old)], heads={500: new})
+            gh_source.poll_github(self.ctx)
+        sources.run = FakeGh([_pr(500, new)])
+        gh_source.poll_github(self.ctx)
+        self.assertNotIn("pr.new", [k for k, _ in self.kinds()], "давний PR: «открыт» не приходит")
+
+    def test_stale_head_for_5_passes_in_a_row_gives_one_coord_event_per_head(self):
+        """SE-134: gh pr view отдаёт не ту голову, что список, — PR пропускается молча (SE-131). Пять проходов подряд —
+        одно событие координатору на голову списка; удачное чтение обнуляет счёт."""
+        old, new, newer = "d4" * 20, "d5" * 20, "d6" * 20
+        three = [f"{x}: approve на d4d4d4d" for x in ("Бэкенд (роль 4)", "Линза плана (роль 2)", "Данные (роль 6)")]
+
+        def passes(count, listed=old, heads=None, upd="2026-11-04T10:00:00Z"):
+            for _ in range(count):
+                sources.run = FakeGh([_pr(498, listed, upd=upd)], comments={498: three}, ci={498: "IN_PROGRESS"},
+                                     heads={498: heads} if heads else None)
+                gh_source.poll_github(self.ctx)
+            return [t for k, t in self.kinds() if k == "pr.stale"]
+
+        passes(1)
+        self.assertTrue(self.ctx.state["github"]["prs"]["498"]["await_ci"])
+        passes(4, heads=new)
+        self.assertEqual(passes(1), [], "четыре подряд, потом удачное чтение — счёт с нуля")
+        self.assertEqual(passes(4, heads=new), [])
+        self.assertEqual(passes(1, heads=new),
+                         ["#498: 5 проходов подряд gh pr view отдаёт голову d5d5d5d5d, а список — d4d4d4d4d; "
+                          "PR не разбирается"])
+        self.assertEqual(len(passes(3, heads=new)), 1, "одно событие на голову списка")
+        self.assertEqual(len(passes(5, listed=new, heads=newer, upd="2026-11-04T10:05:00Z")), 2, "новая голова списка")
+
+    def test_stale_count_resets_after_a_pass_that_parses_the_pr(self):
+        """SE-134: PR меняется каждый проход (основной путь, не перепроверка CI). Удачный разбор тоже обнуляет счёт."""
+        old, new, minute = "d7" * 20, "d8" * 20, iter(range(60))
+
+        def passes(count, heads=None):
+            for _ in range(count):
+                sources.run = FakeGh([_pr(499, old, upd=f"2026-11-04T10:{next(minute):02d}:00Z")],
+                                     heads={499: heads} if heads else None)
+                gh_source.poll_github(self.ctx)
+            return [t for k, t in self.kinds() if k == "pr.stale"]
+
+        passes(4, heads=new)
+        self.assertEqual(passes(1), [], "разобран: счёт с нуля")
+        self.assertEqual(passes(4, heads=new), [])
+        self.assertEqual(len(passes(1, heads=new)), 1)
 
     def test_head_without_checks_waits_for_ci(self):
         """SE-126: сразу после push у головы нет ни одной проверки. Три approve — ожидание CI, а не pr.quorum с «CI ok»."""
@@ -1006,6 +1137,8 @@ class GithubPollTest(unittest.TestCase):
         sources.run = FakeGh(old + [new])
         gh_source.poll_github(self.ctx)
         self.assertEqual(len(st["prs"]), 26)
+        self.assertIn("backfill", st, "проход с новыми для Нерва PR догон не кончает (SE-131)")
+        gh_source.poll_github(self.ctx)
         self.assertNotIn("backfill", st)
         self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], ["#26 открыт: PR 26"])
 
@@ -1034,7 +1167,9 @@ class GithubPollTest(unittest.TestCase):
         sources.run = FakeGh([_pr(1, "a" * 40), _pr(2, "b" * 40, created="2026-11-04T10:00:00Z")])
         gh_source.poll_github(self.ctx)
         self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], [], "давний PR из догона — без «открыт»")
-        self.assertNotIn("backfill", st, "список полон — догон окончен")
+        self.assertIn("backfill", st, "#2 впервые в списке: догон ждёт прохода без новых PR (SE-131)")
+        gh_source.poll_github(self.ctx)
+        self.assertNotIn("backfill", st, "список полон и без новых PR — догон окончен")
 
     def test_empty_list_on_fresh_state_keeps_the_backfill(self):
         """Контроль #393: при пустом known пустой ответ gh тоже не кончает догон (`set() >= set()` — истина)."""
@@ -1042,6 +1177,23 @@ class GithubPollTest(unittest.TestCase):
         sources.run = FakeGh([])
         gh_source.poll_github(self.ctx)
         self.assertIn("backfill", self.ctx.state["github"])
+
+    def test_partial_list_on_fresh_state_does_not_end_the_backfill(self):
+        """SE-131 N3: свежее состояние, gh отдал часть списка с кодом 0. Все известные PR в списке, и раньше догон на
+        этом кончался — давний PR из недочитанной части шёл потом «открыт». Теперь догон кончается на проходе, где
+        не было ни одного нового для Нерва PR: список подтверждён вторым чтением."""
+        self.ctx.state["github"] = {"rev": 2, "prs": {}}
+        old = [_pr(n, "a" * 40, created="2026-11-01T10:00:00Z") for n in (1, 2)]
+        sources.run = FakeGh(old[:1])
+        gh_source.poll_github(self.ctx)
+        st = self.ctx.state["github"]
+        self.assertIn("backfill", st)
+        sources.run = FakeGh(old)
+        gh_source.poll_github(self.ctx)
+        self.assertEqual([t for k, t in self.kinds() if k == "pr.new"], [], "давний PR из недочитанной части")
+        self.assertIn("backfill", st)
+        gh_source.poll_github(self.ctx)
+        self.assertNotIn("backfill", st, "проход без новых PR — догон окончен")
 
     def test_backfill_boundary_ignores_bad_dates_and_the_future(self):
         p = lambda u: {"updated": u}  # noqa: E731
@@ -1154,7 +1306,9 @@ class TapTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             wj(os.path.join(d, "mode.json"), {"phase": "night"})
             open(os.path.join(d, "journal.jsonl"), "w").close()
+            # run_products ведёт учёт прохода (SE-70: длительности, пульс) — с подменённым Ctx он не нужен
             with mock.patch.object(nerve, "STATE_DIR", d), mock.patch.object(nerve, "one_pass"), \
+                    mock.patch.object(nerve, "run_products"), \
                     mock.patch.object(nerve, "Ctx"), mock.patch.object(nerve, "wakes_on", return_value=False), \
                     mock.patch.object(nerve.time, "sleep", side_effect=Slept) as sleep:
                 with self.assertRaises(Slept):
@@ -1257,7 +1411,7 @@ class EmitTest(unittest.TestCase):
     def test_emit_refuses_unknown_role(self):
         with tempfile.TemporaryDirectory() as d:
             open(os.path.join(d, "journal.jsonl"), "w").close()
-            for target in ("tboards", "9", "backend-3", "backend,review", ","):
+            for target in ("tboards", "10", "backend-4", "backend,review", ","):
                 p = self.nerve(d, "emit", target, "никому")
                 self.assertEqual(p.returncode, 2, target)
                 self.assertIn("ничего не записано", p.stderr, target)
@@ -1269,7 +1423,7 @@ class EmitTest(unittest.TestCase):
             self.assertEqual(self.nerve(d, "tap", "backend,release", "--once").returncode, 2)
             self.assertEqual(self.nerve(d, "tap", "selftest", "--once").returncode, 0, "split/6-verify.sh")
             self.assertTrue(os.path.exists(os.path.join(d, "tap-selftest.json")))
-            for n in ("0", "9", "99"):
+            for n in ("0", "10", "99"):
                 self.assertEqual(self.nerve(d, "tap", n, "--once").returncode, 2, f"emit не запишет «{n}»")
                 self.assertFalse(os.path.exists(os.path.join(d, f"tap-{n}.json")), n)
 

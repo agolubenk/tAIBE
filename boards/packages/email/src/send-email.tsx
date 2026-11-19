@@ -14,6 +14,9 @@ import OtpEmail from "./templates/otp";
 import PasswordResetEmail, {
   type PasswordResetEmailProps,
 } from "./templates/password-reset";
+import ReauthCodeEmail, {
+  type ReauthCodeEmailProps,
+} from "./templates/reauth-code";
 import TrialReminderEmail, {
   type TrialReminderEmailProps,
 } from "./templates/trial-reminder";
@@ -145,6 +148,36 @@ export const sendNotificationEmail = async (
     return { success: true };
   } catch (error) {
     console.error("Error sending notification email", error);
+    throw error;
+  }
+};
+
+/** TB-31 R-5: the caller must know a failure — the user waits for this code. */
+export const sendReauthCodeEmail = async (
+  to: string,
+  subject: string,
+  data: ReauthCodeEmailProps,
+): Promise<EmailResult> => {
+  if (!isSmtpConfigured()) {
+    return { success: false, reason: "SMTP_NOT_CONFIGURED" };
+  }
+
+  try {
+    const emailTemplate = await render(
+      ReauthCodeEmail({ email: to, instance: instanceHost(), ...data }),
+    );
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM,
+      to,
+      subject,
+      html: emailTemplate,
+    });
+    return { success: true };
+  } catch (error) {
+    console.error(
+      "Error sending reauth code email",
+      getSmtpErrorDetails(error),
+    );
     throw error;
   }
 };

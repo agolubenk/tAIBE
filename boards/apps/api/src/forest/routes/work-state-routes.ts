@@ -7,6 +7,7 @@ import {
   z,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import { assertTaskInWorkspace } from "../task-scope";
@@ -91,7 +92,10 @@ export const workStateRoutes = apiRouter<
 >()
   .openapi(listWorkStateRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
-    return c.json(await listWorkState(workspaceId, c.get("userId")), 200);
+    return c.json(
+      maskForTokenCaller(c, await listWorkState(workspaceId, c.get("userId"))),
+      200,
+    );
   })
   .openapi(setWorkStateRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
@@ -106,12 +110,15 @@ export const workStateRoutes = apiRouter<
       branch: body.branch ?? null,
       waiting: body.waiting ?? null,
     });
-    return c.json(saved, 200);
+    return c.json(maskForTokenCaller(c, saved), 200);
   })
   .openapi(clearWorkStateRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     return c.json(
-      await clearWorkState(workspaceId, resolveForestActor(c)),
+      maskForTokenCaller(
+        c,
+        await clearWorkState(workspaceId, resolveForestActor(c)),
+      ),
       200,
     );
   });
