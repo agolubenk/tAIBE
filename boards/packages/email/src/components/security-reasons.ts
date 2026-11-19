@@ -27,3 +27,16 @@ export const passwordResetReason: Record<EmailLocale, Reason> = {
   "zh-tw": (email, instance = "Kaneo") =>
     `因為有人要求在 ${instance} 重設密碼，所以寄送至 ${email}。`,
 };
+
+export const reauthReason: Record<EmailLocale, Reason> = {
+  en: (email, instance = "Kaneo") =>
+    `Sent to ${email} because someone signed in as you on ${instance} asked to confirm it's you.`,
+  de: (email, instance = "Kaneo") =>
+    `Gesendet an ${email}, weil jemand, der bei ${instance} als du angemeldet ist, eine Bestätigung angefordert hat.`,
+  vi: (email, instance = "Kaneo") =>
+    `Đã gửi đến ${email} vì có người đang đăng nhập bằng tài khoản của bạn trên ${instance} yêu cầu xác nhận danh tính.`,
+  ja: (email, instance = "Kaneo") =>
+    `${instance} にあなたとしてサインインしている人が本人確認をリクエストしたため、${email} に送信しました。`,
+  "zh-tw": (email, instance = "Kaneo") =>
+    `因為有人以你的身分登入 ${instance} 並要求確認身分，所以寄送至 ${email}。`,
+};

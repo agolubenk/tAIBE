@@ -558,6 +558,41 @@
 				"description": "You'll come right back here to review it.",
 				"submit": "Sign in"
 			}
+		},
+		"reauth": {
+			"title": "Confirm it's you",
+			"description": "This action needs a recent sign-in. Confirm it's you to continue.",
+			"password": {
+				"label": "Password",
+				"submit": "Confirm"
+			},
+			"code": {
+				"explain": "We'll send a {{length}}-digit code to your email.",
+				"send": "Send code",
+				"sent": "The code is in your email. It works for {{minutes}} min.",
+				"label": "Code from the email",
+				"submit": "Confirm",
+				"resend": "Send a new code"
+			},
+			"usePassword": "Use your password instead",
+			"useCode": "Use a code from your email instead",
+			"lockedOut": "Too many failed tries: the password is off for up to an hour.",
+			"impersonated": "Not available while you act as another user.",
+			"noMethod": "Your account has no way to confirm it's you. Set a password: reset it by email from the sign-in page. Without email, ask an administrator.",
+			"errors": {
+				"invalidPassword": "Wrong password.",
+				"invalidCode": "Wrong code. Check it and try again.",
+				"codeExpired": "This code no longer works. Send a new code.",
+				"methodUnavailable": "This way is no longer available. Pick another one.",
+				"emailDeliveryFailed": "We couldn't send the email. Try again later.",
+				"impersonated": "Not available while you act as another user.",
+				"offline": "No connection to the server. Check your network and try again.",
+				"rateLimited": "Too many tries. Wait a minute and try again.",
+				"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+				"signedOut": "Your session has ended. Sign in again.",
+				"failed": "Couldn't confirm. Try again.",
+				"stillNotFresh": "The confirmation didn't apply. Try the action again."
+			}
 		}
 	},
 	"settings": {
@@ -886,8 +921,7 @@
 				"confirmLabel": "Type {{email}} to confirm",
 				"confirm": "Delete account",
 				"success": "Your account has been deleted",
-				"error": "Failed to delete account",
-				"sessionTooOld": "For security, sign out and sign back in before deleting your account."
+				"error": "Failed to delete account"
 			},
 			"emailHint": "You sign in with this address."
 		},
@@ -4078,6 +4112,7 @@
 				"workerOnline": "Worker online",
 				"workerOffline": "Worker offline: search by words only",
 				"counts": "{{sources}} sources · {{chunks}} chunks · {{embedded}} with vectors",
+				"indexCapped": "Meaning search holds the newest {{indexed}} of {{embedded}}: older chunks are found by words only",
 				"model": "Model {{model}} · {{calls}} of {{max}} answers today",
 				"noModel": "No model connected: answers come as sources without text"
 			},
@@ -4192,6 +4227,17 @@
 			"empty": "Nothing synced yet.",
 			"loadError": "Failed to load SSR data.",
 			"draftChanged": "Nothing was decided: the draft changed after you opened the diff. The diff is refreshed; check it and decide again.",
+			"kind": {
+				"skill": "Skill",
+				"rule": "Rule",
+				"agent": "Agent",
+				"genome": "Genome",
+				"prompt": "Prompt",
+				"nerve": "Nerve config",
+				"config": "Council config",
+				"product-prompt": "Product prompt",
+				"template": "Template"
+			},
 			"approveMatching": {
 				"summary": "Drafts: {{total}} · match a version you approved: {{matching}}",
 				"button": "Approve matching ({{matching}})",

@@ -2206,6 +2206,146 @@
 						}
 					},
 					"required": ["authorize", "expired", "signIn"]
+				},
+				"reauth": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"title": {
+							"type": "string"
+						},
+						"description": {
+							"type": "string"
+						},
+						"password": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"label": {
+									"type": "string"
+								},
+								"submit": {
+									"type": "string"
+								}
+							},
+							"required": ["label", "submit"]
+						},
+						"code": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"explain": {
+									"type": "string"
+								},
+								"send": {
+									"type": "string"
+								},
+								"sent": {
+									"type": "string"
+								},
+								"label": {
+									"type": "string"
+								},
+								"submit": {
+									"type": "string"
+								},
+								"resend": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"explain",
+								"send",
+								"sent",
+								"label",
+								"submit",
+								"resend"
+							]
+						},
+						"usePassword": {
+							"type": "string"
+						},
+						"useCode": {
+							"type": "string"
+						},
+						"lockedOut": {
+							"type": "string"
+						},
+						"impersonated": {
+							"type": "string"
+						},
+						"noMethod": {
+							"type": "string"
+						},
+						"errors": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"invalidPassword": {
+									"type": "string"
+								},
+								"invalidCode": {
+									"type": "string"
+								},
+								"codeExpired": {
+									"type": "string"
+								},
+								"methodUnavailable": {
+									"type": "string"
+								},
+								"emailDeliveryFailed": {
+									"type": "string"
+								},
+								"impersonated": {
+									"type": "string"
+								},
+								"offline": {
+									"type": "string"
+								},
+								"rateLimited": {
+									"type": "string"
+								},
+								"rateLimitedFor": {
+									"type": "string"
+								},
+								"signedOut": {
+									"type": "string"
+								},
+								"failed": {
+									"type": "string"
+								},
+								"stillNotFresh": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"invalidPassword",
+								"invalidCode",
+								"codeExpired",
+								"methodUnavailable",
+								"emailDeliveryFailed",
+								"impersonated",
+								"offline",
+								"rateLimited",
+								"rateLimitedFor",
+								"signedOut",
+								"failed",
+								"stillNotFresh"
+							]
+						}
+					},
+					"required": [
+						"title",
+						"description",
+						"password",
+						"code",
+						"usePassword",
+						"useCode",
+						"lockedOut",
+						"impersonated",
+						"noMethod",
+						"errors"
+					]
 				}
 			},
 			"required": [
@@ -2223,7 +2363,8 @@
 				"passwordReset",
 				"page",
 				"device",
-				"mcp"
+				"mcp",
+				"reauth"
 			]
 		},
 		"settings": {
@@ -3527,9 +3668,6 @@
 								},
 								"error": {
 									"type": "string"
-								},
-								"sessionTooOld": {
-									"type": "string"
 								}
 							},
 							"required": [
@@ -3541,8 +3679,7 @@
 								"confirmLabel",
 								"confirm",
 								"success",
-								"error",
-								"sessionTooOld"
+								"error"
 							]
 						},
 						"emailHint": {
@@ -16912,6 +17049,9 @@
 								"counts": {
 									"type": "string"
 								},
+								"indexCapped": {
+									"type": "string"
+								},
 								"model": {
 									"type": "string"
 								},
@@ -16923,6 +17063,7 @@
 								"workerOnline",
 								"workerOffline",
 								"counts",
+								"indexCapped",
 								"model",
 								"noModel"
 							]
@@ -17358,6 +17499,50 @@
 						"draftChanged": {
 							"type": "string"
 						},
+						"kind": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"skill": {
+									"type": "string"
+								},
+								"rule": {
+									"type": "string"
+								},
+								"agent": {
+									"type": "string"
+								},
+								"genome": {
+									"type": "string"
+								},
+								"prompt": {
+									"type": "string"
+								},
+								"nerve": {
+									"type": "string"
+								},
+								"config": {
+									"type": "string"
+								},
+								"product-prompt": {
+									"type": "string"
+								},
+								"template": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"skill",
+								"rule",
+								"agent",
+								"genome",
+								"prompt",
+								"nerve",
+								"config",
+								"product-prompt",
+								"template"
+							]
+						},
 						"approveMatching": {
 							"type": "object",
 							"additionalProperties": false,
@@ -17540,6 +17725,7 @@
 						"empty",
 						"loadError",
 						"draftChanged",
+						"kind",
 						"approveMatching"
 					]
 				}
