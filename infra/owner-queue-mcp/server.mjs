@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { FILE_ID, ITEM_ID, alreadySaved, ensureDir, extOf, fileRoots, filesState, safeDir, saveStream } from './files.mjs';
-import { briefDoc, filterDocs, fitList, getBrief, historyOut, pageList, replyText, snapshots, writeAck } from './list.mjs';
+import { briefDoc, filterDocs, fitList, getBrief, historyOut, pageList, replyText, snapshots, workBrief, writeAck } from './list.mjs';
 import { protocolText } from './protocol.mjs';
 import { createDeltaMirror } from './delta.mjs';
 import { request, timeoutsFromEnv } from './http.mjs';
@@ -178,10 +178,6 @@ async function getBriefDoc(collection, id, doc) {
   }
   return doc?.data?.kind === 'inbox' ? { ...out, untrusted: UNTRUSTED_NOTE } : out;
 }
-function workBrief(d) {
-  const { cards, ...data } = d.data;
-  return { id: d.id, version: d.version, ...data, ...(Array.isArray(cards) ? { cardsCount: cards.length } : {}) };
-}
 
 const TOOLS = [
   {
@@ -327,7 +323,7 @@ const TOOLS = [
         note: { type: 'string' },
         session: { type: 'string', description: 'своя линия из первого сообщения (например r.62u1.ab12): по ней входящее, которое вы ведёте, не перехватит другая сессия (409); для входящих обязательно, для обычных пунктов — нет' },
         takeover: { type: 'string', description: 'входящее: линия держателя, у которого вы, наследник его линии, берёте пункт' },
-        release: { type: 'boolean', description: 'входящее: отпустить свой захват, уходя без наследника; status можно не передавать' },
+        release: { type: 'boolean', description: 'входящее: отпустить свой захват или захват предка своей линии, уходя без наследника; status можно не передавать' },
       },
       required: ['id'],
     },

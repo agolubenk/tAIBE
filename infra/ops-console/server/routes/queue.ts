@@ -12,6 +12,7 @@ import { mergeInfo, mergeItem, redeploy } from '../queue/github'
 import { beatProduct, beatRelay, readRelay, relayBeatSchema } from '../queue/relay'
 import { acceptNotify, notifySchema } from '../queue/notify'
 import { throttleNotify, throttleWrite, writeCounted } from '../queue/throttle'
+import { beatTeam, readTeam, teamBeatSchema } from '../queue/team'
 import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
 import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
@@ -153,6 +154,14 @@ queueRoutes.put('/relay', requireScope('agent'), async (c) => {
   const none = actor.products !== '*' && actor.products.length === 0
   if (!product) throw beat.product || none ? apiError(404, 'Нет автопередачи для продуктов токена') : apiError(422, 'Укажите product: токен видит несколько продуктов')
   return c.json(await beatRelay(beat, product, actor.products))
+})
+
+// Состояние команды ролей Mac (queue/team.ts, OPS-82): отметка сторожа Mac раз в 10 мин и кнопка «Роли» в шапке /queue.
+queueRoutes.get('/team', requireScope('read', 'agent'), async (c) => c.json(await readTeam()))
+queueRoutes.put('/team', requireScope('agent'), async (c) => {
+  const actor = c.get('oqActor')
+  throttleWrite(actor.name)
+  return c.json(await beatTeam(await parseBody(c, teamBeatSchema), actor.name))
 })
 
 // PR репозитория консоли для графика «Сколько PR ждали мёржа» (queue/prs.ts). Репозиторий — HR: токен без HR — 404.
