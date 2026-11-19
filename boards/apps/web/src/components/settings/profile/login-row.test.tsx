@@ -95,9 +95,7 @@ describe("LoginRow (TB-31 R-1)", () => {
     ] as const) {
       type(value);
       fireEvent.blur(field());
-      expect(note()).toHaveTextContent(
-        `${P}.problems.${problem}`,
-      );
+      expect(note()).toHaveTextContent(`${P}.problems.${problem}`);
       expect(field()).toHaveAttribute("aria-invalid", "true");
       expect(saveButton()).toBeDisabled();
     }
@@ -115,9 +113,7 @@ describe("LoginRow (TB-31 R-1)", () => {
     expect(m.isUsernameAvailable).not.toHaveBeenCalled();
     fireEvent.blur(field());
     await waitFor(() =>
-      expect(note()).toHaveTextContent(
-        `${P}.problems.taken`,
-      ),
+      expect(note()).toHaveTextContent(`${P}.problems.taken`),
     );
     expect(m.isUsernameAvailable).toHaveBeenCalledTimes(1);
     expect(m.isUsernameAvailable).toHaveBeenCalledWith(
@@ -141,9 +137,7 @@ describe("LoginRow (TB-31 R-1)", () => {
     type("ivan42");
     fireEvent.blur(field());
     await waitFor(() =>
-      expect(note()).toHaveTextContent(
-        `${P}.problems.rateLimitedFor:30`,
-      ),
+      expect(note()).toHaveTextContent(`${P}.problems.rateLimitedFor:30`),
     );
   });
 
@@ -177,9 +171,7 @@ describe("LoginRow (TB-31 R-1)", () => {
     type("ivan42");
     fireEvent.click(saveButton());
     await waitFor(() =>
-      expect(note()).toHaveTextContent(
-        `${P}.problems.taken`,
-      ),
+      expect(note()).toHaveTextContent(`${P}.problems.taken`),
     );
 
     fresh.run.mockRejectedValue(new ReauthCancelledError());
