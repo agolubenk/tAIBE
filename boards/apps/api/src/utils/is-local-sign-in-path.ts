@@ -1,5 +1,8 @@
+// TB-31 R-1: the login signs in like the email does, so DISABLE_LOGIN_FORM
+// closes `/sign-in/username` too.
 const localSignInPaths = new Set([
   "/sign-in/email",
+  "/sign-in/username",
   "/request-password-reset",
   "/reset-password",
   "/sign-in/magic-link",
