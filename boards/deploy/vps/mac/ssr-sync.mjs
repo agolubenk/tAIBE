@@ -56,6 +56,20 @@ function headCommit(repoRoot, git = "git") {
     .trim();
 }
 
+// TB-98: the sync reads HEAD, not the upstream; say so when a checkout lags.
+function commitsBehindUpstream(repoRoot, git = "git") {
+  try {
+    const count = execFileSync(
+      git,
+      ["rev-list", "--count", "HEAD..@{upstream}"],
+      { cwd: repoRoot, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    return Number.parseInt(count.toString("utf8").trim(), 10) || 0;
+  } catch {
+    return 0; // no upstream: nothing to compare with
+  }
+}
+
 function fileAtHead(repoRoot, path, git = "git") {
   return execFileSync(git, ["show", `HEAD:${path}`], {
     cwd: repoRoot,
@@ -111,6 +125,19 @@ async function main() {
   }
   const paths = [...sources.keys()].sort();
 
+  // TB-98: a version is signed with the HEAD of the checkout its file came
+  // from — the product home's files with the home's commit, not the host's.
+  const commits = new Map([[repoRoot, commitSha]]);
+  for (const root of roots) commits.set(root, headCommit(root, config.git));
+  for (const root of commits.keys()) {
+    const behind = commitsBehindUpstream(root, config.git);
+    if (behind > 0) {
+      stamp(
+        `warning: ${root} is behind its upstream by ${behind} commit(s); the sync reads its HEAD`,
+      );
+    }
+  }
+
   const files = [];
   for (const path of paths) {
     const [root, rel] = sources.get(path);
@@ -123,6 +150,8 @@ async function main() {
       path,
       sha256: sha256(content),
       content: content.toString("utf8"),
+      // the host's files carry the sync's commitSha, a home's file its own
+      commitSha: root === repoRoot ? undefined : commits.get(root),
     });
   }
 
@@ -136,10 +165,8 @@ async function main() {
   );
   const payload = {
     commitSha,
-    files: files.map((file) =>
-      known.has(file.sha256)
-        ? { path: file.path, sha256: file.sha256 }
-        : { path: file.path, sha256: file.sha256, content: file.content },
+    files: files.map(({ content, ...file }) =>
+      known.has(file.sha256) ? file : { ...file, content },
     ),
   };
 

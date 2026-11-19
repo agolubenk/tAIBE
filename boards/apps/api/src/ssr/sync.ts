@@ -11,6 +11,7 @@ import { entityOfPath, isCorpusPath } from "./corpus";
 import { knownShas } from "./known-shas";
 import { replaceOpenDraft } from "./replace-open-draft";
 import { scanSecrets } from "./secret-scan";
+import { versionCommit } from "./version-commit";
 
 const sha256 = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
@@ -19,7 +20,12 @@ const sha256 = (text: string) =>
 // 65535 per statement.
 const PUSH_STATE_CHUNK = 1000;
 
-export type SyncFile = { path: string; sha256: string; content?: string };
+export type SyncFile = {
+  path: string;
+  sha256: string;
+  content?: string;
+  commitSha?: string;
+};
 
 export type SyncResult = {
   commitSha: string;
@@ -225,6 +231,7 @@ export async function syncCorpus(
         }))
         .sort((a, b) => a.path.localeCompare(b.path));
       const blobSha = snapshotSha(snapshot);
+      const commitSha = versionCommit(group.files, input.commitSha);
 
       const existing = byPath.get(path);
       if (!existing) {
@@ -248,7 +255,7 @@ export async function syncCorpus(
             files: snapshot,
             status: "draft",
             origin: "sync",
-            commitSha: input.commitSha,
+            commitSha,
             createdBy: actor,
             message: "First draft — waiting for owner approval (Q-015)",
           })
@@ -272,7 +279,7 @@ export async function syncCorpus(
           const replaced = await replaceOpenDraft(tx, current.id, {
             blobSha,
             files: snapshot,
-            commitSha: input.commitSha,
+            commitSha,
             createdBy: actor,
           });
           if (replaced) {
@@ -314,7 +321,7 @@ export async function syncCorpus(
               files: snapshot,
               status: "draft",
               origin: "sync",
-              commitSha: input.commitSha,
+              commitSha,
               createdBy: actor,
               message: "Changed draft — waiting for owner approval (Q-015)",
             })
@@ -342,9 +349,9 @@ export async function syncCorpus(
               files: snapshot,
               status: "latest",
               origin: "sync",
-              commitSha: input.commitSha,
+              commitSha,
               createdBy: actor,
-              message: `Sync ${input.commitSha.slice(0, 10)}`,
+              message: `Sync ${commitSha.slice(0, 10)}`,
             })
             .returning({ id: ssrVersionTable.id });
           if (!version) throw new Error("version insert returned nothing");
