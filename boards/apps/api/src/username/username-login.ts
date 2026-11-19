@@ -53,7 +53,9 @@ type RequestContext = {
  *   a pair that differs would show one login and sign in with another.
  * - `/sign-up/email` with both fields: the same pair. With one field the
  *   plugin makes the other from it.
- * Server-side `auth.api.*` calls carry no request and pass.
+ * - `/admin/*` does not set a login: the plugin checks neither the rule nor
+ *   the pair there. A person sets their own login in the profile.
+ * Server-side `auth.api.*` calls carry no request and pass the pair check.
  */
 export async function assertUsernameRequest(
   ctx: RequestContext,
@@ -66,6 +68,14 @@ export async function assertUsernameRequest(
     throw new APIError("UNAUTHORIZED", {
       code: "UNAUTHORIZED",
       message: "Sign in to check a login.",
+    });
+  }
+  if (ctx.path.startsWith("/admin/")) {
+    const data = (ctx.body as { data?: unknown } | undefined)?.data;
+    if (!setsLogin(data)) return;
+    throw new APIError("BAD_REQUEST", {
+      code: "LOGIN_SET_BY_PERSON",
+      message: "A person sets their own login in the profile.",
     });
   }
   if (ctx.path !== "/update-user" && ctx.path !== "/sign-up/email") return;

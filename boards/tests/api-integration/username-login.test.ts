@@ -141,6 +141,24 @@ describe("TB-31 R-1: login", () => {
     });
   });
 
+  it("does not let an admin set a login: no rule and no pair there", async () => {
+    const { app } = createApp();
+    const admin = await person(app, "admin");
+    const ivan = await person(app);
+    await expectError(
+      await post(app, "/admin/update-user", admin.cookies, {
+        userId: ivan.userId,
+        data: { username: "root", displayUsername: "ivan43" },
+      }),
+      400,
+      "LOGIN_SET_BY_PERSON",
+    );
+    expect(await storedLogin(ivan.userId)).toEqual({
+      username: null,
+      displayUsername: null,
+    });
+  });
+
   it("frees the old login at once", async () => {
     const { app } = createApp();
     const ivan = await person(app);
