@@ -123,8 +123,10 @@ export function forecast(
   });
 }
 
-// The eta field to write: a new forecast, a move of 2 days or more, or none
-// (null removes it). {} — keep.
+// The eta field to write: a new forecast, a move of 2 days or more, a move
+// across planEnd, or none (null removes it). {} — keep. Across planEnd even
+// 1 day writes: the /queue «не успевает» label reads eta, and the due
+// decision reads the fresh lag (TB-128).
 export function etaPatch(
   data: Record<string, unknown>,
   eta: string | null,
@@ -132,5 +134,12 @@ export function etaPatch(
   const current = typeof data.eta === "string" ? data.eta : null;
   if (eta === null) return current === null ? {} : { eta: null };
   if (current === null) return { eta };
-  return Math.abs(daysBetween(current, eta)) >= ETA_STEP_DAYS ? { eta } : {};
+  const planEnd =
+    typeof data.planEnd === "string" ? data.planEnd.slice(0, 10) : null;
+  const late = (day: string) =>
+    planEnd !== null && daysBetween(planEnd, day) > 0;
+  return Math.abs(daysBetween(current, eta)) >= ETA_STEP_DAYS ||
+    late(current) !== late(eta)
+    ? { eta }
+    : {};
 }
