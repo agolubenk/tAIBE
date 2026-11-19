@@ -435,6 +435,22 @@ userId, 0))`. Затем — локи адресов `tb-email:<адрес>` (п
   действия нет; правило — для будущих).
 - Имя `rpID` доходит до туннеля только через `/etc/hosts` (`deploy/vps/README.md:13-14`). У телефона его нет, DNS в
   туннеле пока нет (`README.md:106`). Ключ на телефоне заработает вместе с DNS в туннеле — отдельная карточка.
+- **API среза Б (ветка `feature/tb31-slice-b3`, 20.11).** Контракт с web — `packages/permissions/src/passkey.ts`.
+  - Пакет `@better-auth/passkey` 1.7.15 (Q-906). `rpID` — `PASSKEY_RP_ID`, без него — имя хоста `KANEO_CLIENT_URL`
+    (`apps/api/src/passkey/passkey-options.ts`).
+  - UV: на регистрации и на входе без флага UV — `USER_VERIFICATION_REQUIRED` (400 и 401). Предел 10 ключей —
+    `PASSKEY_LIMIT_REACHED`. Второй сеанс при регистрации — `PASSKEY_SESSION_NOT_ALLOWED`.
+  - Способ `passkey` в окне свежего входа — если у пользователя есть ключ и вход формой не выключен. После 10 неудач за
+    час способа нет, как и пароля.
+  - Лимитер в минуту по IP: options входа — 20, проверка входа — 10, `inspect` — 10, `confirm` — 5
+    (`apps/api/src/utils/auth-rate-limit.ts`).
+  - «Это не я»: `POST /api/auth/tb/passkey-alert/inspect` и `…/confirm`, тело `{token}`. Неверная, использованная и
+    просроченная ссылка дают одинаковый ответ: 400 `PASSKEY_ALERT_INVALID`. Строка ссылки читается `FOR UPDATE`.
+    Удаление ключа, ключей API, сеансов и строки идёт одной транзакцией. Сокеты закрываются у пользователя и у агентов,
+    чьи ключи удалены. Письмо не ушло — ключ добавлен, ссылка записана.
+  - Приёмка — api-integration `passkey.test.ts`, `passkey-alert.test.ts`, `auth-rate-limit.test.ts` (R-6).
+  - Web — отдельный PR: клиент ключей через `import()`, кнопка на входе, секция «Ключи входа»,
+    страница `/account/passkey-alert`.
 
 ### R-7. Агенты и ключи API — сделано
 
