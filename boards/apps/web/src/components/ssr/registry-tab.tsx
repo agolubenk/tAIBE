@@ -205,6 +205,23 @@ function VersionRow({
 
 const entityAnchor = (entityId: string) => `ssr-entity-${entityId}`;
 
+// The kinds of apps/api/src/ssr/corpus.ts (TB-163); an unknown kind from a
+// newer server shows as it comes.
+const SSR_KINDS = [
+  "skill",
+  "rule",
+  "agent",
+  "genome",
+  "prompt",
+  "nerve",
+  "config",
+  "product-prompt",
+  "template",
+] as const;
+type SsrKind = (typeof SSR_KINDS)[number];
+const isSsrKind = (kind: string): kind is SsrKind =>
+  (SSR_KINDS as readonly string[]).includes(kind);
+
 function locateEntity(entityId: string) {
   const section = document.getElementById(entityAnchor(entityId));
   section?.scrollIntoView({ block: "start" });
@@ -279,8 +296,13 @@ export function RegistryTab({ workspaceId }: { workspaceId: string }) {
           <header className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3">
             <div className="flex flex-wrap items-baseline gap-2">
               <span className="font-medium">{entity.name}</span>
+              <span className="text-muted-foreground text-xs">
+                {isSsrKind(entity.kind)
+                  ? t(`workspace:ssr.kind.${entity.kind}`)
+                  : entity.kind}
+              </span>
               <span className="text-muted-foreground font-mono text-xs">
-                {entity.kind} · {entity.path}
+                {entity.path}
               </span>
             </div>
             <span className="text-muted-foreground text-xs">

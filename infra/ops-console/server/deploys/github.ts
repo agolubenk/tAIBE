@@ -41,8 +41,10 @@ const PROD_BRANCH = 'main'
 const manual = (run: z.infer<typeof runSchema>) => run.event === 'workflow_dispatch'
 /** Заголовок ручного запуска в таблице deploys: по нему колонка «Связь» не связывает такой деплой по коммиту. */
 export const MANUAL_RUN_TITLE = 'ручной запуск'
+/** Заголовок коммита в таблице deploys обрезан до этой длины: колонка «Связь» сравнивает с ним subject пункта мёржа. */
+export const DEPLOY_TITLE_MAX = 250
 const commitTitle = (run: z.infer<typeof runSchema>) =>
-  (manual(run) ? MANUAL_RUN_TITLE : run.head_commit?.message.split('\n')[0] || run.display_title).slice(0, 250)
+  (manual(run) ? MANUAL_RUN_TITLE : run.head_commit?.message.split('\n')[0] || run.display_title).slice(0, DEPLOY_TITLE_MAX)
 const commitLine = (run: z.infer<typeof runSchema>) =>
   manual(run) ? 'ручной запуск (Run workflow) — коммит в логе запуска' : `${run.head_sha.slice(0, 7)} «${commitTitle(run)}»`
 const runsSchema = z.object({ workflow_runs: z.array(runSchema).default([]) })

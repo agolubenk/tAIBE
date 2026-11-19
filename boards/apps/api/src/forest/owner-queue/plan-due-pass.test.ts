@@ -260,13 +260,13 @@ describe("TB-112: forecast and one due decision", () => {
     expect(outcome).toMatchObject({ skipped: 0, left: 0, dailyDone: true });
     expect(queue.data("work", "w-taibe-a").eta).toBe("2026-11-19");
     expect(queue.data("work", "w-taibe-b").eta).toBe("2026-11-21");
-    expect(queue.data("items", "d-taibe-due-20261113")).toMatchObject({
+    expect(queue.data("items", "taibe-d-due-20261113")).toMatchObject({
       kind: "decision",
       rows: ["w-taibe-a"],
     });
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       kind: "due",
-      item: "d-taibe-due-20261113",
+      item: "taibe-d-due-20261113",
       applied: false,
       rows: [
         {
@@ -286,7 +286,7 @@ describe("TB-112: forecast and one due decision", () => {
     await daily(queue, DAY1);
     await daily(queue, DAY2);
     expect(queue.writes).toEqual([]);
-    expect(queue.doc("items", "d-taibe-due-20261114")).toBeUndefined();
+    expect(queue.doc("items", "taibe-d-due-20261114")).toBeUndefined();
   });
 
   it("asks again on a lag +2 and archives the unanswered decision", async () => {
@@ -295,11 +295,11 @@ describe("TB-112: forecast and one due decision", () => {
     await daily(queue, DAY1);
     plan(queue, keys(7));
     await daily(queue, DAY2);
-    expect(queue.data("items", "d-taibe-due-20261114").rows).toEqual([
+    expect(queue.data("items", "taibe-d-due-20261114").rows).toEqual([
       "w-taibe-a",
     ]);
-    expect(queue.data("items", "d-taibe-due-20261113").archived).toBe(true);
-    expect(queue.data("work", "due-taibe").item).toBe("d-taibe-due-20261114");
+    expect(queue.data("items", "taibe-d-due-20261113").archived).toBe(true);
+    expect(queue.data("work", "taibe-due").item).toBe("taibe-d-due-20261114");
   });
 
   it("asks nothing and drops eta with «мало данных»", async () => {
@@ -311,8 +311,8 @@ describe("TB-112: forecast and one due decision", () => {
     });
     await daily(queue, DAY1, undefined, 4);
     expect(queue.data("work", "w-taibe-a").eta).toBeUndefined();
-    expect(queue.doc("items", "d-taibe-due-20261113")).toBeUndefined();
-    expect(queue.doc("work", "due-taibe")).toBeUndefined();
+    expect(queue.doc("items", "taibe-d-due-20261113")).toBeUndefined();
+    expect(queue.doc("work", "taibe-due")).toBeUndefined();
   });
 });
 
@@ -320,18 +320,18 @@ describe("TB-125: a doc the queue refuses (422) does not stop the run", () => {
   it("a refused decision item waits for tomorrow; eta is written, the day counts done", async () => {
     const queue = new MemQueue();
     plan(queue);
-    queue.reject("items", "d-taibe-due-20261113");
+    queue.reject("items", "taibe-d-due-20261113");
     const outcome = await daily(queue, DAY1);
     expect(outcome).toMatchObject({ refused: 1, left: 0, dailyDone: true });
     expect(queue.data("work", "w-taibe-a").eta).toBe("2026-11-19");
-    expect(queue.doc("items", "d-taibe-due-20261113")).toBeUndefined();
+    expect(queue.doc("items", "taibe-d-due-20261113")).toBeUndefined();
     // No state points to an item that is not there.
-    expect(queue.doc("work", "due-taibe")).toBeUndefined();
+    expect(queue.doc("work", "taibe-due")).toBeUndefined();
     // The next day asks with its own item.
-    queue.allow("items", "d-taibe-due-20261113");
+    queue.allow("items", "taibe-d-due-20261113");
     await daily(queue, DAY2);
-    expect(queue.data("work", "due-taibe")).toMatchObject({
-      item: "d-taibe-due-20261114",
+    expect(queue.data("work", "taibe-due")).toMatchObject({
+      item: "taibe-d-due-20261114",
       applied: false,
     });
   });
@@ -339,11 +339,11 @@ describe("TB-125: a doc the queue refuses (422) does not stop the run", () => {
   it("a refused state archives the new item: no answer is lost to it", async () => {
     const queue = new MemQueue();
     plan(queue);
-    queue.reject("work", "due-taibe");
+    queue.reject("work", "taibe-due");
     const outcome = await daily(queue, DAY1);
     expect(outcome).toMatchObject({ refused: 1, dailyDone: true });
-    expect(queue.data("items", "d-taibe-due-20261113").archived).toBe(true);
-    expect(queue.doc("work", "due-taibe")).toBeUndefined();
+    expect(queue.data("items", "taibe-d-due-20261113").archived).toBe(true);
+    expect(queue.doc("work", "taibe-due")).toBeUndefined();
   });
 
   it("a refused eta row is skipped; the other rows and the decision are written", async () => {
@@ -354,8 +354,8 @@ describe("TB-125: a doc the queue refuses (422) does not stop the run", () => {
     expect(outcome).toMatchObject({ refused: 1, dailyDone: true });
     expect(queue.data("work", "w-taibe-a").eta).toBe("2026-11-19");
     expect(queue.data("work", "w-taibe-b").eta).toBeUndefined();
-    expect(queue.data("work", "due-taibe")).toMatchObject({
-      item: "d-taibe-due-20261113",
+    expect(queue.data("work", "taibe-due")).toMatchObject({
+      item: "taibe-d-due-20261113",
     });
   });
 });
@@ -374,7 +374,7 @@ describe("TB-112: the owner's answer", () => {
       });
     }
     await daily(queue, DAY1);
-    queue.answer("d-taibe-due-20261113", choice);
+    queue.answer("taibe-d-due-20261113", choice);
     return queue;
   }
   // Every 5 minutes, not daily.
@@ -395,11 +395,11 @@ describe("TB-112: the owner's answer", () => {
     expect(queue.data("work", "w-taibe-a")).toMatchObject({
       planEnd: "2026-11-19",
       basePlanEnd: "2026-11-14",
-      dueRefs: ["d-taibe-due-20261113"],
+      dueRefs: ["taibe-d-due-20261113"],
     });
     expect(queue.data("work", "w-taibe-a")).not.toHaveProperty("dueRef");
-    expect(queue.data("items", "d-taibe-due-20261113").archived).toBe(true);
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("items", "taibe-d-due-20261113").archived).toBe(true);
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       applied: true,
       choice: "move",
     });
@@ -423,7 +423,7 @@ describe("TB-112: the owner's answer", () => {
       "TB-6",
     ]);
     expect(queue.data("work", "w-taibe-a").planEnd).toBe("2026-11-14");
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       applied: true,
       choice: "keep",
     });
@@ -438,11 +438,11 @@ describe("TB-112: the owner's answer", () => {
     expect(queue.data("work", "w-taibe-a").cards).toHaveLength(6);
     const note =
       "В строки бэклога ушло карточек: 0. Нет строки бэклога в направлении taibe-boards — хвосты остались в строках.";
-    expect(queue.data("checks", "d-taibe-due-20261113")).toMatchObject({
+    expect(queue.data("checks", "taibe-d-due-20261113")).toMatchObject({
       agentStatus: "done",
       agentNote: note,
     });
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       applied: true,
       note,
     });
@@ -453,15 +453,15 @@ describe("TB-112: the owner's answer", () => {
     const before = structuredClone(queue.data("work", "w-taibe-a"));
     await run(queue);
     expect(queue.data("work", "w-taibe-a")).toEqual(before);
-    expect(queue.data("items", "d-taibe-due-20261113").archived).toBe(true);
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("items", "taibe-d-due-20261113").archived).toBe(true);
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       applied: true,
       choice: "red",
     });
     // The same late rows next day: «оставить красными» is not asked again.
     queue.writes.length = 0;
     await daily(queue, DAY2);
-    expect(queue.doc("items", "d-taibe-due-20261114")).toBeUndefined();
+    expect(queue.doc("items", "taibe-d-due-20261114")).toBeUndefined();
   });
 
   it("an unanswered decision changes nothing", async () => {
@@ -492,7 +492,7 @@ describe("TB-112: the answer follows the item the owner read", () => {
     await daily(queue, DAY1);
     return queue;
   }
-  const ITEM = "d-taibe-due-20261113";
+  const ITEM = "taibe-d-due-20261113";
   const run = (queue: MemQueue, now = DAY2, cfg = config) =>
     planPass(
       {
@@ -509,9 +509,9 @@ describe("TB-112: the answer follows the item the owner read", () => {
     queue: MemQueue,
     edit: (row: Record<string, unknown>) => void,
   ) => {
-    const state = structuredClone(queue.data("work", "due-taibe"));
+    const state = structuredClone(queue.data("work", "taibe-due"));
     for (const row of state.rows as Record<string, unknown>[]) edit(row);
-    queue.set("work", "due-taibe", state);
+    queue.set("work", "taibe-due", state);
   };
 
   it("puts the move date and the cut cards into the item", async () => {
@@ -561,8 +561,8 @@ describe("TB-112: the answer follows the item the owner read", () => {
     queue.answer(ITEM, "move");
     await run(queue);
     // The agent turns the state back to «not applied» on the same item.
-    queue.set("work", "due-taibe", {
-      ...queue.data("work", "due-taibe"),
+    queue.set("work", "taibe-due", {
+      ...queue.data("work", "taibe-due"),
       applied: false,
     });
     queue.set("work", "w-taibe-a", {
@@ -572,8 +572,8 @@ describe("TB-112: the answer follows the item the owner read", () => {
     queue.writes.length = 0;
     await run(queue, DAY3);
     expect(queue.data("work", "w-taibe-a").planEnd).toBe("2026-11-14");
-    expect(queue.writes).toEqual(["work/due-taibe"]);
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.writes).toEqual(["work/taibe-due"]);
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       applied: true,
       note: `решение ${ITEM} в архиве или не найдено — не применяю`,
     });
@@ -589,12 +589,12 @@ describe("TB-112: the answer follows the item the owner read", () => {
     await run(queue);
     expect(queue.data("work", "w-taibe-a").planEnd).toBe("2026-11-14");
     expect(queue.data("items", ITEM).archived).toBe(true);
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       applied: true,
       rows: [],
     });
     await daily(queue, DAY2);
-    expect(queue.data("items", "d-taibe-due-20261114").rows).toEqual([
+    expect(queue.data("items", "taibe-d-due-20261114").rows).toEqual([
       "w-taibe-a",
     ]);
   });
@@ -606,11 +606,11 @@ describe("TB-112: the answer follows the item the owner read", () => {
     await run(queue);
     expect(cardsOf(queue, "w-taibe-a")).toHaveLength(6);
     expect(cardsOf(queue, "w-taibe-tb-backlog")).toEqual(["TB-99"]);
-    expect(queue.data("work", "due-taibe").applied).toBe(false);
+    expect(queue.data("work", "taibe-due").applied).toBe(false);
     await run(queue);
     expect(cardsOf(queue, "w-taibe-a")).toEqual(["TB-1"]);
     expect(cardsOf(queue, "w-taibe-tb-backlog")).toHaveLength(6);
-    expect(queue.data("work", "due-taibe").applied).toBe(true);
+    expect(queue.data("work", "taibe-due").applied).toBe(true);
   });
 
   it("keep never puts a card into another product's backlog row", async () => {
@@ -641,10 +641,10 @@ describe("TB-112: the answer follows the item the owner read", () => {
     queue.race("work", "w-taibe-a");
     await run(queue);
     expect(queue.data("work", "w-taibe-a").planEnd).toBe("2026-11-14");
-    expect(queue.data("work", "due-taibe").applied).toBe(false);
+    expect(queue.data("work", "taibe-due").applied).toBe(false);
     await run(queue);
     expect(queue.data("work", "w-taibe-a").planEnd).toBe("2026-11-19");
-    expect(queue.data("work", "due-taibe").applied).toBe(true);
+    expect(queue.data("work", "taibe-due").applied).toBe(true);
   });
 
   it("move: a move the queue refuses is told to the owner and the answer closes", async () => {
@@ -657,20 +657,20 @@ describe("TB-112: the answer follows the item the owner read", () => {
       "Перенесено строк: 0. Очередь не приняла перенос: «Строка A» — срок остался прежним.",
     );
     expect(queue.data("items", ITEM).archived).toBe(true);
-    expect(queue.data("work", "due-taibe").applied).toBe(true);
+    expect(queue.data("work", "taibe-due").applied).toBe(true);
   });
 
   it("the item written but not the state: the next run points the state to it", async () => {
     const queue = new MemQueue();
     plan(queue);
-    queue.race("work", "due-taibe");
+    queue.race("work", "taibe-due");
     const first = await daily(queue, DAY1);
     expect(first.dailyDone).toBe(false);
     expect(queue.doc("items", ITEM)).toBeDefined();
-    expect(queue.doc("work", "due-taibe")).toBeUndefined();
+    expect(queue.doc("work", "taibe-due")).toBeUndefined();
     const second = await daily(queue, DAY1);
     expect(second.dailyDone).toBe(true);
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       item: ITEM,
       applied: false,
       rows: [{ id: "w-taibe-a", eta: "2026-11-19" }],
@@ -680,17 +680,17 @@ describe("TB-112: the answer follows the item the owner read", () => {
   it("a 429 between the item and the state: the day runs again and points the state to it", async () => {
     const queue = new MemQueue();
     plan(queue);
-    queue.throttle("work", "due-taibe");
+    queue.throttle("work", "taibe-due");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const first = await daily(queue, DAY1);
     warn.mockRestore();
     expect(first).toMatchObject({ dailyDone: false, refused: 0 });
     expect(first.left).toBeGreaterThan(0);
     expect(queue.data("items", ITEM).archived).toBeUndefined();
-    expect(queue.doc("work", "due-taibe")).toBeUndefined();
+    expect(queue.doc("work", "taibe-due")).toBeUndefined();
     const second = await daily(queue, DAY1);
     expect(second.dailyDone).toBe(true);
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       item: ITEM,
       rows: [{ id: "w-taibe-a", eta: "2026-11-19" }],
     });
@@ -703,9 +703,9 @@ describe("TB-112: the answer follows the item the owner read", () => {
     queue.writes.length = 0;
     await daily(queue, DAY2);
     await daily(queue, DAY3);
-    expect(queue.doc("items", "d-taibe-due-20261114")).toBeUndefined();
-    expect(queue.doc("items", "d-taibe-due-20261115")).toBeUndefined();
-    expect(queue.data("work", "due-taibe").applied).toBe(true);
+    expect(queue.doc("items", "taibe-d-due-20261114")).toBeUndefined();
+    expect(queue.doc("items", "taibe-d-due-20261115")).toBeUndefined();
+    expect(queue.data("work", "taibe-due").applied).toBe(true);
     expect(queue.data("work", "w-taibe-a").planEnd).toBe("2026-11-19");
   });
 
@@ -722,7 +722,7 @@ describe("TB-112: the answer follows the item the owner read", () => {
     // As an applied answer: the item is archived (a second answer there would
     // be lost), the state closes with no rows.
     expect(queue.data("items", ITEM).archived).toBe(true);
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       applied: true,
       rows: [],
     });
@@ -733,11 +733,11 @@ describe("TB-112: the answer follows the item the owner read", () => {
     // The next daily run asks again from the actual plan.
     queue.allow("work", "w-taibe-tb-backlog");
     await daily(queue, DAY3);
-    expect(queue.data("items", "d-taibe-due-20261115")).toMatchObject({
+    expect(queue.data("items", "taibe-d-due-20261115")).toMatchObject({
       rows: ["w-taibe-a"],
     });
-    expect(queue.data("work", "due-taibe")).toMatchObject({
-      item: "d-taibe-due-20261115",
+    expect(queue.data("work", "taibe-due")).toMatchObject({
+      item: "taibe-d-due-20261115",
       applied: false,
     });
   });
@@ -755,7 +755,7 @@ describe("TB-112: the answer follows the item the owner read", () => {
       "До отказа уже изменены строки: «Бэклог»; остальные — нет.",
     );
     expect(note).not.toContain("не менялись");
-    expect(queue.data("work", "due-taibe")).toMatchObject({
+    expect(queue.data("work", "taibe-due")).toMatchObject({
       applied: true,
       rows: [],
     });
@@ -787,7 +787,7 @@ describe("TB-112: the answer follows the item the owner read", () => {
     const first = await daily(queue, DAY2);
     expect(first.dailyDone).toBe(false);
     expect(queue.data("items", ITEM).archived).toBeUndefined();
-    expect(queue.doc("items", "d-taibe-due-20261114")).toBeUndefined();
+    expect(queue.doc("items", "taibe-d-due-20261114")).toBeUndefined();
     // The next run applies it first.
     await daily(queue, DAY2);
     expect(queue.data("work", "w-taibe-a")).toMatchObject({
