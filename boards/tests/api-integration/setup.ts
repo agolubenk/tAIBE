@@ -81,6 +81,10 @@ process.env.CUSTOM_OAUTH_DISCOVERY_URL = "";
 process.env.CUSTOM_OAUTH_AUTO_LOGIN = "";
 process.env.CUSTOM_OAUTH_NAME = "";
 process.env.DEVICE_AUTH_CLIENT_IDS = "kaneo-cli";
+// The sign-in limiter is on by default (TB-31 R-8) and every request here has
+// the same test IP. Suites sign in many times; auth-rate-limit.test.ts turns
+// it on for itself.
+process.env.DISABLE_AUTH_RATE_LIMIT = "true";
 
 afterEach(() => {
   vi.restoreAllMocks();

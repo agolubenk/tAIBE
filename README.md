@@ -114,7 +114,8 @@ Third-party foundations:
   into the product, it is named here («what was taken → where»), in the docs of the part it went into and in its
   review under [`docs/integrations/`](docs/integrations/README.md). A solution is taken only if it strengthens and
   complements tAIBE — measured before and after — never to replace a part or leave it at the same level. Under
-  review: oh-my-openagent, cognee, agno, warp, ai-memory, i-have-adhd, codebase-memory-mcp, openproject. Taken so far:
+  review: oh-my-openagent, cognee, agno, warp, ai-memory, i-have-adhd, codebase-memory-mcp, openproject; review tools of
+  stage 2 (TB-167): abide, react-doctor, checkov — react-doctor is credited here when its CI step lands (S23-2). Taken so far:
   **[OpenProject](https://github.com/opf/openproject)** (GPLv3) — the idea of validating the relation graph on write
   (no subtask cycles) → `boards/apps/api/src/task-relation/` (idea only, no code);
   **[i-have-adhd](https://github.com/ayghri/i-have-adhd)** (MIT) — blind pairwise A/B judging of skill versions →

@@ -3,7 +3,8 @@
 # emulation). Runs the real compose.yml as project tb-selftest on an empty
 # database, so migrations run from scratch, unlike the dev database.
 # Checks: health, migrations = journal, admin and products seed, TLS proxy with a
-# self-signed certificate, a backup dump and its restore. Cleans up after itself.
+# self-signed certificate, a backup dump and its restore, the memory sampler.
+# Cleans up after itself.
 # Usage: deploy/vps/selftest.sh <image-tag> <scratch-dir>
 set -euo pipefail
 
@@ -70,6 +71,11 @@ done
   fail "app is $status"
 }
 log "app healthy"
+
+# TB-124: the memory sampler reads this project's containers and their limits.
+mem="$(TB_COMPOSE_PROJECT="$project" TB_MEM_STATS_DIR="$root/mem-stats" bash "$vps/mem-stats.sh" sample 0 2>/dev/null)"
+grep -qE $'\tapp\t[0-9]+\.[0-9]\t1024$' "$mem" || fail "mem-stats: no app row with the 1g limit in $mem"
+log "mem-stats: $(cut -f2 "$mem" | sort | tr '\n' ' ')"
 
 journal="$(node -e "process.stdout.write(String(require(process.argv[1]).entries.length))" \
   "$app/apps/api/drizzle/meta/_journal.json")"
