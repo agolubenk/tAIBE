@@ -267,6 +267,8 @@ def cmd_run(args):
             line = steps.audit_line(report['metrics'].get('context_audit'), report['date'])
             if line and not args.dry_run and not args.no_card:  # d-f63b-economy-0711: the owner sees the measure
                 report['audit_card'] = steps.post_card(line)
+            if not args.dry_run and not args.no_card:  # GL-1 plan v1.1: the day's spend line to the coordinator
+                report['spend_nerve'] = steps.spend_nerve(repo, report['metrics'].get('spend'))
         else:
             head = g.fetch(trepo, cfg['base'])
         old = state.get(target) or {}

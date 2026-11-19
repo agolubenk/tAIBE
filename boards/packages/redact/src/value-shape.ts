@@ -17,8 +17,11 @@ export const DROPS_VALUE = /[(){}[\];,<>\\]|[^\x21-\x7e]/;
 //   type name in any context, not only before `,`, `;` or `)` (TB-193):
 //   with the context rule a locale label and a type line became CI errors;
 // - `looks_like_password` (password and secret names) is
-//   `looksLikePassphrase` below with no type name rule (TB-195). A
-//   letters-only value of 20+ characters needs entropy 3.0, others 3.5.
+//   `looksLikePassphrase` below (TB-195; the type context rule since
+//   TB-200). A letters-only value of 20+ characters needs entropy 3.0,
+//   others 3.5;
+// - both also drop Laravel validation rules
+//   ('password' => 'required|string|min:8', TB-200); here they are masked.
 //
 // A type name is capitalized words with no digit. Since the value ends at `,`
 // and `;` (#283 B2), the comma no longer drops `apiKey: ApiKeyUsageRow,`.

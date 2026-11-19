@@ -11,6 +11,7 @@ import {
 } from "../../apps/api/src/ws";
 import db, { getDatabase, schema } from "../../apps/api/src/database";
 import { createApp } from "../../apps/api/src/index";
+import { markSessionFresh } from "../../apps/api/src/reauth/store";
 import deleteAccountData from "../../apps/api/src/user/controllers/delete-account-data";
 import { mockAuthenticatedSession } from "./helpers/auth";
 import { resetTestDatabase } from "./helpers/database";
@@ -504,12 +505,15 @@ it("revokes an administrator's implicit workspace and user sockets after account
     })
     .returning();
   const token = randomUUID();
+  const sessionId = randomUUID();
   await db.insert(schema.sessionTable).values({
-    id: randomUUID(),
+    id: sessionId,
     userId: admin.id,
     token,
     expiresAt: new Date(Date.now() + 60_000),
   });
+  // TB-31 R-5: delete-user needs a fresh session, Bearer or cookie.
+  await markSessionFresh(sessionId, admin.id);
   const projectWs = { send: vi.fn(), close: vi.fn() };
   const userWs = { send: vi.fn(), close: vi.fn() };
   const conn = addConnection(

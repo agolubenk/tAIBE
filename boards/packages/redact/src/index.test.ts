@@ -840,9 +840,69 @@ describe("@kaneo/redact", () => {
       expect(result.text).toBe("[REDACTED:pem]\nnext\n[REDACTED:pem]");
     });
 
-    it("leaves a BEGIN line with no END line as is", () => {
-      const lone = `${begin}\nMIIEvwIBADANBgkq`;
-      expect(redact(lone).text).toBe(lone);
+    it("masks a BEGIN line with no END line up to the first blank line (TB-203 N4)", () => {
+      const cut = `${begin}\nMIIEvwIBADANBgkq\nAbCd12`;
+      expect(redact(`key:\n${cut}`).text).toBe("key:\n[REDACTED:pem]");
+      expect(redact(`${cut}\n \nnext`).text).toBe("[REDACTED:pem]\n \nnext");
+    });
+
+    it("masks an END line with no BEGIN line from the last blank line (TB-203 N4)", () => {
+      const end = join("-----END ", "PRIVATE KEY-----");
+      const cut = `Kq3x9AbCd12\nefGh34==\n${end}`;
+      expect(redact(cut).text).toBe("[REDACTED:pem]");
+      expect(redact(`intro\n\n${cut}\nnext`).text).toBe(
+        "intro\n\n[REDACTED:pem]\nnext",
+      );
+      // After a whole block, the cut one starts where the block ended.
+      expect(redact(`${secrets.pem}\n${cut}`).text).toBe(
+        "[REDACTED:pem][REDACTED:pem]",
+      );
+    });
+
+    // Tools lens #400 B1: the search went on after the END, past a BEGIN
+    // that shares its dashes, and the body of that block stayed open. The
+    // END without a BEGIN regressed against the base; the whole block before
+    // the glue was open in the base too.
+    it.each([5, 6, 9])(
+      "masks the body of a BEGIN glued to the END before it by %i dashes",
+      (dashes) => {
+        const body = join("SECRET", "BODY1234");
+        // The END before ends in five dashes; the BEGIN starts with five.
+        const tail = `${"-".repeat(dashes - 5)}${join("BEGIN B ", "KEY-----")}\n${body}\n\nmore\n${join("-----END ", "B KEY-----")}`;
+        const orphan = `${join("-----END ", "A KEY-----")}${tail}`;
+        for (const text of [orphan, `${secrets.pem}${tail}`]) {
+          expect(redact(text).text).not.toContain(body);
+        }
+      },
+    );
+
+    // Role 4 #400 B1: a BEGIN glued inside a BEGIN line and an END glued to
+    // the second one. That END starts inside the second BEGIN line, so it is
+    // not its END. The base masked the body after a block before it; alone,
+    // the base left it open too.
+    it.each([
+      ["alone", ""],
+      [
+        "after a block",
+        `${join("-----BEGIN ", "A KEY-----")}\nAAAA\n${join("-----END ", "A KEY")}`,
+      ],
+    ])(
+      "masks the body after two glued BEGINs and an END glued to the second, %s",
+      (_, before) => {
+        const body = join("SECRET", "BODY1234");
+        const text = `${before}${join("-----BEGIN ", "B KEY-----")}${join("BEGIN ", "B KEY-----")}${join("END ", "B KEY-----")}${body}x\n\n${join("-----END ", "B KEY-----")}`;
+        expect(redact(text).text).not.toContain(body);
+      },
+    );
+
+    // Boards #400 N1: the search pairs the BEGIN at 56 with an END in the
+    // dashes of the BEGIN line at 77; the detector before TB-203 masked the
+    // block from 77, so its blocks are masked too.
+    it("keeps every block of the detector before TB-203 masked", () => {
+      const body = join("S3CR", "3T");
+      const text = `BEGIN B KEY---------------BEGIN A KEY----------END B KEY-----BEGIN B KEY----------BEGIN B KEY-----END A KEY-----${body}-----BEGIN A KEY----------END B KEY-----`;
+      expect(text.indexOf(body)).toBe(112);
+      expect(redact(text).text).not.toContain(body);
     });
 
     it("joins a broken BEGIN with the block after it, as the lazy regex did", () => {
@@ -872,6 +932,10 @@ describe("@kaneo/redact", () => {
     "Ab3+",
     "postgres://a:",
     "-----BEGIN KEY-----",
+    "-----BEGIN KEY-----\n\n",
+    "-----END KEY-----",
+    "\n\n-----END KEY-----",
+    "-----BEGIN KEY-----END KEY-----",
   ])("redacts 256 000 characters of %j in linear time", (unit) => {
     expectLinear(repeated(unit));
   });

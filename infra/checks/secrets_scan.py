@@ -44,18 +44,20 @@ PATTERNS = [
 ]
 # TB-199, as redact after #375/#378 and the TB-199 PR: the separator is `=`, `:`, `:=` (Go, Pascal) or `=>` (PHP,
 # Ruby, Perl); `==` and `===` compare.
-# A name right after `${` is a shell reference (${PASSWORD:?not set}), not an assignment.
+# A name right after `${` takes a value too (${DB_PASSWORD="<v>"}, ${NAME:=<v>}); `${NAME:?…}` and the like are
+# skipped in scan_line (TB-200). The value ends at `}` as at `,` and `;` (TB-214): it took the `}` of an unquoted
+# ${NAME:=<v>}, and CODE_CHARS dropped it.
 SEPARATOR = r'(?::=|=>|=(?!=)|:)'
 # A credential name in any case, also as the end of a longer name (x-api-key, "api_key" in JSON); quotes optional.
-ASSIGNED = re.compile(r'(?i)(?<!\$\{)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token'
-                      r'|private[_-]?key)\b["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;]{12,})')
+ASSIGNED = re.compile(r'(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token'
+                      r'|private[_-]?key)\b["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;}]{12,})')
 # Environment style, uppercase only: any NAME ending in API_KEY, TOKEN, SECRET or PASSWORD (T_BOARDS_API_KEY=,
 # GITHUB_TOKEN:). `\b` does not fire after `_`, so ASSIGNED misses these names. The name starts where a run of
 # [A-Z0-9_] starts, also after a lowercase prefix (foo_API_KEY, app_CLIENT_SECRET), and has at most 64 characters
 # before the suffix: an open [A-Z0-9_]* that may start after every `_` made a long run of `_` quadratic (64 000
 # characters: 12 s, TB-136 security lens).
-ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])(?<!\$\{)([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))'
-                          r'["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;]{12,})')
+ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))'
+                          r'["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;}]{12,})')
 # Long runs of the base64 alphabet mixing upper, lower and digits with high entropy: encoded key material. The same
 # thresholds as the base64 rule in redact; hex digests are single-case and never reach it.
 BASE64 = re.compile(r'[A-Za-z0-9+/]{64,}={0,2}')
@@ -76,17 +78,36 @@ CAMEL_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)*$')
 # (apiKey: <type>) became two new errors in HR_Helper-v2 (measured on 15.11).
 TYPE_NAME = re.compile(r'^(?:[A-Z][a-z]+)+$')
 # TB-193 B, TB-195: a password or a secret is chosen by a person and may be words, capitalized
-# (CorrectHorseBatteryStaple) or lowercase (correcthorsebatterystaple). For these names neither the type name nor
-# lowercase words drop the value; a camelCase name with a capital inside (jwtSecret) and `undefined` stay code. The
-# passwordAssignment of redact has no filter, its passphrase rule drops the same code.
+# (CorrectHorseBatteryStaple) or lowercase (correcthorsebatterystaple). For these names lowercase words do not drop the
+# value, and a type name drops it only in a type context (TB-200, below); a camelCase name with a capital inside
+# (jwtSecret) and `undefined` stay code. The passwordAssignment of redact has no filter, its passphrase rule drops the
+# same code.
 PASSWORD_NAME = re.compile(r'(?i)(?:password|passwd|pwd|secret)$')
 HUMPED_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)+$')
+# TB-200: for these names a type name is a type only in an annotation: after a bare `:` and before `,`, `;` or `)`
+# (password: PasswordCredential;), the context rule of redact (TB-193) narrowed by the separator. After `=` the same
+# shape is a passphrase (Password=<words>;Database=app, DB_PASSWORD=<words>; ./run). The value pattern keeps `)` in
+# the value, and CODE_CHARS drops it there.
+TYPE_CONTEXT = (',', ';', ')')
+# TB-200: Laravel validation rules, lowercase words joined by `|`, each with an optional `:argument`
+# ('password' => 'required|string|min:8|confirmed'). TB-214: a list counts as rules only if one of its rules is in
+# RULE_WORDS and each argument of 12+ characters is a lowercase name (same:password_confirmation). With any argument
+# and any words, `API_KEY=<word>:<20 random characters>|<word>` was dropped: 0 of 2000 found (backend lens on #408).
+RULE_NAME = re.compile(r'[a-z_]+')
+RULE_WORDS = frozenset(('required', 'nullable', 'sometimes', 'bail', 'string', 'confirmed'))
+RULE_ARGUMENT = re.compile(r'[a-z_./*-]+')
 # Words carry less entropy than a key (correcthorsebatterystaple: 3.36). After a password name a letters-only value of
 # 20+ characters needs 3.0; a shorter one is mostly a word or a placeholder (passwordhash: 2.86) and needs 3.5.
 PASSPHRASE = re.compile(r'^[A-Za-z]{20,}$')
-PLACEHOLDER = re.compile(r'(?i)example|changeme|change-me|placeholder|dummy|sample|your[_-]|xxx|\*\*\*|<[^>]*>|\$\{|'
-                         r'\{\{|\[[^\]]*\]|redacted|test|fake|ci-only|not-a-|secret123|password123|^\$|'
-                         r'^(?:pass(?:word)?|secret|postgres|root|admin|user|kaneo)$')
+STUBS = (r'example|changeme|change-me|placeholder|dummy|sample|your[_-]|\*\*\*|<[^>]*>|\$\{|\{\{|\[[^\]]*\]|redacted'
+         r'|ci-only|not-a-|secret123|password123|^\$|^(?:pass(?:word)?|secret|postgres|root|admin|user|kaneo)$')
+PLACEHOLDER = re.compile(r'(?i)' + STUBS + r'|xxx|test|fake')
+# TB-200: a random key holds `xxx`, `test` or `fake` by chance: 584 of 280 000 keys of 14 provider formats were
+# dropped. In a provider key they count only as a whole word, and a run of x only from 8 characters (sk-proj-xxx…,
+# AKIAXXX…); then 1 of 280 000 keys is dropped, by a longer word.
+KEY_PLACEHOLDER = re.compile(r'(?i)' + STUBS + r'|x{8,}|(?<![A-Za-z0-9])(?:x{3,}|test|fake)(?![A-Za-z0-9])')
+# The value of these rules is any text, not a provider format.
+FREE_VALUE = ('url-credentials', 'bearer-token')
 MARKER = 'checks: allow-secret'
 SKIP_SUFFIX = ('.lock', 'pnpm-lock.yaml', 'package-lock.json', '.svg', '.map', '.example', '.sample', '.template')
 # Fixture code: fake keys of real formats are what tests are for. Findings there are warnings — visible, never a
@@ -109,20 +130,44 @@ def looks_like_secret(value):
     return not (len(value) < 32 and (CAMEL_WORD.match(value) or TYPE_NAME.match(value)))
 
 
-def looks_like_password(value):
-    """TB-193 B, TB-195: the filter for password and secret names, as `looksLikePassphrase` of redact but with no
-    type name rule. Code stays out (a camelCase name with a capital inside, `undefined`, a dotted name, code
-    punctuation); capitalized or lowercase words are caught."""
+def looks_like_password(value, after=''):
+    """TB-193 B, TB-195: the filter for password and secret names, as `looksLikePassphrase` of redact. Code stays
+    out (a camelCase name with a capital inside, `undefined`, a dotted name, code punctuation, a type name in an
+    annotation: `after` is the character after the value, empty when the separator is not a bare `:` (TB-200));
+    capitalized or lowercase words are caught."""
     if not secret_chars(value) or value == 'undefined':
         return False
-    return len(value) >= 32 or not HUMPED_WORD.match(value)
+    if len(value) >= 32:
+        return True
+    return not (HUMPED_WORD.match(value) or TYPE_NAME.match(value) and after in TYPE_CONTEXT)
 
 
 def secret_chars(value):
-    """8+ printable ASCII characters, no code punctuation, not a dotted name or words joined by _ or -."""
+    """8+ printable ASCII characters, no code punctuation, not a dotted name, words joined by _ or - or a list of
+    validation rules."""
     if len(value) < 8 or not PRINTABLE.match(value) or CODE_CHARS.search(value):
         return False
-    return not (DOTTED_NAME.match(value) or JOINED_WORDS.match(value))
+    return not (DOTTED_NAME.match(value) or JOINED_WORDS.match(value) or validation_rules(value))
+
+
+def validation_rules(value):
+    """TB-200, TB-214: a list of Laravel validation rules (required|string|min:8), see RULE_WORDS."""
+    rules = value.split('|')
+    if len(rules) < 2:
+        return False
+    names = set()
+    for rule in rules:
+        name, _, argument = rule.partition(':')
+        if not RULE_NAME.fullmatch(name) or len(argument) >= 12 and not RULE_ARGUMENT.fullmatch(argument):
+            return False
+        names.add(name)
+    return not names.isdisjoint(RULE_WORDS)
+
+
+def shell_test(line, m):
+    """TB-200: `${NAME:?message}`, `${NAME:-word}`, `${NAME:+word}` check NAME or give a word in its place; the word
+    is not given to NAME (compose: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is not set})."""
+    return line.endswith('${', 0, m.start(1)) and line[m.end(1):m.start(2) + 1] in (':?', ':-', ':+')
 
 
 # A character that drops every value holding it in `secret_chars`. A `>` right after `=` is the separator `=>` of
@@ -194,7 +239,8 @@ def scan_line(line):
         for m in pattern_matches(name, rx, line):
             group = 1 if m.groups() else 0
             value = m.group(group)
-            if name != 'private-key' and PLACEHOLDER.search(value):
+            placeholder = PLACEHOLDER if name in FREE_VALUE else KEY_PLACEHOLDER
+            if name != 'private-key' and placeholder.search(value):
                 continue
             if name == 'bearer-token' and (not looks_like_secret(value) or entropy(value) < 3.5):
                 continue
@@ -209,10 +255,13 @@ def scan_line(line):
         while m:
             value = m.group(2)
             if PASSWORD_NAME.search(m.group(1)):
-                shaped, floor = looks_like_password(value), 3.0 if PASSPHRASE.match(value) else 3.5
+                annotation = line[m.end(1):m.start(2)].strip() == ':'
+                after = line[m.end(2):m.end(2) + 1] if annotation else ''
+                shaped, floor = looks_like_password(value, after), 3.0 if PASSPHRASE.match(value) else 3.5
             else:
                 shaped, floor = looks_like_secret(value), 3.5
-            reported = not (covered(m, 2) or PLACEHOLDER.search(value) or not shaped or entropy(value) < floor)
+            reported = not (shell_test(line, m) or covered(m, 2) or PLACEHOLDER.search(value) or not shaped
+                            or entropy(value) < floor)
             if reported:
                 found.append(('literal %s' % m.group(1).lower(), value))
                 spans.append(m.span(2))

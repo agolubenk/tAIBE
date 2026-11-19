@@ -120,3 +120,20 @@ export {
   type PipelineToggle,
   pipelineToggles,
 } from "./pipeline-toggles.js";
+
+export {
+  isReauthMethod,
+  isSessionNotFresh,
+  REAUTH_CODE_LENGTH,
+  REAUTH_CODE_MAX_TRIES,
+  REAUTH_CODE_TTL_SECONDS,
+  REAUTH_ERRORS,
+  REAUTH_FAILURE_LIMIT,
+  REAUTH_FAILURE_WINDOW_SECONDS,
+  REAUTH_FRESH_SECONDS,
+  REAUTH_METHODS,
+  REAUTH_ROUTES,
+  type ReauthError,
+  type ReauthErrorBody,
+  type ReauthMethod,
+} from "./reauth.js";
