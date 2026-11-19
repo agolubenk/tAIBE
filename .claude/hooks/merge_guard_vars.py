@@ -125,13 +125,17 @@ def note_vars(argv, env):
 
 def dir_vars(env, cwd, old=None):
     """$PWD, $OLDPWD и $HOME — их значения известны без выполнения (в кавычках shlex: expand_vars делит подставленное
-    на слова). Прежняя папка неизвестна — $OLDPWD остаётся словом, и `cd $OLDPWD` уходит в LOST."""
+    на слова). Прежняя папка неизвестна — $OLDPWD остаётся словом, и `cd $OLDPWD` уходит в LOST. Пробельный символ в папке
+(SE-173): к значению добавляется вариант «$ИМЯ» и имя — в BLIND: без кавычек bash делит значение на слова."""
     env.setdefault("HOME", [shlex.quote(os.path.expanduser("~"))])
-    env["PWD"] = [shlex.quote(cwd)]
-    if old is None:
-        env.pop("OLDPWD", None)
-    else:
-        env["OLDPWD"] = [shlex.quote(old)]
+    for name, value in (("PWD", cwd), ("OLDPWD", old)):
+        env.pop(name, None)
+        if value is None:
+            continue
+        env[name] = [shlex.quote(value)]  # в кавычках — точное значение: скрипт `"$PWD/m.sh"`, цель `"$PWD/../x"`
+        if re.search(r"\s", value):  # bash делит `$PWD` без кавычек: ещё вариант «неизвестно», имя невидимо (#458 B2)
+            env[name].append("$" + name)
+            env[BLIND] = list(dict.fromkeys(env.get(BLIND, []) + [name]))
     return env
 
 
@@ -155,3 +159,21 @@ def expand_vars(argv, env):
         if len(out) > MAX_VARIANTS:
             out, overflow = out[:MAX_VARIANTS], True
     return out, overflow
+
+
+GUESSED = {"git", "gh", "curl", "wget", "http", "xh"}  # имена догадки: `$D/GIT` на macOS — тот же git (регистр)
+
+
+# Имена, которые оболочка пишет без присваивания в команде (read без имени, mapfile, getopts, $_, zsh $argv/$match):
+# BLIND их не видит — значение невидимо (Claude-линза #458 B1')
+SHELL_SET = {"_", "REPLY", "reply", "MAPFILE", "OPTARG", "argv", "BASH_REMATCH", "match", "MATCH"}
+
+
+def visible_name(exe, hidden):
+    """SE-78: `"$D/swiftc"` — путь из переменной, но последняя часть буквальная и не git/gh/curl: догадки «это git»
+    нет. Догадка остаётся, если имя не видно (`$X`, `$D/$(…)`, `$D/g*`) или значение невидимо (hidden)."""
+    base = exe.rpartition("/")[2] if "/" in exe else ""
+    # `${=D}`, `${(z)D}`, `$@`, `$1`, `${a[@]}` делятся на слова, а VAR их имён не видит — значение невидимо
+    if re.search(r"\$(?![A-Za-z_]|\{[A-Za-z_])|\[[@*]\]", exe) or set(VAR.findall(exe)) & SHELL_SET:
+        return False
+    return bool(not hidden and re.fullmatch(r"[\w.+-]+", base) and SUBST not in base and base.lower() not in GUESSED)

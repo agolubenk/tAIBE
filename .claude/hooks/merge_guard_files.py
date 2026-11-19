@@ -169,13 +169,14 @@ def config_moved(argv):
     опция env (`env -i`, но не `-f` команды после него); sudo. Чтение (`$HOME`, `${HOME}`) — не смена. Кавычки в argv
     уже сняты (tokenize): `H"OME"=…` — `HOME=…`, `$'HOME'=…` — `$HOME=…`, вычисленное имя. `source` и `.` — не здесь:
     вызов псевдонима — запись вслепую (blind), и код из файла в той же команде получает отказ BLIND_RUN."""
+    from merge_guard_shell import command_name  # shell импортирует этот модуль; `ENV -i`, `/usr/bin/SUDO` (SE-90)
     w = argv
     rest = list(itertools.dropwhile(lambda x: ASSIGN.fullmatch(x) or x in ("command", "builtin", "noglob", "exec"), w))
     head = rest[0] if rest else ""
     own = itertools.takewhile(lambda x: x.startswith("-") or "=" in x, rest[1:])  # слова env до команды
-    return any(CONFIG_NAMED.search(x) for x in w) or bool(RUNNERS & set(w)) or computed(rest) or (
+    return any(CONFIG_NAMED.search(x) for x in w) or bool(RUNNERS & {command_name(x) for x in w}) or computed(rest) or (
         head in DECLARE and any(re.fullmatch(r"-\w*n\w*", x) for x in rest)) or (
-        head == "env" and any(x.startswith("-") for x in own))
+        command_name(head) == "env" and any(x.startswith("-") for x in own))
 
 
 def rewritten(paths, written):

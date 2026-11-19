@@ -174,10 +174,16 @@ def normalize(argv):
 
 def command_name(word):
     """Имя команды без пути: `/opt/homebrew/bin/gh` → `gh`; zsh `=gh` (EQUALS) — путь к gh, тоже `gh`. Без регистра:
-    на APFS `GIT` и `Gh` — те же git и gh (SE-145). Имя с `$` и подстановкой — как есть: в нём имя переменной."""
-    w = word.lstrip("`")
-    base = os.path.basename(w[1:] if w.startswith("=") and len(w) > 1 else w)
+    на APFS `GIT` и `Gh` — те же git и gh (SE-145). Имя с `$` и подстановкой — как есть: в нём имя переменной.
+    Встроенные команды shell регистр различают — для них exact_name (SE-90)."""
+    base = exact_name(word)
     return base.lower() if re.fullmatch(r"[\w.+-]+", base) and SUBST not in base else base
+
+
+def exact_name(word):
+    """Имя команды без пути, как написано: `CD x` — не встроенная `cd`, а /usr/bin/cd в подоболочке (папка та же)."""
+    w = word.lstrip("`")
+    return os.path.basename(w[1:] if w.startswith("=") and len(w) > 1 else w)
 
 
 def strip_prefix(argv):
@@ -250,7 +256,8 @@ EXEC_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\x
 
 
 def launcher(word):
-    """Семейство оболочки или интерпретатора по имени команды (python3.12 → python); не они — None."""
+    """Семейство оболочки или интерпретатора по имени команды (python3.12 → python, `BASH` → bash); не они — None."""
+    word = command_name(word)
     if word in SHELLS:
         return "sh"
     w = re.sub(r"[\d.]+$", "", word)

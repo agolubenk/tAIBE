@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import budget
 import sources
-from journal import NERVOUS
+from journal import DIGEST, NERVOUS
 
 
 def _iso(dt):
@@ -100,6 +100,10 @@ def poll_budget(ctx):
             ctx.emit_account(f"limit:resume:{lim['reset']}", "limit.resume", NERVOUS, roles,
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
+            # Сброс прошёл — Esc, и ночью тоже (resume там 08:30, а подъём идёт веткой early). До сброса — смена
+            # аккаунта владельцем: клавиш нет, ложный подъём не съест Esc сброса.
+            if now_l >= _dt(lim["reset"]):
+                unstick_roles(ctx, lim["reset"])
             lim = None
 
     q = quota5(st, cfg)
@@ -128,6 +132,25 @@ def _week(cfg):
     w = cfg["budget"]["week_reset"]
     hh, mm = (int(x) for x in w["time"].split(":"))
     return w["weekday"], hh, mm
+
+
+def unstick_roles(ctx, reset):
+    """SE-174: в момент сброса закрыть меню лимита Claude Code в панелях ролей (eval/tools/limit_unstick.py). Триггер —
+    сброс в самом демоне, не событие журнала (S4). Один Esc на линию за сброс — ключ журнала. Сбой не валит бюджет."""
+    if not ctx.deliver or not ctx.cfg["budget"].get("unstick"):  # выключатель — budget.unstick в instances/_shared.json
+        return
+    pre = f"limit:unstick:{reset}:"
+    try:
+        import limit_unstick
+        done = limit_unstick.unstick(lambda line: pre + line not in ctx.journal.keys)
+    except Exception as e:  # noqa: BLE001 — tmux или ps недоступны: роли ждут владельца, как до SE-174
+        ctx.emit(f"{pre}error", "nerve.error", DIGEST, ["release"], f"меню лимита не закрыто: {type(e).__name__}: "
+                 f"{e}"[:200], "budget")
+        return
+    for d in done:
+        ctx.emit(pre + d["line"], "limit.unstick", DIGEST, ["coord"],
+                 f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}): меню лимита — {d['action']}"
+                 + (f"; sha256 {d['sha256'][:16]}" if d["sha256"] else ""), "budget", sha256=d["sha256"])
 
 
 def _on_limit(ctx, st, meter, ts, text):

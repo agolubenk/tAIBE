@@ -8,7 +8,8 @@
 < system.mem_warn — потолок system.team.floor (10); обратно к total — только от mem_warn + RAISE_GAP (запас, чтобы
 потолок не скакал). Свободно < mem_critical — новые роли не открываются. Потолок не даёт открыть роль — уведомление
 на Mac и пункт в очереди; вернулся — тоже.
-Роли продукта по приоритету: coord, release, backend, frontend, plan, boards, backend-2, frontend-2; продукты —
+Роли продукта по приоритету: coord, release, backend, frontend, plan, boards, backend-2, frontend-2, backend-3 (те из
+них, что есть в team.roles продукта); продукты —
 вперемешку по рангу роли, чтобы при потолке у каждого остались главные роли. Открывает spawn_session.sh --launch,
 по одной, с паузой; роль, чья сессия не поднялась, — снова через 10, 20, 40 мин… (не чаще раза в 6 ч), после
 трёх неудач — пункт владельцу. Не открывает: пока Нерв стоит на лимите аккаунта, пока молчит хаб MCP (:3050),
@@ -21,6 +22,9 @@
   python3 -I eval/tools/team_plan.py plan      что должно быть открыто и что открыто (ничего не запускает)
   python3 -I eval/tools/team_plan.py up [N]    открыть недостающие роли (не больше N за запуск; «ВКЛ», вход, сторож)
   python3 -I eval/tools/team_plan.py pause     сторож и «ВКЛ» не открывают роли (resume — снова открывают)
+  python3 -I eval/tools/team_plan.py keep SLUG ROLE   код 0 — роль в доле, наследник открывается; 3 — роль сверх
+                                               доли владельца: наследника нет (spawn_session.sh --handoff, решение
+                                               d-team-surplus-1711); сбой и роль вне команды — 0
 """
 import fcntl
 import http.client
@@ -43,7 +47,7 @@ import queue_focus as Q  # noqa: E402
 import team_status as TS  # noqa: E402
 import tmux_host as T  # noqa: E402
 
-ORDER = ("coord", "release", "backend", "frontend", "plan", "boards", "backend-2", "frontend-2")
+ORDER = TS.ORDER  # один список ролей с team_status: роль, которой нет в нём, сторож не открыл бы (#477, backend-3)
 DEFAULTS = {"total": 12, "floor": 10, "min_per_product": 2, "split_item": "d-team-split"}
 SOURCE = "team_plan (сторож команды ролей на Mac, OPS-82)"
 PAUSE_CHOICE = "pause"  # ответ на пункт долей: кнопка «Пауза» в шапке /queue
@@ -131,13 +135,20 @@ def owner_split(team, slugs, log=lambda m: None):
             return got, "очередь"
     except ERRORS as exc:
         log(f"  очередь не ответила ({exc.__class__.__name__}) — доли из последнего ответа")
+    return local_split(team, slugs, base)
+
+
+def local_split(team, slugs, base=None):
+    """Доли без сети: последний ответ, который принял сторож (кэш, раз в 10 мин), иначе конфиг."""
+    total, least = int(team["total"]), int(team["min_per_product"])
     try:
         got = parse_split(json.loads(cache_path().read_text(encoding="utf-8")), slugs, total, least)
         if got:
             return got, "последний ответ"
     except ERRORS:
         pass
-    return base, "конфиг"
+    return base or parse_split([int((team.get("split") or {}).get(s, 0)) for s in slugs], slugs, total, least) or dict(
+        zip(slugs, [total // len(slugs) + (i < total % len(slugs)) for i in range(len(slugs))])), "конфиг"
 
 
 def allocate(split, roles):
@@ -419,8 +430,28 @@ def show():
     return 0
 
 
+def keep(slug, role, log=lambda m: None):
+    """Роль в доле владельца? Лишняя (сверх доли) доделывает сессию и наследника не открывает: так новая доля встаёт,
+    когда лишние роли закончили сессию, и работающая роль не обрывается (d-team-surplus-1711). Не знаем — оставить.
+    Без сети: доли — из кэша сторожа (раз в 10 мин), передача смены на исходе контекста не ждёт очередь."""
+    try:
+        team, _, _, _, roles, _ = config()
+        if role not in roles.get(slug, ()):
+            return True, ""  # не роль команды (сессия владельца, продукт выключен) — не наша забота
+        split, _ = local_split(team, list(roles))
+        alloc = allocate(split, roles)
+        return (slug, role) in plan(alloc, roles), " · ".join(f"{s} {n}" for s, n in alloc.items())
+    except Exception as exc:  # noqa: BLE001 — сбой не должен оставить роль без наследника
+        log(f"keep: {exc.__class__.__name__} — роль оставляю")
+        return True, ""
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "keep" and len(argv) == 4:
+        ok, split = keep(argv[2], argv[3], lambda m: print(m, file=sys.stderr))
+        print(split)
+        return 0 if ok else 3
     if cmd == "up" and len(argv) <= 3:
         return up(int(argv[2]) if len(argv) == 3 and argv[2].isdigit() else None)
     if cmd == "plan" and len(argv) == 2:

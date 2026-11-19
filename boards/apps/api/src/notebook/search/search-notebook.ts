@@ -9,6 +9,7 @@ import {
 import { isWorkerOnline, requestQueryEmbedding } from "../embed/embed-queue";
 import { decodeEmbedding } from "../embed/embedding-codec";
 import { notebookEmbedModel } from "../../notebook-model/effective-notebook-model";
+import { maskChunkEdges, textNear } from "../chunk/mask-chunk-edges";
 import { fuseRanks, type RankedList } from "./fuse-ranks";
 import { loadVectorIndex, nearestChunks } from "./vector-index";
 
@@ -45,6 +46,10 @@ export async function searchNotebook(input: {
   embedModel?: string;
   // A caller with a token (API key, agent key, MCP session), TB-196.
   tokenCaller?: boolean;
+  // The text leaves the board, for a caller with a token (the default) or
+  // for a model: its secrets are masked, also one cut at a chunk edge
+  // (TB-203).
+  masked?: boolean;
 }): Promise<{ mode: SearchMode; results: NotebookHit[] }> {
   const wantVectors =
     input.mode === "hybrid" && isWorkerOnline(input.workspaceId);
@@ -62,6 +67,7 @@ export async function searchNotebook(input: {
   const rows = await loadHits(
     input.workspaceId,
     fused.map(({ id }) => id),
+    input.masked ?? Boolean(input.tokenCaller),
   );
   const byId = new Map(rows.map((row) => [row.chunkId, row]));
   const results = fused.flatMap((hit) => {
@@ -119,16 +125,17 @@ async function visibleRanked(rows: Candidate[], query: string) {
   const checked = rows.flatMap(
     (row): { id: string; masked: string | null }[] => {
       // The text as the caller reads it: the route masks each field on its
-      // own. Masked joined, a heading that ends with a label ("Staging
-      // password:") took the first word of the text as its value, and the
-      // secret after the text's own label stayed open (Claude #388 B1).
+      // own, and a secret cut at a chunk edge is masked too (TB-203). Masked
+      // joined, a heading that ends with a label ("Staging password:") took
+      // the first word of the text as its value, and the secret after the
+      // text's own label stayed open (Claude #388 B1).
+      const edges = maskChunkEdges(row.text, row.before ?? "", row.after ?? "");
       const heading = redact(row.heading);
-      const text = redact(row.text);
-      if (!heading.hits.length && !text.hits.length) {
+      if (!edges.hidden && !heading.hits.length) {
         return [{ id: row.id, masked: null }];
       }
       if (row.negationsOnly) return [];
-      const seen = `${heading.text} ${text.text}`;
+      const seen = `${heading.text} ${redact(edges.text).text}`;
       return [{ id: row.id, masked: seen.replace(MARKER, " ") }];
     },
   );
@@ -171,12 +178,16 @@ async function visibleRanked(rows: Candidate[], query: string) {
 async function indexableCandidates(workspaceId: string, query: string) {
   const full = sql`websearch_to_tsquery('russian', ${query})`;
   const indexable = sql`(CASE WHEN querytree(${full}) = 'T' THEN ${full} ELSE regexp_replace(querytree(${full}), '<([0-9]+|-)>', '&', 'g')::tsquery END)`;
-  return db
+  const hit = db
     .select({
       id: notebookChunkTable.id,
       heading: notebookChunkTable.heading,
       text: notebookChunkTable.text,
-      negationsOnly: sql<boolean>`querytree(${full}) = 'T'`,
+      sourceId: notebookChunkTable.sourceId,
+      ordinal: notebookChunkTable.ordinal,
+      rank: sql<number>`ts_rank(${notebookChunkTable.search}, ${indexable})`.as(
+        "rank",
+      ),
     })
     .from(notebookChunkTable)
     .where(
@@ -185,11 +196,21 @@ async function indexableCandidates(workspaceId: string, query: string) {
         sql`${notebookChunkTable.search} @@ ${indexable}`,
       ),
     )
-    .orderBy(
-      sql`ts_rank(${notebookChunkTable.search}, ${indexable}) desc`,
-      notebookChunkTable.id,
-    )
-    .limit(KEYWORD_SCAN_MAX + 1);
+    .orderBy(sql`rank desc`, notebookChunkTable.id)
+    .limit(KEYWORD_SCAN_MAX + 1)
+    .as("hit");
+  // The neighbours of the scanned rows only (textNear).
+  return db
+    .select({
+      id: hit.id,
+      heading: hit.heading,
+      text: hit.text,
+      before: textNear(-1, "hit"),
+      after: textNear(1, "hit"),
+      negationsOnly: sql<boolean>`querytree(${full}) = 'T'`,
+    })
+    .from(hit)
+    .orderBy(sql`${hit.rank} desc`, hit.id);
 }
 
 async function keywordCandidates(workspaceId: string, query: string) {
@@ -233,13 +254,17 @@ async function vectorCandidates(
   );
 }
 
-async function loadHits(workspaceId: string, ids: string[]) {
+async function loadHits(workspaceId: string, ids: string[], masked: boolean) {
   if (!ids.length) return [];
+  const near = (step: -1 | 1) =>
+    masked ? textNear(step) : sql<string | null>`null`;
   const rows = await db
     .select({
       chunkId: notebookChunkTable.id,
       heading: notebookChunkTable.heading,
       text: notebookChunkTable.text,
+      before: near(-1),
+      after: near(1),
       kind: notebookSourceTable.kind,
       ref: notebookSourceTable.ref,
       title: notebookSourceTable.title,
@@ -255,8 +280,11 @@ async function loadHits(workspaceId: string, ids: string[]) {
         inArray(notebookChunkTable.id, ids),
       ),
     );
-  return rows.map(({ kind, ref, title, ...row }) => ({
+  return rows.map(({ kind, ref, title, before, after, ...row }) => ({
     ...row,
+    text: masked
+      ? maskChunkEdges(row.text, before ?? "", after ?? "").text
+      : row.text,
     source: { kind, ref, title },
   }));
 }
