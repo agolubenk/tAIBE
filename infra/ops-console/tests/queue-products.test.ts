@@ -214,3 +214,20 @@ describe('мёрж из очереди — пока только HR', () => {
     expect((await call(hr, 'GET', '/db/items/d-old-image')).json).toMatchObject({ product: 'hr-helper' })
   })
 })
+
+describe('срок строки плана по решению продукта не по умолчанию (TB-112, линза release #159)', () => {
+  it('«перенести» в решении taibe-d-due-<дата> сдвигает срок строки — 200, не 409; токен t-boards видит оба продукта', async () => {
+    const id = 'taibe-d-due-20261115'
+    const due = {
+      kind: 'decision', title: 'Сроки taibe: 1 строк не успевают по текущему темпу', body: 'Строка — срок 20.11, прогноз 25.11', rows: ['w-taibe-due'],
+      moveTo: { 'w-taibe-due': '2026-11-25' }, options: [{ id: 'keep', label: 'Держать срок' }, { id: 'move', label: 'Перенести сроки на прогноз' }],
+    }
+    expect((await call(both, 'PUT', '/db/work/w-taibe-due', { data: { title: 'Строка', track: 'ops', planEnd: '2026-11-20' } })).status).toBe(200)
+    expect((await call(both, 'PUT', `/db/items/${id}`, { data: due })).json).toMatchObject({ product: 'taibe' })
+    expect((await call(both, 'PATCH', '/db/work/w-taibe-due', { data: { planEnd: '2026-11-25', dueRef: id } })).status).toBe(409) // ответа нет
+    expect((await call(owner, 'PUT', `/db/checks/${id}`, { data: { done: true, choice: 'move', note: '', at: '2026-11-15T10:00:00.000Z' } })).status).toBe(200)
+    const moved = await call(both, 'PATCH', '/db/work/w-taibe-due', { data: { planEnd: '2026-11-25', dueRef: id } })
+    expect(moved.status).toBe(200)
+    expect(moved.json?.data).toMatchObject({ planEnd: '2026-11-25', basePlanEnd: '2026-11-20', dueRefs: [id] })
+  })
+})

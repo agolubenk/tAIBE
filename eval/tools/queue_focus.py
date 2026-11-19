@@ -241,8 +241,9 @@ def plan_next(rows, top=5):
 
 
 def oq_request(path, root=ROOT, method='GET', data=None):
-    """One request to the owner queue `/api/oq/v1/db/<path>`: the same token as the Nerve (`$OQ_TOKEN` or
-    `queue.secret_cmd`), stdlib, TLS verified. Returns the JSON reply; 404 — None."""
+    """One request to the owner queue `/api/oq/v1/db/<path>` (a path with a leading `/` — `/api/oq/v1<path>`, e.g.
+    `/team`): the same token as the Nerve (`$OQ_TOKEN` or `queue.secret_cmd`), stdlib, TLS verified. Returns the JSON
+    reply; 404 — None."""
     import ssl
     import subprocess
     import urllib.error
@@ -261,7 +262,8 @@ def oq_request(path, root=ROOT, method='GET', data=None):
     except Exception:  # noqa: BLE001 — the default store still verifies
         ctx = ssl.create_default_context()
     body = None if data is None else json.dumps(data, ensure_ascii=False).encode()
-    req = urllib.request.Request('%s/api/oq/v1/db/%s' % (queue['url'].rstrip('/'), path), data=body, method=method,
+    api = '/api/oq/v1' + path if path.startswith('/') else '/api/oq/v1/db/' + path
+    req = urllib.request.Request(queue['url'].rstrip('/') + api, data=body, method=method,
                                  headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
