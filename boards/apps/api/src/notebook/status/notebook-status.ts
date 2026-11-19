@@ -10,6 +10,7 @@ import {
   effectiveNotebookModel,
   modelChain,
 } from "../../notebook-model/effective-notebook-model";
+import { indexedChunks } from "../search/vector-index";
 
 export async function notebookStatus(workspaceId: string) {
   const [settings, callsToday] = await Promise.all([
@@ -26,6 +27,7 @@ export async function notebookStatus(workspaceId: string) {
       .select({
         count: sql<number>`count(*)::int`,
         embedded: sql<number>`count(*) filter (where ${notebookChunkTable.embedModel} = ${model} and ${notebookChunkTable.embedding} is not null)::int`,
+        width: sql<number>`coalesce(max(octet_length(${notebookChunkTable.embedding})) filter (where ${notebookChunkTable.embedModel} = ${model}), 0)::int`,
       })
       .from(notebookChunkTable)
       .where(eq(notebookChunkTable.workspaceId, workspaceId)),
@@ -40,6 +42,7 @@ export async function notebookStatus(workspaceId: string) {
     sources: sources?.count ?? 0,
     chunks: chunks?.count ?? 0,
     embedded: chunks?.embedded ?? 0,
+    indexed: indexedChunks(chunks?.embedded ?? 0, chunks?.width ?? 0),
     llm: {
       configured: points !== null,
       model: points ? points[0].model : settings.model,

@@ -4,10 +4,8 @@ import db from "../../database";
 import { labelTable, userTable } from "../../database/schema";
 import { assertAssignableUser } from "../../utils/assert-assignable-user";
 import { assertTaskInWorkspace } from "../task-scope";
-import type { GrantApprovalAction } from "./approval-params";
+import { GRANT_TASKS_MAX, type GrantApprovalAction } from "./approval-params";
 import { grantItems } from "./grant-items";
-
-const GRANT_TASKS_MAX = 20;
 
 export type GrantRequest = {
   targetId: string;
@@ -25,7 +23,8 @@ async function assertTasks(
   if (ids.length === 0) {
     throw new HTTPException(400, { message: "taskIds: name the cards" });
   }
-  // The schema lets a batch close name 250 cards (TB-108); a grant stays at 20.
+  // The request schema checks it too (TB-114); this keeps the rule next to
+  // the grant for any other caller.
   if (ids.length > GRANT_TASKS_MAX) {
     throw new HTTPException(400, {
       message: `taskIds: a grant names at most ${GRANT_TASKS_MAX} cards`,

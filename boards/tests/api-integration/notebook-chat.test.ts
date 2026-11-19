@@ -25,6 +25,7 @@ import { createApp } from "../../apps/api/src/index";
 import { mockAuthenticatedSession } from "./helpers/auth";
 import { createInstanceAdmin } from "./helpers/admin/create-instance-admin";
 import { resetTestDatabase } from "./helpers/database";
+import { CUT_DOC, DB_VALUE, shows } from "./helpers/cut-secret";
 import { createWorkspaceMember } from "./helpers/fixtures";
 import { createForest } from "./helpers/forest";
 import { projectAccessApi } from "./helpers/project-access/project-access-api";
@@ -722,5 +723,28 @@ describe("API integration: notebook chat", () => {
       (await nb.owner("GET", `/threads/${asked.body.thread.id}`)).status,
     ).toBe(404);
     expect(await db.$count(schema.notebookMessageTable)).toBe(2);
+  });
+
+  it("sends a secret cut by a chunk edge to the model masked (TB-203)", async () => {
+    useLlm();
+    const forest = await createForest();
+    const stored = await forest.ownerApi(
+      "PUT",
+      `/notebook/${forest.workspace.id}/sources`,
+      { kind: "repo-doc", ref: "docs/cut.md", title: "Граница", text: CUT_DOC },
+    );
+    expect(stored.status).toBe(200);
+
+    // The owner asks: the sources go to a model, maybe at an outside
+    // provider, so the owner's prompt is masked across chunk edges too.
+    const asked = await forest.ownerApi(
+      "POST",
+      `/notebook/${forest.workspace.id}/threads`,
+      { question: "слово" },
+    );
+    expect(asked.status).toBe(201);
+    const prompt = seen[0]?.messages[0]?.content ?? "";
+    expect(prompt.match(/\[\d\] Граница/g)).toHaveLength(3);
+    expect(shows(prompt, DB_VALUE)).toBe(false);
   });
 });
