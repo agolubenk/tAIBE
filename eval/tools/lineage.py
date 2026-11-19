@@ -38,7 +38,15 @@ from pathlib import Path
 
 Proc = namedtuple("Proc", "pid ppid pgid tty start command")
 LINE_RE = re.compile(r"^r(\.[a-z0-9]+)*$")
-LINE_ARG_RE = re.compile(r"Линия: (r(?:\.[a-z0-9]+)+)")  # в первом сообщении, которое пишет spawn_session.sh
+# Линия в первом сообщении spawn_session.sh: « Линия: <линия> (поколение N) — метка session …». Якорь на хвост: цитата
+# чужой линии («Линия: r.x» из handoff) без него не совпадает (TB-122, как HR #602).
+LINE_ARG_RE = re.compile(r"Линия: (r(?:\.[a-z0-9]+)+) \(поколение \d+\) — метка session")
+# Начало первого сообщения spawn_session.sh (first_message: роль с пусковым файлом, роль-наследник, наследник без
+# роли). Из транскрипта линия читается только из первой строки первого промпта, которая так начинается: вставленный
+# handoff с цитатой чужого первого сообщения начинается иначе.
+SPAWN_HEAD_RE = re.compile(r"Сборка Т3, ключ реестра [a-z0-9_-]+, роль \d+[,.] |Наследник сессии\. Handoff: ")
+PROMPT_MAX_BYTES = 1 << 20      # строка транскрипта длиннее — вывод инструмента или картинка, не первое сообщение
+TRANSCRIPT_MAX_BYTES = 8 << 20  # потолок чтения транскрипта на вызов
 LAUNCHER_RE = re.compile(r"/claude-spawn\.[A-Za-z0-9]+/[a-z]+(?:-[2-9])?\.sh(\s|$)")  # пусковой скрипт spawn_session.sh
 SHELLS = {"login", "zsh", "bash", "sh", "fish", "tcsh", "csh"}
 TERM_WAIT = 10          # с между TERM и KILL
@@ -265,30 +273,54 @@ class Sys:
         time.sleep(s)
 
 
+def prompt_text(row):
+    """Текст промпта пользователя из строки транскрипта; "" — служебная строка или только tool_result. Блоки — через
+    перевод строки: склейка пробелом собирала бы якорь из хвоста одного блока и начала другого."""
+    if not isinstance(row, dict) or row.get("type") != "user" or row.get("isMeta"):
+        return ""
+    msg = row.get("message")
+    c = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(c, str):
+        return c
+    return "\n".join(str(x.get("text", "")) for x in c or [] if isinstance(x, dict) and x.get("type") == "text")
+
+
+def first_prompt_line(path, max_lines=400):
+    """Линия из первой строки первого промпта с текстом, если строка — первое сообщение spawn_session.sh
+    (SPAWN_HEAD_RE); иначе None. Две разные линии в ней — None: какая своя, не понять. Строка транскрипта длиннее
+    PROMPT_MAX_BYTES до первого промпта — None: не прочитан, не угадывать."""
+    seen = 0
+    with open(path, "rb") as fh:
+        for i, raw in enumerate(fh):
+            seen += len(raw)
+            if i >= max_lines or seen > TRANSCRIPT_MAX_BYTES:
+                break
+            if b'"user"' not in raw:
+                continue
+            if len(raw) > PROMPT_MAX_BYTES:
+                return None
+            try:
+                text = prompt_text(json.loads(raw.decode("utf-8", errors="replace")))
+            except ValueError:
+                continue
+            if not text.strip():
+                continue
+            first = text.lstrip().split("\n", 1)[0]  # только первый промпт: дальше линии чужих сессий в цитатах
+            if not SPAWN_HEAD_RE.match(first):
+                return None
+            found = set(LINE_ARG_RE.findall(first))
+            return found.pop() if len(found) == 1 else None
+    return None
+
+
 def transcript_line(session_id):
     """Линия из первого промпта транскрипта: у сессии, поднятой через --resume, нет ни TAIBE_LINEAGE, ни первого
-    сообщения в аргументах (так 05.11 воскресили роли после лимита)."""
+    сообщения в аргументах (так 05.11 воскресили роли после лимита). Правило чтения — first_prompt_line (TB-122)."""
     if not re.fullmatch(r"[0-9a-f-]{36}", str(session_id or "")):
         return None
     for f in sorted(projects_dir().glob(f"*/{session_id}.jsonl")):
         try:
-            with open(f, encoding="utf-8", errors="replace") as fh:
-                for i, ln in enumerate(fh):
-                    if i >= 400:
-                        break
-                    if '"user"' not in ln:
-                        continue
-                    try:
-                        r = json.loads(ln)
-                    except ValueError:
-                        continue
-                    if r.get("type") != "user" or r.get("isMeta"):
-                        continue
-                    c = (r.get("message") or {}).get("content")
-                    text = c if isinstance(c, str) else " ".join(
-                        str(x.get("text", "")) for x in c or [] if isinstance(x, dict))
-                    m = LINE_ARG_RE.search(text)
-                    return m.group(1) if m else None  # только первый промпт: дальше линии чужих сессий в цитатах
+            return first_prompt_line(f)
         except OSError:
             continue
     return None
@@ -441,6 +473,12 @@ def main(argv=None, sx=None):
     r.add_argument("--server", default="", help="tmux: pid:start_time сервера")
     sub.add_parser("ack")
     sub.add_parser("line")
+    sp = sub.add_parser("surplus")
+    sp.add_argument("--handoff", default="")
+    sp.add_argument("--role", default="")
+    sp.add_argument("--product", default="", help="ключ генома: '' — продукт по умолчанию, иначе slug")
+    sp.add_argument("--slug", default="", help="slug продукта (instances/): по нему метка сверяется с долей")
+    sp.add_argument("--coord-done", action="store_true", help="координатор получил handoff (событие Нерва записано)")
     t = sub.add_parser("retire")
     t.add_argument("--child", required=True)
     t.add_argument("--role", default="")
@@ -451,7 +489,7 @@ def main(argv=None, sx=None):
                    help="папка со списком Контроля: если предшественник — Контроль, он переходит наследнику (IS-233)")
     t.add_argument("--succ-tty", default="", metavar="TTY",
                    help="tty окна наследника от spawn_session.sh (/dev/ttysNNN); пусто — Контроль не передаётся")
-    from lineage_reap import add_reap_args, cmd_reap  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
+    from lineage_reap import add_reap_args, cmd_reap, cmd_surplus  # noqa: E402 — уборка и сторож в своих модулях (лимит 500 строк)
     from lineage_retire import cmd_retire  # noqa: E402
     from lineage_close import add_autoclose_args, add_exited_args, cmd_autoclose, cmd_exited  # noqa: E402
     add_reap_args(sub.add_parser("reap"))
@@ -459,7 +497,7 @@ def main(argv=None, sx=None):
     add_exited_args(sub.add_parser("exited"))
     a = ap.parse_args(argv)
     sx = sx or Sys()
-    return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "retire": cmd_retire,
+    return {"record": cmd_record, "ack": cmd_ack, "line": cmd_line, "surplus": cmd_surplus, "retire": cmd_retire,
             "reap": cmd_reap, "autoclose": cmd_autoclose, "exited": cmd_exited}[a.cmd](sx, a)
 
 

@@ -1,4 +1,5 @@
 """Тесты spend.py и prices.py на синтетических транскриптах: python3 -I eval/tools/test_spend.py"""
+import copy
 import json
 import os
 import subprocess
@@ -149,6 +150,21 @@ class ScanTest(Fixture):
         self.assertEqual([g['share'] for g in self.rep['by_product'] if g['day'] == '2026-11-14'], [1.0])
         self.assertNotIn('ctx', self.rep['rollups'][0])
 
+    def test_report_totals_over_all_calls(self):
+        """Строка дня (PR 3): медиана и p90 контекста — по всем вызовам окна, полосы — сумма свёрток."""
+        ctx = [c for r in self.roll.values() for c in r['ctx']]
+        self.assertEqual((self.rep['ctx_median'], self.rep['ctx_p90']), (spend.median(ctx), spend.p90(ctx)))
+        self.assertGreater(len({spend.median(r['ctx']) for r in self.roll.values()}), 1)  # не медиана одной сессии
+        self.assertEqual(sum(v['calls'] for v in self.rep['bands'].values()), self.rep['calls'])
+        self.assertAlmostEqual(sum(v['usd'] for v in self.rep['bands'].values()), self.rep['usd'], places=3)
+        self.assertEqual(list(self.rep['bands']), [name for _, name in spend.BANDS])
+        roll = copy.deepcopy(self.roll)  # 20 вызовов: p90 — восемнадцатый, не максимум
+        for r in roll.values():
+            r['ctx'] = []
+        next(iter(roll.values()))['ctx'] = [k * 10_000 for k in range(1, 21)]
+        rep = spend.report(roll, 0, SINCE, UNTIL)
+        self.assertEqual((rep['ctx_median'], rep['ctx_p90']), (105_000, 180_000))
+
     def test_cli_report_and_json(self):
         out = os.path.join(self.tmp.name, 'out.json')
         p = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'spend.py'), '2026-11-14 00:00',
@@ -156,6 +172,8 @@ class ScanTest(Fixture):
                            env=dict(os.environ, HOME=self.tmp.name), capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('| 2026-11-15 | taibe | 6 | boards | 2 | 6 |', p.stdout)
+        self.assertIn('| 2026-11-15 | не отнесено |', p.stdout)  # одна подпись с долей окна Нерва (PR 3)
+        self.assertNotIn('unattributed', p.stdout)
         with open(out, encoding='utf-8') as f:
             self.assertEqual(json.load(f)['usd'], self.rep['usd'])
         bad = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'spend.py'), 'вчера'],

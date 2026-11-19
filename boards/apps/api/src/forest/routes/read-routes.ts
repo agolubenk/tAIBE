@@ -15,6 +15,7 @@ import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { getLog } from "../read/get-log";
 import { listLogs } from "../read/list-logs";
 import { listSectors } from "../read/list-sectors";
+import { shownComment, uncutClips } from "../read/uncut-text";
 import { detectSectors } from "../sector/detect-sectors";
 import {
   detectedSectorSchema,
@@ -113,17 +114,29 @@ export const readRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(getLogRoute, async (c) => {
     const { workspaceId, logId } = c.req.valid("param");
     const log = await getLog(workspaceId, logId);
+    const tokenCaller = isTokenCaller(c);
     // Claude #388 B2: a seed hash is of the raw body. With the masked body
     // and the rest of the text known, it would check a guess at a secret.
-    const seeds = isTokenCaller(c)
-      ? log.seeds.map(({ contentHash: _hash, ...seed }) => seed)
+    // TB-203: felling cuts a history entry at HISTORY_CONTENT_CHARS (N3), a
+    // seed's description and comments and its body, maybe inside a secret
+    // that redact then does not know.
+    const seeds = tokenCaller
+      ? log.seeds.map(({ contentHash: _hash, ...seed }) => ({
+          ...seed,
+          body: uncutClips(seed.body),
+        }))
       : log.seeds;
+    const history = (log.history as Record<string, unknown>[]).map((entry) =>
+      tokenCaller && typeof entry.content === "string"
+        ? { ...entry, content: shownComment(entry.content) }
+        : entry,
+    );
     return c.json(
       maskForTokenCaller(c, {
         ...log,
         seeds,
         fields: log.fields as Record<string, unknown>,
-        history: log.history as Record<string, unknown>[],
+        history,
       }),
       200,
     );

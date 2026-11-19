@@ -9,6 +9,7 @@ export async function loadGuardedTask(taskId: string) {
       title: taskTable.title,
       description: taskTable.description,
       status: taskTable.status,
+      columnId: taskTable.columnId,
       priority: taskTable.priority,
       revision: taskTable.revision,
       projectId: taskTable.projectId,

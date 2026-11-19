@@ -51,6 +51,11 @@ class QueuePollTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.ctx = QueueCtx(self.d)
+        env = {"TAIBE_LINEAGE_DIR": os.path.join(self.d, "lineage")}  # метки surplus — свои, не настоящие Mac
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        self.addCleanup(lambda: [os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+                                 for k, v in old.items()])
         self._run = sources.run
         self.addCleanup(setattr, sources, "run", self._run)
         sources._OQ_CACHE.clear()
@@ -96,6 +101,50 @@ class QueuePollTest(unittest.TestCase):
         sources.run = FakeCurl({"items": [split, _item(1)], "checks": checks})
         sources.poll_queue(self.ctx)
         self.assertEqual([e["text"] for e in self.events() if e["kind"] == "owner.answer"], ["ответ владельца d-1: yes"])
+
+    def test_answer_to_role_without_session_also_goes_to_coord(self):
+        """d-team-surplus-1711: роль-автор закончила смену сверх доли — ответ владельца и координатору."""
+        check = {"id": "d-1", "version": 2, "data": {"choice": "yes", "done": True, "at": "2026-10-28T07:00:00Z"}}
+        sources.run = FakeCurl({"items": [_item(1)], "checks": [check]})  # source «Контроль» → release
+        real = sources.map_roles
+        self.addCleanup(setattr, sources, "map_roles", real)
+        sources.map_roles = lambda ctx: {"coord": ("x", 0), "plan": ("y", 0)}
+        sources.poll_queue(self.ctx)
+        ev = [e for e in self.events() if e["kind"] == "owner.answer"]
+        self.assertEqual(sorted(ev[0]["to"]), ["coord", "release"])
+        self.assertIn("роль release без сессии", ev[0]["text"])
+
+    def test_answer_to_surplus_role_goes_to_coord_at_once(self):
+        """Роль сверх доли закончила смену час назад: её транскрипт ещё «активен» (8 ч), но метка surplus говорит — нет."""
+        os.makedirs(os.environ["TAIBE_LINEAGE_DIR"], exist_ok=True)
+        with open(os.path.join(os.environ["TAIBE_LINEAGE_DIR"], "r.ab.surplus"), "w", encoding="utf-8") as f:
+            json.dump({"line": "r.ab", "role": "release", "product": ""}, f)
+        now = self.ctx.now.timestamp()
+        os.utime(os.path.join(os.environ["TAIBE_LINEAGE_DIR"], "r.ab.surplus"), (now - 3600, now - 3600))
+        check = {"id": "d-1", "version": 2, "data": {"choice": "yes", "done": True, "at": "2026-10-28T07:00:00Z"}}
+        sources.run = FakeCurl({"items": [_item(1)], "checks": [check]})
+        real = sources.map_roles
+        self.addCleanup(setattr, sources, "map_roles", real)
+        sources.map_roles = lambda ctx: {"release": ("x", 0), "coord": ("y", 0)}
+        sources.poll_queue(self.ctx)
+        ev = [e for e in self.events() if e["kind"] == "owner.answer"]
+        self.assertEqual(sorted(ev[0]["to"]), ["coord", "release"])
+
+    def test_answer_to_live_role_or_when_nobody_is_live_stays_with_the_role(self):
+        check = {"id": "d-1", "version": 2, "data": {"choice": "yes", "done": True, "at": "2026-10-28T07:00:00Z"}}
+        real = sources.map_roles
+        self.addCleanup(setattr, sources, "map_roles", real)
+        for live in ({"release": ("x", 0)}, {}):
+            sources._OQ_CACHE.clear()
+            self.ctx.state = {}
+            sources.run = FakeCurl({"items": [_item(1)], "checks": [check]})
+            sources.map_roles = lambda ctx, live=live: live
+            d = tempfile.mkdtemp()
+            self.ctx = QueueCtx(d)
+            self.d = d
+            sources.poll_queue(self.ctx)
+            ev = [e for e in self.events() if e["kind"] == "owner.answer"]
+            self.assertEqual(ev[0]["to"], ["release"], live)
 
     def test_bytes_roll_over_by_local_day(self):
         sources.run = FakeCurl({"items": [], "checks": []})

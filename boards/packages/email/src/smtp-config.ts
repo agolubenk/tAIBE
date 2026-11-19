@@ -1,6 +1,42 @@
+import { readFileSync } from "node:fs";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 
 type SmtpEnv = Record<string, string | undefined>;
+
+// A hung relay otherwise holds the socket and the send promise for up to
+// 10 minutes (nodemailer defaults: 2 min, 30 s, 10 min). TB-31 R-10.
+export const SMTP_TIMEOUTS = {
+  connectionTimeout: 10_000,
+  greetingTimeout: 10_000,
+  socketTimeout: 30_000,
+} as const;
+
+/**
+ * The SMTP password: `SMTP_PASSWORD`, else the file in `SMTP_PASSWORD_FILE`.
+ *
+ * The VPS compose always sets the file path (`/run/tb-secrets/smtp_password`),
+ * so a missing or empty file means "no password", not an error: mail stays
+ * off until SMTP_HOST and SMTP_FROM are set. Any other read error is reported
+ * once by its code and the path, never by the content.
+ */
+export function readSmtpPassword(
+  env: SmtpEnv = process.env,
+): string | undefined {
+  if (env.SMTP_PASSWORD) return env.SMTP_PASSWORD;
+  const file = env.SMTP_PASSWORD_FILE?.trim();
+  if (!file) return undefined;
+  try {
+    return readFileSync(file, "utf8").replace(/(?:\r?\n)+$/, "") || undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "unknown";
+    if (code !== "ENOENT") {
+      console.warn(
+        `[smtp] SMTP_PASSWORD_FILE could not be read (${code}): ${file}`,
+      );
+    }
+    return undefined;
+  }
+}
 
 /**
  * Build the nodemailer transport options from the environment.
@@ -20,19 +56,22 @@ export function getSmtpTransportOptions(
     );
   }
 
+  // No `logger` or `debug`: with them the AUTH command reaches the log.
   const options: SMTPTransport.Options = {
     host: env.SMTP_HOST,
     secure: env.SMTP_SECURE !== "false",
     requireTLS: env.SMTP_REQUIRE_TLS !== "false",
     ignoreTLS: false,
+    ...SMTP_TIMEOUTS,
   };
 
   if (env.SMTP_PORT) {
     options.port = Number(env.SMTP_PORT);
   }
 
-  if (env.SMTP_USER && env.SMTP_PASSWORD) {
-    options.auth = { user: env.SMTP_USER, pass: env.SMTP_PASSWORD };
+  const password = env.SMTP_USER ? readSmtpPassword(env) : undefined;
+  if (env.SMTP_USER && password) {
+    options.auth = { user: env.SMTP_USER, pass: password };
   }
 
   return options;

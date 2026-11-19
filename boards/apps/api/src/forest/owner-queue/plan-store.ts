@@ -7,12 +7,18 @@ import {
   inArray,
   isNull,
   lt,
+  notExists,
   or,
   sql,
 } from "drizzle-orm";
 import db from "../../database";
-import { cardMetaTable, taskLeaseTable } from "../../database/forest-schema";
 import {
+  cardMetaTable,
+  sessionWorkStateTable,
+  taskLeaseTable,
+} from "../../database/forest-schema";
+import {
+  activityTable,
   columnTable,
   projectTable,
   taskTable,
@@ -181,9 +187,12 @@ async function recent(products: Map<string, string>, since: Date) {
 }
 
 // F9 in one query: cards in in-progress without a live lease (none, or
-// expired) and without an update for 24 h.
+// expired) and without a sign of work for 24 h: no edit of the task row, no
+// new comment, no work_state of a session on the card. A comment and a
+// work_state do not touch task.updated_at (SE-165).
 async function abandoned(workspaceIds: string[], now: Date) {
   if (workspaceIds.length === 0) return new Set<string>();
+  const since = new Date(now.getTime() - ABANDONED_AFTER_MS);
   const rows = await db
     .select({
       ws: workspaceTable.slug,
@@ -206,7 +215,30 @@ async function abandoned(workspaceIds: string[], now: Date) {
         isNull(projectTable.archivedAt),
         eq(taskTable.status, "in-progress"),
         isNull(taskLeaseTable.taskId),
-        lt(taskTable.updatedAt, new Date(now.getTime() - ABANDONED_AFTER_MS)),
+        lt(taskTable.updatedAt, since),
+        notExists(
+          db
+            .select({ id: activityTable.id })
+            .from(activityTable)
+            .where(
+              and(
+                eq(activityTable.taskId, taskTable.id),
+                eq(activityTable.type, "comment"),
+                gte(activityTable.createdAt, since),
+              ),
+            ),
+        ),
+        notExists(
+          db
+            .select({ id: sessionWorkStateTable.actorId })
+            .from(sessionWorkStateTable)
+            .where(
+              and(
+                eq(sessionWorkStateTable.taskId, taskTable.id),
+                gte(sessionWorkStateTable.updatedAt, since),
+              ),
+            ),
+        ),
       ),
     )
     .limit(ABANDONED_MAX);

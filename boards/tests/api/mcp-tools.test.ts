@@ -6,10 +6,19 @@ import {
   it,
   vi,
 } from "vite-plus/test";
+import { writeJournal } from "../../apps/api/src/forest/journal";
 import {
   type McpToolRegistrar,
   registerMcpTools,
 } from "../../apps/api/src/mcp/tools";
+
+// Each call writes an agent journal row without waiting for it (R-036). Here
+// there is no database: the real insert failed after the last test and logged
+// "MCP call not journaled" while vitest closed the worker — the CI flake
+// EnvironmentTeardownError (TB-126).
+vi.mock("../../apps/api/src/forest/journal", () => ({
+  writeJournal: vi.fn(async () => {}),
+}));
 
 type ToolCallback = (args: unknown) => Promise<{
   content: Array<{ text: string }>;
@@ -45,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.mocked(writeJournal).mockClear();
 });
 
 function lastRequest() {
@@ -70,11 +80,14 @@ describe("MCP tool catalog", () => {
   });
 
   it("passes only the search filters that were supplied", async () => {
-    await call("search", { q: "login bug" });
-    expect(lastRequest().url).toBe("http://api.test/api/search?q=login+bug");
+    await call("search", { q: "login bug", workspaceId: "w1" });
+    expect(lastRequest().url).toBe(
+      "http://api.test/api/search?q=login+bug&workspaceId=w1",
+    );
 
     await call("search", {
       q: "login bug",
+      workspaceId: "w1",
       type: "tasks",
       projectId: "p1",
       limit: 5,
@@ -82,14 +95,27 @@ describe("MCP tool catalog", () => {
     const url = new URL(lastRequest().url);
     expect(Object.fromEntries(url.searchParams)).toEqual({
       q: "login bug",
+      workspaceId: "w1",
       type: "tasks",
       projectId: "p1",
       limit: "5",
     });
   });
 
+  // TB-91: the API answers 400 without a workspace, so the tool asks for it.
+  it("refuses a search without a workspace before the API", async () => {
+    const result = await call("search", { q: "x" });
+
+    expect(result.isError).toBe(true);
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects a search limit above the API maximum", async () => {
-    const result = await call("search", { q: "x", limit: 500 });
+    const result = await call("search", {
+      q: "x",
+      workspaceId: "w1",
+      limit: 500,
+    });
 
     expect(result.isError).toBe(true);
     expect(apiFetch).not.toHaveBeenCalled();
@@ -228,5 +254,20 @@ describe("MCP tool catalog", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("Task not found");
+  });
+
+  it("journals each call under the bearer's agent id", async () => {
+    await call("list_notifications");
+
+    expect(writeJournal).toHaveBeenCalledOnce();
+    expect(writeJournal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: null,
+        actor: expect.objectContaining({ id: "bearer:user-1" }),
+        action: "mcp.call",
+        targetId: "list_notifications",
+        outcome: "allowed",
+      }),
+    );
   });
 });
