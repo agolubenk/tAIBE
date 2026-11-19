@@ -7,7 +7,7 @@ type App = ReturnType<typeof createApp>["app"];
 
 const PASSWORD = "correct horse battery staple";
 
-function collectCookies(response: Response) {
+export function collectCookies(response: Response) {
   const jar = new Map<string, string>();
   for (const setCookie of response.headers.getSetCookie()) {
     const [pair] = setCookie.split(";");

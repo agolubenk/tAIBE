@@ -9,14 +9,14 @@ import {
   ssrVersionTable,
 } from "../database/ssr-schema";
 import { isCorpusPath } from "./corpus";
+import { type PushTarget, readPushTargets } from "./push-target";
 
 // Push-back (spec RU-9, D-010, D-012): commits served-latest files into the
-// product repo's main with [skip ci]. The push is conditional — for every
-// file the repo's current sha must equal what the sync last saw; anything
-// else is a conflict row, never a silent overwrite. Rollbacks push
-// immediately; the nightly job only reconciles what drifted.
-const REPO = process.env.SSR_PUSH_GITHUB_REPO ?? "agolubenk/HR_Helper-v2";
-const BRANCH = process.env.SSR_PUSH_GITHUB_BRANCH ?? "main";
+// workspace's own repo and branch (push-target.ts, TB-160) with [skip ci].
+// The push is conditional — for every file the repo's current sha must equal
+// what the sync last saw; anything else is a conflict row, never a silent
+// overwrite. Rollbacks push immediately; the nightly job only reconciles what
+// drifted.
 const API = "https://api.github.com";
 
 type ChangesetFile = { path: string; sha256: string; content: string };
@@ -50,11 +50,14 @@ function github(path: string, init: RequestInit = {}) {
 
 type RepoFile = { sha: string | null; content: string | null };
 
-async function readRepoFiles(paths: string[]): Promise<Map<string, RepoFile>> {
+async function readRepoFiles(
+  target: PushTarget,
+  paths: string[],
+): Promise<Map<string, RepoFile>> {
   const result = new Map<string, RepoFile>();
   for (const path of paths) {
     const response = await github(
-      `/repos/${REPO}/contents/${encodeURIComponent(path)}?ref=${BRANCH}`,
+      `/repos/${target.repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(target.branch)}`,
     );
     if (response.status === 404) {
       result.set(path, { sha: null, content: null });
@@ -129,10 +132,12 @@ export async function collectChangeset(
   return changeset;
 }
 
+// targets — SSR_PUSH_TARGETS, read once per nightly run by the caller.
 export async function pushChangeset(
   workspaceId: string,
   message: string,
   filterPaths?: string[],
+  targets: ReadonlyMap<string, PushTarget> = readPushTargets(),
 ): Promise<PushResult> {
   if (!pushBackConfigured()) {
     return {
@@ -164,7 +169,22 @@ export async function pushChangeset(
     };
   }
 
-  const repoFiles = await readRepoFiles(changeset.map((file) => file.path));
+  // No target, no GitHub call: the versions stay served, nothing is lost.
+  const target = targets.get(workspaceId);
+  if (!target) {
+    return {
+      pushed: false,
+      commitSha: null,
+      files: [],
+      conflicts: [],
+      reason: "no_target",
+    };
+  }
+
+  const repoFiles = await readRepoFiles(
+    target,
+    changeset.map((file) => file.path),
+  );
   const states = await db
     .select()
     .from(ssrPushStateTable)
@@ -218,7 +238,7 @@ export async function pushChangeset(
     return { pushed: false, commitSha: null, files: [], conflicts };
   }
 
-  const commitSha = await commitFiles(message, toPush);
+  const commitSha = await commitFiles(target, message, toPush);
   await db
     .insert(ssrPushStateTable)
     .values(
@@ -249,17 +269,17 @@ export async function pushChangeset(
 }
 
 async function commitFiles(
+  target: PushTarget,
   message: string,
   files: ChangesetFile[],
 ): Promise<string> {
-  const refResponse = await github(`/repos/${REPO}/git/ref/heads/${BRANCH}`);
+  const repo = `/repos/${target.repo}`;
+  const refResponse = await github(`${repo}/git/ref/heads/${target.branch}`);
   if (!refResponse.ok) {
     throw new Error(`GitHub ref: HTTP ${refResponse.status}`);
   }
   const ref = (await refResponse.json()) as { object: { sha: string } };
-  const commitResponse = await github(
-    `/repos/${REPO}/git/commits/${ref.object.sha}`,
-  );
+  const commitResponse = await github(`${repo}/git/commits/${ref.object.sha}`);
   if (!commitResponse.ok) {
     throw new Error(`GitHub commit: HTTP ${commitResponse.status}`);
   }
@@ -267,7 +287,7 @@ async function commitFiles(
 
   const treeItems = await Promise.all(
     files.map(async (file) => {
-      const blobResponse = await github(`/repos/${REPO}/git/blobs`, {
+      const blobResponse = await github(`${repo}/git/blobs`, {
         method: "POST",
         body: JSON.stringify({
           content: Buffer.from(file.content, "utf8").toString("base64"),
@@ -289,7 +309,7 @@ async function commitFiles(
     }),
   );
 
-  const treeResponse = await github(`/repos/${REPO}/git/trees`, {
+  const treeResponse = await github(`${repo}/git/trees`, {
     method: "POST",
     body: JSON.stringify({ base_tree: commit.tree.sha, tree: treeItems }),
   });
@@ -298,7 +318,7 @@ async function commitFiles(
   }
   const tree = (await treeResponse.json()) as { sha: string };
 
-  const newCommitResponse = await github(`/repos/${REPO}/git/commits`, {
+  const newCommitResponse = await github(`${repo}/git/commits`, {
     method: "POST",
     body: JSON.stringify({
       message: `${message} [skip ci]`,
@@ -312,7 +332,7 @@ async function commitFiles(
   const newCommit = (await newCommitResponse.json()) as { sha: string };
 
   const updateResponse = await github(
-    `/repos/${REPO}/git/refs/heads/${BRANCH}`,
+    `${repo}/git/refs/heads/${target.branch}`,
     {
       method: "PATCH",
       body: JSON.stringify({ sha: newCommit.sha }),
@@ -325,6 +345,14 @@ async function commitFiles(
 }
 
 // Nightly reconcile (scheduler): push whatever drifted, record conflicts.
-export async function runNightlyPush(workspaceId: string): Promise<PushResult> {
-  return pushChangeset(workspaceId, "tAI-Boards SSR: sync approved versions");
+export async function runNightlyPush(
+  workspaceId: string,
+  targets: ReadonlyMap<string, PushTarget>,
+): Promise<PushResult> {
+  return pushChangeset(
+    workspaceId,
+    "tAI-Boards SSR: sync approved versions",
+    undefined,
+    targets,
+  );
 }

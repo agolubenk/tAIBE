@@ -6,7 +6,8 @@ export const SEED_BODY_CHARS = 6000;
 const DESCRIPTION_CHARS = 800;
 const COMMENT_CHARS = 300;
 const COMMENTS_PER_BRANCH = 5;
-const TRUNCATED = "\n\n…[truncated at felling; branches are not restored]";
+export const SEED_TRUNCATED =
+  "\n\n…[truncated at felling; branches are not restored]";
 
 export type SeedDraft = {
   kind: "branch" | "links";
@@ -36,7 +37,7 @@ function clip(text: string, max: number) {
 
 function fit(body: string, max: number) {
   return body.length > max
-    ? body.slice(0, max - TRUNCATED.length) + TRUNCATED
+    ? body.slice(0, max - SEED_TRUNCATED.length) + SEED_TRUNCATED
     : body;
 }
 

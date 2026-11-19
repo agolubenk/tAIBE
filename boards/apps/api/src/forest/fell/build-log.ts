@@ -1,7 +1,7 @@
 import type { TreeMaterial } from "./tree-material";
 
 export const LOG_HISTORY_LIMIT = 500;
-const HISTORY_CONTENT_CHARS = 4000;
+export const HISTORY_CONTENT_CHARS = 4000;
 export const SEARCH_TEXT_CHARS = 100_000;
 
 export type LogDraft = {
