@@ -20,6 +20,7 @@ import budget
 ENV = "NERVE_CLAUDE_JSON"
 CURRENT = object()  # значение по умолчанию у actions.quota5: прочитать аккаунт входа
 TIER_RE = re.compile(r"(\d+)x(?:$|[^a-z0-9])")
+PRO_RE = re.compile(r"(?:^|_)pro(?:$|_)")
 
 
 def path():
@@ -33,7 +34,7 @@ def tier_mult(tier):
     m = TIER_RE.search(tier.lower())
     if m:
         return int(m.group(1)) or None
-    return 1 if "pro" in tier.lower() else None
+    return 1 if PRO_RE.search(tier.lower()) else None
 
 
 def current(p=None):
@@ -58,22 +59,24 @@ def observe(st, now_ts, p=None):
     Claude Code пишет файл постоянно). Зовётся каждый проход бюджета, поэтому `since` точен до прохода: отказ не
     старше `since` — уже на этом аккаунте; старше — до смены входа, чей он — не знаем."""
     a = current(p)
-    if not a:
-        return None
     seen = st.get("acct_seen") or {}
-    if seen.get("id") != a["id"]:
-        seen = st["acct_seen"] = {"id": a["id"], "since": now_ts}
+    if not a:  # файл пишется в этот миг или его нет: последний виденный вход, если был
+        return dict(seen) if seen.get("id") else None
+    if seen.get("id") != a["id"] or seen.get("mult") != a["mult"]:
+        since = seen["since"] if seen.get("id") == a["id"] else now_ts
+        seen = st["acct_seen"] = {"id": a["id"], "mult": a["mult"], "since": since}
     return dict(a, since=seen["since"])
 
 
 def quota(waves, n, acct):
     """Квота окна ($) по волнам [{usd, acct?, mult?}] и аккаунту входа; None — волн нет. Порядок:
-    1) последние n волн этого аккаунта; 2) последние n волн с известным множителем, пересчитанные на множитель
-    аккаунта; 3) последние n волн вообще (как до разделения по аккаунтам). Возвращает (квота, источник)."""
+    1) последние n волн этого аккаунта (другой тариф того же аккаунта — по множителю); 2) последние n волн с известным множителем, пересчитанные на множитель
+    аккаунта; 3) последние n волн вообще (как до разделения по аккаунтам: волны до этого PR меток не имеют). Возвращает
+    (квота, источник)."""
     ws = [w for w in waves if (w.get("usd") or 0) > 0]
     if acct:
-        own = [w["usd"] for w in ws if w.get("acct") == acct["id"]][-n:]
-        if own:
+        own = [_scaled(w, acct["mult"]) for w in ws if w.get("acct") == acct["id"]][-n:]
+        if own:  # тот же аккаунт сменил тариф — волны старого тарифа по множителю
             return budget.median(own), "account"
         if acct.get("mult"):
             scaled = [w["usd"] * acct["mult"] / w["mult"] for w in ws if w.get("mult")][-n:]
@@ -81,3 +84,7 @@ def quota(waves, n, acct):
                 return budget.median(scaled), "tier"
     allw = [w["usd"] for w in ws][-n:]
     return (budget.median(allw), "all") if allw else (None, "default")
+
+
+def _scaled(w, mult):
+    return w["usd"] * mult / w["mult"] if mult and w.get("mult") and w["mult"] != mult else w["usd"]

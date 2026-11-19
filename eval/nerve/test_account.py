@@ -33,7 +33,7 @@ class TierTest(unittest.TestCase):
         self.assertEqual(account.tier_mult("default_claude_max_20x"), 20)
         self.assertEqual(account.tier_mult("default_claude_max_5x"), 5)
         self.assertEqual(account.tier_mult("default_claude_pro"), 1)
-        for t in (None, "", "default_claude_ai", 5, "max_0x"):
+        for t in (None, "", "default_claude_ai", 5, "max_0x", "approved_tier"):
             self.assertIsNone(account.tier_mult(t), t)
 
 
@@ -70,8 +70,12 @@ class CurrentTest(unittest.TestCase):
             self.assertEqual(account.observe(st, 200.0, p)["since"], 100.0, "тот же вход — since не двигается")
             p = write_login(d, UUID_B, "default_claude_max_5x")
             self.assertEqual(account.observe(st, 300.0, p)["since"], 300.0, "новый вход — since заново")
-            self.assertIsNone(account.observe(st, 400.0, os.path.join(d, "nope.json")))
-            self.assertEqual(st["acct_seen"]["since"], 300.0, "нет файла — память о входе не трогается")
+            last = account.observe(st, 400.0, os.path.join(d, "nope.json"))
+            self.assertEqual((last["mult"], last["since"]), (5, 300.0), "файл не читается — последний виденный вход")
+            self.assertIsNone(account.observe({}, 400.0, os.path.join(d, "nope.json")), "входа не видели — None")
+            p = write_login(d, UUID_B, "default_claude_max_20x")
+            self.assertEqual(account.observe(st, 500.0, p)["since"], 300.0, "смена тарифа — тот же аккаунт")
+            self.assertEqual(st["acct_seen"]["mult"], 20)
 
 
 def wave(usd, acct=None, mult=None):
@@ -103,6 +107,10 @@ class QuotaTest(unittest.TestCase):
         self.assertEqual(account.quota(ws, 6, {"id": "cccccccccccc", "mult": None}), (170, "all"))
         self.assertEqual(account.quota(ws, 6, self.B), (170, "all"), "волн с множителем нет — пересчитать нечем")
         self.assertEqual(account.quota([], 6, self.B), (None, "default"))
+
+    def test_own_waves_of_another_tier_scaled(self):
+        ws = [wave(40, "aaaaaaaaaaaa", 5), wave(44, "aaaaaaaaaaaa", 5)]
+        self.assertEqual(account.quota(ws, 6, self.A), (168.0, "account"), "тот же аккаунт: 5x → 20x")
 
     def test_last_n_waves_only(self):
         ws = [wave(10, "aaaaaaaaaaaa", 20)] * 5 + [wave(200, "aaaaaaaaaaaa", 20)] * 3
