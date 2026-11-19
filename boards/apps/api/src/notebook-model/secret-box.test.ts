@@ -44,10 +44,16 @@ describe("settings secret box", () => {
   it("rejects a tampered payload and a shortened tag", () => {
     vi.stubEnv("SETTINGS_ENCRYPTION_KEY", FIRST);
     const sealed = sealSecret("value", HERE);
-    expect(openSecret(`${sealed.slice(0, -2)}AA`, HERE)).toBeNull();
+    const [iv, tag, body] = sealed.slice("enc:v1:".length).split(".");
+    // One flipped bit always changes the body: a fixed tail like "AA" can
+    // equal the real one (TB-247, about 1 run in 1024).
+    const flipped = Buffer.from(String(body), "base64url");
+    flipped.writeUInt8(flipped.readUInt8(0) ^ 1, 0);
+    const tampered = `enc:v1:${iv}.${tag}.${flipped.toString("base64url")}`;
+    expect(tampered).not.toBe(sealed);
+    expect(openSecret(tampered, HERE)).toBeNull();
     expect(openSecret("plain", HERE)).toBeNull();
 
-    const [iv, tag, body] = sealed.slice("enc:v1:".length).split(".");
     const shortTag = Buffer.from(String(tag), "base64url")
       .subarray(0, 4)
       .toString("base64url");

@@ -31,3 +31,17 @@ def read_heartbeat(state_dir):
         pass
     st = load_json(os.path.join(state_dir, "state.json"), {})
     return st.get("heartbeat") if isinstance(st, dict) else None
+
+
+def write_pulse(state_dir, source, pass_started, at):
+    """SE-70: state/pulse (~100 Б) — перед каждым источником прохода: тап отличает долгий проход от мёртвого демона.
+    Сбой записи демон не валит (пульс прохода — подсказка, не данные)."""
+    try:
+        save_json(os.path.join(state_dir, "pulse"), {"pass": pass_started, "source": source, "at": at})
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def read_pulse(state_dir):
+    p = load_json(os.path.join(state_dir, "pulse"), {})
+    return p if isinstance(p, dict) else {}

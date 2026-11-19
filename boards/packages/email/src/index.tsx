@@ -4,10 +4,13 @@ export {
   sendNotificationEmail,
   sendOtpEmail,
   sendPasswordResetEmail,
+  sendReauthCodeEmail,
   sendTrialReminderEmail,
   sendWorkspaceInvitationEmail,
 } from "./send-email";
 export { isSmtpConfigured } from "./smtp-config";
+export type { EmailResult } from "./send-email";
+export { reauthCodeSubject } from "./templates/reauth-code";
 export type { BoardColumnIcon } from "./components/board-column";
 export type {
   TaskCardDueStatus,

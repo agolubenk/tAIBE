@@ -5,6 +5,7 @@
 usage: python3 -I eval/tools/spend.py --hours 24 [--json out.json]
        python3 -I eval/tools/spend.py "<с YYYY-MM-DD HH:MM>" "<по YYYY-MM-DD HH:MM>" [--json out.json]
        [--instances <папка>]   # другие instances/*.json — для тестов и другой установки
+       [--attribution [--prs <файл>]]   # цель каждого вызова; --prs — список PR из файла вместо gh pr list
 
 Определения (план v1.1 на карточке GL-1; здесь — чтобы наследник их не искал):
 - Вызов — один ответ модели (один requestId). Запрос из возобновлённой или скопированной сессии считается один раз,
@@ -19,10 +20,13 @@ usage: python3 -I eval/tools/spend.py --hours 24 [--json out.json]
 - Роль, линия, ключ реестра — из первого сообщения сессии («роль N», «Линия: r.xxxx», «ключ реестра K»). Роли нет —
   «прочее»: доля «прочего» покажет, нужна ли метка.
 - Продукт — у каждого вызова, той же функцией, что доля окна Нерва (budget.Products, SE-66): cwd записи под repo_root
-  продукта из instances/*.json, иначе папка проекта сессии, иначе unattributed. Сессия, сменившая cwd на чужой репо,
-  делится между продуктами так же, как в budget.py: одна сессия — одна разбивка в обоих.
+  продукта из instances/*.json, иначе папка проекта сессии, иначе «не отнесено» (ключ unattributed). Сессия,
+  сменившая cwd на чужой репо, делится между продуктами так же, как в budget.py: одна сессия — одна разбивка в обоих.
 - День — местная дата вызова; окно [с, по] — по местному времени.
-Привязка к задачам и PR — PR 2, ночной прогон и строка в сводке — PR 3.
+- Цель вызова (PR, карточка или «не отнесено») — `--attribution`, правила в attribution.py (PR 2). С ним же — число PR,
+  влитых в окне (`merged`, по репозиториям): знаменатель «$ на влитый PR» — все траты окна / влитые PR (план v1.1).
+- Ночной прогон (PR 3): `eval/evolve/daily_steps.py` `spend_night` — вчерашний день в
+  `~/.claude/evolve/spend/<день>.json` (60 дней) и строка дня координатору в Нерв.
 """
 import collections
 import json
@@ -38,7 +42,7 @@ sys.path.insert(0, HERE)
 sys.path.append(os.path.join(HERE, '..', 'nerve'))
 import prices  # noqa: E402
 import transcript as tr  # noqa: E402
-from budget import UNATTRIBUTED, Products, project_dir_name  # noqa: E402
+from budget import SHARE_LABELS, UNATTRIBUTED, Products, project_dir_name  # noqa: E402
 
 INSTANCES = os.path.join(HERE, '..', '..', 'instances')
 BANDS = ((250_000, '≤ 250K'), (500_000, '250–500K'), (1_000_000, '500K–1M'), (math.inf, '> 1M'))
@@ -139,8 +143,9 @@ def add_call(r, u, model, is_sub, first):
         r['first_ctx'] = ctx
 
 
-def scan(since, until, home=None, instances=INSTANCES):
-    """{(sid, день, продукт): свёртка} за окно [since, until] и число файлов субагентов с вызовами в окне."""
+def scan(since, until, home=None, instances=INSTANCES, sink=None):
+    """{(sid, день, продукт): свёртка} за окно [since, until] и число файлов субагентов с вызовами в окне.
+    sink (attribution.Ledger) получает каждую запись с временем до отсева повторов и каждый вызов в окне."""
     prods = Products(roots(instances))
     prefixes = [project_dir_name(root) for _, root in prods.roots] or tr.project_prefixes()
     seen, meta, roll, subs = set(), {}, {}, 0
@@ -162,6 +167,8 @@ def scan(since, until, home=None, instances=INSTANCES):
             in_window = since <= t <= until
             key = (sid, t.date().isoformat(), prods.of(o.get('cwd'), project))
             m = o.get('message') if isinstance(o.get('message'), dict) else {}
+            if sink:
+                sink.record(sid, path, is_sub, o, t, key[2])
             if not is_sub and in_window and is_text_message(o) and tr.COMPACTED in tr.text_of(m.get('content')):
                 roll.setdefault(key, new_roll(key, meta[sid]))['compactions'] += 1
             if o.get('type') != 'assistant' or not isinstance(m.get('usage'), dict) or m.get('model') == '<synthetic>':
@@ -175,6 +182,8 @@ def scan(since, until, home=None, instances=INSTANCES):
                 continue
             add_call(roll.setdefault(key, new_roll(key, meta[sid])), m['usage'], m.get('model') or '', is_sub,
                      file_calls == 1)
+            if sink:
+                sink.call(sid, path, is_sub, t, key[2], prices.call_usd(m['usage'], m.get('model') or ''))
             used = True
         subs += is_sub and used
     return roll, subs
@@ -230,9 +239,13 @@ def report(roll, subagents, since, until):
                      ctx_max=max(r['ctx'], default=0), parts={k: round(v, 4) for k, v in r['parts'].items()},
                      bands=rounded(r['bands']))
                 for r in sorted(rolls, key=lambda x: (x['day'], -x['usd']))]
+    ctx = [c for r in rolls for c in r['ctx']]
+    bands = {name: {'calls': sum(r['bands'][name]['calls'] for r in rolls),
+                    'usd': sum(r['bands'][name]['usd'] for r in rolls)} for _, name in BANDS}
     return {'since': since.strftime('%Y-%m-%d %H:%M'), 'until': until.strftime('%Y-%m-%d %H:%M'),
             'sessions': len({r['sid'] for r in rolls}), 'subagents': subagents,
             'calls': sum(r['calls'] for r in rolls), 'usd': round(total, 4),
+            'ctx_median': median(ctx), 'ctx_p90': p90(ctx), 'bands': rounded(bands),
             'by_role': group(rolls, ('product', 'role', 'key')), 'by_product': by_product, 'rollups': sessions}
 
 
@@ -248,11 +261,13 @@ def text(rep):
              + ' | '.join(n for _, n in BANDS) + ' |', '|---' * (11 + len(BANDS)) + '|']
     for g in rep['by_role']:
         bands = ' | '.join(share(g['bands'][n]['usd'], g['usd']) for _, n in BANDS)
-        lines.append(f"| {g['day']} | {g['product']} | {g['role']} | {g['key']} | {g['sessions']} | {g['calls']} | "
+        product = SHARE_LABELS.get(g['product'], g['product'])
+        lines.append(f"| {g['day']} | {product} | {g['role']} | {g['key']} | {g['sessions']} | {g['calls']} | "
                      f"{g['usd']:.2f} | {g['ctx_median'] / 1000:.0f}K | {g['ctx_p90'] / 1000:.0f}K | {g['cold']} | "
                      f"{g['compactions']} | {bands} |")
     lines += ['', '2. Продукты (доля $ дня)', '| день | продукт | $ | доля |', '|---|---|---|---|']
-    lines += [f"| {g['day']} | {g['product']} | {g['usd']:.2f} | {g['share']:.0%} |" for g in rep['by_product']]
+    lines += [f"| {g['day']} | {SHARE_LABELS.get(g['product'], g['product'])} | {g['usd']:.2f} | {g['share']:.0%} |"
+              for g in rep['by_product']]
     lines += ['', 'Полосы окна — доля $ роли за день. На подписке $ — мерило расхода лимита.']
     return '\n'.join(lines)
 
@@ -262,7 +277,7 @@ def window(argv, now=None):
     def value(flag):
         return argv[argv.index(flag) + 1] if flag in argv and argv.index(flag) + 1 < len(argv) else None
     out, inst, hours = value('--json'), value('--instances'), value('--hours')
-    pos = [a for a in argv if not a.startswith('--') and a not in (out, inst, hours)]
+    pos = [a for a in argv if not a.startswith('--') and a not in (out, inst, hours, value('--prs'))]
     if hours:
         until = (now or datetime.now()).replace(second=0, microsecond=0)
         return until - timedelta(hours=float(hours)), until, out, inst
@@ -275,9 +290,22 @@ def main(argv):
     except (IndexError, ValueError):
         print(__doc__.split('\n\n')[1], file=sys.stderr)
         return 2
-    roll, subagents = scan(since, until, instances=inst or INSTANCES)
+    sink = None
+    if '--attribution' in argv:
+        import attribution
+        prs = argv[argv.index('--prs') + 1] if '--prs' in argv and argv.index('--prs') + 1 < len(argv) else None
+        by_slug = attribution.repos(inst or INSTANCES)
+        sink = attribution.Ledger(by_slug, attribution.load_prs(by_slug, prs))
+    roll, subagents = scan(since, until, instances=inst or INSTANCES, sink=sink)
     rep = report(roll, subagents, since, until)
     print(text(rep))
+    if sink:
+        rep['attribution'] = attribution.rows(sink.resolve())
+        rep['merged'] = attribution.merged(sink.prs, since, until)
+        print('\n' + attribution.text(rep['attribution'], rep['usd']))
+        n = sum(rep['merged'].values())
+        per_pr = f"{rep['usd'] / n:.2f}" if n else '—'
+        print(f'\nВлито PR в окне: {n}; $ на влитый PR: {per_pr}.')
     if out:
         with open(out, 'w', encoding='utf-8') as f:
             json.dump(rep, f, ensure_ascii=False, indent=1)
