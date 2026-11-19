@@ -307,6 +307,50 @@ describe("TB-112: forecast and one due decision", () => {
   });
 });
 
+describe("TB-125: a doc the queue refuses (422) does not stop the run", () => {
+  it("a refused decision item waits for tomorrow; eta is written, the day counts done", async () => {
+    const queue = new MemQueue();
+    plan(queue);
+    queue.reject("items", "taibe-d-due-20261113");
+    const outcome = await daily(queue, DAY1);
+    expect(outcome).toMatchObject({ refused: 1, left: 0, dailyDone: true });
+    expect(queue.data("work", "w-taibe-a").eta).toBe("2026-11-19");
+    expect(queue.doc("items", "taibe-d-due-20261113")).toBeUndefined();
+    // No state points to an item that is not there.
+    expect(queue.doc("work", "taibe-due")).toBeUndefined();
+    // The next day asks with its own item.
+    queue.allow("items", "taibe-d-due-20261113");
+    await daily(queue, DAY2);
+    expect(queue.data("work", "taibe-due")).toMatchObject({
+      item: "taibe-d-due-20261114",
+      applied: false,
+    });
+  });
+
+  it("a refused state archives the new item: no answer is lost to it", async () => {
+    const queue = new MemQueue();
+    plan(queue);
+    queue.reject("work", "taibe-due");
+    const outcome = await daily(queue, DAY1);
+    expect(outcome).toMatchObject({ refused: 1, dailyDone: true });
+    expect(queue.data("items", "taibe-d-due-20261113").archived).toBe(true);
+    expect(queue.doc("work", "taibe-due")).toBeUndefined();
+  });
+
+  it("a refused eta row is skipped; the other rows and the decision are written", async () => {
+    const queue = new MemQueue();
+    plan(queue);
+    queue.reject("work", "w-taibe-b");
+    const outcome = await daily(queue, DAY1);
+    expect(outcome).toMatchObject({ refused: 1, dailyDone: true });
+    expect(queue.data("work", "w-taibe-a").eta).toBe("2026-11-19");
+    expect(queue.data("work", "w-taibe-b").eta).toBeUndefined();
+    expect(queue.data("work", "taibe-due")).toMatchObject({
+      item: "taibe-d-due-20261113",
+    });
+  });
+});
+
 describe("TB-112: the owner's answer", () => {
   async function answered(choice: string, backlog = true) {
     const queue = new MemQueue();

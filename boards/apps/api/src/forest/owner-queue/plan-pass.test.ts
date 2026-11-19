@@ -13,6 +13,7 @@ import {
   QueueConflict,
   type QueueDoc,
   type QueuePage,
+  QueueRejected,
 } from "./queue-client";
 import type { OwnerQueueConfig } from "./queue-config";
 
@@ -49,11 +50,12 @@ const moved = (key: string, ws = WS): Moved => ({
 const card = (key: string, st = "to-do") => ({ key, ws: WS, k: "task", st });
 
 // The console's work rules: PATCH merges, a null field is removed, ifVersion
-// must match (409 otherwise).
+// must match (409 otherwise). reject — docs the console refuses with 422.
 class FakeWork {
   readonly docs = new Map<string, QueueDoc>();
   readonly patches: { id: string; data: Record<string, unknown> }[] = [];
   race = new Set<string>();
+  reject = new Set<string>();
   truncated = false;
   // Answer in pages of one doc, as a paging console would (no snapshot).
   paged = false;
@@ -91,6 +93,7 @@ class FakeWork {
       },
       patch: async (_collection, id, data, ifVersion) => {
         const doc = this.docs.get(id);
+        if (this.reject.has(id)) throw new QueueRejected("too large", 422);
         if (!doc || this.race.has(id) || doc.version !== ifVersion) {
           throw new QueueConflict("version");
         }
@@ -168,6 +171,7 @@ describe("planPass (TB-106)", () => {
       written: 1,
       skipped: 0,
       left: 0,
+      refused: 0,
       hourlyDone: false,
       dailyDone: false,
     });
@@ -210,6 +214,7 @@ describe("planPass (TB-106)", () => {
       written: 1,
       skipped: 1,
       left: 0,
+      refused: 0,
       hourlyDone: false,
       dailyDone: false,
     });
@@ -220,6 +225,48 @@ describe("planPass (TB-106)", () => {
       written: 1,
       hourlyDone: true,
     });
+  });
+
+  it("skips a row the queue refuses (422), writes the others and counts the run done", async () => {
+    const queue = new FakeWork();
+    queue.add("w-a", { status: "planned", cards: [card("TB-1")] });
+    queue.add("w-b", { status: "planned", cards: [card("TB-1")] });
+    queue.reject.add("w-a");
+    const board = store({ [`${WS}/TB-1`]: done });
+    // Not incomplete: the hourly part would run again every 5 minutes.
+    expect(await run(queue, board, true)).toEqual({
+      written: 1,
+      skipped: 0,
+      left: 0,
+      refused: 1,
+      hourlyDone: true,
+      dailyDone: false,
+    });
+    expect(queue.docs.get("w-a")?.data.status).toBe("planned");
+    expect(queue.docs.get("w-b")?.data.status).toBe("done");
+    // The next run does not throw either.
+    await expect(run(queue, board)).resolves.toMatchObject({ refused: 1 });
+  });
+
+  it("does not catch a failure of the queue itself", async () => {
+    const queue = new FakeWork();
+    queue.add("w-a", { status: "planned", cards: [card("TB-1")] });
+    const client = queue.client();
+    const failing: QueueClient = {
+      ...client,
+      patch: () => Promise.reject(new Error("queue 503")),
+    };
+    await expect(
+      planPass(
+        {
+          client: failing,
+          config,
+          store: store({ [`${WS}/TB-1`]: done }),
+          now: () => NOW,
+        },
+        { hourly: false, daily: false },
+      ),
+    ).rejects.toThrow("queue 503");
   });
 
   it("writes 30 rows a run at most and leaves the rest for the next run", async () => {
