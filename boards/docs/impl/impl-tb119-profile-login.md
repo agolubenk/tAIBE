@@ -569,7 +569,8 @@ i18n ru и en, включая 5 писем: «Подтвердите новый 
 - `user.username text unique null`, `user.display_username text null`;
 - таблица `passkey` по полям плагина: FK `user_id → user.id on delete cascade`, индекс `user_id`, **уникальный**
   индекс `credential_id` (иначе один credential ID у двух записей превращает вход ключом в выбор случайного
-  пользователя);
+  пользователя). `counter` — `bigint` (drizzle `mode: "number"`), не `integer`: счётчик подписи WebAuthn —
+  беззнаковое 32-битное число до 4 294 967 295, `integer` кончается на 2 147 483 647 (0088, таблица типов в PR #492);
 - частичный уникальный индекс `verification(identifier) WHERE identifier LIKE 'tb-email-%'`;
 - уникальный индекс по `lower(user.email)` — ставим: проба s-tb119-smtp-3010 показала 0 групп дублей email по
   регистру. Перед выкатом проба повторяется тем же s-пунктом (пункт 1 ниже).
