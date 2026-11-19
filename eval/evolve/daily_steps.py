@@ -43,6 +43,15 @@ def log(*parts):
     print('[evolve %s]' % now().strftime('%H:%M:%S'), *parts, flush=True)
 
 
+def merge_before_run(merge, args):
+    """`nightly`'s first step (SE-49): last night's PRs, before the refresh wipes their verdicts and the session's
+    `supersedes` lines from the run's worktree. A failed merge is logged and must not cost the night."""
+    try:
+        merge(args)
+    except Exception as e:  # noqa: BLE001
+        log('merge before the run failed: %s' % e)
+
+
 def load_json(name, default):
     try:
         with open(os.path.join(STATE_DIR, name), encoding='utf-8') as f:

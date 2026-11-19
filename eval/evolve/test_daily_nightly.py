@@ -66,7 +66,7 @@ class NightlyOrderTest(unittest.TestCase):
                 mock.patch.object(daily.g, 'main_repo', lambda *a: '/repo'), \
                 mock.patch.object(daily, 'cmd_merge', first_step), \
                 mock.patch.object(daily.g, 'refresh_worktree', lambda *a: calls.append('refresh')), \
-                mock.patch.object(daily, 'log', lambda *a: calls.append('log')), \
+                mock.patch.object(daily.steps, 'log', lambda *a: calls.append('log')), \
                 mock.patch.object(daily.subprocess, 'run', run):
             code = daily.main(['nightly', '--worktree', 'wt'])
         return code, calls

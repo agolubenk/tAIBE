@@ -427,10 +427,7 @@ def cmd_nightly(args):
     repo = g.main_repo(HERE)
     try:
         with resources.Lock(os.path.join(STATE_DIR, 'run.lock')) as lock:
-            try:  # before the refresh: HERE still holds last night's verdicts with the session's `supersedes` lines
-                cmd_merge(args)
-            except Exception as e:  # noqa: BLE001 — a failed merge must not cost the night
-                log('merge before the run failed: %s' % e)
+            steps.merge_before_run(cmd_merge, args)  # before the refresh: HERE still holds last night's verdicts
             g.refresh_worktree(repo, args.worktree, steps.BASE)
             fresh = os.path.join(repo, args.worktree, 'eval', 'evolve', 'daily.py')
             os.set_inheritable(lock.fd, True)
