@@ -128,6 +128,11 @@ SSR), SQL сделан повторяемым (`IF NOT EXISTS`, `DROP TRIGGER IF
 Нерва и MCP досок не меняются. ИИ-сервисы `infra/` и копия слоя `.claude/` пока остаются в инкубаторе. Пошагово, с
 проверками и откатом — [`docs/ops/split-hr-taibe.md`](../docs/ops/split-hr-taibe.md).
 
+> **Сверка 14.11:** ссылок в HR нет с 05.11 (шаги Л1–Л3, HR #461/#462). Нерв, хаб 1mcp и сессионные MCP `ai-council`
+> и `owner-queue` работают на коде tAIBE (шапка и шаги С1–С4 —
+> [`docs/ops/taibe-extraction-runbook.md`](../docs/ops/taibe-extraction-runbook.md)). Копия `.claude/` в HR осталась
+> ([`multi-product.md`](../docs/plans/roadmap/multi-product.md), строка «Слой `.claude/`»).
+
 ## Стенд d4dev — переключён на tAIBE (03.11)
 
 Стенд `d4dev.admin.hrhelper.space` работает образом, собранным из `boards/` этого репозитория. Сейчас это `96ea332-b17`

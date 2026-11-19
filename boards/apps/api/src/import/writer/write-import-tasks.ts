@@ -1,5 +1,6 @@
 import type db from "../../database";
 import { activityTable, taskTable } from "../../database/schema";
+import { authorMark } from "../../forest/author-kind";
 import { chunk } from "./chunk";
 import type { PlannedImportTask } from "./plan-import-tasks";
 
@@ -36,7 +37,8 @@ export async function writeImportTasks(
         type: "created",
         userId: importedBy,
         content: null,
-        eventData: {},
+        // TB-83: imported text is not the importer's own words.
+        eventData: authorMark("agent"),
         createdAt: task.createdAt,
       })),
     );

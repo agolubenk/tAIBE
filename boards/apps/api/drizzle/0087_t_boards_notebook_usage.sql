@@ -1,0 +1,1 @@
+ALTER TABLE "notebook_message" ADD COLUMN "usage" jsonb;

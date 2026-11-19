@@ -11,6 +11,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useFreshSession } from "@/components/reauth/use-fresh-session";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -23,6 +24,7 @@ import {
 import useUpdateAdminUser from "@/hooks/mutations/admin/use-update-admin-user";
 import type { AdminUser } from "@/hooks/queries/admin/use-admin-users";
 import { hasAgentRole } from "@/lib/instance-admin";
+import { ReauthCancelledError } from "@/lib/reauth/reauth-errors";
 import {
   buildUserUpdate,
   EMPTY_EDIT_USER_VALUES,
@@ -47,6 +49,7 @@ export function EditUserDialog({
     user ? getEditUserValues(user) : EMPTY_EDIT_USER_VALUES,
   );
   const { mutateAsync: updateUser, isPending } = useUpdateAdminUser();
+  const freshSession = useFreshSession();
 
   if (user !== previousUser) {
     setPreviousUser(user);
@@ -75,10 +78,15 @@ export function EditUserDialog({
     if (!update) return;
 
     try {
-      await updateUser(update);
+      // TB-31 R-5: a new email needs a fresh sign-in; name and role do not.
+      await freshSession.run(() => updateUser(update));
       onClose();
-    } catch {
-      return;
+    } catch (error) {
+      // Cancelled window: the email field gets its saved value back (spec R-5).
+      if (error instanceof ReauthCancelledError) {
+        const saved = getEditUserValues(editedUser).email;
+        setValues((current) => ({ ...current, email: saved }));
+      }
     }
   };
 
@@ -190,6 +198,8 @@ export function EditUserDialog({
             </Button>
           </DialogFooter>
         </form>
+        {/* Outside <form>: a submit inside the window must not reach this form. */}
+        {freshSession.dialog}
       </DialogPopup>
     </Dialog>
   );
