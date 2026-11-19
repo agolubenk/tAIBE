@@ -17,6 +17,8 @@ const endpoints = [
     "/sign-in/email",
     { email: "captcha@example.com", password: "long-test-password" },
   ],
+  // TB-31 R-1: the login signs in with a password like the email does.
+  ["/sign-in/username", { username: "captcha42", password: "long-test-password" }],
   [
     "/sign-up/email",
     {
