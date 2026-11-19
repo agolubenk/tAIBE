@@ -11,9 +11,9 @@ import {
 import { canAccessProject } from "../../project-access/can-access-project";
 import { projectAccessCondition } from "../../project-access/project-access-condition";
 import { isMarkerQuery } from "../../utils/visible-match";
-import { TASK_SHORT_ID_PATTERN } from "../task-short-id";
+import type { SearchResult } from "../search-result";
 import { getActivitySearchContent } from "./activity-content";
-import { findTaskByShortId } from "./short-id-task";
+import { exactTaskMatches } from "./exact-task-match";
 import { searchWindow } from "./visible-rows";
 
 type SearchParams = {
@@ -32,26 +32,6 @@ type SearchParams = {
   limit?: number;
   /** A caller with a token reads masked text: matches count only in it (TB-191). */
   tokenCaller?: boolean;
-};
-
-type SearchResult = {
-  id: string;
-  type: "task" | "project" | "workspace" | "comment" | "activity";
-  title: string;
-  description?: string;
-  content?: string;
-  projectId?: string;
-  projectName?: string;
-  workspaceId?: string;
-  workspaceName?: string;
-  userId?: string;
-  userName?: string;
-  createdAt: Date;
-  relevanceScore: number;
-  taskNumber?: number;
-  projectSlug?: string;
-  priority?: string;
-  status?: string;
 };
 
 async function globalSearch(params: SearchParams): Promise<{
@@ -120,54 +100,17 @@ async function globalSearch(params: SearchParams): Promise<{
     projectAccessCondition(resolvedUserId, projectTable.id),
   );
 
-  // Check if query matches short-id pattern (e.g. "DEP-23"). `generateProjectSlug`
-  // normalizes to NFKC before it stores a key, so the query is normalized too,
-  // or a decomposed "ПА-23" would never reach the stored composed form.
-  const shortIdMatch = query.normalize("NFKC").match(TASK_SHORT_ID_PATTERN);
-
-  const shortIdNumber = Number(shortIdMatch?.[2]);
-
   if (type === "all" || type === "tasks") {
     const seenTaskIds = new Set<string>();
 
-    // If query matches short-id pattern, look up by project slug + task number first
-    if (
-      shortIdMatch?.[1] &&
-      Number.isSafeInteger(shortIdNumber) &&
-      shortIdNumber > 0 &&
-      shortIdNumber <= 2_147_483_647
-    ) {
-      const slug = shortIdMatch[1];
-      const taskNumber = shortIdNumber;
-
-      const shortIdTasks = await findTaskByShortId(
-        slug,
-        taskNumber,
-        workspaceFilter,
-        projectId,
-      );
-
-      for (const task of shortIdTasks) {
-        seenTaskIds.add(task.id);
-        results.push({
-          id: task.id,
-          type: "task",
-          title: task.title,
-          description: task.description || undefined,
-          projectId: task.projectId,
-          projectName: task.projectName || undefined,
-          projectSlug: task.projectSlug || undefined,
-          workspaceId: task.workspaceId || undefined,
-          workspaceName: task.workspaceName || undefined,
-          userId: task.userId || undefined,
-          userName: task.userName || undefined,
-          createdAt: task.createdAt,
-          relevanceScore: 10, // Highest relevance for exact short-id match
-          taskNumber: task.taskNumber || undefined,
-          priority: task.priority || undefined,
-          status: task.status,
-        });
-      }
+    // The card the query names exactly (Notion id or link, key "DEP-23") first.
+    for (const task of await exactTaskMatches({
+      query,
+      workspaceFilter,
+      projectId,
+    })) {
+      seenTaskIds.add(task.id);
+      results.push(task);
     }
 
     // Also run text search for tasks

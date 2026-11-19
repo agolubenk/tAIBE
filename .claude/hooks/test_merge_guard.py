@@ -442,6 +442,7 @@ import test_merge_guard_pathcase  # noqa: E402,F401  — защищённый п
 import test_merge_guard_visibility  # noqa: E402,F401  — смена видимости репозитория, Контролю тоже нет (IS-124, SE-91)
 import test_merge_guard_lines  # noqa: E402,F401  — склейка строк `\`⏎ (SE-83)
 import test_merge_guard_tmux  # noqa: E402,F401  — окна сессий в tmux: агенту только чтение (OPS-82)
+import test_merge_guard_alias  # noqa: E402,F401  — инструмент под другим именем: регистр, ссылка, копия (SE-90)
 
 # --- бюджет git ---
 mg_git = sys.modules["merge_guard_git"]
@@ -496,7 +497,7 @@ settings = json.loads((Path(__file__).resolve().parents[1] / "settings.json").re
 if dup_keys:
     failures.append(f"settings.json: повторные ключи {dup_keys} — JSON оставит только последний")
 matchers = [m["matcher"] for m in settings["hooks"]["PreToolUse"]
-            if any("merge-guard" in h.get("command", "") for h in m["hooks"])]
+            if any(re.search(r"merge-guard|merge_guard_entry", h.get("command", "")) for h in m["hooks"])]  # SE-168
 covered = ["Bash", "Monitor", "Edit", "Write", "MultiEdit", "NotebookEdit", "mcp__github__merge_pull_request",
            "mcp__owner-queue__oq_put", "mcp__hub__owner-queue_1mcp_oq_patch", CTX + "ctx_execute", CTX + "ctx_batch_execute",
            CTX + "ctx_execute_file", "mcp__serena__replace_content", "mcp__plugin_serena_serena__create_text_file"]
