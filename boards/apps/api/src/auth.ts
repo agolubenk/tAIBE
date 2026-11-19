@@ -381,7 +381,7 @@ export const auth = betterAuth({
     username(USERNAME_PLUGIN_OPTIONS),
     // TB-31 R-6: options and checks in passkey/.
     passkey(passkeyOptions()),
-    passkeyHooksPlugin(),
+    passkeyHooksPlugin({ clientUrl }),
     magicLink({
       disableSignUp: isPasswordRegistrationDisabled,
       sendMagicLink: async ({ email, url }, ctx) => {

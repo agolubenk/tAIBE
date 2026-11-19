@@ -1,4 +1,4 @@
-import { REAUTH_ROUTES } from "@kaneo/permissions";
+import { PASSKEY_ALERT_ROUTES, REAUTH_ROUTES } from "@kaneo/permissions";
 
 type Env = Record<string, string | undefined>;
 type Rule = { window: number; max: number };
@@ -20,6 +20,9 @@ export const AUTH_RATE_LIMIT_RULES: Record<string, Rule> = {
   // and a cookie on each call; verification checks a signature.
   "/passkey/generate-authenticate-options": { window: 60, max: 20 },
   "/passkey/verify-authentication": { window: 60, max: 10 },
+  // «This wasn't me»: open without a session, the token is the proof.
+  [PASSKEY_ALERT_ROUTES.inspect]: { window: 60, max: 10 },
+  [PASSKEY_ALERT_ROUTES.confirm]: { window: 60, max: 5 },
   "/sign-in/magic-link": { window: 60, max: 3 },
   "/sign-in/email-otp": { window: 60, max: 3 },
   [REAUTH_ROUTES.password]: { window: 60, max: 5 },

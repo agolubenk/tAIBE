@@ -5,6 +5,7 @@ import { EmailIntro } from "../components/email-intro";
 import { EmailNote } from "../components/email-note";
 import { EmailShell } from "../components/email-shell";
 import { FallbackLink } from "../components/fallback-link";
+import { formatDate } from "../components/format-date";
 import { footerLinks } from "../components/footer-links";
 import {
   type RequestContext,
@@ -20,7 +21,8 @@ void React;
  * page that removes the key, the API keys made after it, and every session.
  */
 export type PasskeyAddedEmailProps = RequestContext & {
-  keyName: string;
+  /** null — the key has no name: the email says «Passkey from <date>». */
+  keyName: string | null;
   alertLink: string;
   /** Lifetime of the link in days; the server passes its own TTL. */
   days: number;
@@ -39,6 +41,7 @@ const messages = {
     note: (days: number) =>
       `Then there is nothing to do. If it wasn't you, open the link: it removes this key, the API keys made after it, and signs out every session. The link works for ${days} days.`,
     footer: "Kaneo security email",
+    unnamed: (date: string) => `Passkey from ${date}`,
   },
   de: {
     preview: (name: string) => `Der Passkey „${name}“ kann sich jetzt bei deinem Kaneo-Konto anmelden.`,
@@ -51,6 +54,7 @@ const messages = {
     note: (days: number) =>
       `Dann ist nichts zu tun. Warst du es nicht, öffne den Link: Er entfernt diesen Passkey und die danach erstellten API-Schlüssel und meldet alle Sitzungen ab. Der Link gilt ${days} Tage.`,
     footer: "Kaneo Sicherheits-E-Mail",
+    unnamed: (date: string) => `Passkey vom ${date}`,
   },
   vi: {
     preview: (name: string) => `Khóa truy cập "${name}" giờ có thể đăng nhập vào tài khoản Kaneo của bạn.`,
@@ -63,6 +67,7 @@ const messages = {
     note: (days: number) =>
       `Nếu là bạn thì không cần làm gì. Nếu không phải bạn, hãy mở liên kết: nó xóa khóa này, các khóa API tạo sau nó và đăng xuất mọi phiên. Liên kết có hiệu lực trong ${days} ngày.`,
     footer: "Email bảo mật Kaneo",
+    unnamed: (date: string) => `Khóa truy cập ngày ${date}`,
   },
   ja: {
     preview: (name: string) => `パスキー「${name}」で Kaneo アカウントにサインインできるようになりました。`,
@@ -75,6 +80,7 @@ const messages = {
     note: (days: number) =>
       `その場合は何もする必要はありません。心当たりがない場合はリンクを開いてください。このパスキーとその後に作成された API キーを削除し、すべてのセッションからサインアウトします。リンクの有効期限は${days}日です。`,
     footer: "Kaneo セキュリティメール",
+    unnamed: (date: string) => `${date} のパスキー`,
   },
   "zh-tw": {
     preview: (name: string) => `通行金鑰「${name}」現在可以登入你的 Kaneo 帳號。`,
@@ -87,6 +93,7 @@ const messages = {
     note: (days: number) =>
       `如果是你，就不需要做任何事。如果不是你，請開啟連結：它會移除這把金鑰與之後建立的 API 金鑰，並登出所有工作階段。連結在 ${days} 天內有效。`,
     footer: "Kaneo 安全性通知",
+    unnamed: (date: string) => `${date} 的通行金鑰`,
   },
 } as const;
 
@@ -97,6 +104,18 @@ const subjects = {
   ja: (name: string) => `Kaneo アカウントにパスキーが追加されました：${name}`,
   "zh-tw": (name: string) => `你的 Kaneo 帳號新增了通行金鑰：${name}`,
 } as const;
+
+/** The name the email shows: the key's own, or «Passkey from <date>». */
+export function passkeyDisplayName(
+  keyName: string | null,
+  addedAt: Date | string,
+  locale?: string | null,
+): string {
+  if (keyName) return keyName;
+  const emailLocale = resolveEmailLocale(locale);
+  const date = formatDate(addedAt, emailHtmlLang(emailLocale)) ?? "";
+  return messages[emailLocale].unnamed(date);
+}
 
 export function passkeyAddedSubject(name: string, locale?: string | null) {
   return subjects[resolveEmailLocale(locale)](name);
@@ -114,14 +133,15 @@ const PasskeyAddedEmail = ({
 }: PasskeyAddedEmailProps) => {
   const emailLocale = resolveEmailLocale(locale);
   const copy = messages[emailLocale];
+  const name = passkeyDisplayName(keyName, requestedAt ?? new Date(), locale);
 
   return (
     <EmailShell
       title={copy.title}
-      preview={copy.preview(keyName)}
+      preview={copy.preview(name)}
       lang={emailHtmlLang(emailLocale)}
     >
-      <EmailIntro title={copy.title} subtitle={copy.subtitle(keyName)} />
+      <EmailIntro title={copy.title} subtitle={copy.subtitle(name)} />
       <EmailButton href={alertLink} icon="key-round-light">
         {copy.cta}
       </EmailButton>

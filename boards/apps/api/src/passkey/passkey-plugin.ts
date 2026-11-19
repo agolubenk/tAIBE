@@ -1,12 +1,18 @@
 import type { BetterAuthPlugin } from "better-auth";
 import { createAuthMiddleware, isAPIError } from "better-auth/api";
 import {
+  addedPasskey,
+  notifyPasskeyAdded,
+  passkeyAlertEndpoints,
+} from "./passkey-alert";
+import {
   assertBelowPasskeyLimit,
   cookieSession,
   replaceConfirmedSession,
 } from "./passkey-confirm";
 
 const REGISTER_OPTIONS = "/passkey/generate-register-options";
+const VERIFY_REGISTRATION = "/passkey/verify-registration";
 const AUTHENTICATE_OPTIONS = "/passkey/generate-authenticate-options";
 const VERIFY_AUTHENTICATION = "/passkey/verify-authentication";
 
@@ -14,11 +20,17 @@ const VERIFY_AUTHENTICATION = "/passkey/verify-authentication";
  * TB-31 R-6: our hooks around `@better-auth/passkey`. The fresh-session
  * guard on registration and deletion is in reauth/guard.ts; the checks that
  * need the verified key are the plugin's `afterVerification` callbacks
- * (passkey-options.ts).
+ * (passkey-options.ts). The «A passkey was added» email and its «This
+ * wasn't me» routes are in passkey-alert.ts.
  */
-export function passkeyHooksPlugin(): BetterAuthPlugin {
+export function passkeyHooksPlugin({
+  clientUrl,
+}: {
+  clientUrl: string;
+}): BetterAuthPlugin {
   return {
     id: "tb-passkey",
+    endpoints: passkeyAlertEndpoints,
     hooks: {
       before: [
         {
@@ -45,6 +57,19 @@ export function passkeyHooksPlugin(): BetterAuthPlugin {
             )
               return;
             return ctx.json({ ...returned, userVerification: "required" });
+          }),
+        },
+        {
+          // The key is stored: the email goes to the account's address.
+          matcher: (ctx) => ctx.path === VERIFY_REGISTRATION,
+          handler: createAuthMiddleware(async (ctx) => {
+            const key = addedPasskey(ctx.context.returned);
+            if (!key) return;
+            await notifyPasskeyAdded(
+              key,
+              clientUrl,
+              ctx.request?.headers ?? ctx.headers,
+            );
           }),
         },
         {

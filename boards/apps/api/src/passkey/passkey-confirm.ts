@@ -1,4 +1,7 @@
-import type { PasskeyOptions } from "@better-auth/passkey";
+import {
+  getAuthenticatorName,
+  type PasskeyOptions,
+} from "@better-auth/passkey";
 import {
   PASSKEY_ERRORS,
   PASSKEY_MAX_PER_USER,
@@ -122,7 +125,9 @@ export async function assertBelowPasskeyLimit(userId: string): Promise<void> {
 /**
  * `registration.afterVerification`: a key without a PIN or biometrics is not
  * taken, the limit is checked once more (two tabs), and the signed-in person
- * gets no second session.
+ * gets no second session. A key without a name from the browser gets its
+ * provider's name by `aaguid`; an unknown one stays unnamed, and the web and
+ * the email call it «Passkey from <date>».
  */
 export const checkPasskeyRegistration: AfterRegistration = async ({
   ctx,
@@ -142,4 +147,6 @@ export const checkPasskeyRegistration: AfterRegistration = async ({
     });
   }
   await assertBelowPasskeyLimit(user.id);
+  const name = getAuthenticatorName(verification.registrationInfo.aaguid);
+  return name ? { name } : undefined;
 };

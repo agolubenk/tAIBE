@@ -122,8 +122,12 @@ export {
 } from "./pipeline-toggles.js";
 
 export {
+  PASSKEY_ALERT_PAGE,
+  PASSKEY_ALERT_ROUTES,
+  PASSKEY_ALERT_TTL_DAYS,
   PASSKEY_ERRORS,
   PASSKEY_MAX_PER_USER,
+  type PasskeyAlertInspect,
   type PasskeyError,
 } from "./passkey.js";
 
