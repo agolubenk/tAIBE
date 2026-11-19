@@ -170,9 +170,7 @@ export async function revokeByPasskeyAlert(
     await tx.delete(table).where(eq(table.id, found.rowId));
     const agentIds = [
       ...new Set(
-        removedKeys
-          .map((key) => key.referenceId)
-          .filter((id) => id !== userId),
+        removedKeys.map((key) => key.referenceId).filter((id) => id !== userId),
       ),
     ];
     return { userId, agentIds };

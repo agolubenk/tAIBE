@@ -27,8 +27,7 @@ export function addedPasskey(returned: unknown): AddedPasskey | null {
   if (!returned || typeof returned !== "object" || isAPIError(returned))
     return null;
   const key = returned as Record<string, unknown>;
-  if (typeof key.id !== "string" || typeof key.userId !== "string")
-    return null;
+  if (typeof key.id !== "string" || typeof key.userId !== "string") return null;
   const createdAt = new Date(
     key.createdAt instanceof Date || typeof key.createdAt === "string"
       ? key.createdAt

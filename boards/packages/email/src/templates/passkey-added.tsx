@@ -31,7 +31,8 @@ export type PasskeyAddedEmailProps = RequestContext & {
 
 const messages = {
   en: {
-    preview: (name: string) => `The passkey "${name}" can now sign in to your Kaneo account.`,
+    preview: (name: string) =>
+      `The passkey "${name}" can now sign in to your Kaneo account.`,
     title: "A passkey was added",
     subtitle: (name: string) =>
       `The passkey "${name}" was added to your account. It signs in without a password.`,
@@ -44,12 +45,14 @@ const messages = {
     unnamed: (date: string) => `Passkey from ${date}`,
   },
   de: {
-    preview: (name: string) => `Der Passkey „${name}“ kann sich jetzt bei deinem Kaneo-Konto anmelden.`,
+    preview: (name: string) =>
+      `Der Passkey „${name}“ kann sich jetzt bei deinem Kaneo-Konto anmelden.`,
     title: "Ein Passkey wurde hinzugefügt",
     subtitle: (name: string) =>
       `Der Passkey „${name}“ wurde deinem Konto hinzugefügt. Er meldet dich ohne Passwort an.`,
     cta: "Das war ich nicht",
-    fallback: "Button funktioniert nicht? Füge diesen Link in deinen Browser ein:",
+    fallback:
+      "Button funktioniert nicht? Füge diesen Link in deinen Browser ein:",
     noteTitle: "Warst du das?",
     note: (days: number) =>
       `Dann ist nichts zu tun. Warst du es nicht, öffne den Link: Er entfernt diesen Passkey und die danach erstellten API-Schlüssel und meldet alle Sitzungen ab. Der Link gilt ${days} Tage.`,
@@ -57,7 +60,8 @@ const messages = {
     unnamed: (date: string) => `Passkey vom ${date}`,
   },
   vi: {
-    preview: (name: string) => `Khóa truy cập "${name}" giờ có thể đăng nhập vào tài khoản Kaneo của bạn.`,
+    preview: (name: string) =>
+      `Khóa truy cập "${name}" giờ có thể đăng nhập vào tài khoản Kaneo của bạn.`,
     title: "Đã thêm một khóa truy cập",
     subtitle: (name: string) =>
       `Khóa truy cập "${name}" đã được thêm vào tài khoản của bạn. Khóa này đăng nhập không cần mật khẩu.`,
@@ -70,12 +74,14 @@ const messages = {
     unnamed: (date: string) => `Khóa truy cập ngày ${date}`,
   },
   ja: {
-    preview: (name: string) => `パスキー「${name}」で Kaneo アカウントにサインインできるようになりました。`,
+    preview: (name: string) =>
+      `パスキー「${name}」で Kaneo アカウントにサインインできるようになりました。`,
     title: "パスキーが追加されました",
     subtitle: (name: string) =>
       `パスキー「${name}」があなたのアカウントに追加されました。パスワードなしでサインインできます。`,
     cta: "心当たりがない",
-    fallback: "ボタンが機能しない場合は、このリンクをブラウザに貼り付けてください：",
+    fallback:
+      "ボタンが機能しない場合は、このリンクをブラウザに貼り付けてください：",
     noteTitle: "あなたが追加しましたか？",
     note: (days: number) =>
       `その場合は何もする必要はありません。心当たりがない場合はリンクを開いてください。このパスキーとその後に作成された API キーを削除し、すべてのセッションからサインアウトします。リンクの有効期限は${days}日です。`,
@@ -83,7 +89,8 @@ const messages = {
     unnamed: (date: string) => `${date} のパスキー`,
   },
   "zh-tw": {
-    preview: (name: string) => `通行金鑰「${name}」現在可以登入你的 Kaneo 帳號。`,
+    preview: (name: string) =>
+      `通行金鑰「${name}」現在可以登入你的 Kaneo 帳號。`,
     title: "已新增通行金鑰",
     subtitle: (name: string) =>
       `通行金鑰「${name}」已新增至你的帳號，可以不用密碼登入。`,

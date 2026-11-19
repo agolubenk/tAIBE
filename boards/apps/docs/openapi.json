@@ -6636,6 +6636,7 @@
                   "type": "string",
                   "enum": [
                     "password",
+                    "passkey",
                     "emailCode"
                   ]
                 },

@@ -40,9 +40,9 @@ describe("PasskeyAddedEmail (TB-31 R-6)", () => {
     ["de-DE", "Passkey vom 19. Nov. 2026"],
     ["ja-JP", "2026年11月19日 のパスキー"],
   ])("names an unnamed key in %s", (locale, name) => {
-    expect(
-      passkeyDisplayName(null, "2026-11-19T10:00:00.000Z", locale),
-    ).toBe(name);
+    expect(passkeyDisplayName(null, "2026-11-19T10:00:00.000Z", locale)).toBe(
+      name,
+    );
   });
 
   it("keeps the key's own name", () => {
