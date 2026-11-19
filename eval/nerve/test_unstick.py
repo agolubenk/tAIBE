@@ -1,6 +1,7 @@
 """SE-174 and SE-187 in the Nerve: a lift (the reset, or an early lift before it) builds a wake queue (eval/nerve/wake.py).
 coord goes first, then one role at a time in team_status.ORDER; after a role that got Enter the queue waits
-budget.unstick_pause_s. A role without an assign or reply since the limit gets no Enter (D7). The owner's pause, the
+budget.unstick_pause_s. A role without a task (TASK_KINDS) since the limit gets no Enter (D7); its line waits
+in later, and the first task to the role puts it back into the queue. The owner's pause, the
 5-hour window at budget.warn_at or a new limit hold the queue. Each line writes one `limit.unstick` with keys into the
 journal of the pane's product, each product gets one summary (also an empty one), and a failure does not raise.
 D2 (the session stands because of this limit) is read here, in the Nerve code. limit_unstick itself is a mock here:
@@ -87,8 +88,11 @@ class QueueBase(unittest.TestCase):
             for line, role, pane, _tty, path in panes:
                 if line in only and fresh(line):
                     kind, action, sha, woke = out[line]
+                    if woke and not wake:  # as limit_unstick: Esc only, or no keys on the idle path
+                        kind, action, woke = (kind, "esc; no open task", False) if kind == "menu" else (
+                            None, "no keys: status idle, no open task", False)
                     got.append({"line": line, "role": role, "pane": pane, "path": path, "kind": kind,
-                                "action": action, "sha256": sha, "woke": woke and wake})
+                                "action": action, "sha256": sha, "woke": woke})
             return got
         stack = contextlib.ExitStack()
         stack.enter_context(mock.patch.object(limit_unstick, "role_panes", return_value=list(panes)))
@@ -164,6 +168,115 @@ class QueueTest(QueueBase):
             task(ctx, ["release"])
             wake.step(ctx, st, NOW + timedelta(minutes=3), False)
         self.assertEqual(self.calls[:3], [(["r.co00"], True), (["r.ef56"], True), (["r.ab12"], False)])
+
+    def test_a_review_a_lens_or_a_task_opens_the_role(self):  # coord 01:52 on #496, acceptance 1
+        for kind in ("review", "lens", "task"):
+            with self.subTest(kind), tempfile.TemporaryDirectory() as d:
+                self.calls = []
+                ctx, st = Ctx(d), {}
+                task(ctx, ["backend"], kind=kind)
+                with self.fake():
+                    wake.start(ctx, st, RESET, HIT, RESET, LABEL)
+                    wake.step(ctx, st, NOW, False)
+                    wake.step(ctx, st, NOW + timedelta(minutes=3), False)
+                self.assertEqual(self.calls[:3], [(["r.co00"], True), (["r.ef56"], False), (["r.ab12"], True)])
+                self.assertIn(f"limit:unstick:{RESET}:r.ab12", [r["key"] for r in recs(d)])
+
+    def test_an_esc_only_role_gets_enter_after_a_task_comes(self):  # coord 01:52 on #496, acceptance 2
+        ctx, st = Ctx(self.d), {}
+        with self.fake():
+            wake.start(ctx, st, RESET, HIT, RESET, LABEL)
+            wake.step(ctx, st, NOW, False)  # coord: Enter
+            wake.step(ctx, st, NOW + timedelta(minutes=3), False)  # release, backend, plan: no task
+            self.assertEqual(st["wake"]["lines"], [])
+            self.assertEqual(st["wake"]["later"], [["r.ab12", "backend", "hr-helper"]])
+            self.assertIn(f"limit:unstick:{RESET}:summary", [r["key"] for r in recs(self.d)])
+            task(ctx, ["plan"], kind="review")  # not backend's
+            wake.step(ctx, st, NOW + timedelta(minutes=6), False)
+            self.assertEqual(len(self.calls), 4)
+            task(ctx, ["backend"], kind="review")
+            wake.step(ctx, st, NOW + timedelta(minutes=7), False)
+            self.assertEqual(self.calls[4:], [(["r.ab12"], True)])
+            self.assertEqual(st["wake"]["next"], "2026-10-28T14:51:00+03:00")  # the same pause after the Enter
+            wake.step(ctx, st, NOW + timedelta(minutes=10), False)
+        self.assertIsNone(st["wake"])
+        self.assertEqual(len(self.calls), 5)
+        got = [r for r in recs(self.d) if r["key"].endswith("r.ab12")]
+        self.assertEqual([r["key"] for r in got], [f"limit:unstick:{RESET}:r.ab12", f"limit:unstick:{RESET}:task:r.ab12"])
+        self.assertEqual(got[0]["text"], f"backend (r.ab12, панель %7), {LABEL}: меню лимита — esc; no open task; "
+                                         "sha256 " + "a" * 16)
+        self.assertEqual(got[1]["text"], f"backend (r.ab12, панель %7), {LABEL} (задание после подъёма): меню лимита — "
+                                         "esc, enter; sha256 " + "a" * 16)
+        self.assertEqual(len([r for r in recs(self.d) if r["key"].endswith("summary")]), 1)
+
+    def test_a_task_during_the_pause_waits_for_the_pause(self):
+        ctx, st = Ctx(self.d), {}
+        task(ctx, ["release"])
+        with self.fake(out=dict(OUT, **{"r.ef56": ("idle", "idle text, enter", "", True)})):
+            wake.start(ctx, st, RESET, HIT, RESET, LABEL)
+            wake.step(ctx, st, NOW, False)  # coord
+            wake.step(ctx, st, NOW + timedelta(minutes=3), False)  # release: Enter, pause to 14:47
+            self.assertEqual(self.asked(), ["r.co00", "r.ef56"])
+            wake.step(ctx, st, NOW + timedelta(minutes=6), False)  # backend and plan: no task
+            task(ctx, ["all"], kind="assign")
+            wake.step(ctx, st, NOW + timedelta(minutes=7), False)  # a task to all: backend, Enter
+            self.assertEqual(self.asked(), ["r.co00", "r.ef56", "r.ab12", "r.cd34", "r.ab12"])
+            self.assertEqual(st["wake"]["later"], [])  # plan got "menu stayed": nothing to wake later
+            wake.step(ctx, st, NOW + timedelta(minutes=9), False)  # the pause holds
+            self.assertIsNotNone(st["wake"])
+            wake.step(ctx, st, NOW + timedelta(minutes=10), False)
+        self.assertIsNone(st["wake"])
+
+    def test_a_later_line_without_its_pane_or_after_a_new_lift_is_dropped(self):
+        ctx, st = Ctx(self.d), {}
+        with self.fake():
+            wake.start(ctx, st, RESET, HIT, RESET, LABEL)
+            wake.step(ctx, st, NOW, False)
+            wake.step(ctx, st, NOW + timedelta(minutes=3), False)
+            wake.start(ctx, st, RESET, HIT, RESET, LABEL)  # the same lift again keeps the later line
+            self.assertEqual(st["wake"]["later"], [["r.ab12", "backend", "hr-helper"]])
+            self.assertEqual(st["wake"]["lines"], [])
+        with self.fake(panes=[p for p in PANES if p[0] != "r.ab12"]):
+            task(ctx, ["backend"])
+            wake.step(ctx, st, NOW + timedelta(minutes=6), False)  # the session is gone: no line, no keys
+        self.assertIsNone(st["wake"])
+        self.assertFalse([r for r in recs(self.d) if ":task:" in r["key"]])
+
+    def test_a_new_lift_drops_the_later_lines_and_writes_no_second_summary(self):
+        ctx, st = Ctx(self.d), {}
+        with self.fake():
+            wake.start(ctx, st, RESET, HIT, RESET, LABEL)
+            wake.step(ctx, st, NOW, False)
+            wake.step(ctx, st, NOW + timedelta(minutes=3), False)
+            self.assertTrue(st["wake"]["later"])
+            wake.start(ctx, st, "early:x", HIT, RESET, "ранний подъём")
+            self.assertEqual(st["wake"]["later"], [])
+        self.assertEqual([r["key"] for r in recs(self.d) if r["key"].endswith("summary")],
+                         [f"limit:unstick:{RESET}:summary"])
+
+    def test_a_failure_drops_the_later_lines_too(self):  # tmux is gone: the roles wait for the owner
+        ctx, st = Ctx(self.d), {}
+        with self.fake(out=dict(OUT, **{"r.cd34": ("menu", "esc, enter", "b" * 64, True)})):
+            wake.start(ctx, st, RESET, HIT, RESET, LABEL)
+            wake.step(ctx, st, NOW, False)
+            wake.step(ctx, st, NOW + timedelta(minutes=3), False)
+        self.assertEqual([x[0] for x in st["wake"]["later"]], ["r.ab12", "r.cd34"])
+        task(ctx, ["backend"])  # backend goes back into the queue, plan still waits
+        with self.fake(fail=OSError("tmux")):
+            wake.step(ctx, st, NOW + timedelta(minutes=6), False)
+        self.assertIsNone(st["wake"])
+        self.assertEqual([r["key"] for r in recs(self.d, "nerve.error")], [f"limit:unstick:{RESET}:error"])
+
+    def test_two_rows_of_one_line_both_get_a_summary_row(self):  # backend nit on #496: any() stopped at the first True
+        panes = [("r.ab12", "backend", "%7", "ttys001", HOME), ("r.ab12", "backend", "%17", "ttys011", HOME)]
+        ctx, st = Ctx(self.d), {}
+        task(ctx, ["backend"])
+        with self.fake(panes=panes):
+            wake.start(ctx, st, RESET, HIT, RESET, LABEL)
+            wake.step(ctx, st, NOW, False)
+            wake.step(ctx, st, NOW + timedelta(minutes=3), False)
+        self.assertEqual([r["text"] for r in recs(self.d) if r["key"].endswith("summary")],
+                         [f"{LABEL}: панели ролей 2 — backend r.ab12: esc, enter; backend r.ab12: esc, enter"])
 
     def test_the_owners_pause_the_warn_and_a_new_limit_hold_the_queue(self):
         for why in ("paused", "warn", "limit"):
