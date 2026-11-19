@@ -5,15 +5,15 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import {
   type ApiKeyExpiration,
-  DEFAULT_API_KEY_EXPIRATION,
   getExpirationSeconds,
   isApiKeyExpiration,
 } from "@/components/settings/api-keys/api-key-expirations";
 import { ApiKeyExpiryToggle } from "@/components/settings/api-keys/api-key-expiry-toggle";
 import {
-  ALL_WORKSPACES,
-  apiKeyWorkspaceMetadata,
-} from "@/components/settings/api-keys/api-key-workspace";
+  CREATE_API_KEY_DEFAULTS,
+  type CreateApiKeyFormValues,
+} from "@/components/settings/api-keys/api-key-form-defaults";
+import { apiKeyMetadata } from "@/components/settings/api-keys/api-key-workspace";
 import { useFreshSession } from "@/components/reauth/use-fresh-session";
 import { ApiKeyWorkspaceSelect } from "@/components/settings/api-keys/api-key-workspace-select";
 import { Button } from "@/components/ui/button";
@@ -37,16 +37,13 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import useCreateApiKey from "@/hooks/mutations/api-key/use-create-api-key";
 import { isReauthFlowError } from "@/lib/reauth/reauth-errors";
 import { toast } from "@/lib/toast";
 import type { CreateApiKeyResponse } from "@/types/api-key";
 
-type FormValues = {
-  name: string;
-  expiresIn: ApiKeyExpiration;
-  workspace: string;
-};
+type FormValues = CreateApiKeyFormValues;
 
 type CreateApiKeyDialogProps = {
   open: boolean;
@@ -75,17 +72,14 @@ export function CreateApiKeyDialog({
           .min(3, t("settings:apiKey.createDialog.validation.nameShort")),
         expiresIn: z.custom<ApiKeyExpiration>(isApiKeyExpiration),
         workspace: z.string().min(1),
+        readOnly: z.boolean(),
       }),
     [t],
   );
 
   const form = useForm<FormValues>({
     resolver: standardSchemaResolver(schema),
-    defaultValues: {
-      name: "",
-      expiresIn: DEFAULT_API_KEY_EXPIRATION,
-      workspace: ALL_WORKSPACES,
-    },
+    defaultValues: { ...CREATE_API_KEY_DEFAULTS },
   });
 
   const onSubmit = async (data: FormValues) => {
@@ -94,7 +88,7 @@ export function CreateApiKeyDialog({
         createApiKey({
           name: data.name,
           expiresIn: getExpirationSeconds(data.expiresIn),
-          metadata: apiKeyWorkspaceMetadata(data.workspace),
+          metadata: apiKeyMetadata(data.workspace, data.readOnly),
         }),
       );
       form.reset();
@@ -194,6 +188,29 @@ export function CreateApiKeyDialog({
                     <FormDescription className="text-xs">
                       {t("settings:apiKey.createDialog.workspaceDescription")}
                     </FormDescription>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="readOnly"
+                render={({ field }) => (
+                  <FormItem className="flex items-center justify-between gap-4">
+                    <div className="min-w-0 space-y-0.5">
+                      <FormLabel>
+                        {t("settings:apiKey.createDialog.readOnlyLabel")}
+                      </FormLabel>
+                      <FormDescription className="text-xs">
+                        {t("settings:apiKey.createDialog.readOnlyDescription")}
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={isPending}
+                      />
+                    </FormControl>
                   </FormItem>
                 )}
               />

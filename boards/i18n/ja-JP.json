@@ -838,6 +838,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "読み取り専用",
+				"readOnlyDescription": "このキーは読み取りのみ可能で、変更はできません。エージェントと MCP ハブには書き込みが必要なため、それらの場合はオフにしてください。",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -848,7 +850,8 @@
 				"expires": "有効期限: {{date}}",
 				"neverExpires": "無期限",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "読み取り専用"
 			}
 		},
 		"workspaceGeneral": {

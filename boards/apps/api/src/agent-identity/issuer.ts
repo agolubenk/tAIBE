@@ -24,6 +24,15 @@ export function agentKeyIssuer<E extends { Variables: BaseVariables }>(
       "an agent cannot issue agent keys; its owner's key does",
     );
   }
+  // TB-96 R-016: an agent key carries no access level of its own, so a key
+  // from a read-only key would write. Listing and switching agents is account
+  // management and stays with a person's session or full key too.
+  if (apiKey?.access === "read") {
+    throw new ForestError(
+      "agent_forbidden",
+      "a read-only key cannot issue or manage agent keys",
+    );
+  }
   const scope = apiKey?.workspaceScope;
   if (scope && scope.kind !== "all") {
     throw new ForestError(

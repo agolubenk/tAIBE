@@ -846,6 +846,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Yalnız oxumaq",
+				"readOnlyDescription": "Açar oxuya bilər, amma heç nəyi dəyişə bilməz. Agentlərə və MCP hub-ına yazma lazımdır — onlar üçün bunu söndürün.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -856,7 +858,8 @@
 				"expires": "Müddəti bitir: {{date}}",
 				"neverExpires": "Müddəti bitmir",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Yalnız oxumaq"
 			}
 		},
 		"workspaceGeneral": {

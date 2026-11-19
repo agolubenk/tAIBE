@@ -854,6 +854,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Lecture seule",
+				"readOnlyDescription": "La clé peut lire, mais ne peut rien modifier. Les agents et le hub MCP ont besoin d’écrire : désactivez cette option pour eux.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -864,7 +866,8 @@
 				"expires": "Expire le {{date}}",
 				"neverExpires": "N'expire jamais",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Lecture seule"
 			}
 		},
 		"workspaceGeneral": {

@@ -1742,6 +1742,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Tylko odczyt",
+				"readOnlyDescription": "Klucz może odczytywać dane, ale nie może niczego zmieniać. Agenci i hub MCP potrzebują zapisu — dla nich wyłącz tę opcję.",
 				"workspaceLabel": "Workspace"
 			},
 			"createdModal": {
@@ -1768,7 +1770,8 @@
 				"expires": "Wygasa {{date}}",
 				"neverExpires": "Nigdy nie wygasa",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Tylko odczyt"
 			}
 		},
 		"apiKeys": "Klucze API",

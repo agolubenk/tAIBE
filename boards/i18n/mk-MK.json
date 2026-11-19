@@ -846,6 +846,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Само читање",
+				"readOnlyDescription": "Клучот може да чита, но не може ништо да менува. На агентите и на MCP-хабот им треба запишување — за нив исклучете го.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -856,7 +858,8 @@
 				"expires": "Истекува {{date}}",
 				"neverExpires": "Никогаш не истекува",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Само читање"
 			}
 		},
 		"workspaceGeneral": {

@@ -83,6 +83,7 @@ function setApiKeyContext(c: Context, { key, rateLimit }: VerifiedApiKey) {
     enabled: key.enabled,
     permissions: key.permissions,
     workspaceScope: key.workspaceScope,
+    access: key.access,
     agent: key.agent,
     expiresAt: key.expiresAt ?? null,
   });

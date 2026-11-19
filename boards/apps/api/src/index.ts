@@ -102,6 +102,10 @@ import { assertAgentAuthRoute } from "./agent-identity/agent-auth-routes";
 import { realignAgentRoles } from "./agent-identity/realign-agent-roles";
 import { assertApiKeyAuthRoute } from "./utils/api-key-auth-routes";
 import { apiKeyRejection } from "./utils/api-key-rejection";
+import {
+  type ApiKeyAccess,
+  assertKeyAccessAllowsMethod,
+} from "./utils/api-key-access";
 import type { ApiKeyWorkspaceScope } from "./utils/api-key-workspace-scope";
 import { applyApiKeyHeaders } from "./utils/apply-api-key-headers";
 import { authenticateApiRequest } from "./utils/authenticate-api-request";
@@ -151,6 +155,7 @@ type ApiKey = {
   enabled: boolean;
   permissions: Record<string, string[]> | null;
   workspaceScope?: ApiKeyWorkspaceScope;
+  access?: ApiKeyAccess;
   agent?: { name: string } | null;
 };
 
@@ -491,6 +496,9 @@ export function createApp() {
     const apiKeyResult = await verifyApiKey(apiKeyHeader, { consume: false });
     if (apiKeyResult?.status !== "valid") throw apiKeyRejection(apiKeyResult);
     const scope = apiKeyResult.key.workspaceScope;
+    // TB-96: the read check first, so a write by a read-only key answers
+    // API_KEY_READ_ONLY and not one of the checks below.
+    assertKeyAccessAllowsMethod(apiKeyResult.key.access, c.req.method);
     assertScopedKeyAuthRoute(scope, c.req.method, c.req.path);
     assertAgentAuthRoute(apiKeyResult.key.agent, c.req.method, c.req.path);
     assertApiKeyAuthRoute(c.req.method, c.req.path);
@@ -820,6 +828,7 @@ export function createApp() {
       const apiKeyResult = await verifyApiKey(bearerToken, { consume: false });
       if (apiKeyResult?.status !== "valid") throw apiKeyRejection(apiKeyResult);
       const scope: ApiKeyWorkspaceScope = apiKeyResult.key.workspaceScope;
+      assertKeyAccessAllowsMethod(apiKeyResult.key.access, c.req.method);
       assertScopedKeyAuthRoute(scope, c.req.method, c.req.path);
       assertAgentAuthRoute(apiKeyResult.key.agent, c.req.method, c.req.path);
       assertApiKeyAuthRoute(c.req.method, c.req.path);

@@ -862,7 +862,9 @@
 				},
 				"workspaceLabel": "Продукт",
 				"workspaceAll": "Все мои продукты",
-				"workspaceDescription": "Ключ для одного продукта не видит другие продукты, уведомления и настройки аккаунта."
+				"workspaceDescription": "Ключ для одного продукта не видит другие продукты, уведомления и настройки аккаунта.",
+				"readOnlyLabel": "Только чтение",
+				"readOnlyDescription": "Ключ может читать, но не может ничего менять. Агентам и хабу MCP нужна запись — для них выключите."
 			},
 			"row": {
 				"actions": "Действия для {{name}}",
@@ -872,7 +874,8 @@
 				"expires": "Истекает {{date}}",
 				"neverExpires": "Бессрочный",
 				"workspaceBadge": "Только {{workspace}}",
-				"workspaceUnknown": "Один продукт"
+				"workspaceUnknown": "Один продукт",
+				"readOnlyBadge": "Только чтение"
 			}
 		},
 		"workspaceGeneral": {
