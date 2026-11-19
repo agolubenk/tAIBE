@@ -127,8 +127,8 @@ class Base(unittest.TestCase):
         L.write_json(L.lfile(line, ".json"), {"line": line, "terminal": "tmux", "role": role, "pane": pane, "tty": tty,
                                               "pane_pid": pane_pid, "server": server})
 
-    def session(self, pid, status, waiting=None, kind="interactive"):
-        L.write_json(self.sess / f"{pid}.json", self.sess_data(pid, status, waiting, kind))
+    def session(self, pid, status, waiting=None, kind="interactive", **extra):
+        L.write_json(self.sess / f"{pid}.json", dict(self.sess_data(pid, status, waiting, kind), **extra))
 
     def sess_data(self, pid, status, waiting=None, kind="interactive"):
         return {"pid": pid, "kind": kind, "status": status, **({"waitingFor": waiting} if waiting else {})}
@@ -145,8 +145,11 @@ class Base(unittest.TestCase):
     def keys(self):
         return [c[3:] for c in self.calls() if c[0] == "send-keys"]
 
-    def run_unstick(self, fresh=lambda line: True):
-        return U.unstick(fresh, self.sx, self.slept.append)
+    def run_unstick(self, fresh=lambda line: True, stuck=None):
+        return U.unstick(fresh, self.sx, self.slept.append, stuck)
+
+    def outcomes(self, **kw):
+        return [(d["kind"], d["action"]) for d in self.run_unstick(**kw)]
 
 
 class MatchTest(Base):
@@ -206,7 +209,7 @@ class UnstickTest(Base):
     def test_a_menu_text_above_a_permission_dialog_gets_nothing(self):  # N3 (a)
         self.session(self.PID, "waiting", "permission prompt")
         self.spec({self.PANE: [PERMISSION]})
-        self.assertEqual(self.run_unstick(), [])
+        self.assertEqual(self.outcomes(), [(None, "no keys: status waiting (permission prompt)")])
         self.assertEqual(self.keys(), [])
 
     def test_menu_with_a_permission_status_gets_nothing(self):  # N3 (b)
@@ -214,7 +217,8 @@ class UnstickTest(Base):
             with self.subTest(status=status, waiting=waiting):
                 self.session(self.PID, status, waiting)
                 self.spec({self.PANE: [MENU, PREFILLED]})
-                self.assertEqual(self.run_unstick(), [])
+                self.assertEqual(self.outcomes(), [(None, f"no keys: status {status}"
+                                                          + (f" ({waiting})" if waiting else ""))])
                 self.assertEqual(self.keys(), [])
 
     def test_menu_that_stays_gets_no_text(self):  # N3 (c)
@@ -254,7 +258,7 @@ class UnstickTest(Base):
     def test_no_screen_is_read_when_the_status_is_not_the_menu(self):  # one capture only where the status says menu
         self.session(self.PID, "busy")
         self.spec({self.PANE: [MENU]})
-        self.assertEqual(self.run_unstick(), [])
+        self.assertEqual(self.outcomes(stuck=lambda s: True), [(None, "no keys: status busy")])
         self.assertEqual([c[0] for c in self.calls()], ["list-panes", "display-message"])
 
     def test_a_failure_on_one_pane_keeps_the_others(self):  # backend N2 on #483
@@ -283,8 +287,27 @@ class UnstickTest(Base):
         self.session(701, "waiting", "dialog open")
         self.session(self.PID, "waiting", "dialog open")  # the first run's Esc made it idle
         self.log.unlink()
-        self.assertEqual(self.run_unstick(), [], "two interactive sessions on one tty: whose menu is it?")
+        self.assertEqual(self.outcomes(), [(None, "no keys: 2 claude sessions")],
+                         "two interactive sessions on one tty: whose menu is it?")
         self.assertEqual(self.keys(), [])
+        for pid in (701, self.PID):
+            (self.sess / f"{pid}.json").unlink()
+        self.assertEqual(self.outcomes(), [(None, "no keys: no claude session")])
+
+    def test_the_pane_path_comes_with_the_pane(self):  # SE-187 B: the Nerve picks the product's journal by it
+        self.session(self.PID, "busy")
+        for panes, path in (("%7 /dev/ttys005 4242 /Users/a/My Dir/tAIBE\n", "/Users/a/My Dir/tAIBE"),
+                            ("%7 /dev/ttys005 4242\n", "")):
+            with self.subTest(path):
+                self.spec({}, panes=panes)
+                self.assertEqual(U.role_panes(), [(self.LINE, "backend", self.PANE, self.TTY, path)])
+                self.assertEqual(self.run_unstick()[0]["path"], path)
+
+    def test_menu_keys_do_not_ask_stuck(self):
+        asked = []
+        self.spec({self.PANE: [MENU, PREFILLED]})
+        self.assertEqual(self.outcomes(stuck=asked.append), [("menu", "esc, enter")])
+        self.assertEqual(asked, [])
 
     def test_no_cli(self):  # S6: a role cannot reach the keys through python3 eval/tools/limit_unstick.py
         src = (HERE / "limit_unstick.py").read_text(encoding="utf-8")
@@ -294,6 +317,53 @@ class UnstickTest(Base):
         r = subprocess.run([sys.executable, str(HERE / "limit_unstick.py"), "unstick", "%7", "rm -rf /"],
                            capture_output=True, text=True, env=dict(os.environ), timeout=30)
         self.assertEqual((r.returncode, self.calls()), (0, []))
+
+
+class IdleTest(Base):
+    """SE-187 D: a session idle after a limit error (the owner's Esc closed the menu, the input is empty) gets TEXT and
+    Enter, no Esc. «Stands because of the limit» comes from the Nerve (stuck); here — status, screen and keys."""
+
+    def setUp(self):
+        super().setUp()
+        self.session(self.PID, "idle", sessionId="s1")
+        self.asked = []
+
+    def stuck(self, answer=True):
+        return lambda sess: self.asked.append(sess.get("sessionId")) or answer
+
+    def test_an_idle_session_after_the_limit_gets_the_text(self):
+        self.spec({self.PANE: [EMPTY]})
+        self.assertEqual(self.outcomes(stuck=self.stuck()), [("idle", U.IDLE + "text, enter")])
+        self.assertEqual(self.keys(), [["-l", U.TEXT], ["Enter"]])
+        self.assertEqual((self.asked, self.slept), (["s1"], [U.SETTLE / 3]))
+
+    def test_no_keys_without_the_limit_or_for_another_session(self):
+        cases = {"not stuck": ({}, False), "no stuck at all": ({}, None), "sdk session": ({"entrypoint": "sdk-cli"},
+                 True), "busy": ({"status": "busy"}, True), "a dialog": ({"status": "waiting", "waitingFor":
+                 "permission prompt"}, True)}
+        for why, (extra, answer) in cases.items():
+            with self.subTest(why):
+                self.log.unlink(missing_ok=True)
+                self.session(self.PID, **dict({"status": "idle"}, **extra), sessionId="s1")
+                self.spec({self.PANE: [EMPTY]})
+                got = self.outcomes(stuck=None if answer is None else self.stuck(answer))
+                self.assertEqual(got[0][0], None)
+                self.assertEqual(self.keys(), [])
+        self.assertEqual(self.asked, ["s1"], "stuck is asked only for one idle cli session")
+
+    def test_a_screen_that_does_not_fit_gets_a_line_without_keys(self):
+        for screen, why in ((DRAFT, "no keys, input not empty"), (MENU, "no keys, menu on screen"),
+                            ("Роль ждёт задачу.\n", "no keys, no input line"), (None, "no keys, no screen")):
+            with self.subTest(why):
+                self.log.unlink(missing_ok=True)
+                self.spec({self.PANE: [screen]})
+                self.assertEqual(self.outcomes(stuck=self.stuck()), [("idle", U.IDLE + why)])
+                self.assertEqual(self.keys(), [])
+
+    def test_a_failed_key_stops(self):
+        self.spec({self.PANE: [EMPTY]}, send_rc=1)
+        self.assertEqual(self.outcomes(stuck=self.stuck()), [("idle", U.IDLE + "text failed")])
+        self.assertEqual(self.keys(), [["-l", U.TEXT]])
 
 
 if __name__ == "__main__":

@@ -22,6 +22,11 @@
 - S5: только панели из записей линий `~/.claude/lineage/*.json` (`terminal: tmux`), у которых панель, tty, pid
   пусковой оболочки и сервер те же, что при открытии (как `tmux_host.close_pane`). Окна владельца записей не имеют.
 - S6: CLI нет; зовёт только демон Нерва. Журнал — sha256 совпавших строк, не текст экрана (N1).
+
+SE-187 (дизайн — комментарий на карточке 19.11 15:12): ответ — каждая панель ролей с путём (`pane_current_path`, по
+нему Нерв выбирает журнал продукта) и исходом; у панели без меню — почему клавиш нет (итог на подъём). D: сессия
+`idle` после отказа по лимиту (меню закрыл владелец, ввод пуст) — TEXT и Enter, без Esc. Признак «стоит из-за лимита»
+даёт код Нерва (`stuck`, транскрипт читает он); здесь — только статус, экран и клавиши.
 """
 import hashlib
 import json
@@ -47,6 +52,7 @@ TEXT = "лимит снят: продолжай с work_state"
 SETTLE = 1.5         # с: экран после клавиши
 NO_MATCH = "no keys: status menu, screen differs"
 NO_SCREEN = "no keys: status menu, no screen"
+IDLE = "idle after limit: "  # D (SE-187): начало действия у сессии idle после отказа по лимиту
 
 
 def tidy(line):
@@ -92,9 +98,10 @@ def draft(screen):
 
 
 def role_panes():
-    """[(линия, роль, панель, tty)] панелей ролей этого сервера: запись линии и живая панель совпали (S5)."""
-    r = T.tmux("list-panes", "-a", "-F", "#{pane_id} #{pane_tty} #{pane_pid}")
-    rows = {p[0]: p[1:] for p in (ln.split() for ln in r.stdout.splitlines()) if len(p) == 3}
+    """[(линия, роль, панель, tty, путь)] панелей ролей этого сервера: запись линии и живая панель совпали (S5). Путь —
+    `pane_current_path` (метаданные `list-panes`, не экран; в пути бывают пробелы — он последний)."""
+    r = T.tmux("list-panes", "-a", "-F", "#{pane_id} #{pane_tty} #{pane_pid} #{pane_current_path}")
+    rows = {p[0]: p[1:] for p in (ln.split(None, 3) for ln in r.stdout.splitlines()) if len(p) >= 3}
     server = T.server_info()
     out = []
     for path in sorted(L.ldir().glob("*.json")):
@@ -103,8 +110,8 @@ def role_panes():
             continue
         pane = str(rec.get("pane") or "")
         want = [str(rec.get("tty") or ""), str(rec.get("pane_pid") or "")]
-        if server and pane in rows and rows[pane] == want and rec.get("server") == server:
-            out.append((rec["line"], rec.get("role") or "", pane, want[0]))
+        if server and pane in rows and rows[pane][:2] == want and rec.get("server") == server:
+            out.append((rec["line"], rec.get("role") or "", pane, want[0], (rows[pane][2:] or [""])[0]))
     return out
 
 
@@ -124,6 +131,20 @@ def in_menu(sessions):
         sessions[0].get("waitingFor") == "dialog open"
 
 
+def idle_cli(sessions):
+    """D1: на tty одна сессия claude из терминала (`entrypoint` cli, не SDK), и она ждёт ввода."""
+    return len(sessions) == 1 and sessions[0].get("status") == "idle" and \
+        sessions[0].get("entrypoint", "cli") == "cli"
+
+
+def status_of(sessions):
+    """Почему у панели нет меню — для итога подъёма (SE-187 C)."""
+    if len(sessions) != 1:
+        return f"{len(sessions)} claude sessions" if sessions else "no claude session"
+    s = sessions[0]
+    return f"status {s.get('status') or '?'}" + (f" ({s['waitingFor']})" if s.get("waitingFor") else "")
+
+
 def screen(pane):
     r = T.tmux("capture-pane", "-p", "-t", pane)
     return r.stdout if r.returncode == 0 else None
@@ -137,11 +158,13 @@ def digest(lines):
     return hashlib.sha256(json.dumps(lines, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-def unstick_pane(sx, pane, tty, sleep, procs=None):
+def unstick_pane(sx, pane, tty, sleep, procs=None, stuck=None):
     """Одна панель: (действие, sha256) или None — по статусу меню нет, клавиш не было. sha256 — строк меню; если
-    статус — меню, а экран не совпал или не снят, — нижнего блока экрана (или ''), и клавиш нет."""
-    if not in_menu(sessions_on(sx, tty, procs)):
-        return None
+    статус — меню, а экран не совпал или не снят, — нижнего блока экрана (или ''), и клавиш нет. stuck(сессия) — D:
+    сессия idle стоит из-за лимита этого подъёма (код Нерва); тогда — wake_idle."""
+    sessions = sessions_on(sx, tty, procs)
+    if not in_menu(sessions):
+        return wake_idle(pane, sleep) if stuck and idle_cli(sessions) and stuck(sessions[0]) else None
     before = screen(pane)
     if before is None:
         return NO_SCREEN, ""
@@ -168,18 +191,41 @@ def unstick_pane(sx, pane, tty, sleep, procs=None):
     return "esc; input not empty" if text else "esc; no input line", sha
 
 
-def unstick(fresh, sx=None, sleep=time.sleep):
-    """Все панели ролей с меню лимита. fresh(линия) — Esc этой линии за сброс ещё не было (S4).
-    [{line, role, pane, action, sha256}] — только панели, где была клавиша."""
+def wake_idle(pane, sleep):
+    """D (SE-187): меню закрыто, сессия ждёт ввода. Клавиши — только TEXT и Enter, если на экране нет меню лимита и
+    строка ввода пуста (D3). Esc нет: вне меню он ничего не закрывает, а в чужом диалоге — отказ."""
+    shown = screen(pane)
+    if shown is None:
+        return IDLE + "no keys, no screen", ""
+    if menu_lines(shown) is not None:  # статус не меню, а меню на экране — не наш случай
+        return IDLE + "no keys, menu on screen", digest(menu_lines(shown))
+    text = draft(shown)
+    if text != "":
+        return IDLE + ("no keys, input not empty" if text else "no keys, no input line"), ""
+    if not keys(pane, "-l", TEXT):
+        return IDLE + "text failed", ""
+    sleep(SETTLE / 3)
+    return IDLE + ("text, enter" if keys(pane, "Enter") else "text; enter failed"), ""
+
+
+def unstick(fresh, sx=None, sleep=time.sleep, stuck=None):
+    """Все панели ролей этого сервера. fresh(линия) — ключа этой линии за подъём ещё нет (S4); stuck — для D.
+    [{line, role, pane, path, kind, action, sha256}] — каждая свежая панель. kind: "menu" — статус меню (клавиши или
+    строка без клавиш), "idle" — D, None — клавиш нет, action — почему (только в итог подъёма, ключ линии не тратит)."""
     sx = sx or L.Sys()
-    done = []
+    out = []
     panes = [p for p in role_panes() if fresh(p[0])]
-    procs = sx.procs() if panes else None  # один `ps -A` на сброс
-    for line, role, pane, tty in panes:
+    procs = sx.procs() if panes else None  # один `ps -A` на подъём
+    for line, role, pane, tty, path in panes:
+        kind = "menu"
         try:
-            got = unstick_pane(sx, pane, tty, sleep, procs)
+            got = unstick_pane(sx, pane, tty, sleep, procs, stuck)
+            if got is None:
+                kind, got = None, ("no keys: " + status_of(sessions_on(sx, tty, procs)), "")
+            elif got[0].startswith(IDLE):
+                kind = "idle"
         except Exception as e:  # noqa: BLE001 — клавиши прошлых панелей уже нажаты: их строки и ключи не теряются
             got = (f"error: {type(e).__name__}", "")
-        if got:
-            done.append({"line": line, "role": role, "pane": pane, "action": got[0], "sha256": got[1]})
-    return done
+        out.append({"line": line, "role": role, "pane": pane, "path": path, "kind": kind, "action": got[0],
+                    "sha256": got[1]})
+    return out

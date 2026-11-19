@@ -8,6 +8,7 @@
 4. Недельный лимит → пункт владельцу в очереди (вид check), один на сброс.
 Авто-пауза — по расходу и по факту отказа, не по 502: связь 502 с лимитом не доказана.
 """
+import glob
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -101,10 +102,16 @@ def poll_budget(ctx):
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
             # Сброс прошёл — Esc, и ночью тоже (resume там 08:30, а подъём идёт веткой early). До сброса — смена
-            # аккаунта владельцем: клавиш нет, ложный подъём не съест Esc сброса.
+            # аккаунта владельцем (SE-187 A): Esc своим ключом, а в сброс — ещё раз (подъём был ложный — роль снова
+            # в меню): ключи подъёмов разные, Esc сброса не съеден.
             if now_l >= _dt(lim["reset"]):
-                unstick_roles(ctx, lim["reset"])
+                unstick_roles(ctx, lim["reset"], lim["hit"], f"сброс {_dt(lim['reset']):%d.%m %H:%M}")
+            else:
+                unstick_roles(ctx, f"early:{lim['hit']}", lim["hit"], f"ранний подъём (лимит {lim['hit'][11:16]}, "
+                              f"сброс {_dt(lim['reset']):%d.%m %H:%M})")
+                st.setdefault("unstick_due", []).append({"reset": lim["reset"], "hit": lim["hit"]})
             lim = None
+    unstick_due(ctx, st, now_l)
 
     q = quota5(st, cfg)
     # Окно 5 ч начинается не раньше последнего отказа: дальше либо простой до сброса (расход 0),
@@ -134,23 +141,88 @@ def _week(cfg):
     return w["weekday"], hh, mm
 
 
-def unstick_roles(ctx, reset):
-    """SE-174: в момент сброса закрыть меню лимита Claude Code в панелях ролей (eval/tools/limit_unstick.py). Триггер —
-    сброс в самом демоне, не событие журнала (S4). Один Esc на линию за сброс — ключ журнала. Сбой не валит бюджет."""
+def unstick_due(ctx, st, now_l):
+    """SE-187 A: сброс после раннего подъёма — ещё один вызов с ключом сброса. Если стоит новый лимит с более поздним
+    сбросом, роли ждут его: старый пункт снимается без клавиш."""
+    due, keep, cur = st.get("unstick_due") or [], [], st.get("limit")
+    for d in due:
+        if now_l < _dt(d["reset"]):
+            keep.append(d)
+        elif not (cur and _dt(cur["reset"]) > _dt(d["reset"])):
+            unstick_roles(ctx, d["reset"], d["hit"], f"сброс {_dt(d['reset']):%d.%m %H:%M} после раннего подъёма")
+    if due:
+        st["unstick_due"] = keep
+
+
+def _emit_safe(c, *args, **kw):
+    """Запись в журнал продукта: сбой другого продукта не валит бюджет (как nerve.peer_emit)."""
+    try:
+        return c.emit(*args, **kw)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def product_of(ctxs, path):
+    """SE-187 B: продукт панели — самый длинный repo_root, внутри которого путь панели; иначе продукт по умолчанию."""
+    best, n = ctxs[0], -1
+    for c in ctxs:
+        root = str(c.cfg.get("repo_root") or "").rstrip("/")
+        if root and (path == root or path.startswith(root + "/")) and len(root) > n:
+            best, n = c, len(root)
+    return best
+
+
+def stuck_after(ctx, hit):
+    """SE-187 D2 (читает код Нерва): последняя запись assistant в транскрипте сессии — отказ по лимиту не раньше hit
+    − 5 мин. Нет транскрипта или он не читается — False (клавиш нет)."""
+    floor = _dt(hit) - timedelta(minutes=5)
+
+    def stuck(sess):
+        sid = str(sess.get("sessionId") or "")
+        if len(sid) != 36 or not all(ch in "0123456789abcdef-" for ch in sid):
+            return False
+        for path in sorted(glob.glob(os.path.join(ctx.projects_root, "*", sid + ".jsonl"))):
+            try:
+                last = budget.last_assistant(path)
+            except OSError:
+                continue
+            return bool(last and last[1] and last[0] and last[0] >= floor)
+        return False
+    return stuck
+
+
+def unstick_roles(ctx, tag, hit, label):
+    """SE-174: на подъёме закрыть меню лимита Claude Code в панелях ролей (eval/tools/limit_unstick.py); SE-187 D —
+    разбудить сессию idle после отказа. Триггер — подъём в самом демоне, не событие журнала (S4). Один ключ на линию
+    за подъём — во всех журналах продуктов. Строка линии и итог — в журнал продукта панели (B, C). Сбой не валит
+    бюджет."""
     if not ctx.deliver or not ctx.cfg["budget"].get("unstick"):  # выключатель — budget.unstick в instances/_shared.json
         return
-    pre = f"limit:unstick:{reset}:"
+    pre = f"limit:unstick:{tag}:"
+    ctxs = [ctx] + list((ctx.peers or {}).values())
     try:
         import limit_unstick
-        done = limit_unstick.unstick(lambda line: pre + line not in ctx.journal.keys)
+        rows = limit_unstick.unstick(lambda line: all(pre + line not in c.journal.keys for c in ctxs),
+                                     stuck=stuck_after(ctx, hit))
     except Exception as e:  # noqa: BLE001 — tmux или ps недоступны: роли ждут владельца, как до SE-174
         ctx.emit(f"{pre}error", "nerve.error", DIGEST, ["release"], f"меню лимита не закрыто: {type(e).__name__}: "
                  f"{e}"[:200], "budget")
         return
-    for d in done:
-        ctx.emit(pre + d["line"], "limit.unstick", DIGEST, ["coord"],
-                 f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}): меню лимита — {d['action']}"
-                 + (f"; sha256 {d['sha256'][:16]}" if d["sha256"] else ""), "budget", sha256=d["sha256"])
+    what = {"menu": "меню лимита", "idle": "ввод после лимита"}
+    by = {id(c): [] for c in ctxs}
+    for d in rows:
+        c = product_of(ctxs, d["path"])
+        by[id(c)].append(d)
+        if d["kind"]:
+            _emit_safe(c, pre + d["line"], "limit.unstick", DIGEST, ["coord"],
+                       f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}), {label}: {what[d['kind']]} — "
+                       f"{d['action']}" + (f"; sha256 {d['sha256'][:16]}" if d["sha256"] else ""), "budget",
+                       sha256=d["sha256"])
+    for c in ctxs:  # C: итог в каждом продукте, и пустой
+        mine = by[id(c)]
+        text = f"{label}: панели ролей {len(mine)}" + ("".join(
+            f"{'; ' if i else ' — '}{d['role'] or 'роль'} {d['line']}: {d['action']}" for i, d in enumerate(mine)))
+        _emit_safe(c, pre + "summary", "limit.unstick", DIGEST, ["coord"], text[:1500], "budget")
 
 
 def _on_limit(ctx, st, meter, ts, text):
