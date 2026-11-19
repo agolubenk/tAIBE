@@ -112,3 +112,28 @@ describe("TB-31 R-1: assertUsernameRequest", () => {
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 });
+
+describe("TB-31 R-1: /admin/* does not set a login", () => {
+  it.each(["/admin/update-user", "/admin/create-user"])(
+    "refuses data.username and data.displayUsername at %s",
+    async (path) => {
+      for (const data of [
+        { username: "root" },
+        { displayUsername: "ivan.k" },
+      ]) {
+        await expect(
+          call(path, { userId: "u2", data }).run,
+        ).rejects.toMatchObject({ body: { code: "LOGIN_SET_BY_PERSON" } });
+      }
+    },
+  );
+
+  it("lets the other admin fields through", async () => {
+    await expect(
+      call("/admin/update-user", { userId: "u2", data: { name: "Ivan" } }).run,
+    ).resolves.toBeUndefined();
+    await expect(
+      call("/admin/set-role", { userId: "u2", role: "user" }).run,
+    ).resolves.toBeUndefined();
+  });
+});

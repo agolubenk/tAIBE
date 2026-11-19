@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -46,6 +47,24 @@ function saveButton() {
 function type(value: string) {
   fireEvent.change(field(), { target: { value } });
 }
+// The hint or the problem under the field: one live region from the start.
+function note() {
+  return screen.getByRole("status");
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+const TAKEN = { data: { available: false }, error: null };
+// Lets every pending answer reach the component before the assertion.
+async function flush() {
+  await act(async () => {
+    await new Promise((done) => setTimeout(done, 0));
+  });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -76,9 +95,7 @@ describe("LoginRow (TB-31 R-1)", () => {
     ] as const) {
       type(value);
       fireEvent.blur(field());
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        `${P}.problems.${problem}`,
-      );
+      expect(note()).toHaveTextContent(`${P}.problems.${problem}`);
       expect(field()).toHaveAttribute("aria-invalid", "true");
       expect(saveButton()).toBeDisabled();
     }
@@ -96,9 +113,7 @@ describe("LoginRow (TB-31 R-1)", () => {
     expect(m.isUsernameAvailable).not.toHaveBeenCalled();
     fireEvent.blur(field());
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        `${P}.problems.taken`,
-      ),
+      expect(note()).toHaveTextContent(`${P}.problems.taken`),
     );
     expect(m.isUsernameAvailable).toHaveBeenCalledTimes(1);
     expect(m.isUsernameAvailable).toHaveBeenCalledWith(
@@ -122,9 +137,7 @@ describe("LoginRow (TB-31 R-1)", () => {
     type("ivan42");
     fireEvent.blur(field());
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        `${P}.problems.rateLimitedFor:30`,
-      ),
+      expect(note()).toHaveTextContent(`${P}.problems.rateLimitedFor:30`),
     );
   });
 
@@ -158,16 +171,72 @@ describe("LoginRow (TB-31 R-1)", () => {
     type("ivan42");
     fireEvent.click(saveButton());
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        `${P}.problems.taken`,
-      ),
+      expect(note()).toHaveTextContent(`${P}.problems.taken`),
     );
 
     fresh.run.mockRejectedValue(new ReauthCancelledError());
     type("ivan43");
     fireEvent.click(saveButton());
     await waitFor(() => expect(fresh.run).toHaveBeenCalledTimes(2));
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(note()).not.toHaveTextContent(`${P}.problems.`);
     expect(refetchUser).not.toHaveBeenCalled();
+  });
+
+  it("says «too short» after the person leaves the field, not on the first letter", () => {
+    render(<LoginRow current={null} refetchUser={refetchUser} />);
+    type("i");
+    expect(note()).toHaveTextContent(`${P}.emptyHint`);
+    expect(saveButton()).toBeDisabled();
+    fireEvent.blur(field());
+    expect(note()).toHaveTextContent(`${P}.problems.tooShort`);
+    expect(m.isUsernameAvailable).not.toHaveBeenCalled();
+  });
+
+  it("drops a check answer for a value the person has changed since (B3)", async () => {
+    const answer = deferred<typeof TAKEN>();
+    m.isUsernameAvailable.mockReturnValue(answer.promise);
+    render(<LoginRow current={null} refetchUser={refetchUser} />);
+    type("ivan42");
+    fireEvent.blur(field());
+    type("ivan43");
+    answer.resolve(TAKEN);
+    await flush();
+    await waitFor(() => expect(m.isUsernameAvailable).toHaveBeenCalledTimes(1));
+    expect(note()).not.toHaveTextContent(`${P}.problems.taken`);
+    expect(saveButton()).toBeEnabled();
+  });
+
+  it("drops a check answer that comes after the save (B3)", async () => {
+    const answer = deferred<typeof TAKEN>();
+    m.isUsernameAvailable.mockReturnValue(answer.promise);
+    render(<LoginRow current={null} refetchUser={refetchUser} />);
+    type("ivan42");
+    fireEvent.blur(field());
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(refetchUser).toHaveBeenCalled());
+    answer.resolve(TAKEN);
+    await flush();
+    expect(note()).not.toHaveTextContent(`${P}.problems.taken`);
+  });
+
+  it("keeps «Save» on after 429 or a lost connection from the check (N1)", async () => {
+    m.isUsernameAvailable.mockRejectedValue(new TypeError("Failed to fetch"));
+    render(<LoginRow current={null} refetchUser={refetchUser} />);
+    type("ivan42");
+    fireEvent.blur(field());
+    await waitFor(() =>
+      expect(note()).toHaveTextContent(`${P}.problems.offline`),
+    );
+    expect(saveButton()).toBeEnabled();
+  });
+
+  it("does not check on leaving the field for «Save»: one request (N3)", async () => {
+    render(<LoginRow current={null} refetchUser={refetchUser} />);
+    type("ivan42");
+    fireEvent.blur(field(), { relatedTarget: saveButton() });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(refetchUser).toHaveBeenCalled());
+    expect(m.isUsernameAvailable).not.toHaveBeenCalled();
+    expect(m.updateUser).toHaveBeenCalledTimes(1);
   });
 });
