@@ -2,7 +2,8 @@
 """Авто-действия Нерва (П8, П10; d-pipe-nerve, владелец 28.10: «автозапуск и авто-действия делаем»).
 
 1. Предвестник лимита: окно 5 ч израсходовано на warn_at от квоты окна → всем активным ролям «допиши шаг и
-   work_state». Квота окна — медиана расхода до сбоя в последних волнах лимита (калибруется сама на каждой волне).
+   work_state». Квота окна — медиана расхода до сбоя в последних волнах лимита (калибруется сама на каждой волне);
+   волна помнит аккаунт входа, квота — по волнам своего аккаунта, без них — по тарифу (account.py, 19.11).
 2. Лимит аккаунта сработал → тапы молчат до сброса; Координатору — одна строка.
 3. Сброс лимита → активные роли будятся строкой «лимит снят». Если сброс ночью — в начале дня.
 4. Недельный лимит → пункт владельцу в очереди (вид check), один на сброс.
@@ -10,8 +11,10 @@
 """
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
+import account
 import budget
 import sources
 from journal import DIGEST, NERVOUS
@@ -36,9 +39,12 @@ def calibrate_waves(ctx, meter, days=7):
     return out
 
 
-def quota5(st, cfg):
-    usd = [w["usd"] for w in st["waves"][-cfg["budget"]["waves_for_quota"]:] if w["usd"] > 0]
-    q = budget.median(usd)
+def quota5(st, cfg, acct=account.CURRENT):
+    """Квота окна 5 ч: по волнам аккаунта входа, без них — по волнам других, пересчитанным по тарифу (account.quota).
+    Источник квоты — в st["quota_src"]: account · tier · all · default."""
+    if acct is account.CURRENT:
+        acct = account.observe(st, time.time())
+    q, st["quota_src"] = account.quota(st["waves"], cfg["budget"]["waves_for_quota"], acct)
     return q if q else cfg["budget"]["quota5h_default"]
 
 
@@ -169,8 +175,11 @@ def _on_limit(ctx, st, meter, ts, text):
              f"лимит аккаунта ({'неделя' if kind == 'weekly' else 'окно 5 ч'}) в {ts_l:%H:%M}: команда стоит до "
              f"{reset:%d.%m %H:%M}, Нерв разбудит роли сам", "budget")
     if kind == "session" and all(w.get("reset") != _iso(reset) for w in st["waves"]):
-        st["waves"].append({"hit": _iso(ts_l), "reset": _iso(reset),
-                            "usd": round(meter.total(reset - timedelta(hours=5), ts), 2)})
+        wave = {"hit": _iso(ts_l), "reset": _iso(reset), "usd": round(meter.total(reset - timedelta(hours=5), ts), 2)}
+        acct = account.observe(st, ctx.now.timestamp())
+        if acct and acct["since"] <= ts.timestamp():  # вход сменили позже отказа — чей отказ, не знаем: без метки
+            wave.update(acct=acct["id"], mult=acct["mult"])
+        st["waves"].append(wave)
         st["waves"] = st["waves"][-50:]
     resume = budget.resume_at(reset, ctx.cfg)
     cur = st.get("limit")
