@@ -55,6 +55,32 @@ describe("createRegisterTool onCall (R-036)", () => {
     expect(calls[0]).toMatchObject({ tool: "get_task", ok: false });
   });
 
+  it("tells the journal which session made the call (TB-135)", async () => {
+    const calls: ToolCall[] = [];
+    const handlers = new Map<string, Handler>();
+    const server = {
+      registerTool: (name: string, _config: unknown, handler: Handler) =>
+        handlers.set(name, handler),
+    };
+    const client = { usingApiKey: false, json: vi.fn() };
+    createRegisterTool(server as never, client, {
+      onCall: (c) => calls.push(c),
+      agentIdentity: { defaultHarness: () => "claude-code" },
+    })(
+      "get_task",
+      { description: "", inputSchema: z.object({ id: z.string() }) },
+      async (args) => run(async () => ({ id: args.id })),
+    );
+
+    await handlers.get("get_task")?.({ id: "t1", session: "night-1" });
+    await handlers.get("get_task")?.({ id: "t2" });
+
+    expect(calls.map((c) => c.identity)).toEqual([
+      { harness: "claude-code", session: "night-1" },
+      { harness: "claude-code", session: undefined },
+    ]);
+  });
+
   it("answers even when the journal hook throws", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const call = setup(() => {

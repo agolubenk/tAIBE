@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { updateAdminUser } from "@/fetchers/admin/update-admin-user";
 import { ADMIN_USERS_QUERY_KEY } from "@/hooks/queries/admin/use-admin-users";
+import { isReauthFlowError } from "@/lib/reauth/reauth-errors";
 import { toast } from "@/lib/toast";
 
 function useUpdateAdminUser() {
@@ -15,6 +16,8 @@ function useUpdateAdminUser() {
       queryClient.invalidateQueries({ queryKey: ADMIN_USERS_QUERY_KEY });
     },
     onError: (error) => {
+      // The fresh sign-in window answers these itself.
+      if (isReauthFlowError(error)) return;
       toast.error(
         error instanceof Error && error.message
           ? error.message

@@ -3,17 +3,17 @@ import { useNavigate } from "@tanstack/react-router";
 import { Trash2Icon } from "lucide-react";
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { isDeleteConfirmationValid } from "@/components/settings/profile/is-delete-confirmation-valid";
+import { useFreshSession } from "@/components/reauth/use-fresh-session";
 import { ConfirmDialog } from "@/components/settings/confirm-dialog";
+import { isDeleteConfirmationValid } from "@/components/settings/profile/is-delete-confirmation-valid";
 import { SettingsCard } from "@/components/settings/settings-card";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import useDeleteAccount, {
-  SESSION_TOO_OLD,
-} from "@/hooks/mutations/use-delete-account";
+import useDeleteAccount from "@/hooks/mutations/use-delete-account";
+import { isReauthFlowError } from "@/lib/reauth/reauth-errors";
 import { toast } from "@/lib/toast";
 
 type DeleteAccountSectionProps = {
@@ -28,6 +28,7 @@ export function DeleteAccountSection({ email }: DeleteAccountSectionProps) {
   const [open, setOpen] = useState(false);
   const [confirmation, setConfirmation] = useState("");
   const { mutateAsync: deleteAccount, isPending } = useDeleteAccount();
+  const freshSession = useFreshSession();
   const canConfirm = isDeleteConfirmationValid(confirmation, email);
 
   const handleOpenChange = (next: boolean) => {
@@ -39,7 +40,7 @@ export function DeleteAccountSection({ email }: DeleteAccountSectionProps) {
     if (!canConfirm) return;
 
     try {
-      await deleteAccount();
+      await freshSession.run(() => deleteAccount());
       setOpen(false);
       queryClient.clear();
       toast.success(t("settings:informationPage.deleteAccount.success"), {
@@ -47,11 +48,8 @@ export function DeleteAccountSection({ email }: DeleteAccountSectionProps) {
       });
       navigate({ to: "/auth/sign-in" });
     } catch (error) {
-      if (error instanceof Error && error.message === SESSION_TOO_OLD) {
-        toast.error(t("settings:informationPage.deleteAccount.sessionTooOld"));
-        return;
-      }
-
+      // TB-31 R-5: the fresh sign-in window replaced «sign in again».
+      if (isReauthFlowError(error)) return;
       toast.error(
         error instanceof Error
           ? error.message
@@ -113,6 +111,7 @@ export function DeleteAccountSection({ email }: DeleteAccountSectionProps) {
             placeholder={email ?? ""}
           />
         </div>
+        {freshSession.dialog}
       </ConfirmDialog>
     </SettingsSection>
   );
