@@ -17492,6 +17492,50 @@
 						"loadError": {
 							"type": "string"
 						},
+						"kind": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"skill": {
+									"type": "string"
+								},
+								"rule": {
+									"type": "string"
+								},
+								"agent": {
+									"type": "string"
+								},
+								"genome": {
+									"type": "string"
+								},
+								"prompt": {
+									"type": "string"
+								},
+								"nerve": {
+									"type": "string"
+								},
+								"config": {
+									"type": "string"
+								},
+								"product-prompt": {
+									"type": "string"
+								},
+								"template": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"skill",
+								"rule",
+								"agent",
+								"genome",
+								"prompt",
+								"nerve",
+								"config",
+								"product-prompt",
+								"template"
+							]
+						},
 						"approveMatching": {
 							"type": "object",
 							"additionalProperties": false,
@@ -17673,6 +17717,7 @@
 						"diffFrom",
 						"empty",
 						"loadError",
+						"kind",
 						"approveMatching"
 					]
 				}
