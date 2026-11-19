@@ -12,15 +12,14 @@ import shlex
 
 from merge_guard_comments import CHANGED, comment_char_may_change, comment_char_seen, comment_readings, strip_comments  # noqa: F401 хуку
 from merge_guard_files import open_regular
-from merge_guard_vars import (ASSIGN, SHELL_WORDS, SUBST, dir_vars, expand_vars, note_vars, substitute,  # noqa: F401
-                              words)  # dir_vars, expand_vars, note_vars, substitute — отсюда для хука
+from merge_guard_vars import (ASSIGN, LOST, SHELL_WORDS, SUBST, dir_vars, expand_vars, is_lost, note_vars,  # noqa: F401
+                              substitute, words)  # dir_vars, expand_vars, note_vars, substitute, LOST, is_lost — и хуку
 from merge_guard_expand import NAMES_MAX, brace_words  # раскрытия до запуска
 from merge_guard_heredoc import cut_heredocs, heredoc_text, join_lines  # noqa: F401 — и для хука (SE-83)
 
 PROC = SUBST + "P"  # на месте <(…) и =(…): PROC + номер в списке подстановок — файл с выводом этой команды
 SUBST_AT = re.compile(rf"{SUBST}C(\d+)x")  # на месте $(…) и `…`: SUBST, C, номер в списке подстановок, x (subst_code)
 CURRENT = "MGHEAD"  # на месте $(git branch --show-current): текущая ветка папки, где выполняется shell
-LOST = "/.merge-guard-lost-dir"  # папка shell, которую разбор не видит (`cd "$X"`, `cd $(…)`), см. merge_guard_dirs
 SEPARATORS = set(";&|()<>\n")
 WRAPPERS = {"sudo", "doas", "env", "command", "exec", "nohup", "time", "nice", "caffeinate", "xargs", "builtin",
             "noglob", "nocorrect", "-", "parallel", "watch", "stdbuf", "unbuffer", "chronic", "arch"}  # `-`, nocorrect — zsh
@@ -30,11 +29,6 @@ SHELLS = {"bash", "sh", "zsh", "dash"}
 CURRENT_BRANCH = re.compile(r"\s*git\s+(branch\s+--show-current|rev-parse\s+--abbrev-ref\s+HEAD"
                             r"|symbolic-ref\s+(-q\s+)?--short(\s+-q)?\s+HEAD)\s*")
 PWD_CMD = re.compile(r"\s*pwd(\s+-[LP])?\s*")  # `$(pwd)`, `` `pwd` `` — папка shell: на их место — ${PWD}
-
-
-def is_lost(path):
-    """Путь от папки, которую разбор не видит (LOST): что там лежит, не прочесть."""
-    return path == LOST or path.startswith(LOST + "/")
 
 
 def _subst_end(cmd, i):
