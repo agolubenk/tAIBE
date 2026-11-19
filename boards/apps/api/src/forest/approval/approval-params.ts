@@ -30,6 +30,11 @@ export const GRANT_APPROVAL_ACTIONS = [
 ] as const;
 export type GrantApprovalAction = (typeof GRANT_APPROVAL_ACTIONS)[number];
 
+// The grants that name cards; they name at most GRANT_TASKS_MAX of them, a
+// batch close up to BATCH_CLOSE_MAX (TB-114: the request schema shows both).
+export const LABEL_GRANT_ACTIONS = ["create_label", "attach_label"] as const;
+export const GRANT_TASKS_MAX = 20;
+
 export type FellAction = Exclude<
   ApprovalAction,
   TaskApprovalAction | GrantApprovalAction

@@ -9,6 +9,7 @@ import {
 import { ApiError } from "../../errors/api-error";
 import { chunkMarkdown } from "../chunk/chunk-markdown";
 import { notifyEmbedWork } from "../embed/embed-queue";
+import type { SourceAuthor } from "./source-author";
 
 export type SourceInput = {
   workspaceId: string;
@@ -19,6 +20,8 @@ export type SourceInput = {
   // Refuse a text that cuts into more chunks: a fetched page of tiny
   // sections would flood the embedding worker and the vector index.
   maxChunks?: number;
+  // Written on the first insert only: a refresh keeps who added it (TB-115).
+  addedBy?: SourceAuthor;
 };
 
 // Keeps one insert far under the Postgres limit of 65 535 parameters.
@@ -35,6 +38,13 @@ export const sha256 = (text: string) =>
 
 // Same text: only the title may move, chunks and their embeddings stay. New
 // text: the chunks are cut again and wait for the worker to embed them.
+//
+// TB-204: `changed: false` tells a caller that its text equals the stored
+// one, also a caller with a token that reads the source masked. So such a
+// caller (it needs manage_settings) can test one guess of a secret per
+// stored version: a wrong guess is a new text and replaces the stored one,
+// secret and all. The answer stays: hiding it would also hide a real "no
+// change" from the clients that skip a re-embed on it.
 export async function upsertSource(
   input: SourceInput,
 ): Promise<UpsertedSource> {
@@ -83,6 +93,8 @@ export async function upsertSource(
         title: input.title,
         contentSha256,
         chars: input.text.length,
+        addedByKind: input.addedBy?.kind ?? null,
+        addedBy: input.addedBy?.name ?? null,
       })
       .onConflictDoUpdate({
         target: [

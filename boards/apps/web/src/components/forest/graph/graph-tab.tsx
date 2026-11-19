@@ -58,6 +58,7 @@ export function GraphTab({ workspaceId }: { workspaceId: string }) {
       <ForestListState
         isLoading={graph.isLoading}
         isError={graph.isError}
+        onRetry={() => void graph.refetch()}
         isEmpty={!merged.nodes.length}
         empty={t("workspace:forest.graph.empty")}
       >

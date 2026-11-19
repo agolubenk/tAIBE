@@ -34,9 +34,11 @@ import {
   diffSchema,
   entityParam,
   entitySchema,
+  knownShasBody,
   rollbackBody,
   servedSchema,
   syncBody,
+  SYNC_BODY_BYTES,
   syncResultSchema,
   timelineQuery,
   timelineSchema,
@@ -46,7 +48,6 @@ import {
 // tAI-Boards SSR (spec approved 31.10): the Mac sync agent writes versions,
 // agents and the owner read them, and only the owner's browser session
 // approves, rejects and rolls back (RU-6, RU-7) — see ./owner-ui.
-const SYNC_BODY_BYTES = 12 * 1024 * 1024;
 
 type SsrVariables = BaseVariables & { workspaceId: string };
 
@@ -302,7 +303,7 @@ const contentByNameRoute = createRoute({
   tags: ["SSR"],
   summary: "Serve a version's files by entity name and kind",
   description:
-    "The MCP tools resolve names this way: kind narrows the lookup (skill, rule, agent, genome, prompt, nerve, config, product-prompt).",
+    "The MCP tools resolve names this way: kind narrows the lookup (skill, rule, agent, genome, prompt, nerve, config, product-prompt, template).",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ workspace: ["read"] }),
@@ -337,9 +338,7 @@ const knownShasRoute = createRoute({
       required: true,
       content: {
         "application/json": {
-          schema: z.object({
-            shas: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(1000),
-          }),
+          schema: knownShasBody,
         },
       },
     },

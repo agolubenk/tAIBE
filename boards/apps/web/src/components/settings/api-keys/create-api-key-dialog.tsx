@@ -14,6 +14,7 @@ import {
   ALL_WORKSPACES,
   apiKeyMetadata,
 } from "@/components/settings/api-keys/api-key-workspace";
+import { useFreshSession } from "@/components/reauth/use-fresh-session";
 import { ApiKeyWorkspaceSelect } from "@/components/settings/api-keys/api-key-workspace-select";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,6 +39,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import useCreateApiKey from "@/hooks/mutations/api-key/use-create-api-key";
+import { isReauthFlowError } from "@/lib/reauth/reauth-errors";
 import { toast } from "@/lib/toast";
 import type { CreateApiKeyResponse } from "@/types/api-key";
 
@@ -61,6 +63,7 @@ export function CreateApiKeyDialog({
 }: CreateApiKeyDialogProps) {
   const { t } = useTranslation();
   const { mutateAsync: createApiKey, isPending } = useCreateApiKey();
+  const freshSession = useFreshSession();
   const expiresLabelId = useId();
   const workspaceLabelId = useId();
 
@@ -91,15 +94,19 @@ export function CreateApiKeyDialog({
 
   const onSubmit = async (data: FormValues) => {
     try {
-      const result = await createApiKey({
-        name: data.name,
-        expiresIn: getExpirationSeconds(data.expiresIn),
-        metadata: apiKeyMetadata(data.workspace, data.readOnly),
-      });
+      const result = await freshSession.run(() =>
+        createApiKey({
+          name: data.name,
+          expiresIn: getExpirationSeconds(data.expiresIn),
+          metadata: apiKeyMetadata(data.workspace, data.readOnly),
+        }),
+      );
       form.reset();
       onSuccess(result);
       onClose();
     } catch (error) {
+      // TB-31 R-5: the window answers these; cancel keeps the form as typed.
+      if (isReauthFlowError(error)) return;
       toast.error(
         error instanceof Error
           ? error.message
@@ -235,6 +242,8 @@ export function CreateApiKeyDialog({
             </DialogFooter>
           </form>
         </Form>
+        {/* Outside <form>: a submit inside the window must not reach this form. */}
+        {freshSession.dialog}
       </DialogPopup>
     </Dialog>
   );
