@@ -438,7 +438,9 @@ userId, 0))`. Затем — локи адресов `tb-email:<адрес>` (п
 - **API среза Б (ветка `feature/tb31-slice-b3`, 20.11).** Контракт с web — `packages/permissions/src/passkey.ts`.
   - Пакет `@better-auth/passkey` 1.7.15 (Q-906). `rpID` — `PASSKEY_RP_ID`, без него — имя хоста `KANEO_CLIENT_URL`
     (`apps/api/src/passkey/passkey-options.ts`).
-  - UV: на регистрации и на входе без флага UV — `USER_VERIFICATION_REQUIRED` (400 и 401). Предел 10 ключей —
+  - UV: на регистрации и на входе без флага UV — `USER_VERIFICATION_REQUIRED` (400 и 401). На входе флаг берёт
+    `authentication.afterVerification` плагина 1.7.15 из `authenticationInfo.userVerified`, после проверки подписи и до
+    сеанса (`apps/api/src/passkey/passkey-confirm.ts`), а не хук `before` с разбором байтов. Предел 10 ключей —
     `PASSKEY_LIMIT_REACHED`. Второй сеанс при регистрации — `PASSKEY_SESSION_NOT_ALLOWED`.
   - Способ `passkey` в окне свежего входа — если у пользователя есть ключ и вход формой не выключен. После 10 неудач за
     час способа нет, как и пароля.
