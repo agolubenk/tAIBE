@@ -17,7 +17,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import team_plan as TP  # noqa: E402
 
-ROLES = {"hr-helper": list(TP.ORDER), "taibe": list(TP.ORDER)}
+# Как в instances/: у HR 9 ролей (backend-3, #477), у tAIBE 8.
+ROLES = {"hr-helper": list(TP.ORDER), "taibe": [r for r in TP.ORDER if r != "backend-3"]}
 TEAM = {**TP.DEFAULTS, "split": {"hr-helper": 6, "taibe": 6}}
 
 
@@ -31,7 +32,8 @@ class SplitTest(unittest.TestCase):
 
     def test_allocate_caps_by_roles_and_gives_rest_away(self):
         roles = {"a": ["coord", "release"], "b": list(TP.ORDER)}
-        self.assertEqual(TP.allocate({"a": 6, "b": 6}, roles), {"a": 2, "b": 8})
+        # b: своя доля 6 и остаток a (4), но не больше своих ролей — их 9 (backend-3, #477)
+        self.assertEqual(TP.allocate({"a": 6, "b": 6}, roles), {"a": 2, "b": 9})
 
     def test_plan_interleaves_by_rank(self):
         steps = TP.plan({"hr-helper": 3, "taibe": 2}, ROLES)
@@ -226,7 +228,7 @@ class QueuePauseTest(Base):
         self.choice = "2-10"  # у tAIBE 8 ролей: на деле 4-8
         self.run_up()
         self.assertEqual(self.published[-1]["alloc"], [["hr-helper", 4], ["taibe", 8]])
-        self.assertEqual(self.published[-1]["max"], [["hr-helper", 8], ["taibe", 8]])
+        self.assertEqual(self.published[-1]["max"], [["hr-helper", 9], ["taibe", 8]])
         self.choice, self.spawned = "6-6", []
         self.run_up()
         self.assertEqual(self.spawned, [])  # 12 работают: роли сверх доли не закрыты, новых не открыть
@@ -320,6 +322,34 @@ class QueuePauseTest(Base):
         self.assertEqual(len(self.spawned), 12)
         self.assertIn("состояние для /queue не записано (OSError)", self.log[-1])
         self.assertEqual(self.state()["live"], 12)  # своё состояние на Mac записано
+
+
+class KeepTest(Base):
+    """d-team-surplus-1711: роль сверх доли владельца наследника не открывает."""
+
+    def keep(self, slug, role):
+        def oq(path, root=None, method="GET", data=None):
+            raise AssertionError("keep ходит в сеть")  # передача смены на исходе контекста не ждёт очередь
+        if self.choice and self.choice != "pause":
+            (Path(self.tmp.name) / "team-split.json").write_text(json.dumps([int(x) for x in self.choice.split("-")]))
+        with mock.patch.object(TP, "config", lambda: (TEAM, 20, 10, 14, ROLES, {"hr-helper": "/h", "taibe": "/t"})), \
+                mock.patch.object(TP.Q, "oq_request", oq):
+            return TP.keep(slug, role)
+
+    def test_surplus_after_share_change(self):
+        self.choice = "8-4"  # кэш сторожа: последний принятый ответ
+        self.assertEqual(self.keep("taibe", "plan"), (False, "hr-helper 8 · taibe 4"))
+        self.assertTrue(self.keep("taibe", "frontend")[0])
+        self.assertTrue(self.keep("hr-helper", "boards")[0])
+
+    def test_unknown_role_and_errors_keep_the_successor(self):
+        self.assertEqual(self.keep("taibe", "owner"), (True, ""))  # не роль команды
+        with mock.patch.object(TP, "config", side_effect=OSError("instances")):
+            self.assertEqual(TP.keep("taibe", "plan"), (True, ""))
+
+    def test_pause_does_not_stop_a_successor(self):
+        self.choice = "pause"
+        self.assertTrue(self.keep("taibe", "plan")[0])  # пауза — не открывать новые, смена роли — не новая
 
 
 class LimitTest(unittest.TestCase):

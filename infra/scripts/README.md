@@ -9,7 +9,8 @@ infra/scripts/
              локальные модели (Tiel-Coder, доп. модели, прогрев), прокси claude-mem только для чтения
   misc/      done-index.py — таблица и формат журнала закрытого (docs/plans/DONE.md)
   prod/      ops-deploy-event.py — событие деплоя в ops-консоль (подпись агента хоста)
-  security/  .env.strix.example — профиль Strix (ИИ-пентест по запросу)
+  security/  .env.strix.example — профиль Strix (ИИ-пентест по запросу); mitmproxy-local.sh — mitmweb только на
+             127.0.0.1 перед локальным стендом досок (docs/ops/mitmproxy-local.md)
 ```
 
 | Задача | Команда |

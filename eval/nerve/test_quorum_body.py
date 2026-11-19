@@ -173,7 +173,7 @@ class PollBodyTest(unittest.TestCase):
             self.assertEqual(self.pr()["changes_by"], changes, hm)
             self.assertEqual(self.kinds().count("pr.quorum"), quorums, hm)  # один pr.quorum на голову
             if hm != "03:00":
-                self.assertEqual(views(fake), ["body"], hm)
+                self.assertEqual(views(fake), ["body,headRefOid"], hm)
         self.assertNotIn("pr.changes", self.kinds())  # строки тела пишет автор: pr.changes о них не шлётся
 
     def test_ci_recheck_keeps_the_body_verdicts_without_reading_the_body(self):
@@ -181,14 +181,14 @@ class PollBodyTest(unittest.TestCase):
         self.assertNotIn("pr.quorum", self.kinds())
         self.assertTrue(self.pr()["await_ci"])
         fake = self.poll(hr_gh(hr_body(ROWS), ci="SUCCESS"))  # PR не менялся: перепроверка CI, тело не читается
-        self.assertEqual((views(fake), body_reads(fake)), (["statusCheckRollup"], []))
+        self.assertEqual((views(fake), body_reads(fake)), (["statusCheckRollup,headRefOid"], []))
         self.assertIn("pr.quorum", self.kinds())
 
     def test_pending_ci_and_body_are_one_view(self):
         """PR изменился на той же голове при CI pending: тело и проверки — один gh pr view (SE-123)."""
         self.poll(hr_gh(hr_body(), ci="IN_PROGRESS"))
         fake = self.poll(hr_gh(hr_body(ROWS), "2026-11-14T03:10:00Z", ci="SUCCESS"))
-        self.assertEqual(views(fake), ["statusCheckRollup,body"])
+        self.assertEqual(views(fake), ["statusCheckRollup,body,headRefOid"])
         self.assertIn("pr.quorum", self.kinds())
 
     def test_author_line_added_without_push_is_seen(self):
