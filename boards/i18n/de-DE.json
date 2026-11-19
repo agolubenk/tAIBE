@@ -926,7 +926,7 @@
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
 				"readOnlyLabel": "Nur lesen",
-				"readOnlyDescription": "Der Schlüssel kann lesen, aber nichts ändern.",
+				"readOnlyDescription": "Der Schlüssel kann lesen, aber nichts ändern. Agenten und der MCP-Hub brauchen Schreibzugriff – schalten Sie es für sie aus.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {

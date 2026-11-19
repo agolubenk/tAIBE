@@ -839,7 +839,7 @@
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
 				"readOnlyLabel": "Chỉ đọc",
-				"readOnlyDescription": "Khóa này chỉ đọc được, không thay đổi được gì.",
+				"readOnlyDescription": "Khóa này chỉ đọc được, không thay đổi được gì. Tác tử và hub MCP cần quyền ghi — hãy tắt tùy chọn này cho chúng.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {

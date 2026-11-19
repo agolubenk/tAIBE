@@ -725,7 +725,7 @@
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
 				"readOnlyLabel": "Alleen lezen",
-				"readOnlyDescription": "De sleutel kan lezen, maar niets wijzigen.",
+				"readOnlyDescription": "De sleutel kan lezen, maar niets wijzigen. Agents en de MCP-hub hebben schrijfrechten nodig — zet dit voor hen uit.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {

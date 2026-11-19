@@ -855,7 +855,7 @@
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
 				"readOnlyLabel": "Somente leitura",
-				"readOnlyDescription": "A chave pode ler, mas não pode alterar nada.",
+				"readOnlyDescription": "A chave pode ler, mas não pode alterar nada. Agentes e o hub MCP precisam de escrita — desative para eles.",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {

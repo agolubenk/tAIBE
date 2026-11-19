@@ -5,15 +5,15 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import {
   type ApiKeyExpiration,
-  DEFAULT_API_KEY_EXPIRATION,
   getExpirationSeconds,
   isApiKeyExpiration,
 } from "@/components/settings/api-keys/api-key-expirations";
 import { ApiKeyExpiryToggle } from "@/components/settings/api-keys/api-key-expiry-toggle";
 import {
-  ALL_WORKSPACES,
-  apiKeyMetadata,
-} from "@/components/settings/api-keys/api-key-workspace";
+  CREATE_API_KEY_DEFAULTS,
+  type CreateApiKeyFormValues,
+} from "@/components/settings/api-keys/api-key-form-defaults";
+import { apiKeyMetadata } from "@/components/settings/api-keys/api-key-workspace";
 import { useFreshSession } from "@/components/reauth/use-fresh-session";
 import { ApiKeyWorkspaceSelect } from "@/components/settings/api-keys/api-key-workspace-select";
 import { Button } from "@/components/ui/button";
@@ -43,12 +43,7 @@ import { isReauthFlowError } from "@/lib/reauth/reauth-errors";
 import { toast } from "@/lib/toast";
 import type { CreateApiKeyResponse } from "@/types/api-key";
 
-type FormValues = {
-  name: string;
-  expiresIn: ApiKeyExpiration;
-  workspace: string;
-  readOnly: boolean;
-};
+type FormValues = CreateApiKeyFormValues;
 
 type CreateApiKeyDialogProps = {
   open: boolean;
@@ -84,12 +79,7 @@ export function CreateApiKeyDialog({
 
   const form = useForm<FormValues>({
     resolver: standardSchemaResolver(schema),
-    defaultValues: {
-      name: "",
-      expiresIn: DEFAULT_API_KEY_EXPIRATION,
-      workspace: ALL_WORKSPACES,
-      readOnly: false,
-    },
+    defaultValues: { ...CREATE_API_KEY_DEFAULTS },
   });
 
   const onSubmit = async (data: FormValues) => {

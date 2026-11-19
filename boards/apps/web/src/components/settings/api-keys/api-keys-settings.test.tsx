@@ -235,6 +235,7 @@ describe("creating API keys", () => {
       expect(m.create).toHaveBeenCalledWith({
         name: "Laptop",
         expiresIn: null,
+        metadata: { access: "read" },
       }),
     );
 
@@ -285,7 +286,43 @@ describe("creating API keys", () => {
       expect(m.create).toHaveBeenCalledWith({
         name: "Board bot",
         expiresIn: 2_592_000,
-        metadata: { workspaceId: "ws-a" },
+        metadata: { workspaceId: "ws-a", access: "read" },
+      }),
+    );
+  });
+
+  // TB-96, owner answer A (Q-002): a new key reads only until its owner turns
+  // the switch off; the label turns it (N3: FormLabel + FormControl + Switch).
+  it("starts read-only and issues a full key once the read-only switch is off", async () => {
+    m.create.mockResolvedValue({ key: "kn_secret", name: "MCP hub" });
+    render(<ApiKeysSettings />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings:developerPage.newKey" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const readOnly = within(dialog).getByRole("switch", {
+      name: "settings:apiKey.createDialog.readOnlyLabel",
+    });
+    expect(readOnly).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      within(dialog).getByText("settings:apiKey.createDialog.readOnlyLabel"),
+    );
+    await waitFor(() =>
+      expect(readOnly).toHaveAttribute("aria-checked", "false"),
+    );
+    fireEvent.change(
+      within(dialog).getByLabelText("settings:apiKey.createDialog.nameLabel"),
+      { target: { value: "MCP hub" } },
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "settings:apiKey.createDialog.create",
+      }),
+    );
+    await waitFor(() =>
+      expect(m.create).toHaveBeenCalledWith({
+        name: "MCP hub",
+        expiresIn: 2_592_000,
       }),
     );
   });
@@ -311,6 +348,7 @@ describe("creating API keys", () => {
       expect(m.create).toHaveBeenCalledWith({
         name: "Laptop",
         expiresIn: 2_592_000,
+        metadata: { access: "read" },
       }),
     );
     fireEvent.click(
