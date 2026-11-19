@@ -5,17 +5,34 @@
 // 17 times slower than a Mac (redact 256 000 characters: 6 ms on a Mac, up to
 // 330 ms on the runner; restore 7000 blocks: 65 ms and up to 1112 ms), on
 // PRs that did not change the code it timed.
+//
+// TB-249: the clock is CPU time, not wall time. On a busy machine the system
+// takes the CPU away for whole time slices: a short run at n / SCALE often ends
+// inside one slice, a run SCALE times longer does not, so wall time grew 0.2 to
+// 17.6 times for linear work (30 busy processes on 15 cores, 100 checks, 8 over
+// MAX_GROWTH). CPU time does not count the time the work waited for the CPU:
+// 3.6 to 4.5 times on the same machine, 0 over.
 export const SCALE = 4;
 // Between the linear SCALE and the quadratic SCALE².
 export const MAX_GROWTH = 10;
 const ROUNDS = 3;
-// A run shorter than the timer can tell apart counts as this long.
+// A run shorter than the clock can tell apart counts as this long.
 const MIN_MS = 0.05;
 
+// CPU time of this thread in microseconds. Node before 23.9 has no
+// threadCpuUsage; its process clock also counts the GC and compiler threads.
+function cpuMicros(): number {
+  const used =
+    typeof process.threadCpuUsage === "function"
+      ? process.threadCpuUsage()
+      : process.cpuUsage();
+  return used.user + used.system;
+}
+
 function timed(run: () => unknown): number {
-  const started = performance.now();
+  const started = cpuMicros();
   run();
-  return Math.max(performance.now() - started, MIN_MS);
+  return Math.max((cpuMicros() - started) / 1000, MIN_MS);
 }
 
 // How many times the work grows from n / SCALE to n. Each size counts its
