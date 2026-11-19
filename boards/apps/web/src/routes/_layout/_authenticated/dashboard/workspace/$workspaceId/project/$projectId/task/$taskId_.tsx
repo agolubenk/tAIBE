@@ -7,6 +7,7 @@ import PageTitle from "@/components/page-title";
 import TaskDeleteDialog from "@/components/task/task-delete-dialog";
 import TaskDetailsContent from "@/components/task/task-details-content";
 import { TaskHeaderActions } from "@/components/task/header/task-header-actions";
+import { CardForestBlock } from "@/components/task/forest/card-forest-block";
 import { CardPanel } from "@/components/task/forest/card-panel";
 import { PropertiesRail } from "@/components/task/properties/properties-rail";
 import { PropertyChips } from "@/components/task/properties/property-chips";
@@ -19,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import useGetActivitiesByTaskId from "@/hooks/queries/activity/use-get-activities-by-task-id";
 import useGetProject from "@/hooks/queries/project/use-get-project";
 import useGetTask from "@/hooks/queries/task/use-get-task";
+import useTaskForms from "@/hooks/queries/task-form/use-task-forms";
 
 export const Route = createFileRoute(
   "/_layout/_authenticated/dashboard/workspace/$workspaceId/project/$projectId/task/$taskId_",
@@ -40,6 +42,8 @@ function RouteComponent() {
     workspaceId,
   });
   const { isLoading: isActivitiesLoading } = useGetActivitiesByTaskId(taskId);
+  // The card waits for the task; its forms list starts now, not after (TB-173).
+  useTaskForms(taskId);
   const [isShikiReady, setIsShikiReady] = useState(false);
   const [deleteHandle] = useState(() => AlertDialogCreateHandle());
   useEffect(() => {
@@ -170,19 +174,21 @@ function RouteComponent() {
             variant="page"
             className="mx-auto w-full max-w-2xl px-4 pt-6 pb-16 sm:px-6 xl:pt-12 xl:pb-20"
             properties={
-              <PropertyChips
-                taskId={taskId}
-                projectId={projectId}
-                workspaceId={workspaceId}
-                className="pb-5 lg:hidden"
-              />
+              <>
+                <PropertyChips
+                  taskId={taskId}
+                  projectId={projectId}
+                  workspaceId={workspaceId}
+                  className="pb-5 lg:hidden"
+                />
+                {/* The rail is hidden on narrow screens; the forest folds here. */}
+                <CardForestBlock
+                  workspaceId={workspaceId}
+                  taskId={taskId}
+                  className="mb-5 lg:hidden"
+                />
+              </>
             }
-          />
-          {/* The rail is hidden on narrow screens; the card goes under the text. */}
-          <CardPanel
-            workspaceId={workspaceId}
-            taskId={taskId}
-            className="mx-auto w-full max-w-2xl px-4 pb-16 sm:px-6 lg:hidden"
           />
         </>
       )}

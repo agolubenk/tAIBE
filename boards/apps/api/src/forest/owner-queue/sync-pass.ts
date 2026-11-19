@@ -1,6 +1,6 @@
 import { decideAndApply, markFailed } from "../approval/decide-and-apply";
 import { approvalItemData, approvalItemId, itemNonce } from "./item-text";
-import { eachRow, withoutPaused } from "./each-row";
+import { ApplyDeferred, eachRow, withoutPaused } from "./each-row";
 import { journalQueue, ownerQueueActor } from "./queue-actor";
 import {
   type QueueClient,
@@ -268,13 +268,17 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
     );
     return;
   }
-  await decideAndApply({
-    approvalId: row.id,
-    workspaceId: row.workspaceId,
-    decision: answer.kind === "yes" ? "approved" : "rejected",
-    actor,
-    answer: decided,
-  });
+  try {
+    await decideAndApply({
+      approvalId: row.id,
+      workspaceId: row.workspaceId,
+      decision: answer.kind === "yes" ? "approved" : "rejected",
+      actor,
+      answer: decided,
+    });
+  } catch (error) {
+    throw new ApplyDeferred(error);
+  }
 }
 
 // One pass ends early, without an error, once it spent its share of the

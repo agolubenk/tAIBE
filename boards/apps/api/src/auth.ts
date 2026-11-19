@@ -79,8 +79,12 @@ import {
 } from "./utils/check-registration-allowed";
 import { checkWorkspaceName } from "./utils/check-workspace-name";
 import { mapCustomOAuthProfileToUser } from "./utils/custom-oauth-profile";
+import { authRateLimitOptions } from "./utils/auth-rate-limit";
 import { resolveFileSecret } from "./utils/file-secret";
 import { generateDemoName } from "./utils/generate-demo-name";
+import { assertFreshSession, type GuardSession } from "./reauth/guard";
+import { reauthPlugin } from "./reauth/plugin";
+import { markInteractiveSession } from "./reauth/session-hook";
 import { getEmailRequestContext } from "./utils/email-request-context";
 import { getDefaultCookieAttributes } from "./utils/get-default-cookie-attributes";
 import { getInvitationEmailSubject } from "./utils/get-invitation-email-subject";
@@ -732,6 +736,13 @@ export const auth = betterAuth({
       // t-boards: metadata.workspaceId limits a key to one workspace (R-002).
       enableMetadata: true,
       apiKeyHeaders: "x-api-key",
+      // TB-136: new keys are tbk_ + 64 letters, so the format rules of
+      // @kaneo/redact and infra/checks/secrets_scan.py catch them anywhere.
+      // A key is checked by the hash of the whole string, so keys issued
+      // before the prefix keep working. `start` keeps six key characters
+      // after the prefix, as before.
+      defaultPrefix: "tbk_",
+      startingCharactersConfig: { charactersLength: 10 },
       rateLimit: {
         enabled: true,
         maxRequests: 100,
@@ -748,27 +759,22 @@ export const auth = betterAuth({
       adminRoles: ["admin"],
     }),
     openAPI(),
+    reauthPlugin(),
   ],
   session: {
+    // TB-31 R-5: freshness is only the tb-reauth mark (reauth/guard.ts).
+    // 0 turns off better-auth's own session-age checks on /delete-user,
+    // /list-sessions and /unlink-account; the guard covers all three.
+    // On a better-auth upgrade, re-check dist for freshAge users.
+    freshAge: 0,
     cookieCache: {
       // Consult the session store on every request so password recovery
       // immediately rejects revoked cookies, including caches issued before upgrade.
       enabled: false,
     },
   },
-  rateLimit: {
-    // Enable in cloud; self-hosted instances opt in by setting KANEO_CLOUD.
-    // Default better-auth rate-limit only kicks in for production; we keep the
-    // global limits conservative and tighten signup/invite via customRules.
-    enabled: isCloud(),
-    window: 10,
-    max: 100,
-    customRules: {
-      "/sign-up/email": { window: 60, max: 3 },
-      "/sign-in/anonymous": { window: 60, max: 3 },
-      "/organization/invite-member": { window: 60, max: 5 },
-    },
-  },
+  // TB-31 R-8: on by default; rules and the switch in utils/auth-rate-limit.ts.
+  rateLimit: authRateLimitOptions(),
   databaseHooks: {
     session: {
       create: {
@@ -777,6 +783,8 @@ export const auth = betterAuth({
         before: async (session) => {
           if (await isAgentUser(session.userId)) return false;
         },
+        // TB-31 R-5: a session from an interactive sign-in starts fresh.
+        after: async (session, ctx) => markInteractiveSession(session, ctx),
       },
     },
     user: {
@@ -867,6 +875,9 @@ export const auth = betterAuth({
   },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
+      // TB-31 R-5: protected actions need a fresh session first.
+      await assertFreshSession(ctx, sessionForGuard);
+
       if (ctx.path === "/admin/remove-user") {
         await prepareAdminUserRemoval(ctx);
       }
@@ -1107,3 +1118,15 @@ export const auth = betterAuth({
     }),
   },
 });
+
+/**
+ * TB-31 R-5: the session the fresh-session guard checks. `auth.api.getSession`
+ * runs every before hook, so a Bearer token resolves to the same session the
+ * endpoint will act for (see `SessionResolver` in reauth/guard.ts).
+ */
+function sessionForGuard(headers: Headers): Promise<GuardSession | null> {
+  return auth.api.getSession({
+    headers,
+    query: { disableCookieCache: true, disableRefresh: true },
+  });
+}

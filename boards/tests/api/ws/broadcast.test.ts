@@ -206,6 +206,26 @@ describe("broadcastToProject", () => {
     removeConnection("proj-1", conn);
   });
 
+  it("preserves a completion refresh when a later unrelated project update shares its batch", async () => {
+    const ws = makeFakeWs();
+    const conn = addConnection("proj-1", ws, "user-1", "init-1", "workspace");
+    await projectUpdateHandler?.({
+      projectId: "proj-1",
+      completionChanged: true,
+    });
+    await projectUpdateHandler?.({ projectId: "proj-1" });
+    const send = (ws as { send: ReturnType<typeof vi.fn> }).send;
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce(), {
+      timeout: 300,
+    });
+    expect(JSON.parse(send.mock.calls[0][0])).toMatchObject({
+      type: "PROJECT_UPDATED",
+      projectId: "proj-1",
+      completionChanged: true,
+    });
+    removeConnection("proj-1", conn);
+  });
+
   it("keeps title-change hints through batching without broadcasting private titles", async () => {
     const ws = makeFakeWs();
     const conn = addConnection("proj-1", ws, "user-1", "init-1", "workspace");

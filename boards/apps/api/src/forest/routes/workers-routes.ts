@@ -6,6 +6,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { listCardWorkers } from "../workers/list-card-workers";
 import { workspaceParam } from "./schema";
@@ -36,7 +37,10 @@ export const workersRoutes = apiRouter<
   const { workspaceId } = c.req.valid("param");
   const { projectId } = c.req.valid("query");
   return c.json(
-    await listCardWorkers(workspaceId, projectId, c.get("userId")),
+    maskForTokenCaller(
+      c,
+      await listCardWorkers(workspaceId, projectId, c.get("userId")),
+    ),
     200,
   );
 });

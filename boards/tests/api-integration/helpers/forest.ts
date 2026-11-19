@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { expect } from "vite-plus/test";
 import { auth } from "../../../apps/api/src/auth";
 import db, { schema } from "../../../apps/api/src/database";
 import { createApp } from "../../../apps/api/src/index";
@@ -97,4 +98,45 @@ export async function relate(
   await db
     .insert(schema.taskRelationTable)
     .values({ sourceTaskId, targetTaskId, relationType });
+}
+
+type Forest = Awaited<ReturnType<typeof createForest>>;
+
+// An agent asks the owner; close_task carries the done reference it needs.
+export async function requestApproval(
+  forest: Forest,
+  action: "close_task" | "reopen_task" | "set_priority",
+  targetId: string,
+  value: string,
+) {
+  const requested = await forest.agent("/approvals", {
+    action,
+    targetId,
+    value,
+    reason: "agent asks",
+    ...(action === "close_task"
+      ? { doneRef: "https://github.com/agolubenk/tAIBE/pull/1" }
+      : {}),
+  });
+  expect(requested.status).toBe(200);
+  expect(requested.body.params).toEqual(
+    action === "set_priority" ? { priority: value } : { status: value },
+  );
+  return String(requested.body.id);
+}
+
+// TB-102: «да» in t-boards applies the request at once (R-12).
+export async function approve(
+  forest: Forest,
+  action: "close_task" | "reopen_task" | "set_priority",
+  targetId: string,
+  value: string,
+) {
+  const id = await requestApproval(forest, action, targetId, value);
+  const decided = await forest.owner(`/approvals/${id}/decide`, {
+    decision: "approved",
+  });
+  expect(decided.status).toBe(200);
+  expect(decided.body.status).toBe("consumed");
+  return id;
 }
