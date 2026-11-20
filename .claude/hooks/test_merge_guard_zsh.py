@@ -90,23 +90,23 @@ for label, cmd in [
 ]:
     bash(f"SE-194, проход — {label}: {cmd}", cmd, False)
 
-# --- код из файла мог включить EXTENDED_GLOB (линза frontend на 7dd39c7b0, coord 18:01): `^`, `#`, `~` — маска ---
+# --- `^`, `#`, `~` в середине слова — маска всегда: EXTENDED_GLOB включает и вычисленный текст (линза frontend #512,
+# coord 18:14); буквы — `~` в конце и сразу после `:`/`=` ---
 for label, cmd in [
-    ("source, `^`", f"source ./opts.zsh; rm -rf .^x"),
-    (". файл, `#`", f". ./opts.zsh && rm -rf {C[:4]}#{C[4:]}"),
-    ("eval, `~`", f"eval \"$(cat {O}/o)\"; rm -rf {C}~x"),
-    ("zsh без -f", f"zsh -c 'rm -rf .^x'"),
-    ("if source", f"if source ./opts.zsh; then rm -rf .^x; fi"),
-    ("{ . файл; }", f"{{ . ./opts.zsh; }} && rm -rf {C}~x"),
-    ("builtin source", f"builtin source ./opts.zsh; rm -rf .^x"),
+    ("setopt $(<файл)", "setopt $(<on.txt); rm -rf .^x"),
+    ("имя опции из $(…)", "setopt $(print extended)glob; rm -rf .^x"),
+    ("$(<файл) на месте команды", "$(<opts.zsh); rm -rf .^x"),
+    ("source, `#`", f"source ./opts.zsh && rm -rf {C[:4]}#{C[4:]}"),
+    ("zsh -c, `~`", f"zsh -c 'rm -rf {C}~x'"),
+    ("без опции, чужая папка", f"rm -rf {O}/a^b"),
 ]:
     bash(f"SE-194, отказ — {label}: {cmd}", cmd, True)
 
 for label, cmd in [
-    ("source и `~` в конце", "source ./env.sh && cp a.txt a.txt~"),
-    ("zsh -f", f"zsh -fc 'rm -rf {O}/a^b'"),
-    ("cd . — не чтение кода", f"cd . && rm -rf {O}/a^b"),
-    ("find . — не чтение кода", f"find . -name x && rm -rf {O}/a^b"),
+    ("rsync в host:~/", f"rsync -a {O}/x/ host:~/x/"),
+    ("cd eval и host:~/ (линза Контроля на 0f6411c14)", f"cd eval && rsync -a {O}/x/ host:~/x/"),
+    ("a.map~ — `~` в конце", f"cp {O}/a.map {O}/a.map~"),
+    ("source и a.txt~", "source ./env.sh && cp a.txt a.txt~"),
 ]:
     bash(f"SE-194, проход — {label}: {cmd}", cmd, False)
 
