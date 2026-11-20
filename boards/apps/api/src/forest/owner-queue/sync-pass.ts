@@ -1,4 +1,5 @@
 import { decideAndApply, markFailed } from "../approval/decide-and-apply";
+import { recordDeferral } from "./apply-deferral";
 import { approvalItemData, approvalItemId, itemNonce } from "./item-text";
 import { ApplyDeferred, eachRow, withoutPaused } from "./each-row";
 import { journalQueue, ownerQueueActor } from "./queue-actor";
@@ -277,8 +278,47 @@ async function readPending(deps: SyncDeps, row: ApprovalRow) {
       answer: decided,
     });
   } catch (error) {
-    throw new ApplyDeferred(error);
+    await deferApply(deps, row, itemId, { actor, decided }, error);
   }
+}
+
+// TB-114 п. 3: the «Да» did not apply. Tries 1 to APPLY_TRIES − 1 say so in
+// the item as «doing» and wait the pause (each-row.ts): the pass repeats the
+// apply itself, so the item must not come back to the owner («blocked» after
+// an answer is «ждёт вас снова», open-rule.ts in ops-console; product lens on
+// #227). The last try ends the request as failed, and step 4 asks the owner
+// to file again with «blocked».
+async function deferApply(
+  deps: SyncDeps,
+  row: ApprovalRow,
+  itemId: string,
+  answer: {
+    actor: Parameters<typeof markFailed>[2];
+    decided: Parameters<typeof markFailed>[3];
+  },
+  error: unknown,
+) {
+  const outcome = await recordDeferral(
+    { id: row.id, synced: row.queueSyncedStatus },
+    error,
+    {
+      fail: (reason) =>
+        markFailed(
+          row.id,
+          row.workspaceId,
+          answer.actor,
+          answer.decided,
+          reason,
+        ),
+      save: (synced) => saveItemState(row.id, itemId, { synced }),
+      note: (text) =>
+        deps.client.patch("checks", itemId, {
+          agentStatus: "doing",
+          agentNote: text,
+        }),
+    },
+  );
+  if (outcome === "deferred") throw new ApplyDeferred(error);
 }
 
 // One pass ends early, without an error, once it spent its share of the

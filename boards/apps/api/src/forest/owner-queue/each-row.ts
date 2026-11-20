@@ -7,7 +7,8 @@ export const REJECT_PAUSE_MS = 10 * 60 * 1000;
 // The owner's «Да» could not be applied for a reason that is not a refusal
 // (a lock or statement timeout, a database error). The request stays pending
 // and waits REJECT_PAUSE_MS: a batch of 250 cards is not run again on every
-// pass (Control lens on #160).
+// pass (Control lens on #160). The item counts the tries; the last one fails
+// the request (apply-deferral.ts, TB-114).
 export class ApplyDeferred extends Error {
   constructor(cause: unknown) {
     const text = cause instanceof Error ? cause.message : String(cause);
