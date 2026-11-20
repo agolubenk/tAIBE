@@ -1,13 +1,12 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Skeleton } from "@/components/ui/skeleton";
 import useCardMemory from "@/hooks/queries/forest/use-card-memory";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
-const SHOWN = 5;
-
-// claude-mem observations that name the card (R-042): what agents noted
-// while working on it. Read-only; a sleeping worker shows the last copy.
+// claude-mem observations that name the card exactly (TB-113): per key — the
+// card id, board key, Backlog ID and queue items of its «да» requests — how
+// many and the 5 newest titles. Read-only; a sleeping Mac shows the last
+// answer for up to a day.
 export function CardMemory({
   workspaceId,
   taskId,
@@ -17,7 +16,6 @@ export function CardMemory({
 }) {
   const { t } = useTranslation();
   const { data, isLoading, isError } = useCardMemory(workspaceId, taskId);
-  const [showAll, setShowAll] = useState(false);
 
   if (isLoading) {
     return (
@@ -42,7 +40,7 @@ export function CardMemory({
     );
   }
 
-  const items = showAll ? data.items : data.items.slice(0, SHOWN);
+  const named = data.keys.filter((group) => group.count > 0);
   return (
     <>
       {data.stale && data.fetchedAt ? (
@@ -52,46 +50,50 @@ export function CardMemory({
           })}
         </p>
       ) : null}
-      {items.length ? (
-        <ul className="flex flex-col gap-0.5">
-          {items.map((item) => (
-            <li
-              key={item.id}
-              className="flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 hover:bg-accent/40"
-            >
-              <span className="truncate font-medium text-[13px] text-foreground">
-                {item.title ?? item.subtitle ?? `#${item.id}`}
-              </span>
-              <span className="truncate text-muted-foreground text-xs">
-                <span title={formatDateTime(item.createdAt)}>
-                  {formatRelativeTime(item.createdAt)}
+      {named.length ? (
+        <ul className="flex flex-col gap-2">
+          {named.map((group) => (
+            <li key={group.key} className="flex min-w-0 flex-col gap-0.5">
+              <span className="flex min-w-0 items-baseline gap-1 px-2 text-muted-foreground text-xs">
+                <span className="truncate font-mono text-foreground">
+                  {group.key}
                 </span>
-                {" · "}
-                {item.type}
-                {" · "}
-                {t(`tasks:card.memory.matched.${item.matchedOn}`, {
-                  value: item.matchedValue,
-                })}
+                <span className="shrink-0">
+                  {" · "}
+                  {t(`tasks:card.memory.matched.${group.matchedOn}`)}
+                  {" · "}
+                  {t("tasks:card.memory.count", {
+                    total: group.capped ? `${group.count}+` : group.count,
+                  })}
+                </span>
               </span>
+              <ul className="flex flex-col gap-0.5">
+                {group.latest.map((line) => (
+                  <li
+                    key={line.id}
+                    className="flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1 hover:bg-accent/40"
+                  >
+                    <span className="truncate font-medium text-[13px] text-foreground">
+                      {line.title ?? `#${line.id}`}
+                    </span>
+                    <span className="truncate text-muted-foreground text-xs">
+                      <span title={formatDateTime(line.createdAt)}>
+                        {formatRelativeTime(line.createdAt)}
+                      </span>
+                      {" · "}
+                      {line.project}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </li>
           ))}
         </ul>
       ) : (
         <p className="px-2 py-1 text-muted-foreground text-xs">
-          {t("tasks:card.memory.empty", { total: data.scanned })}
+          {t("tasks:card.memory.empty")}
         </p>
       )}
-      {data.items.length > SHOWN ? (
-        <button
-          type="button"
-          className="self-start px-2 py-1 text-muted-foreground text-xs underline-offset-2 hover:text-foreground hover:underline"
-          onClick={() => setShowAll((value) => !value)}
-        >
-          {showAll
-            ? t("tasks:card.showLess")
-            : t("tasks:card.showAll", { total: data.items.length })}
-        </button>
-      ) : null}
     </>
   );
 }

@@ -1,5 +1,6 @@
 import type { NotebookUsage } from "../../database/notebook-schema";
 import { withoutOutboundTelemetry } from "../../utils/sensitive-outbound";
+import { urlOrigin } from "./base-url";
 
 const RESPONSE_MAX_BYTES = 512 * 1024;
 
@@ -58,6 +59,47 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   }
 }
 
+export type ChatConfig = {
+  baseUrl: string;
+  model: string;
+  // OpenRouter's own fallbacks, tried there after `model`.
+  models?: string[];
+  thinking?: string;
+};
+
+export type ChatAnswer = {
+  content: string;
+  model: string;
+  usage: NotebookUsage | null;
+};
+
+const OPENROUTER = "https://openrouter.ai";
+
+// Fields only OpenRouter knows (TB-159): its fallbacks for this point, and
+// short reasoning kept out of the answer, so reasoning does not use up
+// max_tokens and leave the answer empty. Other providers never get them.
+function providerFields(config: ChatConfig) {
+  if (urlOrigin(config.baseUrl) !== OPENROUTER) return {};
+  return {
+    ...(config.models?.length ? { models: config.models } : {}),
+    reasoning: { effort: "low", exclude: true },
+  };
+}
+
+// The model that answered: one of the names the point lists (an OpenRouter
+// fallback may answer instead of `model`), compared without a `:variant`
+// suffix. Any other name the provider sends is not stored.
+export function answeredModel(body: unknown, config: ChatConfig): string {
+  const sent = (body as { model?: unknown } | null)?.model;
+  if (typeof sent !== "string") return config.model;
+  const names = [config.model, ...(config.models ?? [])];
+  return (
+    names.find((name) => name === sent) ??
+    names.find((name) => name.split(":")[0] === sent) ??
+    config.model
+  );
+}
+
 export function answerText(body: unknown): string {
   const content = (
     body as { choices?: { message?: { content?: unknown } }[] } | null
@@ -97,14 +139,12 @@ export function providerUsage(body: unknown): NotebookUsage | null {
   return { input, output, cached };
 }
 
-export type ChatCompletion = { text: string; usage: NotebookUsage | null };
-
 export async function chatCompletion(
-  config: { baseUrl: string; model: string; thinking?: string },
+  config: ChatConfig,
   key: string,
   messages: ChatMessage[],
   options: { timeoutMs?: number; maxTokens?: number } = {},
-): Promise<ChatCompletion> {
+): Promise<ChatAnswer> {
   const signal = AbortSignal.timeout(options.timeoutMs ?? 60_000);
   try {
     const response = await withoutOutboundTelemetry(() =>
@@ -123,6 +163,7 @@ export async function chatCompletion(
           max_tokens: options.maxTokens ?? 1200,
           temperature: 0.2,
           ...(config.thinking ? { thinking: { type: config.thinking } } : {}),
+          ...providerFields(config),
         }),
       }),
     );
@@ -139,7 +180,11 @@ export async function chatCompletion(
       throw new LlmError("http", response.status);
     }
     const body = await readBoundedJson(response);
-    return { text: answerText(body), usage: providerUsage(body) };
+    return {
+      content: answerText(body),
+      model: answeredModel(body, config),
+      usage: providerUsage(body),
+    };
   } catch (error) {
     if (error instanceof LlmError) throw error;
     if (signal.aborted) throw new LlmError("timeout");

@@ -1736,7 +1736,7 @@
             ]
           },
           "eventData": {
-            "description": "Type-specific payload, e.g. { oldStatus, newStatus } for status_changed. Null for plain comments."
+            "description": "Type-specific payload, e.g. { oldStatus, newStatus } for status_changed. Null for plain comments; a comment of a linked session carries { dialog: { groupKey, fencingToken, session, open } } (R-026): session names the speaking session, open is false once the group's lease ends or the card leaves work."
           },
           "externalUserName": {
             "type": [
@@ -5215,11 +5215,11 @@
         "properties": {
           "available": {
             "type": "boolean",
-            "description": "false when the claude-mem worker is unreachable and nothing was cached yet."
+            "description": "false when the Mac memory proxy is unreachable and no answer from the last 24 hours is kept."
           },
           "stale": {
             "type": "boolean",
-            "description": "true when the worker is down and the list is a cached copy."
+            "description": "true when the proxy is unreachable and the keys are the last answer, at most 24 hours old."
           },
           "fetchedAt": {
             "type": [
@@ -5228,66 +5228,69 @@
             ],
             "format": "date-time"
           },
-          "scanned": {
-            "type": "integer",
-            "description": "How many of the latest observations were checked."
-          },
-          "items": {
+          "keys": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "id": {
-                  "type": "integer"
-                },
-                "type": {
-                  "type": "string"
-                },
-                "title": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "description": "The observation's title. For a caller with a token a secret in it reads [REDACTED:<kind>]."
-                },
-                "subtitle": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "description": "Masked for a caller with a token, as title."
-                },
-                "createdAt": {
-                  "type": "string"
+                "key": {
+                  "type": "string",
+                  "description": "The card id, card key (TB-108) or owner-queue item id."
                 },
                 "matchedOn": {
                   "type": "string",
                   "enum": [
-                    "branch",
-                    "task-id"
+                    "id",
+                    "key",
+                    "queue"
                   ]
                 },
-                "matchedValue": {
-                  "type": "string",
-                  "description": "The card's branch or identifier the observation names."
+                "count": {
+                  "type": "integer",
+                  "description": "Observations that name the key exactly, at most 500."
                 },
-                "source": {
-                  "type": "string",
-                  "enum": [
-                    "metadata",
-                    "text"
-                  ]
+                "capped": {
+                  "type": "boolean",
+                  "description": "true when more than 500 observations name the key; latest is then approximate."
+                },
+                "latest": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer"
+                      },
+                      "title": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The observation's title, at most 120 characters; a cut inside a word drops that word. For a caller with a token a secret in it reads [REDACTED:<kind>]."
+                      },
+                      "project": {
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "title",
+                      "project",
+                      "createdAt"
+                    ]
+                  },
+                  "description": "Up to 5, newest first."
                 }
               },
               "required": [
-                "id",
-                "type",
-                "title",
-                "subtitle",
-                "createdAt",
+                "key",
                 "matchedOn",
-                "matchedValue",
-                "source"
+                "count",
+                "capped",
+                "latest"
               ]
             }
           }
@@ -5296,8 +5299,7 @@
           "available",
           "stale",
           "fetchedAt",
-          "scanned",
-          "items"
+          "keys"
         ]
       },
       "ForestCardCost": {
@@ -5672,6 +5674,326 @@
         },
         "required": [
           "runId"
+        ]
+      },
+      "OwnerQueueList": {
+        "type": "object",
+        "properties": {
+          "docs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "product": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "added": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pr": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "inboxType": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "open",
+                    "done",
+                    null
+                  ],
+                  "description": "open — in the console's open list (?open=1), done — not in it. Items only; null for checks."
+                },
+                "choice": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "done": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "answeredAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "updatedAt": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "product",
+                "kind",
+                "title",
+                "added",
+                "source",
+                "pr",
+                "inboxType",
+                "state",
+                "choice",
+                "done",
+                "answeredAt",
+                "updatedAt"
+              ]
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "oldest",
+              "newest"
+            ],
+            "description": "oldest — open items, oldest first as on the console's /queue (added, creation time, id); newest — the newest answer first (answered, all, checks)."
+          },
+          "total": {
+            "type": "integer"
+          },
+          "products": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "collectionTotal": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "When the console capped the list: how many documents the collection has in all."
+          },
+          "queueUrl": {
+            "type": "string",
+            "description": "The owner queue page in the ops-console."
+          }
+        },
+        "required": [
+          "docs",
+          "page",
+          "pageSize",
+          "order",
+          "total",
+          "products",
+          "truncated",
+          "collectionTotal",
+          "queueUrl"
+        ]
+      },
+      "OwnerQueueDoc": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "version": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "number"
+              },
+              "createdAt": {
+                "type": "number"
+              },
+              "product": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "data",
+              "version",
+              "updatedAt"
+            ]
+          },
+          "check": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "data": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "version": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "number"
+              },
+              "createdAt": {
+                "type": "number"
+              },
+              "product": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "data",
+              "version",
+              "updatedAt"
+            ]
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "number"
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "after": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "at",
+                "actor",
+                "action",
+                "after"
+              ]
+            }
+          },
+          "checkHistory": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "number"
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "after": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "at",
+                "actor",
+                "action",
+                "after"
+              ]
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "number"
+                },
+                "createdAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "kind",
+                "size",
+                "createdAt"
+              ]
+            }
+          },
+          "queueUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc",
+          "check",
+          "history",
+          "checkHistory",
+          "files",
+          "queueUrl"
         ]
       },
       "ForestTrees": {
@@ -9715,6 +10037,13 @@
               "null"
             ]
           },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "OpenRouter's own fallback models for this point, tried there in order. Sent only to openrouter.ai."
+          },
           "embedModel": {
             "type": "string"
           },
@@ -9749,7 +10078,23 @@
             "description": "The server has a settings encryption key, so a model key can be saved here."
           },
           "callsToday": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Today's model calls (UTC) of all points: the daily cap."
+          },
+          "pointCallsToday": {
+            "type": "integer",
+            "description": "The part of callsToday answered or last failed by the main point."
+          },
+          "failsSinceStart": {
+            "type": "integer",
+            "description": "Failed calls of this point since the API started (kept in memory)."
+          },
+          "chain": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotebookModelPoint"
+            },
+            "description": "Points tried in this order after the main one fails (TB-159). The daily cap is shared by all points."
           },
           "usage": {
             "type": "array",
@@ -9797,6 +10142,7 @@
         "required": [
           "baseUrl",
           "model",
+          "models",
           "embedModel",
           "dailyMax",
           "hasKey",
@@ -9805,7 +10151,73 @@
           "fileKeyWithheld",
           "canStoreKey",
           "callsToday",
+          "pointCallsToday",
+          "failsSinceStart",
+          "chain",
           "usage"
+        ]
+      },
+      "NotebookModelPoint": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "OpenRouter's own fallback models for this point, tried there in order. Sent only to openrouter.ai."
+          },
+          "hasKey": {
+            "type": "boolean"
+          },
+          "keySource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "settings",
+              "file",
+              null
+            ],
+            "description": "Where the model key comes from: these settings, or the server's key file. The key itself is never returned."
+          },
+          "keyUnreadable": {
+            "type": "boolean"
+          },
+          "fileKeyWithheld": {
+            "type": "boolean",
+            "description": "The server's key file holds a key for the server's own API address; it is not sent to the address set here."
+          },
+          "callsToday": {
+            "type": "integer",
+            "description": "Today's calls (UTC) answered or last failed by a model this point lists first in the chain."
+          },
+          "failsSinceStart": {
+            "type": "integer",
+            "description": "Failed calls of this point since the API started (kept in memory)."
+          }
+        },
+        "required": [
+          "id",
+          "baseUrl",
+          "model",
+          "models",
+          "hasKey",
+          "keySource",
+          "keyUnreadable",
+          "fileKeyWithheld",
+          "callsToday",
+          "failsSinceStart"
         ]
       },
       "UpdateNotebookModelSettings": {
@@ -9827,6 +10239,19 @@
             ],
             "minLength": 1,
             "maxLength": 200
+          },
+          "models": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 3,
+            "description": "OpenRouter's own fallback models for the main point; null or an empty list removes them."
           },
           "embedModel": {
             "type": [
@@ -9852,6 +10277,58 @@
             "minLength": 1,
             "maxLength": 500,
             "description": "A new model key; null removes the stored one, leaving it out keeps it."
+          },
+          "chain": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "description": "The id of a point already in the chain; leave it out for a new point."
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "maxLength": 500,
+                  "format": "uri",
+                  "description": "An https address of an OpenAI-compatible API. The point's key is bound to it."
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "maxItems": 3
+                },
+                "key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "description": "A new key for this point; null removes it, leaving it out keeps the point's stored key (same address only)."
+                }
+              },
+              "required": [
+                "baseUrl",
+                "model"
+              ]
+            },
+            "maxItems": 4,
+            "description": "The whole chain after the main point, in the order to try it; null removes it, leaving it out keeps it."
           }
         }
       },
@@ -18265,7 +18742,7 @@
             }
           },
           "400": {
-            "description": "Invalid body, or comment activity submitted through the generic endpoint",
+            "description": "Invalid body, a comment (use the comment endpoint), or a status_changed or moved event, which only the server writes",
             "content": {
               "application/json": {
                 "schema": {
@@ -27108,7 +27585,7 @@
           "Forest"
         ],
         "summary": "Get a card's Notion and agent fields",
-        "description": "A card nobody wrote fields for answers the defaults: kind task, not half-baked, empty lists.",
+        "description": "A card nobody wrote fields for answers the defaults: kind task, not half-baked, empty lists. A caller with a token (API key, agent key, MCP) reads secrets in the text as [REDACTED:<kind>]; the web app's session reads the text as stored.",
         "parameters": [
           {
             "schema": {
@@ -27179,7 +27656,7 @@
           "Forest"
         ],
         "summary": "Change a card's Notion and agent fields",
-        "description": "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only.",
+        "description": "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only. A caller with a token sends report or context pack back with the [REDACTED:<kind>] markers it read: they get the stored values back. A marker in another field is stored as it came. The answer is masked as the read is.",
         "parameters": [
           {
             "schema": {
@@ -27354,7 +27831,7 @@
             }
           },
           "409": {
-            "description": "No live lease of this session, the Backlog ID is taken, or revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision)",
+            "description": "No live lease of this session, the Backlog ID is taken, revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision), or REDACTED_MARKERS_MISMATCH: a block with a [REDACTED:…] marker in report or context pack does not match the stored text",
             "content": {
               "application/json": {
                 "schema": {
@@ -27560,7 +28037,7 @@
           "Forest"
         ],
         "summary": "Get the context pack of a card",
-        "description": "The task with its labels and card fields, the live lease, pending approval requests, linked cards, the latest comments and which fields the latest edits changed. Each list is capped; `truncated` names the ones that had more.",
+        "description": "The task with its labels and card fields, the live lease, pending approval requests, linked cards, the latest comments and which fields the latest edits changed. Each list is capped; `truncated` names the ones that had more. A caller with a token (API key, agent key, MCP) reads secrets in the text as [REDACTED:<kind>]; the web app's session reads the text as stored.",
         "parameters": [
           {
             "schema": {
@@ -27633,7 +28110,7 @@
           "Forest"
         ],
         "summary": "List claude-mem observations about a card",
-        "description": "Observations among the claude-mem worker's latest ones that name the card's id, Backlog ID, board number or branch. Read-only; when the worker is down the last copy is returned and marked stale. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
+        "description": "For each of the card's keys — its id, board key, Backlog ID and the owner-queue items of its «да» requests, up to 6 — how many claude-mem observations name it exactly and the 5 newest titles. Read-only, through the Mac memory proxy; when the proxy is down the last answer is returned, marked stale, for up to 24 hours. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
         "parameters": [
           {
             "schema": {
@@ -27695,6 +28172,113 @@
           },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/forest/{workspaceId}/memory": {
+      "get": {
+        "operationId": "lookupForestMemory",
+        "tags": [
+          "Forest"
+        ],
+        "summary": "List claude-mem observations by card key or owner-queue item",
+        "description": "The same answer as a card's memory, found by exactly one of ticketKey (a card of this workspace, e.g. TB-108: its card memory) or queueItemId (an owner-queue item the t-boards token sees: observations that name it). Any other word cannot be searched.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9]{0,9}-[0-9]{1,6}$",
+              "description": "A card key of this workspace, e.g. TB-108: a project key of 1 to 10 Latin letters and digits, a hyphen and the number."
+            },
+            "required": false,
+            "description": "A card key of this workspace, e.g. TB-108: a project key of 1 to 10 Latin letters and digits, a hyphen and the number.",
+            "name": "ticketKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^(?=.{3,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+){1,7}$",
+              "description": "An owner-queue item id, e.g. d-tb113-mem-1311."
+            },
+            "required": false,
+            "description": "An owner-queue item id, e.g. d-tb113-mem-1311.",
+            "name": "queueItemId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForestCardMemory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Neither or both of ticketKey and queueItemId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing task:read permission or project access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such card in this workspace or no such queue item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          },
+          "503": {
+            "description": "The owner queue is not linked or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -27896,6 +28480,221 @@
           },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
+          }
+        }
+      }
+    },
+    "/forest/{workspaceId}/owner-queue/{collection}": {
+      "get": {
+        "operationId": "listForestOwnerQueue",
+        "tags": [
+          "Forest"
+        ],
+        "summary": "List the owner queue",
+        "description": "The owner queue from the ops-console, read only and for the owner's session alone: 50 documents a page, newest first. Items can be filtered to open or answered by the console's own rule.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "items",
+                "checks"
+              ]
+            },
+            "required": true,
+            "name": "collection",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "answered",
+                "all"
+              ]
+            },
+            "required": false,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,40}$"
+            },
+            "required": false,
+            "name": "product",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owner queue page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerQueueList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the owner's session (agents, API keys and members)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The owner queue is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          },
+          "502": {
+            "description": "The ops-console did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/forest/{workspaceId}/owner-queue/{collection}/{id}": {
+      "get": {
+        "operationId": "getForestOwnerQueueDoc",
+        "tags": [
+          "Forest"
+        ],
+        "summary": "Read one owner queue document",
+        "description": "One document with its journal; an item also comes with the owner's answer and its attachments' metadata.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "items",
+                "checks"
+              ]
+            },
+            "required": true,
+            "name": "collection",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.~:@+-]{1,80}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owner queue document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerQueueDoc"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the owner's session (agents, API keys and members)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not configured, or no such document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/ApiKeyRateLimited"
+          },
+          "502": {
+            "description": "The ops-console did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -33812,6 +34611,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent a [REDACTED:kind] marker in the name, default or options; a new field has no stored value to restore",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
           }
@@ -34012,7 +34821,7 @@
             }
           },
           "409": {
-            "description": "A caller with a token sent [REDACTED:kind] markers that do not match the stored value; keep the markers in place",
+            "description": "A caller with a token sent [REDACTED:kind] markers that match neither the stored value nor exactly one field option per marker; keep the markers in place",
             "content": {
               "application/json": {
                 "schema": {
