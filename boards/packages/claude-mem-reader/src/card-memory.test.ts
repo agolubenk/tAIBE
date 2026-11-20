@@ -70,6 +70,31 @@ describe("createCardMemoryClient", () => {
     );
   });
 
+  it("adds one project parameter per claude-mem project root (TB-58)", async () => {
+    const { fetch, memory } = client();
+
+    await memory.find(["TB-108"], ["tAIBE", "HR_Helper-v2"]);
+
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "http://proxy/api/card-memory?key=TB-108&project=tAIBE&project=HR_Helper-v2",
+    );
+  });
+
+  it("does not send a root with a slash or a space, nor more than 4 roots", async () => {
+    const { fetch, memory } = client();
+
+    for (const projects of [
+      ["tAIBE/topic"],
+      ["t AIBE"],
+      [""],
+      ["-tAIBE"],
+      ["a", "b", "c", "d", "e"],
+    ]) {
+      await expect(memory.find(["TB-1"], projects)).rejects.toThrow(TypeError);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("does not send a word that is no key, nor more than 6 keys", async () => {
     const { fetch, memory } = client();
 

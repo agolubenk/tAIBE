@@ -16,6 +16,7 @@
 // One route does not go to the worker: GET /api/card-memory?key=… (1–6 keys, TB-113) reads claude-mem.db itself,
 // read-only, by exact key, titles only (card-memory-db.mjs). The database is CMEM_PROXY_DB, else claude-mem.db in
 // CLAUDE_MEM_DATA_DIR of the settings, else ~/.claude-mem/claude-mem.db. At most 10 such requests a second.
+// Up to 4 project=<root> parameters keep the answer inside one product's claude-mem projects (R-002, TB-58).
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -143,7 +144,7 @@ async function answerCardMemory(url, res) {
   if (cardMemoryLimited()) return deny(res, 429, "too many requests");
   const parsed = parseKeys(url.searchParams);
   if (parsed.error) return deny(res, 400, parsed.error);
-  const result = await cardMemory.find(parsed.keys);
+  const result = await cardMemory.find(parsed.keys, parsed.projects);
   if (result.status !== "ok")
     return sendJson(res, 503, { error: result.status });
   sendJson(res, 200, { keys: result.keys });

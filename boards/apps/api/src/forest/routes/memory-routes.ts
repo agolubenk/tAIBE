@@ -12,7 +12,7 @@ import { requireWorkspacePermission } from "../../utils/require-workspace-permis
 import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { loadCardMemoryKeys } from "../memory/card-memory-keys";
-import { getCardMemoryFinder } from "../memory/memory-reader";
+import { getCardMemoryFinder, memoryRoots } from "../memory/memory-reader";
 import { assertQueueItemVisible } from "../memory/queue-item-check";
 import { assertTaskInWorkspace } from "../task-scope";
 import { cardParam } from "./card-schema";
@@ -29,7 +29,7 @@ const getMemoryRoute = createRoute({
   tags: ["Forest"],
   summary: "List claude-mem observations about a card",
   description:
-    "For each of the card's keys — its id, board key, Backlog ID and the owner-queue items of its «да» requests, up to 6 — how many claude-mem observations name it exactly and the 5 newest titles. Read-only, through the Mac memory proxy; when the proxy is down the last answer is returned, marked stale, for up to 24 hours. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
+    "For each of the card's keys — its id, board key, Backlog ID and the owner-queue items of its «да» requests, up to 6 — how many claude-mem observations name it exactly and the 5 newest titles. Only the workspace's own claude-mem projects and their worktrees are read (CLAUDE_MEM_PROJECTS); a workspace without them gets available: false, reason no-product-map. Read-only, through the Mac memory proxy; when the proxy is down the last answer is returned, marked stale, for up to 24 hours. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["read"] }),
@@ -74,6 +74,7 @@ export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     await assertTaskInWorkspace(taskId, workspaceId, c.get("userId"));
     const memory = await getCardMemoryFinder()(
       await loadCardMemoryKeys(taskId),
+      memoryRoots(workspaceId),
     );
     return c.json(maskForTokenCaller(c, memory), 200);
   })
@@ -88,7 +89,10 @@ export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     if (queueItemId) {
       await assertQueueItemVisible(workspaceId, queueItemId);
       return c.json(
-        maskForTokenCaller(c, await getCardMemoryFinder()([queueItemId])),
+        maskForTokenCaller(
+          c,
+          await getCardMemoryFinder()([queueItemId], memoryRoots(workspaceId)),
+        ),
         200,
       );
     }
@@ -100,6 +104,7 @@ export const memoryRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
     await assertTaskInWorkspace(task.id, workspaceId, userId);
     const memory = await getCardMemoryFinder()(
       await loadCardMemoryKeys(task.id),
+      memoryRoots(workspaceId),
     );
     return c.json(maskForTokenCaller(c, memory), 200);
   });

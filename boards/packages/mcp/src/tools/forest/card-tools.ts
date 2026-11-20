@@ -85,7 +85,7 @@ export function registerForestCardTools(
     "forest_get_card_memory",
     {
       description:
-        "Count the claude-mem observations that name a card or an owner-queue item exactly, with the 5 newest titles per key, never the text. Give exactly one of taskId, ticketKey (TB-108) or queueItemId (d-tb113-mem-1311). A card is searched by its id, board key, Backlog ID and the queue items of its «да» requests. stale: true means the Mac memory proxy is down and this is the last answer, at most 24 hours old.",
+        "Count the claude-mem observations that name a card or an owner-queue item exactly, with the 5 newest titles per key, never the text. Give exactly one of taskId, ticketKey (TB-108) or queueItemId (d-tb113-mem-1311). A card is searched by its id, board key, Backlog ID and the queue items of its «да» requests. Only the workspace's own claude-mem projects are read; available: false with reason no-product-map means the workspace has none. stale: true means the Mac memory proxy is down and this is the last answer, at most 24 hours old.",
       inputSchema: z.object({
         workspaceId: id,
         taskId: id.optional(),

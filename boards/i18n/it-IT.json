@@ -3693,7 +3693,8 @@
 					"id": "card id",
 					"key": "card key",
 					"queue": "queue item"
-				}
+				},
+				"noProductMap": "Memory is off for this workspace: CLAUDE_MEM_PROJECTS names none of its claude-mem projects."
 			},
 			"worker": {
 				"executor": "Done by {{name}}",
