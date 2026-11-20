@@ -34,12 +34,19 @@ const PATHSPECS = [
 
 const FILE_MAX = 600_000;
 
-// The most shas that one known-shas request takes (apps/api/src/ssr/routes/index.ts).
+// The shas in one known-shas request. The server takes up to
+// SYNC_MANIFEST_MAX = 5000 since TB-129 (apps/api/src/ssr/routes/schema.ts);
+// a server from before TB-129 takes 1000, so the sync works with both.
 export const KNOWN_SHAS_MAX = 1000;
 
 // TB-95. Asks the server which shas it already stores, in requests of at most
 // `size` distinct shas, one after another; `ask(shas)` answers `{ shas }`.
 export async function knownShasInBatches(ask, shas, size = KNOWN_SHAS_MAX) {
+  if (!Number.isInteger(size) || size < 1) {
+    throw new RangeError(
+      `The batch size must be a whole number from 1: ${size}`,
+    );
+  }
   const unique = [...new Set(shas)];
   const known = new Set();
   for (let start = 0; start < unique.length; start += size) {

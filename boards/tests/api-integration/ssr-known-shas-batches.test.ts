@@ -8,8 +8,10 @@ import {
 import { resetTestDatabase } from "./helpers/database";
 import { createForest } from "./helpers/forest";
 
-// TB-95: known-shas takes at most 1000 shas per request, and the Mac sync
-// (deploy/vps/mac/ssr-sync.mjs) used to ask about the whole corpus at once.
+// TB-95: the Mac sync (deploy/vps/mac/ssr-sync.mjs) used to ask about the
+// whole corpus at once. It now asks in batches of KNOWN_SHAS_MAX (1000), the
+// limit of a server before TB-129; the route limit itself (5000, TB-129) is
+// tested in ssr-sync.test.ts.
 const sha256 = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
 const commitSha = "6061626364656667686960616263646566676869";
@@ -42,9 +44,6 @@ describe("API integration: SSR known-shas in batches (Mac sync)", () => {
     shas[1000] = sha256("last");
     const path = `/ssr/${forest.workspace.id}/known-shas`;
 
-    const whole = await forest.ownerApi("POST", path, { shas });
-    expect(whole.status).toBe(400);
-
     const sizes: number[] = [];
     const known = await knownShasInBatches(async (batch: string[]) => {
       sizes.push(batch.length);
@@ -69,5 +68,15 @@ describe("API integration: SSR known-shas in batches (Mac sync)", () => {
     const same = sha256("same");
     await knownShasInBatches(ask, [same, sha256("other"), same]);
     expect(asked).toEqual([[same, sha256("other")]]);
+  });
+
+  // A size below 1 would never move past the first batch.
+  it("refuses a batch size that is not a whole number from 1", async () => {
+    const ask = async () => ({ shas: [] });
+    for (const size of [0, -1, 0.5, Number.NaN]) {
+      await expect(
+        knownShasInBatches(ask, [sha256("one")], size),
+      ).rejects.toThrow(RangeError);
+    }
   });
 });
