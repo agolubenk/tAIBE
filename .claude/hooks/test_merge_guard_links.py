@@ -9,11 +9,12 @@ HR #684). protected_path видит путь, а не файл. Проходил
 Запуск: python3 -I -B .claude/hooks/test_merge_guard_links.py
 Пути собраны из частей (C, SET, RULES, ZE): хук читает этот файл с диска при запуске и иначе откажет на сами строки.
 """
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_testkit import D9, HOME, ROOT, TMP, bash, check, finish  # noqa: E402
+from merge_guard_testkit import D9, HOME, ROOT, TMP, bash, check, finish, repo_on, run  # noqa: E402
 
 C, SET, RULES, ZE = "." + "claude", "settings" + ".json", "ru" + "les", "." + "zsh" + "env"
 CL = f"{ROOT}/{C}"
@@ -133,16 +134,19 @@ for label, cmd, cwd in [
 ]:
     bash(f"IS-249, проход — {label}: {cmd}", cmd, False, cwd=cwd)
 
-# --- B1: скрипт с основной ветки (same_blob, как Makefile #402) — прежнее правило; скрипт, которого там нет, — отказ ---
-import merge_guard_git  # noqa: E402
-
-(O / "reviewed.sh").write_text("rm -rf \"$1\"\n")
+# --- B1: скрипт, закоммиченный без правки (блоб HEAD своего репозитория, coord 13:10), — прежнее правило; скрипт из
+# scratchpad и правленый без коммита — отказ с подсказкой «закоммитьте скрипт или назовите путь словами» ---
+G = repo_on("main", "is249-")
+for name in ("ok.sh", "edited.sh"):
+    (G / name).write_text("rm -rf \"$1\"\n")
+for args in (["add", "ok.sh", "edited.sh"], ["commit", "-q", "-m", "s"]):
+    subprocess.run(["git", "-C", str(G), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True)
+(G / "edited.sh").write_text("rm -rf \"$1\"  # правка\n")
 (O / "scratch.sh").write_text("rm -rf \"$1\"\n")
-blob_rule, asked = merge_guard_git.same_blob, []
-merge_guard_git.same_blob = lambda p, data: asked.append(data) or p.endswith("reviewed.sh")
-bash("IS-249, проход — скрипт с основной ветки: rm -rf \"$1\"", f"bash {O}/reviewed.sh {O}/x", False)
-bash("IS-249, отказ — скрипт не с основной ветки: rm -rf \"$1\"", f"bash {O}/scratch.sh {O}/x", True)
-merge_guard_git.same_blob = blob_rule
-check("IS-249, same_blob — на прочтённых байтах обоих скриптов", None if asked and set(asked) == {b"rm -rf \"$1\"\n"} else asked, False)
+bash("IS-249, проход — скрипт закоммичен без правки: rm -rf \"$1\"", f"bash {G}/ok.sh {O}/x", False)
+bash("IS-249, проход — тот же скрипт из своей папки", "bash ./ok.sh /tmp/is249-x", False, cwd=G)
+for label, path in (("скрипт правлен без коммита", G / "edited.sh"), ("скрипт вне репозитория", O / "scratch.sh")):
+    got = run("Bash", {"command": f"bash {path} {O}/x"})
+    check(f"IS-249, отказ с подсказкой — {label}", None if "закоммитьте скрипт" in str(got) else repr(got), False)
 
 finish(", IS-249: ссылки, перенос и удаление папки с законами")

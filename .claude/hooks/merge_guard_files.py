@@ -281,8 +281,9 @@ def _hit(word, bases, roots, protected, dirs):
 
 
 class Disk(str):
-    """Путь скрипта с диска и текст, который хук прочёл (runs_code → whole[2]). reviewed — эти байты — блоб основной
-    ветки origin (same_blob, #402): скрипт прошёл ревью, невидимый путь у mv/rm в нём — не отказ (IS-249 B1, Контроль)."""
+    """Путь скрипта с диска и текст, который хук прочёл (runs_code → whole[2]). reviewed — эти байты — блоб HEAD его
+    репозитория (любого, в том числе worktree): невидимый путь у mv/rm в нём — не отказ (IS-249 B1, coord 13:10). Скрипт
+    из scratchpad и правленый без коммита — отказ; обойти можно только коммитом, а его видно в git."""
     def __new__(cls, path, text):
         s = super().__new__(cls, path)
         s.text, s.ok = text, None
@@ -290,8 +291,8 @@ class Disk(str):
 
     def reviewed(self):
         if self.ok is None:  # git — только когда невидимый путь нашёлся; второго чтения файла нет
-            import merge_guard_git  # git импортирует shell, shell — этот модуль; тест подменяет same_blob
-            self.ok = merge_guard_git.same_blob(str(self), self.text.encode())
+            import merge_guard_git as g  # git импортирует shell, shell — этот модуль; тест подменяет head_blob
+            self.ok = g.head_blob(str(self), self.text.encode())
         return self.ok
 
 
@@ -360,7 +361,8 @@ def link_findings(a, cwd, roots, protected, home, disk=False, bodies=()):
     say = lambda p, why: ("file", f"{p} ({a[0]} {why} — IS-249)")  # noqa: E731
     unseen = say(" ".join(a)[:80], "называет путь, который разбор не видит: назовите его словами")
     if cmd in GONE | {"mv"} and any(UNSEEN.search(w) for w in a[1:]) and typed():  # `rm -rf "$X"`, `mv "$(…)" x`
-        return [unseen]
+        why = "называет путь, который разбор не видит: закоммитьте скрипт или назовите путь словами"
+        return [say(" ".join(a)[:80], why)] if isinstance(disk, Disk) else [unseen]
     if cmd in GONE:
         return [say(p, "удаляет или меняет папку с законами и настройками") for w in ops if (p := hit(w, [cwd]))]
     if cmd in ("tar", "bsdtar", "unzip"):  # `tar -x` без -C и `unzip` без -d — в текущую папку

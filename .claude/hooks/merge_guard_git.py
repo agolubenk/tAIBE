@@ -103,6 +103,17 @@ def same_blob(path, data):
         return False
 
 
+def head_blob(path, data):
+    """Байты data скрипта по пути path (realpath) — блоб HEAD его репозитория (любого, и worktree): скрипт закоммичен
+    без правки (IS-249 B1, coord 13:10). Нет — вне репозитория, пути в HEAD нет, файл правлен, git не ответил вовремя."""
+    d, base = os.path.split(path)
+    try:
+        want = git_out(d, "rev-parse", "-q", "--verify", "HEAD:./" + base)
+    except GitTimeout:
+        return False
+    return bool(want) and want == blob_id(data, len(want))
+
+
 # Тесты слоя (SE-127, решение владельца A, taibe-d-se127-hooktests-1511): в их тексте — образцы защищённых команд,
 # грубый признак их не отличает от запуска. Хук пускает тест без разбора текста, только если прошли ревью его папка и
 # всё, что тесты слоя запускают и импортируют: `.claude/scripts` (dams_common), `eval/tools` (ctx_budget.py,
