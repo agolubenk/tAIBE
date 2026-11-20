@@ -27,7 +27,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, reviewed_test, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, dir_steps, new_state, resolve_dirs  # noqa: E402
-from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
+from merge_guard_files import BLIND_RUN, Disk, command_writes, link_findings, opaque, rewritten, write_targets  # noqa: E402
 from merge_guard_gh import VISIBILITY, classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts,  # noqa: E402
                                 read_names)
@@ -208,7 +208,7 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         is_interp_script = interp if interp is not None else bool(re.match(r"#!.*(python|node|perl|ruby|osascript)", text))
         # `zsh -i < x.zsh`: интерактивный zsh со stdin не считает `#` комментарием — разбор и без снятия (SE-77)
         keep = comment_char_seen(whole[3], text, whole[4][1]) or (s in stdin_files and zsh_interactive(a))
-        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path, keep), s)
+        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, Disk(path, text), keep), s)
         found += got  # разобран до ошибки — находки части и грубый признак по тексту скрипта: в `bash x.sh` его нет
         if partial and FALLBACK.search(text if is_interp_script or keep else uncommented(text)):
             found.append((UNPARSED, s))
@@ -345,7 +345,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     if a[0] == "claude" and hooks_off(a):
         found.append(("file", "claude без хуков проекта (disableAllHooks, --setting-sources без project)"))
     found += [("file", p) for t in write_targets(a) if (p := protected_path(t, cwd, roots))]  # файл ≤ 500 строк (01-base)
-    return found
+    return found + link_findings(a, cwd, roots, protected_path, HOME_CLAUDE, whole, (procs or {}).get(SUBS, ()), hid)  # IS-249
 
 
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, alt=False, keep=False, raw=None):
