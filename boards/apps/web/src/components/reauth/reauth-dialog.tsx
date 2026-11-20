@@ -18,7 +18,7 @@ import { CodeStep, PasskeyStep, PasswordStep } from "./reauth-steps";
 
 // The link that switches the window to another method.
 const SWITCH_LABEL = {
-  password: "auth:reauth.usePassword",
+  password: "auth:reauth.usePassword", // checks: allow-secret — i18n key, not a secret
   passkey: "auth:reauth.usePasskey",
   emailCode: "auth:reauth.useCode",
 } as const satisfies Record<ReauthMethod, string>;
