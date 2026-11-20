@@ -1367,7 +1367,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "KI-Review für {{title}} anfordern",
+				"requestHint": "KI-Review anfordern",
+				"running": "KI-Review läuft",
+				"done": "KI-Review fertig {{time}}",
+				"forkOnly": "Nur PRs aus dem Repository",
+				"errorRunning": "Ein KI-Review läuft bereits.",
+				"errorFork": "KI-Reviews laufen nur für PRs aus dem Repository.",
+				"errorClosed": "Dieser Pull Request ist geschlossen.",
+				"errorNotPullRequest": "Dieser Link ist kein Pull Request.",
+				"errorAppMissing": "Die GitHub App ist für dieses Repository nicht installiert.",
+				"errorGeneric": "KI-Review konnte nicht angefordert werden."
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Rollen",

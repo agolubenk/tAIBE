@@ -1542,7 +1542,20 @@
 			"titleOptional": "标题（可选）",
 			"url": "URL",
 			"remove": "移除 {{title}}",
-			"removeError": "移除资源链接失败。"
+			"removeError": "移除资源链接失败。",
+			"review": {
+				"request": "请求 AI 审查 {{title}}",
+				"requestHint": "请求 AI 审查",
+				"running": "AI 审查进行中",
+				"done": "AI 审查已完成 {{time}}",
+				"forkOnly": "仅限仓库内的 PR",
+				"errorRunning": "AI 审查已在进行中。",
+				"errorFork": "AI 审查仅适用于仓库内的 PR。",
+				"errorClosed": "此拉取请求已关闭。",
+				"errorNotPullRequest": "此链接不是拉取请求。",
+				"errorAppMissing": "此仓库未安装 GitHub App。",
+				"errorGeneric": "无法请求 AI 审查。"
+			}
 		},
 		"customFields": {
 			"createError": "创建自定义字段失败。",

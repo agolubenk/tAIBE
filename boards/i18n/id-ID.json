@@ -1280,7 +1280,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "Minta tinjauan AI untuk {{title}}",
+				"requestHint": "Minta tinjauan AI",
+				"running": "Tinjauan AI sedang berjalan",
+				"done": "Tinjauan AI selesai {{time}}",
+				"forkOnly": "Hanya PR dari repositori",
+				"errorRunning": "Tinjauan AI sudah berjalan.",
+				"errorFork": "Tinjauan AI hanya berjalan untuk PR dari repositori.",
+				"errorClosed": "Pull request ini sudah ditutup.",
+				"errorNotPullRequest": "Tautan ini bukan pull request.",
+				"errorAppMissing": "GitHub App belum dipasang untuk repositori ini.",
+				"errorGeneric": "Gagal meminta tinjauan AI."
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Peran",

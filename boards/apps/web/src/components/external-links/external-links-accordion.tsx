@@ -32,8 +32,10 @@ import useCreateExternalLink from "@/hooks/mutations/external-link/use-create-ex
 import useDeleteExternalLink from "@/hooks/mutations/external-link/use-delete-external-link";
 import { useWorkspacePermission } from "@/hooks/use-workspace-permission";
 import { cn } from "@/lib/cn";
+import { canRequestReview } from "@/lib/pull-request-review";
 import type { ExternalLink } from "@/types/external-link";
 import { linkHost } from "./link-host";
+import { PullRequestReview } from "./pull-request-review";
 
 interface ExternalLinksAccordionProps {
   taskId: string;
@@ -259,6 +261,9 @@ export function ExternalLinksAccordion({
                         </span>
                         {getStatusBadge(link)}
                       </a>
+                      {canAddResource && canRequestReview(link) && (
+                        <PullRequestReview taskId={taskId} link={link} />
+                      )}
                       {removable && (
                         <button
                           type="button"

@@ -1288,7 +1288,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "{{title}} için yapay zekâ incelemesi iste",
+				"requestHint": "Yapay zekâ incelemesi iste",
+				"running": "Yapay zekâ incelemesi sürüyor",
+				"done": "Yapay zekâ incelemesi tamamlandı {{time}}",
+				"forkOnly": "Yalnızca depodaki PR'ler",
+				"errorRunning": "Bir yapay zekâ incelemesi zaten sürüyor.",
+				"errorFork": "Yapay zekâ incelemeleri yalnızca depodaki PR'ler için çalışır.",
+				"errorClosed": "Bu pull request kapalı.",
+				"errorNotPullRequest": "Bu bağlantı bir pull request değil.",
+				"errorAppMissing": "GitHub App bu depo için kurulu değil.",
+				"errorGeneric": "Yapay zekâ incelemesi istenemedi."
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Roller",

@@ -1524,7 +1524,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "Yêu cầu AI đánh giá {{title}}",
+				"requestHint": "Yêu cầu AI đánh giá",
+				"running": "AI đang đánh giá",
+				"done": "AI đã đánh giá xong {{time}}",
+				"forkOnly": "Chỉ PR từ kho mã",
+				"errorRunning": "AI đang đánh giá rồi.",
+				"errorFork": "AI chỉ đánh giá PR từ kho mã.",
+				"errorClosed": "Pull request này đã đóng.",
+				"errorNotPullRequest": "Liên kết này không phải pull request.",
+				"errorAppMissing": "GitHub App chưa được cài cho kho mã này.",
+				"errorGeneric": "Không thể yêu cầu AI đánh giá."
+			}
 		},
 		"mattermostIntegration": {
 			"connect": "Connect Mattermost",
