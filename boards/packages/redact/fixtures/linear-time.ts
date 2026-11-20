@@ -19,8 +19,9 @@ const ROUNDS = 3;
 // A run shorter than the clock can tell apart counts as this long.
 const MIN_MS = 0.05;
 
-// CPU time of this thread in microseconds. Node before 23.9 has no
-// threadCpuUsage; its process clock also counts the GC and compiler threads.
+// CPU time of this thread in microseconds (CI Node 24 and the Mac Node 22.23
+// have threadCpuUsage). An older Node has only the process clock, which also
+// counts the GC and compiler threads.
 function cpuMicros(): number {
   const used =
     typeof process.threadCpuUsage === "function"
