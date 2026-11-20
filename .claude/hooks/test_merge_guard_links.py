@@ -27,6 +27,7 @@ O = TMP / "links"  # чужая папка: не корень и не над н�
 (ROOT / C / "notes.md").write_text("x\n")
 (ROOT / "sub").mkdir()
 (HOME.parent / ZE).write_text("")
+(O / "src" / C).mkdir(parents=True)  # источник с именем папки слоя
 HP = HOME.parent  # домашняя папка песочницы: в ней файлы запуска shell
 
 # --- формы карточки: второе имя и перенос защищённого ---
@@ -103,6 +104,10 @@ deny = [
     ("read LOGNAME и mv", f"read LOGNAME < {O}/a.txt; mv \"$LOGNAME\" /tmp/out"),
     ("read HOME", f"read HOME < {O}/a.txt; rm -rf \"$HOME/x\""),
     ("${USER::=x} (zsh)", ": ${USER::=x}; rm -rf \"$USER\""),
+    # копия папки поверх: содержимое (`x/.`, `x/`, ditto) или источник с именем защищённой папки (линза frontend)
+    ("cp -R папки с именем <слой> в корень", f"cp -R {O}/src/{C} {ROOT}"),
+    ("rsync -a содержимого в корень", f"rsync -a {O}/x/ {ROOT}"),
+    ("cp -R папки, чьё имя разбор не видит, в корень", f"cp -R \"$IS249_NOPE\" {ROOT}"),
 ]
 for label, cmd in deny:
     bash(f"IS-249, отказ — {label}: {cmd}", cmd, True)
@@ -132,6 +137,8 @@ for label, cmd, cwd in [
     ("копия settings.json наружу", f"cp {CL}/{SET} {O}/bak.json", ROOT),
     ("копия <слой> наружу", f"cp -R {CL} {O}/bak", ROOT),
     ("копия папки в чужую папку", f"cp -R {O}/x {O}/dst", ROOT),
+    ("копия папки в корень — новая папка (линза frontend)", f"cp -R {O}/x .", ROOT),
+    ("rsync папки в корень — новая папка", f"rsync -a {O}/x {ROOT}/", ROOT),
     ("git mv в репозитории", "git mv src/a.ts src/b.ts", ROOT),
     ("rm чужой папки", f"rm -rf {O}/x", ROOT),
     ("rm worktree-папки", "rm -rf worktrees/fix/x/node_modules", ROOT),
@@ -147,14 +154,36 @@ for label, cmd, cwd in [
 G = repo_on("main", "is249-")
 for name in ("ok.sh", "edited.sh"):
     (G / name).write_text("rm -rf \"$1\"\n")
-for args in (["add", "ok.sh", "edited.sh"], ["commit", "-q", "-m", "s"]):
+(G / "link.sh").write_text("ln -sfn \"$1\" \"$2\"\n")  # как install.sh:32 и agent-comms-link.sh:47 (coord 13:27)
+for args in (["add", "ok.sh", "edited.sh", "link.sh"], ["commit", "-q", "-m", "s"]):
     subprocess.run(["git", "-C", str(G), "-c", "user.email=t@t", "-c", "user.name=t", *args], check=True)
 (G / "edited.sh").write_text("rm -rf \"$1\"  # правка\n")
 (O / "scratch.sh").write_text("rm -rf \"$1\"\n")
+(O / "link.sh").write_text("ln -sfn \"$1\" \"$2\"\n")
 bash("IS-249, проход — скрипт закоммичен без правки: rm -rf \"$1\"", f"bash {G}/ok.sh {O}/x", False)
 bash("IS-249, проход — тот же скрипт из своей папки", "bash ./ok.sh /tmp/is249-x", False, cwd=G)
-for label, path in (("скрипт правлен без коммита", G / "edited.sh"), ("скрипт вне репозитория", O / "scratch.sh")):
+bash("IS-249, проход — закоммиченный скрипт со ссылкой: ln -sfn \"$1\" \"$2\"", f"bash {G}/link.sh {O}/a.txt {O}/l1", False)
+for label, path in (("скрипт правлен без коммита", G / "edited.sh"), ("скрипт вне репозитория", O / "scratch.sh"),
+                    ("скрипт со ссылкой вне репозитория", O / "link.sh")):
     got = run("Bash", {"command": f"bash {path} {O}/x"})
     check(f"IS-249, отказ с подсказкой — {label}", None if "закоммитьте скрипт" in str(got) else repr(got), False)
+
+# --- маска шире предела — отказ: таймаут хука (10 с) — пропуск; предел — счёт (линза frontend, coord 13:27) ---
+import merge_guard_files as mgf  # noqa: E402
+
+(O / "many").mkdir()
+for i in range(5):
+    (O / "many" / f"f{i}").write_text("")
+    for j in range(5):
+        (O / "deep" / f"d{i}").mkdir(parents=True, exist_ok=True)
+        (O / "deep" / f"d{i}" / f"f{j}").write_text("")
+limits = mgf.PATHS_MAX, mgf.SCAN_MAX
+for label, cmd, caps in (("путей на слове больше предела", f"rm -f {O}/many/*", (3, 1000)),  # 5 путей
+                         ("пустая маска прочла больше предела", f"rm -f {O}/deep/*/zz*", (100, 20))):  # 5 + 25 имён
+    mgf.PATHS_MAX, mgf.SCAN_MAX = caps
+    got = run("Bash", {"command": cmd})
+    check(f"IS-249, отказ — маска: {label}: {cmd}", None if "шире предела" in str(got) else repr(got), False)
+mgf.PATHS_MAX, mgf.SCAN_MAX = limits
+bash("IS-249, проход — те же маски при пределе по умолчанию", f"rm -f {O}/many/* {O}/deep/*/zz*", False)
 
 finish(", IS-249: ссылки, перенос и удаление папки с законами")

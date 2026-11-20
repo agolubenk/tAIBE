@@ -46,6 +46,11 @@ def start_budget(seconds=6.0):
     _seen.clear()
 
 
+def decision():
+    """Метка текущего решения хука (start_budget): предел масок merge_guard_files — на одно решение (IS-249)."""
+    return _deadline[0]
+
+
 def git_out(gdir, *args):
     key = (os.path.normpath(gdir), args)
     if key not in _seen:
