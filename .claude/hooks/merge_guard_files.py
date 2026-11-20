@@ -34,6 +34,10 @@ ZSH_EXT = re.compile(r"[\^#]|(?<=.)~(?=.)")
 # Страховка: имя собирают кавычками и берут из файла (`source`) — регистр и `{c}` закрыты и без имени (линза frontend #512)
 SHELL_OPTS = re.compile(r"caseglob|casepaths|braceccl|globsubst|kshglob|extglob")
 EMULATE = re.compile(r"\bemulate\s+(-\w+\s+)*(sh|ksh|csh|bash)\b")  # `npm run emulate` — не опция (coord 17:43)
+# код в текущий shell (`source f`, `. f`, `eval`) и zsh без -f (читает .zshenv, предположение) включают EXTENDED_GLOB
+READS_CODE = re.compile(r"(?:^|[;&|(\n`])\s*(?:source|\.|eval)\s+[^\s;&|]")  # невидимо (линза frontend #512, coord 18:01)
+ZSH_RUN = re.compile(r"(?:^|[\s;&|(`])(?:/\S*/)?zsh(?=\s|$)((?:\s+-[\w-]+)*)")  # слово `zsh` или `/bin/zsh`, не
+# `<папка>/zsh/x`; опции — до первого слова без `-`: `-fc`, `--no-rcs`
 BRACE_CCL = re.compile(r"(?<![$@])\{(?![^{}]*\.\.)[^{},]+\}")  # `{c}`, `{k-m}`: с `braceccl` — буквы; `{}`, `{1..3}`,
 # `{a,b}`, `${x}`, `@{u}` — нет
 RSYNC_PATTERN = {"--exclude", "--include", "--filter"}  # значение через пробел — шаблон, не путь (`'**/x'`); и `-f`:
@@ -442,7 +446,8 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
     short, dirs, norm = "".join(x[1:] for x in opts if x[:2] != "--"), guarded_dirs(roots, home), [gnu(a[0])] + a[1:]
     unq = re.sub(r"['\"\\]", "", text.casefold())  # zsh снимает кавычки и `\` до `setopt`: `no_case'_'glob` (#512)
     low = re.sub(r"[_-]", "", unq)  # имя опции zsh — без регистра, `_` и `-` (`--no-case-glob`, zsh 5.9)
-    ext = "extendedglob" in low  # `setopt Extended_Glob`, `set -o …`, `zsh -o …`
+    ext = "extendedglob" in low or bool(READS_CODE.search(unq)) or any(  # `setopt Extended_Glob`, `zsh -o …`
+        not re.search(r"(?:^|\s)-(?!-)\w*f|--no-?rcs", m.group(1)) for m in ZSH_RUN.finditer(unq))  # или из файла
     if (SHELL_OPTS.search(low) or EMULATE.search(unq)) and any(GLOB.search(w) or "{" in w for w in ops):  # coord 14:54
         raise Unread("опция оболочки меняет, что находит маска (`nocaseglob`, `braceccl`, `emulate`, SE-194)")
     if any(BRACE_CCL.search(w) for w in ops):  # опция могла прийти из файла: `{c}` — отказ и без имени (coord 17:43)

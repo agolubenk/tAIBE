@@ -90,4 +90,20 @@ for label, cmd in [
 ]:
     bash(f"SE-194, проход — {label}: {cmd}", cmd, False)
 
+# --- код из файла мог включить EXTENDED_GLOB (линза frontend на 7dd39c7b0, coord 18:01): `^`, `#`, `~` — маска ---
+for label, cmd in [
+    ("source, `^`", f"source ./opts.zsh; rm -rf .^x"),
+    (". файл, `#`", f". ./opts.zsh && rm -rf {C[:4]}#{C[4:]}"),
+    ("eval, `~`", f"eval \"$(cat {O}/o)\"; rm -rf {C}~x"),
+    ("zsh без -f", f"zsh -c 'rm -rf .^x'"),
+]:
+    bash(f"SE-194, отказ — {label}: {cmd}", cmd, True)
+
+for label, cmd in [
+    ("source и `~` в конце", "source ./env.sh && cp a.txt a.txt~"),
+    ("zsh -f", f"zsh -fc 'rm -rf {O}/a^b'"),
+    ("cd . — не чтение кода", f"cd . && rm -rf {O}/a^b"),
+]:
+    bash(f"SE-194, проход — {label}: {cmd}", cmd, False)
+
 finish(", SE-194: маска zsh `(…)` у записи и опции оболочки у маски")
