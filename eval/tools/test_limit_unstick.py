@@ -183,6 +183,26 @@ class MatchTest(Base):
         self.assertIsNone(U.draft("> continue\n"))  # no rule above: text in the transcript, not the input
 
 
+    def test_draft_is_the_framed_line_at_the_bottom_only(self):  # Claude lens non-blockers on #483
+        status4 = EMPTY.replace("new task? /clear to save 170.5k tokens",
+                                "new task? /clear\n  ◯ IDE disconnected\n  ⏺ 2 background tasks")
+        self.assertEqual(len(U.bottom(status4)), 8)
+        self.assertEqual(U.draft(status4), "")
+        r = "─" * 40
+        quoted = f"{r}\n> continue\n{r} taibe-plan-czc6 ─\n! ls\n{r}\n  ! for bash mode\n"
+        self.assertIsNone(U.draft(quoted), "a quote above the input frame is not the input")
+        self.assertIsNone(U.draft(PREFILLED.replace("❯ continue", "❯ continue\n  and one more line")))
+        self.assertIsNone(U.draft("> continue\n" + "x\n" * U.INPUT_ZONE + f"{r}\n{r}\n"))
+
+    def test_named_rule_is_strict(self):
+        self.assertTrue(U.rule("─" * 77 + " taibe-plan-czc6 ─"))
+        self.assertTrue(U.rule("─" * 95))
+        for line in ("─ Do you want to proceed? ─", "──────── a ─ 1. Stop and wait for limit to reset ─",
+                     "──────── " + "x" * 65 + " ─", "──────── │ x │ ─"):
+            with self.subTest(line):
+                self.assertFalse(U.rule(line))
+
+
 class UnstickTest(Base):
     def test_prefilled_continue_gets_one_esc_and_enter(self):
         self.spec({self.PANE: [MENU, PREFILLED]})
