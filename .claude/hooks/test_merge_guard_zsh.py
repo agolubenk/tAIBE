@@ -70,4 +70,24 @@ for label, cmd in [
 ]:
     bash(f"SE-194, проход — {label}: {cmd}", cmd, False)
 
+# --- имя опции по частям или из файла (линза frontend #512, coord 17:43): маска без регистра, `{c}` — отказ и без имени ---
+for label, cmd in [
+    ("кавычки в имени", f"setopt no_case'_'glob; rm -rf {CU}"),
+    ("\\ в имени", f"setopt no_case\\_glob; rm -rf {CU}"),
+    ("кавычки в braceccl", f"setopt brace'cc'l; rm -rf {BR}"),
+    ("опция из файла", f"source ./opts.zsh; rm -rf {CU}"),
+    ("маска заглавными без опции", f"mv {CU} {O}/"),
+    ("{буква} без опции", f"rm -rf {BR}"),
+]:
+    bash(f"SE-194, отказ — {label}: {cmd}", cmd, True)
+
+for label, cmd in [
+    ("find -exec rm {} +", f"find {O} -name '*.map' -exec rm {{}} +"),
+    ("emulate — слово скрипта", f"npm run emulate && rm -f {O}/x*"),
+    ("emulate zsh", f"emulate -L zsh; rm -f {O}/x*"),
+    ("{1..3}", f"rm -f {O}/x{{1..3}}"),
+    ("скобки коммита и подоболочка", f"git commit -m 'fix(web): x' && rm -f {O}/*.map && (cd {O} && ls)"),
+]:
+    bash(f"SE-194, проход — {label}: {cmd}", cmd, False)
+
 finish(", SE-194: маска zsh `(…)` у записи и опции оболочки у маски")

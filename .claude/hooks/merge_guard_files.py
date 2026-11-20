@@ -30,8 +30,12 @@ ZSH_FORM = re.compile(r"\[[\^!]|\[:|\*\*")
 # когда команда её включает; `*~`, `a~`, `#x#`, `host:~/d` — буквы (проверено в zsh, линза Контроль #508 N2)
 ZSH_EXT = re.compile(r"[\^#]|(?<=.)~(?=.)")
 # опции, с которыми маска находит другое (zsh -f, bash): `nocaseglob` — `.CLAU*`, `braceccl` — `.{c}laude`, `globsubst`,
-# `kshglob`/`extglob` — `@(…)`, `emulate ksh`; любой способ — `setopt`, `set -o`, `options[…]`, `zsh --x`, `shopt -s`
-SHELL_OPTS = re.compile(r"caseglob|casepaths|braceccl|globsubst|kshglob|extglob|emulate")
+# `kshglob`/`extglob` — `@(…)`, `emulate ksh`; любой способ — `setopt`, `set -o`, `options[…]`, `zsh --x`, `shopt -s`.
+# Страховка: имя собирают кавычками и берут из файла (`source`) — регистр и `{c}` закрыты и без имени (линза frontend #512)
+SHELL_OPTS = re.compile(r"caseglob|casepaths|braceccl|globsubst|kshglob|extglob")
+EMULATE = re.compile(r"\bemulate\s+(-\w+\s+)*(sh|ksh|csh|bash)\b")  # `npm run emulate` — не опция (coord 17:43)
+BRACE_CCL = re.compile(r"(?<![$@])\{(?![^{}]*\.\.)[^{},]+\}")  # `{c}`, `{k-m}`: с `braceccl` — буквы; `{}`, `{1..3}`,
+# `{a,b}`, `${x}`, `@{u}` — нет
 RSYNC_PATTERN = {"--exclude", "--include", "--filter"}  # значение через пробел — шаблон, не путь (`'**/x'`); и `-f`:
 RSYNC_F = re.compile(r"-[^-eBMTf@]*f")  # у `-ref`, `-rTf` f — значение `-e`/`-T`, слово за ним — источник (Контроль B1)
 UNSEEN = re.compile(rf"{SUBST}|[$`]")  # слово из `$(…)`, `` `…` `` или неизвестной переменной: путь разбору не виден
@@ -300,7 +304,8 @@ def _glob(p):
         if not GLOB.search(part):
             cur = [os.path.join(c, part) for c in cur]
             continue
-        nxt, last, match = [], k == len(parts) - 1, re.compile(fnmatch.translate(part)).match  # как fnmatchcase
+        nxt, last, match = [], k == len(parts) - 1, re.compile(fnmatch.translate(part), re.I).match  # без регистра:
+        # надмножество `nocaseglob` в любой форме; APFS регистр не различает (линза frontend #512, coord 17:43)
         for c in cur:
             try:
                 with os.scandir(c or ".") as it:
@@ -435,10 +440,13 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
         val = {k + 1 for k, x in enumerate(a) if x in RSYNC_PATTERN or RSYNC_F.fullmatch(x)}
         ops = [x for k, x in enumerate(a) if k and k not in val and not x.startswith("-")]
     short, dirs, norm = "".join(x[1:] for x in opts if x[:2] != "--"), guarded_dirs(roots, home), [gnu(a[0])] + a[1:]
-    low = re.sub(r"[_-]", "", text.casefold())  # имя опции zsh — без регистра, `_` и `-` (`--no-case-glob`, zsh 5.9)
+    unq = re.sub(r"['\"\\]", "", text.casefold())  # zsh снимает кавычки и `\` до `setopt`: `no_case'_'glob` (#512)
+    low = re.sub(r"[_-]", "", unq)  # имя опции zsh — без регистра, `_` и `-` (`--no-case-glob`, zsh 5.9)
     ext = "extendedglob" in low  # `setopt Extended_Glob`, `set -o …`, `zsh -o …`
-    if SHELL_OPTS.search(low) and any(GLOB.search(w) or "{" in w for w in ops):  # линза frontend #511, coord 14:54
+    if (SHELL_OPTS.search(low) or EMULATE.search(unq)) and any(GLOB.search(w) or "{" in w for w in ops):  # coord 14:54
         raise Unread("опция оболочки меняет, что находит маска (`nocaseglob`, `braceccl`, `emulate`, SE-194)")
+    if any(BRACE_CCL.search(w) for w in ops):  # опция могла прийти из файла: `{c}` — отказ и без имени (coord 17:43)
+        raise Unread("скобки `{…}` без `,` и `..` — с `braceccl` это буквы (`.{c}laude`, SE-194)")
     hit = lambda w, bases: _hit(w, bases, roots, protected, dirs, ext)  # noqa: E731
     paths = lambda base, w: _paths(base, w, ext)  # noqa: E731
     say = lambda p, why: ("file", f"{p} ({a[0]} {why} — IS-249)")  # noqa: E731
