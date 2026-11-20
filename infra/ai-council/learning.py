@@ -534,6 +534,37 @@ def _board_posterior(stats: dict, model: str, role: str, module: str, minimum: f
     return 0.5, "prior", seen
 
 
+def _stats_snapshot(store: Store, module: str) -> dict:
+    """α/β из `model_stats` модуля и агрегата `*` одним запросом — вход `_board_posterior`."""
+    return {(r["model"], r["role"], r["module"]): (float(r["alpha"]), float(r["beta"]))
+            for r in store.q("SELECT model, role, module, alpha, beta FROM model_stats WHERE module IN (?, ?)",
+                             (module, GLOBAL_MODULE))}
+
+
+def reliability_grid(cfg, store: Store, board: dict, module: str = GLOBAL_MODULE) -> list[dict]:
+    """Таблица «Надёжность моделей» вкладки «Качество» — вся сетка «модель × роль», из которой выбирает совет.
+
+    Строки — пары из `model_stats` и пары доски ролей `board` без наблюдений (`prior`, α/β 1/1).
+    `reliability`, α/β и `observations` — по самой роли. `score` и `basis` — оценка, которой пользуется совет:
+    роль → модель в модуле → модель в целом → приор, как у доски ролей. Без них пара без наблюдений по роли
+    показывала 0.50, а совет и доска брали репутацию модели, например 0.25 (AUTO-125)."""
+    minimum = float(cfg.get("learning.min_observations", 3) or 0)
+    stats = _stats_snapshot(store, module)
+    table = reliability_table(store, module)
+    seen = {(row["model"], row["role"]) for row in table}
+    for role, candidates in (board.get("roles") or {}).items():
+        for cand in candidates:
+            if (cand["model"], role) in seen:
+                continue
+            seen.add((cand["model"], role))
+            table.append({"model": cand["model"], "role": role, "module": module,
+                          "alpha": 1.0, "beta": 1.0, "reliability": 0.5, "observations": 0.0,
+                          "updated_at": None, "prior": True})
+    for row in table:
+        row["score"], row["basis"], _seen = _board_posterior(stats, row["model"], row["role"], module, minimum)
+    return table
+
+
 def role_board(cfg, store: Store, module: str = GLOBAL_MODULE) -> dict:
     """Кандидаты на каждую роль среди ВСЕХ известных моделей — из ростеров и статистики, с отметкой
     «облако/локально» и тем, где модель играет эту роль сейчас. Список полный (моделей десятки): выборку
@@ -542,9 +573,7 @@ def role_board(cfg, store: Store, module: str = GLOBAL_MODULE) -> dict:
     rosters = board_rosters(cfg)
     clouds = cloud_models(cfg)
     minimum = float(cfg.get("learning.min_observations", 3) or 0)
-    stats = {(r["model"], r["role"], r["module"]): (float(r["alpha"]), float(r["beta"]))
-             for r in store.q("SELECT model, role, module, alpha, beta FROM model_stats WHERE module IN (?, ?)",
-                              (module, GLOBAL_MODULE))}
+    stats = _stats_snapshot(store, module)
     models = {m for roster in rosters.values() for m in roster.values()} | {m for m, _r, _mod in stats}
     roles: dict[str, list[dict]] = {}
     for role in BOARD_ROLES:
