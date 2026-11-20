@@ -13,6 +13,7 @@ import { formTemplateSchema, LIMITS } from "@kaneo/forms";
 import type { TaskForm } from "@/fetchers/task-form/get-task-forms";
 import { SaveTaskFormError } from "@/fetchers/task-form/save-task-form-answers";
 import { taskFormsKey } from "@/hooks/queries/task-form/use-task-forms";
+import { closeTab } from "@/test/close-tab";
 import { taskForm } from "./form-test-template";
 import { AUTOSAVE_DELAY_MS, useFormAutosave } from "./use-form-autosave";
 
@@ -224,5 +225,58 @@ describe("useFormAutosave (TB-173 F1/F2)", () => {
     await flush();
     expect(save).toHaveBeenCalledTimes(1);
     expect(save.mock.calls[0]?.[1]).toEqual({ keepalive: true });
+  });
+});
+
+describe("useFormAutosave asks before the tab closes (TB-236)", () => {
+  it("asks while a change waits or a save failed, not once it is saved", async () => {
+    vi.useFakeTimers();
+    save.mockRejectedValueOnce(new SaveTaskFormError("failed"));
+    const { result } = setup();
+    expect(closeTab()).toBe(false);
+    act(() => result.current.change("mood", { v: 4 }));
+    expect(result.current.saveState.kind).toBe("pending");
+    expect(closeTab()).toBe(true);
+    await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+    expect(result.current.saveState.kind).toBe("failed");
+    expect(closeTab()).toBe(true);
+    act(() => result.current.retry());
+    await flush();
+    expect(result.current.saveState.kind).toBe("saved");
+    expect(closeTab()).toBe(false);
+  });
+
+  it("asks while a save is on its way: the closing tab would drop it", async () => {
+    vi.useFakeTimers();
+    let answer: (value: unknown) => void = () => {};
+    save.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const { result } = setup();
+    act(() => result.current.change("mood", { v: 4 }));
+    await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+    expect(result.current.saveState.kind).toBe("saving");
+    expect(closeTab()).toBe(true);
+    await act(async () => answer(saved(1)));
+    expect(result.current.saveState.kind).toBe("saved");
+    expect(closeTab()).toBe(false);
+  });
+
+  it("stops asking when the form block closes", async () => {
+    vi.useFakeTimers();
+    save.mockRejectedValue(new SaveTaskFormError("too_large"));
+    const { result, unmount } = setup();
+    act(() => result.current.change("mood", { v: 4 }));
+    await act(async () => vi.advanceTimersByTimeAsync(AUTOSAVE_DELAY_MS));
+    expect(result.current.saveState).toEqual({
+      kind: "failed",
+      failure: "too_large",
+    });
+    expect(closeTab()).toBe(true);
+    unmount();
+    await flush();
+    expect(closeTab()).toBe(false);
   });
 });

@@ -67,6 +67,7 @@ the tunnel:
 | `compose.yml` | VPS | postgres, app, tls, backup |
 | `tls.conf.template` | VPS | `install.sh` renders it into `/opt/t-boards/tls.conf` |
 | `backup.sh` | VPS, backup container | Dumps every 2 h and checks each dump with `pg_restore --list`. Keeps 3 days; `latest.dump` points at the newest |
+| `mem-stats.sh` | VPS | TB-124: `sample [minutes] [step_s]` writes `docker stats` of the project's containers (used and limit, MiB) into `mem-stats/mem-<UTC>.tsv`, default 24 h every 60 s; `report` prints samples, p95, peak, the current limit and a suggested one (peak × 1.5, a multiple of 32 MiB, at least 64), then restarts and OOM kills. Reads only names and memory numbers |
 | `mirror-setup.sh` | VPS | Turns the Notion mirror on: asks for the token, checks it reads every database, writes the workspace and databases into `.env`, recreates the app |
 | `backup-key.sh` | VPS | Adds the Mac pull key with `restrict`, `from="10.77.0.2"` and `command="cat latest.dump"` |
 | `mac/backup-agent.sh` | Mac | `key` / `install` / `remove` for the pull key and the LaunchAgent, which runs every 2 h |
@@ -91,6 +92,7 @@ environment variables (N-007).
 | `notion_token` | 0400, owner 1001. Optional: the owner puts it there |
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
 | `oq_token` | 0400, owner 1001. The owner-queue agent token of t-boards (TB-102, «Owner queue» below). The owner issues it in the ops-console; `install.sh` never makes it. Read on every call |
+| `smtp_password` | 0400, owner 1001. Optional: the SMTP password («Sign-in limits and mail» below). `install.sh` never makes it |
 | `claude_mem_proxy_token` | 0400, owner 1001. The Mac memory proxy token (OPS-19). The Mac owns it: `mac/memory-agent.sh token` makes it, `mac/memory-token-push.sh` delivers it. `install.sh` never makes it and warns while it is missing. The app reads it on every request |
 
 `install.sh` generates the first three once and never overwrites them. The database password only takes effect when the
@@ -162,6 +164,37 @@ applies the owner's answer itself. It is off until all four are set:
 `install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
 While it is off, the journal has one `queue.skip` row per start and «да» works in the t-boards UI.
 
+## Sign-in limits and mail (TB-31)
+
+**Limiter.** Sign-in, sign-up, magic link and the fresh sign-in window (`/tb/reauth/*`) are limited per client IP on
+every install: for example, 5 sign-ins per minute from one address, then `429` with `Retry-After`. The client IP is
+read from `X-Forwarded-For` only when the peer is in `TRUSTED_PROXIES`. In `compose.yml` it is a constant:
+`10.78.0.1/32,127.0.0.0/8,::1/128` — the `tb` bridge gateway, which is the peer of every request from `tls`, and
+loopback. The rest of the `tb` subnet is not trusted, so postgres or backup cannot choose an address.
+
+- If `TRUSTED_PROXIES` is empty, the app trusts only loopback and writes a warning at start. Behind any other proxy all
+  clients then share one bucket: the 6th sign-in in a minute is refused for everybody. Another install behind a proxy
+  sets `TRUSTED_PROXIES` to that proxy's address or subnet.
+- The VPS host is trusted: any process on it that calls `127.0.0.1:5180` arrives as `10.78.0.1` and can set
+  `X-Forwarded-For` to choose its bucket. Clients from the tunnel cannot: `tls` replaces their `X-Forwarded-For` with
+  `$remote_addr` (`tls.conf.template`).
+- One tunnel peer is one bucket: the Mac (`10.77.0.2`) shares its limits with everything behind it.
+- Off: `DISABLE_AUTH_RATE_LIMIT=true` in `/opt/t-boards/.env`, then `docker compose -p t-boards up -d app`. The app
+  warns at start while it is off. `install.sh` keeps the line.
+
+**Mail.** Off until `SMTP_HOST` and `SMTP_FROM` are set; without it there are no sign-in codes, magic links or
+password resets by mail.
+
+1. Add to `/opt/t-boards/.env`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_FROM`. An empty `SMTP_SECURE` means TLS
+   from the first byte (port 465). A provider on 587 with STARTTLS needs `SMTP_SECURE=false`; STARTTLS stays required
+   unless `SMTP_REQUIRE_TLS=false` (a local relay only).
+2. Put the password into `/opt/t-boards/secrets/smtp_password` (0400, owner 1001), never on the command line:
+   `install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/smtp_password`, then paste and Ctrl-D.
+3. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
+
+The app waits at most 10 s for the connection and the greeting and 30 s on the socket. It never logs the SMTP
+dialogue. `install.sh` keeps the `SMTP_*` lines and the password file on every update.
+
 ## Agents' MCP on the Mac (TB-105)
 
 The agents reach t-boards through the MCP hub on the Mac. The hub runs `boards/packages/mcp/dist` of the main tAIBE
@@ -175,6 +208,20 @@ changes `boards/packages/mcp` (a new tool or field), do this after it on the Mac
 
 `npm run mcp-hub:status` and `mcp-hub:check` warn when the source is newer than the build or the running process is
 older than the build. On 12.11 a stale build dropped `doneRef`, and no agent could request `close_task`.
+
+## SSR push-back (TB-160)
+
+The registry pushes approved versions back into the repo of their product (spec RU-9): at night, and at once after
+a rollback. Each workspace has its own repo and branch; there is no default repo. A workspace that is not listed is
+not pushed, and its versions stay served.
+
+- `SSR_PUSH_GITHUB_TOKEN` — the GitHub token. Without it push-back is off.
+- `SSR_PUSH_TARGETS=<workspaceId>=<owner>/<repo>@<branch>,…` — for example Lavaeon → `HR_Helper-v2@main`,
+  aiBoards&eval → `tAIBE@<branch>`. A malformed entry or a workspace named twice is left out, with one log line.
+- `SSR_PUSH_GITHUB_REPO` and `SSR_PUSH_GITHUB_BRANCH` (one repo for every workspace) are ignored, with a log line.
+
+`compose.yml` does not pass these variables to the app yet, and `install.sh` does not keep them in `.env`, so
+push-back is off on the server. Turning it on is an owner item: the token, the targets and the two deploy lines.
 
 ## Products
 
@@ -215,7 +262,12 @@ edited to the plan (journaled under `seed:products`, undone from the card's hist
   and is covered by the dump.
 - `NOTIFICATION_SECRET_ENCRYPTION_KEY` is read only from env. Notification channels that store secrets stay off until
   the variable supports `_FILE`.
-- Memory limits (app 1 GB, postgres 256 MB) are provisional until the K-6 measurements (R-005).
+- Memory limits (app 1 GB, postgres 256 MB, tls 64 MB, backup 128 MB) are provisional until the first day on the VPS
+  is measured (R-005, TB-124). The day after a deploy: `systemd-run --unit=tb-mem-stats --collect
+  /opt/t-boards/mem-stats.sh sample` (detached from SSH; stop early with `systemctl stop tb-mem-stats`), then
+  `bash /opt/t-boards/mem-stats.sh report`. The report goes to the TB-124 card, and the new limits in `compose.yml`
+  are the owner's decision. A local reference: app 237 MB idle and 337 MB at peak on 120 synthetic cards
+  (`boards/docs/impl/impl-k6-measurements.md`).
 - A device without `/etc/hosts` (a phone) needs a DNS override for the subdomain. There is no DNS server in the
   tunnel yet.
 - The backup pull key accepts only `10.77.0.2`, the first peer. The Mac has to be added first.

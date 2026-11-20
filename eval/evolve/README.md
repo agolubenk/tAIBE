@@ -62,12 +62,14 @@ python3 -I eval/evolve/daily.py cases eval/evolve/cases/*.jsonl   # cases fit fo
 
 launchd (05:00 local, after the notebook sync of 04:17) runs `caffeinate -i python3 -I daily.py nightly` — not
 `/bin/bash daily.sh`: macOS privacy control (TCC) refuses /bin/bash a script in ~/Desktop (exit 126, SE-52); by hand —
-`daily.sh run`. `nightly` it takes the run's one lock (`flock`, shared with `daily.py cycle --force`), refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
+`daily.sh run`. `nightly` takes the run's one lock (`flock`, shared with `daily.py cycle --force`), merges last night's
+PRs (the `merge` step below with all its gates; CI has finished by now, so their cases and `supersedes` lines are in
+tonight's base — SE-49), refreshes the run's own worktree `worktrees/evolve/daily` (detached on a fresh
 `origin/board-agents`; no person's checkout is touched) and starts its fresh `daily.py cycle`:
 
 | Step | Who | What |
 |---|---|---|
-| measure | `daily.py run` | `catalog.py`, `dupes.py --l1`, `eval/tools/ctx_budget.py learn` when it exists; layer files changed since the last run (`~/.claude/evolve/state.json`) |
+| measure | `daily.py run` | `catalog.py`, `dupes.py --l1`, `eval/tools/ctx_budget.py learn` when it exists; layer files changed since the last run (`~/.claude/evolve/state.json`); GL-1 spend of yesterday (`eval/tools/spend.py --attribution` → `spend/<day>.json`, 60 days) and its one line to the tAIBE coordinator through the main checkout's Nerve (not with `--dry-run`/`--no-card`) |
 | calibrate | `judges.py` | Judges are Claude models only (owner decision 06.11); no local model, gateway or Ollama is started. Candidates in order: `claude:claude-sonnet-5-5`, `claude:claude-haiku-5-5`, then `claude:claude-opus-5-5` as a fallback — at night only if `abJudgeClaude` is on (the board, closed on doubt, or the owner's file `~/.claude/evolve/abJudgeClaude.on`), or given by the owner with `--judges`. Each is calibrated on the reference skill (`grill-task`): identical texts TIE in both orders, the text beats its first 30 % and its copy with a harmful paragraph in both orders, 6 asks, all right. The first two that pass judge. Fewer than two → nothing is judged, the artifacts stay pending, one line «нет годного судьи» goes to SE-49 |
 | judge | `daily.py run` + `quality.py` | The version before the last edit against the current one, for every changed file with cases. Item by item: both judges finish an artifact before the next one starts, at most 2 artifacts a night, and an artifact starts only if the night's budget (160 calls, 1.2 M tokens) covers it for both judges; the rest stay pending. The state moves to head only when nothing is pending. Files without cases go to `~/.claude/evolve/queue.json` |
 | act | `daily.py run` | Accepted loss of the merged version → revert PR; accepted win → pinned in `verdicts.jsonl`; brak and insufficient → recorded, never applied |
@@ -99,13 +101,18 @@ A judge that is not reached (a limit message, a wrong answering model, an error,
 of time) is «unavailable», never brak: the file stays pending and is judged again the next night against the same
 baseline. The headless session may append a `supersedes` line that marks an accepted
 verdict brak; a revert PR whose verdict was superseded is closed, not merged. Nobody turns brak into accepted.
+The line lives in the run's worktree until its data PR merges, and the nightly refresh wipes it; so every `merge`
+step also keeps the marks it sees in `~/.claude/evolve/supersedes.json` and checks both (SE-49).
 
 ### Claude judges (`abJudgeClaude`, off by default)
 
 Every `claude:<model>` id goes to `judges.claude_call`: `claude -p --model <model> --output-format json`, the same
 prompt and last-line format as `ab.py`, no tools, no MCP, no hooks (`disableAllHooks`), no session file, an empty
 folder. The answering model is checked in `modelUsage` (a dated build or a `[1m]` variant is the same model), and the
-real tokens are charged to the night's budget; the worst ratio of real to estimated tokens scales the next estimates.
+real tokens are charged to the night's budget. The largest excess of real over estimated tokens of one call is added to
+every next call's estimate (SE-49: the excess is about the same per call, 3946 tokens on 14.11; a ratio learned on
+small calls priced big artifacts 3.5 times too high). The report gives the budget with `overhead` and the tokens by
+kind (`usage`: input, output, cache reads and writes).
 A full first night with two artifacts is about 137 calls. Nightly judges are off until the owner turns them on: the
 switch on the board (Pipeline & evolution; the deployed board has no such switch yet), or the local file
 `touch ~/.claude/evolve/abJudgeClaude.on` (remove it to turn them off). `TAIBE_PIPELINE=abJudgeClaude=off` turns them

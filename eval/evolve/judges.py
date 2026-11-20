@@ -39,8 +39,8 @@ CALIBRATION_CALLS = 3 * CALIBRATION_PER_KIND * 2   # three canary kinds, both or
 CLAUDE_MODEL = 'claude-sonnet-5-5'
 CLAUDE_JUDGE = 'claude:' + CLAUDE_MODEL
 SYSTEM = 'You are a strict, impartial judge. Answer exactly as asked.'
-# Per call beyond the prompt: the system prompt, what the CLI adds and a reasoned answer (assumed until measured;
-# the real usage is charged and `Budget.ratio` scales the next estimates).
+# Per call beyond the prompt: the system prompt, what the CLI adds and a reasoned answer (assumed; the real usage is
+# charged, and `Budget.overhead` adds the largest excess seen tonight to the next estimates — 3946 on 14.11, SE-49).
 CALL_EXTRA_TOKENS = 1000
 
 
@@ -71,17 +71,21 @@ def same_model(got, want):
     return bool(got) and re.fullmatch(re.escape(want) + r'(?:-\d{8})?(?:\[[^\]]*\])?', got, re.I) is not None
 
 
-def used_tokens(data):
-    """Real tokens of one call (input, cache writes and reads, output) over every model the CLI used; 0 when the CLI
-    reported none."""
+# Kinds of token in the run report, with their names in `modelUsage` and in `usage` of `claude -p --output-format json`.
+USAGE_KINDS = (('input', 'inputTokens', 'input_tokens'), ('output', 'outputTokens', 'output_tokens'),
+               ('cache_read', 'cacheReadInputTokens', 'cache_read_input_tokens'),
+               ('cache_write', 'cacheCreationInputTokens', 'cache_creation_input_tokens'))
+
+
+def usage_split(data):
+    """Real tokens of one call by kind over every model the CLI used (`modelUsage`, else `usage`); all 0 when the CLI
+    reported none. SE-49: the night's report sums them, so the next price model rests on a measure."""
     per_model = (data or {}).get('modelUsage') or {}
-    total = sum(int((u or {}).get(k) or 0) for u in per_model.values()
-                for k in ('inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens'))
-    if total:
-        return total
+    split = {kind: sum(int((u or {}).get(camel) or 0) for u in per_model.values()) for kind, camel, _ in USAGE_KINDS}
+    if any(split.values()):
+        return split
     usage = (data or {}).get('usage') or {}
-    return sum(int(usage.get(k) or 0) for k in ('input_tokens', 'output_tokens', 'cache_read_input_tokens',
-                                                 'cache_creation_input_tokens'))
+    return {kind: int(usage.get(snake) or 0) for kind, _, snake in USAGE_KINDS}
 
 
 def call_estimate(system, user):
@@ -112,7 +116,8 @@ def claude_call(budget, model=CLAUDE_MODEL, timeout=600):
         except ValueError:
             data = None
         data = data if isinstance(data, dict) else None
-        budget.charge(used_tokens(data) or estimate, estimate)  # no usage reported: the estimate is booked
+        split = usage_split(data)
+        budget.charge(sum(split.values()) or estimate, estimate, split)  # no usage reported: the estimate is booked
         text = data.get('result') or '' if data else res.stdout or ''
         said = ('%s\n%s' % (text, res.stderr or '')).strip()
         # The CLI's own limit message, at any exit code: in stderr, or as the result instead of an answer. A judge's

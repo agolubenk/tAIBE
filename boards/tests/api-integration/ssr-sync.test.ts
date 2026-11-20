@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import db from "../../apps/api/src/database";
 import {
   ssrEntityTable,
+  ssrPushStateTable,
   ssrVersionTable,
 } from "../../apps/api/src/database/ssr-schema";
 import { approveDraft, rejectDraft } from "../../apps/api/src/ssr/approve";
@@ -191,5 +192,177 @@ describe("API integration: SSR corpus sync", () => {
         forest.ownerId,
       ),
     ).rejects.toMatchObject({ status: 409 });
+  });
+
+  // TB-129: the sync is the whole manifest (RU-13), so the corpus limit is
+  // the manifest limit. Up to 5000 files go by sha; new bytes stay at 400.
+  it("syncs a corpus of more than 400 files and still archives what the manifest leaves out", async () => {
+    const forest = await createForest();
+    const commitSha = "3031323334353637383930313233343536373839";
+    const file = (skill: number, index: number, text = "") => {
+      const content = `skill ${skill} file ${index}${text}`;
+      return {
+        path: `.claude/skills/s${skill}/f${index}.md`,
+        sha256: sha256(content),
+        content,
+      };
+    };
+    const skill = (n: number) =>
+      Array.from({ length: 50 }, (_, index) => file(n, index));
+    const skills = (...ns: number[]) => ns.flatMap(skill);
+    const bySha = (files: Array<{ path: string; sha256: string }>) =>
+      files.map(({ path, sha256: sha }) => ({ path, sha256: sha }));
+    const sync = (files: unknown[]) =>
+      forest.ownerApi("POST", `/ssr/${forest.workspace.id}/sync`, {
+        commitSha,
+        files,
+      });
+
+    // Archiving and auto-bump concern live entities: the owner approves the
+    // drafts a sync created.
+    const approveAll = async () => {
+      const drafts = await db
+        .select({
+          entityId: ssrVersionTable.entityId,
+          versionId: ssrVersionTable.id,
+        })
+        .from(ssrVersionTable)
+        .innerJoin(
+          ssrEntityTable,
+          eq(ssrEntityTable.id, ssrVersionTable.entityId),
+        )
+        .where(
+          and(
+            eq(ssrEntityTable.workspaceId, forest.workspace.id),
+            eq(ssrVersionTable.status, "draft"),
+          ),
+        );
+      for (const draft of drafts) {
+        await approveDraft(
+          forest.workspace.id,
+          draft.entityId,
+          draft.versionId,
+          forest.ownerId,
+        );
+      }
+    };
+
+    expect((await sync(skills(0, 1, 2, 3, 4, 5))).status).toBe(200);
+    await approveAll();
+
+    // 450 files: 300 by sha, 150 new with content.
+    const second = await sync([
+      ...bySha(skills(0, 1, 2, 3, 4, 5)),
+      ...skills(6, 7, 8),
+    ]);
+    expect(second.status).toBe(200);
+    expect(second.body.created).toHaveLength(3);
+    expect(second.body.unchanged).toBe(6);
+    await approveAll();
+
+    // Boards lens on #230: the sync agent asks /known-shas about the whole
+    // manifest before /sync. 5000 shas pass; the 450 stored ones come back.
+    const stored = skills(0, 1, 2, 3, 4, 5, 6, 7, 8).map((f) => f.sha256);
+    const unknown = Array.from({ length: 5000 - stored.length }, (_, index) =>
+      sha256(`not stored ${index}`),
+    );
+    const known = await forest.ownerApi(
+      "POST",
+      `/ssr/${forest.workspace.id}/known-shas`,
+      { shas: [...stored, ...unknown] },
+    );
+    expect(known.status).toBe(200);
+    expect([...known.body.shas].sort()).toEqual([...stored].sort());
+    const over = await forest.ownerApi(
+      "POST",
+      `/ssr/${forest.workspace.id}/known-shas`,
+      { shas: [...stored, ...unknown, sha256("one more")] },
+    );
+    expect(over.status).toBe(400);
+
+    // 450 files again: s8 is left out and archived, s9 is new, one file of
+    // s0 changes.
+    const changed = file(0, 0, " v2");
+    const third = await sync([
+      changed,
+      ...bySha(skills(0, 1, 2, 3, 4, 5, 6, 7)).slice(1),
+      ...skill(9),
+    ]);
+    expect(third.status).toBe(200);
+    expect(third.body.archived).toEqual([".claude/skills/s8"]);
+    expect(third.body.created).toHaveLength(1);
+    expect(third.body.bumped).toHaveLength(1);
+
+    // The push baseline has one row a path, the last sha of each.
+    const baseline = await db
+      .select()
+      .from(ssrPushStateTable)
+      .where(eq(ssrPushStateTable.workspaceId, forest.workspace.id));
+    expect(baseline).toHaveLength(500);
+    expect(
+      baseline.find((row) => row.path === changed.path)?.lastSyncedSha,
+    ).toBe(changed.sha256);
+
+    // 401 files with content: the whole sync is refused, nothing archived.
+    const tooMuch = await sync([
+      ...bySha(skills(0, 1, 2, 3, 4, 5, 6, 7, 9)),
+      ...Array.from({ length: 401 }, (_, index) => file(20 + index, 0)),
+    ]);
+    expect(tooMuch.status).toBe(400);
+    const active = await db
+      .select({ path: ssrEntityTable.path })
+      .from(ssrEntityTable)
+      .where(eq(ssrEntityTable.status, "active"));
+    expect(active.length).toBeGreaterThanOrEqual(6);
+    expect(active.map((row) => row.path)).not.toContain(".claude/skills/s20");
+  });
+
+  it("names a path twice in one sync: the baseline keeps the last sha", async () => {
+    const forest = await createForest();
+    const one = { path: ".claude/rules/twice.md", content: "one" };
+    const two = { path: ".claude/rules/twice.md", content: "two" };
+    const res = await forest.ownerApi(
+      "POST",
+      `/ssr/${forest.workspace.id}/sync`,
+      {
+        commitSha: "3031323334353637383930313233343536373839",
+        files: [one, two].map((file) => ({
+          ...file,
+          sha256: sha256(file.content),
+        })),
+      },
+    );
+    expect(res.status).toBe(200);
+    const [row] = await db
+      .select()
+      .from(ssrPushStateTable)
+      .where(eq(ssrPushStateTable.path, one.path));
+    expect(row?.lastSyncedSha).toBe(sha256("two"));
+  });
+
+  // The entry limit holds by bytes too: the largest manifest the schema
+  // takes, with 500-character paths, passes the 12 MB body bound and reaches
+  // the sync (409 for shas the workspace does not hold), not a 413.
+  it("takes the largest manifest under the body bound", async () => {
+    const forest = await createForest();
+    const longPath = (index: number) =>
+      `.claude/rules/${String(index).padStart(483, "x")}.md`;
+    const res = await forest.ownerApi(
+      "POST",
+      `/ssr/${forest.workspace.id}/sync`,
+      {
+        commitSha: "3031323334353637383930313233343536373839",
+        files: Array.from({ length: 5000 }, (_, index) => ({
+          path: longPath(index),
+          sha256: sha256(String(index)),
+        })),
+        deleted: Array.from({ length: 5000 }, (_, index) =>
+          longPath(index + 5000),
+        ),
+      },
+    );
+    expect(longPath(0)).toHaveLength(500);
+    expect(res.status).toBe(409);
+    expect(res.body.message).toContain("Content required");
   });
 });

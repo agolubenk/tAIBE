@@ -151,11 +151,12 @@ export async function saveItemState(
 // A batch close shows its first 10 cards (TB-108 R-5), a label grant all of
 // its cards (at most 20).
 export async function taskKeys(approval: ApprovalRow): Promise<string[]> {
-  const shown = approval.action === "close_task" ? 10 : 20;
+  // A batch close lists its keys from params, without titles (TB-114).
+  if (approval.action === "close_task") return [];
   const ids = (approval.params?.taskIds ?? "")
     .split(",")
     .filter(Boolean)
-    .slice(0, shown);
+    .slice(0, 20);
   if (ids.length === 0) return [];
   const rows = await db
     .select({
