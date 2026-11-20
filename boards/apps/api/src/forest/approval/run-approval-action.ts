@@ -9,6 +9,7 @@ import { fellInTx, publishFelling } from "../fell/fell-trees";
 import type { Tx } from "../tx";
 import type { ActionOutcome, AppliedStep } from "./action-outcome";
 import { ApprovalFailure } from "./approval-failure";
+import { assertApprovedStatus } from "./approved-status";
 import {
   type ApprovalAction,
   approvalParamsHash,
@@ -65,6 +66,12 @@ async function applyStatus(
   const path = statusPath(task.status, target);
   if (path.kind === "already") return NOTHING;
   if (path.kind === "unreachable") throw new ApprovalFailure(path.reason);
+  await assertApprovedStatus(
+    tx,
+    task.projectId,
+    target,
+    approval.action === "close_task",
+  );
 
   const changes: { before: typeof task; after: typeof task }[] = [];
   let current = task;
