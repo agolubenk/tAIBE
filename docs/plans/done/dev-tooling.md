@@ -37,6 +37,7 @@
 - **OPS-21 — хаб MCP: клиенты на срезе тегов, claude-mem по installPath** (2026-11-15 · `acd00e932` (#435), `29f88bce4` (#436) · OPS-21) — клиент без `tags=` получал все 292 инструмента хаба. Codex, Copilot Chat, Roo и Kimi Code переведены на срез `oauth,connector,boards`, как у Claude Code; claude-mem запускается по `installPath`; у Continue удалён дубль записи хаба. Auth хаба не включён (ответ владельца). #security
 - **OPS-56 — цепочка ревью консилиума берёт хост из instances/ без TAIBE_HOST_ROOT** (2026-11-18 · `68fe33d73` (#218) · OPS-56) — без лишней переменной окружения. #infra
 - **OPS-48 — M7 проверяет, что три читателя корня видят фикстуру** (2026-11-20 · `28069301c` (#264) · OPS-48) — в `infra/ai-council/selftest_drift_clean.py` новая проверка блока `host_tree`: `verifier`, `council_rounds` и `council_clean` читают дерево-фикстуру, а не checkout. Имена заданы в самой проверке, поэтому потерю модуля из `READERS` CI видит и без `TAIBE_HOST_ROOT` (без `verifier` или `council_rounds` — 1 провал). Вместе с #258 закрывает карточку. #bug
+- **SE-192 — тест предела worktree не зависит от сегодняшней даты** (2026-11-20 · `e9cefb49e` (#500) · SE-192) — с 20.11 хук законно отказывает (`ENFORCE_FROM`, OPS-52), тест ждёт отказ; режим предупреждения проверяется через `wt_gc.limit_text` с днём в аргументе; layer-ci снова зелёный. #bug
 
 ### 2026-10
 
