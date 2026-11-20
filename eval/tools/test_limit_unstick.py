@@ -41,6 +41,15 @@ if a[0] == "send-keys":
     for path, data in spec.get("on_key", {}).get(a[2], []):
         open(path, "w").write(json.dumps(data))
     sys.exit(spec.get("send_rc", 0))
+if a[0] == "display-message" and a[-1] == "#{pane_in_mode}":  # mode of the pane by the number of keys already sent
+    pane = a[a.index("-t") + 1]
+    n = sum(1 for c in calls if c[0] == "send-keys" and c[2] == pane)
+    modes = spec.get("in_mode", {}).get(pane, ["0"])
+    mode = modes[min(n, len(modes) - 1)]
+    if mode is None:  # display-message failed
+        sys.exit(1)
+    sys.stdout.write(mode + "\n")
+    sys.exit(0)
 out, rc = spec.get(a[0], ["", 0])
 sys.stdout.write(out)
 sys.exit(rc)
@@ -285,6 +294,36 @@ class UnstickTest(Base):
         self.log.unlink()
         self.assertEqual(self.run_unstick(), [], "two interactive sessions on one tty: whose menu is it?")
         self.assertEqual(self.keys(), [])
+
+    def test_copy_mode_before_esc_gets_no_keys(self):  # SE-187 condition 2: the owner scrolls the pane with the wheel
+        for mode in ("1", None):  # in a mode, or no answer from tmux
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                self.spec({self.PANE: [MENU, PREFILLED]}, in_mode={self.PANE: [mode]})
+                done = self.run_unstick()
+                self.assertEqual([(d["action"], d["sha256"]) for d in done],
+                                 [(U.IN_MODE, U.digest(U.menu_lines(MENU)))])
+                self.assertEqual(self.keys(), [])
+                self.assertEqual(self.slept, [])
+
+    def test_copy_mode_after_esc_gets_no_more_keys(self):  # the #483 path: Esc, then Enter or the text
+        cases = (([MENU, PREFILLED], ["0", "1"], "esc; in-mode, no enter", [["Escape"]]),
+                 ([MENU, EMPTY], ["0", "1"], "esc; in-mode, no text", [["Escape"]]),
+                 ([MENU, EMPTY], ["0", "0", "1"], "esc, text; in-mode, no enter", [["Escape"], ["-l", U.TEXT]]))
+        for screens, modes, action, sent in cases:
+            with self.subTest(action):
+                self.log.unlink(missing_ok=True)
+                self.session(self.PID, "waiting", "dialog open")
+                self.spec({self.PANE: screens}, in_mode={self.PANE: modes})
+                self.assertEqual(self.run_unstick()[0]["action"], action)
+                self.assertEqual(self.keys(), sent)
+
+    def test_the_mode_is_read_before_each_key(self):
+        self.spec({self.PANE: [MENU, EMPTY]})
+        self.run_unstick()
+        seq = [c[0] if c[0] == "send-keys" else "mode" for c in self.calls()
+               if c[0] == "send-keys" or c[-1] == "#{pane_in_mode}"]
+        self.assertEqual(seq, ["mode", "send-keys"] * 3)
 
     def test_no_cli(self):  # S6: a role cannot reach the keys through python3 eval/tools/limit_unstick.py
         src = (HERE / "limit_unstick.py").read_text(encoding="utf-8")
