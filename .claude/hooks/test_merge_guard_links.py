@@ -129,6 +129,9 @@ deny = [
     ("setopt extendedglob: ^ без маски", "setopt extendedglob; rm -rf ^x"),
     ("setopt Extended_Glob: # без маски", f"setopt Extended_Glob && rm -rf {C[:3]}#{C[3:]}"),
     ("set -o EXTENDEDglob: ~ без маски", f"set -o EXTENDEDglob; rm -rf {C}~x"),
+    # SE-194 (coord 18:14): `^`, `#`, `~` в середине — маска всегда, и у чужой папки (было «буквы» без EXTENDED_GLOB)
+    ("#autosave# — `#` в середине", f"rm -f {O}/x/#autosave#"),
+    ("путь iCloud com~apple~CloudDocs — `~` в середине", f"cp {O}/a.txt {O}/com~apple~CloudDocs/a.txt"),
     ("тело heredoc для shell — свой уровень: (…)", f"bash <<'EOF'\nrm -rf {C[:3]}(a){C[4:]}\nEOF"),
     ("маска в цели mv: файл с защищённым именем в <слой>", f"mv {O}/x/{SET} {C[:3]}*/"),
     ("форма zsh в цели mv", f"mv {O}/a.txt {C[:3]}[^x]{C[4:]}/"),
@@ -166,14 +169,12 @@ for label, cmd, cwd in [
     ("подоболочка после rm — не маска", f"rm -f {O}/a.txt && (cd {O})", ROOT),
     ("скобки в кавычках — не маска", f"echo 'fix(x)' && rm -f {O}/a.txt", ROOT),
     ("маска в цели mv — чужая папка", f"mv {O}/a.txt {O}/x*/", ROOT),
-    # без EXTENDED_GLOB `~`, `#`, `^` — буквы (Контроль N2 и линза frontend на 9bfda9ce5)
+    # `~` в конце слова и сразу после `:`/`=` — буква (Контроль N2, линза frontend на 9bfda9ce5, SE-194)
     ("*~ — `~` в конце слова", f"rm -f {O}/x/*~", ROOT),
     ("a~ — резервная копия", f"cp {O}/a.txt {O}/a.txt~", ROOT),
     ("rsync в host:~/", f"rsync -a {O}/x/ host:~/dst/", ROOT),
     ("rsync --exclude '**/…' через пробел — шаблон", f"rsync -a --exclude '**/node_modules' {O}/x/ {O}/dst/", ROOT),
     ("rsync -af '**/…' — шаблон", f"rsync -af '- **/node_modules' {O}/x/ {O}/dst/", ROOT),
-    ("#autosave#", f"rm -f {O}/x/#autosave#", ROOT),
-    ("путь iCloud com~apple~CloudDocs", f"cp {O}/a.txt {O}/com~apple~CloudDocs/a.txt", ROOT),
     # проза в теле heredoc — не команда (N1)
     ("проза в heredoc и mv", f"cat > {O}/n.md <<'EOF'\n- install deps (pnpm)\nEOF\nmv {O}/n.md {O}/n2.md", ROOT),
     ("git mv и проза в heredoc", f"git mv src/a.ts src/b.ts && cat > {O}/m.txt <<'EOF'\n- mv files (IS-249)\nEOF", ROOT),

@@ -42,6 +42,7 @@ from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files,
 from merge_guard_comments import comment_char_may_change, comment_char_seen, zsh_interactive  # noqa: E402  SE-77
 from merge_guard_shell import heredoc_text, join_lines  # noqa: E402  SE-83
 from merge_guard_partial import PARTIAL, settle, settled, tokens_before_error  # noqa: E402  разбор до ошибки (SE-76)
+from merge_guard_zsh import zsh_group  # noqa: E402  `(…)` на месте слова у записи (SE-194)
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 from merge_guard_tmux import TMUX, classify_tmux  # noqa: E402  окна сессий в tmux — только владелец (OPS-82)
@@ -377,7 +378,7 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
     for code in qualifier_code(cmd):  # zsh `ls *(e:'gh pr merge 1':)`
         found += classify_bash(code, cwd, roots, depth + 1, git_env, disk, written, whole[4], part=True)
     tokens, complete = tokens_before_error(cmd)
-    found += [] if complete else [(PARTIAL, cmd[:120])]  # кавычки не сошлись: разбор до ошибки без комментариев
+    found += ([] if complete else [(PARTIAL, cmd[:120])]) + zsh_group(tokens)  # кавычки не сошлись: разбор до ошибки без комментариев
     found += [(DEFERRED, t[:120]) for t in tokens if ("$(" in t or "`" in t) and FALLBACK.search(t)]
     env, prev, st, saved = dir_vars({}, cwd), ([], []), new_state(cwd), []
     fed = [r for readers, _, _ in bodies for r in readers]

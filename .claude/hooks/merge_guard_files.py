@@ -4,7 +4,6 @@ package.json, Makefile), и какие файлы команда пишет — 
 чем их прочтут: тогда прочитанное хуком — не то, что выполнится.
 """
 import fnmatch
-import functools
 import itertools
 import os
 import re
@@ -25,11 +24,19 @@ COPY_LINK = {"cp": "ls", "install": "l"}  # буква опции, с котор
 GNU = WRITE_ALL | WRITE_LAST | LINKS | GONE | {"dd", "tar"}  # `gmv`, `gln`, `grm`, `gtee` — coreutils из Homebrew
 GLOB = re.compile(r"[*?[]")
 # формы маски zsh, которых _glob не повторяет (`[^x]`, `[!x]`, `[[:alpha:]]`, `**`; `^`, `#`, `~` — EXTENDED_GLOB):
-# отказ, не подражание (coord 13:46, линза frontend #508); `(…)` в слове делит разбор — _group
+# отказ, не подражание (coord 13:46, линза frontend #508); `(…)` в слове делит разбор — merge_guard_zsh
 ZSH_FORM = re.compile(r"\[[\^!]|\[:|\*\*")
-# `^`, `#`, `~` в середине — маска только при EXTENDED_GLOB (в Bash-инструменте выключена): форма — в слове с `*?[` или
-# когда команда её включает; `*~`, `a~`, `#x#`, `host:~/d` — буквы (проверено в zsh, линза Контроль #508 N2)
-ZSH_EXT = re.compile(r"[\^#]|(?<=.)~(?=.)")
+# `^`, `#`, `~` в середине слова — маска всегда: EXTENDED_GLOB включает и текст, которого разбор не видит (`setopt $(<f)`,
+# `source f`; линза frontend #512, coord 18:14). Буквы: `~` в конце (`a.map~`, `*~`) и сразу после `:`/`=` (`host:~/d`,
+# `--dir=~/x`; Контроль #508 N2)
+ZSH_EXT = re.compile(r"[\^#]|(?<=[^:=])~(?=.)")
+# опции, с которыми маска находит другое (zsh -f, bash): `nocaseglob` — `.CLAU*`, `braceccl` — `.{c}laude`, `globsubst`,
+# `kshglob`/`extglob` — `@(…)`, `emulate ksh`; любой способ — `setopt`, `set -o`, `options[…]`, `zsh --x`, `shopt -s`.
+# Страховка: имя собирают кавычками и берут из файла (`source`) — регистр и `{c}` закрыты и без имени (линза frontend #512)
+SHELL_OPTS = re.compile(r"caseglob|casepaths|braceccl|globsubst|kshglob|extglob")
+EMULATE = re.compile(r"\bemulate\s+(-\w+\s+)*(sh|ksh|csh|bash)\b")  # `npm run emulate` — не опция (coord 17:43)
+BRACE_CCL = re.compile(r"(?<![$@])\{(?![^{}]*\.\.)[^{},]+\}")  # `{c}`, `{k-m}`: с `braceccl` — буквы; `{}`, `{1..3}`,
+# `{a,b}`, `${x}`, `@{u}` — нет
 RSYNC_PATTERN = {"--exclude", "--include", "--filter"}  # значение через пробел — шаблон, не путь (`'**/x'`); и `-f`:
 RSYNC_F = re.compile(r"-[^-eBMTf@]*f")  # у `-ref`, `-rTf` f — значение `-e`/`-T`, слово за ним — источник (Контроль B1)
 UNSEEN = re.compile(rf"{SUBST}|[$`]")  # слово из `$(…)`, `` `…` `` или неизвестной переменной: путь разбору не виден
@@ -283,7 +290,7 @@ def _budget():
     if _scan[0] != g.decision():
         _scan[:] = [g.decision(), 0, 0, {}]
     if _scan[0] and time.monotonic() > _scan[0]:  # срок решения (start_budget, 6 с): путь глубиной 400 — 3 мс (realpath
-        raise Unread("разбор масок дольше срока решения")  # — lstat на часть), предел счёта время не держит (frontend #511)
+        raise Unread("разбор путей дольше срока решения")  # — lstat на часть), предел счёта время не держит (frontend #511)
     return _scan
 
 
@@ -298,7 +305,8 @@ def _glob(p):
         if not GLOB.search(part):
             cur = [os.path.join(c, part) for c in cur]
             continue
-        nxt, last, match = [], k == len(parts) - 1, re.compile(fnmatch.translate(part)).match  # как fnmatchcase
+        nxt, last, match = [], k == len(parts) - 1, re.compile(fnmatch.translate(part), re.I).match  # без регистра:
+        # надмножество `nocaseglob` в любой форме; APFS регистр не различает (линза frontend #512, coord 17:43)
         for c in cur:
             try:
                 with os.scandir(c or ".") as it:
@@ -315,9 +323,9 @@ def _glob(p):
     return s[3][p]
 
 
-def _paths(base, word, ext=False):
-    """Пути слова от base; маску — и на имена с точкой (`mv .c* x`), не шире предела; ext — включён EXTENDED_GLOB."""
-    if ZSH_FORM.search(word) or ZSH_EXT.search(word) and (ext or GLOB.search(word)):
+def _paths(base, word):
+    """Пути слова от base; маску — и на имена с точкой (`mv .c* x`), не шире предела."""
+    if ZSH_FORM.search(word) or ZSH_EXT.search(word):
         raise Unread("форма маски zsh, которую разбор не читает (`[^…]`, `[[:…:]]`, `**`, `^`, `#`, `~`)")
     p = os.path.join(base, os.path.expanduser(word))
     if not GLOB.search(word):
@@ -329,30 +337,10 @@ def _paths(base, word, ext=False):
     return got
 
 
-@functools.lru_cache(maxsize=8)
-def _group(text):
-    """В тексте у команды семьи link_findings `(` на месте слова: в zsh это маска (`.cl(a)ude`, `(a|b)/x`, `*(/)`), а
-    разбор (merge_guard_shell.tokenize) делит её на команды и имени не видит. Не маска: `$(`, `=(`, `<(`, `f()`."""
-    from merge_guard_shell import SEPARATORS, tokenize  # shell импортирует этот модуль
-    try:
-        tokens, argv = tokenize(text), []
-    except ValueError:
-        return False
-    for t in tokens:
-        if not (t and set(t) <= SEPARATORS):
-            argv.append(t)
-        elif t[0] == "(" and argv and not argv[-1].endswith(("$", "=")) and not (  # `;(`, `⏎(`, `<(` — не слово
-                len(argv) == 1 and t.startswith("()")) and any(gnu(os.path.basename(w)) in FAMILY for w in argv):
-            return True
-        elif set(t) & set(";&|\n()"):
-            argv = []
-    return False
-
-
-def _hit(word, bases, roots, protected, dirs, ext=False):
+def _hit(word, bases, roots, protected, dirs):
     """Путь слова от одной из bases — защищённый или папка над защищённым: что назвать в отказе, иначе None."""
     for base in bases:
-        for q in _paths(base, word, ext):
+        for q in _paths(base, word):
             f = _budget() and os.path.realpath(q).casefold()  # срок решения — на каждый путь: вышел — Unread
             if p := protected(q, base, roots):
                 return p
@@ -449,15 +437,18 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
         cmd, ops = {"mv": "mv", "rm": "rm"}.get(sub, ""), [x for x in a[k + 1:] if not x.startswith("-")]
     if cmd not in FAMILY:  # остальным realpath папок не нужен
         return []
-    if whole[0] and _group(whole[0]):  # текст своего уровня, без тел heredoc: тело для shell — свой уровень (N1, #508)
-        raise Unread("форма маски zsh, которую разбор не читает (`(…)`, `(a|b)`, `*(/)`)")
     if cmd == "rsync":  # `--exclude '**/node_modules'`: значение опции — шаблон, не путь (Контроль N2, #508)
         val = {k + 1 for k, x in enumerate(a) if x in RSYNC_PATTERN or RSYNC_F.fullmatch(x)}
         ops = [x for k, x in enumerate(a) if k and k not in val and not x.startswith("-")]
     short, dirs, norm = "".join(x[1:] for x in opts if x[:2] != "--"), guarded_dirs(roots, home), [gnu(a[0])] + a[1:]
-    ext = "extendedglob" in text.casefold().replace("_", "")  # `setopt Extended_Glob`, `set -o …`, `zsh -o …` (zsh 5.9)
-    hit = lambda w, bases: _hit(w, bases, roots, protected, dirs, ext)  # noqa: E731
-    paths = lambda base, w: _paths(base, w, ext)  # noqa: E731
+    unq = re.sub(r"['\"\\]", "", text.casefold())  # zsh снимает кавычки и `\` до `setopt`: `no_case'_'glob` (#512)
+    low = re.sub(r"[_-]", "", unq)  # имя опции zsh — без регистра, `_` и `-` (`--no-case-glob`, zsh 5.9)
+    if (SHELL_OPTS.search(low) or EMULATE.search(unq)) and any(GLOB.search(w) or "{" in w for w in ops):  # coord 14:54
+        raise Unread("опция оболочки меняет, что находит маска (`nocaseglob`, `braceccl`, `emulate`, SE-194)")
+    if any(BRACE_CCL.search(w) for w in ops):  # опция могла прийти из файла: `{c}` — отказ и без имени (coord 17:43)
+        raise Unread("скобки `{…}` без `,` и `..` — с `braceccl` это буквы (`.{c}laude`, SE-194)")
+    hit = lambda w, bases: _hit(w, bases, roots, protected, dirs)  # noqa: E731
+    paths = _paths
     say = lambda p, why: ("file", f"{p} ({a[0]} {why} — IS-249)")  # noqa: E731
     unseen = say(" ".join(a)[:80], "называет путь, который разбор не видит: " + (
         "закоммитьте скрипт или назовите путь словами" if isinstance(disk, Disk) else "назовите его словами"))
