@@ -9,6 +9,8 @@ type CorpusCase = {
   id: string;
   kind: string;
   before: string;
+  // `before` as redact gives it, when a part of it is masked too (TB-201).
+  beforeRedacted?: string;
   value: string[];
   after: string;
   redact: string;
@@ -245,11 +247,22 @@ describe("@kaneo/redact", () => {
       "redacts %s and nothing else",
       (_id, c) => {
         const value = c.value.join("");
-        const result = expectSingleHit(
-          `${c.before}${value}${c.after}`,
-          c.redact,
-          value,
-        );
+        const input = `${c.before}${value}${c.after}`;
+        const result =
+          c.beforeRedacted === undefined
+            ? expectSingleHit(input, c.redact, value)
+            : redact(input);
+        if (c.beforeRedacted !== undefined) {
+          const start = c.before.length;
+          expect(result.hits.at(-1)).toEqual({
+            kind: c.redact,
+            start,
+            end: start + value.length,
+          });
+          expect(result.text).toBe(
+            `${c.beforeRedacted}[REDACTED:${c.redact}]${c.after}`,
+          );
+        }
         expect(redact(result.text).hits).toHaveLength(0);
       },
     );
@@ -587,9 +600,9 @@ describe("@kaneo/redact", () => {
       expect(redact(input).text).not.toContain(value);
     });
 
-    // Coord 15.11: the base took the `=` of a glued `:=` into the value and
-    // masked any value long enough. A value right after `:=` or `=>` keeps
-    // that mask.
+    // Coord 15.11: the base took the `=` of a glued `:=` or `=>` into the
+    // value and masked any value long enough. A value right after them keeps
+    // that mask (coord B1 #401: a Ruby hash, a PHP array).
     const phrase = join("correct", "horse", "battery", "staple");
     const camel = join("Correct", "Horse", "Battery", "Staple");
     it.each([
@@ -598,8 +611,36 @@ describe("@kaneo/redact", () => {
       [`x-api-key:=${phrase}`, phrase],
       [`A_SECRET:=${camel};`, camel],
       [`T_ACCESS_TOKEN=>${phrase}`, phrase],
+      [`api_key=>${phrase}`, phrase],
+      [` k1_api_key=>${phrase}"`, phrase],
+      [`A_SECRET=>${camel};`, camel],
     ])("masks a word value after a glued operator: %s", (input, secret) => {
       expect(redact(input).text).not.toContain(secret);
+    });
+
+    // TB-201 (Claude lens #392, 1; coord B1 #401): after a glued `=>` the
+    // re-check masked code. A name of code is not judged again: a camelCase
+    // identifier or a dotted name. Code stays readable as it is with ` => `
+    // and `=`.
+    it.each([
+      ":api_key=>options.api_key,",
+      "GITHUB_TOKEN=>githubToken,",
+      "CLIENT_SECRET=>clientSecret,",
+      "'auth_token'=>user.auth_token,",
+      "api_key=>this.apiKey",
+    ])("leaves code after a glued `=>` readable: %s", (input) => {
+      const result = redact(input);
+      expect(result.hits).toEqual([]);
+      expect(redact(input.replace("=>", "=")).hits).toEqual([]);
+    });
+
+    // Role 4 #401 N1: a value that only starts with a separator and a mask
+    // is still a value; the mask does not reach its end.
+    it.each([
+      `password:=[REDACTED:password_assignment]${value}`,
+      `password=>[REDACTED:password_assignment]${value}`,
+    ])("masks a value glued after a mask: %s", (input) => {
+      expect(redact(input).text).not.toContain(value);
     });
 
     // TB-202 superset test against 221e381b4: a name with a glued `:=`
@@ -632,6 +673,24 @@ describe("@kaneo/redact", () => {
         expectLinear((n) => `${name}${"=".repeat(n)} x`);
       },
     );
+
+    // TB-201 (Claude lens #392, 3): a second pass took the rest of a
+    // separator before a mask as a value (`password :[R] [R]`,
+    // `password=[R]`).
+    it.each([
+      "password := <v>",
+      "password:=<v>",
+      "password=><v>",
+      "C_PASSWORD => <v>",
+      'C_PASSWORD => "<v>"',
+      "q;passwd => <v>",
+      "A_TOKEN:=<v>;x",
+      "api_key => '<v>'",
+    ])("changes nothing on a second pass over %j", (input) => {
+      const once = redact(input.replace("<v>", value)).text;
+      expect(once).not.toContain(value);
+      expect(redact(once).text).toBe(once);
+    });
   });
 
   // Claude lens #283 B2, B3 and note 1: a value glued to `,` or `;`, the
@@ -670,6 +729,44 @@ describe("@kaneo/redact", () => {
     ])("redacts a bearer token under a JSON key in %s", (_name, input) => {
       const token = `${value}Qz8Lm4Rt7Wx2`;
       expectSingleHit(input, "bearer", token);
+    });
+
+    // TB-201 (Claude lens #378): a token glued to a second header with its
+    // `Bearer` takes that header into its value, and the token after it
+    // stayed open. With a space or a quote before `Bearer` the second search
+    // found it already.
+    it.each([
+      ["glued", "Authorization: Bearer abcAuthorization:Bearer <v>"],
+      [
+        "glued, a newline",
+        "Authorization: Bearer abcAuthorization:Bearer\n<v>",
+      ],
+      ["after a comma", "Authorization: Bearer x,Authorization:Bearer <v>"],
+      ["any case", "authorization: bearer abcAUTHORIZATION:BEARER <v>"],
+      ["the header alone", "Authorization: Bearer Authorization:Bearer <v>"],
+      [
+        "nested",
+        "Authorization: Bearer aAuthorization:BearerbAuthorization:Bearer <v>",
+      ],
+      ["a space", "Authorization: Bearer abcAuthorization: Bearer <v>"],
+      ["a quote", 'Authorization: Bearer abcAuthorization:"Bearer <v>'],
+    ])("masks the token after a header inside a token: %s", (_name, input) => {
+      const text = input.replace("<v>", value);
+      const result = redact(text);
+      expect(result.text).not.toContain(value);
+      expect(result.text.endsWith("[REDACTED:bearer]")).toBe(true);
+    });
+
+    it.each([
+      "Authorization: Bearer ",
+      "aAuthorization:Bearer",
+      "Authorization:Bearer x,",
+      "authorization: bearer authorization",
+    ])("redacts 256 000 characters of %j in linear time", (unit) => {
+      const text = `Authorization: Bearer ${unit.repeat(Math.ceil(256_000 / unit.length))} x`;
+      const started = performance.now();
+      redact(text);
+      expect(performance.now() - started).toBeLessThan(250);
     });
 
     it("leaves the next header alone after an empty x-api-key", () => {
