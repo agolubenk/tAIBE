@@ -10,6 +10,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOOK = os.path.join(HERE, "pre-tool-use-wt-limit.sh")
+TOOLS = os.path.join(HERE, "..", "..", "eval", "tools")
 ADD = " ".join(["git", "worktree", "add"])  # текст команды, которую проверяет хук
 
 
@@ -41,17 +42,27 @@ class WtLimitHookTest(unittest.TestCase):
         self.last_stdout = p.stdout
         return p.returncode, p.stderr
 
-    def test_over_limit_before_arming_warns_into_context(self):
-        """Решение владельца 14.11 (B): продукт уже выше предела — команда идёт, модель получает предупреждение."""
+    def test_over_limit_before_arming_blocks_from_the_owner_date(self):
+        """Решение владельца 14.11 (B): с ENFORCE_FROM продукт выше предела останавливается и без метки.
+        SE-192: тест ждал режим предупреждения и покраснел 20.11 сам. Дата в хуке не подменяется: окружение,
+        которое отодвигает её, было бы обходом предела. До даты — предупреждение, это проверяет тест ниже."""
         for w in ("w1", "w2"):
             git(self.repo, "worktree", "add", "-q", "-b", w, os.path.join(self.repo, w))
-        self.assertEqual(self.run_hook(f"{ADD} w3", self.repo)[0], 0)
-        ctx = json.loads(self.last_stdout)["hookSpecificOutput"]
-        self.assertEqual(ctx["hookEventName"], "PreToolUse")
-        self.assertIn("Предупреждение", ctx["additionalContext"])
-        self.assertNotIn("permissionDecision", ctx)
-        # Дата остановки наступила — отказ.
-        self.assertEqual(self.run_hook(f"{ADD} w3", self.repo, WT_LIMIT_ENFORCE_FROM="2000-01-01")[0], 2)
+        self.assertEqual(self.run_hook(f"{ADD} w3", self.repo)[0], 2)
+
+    def test_over_limit_before_the_owner_date_warns(self):
+        """До ENFORCE_FROM без метки — предупреждение, не отказ (день передаётся в limit_text, не через окружение)."""
+        for w in ("w1", "w2"):
+            git(self.repo, "worktree", "add", "-q", "-b", w, os.path.join(self.repo, w))
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import wt_gc; "
+                "m, t = wt_gc.limit_text(sys.argv[2], '2026-11-19'); print(m); print(t)")
+        env = {**os.environ, "WT_LIMIT": "1"}
+        env.pop("WT_LIMIT_ENFORCE_FROM", None)
+        p = subprocess.run(["python3", "-I", "-c", code, TOOLS, self.repo], capture_output=True, text=True, env=env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        mode, text = p.stdout.split("\n", 1)
+        self.assertEqual(mode, "warn")
+        self.assertIn("Предупреждение", text)
 
     def test_under_limit_passes_and_at_limit_blocks(self):
         self.assertEqual(self.run_hook(f"{ADD} w1", self.repo)[0], 0)
