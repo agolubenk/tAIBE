@@ -107,7 +107,12 @@ It is the one exception to R-040 (owner decision d-tb113-r040-1311): the worker'
 exact-key mode, so `mac/card-memory-db.mjs` reads `claude-mem.db` itself, read-only (WAL, `readOnly`, 0.3 s lock
 timeout). 1 to 6 keys, each a card id (24 lowercase letters and digits), a card key (`TB-108`, `Q-12`: a project key of 1 to 10 Latin capitals and digits) or a queue item id
 (`d-tb113-mem-1311`); anything else is 400. Per key: `count` (exact matches, at most 500, `capped` above), the 5 newest
-`{id, title ≤ 120, project, createdAt}`, never the text. 10 requests a second, then 429. 503 `{error}` with
+`{id, title ≤ 120, project, createdAt}`, never the text. Up to 4 `project=<root>` parameters (a repo folder name such
+as `tAIBE`: Latin letters, digits, `.`, `_`, `-`, no slash) keep the count and the 5 newest inside those claude-mem
+projects and their worktrees `<root>/<topic>`, filtered in the SQL before the 500 window (R-002, TB-58); `tAIBE-old`
+is not `tAIBE`. Without them every project is read. The app sends the workspace's roots from `CLAUDE_MEM_PROJECTS`
+(compose holds the prod map) and, for a workspace without them, asks nothing and answers `reason: "no-product-map"`.
+10 requests a second, then 429. 503 `{error}` with
 `unavailable` (no database yet), `schema_changed` (the file is not a database, or claude-mem changed its tables) or
 `busy` (locked). The database is
 `CMEM_PROXY_DB`, else `claude-mem.db` in `CLAUDE_MEM_DATA_DIR` of `~/.claude-mem/settings.json`, else

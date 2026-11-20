@@ -1,6 +1,8 @@
 import { type ClaudeMemReaderOptions, createJsonGetter } from "./client.js";
 import {
+  isMemoryProjectRoot,
   MAX_MEMORY_KEYS,
+  MAX_MEMORY_PROJECTS,
   type MemoryKeyForm,
   memoryKeyForm,
 } from "./memory-keys.js";
@@ -26,7 +28,11 @@ export type CardMemoryKeyResult = {
 export type CardMemoryAnswer = { keys: CardMemoryKeyResult[] };
 
 export type CardMemoryClient = {
-  find(keys: string[]): Promise<CardMemoryAnswer>;
+  /**
+   * projects: the claude-mem project roots to search in, each with its
+   * worktrees (R-002, TB-58); none searches every project.
+   */
+  find(keys: string[], projects?: readonly string[]): Promise<CardMemoryAnswer>;
 };
 
 /** The Mac proxy's own route: an exact key search in claude-mem.db (TB-113). */
@@ -39,7 +45,7 @@ export function createCardMemoryClient(
 ): CardMemoryClient {
   const get = createJsonGetter(options);
   return {
-    find(keys) {
+    find(keys, projects = []) {
       if (
         keys.length === 0 ||
         keys.length > MAX_MEMORY_KEYS ||
@@ -51,7 +57,20 @@ export function createCardMemoryClient(
           ),
         );
       }
-      const query = new URLSearchParams(keys.map((key) => ["key", key]));
+      if (
+        projects.length > MAX_MEMORY_PROJECTS ||
+        !projects.every(isMemoryProjectRoot)
+      ) {
+        return Promise.reject(
+          new TypeError(
+            `card memory takes at most ${MAX_MEMORY_PROJECTS} claude-mem project roots`,
+          ),
+        );
+      }
+      const query = new URLSearchParams([
+        ...keys.map((key) => ["key", key]),
+        ...projects.map((project) => ["project", project]),
+      ]);
       // The keys stay out of error messages: the label is the bare route.
       return get(
         `${CARD_MEMORY_PATH}?${query}`,

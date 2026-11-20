@@ -20,7 +20,9 @@ import { createForest } from "./helpers/forest";
 
 // TB-113: card memory through the Mac proxy's exact key search. One loopback
 // server stands in for the memory proxy (/api/card-memory) and the owner
-// queue (/api/oq/v1/db/items/<id>); nothing real is asked.
+// queue (/api/oq/v1/db/items/<id>); nothing real is asked. TB-58: the API
+// sends the workspace's claude-mem project roots, and a workspace without
+// them asks nothing.
 const QUEUE_ITEM = "d-tb113-mem-1311";
 // An existing item of the other product (Control lens on 20290bce9).
 const FOREIGN_ITEM = "d-lavaeon-1311";
@@ -31,12 +33,15 @@ const ENV_KEYS = [
   "OQ_TOKEN_FILE",
   "OQ_TOKEN_NAME",
   "OQ_WORKSPACE_PRODUCTS",
+  "CLAUDE_MEM_PROJECTS",
 ] as const;
 
 let server: Server;
 let port: number;
 let dir: string;
 const asked: string[][] = [];
+// The project parameters of each proxy request, in the order of asked.
+const askedProjects: string[][] = [];
 const queueAsked: string[] = [];
 // When set, every newest line carries this title instead of "About <key>".
 let secretTitle: string | null = null;
@@ -49,6 +54,7 @@ beforeAll(async () => {
     if (url.pathname === "/api/card-memory") {
       const keys = url.searchParams.getAll("key");
       asked.push(keys);
+      askedProjects.push(url.searchParams.getAll("project"));
       res.end(
         JSON.stringify({
           keys: keys.map((key) => ({
@@ -114,6 +120,13 @@ afterAll(async () => {
   await new Promise((done) => server.close(() => done(undefined)));
 });
 
+// CLAUDE_MEM_PROJECTS is read on every request.
+function memoryProjects(...pairs: [string, string][]) {
+  process.env.CLAUDE_MEM_PROJECTS = pairs
+    .map(([workspaceId, roots]) => `${workspaceId}=${roots}`)
+    .join(",");
+}
+
 function linkQueue(workspaceId: string) {
   process.env.OQ_URL = `http://127.0.0.1:${port}`;
   process.env.OQ_TOKEN_FILE = join(dir, "oq_token");
@@ -138,6 +151,7 @@ describe("API integration: card memory (TB-113)", () => {
   beforeEach(async () => {
     await resetTestDatabase();
     asked.length = 0;
+    askedProjects.length = 0;
     queueAsked.length = 0;
     secretTitle = null;
   });
@@ -145,17 +159,21 @@ describe("API integration: card memory (TB-113)", () => {
   afterEach(() => {
     delete process.env.OQ_URL;
     delete process.env.OQ_WORKSPACE_PRODUCTS;
+    delete process.env.CLAUDE_MEM_PROJECTS;
   });
 
   it("searches a card by its id and board key", async () => {
     const forest = await createForest();
+    memoryProjects([forest.workspace.id, "tAIBE"]);
     const card = await numberedCard(forest.project.id, "mema", 7);
 
     const res = await forest.agent(`/cards/${card.id}/memory`);
     expect(res.status).toBe(200);
     expect(asked).toEqual([[card.id, "MEMA-7"]]);
+    expect(askedProjects).toEqual([["tAIBE"]]);
     expect(res.body).toMatchObject({
       available: true,
+      reason: null,
       stale: false,
       keys: [
         { key: card.id, matchedOn: "id", count: 2 },
@@ -172,6 +190,7 @@ describe("API integration: card memory (TB-113)", () => {
   // the titles masked; the web app's cookie session reads them as stored.
   it("masks secrets in titles for an agent's key on both routes, not for the web app", async () => {
     const forest = await createForest();
+    memoryProjects([forest.workspace.id, "tAIBE"]);
     const card = await numberedCard(forest.project.id, "memc", 5);
     const key = `tbk_${"a1B2c3D4".repeat(4)}`;
     const github = `ghp_${"Q1w2E3r4".repeat(5)}`;
@@ -198,6 +217,7 @@ describe("API integration: card memory (TB-113)", () => {
   it("finds the same card by its key in this workspace only", async () => {
     const forest = await createForest();
     const other = await createForest();
+    memoryProjects([forest.workspace.id, "tAIBE"], [other.workspace.id, "HR"]);
     const card = await numberedCard(forest.project.id, "memb", 3);
 
     const mine = await forest.agent("/memory?ticketKey=MEMB-3");
@@ -219,6 +239,7 @@ describe("API integration: card memory (TB-113)", () => {
   it("searches by a queue item only when it exists, is of this product and the workspace is linked", async () => {
     const forest = await createForest();
 
+    memoryProjects([forest.workspace.id, "tAIBE"]);
     const unlinked = await forest.agent(`/memory?queueItemId=${QUEUE_ITEM}`);
     expect(unlinked.status).toBe(503);
 
@@ -235,6 +256,54 @@ describe("API integration: card memory (TB-113)", () => {
     expect(foreign.status).toBe(404);
     expect(queueAsked).toEqual([QUEUE_ITEM, "d-unknown-1311", FOREIGN_ITEM]);
     expect(asked).toEqual([[QUEUE_ITEM]]);
+    expect(askedProjects).toEqual([["tAIBE"]]);
+  });
+
+  // TB-58 (R-002): the proxy counts and shows only the roots it is sent, and
+  // their worktrees; each workspace sends its own roots.
+  it("sends each workspace's own claude-mem project roots, and no answer is shared", async () => {
+    const forest = await createForest();
+    const other = await createForest();
+    memoryProjects(
+      [forest.workspace.id, "tAIBE|tAIBE-lab"],
+      [other.workspace.id, "HR_Helper-v2"],
+    );
+    const mine = await numberedCard(forest.project.id, "memd", 4);
+    const theirs = await numberedCard(other.project.id, "memd", 4);
+
+    expect((await forest.agent(`/cards/${mine.id}/memory`)).status).toBe(200);
+    expect((await other.agent(`/cards/${theirs.id}/memory`)).status).toBe(200);
+    expect(asked).toEqual([
+      [mine.id, "MEMD-4"],
+      [theirs.id, "MEMD-4"],
+    ]);
+    expect(askedProjects).toEqual([["tAIBE", "tAIBE-lab"], ["HR_Helper-v2"]]);
+  });
+
+  it("answers no-product-map and asks nobody for a workspace without its claude-mem projects", async () => {
+    const forest = await createForest();
+    const other = await createForest();
+    // Only another workspace is on the map, and this one's entry is malformed.
+    memoryProjects([other.workspace.id, "tAIBE"], [forest.workspace.id, "a/b"]);
+    linkQueue(forest.workspace.id);
+    const card = await numberedCard(forest.project.id, "meme", 9);
+
+    for (const path of [
+      `/cards/${card.id}/memory`,
+      "/memory?ticketKey=MEME-9",
+      `/memory?queueItemId=${QUEUE_ITEM}`,
+    ]) {
+      const res = await forest.agent(path);
+      expect(res.status, path).toBe(200);
+      expect(res.body, path).toEqual({
+        available: false,
+        reason: "no-product-map",
+        stale: false,
+        fetchedAt: null,
+        keys: [],
+      });
+    }
+    expect(asked).toEqual([]);
   });
 
   it("refuses none, both or a malformed key before asking anyone", async () => {

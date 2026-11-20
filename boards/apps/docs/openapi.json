@@ -5215,7 +5215,19 @@
         "properties": {
           "available": {
             "type": "boolean",
-            "description": "false when the Mac memory proxy is unreachable and no answer from the last 24 hours is kept."
+            "description": "false when the Mac memory proxy is unreachable and no answer from the last 24 hours is kept, or when the workspace has no claude-mem projects."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "worker-unreachable",
+              "no-product-map",
+              null
+            ],
+            "description": "Why available is false: worker-unreachable — the proxy did not answer; no-product-map — CLAUDE_MEM_PROJECTS names no claude-mem projects for this workspace (R-002), so nothing is read. null when available."
           },
           "stale": {
             "type": "boolean",
@@ -5247,7 +5259,7 @@
                 },
                 "count": {
                   "type": "integer",
-                  "description": "Observations that name the key exactly, at most 500."
+                  "description": "Observations of the workspace's claude-mem projects that name the key exactly, at most 500."
                 },
                 "capped": {
                   "type": "boolean",
@@ -5297,6 +5309,7 @@
         },
         "required": [
           "available",
+          "reason",
           "stale",
           "fetchedAt",
           "keys"
@@ -28110,7 +28123,7 @@
           "Forest"
         ],
         "summary": "List claude-mem observations about a card",
-        "description": "For each of the card's keys — its id, board key, Backlog ID and the owner-queue items of its «да» requests, up to 6 — how many claude-mem observations name it exactly and the 5 newest titles. Read-only, through the Mac memory proxy; when the proxy is down the last answer is returned, marked stale, for up to 24 hours. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
+        "description": "For each of the card's keys — its id, board key, Backlog ID and the owner-queue items of its «да» requests, up to 6 — how many claude-mem observations name it exactly and the 5 newest titles. Only the workspace's own claude-mem projects and their worktrees are read (CLAUDE_MEM_PROJECTS); a workspace without them gets available: false, reason no-product-map. Read-only, through the Mac memory proxy; when the proxy is down the last answer is returned, marked stale, for up to 24 hours. A caller with a token (API key, agent key, MCP) reads secrets in the titles as [REDACTED:<kind>]; the web app's session reads them as stored.",
         "parameters": [
           {
             "schema": {

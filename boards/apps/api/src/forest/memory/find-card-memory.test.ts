@@ -33,9 +33,11 @@ function result(key: string, count: number): CardMemoryKeyResult {
 // an Error is thrown. It records each call.
 function scriptedClient(script: (number | Error)[]) {
   const calls: string[][] = [];
+  const projects: (readonly string[] | undefined)[] = [];
   const client: CardMemoryClient = {
-    async find(keys) {
+    async find(keys, roots) {
       calls.push(keys);
+      projects.push(roots);
       const step = script.shift();
       if (step === undefined) throw new Error("script is over");
       if (step instanceof Error) throw step;
@@ -45,8 +47,11 @@ function scriptedClient(script: (number | Error)[]) {
       return answer;
     },
   };
-  return { client, calls };
+  return { client, calls, projects };
 }
+
+// The workspace's claude-mem project roots (memoryRoots).
+const ROOTS = ["tAIBE"];
 
 function clockAt(start: number) {
   const clock = { now: start, tick: (ms: number) => (clock.now += ms) };
@@ -58,8 +63,9 @@ describe("createCardMemoryFinder", () => {
   it("answers an empty available list for no keys and does not call the proxy", async () => {
     const { client, calls } = scriptedClient([]);
     const find = createCardMemoryFinder(client);
-    expect(await find([])).toEqual({
+    expect(await find([], ROOTS)).toEqual({
       available: true,
+      reason: null,
       stale: false,
       fetchedAt: null,
       keys: [],
@@ -72,18 +78,18 @@ describe("createCardMemoryFinder", () => {
     const { client, calls } = scriptedClient([3, 7]);
     const find = createCardMemoryFinder(client, () => clock.now);
 
-    const first = await find(["TB-108", "g88se9086hag2gzm0fgjul5w"]);
+    const first = await find(["TB-108", "g88se9086hag2gzm0fgjul5w"], ROOTS);
     expect(first).toMatchObject({ available: true, stale: false });
     expect(first.keys[0]?.count).toBe(3);
     expect(first.fetchedAt?.getTime()).toBe(1_000_000);
 
     clock.tick(FRESH_MS - 1);
-    const second = await find(["g88se9086hag2gzm0fgjul5w", "TB-108"]);
+    const second = await find(["g88se9086hag2gzm0fgjul5w", "TB-108"], ROOTS);
     expect(second.keys[0]?.count).toBe(3);
     expect(calls).toHaveLength(1);
 
     clock.tick(1);
-    const third = await find(["TB-108", "g88se9086hag2gzm0fgjul5w"]);
+    const third = await find(["TB-108", "g88se9086hag2gzm0fgjul5w"], ROOTS);
     expect(third.keys[0]?.count).toBe(7);
     expect(calls).toHaveLength(2);
   });
@@ -93,9 +99,9 @@ describe("createCardMemoryFinder", () => {
     const { client } = scriptedClient([4, new Error("proxy down")]);
     const find = createCardMemoryFinder(client, () => clock.now);
 
-    await find(["TB-113"]);
+    await find(["TB-113"], ROOTS);
     clock.tick(STALE_MS - 1);
-    const stale = await find(["TB-113"]);
+    const stale = await find(["TB-113"], ROOTS);
     expect(stale).toMatchObject({ available: true, stale: true });
     expect(stale.fetchedAt?.getTime()).toBe(5_000_000);
     expect(stale.keys[0]?.count).toBe(4);
@@ -110,16 +116,17 @@ describe("createCardMemoryFinder", () => {
     ]);
     const find = createCardMemoryFinder(client, () => clock.now);
 
-    await find(["TB-113"]);
+    await find(["TB-113"], ROOTS);
     clock.tick(STALE_MS);
-    expect(await find(["TB-113"])).toMatchObject({
+    expect(await find(["TB-113"], ROOTS)).toMatchObject({
       available: false,
+      reason: "worker-unreachable",
       stale: false,
       keys: [],
     });
     // The old answer is dropped, not shown again on the next failure.
     clock.tick(FAILED_MS);
-    expect(await find(["TB-113"])).toMatchObject({ available: false });
+    expect(await find(["TB-113"], ROOTS)).toMatchObject({ available: false });
     expect(calls).toHaveLength(3);
   });
 
@@ -128,21 +135,21 @@ describe("createCardMemoryFinder", () => {
     const { client, calls } = scriptedClient([5, new Error("proxy down"), 6]);
     const find = createCardMemoryFinder(client, () => clock.now);
 
-    await find(["TB-1"]);
+    await find(["TB-1"], ROOTS);
     clock.tick(FRESH_MS);
-    expect(await find(["TB-1"])).toMatchObject({ stale: true });
+    expect(await find(["TB-1"], ROOTS)).toMatchObject({ stale: true });
     expect(calls).toHaveLength(2);
 
     clock.tick(FAILED_MS - 1);
-    expect(await find(["TB-1"])).toMatchObject({
+    expect(await find(["TB-1"], ROOTS)).toMatchObject({
       available: true,
       stale: true,
     });
-    expect(await find(["TB-2"])).toMatchObject({ available: false });
+    expect(await find(["TB-2"], ROOTS)).toMatchObject({ available: false });
     expect(calls).toHaveLength(2);
 
     clock.tick(1);
-    expect(await find(["TB-2"])).toMatchObject({
+    expect(await find(["TB-2"], ROOTS)).toMatchObject({
       available: true,
       stale: false,
     });
@@ -152,16 +159,47 @@ describe("createCardMemoryFinder", () => {
   it("answers unavailable when the first call fails", async () => {
     const { client } = scriptedClient([new Error("proxy down")]);
     const find = createCardMemoryFinder(client);
-    expect(await find(["TB-1"])).toMatchObject({ available: false });
+    expect(await find(["TB-1"], ROOTS)).toMatchObject({ available: false });
+  });
+
+  // TB-58 (R-002): fail closed, before the cache and the failure pause.
+  it("answers no-product-map for a workspace without roots and does not call the proxy", async () => {
+    const { client, calls } = scriptedClient([]);
+    const find = createCardMemoryFinder(client);
+    for (const keys of [["TB-1"], []]) {
+      expect(await find(keys, [])).toEqual({
+        available: false,
+        reason: "no-product-map",
+        stale: false,
+        fetchedAt: null,
+        keys: [],
+      });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("sends the roots and keeps separate answers for separate root sets", async () => {
+    const clock = clockAt(0);
+    const { client, calls, projects } = scriptedClient([1, 2]);
+    const find = createCardMemoryFinder(client, () => clock.now);
+    expect((await find(["TB-1"], ["tAIBE", "tAIBE-lab"])).keys[0]?.count).toBe(
+      1,
+    );
+    expect((await find(["TB-1"], ["HR_Helper-v2"])).keys[0]?.count).toBe(2);
+    expect((await find(["TB-1"], ["tAIBE-lab", "tAIBE"])).keys[0]?.count).toBe(
+      1,
+    );
+    expect(calls).toHaveLength(2);
+    expect(projects).toEqual([["tAIBE", "tAIBE-lab"], ["HR_Helper-v2"]]);
   });
 
   it("keeps separate answers for separate key sets", async () => {
     const clock = clockAt(0);
     const { client, calls } = scriptedClient([1, 2]);
     const find = createCardMemoryFinder(client, () => clock.now);
-    expect((await find(["TB-1"])).keys[0]?.count).toBe(1);
-    expect((await find(["TB-2"])).keys[0]?.count).toBe(2);
-    expect((await find(["TB-1"])).keys[0]?.count).toBe(1);
+    expect((await find(["TB-1"], ROOTS)).keys[0]?.count).toBe(1);
+    expect((await find(["TB-2"], ROOTS)).keys[0]?.count).toBe(2);
+    expect((await find(["TB-1"], ROOTS)).keys[0]?.count).toBe(1);
     expect(calls).toHaveLength(2);
   });
 });

@@ -12,8 +12,13 @@ export const STALE_MS = 24 * 60 * 60_000;
 export const FAILED_MS = 10_000;
 const CACHE_ENTRIES = 500;
 
+// Why available is false: the proxy failed and nothing is cached, or the
+// workspace has no claude-mem projects in CLAUDE_MEM_PROJECTS (R-002, TB-58).
+export type CardMemoryReason = "worker-unreachable" | "no-product-map";
+
 export type CardMemory = {
   available: boolean;
+  reason: CardMemoryReason | null;
   stale: boolean;
   fetchedAt: Date | null;
   keys: CardMemoryKeyResult[];
@@ -21,15 +26,20 @@ export type CardMemory = {
 
 const UNAVAILABLE: CardMemory = {
   available: false,
+  reason: "worker-unreachable",
   stale: false,
   fetchedAt: null,
   keys: [],
 };
 
+// Fail closed: a workspace without its claude-mem projects asks nothing.
+const NO_PRODUCT_MAP: CardMemory = { ...UNAVAILABLE, reason: "no-product-map" };
+
 // No key of the card fits a searchable form: there is nothing to ask, which
 // is not a proxy failure.
 const NOTHING_TO_SEARCH: CardMemory = {
   available: true,
+  reason: null,
   stale: false,
   fetchedAt: null,
   keys: [],
@@ -37,9 +47,15 @@ const NOTHING_TO_SEARCH: CardMemory = {
 
 type Entry = { keys: CardMemoryKeyResult[]; fetchedAt: number };
 
-export type CardMemoryFinder = (keys: string[]) => Promise<CardMemory>;
+// roots: the workspace's claude-mem project roots (memoryRoots); the proxy
+// counts and shows only their observations and their worktrees' (TB-58).
+export type CardMemoryFinder = (
+  keys: string[],
+  roots: readonly string[],
+) => Promise<CardMemory>;
 
-// The cache key is the key set. The keys and titles live in this process's
+// The cache key is the root set and the key set: two workspaces asking the
+// same key do not share an answer. The keys and titles live in this process's
 // memory only and never reach a log: a failure is not logged with them.
 export function createCardMemoryFinder(
   client: CardMemoryClient,
@@ -67,6 +83,7 @@ export function createCardMemoryFinder(
     if (known && now - known.fetchedAt < STALE_MS) {
       return {
         available: true,
+        reason: null,
         stale: true,
         fetchedAt: new Date(known.fetchedAt),
         keys: known.keys,
@@ -76,14 +93,17 @@ export function createCardMemoryFinder(
     return UNAVAILABLE;
   }
 
-  return async (keys) => {
+  return async (keys, roots) => {
+    if (roots.length === 0) return NO_PRODUCT_MAP;
     if (keys.length === 0) return NOTHING_TO_SEARCH;
-    const id = [...keys].sort().join(" ");
+    // A root has no space or line break, a key no space (memory-keys.ts).
+    const id = `${[...roots].sort().join(" ")}\n${[...keys].sort().join(" ")}`;
     const now = clock();
     const known = cache.get(id);
     if (known && now - known.fetchedAt < FRESH_MS) {
       return {
         available: true,
+        reason: null,
         stale: false,
         fetchedAt: new Date(known.fetchedAt),
         keys: known.keys,
@@ -91,10 +111,11 @@ export function createCardMemoryFinder(
     }
     if (now < failedUntil) return lastAnswer(id, known, now);
     try {
-      const answer = await client.find(keys);
+      const answer = await client.find(keys, roots);
       remember(id, { keys: answer.keys, fetchedAt: now });
       return {
         available: true,
+        reason: null,
         stale: false,
         fetchedAt: new Date(now),
         keys: answer.keys,

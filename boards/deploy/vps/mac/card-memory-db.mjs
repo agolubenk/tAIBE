@@ -3,8 +3,16 @@
 // reads the database itself — read-only, a search by one exact key at a time, titles only, never the bodies.
 // Nothing is written: the connection is opened with readOnly, and WAL lets it read while the worker writes.
 // The key forms are the same as packages/claude-mem-reader/src/memory-keys.ts.
+//
+// The product boundary (R-002, TB-58): with project=<root> parameters only the observations of those claude-mem
+// projects and their worktrees («<root>/<topic>») are counted and shown, in the SQL itself. Without them every
+// project is read, as before: the API sends them from CLAUDE_MEM_PROJECTS, an older API does not.
 
 export const MAX_KEYS = 6;
+export const MAX_PROJECTS = 4;
+// A project root is a repo folder name («tAIBE», «HR_Helper-v2»): no slash, since «<root>/<topic>» is a worktree.
+// The same form as packages/claude-mem-reader/src/memory-keys.ts.
+const PROJECT_ROOT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const LATEST = 5;
 // One more candidate than the count shows: 501 rows mean «more than 500».
 const WINDOW = 501;
@@ -47,11 +55,16 @@ export function keyForm(key) {
   return null;
 }
 
+export const isProjectRoot = (root) => PROJECT_ROOT.test(root);
+
 // URLSearchParams has already decoded the query: %22 is a quote here, «+» a space, and neither fits a key form,
-// so nothing but letters, digits and hyphens reaches the FTS phrase.
+// so nothing but letters, digits and hyphens reaches the FTS phrase. A project root reaches the SQL only as a
+// bound parameter.
 export function parseKeys(searchParams) {
   for (const name of searchParams.keys()) {
-    if (name !== "key") return { error: "only key parameters" };
+    if (name !== "key" && name !== "project") {
+      return { error: "only key and project parameters" };
+    }
   }
   const keys = [...new Set(searchParams.getAll("key"))];
   if (keys.length === 0 || keys.length > MAX_KEYS) {
@@ -64,7 +77,14 @@ export function parseKeys(searchParams) {
       return { error: "not a card id, card key or queue item id" };
     parsed.push({ key, matchedOn });
   }
-  return { keys: parsed };
+  const projects = [...new Set(searchParams.getAll("project"))];
+  if (projects.length > MAX_PROJECTS) {
+    return { error: `at most ${MAX_PROJECTS} projects` };
+  }
+  if (!projects.every(isProjectRoot)) {
+    return { error: "not a claude-mem project root" };
+  }
+  return { keys: parsed, projects };
 }
 
 // A cut inside a word drops the whole word. The API masks secrets in titles
@@ -107,19 +127,31 @@ function schemaFits(db) {
   db.prepare(
     `SELECT ${OBSERVATION_COLUMNS.join(", ")} FROM observations LIMIT 1`,
   ).all();
+  // The project filter reads its roots with json_each (SQLite core since 3.38).
+  db.prepare(`SELECT value FROM json_each('["probe"]')`).all();
   return true;
 }
 
 // The candidates are the newest 501 matches by rowid; rowid does not grow strictly
 // with time, so the 5 shown are sorted by created_at_epoch. Above 500 matches «latest» is approximate.
 const CANDIDATES = `SELECT rowid AS id FROM observations_fts WHERE observations_fts MATCH ? ORDER BY rowid DESC LIMIT ${WINDOW}`;
+// The same within the roots of the second parameter, a JSON list: a project is a root or a worktree of one.
+// «tAIBE-old» is not «tAIBE». The filter runs before the window, so the count and the 5 shown are the product's.
+const CANDIDATES_IN_ROOTS = `SELECT observations_fts.rowid AS id FROM observations_fts JOIN observations p ON p.id = observations_fts.rowid WHERE observations_fts MATCH ? AND EXISTS (SELECT 1 FROM json_each(?) r WHERE p.project = r.value OR substr(p.project, 1, length(r.value) + 1) = r.value || '/') ORDER BY observations_fts.rowid DESC LIMIT ${WINDOW}`;
+
+function statementsOver(db, candidates) {
+  return {
+    count: db.prepare(`SELECT count(*) AS n FROM (${candidates})`),
+    latest: db.prepare(
+      `SELECT o.id, o.title, o.project, o.created_at AS createdAt FROM observations o JOIN (${candidates}) c ON o.id = c.id ORDER BY o.created_at_epoch DESC LIMIT ${LATEST}`,
+    ),
+  };
+}
 
 function prepare(db) {
   return {
-    count: db.prepare(`SELECT count(*) AS n FROM (${CANDIDATES})`),
-    latest: db.prepare(
-      `SELECT o.id, o.title, o.project, o.created_at AS createdAt FROM observations o JOIN (${CANDIDATES}) c ON o.id = c.id ORDER BY o.created_at_epoch DESC LIMIT ${LATEST}`,
-    ),
+    all: statementsOver(db, CANDIDATES),
+    inRoots: statementsOver(db, CANDIDATES_IN_ROOTS),
   };
 }
 
@@ -184,10 +216,16 @@ export function createCardMemoryDb(
     return opening;
   }
 
-  function search({ key, matchedOn }) {
+  function search({ key, matchedOn }, projects) {
     const phrase = `"${key}"`;
-    const n = Number(statements.count.get(phrase).n);
-    const latest = statements.latest.all(phrase).map((row) => ({
+    const { count, latest: newest } = projects.length
+      ? statements.inRoots
+      : statements.all;
+    const params = projects.length
+      ? [phrase, JSON.stringify(projects)]
+      : [phrase];
+    const n = Number(count.get(...params).n);
+    const latest = newest.all(...params).map((row) => ({
       id: Number(row.id),
       title: clip(row.title),
       project: row.project,
@@ -205,19 +243,21 @@ export function createCardMemoryDb(
   // Synchronous: health and the worker routes wait while it runs. Measured on the live 2.5 GB claude-mem.db
   // (13.11, node 22.23): one key 2.5–23 ms, 6 keys 17 ms warm and 36 ms cold. At the 10 requests a second limit the
   // event loop is busy up to 170–360 ms a second; the API's 60 s cache keeps real traffic far below that.
-  async function find(keys) {
+  // projects: the roots of parseKeys; empty reads every project.
+  async function find(keys, projects = []) {
+    const searchAll = () => keys.map((key) => search(key, projects));
     if (opening) await opening;
     if (state !== "ok" && now() >= retryAt) await open();
     if (state !== "ok") return { status: state };
     try {
-      return { status: "ok", keys: keys.map(search) };
+      return { status: "ok", keys: searchAll() };
     } catch (err) {
       if (isBusy(err)) return { status: "busy" };
     }
     // A failed query (claude-mem updated under us): open again and check the schema once.
     if ((await open()) !== "ok") return { status: state };
     try {
-      return { status: "ok", keys: keys.map(search) };
+      return { status: "ok", keys: searchAll() };
     } catch (err) {
       if (isBusy(err)) return { status: "busy" };
       close();

@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
-import { createCardMemoryDb } from "../../../deploy/vps/mac/card-memory-db.mjs";
+import {
+  createCardMemoryDb,
+  isProjectRoot,
+  MAX_PROJECTS,
+} from "../../../deploy/vps/mac/card-memory-db.mjs";
+import {
+  isMemoryProjectRoot,
+  MAX_MEMORY_PROJECTS,
+} from "../../../packages/claude-mem-reader/src/memory-keys";
 import {
   type FakeWorker,
   makeHome,
@@ -208,13 +216,81 @@ describe("memory-proxy.mjs /api/card-memory", () => {
       "?key=free%20text",
       `?key=${encodeURIComponent('"TB-1" OR title:*')}`,
       "?key=TB-1*",
-      "?key=TB-1&project=t-boards",
+      "?key=TB-1&projects=t-boards",
       "?q=TB-1",
     ]) {
       const { status, body } = await ask(query);
       expect(status, query).toBe(400);
       expect(body.keys).toBeUndefined();
     }
+  });
+
+  // A server of its own: the route answers 10 requests a second.
+  it("refuses a project that is not a root, more than 4 projects and projects without a key", async () => {
+    writer = makeDb(dbPath, [{ title: "TB-1", epoch: T0 }]);
+    await start();
+    for (const query of [
+      "?key=TB-1&project=",
+      "?key=TB-1&project=tAIBE%2Ftopic",
+      `?key=TB-1&project=${encodeURIComponent("' OR 1=1 --")}`,
+      "?key=TB-1&project=a&project=b&project=c&project=d&project=e",
+      "?project=tAIBE",
+    ]) {
+      const { status, body } = await ask(query);
+      expect(status, query).toBe(400);
+      expect(body.keys).toBeUndefined();
+    }
+  });
+
+  // TB-58 (R-002): a product reads only its claude-mem projects — its roots
+  // and their worktrees — in both the count and the 5 shown.
+  it("counts and shows only the roots it is sent and their worktrees", async () => {
+    writer = makeDb(dbPath, [
+      { title: "TB-7 root", project: "tAIBE", epoch: T0 },
+      { title: "TB-7 worktree", project: "tAIBE/topic", epoch: T0 + DAY },
+      { title: "TB-7 old copy", project: "tAIBE-old", epoch: T0 + 2 * DAY },
+      {
+        title: "TB-7 other worktree",
+        project: "HR_Helper-v2/tAIBE",
+        epoch: T0 + 3 * DAY,
+      },
+      { title: "TB-7 other", project: "HR_Helper-v2", epoch: T0 + 4 * DAY },
+    ]);
+    await start();
+
+    const titles = (body: { keys: { latest: { title: string | null }[] }[] }) =>
+      body.keys[0]?.latest.map((line) => line.title);
+
+    const own = await ask("?key=TB-7&project=tAIBE");
+    expect(own.status).toBe(200);
+    expect(own.body.keys[0]).toMatchObject({ count: 2, capped: false });
+    expect(titles(own.body)).toEqual(["TB-7 worktree", "TB-7 root"]);
+
+    const two = await ask("?key=TB-7&project=tAIBE&project=HR_Helper-v2");
+    expect(two.body.keys[0].count).toBe(4);
+    expect(titles(two.body)).not.toContain("TB-7 old copy");
+
+    const none = await ask("?key=TB-7&project=terminal");
+    expect(none.body.keys[0]).toMatchObject({ count: 0, latest: [] });
+
+    // Without project parameters every project is read, as before TB-58.
+    expect((await ask("?key=TB-7")).body.keys[0].count).toBe(5);
+  });
+
+  it("filters before the 501-row window, so other products do not crowd out the count", async () => {
+    writer = makeDb(dbPath, [
+      { title: "CAP-2 mine", project: "tAIBE", epoch: T0 },
+      { title: "CAP-2 mine too", project: "tAIBE", epoch: T0 + 1 },
+      ...Array.from({ length: 503 }, (_, i) => ({
+        title: `CAP-2 theirs ${i}`,
+        project: "HR_Helper-v2",
+        epoch: T0 + 10 + i,
+      })),
+    ]);
+    await start();
+    const { body } = await ask("?key=CAP-2&project=tAIBE");
+    expect(body.keys[0]).toMatchObject({ count: 2, capped: false });
+    expect(body.keys[0].latest).toHaveLength(2);
   });
 
   // Control lens on 20290bce9: the queue panel's project key is one letter.
@@ -357,5 +433,39 @@ describe("card-memory-db.mjs busy", () => {
     const after = await memory.find(keys);
     expect(after.status).toBe("ok");
     expect(after.keys[0].count).toBe(1);
+  });
+});
+
+// The API checks a root with the package's form and the proxy with its own
+// (the Mac proxy cannot import the package): a drift would turn a valid
+// map entry into a proxy 400, that is, no memory.
+describe("project root form: package and proxy", () => {
+  it("agree on boundary roots and on the limit", () => {
+    expect(MAX_PROJECTS).toBe(MAX_MEMORY_PROJECTS);
+    for (const root of [
+      "tAIBE",
+      "HR_Helper-v2",
+      "terminal",
+      "t.boards",
+      "a",
+      "A".repeat(64),
+      "A".repeat(65),
+      "",
+      "tAIBE/topic",
+      "-tAIBE",
+      ".tAIBE",
+      "_tAIBE",
+      "t AIBE",
+      "tAIBÉ",
+      "t|AIBE",
+      "t,AIBE",
+      "t=AIBE",
+      "t%AIBE",
+      "t'AIBE",
+    ]) {
+      expect(isProjectRoot(root), root).toBe(isMemoryProjectRoot(root));
+    }
+    expect(isProjectRoot("tAIBE")).toBe(true);
+    expect(isProjectRoot("tAIBE/topic")).toBe(false);
   });
 });

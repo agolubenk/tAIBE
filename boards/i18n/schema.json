@@ -14990,6 +14990,9 @@
 								"unavailable": {
 									"type": "string"
 								},
+								"noProductMap": {
+									"type": "string"
+								},
 								"stale": {
 									"type": "string"
 								},
@@ -15021,6 +15024,7 @@
 							},
 							"required": [
 								"unavailable",
+								"noProductMap",
 								"stale",
 								"empty",
 								"count",

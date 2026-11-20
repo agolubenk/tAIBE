@@ -23,7 +23,8 @@ const memoryKeySchema = z.object({
   }),
   matchedOn: z.enum(["id", "key", "queue"]),
   count: z.number().int().openapi({
-    description: "Observations that name the key exactly, at most 500.",
+    description:
+      "Observations of the workspace's claude-mem projects that name the key exactly, at most 500.",
   }),
   capped: z.boolean().openapi({
     description:
@@ -38,8 +39,15 @@ export const cardMemorySchema = z
   .object({
     available: z.boolean().openapi({
       description:
-        "false when the Mac memory proxy is unreachable and no answer from the last 24 hours is kept.",
+        "false when the Mac memory proxy is unreachable and no answer from the last 24 hours is kept, or when the workspace has no claude-mem projects.",
     }),
+    reason: z
+      .enum(["worker-unreachable", "no-product-map"])
+      .nullable()
+      .openapi({
+        description:
+          "Why available is false: worker-unreachable — the proxy did not answer; no-product-map — CLAUDE_MEM_PROJECTS names no claude-mem projects for this workspace (R-002), so nothing is read. null when available.",
+      }),
     stale: z.boolean().openapi({
       description:
         "true when the proxy is unreachable and the keys are the last answer, at most 24 hours old.",
