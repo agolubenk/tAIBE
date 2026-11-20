@@ -119,9 +119,14 @@ deny = [
     ("zsh квалификатор *(/) — и у чужой папки", f"rm -rf {O}/x*(/)"),
     ("zsh (…) у mv", f"mv {C[:3]}(a){C[4:]} /tmp/is249-o"),
     ("zsh () у git rm", f"git rm -r {C[:3]}(){C[3:]}"),
-    ("zsh ^ (EXTENDED_GLOB)", "rm -rf ^x"),
-    ("zsh # (EXTENDED_GLOB)", f"rm -rf {C[:3]}#{C[3:]}"),
-    ("zsh ~ (EXTENDED_GLOB)", f"rm -rf {C}~x"),
+    # `^`, `#`, `~` в середине — форма в слове с маской или когда команда включает EXTENDED_GLOB (Контроль N2)
+    ("zsh ^ в маске", "rm -rf ^x*"),
+    ("zsh # в маске", f"rm -rf {C[:3]}#{C[3:-1]}?"),
+    ("zsh ~ в маске", f"rm -rf {C[:-1]}*~x"),
+    ("setopt extendedglob: ^ без маски", "setopt extendedglob; rm -rf ^x"),
+    ("setopt Extended_Glob: # без маски", f"setopt Extended_Glob && rm -rf {C[:3]}#{C[3:]}"),
+    ("set -o EXTENDEDglob: ~ без маски", f"set -o EXTENDEDglob; rm -rf {C}~x"),
+    ("тело heredoc для shell — свой уровень: (…)", f"bash <<'EOF'\nrm -rf {C[:3]}(a){C[4:]}\nEOF"),
     ("маска в цели mv: файл с защищённым именем в <слой>", f"mv {O}/x/{SET} {C[:3]}*/"),
     ("форма zsh в цели mv", f"mv {O}/a.txt {C[:3]}[^x]{C[4:]}/"),
 ]
@@ -158,6 +163,16 @@ for label, cmd, cwd in [
     ("подоболочка после rm — не маска", f"rm -f {O}/a.txt && (cd {O})", ROOT),
     ("скобки в кавычках — не маска", f"echo 'fix(x)' && rm -f {O}/a.txt", ROOT),
     ("маска в цели mv — чужая папка", f"mv {O}/a.txt {O}/x*/", ROOT),
+    # без EXTENDED_GLOB `~`, `#`, `^` — буквы (Контроль N2 и линза frontend на 9bfda9ce5)
+    ("*~ — `~` в конце слова", f"rm -f {O}/x/*~", ROOT),
+    ("a~ — резервная копия", f"cp {O}/a.txt {O}/a.txt~", ROOT),
+    ("rsync в host:~/", f"rsync -a {O}/x/ host:~/dst/", ROOT),
+    ("rsync --exclude '**/…' через пробел — шаблон", f"rsync -a --exclude '**/node_modules' {O}/x/ {O}/dst/", ROOT),
+    ("#autosave#", f"rm -f {O}/x/#autosave#", ROOT),
+    ("путь iCloud com~apple~CloudDocs", f"cp {O}/a.txt {O}/com~apple~CloudDocs/a.txt", ROOT),
+    # проза в теле heredoc — не команда (N1)
+    ("проза в heredoc и mv", f"cat > {O}/n.md <<'EOF'\n- install deps (pnpm)\nEOF\nmv {O}/n.md {O}/n2.md", ROOT),
+    ("git mv и проза в heredoc", f"git mv src/a.ts src/b.ts && cat > {O}/m.txt <<'EOF'\n- mv files (IS-249)\nEOF", ROOT),
     ("git mv в репозитории", "git mv src/a.ts src/b.ts", ROOT),
     ("rm чужой папки", f"rm -rf {O}/x", ROOT),
     ("rm worktree-папки", "rm -rf worktrees/fix/x/node_modules", ROOT),
@@ -197,7 +212,8 @@ for i in range(5):
         (O / "deep" / f"d{i}").mkdir(parents=True, exist_ok=True)
         (O / "deep" / f"d{i}" / f"f{j}").write_text("")
 limits = mgf.PATHS_MAX, mgf.SCAN_MAX
-for label, cmd, caps in (("путей на слове больше предела", f"rm -f {O}/many/*", (3, 1000)),  # 5 путей
+for label, cmd, caps in (("путей маски больше предела", f"rm -f {O}/many/*", (3, 1000)),  # 5 путей
+                         ("путей масок на решение больше предела", f"rm -f {O}/many/* && rm -f {O}/many/f*", (8, 1000)),
                          ("пустая маска прочла больше предела", f"rm -f {O}/deep/*/zz*", (100, 20))):  # 5 + 25 имён
     mgf.PATHS_MAX, mgf.SCAN_MAX = caps
     got = run("Bash", {"command": cmd})
