@@ -85,6 +85,13 @@ services:
       # is not its queue product.
       OQ_PLAN_PRODUCTS: ${OQ_PLAN_PRODUCTS:-}
       OQ_TOKEN_FILE: /run/tb-secrets/oq_token
+      # SSR push-back (TB-160, TB-116): each workspace pushes into the repo and
+      # branch SSR_PUSH_TARGETS names for it (<workspaceId>=<owner>/<repo>@<branch>,
+      # commas). The GitHub token comes from its file only and is read on
+      # every push; without the file push-back is off and the nightly job logs
+      # one line.
+      SSR_PUSH_TARGETS: ${SSR_PUSH_TARGETS:-}
+      SSR_PUSH_GITHUB_TOKEN_FILE: /run/tb-secrets/ssr_push_github_token
       # Mail (TB-31 R-10): off until SMTP_HOST and SMTP_FROM are set. An empty
       # SMTP_SECURE means TLS from the first byte (port 465); a provider on 587
       # with STARTTLS needs SMTP_SECURE=false. The password is a file only.
