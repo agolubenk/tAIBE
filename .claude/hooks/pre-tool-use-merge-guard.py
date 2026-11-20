@@ -27,7 +27,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, reviewed_test, start_budget  # noqa: E402
 from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, dir_steps, new_state, resolve_dirs  # noqa: E402
-from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
+from merge_guard_files import BLIND_RUN, command_writes, link_findings, opaque, rewritten, write_targets  # noqa: E402
 from merge_guard_gh import VISIBILITY, classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts,  # noqa: E402
                                 read_names)
@@ -345,7 +345,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     if a[0] == "claude" and hooks_off(a):
         found.append(("file", "claude без хуков проекта (disableAllHooks, --setting-sources без project)"))
     found += [("file", p) for t in write_targets(a) if (p := protected_path(t, cwd, roots))]  # файл ≤ 500 строк (01-base)
-    return found
+    return found + link_findings(a, cwd, roots, protected_path, HOME_CLAUDE)  # IS-249: ссылка, перенос, удаление папки
 
 
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, alt=False, keep=False, raw=None):

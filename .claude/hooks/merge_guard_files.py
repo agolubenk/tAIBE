@@ -3,16 +3,25 @@
 package.json, Makefile), и какие файлы команда пишет — защищённые пути и файлы, которые она может переписать раньше,
 чем их прочтут: тогда прочитанное хуком — не то, что выполнится.
 """
+import glob
 import itertools
 import os
 import re
 import stat
+import sys
 
-from merge_guard_vars import ASSIGN, DECLARE, computed
+from merge_guard_vars import ASSIGN, DECLARE, SUBST, computed
 
 
 WRITE_ALL = {"rm", "rmdir", "truncate", "touch", "chmod", "chown", "tee", "unlink", "shred", "mv", "sponge"}
 WRITE_LAST = {"cp", "install", "rsync", "ln", "ditto", "scp"}
+# IS-249. Второе имя пути: символьная и жёсткая ссылка; убирает или меняет путь целиком — и папку, где лежат законы.
+LINKS = {"ln", "link"}
+GONE = {"rm", "rmdir", "unlink", "shred", "truncate", "chmod", "chown", "chflags"}
+COPY_LINK = {"cp": "ls", "install": "l"}  # буква опции, с которой копия — ссылки (`cp -al`, `install -l s`)
+GNU = WRITE_ALL | WRITE_LAST | LINKS | GONE | {"dd", "tar"}  # `gmv`, `gln`, `grm`, `gtee` — coreutils из Homebrew
+GLOB = re.compile(r"[*?[]")
+UNSEEN = re.compile(rf"{SUBST}|[$`]")  # слово из `$(…)`, `` `…` `` или неизвестной переменной: путь разбору не виден
 ANY = "/"  # имя-джокер (в имени файла `/` не бывает): команда переписывает файлы, которых по её словам не назвать
 GH_MOVED = ANY + "\0gh"  # окружение gh сменено (config_moved): не файл, `\0` в имени тоже не бывает
 GH_WRITTEN = ANY + "\0gh-config"  # запись по пути конфига gh: `~/.config/gh/config.yml`, `$GH_CONFIG_DIR/…`
@@ -50,9 +59,14 @@ def open_regular(path):
     return os.fdopen(fd, "rb")
 
 
+def gnu(word):
+    """`gmv`, `gln`, `grm`, `gtee`… (GNU coreutils на Mac) — то же, что mv, ln, rm, tee (IS-249)."""
+    return word[1:] if word[:1] == "g" and word[1:] in GNU else word
+
+
 def write_targets(a):
     """Пути, которые команда пишет или удаляет (по первому слову)."""
-    cmd, args = a[0], [x for x in a[1:] if not x.startswith("-")]
+    cmd, args = gnu(a[0]), [x for x in a[1:] if not x.startswith("-")]
     if cmd in WRITE_ALL:
         return args
     if cmd in WRITE_LAST:
@@ -228,3 +242,80 @@ def command_writes(text, depth=0, alt=False, keep=False, raw=False):
     names |= command_writes(other, depth, True, keep) if other else set()
     names |= command_writes(source, depth, alt, keep, True) if keep and not raw else set()
     return names.union(*(command_writes(m, depth + 1, keep=keep) for m in more))
+
+
+# ---------- IS-249: второе имя, перенос и удаление защищённого пути или папки над ним ----------
+# protected_path хука защищает сами законы и настройки. Проходили (линза security на HR #684): `ln -s …/.claude/rules
+# /tmp/r && echo x > /tmp/r/01-base.md` — нового имени realpath в момент проверки ещё не знает; `ln …/settings.json
+# /tmp/h` — у жёсткой ссылки другой путь, а файл тот же; `mv .claude /tmp/c2` — законы уехали вместе с папкой. Так же
+# `mv /tmp/x/settings.json .claude/` (имя в папке-цели) и `rm -rf .claude`. Папка над защищённым здесь — защищённая.
+
+def guarded_dirs(roots, home):
+    """Папки с защищённым: .claude каждого корня, ~/.claude (реестр сессий), ~ и $ZDOTDIR (файлы запуска shell)."""
+    home = os.path.realpath(home)  # те же папки, что у home_protected
+    out = [os.path.join(os.path.realpath(r), ".claude") for r in roots] + [home, os.path.dirname(home), "~"]
+    return [os.path.realpath(os.path.expanduser(d)).casefold() for d in out + [os.environ.get("ZDOTDIR") or "~"]]
+
+
+def _paths(base, word):
+    """Пути слова от папки base; маску раскрывает и на имена с точкой (`mv .c* x`, zsh GLOB_DOTS, bash dotglob)."""
+    p = os.path.join(base, os.path.expanduser(word))
+    if not GLOB.search(word):
+        return [p]
+    return glob.glob(p, **({"include_hidden": True} if sys.version_info >= (3, 11) else {})) or [p]
+
+
+def _hit(word, bases, roots, protected, dirs):
+    """Путь слова от одной из bases — защищённый или папка над защищённым: что назвать в отказе, иначе None."""
+    for base in bases:
+        for q in _paths(base, word):
+            f = os.path.realpath(q).casefold()
+            if p := protected(q, base, roots):
+                return p
+            if any(d == f or d.startswith(f.rstrip("/") + "/") for d in dirs):
+                return os.path.realpath(q)
+    return None
+
+
+def link_findings(a, cwd, roots, protected, home):
+    """[(«file», что)]: команда даёт защищённому пути или папке над ним второе имя (ln, link, cp -l/-s, install -l,
+    rsync --link-dest), уносит его (mv, git mv), кладёт в папку законов файл с защищённым именем, удаляет или меняет
+    папку (rm, chmod, git rm) или переписывает её копией папки и распаковкой. protected — protected_path хука."""
+    cmd, opts, ops = gnu(a[0]), [x for x in a[1:] if x.startswith("-")], [x for x in a[1:] if not x.startswith("-")]
+    if cmd == "git":  # `git -C d mv .claude x`: пути — от d
+        k, sub = git_sub(a)
+        cwd = next((os.path.join(cwd, a[i + 1]) for i in range(k - 1) if a[i] == "-C"), cwd)
+        cmd, ops = {"mv": "mv", "rm": "rm"}.get(sub, ""), [x for x in a[k + 1:] if not x.startswith("-")]
+    if cmd not in GONE | LINKS | WRITE_LAST | {"mv", "tar", "bsdtar", "unzip"}:  # остальным realpath папок не нужен
+        return []
+    short, dirs, norm = "".join(x[1:] for x in opts if x[:2] != "--"), guarded_dirs(roots, home), [gnu(a[0])] + a[1:]
+    hit = lambda w, bases: _hit(w, bases, roots, protected, dirs)  # noqa: E731
+    say = lambda p, why: ("file", f"{p} ({a[0]} {why} — IS-249)")  # noqa: E731
+    if cmd in GONE:
+        return [say(p, "удаляет или меняет папку с законами и настройками") for w in ops if (p := hit(w, [cwd]))]
+    if cmd in ("tar", "bsdtar", "unzip"):  # `tar -x` без -C и `unzip` без -d — в текущую папку
+        listing = cmd == "unzip" and bool(set(short) & set("lvtZp"))  # `unzip -l`: только список
+        into = unpack_dirs(norm) or ([cwd] if blind(norm) and not listing else [])
+        return [say(p, "распаковывает в папку с законами и настройками") for d in into if (p := hit(d, [cwd]))]
+    link_dest = [x.split("=", 1)[1] for x in opts if x.startswith("--link-dest=")]
+    linking = cmd in LINKS or bool(set(short) & set(COPY_LINK.get(cmd, ""))) or cmd == "cp" and bool(
+        {"--link", "--symbolic-link"} & set(opts)) or cmd == "rsync" and any(x.startswith("--link-dest") for x in opts)
+    if not (linking or cmd == "mv" or cmd in WRITE_LAST):
+        return []
+    into = _values(norm, "t", "--target-directory") if cmd in ("ln", "mv", "cp", "install") else []
+    dest = into[0] if into else ops[-1] if len(ops) > 1 else None
+    srcs = ([x for x in ops if x != dest] if into else ops[:-1] if dest else ops) + link_dest
+    at = os.path.join(cwd, os.path.expanduser(dest)) if dest else cwd  # куда ляжет: папка-цель или новое имя
+    found = []
+    if linking and any(UNSEEN.search(w) for w in ops + link_dest):  # `ln -s "$(…)" /tmp/r && echo x > /tmp/r/…`
+        found.append(say(" ".join(a)[:80], "называет путь, который разбор не видит: назовите его словами"))
+    if linking or cmd == "mv":  # символьная ссылка считается от своей папки, жёсткая и перенос — от cwd
+        bases = [cwd, at, os.path.dirname(at)] if linking and dest else [cwd]
+        found += [say(p, "даёт второе имя или уносит защищённое или папку над ним") for w in srcs if (p := hit(w, bases))]
+    found += [say(p, "кладёт файл с защищённым именем") for w in srcs for q in _paths(cwd, w)
+              if (p := protected(os.path.join(at, os.path.basename(q.rstrip("/"))), cwd, roots))]
+    tree = cmd == "ditto" or cmd in ("cp", "rsync") and bool(
+        re.search(r"[rRa]" if cmd == "cp" else r"[ra]", short) or {"--recursive", "--archive"} & set(opts))
+    if tree and dest and (p := hit(dest, [cwd])):  # `cp -R x/. .claude`, `rsync -a x/ .claude/`
+        found.append(say(p, "копирует папку поверх папки с законами и настройками"))
+    return found
