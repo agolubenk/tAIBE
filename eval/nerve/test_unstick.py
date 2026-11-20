@@ -1,6 +1,7 @@
 """SE-174 and SE-187 in the Nerve: a lift (the reset, or an early lift before it) builds a wake queue (eval/nerve/wake.py).
 coord goes first, then one role at a time in team_status.ORDER; after a role that got Enter the queue waits
-budget.unstick_pause_s. A role without a task (TASK_KINDS) since the limit gets no Enter (D7); its line waits
+budget.unstick_pause_s. A role without a task (TASK_KINDS) since budget.wake_task_lookback_s (4 h) before the limit
+gets no Enter (D7); its line waits
 in later, and the first task to the role puts it back into the queue. The owner's pause, the
 5-hour window at budget.warn_at or a new limit hold the queue. Each line writes one `limit.unstick` with keys into the
 journal of the pane's product, each product gets one summary (also an empty one), and a failure does not raise.
@@ -143,7 +144,7 @@ class QueueTest(QueueBase):
     def test_a_role_without_an_open_task_gets_no_enter(self):  # D7
         ctx, st = Ctx(self.d), {}
         task(ctx, ["backend"])
-        task(ctx, ["plan"], at="2026-10-28T07:40:00+00:00")  # 10:40 MSK, before hit − 5 min
+        task(ctx, ["plan"], at="2026-10-28T03:40:00+00:00")  # 06:40 MSK, before hit − 4 h
         task(ctx, ["release"], kind="lease")  # not a task
         with self.fake(out={k: (v[0], v[1], v[2], False) for k, v in OUT.items()}):
             wake.start(ctx, st, RESET, HIT, RESET, LABEL)
@@ -159,6 +160,23 @@ class QueueTest(QueueBase):
             wake.start(ctx, st, RESET, HIT, RESET, LABEL)
             wake.step(ctx, st, NOW, False)
         self.assertEqual([w for _, w in self.calls], [True, True, True, True])
+
+    def test_a_task_within_the_lookback_before_the_limit_opens_the_role(self):  # Контроль 08:38 on #496, B1
+        # A role mid-task on an assign that came before the limit gets Enter after the reset, with no new event.
+        for look, at, woke in ((None, "2026-10-28T03:53:00+00:00", True),  # 06:53 MSK: 3 h 59 min before the hit
+                               (None, "2026-10-28T03:51:00+00:00", False),  # 06:51 MSK: 4 h 1 min before
+                               (600, "2026-10-28T07:40:00+00:00", False),  # 10:40 MSK, the lookback is 10 min
+                               (0, "2026-10-28T07:48:00+00:00", True)):  # 10:48 MSK: never less than MARGIN
+            with self.subTest(look=look, at=at), tempfile.TemporaryDirectory() as d:
+                self.calls = []
+                ctx, st = Ctx(d), {}
+                if look is not None:
+                    ctx.cfg["budget"]["wake_task_lookback_s"] = look
+                task(ctx, ["plan"], at=at)
+                with self.fake(out={k: (v[0], v[1], v[2], False) for k, v in OUT.items()}):
+                    wake.start(ctx, st, RESET, HIT, RESET, LABEL)
+                    wake.step(ctx, st, NOW, False)
+                self.assertEqual(self.calls[-1], (["r.cd34"], woke))
 
     def test_a_task_that_comes_during_the_queue_counts(self):  # the journal is read on, not once
         ctx, st = Ctx(self.d), {}
@@ -418,6 +436,7 @@ class QueueTest(QueueBase):
     def test_the_switch_and_the_pause_are_in_the_rendered_config(self):
         self.assertIs(CFG["budget"].get("unstick"), True)
         self.assertEqual(CFG["budget"].get("unstick_pause_s"), 180)
+        self.assertEqual(CFG["budget"].get("wake_task_lookback_s"), 14400)
 
 
 class StuckTest(unittest.TestCase):

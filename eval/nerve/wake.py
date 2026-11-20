@@ -4,7 +4,8 @@
 каждая заново записала в кэш свой контекст 220–270K — около $20 из $45 окна. Поэтому:
 1. Сначала coord каждого продукта, потом роли по одной в порядке `team_status.ORDER`. После роли, которую разбудил
    Enter, — пауза `budget.unstick_pause_s` (instances/_shared.json). Роль без клавиш паузы не стоит.
-2. Роль без открытого задания (D7: нет события TASK_KINDS ей или всем с момента лимита − 5 мин) Enter не получает:
+2. Роль без открытого задания (D7: нет события TASK_KINDS ей или всем с момента лимита − `budget.wake_task_lookback_s`,
+   4 ч: роль посреди задания, пришедшего до лимита, тоже открыта — Контроль 20.11 08:38, B1) Enter не получает:
    меню закрывается Esc, текст не вводится. Тап роли за время лимита истёк (Monitor живёт 30 мин), поэтому будит
    её Нерв: линия ждёт в st["wake"]["later"], первое задание роли ставит её в конец очереди — Enter с той же
    паузой, ключ `limit:unstick:<подъём>:task:<линия>`. Отложенные линии живут до нового подъёма. coord будится всегда.
@@ -22,7 +23,8 @@ from datetime import datetime, timedelta
 import budget
 from journal import ALL, DIGEST, read_from
 
-MARGIN = timedelta(minutes=5)  # отказ и задание за 5 мин до лимита — уже «после лимита»
+MARGIN = timedelta(minutes=5)  # отказ за 5 мин до лимита — уже «после лимита»
+LOOKBACK_S = 4 * 3600  # budget.wake_task_lookback_s по умолчанию: задание за 4 ч до лимита открывает роль (D7)
 TASK_KINDS = ("assign", "reply", "review", "lens", "task")  # coord 20.11 01:52: всё, что адресует роли работу
 LATER = "task:"  # ключ линии, разбуженной заданием после подъёма: limit:unstick:<подъём>:task:<линия>
 NO_TASK = "no open task"  # исход limit_unstick при wake=False
@@ -170,9 +172,10 @@ def step(ctx, st, now_l, warn):
 
 
 def opened_roles(ctx, w, by, slug):
-    """D7: роли продукта с заданием с момента лимита − 5 мин; журнал читается дальше по offset."""
+    """D7: роли продукта с заданием с момента лимита − lookback (не меньше MARGIN); журнал читается дальше по offset."""
     scan = w["scan"].setdefault(slug, {"off": 0, "open": []})
-    got, scan["off"] = open_roles(by.get(slug, ctx), _dt(w["hit"]) - MARGIN, scan["off"])
+    back = max(MARGIN, timedelta(seconds=ctx.cfg["budget"].get("wake_task_lookback_s", LOOKBACK_S)))
+    got, scan["off"] = open_roles(by.get(slug, ctx), _dt(w["hit"]) - back, scan["off"])
     scan["open"] = sorted(set(scan["open"]) | got)
     return set(scan["open"])
 
