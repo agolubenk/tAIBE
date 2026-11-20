@@ -60,6 +60,12 @@ export const knownShasBody = z.object({
 
 export const approveBody = z.object({
   versionId: z.string(),
+  blobSha: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .describe(
+      "The draft's blob sha from the open diff (toBlobSha); re-checked",
+    ),
 });
 
 export const rollbackBody = z.object({
@@ -139,6 +145,12 @@ export const servedSchema = z.object({
 export const diffSchema = z.object({
   from: z.number(),
   to: z.number(),
+  toVersionId: z.string(),
+  toBlobSha: z
+    .string()
+    .describe(
+      "Aggregate sha of the bytes shown on the `to` side; approve and reject send it back",
+    ),
   files: z.array(z.object({ path: z.string(), diff: z.string() })),
 });
 
