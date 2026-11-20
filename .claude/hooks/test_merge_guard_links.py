@@ -223,6 +223,12 @@ for label, cmd, caps in (("путей маски больше предела", f
     got = run("Bash", {"command": cmd})
     check(f"IS-249, отказ — маска: {label}: {cmd}", None if "шире предела" in str(got) else repr(got), False)
 mgf.PATHS_MAX, mgf.SCAN_MAX = limits
+# срок решения вышел — отказ до таймаута: путь глубиной 400 — 3 мс, 4000 путей — 12,7 с (линза frontend #511)
+clock, mgf.time = mgf.time, type("Late", (), {"monotonic": staticmethod(lambda: float("inf"))})
+for label, cmd in (("маска", f"rm -f {O}/many/*"), ("путь словом", f"rm -f {O}/a.txt")):
+    got = run("Bash", {"command": cmd})
+    check(f"IS-249, отказ — срок решения вышел, {label}: {cmd}", None if "дольше срока" in str(got) else repr(got), False)
+mgf.time = clock
 bash("IS-249, проход — те же маски при пределе по умолчанию", f"rm -f {O}/many/* {O}/deep/*/zz*", False)
 
 finish(", IS-249: ссылки, перенос и удаление папки с законами")
