@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_testkit import TMP, bash, finish  # noqa: E402
+from merge_guard_testkit import TMP, bash, check, finish, run  # noqa: E402
 
 C, SET = "." + "claude", "settings" + ".json"
 G = f"{C[:3]}(a){C[4:]}"  # маска zsh: находит папку слоя
@@ -50,4 +50,24 @@ for label, cmd in [
 ]:
     bash(f"SE-194, проход — {label}: {cmd}", cmd, False)
 
-finish(", SE-194: маска zsh `(…)` у записи")
+# --- опция оболочки меняет, что находит маска (линза frontend #511, coord 14:54): zsh -f находит папку и так ---
+CU, BR = C.upper()[:4] + "*", f".{{{C[1]}}}{C[2:]}"  # `nocaseglob`: маска заглавными; `braceccl`: `{буква}`
+for label, cmd in [
+    ("setopt nocaseglob", f"setopt nocaseglob; rm -rf {CU}"),
+    ("unsetopt CASE_GLOB у mv", f"unsetopt CASE_GLOB && mv {CU} {O}/"),
+    ("options[…]", f"options[nocaseglob]=on; rm -rf {CU}"),
+    ("setopt braceccl", f"setopt braceccl; rm -rf {BR}"),
+    ("emulate ksh", f"emulate ksh; rm -rf {O}/x*"),
+]:
+    got = run("Bash", {"command": cmd})
+    check(f"SE-194, отказ — опция меняет маску, {label}: {cmd}", None if "опция оболочки" in str(got) else repr(got), False)
+
+for label, cmd in [
+    ("set -o pipefail — опция не про маску", f"set -o pipefail; rm -f {O}/x*"),
+    ("опция, у команды нет маски", f"setopt nocaseglob; rm -f {O}/a"),
+    ("{…} без опции", f"rm -f {O}/x{{1,2}}"),
+    ("опция у чтения", f"setopt nocaseglob; ls {CU}"),
+]:
+    bash(f"SE-194, проход — {label}: {cmd}", cmd, False)
+
+finish(", SE-194: маска zsh `(…)` у записи и опции оболочки у маски")

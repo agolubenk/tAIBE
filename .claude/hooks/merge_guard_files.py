@@ -29,6 +29,9 @@ ZSH_FORM = re.compile(r"\[[\^!]|\[:|\*\*")
 # `^`, `#`, `~` в середине — маска только при EXTENDED_GLOB (в Bash-инструменте выключена): форма — в слове с `*?[` или
 # когда команда её включает; `*~`, `a~`, `#x#`, `host:~/d` — буквы (проверено в zsh, линза Контроль #508 N2)
 ZSH_EXT = re.compile(r"[\^#]|(?<=.)~(?=.)")
+# опции, с которыми маска находит другое (zsh -f, bash): `nocaseglob` — `.CLAU*`, `braceccl` — `.{c}laude`, `globsubst`,
+# `kshglob`/`extglob` — `@(…)`, `emulate ksh`; любой способ — `setopt`, `set -o`, `options[…]`, `zsh --x`, `shopt -s`
+SHELL_OPTS = re.compile(r"caseglob|casepaths|braceccl|globsubst|kshglob|extglob|emulate")
 RSYNC_PATTERN = {"--exclude", "--include", "--filter"}  # значение через пробел — шаблон, не путь (`'**/x'`); и `-f`:
 RSYNC_F = re.compile(r"-[^-eBMTf@]*f")  # у `-ref`, `-rTf` f — значение `-e`/`-T`, слово за ним — источник (Контроль B1)
 UNSEEN = re.compile(rf"{SUBST}|[$`]")  # слово из `$(…)`, `` `…` `` или неизвестной переменной: путь разбору не виден
@@ -282,7 +285,7 @@ def _budget():
     if _scan[0] != g.decision():
         _scan[:] = [g.decision(), 0, 0, {}]
     if _scan[0] and time.monotonic() > _scan[0]:  # срок решения (start_budget, 6 с): путь глубиной 400 — 3 мс (realpath
-        raise Unread("разбор масок дольше срока решения")  # — lstat на часть), предел счёта время не держит (frontend #511)
+        raise Unread("разбор путей дольше срока решения")  # — lstat на часть), предел счёта время не держит (frontend #511)
     return _scan
 
 
@@ -432,7 +435,10 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
         val = {k + 1 for k, x in enumerate(a) if x in RSYNC_PATTERN or RSYNC_F.fullmatch(x)}
         ops = [x for k, x in enumerate(a) if k and k not in val and not x.startswith("-")]
     short, dirs, norm = "".join(x[1:] for x in opts if x[:2] != "--"), guarded_dirs(roots, home), [gnu(a[0])] + a[1:]
-    ext = "extendedglob" in text.casefold().replace("_", "")  # `setopt Extended_Glob`, `set -o …`, `zsh -o …` (zsh 5.9)
+    low = re.sub(r"[_-]", "", text.casefold())  # имя опции zsh — без регистра, `_` и `-` (`--no-case-glob`, zsh 5.9)
+    ext = "extendedglob" in low  # `setopt Extended_Glob`, `set -o …`, `zsh -o …`
+    if SHELL_OPTS.search(low) and any(GLOB.search(w) or "{" in w for w in ops):  # линза frontend #511, coord 14:54
+        raise Unread("опция оболочки меняет, что находит маска (`nocaseglob`, `braceccl`, `emulate`, SE-194)")
     hit = lambda w, bases: _hit(w, bases, roots, protected, dirs, ext)  # noqa: E731
     paths = lambda base, w: _paths(base, w, ext)  # noqa: E731
     say = lambda p, why: ("file", f"{p} ({a[0]} {why} — IS-249)")  # noqa: E731
