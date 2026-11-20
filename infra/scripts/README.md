@@ -7,8 +7,7 @@ infra/scripts/
   dev/       wt-deps.sh (свои зависимости git worktree), dev-common.sh (помощники Ollama и локального env)
   dev-ai/    MCP-хаб, секреты (mcp-secret.sh: env → Keychain), MCP досок (mcp-t-boards.sh), конвейер ИИ-инструментов,
              локальные модели (Tiel-Coder, доп. модели, прогрев), прокси claude-mem только для чтения
-  misc/      done-index.py — таблица и формат журнала закрытого (docs/plans/DONE.md); open-notebook-measure.py —
-             разовый замер RAM open-notebook на Mac (OPS-13, docs/integrations/open-notebook/)
+  misc/      done-index.py — таблица и формат журнала закрытого (docs/plans/DONE.md)
   prod/      ops-deploy-event.py — событие деплоя в ops-консоль (подпись агента хоста)
   security/  .env.strix.example — профиль Strix (ИИ-пентест по запросу); mitmproxy-local.sh — mitmweb только на
              127.0.0.1 перед локальным стендом досок (docs/ops/mitmproxy-local.md)
