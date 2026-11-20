@@ -35,7 +35,9 @@ ZSH_EXT = re.compile(r"[\^#]|(?<=.)~(?=.)")
 SHELL_OPTS = re.compile(r"caseglob|casepaths|braceccl|globsubst|kshglob|extglob")
 EMULATE = re.compile(r"\bemulate\s+(-\w+\s+)*(sh|ksh|csh|bash)\b")  # `npm run emulate` — не опция (coord 17:43)
 # код в текущий shell (`source f`, `. f`, `eval`) и zsh без -f (читает .zshenv, предположение) включают EXTENDED_GLOB
-READS_CODE = re.compile(r"(?:^|[;&|(\n`])\s*(?:source|\.|eval)\s+[^\s;&|]")  # невидимо (линза frontend #512, coord 18:01)
+READS_CODE = re.compile(r"(?<![\w./-])(?:source|eval|autoload)(?![\w./-])|(?:^|[;&|(){}!\n`]|\b(?:if|then|do|else|elif"
+                        r"|while|until|time|builtin|command|exec|noglob|nocorrect)|=\S*)\s*\.\s+[^\s;&|)]")  # слово где угодно,
+# `.` — на месте команды; надмножество: `if source f`, `{ . f; }`, `x=1 . f` (линза frontend #512, coord 18:01)
 ZSH_RUN = re.compile(r"(?:^|[\s;&|(`])(?:/\S*/)?zsh(?=\s|$)((?:\s+-[\w-]+)*)")  # слово `zsh` или `/bin/zsh`, не
 # `<папка>/zsh/x`; опции — до первого слова без `-`: `-fc`, `--no-rcs`
 BRACE_CCL = re.compile(r"(?<![$@])\{(?![^{}]*\.\.)[^{},]+\}")  # `{c}`, `{k-m}`: с `braceccl` — буквы; `{}`, `{1..3}`,
