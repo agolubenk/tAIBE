@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import account
 import budget
 import sources
+import wake
 from journal import DIGEST, NERVOUS
 
 
@@ -107,10 +108,16 @@ def poll_budget(ctx):
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
             # Сброс прошёл — Esc, и ночью тоже (resume там 08:30, а подъём идёт веткой early). До сброса — смена
-            # аккаунта владельцем: клавиш нет, ложный подъём не съест Esc сброса.
+            # аккаунта владельцем (SE-187 A): Esc своим ключом, а в сброс — ещё раз (подъём был ложный — роль снова
+            # в меню): ключи подъёмов разные, Esc сброса не съеден.
             if now_l >= _dt(lim["reset"]):
-                unstick_roles(ctx, lim["reset"])
+                wake.start(ctx, st, lim["reset"], lim["hit"], lim["reset"], f"сброс {_dt(lim['reset']):%d.%m %H:%M}")
+            else:
+                wake.start(ctx, st, f"early:{lim['hit']}", lim["hit"], lim["reset"], f"ранний подъём (лимит "
+                           f"{lim['hit'][11:16]}, сброс {_dt(lim['reset']):%d.%m %H:%M})")
+                st.setdefault("unstick_due", []).append({"reset": lim["reset"], "hit": lim["hit"]})
             lim = None
+    wake.due(ctx, st, now_l)
 
     q = quota5(st, cfg)
     # Окно 5 ч начинается не раньше последнего отказа: дальше либо простой до сброса (расход 0),
@@ -127,6 +134,7 @@ def poll_budget(ctx):
                     f"окно 5 ч израсходовано на {round(share5 * 100)}% (${used:.0f} из ~${q:.0f} до прошлых "
                     f"сбоев): допиши шаг, запиши work_state, тяжёлое не начинай", "budget"):
             st["warned"] = _iso(now_l)
+    wake.step(ctx, st, now_l, share5 is not None and share5 >= b["warn_at"])
     mode = budget.decide_mode(now_l, share5, _dt(lim["resume"]) if lim else None, cfg)
     mode.update(quota5=round(q, 1), used5=round(used, 1), window_from=_iso(ws),
                 week_usd=round(meter.total(budget.week_start(now_l, *_week(cfg))), 1), at=_iso(now_l))
@@ -139,24 +147,6 @@ def _week(cfg):
     hh, mm = (int(x) for x in w["time"].split(":"))
     return w["weekday"], hh, mm
 
-
-def unstick_roles(ctx, reset):
-    """SE-174: в момент сброса закрыть меню лимита Claude Code в панелях ролей (eval/tools/limit_unstick.py). Триггер —
-    сброс в самом демоне, не событие журнала (S4). Один Esc на линию за сброс — ключ журнала. Сбой не валит бюджет."""
-    if not ctx.deliver or not ctx.cfg["budget"].get("unstick"):  # выключатель — budget.unstick в instances/_shared.json
-        return
-    pre = f"limit:unstick:{reset}:"
-    try:
-        import limit_unstick
-        done = limit_unstick.unstick(lambda line: pre + line not in ctx.journal.keys)
-    except Exception as e:  # noqa: BLE001 — tmux или ps недоступны: роли ждут владельца, как до SE-174
-        ctx.emit(f"{pre}error", "nerve.error", DIGEST, ["release"], f"меню лимита не закрыто: {type(e).__name__}: "
-                 f"{e}"[:200], "budget")
-        return
-    for d in done:
-        ctx.emit(pre + d["line"], "limit.unstick", DIGEST, ["coord"],
-                 f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}): меню лимита — {d['action']}"
-                 + (f"; sha256 {d['sha256'][:16]}" if d["sha256"] else ""), "budget", sha256=d["sha256"])
 
 
 def _on_limit(ctx, st, meter, ts, text):
