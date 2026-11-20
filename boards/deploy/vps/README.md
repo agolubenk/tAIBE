@@ -100,6 +100,20 @@ volume is first initialised. A replaced `settings_key` leaves the saved model ke
 The app reads `settings_key` once at start, so a new one needs `docker compose -p t-boards up -d app`; anything shorter
 than 32 characters counts as no key.
 
+## Card memory route (TB-113)
+
+The proxy answers one route of its own: `GET /api/card-memory?key=<k>&key=<k>`, after the peer, token and GET checks.
+It is the one exception to R-040 (owner decision d-tb113-r040-1311): the worker's search is semantic and has no
+exact-key mode, so `mac/card-memory-db.mjs` reads `claude-mem.db` itself, read-only (WAL, `readOnly`, 0.3 s lock
+timeout). 1 to 6 keys, each a card id (24 lowercase letters and digits), a card key (`TB-108`, `Q-12`: a project key of 1 to 10 Latin capitals and digits) or a queue item id
+(`d-tb113-mem-1311`); anything else is 400. Per key: `count` (exact matches, at most 500, `capped` above), the 5 newest
+`{id, title ≤ 120, project, createdAt}`, never the text. 10 requests a second, then 429. 503 `{error}` with
+`unavailable` (no database yet), `schema_changed` (the file is not a database, or claude-mem changed its tables) or
+`busy` (locked). The database is
+`CMEM_PROXY_DB`, else `claude-mem.db` in `CLAUDE_MEM_DATA_DIR` of `~/.claude-mem/settings.json`, else
+`~/.claude-mem/claude-mem.db`. Keys and titles are never logged. The app keeps an answer a minute, does not ask again for 10 s after a
+failure (1.5 s timeout) and shows the last one as stale for up to 24 hours. `memory-agent.sh install` copies both files; a new route needs that reinstall.
+
 ## Memory proxy token
 
 The tunnel filter lets only the app open connections to the Mac's claude-mem proxy, but it cannot see past the VPS
@@ -148,7 +162,9 @@ integration. A wrong token gets its own message.
 t-boards puts every pending «да» request into the owner queue (ops-console) as an item `d-tba-<id>-<nonce>` and
 applies the owner's answer itself. It is off until all four are set:
 
-1. In the ops-console, issue an agent token named `t-boards` (scope `agent`, products `hr-helper`). The name is
+1. In the ops-console, issue an agent token named `t-boards` (scope `agent`, products `hr-helper,taibe`). The queue
+   files a doc by its id prefix: a taibe doc is `taibe-…` (the plan due decision `taibe-d-due-<date>`, its state
+   `taibe-due`). Without `taibe` the token cannot write them, and the journal shows a 404 per taibe decision. The name is
    `OQ_TOKEN_NAME`: an item whose last writer has another name is treated as edited by someone else (R-4). The queue
    journal writes the author as `token:<name>`; t-boards adds the prefix itself, so `t-boards` and `token:t-boards` both
    work (TB-111).

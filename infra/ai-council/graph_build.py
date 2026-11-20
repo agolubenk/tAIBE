@@ -39,13 +39,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from config import REPO_ROOT  # noqa: E402 — граф строится по коду хоста
+import product  # noqa: E402 — поля council продукта хоста
 
 OUT_DIR = REPO_ROOT / "graphify-out"
 GRAPH_JSON = OUT_DIR / "graph.json"
 DETECT = OUT_DIR / ".graphify_detect.json"
 PYTHON_MARKER = OUT_DIR / ".graphify_python"
 PRISMA_JSON = OUT_DIR / ".graphify_prisma.json"
-PRISMA_SCHEMA = REPO_ROOT / "apps" / "backend" / "prisma" / "schema.prisma"
+# Схема Prisma — поле `council.prisma_schema` продукта (Ф2 OPS-23); нет поля — слоя Prisma в графе нет.
+_PRISMA_REL = product.current().prisma_schema
+PRISMA_SCHEMA = REPO_ROOT / _PRISMA_REL if _PRISMA_REL else None
 
 _PRISMA_BLOCK_RE = re.compile(r"^(model|enum)\s+(\w+)\s*\{")
 _PRISMA_SCALARS = {"String", "Int", "Float", "Boolean", "DateTime", "Json",
@@ -130,7 +133,7 @@ def _parse_prisma_models() -> dict:
     Ломается на экзотике синтаксиса (multi-line @@relation, комментарии внутри блока
     поля) — молча возвращает пустой результат, не исключение: упавший шаг не должен
     ронять сборку графа (см. build())."""
-    if not PRISMA_SCHEMA.is_file():
+    if PRISMA_SCHEMA is None or not PRISMA_SCHEMA.is_file():
         return {"nodes": [], "edges": [], "model_names": []}
     try:
         lines = PRISMA_SCHEMA.read_text(encoding="utf-8").splitlines()

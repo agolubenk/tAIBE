@@ -8,6 +8,8 @@ type ForestListStateProps = {
   isError: boolean;
   isEmpty: boolean;
   empty: string;
+  // A tab that knows why the read failed says so instead of the generic text.
+  error?: string;
   // Refetches the failed list in place: without it a dropped request on a slow
   // network leaves the tab dead until the whole page reloads (TB-218).
   onRetry: () => void;
@@ -20,6 +22,7 @@ export function ForestListState({
   isError,
   isEmpty,
   empty,
+  error,
   onRetry,
   children,
 }: ForestListStateProps) {
@@ -38,7 +41,7 @@ export function ForestListState({
     return (
       <div className="flex flex-wrap items-center gap-3 py-6">
         <p role="alert" className="text-muted-foreground text-sm">
-          {t("workspace:forest.loadError")}
+          {error ?? t("workspace:forest.loadError")}
         </p>
         <Button size="sm" variant="outline" onClick={onRetry}>
           {t("common:error.tryAgain")}

@@ -8,9 +8,10 @@ export interface TokenCounter {
   count(text: string): number;
 }
 
-// Proposal D-018: o200k_base via gpt-tokenizer. It sits behind TokenCounter
-// so the decision can be revisited with a one-line change. The name carries
-// the pinned version; src/token-reference.test.ts holds the reference counts.
+// D-018 (owner, d-0111-d18): provider usage first; where there is none,
+// o200k_base via gpt-tokenizer. It sits behind TokenCounter, so the counter
+// can change with a one-line edit. The name carries the pinned version;
+// src/token-reference.test.ts holds the reference counts.
 export const defaultCounter: TokenCounter = {
   name: "gpt-tokenizer@4.1.0/o200k_base",
   count: (text) => o200kEncode(text).length,

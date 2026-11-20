@@ -206,14 +206,14 @@ exit "$FAKE_RC"
 """
 FAKE_PY = """import os, sys
 with open(os.environ["FAKE_LOG"], "a") as f:
-    f.write(sys.argv[1] + "\\n")
+    f.write((" ".join(sys.argv[1:]) if sys.argv[1] == "seat" else sys.argv[1]) + "\\n")
 if sys.argv[1] == "wait":
-    sys.exit(1)
+    sys.exit(int(os.environ.get("FAKE_WAIT", "1")))
 print("нерв: подмена")
 """
 
 
-def osa_run(terminal, rc, start, launch=False):
+def osa_run(terminal, rc, start, launch=False, roles="plan,coord", wait="1", product=False):
     with tempfile.TemporaryDirectory() as tmp:
         tools = Path(tmp) / "layer" / "tools"
         tools.mkdir(parents=True)
@@ -223,6 +223,10 @@ def osa_run(terminal, rc, start, launch=False):
             (tools / f).write_text(FAKE_PY, encoding="utf-8")
         (tools.parent / "pipeline").mkdir()
         (tools.parent / "pipeline" / "genome").symlink_to(SCRIPT.parent.parent / "pipeline" / "genome")
+        if product:  # продукт по умолчанию из настоящих instances/ (SE-155: seat зовётся с --product)
+            (tools.parent / "nerve").mkdir()
+            (tools.parent / "nerve" / "products.py").symlink_to(SCRIPT.parent.parent / "nerve" / "products.py")
+            (Path(tmp) / "instances").symlink_to(SCRIPT.parent.parent.parent / "instances")
         fake_bin = Path(tmp) / "bin"
         fake_bin.mkdir()
         (fake_bin / "osascript").write_text(FAKE_OSA, encoding="utf-8")
@@ -231,9 +235,9 @@ def osa_run(terminal, rc, start, launch=False):
         handoff.write_text("x\n", encoding="utf-8")
         log = Path(tmp) / "fake.log"
         env = clean_env(PATH=f"{fake_bin}:{os.environ['PATH']}", TMPDIR=tmp, TAIBE_LINEAGE="r.ab12", FAKE_RC=str(rc),
-                        FAKE_START="1" if start else "0", FAKE_LOG=str(log), SPAWN_START_WAIT="1")
+                        FAKE_START="1" if start else "0", FAKE_LOG=str(log), SPAWN_START_WAIT="1", FAKE_WAIT=wait)
         if launch:
-            args = ["--launch", "--roles", "plan,coord", "--force", "--prompt-dir",
+            args = ["--launch", "--roles", roles, "--force", "--prompt-dir",
                     str(SCRIPT.parent.parent / "prompts" / "launch-3010" / "roles")]
         else:
             args = ["--handoff", str(handoff)]
@@ -276,6 +280,25 @@ if not (rc == 4 and calls.count("osascript") == 1 and "plan — НЕ откры�
     failed += 1
     print("FAIL: --launch stops after the first window that did not open", rc, calls)
     print(out)
+# SE-155: release поднялся — lineage.py seat с продуктом, линией, tty окна и папками списка (решает и отказывает он
+# сам); другая роль — без seat; без instances/ продукт не известен — seat не зовётся, итог говорит почему.
+rc, out, calls, _ = osa_run("terminal", 0, start=True, launch=True, roles="release", wait="0", product=True)
+seat = " ".join(calls[calls.index("seat"):]) if "seat" in calls else ""
+if not (rc == 0 and calls.count("seat") == 1 and "--product hr-helper" in seat and "--succ-tty /dev/ttys009" in seat
+        and "--line r.ab12." in seat and seat.count("--guard") == 2 and "release — нерв: подмена" in out):
+    failed += 1
+    print("FAIL: release up -> lineage.py seat with product, line, tty and guard folders", rc, calls)
+    print(out)
+rc, out, calls, _ = osa_run("terminal", 0, start=True, launch=True, roles="coord", wait="0", product=True)
+if not (rc == 0 and "coord — поднята" in out and "seat" not in calls):
+    failed += 1
+    print("FAIL: coord up -> no seat", rc, calls)
+    print(out)
+rc, out, calls, _ = osa_run("terminal", 0, start=True, launch=True, roles="release", wait="0")
+if not (rc == 0 and "seat" not in calls and "release — Контроль: продукт не известен" in out):
+    failed += 1
+    print("FAIL: release up without instances/ -> no seat, reason in the summary", rc, calls)
+    print(out)
 
 # Вторая сессия роли (решения владельца 14.11): ключ backend-2 и роль 7, а геном и пусковой файл — базовой роли.
 def second_run(product, *flags):
@@ -317,7 +340,9 @@ for bad in ("backend-4", "boards-2"):
         print("FAIL: unknown second session refused:", bad)
         print(out)
 rc, out = second_run("taibe", "--launch", "--roles", "all")
-if rc != 0 or "backend-2" in out or "boards — команда напечатана" not in out:
+# Вторая сессия — строка итога «backend-2 —» или имя «…-backend-2-<хвост>»; подстрока «backend-2» ловила и хвост линии
+# базовой роли («taibe-backend-2wvk»: CI #457, прогон 44140212836).
+if rc != 0 or re.search(r"^\s+backend-2 —|-backend-2-", out, re.M) or "boards — команда напечатана" not in out:
     failed += 1
     print("FAIL: --roles all opens the six base roles only")
     print(out)

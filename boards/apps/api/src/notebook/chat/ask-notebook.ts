@@ -10,6 +10,7 @@ import {
 } from "../../database/notebook-schema";
 import {
   effectiveNotebookModel,
+  modelChain,
   type NotebookModel,
 } from "../../notebook-model/effective-notebook-model";
 import { type NotebookHit, searchNotebook } from "../search/search-notebook";
@@ -75,35 +76,30 @@ async function writeAnswer(
   hits: NotebookHit[],
   history: { role: "user" | "assistant"; content: string }[],
 ): Promise<Outcome> {
-  const { key, model } = settings;
-  if (!model || !key || !hits.length) {
+  const points = modelChain(settings);
+  if (!points || !hits.length) {
     return { status: "retrieval-only", content: "", model: null };
   }
-  const config = {
-    baseUrl: settings.baseUrl,
-    model,
-    dailyMax: settings.dailyMax,
-    ...(settings.thinking ? { thinking: settings.thinking } : {}),
-  };
   const messages = buildPrompt(question, hits, history);
-  // Holds a place under the daily cap; askNotebook releases it once the
-  // answer is stored. Nothing below throws, so every place is released.
-  if (!(await reserveCall(config.dailyMax))) {
+  // Holds a place under the daily cap, one for the whole chain; askNotebook
+  // releases it once the answer is stored. Nothing below throws, so every
+  // place is released.
+  if (!(await reserveCall(settings.dailyMax))) {
     return { status: "capped", content: "", model: null };
   }
-  const reply = await callModel(config, key, messages);
+  const reply = await callModel(points, messages);
   if (reply.ok) {
     return {
       status: "answered",
       content: reply.content,
-      model: config.model,
+      model: reply.model,
       usage: reply.usage,
     };
   }
   return {
     status: reply.limited ? "rate-limited" : "failed",
     content: "",
-    model: config.model,
+    model: reply.model,
   };
 }
 

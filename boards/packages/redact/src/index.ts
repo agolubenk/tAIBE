@@ -1,3 +1,12 @@
+import {
+  codeName,
+  DROPS_VALUE,
+  looksLikePassphrase,
+  looksLikeSecret,
+} from "./value-shape.js";
+
+export { looksLikePassphrase, looksLikeSecret } from "./value-shape.js";
+
 import { pem } from "./pem.js";
 
 export type SecretKind =
@@ -25,10 +34,6 @@ function collect(pattern: RegExp, kind: SecretKind): Detector {
     return hits;
   };
 }
-
-// A character that drops every value holding it in `secretShaped`: code
-// punctuation or a character outside printable ASCII.
-const DROPS_VALUE = /[(){}[\];,<>\\]|[^\x21-\x7e]/;
 
 function lastDropping(value: string): number {
   for (let i = value.length - 1; i >= 0; i--) {
@@ -71,20 +76,32 @@ function afterDropping(value: string, dropping: number): number {
     : dropping + 1;
 }
 
+// TB-201 (Claude lens #392, 3): text is masked twice on its way to a model.
+// In `password:=[REDACTED…]` the pattern fell back from `:=` to `:` with the
+// value `=[REDACTED…]` (`>` of `=>` the same): the rest of a separator
+// before a mask is a part of it. The first pass sees no mask: no change. A
+// value that goes on after the mask is a value (role 4 #401 N1).
+const SEPARATOR_BEFORE_MASK = /^[=>:]+[ \t]*["'`]?\[REDACTED:[a-z_]+\]/;
+
 // TB-199: before the new separators the base took the `=` of a glued `:=`
 // into the value (A_TOKEN:=<v>), and a filter accepts any value with `=` in
 // it that is long enough. A value right after `:=` or `=>` is also judged as
 // the base judged it, so no value that the base masked loses its mask
-// (coord, 15.11).
+// (coord, 15.11). After `=>` a name of code is not: the re-check masked
+// GITHUB_TOKEN=>githubToken (TB-201, Claude lens #392, 1), and a word value
+// of a Ruby hash or a PHP array keeps its mask (coord B1 #401).
 function accepts(
   accept: (value: string, next: string) => boolean,
   text: string,
   start: number,
   value: string,
 ): boolean {
+  const mask = SEPARATOR_BEFORE_MASK.exec(text.slice(start, start + 64));
+  if (mask && mask[0].length >= value.length) return false;
   const next = text.charAt(start + value.length);
   if (accept(value, next)) return true;
   const operator = text.slice(Math.max(0, start - 2), start);
+  if (operator === "=>" && codeName(value)) return false;
   return (operator === ":=" || operator === "=>") && accept(`=${value}`, next);
 }
 
@@ -105,12 +122,14 @@ function accepts(
 // The second search may pair a name with another value than the plain one
 // (A_TOKEN=x(B_TOKEN = y(C_TOKEN = D1_TOKEN = X1_TOKEN = <v>), so it only
 // adds hits: the plain search runs as before, and redact() merges
-// overlapping hits (coord, #375).
+// overlapping hits (coord, #375). `resumeIn` gives where it goes on in an
+// accepted value (-1: after the match).
 function collectGroup(
   pattern: RegExp,
   kind: SecretKind,
   group: number,
   accept: (value: string, next: string) => boolean = () => true,
+  resumeIn: (value: string) => number = trailingName,
 ): Detector {
   // Flag `d` gives the group's own position. The first equal text in the
   // match may sit in the name: `password: pass` (TB-199).
@@ -125,7 +144,7 @@ function collectGroup(
       if (!accepts(accept, text, start, value)) continue;
       hits.push({ kind, start, end: start + value.length });
     }
-    return hits.concat(innerHits(text, search, kind, group, accept));
+    return hits.concat(innerHits(text, search, kind, group, accept, resumeIn));
   };
 }
 
@@ -140,6 +159,7 @@ function innerHits(
   kind: SecretKind,
   group: number,
   accept: (value: string, next: string) => boolean,
+  resumeIn: (value: string) => number,
 ): RedactHit[] {
   const hits: RedactHit[] = [];
   let limit = -1;
@@ -153,7 +173,7 @@ function innerHits(
     const dropping = accepted ? -1 : lastDropping(value);
     if (dropping >= 0) limit = Math.max(limit, pattern.lastIndex);
     const resume =
-      dropping >= 0 ? afterDropping(value, dropping) : trailingName(value);
+      dropping >= 0 ? afterDropping(value, dropping) : resumeIn(value);
     if (resume >= 0) {
       pattern.lastIndex = Math.max(match.index + 1, start + resume);
     }
@@ -171,63 +191,6 @@ const dbUrl = collect(
   "db_url",
 );
 
-// TB-136: a value given to a credential name in code is mostly code
-// (options.apiKey, z.string(), apiKey) or a placeholder
-// (your_secure_password), not a secret. Measured on this repo: without this
-// filter 95% of the new assignment hits were such code. A key has 8+
-// printable ASCII characters, no code punctuation, and is not a dotted name,
-// words joined by _ or -, or a short camelCase name. The CI scanner
-// (infra/checks/secrets_scan.py) is a gate and this is a mask, so they
-// differ on purpose:
-// - `looks_like_secret` (key and token names) has these rules, but drops a
-//   type name in any context, not only before `,`, `;` or `)` (TB-193):
-//   with the context rule a locale label and a type line became CI errors;
-// - `looks_like_password` (password and secret names) is
-//   `looksLikePassphrase` below (TB-195; the type context rule since
-//   TB-200). A letters-only value of 20+ characters needs entropy 3.0,
-//   others 3.5;
-// - both also drop Laravel validation rules
-//   ('password' => 'required|string|min:8', TB-200); here they are masked.
-//
-// A type name is capitalized words with no digit. Since the value ends at `,`
-// and `;` (#283 B2), the comma no longer drops `apiKey: ApiKeyUsageRow,`.
-// TB-193: such a value is a type only if `,`, `;` or `)` comes right after
-// it (`next`), as in a parameter list or a type literal (today the value
-// patterns glue `)` to the value, and the punctuation rule drops it; the set
-// keeps it so the rule does not depend on a pattern). Elsewhere it may be
-// a passphrase (CLIENT_SECRET=<capitalized words> at the end of a line) and
-// is masked. The price: a type with no punctuation after it is masked too
-// (`apiKey: ApiKeyItem | null`, a type line with no `;`). The end of a line
-// is not a type context: an .env value ends there.
-const TYPE_NAME = /^(?:[A-Z][a-z]+)+$/;
-const TYPE_CONTEXT = new Set([",", ";", ")"]);
-const CAMEL_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)*$/;
-// TB-195: a camelCase name with at least one capital inside (jwtSecret).
-const HUMPED_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
-
-function secretShaped(value: string, next: string, name: RegExp): boolean {
-  if (value.length < 8 || DROPS_VALUE.test(value)) return false;
-  if (/^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$/.test(value)) return false;
-  if (/^[A-Za-z]+(?:[_-][A-Za-z]+)+$/.test(value)) return false;
-  if (value.length >= 32) return true;
-  if (name.test(value)) return false;
-  return !(TYPE_NAME.test(value) && TYPE_CONTEXT.has(next));
-}
-
-export function looksLikeSecret(value: string, next = ""): boolean {
-  return secretShaped(value, next, CAMEL_NAME);
-}
-
-// TB-195: a SECRET or PASSWORD name may hold a passphrase of lowercase words
-// joined together (CLIENT_SECRET=<words> at the end of an .env line), and
-// the camelCase rule read it as a variable name. For these names only a
-// name with a capital inside (jwtSecret) and the literal `undefined` stay
-// open. Measured on `git ls-files` of tAIBE and HR_Helper-v2: no new mask of
-// a SECRET name; a PASSWORD name was masked already by passwordAssignment.
-export function looksLikePassphrase(value: string, next = ""): boolean {
-  return value !== "undefined" && secretShaped(value, next, HUMPED_NAME);
-}
-
 // TB-136: credentials in a URL of any other scheme (https, smtp, ftp): only
 // the password goes, the user and the host stay readable. A database URL is
 // one db_url hit already and wins the overlap. A scheme has at most 32
@@ -241,10 +204,20 @@ const urlCredentials = collectGroup(
 // The header also as a JSON key ("Authorization": "Bearer …", Claude lens
 // #283 B3). `\s*` stays: a token in the block below its header is still
 // masked, and restore (#292) relies on that.
+//
+// TB-201 (Claude lens #378): in `abcAuthorization:Bearer <v>` the header is
+// in the token's value, and the second search went on after its name. It
+// goes on at the first header name in the value: linear.
+const headerIn = (value: string) => {
+  const at = value.search(/authorization/i);
+  return at >= 0 ? at : trailingName(value);
+};
 const bearer = collectGroup(
   /Authorization["']?\s*:\s*["']?Bearer\s+(?!\[REDACTED)([^\s"']+)/gi,
   "bearer",
   1,
+  () => true,
+  headerIn,
 );
 
 // TB-136: the header of the board's own API keys, like `bearer`. Keys issued
@@ -300,6 +273,10 @@ const telegramToken = collect(
 // (`password === true`); glued to a value they are an assignment of a
 // value that starts with `=`, masked as the base masked it
 // (`DB_PASSWORD==<v>`, release #392 B1).
+//
+// A known cost (TB-201, Claude lens #392, 2): code after `=>` is masked as
+// after `:` (`password => password.length`, `'password' => 'required'`).
+// On `git ls-files` of tAIBE and HR_Helper-v2 (19 084 files): 0 such masks.
 const passwordAssignment = collectGroup(
   /["']?(?:password|passwd|pwd)["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'`]|$))|:)[ \t]*["'`]?(?!\[REDACTED|\$)([^"'`\s]+)/gi,
   "password_assignment",

@@ -219,6 +219,57 @@ describe("API integration: task comments", () => {
     });
   });
 
+  // TB-29: status and move events date a card; only the server writes them.
+  it.each(["status_changed", "moved"])(
+    "rejects a client-made %s through the generic activity endpoint",
+    async (type) => {
+      const member = await createWorkspaceMember();
+      const { project, columns } = await createProjectFixture({
+        workspaceId: member.workspace.id,
+      });
+      const [task] = await db
+        .insert(schema.taskTable)
+        .values({
+          projectId: project.id,
+          title: "Forged history",
+          status: "to-do",
+          columnId: columns.todo.id,
+          priority: "medium",
+          number: 1,
+          position: 1,
+        })
+        .returning();
+      mockAuthenticatedSession(member.user);
+      const { app } = createApp();
+
+      const response = await app.request("/api/activity/create", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          taskId: task.id,
+          message: null,
+          type,
+          eventData: { oldStatus: "to-do", newStatus: "done" },
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).message).toMatch(
+        new RegExp(`^activity_server_only: the server writes ${type} `),
+      );
+      const written = await db
+        .select()
+        .from(schema.activityTable)
+        .where(
+          and(
+            eq(schema.activityTable.taskId, task.id),
+            eq(schema.activityTable.type, type),
+          ),
+        );
+      expect(written).toEqual([]);
+    },
+  );
+
   it("records an external author for an authorized workspace administrator", async () => {
     const member = await createWorkspaceMember({ role: "admin" });
     const { project, columns } = await createProjectFixture({
