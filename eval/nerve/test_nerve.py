@@ -1458,11 +1458,11 @@ class ProductsTest(unittest.TestCase):
     def tdir(self):
         return os.path.join(self.d, "products", "taibe")
 
-    def tap(self, product, env_product=None):
+    def tap(self, product, env_product=None, role="boards"):
         out, err = io.StringIO(), io.StringIO()
         env = {"TAIBE_PRODUCT": env_product} if env_product is not None else {"TAIBE_PRODUCT": ""}
         with mock.patch.dict(os.environ, env), redirect_stdout(out), redirect_stderr(err):
-            nerve.cmd_tap(CFG, Namespace(role="boards", once=True, product=product))
+            nerve.cmd_tap(CFG, Namespace(role=role, once=True, product=product))
         return out.getvalue(), err.getvalue()
 
     def test_seed_then_delivery_only_to_own_product(self):
@@ -1740,6 +1740,21 @@ class ProductsTest(unittest.TestCase):
         _, err = self.tap(None)
         self.assertIn("продукт по умолчанию hr-helper", err)
         self.assertTrue(os.path.exists(os.path.join(self.d, "tap-boards.json")))
+
+    def test_flag_beats_env_of_other_product(self):
+        """SE-189: сессия, поднятая `claude --resume` без генома, наследует TAIBE_PRODUCT чужого продукта. HR-промпт
+        пишет `--product hr-helper`, флаг побеждает env, и событие release tAIBE в тап release HR не приходит."""
+        os.makedirs(self.tdir())
+        open(os.path.join(self.tdir(), "journal.jsonl"), "w").close()
+        open(os.path.join(self.d, "journal.jsonl"), "w").close()
+        self.tap("hr-helper", env_product="taibe", role="release")   # курсоры с конца журнала HR
+        with redirect_stdout(io.StringIO()):
+            nerve.cmd_emit(CFG, Namespace(role="release", text="tAIBE #192 на мёрж", kind="review", product="taibe"))
+            nerve.cmd_emit(CFG, Namespace(role="release", text="HR #866 на мёрж", kind="review", product="hr-helper"))
+        out, _ = self.tap("hr-helper", env_product="taibe", role="release")
+        self.assertIn("HR #866", out)
+        self.assertNotIn("tAIBE #192", out)
+        self.assertFalse(os.path.exists(os.path.join(self.tdir(), "tap-release.json")), "курсор — не в журнале tAIBE")
 
     def test_emit_writes_to_product_journal(self):
         with redirect_stdout(io.StringIO()):

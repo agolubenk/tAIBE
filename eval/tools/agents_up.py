@@ -168,13 +168,21 @@ def down(yes):
 
 def team_bg():
     """Команда ролей в фоне (ярлык «ВКЛ»): окно сразу становится окном tmux, роли появляются в нём по мере открытия.
-    Журнал — тот же, что у сторожа; запуск, заставший сторожа за работой, выходит по замку team.lock."""
+    Роли открывает задача launchd входа (dev-up: этот же файл без --attach, все роли без предела): release, открытый
+    задачей, получает Контроль (lineage seat ждёт задачу launchd, SE-155). Задача не запустилась — прежний фон: роли
+    откроются, Контроль — s-пунктом владельцу. Запуск, заставший сторожа за работой, выходит по замку team.lock."""
+    r = D.run("launchctl", "kickstart", f"{D.domain()}/{D.LABEL_UP}")  # работает — kickstart без -k ничего не делает
+    if r.returncode == 0:
+        print(f"  роли открываются в фоне — появятся окнами tmux; ход — {D.home() / 'Library' / 'Logs'}"
+              "/taibe-dev-up.log")
+        return
     log = D.home() / "Library" / "Logs" / "taibe-team.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as out:
         subprocess.Popen([sys.executable, "-I", "-u", str(Path(__file__).resolve().parent / "team_plan.py"), "up"],
                          stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-    print(f"  роли открываются в фоне — появятся окнами tmux; ход — окно ops:team ({log})")
+    print(f"  задача {D.LABEL_UP} не запустилась ({(r.stderr or '').strip() or r.returncode}): роли открываются в "
+          f"фоне, Контроль новому release — s-пунктом владельцу; ход — {log}")
 
 
 def attach(ok):

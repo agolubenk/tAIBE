@@ -215,11 +215,28 @@ def is_base64_key(line, m):
     return sum(1 for segment in token.split('/') if PATH_WORD.fullmatch(segment)) < 2
 
 
+HEADER_NAME = re.compile(r'(?i)authorization')
+
+
+def pattern_matches(name, rx, line):
+    """Matches of one rule. TB-201, as `bearer` of redact: a header glued to a token has its `Bearer` in the token's
+    value (x,Authorization:Bearer <v>), and the plain search went on after that value. For this rule the search also
+    goes on at the first header name inside the value. Each match reads its value once more: linear."""
+    if name != 'bearer-token':
+        yield from rx.finditer(line)
+        return
+    m = rx.search(line)
+    while m:
+        yield m
+        inner = HEADER_NAME.search(m.group(1))
+        m = rx.search(line, m.start(1) + inner.start() if inner else m.end())
+
+
 def scan_line(line):
     """(rule, value) pairs of one line. A value inside a provider-format match is reported once, by its format."""
     found, spans = [], []
     for name, rx in PATTERNS:
-        for m in rx.finditer(line):
+        for m in pattern_matches(name, rx, line):
             group = 1 if m.groups() else 0
             value = m.group(group)
             placeholder = PLACEHOLDER if name in FREE_VALUE else KEY_PLACEHOLDER

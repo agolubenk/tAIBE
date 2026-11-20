@@ -284,4 +284,216 @@ describe("API integration: notebook model settings", () => {
       embedModel: "bge-m3",
     });
   });
+
+  describe("model chain (TB-159)", () => {
+    const CHAIN_KEY = "sk-test-chain-key";
+    const put = async (body: Record<string, unknown>) =>
+      (await asAdmin())("/admin/notebook-model", { method: "PUT", body });
+
+    it("stores the chain in the admin's order with write-only keys", async () => {
+      const saved = await put({
+        model: "a/main",
+        key: MODEL_KEY,
+        chain: [
+          {
+            baseUrl: "https://openrouter.ai/api/v1/",
+            model: "x/free:free",
+            models: ["y/free:free"],
+            key: CHAIN_KEY,
+          },
+          { baseUrl: "https://glm.example/v4", model: "glm-4.6" },
+        ],
+      });
+      expect(saved.status).toBe(200);
+      const text = await saved.text();
+      expect(text).not.toContain(CHAIN_KEY);
+      const view = JSON.parse(text);
+      expect(view).toMatchObject({
+        models: [],
+        pointCallsToday: 0,
+        failsSinceStart: 0,
+        chain: [
+          {
+            baseUrl: "https://openrouter.ai/api/v1",
+            model: "x/free:free",
+            models: ["y/free:free"],
+            hasKey: true,
+            keySource: "settings",
+            callsToday: 0,
+            failsSinceStart: 0,
+          },
+          {
+            baseUrl: "https://glm.example/v4",
+            model: "glm-4.6",
+            models: [],
+            hasKey: false,
+            keySource: null,
+          },
+        ],
+      });
+      expect(view.chain[0].id).not.toBe(view.chain[1].id);
+
+      const row = await storedRow();
+      expect(row?.value).not.toContain(CHAIN_KEY);
+      expect(JSON.parse(String(row?.value)).chain[0].key).toMatch(/^enc:v1:/);
+    });
+
+    it("keeps a point's key by its id on the same address only", async () => {
+      const first = await put({
+        chain: [
+          { baseUrl: "https://gw.example/v1", model: "m1", key: CHAIN_KEY },
+        ],
+      });
+      const [{ id }] = (await first.json()).chain;
+
+      const renamed = await put({
+        chain: [{ id, baseUrl: "https://gw.example/v2", model: "m2" }],
+      });
+      expect((await renamed.json()).chain).toMatchObject([
+        { id, model: "m2", keySource: "settings" },
+      ]);
+
+      const kept = await put({ dailyMax: 9 });
+      expect((await kept.json()).chain).toMatchObject([{ id, hasKey: true }]);
+
+      const moved = await put({
+        chain: [{ id, baseUrl: "https://collector.example/v1", model: "m2" }],
+      });
+      expect(moved.status).toBe(409);
+      expect((await storedRow())?.value).toContain("https://gw.example/v2");
+
+      const added = await put({
+        chain: [{ baseUrl: "https://collector.example/v1", model: "m2" }],
+      });
+      expect((await added.json()).chain).toMatchObject([
+        { hasKey: false, model: "m2" },
+      ]);
+    });
+
+    it("refuses an id that is not in the chain or is sent twice", async () => {
+      const first = await put({
+        chain: [
+          { baseUrl: "https://gw.example/v1", model: "m1", key: CHAIN_KEY },
+        ],
+      });
+      const [{ id }] = (await first.json()).chain;
+      const point = { id, baseUrl: "https://gw.example/v1", model: "m1" };
+
+      expect(
+        (await put({ chain: [{ ...point, id: "not-there" }] })).status,
+      ).toBe(400);
+      expect((await put({ chain: [point, point] })).status).toBe(400);
+      expect((await storedRow())?.value).toContain(id);
+    });
+
+    it("removes a point's key with null and the chain with null", async () => {
+      const first = await put({
+        chain: [
+          { baseUrl: "https://gw.example/v1", model: "m1", key: CHAIN_KEY },
+        ],
+      });
+      const [{ id }] = (await first.json()).chain;
+
+      const keyless = await put({
+        chain: [
+          { id, baseUrl: "https://gw.example/v1", model: "m1", key: null },
+        ],
+      });
+      expect((await keyless.json()).chain).toMatchObject([
+        { id, hasKey: false },
+      ]);
+
+      const cleared = await put({ chain: null });
+      expect((await cleared.json()).chain).toEqual([]);
+      expect(JSON.parse(String((await storedRow())?.value))).not.toHaveProperty(
+        "chain",
+      );
+    });
+
+    it("refuses a chain key while the server has no settings encryption key", async () => {
+      vi.stubEnv("SETTINGS_ENCRYPTION_KEY", "");
+      vi.stubEnv("SETTINGS_ENCRYPTION_KEY_FILE", "/nonexistent/settings_key");
+      const refused = await put({
+        chain: [
+          { baseUrl: "https://gw.example/v1", model: "m1", key: CHAIN_KEY },
+        ],
+      });
+      expect(refused.status).toBe(409);
+      expect(await storedRow()).toBeNull();
+    });
+
+    it("rejects an http point, too many points and too many fallbacks", async () => {
+      const point = { baseUrl: "https://gw.example/v1", model: "m1" };
+      for (const chain of [
+        [{ ...point, baseUrl: "http://gw.example/v1" }],
+        Array.from({ length: 5 }, () => point),
+        [{ ...point, models: ["a", "b", "c", "d"] }],
+        [{ baseUrl: point.baseUrl }],
+      ]) {
+        expect((await put({ chain })).status).toBe(400);
+      }
+      expect(await storedRow()).toBeNull();
+    });
+
+    it("gives a point at the server's address the key file and thinking, and withholds them elsewhere", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "notebook-model-"));
+      try {
+        writeFileSync(join(dir, "key"), "sk-test-file-key\n");
+        vi.stubEnv(
+          "NOTEBOOK_LLM_BASE_URL",
+          "https://api.z.ai/api/coding/paas/v4",
+        );
+        vi.stubEnv("NOTEBOOK_LLM_KEY_FILE", join(dir, "key"));
+        vi.stubEnv("NOTEBOOK_LLM_THINKING", "disabled");
+        const saved = await put({
+          baseUrl: "https://openrouter.ai/api/v1",
+          model: "x/free:free",
+          key: MODEL_KEY,
+          chain: [
+            {
+              baseUrl: "https://api.z.ai/api/coding/paas/v4",
+              model: "glm-4.6",
+            },
+            { baseUrl: "https://other.example/v1", model: "o1" },
+          ],
+        });
+        expect((await saved.json()).chain).toMatchObject([
+          { hasKey: true, keySource: "file", fileKeyWithheld: false },
+          { hasKey: false, keySource: null, fileKeyWithheld: true },
+        ]);
+        const settings = await effectiveNotebookModel();
+        expect(settings.thinking).toBeNull();
+        expect(settings.chain.map((point) => point.thinking)).toEqual([
+          "disabled",
+          null,
+        ]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("drops a broken chain point and keeps the others", async () => {
+      await put({
+        chain: [
+          { baseUrl: "https://gw.example/v1", model: "m1", key: CHAIN_KEY },
+        ],
+      });
+      const row = await storedRow();
+      const value = JSON.parse(String(row?.value));
+      value.chain.push({
+        id: "broken",
+        baseUrl: "http://gw.example",
+        model: "",
+      });
+      await db
+        .update(schema.instanceSettingTable)
+        .set({ value: JSON.stringify(value) })
+        .where(eq(schema.instanceSettingTable.key, "notebook.model"));
+
+      const view = await (await asAdmin())("/admin/notebook-model");
+      expect((await view.json()).chain).toMatchObject([
+        { model: "m1", keySource: "settings" },
+      ]);
+    });
+  });
 });

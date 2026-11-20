@@ -21,6 +21,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lineage as L  # noqa: E402
+import lineage_guard as G  # noqa: E402
 import lineage_reap as R  # noqa: E402
 import lineage_retire as LR  # noqa: E402
 
@@ -128,9 +129,13 @@ class Base(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {"TAIBE_LINEAGE_DIR": str(self.dir / "lin"),
                                                 "CLAUDE_SESSIONS_DIR": str(self.dir / "sess")})
         self.env.start()
+        # папки выше — из окружения: в живом запуске hand_control на них отказывает (SE-167), тест — свой реестр
+        self.home_ok = mock.patch.object(G, "env_problem", lambda: None)
+        self.home_ok.start()
         self.lines = []
 
     def tearDown(self):
+        self.home_ok.stop()
         self.env.stop()
         self.tmp.cleanup()
 

@@ -22,6 +22,12 @@
 - S5: только панели из записей линий `~/.claude/lineage/*.json` (`terminal: tmux`), у которых панель, tty, pid
   пусковой оболочки и сервер те же, что при открытии (как `tmux_host.close_pane`). Окна владельца записей не имеют.
 - S6: CLI нет; зовёт только демон Нерва. Журнал — sha256 совпавших строк, не текст экрана (N1).
+
+SE-187, условие 2 линзы Контроля (`s3e5xjxp…`): панель в режиме tmux (`#{pane_in_mode}` ≠ 0 — copy-mode после
+колеса мыши, `set -g mouse on` в `tmux_host.py`) получает клавиши как команды режима: Esc выходит из copy-mode vi, а
+Enter уходит в Claude Code или копирует выделение. Поэтому режим проверяется перед каждой клавишей, не один раз за
+проход. Если панель в режиме, клавиши нет, исход — `in-mode`. Повтора в этот сброс нет (ключ S4): строку исхода видит
+coord.
 """
 import hashlib
 import json
@@ -47,6 +53,7 @@ TEXT = "лимит снят: продолжай с work_state"
 SETTLE = 1.5         # с: экран после клавиши
 NO_MATCH = "no keys: status menu, screen differs"
 NO_SCREEN = "no keys: status menu, no screen"
+IN_MODE = "no keys: in-mode"
 
 
 def tidy(line):
@@ -133,6 +140,19 @@ def keys(pane, *args):
     return T.tmux("send-keys", "-t", pane, *args).returncode == 0
 
 
+def in_mode(pane):
+    """Панель в режиме tmux (copy-mode, выбор): клавиша ушла бы в команды режима. Нет ответа — тоже режим."""
+    r = T.tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}")
+    return r.returncode != 0 or r.stdout.strip() != "0"
+
+
+def press(pane, *args):
+    """Клавиша вне режима tmux: 'ok', 'in-mode' (клавиши не было) или 'failed'."""
+    if in_mode(pane):
+        return "in-mode"
+    return "ok" if keys(pane, *args) else "failed"
+
+
 def digest(lines):
     return hashlib.sha256(json.dumps(lines, ensure_ascii=False).encode("utf-8")).hexdigest()
 
@@ -149,8 +169,9 @@ def unstick_pane(sx, pane, tty, sleep, procs=None):
     if menu is None:  # живая раскладка не та, что в тестах: приёмка отличит это от «меню не было»
         return NO_MATCH, digest(bottom(before)[-MENU_MAX:])
     sha = digest(menu)
-    if not keys(pane, "Escape"):
-        return "esc failed", sha
+    got = press(pane, "Escape")
+    if got != "ok":
+        return (IN_MODE if got == "in-mode" else "esc failed"), sha
     sleep(SETTLE)
     after = screen(pane)
     if after is None or menu_lines(after) is not None:
@@ -159,12 +180,15 @@ def unstick_pane(sx, pane, tty, sleep, procs=None):
         return "esc; another dialog", sha
     text = draft(after)
     if text == PREFILL:
-        return ("esc, enter" if keys(pane, "Enter") else "esc; enter failed"), sha
+        return "esc" + {"ok": ", enter", "in-mode": "; in-mode, no enter", "failed": "; enter failed"}[
+            press(pane, "Enter")], sha
     if text == "":
-        if not keys(pane, "-l", TEXT):
-            return "esc; text failed", sha
+        got = press(pane, "-l", TEXT)
+        if got != "ok":
+            return ("esc; in-mode, no text" if got == "in-mode" else "esc; text failed"), sha
         sleep(SETTLE / 3)
-        return ("esc, text, enter" if keys(pane, "Enter") else "esc, text; enter failed"), sha
+        return "esc, text" + {"ok": ", enter", "in-mode": "; in-mode, no enter", "failed": "; enter failed"}[
+            press(pane, "Enter")], sha
     return "esc; input not empty" if text else "esc; no input line", sha
 
 
