@@ -4,7 +4,6 @@ package.json, Makefile), и какие файлы команда пишет — 
 чем их прочтут: тогда прочитанное хуком — не то, что выполнится.
 """
 import fnmatch
-import functools
 import itertools
 import os
 import re
@@ -24,7 +23,7 @@ COPY_LINK = {"cp": "ls", "install": "l"}  # буква опции, с котор
 GNU = WRITE_ALL | WRITE_LAST | LINKS | GONE | {"dd", "tar"}  # `gmv`, `gln`, `grm`, `gtee` — coreutils из Homebrew
 GLOB = re.compile(r"[*?[]")
 # формы маски zsh, которых _glob не повторяет (`[^x]`, `[!x]`, `[[:alpha:]]`, `**`; `^`, `#`, `~` — EXTENDED_GLOB):
-# отказ, не подражание (coord 13:46, линза frontend #508); `(…)` в слове делит разбор — _group
+# отказ, не подражание (coord 13:46, линза frontend #508); `(…)` в слове делит разбор — merge_guard_zsh
 ZSH_FORM = re.compile(r"\[[\^!]|\[:|\*\*")
 # `^`, `#`, `~` в середине — маска только при EXTENDED_GLOB (в Bash-инструменте выключена): форма — в слове с `*?[` или
 # когда команда её включает; `*~`, `a~`, `#x#`, `host:~/d` — буквы (проверено в zsh, линза Контроль #508 N2)
@@ -327,26 +326,6 @@ def _paths(base, word, ext=False):
     return got
 
 
-@functools.lru_cache(maxsize=8)
-def _group(text):
-    """В тексте у команды семьи link_findings `(` на месте слова: в zsh это маска (`.cl(a)ude`, `(a|b)/x`, `*(/)`), а
-    разбор (merge_guard_shell.tokenize) делит её на команды и имени не видит. Не маска: `$(`, `=(`, `<(`, `f()`."""
-    from merge_guard_shell import SEPARATORS, tokenize  # shell импортирует этот модуль
-    try:
-        tokens, argv = tokenize(text), []
-    except ValueError:
-        return False
-    for t in tokens:
-        if not (t and set(t) <= SEPARATORS):
-            argv.append(t)
-        elif t[0] == "(" and argv and not argv[-1].endswith(("$", "=")) and not (  # `;(`, `⏎(`, `<(` — не слово
-                len(argv) == 1 and t.startswith("()")) and any(gnu(os.path.basename(w)) in FAMILY for w in argv):
-            return True
-        elif set(t) & set(";&|\n()"):
-            argv = []
-    return False
-
-
 def _hit(word, bases, roots, protected, dirs, ext=False):
     """Путь слова от одной из bases — защищённый или папка над защищённым: что назвать в отказе, иначе None."""
     for base in bases:
@@ -447,8 +426,6 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
         cmd, ops = {"mv": "mv", "rm": "rm"}.get(sub, ""), [x for x in a[k + 1:] if not x.startswith("-")]
     if cmd not in FAMILY:  # остальным realpath папок не нужен
         return []
-    if whole[0] and _group(whole[0]):  # текст своего уровня, без тел heredoc: тело для shell — свой уровень (N1, #508)
-        raise Unread("форма маски zsh, которую разбор не читает (`(…)`, `(a|b)`, `*(/)`)")
     if cmd == "rsync":  # `--exclude '**/node_modules'`: значение опции — шаблон, не путь (Контроль N2, #508)
         val = {k + 1 for k, x in enumerate(a) if x in RSYNC_PATTERN or RSYNC_F.fullmatch(x)}
         ops = [x for k, x in enumerate(a) if k and k not in val and not x.startswith("-")]
