@@ -12,8 +12,23 @@ import {
   DialogPopup,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { supportsPasskeys } from "@/lib/passkey/passkey-client";
 import type { ReauthReply } from "@/lib/reauth/reauth-api";
-import { CodeStep, PasswordStep } from "./reauth-steps";
+import { CodeStep, PasskeyStep, PasswordStep } from "./reauth-steps";
+
+// The link that switches the window to another method.
+const SWITCH_LABEL = {
+  password: "auth:reauth.usePassword",
+  passkey: "auth:reauth.usePasskey",
+  emailCode: "auth:reauth.useCode",
+} as const satisfies Record<ReauthMethod, string>;
+
+// A browser without WebAuthn cannot use a key: the window does not offer it.
+function usable(methods: ReauthMethod[]): ReauthMethod[] {
+  return supportsPasskeys()
+    ? methods
+    : methods.filter((method) => method !== "passkey");
+}
 
 export type ReauthRequest = {
   // A new id per opening: the window starts clean each time.
@@ -63,10 +78,8 @@ function ReauthBody({
   onDone: Props["onDone"];
 }) {
   const { t } = useTranslation();
-  const [methods, setMethods] = useState(request.methods);
-  const [view, setView] = useState<ReauthMethod | undefined>(
-    request.methods[0],
-  );
+  const [methods, setMethods] = useState(() => usable(request.methods));
+  const [view, setView] = useState<ReauthMethod | undefined>(methods[0]);
   // From the 10th failed try in an hour the server drops "password".
   const [lockedOut, setLockedOut] = useState(false);
 
@@ -76,7 +89,7 @@ function ReauthBody({
       return;
     }
     if (!reply.methods) return;
-    const next = reply.methods;
+    const next = usable(reply.methods);
     if (methods.includes("password") && !next.includes("password")) {
       setLockedOut(true);
     }
@@ -84,7 +97,7 @@ function ReauthBody({
     if (!view || !next.includes(view)) setView(next[0]);
   };
 
-  const other = methods.find((method) => method !== view);
+  const others = methods.filter((method) => method !== view);
 
   return (
     <>
@@ -100,6 +113,7 @@ function ReauthBody({
             </p>
           ) : null}
           {view === "password" ? <PasswordStep onReply={onReply} /> : null}
+          {view === "passkey" ? <PasskeyStep onReply={onReply} /> : null}
           {view === "emailCode" ? <CodeStep onReply={onReply} /> : null}
           {view === undefined ? (
             <p role="status" className="text-sm">
@@ -108,21 +122,18 @@ function ReauthBody({
                 : t("auth:reauth.noMethod")}
             </p>
           ) : null}
-          {other ? (
+          {others.map((method) => (
             <Button
+              key={method}
               type="button"
               variant="link"
               size="sm"
               className="self-start px-0"
-              onClick={() => setView(other)}
+              onClick={() => setView(method)}
             >
-              {t(
-                other === "password"
-                  ? "auth:reauth.usePassword"
-                  : "auth:reauth.useCode",
-              )}
+              {t(SWITCH_LABEL[method])}
             </Button>
-          ) : null}
+          ))}
         </div>
       </DialogPanel>
       <DialogFooter>

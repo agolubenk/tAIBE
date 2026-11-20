@@ -453,6 +453,19 @@ userId, 0))`. Затем — локи адресов `tb-email:<адрес>` (п
   - Приёмка — api-integration `passkey.test.ts`, `passkey-alert.test.ts`, `auth-rate-limit.test.ts` (R-6).
   - Web — отдельный PR: клиент ключей через `import()`, кнопка на входе, секция «Ключи входа»,
     страница `/account/passkey-alert`.
+- **Web среза Б (ветка `feature/tb31-r6-web`, поверх `feature/tb31-slice-b3`, 20.11).**
+  - Церемонии (вход и добавление) — `apps/web/src/lib/passkey/passkey-client.ts`: `passkeyClient().getActions()` на
+    `$fetch` и `$store` общего `authClient`, модуль плагина и `@simplewebauthn/browser` — через `import()` по нажатию
+    (чанк ≈ 4 КБ gzip, в entry его нет). Вход ключом обновляет сеанс приложения тем же `$sessionSignal`.
+  - Список, переименование, удаление и «Это не я» — `lib/passkey/passkey-api.ts`, обычный `$fetch` без плагина.
+  - Закрытое системное окно (`NotAllowedError` → код simplewebauthn `ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY`,
+    `ERROR_CEREMONY_ABORTED`, `AUTH_CANCELLED` плагина) — без текста. Тексты кодов — `lib/passkey/passkey-message.ts`.
+  - Окно свежего входа: способ «ключ» — кнопка «Подтвердить ключом» (запрос ключа только по нажатию), ссылки на все
+    прочие способы; браузер без WebAuthn способа «ключ» не видит. `REAUTH_USER_MISMATCH` — «Это ключ другого аккаунта».
+  - «Добавить ключ»: отказ `SESSION_NOT_FRESH` открывает окно через `useFreshSession().confirm()`, действие само не
+    повторяется — кнопка становится «Продолжить» (жест для Safari и iOS). Удаление — `run()`, повтор сразу.
+  - `/account/passkey-alert`: токен из `#t=` читается один раз и сразу уходит из адресной строки
+    (`history.replaceState`); при 429 и обрыве токен остаётся в памяти для «Попробовать снова».
 
 ### R-7. Агенты и ключи API — сделано
 

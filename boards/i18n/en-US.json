@@ -598,7 +598,50 @@
 				"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
 				"signedOut": "Your session has ended. Sign in again.",
 				"failed": "Couldn't confirm. Try again.",
-				"stillNotFresh": "The confirmation didn't apply. Try the action again."
+				"stillNotFresh": "The confirmation didn't apply. Try the action again.",
+				"userMismatch": "This passkey belongs to another account.",
+				"userVerificationRequired": "Use a passkey with a PIN or biometrics.",
+				"passkeyNotFound": "This passkey isn't linked to your account. Use another way to confirm."
+			},
+			"usePasskey": "Use a passkey instead",
+			"passkey": {
+				"explain": "Your browser will ask for the passkey's PIN or biometrics.",
+				"submit": "Confirm with a passkey"
+			}
+		},
+		"passkey": {
+			"signIn": "Sign in with a passkey",
+			"errors": {
+				"userVerificationRequired": "Use a passkey with a PIN or biometrics.",
+				"limitReached": "You have the most passkeys allowed. Remove one you don't use.",
+				"previouslyRegistered": "This passkey is added already.",
+				"notFound": "This passkey isn't linked to an account here. Sign in with your password.",
+				"wrongAddress": "Passkeys work only at the main address of this site. Sign in with your password.",
+				"offline": "No connection to the server. Check your network and try again.",
+				"rateLimited": "Too many tries. Wait a minute and try again.",
+				"failed": "Couldn't use the passkey. Try again."
+			}
+		},
+		"passkeyAlert": {
+			"pageTitle": "Passkey added",
+			"title": "A passkey was added to your account",
+			"description": "Passkey «{{name}}» was added on {{date}}. If it wasn't you, remove it here.",
+			"descriptionRemoved": "Passkey «{{name}}», added on {{date}}, is removed already. If it wasn't you, sign out everywhere here.",
+			"effect": "We will also sign you out on every device and remove the API keys made after this passkey.",
+			"confirm": "It wasn't me: remove the passkey",
+			"confirmRemoved": "It wasn't me: sign out everywhere",
+			"itWasMe": "It was me",
+			"doneTitle": "Passkey removed",
+			"doneDescription": "You are signed out on every device. Reset your password: whoever added the passkey may know it.",
+			"resetPassword": "Reset password",
+			"invalidTitle": "This link doesn't work",
+			"invalidDescription": "The link is wrong, used already or older than {{days}} days. Open the link from the latest email.",
+			"toSignIn": "Go to sign-in",
+			"retry": "Try again",
+			"errors": {
+				"rateLimited": "Too many tries. Wait a minute and try again.",
+				"offline": "No connection to the server. Check your network and try again.",
+				"failed": "Something went wrong. Try again."
 			}
 		}
 	},
@@ -2629,6 +2672,34 @@
 					"description": "When an agent takes a card, it becomes the assignee and the start date is set. The move's comment is posted either way."
 				}
 			}
+		},
+		"passkeys": {
+			"title": "Passkeys",
+			"description": "Sign in without a password: with your fingerprint, face or device PIN. Your password stays.",
+			"add": "Add passkey",
+			"continue": "Continue",
+			"continueHint": "Confirmed. Press «Continue» to create the passkey.",
+			"limit": "You can have up to {{max}} passkeys. Remove one you don't use to add a new one.",
+			"emptyTitle": "No passkeys yet",
+			"emptyDescription": "A passkey works only at this site's main address. At another address, sign in with your password.",
+			"loadError": "Couldn't load your passkeys.",
+			"unnamed": "Passkey from {{date}}",
+			"multiDevice": "Syncs across your devices",
+			"singleDevice": "Only on this device",
+			"added": "Added {{date}}",
+			"actions": "Actions for {{name}}",
+			"rename": "Rename",
+			"renameTitle": "Rename passkey",
+			"nameLabel": "Name",
+			"save": "Save",
+			"renameError": "Couldn't rename the passkey. Try again.",
+			"toastRenamed": "Passkey renamed",
+			"delete": "Remove",
+			"deleteTitle": "Remove {{name}}?",
+			"deleteDescription": "You won't be able to sign in with this passkey. Also remove it from the device, in its passkey settings.",
+			"deleteError": "Couldn't remove the passkey. Try again.",
+			"toastDeleted": "Passkey removed",
+			"toastAdded": "Passkey added"
 		}
 	},
 	"navigation": {
