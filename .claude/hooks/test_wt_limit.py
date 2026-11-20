@@ -49,6 +49,8 @@ class WtLimitHookTest(unittest.TestCase):
         for w in ("w1", "w2"):
             git(self.repo, "worktree", "add", "-q", "-b", w, os.path.join(self.repo, w))
         self.assertEqual(self.run_hook(f"{ADD} w3", self.repo)[0], 2)
+        # Ревью #500 (backend): окружение дату владельца не отодвигает.
+        self.assertEqual(self.run_hook(f"{ADD} w3", self.repo, WT_LIMIT_ENFORCE_FROM="2099-01-01")[0], 2)
 
     def test_over_limit_before_the_owner_date_warns(self):
         """До ENFORCE_FROM без метки — предупреждение, не отказ (день передаётся в limit_text, не через окружение)."""
