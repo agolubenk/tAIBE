@@ -2,6 +2,14 @@ import { archiveItem, applyAnswers } from "./plan-due-apply";
 import { isDueChoice, readItemDue } from "./plan-due";
 import { type DailyPlan, dailyPlan } from "./plan-due-daily";
 import { PACE_DAYS } from "./plan-eta";
+import {
+  applyReverts,
+  focusPlans,
+  readOwnerInputs,
+  withInputs,
+  writeFocus,
+} from "./plan-focus-run";
+import type { FocusPlan } from "./plan-focus";
 import { planWrites, type RowWrite } from "./plan-rows";
 import {
   type BoardCard,
@@ -29,6 +37,8 @@ export interface PlanStore {
   ): Promise<Map<string, BoardCard>>;
   recent(products: Map<string, string>, since: Date): Promise<RecentCard[]>;
   abandoned(workspaceIds: string[], now: Date): Promise<Set<string>>;
+  // The cards with these keys (TB-107 inputs), with their plan product.
+  named(products: Map<string, string>, keys: string[]): Promise<RecentCard[]>;
   // Plan product → cards closed since then (TB-112 pace).
   closed(
     products: Map<string, string>,
@@ -182,13 +192,17 @@ export async function planPass(
   const planProducts = deps.config.plan.products;
   const products = [...new Set(planProducts.values())];
   let list = await listAll(deps.client, "work", readBy);
+  const planned = planRows(list.docs, products);
   const answers = await applyAnswers(writer, {
     docs: list.docs,
-    rows: planRows(list.docs, products),
+    rows: planned,
     products,
     now,
   });
-  if (answers.changed) list = await listAll(deps.client, "work", readBy);
+  const back = await applyReverts(writer, list.docs, planned, products);
+  if (answers.changed || back) {
+    list = await listAll(deps.client, "work", readBy);
+  }
   // A cut list, or a paged walk without a snapshot, may miss the row that
   // plans a card or a row before another: no off-plan decisions and no
   // forecast then. F4 still follows the rows read.
@@ -225,15 +239,17 @@ export async function planPass(
     );
   }
   let daily: DailyPlan | null = null;
+  let focus: FocusPlan[] = [];
   let ordered = writes;
   if (withDaily) {
     const patched = new Map(writes.map((write) => [write.id, write.patch]));
+    const current = rows.map((row) => {
+      const patch = patched.get(row.id);
+      return patch ? { ...row, data: withPatch(row.data, patch) } : row;
+    });
     daily = dailyPlan({
       docs: list.docs,
-      rows: rows.map((row) => {
-        const patch = patched.get(row.id);
-        return patch ? { ...row, data: withPatch(row.data, patch) } : row;
-      }),
+      rows: current,
       board,
       closed: await deps.store.closed(
         planProducts,
@@ -244,12 +260,35 @@ export async function planPass(
       today: localDate(now),
       now,
     });
-    ordered = withEta(writes, rows, daily);
+    // TB-107 after the eta step: the owner's inputs into the plan and the
+    // focus order. A cut items or checks list may miss the owner's «Вернуть»:
+    // no focus step then.
+    const owner = await readOwnerInputs(deps.client, products, now, readBy);
+    if (owner.truncated) {
+      console.warn("owner-queue plan focus: items or checks list is truncated");
+    } else {
+      focus = focusPlans({
+        docs: list.docs,
+        rows: current,
+        board,
+        cards: await deps.store.named(planProducts, [
+          ...owner.named.keys.keys(),
+        ]),
+        named: owner.named,
+        reverts: owner.reverts,
+        products,
+        url: deps.config.url,
+        today: localDate(now),
+        now,
+      });
+    }
+    ordered = withInputs(withEta(writes, rows, daily), rows, focus);
   }
   for (const write of ordered) {
     await writer.patch("work", write.id, write.patch, write.version);
   }
   const decided = daily ? await writeDecisions(writer, daily) : true;
+  await writeFocus(writer, focus);
   const clean = writer.skipped === 0 && writer.left === 0;
   return {
     written: writer.written,

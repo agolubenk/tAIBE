@@ -70,6 +70,9 @@ export const isOffPlanRow = (id: string) => /^w-[a-z0-9-]+-unplanned$/.test(id);
 // The default product owns the rows without another product's prefix, as
 // eval/tools/queue_focus.py plan_rows reads them.
 export const DEFAULT_PLAN_PRODUCT = "hr-helper";
+// The product in a queue item id (d-hr-…, d-taibe-…): hr for the default one.
+export const itemTag = (product: string) =>
+  product === DEFAULT_PLAN_PRODUCT ? "hr" : product;
 
 // The plan product of a row w-<product>-…; the longest prefix wins. null — not
 // a plan row of these products.
