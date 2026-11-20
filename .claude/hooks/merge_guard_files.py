@@ -29,7 +29,8 @@ ZSH_FORM = re.compile(r"\[[\^!]|\[:|\*\*")
 # `^`, `#`, `~` в середине — маска только при EXTENDED_GLOB (в Bash-инструменте выключена): форма — в слове с `*?[` или
 # когда команда её включает; `*~`, `a~`, `#x#`, `host:~/d` — буквы (проверено в zsh, линза Контроль #508 N2)
 ZSH_EXT = re.compile(r"[\^#]|(?<=.)~(?=.)")
-RSYNC_PATTERN = {"--exclude", "--include", "--filter", "-f"}  # значение через пробел — шаблон, не путь (`'**/x'`)
+RSYNC_PATTERN = {"--exclude", "--include", "--filter"}  # значение через пробел — шаблон, не путь (`'**/x'`); и `-f`:
+RSYNC_F = re.compile(r"-[^-eBMTf@]*f")  # у `-ref`, `-rTf` f — значение `-e`/`-T`, слово за ним — источник (Контроль B1)
 UNSEEN = re.compile(rf"{SUBST}|[$`]")  # слово из `$(…)`, `` `…` `` или неизвестной переменной: путь разбору не виден
 SUBST_N = re.compile(rf"{SUBST}C(\d+)x")  # $(…) с номером текста в procs[SUBS] хука (merge_guard_shell.SUBST_AT)
 ENV_WORD = re.compile(r"\$(?:\{(TMPDIR|USER|LOGNAME|RANDOM)\}|(TMPDIR|USER|LOGNAME|RANDOM)(?!\w)|\$)")  # HOME — dir_vars
@@ -449,7 +450,7 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
     if whole[0] and _group(whole[0]):  # текст своего уровня, без тел heredoc: тело для shell — свой уровень (N1, #508)
         raise Unread("форма маски zsh, которую разбор не читает (`(…)`, `(a|b)`, `*(/)`)")
     if cmd == "rsync":  # `--exclude '**/node_modules'`: значение опции — шаблон, не путь (Контроль N2, #508)
-        val = {k + 1 for k, x in enumerate(a) if x in RSYNC_PATTERN or re.fullmatch(r"-[a-zA-Z]+f", x)}
+        val = {k + 1 for k, x in enumerate(a) if x in RSYNC_PATTERN or RSYNC_F.fullmatch(x)}
         ops = [x for k, x in enumerate(a) if k and k not in val and not x.startswith("-")]
     short, dirs, norm = "".join(x[1:] for x in opts if x[:2] != "--"), guarded_dirs(roots, home), [gnu(a[0])] + a[1:]
     ext = "extendedglob" in text.casefold().replace("_", "")  # `setopt Extended_Glob`, `set -o …`, `zsh -o …` (zsh 5.9)

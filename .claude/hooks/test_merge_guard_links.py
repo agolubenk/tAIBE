@@ -107,6 +107,9 @@ deny = [
     # копия папки поверх: содержимое (`x/.`, `x/`, ditto) или источник с именем защищённой папки (линза frontend)
     ("cp -R папки с именем <слой> в корень", f"cp -R {O}/src/{C} {ROOT}"),
     ("rsync -a содержимого в корень", f"rsync -a {O}/x/ {ROOT}"),
+    ("rsync -ref: f — значение -e, источник остаётся (Контроль B1)", f"rsync -ref {O}/x/ {ROOT}"),
+    ("rsync -rTf: f — значение -T", f"rsync -rTf {O}/x/ {ROOT}"),
+    ("rsync -raf '- y': шаблон, источник — следующее слово", f"rsync -raf '- y' {O}/x/ {ROOT}"),
     ("cp -R папки, чьё имя разбор не видит, в корень", f"cp -R \"$IS249_NOPE\" {ROOT}"),
     # маски zsh, которых _glob не повторяет, — отказ, не подражание (линза frontend на 33e467bcc, coord 13:46)
     ("zsh [^x]", f"rm -rf .[^x]{C[2:]}"),
@@ -168,6 +171,7 @@ for label, cmd, cwd in [
     ("a~ — резервная копия", f"cp {O}/a.txt {O}/a.txt~", ROOT),
     ("rsync в host:~/", f"rsync -a {O}/x/ host:~/dst/", ROOT),
     ("rsync --exclude '**/…' через пробел — шаблон", f"rsync -a --exclude '**/node_modules' {O}/x/ {O}/dst/", ROOT),
+    ("rsync -af '**/…' — шаблон", f"rsync -af '- **/node_modules' {O}/x/ {O}/dst/", ROOT),
     ("#autosave#", f"rm -f {O}/x/#autosave#", ROOT),
     ("путь iCloud com~apple~CloudDocs", f"cp {O}/a.txt {O}/com~apple~CloudDocs/a.txt", ROOT),
     # проза в теле heredoc — не команда (N1)
