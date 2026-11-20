@@ -11,6 +11,7 @@ import { publishEvent } from "../../events";
 import { type AuthorKind, authorMark } from "../../forest/author-kind";
 import createNotification from "../../notification/controllers/create-notification";
 import { parseMentionIds } from "../../utils/parse-mentions";
+import type { DialogMark } from "../../forest/dialog/session-dialog";
 
 async function createComment(
   taskId: string,
@@ -19,6 +20,8 @@ async function createComment(
   external?: { userName: string; source: string },
   // TB-83: who wrote it, recorded with the comment.
   author?: AuthorKind,
+  // R-026: the comment of a linked session joins its group's dialog.
+  dialog?: DialogMark | null,
 ) {
   const [activity] = await db
     .insert(activityTable)
@@ -27,7 +30,10 @@ async function createComment(
       type: "comment",
       userId,
       content,
-      eventData: author ? authorMark(author) : null,
+      eventData:
+        author || dialog
+          ? { ...authorMark(author), ...(dialog ? { dialog } : {}) }
+          : null,
       ...(external
         ? {
             externalUserName: external.userName,

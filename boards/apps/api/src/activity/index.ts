@@ -14,6 +14,7 @@ import {
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import { type AuthorKind, authorMark, writerKind } from "../forest/author-kind";
 import createActivity from "./controllers/create-activity";
+import { dialogMarkFor, markOpenDialogs } from "../forest/dialog/dialog-store";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
 import getActivities from "./controllers/get-activities";
@@ -201,19 +202,18 @@ const activity = apiRouter()
       200,
     ),
   )
-  .openapi(getActivitiesRoute, async (c) =>
-    c.json(
-      maskForTokenCaller(
-        c,
-        await getActivities(
-          c.req.valid("param").taskId,
-          c.get("userId"),
-          c.req.valid("query").limit,
-        ),
-      ),
+  .openapi(getActivitiesRoute, async (c) => {
+    const { taskId } = c.req.valid("param");
+    const activities = await getActivities(
+      taskId,
+      c.get("userId"),
+      c.req.valid("query").limit,
+    );
+    return c.json(
+      maskForTokenCaller(c, await markOpenDialogs(taskId, activities)),
       200,
-    ),
-  )
+    );
+  })
   .openapi(createActivityRoute, async (c) => {
     const { taskId, message, type, eventData } = c.req.valid("json");
     if (type === "comment") {
@@ -240,6 +240,7 @@ const activity = apiRouter()
   })
   .openapi(createCommentRoute, async (c) => {
     const { taskId, comment } = c.req.valid("json");
+    const dialog = await dialogMarkFor(c, taskId);
     return c.json(
       maskForTokenCaller(
         c,
@@ -249,6 +250,7 @@ const activity = apiRouter()
           comment,
           undefined,
           writerKind(c),
+          dialog,
         ),
       ),
       200,

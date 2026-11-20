@@ -12334,6 +12334,25 @@
 						"importedFrom",
 						"importedBy"
 					]
+				},
+				"dialog": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"title": {
+							"type": "string"
+						},
+						"live": {
+							"type": "string"
+						},
+						"archived": {
+							"type": "string"
+						},
+						"summary": {
+							"type": "string"
+						}
+					},
+					"required": ["title", "live", "archived", "summary"]
 				}
 			},
 			"required": [
@@ -12350,7 +12369,8 @@
 				"movedFromOtherProject",
 				"created",
 				"githubUser",
-				"comment"
+				"comment",
+				"dialog"
 			]
 		},
 		"tasks": {
