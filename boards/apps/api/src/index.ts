@@ -38,11 +38,13 @@ import {
   validationHook,
   validationHookWithMessage,
 } from "./errors/validation-error";
+import { checkMigrationDrift } from "./database/migration-drift";
 import { prepareDatabaseStartup } from "./database/prepare-database-startup";
 import { waitForDatabase } from "./database/wait-for-database";
 import discordIntegration from "./discord-integration";
 import { eventContext } from "./events";
 import externalLink from "./external-link";
+import form from "./form";
 import genericWebhookIntegration from "./generic-webhook-integration";
 import giteaIntegration, { handleGiteaWebhookRoute } from "./gitea-integration";
 import githubIntegration, {
@@ -82,6 +84,7 @@ import { descriptionPageQuery, listTasksQuery } from "./task/schema";
 import taskRelation from "./task-relation";
 // t-boards
 import agentIdentity from "./agent-identity";
+import agentJournal from "./agent-journal";
 import forest from "./forest";
 import notebook from "./notebook";
 import ssr from "./ssr";
@@ -102,13 +105,16 @@ import { assertApiKeyAuthRoute } from "./utils/api-key-auth-routes";
 import { apiKeyRejection } from "./utils/api-key-rejection";
 import type { ApiKeyWorkspaceScope } from "./utils/api-key-workspace-scope";
 import { applyApiKeyHeaders } from "./utils/apply-api-key-headers";
+import { isLoopbackOrigin } from "./utils/loopback-origin";
 import { authenticateApiRequest } from "./utils/authenticate-api-request";
 import {
   authorizeAssetAccess,
   isPublicAsset,
 } from "./utils/authorize-asset-access";
 import { getInvitationDetails } from "./utils/check-registration-allowed";
+import { authRateLimitWarning } from "./utils/auth-rate-limit";
 import { clientIpMiddleware } from "./utils/client-ip";
+import { exposeRetryAfter } from "./utils/expose-retry-after";
 import { migrateApiKeyReferenceId } from "./utils/migrate-apikey-reference-id";
 import { migrateNotificationPreferencesSchema } from "./utils/migrate-notification-preferences-schema";
 import { migrateSessionColumn } from "./utils/migrate-session-column";
@@ -257,6 +263,10 @@ export function createApp() {
     console.warn(
       "[cors] Neither CORS_ORIGINS nor KANEO_CLIENT_URL is set, so cross-origin requests are refused. Same-origin deployments (the bundled image) are unaffected; set KANEO_CLIENT_URL if the web app is served from another origin.",
     );
+  } else if (!corsOrigins) {
+    console.warn(
+      "[cors] Neither CORS_ORIGINS nor KANEO_CLIENT_URL is set, and NODE_ENV is not production: only loopback origins (localhost, 127.0.0.1, [::1]) may make cross-origin requests.",
+    );
   }
 
   app.use(
@@ -271,9 +281,12 @@ export function createApp() {
       ],
       origin: (origin) => {
         // Reflecting an arbitrary origin alongside credentials lets any site
-        // read authenticated responses, so it stays a development convenience.
+        // read authenticated responses. Unconfigured development answers
+        // pages served from this machine only (TB-87).
         if (!corsOrigins) {
-          return reflectUnconfiguredOrigins ? origin || "*" : null;
+          return reflectUnconfiguredOrigins && isLoopbackOrigin(origin)
+            ? origin
+            : null;
         }
 
         if (!origin) {
@@ -292,6 +305,8 @@ export function createApp() {
 
   const api = new OpenAPIHono<ApiVariables>({ defaultHook: validationHook });
 
+  // Outer: runs after applyApiKeyHeaders (TB-31 R-8).
+  api.use("*", exposeRetryAfter);
   api.use("*", applyApiKeyHeaders);
 
   const apiKeyRateLimited = api.openAPIRegistry.registerComponent(
@@ -930,6 +945,8 @@ export function createApp() {
   const taskRelationApi = api.route("/task-relation", taskRelation);
   const forestApi = api.route("/forest", forest);
   const agentIdentityApi = api.route("/agent-identity", agentIdentity);
+  // TB-135: not a workspace route, so a one-workspace key is refused (R-002).
+  const agentJournalApi = api.route("/agent-journal", agentJournal);
   const notebookApi = api.route("/notebook", notebook);
   const ssrApi = api.route("/ssr", ssr);
   const externalLinkApi = api.route("/external-link", externalLink);
@@ -937,6 +954,7 @@ export function createApp() {
   const invitationApi = api.route("/invitation", invitation);
   const workspaceApi = api.route("/workspace", workspace);
   const customFieldApi = api.route("/custom-field", customField);
+  const formApi = api.route("/form", form);
   const importApi = api.route("/import", importRoutes);
   const userApi = api.route("/user", user);
   const adminApi = api.route("/admin", admin);
@@ -1066,6 +1084,7 @@ export function createApp() {
     taskRelationApi,
     forestApi,
     agentIdentityApi,
+    agentJournalApi,
     notebookApi,
     ssrApi,
     telegramIntegrationApi,
@@ -1077,6 +1096,7 @@ export function createApp() {
     workflowRuleApi,
     workspaceApi,
     customFieldApi,
+    formApi,
     importApi,
     oauthApi,
   };
@@ -1098,8 +1118,11 @@ export async function runStartupTasks() {
       await migrateSessionColumn();
 
       console.log("🔄 Migrating database...");
-      await migrate(getDatabase(), {
-        migrationsFolder: `${currentDir}/../drizzle`,
+      const migrationsFolder = `${currentDir}/../drizzle`;
+      await migrate(getDatabase(), { migrationsFolder });
+      // TB-64: an applied migration whose file changed afterwards.
+      await checkMigrationDrift(getDatabase(), migrationsFolder, {
+        production: process.env.NODE_ENV === "production",
       });
       console.log("✅ Database migrated successfully!");
       // Renames rows of "column", so it runs after the migrations that create
@@ -1133,6 +1156,9 @@ export async function startServer(
     console.error("❌ Database migration failed!", error);
     process.exit(1);
   }
+
+  const rateLimitWarning = authRateLimitWarning();
+  if (rateLimitWarning) console.warn(rateLimitWarning);
 
   let shuttingDown = false;
 
@@ -1235,6 +1261,7 @@ const {
   taskRelationApi,
   forestApi,
   agentIdentityApi,
+  agentJournalApi,
   notebookApi,
   ssrApi,
   telegramIntegrationApi,
@@ -1246,6 +1273,7 @@ const {
   workflowRuleApi,
   workspaceApi,
   customFieldApi,
+  formApi,
   importApi,
   oauthApi,
 } = createdApp;
@@ -1286,6 +1314,7 @@ export type AppType =
   | typeof taskRelationApi
   | typeof forestApi
   | typeof agentIdentityApi
+  | typeof agentJournalApi
   | typeof notebookApi
   | typeof ssrApi
   | typeof externalLinkApi
@@ -1293,6 +1322,7 @@ export type AppType =
   | typeof invitationApi
   | typeof workspaceApi
   | typeof customFieldApi
+  | typeof formApi
   | typeof importApi
   | typeof userApi
   | typeof adminApi

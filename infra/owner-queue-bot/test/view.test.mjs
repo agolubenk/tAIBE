@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sanitizeTg } from '../tg-html.mjs';
 import {
-  itemMessages, keyOf, menuFingerprint, menuView, nextOpen, optKey, pack, searchView, sectionView, verOf, workMessages,
+  backNotice, connReason, itemMessages, keyOf, localNotice, menuFingerprint, menuView, nextOpen, optKey, pack, searchView,
+  sectionView, verOf, workMessages,
 } from '../view.mjs';
 
 const item = (over = {}) => ({
@@ -168,4 +169,94 @@ test('у открытого пункта мёржа — «Влить сейча�
   assert.ok(!callbacks(done.at(-1).keyboard).some((c) => c.startsWith('M:')));
   const s = snapOf([item({ id: 'm1', kind: 'merge', options: [] })]);
   assert.ok(callbacks(sectionView(s, 'merge').keyboard).includes('RD'));
+});
+
+test('сигнал «страница без базы»: причина по ответу консоли (просьба владельца 14.11)', () => {
+  assert.match(connReason({ okAt: 1, errAt: 2, status: 401, err: 'HTTP 401', fails: 3 }), /не приняла токен бота \(ответ 401\)/);
+  assert.match(connReason({ okAt: 1, errAt: 2, status: 403, err: 'HTTP 403', fails: 3 }), /токен отозван или истёк/);
+  assert.match(connReason({ okAt: 1, errAt: 2, status: 502, err: 'HTTP 502', fails: 3 }), /ошибкой 502 — .*выкатке/);
+  assert.match(connReason({ okAt: 0, errAt: 2, status: 0, err: 'Failed to fetch', fails: 3 }), /не ответила по сети \(Failed to fetch\)/);
+  assert.equal(connReason({ okAt: 1, errAt: 2, status: 429, err: 'HTTP 429', fails: 3 }), 'консоль ответила 429');
+  assert.equal(connReason({ okAt: 1, errAt: 2, status: 409, err: 'конфликт', fails: 3 }), 'консоль ответила 409: конфликт');
+  assert.match(connReason(null), /опроса не было/);
+  assert.match(connReason({ okAt: 5, errAt: 0, status: 0, err: '', fails: 0 }), /хотя консоль отвечала/);
+});
+
+test('сигнал «страница без базы»: последний удачный ответ по Москве, следующая перезагрузка, подсказка; HTML валиден', () => {
+  const okAt = Date.UTC(2026, 10, 14, 14, 2); // 17:02 МСК
+  const n = localNotice({ okAt, errAt: okAt + 60_000, status: 502, err: 'HTTP 502', fails: 3 }, { now: okAt + 3 * 60_000, nextReloadMs: 60_000, hint: 'token-list <на сервере>' });
+  assert.match(n.text, /^🟠 <b>Очередь не подключилась к консоли<\/b>/);
+  assert.match(n.text, /Последний удачный ответ консоли — 17:02 МСК \(3 мин назад\)/);
+  assert.match(n.text, /Неудачных опросов подряд: 3/);
+  assert.match(n.text, /перезагрузит страницу через 1 мин/);
+  assert.match(n.text, /token-list &lt;на сервере&gt;/);
+  assertTelegramHtml(n.text);
+  const never = localNotice(null, { now: okAt, nextReloadMs: 60_000, hint: '' });
+  assert.match(never.text, /Удачных ответов консоли с открытия страницы не было/);
+  assert.doesNotMatch(never.text, /Если связь не вернётся/);
+  assertTelegramHtml(never.text);
+});
+
+test('связь вернулась: сколько её не было, не меньше минуты', () => {
+  assert.match(backNotice(4 * 60_000).text, /^🟢 .*Связи не было около 4 мин\.$/);
+  assert.match(backNotice(5_000).text, /около 1 мин/);
+});
+
+test('снимок одного пункта поверх полного: пункт и счётчики свежие, остальные из полного, пропавший убран (OPS-76)', async () => {
+  const { mergeItems } = await import('../view.mjs');
+  const base = { ...snapOf([item({ id: 'd-1' }), item({ id: 'd-2', title: 'старый' }), item({ id: 'd-3' })]), progress: 'Сделано 0 из 3' };
+  const part = { ...snapOf([item({ id: 'd-2', title: 'новый', done: true })]), progress: 'Сделано 1 из 3' };
+  const m = mergeItems(base, part, ['d-2']);
+  assert.deepEqual(m.items.map((it) => it.id), ['d-1', 'd-2', 'd-3'], 'порядок полного снимка');
+  assert.equal(m.items[1].title, 'новый');
+  assert.equal(m.items[1].done, true);
+  assert.equal(m.progress, 'Сделано 1 из 3', 'шапка — из свежего');
+  assert.deepEqual(mergeItems(base, snapOf([]), ['d-3']).items.map((it) => it.id), ['d-1', 'd-2'], 'пункт пропал со страницы');
+  assert.equal(mergeItems(null, part, ['d-2']), part, 'полного ещё не было');
+});
+
+test('snapshotPage(ids) разбирает только эти пункты, без ids — все (OPS-76)', async () => {
+  const { snapshotPage } = await import('../frame-scripts.mjs');
+  const saved = { window: globalThis.window, document: globalThis.document, CSS: globalThis.CSS };
+  const el = (id) => ({
+    dataset: { id, src: 'db' }, classList: { contains: () => false }, closest: () => ({ dataset: { section: 'decision' } }),
+    querySelector: () => null, querySelectorAll: () => [],
+  });
+  const all = [el('d-1'), el('d-2'), el('d-3')];
+  const asked = [];
+  globalThis.document = {
+    querySelector: (sel) => { const m = /data-id="([^"]+)"/.exec(sel); if (!m) return null; asked.push(m[1]); return all.find((e) => e.dataset.id === m[1]) || null; },
+    querySelectorAll: (sel) => (sel === '.item[data-id]' ? all : []),
+    getElementById: () => null,
+  };
+  globalThis.window = {};
+  globalThis.CSS = { escape: (s) => s };
+  try {
+    assert.deepEqual(snapshotPage().items.map((it) => it.id), ['d-1', 'd-2', 'd-3']);
+    assert.deepEqual(snapshotPage(['d-2', 'd-9']).items.map((it) => it.id), ['d-2'], 'пропавший пункт — пусто, не ошибка');
+    assert.deepEqual(asked, ['d-2', 'd-9']);
+  } finally {
+    globalThis.window = saved.window;
+    globalThis.document = saved.document;
+    globalThis.CSS = saved.CSS;
+  }
+});
+
+test('держатель входящего (карточка HR xuc5csrv): «молчит» — 🔇 в списке открытых и жирная строка в карточке; «в сети» — строка без знака', () => {
+  const silent = item({ id: 'i-1', kind: 'inbox', title: 'Входящее 1', options: [], agentStatus: 'doing', agentStatusText: 'в работе',
+    holder: '🔇 Держатель r.ab12 молчит 5 ч — координатор передаст пункт живой сессии (проверка в 09:30)' });
+  const online = item({ id: 'i-2', kind: 'inbox', title: 'Входящее 2', options: [], agentStatus: 'taken', agentStatusText: 'взял',
+    holder: '🟢 Держатель r.cd34 в сети' });
+  const plain = item({ id: 'i-3', kind: 'inbox', title: 'Входящее 3', options: [] });
+  const s = { ...snapOf([silent, online, plain]), sections: [{ kind: 'inbox', title: 'Входящие', count: '3', note: '' }] };
+  const labels = sectionView(s, 'inbox').keyboard.flat().map((b) => b.text);
+  assert.ok(labels.some((t) => t.includes('🔇') && t.includes('Входящее 1')), labels.join(' | '));
+  assert.ok(labels.some((t) => !t.includes('🔇') && t.includes('Входящее 2')));
+  assert.ok(labels.some((t) => !t.includes('🔇') && t.includes('Входящее 3')));
+  const card = (it) => itemMessages(it).map((m) => m.text).join('\n');
+  assert.match(card(silent), /<b>🔇 Держатель r\.ab12 молчит 5 ч/);
+  assert.match(card(online), /🟢 Держатель r\.cd34 в сети/);
+  assert.doesNotMatch(card(online), /<b>🟢/);
+  assert.doesNotMatch(card(plain), /Держатель/);
+  for (const it of [silent, online, plain]) for (const m of itemMessages(it)) assertTelegramHtml(m.text);
 });

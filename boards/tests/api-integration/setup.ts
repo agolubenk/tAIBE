@@ -2,6 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, vi } from "vite-plus/test";
+import {
+  assertTestDatabaseUrl,
+  deriveTestDatabaseUrl,
+} from "./helpers/database-url";
 
 // Prevent dotenv-mono from loading the local .env file during tests.
 // All env vars are set explicitly below; the .env file must be ignored.
@@ -18,28 +22,6 @@ function stripEnvValueQuotes(value: string) {
     return trimmed.slice(1, -1);
   }
   return trimmed;
-}
-
-function deriveTestDatabaseUrl(connectionString: string) {
-  const url = new URL(connectionString);
-  const databaseName = url.pathname.replace(/^\//, "");
-
-  if (!databaseName || databaseName.endsWith("_test")) {
-    return connectionString;
-  }
-
-  url.pathname = `/${databaseName}_test`;
-  return url.toString();
-}
-
-function assertTestDatabaseUrl(connectionString: string) {
-  const url = new URL(connectionString);
-  const databaseName = url.pathname.replace(/^\//, "");
-  if (!databaseName.endsWith("_test")) {
-    throw new Error(
-      `Integration tests require DATABASE_URL to use a database name ending in _test (got "${databaseName}")`,
-    );
-  }
 }
 
 function readDatabaseUrlFromEnvFile() {
@@ -99,6 +81,10 @@ process.env.CUSTOM_OAUTH_DISCOVERY_URL = "";
 process.env.CUSTOM_OAUTH_AUTO_LOGIN = "";
 process.env.CUSTOM_OAUTH_NAME = "";
 process.env.DEVICE_AUTH_CLIENT_IDS = "kaneo-cli";
+// The sign-in limiter is on by default (TB-31 R-8) and every request here has
+// the same test IP. Suites sign in many times; auth-rate-limit.test.ts turns
+// it on for itself.
+process.env.DISABLE_AUTH_RATE_LIMIT = "true";
 
 afterEach(() => {
   vi.restoreAllMocks();

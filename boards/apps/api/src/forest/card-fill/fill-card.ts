@@ -1,5 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import createComment from "../../activity/controllers/create-comment";
+import { authorOfActor } from "../author-kind";
 import db from "../../database";
 import { agentProfileTable } from "../../database/forest-schema";
 import {
@@ -18,6 +19,7 @@ import {
 } from "../../utils/assert-assignable-user";
 import { pipelineEnabled } from "../../pipeline-settings/store";
 import type { ForestActor } from "../actor";
+import { setHistoryActor } from "../history/history-fields";
 import { cardStage } from "./card-stage";
 
 export type CardMove = {
@@ -42,8 +44,11 @@ async function addLink(taskId: string, url: string, userId: string) {
 }
 
 // Whoever starts or hands over the work holds the card, from the day it
-// started; fields someone already set stay as they are.
-async function takeCard(taskId: string, userId: string) {
+// started; fields someone already set stay as they are. The history row names
+// the agent whose move caused the fill, so undoing that move undoes the fill
+// with it (R-023 AC-009, TB-69).
+async function takeCard(taskId: string, actor: ForestActor) {
+  const userId = actor.userId;
   const { before, after } = await withLockedTask(taskId, async (tx, task) => {
     const set: Partial<typeof taskTable.$inferInsert> = {};
     if (!task.startDate) set.startDate = new Date();
@@ -59,6 +64,7 @@ async function takeCard(taskId: string, userId: string) {
       if (assignable) set.userId = userId;
     }
     if (Object.keys(set).length === 0) return task;
+    await setHistoryActor(tx, actor.id);
     const [updated] = await tx
       .update(taskTable)
       .set(set)
@@ -118,7 +124,13 @@ async function commentMove(move: CardMove) {
     `${await ownerMention(move.actor.userId)}«${from}» → «${to}»${move.note ? `: ${move.note}` : ""}`,
   ];
   if (move.link) lines.push(move.link);
-  await createComment(move.taskId, move.actor.userId, lines.join("\n\n"));
+  await createComment(
+    move.taskId,
+    move.actor.userId,
+    lines.join("\n\n"),
+    undefined,
+    authorOfActor(move.actor),
+  );
 }
 
 // A settings read that fails keeps the default (on): the status change is
@@ -150,7 +162,7 @@ export async function fillCard(move: CardMove) {
   // Filling the assignee and start date is automation a product can switch off
   // (pipeline settings, `cardAutofill`); the move's comment always goes out.
   if (cardStage(move.to) && (await autofillOn(move.projectId))) {
-    await logged("assignee", takeCard(move.taskId, move.actor.userId));
+    await logged("assignee", takeCard(move.taskId, move.actor));
   }
   await logged("comment", commentMove(move));
 }

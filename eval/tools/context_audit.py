@@ -2,11 +2,14 @@
 
 usage: python3 -I context_audit.py "<с YYYY-MM-DD HH:MM>" "<по YYYY-MM-DD HH:MM>" [--json out.json] [--match "<строка>"]
        python3 -I context_audit.py --hours 24 --all [--json out.json]     # ежедневная эволюция (daily_steps)
+       ... [--product <slug>]                                              # только один продукт (SE-36)
 
 Время — местное (Минск). Журналы — сессии команды: первое сообщение содержит «ключ реестра» (или строку --match:
 у пилота с геномом ключа реестра нет, его первое сообщение — «…ты — автор t-boards…»). `--all` — все сессии хоста и
 слоя (repo_root и layer_home из eval/nerve/config.json): их папки проектов, папки worktree и субагенты
 `<sid>/subagents/*.jsonl`, без фильтра по первому сообщению; запрос, записанный в двух файлах, считается один раз.
+`--product <slug>` — только папка проекта этого продукта (`team.project_dir` из instances/<slug>.json) и её worktree:
+сессия продукта открыта в его основном checkout (как в team_status.py). Наблюдатель claude-mem (раздел 7) общий.
 1. Деньги по статьям: вход, запись кэша (5 мин / 1 ч), чтение кэша, выход. Холодный вызов — запись кэша больше
    половины контекста (от 30K), то есть контекст переписан целиком. Причина (d-f63b-economy-0711), по порядку:
    старт, сжатие, пауза ≥ 60 мин, ToolSearch с прошлого вызова, запись отложенных инструментов без ToolSearch,
@@ -35,17 +38,21 @@ from datetime import datetime, timedelta
 HOME_CLAUDE = os.path.expanduser('~/.claude/')
 ROOT = HOME_CLAUDE + 'projects/-Users-agolubenko-Desktop-Development-HR-Helper-v2'
 OBSERVER_GLOB = HOME_CLAUDE + 'projects/*observer*/*.jsonl'
-PRICES = {'fable': (10, 50, 0.25), 'opus-5-5': (4, 20, 0.2), 'opus-5': (5, 25, 0.5), 'sonnet': (2, 10, 0.2),
-          'haiku-5-5': (0.1, 0.5, 0.01)}
-COMPACTED = 'This session is being continued'
+NERVE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'nerve')
+# прайс, разбор и список транскриптов — общие для замеров eval (GL-1): prices.py, transcript.py
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from prices import call_cost  # noqa: E402
+import transcript as tr  # noqa: E402
+from transcript import COMPACTED, local_time, text_of  # noqa: E402
 
 TOOLSET_DELTA = {'deferred_tools_delta', 'mcp_instructions_delta', 'agent_listing_delta', 'skill_listing'}
 pos = [a for a in sys.argv[1:] if not a.startswith('--')]
 out_json = sys.argv[sys.argv.index('--json') + 1] if '--json' in sys.argv else None
 match = sys.argv[sys.argv.index('--match') + 1] if '--match' in sys.argv else 'ключ реестра'
 hours = sys.argv[sys.argv.index('--hours') + 1] if '--hours' in sys.argv else None
+product = sys.argv[sys.argv.index('--product') + 1] if '--product' in sys.argv else None
 all_dirs = '--all' in sys.argv
-for flag_value in (out_json, match, hours):
+for flag_value in (out_json, match, hours, product):
     if flag_value in pos:
         pos.remove(flag_value)
 if hours:
@@ -56,34 +63,35 @@ else:
     until = datetime.strptime(pos[1], '%Y-%m-%d %H:%M')
 
 
-def project_prefixes(config=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'nerve', 'config.json')):
-    """Claude project-dir names of the host and the layer checkouts; worktree dirs start with the same name."""
+def product_dir(slug):
+    """Claude project-dir name of one product: the base name of team.project_dir in instances/<slug>.json."""
+    sys.path.append(NERVE)
+    import products
     try:
-        with open(config, encoding='utf-8') as f:
-            cfg = json.load(f)
-    except (OSError, ValueError):
-        cfg = {}
-    roots = [cfg.get('repo_root'), os.path.dirname(cfg['layer_home'].rstrip('/')) if cfg.get('layer_home') else None]
-    return [re.sub(r'[^A-Za-z0-9]', '-', r) for r in roots if r] or [os.path.basename(ROOT)]
+        cfg = products.config_for(slug)
+    except products.ProductError as e:
+        sys.exit(f'--product: {e}')
+    return os.path.basename(os.path.expanduser(cfg['team']['project_dir']).rstrip('/'))
+
+
+PRODUCT_DIR = product_dir(product) if product else None
+if PRODUCT_DIR:
+    ROOT = HOME_CLAUDE + 'projects/' + PRODUCT_DIR
+
+
+def own_dir(path, prefixes):
+    """The session's project dir is a prefix or its worktree: not «…-tAIBE2» for «…-tAIBE». tr.files matches a bare
+    prefix on purpose: spend.py counts «…-tAIBE2» as unattributed."""
+    d = os.path.relpath(path, HOME_CLAUDE + 'projects').split(os.sep)[0]
+    return any(d == x or d.startswith(x + '-') for x in prefixes)
 
 
 def transcripts():
     """(path, is_subagent): the team dir only, or with --all every dir of the instance and its subagents."""
     if not all_dirs:
         return [(p, False) for p in glob.glob(os.path.join(ROOT, '*.jsonl'))]
-    prefixes, out = project_prefixes(), []
-    for d in glob.glob(HOME_CLAUDE + 'projects/*'):
-        if any(os.path.basename(d).startswith(p) for p in prefixes):
-            out += [(p, False) for p in glob.glob(os.path.join(d, '*.jsonl'))]
-            out += [(p, True) for p in glob.glob(os.path.join(d, '*', 'subagents', '*.jsonl'))]
-
-    def born(item):
-        try:
-            st = os.stat(item[0])
-        except OSError:  # deleted between the glob and the sort; the scan skips it
-            return 0
-        return getattr(st, 'st_birthtime', st.st_mtime)
-    return sorted(out, key=born)   # the original before its fork: a copied request counts where it was made
+    prefixes = [PRODUCT_DIR] if PRODUCT_DIR else tr.project_prefixes(fallback=os.path.basename(ROOT))
+    return [(p, sub) for p, sub in tr.files(prefixes, HOME_CLAUDE) if own_dir(p, prefixes)]
 
 
 def cold_cause(first, was_compact, gap, marks):
@@ -104,32 +112,11 @@ def cold_cause(first, was_compact, gap, marks):
     return 'прочее'
 
 
-def price(model):
-    for k in PRICES:
-        if k in (model or ''):
-            return PRICES[k]
-    return PRICES['opus-5-5']
-
-
 # one estimate for the whole eval: the evolution toolkit prices artifacts with the same function
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'evolve'))
 from tokens import est_tokens  # noqa: E402,F401
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import context_gen as cg  # noqa: E402 — section 8
-
-
-def text_of(content):
-    if isinstance(content, str):
-        return content
-    out = []
-    for x in content or []:
-        if isinstance(x, dict) and isinstance(x.get('text') or x.get('content'), str):
-            out.append(x.get('text') or x.get('content'))
-    return ' '.join(out)
-
-
-def local_time(ts):
-    return datetime.fromisoformat(ts.replace('Z', '+00:00')).astimezone().replace(tzinfo=None)
 
 
 def wake_kind(text):
@@ -169,17 +156,6 @@ def norm_path(p):
 def first_tag(text):
     m = re.search(r'<([a-zA-Z][\w-]{2,40})[\s>]', text[:400])
     return m.group(1) if m else 'без тега'
-
-
-def call_cost(u, model):
-    pi, po, pr = price(model)
-    cw = u.get('cache_creation_input_tokens', 0) or 0
-    c1 = (u.get('cache_creation') or {}).get('ephemeral_1h_input_tokens', 0) or 0
-    return {'вход': (u.get('input_tokens', 0) or 0) * pi / 1e6,
-            'запись кэша 5 мин': (cw - c1) * 1.25 * pi / 1e6,
-            'запись кэша 1 ч': c1 * 2 * pi / 1e6,
-            'чтение кэша': (u.get('cache_read_input_tokens', 0) or 0) * pr / 1e6,
-            'выход': (u.get('output_tokens', 0) or 0) * po / 1e6}
 
 
 def first_prompt(path):
@@ -400,7 +376,7 @@ for path in glob.glob(OBSERVER_GLOB):
 
 total = sum(money.values())
 pct = (lambda v: f'{v / total:5.1%}') if total else (lambda _v: '-')
-print(f'Окно {since:%d.%m %H:%M} – {until:%d.%m %H:%M}: сессий {sessions} (+ субагентов {subagent_files}), вызовов {calls_total}, ${total:,.1f}, '
+print((f'Продукт {product}. ' if product else '') + f'Окно {since:%d.%m %H:%M} – {until:%d.%m %H:%M}: сессий {sessions} (+ субагентов {subagent_files}), вызовов {calls_total}, ${total:,.1f}, '
       f'средний контекст {ctx_sum // max(calls_total, 1):,}; модели: ' + ', '.join(f'{k} {v}' for k, v in models.most_common(4)))
 print('1. Деньги: ' + ' · '.join(f'{k} ${v:,.1f} ({pct(v).strip()})' for k, v in money.most_common()))
 print('   Холодные вызовы по причине: ' + ' · '.join(
@@ -424,7 +400,7 @@ if base:
     base.sort()
     print(f'6. Первый вызов сессии: мин {base[0]:,} · медиана {base[len(base) // 2]:,} · макс {base[-1]:,} (сессий {len(base)})')
 obs_total = sum(obs_money.values())
-print(f'7. Наблюдатель claude-mem: сессий {obs_files}, вызовов {obs_calls}, ${obs_total:,.1f} по прайсу; модели: '
+print('7. Наблюдатель claude-mem' + (' (общий для продуктов)' if product else '') + f': сессий {obs_files}, вызовов {obs_calls}, ${obs_total:,.1f} по прайсу; модели: '
       + (', '.join(f'{k} {v}' for k, v in obs_models.most_common(3)) or '—'))
 bands = cg.generation_bands(gens)
 print('8. Поколение по окну (наибольший контекст сессии без субагентов): ' + (' · '.join(
@@ -432,7 +408,7 @@ print('8. Поколение по окну (наибольший контекс�
     f'ход ${v["call_usd"]}, передача ' + (f'{v["handoff_share"]:.0%}' if v['handoff_share'] is not None else '—')
     for k, v in bands.items()) or '—'))
 if out_json:
-    json.dump({'window': [f'{since:%Y-%m-%d %H:%M}', f'{until:%Y-%m-%d %H:%M}'], 'all': all_dirs,
+    json.dump({'window': [f'{since:%Y-%m-%d %H:%M}', f'{until:%Y-%m-%d %H:%M}'], 'all': all_dirs, 'product': product,
                'total': round(total, 2), 'generations': bands,
                'money': money, 'cold': cold, 'held': held, 'ups_by_wake': ups_by_wake,
                'hook_src': {f'{e}/{tag}': v for (e, tag), v in hook_src.items()}, 'nested': nested, 'instr': instr,

@@ -7,8 +7,14 @@ import {
   jsonResponse,
 } from "../openapi";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
+import {
+  maskForTokenCaller,
+  restoreForTokenCaller,
+} from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
+import { type AuthorKind, authorMark, writerKind } from "../forest/author-kind";
 import createActivity from "./controllers/create-activity";
+import { dialogMarkFor, markOpenDialogs } from "../forest/dialog/dialog-store";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
 import getActivities from "./controllers/get-activities";
@@ -28,6 +34,7 @@ import {
   updateCommentBody,
   workspaceIdParam,
 } from "./schema";
+import { storedCommentContent } from "./stored-comment-content";
 
 const getWorkspaceActivitiesRoute = createRoute({
   method: "get",
@@ -69,6 +76,14 @@ const getActivitiesRoute = createRoute({
   },
 });
 
+// TB-29. Status and move events date a card (completed_at, cycle time) and
+// are written by the server when the task changes; a client-made one would
+// forge that history.
+const SERVER_WRITTEN_TYPES: ReadonlySet<string> = new Set([
+  "status_changed",
+  "moved",
+]);
+
 const createActivityRoute = createRoute({
   method: "post",
   operationId: "createActivity",
@@ -90,7 +105,7 @@ const createActivityRoute = createRoute({
   responses: {
     200: jsonResponse("The created activity", activitySchema),
     400: errorResponse(
-      "Invalid body, or comment activity submitted through the generic endpoint",
+      "Invalid body, a comment (use the comment endpoint), or a status_changed or moved event, which only the server writes",
     ),
     403: errorResponse(
       "No access to the project, or missing task:update permission",
@@ -146,6 +161,9 @@ const updateCommentRoute = createRoute({
     400: errorResponse("Invalid body"),
     403: errorResponse("Not the author, or no access to the project"),
     404: errorResponse("Activity or comment not found"),
+    409: errorResponse(
+      "A caller with a token sent [REDACTED:kind] markers that do not match the stored values; keep the markers in place",
+    ),
   },
 });
 
@@ -174,23 +192,28 @@ const deleteCommentRoute = createRoute({
 const activity = apiRouter()
   .openapi(getWorkspaceActivitiesRoute, async (c) =>
     c.json(
-      await getWorkspaceActivities(
-        c.req.valid("param").workspaceId,
-        c.get("userId"),
+      maskForTokenCaller(
+        c,
+        await getWorkspaceActivities(
+          c.req.valid("param").workspaceId,
+          c.get("userId"),
+        ),
       ),
       200,
     ),
   )
-  .openapi(getActivitiesRoute, async (c) =>
-    c.json(
-      await getActivities(
-        c.req.valid("param").taskId,
-        c.get("userId"),
-        c.req.valid("query").limit,
-      ),
+  .openapi(getActivitiesRoute, async (c) => {
+    const { taskId } = c.req.valid("param");
+    const activities = await getActivities(
+      taskId,
+      c.get("userId"),
+      c.req.valid("query").limit,
+    );
+    return c.json(
+      maskForTokenCaller(c, await markOpenDialogs(taskId, activities)),
       200,
-    ),
-  )
+    );
+  })
   .openapi(createActivityRoute, async (c) => {
     const { taskId, message, type, eventData } = c.req.valid("json");
     if (type === "comment") {
@@ -198,25 +221,65 @@ const activity = apiRouter()
         message: "Use the comment endpoint to create comments",
       });
     }
+    if (SERVER_WRITTEN_TYPES.has(type)) {
+      throw new HTTPException(400, {
+        message: `activity_server_only: the server writes ${type} when the task changes; change the task instead`,
+      });
+    }
     return c.json(
-      await createActivity(taskId, type, c.get("userId"), message, eventData),
+      maskForTokenCaller(
+        c,
+        // TB-83: the writer's kind is stamped, never taken from the body.
+        await createActivity(taskId, type, c.get("userId"), message, {
+          ...eventData,
+          ...authorMark(writerKind(c)),
+        }),
+      ),
       200,
     );
   })
   .openapi(createCommentRoute, async (c) => {
     const { taskId, comment } = c.req.valid("json");
-    return c.json(await createComment(taskId, c.get("userId"), comment), 200);
+    const dialog = await dialogMarkFor(c, taskId);
+    return c.json(
+      maskForTokenCaller(
+        c,
+        await createComment(
+          taskId,
+          c.get("userId"),
+          comment,
+          undefined,
+          writerKind(c),
+          dialog,
+        ),
+      ),
+      200,
+    );
   })
   .openapi(updateCommentRoute, async (c) => {
     const { activityId, comment } = c.req.valid("json");
+    const restored = await restoreForTokenCaller(c, comment, () =>
+      storedCommentContent(activityId),
+    );
     return c.json(
-      await updateComment(c.get("userId"), activityId, comment),
+      maskForTokenCaller(
+        c,
+        await updateComment(
+          c.get("userId"),
+          activityId,
+          restored,
+          writerKind(c),
+        ),
+      ),
       200,
     );
   })
   .openapi(deleteCommentRoute, async (c) =>
     c.json(
-      await deleteComment(c.get("userId"), c.req.valid("json").activityId),
+      maskForTokenCaller(
+        c,
+        await deleteComment(c.get("userId"), c.req.valid("json").activityId),
+      ),
       200,
     ),
   );
@@ -226,11 +289,18 @@ subscribeToEvent<{
   currentUserId: string;
   type: string;
   content: string | null;
+  author?: AuthorKind;
 }>("task.created", async (data) => {
   if (!data.currentUserId || !data.taskId || !data.type) {
     return;
   }
-  await createActivity(data.taskId, data.type, data.currentUserId, null, {});
+  await createActivity(
+    data.taskId,
+    data.type,
+    data.currentUserId,
+    null,
+    authorMark(data.author),
+  );
 });
 
 subscribeToEvent<{

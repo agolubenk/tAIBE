@@ -3,7 +3,8 @@
 # emulation). Runs the real compose.yml as project tb-selftest on an empty
 # database, so migrations run from scratch, unlike the dev database.
 # Checks: health, migrations = journal, admin and products seed, TLS proxy with a
-# self-signed certificate, a backup dump and its restore. Cleans up after itself.
+# self-signed certificate, a backup dump and its restore, the memory sampler.
+# Cleans up after itself.
 # Usage: deploy/vps/selftest.sh <image-tag> <scratch-dir>
 set -euo pipefail
 
@@ -71,6 +72,11 @@ done
 }
 log "app healthy"
 
+# TB-124: the memory sampler reads this project's containers and their limits.
+mem="$(TB_COMPOSE_PROJECT="$project" TB_MEM_STATS_DIR="$root/mem-stats" bash "$vps/mem-stats.sh" sample 0 2>/dev/null)"
+grep -qE $'\tapp\t[0-9]+\.[0-9]\t1024$' "$mem" || fail "mem-stats: no app row with the 1g limit in $mem"
+log "mem-stats: $(cut -f2 "$mem" | sort | tr '\n' ' ')"
+
 journal="$(node -e "process.stdout.write(String(require(process.argv[1]).entries.length))" \
   "$app/apps/api/drizzle/meta/_journal.json")"
 applied="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -Atc \
@@ -86,7 +92,7 @@ admins="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -Atc \
 log "seed: one admin after two runs"
 
 "${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1
-again="$("${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1)"
+again="$("${compose[@]}" exec -T app node /app/apps/api/dist/seed-products.js <"$vps/seed/products.json" 2>&1 | tail -1)" || fail "second products seed failed: $again"
 printf '%s\n' "$again"
 [[ "$again" == "products: +0 "*"cards: +0 "*"links: +0 "* ]] || fail "second products seed changed something: $again"
 log "seed: products and links added once, kept on the second run"
@@ -97,7 +103,7 @@ eval "$(grep -E '^(MIRROR_SLUG|OWNED_SQL|PRODUCT_SQL)=' "$vps/mirror-setup.sh")"
 if [ -z "${PRODUCT_SQL:-}" ] || [ -z "${OWNED_SQL:-}" ]; then fail "lookup SQL not found in mirror-setup.sh"; fi
 product="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -At -F ' | ' -c "$PRODUCT_SQL")"
 [[ "$product" =~ ^[a-z0-9]+\ \|\ HR\ Helper\ /\ Lavaeon$ ]] || fail "mirror-setup product lookup returned: $product"
-owned="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -At -F ' | ' -c "$OWNED_SQL" | grep -c .)"
+owned="$("${compose[@]}" exec -T postgres psql -U t_boards -d t_boards -At -F ' | ' -c "$OWNED_SQL" | grep -c . || true)"
 [ "$owned" = 3 ] || fail "admin owns $owned workspaces, expected the 3 products"
 log "mirror-setup lookup: HR Helper product, admin owns 3 products"
 
@@ -134,10 +140,10 @@ log "backup: $(wc -c <"$root/backups/latest.dump" | tr -d ' ') bytes"
 restored="$(sh "$vps/mac/restore-check.sh" "$root/backups/latest.dump")" || fail "restore-check"
 printf '%s\n' "$restored"
 printf '%s\n' "$restored" | grep -qx "migrations $journal" || fail "restored dump lacks $journal migrations"
-cards="$(grep -c -E '"key": "[A-Z]{2,5}-[0-9]{3}"' "$vps/seed/products.json")"
-for row in "users 1" "workspaces 3" "tasks $cards"; do
+cards="$(grep -c -E '"key": "[A-Z]{2,5}-[0-9]{3}"' "$vps/seed/products.json" || true)"
+for row in "users 1" "workspaces 3" "tasks $cards" "oq_guards 3"; do
   printf '%s\n' "$restored" | grep -qx "$row" || fail "restored dump lacks $row"
 done
-log "restore: $journal migrations, the admin, 3 products and $cards cards back"
+log "restore: $journal migrations, the admin, 3 products, $cards cards and the 3 owner-queue write guards back"
 
 log "selftest: all checks passed"

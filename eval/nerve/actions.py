@@ -2,7 +2,8 @@
 """Авто-действия Нерва (П8, П10; d-pipe-nerve, владелец 28.10: «автозапуск и авто-действия делаем»).
 
 1. Предвестник лимита: окно 5 ч израсходовано на warn_at от квоты окна → всем активным ролям «допиши шаг и
-   work_state». Квота окна — медиана расхода до сбоя в последних волнах лимита (калибруется сама на каждой волне).
+   work_state». Квота окна — медиана расхода до сбоя в последних волнах лимита (калибруется сама на каждой волне);
+   волна помнит аккаунт входа, квота — по волнам своего аккаунта, без них — по тарифу (account.py, 19.11).
 2. Лимит аккаунта сработал → тапы молчат до сброса; Координатору — одна строка.
 3. Сброс лимита → активные роли будятся строкой «лимит снят». Если сброс ночью — в начале дня.
 4. Недельный лимит → пункт владельцу в очереди (вид check), один на сброс.
@@ -10,11 +11,13 @@
 """
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
+import account
 import budget
 import sources
-from journal import NERVOUS
+from journal import DIGEST, NERVOUS
 
 
 def _iso(dt):
@@ -36,17 +39,51 @@ def calibrate_waves(ctx, meter, days=7):
     return out
 
 
-def quota5(st, cfg):
-    usd = [w["usd"] for w in st["waves"][-cfg["budget"]["waves_for_quota"]:] if w["usd"] > 0]
-    q = budget.median(usd)
+def quota5(st, cfg, acct=account.CURRENT):
+    """Квота окна 5 ч: по волнам аккаунта входа, без них — по волнам других, пересчитанным по тарифу (account.quota).
+    Источник квоты — в st["quota_src"]: account · tier · all · default."""
+    if acct is account.CURRENT:
+        acct = account.observe(st, time.time())
+    q, st["quota_src"] = account.quota(st["waves"], cfg["budget"]["waves_for_quota"], acct)
     return q if q else cfg["budget"]["quota5h_default"]
+
+
+EVOLVE_DIR = os.path.expanduser(os.environ.get("EVOLVE_STATE_DIR") or "~/.claude/evolve")  # как daily_steps.STATE_DIR
+
+
+def product_roots(ctx):
+    """{slug: repo_root} всех продуктов instances/, и неактивных: их сессии тоже тратят окно (SE-66). Сломанный
+    instances/ не останавливает бюджет: тогда только свой продукт, остальное — unattributed."""
+    try:
+        import products
+        _, items = products.load()
+        return {slug: d["repo_root"] for slug, d in items.items()}
+    except (ImportError, OSError, ValueError, KeyError):
+        return {ctx.cfg.get("slug") or "default": ctx.cfg.get("repo_root")}
+
+
+def product_shares(meter, st_meter, share5, q, ws, now_l, evolve_dir=EVOLVE_DIR):
+    """Поля mode.json о долях окна по продуктам (SE-66). Сначала только измерение: решения режима от них не зависят,
+    поэтому сбой здесь режим и лимит не держит — вместо долей в mode.json причина (share5_by_error)."""
+    try:
+        by = meter.by_product(ws, now_l)
+        overhead, unknown = budget.evolve_overhead(evolve_dir, ws, now_l)
+        out = {"share5_by": budget.shares(share5, by, overhead, q)}
+        if unknown:
+            out["overhead_unknown"] = unknown
+        since = _dt(st_meter.get("products_from"))
+        if since:
+            out.update(products_from=_iso(since.astimezone(now_l.tzinfo)), products_partial=since > ws)
+        return out
+    except Exception as e:  # noqa: BLE001 — измерение не валит poll_budget до write_mode
+        return {"share5_by_error": f"{type(e).__name__}: {e}"[:200]}
 
 
 def poll_budget(ctx):
     cfg = ctx.cfg
     b = cfg["budget"]
     st = ctx.state.setdefault("budget", {"meter": {}, "waves": [], "limit": None, "checked": "", "warned": ""})
-    meter = budget.Meter(st["meter"])
+    meter = budget.Meter(st["meter"], products=budget.Products(product_roots(ctx)))
     limits = meter.update(ctx.projects_root, ctx.now)
     if not st["waves"] and not st.get("calibrated"):
         st["waves"] = calibrate_waves(ctx, meter)
@@ -69,6 +106,10 @@ def poll_budget(ctx):
             ctx.emit_account(f"limit:resume:{lim['reset']}", "limit.resume", NERVOUS, roles,
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
+            # Сброс прошёл — Esc, и ночью тоже (resume там 08:30, а подъём идёт веткой early). До сброса — смена
+            # аккаунта владельцем: клавиш нет, ложный подъём не съест Esc сброса.
+            if now_l >= _dt(lim["reset"]):
+                unstick_roles(ctx, lim["reset"])
             lim = None
 
     q = quota5(st, cfg)
@@ -89,6 +130,7 @@ def poll_budget(ctx):
     mode = budget.decide_mode(now_l, share5, _dt(lim["resume"]) if lim else None, cfg)
     mode.update(quota5=round(q, 1), used5=round(used, 1), window_from=_iso(ws),
                 week_usd=round(meter.total(budget.week_start(now_l, *_week(cfg))), 1), at=_iso(now_l))
+    mode.update(product_shares(meter, st["meter"], share5, q, ws, now_l))
     ctx.write_mode(mode)
 
 
@@ -96,6 +138,25 @@ def _week(cfg):
     w = cfg["budget"]["week_reset"]
     hh, mm = (int(x) for x in w["time"].split(":"))
     return w["weekday"], hh, mm
+
+
+def unstick_roles(ctx, reset):
+    """SE-174: в момент сброса закрыть меню лимита Claude Code в панелях ролей (eval/tools/limit_unstick.py). Триггер —
+    сброс в самом демоне, не событие журнала (S4). Один Esc на линию за сброс — ключ журнала. Сбой не валит бюджет."""
+    if not ctx.deliver or not ctx.cfg["budget"].get("unstick"):  # выключатель — budget.unstick в instances/_shared.json
+        return
+    pre = f"limit:unstick:{reset}:"
+    try:
+        import limit_unstick
+        done = limit_unstick.unstick(lambda line: pre + line not in ctx.journal.keys)
+    except Exception as e:  # noqa: BLE001 — tmux или ps недоступны: роли ждут владельца, как до SE-174
+        ctx.emit(f"{pre}error", "nerve.error", DIGEST, ["release"], f"меню лимита не закрыто: {type(e).__name__}: "
+                 f"{e}"[:200], "budget")
+        return
+    for d in done:
+        ctx.emit(pre + d["line"], "limit.unstick", DIGEST, ["coord"],
+                 f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}): меню лимита — {d['action']}"
+                 + (f"; sha256 {d['sha256'][:16]}" if d["sha256"] else ""), "budget", sha256=d["sha256"])
 
 
 def _on_limit(ctx, st, meter, ts, text):
@@ -114,8 +175,11 @@ def _on_limit(ctx, st, meter, ts, text):
              f"лимит аккаунта ({'неделя' if kind == 'weekly' else 'окно 5 ч'}) в {ts_l:%H:%M}: команда стоит до "
              f"{reset:%d.%m %H:%M}, Нерв разбудит роли сам", "budget")
     if kind == "session" and all(w.get("reset") != _iso(reset) for w in st["waves"]):
-        st["waves"].append({"hit": _iso(ts_l), "reset": _iso(reset),
-                            "usd": round(meter.total(reset - timedelta(hours=5), ts), 2)})
+        wave = {"hit": _iso(ts_l), "reset": _iso(reset), "usd": round(meter.total(reset - timedelta(hours=5), ts), 2)}
+        acct = account.observe(st, ctx.now.timestamp())
+        if acct and acct["since"] <= ts.timestamp():  # вход сменили позже отказа — чей отказ, не знаем: без метки
+            wave.update(acct=acct["id"], mult=acct["mult"])
+        st["waves"].append(wave)
         st["waves"] = st["waves"][-50:]
     resume = budget.resume_at(reset, ctx.cfg)
     cur = st.get("limit")

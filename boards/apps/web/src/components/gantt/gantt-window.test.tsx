@@ -51,6 +51,7 @@ vi.mock("@/store/user-preferences", () => ({
 }));
 vi.mock("@/lib/i18n/domain", () => ({
   getStatusLabel: (status: string) => status,
+  getStatusDisplayLabel: (status: string, name?: string) => name ?? status,
   getPriorityLabel: (priority: string) => priority,
 }));
 vi.mock("react-i18next", () => ({

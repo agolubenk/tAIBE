@@ -3,12 +3,14 @@ import { approvalRoutes } from "./routes/approval-routes";
 import { bugsRoutes } from "./routes/bugs-routes";
 import { cardRoutes } from "./routes/card-routes";
 import { contextRoutes } from "./routes/context-routes";
+import { costRoutes } from "./routes/cost-routes";
 import { fellRoutes } from "./routes/fell-routes";
 import { graphRoutes } from "./routes/graph-routes";
 import { historyRoutes } from "./routes/history-routes";
 import { leaseRoutes } from "./routes/lease-routes";
 import { memoryRoutes } from "./routes/memory-routes";
 import { mirrorRoutes } from "./routes/mirror-routes";
+import { ownerQueueRoutes } from "./routes/owner-queue-routes";
 import { pulseRoutes } from "./routes/pulse-routes";
 import { readRoutes } from "./routes/read-routes";
 import { treeRoutes } from "./routes/tree-routes";
@@ -21,7 +23,7 @@ import { workStateRoutes } from "./routes/work-state-routes";
 // the context pack an agent reads to pick up a card (R-031), and the reads
 // the forest page and the board show: trees with their branches, live leases,
 // the agents' feed, what is on fire and the links graph (R-090), who is on
-// a card and its bugs.
+// a card and its bugs, and what agents spent on a card (R-036).
 const forest = apiRouter<BaseVariables & { workspaceId: string }>()
   .route("/", leaseRoutes)
   .route("/", approvalRoutes)
@@ -31,7 +33,9 @@ const forest = apiRouter<BaseVariables & { workspaceId: string }>()
   .route("/", historyRoutes)
   .route("/", contextRoutes)
   .route("/", memoryRoutes)
+  .route("/", costRoutes)
   .route("/", mirrorRoutes)
+  .route("/", ownerQueueRoutes)
   .route("/", treeRoutes)
   .route("/", workStateRoutes)
   .route("/", workersRoutes)

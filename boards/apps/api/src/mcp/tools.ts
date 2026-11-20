@@ -8,7 +8,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
 import type { ForestActor } from "../forest/actor";
 import { writeJournal } from "../forest/journal";
-import { callDetail } from "./call-detail";
+import { callDetail, callTarget } from "./call-detail";
 import type { McpRole } from "./tool-scope/roles";
 import { collectTools, registerScoped } from "./tool-scope/scoped-tools";
 import {
@@ -87,17 +87,25 @@ class ApiClient {
 }
 
 // role: R-034, the tool set this session sees; none keeps the full set.
-export type McpSession = { token: string; userId: string; role?: McpRole };
+// label: the client's session label (x-t-boards-session), TB-135.
+export type McpSession = {
+  token: string;
+  userId: string;
+  role?: McpRole;
+  label?: string;
+};
 
-// MCP rows go under the same actor id the forest gives this bearer.
-function bearerActor(userId: string): ForestActor {
-  const id = `bearer:${userId}`;
-  return { kind: "agent", id, name: id, userId };
+// MCP rows go under the same actor the forest gives this bearer and label
+// (resolveForestActor): the label names the session, the token the user.
+export function bearerActor(userId: string, label?: string): ForestActor {
+  const base = `bearer:${userId}`;
+  return label
+    ? { kind: "agent", id: `${base}:${label}`, name: label, userId }
+    : { kind: "agent", id: base, name: base, userId };
 }
 
 // AC-022: a TOON codec failure answers in JSON and lands in the agent journal.
-function journalFormatFallback(userId: string) {
-  const actor = bearerActor(userId);
+function journalFormatFallback(actor: ForestActor) {
   return (tool: string, error: string) => {
     writeJournal({
       workspaceId: null,
@@ -115,16 +123,14 @@ function journalFormatFallback(userId: string) {
 
 // R-036: every call, with its arguments and answer size. The workspace stays
 // empty: the agent names it in the arguments, and a wrong one must not lose
-// the row on the foreign key.
-function journalCall(userId: string) {
-  const actor = bearerActor(userId);
+// the row on the foreign key. A call about a card is filed under it (TB-44).
+function journalCall(actor: ForestActor) {
   return (call: ToolCall) => {
     writeJournal({
       workspaceId: null,
       actor,
       action: "mcp.call",
-      targetType: "mcp_tool",
-      targetId: call.tool,
+      ...callTarget(call),
       outcome: call.ok ? "allowed" : "denied",
       detail: callDetail(call),
     }).catch((e: unknown) =>
@@ -139,9 +145,10 @@ export async function registerMcpTools(
   session: McpSession,
 ): Promise<void> {
   const client = new ApiClient(baseUrl, session.token);
+  const actor = bearerActor(session.userId, session.label);
   const hooks = {
-    onFormatFallback: journalFormatFallback(session.userId),
-    onCall: journalCall(session.userId),
+    onFormatFallback: journalFormatFallback(actor),
+    onCall: journalCall(actor),
   };
   const { role } = session;
   if (!role) {

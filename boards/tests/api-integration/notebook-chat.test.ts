@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   afterAll,
   afterEach,
@@ -25,6 +25,7 @@ import { createApp } from "../../apps/api/src/index";
 import { mockAuthenticatedSession } from "./helpers/auth";
 import { createInstanceAdmin } from "./helpers/admin/create-instance-admin";
 import { resetTestDatabase } from "./helpers/database";
+import { CUT_DOC, DB_VALUE, shows } from "./helpers/cut-secret";
 import { createWorkspaceMember } from "./helpers/fixtures";
 import { createForest } from "./helpers/forest";
 import { projectAccessApi } from "./helpers/project-access/project-access-api";
@@ -48,6 +49,7 @@ type Reply = {
   content?: string;
   retryAfter?: string;
   delayMs?: number;
+  usage?: unknown;
 };
 type Seen = {
   authorization?: string;
@@ -82,7 +84,10 @@ beforeAll(async () => {
         res.end(
           JSON.stringify(
             next.status === 200
-              ? { choices: [{ message: { content: next.content } }] }
+              ? {
+                  choices: [{ message: { content: next.content } }],
+                  usage: next.usage,
+                }
               : { error: "nope" },
           ),
         );
@@ -228,6 +233,91 @@ describe("API integration: notebook chat", () => {
     });
   });
 
+  // D-018 (storage d-taibe-tb134-usage-1411 = A): the provider's own counts
+  // are kept per answer and summed per workspace for the admin.
+  it("stores the provider's usage per answer and brief and sums it for the admin", async () => {
+    useLlm();
+    const brief =
+      "GOAL: Extend a card lease.\nCONSTRAINTS: none stated\nACCEPTANCE: lease renewed";
+    script = [
+      {
+        status: 200,
+        content: "Через час [1].",
+        usage: {
+          prompt_tokens: 1200,
+          completion_tokens: 80,
+          prompt_tokens_details: { cached_tokens: 1024 },
+        },
+      },
+      {
+        status: 200,
+        content: brief,
+        usage: {
+          prompt_tokens: 300,
+          completion_tokens: 20,
+          prompt_cache_hit_tokens: 100,
+        },
+      },
+      { status: 200, content: "В бревно [1]." },
+      { status: 500 },
+    ];
+    const nb = await chatFixture();
+    const asked = await nb.owner("POST", "/threads", {
+      question: "аренда карточки",
+    });
+    const threadId = asked.body.thread.id;
+    // The usage is for the admin, not for the members who read the thread.
+    expect(asked.body.messages[1]).not.toHaveProperty("usage");
+    await nb.owner("POST", `/threads/${threadId}/brief`);
+    await nb.owner("POST", `/threads/${threadId}/messages`, {
+      question: "а рубка?",
+    });
+    const failed = await nb.owner("POST", `/threads/${threadId}/messages`, {
+      question: "а семена?",
+    });
+    expect(failed.body.messages[1]).toMatchObject({ status: "failed" });
+
+    const rows = await db
+      .select({
+        status: schema.notebookMessageTable.status,
+        usage: schema.notebookMessageTable.usage,
+        empty: sql<boolean>`${schema.notebookMessageTable.usage} IS NULL`,
+      })
+      .from(schema.notebookMessageTable)
+      .where(eq(schema.notebookMessageTable.role, "assistant"))
+      .orderBy(schema.notebookMessageTable.createdAt);
+    expect(rows).toEqual([
+      {
+        status: "answered",
+        usage: { input: 1200, output: 80, cached: 1024 },
+        empty: false,
+      },
+      {
+        status: "brief",
+        usage: { input: 300, output: 20, cached: 100 },
+        empty: false,
+      },
+      // No usage from the provider, and a failed call: SQL NULL, not a JSON
+      // null, so count(usage) leaves them out.
+      { status: "answered", usage: null, empty: true },
+      { status: "failed", usage: null, empty: true },
+    ]);
+
+    mockAuthenticatedSession(await createInstanceAdmin());
+    const view = await projectAccessApi()("/admin/notebook-model");
+    expect((await view.json()).usage).toEqual([
+      {
+        workspaceId: nb.workspace.id,
+        name: expect.any(String),
+        calls: 4,
+        withUsage: 2,
+        input: 1500,
+        output: 100,
+        cached: 1124,
+      },
+    ]);
+  });
+
   // The model may come from the settings while the key stays in the
   // server's file: each value is read on its own.
   it("answers with the admin's model and the server's key file", async () => {
@@ -290,6 +380,68 @@ describe("API integration: notebook chat", () => {
       status: "failed",
       content: "",
     });
+  });
+
+  it("moves to the next point of the chain and stores the model that answered (TB-159)", async () => {
+    useLlm();
+    vi.stubEnv(
+      "SETTINGS_ENCRYPTION_KEY",
+      "test-settings-encryption-key-0123456789",
+    );
+    await writeStoredNotebookModel(
+      {
+        chain: [
+          {
+            id: "p2",
+            baseUrl: "https://chain.example/v1",
+            model: "chain-model",
+            key: sealSecret("sk-test-chain-key", "https://chain.example"),
+          },
+        ],
+      },
+      null,
+    );
+    // The second point is an https address: answered here, every other
+    // address goes to the real fetch (the scripted server, the embedder).
+    const realFetch = globalThis.fetch;
+    const chainCalls: (string | null)[] = [];
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).startsWith("https://chain.example/")) {
+        return realFetch(input, init);
+      }
+      chainCalls.push(new Headers(init?.headers).get("authorization"));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            model: "chain-model",
+            choices: [{ message: { content: "Запас [1]." } }],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    });
+    try {
+      const nb = await chatFixture();
+      script = [{ status: 429, retryAfter: "3600" }];
+      const asked = await nb.owner("POST", "/threads", { question: "аренда" });
+      expect(asked.body.messages[1]).toMatchObject({
+        status: "answered",
+        content: "Запас [1].",
+        model: "chain-model",
+      });
+      expect(seen.map((call) => call.authorization)).toEqual([`Bearer ${KEY}`]);
+      expect(chainCalls).toEqual(["Bearer sk-test-chain-key"]);
+
+      mockAuthenticatedSession(await createInstanceAdmin());
+      const view = await projectAccessApi()("/admin/notebook-model");
+      expect(await view.json()).toMatchObject({
+        callsToday: 1,
+        pointCallsToday: 0,
+        chain: [{ id: "p2", callsToday: 1 }],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("stops calling the model at the daily cap", async () => {
@@ -571,5 +723,28 @@ describe("API integration: notebook chat", () => {
       (await nb.owner("GET", `/threads/${asked.body.thread.id}`)).status,
     ).toBe(404);
     expect(await db.$count(schema.notebookMessageTable)).toBe(2);
+  });
+
+  it("sends a secret cut by a chunk edge to the model masked (TB-203)", async () => {
+    useLlm();
+    const forest = await createForest();
+    const stored = await forest.ownerApi(
+      "PUT",
+      `/notebook/${forest.workspace.id}/sources`,
+      { kind: "repo-doc", ref: "docs/cut.md", title: "Граница", text: CUT_DOC },
+    );
+    expect(stored.status).toBe(200);
+
+    // The owner asks: the sources go to a model, maybe at an outside
+    // provider, so the owner's prompt is masked across chunk edges too.
+    const asked = await forest.ownerApi(
+      "POST",
+      `/notebook/${forest.workspace.id}/threads`,
+      { question: "слово" },
+    );
+    expect(asked.status).toBe(201);
+    const prompt = seen[0]?.messages[0]?.content ?? "";
+    expect(prompt.match(/\[\d\] Граница/g)).toHaveLength(3);
+    expect(shows(prompt, DB_VALUE)).toBe(false);
   });
 });

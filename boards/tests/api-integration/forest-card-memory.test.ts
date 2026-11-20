@@ -38,6 +38,8 @@ let port: number;
 let dir: string;
 const asked: string[][] = [];
 const queueAsked: string[] = [];
+// When set, every newest line carries this title instead of "About <key>".
+let secretTitle: string | null = null;
 const saved: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 
 beforeAll(async () => {
@@ -61,7 +63,7 @@ beforeAll(async () => {
             latest: [
               {
                 id: 1,
-                title: `About ${key}`,
+                title: secretTitle ?? `About ${key}`,
                 project: "t-boards",
                 createdAt: "2026-11-13T10:00:00.000Z",
               },
@@ -137,6 +139,7 @@ describe("API integration: card memory (TB-113)", () => {
     await resetTestDatabase();
     asked.length = 0;
     queueAsked.length = 0;
+    secretTitle = null;
   });
 
   afterEach(() => {
@@ -163,6 +166,33 @@ describe("API integration: card memory (TB-113)", () => {
         },
       ],
     });
+  });
+
+  // TB-192, TB-143 decision (a): a caller with a token feeds a model and reads
+  // the titles masked; the web app's cookie session reads them as stored.
+  it("masks secrets in titles for an agent's key on both routes, not for the web app", async () => {
+    const forest = await createForest();
+    const card = await numberedCard(forest.project.id, "memc", 5);
+    const key = `tbk_${"a1B2c3D4".repeat(4)}`;
+    const github = `ghp_${"Q1w2E3r4".repeat(5)}`;
+    secretTitle = `rotated ${key} pushed with ${github}`;
+
+    for (const path of [
+      `/cards/${card.id}/memory`,
+      "/memory?ticketKey=MEMC-5",
+    ]) {
+      const agent = await forest.agent(path);
+      expect(agent.status, path).toBe(200);
+      expect(agent.body.keys[0].latest[0].title, path).toBe(
+        "rotated [REDACTED:api_key] pushed with [REDACTED:api_key]",
+      );
+      expect(JSON.stringify(agent.body), path).not.toContain(key);
+      expect(JSON.stringify(agent.body), path).not.toContain(github);
+    }
+
+    const owner = await forest.owner(`/cards/${card.id}/memory`);
+    expect(owner.status).toBe(200);
+    expect(owner.body.keys[0].latest[0].title).toBe(secretTitle);
   });
 
   it("finds the same card by its key in this workspace only", async () => {

@@ -4,7 +4,7 @@
 import { randomBytes } from 'node:crypto';
 import { classify, isForwarded, linksOf, originOf, SEVERITIES, textOf, titleOf, withType } from './classify.mjs';
 import { addFiles, DEFAULT_LIMITS, fallbackText, MAX_FILES, planFiles } from './uploads.mjs';
-import { btn, cut, esc } from './view.mjs';
+import { btn, cut, esc, lineTail } from './view.mjs';
 
 const TTL_MS = 30 * 60_000;
 const APPEND_TTL_MS = 10 * 60_000;
@@ -13,6 +13,8 @@ const TEXT_MAX = 8000; // как в схеме консоли (server/queue/stor
 // Документ консоли — до 48 КБ: текст из иероглифов или эмодзи и 10 длинных ссылок вместе могут его превысить (422 без выхода).
 const ITEM_BYTES_MAX = 45 * 1024;
 const PLACEHOLDER = '(без текста — только вложение)';
+/** Основной продукт очереди (server/queue/product-boards.ts консоли): у id входящего бота нет префикса продукта. */
+const DEFAULT_PRODUCT = 'hr-helper';
 const plural = (n, one, few, many) => {
   const a = n % 10, b = n % 100;
   return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many;
@@ -199,9 +201,14 @@ export function draftView(d, limits = DEFAULT_LIMITS) {
  */
 export function sentView(d, item, relay = null) {
   const head = `📥 <b>Принято</b> · ${esc(TYPE_LABEL[d.type])} · ${esc(URGENCY_LABEL[d.urgency])}${item.inbox.severity ? ` · ${esc(SEVERITY_LABEL[item.inbox.severity] || item.inbox.severity)}` : ''}\n«${esc(cut(item.title, 160))}» · <code>${esc(d.id)}</code>`;
-  const live = relay && Array.isArray(relay.sessions) ? relay.sessions.find((s) => s && s.alive && typeof s.session === 'string') : null;
+  // Автопередача по продуктам (OPS-51): входящее бота — основного продукта, передаёт его только сессия этого продукта.
+  // Сессия без поля product — ответ консоли до автопередачи по продуктам, она про основной продукт.
+  const product = item.product || DEFAULT_PRODUCT;
+  const live = relay && Array.isArray(relay.sessions)
+    ? relay.sessions.find((s) => s && s.alive && typeof s.session === 'string' && (s.product || DEFAULT_PRODUCT) === product)
+    : null;
   const next = live
-    ? `${d.urgency === 'now' ? '⚡' : '🗂'} Передаю сессии <b>${esc(cut(live.session, 120))}</b> — возьмёт в течение минуты${d.urgency === 'now' ? '' : ' и заведёт карточку'}. «Возьми входящее» вставлять не нужно.`
+    ? `${d.urgency === 'now' ? '⚡' : '🗂'} Передаю сессии <b>${esc(lineTail(live.session, 120))}</b> — возьмёт в течение минуты${d.urgency === 'now' ? '' : ' и заведёт карточку'}. «Возьми входящее» вставлять не нужно.`
     : d.urgency === 'now'
       ? `⚡ ${relay ? 'Автопередача сейчас не работает — а' : 'А'}гент сам не стартует. Откройте сессию Claude и вставьте:\n<pre><code>Возьми входящее ${esc(d.id)}</code></pre>Работающая сессия увидит его в очереди при следующем обращении к ней.`
       : '🗂 Карточку заведёт сессия, которая первой откроет очередь. Ссылку она оставит в своём статусе — статус придёт сюда.';

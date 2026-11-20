@@ -9,6 +9,10 @@ import {
   jsonResponse,
 } from "../openapi";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
+import {
+  maskForTokenCaller,
+  refuseMarkerForTokenCaller,
+} from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createExternalLink from "./controllers/create-external-link";
 import deleteExternalLink from "./controllers/delete-external-link";
@@ -54,6 +58,9 @@ const createExternalLinkRoute = createRoute({
     401: errorResponse("Unauthorized"),
     403: errorResponse("No permission to update the task"),
     404: errorResponse("Task not found"),
+    409: errorResponse(
+      "A caller with a token sent a [REDACTED:kind] marker in the URL or title; a new link has no stored value to restore",
+    ),
   },
 });
 
@@ -100,6 +107,14 @@ const externalLink = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(createExternalLinkRoute, async (c) => {
     const { taskId } = c.req.valid("param");
     const { url, title } = c.req.valid("json");
+    // TB-144: task reads mask link URLs and titles for a caller with a token.
+    for (const value of [url, title]) {
+      refuseMarkerForTokenCaller(
+        c,
+        value,
+        "Send the full URL and title; a person copies a masked link in the web app.",
+      );
+    }
 
     const link = await createExternalLink({
       taskId,
@@ -109,17 +124,20 @@ const externalLink = apiRouter<BaseVariables & { workspaceId: string }>()
     });
 
     return c.json(
-      {
+      maskForTokenCaller(c, {
         ...link,
         metadata: link.metadata ? JSON.parse(link.metadata) : null,
-      },
+      }),
       200,
     );
   })
   .openapi(deleteExternalLinkRoute, async (c) => {
     const { taskId, id } = c.req.valid("param");
     return c.json(
-      await deleteExternalLink({ taskId, id, userId: c.get("userId") }),
+      maskForTokenCaller(
+        c,
+        await deleteExternalLink({ taskId, id, userId: c.get("userId") }),
+      ),
       200,
     );
   })
@@ -136,10 +154,13 @@ const externalLink = apiRouter<BaseVariables & { workspaceId: string }>()
     });
 
     return c.json(
-      links.map((link) => ({
-        ...link,
-        metadata: link.metadata ? JSON.parse(link.metadata) : null,
-      })),
+      maskForTokenCaller(
+        c,
+        links.map((link) => ({
+          ...link,
+          metadata: link.metadata ? JSON.parse(link.metadata) : null,
+        })),
+      ),
       200,
     );
   });

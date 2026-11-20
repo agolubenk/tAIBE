@@ -3,7 +3,7 @@
 false positives as brak, and corrections that only an accepted verdict may start (owner, 06.11: once a day, by
 itself, «ложноположительные результаты — брак»). The judges are Claude models only (owner decision 06.11).
 
-    bash eval/evolve/daily.sh run                    # what launchd starts at 05:00: `nightly` (lock → refresh → cycle)
+    bash eval/evolve/daily.sh run                    # launchd at 05:00: `nightly` (lock → merge → refresh → cycle)
     python3 -I eval/evolve/daily.py cycle [--force]  # run → session → publish → merge
     python3 -I eval/evolve/daily.py run [--target taibe|hr|all] [--since REV] [--judges claude:m1,claude:m2]
                                         [--no-pr] [--dry-run]
@@ -15,7 +15,8 @@ checkout is touched), runs `catalog.py` and `dupes.py`, and takes the layer file
 (`~/.claude/evolve/state.json`). For each one with cases (`cases/*.jsonl`, naming below) it judges the version
 before its last edit against the current one. Judges: `--judges`, else the Claude candidates (`judges.py`) when
 `abJudgeClaude` is on — the board, closed on doubt, or the owner's file `~/.claude/evolve/abJudgeClaude.on`. They are
-calibrated first; with fewer than two that pass, nothing is judged and the artifacts stay pending. Artifacts are
+calibrated first; with fewer than two that pass, nothing is judged and the artifacts stay pending (an insufficient
+line each; none when no candidate answered at all — an account limit is not a measurement, SE-125). Artifacts are
 judged one at a time by every judge, at most `resources.MAX_ARTIFACTS` a night, and only while the night's budget
 covers the whole artifact. Every verdict passes `quality.py`. An accepted loss opens a revert PR of that edit; an
 accepted win is pinned in `verdicts.jsonl`; brak and insufficient verdicts are written there as well and never act.
@@ -171,14 +172,18 @@ def verdict_line(it, status, reasons, pick, per_judge):
             'judges': judges}
 
 
-def no_judge_line(it, calibration):
-    """A night with fewer than two calibrated judges: insufficient, nothing acts, the artifact stays pending."""
-    tried = ', '.join('%s (%s)' % (r['model'], r['reasons'][0][:80]) for r in calibration['rows'])
+def no_judge_lines(items, calibration, judged):
+    """A night with fewer than two calibrated judges: an insufficient line per artifact, nothing acts, the artifacts
+    stay pending. No candidate answered at all (account limit, CLI error, deadline) is not a measurement: no line,
+    «not measured» in the report `judged`, as judges unreachable in A/B (SE-125)."""
+    tried = ', '.join('%s (%s)' % (r['model'], r['reasons'][0][:200]) for r in calibration['rows'])
     why = 'no judge: %d of %d candidates passed calibration (need %d) — %s' % (
         len(calibration['passed']), len(calibration['rows']), judging.WANT_JUDGES, tried or 'no candidates')
-    v = verdict_line(it, 'insufficient', [why], None, [])
-    v['calibration'] = [r['model'] for r in calibration['rows']]
-    return v
+    if all(r['reasons'][0].startswith('unavailable') for r in calibration['rows']):
+        judged += [{'path': it['path'], 'status': 'not measured', 'reasons': [why]} for it in items]
+        return []
+    return [dict(verdict_line(it, 'insufficient', [why], None, []),
+                 calibration=[r['model'] for r in calibration['rows']]) for it in items]
 
 
 def judge_names(args, code_root):
@@ -262,6 +267,8 @@ def cmd_run(args):
             line = steps.audit_line(report['metrics'].get('context_audit'), report['date'])
             if line and not args.dry_run and not args.no_card:  # d-f63b-economy-0711: the owner sees the measure
                 report['audit_card'] = steps.post_card(line)
+            if not args.dry_run and not args.no_card:  # GL-1 plan v1.1: the day's spend line to the coordinator
+                report['spend_nerve'] = steps.spend_nerve(repo, report['metrics'].get('spend'))
         else:
             head = g.fetch(trepo, cfg['base'])
         old = state.get(target) or {}
@@ -293,7 +300,7 @@ def cmd_run(args):
                 verdicts, pending = judge(items, passed, args.factory or judge_factory(args.budget), args.budget,
                                           deadline)
             else:  # fewer than two judges: a verdict could never be accepted — no A/B, the artifacts stay pending
-                verdicts, pending = [no_judge_line(it, calibration) for it in items], list(items)
+                verdicts, pending = no_judge_lines(items, calibration, t['judged']), list(items)
                 if not posted and not args.no_card:
                     posted = steps.post_card('evolve %s: нет годного судьи — калибровку прошли %d из %d кандидатов '
                                              '(нужно 2: %s); A/B не выполнен, корректировок нет, артефакты ждут.' % (
@@ -385,6 +392,7 @@ def cmd_merge(args):
     if os.path.isfile(args.verdicts):
         with open(args.verdicts, encoding='utf-8') as f:
             verdicts = [json.loads(ln) for ln in f if ln.strip()]
+    verdicts = steps.with_kept_supersedes(verdicts)  # the brak marks a refresh wiped from the worktree
     enabled = merge_switch(code_root)
     rows = g.merge_ready(repo, TARGETS['taibe']['base'], verdicts, enabled, load_json('prs.json', {}), args.dry_run)
     print(json.dumps(rows, ensure_ascii=False, indent=1))
@@ -413,11 +421,13 @@ def cmd_cycle(args):
 
 
 def cmd_nightly(args):
-    """What launchd starts: take the lock, refresh the run's worktree, run its fresh `cycle` with the lock handed
-    over (the same open file, so nobody can start between the refresh and the cycle)."""
+    """What launchd starts: take the lock, merge last night's PRs (green by now; their cases and `supersedes` lines
+    join tonight's base, SE-49), refresh the run's worktree, run its fresh `cycle` with the lock handed over (the
+    same open file, so nobody can start between the refresh and the cycle)."""
     repo = g.main_repo(HERE)
     try:
         with resources.Lock(os.path.join(STATE_DIR, 'run.lock')) as lock:
+            steps.merge_before_run(cmd_merge, args)  # before the refresh: HERE still holds last night's verdicts
             g.refresh_worktree(repo, args.worktree, steps.BASE)
             fresh = os.path.join(repo, args.worktree, 'eval', 'evolve', 'daily.py')
             os.set_inheritable(lock.fd, True)

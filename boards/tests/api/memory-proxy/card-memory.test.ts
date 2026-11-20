@@ -115,7 +115,10 @@ describe("memory-proxy.mjs /api/card-memory", () => {
   }
 
   it("counts exact matches per key and shows the 5 newest titles, never the text", async () => {
-    const long = `TB-108 ${"x".repeat(200)}`;
+    // A key starts 2 characters before the cut: the cut drops all of it, so
+    // no half of it reaches the API mask, which matches whole tokens only.
+    const key = `ghp_${"Q1w2E3r4".repeat(5)}`;
+    const long = `TB-108 ${"word ".repeat(22)}${key} tail`;
     writer = makeDb(dbPath, [
       { title: "Deploy TB-108 to d4dev", narrative: SECRET_BODY, epoch: T0 },
       {
@@ -158,7 +161,7 @@ describe("memory-proxy.mjs /api/card-memory", () => {
       "TB-108 more",
       "TB-108 again",
       null,
-      `${long.slice(0, 119)}…`,
+      `TB-108 ${"word ".repeat(22).trimEnd()}…`,
     ]);
     expect(card.latest[0]).toEqual({
       id: 10,

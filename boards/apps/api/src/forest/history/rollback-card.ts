@@ -2,7 +2,7 @@ import type { ForestActor } from "../actor";
 import type { AgentHeaders } from "../agent-guard/agent-headers";
 import { ForestError } from "../forest-error";
 import { writeJournal } from "../journal";
-import { loadHistoryEntry } from "./card-history";
+import { loadAutofillOf, loadHistoryEntry } from "./card-history";
 import { restoreMeta } from "./restore-meta";
 import { restoreTask } from "./restore-task";
 
@@ -39,11 +39,16 @@ export async function rollbackCard(input: {
       );
     }
     const restore = { taskId, workspaceId, changes: entry.changes, actor };
+    // An agent's move to a work stage filled the assignee and start date in
+    // its own row; one rollback undoes both (AC-009, TB-69).
+    const autofill = await loadAutofillOf(entry);
     const result =
       entry.kind === "task"
         ? {
             kind: entry.kind,
-            revision: (await restoreTask(restore)).revision,
+            revision: (
+              await restoreTask({ ...restore, autofill: autofill?.changes })
+            ).revision,
             meta: null,
           }
         : {
@@ -53,7 +58,7 @@ export async function rollbackCard(input: {
           };
     await journal(
       "allowed",
-      `history ${entry.id}: ${Object.keys(entry.changes).join(",")}`,
+      `history ${entry.id}: ${Object.keys(entry.changes).join(",")}${autofill ? `; autofill ${autofill.id}` : ""}`,
     );
     return result;
   } catch (error) {

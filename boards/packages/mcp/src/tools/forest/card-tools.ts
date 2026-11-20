@@ -6,6 +6,14 @@ import { forestCall, id } from "./request.js";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 
+// D-018 (owner, d-0111-d18): actual provider numbers first, o200k_base only
+// where the provider gives none. Cache reads would swamp the work in tokens,
+// so cache counts in costUsd at the provider's price instead. "Without cache"
+// is said because providers differ: Anthropic input_tokens has no cache,
+// OpenAI-style prompt_tokens includes cached_tokens.
+export const CARD_TOKENS_RULE =
+  "Tokens on the card from provider usage: input without cache + output. Cache counts in costUsd at provider price. Without usage: o200k_base of input + output text (D-018).";
+
 // The same limits as apps/api/src/forest/card/card-patch.ts; the API decides.
 const cardFields = {
   kind: z
@@ -28,7 +36,13 @@ const cardFields = {
     .max(200)
     .optional()
     .describe("Touched files, path or path:line."),
-  tokens: z.number().int().min(0).nullable().optional(),
+  tokens: z
+    .number()
+    .int()
+    .min(0)
+    .nullable()
+    .optional()
+    .describe(CARD_TOKENS_RULE),
   costUsd: z.number().min(0).max(1e8).nullable().optional(),
   contextPack: text(2000).nullable().optional(),
 };
@@ -100,12 +114,22 @@ export function registerForestCardTools(
     "forest_set_card_meta",
     {
       description:
-        "Change a card's fields under your lease (session, fencingToken). Send only what changes; null clears. Notion fields change only on cards you created and never on a card mirrored from Notion; half-baked is the owner's alone.",
+        "Change a card's fields under your lease (session, fencingToken). Send only what changes; null clears. Send expectedMetaRevision (revision from forest_get_card_meta) when you read, edit and write back (contextPack): if the owner changed the fields since, the write is refused with 409 revision_conflict, so read again and merge. expectedRevision checks the task, not these fields. Notion fields change only on cards you created and never on a card mirrored from Notion; half-baked is the owner's alone.",
       // Strict: a halfBaked or a misspelt field is refused, not dropped.
       inputSchema: z.strictObject({
         workspaceId: id,
         taskId: id,
         ...cardFields,
+        expectedMetaRevision: z
+          .string()
+          .trim()
+          .min(1)
+          .max(40)
+          .nullable()
+          .optional()
+          .describe(
+            "The revision from your read; null: only if the card has no fields yet. Omitted: no check.",
+          ),
       }),
     },
     ({ workspaceId, taskId, ...body }, callClient) =>

@@ -90,9 +90,29 @@ class RoutingAndCallTest(unittest.TestCase):
         with mock.patch.object(judging.subprocess, 'run', cli_answer(tokens=5000)):
             judging.claude_call(budget)(None, 'short prompt')
         self.assertEqual((budget.calls, budget.tokens), (1, 5000))
-        self.assertGreater(budget.ratio, 1)  # the real call was larger than its estimate
+        self.assertEqual(budget.overhead, 5000 - budget.estimated)  # the real call was larger than its estimate
+        self.assertEqual(budget.report()['usage'], {'input': 4900, 'output': 100, 'cache_read': 0, 'cache_write': 0})
         self.assertEqual((resources.JUDGE_MAX_CALLS, resources.JUDGE_MAX_TOKENS, resources.MAX_ARTIFACTS),
                          (160, 1_200_000, 2))
+
+    def test_usage_without_model_usage_comes_from_usage(self):
+        data = {'usage': {'input_tokens': 10, 'output_tokens': 2, 'cache_read_input_tokens': 300,
+                          'cache_creation_input_tokens': 40}}
+        self.assertEqual(judging.usage_split(data), {'input': 10, 'output': 2, 'cache_read': 300, 'cache_write': 40})
+        self.assertEqual(sum(judging.usage_split(None).values()), 0)
+
+    def test_the_excess_per_call_is_added_not_multiplied(self):  # SE-49, replay of 14.11
+        budget = resources.Budget()
+        for _ in range(24):                  # calibration of two judges: estimate 4023, real 7969 a call
+            budget.charge(7969, 4023)
+        budget.charge(5488, 1542)            # the smallest call of the night: real/estimate = 3.56
+        budget.charge(1100, 1000)            # a later call with a small excess does not lower the largest one
+        self.assertEqual(budget.overhead, 3946)
+        # successor-handoff: 56 calls, 777952 tokens estimated (log of 14.11). With the excess added it fits the
+        # night; a ratio of 3.56 would have asked 2.77M tokens of a 1.2M ceiling.
+        self.assertTrue(budget.covers(56, 777952))
+        self.assertFalse(budget.covers(80, 839280))  # infra/ai-council/CLAUDE.md still does not fit
+        self.assertFalse(budget.covers(136, 0))      # and the call ceiling holds as before
 
 
 def item(path, text_a=OLD, text_b=NEW, cases_file=None):
@@ -211,7 +231,34 @@ class NightTest(unittest.TestCase):
         lines, state = self.run_night(factory)
         self.assertEqual([v['status'] for v in lines], ['insufficient'])
         self.assertIn('no judge', lines[0]['reasons'][0])
+        self.assertEqual(lines[0]['calibration'], [SONNET, HAIKU])  # who was tried, on the line itself
         self.assertEqual(state['rev'], self.since)  # not moved to head
+        self.assertEqual([p['path'] for p in state['pending']], ['.claude/skills/grill-task/SKILL.md'])
+
+    def test_no_candidate_reached_writes_no_verdict_line(self):  # rule 5, SE-125: an account limit is no measure
+        def limited(name):
+            def call(system, user):
+                raise OSError("claude -p exit 1: You've hit your 5-hour limit · resets 5:10am (Europe/Moscow)")
+            return call
+        lines, state = self.run_night(limited, judges=','.join(judging.CLAUDE_CANDIDATES))
+        self.assertEqual(lines, [])
+        self.assertEqual(state['rev'], self.since)
+        self.assertEqual([p['path'] for p in state['pending']], ['.claude/skills/grill-task/SKILL.md'])
+        report = steps.load_json('runs/latest.json', {})
+        judged = report['targets']['taibe']['judged']
+        self.assertEqual([j['status'] for j in judged], ['not measured'])
+        self.assertIn('resets 5:10am', judged[0]['reasons'][0])  # the reset time is not cut off
+        self.assertIn('A/B not measured 1', report['summary'])
+
+    def test_one_judge_passed_and_the_rest_unreachable_keep_the_line(self):  # rule 5, SE-125
+        def call_of(name):
+            if name == SONNET:
+                return judge()
+            def call(system, user):
+                raise OSError("claude -p exit 1: You've hit your 5-hour limit")
+            return call
+        lines, state = self.run_night(call_of)
+        self.assertEqual([v['status'] for v in lines], ['insufficient'])
         self.assertEqual([p['path'] for p in state['pending']], ['.claude/skills/grill-task/SKILL.md'])
 
     def test_switch_off_judges_nothing_and_keeps_the_state(self):  # rule 10

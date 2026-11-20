@@ -18,7 +18,10 @@
       "frontend",
       "backend",
       "release",
-      "boards"
+      "boards",
+      "backend-2",
+      "frontend-2",
+      "backend-3"
     ],
     "active_hours": 8
   },
@@ -196,12 +199,24 @@
         "boards"
       ],
       [
-        "Связь|Координатор|Менеджер|Ноушен|QA|Тестировщик|Проверка|coord",
+        "Связь|Координатор|Менеджер|Ноушен|(?<![a-z0-9])QA(?![a-z0-9])|Тестировщик|Проверка|coord",
         "coord"
       ],
       [
         "Контроль|DevOps|Выпуск|Безопасность|release",
         "release"
+      ],
+      [
+        "backend[- –]?2(?!\\d)|Бэкенд[- –]?2(?!\\d)|роль 7(?!\\d)",
+        "backend-2"
+      ],
+      [
+        "frontend[- –]?2(?!\\d)|Фронтенд[- –]?2(?!\\d)|роль 8(?!\\d)",
+        "frontend-2"
+      ],
+      [
+        "backend[- –]?3(?!\\d)|Бэкенд[- –]?3(?!\\d)|роль 9(?!\\d)",
+        "backend-3"
       ],
       [
         "Бэкенд|backend|Данные",
@@ -220,6 +235,38 @@
   "system": {
     "mem_critical": 10,
     "mem_warn": 20,
+    "max_sessions": 14,
+    "terminal": "tmux",
+    "team": {
+      "total": 12,
+      "floor": 10,
+      "min_per_product": 2,
+      "split": {
+        "hr-helper": 6,
+        "taibe": 6
+      },
+      "split_item": "d-team-split"
+    },
+    "dev": {
+      "agents": [
+        "space.hrhelper.headroom",
+        "space.hrhelper.agents-tmux",
+        "space.hrhelper.nerve",
+        "space.hrhelper.t-boards-memory-proxy",
+        "space.hrhelper.t-boards-notebook-worker",
+        "space.hrhelper.t-boards-notebook-sync",
+        "space.hrhelper.reaper",
+        "space.hrhelper.evolve-daily",
+        "space.hrhelper.team-keeper"
+      ],
+      "apps_on": [
+        "com.electron.ollama"
+      ],
+      "apps_off": [
+        "com.docker.docker",
+        "com.electron.ollama"
+      ]
+    },
     "hub_health": "http://127.0.0.1:3050/health"
   },
   "budget": {
@@ -228,6 +275,7 @@
     "warn_at": 0.8,
     "batch_at": 0.6,
     "tail_bytes": 262144,
+    "unstick": true,
     "week_reset": {
       "weekday": 3,
       "time": "19:00"
