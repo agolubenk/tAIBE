@@ -11,7 +11,6 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import * as Sentry from "@sentry/node";
 import type { Session, User } from "better-auth/types";
 import { eq, sql } from "drizzle-orm";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { cors } from "hono/cors";
@@ -38,7 +37,7 @@ import {
   validationHook,
   validationHookWithMessage,
 } from "./errors/validation-error";
-import { checkMigrationDrift } from "./database/migration-drift";
+import { migrateWithDriftCheck } from "./database/migrate-with-drift-check";
 import { prepareDatabaseStartup } from "./database/prepare-database-startup";
 import { waitForDatabase } from "./database/wait-for-database";
 import discordIntegration from "./discord-integration";
@@ -1118,12 +1117,8 @@ export async function runStartupTasks() {
       await migrateSessionColumn();
 
       console.log("🔄 Migrating database...");
-      const migrationsFolder = `${currentDir}/../drizzle`;
-      await migrate(getDatabase(), { migrationsFolder });
-      // TB-64: an applied migration whose file changed afterwards.
-      await checkMigrationDrift(getDatabase(), migrationsFolder, {
-        production: process.env.NODE_ENV === "production",
-      });
+      // migrate(), then TB-64: an applied migration whose file changed afterwards.
+      await migrateWithDriftCheck(getDatabase(), `${currentDir}/../drizzle`);
       console.log("✅ Database migrated successfully!");
       // Renames rows of "column", so it runs after the migrations that create
       // the table: before them a fresh database has no "column" and startup fails.
