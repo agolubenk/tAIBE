@@ -6,6 +6,7 @@ import {
   errorResponse,
   jsonResponse,
 } from "../../openapi";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { resolveForestActor } from "../actor";
 import {
@@ -115,7 +116,10 @@ export const ownerQueueRoutes = apiRouter<
         knownProducts,
       }),
     );
-    return c.json({ ...list, queueUrl }, 200);
+    // TB-254: only the owner reads the queue (assertOwnerQueueReader), and
+    // the mask changes nothing for the owner's session. It stays in case the
+    // access check is ever made weaker (TB-204).
+    return c.json(maskForTokenCaller(c, { ...list, queueUrl }), 200);
   })
   .openapi(getOwnerQueueDocRoute, async (c) => {
     assertOwnerQueueReader(resolveForestActor(c));
@@ -124,5 +128,5 @@ export const ownerQueueRoutes = apiRouter<
     const view = await fromConsole(() =>
       readOwnerQueueDoc(client, collection, id),
     );
-    return c.json({ ...view, queueUrl }, 200);
+    return c.json(maskForTokenCaller(c, { ...view, queueUrl }), 200);
   });
