@@ -108,6 +108,22 @@ deny = [
     ("cp -R папки с именем <слой> в корень", f"cp -R {O}/src/{C} {ROOT}"),
     ("rsync -a содержимого в корень", f"rsync -a {O}/x/ {ROOT}"),
     ("cp -R папки, чьё имя разбор не видит, в корень", f"cp -R \"$IS249_NOPE\" {ROOT}"),
+    # маски zsh, которых _glob не повторяет, — отказ, не подражание (линза frontend на 33e467bcc, coord 13:46)
+    ("zsh [^x]", f"rm -rf .[^x]{C[2:]}"),
+    ("zsh [!x]", f"rm -rf .[!x]{C[2:]}"),
+    ("zsh [[:alpha:]]", f"rm -rf {C[:-1]}[[:alpha:]]"),
+    ("zsh **/ на глубине 0", f"rm -rf **/{C}"),
+    ("zsh <слой>/**/<файл>", f"rm {C}/**/{SET}"),
+    ("zsh (…) в слове", f"rm -rf {C[:3]}(a){C[4:]}"),
+    ("zsh (a|b) в начале слова", f"rm -rf ({C}|zz)"),
+    ("zsh квалификатор *(/) — и у чужой папки", f"rm -rf {O}/x*(/)"),
+    ("zsh (…) у mv", f"mv {C[:3]}(a){C[4:]} /tmp/is249-o"),
+    ("zsh () у git rm", f"git rm -r {C[:3]}(){C[3:]}"),
+    ("zsh ^ (EXTENDED_GLOB)", "rm -rf ^x"),
+    ("zsh # (EXTENDED_GLOB)", f"rm -rf {C[:3]}#{C[3:]}"),
+    ("zsh ~ (EXTENDED_GLOB)", f"rm -rf {C}~x"),
+    ("маска в цели mv: файл с защищённым именем в <слой>", f"mv {O}/x/{SET} {C[:3]}*/"),
+    ("форма zsh в цели mv", f"mv {O}/a.txt {C[:3]}[^x]{C[4:]}/"),
 ]
 for label, cmd in deny:
     bash(f"IS-249, отказ — {label}: {cmd}", cmd, True)
@@ -139,6 +155,9 @@ for label, cmd, cwd in [
     ("копия папки в чужую папку", f"cp -R {O}/x {O}/dst", ROOT),
     ("копия папки в корень — новая папка (линза frontend)", f"cp -R {O}/x .", ROOT),
     ("rsync папки в корень — новая папка", f"rsync -a {O}/x {ROOT}/", ROOT),
+    ("подоболочка после rm — не маска", f"rm -f {O}/a.txt && (cd {O})", ROOT),
+    ("скобки в кавычках — не маска", f"echo 'fix(x)' && rm -f {O}/a.txt", ROOT),
+    ("маска в цели mv — чужая папка", f"mv {O}/a.txt {O}/x*/", ROOT),
     ("git mv в репозитории", "git mv src/a.ts src/b.ts", ROOT),
     ("rm чужой папки", f"rm -rf {O}/x", ROOT),
     ("rm worktree-папки", "rm -rf worktrees/fix/x/node_modules", ROOT),
