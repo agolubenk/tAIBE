@@ -173,7 +173,9 @@ class ChecksTest(unittest.TestCase):
     def test_secrets_hostile_lines_stay_linear(self):
         # TB-136 security lens: a rule that may restart at every character and scan to the end of the line is
         # quadratic. On 64 000 characters each line takes up to 14 ms linear and 2.4-12 s quadratic.
-        for unit in ('_', 'A_', 'a_', 'a_A', 'API_KEY', 'TOKEN_', 'a.', 'a-', 'a+', 'eyJa.', 'sk-', 'Ab3+'):
+        # TB-201: the bearer rule also goes on at a header name inside a value (13-19 ms on these units).
+        for unit in ('_', 'A_', 'a_', 'a_A', 'API_KEY', 'TOKEN_', 'a.', 'a-', 'a+', 'eyJa.', 'sk-', 'Ab3+',
+                     'Authorization: Bearer ', 'x,Authorization:Bearer ', 'aAuthorization:Bearer'):
             line = unit * (64000 // len(unit))
             with self.subTest(unit=unit):
                 started = time.perf_counter()
@@ -225,6 +227,74 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {ant}')], ['anthropic-key'])
         self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {orr}')], ['openrouter-key'])
 
+    def test_secrets_shell_default_assignment(self):
+        # TB-200 item 1: `${NAME=<v>}` and `${NAME:=<v>}` give NAME a value when it is unset; the base found them.
+        key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
+        for line in (f'${{DB_PASSWORD="{key}"}}', f': "${{API_TOKEN:="{key}"}}"', f"echo ${{password='{key}'}}",
+                     f'PASSWORD=${{DB_PASSWORD="{key}"}}',
+                     # TB-214: without quotes the value ends at `}`; before, the `}` dropped it as code.
+                     f'${{DB_PASSWORD:={key}}}', f'${{API_TOKEN={key}}}', f'cd ${{password:={key}}}/app',
+                     f'PASSWORD=${{DB_PASSWORD:={key}}}', f'${{A_TOKEN:=${{B_TOKEN:={key}}}}}'):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [key])
+        # `${NAME:?…}`, `${NAME:-…}`, `${NAME:+…}` check NAME or give a word in its place, not to it.
+        for line in (f'${{DB_PASSWORD:?{key} is not set}}', f'${{API_TOKEN:-{key} fallback}}',
+                     f'${{password:+{key} and more}}', f'A_TOKEN: ${{A_TOKEN:?{key} is required}}',
+                     f'${{DB_PASSWORD:?{key}}}', f'${{API_TOKEN:-{key}}}', f'${{password:+{key}}}',
+                     # TB-214: a value up to `}` needs 12 characters; a reference is a placeholder.
+                     '${DB_PASSWORD:=Qz8Lm4Rt7}', '${API_TOKEN:=${OTHER_API_TOKEN}}'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_stub_word_inside_a_provider_key(self):
+        # TB-200 item 2: a random key holds `xxx`, `test` or `fake` by chance (584 of 280 000 keys of 14 formats), so
+        # in a provider key they count only as a whole word; a run of x counts from 8 characters.
+        for line, rule in ((''.join(('sk-', 'proj-', 'Ab3dE5fG7h', 'TeSt', 'J9kL2mN4pQ6rSt8')), 'openai-key'),
+                           (''.join(('gh', 'p_', 'A1b2C3', 'xXx', 'd4E5f6G7h8I9j0K1l2M3n4O5p6Q')), 'github-token'),
+                           (''.join(('AK', 'IA', 'Q3R4', 'TEST', '7Z5RXK2W')), 'aws-access-key'),
+                           (''.join(('tb', 'k_', 'Hd', 'Qz8Lm4', 'fake', 'Rt7Wx2Ny5Kp9Bv3Xc6Fj1Gs0Ue')), 't-boards-key')):
+            with self.subTest(rule):
+                self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {line}')], [rule])
+        for line in ('sk-' + 'proj-' + 'x' * 48, 'gh' + 'p_' + 'x' * 36, 'AK' + 'IA' + 'X' * 16,
+                     'AK' + 'IA' + 'IOSFODNN7' + 'EXAMPLE', 'AI' + 'zaSy' + 'X' * 33, 'sk-' + 'proj-abc123' + 'x' * 30,
+                     'sk-' + 'test-' + '1234567890abcdefghij', 'xo' + 'xb-your-token-here-123',
+                     'sk-' + 'fake-key-' + '1234567890abc'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(f'k {line}'), [])
+
+    def test_secrets_password_type_name(self):
+        # TB-200 item 3, the context rule of redact (TB-193): after a password name a type name is a type in an
+        # annotation, after a bare `:` and before `,`, `;` or `)`. Elsewhere it may be a passphrase: after `=` the
+        # same shape before `;` is a password in a connection string or a shell line (backend lens #408 B1).
+        upper = ''.join(('Correct', 'Horse', 'Battery', 'Staple'))
+        for line in ('password: PasswordCredential;', '(password: PasswordCredential, next: Next)',
+                     '{ secret: SecretManagerServiceClient; }', 'type A = { pwd: PasswordHashOptions, b: B };'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+        for line in (f'password: {upper}', f'secret = "{upper}";', f'{{"password": "{upper}", "n": 1}}',
+                     f'Server=db;User Id=sa;Password={upper};Database=app', f'DB_PASSWORD={upper}; ./run',
+                     f'"Password={upper},Timeout=30"'):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [upper])
+
+    def test_secrets_validation_rules(self):
+        # TB-200 item 4: Laravel rules are lowercase words joined by `|`, each with an optional `:argument`.
+        for line in ("'password' => 'required|string|min:8|confirmed',", "password: 'required|string|min:8'",
+                     "'api_key' => 'nullable|string|max:255',", '"password" => "required|confirmed|min:12|max:64"',
+                     "'password' => 'required|same:password_confirmation',",
+                     "'current_password' => 'bail|required|different:new_password_value',",
+                     "'secret' => 'sometimes|string|starts_with:sk_live_example'"):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+        key = ''.join(('Qz8', '|Lm4', 'Rt7Wx2Ny5'))
+        self.assertEqual([v for _, v in secrets_scan.scan_line(f'password = "{key}"')], [key])
+        # TB-214: an argument may not hide a key, and words joined by `|` are rules only with a rule word.
+        arg = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3X'))
+        for line in (f'API_KEY=alpha:{arg}|omega', f"'password' => 'required|min:{arg}'",
+                     'password = "%s"' % '|'.join(('dolphin', 'sunrise', 'granite', 'meadow'))):
+            with self.subTest(line):
+                self.assertEqual(len(secrets_scan.scan_line(line)), 1)
+
     def test_secrets_inner_names_stay_linear(self):
         # TB-198: from the start of every rejected value a run of `A_TOKEN:=` nested one inner value per name (64 000
         # characters: 20 s). The CI runner is up to 10 times slower than a laptop, so the test compares 64 000
@@ -232,7 +302,9 @@ class ChecksTest(unittest.TestCase):
         # times. A time below 10 ms counts as 10 ms (timer noise); 5 s is the guard against a hang.
         units = ['A_SECRET=A_SECRET=', 'A_TOKEN=test/', 'A_TOKEN:=', 'api_key=api_key=', 'secret=secret=secret=',
                  'A_SECRET=fooB_SECRET: ', 'A_TOKEN=>(', 'A_TOKEN:=' * 27 + ' ', 'secret=' * 35 + ' ',
-                 'pwd=' * 63 + ' ']
+                 'pwd=' * 63 + ' ',
+                 # TB-214: the value ends at `}`.
+                 '${A_TOKEN:=}', '${A_TOKEN:=', 'A_TOKEN=}', '${A_TOKEN:=' * 20 + '}' * 20 + ' ']
 
         def best(line):
             times = []

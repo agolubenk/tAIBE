@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -18,6 +19,12 @@ def copy_instances():
     for name in os.listdir(P.INSTANCES):
         shutil.copy(os.path.join(P.INSTANCES, name), d)
     return d
+
+
+def _at(data, keys):
+    for k in keys:
+        data = data[k]
+    return data
 
 
 def edit(d, name, fn):
@@ -137,6 +144,31 @@ class ErrorsTest(unittest.TestCase):
         edit(self.d, "taibe.json", lambda d: d["queue"].update(match=["-taibe-"]))
         self.fails("queue.match")
 
+    def test_empty_required_string_is_refused(self):
+        """SE-172: пустая строка в обязательном поле — ошибка загрузки, а не "" с кодом 0 у `get` (линза #218)."""
+        for path in ("repo_root", "product_tree", "team.project_dir", "github.repo"):
+            for value in ("", "  "):
+                with self.subTest(path=path, value=value):
+                    d = copy_instances()
+                    self.addCleanup(shutil.rmtree, d)
+                    *keys, leaf = path.split(".")
+                    edit(d, "taibe.json", lambda data, k=keys, lf=leaf, v=value: _at(data, k).update({lf: v}))
+                    with self.assertRaises(P.ProductError) as e:
+                        P.load(d)
+                    self.assertIn(f"instances/taibe.json: пустое обязательное поле {path}", str(e.exception))
+
+    def test_get_of_empty_required_field_fails(self):
+        import contextlib
+        import io
+        edit(self.d, "taibe.json", lambda d: d.update(repo_root=""))
+        err = io.StringIO()
+        real = P.load
+        with mock.patch.object(P, "load", lambda instances=self.d: real(instances)), \
+                contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(err):
+            self.assertEqual(P.main(["get", "taibe", "repo_root"]), 1)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("пустое обязательное поле repo_root", err.getvalue())
+
     def test_unknown_default(self):
         edit(self.d, "_shared.json", lambda d: d.update(default_product="nope"))
         self.fails("default_product")
@@ -159,6 +191,14 @@ class ErrorsTest(unittest.TestCase):
     def test_paths_are_not_secrets(self):
         self.assertIsNone(P.SECRET_RE.search("/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state"))
 
+    def test_council_relative_paths_pass_and_keys_still_fail(self):  # Ф2 OPS-23
+        path = "apps/backend/src/modules/integrations/telegram"   # 46 знаков из букв и «/» — форма base64
+        edit(self.d, "hr-helper.json", lambda d: d.update(council={"modules": {"telegram": [path]}}))
+        P.load(self.d)
+        for key in ("AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcd/E", "ghp_" + "a1B2" * 9, "AKIA" + "ABCDEFGHIJKLMNOP"):
+            edit(self.d, "hr-helper.json", lambda d, k=key: d.update(council={"modules": {"x": [k]}}))
+            self.fails("похоже на ключ")
+
 
 class BaseRoleTest(unittest.TestCase):
     def test_second_session_maps_to_base_role(self):
@@ -166,10 +206,12 @@ class BaseRoleTest(unittest.TestCase):
                          ["backend", "frontend", "backend", "boards", "a-1", "x-10", ""])
 
     def test_both_products_have_second_sessions_after_the_six(self):
-        """Решения владельца 14.11: backend-2 (роль 7) и frontend-2 (роль 8) у tAIBE и HR."""
+        """Решения владельца 14.11: backend-2 (роль 7) и frontend-2 (роль 8) у tAIBE и HR; у HR ещё backend-3 (роль 9,
+        презентации, d-presentations-sessions-1811)."""
         _, products = P.load()
-        for slug in ("taibe", "hr-helper"):
-            self.assertEqual(products[slug]["team"]["roles"][6:], ["backend-2", "frontend-2"], slug)
+        want = {"taibe": ["backend-2", "frontend-2"], "hr-helper": ["backend-2", "frontend-2", "backend-3"]}
+        for slug, roles in want.items():
+            self.assertEqual(products[slug]["team"]["roles"][6:], roles, slug)
 
 
 class ProductDirTest(unittest.TestCase):

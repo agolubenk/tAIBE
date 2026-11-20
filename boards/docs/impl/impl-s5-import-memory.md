@@ -48,14 +48,28 @@
   - Порт и хост берутся из `CLAUDE_MEM_WORKER_PORT/HOST` или настроек claude-mem.
   - Файл `~/.claude-mem/claude-mem.db` не открывается; в claude-mem ничего не пишется (R-040, N-001).
   - Есть кэш и привязка `bind.ts`.
-- Привязка (`apps/api/src/forest/memory/card-binding.ts`): наблюдение относится к карточке, если называет её одним из
-  признаков:
+- Привязка с 13.11 (TB-113, `apps/api/src/forest/memory/card-memory-keys.ts`) — точные ключи карточки, до 6:
   - id;
+  - номер `<SLUG>-<number>`;
   - Backlog ID;
-  - номер `<slug>-<number>`;
-  - ветку агента из `card_meta.branch`.
-- API: `GET /api/forest/{workspaceId}/cards/{taskId}/memory` (`memory-routes.ts`). Необязательный env
-  `CLAUDE_MEM_PROJECT` сужает поиск до проекта claude-mem.
+  - пункты очереди её запросов «да», новые первыми.
+  - Ветка больше не ключ: «main» называет тысячи чужих наблюдений. Ключ вне трёх форм (кириллица, «B-6») не ищется.
+- Поиск — маршрут прокси на Mac `GET /api/card-memory` прямо по `claude-mem.db`, только чтение (исключение R-040,
+  `deploy/vps/README.md`, «Card memory route»). Прежний просмотр окна 200 последних наблюдений через воркер снят.
+- API: `GET /api/forest/{workspaceId}/cards/{taskId}/memory` и `GET /api/forest/{workspaceId}/memory?ticketKey=|queueItemId=`
+  (`memory-routes.ts`). Пункт очереди ищется, только если пространство связано с очередью и пункт существует.
+  Кэш: минута свежий, до 24 часов «копия» (`find-card-memory.ts`). `CLAUDE_MEM_PROJECT` больше не читается.
+- Граница продукта (R-002, TB-58, 20.11): карточка видит только проекты claude-mem своего пространства — корень (папка
+  репозитория, `tAIBE`) и его worktree (`tAIBE/<тема>`). `tAIBE-old` — не `tAIBE`.
+  - Карта — `CLAUDE_MEM_PROJECTS="<workspaceId>=<корень>[|<корень>], …"` (формат `OQ_WORKSPACE_PRODUCTS`). Значение по
+    умолчанию в `deploy/vps/compose.yml` — три пространства прода: taibe → `tAIBE`, Lavaeon → `HR_Helper-v2`,
+    Financial terminal → `terminal`.
+  - API шлёт корни прокси параметрами `project` (до 4). Прокси фильтрует их в SQL до окна 500, поэтому и `count`, и
+    5 последних — только наблюдения продукта: число чужих наблюдений наружу не уходит.
+  - Пространства нет в карте или его корни не подходят по форме — прокси не спрашивается, ответ `available: false`,
+    `reason: "no-product-map"`; карточка пишет, что память для пространства выключена. `reason: "worker-unreachable"`
+    — прокси не ответил, копии нет.
+  - Прежний PR #228 фильтровал просмотр окна, который снял #172; граница перенесена на поиск по ключу.
 - Web: раздел «Память» в боковой панели карточки (`card-memory.tsx`, `use-card-memory.ts`).
 - Живая проба 28.10: из 200 просмотренных наблюдений 3 привязались к PRB-1.
 - MCP-инструмент для агентов — `forest_get_card_memory` (29.10, `impl-r037-work-state.md`).

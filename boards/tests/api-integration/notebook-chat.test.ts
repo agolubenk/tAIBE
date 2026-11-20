@@ -25,6 +25,7 @@ import { createApp } from "../../apps/api/src/index";
 import { mockAuthenticatedSession } from "./helpers/auth";
 import { createInstanceAdmin } from "./helpers/admin/create-instance-admin";
 import { resetTestDatabase } from "./helpers/database";
+import { CUT_DOC, DB_VALUE, shows } from "./helpers/cut-secret";
 import { createWorkspaceMember } from "./helpers/fixtures";
 import { createForest } from "./helpers/forest";
 import { projectAccessApi } from "./helpers/project-access/project-access-api";
@@ -381,6 +382,68 @@ describe("API integration: notebook chat", () => {
     });
   });
 
+  it("moves to the next point of the chain and stores the model that answered (TB-159)", async () => {
+    useLlm();
+    vi.stubEnv(
+      "SETTINGS_ENCRYPTION_KEY",
+      "test-settings-encryption-key-0123456789",
+    );
+    await writeStoredNotebookModel(
+      {
+        chain: [
+          {
+            id: "p2",
+            baseUrl: "https://chain.example/v1",
+            model: "chain-model",
+            key: sealSecret("sk-test-chain-key", "https://chain.example"),
+          },
+        ],
+      },
+      null,
+    );
+    // The second point is an https address: answered here, every other
+    // address goes to the real fetch (the scripted server, the embedder).
+    const realFetch = globalThis.fetch;
+    const chainCalls: (string | null)[] = [];
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).startsWith("https://chain.example/")) {
+        return realFetch(input, init);
+      }
+      chainCalls.push(new Headers(init?.headers).get("authorization"));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            model: "chain-model",
+            choices: [{ message: { content: "Запас [1]." } }],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    });
+    try {
+      const nb = await chatFixture();
+      script = [{ status: 429, retryAfter: "3600" }];
+      const asked = await nb.owner("POST", "/threads", { question: "аренда" });
+      expect(asked.body.messages[1]).toMatchObject({
+        status: "answered",
+        content: "Запас [1].",
+        model: "chain-model",
+      });
+      expect(seen.map((call) => call.authorization)).toEqual([`Bearer ${KEY}`]);
+      expect(chainCalls).toEqual(["Bearer sk-test-chain-key"]);
+
+      mockAuthenticatedSession(await createInstanceAdmin());
+      const view = await projectAccessApi()("/admin/notebook-model");
+      expect(await view.json()).toMatchObject({
+        callsToday: 1,
+        pointCallsToday: 0,
+        chain: [{ id: "p2", callsToday: 1 }],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stops calling the model at the daily cap", async () => {
     useLlm(1);
     const nb = await chatFixture();
@@ -660,5 +723,28 @@ describe("API integration: notebook chat", () => {
       (await nb.owner("GET", `/threads/${asked.body.thread.id}`)).status,
     ).toBe(404);
     expect(await db.$count(schema.notebookMessageTable)).toBe(2);
+  });
+
+  it("sends a secret cut by a chunk edge to the model masked (TB-203)", async () => {
+    useLlm();
+    const forest = await createForest();
+    const stored = await forest.ownerApi(
+      "PUT",
+      `/notebook/${forest.workspace.id}/sources`,
+      { kind: "repo-doc", ref: "docs/cut.md", title: "Граница", text: CUT_DOC },
+    );
+    expect(stored.status).toBe(200);
+
+    // The owner asks: the sources go to a model, maybe at an outside
+    // provider, so the owner's prompt is masked across chunk edges too.
+    const asked = await forest.ownerApi(
+      "POST",
+      `/notebook/${forest.workspace.id}/threads`,
+      { question: "слово" },
+    );
+    expect(asked.status).toBe(201);
+    const prompt = seen[0]?.messages[0]?.content ?? "";
+    expect(prompt.match(/\[\d\] Граница/g)).toHaveLength(3);
+    expect(shows(prompt, DB_VALUE)).toBe(false);
   });
 });

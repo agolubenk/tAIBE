@@ -111,4 +111,45 @@ describe("forest work state tools", () => {
       { method: "GET", headers: {} },
     );
   });
+
+  it("reads memory by card key or queue item", async () => {
+    const { tool, client } = setup();
+
+    await tool("forest_get_card_memory").handler({
+      workspaceId: "ws",
+      ticketKey: "TB-108",
+    });
+    await tool("forest_get_card_memory").handler({
+      workspaceId: "ws",
+      queueItemId: "d-tb113-mem-1311",
+    });
+
+    expect(client.json).toHaveBeenNthCalledWith(
+      1,
+      "/api/forest/ws/memory?ticketKey=TB-108",
+      { method: "GET", headers: {} },
+    );
+    expect(client.json).toHaveBeenNthCalledWith(
+      2,
+      "/api/forest/ws/memory?queueItemId=d-tb113-mem-1311",
+      { method: "GET", headers: {} },
+    );
+  });
+
+  it("refuses memory with none or two of the keys and calls nothing", async () => {
+    const { tool, client } = setup();
+
+    const none = await tool("forest_get_card_memory").handler({
+      workspaceId: "ws",
+    });
+    const two = await tool("forest_get_card_memory").handler({
+      workspaceId: "ws",
+      taskId: "t1",
+      ticketKey: "TB-108",
+    });
+
+    expect(none.isError).toBe(true);
+    expect(two.isError).toBe(true);
+    expect(client.json).not.toHaveBeenCalled();
+  });
 });

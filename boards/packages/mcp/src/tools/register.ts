@@ -2,6 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { buildFullTaskUpdateBody } from "../kaneo/task-helpers.js";
 import { excerptSearchResults } from "../view/excerpt.js";
+import { GROUP_HEADER, withHeaders } from "./agent-write.js";
 import { registerForestTools } from "./forest/register-forest.js";
 import { registerFormTools } from "./form-tools.js";
 import { getCurrentUser } from "./get-current-user.js";
@@ -430,7 +431,8 @@ export function registerTools(
   registerTool(
     "list_task_comments",
     {
-      description: "List comments on a task.",
+      description:
+        "List comments on a task. The dialog marks of linked sessions (eventData.dialog) are in list_task_activity.",
       inputSchema: z.object({ taskId: nonEmptyString }),
     },
     async (args) =>
@@ -444,15 +446,26 @@ export function registerTools(
   registerTool(
     "create_task_comment",
     {
-      description: "Add a comment to a task.",
+      description:
+        "Add a comment to a task. A linked session sends the groupKey of the card's shared lease: its comment joins the group's dialog on the card (R-026); the lease holder joins it without one.",
       inputSchema: z.object({
         taskId: nonEmptyString,
         content: nonEmptyString,
+        groupKey: z
+          .string()
+          .trim()
+          .min(1)
+          .max(120)
+          .optional()
+          .describe("The groupKey of a lease shared by linked sessions."),
       }),
     },
     async (args) =>
       run(() =>
-        client.json(`/api/comment/${encodeURIComponent(args.taskId)}`, {
+        withHeaders(
+          client,
+          args.groupKey ? { [GROUP_HEADER]: args.groupKey } : {},
+        ).json(`/api/comment/${encodeURIComponent(args.taskId)}`, {
           method: "POST",
           body: JSON.stringify({ content: args.content }),
         }),
@@ -673,7 +686,7 @@ export function registerTools(
     "search",
     {
       description:
-        "Search across tasks, projects, workspaces, comments, and activities. Descriptions and comment text come as an excerpt around the match; read the task for the whole text.",
+        "Search across tasks, projects, workspaces, comments, and activities in one workspace. A card key (DEP-23), a Notion page id or a Notion page link finds that card first. Descriptions and comment text come as an excerpt around the match; read the task for the whole text.",
       inputSchema: z.object({
         q: nonEmptyString.describe("Search query"),
         type: z
@@ -687,7 +700,9 @@ export function registerTools(
           ])
           .optional()
           .describe("Restrict results to one kind. Defaults to all."),
-        workspaceId: optionalNonEmptyString.describe("Limit to one workspace"),
+        // The API needs it (search/schema.ts); without it every call was a 400
+        // (TB-91).
+        workspaceId: nonEmptyString.describe("Workspace to search in"),
         projectId: optionalNonEmptyString.describe("Limit to one project"),
         limit: z
           .number()
@@ -701,7 +716,7 @@ export function registerTools(
     async (args) => {
       const qs = new URLSearchParams({ q: args.q });
       if (args.type) qs.set("type", args.type);
-      if (args.workspaceId) qs.set("workspaceId", args.workspaceId);
+      qs.set("workspaceId", args.workspaceId);
       if (args.projectId) qs.set("projectId", args.projectId);
       if (args.limit !== undefined) qs.set("limit", String(args.limit));
       return run(async () =>

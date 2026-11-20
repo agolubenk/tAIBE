@@ -26,14 +26,14 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from merge_guard_git import classify_git, reviewed_test, start_budget  # noqa: E402
-from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, new_state, resolve_dirs  # noqa: E402
-from merge_guard_files import BLIND_RUN, command_writes, opaque, rewritten, write_targets  # noqa: E402
+from merge_guard_dirs import DIR_CMDS, copy_state, dir_step, dir_steps, new_state, resolve_dirs  # noqa: E402
+from merge_guard_files import BLIND_RUN, Disk, command_writes, link_findings, opaque, rewritten, write_targets  # noqa: E402
 from merge_guard_gh import VISIBILITY, classify_gh, classify_http, classify_interp, hooks_off  # noqa: E402
 from merge_guard_launch import (awk_programs, implied_commands, make_files, package_scripts,  # noqa: E402
                                 read_names)
 from merge_guard_mcp import WRITE_OP, classify_mcp, mcp_op, mcp_paths, oq_identity, oq_merge_write  # noqa: E402
 from merge_guard_expand import NAMES_MAX, brace_argv, qualifier_code  # noqa: E402
-from merge_guard_vars import BLIND, VAR, words  # noqa: E402
+from merge_guard_vars import BLIND, VAR, visible_name, words  # noqa: E402
 from merge_guard_identity import MAIN_ROOT, control_verdict, live_sessions, load_control  # noqa: E402,F401 MAIN_ROOT — тесту
 from merge_guard_shell import (LOST, PROC, SCRIPT_EXT, SHELLS, SUBST, cat_files, command_name, cut_heredocs,  # noqa: E402
                                cut_substitutions, device, dir_vars, expand_vars, expand_word, is_lost, launch_args,
@@ -45,6 +45,7 @@ from merge_guard_partial import PARTIAL, settle, settled, tokens_before_error  #
 from merge_guard_make import make_hint, make_option, trusted_make  # noqa: E402
 from merge_guard_gate import gate_tail  # noqa: E402  отдельной строкой: импорт выше правят PR стража SE-75…SE-83
 from merge_guard_tmux import TMUX, classify_tmux  # noqa: E402  окна сессий в tmux — только владелец (OPS-82)
+from merge_guard_crash import crash_verdict  # noqa: E402  сбой decide — роли отказ (SE-152); сбой разбора — в settled
 from merge_guard_home import HOME_WRITE, MORE_WRITES, home_protected  # noqa: E402  файлы ~, которые shell выполняет до команды (SE-98)
 
 
@@ -207,7 +208,7 @@ def runs_code(a, exe, cwd, roots, depth, git_env, whole, stdin_files=(), procs=N
         is_interp_script = interp if interp is not None else bool(re.match(r"#!.*(python|node|perl|ruby|osascript)", text))
         # `zsh -i < x.zsh`: интерактивный zsh со stdin не считает `#` комментарием — разбор и без снятия (SE-77)
         keep = comment_char_seen(whole[3], text, whole[4][1]) or (s in stdin_files and zsh_interactive(a))
-        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, path, keep))
+        got, partial, _ = settled(lambda: script_found(text, is_interp_script, cwd, roots, depth, git_env, Disk(path, text), keep), s)
         found += got  # разобран до ошибки — находки части и грубый признак по тексту скрипта: в `bash x.sh` его нет
         if partial and FALLBACK.search(text if is_interp_script or keep else uncommented(text)):
             found.append((UNPARSED, s))
@@ -334,8 +335,8 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
             found += more + (classify_argv(normalize(b), cwd, roots, depth + 1, git_env, whole, b[0], stdin_files, procs,
                                            hid) if b else [])
         g = "blind" if hidden else True  # имя задано невидимо: голый push на main — тоже отказ (classify_git)
-        kind = kind or (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
-                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd))
+        kind = kind or (None if visible_name(exe, hidden) else (classify_gh(["gh"] + a[1:], cwd, written, guess=True)
+                        or classify_git(["git"] + a[1:], cwd, env_config=git_env, guess=g) or classify_http(a, cwd)))
         tail = strip_prefix(a[1:])  # `$X` раскроется и в пусто, и в префикс (`$SUDO`, `${DRY:+echo}`): `$X gh pr merge 1`
         if tail:
             found += classify_argv(normalize(tail), cwd, roots, depth, git_env, whole, tail[0], stdin_files, procs, hid)
@@ -344,7 +345,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     if a[0] == "claude" and hooks_off(a):
         found.append(("file", "claude без хуков проекта (disableAllHooks, --setting-sources без project)"))
     found += [("file", p) for t in write_targets(a) if (p := protected_path(t, cwd, roots))]  # файл ≤ 500 строк (01-base)
-    return found
+    return found + link_findings(a, cwd, roots, protected_path, HOME_CLAUDE, whole, (procs or {}).get(SUBS, ()), hid)  # IS-249
 
 
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, alt=False, keep=False, raw=None):
@@ -403,14 +404,14 @@ def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=N
         for v in implied_commands(expanded):  # `BASH_ENV=m.sh bash -c true`, `NODE_OPTIONS='-r ./m.js' npm test`
             found += classify_argv(normalize(v), cwd, roots, depth, git_env, whole[:2] + (True,) + whole[3:],
                                   strip_prefix(v)[0])
-        raws = [r for r in (strip_prefix(v) for v in expanded) if r]
-        variants = [([command_name(r[0])] + r[1:], r[0]) for r in raws]
+        variants = [([command_name(r[0])] + r[1:], r[0]) for r in (strip_prefix(v) for v in expanded) if r]
         stdin_files = [x for f in sources or (cat_files(*prev, cwd) if piped else []) for x in procs.get(f, [f])]
         stdin_files = stdin_files or ([HEREDOC] if argv in fed else [])
         prev = ([v for v, _ in variants], stdin_files)
-        if any(v[0] in DIR_CMDS for v, _ in variants):
-            new = dir_step([v for v, _ in variants], st, piped)
-            if disk and is_lost(new):  # в скрипте с диска `cd "$ROOT"` в функциях и циклах обычен — папка прежняя
+        steps = dir_steps(expanded, variants)  # `CD x`, `nohup cd x` — папка та же; `command cd` — неизвестна (SE-90)
+        if any(v is None or v and v[0] in DIR_CMDS for v in steps):
+            new = dir_step(steps, st, piped)  # bash и zsh расходятся (`command cd`, `… | cd`) — LOST и в скрипте с диска
+            if disk and is_lost(new) and not piped and None not in steps:  # `cd "$ROOT"` в функциях и циклах — прежняя
                 st.update(new_state(cwd))
             else:
                 cwd = new
@@ -485,11 +486,8 @@ def main():
         return
     try:
         reason = decide(data)
-    except Exception as exc:  # сбой хука не должен ни пропускать мёрж, ни блокировать всё подряд
-        cmd = json.dumps(data.get("tool_input"), ensure_ascii=False) if data.get("tool_name") != "Bash" else \
-            str((data.get("tool_input") or {}).get("command", ""))
-        reason = (f"merge-guard: сбой хука ({exc.__class__.__name__}), а в вызове признак защищённого действия."
-                  if FALLBACK.search(cmd) or re.search(r"merge_pull_request|auto_merge", str(data.get("tool_name"))) else None)
+    except Exception as exc:  # сбой хука: признак в вызове — отказ всем; иначе роли отказ, Контроль — своим путём
+        reason = crash_verdict(data, exc, FALLBACK)
     if reason:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}},

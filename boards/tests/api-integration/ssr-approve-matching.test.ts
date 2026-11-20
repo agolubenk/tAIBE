@@ -489,7 +489,7 @@ describe("API integration: SSR approve-matching", () => {
       await approveDraft(
         source.id,
         version.entityId,
-        version.id,
+        { versionId: version.id, blobSha: version.blobSha },
         forest.ownerId,
       );
     }

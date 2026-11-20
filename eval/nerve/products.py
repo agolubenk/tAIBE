@@ -35,9 +35,10 @@ NESTED = {
     "boards": ("url", "product", "workspace", "note"),
 }
 # Где живёт поле: путь или его префикс. Поля продукта, которых нет в config.json (slug, title, active, queue.match,
-# genome — его читает сборщик геномов, SE-79), render не выводит.
+# genome — его читает сборщик геномов, SE-79; council — его читает консилиум, infra/ai-council/product.py, Ф2 OPS-23),
+# render не выводит.
 PRODUCT = ("slug", "title", "active", "repo_root", "product_tree", "team.project_dir", "team.roles", "team.active_hours",
-           "github", "queue.source_roles", "queue.match", "genome.disabledMcpjsonServers")
+           "github", "queue.source_roles", "queue.match", "genome.disabledMcpjsonServers", "council")
 SHARED = ("default_product", "layer_home", "interval_seconds", "sources", "team.projects_root", "queue.url",
           "queue.secret_cmd", "queue.owner_items", "queue.delta", "system", "budget", "circadian", "tap", "boards")
 REQUIRED = ("slug", "repo_root", "product_tree", "team.project_dir", "team.roles", "team.active_hours", "github.repo",
@@ -45,6 +46,10 @@ REQUIRED = ("slug", "repo_root", "product_tree", "team.project_dir", "team.roles
 # R-2 спеки M1: значение, похожее на ключ, в публичном git не живёт — только secret_cmd.
 # Длинный base64 — без «/» в начале: абсолютный путь из одних букв и «/» тоже длинный.
 SECRET_RE = re.compile(r"^(sk-|ghp_|github_pat_|xox[a-z]-|AKIA)|-----BEGIN|^eyJ[\w-]+\.[\w-]+\.[\w-]+$|^[A-Za-z0-9+][A-Za-z0-9+/]{39,}={0,2}$")
+# Относительный путь из строчных сегментов (`apps/backend/src/modules/integrations/telegram`, поле council) — не ключ:
+# base64 ключа из 40+ знаков без единой заглавной буквы почти невероятен, а префиксы ключей (ghp_, AKIA, eyJ, xox*-)
+# сюда не попадают — в них заглавные буквы или нет «/».
+REL_PATH_RE = re.compile(r"^[a-z0-9._-]+(?:/[a-z0-9._-]+)+$")
 
 
 class ProductError(ValueError):
@@ -85,7 +90,7 @@ def _check_file(name, data, own, other, other_name):
             raise ProductError(f"instances/{name}: поле {path} — место ему: {where}")
         for s in value if isinstance(value, list) else [value]:
             for x in s if isinstance(s, list) else [s]:
-                if isinstance(x, str) and SECRET_RE.search(x):
+                if isinstance(x, str) and SECRET_RE.search(x) and not REL_PATH_RE.match(x):
                     raise ProductError(f"instances/{name}: {path} похоже на ключ — в git только secret_cmd")
 
 
@@ -181,8 +186,11 @@ def load(instances=INSTANCES):
         if data.get("slug") != slug or not SLUG_RE.match(slug):
             raise ProductError(f"instances/{name}: slug «{data.get('slug')}» — нужен «{slug}» формата {SLUG_RE.pattern}")
         for path in REQUIRED:
-            if _get(data, path) is None:
+            value = _get(data, path)
+            if value is None:
                 raise ProductError(f"instances/{name}: нет обязательного поля {path}")
+            if isinstance(value, str) and not value.strip():   # SE-172: `get` отдал бы "" с кодом 0
+                raise ProductError(f"instances/{name}: пустое обязательное поле {path}")
         _check_match(name, _get(data, "queue.match"))
         products[slug] = data
     default = shared.get("default_product")

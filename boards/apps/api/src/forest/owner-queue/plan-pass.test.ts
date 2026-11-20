@@ -131,6 +131,14 @@ function store(
       calls.push("abandoned");
       return new Set(extra.abandoned ?? []);
     },
+    closed: async () => {
+      calls.push("closed");
+      return new Map();
+    },
+    named: async () => {
+      calls.push("named");
+      return [];
+    },
   };
 }
 
@@ -138,7 +146,7 @@ const done: BoardCard = { status: "done", final: true, closedAt: NOW };
 const run = (queue: FakeWork, board: PlanStore, hourly = false) =>
   planPass(
     { client: queue.client(), config, store: board, now: () => NOW },
-    hourly,
+    { hourly, daily: false },
   );
 
 describe("planPass (TB-106)", () => {
@@ -165,6 +173,7 @@ describe("planPass (TB-106)", () => {
       skipped: 0,
       left: 0,
       hourlyDone: false,
+      dailyDone: false,
     });
     expect(queue.docs.get("w-a")?.data).toMatchObject({
       status: "done",
@@ -206,6 +215,7 @@ describe("planPass (TB-106)", () => {
       skipped: 1,
       left: 0,
       hourlyDone: false,
+      dailyDone: false,
     });
     expect(queue.docs.get("w-a")?.data.status).toBe("planned");
     expect(queue.docs.get("w-b")?.data.status).toBe("done");
@@ -285,7 +295,7 @@ describe("planPass (TB-106)", () => {
     const board = store({ [`${WS}/TB-1`]: done });
     await planPass(
       { client: queue.client(), config: own, store: board, now: () => NOW },
-      false,
+      { hourly: false, daily: false },
     );
     expect(queue.patches.map((patch) => patch.id)).toEqual(["w-taibe-a"]);
     expect(queue.docs.get("w-n-high")?.data.status).toBe("doing");

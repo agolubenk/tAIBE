@@ -21,6 +21,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lineage as L  # noqa: E402
+import lineage_guard as G  # noqa: E402
 import lineage_reap as R  # noqa: E402
 import lineage_retire as LR  # noqa: E402
 
@@ -128,9 +129,13 @@ class Base(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {"TAIBE_LINEAGE_DIR": str(self.dir / "lin"),
                                                 "CLAUDE_SESSIONS_DIR": str(self.dir / "sess")})
         self.env.start()
+        # папки выше — из окружения: в живом запуске hand_control на них отказывает (SE-167), тест — свой реестр
+        self.home_ok = mock.patch.object(G, "env_problem", lambda: None)
+        self.home_ok.start()
         self.lines = []
 
     def tearDown(self):
+        self.home_ok.stop()
         self.env.stop()
         self.tmp.cleanup()
 
@@ -388,6 +393,29 @@ class CommandsTest(Base):
         a = L.read_json(L.ldir() / f"{CHILD}.ack")
         self.assertEqual((a["pid"], a["start"]), (700, ST))
 
+    def test_surplus_mark_only_on_that_role(self):
+        """d-team-surplus-1711: метка сверх доли — только на claude той самой роли; повтор — 4, затем 3 после coord."""
+        me = os.getpid()
+        sx = FakeSys([P(700, 1, 700, "ttys001", "claude --settings /x/genome/taibe/plan.json"),
+                      P(me, 700, me, "??", "python3 lineage.py surplus")], env={700: CHILD})
+        args = ["surplus", "--role", "plan", "--product", "taibe", "--slug", "taibe", "--handoff", "/h.md"]
+        with mock.patch.dict(os.environ, {"TAIBE_LINEAGE": CHILD}), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(L.main(args, sx), 0)
+            m = L.read_json(L.ldir() / f"{CHILD}.surplus")
+            self.assertEqual((m["pid"], m["role"], m["product"], m["slug"], m["coord"]), (700, "plan", "taibe", "taibe", False))
+            self.assertEqual(L.main(args, sx), 4)                      # координатор ещё не подтверждён
+            done = ["surplus", "--coord-done", "--role", "plan", "--product", "taibe", "--slug", "taibe"]
+            self.assertEqual(L.main(done, sx), 0)
+            self.assertEqual(L.main(args, sx), 3)                      # повтор — событие второй раз не нужно
+            # Сессия линии — координатор, а просят plan: метку не ставить (её сняла бы автоуборка).
+            (L.ldir() / f"{CHILD}.surplus").unlink()
+            coord = FakeSys([P(700, 1, 700, "ttys001", "claude --settings /x/genome/taibe/coord.json"),
+                             P(me, 700, me, "??", "python3 lineage.py surplus")], env={700: CHILD})
+            self.assertEqual(L.main(args, coord), 2)
+            self.assertEqual(L.main(done, coord), 2)               # --coord-done новую метку не ставит
+            self.assertEqual(L.main(["surplus", "--coord-done"], coord), 2)  # и без роли — тоже
+            self.assertFalse((L.ldir() / f"{CHILD}.surplus").exists())
+
     def test_retire_refuses_foreign_child_line(self):
         with mock.patch.dict(os.environ, {"TAIBE_LINEAGE": PARENT}), mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(L.main(["retire", "--child", "r.other.x1y2", "--foreground"], FakeSys([])), 2)
@@ -406,6 +434,20 @@ class CommandsTest(Base):
         self.assertTrue(all(len(f.name) <= 40 for f in L.ldir().iterdir()), list(L.ldir().iterdir()))
         self.assertEqual(L.line_records(), [(LONG_CHILD, L.lfile(LONG_CHILD, ".json"))])
         self.assertEqual(L.child_acks(LONG_PARENT), [(LONG_CHILD, L.lfile(LONG_CHILD, ".ack"))])
+
+    def test_fake_h_record_is_not_a_second_record(self):
+        """SE-64: файл h<хэш>.<сегмент>.json с чужим полем line не дублирует запись линии. Запись засчитывается,
+        только если её имя — lfile(line), поэтому window_plan не обрабатывает линию дважды."""
+        L.ldir().mkdir(parents=True)
+        for line in ("r.a1", LONG_CHILD):
+            L.lfile(line, ".json").write_text(json.dumps({"line": line}), encoding="utf-8")
+        fakes = {"h0000000000000000.a1": "r.a1", L.line_hash("r.zz") + ".a1": "r.a1",
+                 "h1111111111111111.zz99": LONG_CHILD, L.line_hash(LONG_CHILD) + ".zz99": LONG_CHILD}
+        for stem, line in fakes.items():
+            (L.ldir() / f"{stem}.json").write_text(json.dumps({"line": line}), encoding="utf-8")
+        self.assertEqual(len(list(L.ldir().glob("*.json"))), 6)
+        self.assertEqual(L.line_records(), [(LONG_CHILD, L.lfile(LONG_CHILD, ".json")),
+                                            ("r.a1", L.ldir() / "r.a1.json")])
 
     def test_line_key_keeps_short_names(self):
         """Линия до 200 символов — имя прежнее; длиннее — h<хэш родителя>.<сегмент>, LINE_RE его не принимает."""
@@ -520,7 +562,8 @@ class ReapTest(Base):
         proj = self.dir / "projects" / "-x-proj"
         proj.mkdir(parents=True)
         recs = [{"type": "mode"}, {"type": "user", "isMeta": True, "message": {"content": "Линия: r.zz.zz"}},
-                {"type": "user", "message": {"content": "Сборка Т3, ключ реестра backend… Линия: r.a1.b2 (поколение 2)"}},
+                {"type": "user", "message": {"content": "Сборка Т3, ключ реестра backend, роль 4, наследник. Handoff: "
+                                             "/h.md — прочитай. Линия: r.a1.b2 (поколение 2) — метка session."}},
                 {"type": "user", "message": {"content": [{"type": "text", "text": "Линия: r.q.q"}]}}]
         (proj / f"{sid}.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECTS_DIR": str(self.dir / "projects")}):

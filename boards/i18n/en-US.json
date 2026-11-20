@@ -558,6 +558,41 @@
 				"description": "You'll come right back here to review it.",
 				"submit": "Sign in"
 			}
+		},
+		"reauth": {
+			"title": "Confirm it's you",
+			"description": "This action needs a recent sign-in. Confirm it's you to continue.",
+			"password": {
+				"label": "Password",
+				"submit": "Confirm"
+			},
+			"code": {
+				"explain": "We'll send a {{length}}-digit code to your email.",
+				"send": "Send code",
+				"sent": "The code is in your email. It works for {{minutes}} min.",
+				"label": "Code from the email",
+				"submit": "Confirm",
+				"resend": "Send a new code"
+			},
+			"usePassword": "Use your password instead",
+			"useCode": "Use a code from your email instead",
+			"lockedOut": "Too many failed tries: the password is off for up to an hour.",
+			"impersonated": "Not available while you act as another user.",
+			"noMethod": "Your account has no way to confirm it's you. Set a password: reset it by email from the sign-in page. Without email, ask an administrator.",
+			"errors": {
+				"invalidPassword": "Wrong password.",
+				"invalidCode": "Wrong code. Check it and try again.",
+				"codeExpired": "This code no longer works. Send a new code.",
+				"methodUnavailable": "This way is no longer available. Pick another one.",
+				"emailDeliveryFailed": "We couldn't send the email. Try again later.",
+				"impersonated": "Not available while you act as another user.",
+				"offline": "No connection to the server. Check your network and try again.",
+				"rateLimited": "Too many tries. Wait a minute and try again.",
+				"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+				"signedOut": "Your session has ended. Sign in again.",
+				"failed": "Couldn't confirm. Try again.",
+				"stillNotFresh": "The confirmation didn't apply. Try the action again."
+			}
 		}
 	},
 	"settings": {
@@ -841,7 +876,11 @@
 				"total": "{{count}} of {{max}} model requests today",
 				"calls_one": "{{count}} request",
 				"calls_other": "{{count}} requests",
-				"empty": "No requests to the model yet today."
+				"empty": "No requests to the model yet today.",
+				"tokens": "Tokens: {{input}} in ({{cached}} cached) · {{output}} out",
+				"coverage_one": "over {{withUsage}} of {{count}} request",
+				"coverage_other": "over {{withUsage}} of {{count}} requests",
+				"noProviderData": "No token data from the provider"
 			},
 			"validation": {
 				"baseUrl": "Enter a full https address, for example https://openrouter.ai/api/v1.",
@@ -886,8 +925,7 @@
 				"confirmLabel": "Type {{email}} to confirm",
 				"confirm": "Delete account",
 				"success": "Your account has been deleted",
-				"error": "Failed to delete account",
-				"sessionTooOld": "For security, sign out and sign back in before deleting your account."
+				"error": "Failed to delete account"
 			},
 			"emailHint": "You sign in with this address."
 		},
@@ -2966,6 +3004,12 @@
 			},
 			"importedFrom": "Imported from {{source}}",
 			"importedBy": "Imported by {{name}}"
+		},
+		"dialog": {
+			"title": "Dialog of linked sessions",
+			"live": "Live",
+			"archived": "Archived",
+			"summary": "Sessions: {{sessions}} · Messages: {{messages}}"
 		}
 	},
 	"tasks": {
@@ -3583,12 +3627,15 @@
 			},
 			"memory": {
 				"unavailable": "claude-mem is not reachable, and nothing was read from it yet.",
+				"noProductMap": "Memory is off for this workspace: CLAUDE_MEM_PROJECTS names none of its claude-mem projects.",
 				"stale": "claude-mem is not reachable: a copy from {{time}}.",
-				"empty": "No observations name this card among the latest {{total}}.",
+				"empty": "No observations name this card.",
+				"count": "Observations: {{total}}",
 				"loadError": "Could not load the memory.",
 				"matched": {
-					"task-id": "names {{value}}",
-					"branch": "branch {{value}}"
+					"id": "card id",
+					"key": "card key",
+					"queue": "queue item"
 				}
 			},
 			"historyField": {
@@ -3832,7 +3879,8 @@
 				"leases": "Leases",
 				"sessions": "Sessions",
 				"journal": "Feed",
-				"mirror": "Notion mirror"
+				"mirror": "Notion mirror",
+				"queue": "Owner queue"
 			},
 			"hints": {
 				"pulse": "What needs you now: «да» requests and sessions waiting for an answer, open bugs and urgent cards, and what was refused in the last day.",
@@ -3844,7 +3892,8 @@
 				"leases": "Who is working on which card right now. A lease ends on its own when its holder stops renewing it.",
 				"sessions": "What each session is doing: its step, branch and what it waits for. Agents record it after each step; a session silent for 30 days disappears.",
 				"journal": "What agents and people did on the board, newest first. Entries about cards of projects you may not open are left out.",
-				"mirror": "The board reads Notion on a schedule and compares the two. A clean run means every page has its card in the same status; the move off Notion waits for an unbroken streak of clean runs."
+				"mirror": "The board reads Notion on a schedule and compares the two. A clean run means every page has its card in the same status; the move off Notion waits for an unbroken streak of clean runs.",
+				"queue": "The owner's queue from the ops console, read only and for the owner alone. Answers are given in the console or through a card's «да» request."
 			},
 			"pulse": {
 				"fires": "What is on fire",
@@ -4058,6 +4107,59 @@
 					"started": "Mirror run started",
 					"error": "Could not start the mirror run"
 				}
+			},
+			"queue": {
+				"openConsole": "Open in the console",
+				"collectionLabel": "Collection",
+				"collection": {
+					"items": "Items",
+					"checks": "Answers"
+				},
+				"stateLabel": "State",
+				"state": {
+					"open": "Open",
+					"answered": "Answered",
+					"all": "All"
+				},
+				"productLabel": "Product",
+				"allProducts": "All products",
+				"truncated": "The console capped the list at part of its {{total}} documents; the oldest are not shown.",
+				"truncatedNoTotal": "The console capped the list; the oldest documents are not shown.",
+				"empty": "Nothing here.",
+				"range": "{{first}}–{{last}} of {{total}}",
+				"order": {
+					"oldest": "oldest first",
+					"newest": "newest answer first"
+				},
+				"previous": "Previous",
+				"next": "Next",
+				"rowState": {
+					"open": "Open",
+					"done": "Answered"
+				},
+				"choice": "Answer: {{choice}}",
+				"answer": {
+					"title": "Owner's answer",
+					"none": "No answer yet.",
+					"done": "Done",
+					"notDone": "Not done"
+				},
+				"files": {
+					"title": "Files",
+					"open": "Open the files in the console"
+				},
+				"history": {
+					"item": "History",
+					"answer": "Answer history",
+					"empty": "No events.",
+					"older": "Older events: {{n}}. They are in the console."
+				},
+				"error": {
+					"forbidden": "Only the owner's own session can read the owner queue.",
+					"off": "The owner queue is not connected to this board.",
+					"notFound": "This document is no longer in the queue.",
+					"unavailable": "The ops console did not answer. Try again later."
+				}
 			}
 		},
 		"notebook": {
@@ -4078,6 +4180,7 @@
 				"workerOnline": "Worker online",
 				"workerOffline": "Worker offline: search by words only",
 				"counts": "{{sources}} sources · {{chunks}} chunks · {{embedded}} with vectors",
+				"indexCapped": "Meaning search holds the newest {{indexed}} of {{embedded}}: older chunks are found by words only",
 				"model": "Model {{model}} · {{calls}} of {{max}} answers today",
 				"noModel": "No model connected: answers come as sources without text"
 			},
@@ -4191,6 +4294,18 @@
 			"diffFrom": "from",
 			"empty": "Nothing synced yet.",
 			"loadError": "Failed to load SSR data.",
+			"draftChanged": "Nothing was decided: the draft changed after you opened the diff. The diff is refreshed; check it and decide again.",
+			"kind": {
+				"skill": "Skill",
+				"rule": "Rule",
+				"agent": "Agent",
+				"genome": "Genome",
+				"prompt": "Prompt",
+				"nerve": "Nerve config",
+				"config": "Council config",
+				"product-prompt": "Product prompt",
+				"template": "Template"
+			},
 			"approveMatching": {
 				"summary": "Drafts: {{total}} · match a version you approved: {{matching}}",
 				"button": "Approve matching ({{matching}})",

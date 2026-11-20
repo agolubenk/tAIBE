@@ -37,6 +37,14 @@ services:
       # Secrets come from files only (N-007).
       POSTGRES_PASSWORD_FILE: /run/tb-secrets/postgres_password
       AUTH_SECRET_FILE: /run/tb-secrets/auth_secret
+      # TB-31 R-8: the sign-in limiter counts per client IP. The API's peer is
+      # the image's own nginx (127.0.0.1), which appends its peer, the tb bridge
+      # gateway 10.78.0.1, to X-Forwarded-For; tls sets that header to
+      # $remote_addr. Trust both hops (not the whole subnet), so the client is
+      # the first untrusted address. Without it all clients share one bucket.
+      TRUSTED_PROXIES: 10.78.0.1/32,127.0.0.0/8,::1/128
+      # "true" turns the limiter off (README «Sign-in limits and mail»).
+      DISABLE_AUTH_RATE_LIMIT: ${DISABLE_AUTH_RATE_LIMIT:-}
       # One seeded admin; agents use API keys. Nobody signs up from the tunnel.
       DISABLE_REGISTRATION: "true"
       DISABLE_GUEST_ACCESS: "true"
@@ -66,6 +74,13 @@ services:
       # mac/memory-token-push.sh. Read on every request; without the file the
       # reader sends no header, which only the proxy's rollout mode accepts.
       CLAUDE_MEM_PROXY_TOKEN_FILE: /run/tb-secrets/claude_mem_proxy_token
+      # The product boundary (R-002, TB-58): each workspace reads only its own
+      # claude-mem projects — the repo folder and its worktrees («<root>/…»);
+      # the Mac proxy filters them in its SQL. «<workspaceId>=<root>[|<root>],
+      # …»; a workspace not listed reads nothing. Defaults: taibe → tAIBE,
+      # Lavaeon (HR Helper) → HR_Helper-v2, Financial terminal → terminal
+      # (workspaces on prod 13.11).
+      CLAUDE_MEM_PROJECTS: ${CLAUDE_MEM_PROJECTS:-lth89qy6f8j1greiy4c5cn23=tAIBE,jbza3jvj5qtkquur7mpaxzet=HR_Helper-v2,tn34un5k8phqk9bs3wlj37qj=terminal}
       # The owner queue (TB-102): requests go there as items and «да» there
       # is applied here. Off until the URL, the token's name in the queue and
       # the workspace → product pairs are set; the token file is read on
@@ -77,6 +92,16 @@ services:
       # is not its queue product.
       OQ_PLAN_PRODUCTS: ${OQ_PLAN_PRODUCTS:-}
       OQ_TOKEN_FILE: /run/tb-secrets/oq_token
+      # Mail (TB-31 R-10): off until SMTP_HOST and SMTP_FROM are set. An empty
+      # SMTP_SECURE means TLS from the first byte (port 465); a provider on 587
+      # with STARTTLS needs SMTP_SECURE=false. The password is a file only.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-}
+      SMTP_PASSWORD_FILE: /run/tb-secrets/smtp_password
     volumes:
       - ./secrets:/run/tb-secrets:ro
     ports:
