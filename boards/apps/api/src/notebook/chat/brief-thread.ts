@@ -1,7 +1,10 @@
 import db from "../../database";
 import { notebookMessageTable } from "../../database/notebook-schema";
 import { ApiError } from "../../errors/api-error";
-import { effectiveNotebookModel } from "../../notebook-model/effective-notebook-model";
+import {
+  effectiveNotebookModel,
+  modelChain,
+} from "../../notebook-model/effective-notebook-model";
 import { findThread, threadTurns, touchThread } from "./ask-notebook";
 import { BRIEF_MAX_TOKENS, briefPrompt, parseBrief } from "./brief-prompt";
 import { releaseCall, reserveCall } from "./call-budget";
@@ -18,8 +21,8 @@ export async function briefThread(input: {
 }) {
   const thread = await findThread(input.workspaceId, input.threadId);
   const settings = await effectiveNotebookModel();
-  const { key, model } = settings;
-  if (!model || !key) {
+  const points = modelChain(settings);
+  if (!points) {
     throw new ApiError(409, {
       code: "NOTEBOOK_MODEL_NOT_CONFIGURED",
       message: "No model is connected, so the notebook cannot write a brief.",
@@ -34,12 +37,7 @@ export async function briefThread(input: {
         "Today's model call limit is reached; briefs resume tomorrow (UTC).",
     });
   }
-  const config = {
-    baseUrl: settings.baseUrl,
-    model,
-    ...(settings.thinking ? { thinking: settings.thinking } : {}),
-  };
-  const reply = await callModel(config, key, messages, {
+  const reply = await callModel(points, messages, {
     maxTokens: BRIEF_MAX_TOKENS,
   });
   const brief = reply.ok ? parseBrief(reply.content) : null;
@@ -51,7 +49,7 @@ export async function briefThread(input: {
       role: "assistant",
       status: brief ? "brief" : "brief-failed",
       content: brief ?? "",
-      model,
+      model: reply.model,
       // D-018: a brief the model wrote but parseBrief refused still spent
       // the tokens, so its usage is kept.
       usage: reply.ok ? reply.usage : null,

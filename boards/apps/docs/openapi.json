@@ -10037,6 +10037,13 @@
               "null"
             ]
           },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "OpenRouter's own fallback models for this point, tried there in order. Sent only to openrouter.ai."
+          },
           "embedModel": {
             "type": "string"
           },
@@ -10071,7 +10078,23 @@
             "description": "The server has a settings encryption key, so a model key can be saved here."
           },
           "callsToday": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Today's model calls (UTC) of all points: the daily cap."
+          },
+          "pointCallsToday": {
+            "type": "integer",
+            "description": "The part of callsToday answered or last failed by the main point."
+          },
+          "failsSinceStart": {
+            "type": "integer",
+            "description": "Failed calls of this point since the API started (kept in memory)."
+          },
+          "chain": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotebookModelPoint"
+            },
+            "description": "Points tried in this order after the main one fails (TB-159). The daily cap is shared by all points."
           },
           "usage": {
             "type": "array",
@@ -10119,6 +10142,7 @@
         "required": [
           "baseUrl",
           "model",
+          "models",
           "embedModel",
           "dailyMax",
           "hasKey",
@@ -10127,7 +10151,73 @@
           "fileKeyWithheld",
           "canStoreKey",
           "callsToday",
+          "pointCallsToday",
+          "failsSinceStart",
+          "chain",
           "usage"
+        ]
+      },
+      "NotebookModelPoint": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "OpenRouter's own fallback models for this point, tried there in order. Sent only to openrouter.ai."
+          },
+          "hasKey": {
+            "type": "boolean"
+          },
+          "keySource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "settings",
+              "file",
+              null
+            ],
+            "description": "Where the model key comes from: these settings, or the server's key file. The key itself is never returned."
+          },
+          "keyUnreadable": {
+            "type": "boolean"
+          },
+          "fileKeyWithheld": {
+            "type": "boolean",
+            "description": "The server's key file holds a key for the server's own API address; it is not sent to the address set here."
+          },
+          "callsToday": {
+            "type": "integer",
+            "description": "Today's calls (UTC) answered or last failed by a model this point lists first in the chain."
+          },
+          "failsSinceStart": {
+            "type": "integer",
+            "description": "Failed calls of this point since the API started (kept in memory)."
+          }
+        },
+        "required": [
+          "id",
+          "baseUrl",
+          "model",
+          "models",
+          "hasKey",
+          "keySource",
+          "keyUnreadable",
+          "fileKeyWithheld",
+          "callsToday",
+          "failsSinceStart"
         ]
       },
       "UpdateNotebookModelSettings": {
@@ -10149,6 +10239,19 @@
             ],
             "minLength": 1,
             "maxLength": 200
+          },
+          "models": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 3,
+            "description": "OpenRouter's own fallback models for the main point; null or an empty list removes them."
           },
           "embedModel": {
             "type": [
@@ -10174,6 +10277,58 @@
             "minLength": 1,
             "maxLength": 500,
             "description": "A new model key; null removes the stored one, leaving it out keeps it."
+          },
+          "chain": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "description": "The id of a point already in the chain; leave it out for a new point."
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "maxLength": 500,
+                  "format": "uri",
+                  "description": "An https address of an OpenAI-compatible API. The point's key is bound to it."
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "maxItems": 3
+                },
+                "key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "description": "A new key for this point; null removes it, leaving it out keeps the point's stored key (same address only)."
+                }
+              },
+              "required": [
+                "baseUrl",
+                "model"
+              ]
+            },
+            "maxItems": 4,
+            "description": "The whole chain after the main point, in the order to try it; null removes it, leaving it out keeps it."
           }
         }
       },

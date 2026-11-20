@@ -10,27 +10,38 @@ import {
 } from "./notebook-model-store";
 import type { UpdateNotebookModel } from "./schema";
 import { canSealSecrets, sealSecret } from "./secret-box";
+import { applyChain, sendsChainKey } from "./update-model-chain";
 
 function applyFields(current: StoredNotebookModel, patch: UpdateNotebookModel) {
   const next: StoredNotebookModel = { ...current };
-  for (const field of ["baseUrl", "model", "embedModel", "dailyMax"] as const) {
+  for (const field of [
+    "baseUrl",
+    "model",
+    "models",
+    "embedModel",
+    "dailyMax",
+  ] as const) {
     const value = patch[field];
     if (value === undefined) continue;
-    if (value === null) delete next[field];
-    else (next as Record<string, unknown>)[field] = value;
+    if (value === null || (Array.isArray(value) && !value.length)) {
+      delete next[field];
+    } else (next as Record<string, unknown>)[field] = value;
   }
   if (next.baseUrl) next.baseUrl = normalizeBaseUrl(next.baseUrl);
   return next;
 }
 
 // A field left out keeps its value; null clears it back to the server's
-// default. The key is sealed to the API address it is meant for before it
+// default. Each key is sealed to the API address it is meant for before it
 // reaches the database.
 export async function updateNotebookModel(
   patch: UpdateNotebookModel,
   actorId: string,
 ) {
-  if (typeof patch.key === "string" && !canSealSecrets()) {
+  if (
+    (typeof patch.key === "string" || sendsChainKey(patch)) &&
+    !canSealSecrets()
+  ) {
     throw new HTTPException(409, {
       message:
         "The server has no settings encryption key, so a model key cannot be stored",
@@ -50,6 +61,9 @@ export async function updateNotebookModel(
           "The stored key belongs to the previous API address: enter the key again or remove it",
       });
     }
+    const chain = applyChain(current.chain, patch.chain);
+    if (chain) next.chain = chain;
+    else delete next.chain;
     await writeStoredNotebookModel(next, actorId, tx);
   });
 }
