@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import stat
+import time
 
 from merge_guard_vars import ASSIGN, DECLARE, SUBST, computed
 
@@ -25,7 +26,12 @@ GNU = WRITE_ALL | WRITE_LAST | LINKS | GONE | {"dd", "tar"}  # `gmv`, `gln`, `gr
 GLOB = re.compile(r"[*?[]")
 # формы маски zsh, которых _glob не повторяет (`[^x]`, `[!x]`, `[[:alpha:]]`, `**`; `^`, `#`, `~` — EXTENDED_GLOB):
 # отказ, не подражание (coord 13:46, линза frontend #508); `(…)` в слове делит разбор — _group
-ZSH_FORM = re.compile(r"\[[\^!]|\[:|\*\*|[\^#]|(?<=.)~")
+ZSH_FORM = re.compile(r"\[[\^!]|\[:|\*\*")
+# `^`, `#`, `~` в середине — маска только при EXTENDED_GLOB (в Bash-инструменте выключена): форма — в слове с `*?[` или
+# когда команда её включает; `*~`, `a~`, `#x#`, `host:~/d` — буквы (проверено в zsh, линза Контроль #508 N2)
+ZSH_EXT = re.compile(r"[\^#]|(?<=.)~(?=.)")
+RSYNC_PATTERN = {"--exclude", "--include", "--filter"}  # значение через пробел — шаблон, не путь (`'**/x'`); и `-f`:
+RSYNC_F = re.compile(r"-[^-eBMTf@]*f")  # у `-ref`, `-rTf` f — значение `-e`/`-T`, слово за ним — источник (Контроль B1)
 UNSEEN = re.compile(rf"{SUBST}|[$`]")  # слово из `$(…)`, `` `…` `` или неизвестной переменной: путь разбору не виден
 SUBST_N = re.compile(rf"{SUBST}C(\d+)x")  # $(…) с номером текста в procs[SUBS] хука (merge_guard_shell.SUBST_AT)
 ENV_WORD = re.compile(r"\$(?:\{(TMPDIR|USER|LOGNAME|RANDOM)\}|(TMPDIR|USER|LOGNAME|RANDOM)(?!\w)|\$)")  # HOME — dir_vars
@@ -264,53 +270,63 @@ def guarded_dirs(roots, home):
     return [os.path.realpath(os.path.expanduser(d)).casefold() for d in out + [os.environ.get("ZDOTDIR") or "~"]]
 
 
-PATHS_MAX, SCAN_MAX = 2000, 20_000  # путей маски на слово, прочтённых имён на решение хука (линза frontend #508)
-_scan = [None, 0]  # решение хука (merge_guard_git.decision) и сколько имён маски уже прочтено
+PATHS_MAX, SCAN_MAX = 20_000, 500_000  # на решение: путей масок для проверок, прочтённых имён (coord 14:02: < 3 с на Mac)
+_scan = [None, 0, 0, {}]  # решение (merge_guard_git.decision), имён прочтено, путей отдано, пути масок этого решения
 
 
 class Unread(Exception):
-    """Маску не прочесть: шире предела (таймаут хука 10 с — пропуск; предел — счёт, не время, coord 13:27) или форма
-    zsh, которой _glob не повторяет (coord 13:46). Тогда отказ: назовите пути словами."""
+    """Отказ «назовите пути словами»: маска шире предела или срока решения (таймаут хука — пропуск) или форма zsh."""
 
 
-def _left():
+def _budget():
     import merge_guard_git as g  # git импортирует shell, shell — этот модуль
     if _scan[0] != g.decision():
-        _scan[:] = [g.decision(), 0]
-    return SCAN_MAX - _scan[1]
+        _scan[:] = [g.decision(), 0, 0, {}]
+    if _scan[0] and time.monotonic() > _scan[0]:  # срок решения (start_budget, 6 с): путь глубиной 400 — 3 мс (realpath
+        raise Unread("разбор масок дольше срока решения")  # — lstat на часть), предел счёта время не держит (frontend #511)
+    return _scan
 
 
 def _glob(p):
-    """Пути маски p по частям пути (os.scandir), с именами с точкой (zsh GLOB_DOTS, bash dotglob). Каждое прочтённое
-    имя (и в папке без совпадений) идёт в предел решения SCAN_MAX; путей на слове больше PATHS_MAX — Unread."""
+    """Пути маски p по частям пути (os.scandir), с именами с точкой (GLOB_DOTS). Папку читает потоком, в памяти — только
+    совпадения; каждое прочтённое имя — в предел решения SCAN_MAX; ту же маску решение раскрывает один раз."""
+    s = _budget()
+    if p in s[3]:
+        return s[3][p]
     cur, parts = [os.sep if os.path.isabs(p) else ""], [x for x in p.split(os.sep) if x]
     for k, part in enumerate(parts):
         if not GLOB.search(part):
             cur = [os.path.join(c, part) for c in cur]
             continue
-        nxt, last = [], k == len(parts) - 1
+        nxt, last, match = [], k == len(parts) - 1, re.compile(fnmatch.translate(part)).match  # как fnmatchcase
         for c in cur:
-            left = _left()
             try:
                 with os.scandir(c or ".") as it:
-                    got = list(itertools.islice(it, left + 1))  # папка в миллион имён — не дальше предела
-                    names = [e.name for e in got if last or e.is_dir()]
+                    for e in it:
+                        s[1] += 1
+                        if s[1] > SCAN_MAX or len(nxt) > PATHS_MAX:
+                            raise Unread("маска раскрывается шире предела")
+                        if match(e.name) and (last or e.is_dir()):
+                            nxt.append(os.path.join(c, e.name))
             except OSError:
                 continue
-            _scan[1] += len(got)
-            nxt += [os.path.join(c, n) for n in names if fnmatch.fnmatchcase(n, part)]
-            if len(got) > left or len(nxt) > PATHS_MAX:
-                raise Unread("маска раскрывается шире предела")
         cur = nxt
-    return [c for c in cur if os.path.lexists(c)]
+    s[3][p] = [c for c in cur if os.path.lexists(c)]
+    return s[3][p]
 
 
-def _paths(base, word):
-    """Пути слова от папки base; маску раскрывает и на имена с точкой (`mv .c* x`), не шире предела (_glob)."""
-    if ZSH_FORM.search(word):
+def _paths(base, word, ext=False):
+    """Пути слова от base; маску — и на имена с точкой (`mv .c* x`), не шире предела; ext — включён EXTENDED_GLOB."""
+    if ZSH_FORM.search(word) or ZSH_EXT.search(word) and (ext or GLOB.search(word)):
         raise Unread("форма маски zsh, которую разбор не читает (`[^…]`, `[[:…:]]`, `**`, `^`, `#`, `~`)")
     p = os.path.join(base, os.path.expanduser(word))
-    return (_glob(p) or [p]) if GLOB.search(word) else [p]
+    if not GLOB.search(word):
+        return [p]
+    got = _glob(p) or [p]
+    _scan[2] += len(got)  # каждый путь проверка прочтёт (realpath): предел — на все проверки решения
+    if _scan[2] > PATHS_MAX:
+        raise Unread("маска раскрывается шире предела")
+    return got
 
 
 @functools.lru_cache(maxsize=8)
@@ -333,11 +349,11 @@ def _group(text):
     return False
 
 
-def _hit(word, bases, roots, protected, dirs):
+def _hit(word, bases, roots, protected, dirs, ext=False):
     """Путь слова от одной из bases — защищённый или папка над защищённым: что назвать в отказе, иначе None."""
     for base in bases:
-        for q in _paths(base, word):
-            f = os.path.realpath(q).casefold()
+        for q in _paths(base, word, ext):
+            f = _budget() and os.path.realpath(q).casefold()  # срок решения — на каждый путь: вышел — Unread
             if p := protected(q, base, roots):
                 return p
             if any(d == f or d.startswith(f.rstrip("/") + "/") for d in dirs):
@@ -433,10 +449,15 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
         cmd, ops = {"mv": "mv", "rm": "rm"}.get(sub, ""), [x for x in a[k + 1:] if not x.startswith("-")]
     if cmd not in FAMILY:  # остальным realpath папок не нужен
         return []
-    if text and _group(text):
+    if whole[0] and _group(whole[0]):  # текст своего уровня, без тел heredoc: тело для shell — свой уровень (N1, #508)
         raise Unread("форма маски zsh, которую разбор не читает (`(…)`, `(a|b)`, `*(/)`)")
+    if cmd == "rsync":  # `--exclude '**/node_modules'`: значение опции — шаблон, не путь (Контроль N2, #508)
+        val = {k + 1 for k, x in enumerate(a) if x in RSYNC_PATTERN or RSYNC_F.fullmatch(x)}
+        ops = [x for k, x in enumerate(a) if k and k not in val and not x.startswith("-")]
     short, dirs, norm = "".join(x[1:] for x in opts if x[:2] != "--"), guarded_dirs(roots, home), [gnu(a[0])] + a[1:]
-    hit = lambda w, bases: _hit(w, bases, roots, protected, dirs)  # noqa: E731
+    ext = "extendedglob" in text.casefold().replace("_", "")  # `setopt Extended_Glob`, `set -o …`, `zsh -o …` (zsh 5.9)
+    hit = lambda w, bases: _hit(w, bases, roots, protected, dirs, ext)  # noqa: E731
+    paths = lambda base, w: _paths(base, w, ext)  # noqa: E731
     say = lambda p, why: ("file", f"{p} ({a[0]} {why} — IS-249)")  # noqa: E731
     unseen = say(" ".join(a)[:80], "называет путь, который разбор не видит: " + (
         "закоммитьте скрипт или назовите путь словами" if isinstance(disk, Disk) else "назовите его словами"))
@@ -457,15 +478,15 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
     into = _values(norm, "t", "--target-directory") if cmd in ("ln", "mv", "cp", "install") else []
     dest = into[0] if into else ops[-1] if len(ops) > 1 else None
     srcs = ([x for x in ops if x != dest] if into else ops[:-1] if dest else ops) + link_dest
-    ats = _paths(cwd, dest) if dest else [cwd]  # куда ляжет: папка-цель или новое имя; маску цели (`.cl*/`) — как shell
+    ats = paths(cwd, dest) if dest else [cwd]  # куда ляжет: папка-цель или новое имя; маску цели (`.cl*/`) — как shell
     found = []
     if linking and any(UNSEEN.search(w) for w in ops + link_dest) and typed():  # `ln -s "$(…)" /tmp/r && echo x > …`
         found.append(unseen)  # закоммиченный скрипт — прежнее правило (install.sh, agent-comms-link.sh; coord 13:27)
     if linking or cmd == "mv":  # символьная ссылка считается от своей папки, жёсткая и перенос — от cwd
         bases = [cwd] + [b for at in ats for b in (at, os.path.dirname(at))] if linking and dest else [cwd]
         found += [say(p, "даёт второе имя или уносит защищённое или папку над ним") for w in srcs if (p := hit(w, bases))]
-    found += [say(p, "кладёт файл с защищённым именем") for at in ats for w in srcs for q in _paths(cwd, w)
-              if (p := protected(os.path.join(at, os.path.basename(q.rstrip("/"))), cwd, roots))]
+    found += [say(p, "кладёт файл с защищённым именем") for at in ats for w in srcs for q in paths(cwd, w)
+              if _budget() and (p := protected(os.path.join(at, os.path.basename(q.rstrip("/"))), cwd, roots))]  # срок — как в _hit
     tree = cmd == "ditto" or cmd in ("cp", "rsync") and bool(
         re.search(r"[rRa]" if cmd == "cp" else r"[ra]", short) or {"--recursive", "--archive"} & set(opts))
     if tree and dest:  # содержимое (`x/.`, `x/`, ditto) и цель, которой нет, — в саму цель; иначе — в цель/имя источника
@@ -473,6 +494,6 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
             b = os.path.basename(q)
             return at if cmd == "ditto" or w.endswith(("/", "/.")) or not os.path.isdir(at) or UNSEEN.search(b) else (
                 os.path.join(at, b))
-        into = [land(at, w, q) for at in ats for w in srcs for q in _paths(cwd, w) if not GLOB.search(os.path.basename(q))]
+        into = [land(at, w, q) for at in ats for w in srcs for q in paths(cwd, w) if not GLOB.search(os.path.basename(q))]
         found += [say(p, "копирует папку поверх папки с законами и настройками") for t in into if (p := hit(t, [cwd]))]
     return found
