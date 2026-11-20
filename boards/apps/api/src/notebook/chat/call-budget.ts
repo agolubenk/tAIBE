@@ -17,13 +17,28 @@ function oneAtATime<T>(step: () => Promise<T> | T): Promise<T> {
   return run;
 }
 
+const modelCallToday = () =>
+  and(
+    isNotNull(notebookMessageTable.model),
+    sql`${notebookMessageTable.createdAt} >= date_trunc('day', now() AT TIME ZONE 'utc')`,
+  );
+
 export async function cloudCallsToday(): Promise<number> {
-  return db.$count(
-    notebookMessageTable,
-    and(
-      isNotNull(notebookMessageTable.model),
-      sql`${notebookMessageTable.createdAt} >= date_trunc('day', now() AT TIME ZONE 'utc')`,
-    ),
+  return db.$count(notebookMessageTable, modelCallToday());
+}
+
+// TB-159: today's calls by the model that answered (or last failed).
+export async function cloudCallsByModelToday(): Promise<Map<string, number>> {
+  const rows = await db
+    .select({
+      model: notebookMessageTable.model,
+      calls: sql<number>`count(*)::int`,
+    })
+    .from(notebookMessageTable)
+    .where(modelCallToday())
+    .groupBy(notebookMessageTable.model);
+  return new Map(
+    rows.flatMap((row) => (row.model ? [[row.model, row.calls]] : [])),
   );
 }
 
