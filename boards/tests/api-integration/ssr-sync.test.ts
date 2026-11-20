@@ -237,6 +237,7 @@ describe("API integration: SSR corpus sync", () => {
         .select({
           entityId: ssrVersionTable.entityId,
           versionId: ssrVersionTable.id,
+          blobSha: ssrVersionTable.blobSha,
         })
         .from(ssrVersionTable)
         .innerJoin(
@@ -253,7 +254,7 @@ describe("API integration: SSR corpus sync", () => {
         await approveDraft(
           forest.workspace.id,
           draft.entityId,
-          draft.versionId,
+          { versionId: draft.versionId, blobSha: draft.blobSha },
           forest.ownerId,
         );
       }
