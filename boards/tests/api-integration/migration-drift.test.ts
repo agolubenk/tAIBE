@@ -16,6 +16,7 @@ import {
   checkMigrationDrift,
   findMigrationDrift,
 } from "../../apps/api/src/database/migration-drift";
+import { migrateWithDriftCheck } from "../../apps/api/src/database/migrate-with-drift-check";
 import { ensureTestDatabaseMigrated } from "./helpers/database";
 
 // TB-64: a migration file that changed after the database applied it. The
@@ -92,6 +93,26 @@ describe("API integration: migration drift (TB-64)", () => {
     expect(logged).toHaveLength(1);
     expect(logged[0]).toContain(tag);
     expect(logged[0]).toContain("Ловушка dev-базы");
+  });
+
+  // TB-251: the step that runStartupTasks calls, with the real migrate().
+  it("runs migrate, then the drift check that NODE_ENV sets", async () => {
+    const folder = copyFolder();
+    const tag = tagOf(folder, "0069_");
+    appendFileSync(join(folder, `${tag}.sql`), "\n-- written after apply\n");
+
+    await expect(
+      migrateWithDriftCheck(db, folder, { env: { NODE_ENV: "test" } }),
+    ).rejects.toThrow(tag);
+
+    const logged: string[] = [];
+    const drift = await migrateWithDriftCheck(db, folder, {
+      env: { NODE_ENV: "production" },
+      logError: (message) => logged.push(message),
+    });
+    expect(drift.map((entry) => entry.tag)).toEqual([tag]);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain(tag);
   });
 
   it("clears the drift with the UPDATE that the error prints", async () => {
