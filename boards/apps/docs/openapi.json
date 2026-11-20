@@ -26786,6 +26786,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent a [REDACTED:…] marker in a new label name (create_label); a new value has no stored value for it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "410": {
             "description": "The tree or sector was already felled",
             "content": {
@@ -32153,6 +32163,13 @@
                     "to": {
                       "type": "number"
                     },
+                    "toVersionId": {
+                      "type": "string"
+                    },
+                    "toBlobSha": {
+                      "type": "string",
+                      "description": "Aggregate sha of the bytes shown on the `to` side; approve and reject send it back"
+                    },
                     "files": {
                       "type": "array",
                       "items": {
@@ -32175,6 +32192,8 @@
                   "required": [
                     "from",
                     "to",
+                    "toVersionId",
+                    "toBlobSha",
                     "files"
                   ]
                 }
@@ -32394,10 +32413,16 @@
                 "properties": {
                   "versionId": {
                     "type": "string"
+                  },
+                  "blobSha": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "The draft's blob sha from the open diff (toBlobSha); re-checked"
                   }
                 },
                 "required": [
-                  "versionId"
+                  "versionId",
+                  "blobSha"
                 ]
               }
             }
@@ -32451,7 +32476,7 @@
             }
           },
           "409": {
-            "description": "Version is not an open draft",
+            "description": "Version is not an open draft, or SSR_DRAFT_CHANGED: its bytes differ from blobSha",
             "content": {
               "application/json": {
                 "schema": {
@@ -32500,10 +32525,16 @@
                 "properties": {
                   "versionId": {
                     "type": "string"
+                  },
+                  "blobSha": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "The draft's blob sha from the open diff (toBlobSha); re-checked"
                   }
                 },
                 "required": [
-                  "versionId"
+                  "versionId",
+                  "blobSha"
                 ]
               }
             }
@@ -32553,7 +32584,7 @@
             }
           },
           "409": {
-            "description": "Version is not an open draft",
+            "description": "Version is not an open draft, or SSR_DRAFT_CHANGED: its bytes differ from blobSha",
             "content": {
               "application/json": {
                 "schema": {

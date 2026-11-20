@@ -17745,6 +17745,9 @@
 						"loadError": {
 							"type": "string"
 						},
+						"draftChanged": {
+							"type": "string"
+						},
 						"kind": {
 							"type": "object",
 							"additionalProperties": false,
@@ -17970,6 +17973,7 @@
 						"diffFrom",
 						"empty",
 						"loadError",
+						"draftChanged",
 						"kind",
 						"approveMatching"
 					]

@@ -312,7 +312,7 @@ async function refuseAnswer(
 
 // The answer counts for the text the owner read: the item is unchanged since
 // the owner's answer (ownerAt is set by the queue server).
-function answeredAfter(check: QueueDoc, item: QueueDoc) {
+export function answeredAfter(check: QueueDoc, item: QueueDoc) {
   const at =
     typeof check.data.ownerAt === "string"
       ? Date.parse(check.data.ownerAt)

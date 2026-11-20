@@ -48,6 +48,8 @@ export type SsrServed = {
 export type SsrDiff = {
   from: number;
   to: number;
+  toVersionId: string;
+  toBlobSha: string;
   files: Array<{ path: string; diff: string }>;
 };
 
@@ -105,12 +107,13 @@ export async function approveSsrDraft(
   workspaceId: string,
   entityId: string,
   versionId: string,
+  blobSha: string,
 ) {
   const response = await client.ssr[":workspaceId"].entities[
     ":entityId"
   ].approve.$post({
     param: { workspaceId, entityId },
-    json: { versionId },
+    json: { versionId, blobSha },
   });
   return toResult(response);
 }
@@ -119,12 +122,13 @@ export async function rejectSsrDraft(
   workspaceId: string,
   entityId: string,
   versionId: string,
+  blobSha: string,
 ) {
   const response = await client.ssr[":workspaceId"].entities[
     ":entityId"
   ].reject.$post({
     param: { workspaceId, entityId },
-    json: { versionId },
+    json: { versionId, blobSha },
   });
   return toResult(response);
 }

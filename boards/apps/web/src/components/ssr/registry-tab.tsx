@@ -12,11 +12,17 @@ import {
   type SsrVersionSummary,
 } from "@/fetchers/ssr/ssr-fetchers";
 import { Button } from "@/components/ui/button";
+import { HttpError } from "@/lib/http-error";
 import { ApproveMatchingBar } from "./approve-matching-bar";
 
 // «Скиллы и правила» (spec RU-2, RU-11): the registry. Every entity with its
 // versions; a diff opens before any owner decision — approve and rollback
-// stay disabled until the diff is on screen.
+// stay disabled until the diff is on screen. Approve and reject send the blob
+// sha of the bytes that diff shows (TB-88): if the sync replaced the draft
+// since, the server answers 409 SSR_DRAFT_CHANGED and the diff reloads.
+const isDraftChanged = (error: unknown) =>
+  error instanceof HttpError && error.code === "SSR_DRAFT_CHANGED";
+
 function DiffBlock({ diff }: { diff: string }) {
   return (
     <pre className="bg-muted/50 max-h-96 overflow-auto rounded-md border border-border p-3 font-mono text-xs leading-relaxed">
@@ -71,14 +77,37 @@ function VersionRow({
       }),
     ]);
 
+  // A stale diff is reloaded so the owner sees the bytes now waiting.
+  const onDecisionError = (error: unknown) => {
+    if (!isDraftChanged(error)) return;
+    void queryClient.invalidateQueries({
+      queryKey: ["ssr", "diff", workspaceId, entity.id, version.number],
+    });
+  };
   const approve = useMutation({
-    mutationFn: () => approveSsrDraft(workspaceId, entity.id, version.id),
+    mutationFn: (blobSha: string) =>
+      approveSsrDraft(workspaceId, entity.id, version.id, blobSha),
     onSuccess: invalidate,
+    onError: onDecisionError,
   });
   const reject = useMutation({
-    mutationFn: () => rejectSsrDraft(workspaceId, entity.id, version.id),
+    mutationFn: (blobSha: string) =>
+      rejectSsrDraft(workspaceId, entity.id, version.id, blobSha),
     onSuccess: invalidate,
+    onError: onDecisionError,
   });
+  // The bytes on screen: only a loaded, settled diff of this very version.
+  // A failed reload keeps the old data, so an error clears the sha as well.
+  const seenSha =
+    diff.data &&
+    !diff.isFetching &&
+    !diff.isError &&
+    diff.data.toVersionId === version.id
+      ? diff.data.toBlobSha
+      : null;
+  const deciding = approve.isPending || reject.isPending;
+  const draftChanged =
+    isDraftChanged(approve.error) || isDraftChanged(reject.error);
   const rollback = useMutation({
     mutationFn: () => rollbackSsrEntity(workspaceId, entity.id, version.number),
     onSuccess: invalidate,
@@ -139,8 +168,8 @@ function VersionRow({
               <Button
                 type="button"
                 size="sm"
-                disabled={!diffOpen || diff.isPending}
-                onClick={() => approve.mutate()}
+                disabled={!diffOpen || !seenSha || deciding}
+                onClick={() => seenSha && approve.mutate(seenSha)}
               >
                 {t("workspace:ssr.approve")}
               </Button>
@@ -148,8 +177,8 @@ function VersionRow({
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={!diffOpen || diff.isPending}
-                onClick={() => reject.mutate()}
+                disabled={!diffOpen || !seenSha || deciding}
+                onClick={() => seenSha && reject.mutate(seenSha)}
               >
                 {t("workspace:ssr.reject")}
               </Button>
@@ -194,9 +223,14 @@ function VersionRow({
             : null}
         </div>
       ) : null}
-      {approve.isError || reject.isError || rollback.isError ? (
-        <p className="text-destructive mt-2 text-xs">
-          {t("workspace:ssr.loadError")}
+      {/* "Decide again" only while the reloaded diff is there to decide on;
+          a failed reload says so above and the buttons stay off. */}
+      {(approve.isError || reject.isError || rollback.isError) &&
+      !(draftChanged && diff.isError) ? (
+        <p className="text-destructive mt-2 text-xs" role="alert">
+          {draftChanged
+            ? t("workspace:ssr.draftChanged")
+            : t("workspace:ssr.loadError")}
         </p>
       ) : null}
     </li>

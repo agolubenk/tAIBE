@@ -25,7 +25,7 @@ import {
   timeline,
 } from "../serve";
 import { SyncError, syncCorpus } from "../sync";
-import { assertOwnerUi } from "./owner-ui";
+import { assertOwnerUi, ownerUiOnly } from "./owner-ui";
 import {
   approveBody,
   conflictSchema,
@@ -164,6 +164,7 @@ const approveRoute = createRoute({
   tags: ["SSR"],
   summary: "Approve a draft version (owner UI only)",
   middleware: [
+    ownerUiOnly(),
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ workspace: ["manage_settings"] }),
   ] as const,
@@ -184,7 +185,9 @@ const approveRoute = createRoute({
       }),
     ),
     403: errorResponse("Not the owner's browser session"),
-    409: errorResponse("Version is not an open draft"),
+    409: errorResponse(
+      "Version is not an open draft, or SSR_DRAFT_CHANGED: its bytes differ from blobSha",
+    ),
   },
 });
 
@@ -195,6 +198,7 @@ const rejectRoute = createRoute({
   tags: ["SSR"],
   summary: "Reject a draft version (owner UI only)",
   middleware: [
+    ownerUiOnly(),
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ workspace: ["manage_settings"] }),
   ] as const,
@@ -211,7 +215,9 @@ const rejectRoute = createRoute({
       z.object({ entityId: z.string(), versionId: z.string() }),
     ),
     403: errorResponse("Not the owner's browser session"),
-    409: errorResponse("Version is not an open draft"),
+    409: errorResponse(
+      "Version is not an open draft, or SSR_DRAFT_CHANGED: its bytes differ from blobSha",
+    ),
   },
 });
 
@@ -431,18 +437,18 @@ export const ssrRoutes = apiRouter<SsrVariables>()
   .openapi(approveRoute, async (c) => {
     assertOwnerUi(c.req.raw.headers);
     const { workspaceId, entityId } = c.req.valid("param");
-    const { versionId } = c.req.valid("json");
+    const seen = c.req.valid("json");
     return c.json(
-      await approveDraft(workspaceId, entityId, versionId, c.get("userId")),
+      await approveDraft(workspaceId, entityId, seen, c.get("userId")),
       200,
     );
   })
   .openapi(rejectRoute, async (c) => {
     assertOwnerUi(c.req.raw.headers);
     const { workspaceId, entityId } = c.req.valid("param");
-    const { versionId } = c.req.valid("json");
+    const seen = c.req.valid("json");
     return c.json(
-      await rejectDraft(workspaceId, entityId, versionId, c.get("userId")),
+      await rejectDraft(workspaceId, entityId, seen, c.get("userId")),
       200,
     );
   })
