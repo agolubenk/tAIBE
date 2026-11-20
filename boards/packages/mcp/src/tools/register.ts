@@ -3,6 +3,7 @@ import { z } from "zod";
 import { buildFullTaskUpdateBody } from "../kaneo/task-helpers.js";
 import { excerptSearchResults } from "../view/excerpt.js";
 import { registerForestTools } from "./forest/register-forest.js";
+import { registerFormTools } from "./form-tools.js";
 import { getCurrentUser } from "./get-current-user.js";
 import { registerNotebookTools } from "./notebook-tools.js";
 import { registerSsrTools } from "./ssr-tools.js";
@@ -19,6 +20,8 @@ export type { FormatFallback, RegisterHooks, RegisterTool, ToolCall };
 // The API registers its own tools (R-034 tools_find) with the same
 // validation and call journal as these.
 export { createRegisterTool };
+// The API test checks them against @kaneo/forms (TB-173).
+export { FORM_FIELD_TYPES, FORM_LIMITS } from "./form-tools.js";
 
 export type ToolClient = {
   readonly usingApiKey?: boolean;
@@ -670,7 +673,7 @@ export function registerTools(
     "search",
     {
       description:
-        "Search across tasks, projects, workspaces, comments, and activities. Descriptions and comment text come as an excerpt around the match; read the task for the whole text.",
+        "Search across tasks, projects, workspaces, comments, and activities in one workspace. A card key (DEP-23), a Notion page id or a Notion page link finds that card first. Descriptions and comment text come as an excerpt around the match; read the task for the whole text.",
       inputSchema: z.object({
         q: nonEmptyString.describe("Search query"),
         type: z
@@ -684,7 +687,9 @@ export function registerTools(
           ])
           .optional()
           .describe("Restrict results to one kind. Defaults to all."),
-        workspaceId: optionalNonEmptyString.describe("Limit to one workspace"),
+        // The API needs it (search/schema.ts); without it every call was a 400
+        // (TB-91).
+        workspaceId: nonEmptyString.describe("Workspace to search in"),
         projectId: optionalNonEmptyString.describe("Limit to one project"),
         limit: z
           .number()
@@ -698,7 +703,7 @@ export function registerTools(
     async (args) => {
       const qs = new URLSearchParams({ q: args.q });
       if (args.type) qs.set("type", args.type);
-      if (args.workspaceId) qs.set("workspaceId", args.workspaceId);
+      qs.set("workspaceId", args.workspaceId);
       if (args.projectId) qs.set("projectId", args.projectId);
       if (args.limit !== undefined) qs.set("limit", String(args.limit));
       return run(async () =>
@@ -873,6 +878,7 @@ export function registerTools(
   );
 
   registerForestTools(registerTool, client);
+  registerFormTools(registerTool, client);
   registerNotebookTools(registerTool, client);
   registerSsrTools(registerTool, client);
 }

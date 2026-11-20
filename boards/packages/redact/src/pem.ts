@@ -1,4 +1,4 @@
-import type { Detector, RedactHit } from "./index";
+import type { Detector, RedactHit } from "./index.js";
 
 // PEM blocks end in "KEY-----", PGP key blocks in "KEY BLOCK-----".
 // A BEGIN line up to the nearest END line. Not one lazy regex: from every

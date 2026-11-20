@@ -7,6 +7,9 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createDeltaMirror } from './delta.mjs';
+import { bodyJson, timeoutsFromEnv } from './http.mjs';
+
+const TIMEOUTS_DEFAULT = timeoutsFromEnv({});
 
 // ── Автопередача входящих (--relay <сессия>, входящее владельца 9654) ────────────────────────────────────────
 // Процесс под Monitor сессии: раз в 20 с — очередь (дельта /changes, без неё — ETag и 304), каждое новое
@@ -69,8 +72,27 @@ function relayPrune(relayed, now) {
   return Object.fromEntries(Object.entries(relayed).filter(([, v]) => !(now - Date.parse(v) > 30 * DAY_MS)));
 }
 
+/**
+ * Прежний опрос коллекции с ETag (когда дельты нет). ETag и docs запоминаются только вместе и только после разбора
+ * тела (OPS-79): раньше ETag ставился до чтения тела, тело обрывалось таймаутом — и каждый следующий проход получал
+ * 304 без данных («HTTP 304» по кругу, входящие не передавались, пока коллекция не изменится).
+ */
+export function createPoller({ base, token, timeoutMs = TIMEOUTS_DEFAULT.list, fetchFn = fetch }) {
+  const etag = {}, last = {};
+  return async function poll(col) {
+    const res = await fetchFn(`${base}/db/${col}`, { headers: { Authorization: `Bearer ${token}`, ...(etag[col] ? { 'If-None-Match': etag[col] } : {}) }, signal: AbortSignal.timeout(timeoutMs) });
+    if (res.status === 304 && last[col]) return last[col];
+    if (!res.ok) throw new Error(`${col}: HTTP ${res.status}`);
+    const j = await bodyJson(res, timeoutMs);
+    if (!Array.isArray(j?.docs)) throw new Error(`${col}: ответ без docs`);
+    etag[col] = res.headers.get('etag');
+    last[col] = j.docs;
+    return last[col];
+  };
+}
+
 /** conn — адрес API, токен и запрос из server.mjs: без обратного импорта (цикл модулей). */
-export async function relayLoop(session, { BASE, TOKEN, api, product = DEFAULT_PRODUCT }) {
+export async function relayLoop(session, { BASE, TOKEN, api, product = DEFAULT_PRODUCT, timeouts = TIMEOUTS_DEFAULT }) {
   if (!RELAY_SESSION.test(session || '')) {
     // Выход — после сброса строки: под Monitor вывод — pipe, и process.exit сразу после write терял бы её (ревью #173).
     process.stderr.write('Использование: node server.mjs --relay <имя сессии> [--product <slug>] (имя — латиница, цифры, «.», «_», «-»)\n',
@@ -98,16 +120,8 @@ export async function relayLoop(session, { BASE, TOKEN, api, product = DEFAULT_P
   // Дельта /changes (delta.mjs, карточка HR Q-38): ETag экономил только проход без изменений, а любая запись в checks
   // (статусы агентов — постоянно) или items заново тянула всю коллекцию. /changes нет или сбой — прежний опрос с ETag.
   const mirror = createDeltaMirror({ get: (p) => api('GET', p), cols: ['checks', 'items'], log: (s) => process.stderr.write(`[owner-queue-relay] ${s}\n`) });
-  const etag = {}, last = {};
+  const poll = createPoller({ base: BASE, token: TOKEN, timeoutMs: timeouts.list });
   const docsOf = async (col) => (await mirror.list(col))?.docs ?? poll(col);
-  async function poll(col) {
-    const res = await fetch(`${BASE}/db/${col}`, { headers: { Authorization: `Bearer ${TOKEN}`, ...(etag[col] ? { 'If-None-Match': etag[col] } : {}) }, signal: AbortSignal.timeout(20_000) });
-    if (res.status === 304 && last[col]) return last[col];
-    if (!res.ok) throw new Error(`${col}: HTTP ${res.status}`);
-    etag[col] = res.headers.get('etag');
-    last[col] = (await res.json()).docs;
-    return last[col];
-  }
   // Диагностика — в stderr: stdout читает Monitor, каждая строка в нём будит сессию.
   process.stderr.write(`[owner-queue-relay] ${session}: автопередача входящих продукта ${product} запущена, журнал ${file}\n`);
   let beat = 0;

@@ -129,6 +129,11 @@ html { overflow-anchor: none; }
 .jump-list a:hover, .jump-list a:focus-visible { background: var(--accent-soft); color: var(--accent); outline-offset: -2px; }
 .jump-c { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .jump-c.hot { color: var(--warn); font-weight: 600; }
+/* Телефон: «Одной очередью» и «Тема» — строками меню «Очередь», их места в шапке у «Роли» и «Памятки» (OPS-82). */
+.jump-phone { display: none; }
+.jump-phone.jump-sep { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+.jump-act { display: block; width: 100%; min-height: 40px; padding: 9px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.jump-act:hover, .jump-act:focus-visible { background: var(--accent-soft); color: var(--accent); outline-offset: -2px; }
 /* Окна шапки: форма «Поставить задачу» и (на телефоне) «Отчёты». Esc и ✕ закрывают, фокус внутри (showModal). */
 dialog.sheet { width: min(760px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 48px); margin: 24px auto auto; padding: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); box-shadow: 0 18px 60px rgba(0, 0, 0, .28); }
 dialog.sheet::backdrop { background: rgba(15, 19, 25, .45); }
@@ -149,6 +154,8 @@ dialog.sheet .compose { background: var(--surface); }
 .relay-st.warn, .relay-st .warn { color: var(--warn); }
 .relay-st code { font-family: var(--font-mono); font-size: 12px; }
 .relay-st .copy { margin-left: 6px; }
+.holder-st { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.holder-st.warn { color: var(--warn); }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
 .status-row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; font-size: 13px; color: var(--muted); }
 .mode { display: inline-flex; align-items: center; gap: 6px; }
@@ -449,7 +456,12 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 .link-host.warn { color: var(--warn); font-weight: 600; }
 /* До 1400 px окна шапка липнет всегда; с 641 до 1400 — ещё и «К решениям ↓» (решение владельца d-queue-jump-link). */
 @media (max-width: 1399.98px) { .head-bar { position: sticky; top: env(safe-area-inset-top, 0px); } }
-@media (min-width: 641px) and (max-width: 1399.98px) { .hb-to-dec { display: inline-flex; } }
+@media (min-width: 641px) and (max-width: 1399.98px) {
+  .hb-to-dec { display: inline-flex; }
+  /* Планшет и узкое окно Mac: «Тема» — строкой меню «Очередь», «Памятки» — значком (page-memos.ts), иначе шапка в 4 строки. */
+  .head-bar .hb-theme { display: none; }
+  .jump-phone.jump-theme { display: list-item; list-style: none; }
+}
 /* Телефон: отчёты — в окне «Отчёты», тело страницы начинается с данных очереди. Шапка — одна строка (просьба владельца
    10.11): у кнопок вместо названий значки (название — в aria-label и title), выбор продукта забирает оставшееся место. */
 .rm-range { justify-self: start; }
@@ -463,6 +475,10 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
   .head-bar { min-width: 0; }
   .hb-btn { padding: 0 9px; gap: 4px; }
   .hb-compose, .hb-reports, .hb-theme, .hb-layout { flex: none; width: 40px; padding: 0; justify-content: center; }
+  .head-bar .hb-theme, .hb-nav .hb-layout { display: none; }
+  /* Стрелка меню на телефоне — 10 px из строки, где каждый пиксель у выбора продукта; меню видно по счётчику. */
+  #jump-queue > summary::after { display: none; }
+  .jump-phone { display: list-item; list-style: none; }
   .hb-compose[data-draft="1"] { width: auto; padding: 0 8px; }
   /* width: 0 — иначе ширина текста выбора («Все продукты») раздвигает сетку страницы шире экрана; место даёт flex-grow. */
   #head-bar .oq-product-pick { flex: 1 1 0; width: 0; min-width: 0; max-width: none; }
@@ -506,6 +522,8 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
           <li><a href="#sec-server" data-kind="server">На сервере <span class="jump-c"></span></a></li>
           <li><a href="#sec-check" data-kind="check">Проверить руками <span class="jump-c"></span></a></li>
           <li><a href="#sec-inbox" data-kind="inbox">Входящие <span class="jump-c"></span></a></li>
+          <li class="jump-phone jump-sep"><button type="button" class="jump-act" data-proxy="layout-btn"></button></li>
+          <li class="jump-phone jump-theme"><button type="button" class="jump-act" data-proxy="theme-btn"></button></li>
         </ul>
       </details>
       <!-- Раскладка очереди: подпись называет ту, на которую переключит (скрипт ставит её по выбору из localStorage). -->
@@ -752,7 +770,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 
   <details class="agent-howto">
     <summary>Для агентов: как добавить пункт владельцу и отметить свою работу</summary>
-    <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd без basePlanEnd — 409.</p>
+    <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd позже без ответа владельца «перенести» (dueRef) — 409.</p>
     <pre>items/&lt;id&gt;  пункт владельцу (id: d-… решение, m-… мёрж, s-… сервер, c-… ручная проверка)
   Продукт — hr-helper (Lavaeon (HR Helper): id без префикса) или taibe (tAIBE: id начинается с «taibe-», taibe-m-93).
   Продукт пункта меняет только владелец (выбор «Продукт:» у пункта).
@@ -770,8 +788,11 @@ work/&lt;id&gt;  задача агента для отчёта, Ганта и р
    session, planStart, planEnd, start, end ('YYYY-MM-DD'), milestone: bool, note, link, linkText, order,
    cards: [{key: '&lt;ключ карточки t-boards, OPS-34&gt;', ws: '&lt;slug пространства, aiboards-eval&gt;', t: заголовок, k: 'bug'|'task',
             s: severity|priority, st: статус (колонка), c: код}]}
-  planEnd не переписывать: от него считается отставание. Сдвиг плана — новый planEnd
-  и basePlanEnd = прежняя дата, причина — в note. В строку коллеги — только своё поле (oq_patch, ifVersion).
+  planEnd позже — только по ответу владельца «перенести» в решении d-&lt;продукт&gt;-due[-&lt;тема&gt;]
+  (rows, moveTo: {строка: дата}, та же дата — в тексте: DD.MM или YYYY-MM-DD; вариант move подписан «Перенести…»).
+  id решения — в поле dueRef записи строки (dueRefs не слать: его ведёт сервер, как и basePlanEnd); срок не позже moveTo.
+  Ответ годен, пока пункт не меняли после него: сначала сдвинуть все строки, потом писать в пункт. Один ответ — один
+  сдвиг, у строки до 50 сдвигов, дальше — владелец. Снять planEnd может только владелец. Раньше срок — свободно. В строку коллеги — только своё поле (oq_patch, ifVersion).
 
 work/track-&lt;id&gt;  направление «Хода работ» {kind: 'track', name, color: 'var(--c1)'…'var(--c6)', order, archived}
   Пять базовых направлений вшиты в страницу, документ с их id меняет имя и порядок.
@@ -780,7 +801,14 @@ work/track-&lt;id&gt;  направление «Хода работ» {kind: 'tr
 work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs: {critical, high, medium, low, none},
   tasks: {P0, P1, P2, P3, none}, inPlan, notInPlan, halfBaked, history: [{d: 'YYYY-MM-DD', bugs, tasks, inPlan}]}
   Пишет агент при сверке с досками (история — точка на каждый день сверки). Карточка в плане — та, чей ключ есть
-  в cards какой-либо строки; новая карточка без строки — кандидат в строку блока.</pre>
+  в cards какой-либо строки; новая карточка без строки — кандидат в строку блока.
+
+work/memo-&lt;id&gt;  памятка владельцу (окно «Памятки» в шапке) {kind: 'memo', title, body (простой текст: абзацы через
+  пустую строку), cmds: [{label, cmd}] (команды с кнопкой «Скопировать»), order, added, source, archived}. Пишет агент,
+  когда владелец просит «вынеси в памятки»; скрывает владелец (archived: true). Не пункт: ни счётчиков, ни бота.
+
+Кнопка «Роли» в шапке: ответ на пункт d-team-split — доля «8-4» или «pause» (новые роли не открываются); состояние
+  команды ролей Mac — GET /api/oq/v1/team (отметка сторожа eval/tools/team_plan.py раз в 10 мин).</pre>
   </details>
 
   <footer>PR #122 (мажорные обновления зависимостей) — трекер, не вливать. Ребрендинг lavaeon отложен.</footer>
@@ -988,7 +1016,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       ? '<textarea class="field" id="note-' + it.id + '" placeholder="' + esc(ph) + '"></textarea>'
       : '<input class="field" type="text" id="note-' + it.id + '" placeholder="' + esc(ph) + '">';
     answer += '<label class="answer-label" for="note-' + it.id + '">' + esc(fieldLabel) + '</label>' + area;
-    answer += '<span class="summary-answer"></span>' + (it.kind === 'inbox' ? '<span class="relay-st" hidden></span>' : '') + '<span class="agent-status"></span><button type="button" class="reopen">Изменить ответ</button><span class="saved" aria-live="polite"></span></div>';
+    answer += '<span class="summary-answer"></span>' + (it.kind === 'inbox' ? '<span class="relay-st" hidden></span><span class="holder-st" hidden></span>' : '') + '<span class="agent-status"></span><button type="button" class="reopen">Изменить ответ</button><span class="saved" aria-live="polite"></span></div>';
     // Вложения — вне .item-body: бот очереди переносит тело пункта в сообщение, список файлов ему не нужен.
     var filesHtml = it.kind === 'inbox' && FILES ? FILES.cardHtml(it) : '';
     var kindHtml = KIND_NAME[it.kind] ? '<span class="item-kind">' + KIND_NAME[it.kind] + '</span>' : '';
@@ -1195,7 +1223,10 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       : 'Ответы сохраняются только в этом браузере — продублируйте важное в чате';
   }
 
-  function fmtTime(iso) { try { return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+  // Форматтеры Intl — один на формат: toLocale*String собирает новый на каждый вызов, а страница форматирует время у
+  // каждого пункта и тысячи дат «Хода работ» на каждое изменение данных (профиль OPS-76: половина времени renderDash).
+  var FMT_HM = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  function fmtTime(iso) { try { return FMT_HM.format(new Date(iso)); } catch (e) { return ''; } }
 
   function render() {
     placeItems();
@@ -1395,9 +1426,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         if (typeof r.data.note === 'string') e.note = r.data.note;
         if (typeof r.data.at === 'string') e.at = r.data.at;
       }
-      if (typeof r.data.agentStatus === 'string') e.agentStatus = r.data.agentStatus;
-      if (typeof r.data.agentNote === 'string') e.agentNote = r.data.agentNote;
-      if (typeof r.data.agentAt === 'string') e.agentAt = r.data.agentAt;
+      agentFieldsInto(e, r.data);
     });
     saveLocal(); render();
   }
@@ -1552,6 +1581,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
         key: board ? c.key : '', ws: board ? c.ws : '', archived: old,
         t: typeof c.t === 'string' ? c.t.slice(0, 160) : '', k: c.k === 'bug' ? 'bug' : 'task',
         s: typeof c.s === 'string' ? c.s.slice(0, 12) : '', st: st, c: typeof c.c === 'string' ? c.c.slice(0, 24) : '',
+        mark: typeof c.mark === 'string' ? c.mark.slice(0, 24) : '',
         closed: !!CARD_DONE[st], review: !!CARD_REVIEW[st],
       };
     }).filter(Boolean).sort(function (a, b) {
@@ -1649,7 +1679,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     return '<li' + (c.closed ? ' class="is-closed"' : '') + '><span class="sev sev-' + esc(c.s || 'none') + '">' + esc(c.s || kind) + '</span>' +
       (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc((c.key + ' ' + (c.t || '')).trim()) + '</a>'
         : '<span>' + esc(c.t || 'карточка') + ' (архив)</span>') +
-      '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + '</small></li>';
+      '<small>' + kind + ' · ' + esc(c.st || 'без статуса') + (c.c ? ' · ' + esc(c.c) : '') + (c.mark ? ' · ' + esc(c.mark) : '') + '</small></li>';
   }
   function statsFromDb(d) {
     if (!d || d.kind !== 'stats') return null;
@@ -1841,6 +1871,30 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     if (live) return { k: 'sending', session: live.session };
     return { k: 'off' };
   }
+  // Держатель входящего (карточка HR xuc5csrv, решение владельца d-silent-holder-1511 «a»). У входящего со статусом
+  // «взял / в работе / ждёт»: online — у сессии agentBy или её наследника по линии (agentBy.<…>) живая автопередача
+  // своего продукта; silent — живой нет, а последняя запись агента (agentAt) старше 4 ч; иначе null. Только метка:
+  // захват снимает сервер через 12 ч, как раньше (CLAIM_TTL_MS); помеченные смотрит координатор в 09:30.
+  // relay null — ответа /relay ещё нет или консоль без него: про пульс не знаем, молчим.
+  var HOLDER_SILENT_MS = 4 * 3600000;
+  // Поля агента из строки снимка checks (документ целиком) — в запись страницы. agentBy, которого нет в снимке,
+  // стирается: release снимает захват (сервер удаляет agentBy, статус и заметку оставляет), и без этого метка
+  // называла бы держателем сессию, которая пункт уже отпустила (линза фронтенда #414, N1).
+  function agentFieldsInto(e, data) {
+    ['agentStatus', 'agentNote', 'agentAt'].forEach(function (k) { if (typeof data[k] === 'string') e[k] = data[k]; });
+    if (typeof data.agentBy === 'string') e.agentBy = data.agentBy; else delete e.agentBy;
+    return e;
+  }
+  function holderState(relay, e, now, product) {
+    if (!relay || !Array.isArray(relay.sessions) || !e || ['taken', 'doing', 'blocked'].indexOf(e.agentStatus) < 0) return null;
+    var by = typeof e.agentBy === 'string' ? e.agentBy : '';
+    if (by && relay.sessions.some(function (s) {
+      return relaySessionFits(s, product) && s.alive && typeof s.session === 'string' && (s.session === by || s.session.indexOf(by + '.') === 0);
+    })) return { k: 'online', session: by };
+    var at = Date.parse(e.agentAt || '');
+    if (isNaN(at) || !(now - at > HOLDER_SILENT_MS)) return null;
+    return { k: 'silent', session: by, hours: Math.floor((now - at) / 3600000) };
+  }
   // Снимок checks несёт ответ владельца (done, choice, note, at). Брать его, только если здесь нет своей несохранённой
   // правки (pending: сохранение идёт, ждёт повтора или не удалось) и своя правка не новее снимка: снимок, снятый до
   // сохранения, иначе откатил бы ответ, а следующее сохранение отправило бы старое поверх нового.
@@ -2011,6 +2065,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
       // Сводка доски выбранного продукта (SHIM относит её к продукту по data.ws); при всех продуктах — cards-stats (HR).
       if (d.kind === 'stats') { if (!stats || r.id === 'cards-stats') stats = statsFromDb(d); return; }
       if (d.kind === 'boards') return; // карта доски — для группировки (page-lanes.ts), не строка плана
+      if (d.kind === 'memo') return; // памятка владельцу — окно «Памятки» (page-memos.ts), не строка плана
       WORK_FIELDS.forEach(function (k) { if (typeof d[k] === 'string') w[k] = d[k].slice(0, k === 'note' ? 600 : 200); });
       if (typeof d.order === 'number') w.order = d.order;
       if (typeof d.milestone === 'boolean') w.milestone = d.milestone;
@@ -2040,9 +2095,13 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
   function dayOf(iso) { var t = new Date(iso); return isNaN(t) ? null : new Date(t.getFullYear(), t.getMonth(), t.getDate()); }
   function today0() { var n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
   function addD(d, k) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + k); }
-  function fmtD(d) { return d ? d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '') : '—'; }
-  function fmtDT(t) { return t.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).replace('.', ''); }
-  function nf(v, dec) { return Number(v).toLocaleString('ru-RU', { maximumFractionDigits: dec || 0 }); }
+  var FMT_DAY = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
+  var FMT_DT = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  var FMT_NUM = {};
+  // Неверная дата — прочерк: format() бросает исключение там, где toLocale*String писал «Invalid Date».
+  function fmtD(d) { return d && !isNaN(d) ? FMT_DAY.format(d).replace('.', '') : '—'; }
+  function fmtDT(t) { return t && !isNaN(t) ? FMT_DT.format(t).replace('.', '') : '—'; }
+  function nf(v, dec) { var k = dec || 0; return (FMT_NUM[k] || (FMT_NUM[k] = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: k }))).format(Number(v)); }
   var ST_COLOR = { done: 'var(--st-good)', doing: 'var(--st-warn)', blocked: 'var(--st-crit)', planned: 'var(--st-none)' };
   var ST_NAME = { done: 'сделано', doing: 'в работе', blocked: 'ждёт', planned: 'в плане' };
 
@@ -2684,7 +2743,7 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     try { paintScope(ws); } catch (e) { /* подписи продукта необязательны */ }
     try { jumpDash(c, ws, lag, st); } catch (e) { /* числа в шапке необязательны */ }
     document.getElementById('dash-asof').textContent = dashStale() ? 'нет связи с базой'
-      : dashReady() ? 'обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : 'загружаю…';
+      : dashReady() ? 'обновлено ' + FMT_HM.format(new Date()) : 'загружаю…';
   }
   // Переключатель окна роадмапа: подпись постоянная — «Весь горизонт», состояние — aria-pressed (линза фронтенда #347:
   // меняющаяся подпись вместе с aria-pressed читалась диктором наоборот). Перерисовывается только роадмап.
@@ -2790,6 +2849,22 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     });
   }
   function closeJumps(except) { document.querySelectorAll('details.jump[open]').forEach(function (d) { if (d !== except) d.open = false; }); }
+  // Телефон: строки меню «Очередь» нажимают скрытые кнопки шапки — подписи берут у них же (что будет по нажатию).
+  function paintProxies() {
+    jumpQ.querySelectorAll('.jump-act').forEach(function (b) {
+      var src = document.getElementById(b.dataset.proxy);
+      b.textContent = src ? (b.dataset.proxy === 'theme-btn' ? document.getElementById('theme-text').textContent : src.getAttribute('aria-label')) : '';
+    });
+  }
+  jumpQ.addEventListener('toggle', function () { if (jumpQ.open) paintProxies(); });
+  jumpQ.addEventListener('click', function (ev) {
+    var b = ev.target.closest && ev.target.closest('.jump-act');
+    if (!b) return;
+    var src = document.getElementById(b.dataset.proxy);
+    if (src) src.click();
+    if (b.dataset.proxy === 'theme-btn') { paintProxies(); return; } // тему видно сразу — меню остаётся, можно листать дальше
+    jumpQ.open = false;
+  });
   document.querySelectorAll('details.jump').forEach(function (d) { d.addEventListener('toggle', function () { if (d.open) closeJumps(d); }); });
   document.addEventListener('click', function (ev) { if (!(ev.target.closest && ev.target.closest('details.jump'))) closeJumps(null); });
   document.addEventListener('keydown', function (ev) {
@@ -2870,6 +2945,18 @@ work/cards-stats  сводка сверки с t-boards {kind: 'stats', at, bugs
     var html = d || e.agentStatus || !relay ? '' : old ? '<span class="warn">⚠️ Автопередачи для этого продукта пока нет — задачу никто не возьмёт</span>' : relayHtml(it.id, product);
     if (rl.innerHTML !== html) rl.innerHTML = html;
     rl.hidden = !html;
+    paintHolder(el, e, d, product);
+  }
+  // Метка держателя у входящего со статусом агента (holderState); бот читает её из .holder-st (frame-scripts.mjs).
+  function paintHolder(el, e, d, product) {
+    var hl = el.querySelector('.holder-st');
+    if (!hl) return;
+    var x = d ? null : holderState(relay, e, Date.now(), product), who = x && x.session ? ' ' + esc(x.session) : '';
+    var html = !x ? '' : x.k === 'online' ? '🟢 Держатель' + who + ' в сети'
+      : '🔇 Держатель' + who + ' молчит ' + x.hours + ' ч — координатор передаст пункт живой сессии (проверка в 09:30)';
+    if (hl.innerHTML !== html) hl.innerHTML = html;
+    hl.classList.toggle('warn', !!x && x.k === 'silent');
+    hl.hidden = !html;
   }
   // Продукты строки «Автопередача»: выбранный в фильтре, иначе все продукты владельца (основной — первым).
   function relayProducts() {

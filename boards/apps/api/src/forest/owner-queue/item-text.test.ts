@@ -64,19 +64,43 @@ describe("approvalItemData for a batch close (TB-108 R-5)", () => {
   });
 
   // Control lens on #160: the owner sees every key of the request before
-  // «да», not only the first 10.
-  it("shows counts per project, the first 10 cards and every key", () => {
+  // «да». TB-114: only that full list — no second «first cards» list.
+  it("shows counts per project and every key, once", () => {
     const body = String(batch.body);
     expect(batch.title).toContain("закрыть карточки (12)");
     expect(body).toContain("Карточек: 12 — APP 8, HRH 4");
-    expect(body).toContain("- HRH-10 «t»");
-    expect(body).not.toContain("HRH-11 «t»");
-    expect(body).toContain("- и ещё 2");
     expect(body).toContain(
       "Все карточки заявки:\nAPP: 1, 2, 3, 4, 5, 6, 7, 8\nHRH: 9, 10, 11, 12",
     );
+    expect(body).not.toContain("Первые карточки");
+    expect(body).not.toContain("«t»");
+    expect(body).not.toContain("и ещё");
     expect(body).toContain("перенесена в другой проект");
     expect(batch).not.toHaveProperty("links");
+  });
+
+  it("keeps a 250-card batch item within 2 000 characters (TB-114)", () => {
+    const keys = [
+      ...Array.from({ length: 150 }, (_, i) => `TB-${i + 100}`),
+      ...Array.from({ length: 100 }, (_, i) => `APP-${i + 300}`),
+    ];
+    const big = approvalItemData({
+      approval: approval({
+        params: {
+          taskIds: keys.join(","),
+          keys: keys.join(","),
+          from: "",
+          targets: "",
+        },
+        doneRef:
+          "https://github.com/agolubenk/tAIBE/blob/board-agents/docs/plans/done/boards.md",
+      }),
+      workspaceName: "aiBoards&eval",
+      card: null,
+      now: new Date("2026-11-13T07:54:27Z"),
+    });
+    expect(String(big.body)).toContain("TB: 100, 101,");
+    expect(String(big.body).length).toBeLessThanOrEqual(2000);
   });
 
   it("gives a single close no list of keys", () => {

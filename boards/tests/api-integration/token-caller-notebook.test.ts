@@ -540,6 +540,43 @@ describe("API integration: logs and notebook for callers with a token (TB-196)",
     expect(await headings("ротация <-> квартал")).toEqual(["Ключи › Ротация"]);
   });
 
+  it("answers a phrase across a secret the same for any kind of value", async () => {
+    const nb = await notebookFixture();
+    // Backend #388 N1 (TB-206): a value of letters or digits puts lexemes
+    // between the words around it in the stored text, a value of only
+    // punctuation puts none. When the gate checked the phrase on the stored
+    // text, the answer told which of the two the value was.
+    const values = {
+      "Пароли 1": join("Summer", "-Hunter-", "2026"),
+      "Пароли 2": join("!@#$%", "^&*()_+{}|"),
+    };
+    for (const [title, value] of Object.entries(values)) {
+      const stored = await nb.owner("PUT", "/sources", {
+        kind: "link",
+        ref: `https://example.com/${encodeURIComponent(title)}`,
+        title,
+        text: `# ${title}\n\nСмена: password=${value} раз в квартал.`,
+      });
+      expect(stored.status).toBe(200);
+    }
+    const headings = async (query: string, as: "owner" | "agent" = "agent") => {
+      const found = await nb[as]("POST", "/search", { query, mode: "keyword" });
+      expect(found.status).toBe(200);
+      return (found.body.results as Hit[]).map((hit) => hit.heading).sort();
+    };
+
+    const phrase = '"password раз в квартал"';
+    // Both values are masked the same: the caller finds both chunks.
+    expect(await headings(phrase)).toEqual(["Пароли 1", "Пароли 2"]);
+    expect(await headings(`${phrase} or другое`)).toEqual([
+      "Пароли 1",
+      "Пароли 2",
+    ]);
+    // Not vacuous: in the stored text only the value of punctuation keeps
+    // the words together, so the owner finds one chunk.
+    expect(await headings(phrase, "owner")).toEqual(["Пароли 2"]);
+  });
+
   it("answers a guess under a label heading as any other word", async () => {
     const nb = await notebookFixture();
     const stored = await nb.owner("PUT", "/sources", {

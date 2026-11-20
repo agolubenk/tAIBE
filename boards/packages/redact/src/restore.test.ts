@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import { redact } from "./index";
+import { growth, MAX_GROWTH } from "../fixtures/linear-time.js";
+import { redact } from "./index.js";
 import {
   hasRedactionMarker,
   RESTORE_MAX_CHARS,
   redactDeep,
   restoreRedacted,
-} from "./restore";
+} from "./restore.js";
 
 // Fake secrets assembled at runtime, so this file holds no key-shaped literal.
 const join = (...parts: string[]) => parts.join("");
@@ -190,6 +191,37 @@ describe("restoreRedacted (TB-143)", () => {
     }
   });
 
+  // A caller (an LLM, a JSON client) often trims the text or writes one blank
+  // line in place of two; the blocks with markers did not change.
+  it("restores when the caller trims line breaks around the blocks", () => {
+    const tail = `deploy with ${KEY_A}\n`;
+    const view = redact(tail).text;
+
+    expect(restoreRedacted(tail, view.trimEnd())).toEqual({
+      ok: true,
+      text: `deploy with ${KEY_A}`,
+    });
+    expect(restoreRedacted(tail, `${view}\n\nnote`)).toEqual({
+      ok: true,
+      text: `${tail}\n\nnote`,
+    });
+
+    const spaced = `\nintro\n\n\nbackup ${KEY_B}`;
+    expect(
+      restoreRedacted(spaced, "intro\n\nbackup [REDACTED:api_key]"),
+    ).toEqual({ ok: true, text: `intro\n\nbackup ${KEY_B}` });
+  });
+
+  it("keeps the indent of a block with a marker", () => {
+    const code = `    ![x](https://example.test/p.png?k=${KEY_A})`;
+    const view = redact(code).text;
+
+    expect(restoreRedacted(code, view.trimStart())).toEqual({
+      ok: false,
+      reason: "block",
+    });
+  });
+
   it("keeps a raw secret the caller types next to the markers", () => {
     const text = `deploy with ${KEY_A}`;
     const incoming = `deploy with [REDACTED:api_key]\n\nnew key ${KEY_B}`;
@@ -229,25 +261,34 @@ describe("restoreRedacted (TB-143)", () => {
   });
 
   // B3: the old loop compared and scanned the whole text above every marker
-  // block (7000 blocks, 238 KiB: 983 ms); now it is one pass (24 ms, same Mac).
+  // block (7000 blocks, 238 KiB: 983 ms on a Mac), so its time grew with the
+  // square of the block count; now it is one pass. TB-209: the time of 7000
+  // blocks is checked against 1750 blocks in the same run, not against a
+  // limit in milliseconds (fixtures/linear-time.ts).
   it("restores many marker blocks in linear time", () => {
-    const blocks = Array.from(
-      { length: 7000 },
-      (_, i) =>
-        `step ${i} uses ${join("s", "k-A", String(i).padStart(8, "0"), "bCdEfGhIjKlMnOpQrStU")}`,
-    );
-    const text = ["intro", ...blocks].join("\n\n");
-    const incoming = redact(text).text.replace(/^intro/, "intro edited");
+    const edit = (blocks: number) => {
+      const text = [
+        "intro",
+        ...Array.from(
+          { length: blocks },
+          (_, i) =>
+            `step ${i} uses ${join("s", "k-A", String(i).padStart(8, "0"), "bCdEfGhIjKlMnOpQrStU")}`,
+        ),
+      ].join("\n\n");
+      return {
+        text,
+        incoming: redact(text).text.replace(/^intro/, "intro edited"),
+      };
+    };
+    const { text, incoming } = edit(7000);
 
-    const start = performance.now();
-    const result = restoreRedacted(text, incoming);
-    const elapsed = performance.now() - start;
-
-    expect(result).toEqual({
+    expect(restoreRedacted(text, incoming)).toEqual({
       ok: true,
       text: text.replace(/^intro/, "intro edited"),
     });
-    expect(elapsed).toBeLessThan(500);
+    expect(
+      growth(edit, (pair) => restoreRedacted(pair.text, pair.incoming), 7000),
+    ).toBeLessThan(MAX_GROWTH);
   });
 
   it("refuses a text with markers longer than the limit", () => {

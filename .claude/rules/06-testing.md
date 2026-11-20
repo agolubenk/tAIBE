@@ -1,8 +1,9 @@
 ---
 paths:
-  - "**/*.spec.ts"
-  - "**/*.test.ts"
-  - "**/*.test.tsx"
+  - "apps/**/*.spec.ts"
+  - "apps/**/*.test.ts"
+  - "apps/**/*.test.tsx"
+  - "packages/**/*.test.ts"
 ---
 
 # Тестирование

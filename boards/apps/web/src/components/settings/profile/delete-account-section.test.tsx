@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -13,6 +14,7 @@ import {
   it,
   vi,
 } from "vite-plus/test";
+import { SessionNotFreshError } from "@/lib/reauth/reauth-errors";
 import { DeleteAccountSection } from "./delete-account-section";
 
 const m = vi.hoisted(() => ({
@@ -21,6 +23,7 @@ const m = vi.hoisted(() => ({
   clear: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
+  post: vi.fn(),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -32,8 +35,9 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ clear: m.clear }),
 }));
+vi.mock("@/lib/i18n", () => ({ i18n: { t: (key: string) => key } }));
+vi.mock("@/lib/reauth/reauth-api", () => ({ postReauth: m.post }));
 vi.mock("@/hooks/mutations/use-delete-account", () => ({
-  SESSION_TOO_OLD: "SESSION_TOO_OLD",
   default: () => ({ mutateAsync: m.deleteAccount, isPending: false }),
 }));
 vi.mock("@/lib/toast", () => ({
@@ -60,6 +64,7 @@ describe("DeleteAccountSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m.deleteAccount.mockResolvedValue(undefined);
+    m.post.mockResolvedValue({ ok: true });
     Object.defineProperty(Element.prototype, "getAnimations", {
       configurable: true,
       value: () => [],
@@ -87,8 +92,16 @@ describe("DeleteAccountSection", () => {
     expect(m.navigate).toHaveBeenCalledWith({ to: "/auth/sign-in" });
   });
 
-  it("explains a session that is too old to delete the account", async () => {
-    m.deleteAccount.mockRejectedValue(new Error("SESSION_TOO_OLD"));
+  it("asks to confirm it is you and then deletes, without a toast", async () => {
+    m.deleteAccount
+      .mockRejectedValueOnce(
+        new SessionNotFreshError({
+          code: "SESSION_NOT_FRESH",
+          message: "",
+          methods: ["password"],
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
     render(<DeleteAccountSection email="jo@example.com" />);
     openDialog();
 
@@ -100,11 +113,26 @@ describe("DeleteAccountSection", () => {
     );
     fireEvent.click(await confirmButton());
 
-    await waitFor(() =>
-      expect(m.error).toHaveBeenCalledWith(
-        "settings:informationPage.deleteAccount.sessionTooOld",
-      ),
-    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "auth:reauth.title",
+    });
     expect(m.navigate).not.toHaveBeenCalled();
+    fireEvent.change(
+      within(dialog).getByLabelText("auth:reauth.password.label"),
+      {
+        target: { value: "pw" },
+      },
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "auth:reauth.password.submit",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(m.navigate).toHaveBeenCalledWith({ to: "/auth/sign-in" }),
+    );
+    expect(m.deleteAccount).toHaveBeenCalledTimes(2);
+    expect(m.error).not.toHaveBeenCalled();
   });
 });

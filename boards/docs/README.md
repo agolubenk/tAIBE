@@ -1,7 +1,7 @@
 # boards/docs — карта документов tAI-Boards
 
 Внутренняя замена Notion для ИИ-агентов («фабрика для ИИ», control plane задач). Код — родительская папка
-`boards/` (форк Kaneo). Спека — `t-boards-spec.md` (v0.3.1); при расхождении архитектуры со спекой действует спека.
+`boards/` (форк Kaneo). Спека — `t-boards-spec.md` (версия — в её шапке); при расхождении архитектуры со спекой действует спека.
 
 > Перенесено из подпроекта-инкубатора `t-boards/` (там код жил в `t-boards/app`, локально). Соответствие путей:
 > `t-boards/<doc>` → `boards/docs/<doc>` · `t-boards/app/<path>` → `boards/<path>` · `t-boards/tools/` → `boards/tools/` ·
@@ -16,7 +16,7 @@
 | `pipeline-settings.md` | переключатели автоматики процесса в настройках продукта: что выключает каждый и где это соблюдается (R-110) |
 | `impl-progress.md` | ход реализации: что сделано, коммиты, проверки, стенд |
 | `impl-remaining.md` | что осталось до перехода, решения владельца, субдомен |
-| `kimi-tasks.md` | задачи для Kimi: волна 1 закрыта, волна 2 (K-6, K-7) ждёт старта владельца |
+| `kimi-tasks.md` | задачи для Kimi: волна 1 закрыта; K-6 сделала команда 01.11 (`impl/impl-k6-measurements.md`), K-7 не сделан (там же, «Ограничения замера»; сверка 14.11) |
 
 Линза Kimi на архитектуру 2.0 и сверка спеки — `../../eval/t-boards/`.
 
@@ -33,8 +33,10 @@
   `t-boards-grill-answers.json` и наброски Kimi по K-4/K-5 (`kimi-partial-k4-k5/`; код вошёл в
   `packages/importers/src/notion/` и `packages/claude-mem-reader/`). Архив исключён из `vp check`.
 - `kimi-reports/` — отчёты Kimi (K-1…K-3).
-- Пробы стенда и прогон интеграционных тестов — `../tools/` (`run-int.sh`, `mcp-probe*.mjs`, `history-probe.mjs`,
-  `mcp-wire-measure.mjs`, `tool-scope-probe.mjs`; нужен поднятый API `:1337` и собранный `packages/agent-format`).
+- Прогон интеграционных тестов — только `../scripts/it-pg.sh <имя> [файлы…]` (свой Postgres на прогон, удаляется на
+  выходе; TB-145). `../tools/run-int.sh` выведен 14.11: он брал базу из `.env`, то есть живую `t-boards-postgres-1`.
+- Пробы стенда — `../tools/` (`mcp-probe*.mjs`, `history-probe.mjs`, `mcp-wire-measure.mjs`, `tool-scope-probe.mjs`;
+  нужен поднятый API `:1337` и собранный `packages/agent-format`).
 
 ## Словарь идентификаторов
 

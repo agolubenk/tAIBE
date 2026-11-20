@@ -225,6 +225,74 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {ant}')], ['anthropic-key'])
         self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {orr}')], ['openrouter-key'])
 
+    def test_secrets_shell_default_assignment(self):
+        # TB-200 item 1: `${NAME=<v>}` and `${NAME:=<v>}` give NAME a value when it is unset; the base found them.
+        key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
+        for line in (f'${{DB_PASSWORD="{key}"}}', f': "${{API_TOKEN:="{key}"}}"', f"echo ${{password='{key}'}}",
+                     f'PASSWORD=${{DB_PASSWORD="{key}"}}',
+                     # TB-214: without quotes the value ends at `}`; before, the `}` dropped it as code.
+                     f'${{DB_PASSWORD:={key}}}', f'${{API_TOKEN={key}}}', f'cd ${{password:={key}}}/app',
+                     f'PASSWORD=${{DB_PASSWORD:={key}}}', f'${{A_TOKEN:=${{B_TOKEN:={key}}}}}'):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [key])
+        # `${NAME:?…}`, `${NAME:-…}`, `${NAME:+…}` check NAME or give a word in its place, not to it.
+        for line in (f'${{DB_PASSWORD:?{key} is not set}}', f'${{API_TOKEN:-{key} fallback}}',
+                     f'${{password:+{key} and more}}', f'A_TOKEN: ${{A_TOKEN:?{key} is required}}',
+                     f'${{DB_PASSWORD:?{key}}}', f'${{API_TOKEN:-{key}}}', f'${{password:+{key}}}',
+                     # TB-214: a value up to `}` needs 12 characters; a reference is a placeholder.
+                     '${DB_PASSWORD:=Qz8Lm4Rt7}', '${API_TOKEN:=${OTHER_API_TOKEN}}'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_stub_word_inside_a_provider_key(self):
+        # TB-200 item 2: a random key holds `xxx`, `test` or `fake` by chance (584 of 280 000 keys of 14 formats), so
+        # in a provider key they count only as a whole word; a run of x counts from 8 characters.
+        for line, rule in ((''.join(('sk-', 'proj-', 'Ab3dE5fG7h', 'TeSt', 'J9kL2mN4pQ6rSt8')), 'openai-key'),
+                           (''.join(('gh', 'p_', 'A1b2C3', 'xXx', 'd4E5f6G7h8I9j0K1l2M3n4O5p6Q')), 'github-token'),
+                           (''.join(('AK', 'IA', 'Q3R4', 'TEST', '7Z5RXK2W')), 'aws-access-key'),
+                           (''.join(('tb', 'k_', 'Hd', 'Qz8Lm4', 'fake', 'Rt7Wx2Ny5Kp9Bv3Xc6Fj1Gs0Ue')), 't-boards-key')):
+            with self.subTest(rule):
+                self.assertEqual([r for r, _ in secrets_scan.scan_line(f'k {line}')], [rule])
+        for line in ('sk-' + 'proj-' + 'x' * 48, 'gh' + 'p_' + 'x' * 36, 'AK' + 'IA' + 'X' * 16,
+                     'AK' + 'IA' + 'IOSFODNN7' + 'EXAMPLE', 'AI' + 'zaSy' + 'X' * 33, 'sk-' + 'proj-abc123' + 'x' * 30,
+                     'sk-' + 'test-' + '1234567890abcdefghij', 'xo' + 'xb-your-token-here-123',
+                     'sk-' + 'fake-key-' + '1234567890abc'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(f'k {line}'), [])
+
+    def test_secrets_password_type_name(self):
+        # TB-200 item 3, the context rule of redact (TB-193): after a password name a type name is a type in an
+        # annotation, after a bare `:` and before `,`, `;` or `)`. Elsewhere it may be a passphrase: after `=` the
+        # same shape before `;` is a password in a connection string or a shell line (backend lens #408 B1).
+        upper = ''.join(('Correct', 'Horse', 'Battery', 'Staple'))
+        for line in ('password: PasswordCredential;', '(password: PasswordCredential, next: Next)',
+                     '{ secret: SecretManagerServiceClient; }', 'type A = { pwd: PasswordHashOptions, b: B };'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+        for line in (f'password: {upper}', f'secret = "{upper}";', f'{{"password": "{upper}", "n": 1}}',
+                     f'Server=db;User Id=sa;Password={upper};Database=app', f'DB_PASSWORD={upper}; ./run',
+                     f'"Password={upper},Timeout=30"'):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [upper])
+
+    def test_secrets_validation_rules(self):
+        # TB-200 item 4: Laravel rules are lowercase words joined by `|`, each with an optional `:argument`.
+        for line in ("'password' => 'required|string|min:8|confirmed',", "password: 'required|string|min:8'",
+                     "'api_key' => 'nullable|string|max:255',", '"password" => "required|confirmed|min:12|max:64"',
+                     "'password' => 'required|same:password_confirmation',",
+                     "'current_password' => 'bail|required|different:new_password_value',",
+                     "'secret' => 'sometimes|string|starts_with:sk_live_example'"):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+        key = ''.join(('Qz8', '|Lm4', 'Rt7Wx2Ny5'))
+        self.assertEqual([v for _, v in secrets_scan.scan_line(f'password = "{key}"')], [key])
+        # TB-214: an argument may not hide a key, and words joined by `|` are rules only with a rule word.
+        arg = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3X'))
+        for line in (f'API_KEY=alpha:{arg}|omega', f"'password' => 'required|min:{arg}'",
+                     'password = "%s"' % '|'.join(('dolphin', 'sunrise', 'granite', 'meadow'))):
+            with self.subTest(line):
+                self.assertEqual(len(secrets_scan.scan_line(line)), 1)
+
     def test_secrets_inner_names_stay_linear(self):
         # TB-198: from the start of every rejected value a run of `A_TOKEN:=` nested one inner value per name (64 000
         # characters: 20 s). The CI runner is up to 10 times slower than a laptop, so the test compares 64 000
@@ -232,7 +300,9 @@ class ChecksTest(unittest.TestCase):
         # times. A time below 10 ms counts as 10 ms (timer noise); 5 s is the guard against a hang.
         units = ['A_SECRET=A_SECRET=', 'A_TOKEN=test/', 'A_TOKEN:=', 'api_key=api_key=', 'secret=secret=secret=',
                  'A_SECRET=fooB_SECRET: ', 'A_TOKEN=>(', 'A_TOKEN:=' * 27 + ' ', 'secret=' * 35 + ' ',
-                 'pwd=' * 63 + ' ']
+                 'pwd=' * 63 + ' ',
+                 # TB-214: the value ends at `}`.
+                 '${A_TOKEN:=}', '${A_TOKEN:=', 'A_TOKEN=}', '${A_TOKEN:=' * 20 + '}' * 20 + ' ']
 
         def best(line):
             times = []
@@ -297,6 +367,73 @@ class ChecksTest(unittest.TestCase):
         self.assertIn('0001_b', journal_msgs)  # `when` went backwards / no .sql
         self.assertIn(('boards/apps/api/drizzle/0002_orphan.sql', 'migration is not in the journal — it never runs'),
                       paths)
+
+    def drizzle_tree(self, entries, snapshots):
+        """entries: [(idx, tag, when)]; snapshots: {number: (id, prevId)}; every entry gets its .sql."""
+        base = 'boards/apps/api/drizzle'
+        write(self.root, base + '/meta/_journal.json', json.dumps({'entries': [
+            {'idx': i, 'when': w, 'tag': t} for i, t, w in entries]}))
+        for _, t, _ in entries:
+            write(self.root, '%s/%s.sql' % (base, t), 'select 1;')
+        for num, (sid, prev) in snapshots.items():
+            write(self.root, '%s/meta/%s_snapshot.json' % (base, num), json.dumps({'id': sid, 'prevId': prev}))
+        return {f.message for f in self.findings_raw('data') if f.level == 'error'}
+
+    def findings_raw(self, only):
+        self.git('add', '-A')
+        return run.collect(self.root, tuple(only.split(',')), None)[0]
+
+    def test_drizzle_journal_ok(self):
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 200)], {'0000': ('A', 'Z'), '0001': ('B', 'A')})
+        self.assertEqual(msgs, set())
+
+    def test_drizzle_journal_rebase_mistakes(self):
+        # OPS-74: two PRs took 0084; the second was rebased, appended without renumbering, without a snapshot, and
+        # kept its older `when` — drizzle would skip it on existing databases
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 300), (2, '0001_c', 200)],
+                                 {'0000': ('A', 'Z'), '0001': ('B', 'A')})
+        self.assertIn('0001_c: number in the tag is not 0002 — renumber it', msgs)
+        self.assertTrue(any(m.startswith('0001_c: when 200 is not newer') for m in msgs))
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 200), (2, '0002_c', 300)],
+                                 {'0000': ('A', 'Z'), '0001': ('B', 'A')})
+        self.assertIn('0002_c: no snapshot — generate the migration with db:generate', msgs)
+
+    def test_drizzle_snapshot_on_another_base(self):
+        # generated on the old base: its prevId points past the migration that merged first
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 200), (2, '0002_c', 300)],
+                                 {'0000': ('A', 'Z'), '0001': ('B', 'A'), '0002': ('C', 'A')})
+        self.assertIn('0002_c: snapshot prevId A is not the id of 0001_b — regenerate it on top of the journal', msgs)
+
+    def test_drizzle_allowlist_names_each_shipped_migration(self):
+        write(self.root, 'infra/checks/allow.txt',
+              'data  boards/apps/api/drizzle/meta/_journal.json  0001_b: no snapshot\n')
+        msgs = self.drizzle_tree([(0, '0000_a', 100), (1, '0001_b', 200), (2, '0002_c', 300)],
+                                 {'0000': ('A', 'Z'), '0002': ('C', 'Q')})
+        self.assertEqual(msgs, set())   # 0001 shipped without a snapshot; 0002 after a gap is not chained
+        os.remove(os.path.join(self.root, 'boards/apps/api/drizzle/meta/0002_snapshot.json'))
+        msgs = self.findings_raw('data')
+        self.assertIn('0002_c: no snapshot — generate the migration with db:generate', {f.message for f in msgs})
+
+    def test_oq_schema_has_one_writer(self):
+        bad = {
+            'boards/apps/api/src/a.ts': 'await db.execute(sql`select * from oq.docs`)',
+            'boards/apps/api/src/b.ts': 'db.execute(sql`insert into "oq"."events" (id) values (1)`)',
+            'boards/packages/x/src/c.ts': 'export const oq = pgSchema("oq")',
+            'boards/apps/api/src/d.ts': "await client.query('SET search_path TO oq, public')",
+            'boards/apps/api/scripts/e.sh': 'psql -c "alter schema oq owner to t_boards"',
+        }
+        fine = {
+            'boards/apps/api/drizzle/0005_oq.sql': 'CREATE TABLE "oq"."docs" ("id" text);',
+            'boards/apps/web/src/queue.ts': 'fetch(`/api/oq/v1/db/items?state=1`)',
+            'boards/apps/web/src/names.ts': 'const oqDocs = items.docs; const ok = toq.events',
+            'boards/tests/api-integration/oq-schema.test.ts': 'await client.query("select 1 from oq.docs")',
+            'boards/apps/api/README.md': 'The console writes oq.docs.',
+            'infra/ops-console/server/db/pg.ts': 'select * from oq.docs',
+        }
+        for rel, text in {**bad, **fine}.items():
+            write(self.root, rel, text + '\n')
+        hits = {p for _, level, p, m in self.findings('data') if level == 'error' and m.startswith('SQL to the')}
+        self.assertEqual(hits, set(bad))
 
     def test_syntax(self):
         write(self.root, 'ok.py', 'x = 1\n')

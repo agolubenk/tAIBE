@@ -1101,6 +1101,24 @@ def test_cloud_budget(tmp: Path) -> None:
         ok_more, _ = client.check_budget("run-gw2", "executive.deep")
         check("шлюз: ниже потолка — вызов разрешён", ok_more)
 
+        # OPS-22: окна 2 и 30 мин считают все ушедшие запросы, удачные и нет, — провайдер считает запросы.
+        # Отказ по бюджету в сеть не ушёл и в окно не входит.
+        for i, (ok_flag, refused_why, ago) in enumerate([(0, "", 60), (1, "", 600), (0, "бюджет", 30)]):
+            store.x("INSERT INTO cloud_usage (run_id, role, provider, model, ok, refused, error, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?)", (f"gw-win-{i}", "x", "gateway", "executive.deep", ok_flag,
+                                                 refused_why, "HTTP 500" if not ok_flag else "", now_ts - ago))
+        client.rate_limits = {"gateway": {"max_calls_per_30min": 2}}
+        ok_win, why_win = client.check_budget("run-gw3", "executive.deep")
+        check("шлюз: окно 30 мин считает и неудачные запросы",
+              not ok_win and "2/2 вызовов за последние 30 мин" in why_win, why_win[:80])
+        client.rate_limits = {"gateway": {"max_calls_per_2min": 1}}
+        ok_2m, why_2m = client.check_budget("run-gw4", "executive.deep")
+        check("шлюз: окно 2 мин — неудачный запрос занимает место",
+              not ok_2m and "1/1 вызовов за последние 2 мин" in why_2m, why_2m[:80])
+        client.rate_limits = {"gateway": {"max_calls_per_30min": 3}}
+        ok_win3, why_win3 = client.check_budget("run-gw5", "executive.deep")
+        check("шлюз: отказ по бюджету в окно не входит", ok_win3, why_win3[:80])
+
         # Неизвестная модель не должна молча уходить в сеть под чужим ключом.
         result = client.chat("run-7", "judge.cloud", "нет-такой-модели",
                              [{"role": "user", "content": "x"}])
@@ -1977,7 +1995,23 @@ def _drift_payload(goal: str, files: list[str]) -> dict:
     return payload
 
 
+DRIFT_TREE = {"infra/ai-council/council.py": "", "infra/ai-council/learning.py": "", "docs/README.md": ""}
+
+
 def test_drift_part2(tmp: Path) -> None:
+    """Файлы постановки и сверки M2 — из дерева-фикстуры, а не из checkout хоста (OPS-48)."""
+    import council_rounds as rounds
+    from selftest_tree import host_tree
+
+    text = "Поправить infra/ai-council/council.py и docs/README.md."
+    with host_tree(tmp, {}, name="drift-empty"):
+        check("постановка: файлы сверяются с деревом хоста, а не с checkout (пустое дерево — ни одного)",
+              rounds.statement_files(text) == set())
+    with host_tree(tmp, DRIFT_TREE, name="drift-tree"):
+        _drift_part2(tmp)
+
+
+def _drift_part2(tmp: Path) -> None:
     """Консилиум, часть 2 (2026-10-15): M2 сверка вместо воздержания при расхождении, M3 дожим 7–8/15, M6 языковой
     гейт, бюджет доп. раунда. Плюс инварианты ревью #159: незавершённый раунд откатывается, авторы видят исходные
     версии друг друга, потерявшие все файлы постановки исключаются из ворот и арбитража, переписанное перезаписано."""
@@ -1988,7 +2022,7 @@ def test_drift_part2(tmp: Path) -> None:
     from types import SimpleNamespace
 
     Proposal = council_mod.Proposal
-    F1, F2 = "infra/ai-council/council.py", "infra/ai-council/learning.py"     # существуют в репозитории
+    F1, F2 = "infra/ai-council/council.py", "infra/ai-council/learning.py"     # есть в DRIFT_TREE, apps/ — нет
     check("доп. раунд: вид воздержания по причине",
           rounds.abstain_kind("модели поняли задачу по-разному (совпадение файлов 0.20 < 0.25)") == "divergence"
           and rounds.abstain_kind("модели разошлись в понимании ЦЕЛИ (совпадение goal 0.1)") == "divergence"
