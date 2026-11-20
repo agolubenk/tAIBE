@@ -1,13 +1,25 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertDialogCreateHandle } from "@/components/ui/alert-dialog";
+import { lazyPart } from "@/components/ui/lazy-part";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ForestPageLink } from "./forest/forest-page-link";
 import { TaskSheetHeader } from "./header/task-sheet-header";
 import { PropertiesRail } from "./properties/properties-rail";
 import { PropertyChips } from "./properties/property-chips";
 import TaskDeleteDialog from "./task-delete-dialog";
-import TaskDetailsContent from "./task-details-content";
 import { TaskShortcuts } from "./task-shortcuts";
+
+// The description editor and the activity load with the first opened task, not
+// with the board (TB-15: the cold board on 3G).
+const TaskDetailsContent = lazyPart(
+  () => import("./task-details-content"),
+  <div aria-hidden className="space-y-4 px-5 pt-5 pb-10 lg:px-9 lg:pt-7">
+    <Skeleton className="h-8 w-2/3" />
+    <Skeleton className="h-44 w-full" />
+  </div>,
+);
 
 type TaskDetailsSheetProps = {
   taskId: string | undefined;
@@ -114,21 +126,37 @@ export default function TaskDetailsSheet({
                 workspaceId={workspaceId}
                 className="px-5 pt-5 pb-10 lg:px-9 lg:pt-7"
                 properties={
-                  <PropertyChips
-                    taskId={currentTaskId}
-                    projectId={projectId}
-                    workspaceId={workspaceId}
-                    className="pb-5 lg:hidden"
-                  />
+                  <>
+                    <PropertyChips
+                      taskId={currentTaskId}
+                      projectId={projectId}
+                      workspaceId={workspaceId}
+                      className="pb-5 lg:hidden"
+                    />
+                    <ForestPageLink
+                      workspaceId={workspaceId}
+                      projectId={projectId}
+                      taskId={currentTaskId}
+                      className="mb-5 lg:hidden"
+                    />
+                  </>
                 }
               />
             </div>
-            <PropertiesRail
-              taskId={currentTaskId}
-              projectId={projectId}
-              workspaceId={workspaceId}
-              className="hidden w-73 shrink-0 overflow-y-auto border-border border-l lg:flex"
-            />
+            <div className="hidden w-73 shrink-0 flex-col overflow-y-auto border-border border-l lg:flex">
+              <PropertiesRail
+                taskId={currentTaskId}
+                projectId={projectId}
+                workspaceId={workspaceId}
+                className="pb-3"
+              />
+              <ForestPageLink
+                workspaceId={workspaceId}
+                projectId={projectId}
+                taskId={currentTaskId}
+                className="mx-5 mb-6"
+              />
+            </div>
           </div>
         )}
       </SheetContent>

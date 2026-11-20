@@ -1,7 +1,7 @@
 // Отбор и страницы oq_list (list.mjs): фильтры, окно offset/limit, next_offset и потолок размера ответа.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { OUT_MAX, briefDeep, briefDoc, filterDocs, fitEvents, fitList, historyReply, ownerAnswerUnread, pageList, replyText, snapshots } from '../list.mjs';
+import { OUT_MAX, briefDeep, briefDoc, filterDocs, fitEvents, fitList, historyReply, ownerAnswerUnread, pageList, replyText, snapshots, workBrief } from '../list.mjs';
 
 const check = (id, data) => ({ id, version: 1, data });
 
@@ -43,11 +43,14 @@ test('filterDocs: неверный since и unread вне checks — ошибк�
   assert.throws(() => filterDocs('items', [], { unread: true }), /только для checks/);
 });
 
-test('pageList: offset и limit (1…500, по умолчанию 50); offset за концом — пустое окно', () => {
+test('pageList: offset и limit (1…30, по умолчанию 20; с ids — до 500); offset за концом — пустое окно (SE-45)', () => {
   const list = Array.from({ length: 120 }, (_, i) => i);
-  assert.deepEqual(pageList(list, {}), { from: 0, docs: list.slice(0, 50) });
-  assert.deepEqual(pageList(list, { offset: 100, limit: 50 }).docs, list.slice(100));
-  assert.equal(pageList(list, { limit: 10_000 }).docs.length, 120);
+  assert.deepEqual(pageList(list, {}), { from: 0, docs: list.slice(0, 20) });
+  assert.deepEqual(pageList(list, { offset: 100, limit: 30 }).docs, list.slice(100));
+  assert.equal(pageList(list, { limit: 10_000 }).docs.length, 30);
+  assert.equal(pageList(list, { ids: ['a'] }).docs.length, 120, 'с ids — все названные');
+  assert.equal(pageList(list, { ids: ['a'], limit: 60 }).docs.length, 60);
+  assert.equal(pageList(list, { ids: [] }).docs.length, 20, 'пустой ids — как без него');
   assert.equal(pageList(list, { limit: 0 }).docs.length, 1);
   assert.equal(pageList(list, { offset: -5 }).from, 0);
   assert.deepEqual(pageList(list, { offset: 500 }).docs, []);
@@ -56,7 +59,7 @@ test('pageList: offset и limit (1…500, по умолчанию 50); offset з
 test('fitList: next_offset — пока документы остались, за limit или за потолком размера; последнее окно без него', () => {
   const docs = Array.from({ length: 10 }, (_, i) => ({ id: `d-${i}` }));
   assert.deepEqual(fitList(10, docs), { total: 10, docs });
-  assert.deepEqual(fitList(30, docs, 10), { total: 30, offset: 10, next_offset: 20, docs });
+  assert.deepEqual(fitList(30, docs, 10), { total: 30, offset: 10, next_offset: 20, more: 'ещё 10', docs });
   assert.deepEqual(fitList(30, docs, 20), { total: 30, offset: 20, docs });
 
   const big = Array.from({ length: 40 }, (_, i) => ({ id: `b-${i}`, note: 'x'.repeat(5_000) }));
@@ -180,4 +183,21 @@ test('replyText: JSON целиком или ошибка с размером —
   assert.equal(r.isError, true);
   assert.match(r.text, /больше потолка 100/);
   assert.deepEqual(replyText(undefined), { text: 'null' });
+});
+
+test('workBrief: строка плана — cardsCount; памятка — без текста и команд, только их размеры', () => {
+  const row = workBrief({ id: 'w-taibe-1', version: 3, data: { title: 'x', cards: [{ key: 'OPS-1' }, { key: 'OPS-2' }] } });
+  assert.deepEqual(row, { id: 'w-taibe-1', version: 3, title: 'x', cardsCount: 2 });
+  const memo = workBrief({ id: 'memo-phone', version: 1, data: { kind: 'memo', title: 'Телефон потерян', body: 'абзац', cmds: [{ cmd: 'a' }, { cmd: 'b' }], order: 1 } });
+  assert.deepEqual(memo, { id: 'memo-phone', version: 1, kind: 'memo', title: 'Телефон потерян', order: 1, bodyLen: 5, cmdsCount: 2 });
+});
+
+test('unread: ответ на доли команды ролей (d-team-split) читает сторож Mac — агенту не «непрочитанный»', () => {
+  const docs = [
+    { id: 'd-team-split', version: 3, data: { done: true, choice: 'pause', at: '2026-11-17T10:00:00Z', ownerAt: '2026-11-17T10:00:00Z' } },
+    { id: 'd-1', version: 2, data: { done: true, choice: 'yes', at: '2026-11-17T10:00:00Z', ownerAt: '2026-11-17T10:00:00Z' } },
+  ];
+  assert.deepEqual(filterDocs('checks', docs, { unread: true }).map((d) => d.id), ['d-1']);
+  assert.equal(ownerAnswerUnread(docs[0].data, 'd-team-split'), false);
+  assert.equal(ownerAnswerUnread(docs[1].data, 'd-1'), true);
 });

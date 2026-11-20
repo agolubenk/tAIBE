@@ -17,8 +17,31 @@ import time
 import lineage as L
 import lineage_retire as LR
 
+_NERVE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "nerve")
+if _NERVE not in sys.path:
+    sys.path.append(_NERVE)  # в конец: свои модули eval/tools не подменяются
+from products import base_role  # noqa: E402
+
 # genome/<роль>.json — продукт по умолчанию, genome/<slug>/<роль>.json — другие продукты (OPS-25).
 ROLE_RE = re.compile(r"/genome/(?:([a-z][a-z0-9-]*[a-z0-9])/)?([a-z]+)\.json")
+KEY_RE = re.compile(r"ключ реестра ([\w-]+)")  # как sources.KEY_RE Нерва: ключ роли в первом сообщении
+
+
+def role_of(command, line=None):
+    """(продукт, роль) сессии по геному в argv; ("", None) — не роль. У второй сессии (backend-2) геном базовой
+    роли, ключ — из первого сообщения в argv, после --resume — из записи линии (spawn_session.sh пишет --role).
+    Иначе reap и ростер считали бы backend и backend-2 одной ролью и сочли бы одну из сессий сменённой."""
+    m = ROLE_RE.search(command)
+    if not m:
+        return "", None
+    product, role = m.group(1) or "", m.group(2)
+    k = KEY_RE.search(command)
+    key = k.group(1) if k else None
+    if key is None and line and L.valid_line(line):
+        key = (L.read_json(L.lfile(line, ".json")) or {}).get("role")
+    if isinstance(key, str) and key != role and base_role(key) == role:
+        role = key
+    return product, role
 
 
 def add_reap_args(p):
@@ -41,6 +64,8 @@ def add_reap_args(p):
                    help="--auto: окно линии закрывается не раньше стольких минут после выхода claude с кодом 0")
     p.add_argument("--ack-minutes", type=float, default=30.0,
                    help="--auto: предшественник снимается, если проверенной квитанции наследника не меньше стольких минут")
+    p.add_argument("--surplus-idle-minutes", type=float, default=30.0,
+                   help="--auto: роль сверх доли владельца (метка lineage.py surplus) снимается после такого простоя")
     p.add_argument("--auto-idle-hours", type=float, default=8.0,
                    help="--auto: простой, после которого сессия — кандидат (не держатель роли, без незакоммиченного)")
     p.add_argument("--keep-cwd", action="append", default=[],
@@ -57,7 +82,7 @@ def prune_lineage_dir(days, now=None):
     cutoff = (now if now is not None else time.time()) - days * 86400
     n = 0
     for f in L.ldir().glob("*"):
-        if f.name == "reap-list.json" or f.suffix not in {".json", ".ack", ".log"} or not f.is_file():
+        if f.name == "reap-list.json" or f.suffix not in {".json", ".ack", ".log", ".surplus"} or not f.is_file():
             continue
         try:
             if f.stat().st_mtime < cutoff:
@@ -110,6 +135,59 @@ def ack_state(procs, line):
     return state
 
 
+def surplus_state(procs, line):
+    """Метка «сверх доли владельца» (lineage.py surplus) этой самой сессии: pid и старт совпали с живым claude. Метка
+    действует и после возврата доли: сессия уже передала смену и стоит на исходе контекста, работать не будет — её
+    снимет автоуборка, а сторож откроет роль заново (handoff у координатора). Иначе она держала бы роль, не работая."""
+    if not L.valid_line(line or ""):
+        return False
+    m = L.read_json(L.lfile(line, ".surplus")) or {}
+    s = procs.get(m.get("pid") if isinstance(m.get("pid"), int) else -1)
+    return isinstance(m.get("role"), str) and bool(m["role"]) and s is not None and L.argv0(s) == "claude" \
+        and L.norm(s.start) == L.norm(m.get("start"))
+
+
+def cmd_surplus(sx, a):
+    """Роль сверх доли владельца (spawn_session.sh --handoff, код 5): метка <линия>.surplus с pid и стартом своего
+    claude. По ней сторож команды не считает сессию живой ролью, автоуборка снимает её после простоя, а Нерв шлёт ответы
+    владельца на её пункты и координатору (role, product — ключ генома: '' у продукта по умолчанию). Код 0 — метка
+    новая, 4 — уже была, но координатор ещё не подтверждён, 3 — была и координатор получил handoff (--coord-done)."""
+    procs = sx.procs()
+    me = L.ancestor_claude(procs, os.getpid())
+    line = os.environ.get("TAIBE_LINEAGE", "") or (L.session_line(sx, me) if me else None) or ""
+    if not L.valid_line(line):
+        return L.die("нет линии роли (TAIBE_LINEAGE или первый промпт своей сессии)")
+    # Своя линия — свой claude; чужая (координатор будит спящую роль: TAIBE_LINEAGE=<линия роли> … --no-retire) —
+    # живой claude этой линии из sessions/, иначе метка легла бы на координатора.
+    who = me if me is not None and L.session_line(sx, me) == line else None
+    for f in ([] if who else sorted(L.sessions_dir().glob("*.json"))):
+        d = L.read_json(f)
+        p = procs.get(d.get("pid")) if isinstance(d, dict) and isinstance(d.get("pid"), int) else None
+        if p is not None and L.argv0(p) == "claude" and L.norm(p.start) == L.norm(d.get("procStart")) \
+                and L.session_line(sx, p) == line:
+            who = p
+            break
+    if who is None:
+        return L.die(f"нет живой сессии линии {line}")
+    # Метка только на сессию той самой роли: иначе (координатор без TAIBE_LINEAGE= будит роль, унаследованная линия)
+    # она легла бы на координатора или другую роль, и автоуборка сняла бы рабочую сессию (линза корректности).
+    got = role_of(who.command, line)
+    if not a.role or got != (a.product, a.role):
+        return L.die(f"линия {line} — сессия {got[1] or 'без роли'} ({got[0] or 'по умолчанию'}), не {a.role}: метку не ставлю")
+    f, old = L.lfile(line, ".surplus"), L.read_json(L.lfile(line, ".surplus")) or {}
+    same = old.get("pid") == who.pid and L.norm(old.get("start")) == L.norm(who.start)
+    if a.coord_done:  # только отметка в своей метке; новую метку --coord-done не ставит
+        if not same:
+            return L.die(f"нет метки сессии линии {line} — --coord-done не ставит её")
+        L.write_json(f, {**old, "coord": True})
+        return 0
+    if same:
+        return 3 if old.get("coord") else 4
+    L.write_json(f, {"line": line, "pid": who.pid, "start": who.start, "role": a.role, "product": a.product, "slug": a.slug,
+                     "handoff": a.handoff, "coord": False, "at": L.stamp()})
+    return 0
+
+
 def successor_gen(rows, r):
     """Поколение самого дальнего живого наследника той же роли (линия начинается с «<линия>.»); 0 — его нет.
     Префикс с точкой: сиблинг r.a1.b2 для r.a1.c3 и r.a10.x для r.a1 наследниками не считаются."""
@@ -134,11 +212,11 @@ def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
         if p is None or L.argv0(p) != "claude" or L.norm(p.start) != L.norm(d.get("procStart")):
             continue  # файл от завершённой сессии или pid уже у другого процесса
         line = L.session_line(sx, p)
-        m = ROLE_RE.search(p.command)
+        product, role = role_of(p.command, line)
         last = max(d.get("updatedAt") or 0, d.get("statusUpdatedAt") or 0) / 1000.0
         status = d.get("status") or "?"
         rows.append({"pid": p.pid, "start": p.start, "proc": p, "name": d.get("name") or "", "status": status,
-                     "cwd": d.get("cwd") or "", "line": line, "role": m.group(2) if m else None, "product": (m.group(1) or "") if m else "",
+                     "cwd": d.get("cwd") or "", "line": line, "role": role, "product": product,
                      "age_h": max(0.0, now - (d.get("startedAt") or 0) / 1000.0) / 3600,
                      "idle_h": 0.0 if status == "busy" else max(0.0, now - last) / 3600})
     current = {}   # (продукт, роль) → текущая сессия: роль одного продукта не делает чужую «вытесненной»
@@ -150,6 +228,7 @@ def scan(sx, idle_hours, include_waiting, roots, superseded_idle_hours=1.0):
                 current[pr] = (key, r["pid"])
     for r in rows:
         r["ack"] = ack_state(procs, r["line"])
+        r["surplus"] = surplus_state(procs, r["line"])
         is_current = r["role"] is not None and current[(r["product"], r["role"])][1] == r["pid"]
         gen = successor_gen(rows, r)
         r["cand"] = False

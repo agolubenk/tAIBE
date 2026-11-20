@@ -10,6 +10,7 @@ import {
   jsonResponse,
 } from "../../openapi";
 import { requireWorkspacePermission } from "../../utils/require-workspace-permission";
+import { maskForTokenCaller } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { mirrorRunStartedSchema, mirrorRunsSchema } from "./mirror-schema";
 import { workspaceParam } from "./schema";
@@ -57,7 +58,10 @@ const startMirrorRunRoute = createRoute({
 export const mirrorRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listMirrorRunsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
-    return c.json(await listMirrorRuns(workspaceId), 200);
+    return c.json(
+      maskForTokenCaller(c, await listMirrorRuns(workspaceId)),
+      200,
+    );
   })
   .openapi(startMirrorRunRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
