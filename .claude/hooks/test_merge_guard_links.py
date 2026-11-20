@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""
+Проверка merge-guard: второе имя, перенос и удаление защищённого пути или папки над ним (IS-249, линза security на
+HR #684). protected_path видит путь, а не файл. Проходили: символьная ссылка на папку законов и запись через неё
+(нового имени ещё нет, realpath его не знает), жёсткая ссылка на настройки хуков (другой путь, тот же файл), перенос
+папки слоя целиком (законы уехали вместе с ней). Так же файл с защищённым именем в папке-цели (`mv x/<имя> <слой>/`),
+удаление папки слоя, копия папки и распаковка поверх неё.
+
+Запуск: python3 -I -B .claude/hooks/test_merge_guard_links.py
+Пути собраны из частей (C, SET, RULES, ZE): хук читает этот файл с диска при запуске и иначе откажет на сами строки.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from merge_guard_testkit import D9, HOME, ROOT, TMP, bash, finish  # noqa: E402
+
+C, SET, RULES, ZE = "." + "claude", "settings" + ".json", "ru" + "les", "." + "zsh" + "env"
+CL = f"{ROOT}/{C}"
+O = TMP / "links"  # чужая папка: не корень и не над ним
+(O / "x").mkdir(parents=True)
+(O / RULES).mkdir()
+(O / "a.txt").write_text("x\n")
+(O / "x" / SET).write_text("{}\n")
+(ROOT / C / SET).write_text("{}\n")
+(ROOT / C / "notes.md").write_text("x\n")
+(ROOT / "sub").mkdir()
+(HOME.parent / ZE).write_text("")
+HP = HOME.parent  # домашняя папка песочницы: в ней файлы запуска shell
+
+# --- формы карточки: второе имя и перенос защищённого ---
+deny = [
+    ("символьная ссылка на rules, запись через неё", f"ln -s {CL}/{RULES} {O}/r && echo x > {O}/r/01-base.md"),
+    ("жёсткая ссылка на settings.json", f"ln {CL}/{SET} {O}/h"),
+    ("перенос <слой>", f"mv {C} {O}/c2"),
+    ("символьная ссылка от cwd", f"ln -s {C}/{RULES} {O}/r2"),
+    ("ln без цели", f"cd {O} && ln -s {CL}/{RULES}"),
+    # папка над защищённым — тоже второе имя
+    ("ссылка на <слой>", f"ln -s {CL} {O}/cl"),
+    ("ссылка на корень репозитория", f"ln -s {ROOT} {O}/repo"),
+    ("ссылка на /", f"ln -s / {O}/top"),
+    ("cp -al", f"cp -al {CL} {O}/copy"),
+    ("cp --link", f"cp --link {CL}/{SET} {O}/h2"),
+    ("cp -s", f"cp -s {CL}/{SET} {O}/s2"),
+    ("link", f"link {CL}/{SET} {O}/h3"),
+    ("gln (coreutils)", f"gln -s {CL}/{RULES} {O}/r3"),
+    ("gmv (coreutils)", f"gmv {CL} {O}/c3"),
+    ("rsync --link-dest", f"rsync -a --link-dest={CL} {O}/x/ {O}/snap/"),
+    ("ln -t", f"ln -s -t {O} {CL}/{RULES}"),
+    ("mv -t", f"mv -t {O} {CL}"),
+    ("mv корня", f"mv {ROOT} {O}/repo2"),
+    ("cd и mv", f"cd {ROOT} && mv {C} {O}/c4"),
+    ("маска с точкой", f"mv .c* {O}/c5"),
+    ("git mv", f"git mv {C} {O}/c6"),
+    ("git -C d mv", f"git -C {ROOT} mv {C} {O}/c7"),
+    # путь, который разбор не видит
+    ("$(…) в ln", f"ln -s \"$(date +%s)\" {O}/r4"),
+    ("неизвестная переменная в ln", f"ln -s $IS249_NOPE {O}/r5"),
+    ("обратные кавычки в ln", f"ln -s `date` {O}/r6"),
+    # символьная ссылка считается от своей папки
+    ("относительная ссылка от папки ссылки", f"cd {O}/x && ln -s ../repo/{C}/{RULES} {O}/r7"),  # от {O}: {TMP}/repo
+    # домашняя папка: реестр сессий и файлы запуска shell
+    ("ссылка на ~/<слой>", f"ln -s {HOME} {O}/hc"),
+    ("перенос домашней папки", f"mv {HP} {O}/home2"),
+    ("жёсткая ссылка на файл запуска shell", f"ln {HP}/{ZE} {O}/z"),
+    # имя в папке-цели
+    ("mv settings.json в <слой>/", f"mv {O}/x/{SET} {CL}/"),
+    ("cp settings.json в <слой>/", f"cp {O}/x/{SET} {CL}/"),
+    ("mv rules в <слой>/", f"mv {O}/{RULES} {CL}/"),
+    ("ln -sf rules в <слой>/", f"ln -sf {O}/{RULES} {CL}/"),
+    ("cp -t <слой>", f"cp -t {CL} {O}/x/{SET}"),
+    # удаление и смена папки (та же причина)
+    ("rm -rf <слой>", f"rm -rf {C}"),
+    ("grm -rf <слой>", f"grm -rf {C}"),
+    ("rm -rf корня", f"rm -rf {ROOT}"),
+    ("chmod -R <слой>", f"chmod -R a-w {C}"),
+    ("git rm -r <слой>", f"git rm -r -q {C}"),
+    # копия папки и распаковка поверх папки с законами
+    ("cp -R в <слой>", f"cp -R {O}/x/. {CL}"),
+    ("rsync -a в <слой>", f"rsync -a {O}/x/ {CL}/"),
+    ("ditto в <слой>", f"ditto {O}/x {CL}"),
+    ("tar -x -C <слой>", f"tar -xf {O}/e.tar -C {CL}"),
+    ("tar -x в корне", f"cd {ROOT} && tar -xf {O}/e.tar"),
+    ("unzip -d корень", f"unzip -o {O}/e.zip -d {ROOT}"),
+    ("unzip в корне", f"cd {ROOT} && unzip -o {O}/e.zip"),
+    # интерпретатор — как было (MORE_WRITES)
+    ("python os.link", f"python3 -c \"import os; os.link('{CL}/{SET}', '{O}/h9')\""),
+]
+for label, cmd in deny:
+    bash(f"IS-249, отказ — {label}: {cmd}", cmd, True)
+to_control = ("символьная ссылка на rules, запись через неё", "жёсткая ссылка на settings.json", "перенос <слой>",
+              "rm -rf <слой>", "mv settings.json в <слой>/")
+for label, cmd in [d for d in deny if d[0] in to_control]:  # законы правит только владелец: Контролю тоже отказ
+    bash(f"IS-249, отказ Контролю — {label}: {cmd}", cmd, True, who=D9)
+
+# --- обычная работа проходит ---
+for label, cmd, cwd in [
+    ("ссылка между чужими файлами", f"ln -s {O}/a.txt {O}/b.txt", ROOT),
+    ("ссылка на папку", f"ln -sfn {O}/x {O}/cur", ROOT),
+    ("ln без цели в чужой папке", f"ln -s {O}/a.txt", O / "x"),
+    ("относительная ссылка в репозитории", "ln -s ../shared node_modules", ROOT / "sub"),
+    ("rsync --link-dest на чужую папку", f"rsync -a --link-dest={O}/prev {O}/x/ {O}/snap/", ROOT),
+    ("переименование", f"mv {O}/a.txt {O}/a2.txt", ROOT),
+    ("перенос в папку над корнем", f"mv {O}/a.txt {TMP}/", ROOT),
+    ("перенос невидимого источника (sync-agent-skills.sh)", f"mv \"$(mktemp)\" {O}/out.txt", ROOT),
+    ("незащищённый файл из <слой>", f"mv {CL}/notes.md {O}/", ROOT),
+    ("копия чужого файла в <слой>/", f"cp {O}/a.txt {CL}/", ROOT),
+    ("копия settings.json наружу", f"cp {CL}/{SET} {O}/bak.json", ROOT),
+    ("копия <слой> наружу", f"cp -R {CL} {O}/bak", ROOT),
+    ("копия папки в чужую папку", f"cp -R {O}/x {O}/dst", ROOT),
+    ("git mv в репозитории", "git mv src/a.ts src/b.ts", ROOT),
+    ("rm чужой папки", f"rm -rf {O}/x", ROOT),
+    ("rm worktree-папки", "rm -rf worktrees/fix/x/node_modules", ROOT),
+    ("chmod чужого файла", f"chmod +x {O}/a.txt", ROOT),
+    ("tar -x в чужую папку", f"tar -xf {O}/e.tar -C {O}/out", ROOT),
+    ("tar -c в корне", f"tar -czf {O}/e.tgz {C}", ROOT),
+    ("unzip -l в корне", f"unzip -l {O}/e.zip", ROOT),
+]:
+    bash(f"IS-249, проход — {label}: {cmd}", cmd, False, cwd=cwd)
+
+finish(", IS-249: ссылки, перенос и удаление папки с законами")
