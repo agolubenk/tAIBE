@@ -227,8 +227,14 @@ def _client(check, tb, url: str) -> None:
 def _card(check, tb, url: str, tmp: Path) -> None:
     from store import Store
     cfg = SimpleNamespace(get=lambda key, default=None: default)
-    with tb.Client(url, KEY, WS, "aiboards-eval", "aiBoards&eval") as client:
-        card = tb.fetch_card(cfg, "OPS-26", client)
+    # Словарь модулей — поле продукта (Ф2 OPS-23). Фикстура — метка «Backend»; словарь — свой, от хоста не зависит.
+    fixture = tb.product.Council(slug="fixture", how="env", modules={"backend": ("src",), "frontend": ("web",)})
+    saved, tb.product.current = tb.product.current, lambda: fixture
+    try:
+        with tb.Client(url, KEY, WS, "aiboards-eval", "aiBoards&eval") as client:
+            card = tb.fetch_card(cfg, "OPS-26", client)
+    finally:
+        tb.product.current = saved
     check("t-boards: card_id перенесённой карточки — её Notion-id с дефисами (история при ней)",
           card["card_id"] == "3b9dd207-a825-81df-b95a-df2a95472dbf" and card["board_task_id"] == TASK, card["card_id"])
     check("t-boards: поля — ошибка, P1, severity, ключ, адрес, модули ∩ канон",

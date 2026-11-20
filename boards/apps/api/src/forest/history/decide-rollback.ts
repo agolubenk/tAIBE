@@ -35,3 +35,27 @@ export function decideRollback(
     ),
   };
 }
+
+// The fields a move to a work stage fills in when they are empty
+// (card-fill/fill-card.ts).
+export const AUTOFILL_FIELDS: ReadonlySet<string> = new Set([
+  "assigneeId",
+  "startDate",
+]);
+
+// An agent's move and the autofill it caused are one action for the owner
+// (R-023 AC-009, TB-69): an autofilled field that still holds the filled value
+// goes back with the edit; a field someone changed since stays as it is.
+export function withAutofill(
+  edit: HistoryChanges,
+  autofill: HistoryChanges | undefined,
+  current: Record<string, unknown>,
+): HistoryChanges {
+  if (!autofill) return edit;
+  const merged: HistoryChanges = { ...edit };
+  for (const [field, change] of Object.entries(autofill)) {
+    if (!isDeepStrictEqual(current[field], change.to)) continue;
+    merged[field] = { from: edit[field]?.from ?? change.from, to: change.to };
+  }
+  return merged;
+}

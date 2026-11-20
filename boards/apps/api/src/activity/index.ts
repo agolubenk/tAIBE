@@ -14,6 +14,7 @@ import {
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import { type AuthorKind, authorMark, writerKind } from "../forest/author-kind";
 import createActivity from "./controllers/create-activity";
+import { dialogMarkFor, markOpenDialogs } from "../forest/dialog/dialog-store";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
 import getActivities from "./controllers/get-activities";
@@ -75,6 +76,14 @@ const getActivitiesRoute = createRoute({
   },
 });
 
+// TB-29. Status and move events date a card (completed_at, cycle time) and
+// are written by the server when the task changes; a client-made one would
+// forge that history.
+const SERVER_WRITTEN_TYPES: ReadonlySet<string> = new Set([
+  "status_changed",
+  "moved",
+]);
+
 const createActivityRoute = createRoute({
   method: "post",
   operationId: "createActivity",
@@ -96,7 +105,7 @@ const createActivityRoute = createRoute({
   responses: {
     200: jsonResponse("The created activity", activitySchema),
     400: errorResponse(
-      "Invalid body, or comment activity submitted through the generic endpoint",
+      "Invalid body, a comment (use the comment endpoint), or a status_changed or moved event, which only the server writes",
     ),
     403: errorResponse(
       "No access to the project, or missing task:update permission",
@@ -193,24 +202,28 @@ const activity = apiRouter()
       200,
     ),
   )
-  .openapi(getActivitiesRoute, async (c) =>
-    c.json(
-      maskForTokenCaller(
-        c,
-        await getActivities(
-          c.req.valid("param").taskId,
-          c.get("userId"),
-          c.req.valid("query").limit,
-        ),
-      ),
+  .openapi(getActivitiesRoute, async (c) => {
+    const { taskId } = c.req.valid("param");
+    const activities = await getActivities(
+      taskId,
+      c.get("userId"),
+      c.req.valid("query").limit,
+    );
+    return c.json(
+      maskForTokenCaller(c, await markOpenDialogs(taskId, activities)),
       200,
-    ),
-  )
+    );
+  })
   .openapi(createActivityRoute, async (c) => {
     const { taskId, message, type, eventData } = c.req.valid("json");
     if (type === "comment") {
       throw new HTTPException(400, {
         message: "Use the comment endpoint to create comments",
+      });
+    }
+    if (SERVER_WRITTEN_TYPES.has(type)) {
+      throw new HTTPException(400, {
+        message: `activity_server_only: the server writes ${type} when the task changes; change the task instead`,
       });
     }
     return c.json(
@@ -227,6 +240,7 @@ const activity = apiRouter()
   })
   .openapi(createCommentRoute, async (c) => {
     const { taskId, comment } = c.req.valid("json");
+    const dialog = await dialogMarkFor(c, taskId);
     return c.json(
       maskForTokenCaller(
         c,
@@ -236,6 +250,7 @@ const activity = apiRouter()
           comment,
           undefined,
           writerKind(c),
+          dialog,
         ),
       ),
       200,

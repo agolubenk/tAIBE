@@ -43,6 +43,15 @@ def log(*parts):
     print('[evolve %s]' % now().strftime('%H:%M:%S'), *parts, flush=True)
 
 
+def merge_before_run(merge, args):
+    """`nightly`'s first step (SE-49): last night's PRs, before the refresh wipes their verdicts and the session's
+    `supersedes` lines from the run's worktree. A failed merge is logged and must not cost the night."""
+    try:
+        merge(args)
+    except Exception as e:  # noqa: BLE001
+        log('merge before the run failed: %s' % e)
+
+
 def load_json(name, default):
     try:
         with open(os.path.join(STATE_DIR, name), encoding='utf-8') as f:
@@ -57,6 +66,18 @@ def save_json(name, data):
     with open(path + '.tmp', 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(path + '.tmp', path)
+
+
+def with_kept_supersedes(verdicts):
+    """`supersedes … brak` lines live in the run's worktree until their data PR merges, and `refresh_worktree`
+    (checkout --force) wipes them. Each merge step keeps the ones it sees in `supersedes.json` and reads both, so a
+    revert PR whose verdict was marked brak never merges after a refresh (SE-49)."""
+    kept = load_json('supersedes.json', {})
+    seen = {v['supersedes']: v.get('status') for v in verdicts if v.get('supersedes')}
+    if any(kept.get(vid) != status for vid, status in seen.items()):
+        kept.update(seen)
+        save_json('supersedes.json', kept)
+    return verdicts + [{'supersedes': vid, 'status': status} for vid, status in kept.items() if vid not in seen]
 
 
 def closed_switch(name, root=ROOT):

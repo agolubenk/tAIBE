@@ -71,11 +71,29 @@ export function registerForestCardTools(
     "forest_get_card_memory",
     {
       description:
-        "List claude-mem observations that name the card (its id, Backlog ID, board number or branch): id, type, title and why it matched, not the text. stale: true means the memory worker is down and this is the last copy.",
-      inputSchema: z.object({ workspaceId: id, taskId: id }),
+        "Count the claude-mem observations that name a card or an owner-queue item exactly, with the 5 newest titles per key, never the text. Give exactly one of taskId, ticketKey (TB-108) or queueItemId (d-tb113-mem-1311). A card is searched by its id, board key, Backlog ID and the queue items of its «да» requests. stale: true means the Mac memory proxy is down and this is the last answer, at most 24 hours old.",
+      inputSchema: z.object({
+        workspaceId: id,
+        taskId: id.optional(),
+        ticketKey: id.optional(),
+        queueItemId: id.optional(),
+      }),
     },
-    ({ workspaceId, taskId }) =>
-      run(() => forestCall(client, workspaceId, cardPath(taskId, "memory"))),
+    ({ workspaceId, taskId, ticketKey, queueItemId }) =>
+      run(async () => {
+        const given = [taskId, ticketKey, queueItemId].filter(Boolean);
+        if (given.length !== 1) {
+          throw new Error(
+            "Give exactly one of taskId, ticketKey and queueItemId",
+          );
+        }
+        if (taskId) {
+          return forestCall(client, workspaceId, cardPath(taskId, "memory"));
+        }
+        return forestCall(client, workspaceId, "/memory", {
+          query: { ticketKey, queueItemId },
+        });
+      }),
   );
 
   registerTool(

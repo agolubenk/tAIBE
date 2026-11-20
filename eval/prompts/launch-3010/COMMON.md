@@ -19,7 +19,9 @@
    файл, закрой (`status: "dropped"`, `note: "перенесено в launch-3010"`). Дальше веди тот же список.
 3. **Очередь.** Пункты из раздела «Захватить» своего файла перехвати через `oq_agent_status` с `session`. Без
    `session` agentBy не меняется.
-4. **Нерв.** Один Monitor с `timeout_ms` 3300000 (не persistent): `python3 -I eval/nerve/nerve.py tap <ключ>`.
+4. **Нерв.** Один Monitor с `timeout_ms` 3300000 (не persistent):
+   `python3 -I eval/nerve/nerve.py tap <ключ> --product hr-helper`. Флаг пиши всегда: сессия после `--resume`
+   может потерять геном и его `TAIBE_PRODUCT` и молча слушать журнал tAIBE (SE-189).
    По таймауту — один голый перевзвод: без `oq_list`, `work_state` и текста (норма d-f63b-economy-0711; курсор тапа
    событий не теряет). Без `| grep`: фильтр уже внутри.
 5. **Готово.** `forest_set_work_state` со `step: "дела приняты от <id, id>; дальше — <первое дело>"`. Это и есть сигнал

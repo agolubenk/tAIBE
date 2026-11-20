@@ -12,11 +12,16 @@
 // (rollout mode: the app learns to send the token first). The file is read at start; a new one needs a restart.
 // The worker address comes from ~/.claude-mem/settings.json (CLAUDE_MEM_WORKER_HOST/PORT), as the reader does.
 // While the tunnel is down the listen address does not exist: the proxy retries every 30 s instead of exiting.
+//
+// One route does not go to the worker: GET /api/card-memory?key=… (1–6 keys, TB-113) reads claude-mem.db itself,
+// read-only, by exact key, titles only (card-memory-db.mjs). The database is CMEM_PROXY_DB, else claude-mem.db in
+// CLAUDE_MEM_DATA_DIR of the settings, else ~/.claude-mem/claude-mem.db. At most 10 such requests a second.
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createCardMemoryDb, parseKeys } from "./card-memory-db.mjs";
 
 const LISTEN = process.env.CMEM_PROXY_LISTEN ?? "10.77.0.2";
 const PORT = Number(process.env.CMEM_PROXY_PORT ?? 37702);
@@ -32,6 +37,8 @@ const TOKEN_HEADER = "x-cmem-proxy-token";
 const TOKEN_MIN_LENGTH = 32;
 const RETRY_MS = 30_000;
 const UPSTREAM_TIMEOUT_MS = 10_000;
+const CARD_MEMORY_PATH = "/api/card-memory";
+const CARD_MEMORY_PER_SECOND = 10;
 
 // The four reads of the t-boards memory reader — and nothing else.
 const ROUTES = [
@@ -41,19 +48,27 @@ const ROUTES = [
   /^\/api\/observation\/[A-Za-z0-9_-]{1,64}$/,
 ];
 
-function workerAddress() {
-  let settings = {};
+function readSettings() {
   try {
-    settings = JSON.parse(
+    return JSON.parse(
       readFileSync(join(homedir(), ".claude-mem", "settings.json"), "utf8"),
     );
   } catch {
-    // no settings file — fall back to the worker defaults
+    return {}; // no settings file — fall back to the worker defaults
   }
+}
+
+function workerAddress(settings) {
   return {
     host: settings.CLAUDE_MEM_WORKER_HOST || "127.0.0.1",
     port: Number(settings.CLAUDE_MEM_WORKER_PORT || 37777),
   };
+}
+
+function databasePath(settings) {
+  if (process.env.CMEM_PROXY_DB) return process.env.CMEM_PROXY_DB;
+  const dir = settings.CLAUDE_MEM_DATA_DIR || join(homedir(), ".claude-mem");
+  return join(dir, "claude-mem.db");
 }
 
 // No file — rollout mode (null). A file that is there but unusable stops the proxy rather than opening it:
@@ -79,8 +94,11 @@ function loadToken() {
   return token;
 }
 
-const upstream = workerAddress();
+const settings = readSettings();
+const upstream = workerAddress(settings);
 const token = loadToken();
+const cardMemory = createCardMemoryDb(databasePath(settings));
+cardMemory.open();
 if (!token) {
   console.warn(
     `[cmem-ro-proxy] no token file ${TOKEN_FILE}: allowed peers read without a token (rollout mode, OPS-19)`,
@@ -101,6 +119,36 @@ function deny(res, status, reason) {
   res.end(reason);
 }
 
+function sendJson(res, status, body) {
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  res.end(JSON.stringify(body));
+}
+
+// A sliding second: the d4dev API asks once per card it opens, so 10 a second is far above normal use.
+const cardMemoryHits = [];
+function cardMemoryLimited(now = Date.now()) {
+  while (cardMemoryHits.length && now - cardMemoryHits[0] >= 1000) {
+    cardMemoryHits.shift();
+  }
+  if (cardMemoryHits.length >= CARD_MEMORY_PER_SECOND) return true;
+  cardMemoryHits.push(now);
+  return false;
+}
+
+// Keys and titles are never logged here: they name the owner's work.
+async function answerCardMemory(url, res) {
+  if (cardMemoryLimited()) return deny(res, 429, "too many requests");
+  const parsed = parseKeys(url.searchParams);
+  if (parsed.error) return deny(res, 400, parsed.error);
+  const result = await cardMemory.find(parsed.keys);
+  if (result.status !== "ok")
+    return sendJson(res, 503, { error: result.status });
+  sendJson(res, 200, { keys: result.keys });
+}
+
 const server = http.createServer((req, res) => {
   const peer = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
   if (!ALLOW.has(peer)) return deny(res, 403, "peer not allowed");
@@ -110,6 +158,12 @@ const server = http.createServer((req, res) => {
   }
   if (req.method !== "GET") return deny(res, 405, "read-only");
   const url = new URL(req.url ?? "/", "http://proxy");
+  if (url.pathname === CARD_MEMORY_PATH) {
+    answerCardMemory(url, res).catch(() => {
+      if (!res.headersSent) sendJson(res, 503, { error: "unavailable" });
+    });
+    return;
+  }
   if (!ROUTES.some((re) => re.test(url.pathname)))
     return deny(res, 403, "route not allowed");
 

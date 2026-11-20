@@ -14,7 +14,7 @@ export const activitySchema = z
     content: z.string().nullable(),
     eventData: z.unknown().openapi({
       description:
-        "Type-specific payload, e.g. { oldStatus, newStatus } for status_changed. Null for plain comments.",
+        "Type-specific payload, e.g. { oldStatus, newStatus } for status_changed. Null for plain comments; a comment of a linked session carries { dialog: { groupKey, fencingToken, session, open } } (R-026): session names the speaking session, open is false once the group's lease ends or the card leaves work.",
     }),
     externalUserName: z.string().nullable().openapi({
       description: "Set when the activity was imported from another tool.",
