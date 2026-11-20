@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { postReauth, type ReauthReply } from "@/lib/reauth/reauth-api";
+import { reauthWithPasskey } from "@/lib/reauth/reauth-passkey";
 import { type ReauthMessage, reauthMessage } from "@/lib/reauth/reauth-message";
 
 type StepProps = {
@@ -18,12 +19,17 @@ type StepProps = {
 function useTry(onReply: StepProps["onReply"]) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<ReauthMessage | null>(null);
-  // `confirms`: only a password or code check confirms; a sent code does not.
-  const run = async (send: () => Promise<ReauthReply>, confirms: boolean) => {
+  // `confirms`: only a password, code or key check confirms; a sent code does
+  // not. A null reply (the system window of a key was closed) shows nothing.
+  const run = async (
+    send: () => Promise<ReauthReply | null>,
+    confirms: boolean,
+  ) => {
     setBusy(true);
     setMessage(null);
     const reply = await send();
     setBusy(false);
+    if (!reply) return null;
     if (!reply.ok) setMessage(reauthMessage(reply));
     if (!reply.ok || confirms) onReply(reply);
     return reply;
@@ -68,7 +74,7 @@ export function PasswordStep({ onReply }: StepProps) {
     stopSubmit(event);
     if (!password || busy) return;
     const reply = await run(() => postReauth("password", { password }), true);
-    if (!reply.ok) setPassword("");
+    if (reply && !reply.ok) setPassword("");
   };
 
   return (
@@ -105,7 +111,7 @@ export function CodeStep({ onReply }: StepProps) {
   // The window sends nothing until the person picks a method (AC-17).
   const send = async () => {
     const reply = await run(() => postReauth("sendCode"), false);
-    if (reply.ok) {
+    if (reply?.ok) {
       setSent(true);
       setCode("");
     }
@@ -115,7 +121,7 @@ export function CodeStep({ onReply }: StepProps) {
     stopSubmit(event);
     if (code.length !== REAUTH_CODE_LENGTH || busy) return;
     const reply = await run(() => postReauth("verifyCode", { code }), true);
-    if (!reply.ok && reauthMessage(reply).codeGone) setCode("");
+    if (reply && !reply.ok && reauthMessage(reply).codeGone) setCode("");
   };
 
   if (!sent) {
@@ -173,5 +179,31 @@ export function CodeStep({ onReply }: StepProps) {
         {t("auth:reauth.code.resend")}
       </Button>
     </form>
+  );
+}
+
+// R-6: the key is asked for only on a press, so Safari and iOS allow it.
+export function PasskeyStep({ onReply }: StepProps) {
+  const { t } = useTranslation();
+  const errorId = useId();
+  const { busy, message, run } = useTry(onReply);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-muted-foreground text-sm">
+        {t("auth:reauth.passkey.explain")}
+      </p>
+      <StepError id={errorId} message={message} />
+      <Button
+        type="button"
+        loading={busy}
+        aria-describedby={errorId}
+        onClick={() => {
+          if (!busy) void run(reauthWithPasskey, true);
+        }}
+      >
+        {t("auth:reauth.passkey.submit")}
+      </Button>
+    </div>
   );
 }

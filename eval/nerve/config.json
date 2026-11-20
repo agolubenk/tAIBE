@@ -276,6 +276,8 @@
     "batch_at": 0.6,
     "tail_bytes": 262144,
     "unstick": true,
+    "unstick_pause_s": 180,
+    "wake_task_lookback_s": 14400,
     "week_reset": {
       "weekday": 3,
       "time": "19:00"

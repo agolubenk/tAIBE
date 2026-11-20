@@ -27,13 +27,27 @@ describe("auth rate limit (TB-31 R-8)", () => {
       window: 60,
       max: 5,
     });
+    // TB-31 R-1: a login check per IP, not a way to list the logins.
+    expect(AUTH_RATE_LIMIT_RULES["/is-username-available"]).toEqual({
+      window: 60,
+      max: 10,
+    });
+    // TB-31 R-6: open without a session; each call writes a challenge row.
+    expect(
+      AUTH_RATE_LIMIT_RULES["/passkey/generate-authenticate-options"],
+    ).toEqual({ window: 60, max: 20 });
+    expect(AUTH_RATE_LIMIT_RULES["/passkey/verify-authentication"]).toEqual({
+      window: 60,
+      max: 10,
+    });
     expect(AUTH_RATE_LIMIT_RULES["/sign-in/magic-link"]).toEqual({
       window: 60,
       max: 3,
     });
+    // The email-otp plugin's own limit; a custom rule must not loosen it.
     expect(AUTH_RATE_LIMIT_RULES["/sign-in/email-otp"]).toEqual({
       window: 60,
-      max: 5,
+      max: 3,
     });
     expect(AUTH_RATE_LIMIT_RULES["/tb/reauth/password"]).toEqual({
       window: 60,

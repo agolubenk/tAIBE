@@ -15,8 +15,10 @@ import {
   normalizeDeviceCode,
 } from "@/components/auth/device-code";
 import PageTitle from "@/components/page-title";
+import { useFreshSession } from "@/components/reauth/use-fresh-session";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth-client";
+import { isReauthFlowError, throwIfNotFresh } from "@/lib/reauth/reauth-errors";
 import { toast } from "@/lib/toast";
 
 const approveSearchSchema = z.object({
@@ -37,6 +39,7 @@ function DeviceApprovePage() {
   const { session, isLoading: isSessionPending } = useSettledSession();
   const [pending, setPending] = useState<Decision | null>(null);
   const [result, setResult] = useState<Decision | null>(null);
+  const freshSession = useFreshSession();
   const userCode = normalizeDeviceCode(search.user_code);
   const pageTitle = <PageTitle title={t("auth:device.approve.pageTitle")} />;
 
@@ -123,9 +126,15 @@ function DeviceApprovePage() {
       // (GET /device) before it can be approved or denied. No-op if already
       // claimed.
       await authClient.device({ query: { user_code: userCode } });
+      // TB-31 R-5: an approved device issues agent keys without asking again
+      // (owner taibe-d-tb31-agent-key-1811 = A), so approving asks first.
       const response =
         decision === "approve"
-          ? await authClient.device.approve({ userCode })
+          ? await freshSession.run(async () => {
+              const approved = await authClient.device.approve({ userCode });
+              throwIfNotFresh(approved.error);
+              return approved;
+            })
           : await authClient.device.deny({ userCode });
       if (response.error) {
         toast.error(
@@ -135,8 +144,10 @@ function DeviceApprovePage() {
         return;
       }
       setResult(decision);
-    } catch {
-      toast.error(t("auth:device.approve.failed"));
+    } catch (error) {
+      // The window answers a refusal itself; a closed window approves nothing.
+      if (!isReauthFlowError(error))
+        toast.error(t("auth:device.approve.failed"));
       setPending(null);
     }
   };
@@ -180,6 +191,7 @@ function DeviceApprovePage() {
           </div>
         </div>
       </AuthPage>
+      {freshSession.dialog}
     </>
   );
 }

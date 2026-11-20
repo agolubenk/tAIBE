@@ -144,7 +144,7 @@ describe("sign-in password form", () => {
   it("sends the CAPTCHA token with a password sign-in", async () => {
     const Page = signin.options.component as ComponentType;
     render(<Page />);
-    fireEvent.change(screen.getByLabelText("auth:forms.email"), {
+    fireEvent.change(screen.getByLabelText("auth:forms.loginOrEmail"), {
       target: { value: "person@example.com" },
     });
     fireEvent.change(screen.getByLabelText("auth:forms.password"), {
@@ -159,7 +159,9 @@ describe("sign-in password form", () => {
     await waitFor(() => expect(m.email).toHaveBeenCalledTimes(1));
     expect(m.email).toHaveBeenCalledWith(
       { email: "person@example.com", password: "long-test-password" },
-      { headers: { "x-turnstile-token": "fresh-token" } },
+      expect.objectContaining({
+        headers: { "x-turnstile-token": "fresh-token" },
+      }),
     );
   });
 });

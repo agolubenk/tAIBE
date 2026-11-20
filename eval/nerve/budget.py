@@ -79,6 +79,25 @@ def limit_text(o):
     return text if LIMIT_RE.search(text) else ""
 
 
+def last_assistant(path, tail=256 * 1024):
+    """(время, текст отказа по лимиту или '') последней записи assistant в хвосте транскрипта; None — её нет в хвосте
+    (SE-187 D2: сессия idle стоит из-за лимита, если её последний ответ — отказ)."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - tail))
+        raw = f.read()
+    for ln in reversed(raw.split(b"\n")):
+        if b'"assistant"' not in ln:
+            continue
+        try:
+            o = json.loads(ln)
+        except ValueError:  # первая строка хвоста бывает обрезана
+            continue
+        if isinstance(o, dict) and o.get("type") == "assistant":
+            return parse_ts(o.get("timestamp") or ""), limit_text(o)
+    return None
+
+
 def scan_increments(path, offset, last_rids, limits=None):
     """Как scan_usage, но отдаёт приращения [(ts, usd, cwd)] — для поминутных корзин счётчика; cwd записи — для
     продукта (SE-66). Отказы по лимиту из тех же строк дописываются в limits [(ts, text)]: счётчик читает каждую новую

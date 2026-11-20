@@ -18,7 +18,8 @@ STUB = '''import json, sys
 args = sys.argv[1:]
 assert args[:3] == ['--hours', '24', '--all'], args
 json.dump({'total': 12.5, 'cold': {'ToolSearch': {'n': 2, 'usd': 3.14159}},
-           'generations': {'> 500K': {'sessions': 1}}}, open(args[args.index('--json') + 1], 'w'))
+           'generations': {'> 500K': {'sessions': 1, 'life_min': 30.0, 'call_usd': 0.1, 'handoff_share': None}}},
+          open(args[args.index('--json') + 1], 'w'))
 '''
 
 
@@ -40,7 +41,8 @@ class NightlyContextAuditTest(unittest.TestCase):
         self.assertEqual(out['exit'], 0)
         self.assertEqual(out['usd'], 12.5)
         self.assertEqual(out['cold'], {'ToolSearch': {'n': 2, 'usd': 3.14}})
-        self.assertEqual(out['generations'], {'> 500K': {'sessions': 1}})
+        self.assertEqual(out['generations'], {'> 500K': {'sessions': 1, 'life_min': 30.0, 'call_usd': 0.1,
+                                                         'handoff_share': None}})
         with open(out['file'], encoding='utf-8') as f:
             self.assertEqual(json.load(f)['total'], 12.5)
 
@@ -67,6 +69,24 @@ class NightlyContextAuditTest(unittest.TestCase):
         out = steps.context_audit(self.wt)
         self.assertNotIn('usd', out)
         self.assertEqual(steps.audit_line(out, 'd'), '')
+
+    def test_a_report_of_another_form_is_an_error(self):  # #478, Control N2
+        tool = os.path.join(self.wt, 'eval', 'tools', 'context_audit.py')
+        forms = {'cold without n': {'total': 1.0, 'cold': {'x': {'usd': 1.0}}}, 'a list': [1],
+                 'generations without call_usd': {'total': 1.0, 'generations': {'w1': {'handoff_share': 0.1}}},
+                 'generations as a list': {'total': 1.0, 'generations': [1]},
+                 'total as text': {'total': '1.0'}, 'life_min as text': {'total': 1.0, 'generations': {
+                     'w1': {'life_min': '30', 'call_usd': 0.1}}}}
+        for why, rep in forms.items():
+            with self.subTest(why):
+                with open(tool, 'w') as f:
+                    f.write('import json, sys\njson.dump(%s, open(sys.argv[sys.argv.index("--json") + 1], "w"))\n'
+                            % json.dumps(rep))
+                out = steps.context_audit(self.wt)
+                self.assertEqual(out['exit'], 0)
+                self.assertIn('report of another form', out['error'])
+                self.assertNotIn('usd', out)
+                self.assertEqual(steps.audit_line(out, 'd'), '')
 
     def test_timeout_does_not_break_the_night(self):
         with open(os.path.join(self.wt, 'eval', 'tools', 'context_audit.py'), 'w') as f:

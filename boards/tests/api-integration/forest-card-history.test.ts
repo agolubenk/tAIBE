@@ -95,13 +95,14 @@ describe("API integration: card history and rollback (R-023)", () => {
     );
     expect(edit.status).toBe(200);
 
-    // Going to review also triggers card-fill (assignee, start date): that is
-    // its own, later history entry by the server (actorId null), so the agent's
-    // edit is found by its author rather than taken as the newest entry.
+    // Going to review also triggers card-fill (assignee, start date) in its
+    // own, next history row, named after the agent whose move caused it.
     const afterEdit = await entries(forest, id);
-    const entry = afterEdit.find((e) => /^key:.+:dev-1$/.test(e.actorId ?? ""));
-    const fill = afterEdit.find((e) => e.actorId === null);
-    expect(fill?.changes).toHaveProperty("assigneeId");
+    const agentRows = afterEdit.filter((e) =>
+      /^key:.+:dev-1$/.test(e.actorId ?? ""),
+    );
+    const entry = agentRows.find((e) => "status" in e.changes);
+    const fill = agentRows.find((e) => "assigneeId" in e.changes);
     expect(entry).toMatchObject({
       kind: "task",
       revision: before?.revision,
@@ -113,12 +114,19 @@ describe("API integration: card history and rollback (R-023)", () => {
         dueDate: { from: null, to: "2026-11-01T10:00:00.000Z" },
       },
     });
+    expect(fill).toMatchObject({
+      kind: "task",
+      revision: (before?.revision ?? 0) + 1,
+      actorId: entry?.actorId,
+      changes: { assigneeId: { from: null }, startDate: { from: null } },
+    });
 
     const undone = await forest.owner(rollback(id, String(entry?.id)), {});
     expect(undone.status).toBe(200);
     expect(undone.body).toMatchObject({ kind: "task", meta: null });
 
-    // One action returns everything the agent changed.
+    // One action returns everything the agent's move changed, the autofill
+    // included: the card matches the version before in every field (TB-69).
     const after = await taskRow(id);
     expect(after).toMatchObject({
       title: before?.title,
@@ -127,24 +135,86 @@ describe("API integration: card history and rollback (R-023)", () => {
       columnId: before?.columnId,
       priority: before?.priority,
       dueDate: before?.dueDate,
-    });
-    expect(after?.revision).toBe(undone.body.revision);
-
-    // The server's card-fill is undone by its own entry; then the card matches
-    // the version before the agent touched it in every field.
-    const undoneFill = await forest.owner(rollback(id, String(fill?.id)), {});
-    expect(undoneFill.status).toBe(200);
-    expect(await taskRow(id)).toMatchObject({
       userId: before?.userId,
       startDate: before?.startDate,
     });
+    expect(after?.revision).toBe(undone.body.revision);
+
+    // The autofill row is spent: undoing it again finds the fields changed.
+    const again = await forest.owner(rollback(id, String(fill?.id)), {});
+    expect(again.status).toBe(409);
+    expect(again.body.message).toContain("history_conflict");
 
     const [latest] = await entries(forest, id);
     expect(latest?.actorId).toMatch(/^session:/);
     expect(await journal("card.rollback", id)).toMatchObject([
       { outcome: "allowed", actorKind: "owner-ui" },
-      { outcome: "allowed", actorKind: "owner-ui" },
+      { outcome: "denied", actorKind: "owner-ui" },
     ]);
+  });
+
+  it("an assignee someone set after the autofill survives the rollback of the agent's move", async () => {
+    const forest = await createForest();
+    const id = await agentCard(forest);
+    const token = await lease(forest, id);
+    const before = await taskRow(id);
+    const current = await forest.agentApi("GET", `/task/${id}`);
+    const moved = await forest.agentApi(
+      "PUT",
+      `/task/${id}`,
+      {
+        title: current.body.title,
+        description: current.body.description,
+        status: "in-review",
+        priority: current.body.priority,
+        projectId: current.body.projectId,
+        position: current.body.position ?? 0,
+      },
+      {
+        "x-t-boards-fence": token,
+        "x-t-boards-link": "https://github.com/agolubenk/tAIBE/pull/1",
+      },
+      "dev-1",
+    );
+    expect(moved.status).toBe(200);
+    const filled = await taskRow(id);
+    expect(filled?.userId).toBeTruthy();
+    expect(filled?.startDate).toBeTruthy();
+
+    // Another member takes the card over after the agent's move (the agent
+    // key acts for the owner, so the autofill assigned the owner).
+    expect(filled?.userId).toBe(forest.ownerId);
+    const [colleague] = await db
+      .insert(schema.userTable)
+      .values({
+        id: "user-colleague-tb69",
+        email: "colleague-tb69@example.com",
+        emailVerified: true,
+        name: "Colleague",
+      })
+      .returning();
+    if (!colleague) throw new Error("no colleague");
+    await db.insert(schema.workspaceUserTable).values({
+      workspaceId: forest.workspace.id,
+      userId: colleague.id,
+      role: "member",
+      joinedAt: new Date(),
+    });
+    const assigned = await forest.ownerApi("PUT", `/task/assignee/${id}`, {
+      userId: colleague.id,
+    });
+    expect(assigned.status).toBe(200);
+
+    const entry = (await entries(forest, id)).find(
+      (e) => /^key:.+:dev-1$/.test(e.actorId ?? "") && "status" in e.changes,
+    );
+    const undone = await forest.owner(rollback(id, String(entry?.id)), {});
+    expect(undone.status).toBe(200);
+    expect(await taskRow(id)).toMatchObject({
+      status: before?.status,
+      startDate: before?.startDate,
+      userId: colleague.id,
+    });
   });
 
   it("refuses to drop a later edit of the same field, and undoes in order", async () => {

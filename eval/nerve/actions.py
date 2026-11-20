@@ -2,7 +2,8 @@
 """Авто-действия Нерва (П8, П10; d-pipe-nerve, владелец 28.10: «автозапуск и авто-действия делаем»).
 
 1. Предвестник лимита: окно 5 ч израсходовано на warn_at от квоты окна → всем активным ролям «допиши шаг и
-   work_state». Квота окна — медиана расхода до сбоя в последних волнах лимита (калибруется сама на каждой волне).
+   work_state». Квота окна — медиана расхода до сбоя в последних волнах лимита (калибруется сама на каждой волне);
+   волна помнит аккаунт входа, квота — по волнам своего аккаунта, без них — по тарифу (account.py, 19.11).
 2. Лимит аккаунта сработал → тапы молчат до сброса; Координатору — одна строка.
 3. Сброс лимита → активные роли будятся строкой «лимит снят». Если сброс ночью — в начале дня.
 4. Недельный лимит → пункт владельцу в очереди (вид check), один на сброс.
@@ -10,10 +11,13 @@
 """
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
+import account
 import budget
 import sources
+import wake
 from journal import DIGEST, NERVOUS
 
 
@@ -36,9 +40,12 @@ def calibrate_waves(ctx, meter, days=7):
     return out
 
 
-def quota5(st, cfg):
-    usd = [w["usd"] for w in st["waves"][-cfg["budget"]["waves_for_quota"]:] if w["usd"] > 0]
-    q = budget.median(usd)
+def quota5(st, cfg, acct=account.CURRENT):
+    """Квота окна 5 ч: по волнам аккаунта входа, без них — по волнам других, пересчитанным по тарифу (account.quota).
+    Источник квоты — в st["quota_src"]: account · tier · all · default."""
+    if acct is account.CURRENT:
+        acct = account.observe(st, time.time())
+    q, st["quota_src"] = account.quota(st["waves"], cfg["budget"]["waves_for_quota"], acct)
     return q if q else cfg["budget"]["quota5h_default"]
 
 
@@ -101,10 +108,16 @@ def poll_budget(ctx):
                      f"лимит снят ({why}): продолжай с work_state", "budget")
             st["limit"] = None
             # Сброс прошёл — Esc, и ночью тоже (resume там 08:30, а подъём идёт веткой early). До сброса — смена
-            # аккаунта владельцем: клавиш нет, ложный подъём не съест Esc сброса.
+            # аккаунта владельцем (SE-187 A): Esc своим ключом, а в сброс — ещё раз (подъём был ложный — роль снова
+            # в меню): ключи подъёмов разные, Esc сброса не съеден.
             if now_l >= _dt(lim["reset"]):
-                unstick_roles(ctx, lim["reset"])
+                wake.start(ctx, st, lim["reset"], lim["hit"], lim["reset"], f"сброс {_dt(lim['reset']):%d.%m %H:%M}")
+            else:
+                wake.start(ctx, st, f"early:{lim['hit']}", lim["hit"], lim["reset"], f"ранний подъём (лимит "
+                           f"{lim['hit'][11:16]}, сброс {_dt(lim['reset']):%d.%m %H:%M})")
+                st.setdefault("unstick_due", []).append({"reset": lim["reset"], "hit": lim["hit"]})
             lim = None
+    wake.due(ctx, st, now_l)
 
     q = quota5(st, cfg)
     # Окно 5 ч начинается не раньше последнего отказа: дальше либо простой до сброса (расход 0),
@@ -121,6 +134,7 @@ def poll_budget(ctx):
                     f"окно 5 ч израсходовано на {round(share5 * 100)}% (${used:.0f} из ~${q:.0f} до прошлых "
                     f"сбоев): допиши шаг, запиши work_state, тяжёлое не начинай", "budget"):
             st["warned"] = _iso(now_l)
+    wake.step(ctx, st, now_l, share5 is not None and share5 >= b["warn_at"])
     mode = budget.decide_mode(now_l, share5, _dt(lim["resume"]) if lim else None, cfg)
     mode.update(quota5=round(q, 1), used5=round(used, 1), window_from=_iso(ws),
                 week_usd=round(meter.total(budget.week_start(now_l, *_week(cfg))), 1), at=_iso(now_l))
@@ -133,24 +147,6 @@ def _week(cfg):
     hh, mm = (int(x) for x in w["time"].split(":"))
     return w["weekday"], hh, mm
 
-
-def unstick_roles(ctx, reset):
-    """SE-174: в момент сброса закрыть меню лимита Claude Code в панелях ролей (eval/tools/limit_unstick.py). Триггер —
-    сброс в самом демоне, не событие журнала (S4). Один Esc на линию за сброс — ключ журнала. Сбой не валит бюджет."""
-    if not ctx.deliver or not ctx.cfg["budget"].get("unstick"):  # выключатель — budget.unstick в instances/_shared.json
-        return
-    pre = f"limit:unstick:{reset}:"
-    try:
-        import limit_unstick
-        done = limit_unstick.unstick(lambda line: pre + line not in ctx.journal.keys)
-    except Exception as e:  # noqa: BLE001 — tmux или ps недоступны: роли ждут владельца, как до SE-174
-        ctx.emit(f"{pre}error", "nerve.error", DIGEST, ["release"], f"меню лимита не закрыто: {type(e).__name__}: "
-                 f"{e}"[:200], "budget")
-        return
-    for d in done:
-        ctx.emit(pre + d["line"], "limit.unstick", DIGEST, ["coord"],
-                 f"{d['role'] or 'роль'} ({d['line']}, панель {d['pane']}): меню лимита — {d['action']}"
-                 + (f"; sha256 {d['sha256'][:16]}" if d["sha256"] else ""), "budget", sha256=d["sha256"])
 
 
 def _on_limit(ctx, st, meter, ts, text):
@@ -169,8 +165,11 @@ def _on_limit(ctx, st, meter, ts, text):
              f"лимит аккаунта ({'неделя' if kind == 'weekly' else 'окно 5 ч'}) в {ts_l:%H:%M}: команда стоит до "
              f"{reset:%d.%m %H:%M}, Нерв разбудит роли сам", "budget")
     if kind == "session" and all(w.get("reset") != _iso(reset) for w in st["waves"]):
-        st["waves"].append({"hit": _iso(ts_l), "reset": _iso(reset),
-                            "usd": round(meter.total(reset - timedelta(hours=5), ts), 2)})
+        wave = {"hit": _iso(ts_l), "reset": _iso(reset), "usd": round(meter.total(reset - timedelta(hours=5), ts), 2)}
+        acct = account.observe(st, ctx.now.timestamp())
+        if acct and acct["since"] <= ts.timestamp():  # вход сменили позже отказа — чей отказ, не знаем: без метки
+            wave.update(acct=acct["id"], mult=acct["mult"])
+        st["waves"].append(wave)
         st["waves"] = st["waves"][-50:]
     resume = budget.resume_at(reset, ctx.cfg)
     cur = st.get("limit")

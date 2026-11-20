@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
-import { getMemoryReader } from "./memory-reader";
+import { getMemoryReader, memoryRoots } from "./memory-reader";
 
 const TOKEN = "synthetic-proxy-token-for-tests-only-111111";
 const KEYS = [
@@ -59,5 +59,35 @@ describe("getMemoryReader and the proxy token", () => {
 
     expect(fresh.stale).toBe(false);
     expect(seen).toEqual([TOKEN, undefined]);
+  });
+});
+
+// TB-58 (R-002): the claude-mem project roots of one workspace.
+describe("memoryRoots", () => {
+  const env = (value: string) => ({ CLAUDE_MEM_PROJECTS: value });
+
+  it("reads the roots of the workspace from the pair list", () => {
+    const map = env(" ws1 = tAIBE | tAIBE-lab , ws2=HR_Helper-v2,ws3=terminal");
+    expect(memoryRoots("ws1", map)).toEqual(["tAIBE", "tAIBE-lab"]);
+    expect(memoryRoots("ws2", map)).toEqual(["HR_Helper-v2"]);
+  });
+
+  it("gives no roots to a workspace that is not on the list (fail closed)", () => {
+    expect(memoryRoots("ws9", env("ws1=tAIBE"))).toEqual([]);
+    expect(memoryRoots("ws1", {})).toEqual([]);
+    expect(memoryRoots("ws1", env("ws1="))).toEqual([]);
+    expect(memoryRoots("ws1", env("=tAIBE"))).toEqual([]);
+  });
+
+  it("drops a root outside the proxy's form and keeps at most 4", () => {
+    expect(memoryRoots("ws1", env("ws1=a/b|t AIBE||tAIBE|tAIBE"))).toEqual([
+      "tAIBE",
+    ]);
+    expect(memoryRoots("ws1", env("ws1=a|b|c|d|e"))).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ]);
   });
 });

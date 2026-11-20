@@ -34,7 +34,14 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock("@/lib/toast", () => ({ toast: { error: vi.fn() } }));
+const fresh = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("@/components/reauth/use-fresh-session", () => ({
+  useFreshSession: () => ({ run: fresh.run, dialog: null }),
+}));
 
+const { toast } = await import("@/lib/toast");
+const { ReauthCancelledError, SessionNotFreshError } =
+  await import("@/lib/reauth/reauth-errors");
 const { Route } = await import("./approve");
 const Page = Route.options.component as ComponentType;
 
@@ -48,6 +55,7 @@ beforeEach(() => {
   m.device.mockResolvedValue({ data: {}, error: null });
   m.device.approve.mockResolvedValue({ data: {}, error: null });
   m.device.deny.mockResolvedValue({ data: {}, error: null });
+  fresh.run.mockImplementation((action: () => Promise<unknown>) => action());
 });
 afterEach(cleanup);
 
@@ -102,4 +110,38 @@ it("sends signed-out visitors to sign in and back to this request", () => {
     to: "/auth/sign-in",
     search: { redirect: "/device/approve?user_code=WDJBMJHT" },
   });
+});
+
+// TB-31 R-5, owner taibe-d-tb31-agent-key-1811 = A.
+it("approves through the fresh sign-in window; a closed window approves nothing", async () => {
+  m.device.approve.mockResolvedValue({
+    data: null,
+    error: {
+      code: "SESSION_NOT_FRESH",
+      message: "Confirm it's you to continue.",
+      methods: ["password"],
+    },
+  });
+  fresh.run.mockImplementation(async (action: () => Promise<unknown>) => {
+    await expect(action()).rejects.toBeInstanceOf(SessionNotFreshError);
+    throw new ReauthCancelledError();
+  });
+  render(<Page />);
+  const approve = screen.getByRole("button", {
+    name: "auth:device.approve.approve",
+  });
+  fireEvent.click(approve);
+  await waitFor(() => expect(approve).not.toBeDisabled());
+  expect(fresh.run).toHaveBeenCalledTimes(1);
+  expect(toast.error).not.toHaveBeenCalled();
+  expect(screen.queryByText("auth:device.approved.description")).toBeNull();
+});
+
+it("denies without the window", async () => {
+  render(<Page />);
+  fireEvent.click(
+    screen.getByRole("button", { name: "auth:device.approve.deny" }),
+  );
+  await screen.findByText("auth:device.denied.description");
+  expect(fresh.run).not.toHaveBeenCalled();
 });

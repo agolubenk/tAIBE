@@ -15,12 +15,16 @@ import { ThemeProvider } from "./components/providers/theme-provider";
 import { ErrorBoundary } from "./components/ui/error-boundary";
 import { ShortcutListener } from "./lib/shortcuts/shortcut-listener";
 import { captureCheckoutIntent } from "./lib/checkout-intent";
+import { installCssPreloadReload } from "./lib/chunk-reload";
 import { AppI18nProvider } from "./lib/i18n/provider";
 import { routeTree } from "./routeTree.gen";
 
 // Capture a pricing-page `?checkout=<plan>-<interval>` deep link before the
 // router runs and strips it across the sign-up → onboarding redirect chain.
 captureCheckoutIntent();
+
+// A chunk's CSS missing after a deploy reloads the page once (TB-127).
+installCssPreloadReload();
 
 console.log(`
                      ////////  
