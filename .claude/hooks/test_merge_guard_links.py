@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from merge_guard_testkit import D9, HOME, ROOT, TMP, bash, finish  # noqa: E402
+from merge_guard_testkit import D9, HOME, ROOT, TMP, bash, check, finish  # noqa: E402
 
 C, SET, RULES, ZE = "." + "claude", "settings" + ".json", "ru" + "les", "." + "zsh" + "env"
 CL = f"{ROOT}/{C}"
@@ -85,6 +85,16 @@ deny = [
     ("unzip в корне", f"cd {ROOT} && unzip -o {O}/e.zip"),
     # интерпретатор — как было (MORE_WRITES)
     ("python os.link", f"python3 -c \"import os; os.link('{CL}/{SET}', '{O}/h9')\""),
+    # B1 (Контроль, #508): путь, который разбор не видит, у mv и rm/chmod в набранной команде
+    ("$(…) в mv", f"mv \"$(printf .cla)ude\" {O}/c8"),
+    ("$(…) в rm", f"rm -rf \"$(echo {C})\""),
+    ("неизвестная переменная в rm", "rm -rf $IS249_NOPE"),
+    ("неизвестная переменная — цель mv", f"mv {O}/x/{SET} \"$IS249_NOPE/\""),
+    ("обратные кавычки в chmod", "chmod -R a-w `echo x`"),
+    ("$(cat …) в git rm", f"git rm -r \"$(cat {O}/a.txt)\""),
+    ("переменная из read", f"read d < {O}/a.txt; rm -rf \"$d\""),
+    ("mktemp -u — имя без файла", "D=$(mktemp -d -u); rm -rf \"$D\""),
+    ("путь mktemp виден: папка над ним", f"cd {ROOT} && rm -rf \"$(mktemp -d {C}/t.XXXX)/..\""),
 ]
 for label, cmd in deny:
     bash(f"IS-249, отказ — {label}: {cmd}", cmd, True)
@@ -102,7 +112,12 @@ for label, cmd, cwd in [
     ("rsync --link-dest на чужую папку", f"rsync -a --link-dest={O}/prev {O}/x/ {O}/snap/", ROOT),
     ("переименование", f"mv {O}/a.txt {O}/a2.txt", ROOT),
     ("перенос в папку над корнем", f"mv {O}/a.txt {TMP}/", ROOT),
-    ("перенос невидимого источника (sync-agent-skills.sh)", f"mv \"$(mktemp)\" {O}/out.txt", ROOT),
+    ("перенос нового файла из mktemp (sync-agent-skills.sh)", f"mv \"$(mktemp)\" {O}/out.txt", ROOT),
+    ("rm папки из mktemp через переменную", "D=$(mktemp -d); rm -rf \"$D\"", ROOT),
+    ("mktemp -t и переменная", f"F=$(mktemp -t is249); mv \"$F\" {O}/out2.txt", ROOT),
+    ("переменная из той же команды", "tmp=/tmp/is249.x; rm -rf \"$tmp\"", ROOT),
+    ("$HOME, $TMPDIR и $$", "rm -rf \"$HOME/is249-x\" \"$TMPDIR/is249-y\" /tmp/is249.$$", ROOT),
+    ("цикл по словам", f"for f in a b; do rm -f {O}/$f.orig; done", ROOT),
     ("незащищённый файл из <слой>", f"mv {CL}/notes.md {O}/", ROOT),
     ("копия чужого файла в <слой>/", f"cp {O}/a.txt {CL}/", ROOT),
     ("копия settings.json наружу", f"cp {CL}/{SET} {O}/bak.json", ROOT),
@@ -117,5 +132,17 @@ for label, cmd, cwd in [
     ("unzip -l в корне", f"unzip -l {O}/e.zip", ROOT),
 ]:
     bash(f"IS-249, проход — {label}: {cmd}", cmd, False, cwd=cwd)
+
+# --- B1: скрипт с основной ветки (same_blob, как Makefile #402) — прежнее правило; скрипт, которого там нет, — отказ ---
+import merge_guard_git  # noqa: E402
+
+(O / "reviewed.sh").write_text("rm -rf \"$1\"\n")
+(O / "scratch.sh").write_text("rm -rf \"$1\"\n")
+blob_rule, asked = merge_guard_git.same_blob, []
+merge_guard_git.same_blob = lambda p, data: asked.append(data) or p.endswith("reviewed.sh")
+bash("IS-249, проход — скрипт с основной ветки: rm -rf \"$1\"", f"bash {O}/reviewed.sh {O}/x", False)
+bash("IS-249, отказ — скрипт не с основной ветки: rm -rf \"$1\"", f"bash {O}/scratch.sh {O}/x", True)
+merge_guard_git.same_blob = blob_rule
+check("IS-249, same_blob — на прочтённых байтах обоих скриптов", None if asked and set(asked) == {b"rm -rf \"$1\"\n"} else asked, False)
 
 finish(", IS-249: ссылки, перенос и удаление папки с законами")
