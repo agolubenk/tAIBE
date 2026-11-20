@@ -2,10 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { isReauthMethod, isSessionNotFresh, REAUTH_ERRORS } from "./reauth";
 
 describe("reauth contract", () => {
-  it("accepts only the slice A methods", () => {
+  it("accepts only the contract methods", () => {
     expect(isReauthMethod("password")).toBe(true);
     expect(isReauthMethod("emailCode")).toBe(true);
-    expect(isReauthMethod("passkey")).toBe(false);
+    expect(isReauthMethod("passkey")).toBe(true);
+    expect(isReauthMethod("webauthn")).toBe(false);
     expect(isReauthMethod(undefined)).toBe(false);
   });
 

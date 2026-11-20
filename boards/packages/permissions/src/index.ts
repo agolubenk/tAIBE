@@ -122,6 +122,16 @@ export {
 } from "./pipeline-toggles.js";
 
 export {
+  PASSKEY_ALERT_PAGE,
+  PASSKEY_ALERT_ROUTES,
+  PASSKEY_ALERT_TTL_DAYS,
+  PASSKEY_ERRORS,
+  PASSKEY_MAX_PER_USER,
+  type PasskeyAlertInspect,
+  type PasskeyError,
+} from "./passkey.js";
+
+export {
   isReauthMethod,
   isSessionNotFresh,
   REAUTH_CODE_LENGTH,
@@ -137,3 +147,13 @@ export {
   type ReauthErrorBody,
   type ReauthMethod,
 } from "./reauth.js";
+
+export {
+  isAllowedUsername,
+  isEmailLogin,
+  RESERVED_USERNAMES,
+  USERNAME_MAX_LENGTH,
+  USERNAME_MIN_LENGTH,
+  type UsernameProblem,
+  usernameProblem,
+} from "./username.js";

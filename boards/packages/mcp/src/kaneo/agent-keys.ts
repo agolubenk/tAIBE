@@ -54,9 +54,16 @@ export class AgentKeys {
       agent?: AgentKey["agent"];
       expiresAt?: string | null;
       message?: string;
+      code?: string;
     } | null;
     if (!res.ok || !body?.key || !body.agent) {
-      const why = body?.message ?? `HTTP ${res.status}`;
+      // TB-31 R-5: the client already signed in on the device once more for
+      // this refusal (KaneoClient.issueAgentKey); the server log says why the
+      // new session got no device mark.
+      const why =
+        body?.code === "SESSION_NOT_FRESH"
+          ? "the server refused this device session for agent keys (SESSION_NOT_FRESH) even after a new device sign-in; see the server log, or use KANEO_API_KEY"
+          : (body?.message ?? `HTTP ${res.status}`);
       throw new Error(
         `agent key for ${identity.session ?? identity.harness}: ${why}`,
       );

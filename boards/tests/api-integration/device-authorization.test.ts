@@ -8,14 +8,21 @@ import { createWorkspaceMember } from "./helpers/fixtures";
 
 const origin = "http://localhost:5173";
 
+// A new cookie replaces the one of the same name, as in a browser. Appended,
+// the sign-up session would stay first and win: it is not fresh (TB-31 R-5),
+// and the device approval is under the guard.
 function mergeCookieJar(cookieJar: string, res: Response): string {
-  const incoming = res.headers.getSetCookie?.() ?? [];
-  if (incoming.length === 0) {
-    return cookieJar;
+  const jar = new Map(
+    cookieJar
+      .split("; ")
+      .filter(Boolean)
+      .map((pair) => [pair.split("=")[0], pair] as const),
+  );
+  for (const setCookie of res.headers.getSetCookie?.() ?? []) {
+    const pair = setCookie.split(";")[0];
+    if (pair) jar.set(pair.split("=")[0], pair);
   }
-  const pairs = incoming.map((c) => c.split(";")[0]).filter(Boolean);
-  const prefix = cookieJar ? `${cookieJar}; ` : "";
-  return `${prefix}${pairs.join("; ")}`;
+  return [...jar.values()].join("; ");
 }
 
 async function hashApiKeyForTest(key: string): Promise<string> {

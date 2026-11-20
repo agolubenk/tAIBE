@@ -1,6 +1,8 @@
 import { REAUTH_ERRORS, type ReauthErrorBody } from "@kaneo/permissions";
 import { APIError, type getSessionFromCtx } from "better-auth/api";
 import { adminEmailChanges } from "../user/controllers/clear-email-verification-on-admin-change";
+import { setsLogin } from "../username/username-login";
+import { canUpdateUsers } from "./admin-role";
 import { availableMethods } from "./methods";
 import { isSessionFresh } from "./store";
 
@@ -9,7 +11,7 @@ type GuardContext = Parameters<typeof getSessionFromCtx>[0];
 /** The session a guarded endpoint will act for. */
 export type GuardSession = {
   session: { id: string; impersonatedBy?: string | null };
-  user: { id: string };
+  user: { id: string; role?: string | null };
 };
 
 /**
@@ -27,35 +29,91 @@ export type SessionResolver = (
 /**
  * TB-31 R-5, slice A. `/list-sessions` and `/unlink-account` are here
  * because `session.freshAge` is 0: better-auth no longer checks them itself.
- * Slice B adds the passkey routes, the username and the email change.
+ * Slice B: an admin setting a user's password or signing in as a user takes
+ * the account like an email change does (owner, taibe-d-tb31-scope-1811 = A).
+ * `/device/approve` gives a device a session that issues agent keys without a
+ * confirmation (owner, taibe-d-tb31-agent-key-1811 = A): the approval is the
+ * confirmation. `/update-user` that sets the login (R-1) is guarded: the login
+ * signs in like the email does. Adding and removing a passkey (R-6) is guarded
+ * here, not by the plugin's `freshSessionMiddleware`: that one reads the
+ * session age, and `freshAge` is 0. The email change follows.
  */
 const ALWAYS_GUARDED = new Set([
   "/api-key/create",
   "/delete-user",
   "/list-sessions",
   "/unlink-account",
+  "/admin/set-user-password",
+  "/admin/impersonate-user",
+  "/device/approve",
+  "/passkey/generate-register-options",
+  "/passkey/verify-registration",
+  "/passkey/delete-passkey",
 ]);
 
-async function needsFreshSession(ctx: GuardContext): Promise<boolean> {
-  if (ALWAYS_GUARDED.has(ctx.path)) return true;
-  if (ctx.path !== "/admin/update-user") return false;
-  const body = ctx.body as { userId?: unknown; data?: unknown } | undefined;
-  const data = body?.data;
+/** What a route needs: always a fresh session, only for an email change, or nothing. */
+function guardKind(ctx: GuardContext): "always" | "admin-email" | null {
+  if (ALWAYS_GUARDED.has(ctx.path)) return "always";
+  if (ctx.path === "/update-user") return setsLogin(ctx.body) ? "always" : null;
+  if (ctx.path !== "/admin/update-user") return null;
+  const data = (ctx.body as { data?: unknown } | undefined)?.data;
   if (!data || typeof data !== "object" || !Object.hasOwn(data, "email"))
-    return false;
-  const userId = body?.userId;
-  const email = (data as { email?: unknown }).email;
+    return null;
+  return "admin-email";
+}
+
+/**
+ * `/admin/update-user` with an email needs a fresh session when the email
+ * changes. The target is read only for a role that may update users (release
+ * N14): for any other caller, the guard's 403 against the plugin's 403 would
+ * tell whether an email is that user's. Such a caller is guarded unread.
+ */
+async function adminEmailNeedsFresh(
+  ctx: GuardContext,
+  role: string | null | undefined,
+): Promise<boolean> {
+  const body = ctx.body as { userId?: unknown; data: { email?: unknown } };
+  const userId = body.userId;
+  const email = body.data.email;
   // better-auth coerces userId (`z.coerce.string()`): ["id"] acts on "id".
   // Anything but two strings is guarded, not guessed.
   if (typeof userId !== "string" || typeof email !== "string") return true;
+  if (!canUpdateUsers(role)) return true;
   return adminEmailChanges(userId, email);
 }
 
-export function notFreshError(body: Omit<ReauthErrorBody, "message">) {
-  return new APIError("FORBIDDEN", {
-    message: "Confirm it's you to continue.",
-    ...body,
-  });
+export const NOT_FRESH_MESSAGE = "Confirm it's you to continue.";
+
+export type NotFreshBody = Omit<ReauthErrorBody, "message">;
+
+export function notFreshError(body: NotFreshBody) {
+  return new APIError("FORBIDDEN", { message: NOT_FRESH_MESSAGE, ...body });
+}
+
+/**
+ * The SESSION_NOT_FRESH body for a session that may not act now, or null.
+ * An impersonated session never may: the person behind it is the admin.
+ * `alsoPasses` lets a route accept another mark (the device flow's).
+ */
+export async function staleSessionRefusal(
+  session: GuardSession["session"],
+  userId: string,
+  alsoPasses?: (sessionId: string, userId: string) => Promise<boolean>,
+): Promise<NotFreshBody | null> {
+  // `impersonatedBy` comes from the admin plugin's session fields.
+  if (session.impersonatedBy) {
+    return {
+      code: REAUTH_ERRORS.sessionNotFresh,
+      methods: [],
+      impersonated: true,
+    };
+  }
+  if (alsoPasses && (await alsoPasses(session.id, userId))) return null;
+  if (await isSessionFresh(session.id, userId)) return null;
+  return {
+    code: REAUTH_ERRORS.sessionNotFresh,
+    methods: await availableMethods(userId, false),
+  };
 }
 
 /**
@@ -70,21 +128,13 @@ export async function assertFreshSession(
   resolveSession: SessionResolver,
 ): Promise<void> {
   if (!ctx.request) return;
-  if (!(await needsFreshSession(ctx))) return;
+  const kind = guardKind(ctx);
+  if (!kind) return;
   const found = await resolveSession(ctx.headers ?? ctx.request.headers);
   if (!found?.session) return;
   const { session, user } = found;
-  // `impersonatedBy` comes from the admin plugin's session fields.
-  if ((session as { impersonatedBy?: string | null }).impersonatedBy) {
-    throw notFreshError({
-      code: REAUTH_ERRORS.sessionNotFresh,
-      methods: [],
-      impersonated: true,
-    });
-  }
-  if (await isSessionFresh(session.id, user.id)) return;
-  throw notFreshError({
-    code: REAUTH_ERRORS.sessionNotFresh,
-    methods: await availableMethods(user.id, false),
-  });
+  if (kind === "admin-email" && !(await adminEmailNeedsFresh(ctx, user.role)))
+    return;
+  const refused = await staleSessionRefusal(session, user.id);
+  if (refused) throw notFreshError(refused);
 }

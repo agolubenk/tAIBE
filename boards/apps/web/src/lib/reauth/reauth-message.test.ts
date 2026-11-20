@@ -56,4 +56,22 @@ describe("reauthMessage", () => {
       "auth:reauth.errors.failed",
     );
   });
+
+  it("reads a 401 of a key by its code, not as a sign-out (R-6)", () => {
+    expect(reauthMessage(failure(401, "USER_VERIFICATION_REQUIRED")).key).toBe(
+      "auth:reauth.errors.userVerificationRequired",
+    );
+    expect(reauthMessage(failure(401, "PASSKEY_NOT_FOUND")).key).toBe(
+      "auth:reauth.errors.passkeyNotFound",
+    );
+    expect(reauthMessage(failure(401, "AUTHENTICATION_FAILED")).key).toBe(
+      "auth:reauth.errors.failed",
+    );
+    expect(reauthMessage(failure(403, "REAUTH_USER_MISMATCH")).key).toBe(
+      "auth:reauth.errors.userMismatch",
+    );
+    expect(reauthMessage(failure(401)).key).toBe(
+      "auth:reauth.errors.signedOut",
+    );
+  });
 });

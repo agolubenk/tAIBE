@@ -895,6 +895,15 @@
 						},
 						"continueWithEmail": {
 							"type": "string"
+						},
+						"loginOrEmail": {
+							"type": "string"
+						},
+						"loginOrEmailPlaceholder": {
+							"type": "string"
+						},
+						"invalidLogin": {
+							"type": "string"
 						}
 					},
 					"required": [
@@ -912,7 +921,10 @@
 						"passwordRequired",
 						"passwordTooShort",
 						"disposableEmail",
-						"continueWithEmail"
+						"continueWithEmail",
+						"loginOrEmail",
+						"loginOrEmailPlaceholder",
+						"invalidLogin"
 					]
 				},
 				"checkEmail": {
@@ -1123,9 +1135,27 @@
 					"properties": {
 						"failedSignIn": {
 							"type": "string"
+						},
+						"invalidCredentials": {
+							"type": "string"
+						},
+						"rateLimited": {
+							"type": "string"
+						},
+						"rateLimitedFor": {
+							"type": "string"
+						},
+						"offline": {
+							"type": "string"
 						}
 					},
-					"required": ["failedSignIn"]
+					"required": [
+						"failedSignIn",
+						"invalidCredentials",
+						"rateLimited",
+						"rateLimitedFor",
+						"offline"
+					]
 				},
 				"invitation": {
 					"type": "object",
@@ -2316,6 +2346,15 @@
 								},
 								"stillNotFresh": {
 									"type": "string"
+								},
+								"userMismatch": {
+									"type": "string"
+								},
+								"userVerificationRequired": {
+									"type": "string"
+								},
+								"passkeyNotFound": {
+									"type": "string"
 								}
 							},
 							"required": [
@@ -2330,8 +2369,27 @@
 								"rateLimitedFor",
 								"signedOut",
 								"failed",
-								"stillNotFresh"
+								"stillNotFresh",
+								"userMismatch",
+								"userVerificationRequired",
+								"passkeyNotFound"
 							]
+						},
+						"usePasskey": {
+							"type": "string"
+						},
+						"passkey": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"explain": {
+									"type": "string"
+								},
+								"submit": {
+									"type": "string"
+								}
+							},
+							"required": ["explain", "submit"]
 						}
 					},
 					"required": [
@@ -2344,6 +2402,143 @@
 						"lockedOut",
 						"impersonated",
 						"noMethod",
+						"errors",
+						"usePasskey",
+						"passkey"
+					]
+				},
+				"passkey": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"signIn": {
+							"type": "string"
+						},
+						"errors": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"userVerificationRequired": {
+									"type": "string"
+								},
+								"limitReached": {
+									"type": "string"
+								},
+								"previouslyRegistered": {
+									"type": "string"
+								},
+								"notFound": {
+									"type": "string"
+								},
+								"wrongAddress": {
+									"type": "string"
+								},
+								"offline": {
+									"type": "string"
+								},
+								"rateLimited": {
+									"type": "string"
+								},
+								"failed": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"userVerificationRequired",
+								"limitReached",
+								"previouslyRegistered",
+								"notFound",
+								"wrongAddress",
+								"offline",
+								"rateLimited",
+								"failed"
+							]
+						}
+					},
+					"required": ["signIn", "errors"]
+				},
+				"passkeyAlert": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"pageTitle": {
+							"type": "string"
+						},
+						"title": {
+							"type": "string"
+						},
+						"description": {
+							"type": "string"
+						},
+						"descriptionRemoved": {
+							"type": "string"
+						},
+						"effect": {
+							"type": "string"
+						},
+						"confirm": {
+							"type": "string"
+						},
+						"confirmRemoved": {
+							"type": "string"
+						},
+						"itWasMe": {
+							"type": "string"
+						},
+						"doneTitle": {
+							"type": "string"
+						},
+						"doneDescription": {
+							"type": "string"
+						},
+						"resetPassword": {
+							"type": "string"
+						},
+						"invalidTitle": {
+							"type": "string"
+						},
+						"invalidDescription": {
+							"type": "string"
+						},
+						"toSignIn": {
+							"type": "string"
+						},
+						"retry": {
+							"type": "string"
+						},
+						"errors": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"rateLimited": {
+									"type": "string"
+								},
+								"offline": {
+									"type": "string"
+								},
+								"failed": {
+									"type": "string"
+								}
+							},
+							"required": ["rateLimited", "offline", "failed"]
+						}
+					},
+					"required": [
+						"pageTitle",
+						"title",
+						"description",
+						"descriptionRemoved",
+						"effect",
+						"confirm",
+						"confirmRemoved",
+						"itWasMe",
+						"doneTitle",
+						"doneDescription",
+						"resetPassword",
+						"invalidTitle",
+						"invalidDescription",
+						"toSignIn",
+						"retry",
 						"errors"
 					]
 				}
@@ -2364,7 +2559,9 @@
 				"page",
 				"device",
 				"mcp",
-				"reauth"
+				"reauth",
+				"passkey",
+				"passkeyAlert"
 			]
 		},
 		"settings": {
@@ -3708,6 +3905,83 @@
 						},
 						"emailHint": {
 							"type": "string"
+						},
+						"login": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"label": {
+									"type": "string"
+								},
+								"placeholder": {
+									"type": "string"
+								},
+								"save": {
+									"type": "string"
+								},
+								"saved": {
+									"type": "string"
+								},
+								"saveHint": {
+									"type": "string"
+								},
+								"emptyHint": {
+									"type": "string"
+								},
+								"problems": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"tooShort": {
+											"type": "string"
+										},
+										"tooLong": {
+											"type": "string"
+										},
+										"invalid": {
+											"type": "string"
+										},
+										"reserved": {
+											"type": "string"
+										},
+										"taken": {
+											"type": "string"
+										},
+										"rateLimited": {
+											"type": "string"
+										},
+										"rateLimitedFor": {
+											"type": "string"
+										},
+										"offline": {
+											"type": "string"
+										},
+										"failed": {
+											"type": "string"
+										}
+									},
+									"required": [
+										"tooShort",
+										"tooLong",
+										"invalid",
+										"reserved",
+										"taken",
+										"rateLimited",
+										"rateLimitedFor",
+										"offline",
+										"failed"
+									]
+								}
+							},
+							"required": [
+								"label",
+								"placeholder",
+								"save",
+								"saved",
+								"saveHint",
+								"emptyHint",
+								"problems"
+							]
 						}
 					},
 					"required": [
@@ -3723,7 +3997,8 @@
 						"validation",
 						"avatar",
 						"deleteAccount",
-						"emailHint"
+						"emailHint",
+						"login"
 					]
 				},
 				"notificationsPage": {
@@ -10675,6 +10950,118 @@
 						"pipelineSubtitle",
 						"toggles"
 					]
+				},
+				"passkeys": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"title": {
+							"type": "string"
+						},
+						"description": {
+							"type": "string"
+						},
+						"add": {
+							"type": "string"
+						},
+						"continue": {
+							"type": "string"
+						},
+						"continueHint": {
+							"type": "string"
+						},
+						"limit": {
+							"type": "string"
+						},
+						"emptyTitle": {
+							"type": "string"
+						},
+						"emptyDescription": {
+							"type": "string"
+						},
+						"loadError": {
+							"type": "string"
+						},
+						"unnamed": {
+							"type": "string"
+						},
+						"multiDevice": {
+							"type": "string"
+						},
+						"singleDevice": {
+							"type": "string"
+						},
+						"added": {
+							"type": "string"
+						},
+						"actions": {
+							"type": "string"
+						},
+						"rename": {
+							"type": "string"
+						},
+						"renameTitle": {
+							"type": "string"
+						},
+						"nameLabel": {
+							"type": "string"
+						},
+						"save": {
+							"type": "string"
+						},
+						"renameError": {
+							"type": "string"
+						},
+						"toastRenamed": {
+							"type": "string"
+						},
+						"delete": {
+							"type": "string"
+						},
+						"deleteTitle": {
+							"type": "string"
+						},
+						"deleteDescription": {
+							"type": "string"
+						},
+						"deleteError": {
+							"type": "string"
+						},
+						"toastDeleted": {
+							"type": "string"
+						},
+						"toastAdded": {
+							"type": "string"
+						}
+					},
+					"required": [
+						"title",
+						"description",
+						"add",
+						"continue",
+						"continueHint",
+						"limit",
+						"emptyTitle",
+						"emptyDescription",
+						"loadError",
+						"unnamed",
+						"multiDevice",
+						"singleDevice",
+						"added",
+						"actions",
+						"rename",
+						"renameTitle",
+						"nameLabel",
+						"save",
+						"renameError",
+						"toastRenamed",
+						"delete",
+						"deleteTitle",
+						"deleteDescription",
+						"deleteError",
+						"toastDeleted",
+						"toastAdded"
+					]
 				}
 			},
 			"required": [
@@ -10729,7 +11116,8 @@
 				"shared",
 				"projectCustomFields",
 				"agentsPage",
-				"workspacePipeline"
+				"workspacePipeline",
+				"passkeys"
 			]
 		},
 		"navigation": {

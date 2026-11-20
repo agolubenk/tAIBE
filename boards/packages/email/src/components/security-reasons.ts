@@ -40,3 +40,18 @@ export const reauthReason: Record<EmailLocale, Reason> = {
   "zh-tw": (email, instance = "Kaneo") =>
     `因為有人以你的身分登入 ${instance} 並要求確認身分，所以寄送至 ${email}。`,
 };
+
+// TB-31 R-6: the passkey email goes to the account's address, not to one a
+// person typed: it says so.
+export const passkeyAddedReason: Record<EmailLocale, Reason> = {
+  en: (email, instance = "Kaneo") =>
+    `Sent to ${email} because a passkey was added to your account on ${instance}.`,
+  de: (email, instance = "Kaneo") =>
+    `Gesendet an ${email}, weil deinem Konto bei ${instance} ein Passkey hinzugefügt wurde.`,
+  vi: (email, instance = "Kaneo") =>
+    `Đã gửi đến ${email} vì một khóa truy cập đã được thêm vào tài khoản của bạn trên ${instance}.`,
+  ja: (email, instance = "Kaneo") =>
+    `${instance} のあなたのアカウントにパスキーが追加されたため、${email} に送信しました。`,
+  "zh-tw": (email, instance = "Kaneo") =>
+    `因為你在 ${instance} 的帳號新增了通行金鑰，所以寄送至 ${email}。`,
+};
