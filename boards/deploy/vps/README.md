@@ -162,7 +162,9 @@ integration. A wrong token gets its own message.
 t-boards puts every pending «да» request into the owner queue (ops-console) as an item `d-tba-<id>-<nonce>` and
 applies the owner's answer itself. It is off until all four are set:
 
-1. In the ops-console, issue an agent token named `t-boards` (scope `agent`, products `hr-helper`). The name is
+1. In the ops-console, issue an agent token named `t-boards` (scope `agent`, products `hr-helper,taibe`). The queue
+   files a doc by its id prefix: a taibe doc is `taibe-…` (the plan due decision `taibe-d-due-<date>`, its state
+   `taibe-due`). Without `taibe` the token cannot write them, and the journal shows a 404 per taibe decision. The name is
    `OQ_TOKEN_NAME`: an item whose last writer has another name is treated as edited by someone else (R-4). The queue
    journal writes the author as `token:<name>`; t-boards adds the prefix itself, so `t-boards` and `token:t-boards` both
    work (TB-111).
