@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import stat
+import time
 
 from merge_guard_vars import ASSIGN, DECLARE, SUBST, computed
 
@@ -274,14 +275,15 @@ _scan = [None, 0, 0, {}]  # решение (merge_guard_git.decision), имён 
 
 
 class Unread(Exception):
-    """Маску не прочесть: шире предела (таймаут хука 10 с — пропуск; предел — счёт, не время, coord 13:27) или форма
-    zsh, которой _glob не повторяет (coord 13:46). Тогда отказ: назовите пути словами."""
+    """Отказ «назовите пути словами»: маска шире предела или срока решения (таймаут хука — пропуск) или форма zsh."""
 
 
 def _budget():
     import merge_guard_git as g  # git импортирует shell, shell — этот модуль
     if _scan[0] != g.decision():
         _scan[:] = [g.decision(), 0, 0, {}]
+    if _scan[0] and time.monotonic() > _scan[0]:  # срок решения (start_budget, 6 с): путь глубиной 400 — 3 мс (realpath
+        raise Unread("разбор масок дольше срока решения")  # — lstat на часть), предел счёта время не держит (frontend #511)
     return _scan
 
 
@@ -351,7 +353,7 @@ def _hit(word, bases, roots, protected, dirs, ext=False):
     """Путь слова от одной из bases — защищённый или папка над защищённым: что назвать в отказе, иначе None."""
     for base in bases:
         for q in _paths(base, word, ext):
-            f = os.path.realpath(q).casefold()
+            f = _budget() and os.path.realpath(q).casefold()  # срок решения — на каждый путь: вышел — Unread
             if p := protected(q, base, roots):
                 return p
             if any(d == f or d.startswith(f.rstrip("/") + "/") for d in dirs):
@@ -484,7 +486,7 @@ def _links(a, cwd, roots, protected, home, whole, bodies, hid):
         bases = [cwd] + [b for at in ats for b in (at, os.path.dirname(at))] if linking and dest else [cwd]
         found += [say(p, "даёт второе имя или уносит защищённое или папку над ним") for w in srcs if (p := hit(w, bases))]
     found += [say(p, "кладёт файл с защищённым именем") for at in ats for w in srcs for q in paths(cwd, w)
-              if (p := protected(os.path.join(at, os.path.basename(q.rstrip("/"))), cwd, roots))]
+              if _budget() and (p := protected(os.path.join(at, os.path.basename(q.rstrip("/"))), cwd, roots))]  # срок — как в _hit
     tree = cmd == "ditto" or cmd in ("cp", "rsync") and bool(
         re.search(r"[rRa]" if cmd == "cp" else r"[ra]", short) or {"--recursive", "--archive"} & set(opts))
     if tree and dest:  # содержимое (`x/.`, `x/`, ditto) и цель, которой нет, — в саму цель; иначе — в цель/имя источника
