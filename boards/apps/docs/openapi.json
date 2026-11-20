@@ -34611,6 +34611,16 @@
               }
             }
           },
+          "409": {
+            "description": "A caller with a token sent a [REDACTED:kind] marker in the name, default or options; a new field has no stored value to restore",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/ApiKeyRateLimited"
           }
@@ -34811,7 +34821,7 @@
             }
           },
           "409": {
-            "description": "A caller with a token sent [REDACTED:kind] markers that do not match the stored value; keep the markers in place",
+            "description": "A caller with a token sent [REDACTED:kind] markers that match neither the stored value nor exactly one field option per marker; keep the markers in place",
             "content": {
               "application/json": {
                 "schema": {

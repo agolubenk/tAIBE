@@ -8,6 +8,7 @@ import {
   errorResponse,
   jsonResponse,
 } from "../openapi";
+import { maskForTokenCaller } from "../utils/token-caller-text";
 import clearNotifications from "./controllers/clear-notifications";
 import createNotification from "./controllers/create-notification";
 import deleteNotification from "./controllers/delete-notification";
@@ -152,7 +153,13 @@ const deleteNotificationRoute = createRoute({
 const notification = apiRouter()
   .openapi(listNotificationsRoute, async (c) =>
     c.json(
-      await getNotifications(c.get("userId"), c.req.valid("query").workspaceId),
+      maskForTokenCaller(
+        c,
+        await getNotifications(
+          c.get("userId"),
+          c.req.valid("query").workspaceId,
+        ),
+      ),
       200,
     ),
   )
@@ -166,65 +173,90 @@ const notification = apiRouter()
       relatedEntityType,
     } = c.req.valid("json");
     return c.json(
-      await createNotification({
-        userId: c.get("userId"),
-        title,
-        content: message,
-        type,
-        eventData,
-        resourceId: relatedEntityId,
-        resourceType: relatedEntityType,
-      }),
+      maskForTokenCaller(
+        c,
+        await createNotification({
+          userId: c.get("userId"),
+          title,
+          content: message,
+          type,
+          eventData,
+          resourceId: relatedEntityId,
+          resourceType: relatedEntityType,
+        }),
+      ),
       200,
     );
   })
   .openapi(markAsReadRoute, async (c) =>
     c.json(
-      await setNotificationRead(c.req.valid("param").id, c.get("userId"), true),
+      maskForTokenCaller(
+        c,
+        await setNotificationRead(
+          c.req.valid("param").id,
+          c.get("userId"),
+          true,
+        ),
+      ),
       200,
     ),
   )
   .openapi(markAsUnreadRoute, async (c) =>
     c.json(
-      await setNotificationRead(
-        c.req.valid("param").id,
-        c.get("userId"),
-        false,
+      maskForTokenCaller(
+        c,
+        await setNotificationRead(
+          c.req.valid("param").id,
+          c.get("userId"),
+          false,
+        ),
       ),
       200,
     ),
   )
   .openapi(markAllAsReadRoute, async (c) =>
     c.json(
-      await markAllNotificationsAsRead(
-        c.get("userId"),
-        c.req.valid("query").workspaceId,
+      maskForTokenCaller(
+        c,
+        await markAllNotificationsAsRead(
+          c.get("userId"),
+          c.req.valid("query").workspaceId,
+        ),
       ),
       200,
     ),
   )
   .openapi(clearAllRoute, async (c) =>
     c.json(
-      await clearNotifications(
-        c.get("userId"),
-        c.req.valid("query").workspaceId,
+      maskForTokenCaller(
+        c,
+        await clearNotifications(
+          c.get("userId"),
+          c.req.valid("query").workspaceId,
+        ),
       ),
       200,
     ),
   )
   .openapi(clearReadRoute, async (c) =>
     c.json(
-      await clearNotifications(
-        c.get("userId"),
-        c.req.valid("query").workspaceId,
-        true,
+      maskForTokenCaller(
+        c,
+        await clearNotifications(
+          c.get("userId"),
+          c.req.valid("query").workspaceId,
+          true,
+        ),
       ),
       200,
     ),
   )
   .openapi(deleteNotificationRoute, async (c) =>
     c.json(
-      await deleteNotification(c.req.valid("param").id, c.get("userId")),
+      maskForTokenCaller(
+        c,
+        await deleteNotification(c.req.valid("param").id, c.get("userId")),
+      ),
       200,
     ),
   );
