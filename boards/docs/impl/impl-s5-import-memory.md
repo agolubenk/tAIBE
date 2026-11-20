@@ -48,14 +48,17 @@
   - Порт и хост берутся из `CLAUDE_MEM_WORKER_PORT/HOST` или настроек claude-mem.
   - Файл `~/.claude-mem/claude-mem.db` не открывается; в claude-mem ничего не пишется (R-040, N-001).
   - Есть кэш и привязка `bind.ts`.
-- Привязка (`apps/api/src/forest/memory/card-binding.ts`): наблюдение относится к карточке, если называет её одним из
-  признаков:
+- Привязка с 13.11 (TB-113, `apps/api/src/forest/memory/card-memory-keys.ts`) — точные ключи карточки, до 6:
   - id;
+  - номер `<SLUG>-<number>`;
   - Backlog ID;
-  - номер `<slug>-<number>`;
-  - ветку агента из `card_meta.branch`.
-- API: `GET /api/forest/{workspaceId}/cards/{taskId}/memory` (`memory-routes.ts`). Необязательный env
-  `CLAUDE_MEM_PROJECT` сужает поиск до проекта claude-mem.
+  - пункты очереди её запросов «да», новые первыми.
+  - Ветка больше не ключ: «main» называет тысячи чужих наблюдений. Ключ вне трёх форм (кириллица, «B-6») не ищется.
+- Поиск — маршрут прокси на Mac `GET /api/card-memory` прямо по `claude-mem.db`, только чтение (исключение R-040,
+  `deploy/vps/README.md`, «Card memory route»). Прежний просмотр окна 200 последних наблюдений через воркер снят.
+- API: `GET /api/forest/{workspaceId}/cards/{taskId}/memory` и `GET /api/forest/{workspaceId}/memory?ticketKey=|queueItemId=`
+  (`memory-routes.ts`). Пункт очереди ищется, только если пространство связано с очередью и пункт существует.
+  Кэш: минута свежий, до 24 часов «копия» (`find-card-memory.ts`). `CLAUDE_MEM_PROJECT` больше не читается.
 - Web: раздел «Память» в боковой панели карточки (`card-memory.tsx`, `use-card-memory.ts`).
 - Живая проба 28.10: из 200 просмотренных наблюдений 3 привязались к PRB-1.
 - MCP-инструмент для агентов — `forest_get_card_memory` (29.10, `impl-r037-work-state.md`).
