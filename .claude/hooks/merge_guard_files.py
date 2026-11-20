@@ -332,22 +332,26 @@ def _env(m):
     return os.environ.get(name) or ("/tmp" if name == "TMPDIR" else m[0])
 
 
-def seen_word(w, bodies, cwd):
-    """Слово с $TMPDIR/$USER/$LOGNAME — с их значением; `$(mktemp …)` и переменная из него — с путём от fresh."""
-    w = ENV_WORD.sub(_env, w)
+def seen_word(w, bodies, cwd, named=()):
+    """Слово с $TMPDIR/$USER/$LOGNAME — с их значением; `$(mktemp …)` и переменная из него — с путём от fresh. named —
+    имена, которые команда может поменять сама (`read USER`, `unset TMPDIR`, `printf -v USER`): остаются словом (Б2)."""
+    w = ENV_WORD.sub(lambda m: m[0] if (m.group(1) or m.group(2)) in named else _env(m), w)
     path = lambda k: fresh(bodies[k], cwd) if k < len(bodies) else None  # noqa: E731
     return SUBST_N.sub(lambda m: path(int(m.group(1))) or m[0], w)
 
 
-def link_findings(a, cwd, roots, protected, home, disk=False, bodies=()):
+def link_findings(a, cwd, roots, protected, home, whole=("", "", False, None, ("", "")), bodies=(), hid=()):
     """[(«file», что)]: команда даёт защищённому пути или папке над ним второе имя (ln, link, cp -l/-s, install -l,
     rsync --link-dest), уносит его (mv, git mv), кладёт в папку законов файл с защищённым именем, удаляет или меняет
-    папку (rm, chmod, git rm) или переписывает её копией папки и распаковкой. protected — protected_path хука; disk —
-    whole[2] (Disk — скрипт с диска), bodies — тексты $(…) команды. Невидимый путь: у ссылки — отказ всегда, у mv и
-    GONE — в команде, которую набрал агент, и в скрипте, которого нет на основной ветке (B1)."""
+    папку (rm, chmod, git rm) или переписывает её копией папки и распаковкой. protected — protected_path хука; whole —
+    как у classify_argv (whole[2] — Disk у скрипта с диска), bodies — тексты $(…), hid — BLIND. Невидимый путь: у
+    ссылки — отказ всегда, у mv и GONE — в команде, которую набрал агент, и в скрипте без коммита (B1)."""
     if gnu(a[0]) not in GONE | LINKS | WRITE_LAST | {"mv", "tar", "bsdtar", "unzip", "git"}:
         return []
-    a = [a[0]] + [seen_word(w, bodies, cwd) for w in a[1:]]
+    disk, text = whole[2], whole[4][1] if len(whole) > 4 else whole[1]
+    named = {n for n in ("TMPDIR", "USER", "LOGNAME", "RANDOM") if n in hid or "*" in hid or (
+        n in text and re.search(rf"(?<![$\w{{]){n}(?!\w)", text))}  # имя словом: read, unset, printf -v, export, n=
+    a = [a[0]] + [seen_word(w, bodies, cwd, named) for w in a[1:]]
     typed = lambda: not (isinstance(disk, Disk) and disk.reviewed())  # noqa: E731
     cmd, opts, ops = gnu(a[0]), [x for x in a[1:] if x.startswith("-")], [x for x in a[1:] if not x.startswith("-")]
     if cmd == "git":  # `git -C d mv .claude x`: пути — от d

@@ -96,6 +96,12 @@ deny = [
     ("переменная из read", f"read d < {O}/a.txt; rm -rf \"$d\""),
     ("mktemp -u — имя без файла", "D=$(mktemp -d -u); rm -rf \"$D\""),
     ("путь mktemp виден: папка над ним", f"cd {ROOT} && rm -rf \"$(mktemp -d {C}/t.XXXX)/..\""),
+    # Б2 (Контроль, c9ab1c1d9): имя из окружения, которое команда меняет сама, — не значение хука
+    ("read USER", f"read USER < {O}/a.txt; rm -rf \"$USER\""),
+    ("unset TMPDIR", "unset TMPDIR; rm -rf \"${TMPDIR}x\""),
+    ("printf -v USER", "printf -v USER x; rm -rf \"$USER\""),
+    ("read LOGNAME и mv", f"read LOGNAME < {O}/a.txt; mv \"$LOGNAME\" /tmp/out"),
+    ("read HOME", f"read HOME < {O}/a.txt; rm -rf \"$HOME/x\""),
 ]
 for label, cmd in deny:
     bash(f"IS-249, отказ — {label}: {cmd}", cmd, True)
@@ -119,6 +125,7 @@ for label, cmd, cwd in [
     ("переменная из той же команды", "tmp=/tmp/is249.x; rm -rf \"$tmp\"", ROOT),
     ("$HOME, $TMPDIR и $$", "rm -rf \"$HOME/is249-x\" \"$TMPDIR/is249-y\" /tmp/is249.$$", ROOT),
     ("цикл по словам", f"for f in a b; do rm -f {O}/$f.orig; done", ROOT),
+    ("export TMPDIR — значение из той же команды", "export TMPDIR=/tmp/is249; rm -rf \"$TMPDIR/y\"", ROOT),
     ("незащищённый файл из <слой>", f"mv {CL}/notes.md {O}/", ROOT),
     ("копия чужого файла в <слой>/", f"cp {O}/a.txt {CL}/", ROOT),
     ("копия settings.json наружу", f"cp {CL}/{SET} {O}/bak.json", ROOT),

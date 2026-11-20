@@ -345,7 +345,7 @@ def classify_argv(a, cwd, roots, depth, git_env, whole=("", "", False, None, (""
     if a[0] == "claude" and hooks_off(a):
         found.append(("file", "claude без хуков проекта (disableAllHooks, --setting-sources без project)"))
     found += [("file", p) for t in write_targets(a) if (p := protected_path(t, cwd, roots))]  # файл ≤ 500 строк (01-base)
-    return found + link_findings(a, cwd, roots, protected_path, HOME_CLAUDE, whole[2], (procs or {}).get(SUBS, ()))  # IS-249
+    return found + link_findings(a, cwd, roots, protected_path, HOME_CLAUDE, whole, (procs or {}).get(SUBS, ()), hid)  # IS-249
 
 
 def classify_bash(cmd, cwd, roots, depth=0, git_env=False, disk=False, written=None, outer=None, part=False, alt=False, keep=False, raw=None):
