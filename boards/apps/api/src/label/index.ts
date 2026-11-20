@@ -6,6 +6,7 @@ import {
 } from "../openapi";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
 import {
+  maskForTokenCaller,
   refuseMarkerForTokenCaller,
   restoreForTokenCaller,
 } from "../utils/token-caller-text";
@@ -220,12 +221,15 @@ const deleteLabelRoute = createRoute({
 const label = apiRouter()
   .openapi(getTaskLabelsRoute, async (c) => {
     const { taskId } = c.req.valid("param");
-    return c.json(await getLabelsByTaskId(taskId), 200);
+    return c.json(maskForTokenCaller(c, await getLabelsByTaskId(taskId)), 200);
   })
   .openapi(getWorkspaceLabelsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     return c.json(
-      await getLabelsByWorkspaceId(workspaceId, c.get("userId")),
+      maskForTokenCaller(
+        c,
+        await getLabelsByWorkspaceId(workspaceId, c.get("userId")),
+      ),
       200,
     );
   })
@@ -239,24 +243,33 @@ const label = apiRouter()
     );
     const userId = c.get("userId");
     return c.json(
-      await createLabel(name, color, taskId, workspaceId, userId),
+      maskForTokenCaller(
+        c,
+        await createLabel(name, color, taskId, workspaceId, userId),
+      ),
       200,
     );
   })
   .openapi(getLabelRoute, async (c) => {
     const { id } = c.req.valid("param");
-    return c.json(await getLabel(id), 200);
+    return c.json(maskForTokenCaller(c, await getLabel(id)), 200);
   })
   .openapi(attachLabelToTaskRoute, async (c) => {
     const { id } = c.req.valid("param");
     const { taskId } = c.req.valid("json");
     const userId = c.get("userId");
-    return c.json(await assignLabelToTask(id, taskId, userId), 200);
+    return c.json(
+      maskForTokenCaller(c, await assignLabelToTask(id, taskId, userId)),
+      200,
+    );
   })
   .openapi(detachLabelFromTaskRoute, async (c) => {
     const { id } = c.req.valid("param");
     const userId = c.get("userId");
-    return c.json(await unassignLabelFromTask(id, userId), 200);
+    return c.json(
+      maskForTokenCaller(c, await unassignLabelFromTask(id, userId)),
+      200,
+    );
   })
   .openapi(updateLabelRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -264,15 +277,21 @@ const label = apiRouter()
     const restored = await restoreForTokenCaller(c, name, () =>
       storedLabelName(id),
     );
-    return c.json(await updateLabel(id, restored, color), 200);
+    return c.json(
+      maskForTokenCaller(c, await updateLabel(id, restored, color)),
+      200,
+    );
   })
   .openapi(deleteLabelRoute, async (c) => {
     const { id } = c.req.valid("param");
     const userId = c.get("userId");
     const result = await deleteLabel(id, userId);
     if (result.pendingDeletion)
-      return c.json({ ...result, pendingDeletion: true as const }, 202);
-    return c.json(result, 200);
+      return c.json(
+        maskForTokenCaller(c, { ...result, pendingDeletion: true as const }),
+        202,
+      );
+    return c.json(maskForTokenCaller(c, result), 200);
   });
 
 export default label;

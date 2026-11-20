@@ -70,6 +70,9 @@ export const isOffPlanRow = (id: string) => /^w-[a-z0-9-]+-unplanned$/.test(id);
 // The default product owns the rows without another product's prefix, as
 // eval/tools/queue_focus.py plan_rows reads them.
 export const DEFAULT_PLAN_PRODUCT = "hr-helper";
+// The product in a queue item id (d-hr-…, d-taibe-…): hr for the default one.
+export const itemTag = (product: string) =>
+  product === DEFAULT_PLAN_PRODUCT ? "hr" : product;
 
 // The plan product of a row w-<product>-…; the longest prefix wins. null — not
 // a plan row of these products.
@@ -92,3 +95,31 @@ const LOCAL_DATE = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 export const localDate = (date: Date) => LOCAL_DATE.format(date);
+const LOCAL_TIME = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Moscow",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+// «HH:MM» in Moscow.
+export const localTime = (date: Date) => LOCAL_TIME.format(date);
+
+// Calendar arithmetic on «YYYY-MM-DD» (a longer row date counts by its day).
+const dayMs = (date: string) => Date.parse(`${date.slice(0, 10)}T00:00:00Z`);
+export const addDays = (date: string, days: number) =>
+  new Date(dayMs(date) + days * DAY_MS).toISOString().slice(0, 10);
+export const daysBetween = (from: string, to: string) =>
+  Math.round((dayMs(to) - dayMs(from)) / DAY_MS);
+
+// A copy of a row's data with a patch applied: null removes a field, as the
+// console does.
+export function withPatch(
+  data: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = { ...data, ...patch };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key];
+  }
+  return next;
+}

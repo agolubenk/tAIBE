@@ -221,5 +221,8 @@
         "plan"
       ]
     ]
+  },
+  "council": {
+    "file": "docs/ai/council.json"
   }
 }

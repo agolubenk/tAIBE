@@ -79,12 +79,42 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 export function createClaudeMemReader(
   options: ClaudeMemReaderOptions,
 ): ClaudeMemReader {
+  const get = createJsonGetter(options);
+
+  return {
+    health: () => get("/api/health", parseHealth),
+    listProjects: () => get("/api/projects", parseProjectsCatalog),
+    listObservations: (params = {}) =>
+      get(`/api/observations${queryString(params)}`, (body) =>
+        parsePage(body, parseObservation),
+      ),
+    getObservation: (id) => {
+      if (!Number.isInteger(id) || id <= 0) {
+        return Promise.reject(
+          new TypeError("observation id must be a positive integer"),
+        );
+      }
+      return get(`/api/observation/${id}`, parseObservationDetail);
+    },
+  };
+}
+
+/**
+ * One GET against the worker or the Mac proxy. `label` names the request in
+ * errors instead of the path: a card-memory query carries the card's keys,
+ * and those must not reach a log (TB-113).
+ */
+export function createJsonGetter(options: ClaudeMemReaderOptions) {
   const fetchImpl: FetchLike =
     options.fetch ?? ((input, init) => fetch(input, init));
   const baseUrl = options.baseUrl.trim().replace(/\/+$/, "");
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  async function get<T>(path: string, parse: (body: unknown) => T): Promise<T> {
+  return async function get<T>(
+    path: string,
+    parse: (body: unknown) => T,
+    label = path,
+  ): Promise<T> {
     const signals = [AbortSignal.timeout(timeoutMs)];
     if (options.signal) signals.push(options.signal);
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -110,29 +140,12 @@ export function createClaudeMemReader(
     const body = await readBody(res);
     if (!res.ok) {
       throw new ClaudeMemHttpError(
-        `claude-mem GET ${path}: HTTP ${res.status}`,
+        `claude-mem GET ${label}: HTTP ${res.status}`,
         res.status,
         body,
       );
     }
     return parse(body);
-  }
-
-  return {
-    health: () => get("/api/health", parseHealth),
-    listProjects: () => get("/api/projects", parseProjectsCatalog),
-    listObservations: (params = {}) =>
-      get(`/api/observations${queryString(params)}`, (body) =>
-        parsePage(body, parseObservation),
-      ),
-    getObservation: (id) => {
-      if (!Number.isInteger(id) || id <= 0) {
-        return Promise.reject(
-          new TypeError("observation id must be a positive integer"),
-        );
-      }
-      return get(`/api/observation/${id}`, parseObservationDetail);
-    },
   };
 }
 

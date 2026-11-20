@@ -79,3 +79,12 @@ export function readQueueToken(config: OwnerQueueConfig): string {
 export function itemIdPrefix(product: string): string {
   return product === "hr-helper" ? "" : `${product}-`;
 }
+
+// The id of a doc t-boards writes for a plan product (due, focus): hr-helper
+// keeps the form it has always had, any other product's id is its prefix
+// and the product's own form, so the queue files it under the product
+// (release lens #159: d-taibe-due-… went to the HR lane).
+export function planDocId(product: string, hrForm: string, form: string) {
+  const prefix = itemIdPrefix(product);
+  return prefix ? `${prefix}${form}` : hrForm;
+}

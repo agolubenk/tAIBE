@@ -5,9 +5,9 @@ name: infra CI
 on:
   push:
     branches: [board-agents, main]
-    paths: ["infra/**", "docs/**", ".claude/**", "**/*.md", ".github/workflows/infra-ci.yml"]
+    paths: ["infra/**", "docs/**", ".claude/**", "**/*.md", "instances/**", "eval/nerve/products.py", ".github/workflows/infra-ci.yml"]
   pull_request:
-    paths: ["infra/**", "docs/**", ".claude/**", "**/*.md", ".github/workflows/infra-ci.yml"]
+    paths: ["infra/**", "docs/**", ".claude/**", "**/*.md", "instances/**", "eval/nerve/products.py", ".github/workflows/infra-ci.yml"]
   workflow_dispatch:
 
 concurrency:
@@ -42,6 +42,7 @@ jobs:
           python3 -m pip install --quiet -r requirements.txt
           python3 selftest.py
           python3 selftest_host_root.py
+          python3 selftest_product.py
       - name: closed-items index and docs links
         run: |
           python3 infra/scripts/misc/done-index.py --check

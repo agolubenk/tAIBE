@@ -16,6 +16,7 @@ import {
   restoreForTokenCaller,
 } from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
+import { dialogMarkFor } from "../forest/dialog/dialog-store";
 import { writerKind } from "../forest/author-kind";
 import createComment from "./controllers/create-comment";
 import deleteComment from "./controllers/delete-comment";
@@ -149,6 +150,7 @@ const comment = apiRouter()
       externalUserName && externalSource
         ? { userName: externalUserName, source: externalSource }
         : undefined;
+    const dialog = await dialogMarkFor(c, taskId);
     return c.json(
       maskForTokenCaller(
         c,
@@ -158,6 +160,7 @@ const comment = apiRouter()
           content,
           external,
           writerKind(c),
+          dialog,
         ),
       ),
       200,

@@ -144,9 +144,13 @@ export const readRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(listSectorsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
     const { status } = c.req.valid("query");
-    return c.json(await listSectors(workspaceId, status), 200);
+    // TB-179: a sector's name holds its root card's title.
+    return c.json(
+      maskForTokenCaller(c, await listSectors(workspaceId, status)),
+      200,
+    );
   })
   .openapi(detectSectorsRoute, async (c) => {
     const { workspaceId } = c.req.valid("param");
-    return c.json(await detectSectors(workspaceId), 200);
+    return c.json(maskForTokenCaller(c, await detectSectors(workspaceId)), 200);
   });
