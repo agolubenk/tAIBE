@@ -350,7 +350,8 @@ def link_findings(a, cwd, roots, protected, home, whole=("", "", False, None, ("
         return []
     disk, text = whole[2], whole[4][1] if len(whole) > 4 else whole[1]
     named = {n for n in ("TMPDIR", "USER", "LOGNAME", "RANDOM") if n in hid or "*" in hid or (
-        n in text and re.search(rf"(?<![$\w{{]){n}(?!\w)", text))}  # имя словом: read, unset, printf -v, export, n=
+        n in text and re.search(rf"(?<![$\w{{]){n}(?!\w)|\$\{{{n}(\[[^]]*\])?:{{0,2}}=", text))}  # read, unset, printf -v,
+    # export, n=; `${n:=x}` и `${n::=x}` (zsh) — как mentioned в merge_guard_vars
     a = [a[0]] + [seen_word(w, bodies, cwd, named) for w in a[1:]]
     typed = lambda: not (isinstance(disk, Disk) and disk.reviewed())  # noqa: E731
     cmd, opts, ops = gnu(a[0]), [x for x in a[1:] if x.startswith("-")], [x for x in a[1:] if not x.startswith("-")]

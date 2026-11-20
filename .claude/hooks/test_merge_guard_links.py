@@ -102,6 +102,7 @@ deny = [
     ("printf -v USER", "printf -v USER x; rm -rf \"$USER\""),
     ("read LOGNAME и mv", f"read LOGNAME < {O}/a.txt; mv \"$LOGNAME\" /tmp/out"),
     ("read HOME", f"read HOME < {O}/a.txt; rm -rf \"$HOME/x\""),
+    ("${USER::=x} (zsh)", ": ${USER::=x}; rm -rf \"$USER\""),
 ]
 for label, cmd in deny:
     bash(f"IS-249, отказ — {label}: {cmd}", cmd, True)
