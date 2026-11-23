@@ -1,8 +1,20 @@
-# t-boards on the VPS (scheme A)
+# t-boards on the VPS (scheme A + public entry)
 
-t-boards answers only inside WireGuard: `https://d4dev.admin.hrhelper.space` from a device in the tunnel. The public
-A record exists only so Let's Encrypt can issue the certificate over HTTP-01. The product's other subdomains stay
-public and need no tunnel.
+t-boards answers at `https://d4dev.admin.hrhelper.space` in two ways:
+
+- **Public, without a tunnel** (owner `taibe-d-novpn-2311` = A, 23.11). The product's edge nginx owns `0.0.0.0:443`.
+  With `BOARDS_DOMAIN` and `BOARDS_UPSTREAM` in its `.env.contabo` (HR `infra/nginx/boards-host.sh`), it proxies the
+  name to the app port that `TB_EDGE_BIND` publishes here (the gateway address of the edge's Docker network and a
+  port, e.g. `172.18.0.1:5181`; not reachable from outside). The edge adds HSTS and a second per-IP limit on sign-in
+  POSTs. The app itself guards the entry: registration and guest access are off, sign-in is by password or sign-in
+  key with a per-IP limit (TB-31 R-8), MCP needs a token. Off: drop `BOARDS_DOMAIN` on the edge and recreate its
+  nginx; the tunnel entry below keeps working.
+- **Inside WireGuard** (scheme A), from a device in the tunnel. The tunnel also carries the server ↔ Mac traffic: the
+  memory proxy (`10.77.0.2:37702`) and the backup pull. A device that should use the public entry drops the
+  `/etc/hosts` line below.
+
+The public A record first existed only so Let's Encrypt can issue the certificate over HTTP-01. The product's other
+subdomains stay public and need no tunnel.
 
 Each device joins in one of two modes, chosen per peer:
 

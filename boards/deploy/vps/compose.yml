@@ -106,6 +106,13 @@ services:
       - ./secrets:/run/tb-secrets:ro
     ports:
       - "127.0.0.1:5180:5173"
+      # Public entry without WireGuard (owner taibe-d-novpn-2311 = A): the
+      # product's edge nginx proxies BOARDS_DOMAIN here (HR infra/nginx/
+      # boards-host.sh, BOARDS_UPSTREAM). TB_EDGE_BIND is the gateway address of
+      # the edge's Docker network plus a port, e.g. 172.18.0.1:5181; it is
+      # reachable from containers and the host, not from outside. Unset, it is
+      # a second loopback port that nothing uses.
+      - "${TB_EDGE_BIND:-127.0.0.1:5181}:5173"
     # Until the K-6 measurements (R-005) say otherwise.
     mem_limit: 1g
     networks:
