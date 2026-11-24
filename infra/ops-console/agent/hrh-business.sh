@@ -101,6 +101,13 @@ case "${1:-}" in
   # прервалось). Скачивание по ссылке и приём частей падают со своими текстами — это не whisper.
   stt_failed_1h) pg_value "select count(*) from tenant_meeting_recordings where status = 'failed'
     and error_text like 'Распознавание%' and updated_at > now() - interval '1 hour'" ;;
+  # Готовые записи, у которых разметка говорящих не выполнилась: транскрипт есть, говорящих нет, и без пометки запись
+  # не отличить от разговора одного человека. Тексты пометок — apps/backend/…/stt/meeting-stt.constants.ts
+  # («Разметка говорящих не выполнена: …» — сбой, пропавшее аудио, никого не нашла) и meeting-rediarization.service.ts
+  # («Повторная диаризация не удалась/прервалась»). Успешная переразметка пометку снимает.
+  stt_diarization_failed_1h) pg_value "select count(*) from tenant_meeting_recordings where status = 'ready'
+    and (error_text like 'Разметка говорящих не выполнена%' or error_text like 'Повторная диаризация%')
+    and updated_at > now() - interval '1 hour'" ;;
   # processing дольше порога: 4 ч, для файлов больше 1,5 ГБ (PS-03) — 6 ч, но не меньше двух длительностей записи,
   # если она известна (whisper на CPU идёт примерно со скоростью звука). Во время распознавания строка не
   # обновляется, а каждый повтор задачи (release → claim) заново ставит processing и сдвигает updated_at.
@@ -182,7 +189,7 @@ case "${1:-}" in
       select count(*) from x where jsonb_typeof(j) = 'object' and coalesce(j ->> 'activeSystem', '') <> 'sandbox' and $cond" ;;
 
   *)
-    echo "использование: $0 companies|users|db_size_mb|stt_failed_1h|stt_stuck|stt_orphaned|stt_queue_waiting|tg_api_5xx_pct|tg_api_503_pct|tg_evictions_1h|tg_subs_coverage_pct|redis_queue_mem_pct|hf_refresh_rejected|hf_refresh_errors_6h" >&2
+    echo "использование: $0 companies|users|db_size_mb|stt_failed_1h|stt_diarization_failed_1h|stt_stuck|stt_orphaned|stt_queue_waiting|tg_api_5xx_pct|tg_api_503_pct|tg_evictions_1h|tg_subs_coverage_pct|redis_queue_mem_pct|hf_refresh_rejected|hf_refresh_errors_6h" >&2
     exit 2
     ;;
 esac

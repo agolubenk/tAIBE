@@ -286,6 +286,19 @@ export const BUILTIN_RULES: NewRule[] = [
   // минуты: обычный деплой идёт 15–45 мин, потолок задачи GitHub — 120 мин.
   { since: 5, name: 'Деплой идёт слишком долго', kind: 'deploy_slow', threshold: 60, forSamples: 1, severity: 'warning', repeatMin: 0 },
   { since: 5, name: 'Откат по rollback-prev недоступен', kind: 'deploy_rollback_prev', forSamples: 1, severity: 'warning', repeatMin: 0 },
+  // v6: у готовой записи не выполнилась разметка говорящих (транскрипт есть, говорящих нет) — раньше это было видно
+  // только в логе backend. Не 13 замеров, как у сбоев распознавания: записей мало, а одиночная пометка сама не уйдёт,
+  // пока запись не переразметят. Без повтора — одно сообщение на волну; закрывается, когда за час новых пометок нет.
+  {
+    since: 6,
+    name: 'STT: разметка говорящих не выполнена',
+    kind: 'host_metric',
+    metric: 'biz_stt_diarization_failed_1h',
+    op: 'gt',
+    threshold: 0,
+    forSamples: 1,
+    severity: 'warning',
+  },
 ]
 
 /**
