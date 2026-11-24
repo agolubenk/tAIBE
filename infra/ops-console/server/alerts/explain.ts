@@ -156,6 +156,8 @@ const BIZ_HINTS: Record<string, string> = {
     'Записи ждут распознавания (uploaded), а задач для них в очереди meeting-stt нет: постановка сорвалась или очередь потерялась при перезапуске Redis. Сами они не начнутся — «Распознать заново» в карточке встречи; найти: tenant_meeting_recordings со status = \'uploaded\' старше 30 минут.',
   biz_stt_queue_waiting:
     'Задачи копятся в очереди meeting-stt: распознавание не успевает или стоит. Проверьте контейнеры backend-whisper-1 и backend-backend-1.',
+  biz_stt_queue_stalled:
+    'Задачи распознавания ждут, а в работе ни одной — обработчик очереди meeting-stt их не берёт: backend перезапускается или упал воркер. Длинная очередь, которая разбирается, сюда не попадает; недоступный Redis очередей — тоже: тогда метрика не считается вовсе (правило «Бизнес-метрики не считаются»). Проверьте docker logs --tail 200 backend-backend-1 (MeetingSttProcessor).',
   biz_tg_api_5xx_pct:
     'Маршруты Telegram отвечают 500/502/504 (по журналу nginx): backend упал, не отвечает или падает с ошибкой кода. Проверьте контейнер backend-backend-1 и его логи: docker logs --tail 200 backend-backend-1.',
   biz_tg_api_503_pct: `Backend отказывает по Telegram с 503: у аккаунтов открыт circuit breaker Session Manager, FLOOD_WAIT, конфликт владения сессией или таймаут MTProto. Обычно это один-два аккаунта, а не платформа. ${SM_LOGS}.`,
@@ -189,6 +191,7 @@ export function metricLabel(metric: string): string {
     biz_stt_stuck: 'Застрявших записей',
     biz_stt_orphaned: 'Записей без задачи',
     biz_stt_queue_waiting: 'В очереди расшифровки',
+    biz_stt_queue_stalled: 'Задач ждут, обработчик не берёт',
     biz_tg_api_5xx_pct: 'Ошибки API Telegram (кроме 503)',
     biz_tg_api_503_pct: 'Отказы Telegram (503)',
     biz_tg_evictions_1h: 'Выселений сессий за час',

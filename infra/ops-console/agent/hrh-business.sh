@@ -115,19 +115,33 @@ case "${1:-}" in
     and updated_at < now() - greatest(
       case when coalesce(size_bytes, 0) > 1610612736 then interval '6 hours' else interval '4 hours' end,
       coalesce(duration_sec, 0) * 2 * interval '1 second')" ;;
-  # Записи без задачи распознавания. Каждой uploaded соответствует задача в waiting или delayed очереди meeting-stt
-  # (active уже перевела запись в processing). uploaded старше 30 минут сверх числа таких задач потеряны: сбой
-  # постановки только пишется в лог, а Redis без сохранения теряет очереди при перезапуске. Задачи диаризации в той
-  # же очереди дают недосчёт, не ложную тревогу.
+  # Записи без задачи распознавания. Каждой uploaded соответствует задача в waiting, prioritized или delayed очереди
+  # meeting-stt (active уже перевела запись в processing; prioritized — задачи с приоритетом, в BullMQ 5 это отдельный
+  # список, и waiting их не видит). uploaded старше 30 минут сверх числа таких задач потеряны: сбой постановки только
+  # пишется в лог, а очереди до переноса в redis-queue (20.10) терялись при перезапуске Redis. Задачи диаризации в той же
+  # очереди дают недосчёт, не ложную тревогу.
   stt_orphaned)
     text=$(metrics_of "$backend" 'http://127.0.0.1:3001/api/v1/metrics')
-    jobs=$(awk '/^hr_helper_bullmq_(waiting|delayed)_total\{/ && /queue="meeting-stt"/ { s += $NF; n++ } END { if (!n) exit 1; printf "%d\n", s }' <<<"$text")
+    jobs=$(awk '/^hr_helper_bullmq_(waiting|prioritized|delayed)_total\{/ && /queue="meeting-stt"/ { s += $NF; n++ } END { if (!n) exit 1; printf "%d\n", s }' <<<"$text")
     uploaded=$(pg_value "select count(*) from tenant_meeting_recordings where status = 'uploaded' and updated_at < now() - interval '30 minutes'")
     echo $(( uploaded > jobs ? uploaded - jobs : 0 )) ;;
   stt_queue_waiting)
     text=$(metrics_of "$backend" 'http://127.0.0.1:3001/api/v1/metrics')
-    # Серии нет, когда backend не достучался до Redis: это сбой чтения, а не пустая очередь.
-    awk '/^hr_helper_bullmq_waiting_total\{/ && /queue="meeting-stt"/ { s += $NF; n++ } END { if (!n) exit 1; print s + 0 }' <<<"$text" ;;
+    # Готовы к запуску: waiting и prioritized. Серии waiting нет, когда backend не достучался до Redis: это сбой
+    # чтения, а не пустая очередь. prioritized у backend до 22.10 нет — тогда только waiting.
+    awk '/^hr_helper_bullmq_(waiting|prioritized)_total\{/ && /queue="meeting-stt"/ { s += $NF; if ($1 ~ /^hr_helper_bullmq_waiting_total/) n++ }
+      END { if (!n) exit 1; print s + 0 }' <<<"$text" ;;
+  # Очередь стоит: задачи ждут (waiting + prioritized), а в работе ни одной — обработчик не берёт их. Число ждущих при
+  # пустом active, иначе 0. Длинная очередь, которая разбирается, — 0: active = 1 (занят ≠ завис, load-design В8).
+  # delayed не считается: задача на повторе ждёт паузу 1–4 мин законно. Если воркер умер, пока все задачи в delayed,
+  # тревога придёт на один-два замера позже — когда пауза кончится и они вернутся в waiting.
+  stt_queue_stalled)
+    text=$(metrics_of "$backend" 'http://127.0.0.1:3001/api/v1/metrics')
+    awk '/queue="meeting-stt"/ {
+        if ($1 ~ /^hr_helper_bullmq_(waiting|prioritized)_total\{/) { ready += $NF; if ($1 ~ /^hr_helper_bullmq_waiting_total/) w++ }
+        if ($1 ~ /^hr_helper_bullmq_active_total\{/) { active += $NF; a++ }
+      }
+      END { if (!w || !a) exit 1; print (active > 0 ? 0 : ready + 0) }' <<<"$text" ;;
 
   # ── Telegram ──────────────────────────────────────────────────────────────
   tg_api_5xx_pct) tg_api_pct 5xx ;;
@@ -189,7 +203,7 @@ case "${1:-}" in
       select count(*) from x where jsonb_typeof(j) = 'object' and coalesce(j ->> 'activeSystem', '') <> 'sandbox' and $cond" ;;
 
   *)
-    echo "использование: $0 companies|users|db_size_mb|stt_failed_1h|stt_diarization_failed_1h|stt_stuck|stt_orphaned|stt_queue_waiting|tg_api_5xx_pct|tg_api_503_pct|tg_evictions_1h|tg_subs_coverage_pct|redis_queue_mem_pct|hf_refresh_rejected|hf_refresh_errors_6h" >&2
+    echo "использование: $0 companies|users|db_size_mb|stt_failed_1h|stt_diarization_failed_1h|stt_stuck|stt_orphaned|stt_queue_waiting|stt_queue_stalled|tg_api_5xx_pct|tg_api_503_pct|tg_evictions_1h|tg_subs_coverage_pct|redis_queue_mem_pct|hf_refresh_rejected|hf_refresh_errors_6h" >&2
     exit 2
     ;;
 esac
