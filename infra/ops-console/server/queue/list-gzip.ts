@@ -50,5 +50,11 @@ export function gzipListOnce(key: string, tag: string, build: () => Promise<unkn
   return { tag, body: entry.body }
 }
 
+/** Малое тело без кэша (дельта /changes, OPS-50): сжатие — только если оно больше порога, иначе заголовки дороже выигрыша. */
+export const GZIP_MIN_BYTES = 1024
+export async function gzipJson(json: string): Promise<Uint8Array> {
+  return new Uint8Array(await gzipAsync(json))
+}
+
 /** Клиент принимает gzip: браузер, fetch Node (relay MCP), curl --compressed (Нерв). */
 export const acceptsGzip = (header: string | undefined) => /\bgzip\b/i.test(header ?? '')

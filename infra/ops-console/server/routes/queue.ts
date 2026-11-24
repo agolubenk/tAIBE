@@ -15,13 +15,14 @@ import { throttleNotify, throttleWrite, writeCounted } from '../queue/throttle'
 import { beatTeam, readTeam, teamBeatSchema } from '../queue/team'
 import { filesRoutes } from './queue-files'
 import { etagMatches } from '../queue/etag'
-import { acceptsGzip, gzipListOnce } from '../queue/list-gzip'
+import { acceptsGzip, GZIP_MIN_BYTES, gzipJson, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
+import { changesSince, CURSOR, eventCursor, listsWithCursor } from '../queue/changes'
 import { changeItemProduct } from '../queue/product-change'
 import { historyQuery, historyReplyBody } from '../queue/history-view'
 import { recentPrs } from '../queue/prs'
 import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_BOARDS, PRODUCT_SLUG, visibilityKey, type Visibility } from '../queue/products'
-import { SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
+import { COLLECTIONS, SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
 const writeSchema = z.object({
   data: z.record(z.unknown()),
@@ -77,6 +78,51 @@ queueRoutes.get('/db/:col', requireScope('read', 'agent'), async (c) => {
     return listResponse(c, `items?open=1|${vis}`, await openItemsTag(products), async () => ({ ...listBody(await listOpenItems(products)), open: true }))
   }
   return listResponse(c, `${col}|${vis}`, await collectionTag(col, products), async () => listBody(await listDocs(col, products)))
+})
+
+/** ?col=items,checks — коллекции дельты; без параметра — все. Порядок — как в COLLECTIONS (ключ кэша один). */
+function collectionsOf(raw: string | undefined): Collection[] {
+  if (raw === undefined || raw === '') return [...COLLECTIONS]
+  const want = raw.split(',').map((s) => s.trim())
+  for (const s of want) collectionOf(s)
+  return COLLECTIONS.filter((col) => want.includes(col))
+}
+
+/**
+ * Дельта очереди (OPS-50, queue/changes.ts). Без since — полные списки и курсор (full: true): тело сжимается один раз
+ * на набор тегов, как у списка, но без ETag — 304 не вернул бы курсор. ?since=<курсор> — по каждой коллекции
+ * изменённые документы и удалённые id, новый курсор; курсор не годится — 410, клиент берёт полный список. ?product= —
+ * как у списка. Прежний GET /db/:col не меняется.
+ */
+queueRoutes.get('/changes', requireScope('read', 'agent'), async (c) => {
+  const cols = collectionsOf(c.req.query('col'))
+  const products = withProductFilter(c.get('oqActor').products, c.req.query('product'))
+  const since = c.req.query('since')
+  const noStore = { 'Cache-Control': 'no-store', Vary: 'Accept-Encoding' }
+  if (since === undefined) {
+    const build = async () => {
+      const { cursor, lists } = await listsWithCursor(cols, products)
+      return { full: true, cursor, collections: Object.fromEntries(cols.map((col) => [col, listBody(lists[col]!)])) }
+    }
+    if (!acceptsGzip(c.req.header('accept-encoding'))) return c.json(await build(), 200, noStore)
+    // Тег — теги видимых коллекций и текущий курсор журнала: тело несёт общий курсор, и без него в теге кэш отдавал
+    // бы старый курсор после событий чужих продуктов — 410 по кругу (queue/changes.ts, eventCursor).
+    const tags = [...(await Promise.all(cols.map((col) => collectionTag(col, products)))), String(await eventCursor())].join(',')
+    const gz = gzipListOnce(`changes:${cols.join(',')}|${visibilityKey(products)}`, tags, build)
+    return c.body(await gz.body, 200, { ...noStore, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' })
+  }
+  if (!CURSOR.test(since)) throw apiError(400, 'since — курсор из прошлого ответа /changes')
+  const out = await changesSince(cols, products, since)
+  if ('resync' in out) {
+    // Строка лога на каждый 410: шторм полных списков (после деплоя, при потолке) виден в логах контейнера.
+    console.warn(`[oq-changes] 410 ${c.get('oqActor').name}: ${out.resync}`)
+    return c.json({ resync: true, reason: out.resync }, 410, noStore)
+  }
+  const json = JSON.stringify(out)
+  if (json.length < GZIP_MIN_BYTES || !acceptsGzip(c.req.header('accept-encoding'))) {
+    return c.body(json, 200, { ...noStore, 'Content-Type': 'application/json' })
+  }
+  return c.body(await gzipJson(json), 200, { ...noStore, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' })
 })
 
 /** Продукт пункта меняет владелец (страница, бот): пункт и ответ — одной транзакцией (queue/product-change.ts). */
