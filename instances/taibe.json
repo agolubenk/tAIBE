@@ -21,6 +21,7 @@
   "github": {
     "repo": "agolubenk/tAIBE",
     "min_lenses": 3,
+    "body_verdicts": false,
     "quorum_to": [
       "release"
     ],

@@ -30,7 +30,8 @@ TOP = ("repo_root", "product_tree", "layer_home", "interval_seconds", "sources",
        "budget", "circadian", "tap", "boards")
 NESTED = {
     "team": ("projects_root", "project_dir", "roles", "active_hours"),
-    "github": ("repo", "min_lenses", "quorum_to", "path_roles", "lens_roles", "wt_sweep_minutes"),  # OPS-81: 0 — выкл.
+    "github": ("repo", "min_lenses", "quorum_to", "path_roles", "lens_roles", "wt_sweep_minutes",  # OPS-81: 0 — выкл.
+               "body_verdicts"),  # false — вердикты только из комментариев PR (кворум tAIBE, #519)
     "queue": ("url", "secret_cmd", "owner_items", "delta", "source_roles"),
     "boards": ("url", "product", "workspace", "note"),
 }
@@ -192,6 +193,8 @@ def load(instances=INSTANCES):
             if isinstance(value, str) and not value.strip():   # SE-172: `get` отдал бы "" с кодом 0
                 raise ProductError(f"instances/{name}: пустое обязательное поле {path}")
         _check_match(name, _get(data, "queue.match"))
+        if not isinstance(_get(data, "github.body_verdicts"), (bool, type(None))):   # 0 и "false" — ошибка
+            raise ProductError(f"instances/{name}: github.body_verdicts — true или false")
         products[slug] = data
     default = shared.get("default_product")
     if not isinstance(default, str) or default not in products:

@@ -13,7 +13,7 @@ import gh_source  # noqa: E402
 import quorum  # noqa: E402
 import sources  # noqa: E402
 from journal import read_from  # noqa: E402
-from test_nerve import LR, TEAM, FakeCtx, FakeGh, _pr  # noqa: E402
+from test_nerve import CFG, LR, TEAM, FakeCtx, FakeGh, _pr  # noqa: E402
 
 HEAD = "4a88b01d1" + "0" * 31
 OLD = "b88b10899" + "1" * 31
@@ -212,6 +212,78 @@ class PollBodyTest(unittest.TestCase):
         self.assertEqual(reads, [gh_source.GH_NEW_PER_PASS, 5, 0])
         self.assertIn("pr.quorum", self.kinds())  # #700: вердикты тела старого PR
         self.assertNotIn("pr.new", self.kinds())
+
+
+def body_519():
+    """Тело tAIBE #519 (24.11): таблица раундов opencode автора и строка вердикта Backend, вписанная автором в тело.
+    Головы заменены на HEAD/OLD; строки вердиктов — как в PR."""
+    rows = [(lens, sha, word) for sha, words in ((O, ("accept, 3 minor → внесены", "accept, 1 major + 1 minor → внесены",
+                                                          "accept, 2 minor → внесены")),
+                                                 (H, ("accept, 2 minor — без правки", "accept, 1 minor — без правки",
+                                                      "accept, 3 minor — без правки")))
+            for lens, word in zip(("корректность и отказы", "ресурсы (сервер → сеть → Mac)", "продукт и простота"), words)]
+    return "\n".join(["## Адверсариальная проверка", "", "| Линза | Кто | Голова | Вердикт |", "|---|---|---|---|",
+                      *[f"| {lens} | opencode | {sha} | {word} |" for lens, sha, word in rows], "",
+                      f"**Линза команды — Backend, роль 4** (решение coord 24.11 07:53: аварийный режим, одна линза на "
+                      f"PR). Вердикт: **approve на {H}**", ""])
+
+
+OFF = dict(CFG, github=dict(CFG["github"], body_verdicts=False))
+LENS_COMMENTS = [f"Линза Бэкенд (роль 4): approve на {H}", f"Линза Продукт (роль 2): approve на {H}",
+                 f"Линза Контроль (роль 5): approve на {H}"]
+
+
+class BodyVerdictsOffTest(unittest.TestCase):
+    """github.body_verdicts: false (tAIBE, COMMON п. 4): кворум — только первые строки комментариев. #519 получил
+    ложный pr.quorum 24.11 04:55Z без единого комментария: голоса дали таблица opencode и строка автора в теле."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.ctx = FakeCtx(self.d)
+        self.addCleanup(setattr, sources, "run", sources.run)
+
+    def kinds(self):
+        return [e["kind"] for e in read_from(os.path.join(self.d, "j.jsonl"), 0)[0]]
+
+    def poll(self, fake, cfg=OFF):
+        self.ctx.cfg = cfg
+        sources.run = fake
+        gh_source.poll_github(self.ctx)
+        return self.ctx.state["github"]["prs"]["643"]
+
+    def test_519_body_gives_quorum_only_with_body_verdicts_on(self):
+        """Правило HR (SE-50) не тронуто: на его конфиге тело #519 — 4 линзы и кворум; у tAIBE — ни одной."""
+        self.assertEqual(sorted({v["lens"] for v in body(body_519())}),
+                         ["backend", "plan", "корректность и отказы", "ресурсы"])
+        self.poll(hr_gh(body_519()), CFG)
+        self.assertIn("pr.quorum", self.kinds())
+
+    def test_519_body_gives_no_body_verdicts_for_taibe(self):
+        p = self.poll(hr_gh(body_519()))
+        self.assertEqual((p["body_verdicts"], p["changes_by"]), ([], []))
+        self.assertNotIn("pr.quorum", self.kinds())
+
+    def test_comment_verdicts_still_reach_quorum(self):
+        self.poll(hr_gh(body_519(), comments={643: LENS_COMMENTS[:2]}))
+        self.assertNotIn("pr.quorum", self.kinds())
+        self.poll(hr_gh(body_519(), "2026-11-14T03:10:00Z", comments={643: LENS_COMMENTS}))
+        self.assertIn("pr.quorum", self.kinds())
+
+    def test_body_changes_line_does_not_block(self):
+        """Тело не голосует и против: changes в теле пишет автор, у tAIBE вердикт — комментарий линзы."""
+        text = f"Линза Бэкенд (роль 4): changes на {H}\n\n" + body_519()
+        p = self.poll(hr_gh(text, comments={643: LENS_COMMENTS}))
+        self.assertEqual(p["changes_by"], [])
+        self.assertIn("pr.quorum", self.kinds())
+
+    def test_body_verdicts_stored_before_the_switch_do_not_count(self):
+        """Демон разобрал тело по старому правилу (CI шёл), затем продукт выключил голоса тела: перепроверка CI без
+        чтения тела кворума не даёт."""
+        p = self.poll(hr_gh(body_519(), ci="IN_PROGRESS"), CFG)
+        self.assertTrue(p["body_verdicts"] and p["await_ci"])
+        p = self.poll(hr_gh(body_519(), ci="SUCCESS"))
+        self.assertNotIn("pr.quorum", self.kinds())
+        self.assertFalse(p["await_ci"])
 
 
 if __name__ == "__main__":
