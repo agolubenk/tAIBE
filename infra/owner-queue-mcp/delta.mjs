@@ -20,11 +20,13 @@ export const FULL_EVERY_MS = 12 * 3600_000;
 export const BACKOFF_MS = 30 * 60_000;
 export const RETRY_MS = 60_000;
 /**
- * Потолок страниц одного полного списка. Потолок коллекции консоли (list.ts) — 10 000 документов и 16 МБ, страница —
- * 1 МБ: три коллекции дают не больше 48 страниц. На проде 24.11 — 7 страниц по ~1,1 МБ (3850 документов, 7,7 МБ одним
- * ответом). Консоль, которая отдаёт next по кругу, останавливает раньше проверка «страница без новых документов».
+ * Потолок страниц одного полного списка — на весь full(), вместе с повтором после 410. Потолок коллекции консоли
+ * (list.ts) — 10 000 документов и 16 МБ, страница — 1 МБ: при документах много меньше 1 МБ три коллекции дают около
+ * 48 страниц; крупные документы (до 48 КБ, store.ts) и рост лимитов сервера дают больше. На проде 24.11 — 7 страниц по
+ * ~1,1 МБ (3850 документов, 7,7 МБ одним ответом). Потолок взят с запасом: консоль, которая отдаёт next по кругу,
+ * останавливает на 2-й странице проверка «страница без новых документов», а не он.
  */
-export const MAX_PAGES = 50;
+export const MAX_PAGES = 200;
 
 /**
  * Сбой, который пройдёт сам: 5xx, 429, сеть или недочитанное тело (у ошибок fetch и http.mjs bodyJson нет status, OPS-79);
@@ -76,20 +78,23 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
    * (там же потолок truncated); документы склеиваются по порядку страниц, повтор id — последняя версия.
    * Токен страницы устарел (410: консоль перезапущена между страницами) — RESTART, если можно.
    */
-  async function fullPass(mayRestart) {
+  async function fullPass(mayRestart, budget) {
     const docs = Object.fromEntries(cols.map((col) => [col, new Map()]));
     const meta = Object.fromEntries(cols.map((col) => [col, {}]));
     const seen = new Set();
     let cursor;
     let next;
     for (let page = 1; ; page++) {
-      if (page > MAX_PAGES) throw contractError(`полный список длиннее ${MAX_PAGES} страниц`);
+      if (budget.pages <= 0) throw contractError(`полный список длиннее ${MAX_PAGES} страниц`);
+      budget.pages -= 1;
       let j;
       try {
         j = await get(next === undefined ? `${base}&paged=1` : `${base}&page=${encodeURIComponent(next)}`);
       } catch (e) {
         // 410 — метка запуска консоли в токене устарела (OPS-70): повтор с первой страницы поможет. 400 — токен
-        // отвергнут по форме: повтор скачал бы те же страницы и упёрся в тот же отказ, это обычная ветка ошибки.
+        // отвергнут по форме. Стойкий 400 (токен портится по пути) повтор не лечит, а удваивает трафик — это обычная
+        // ветка ошибки. Выкатка со сменой формата токена посреди прохода тоже даст 400 и паузу 30 мин — принятая цена:
+        // такая выкатка редка, а стойкий 400 качал бы два прохода каждые 30 мин.
         if (next !== undefined && e?.status === 410) {
           if (!mayRestart) throw Object.assign(new Error(`страница ${page} снова устарела (консоль перезапущена дважды за проход)`), { transient: true });
           log(`страница ${page} полного списка устарела (консоль перезапущена) — повтор с первой`);
@@ -134,7 +139,8 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
    * пройдёт сам (выкатка с двумя перезапусками): повтор через RETRY_MS, а не пауза BACKOFF_MS — зеркало и курсор целы.
    */
   async function full() {
-    if ((await fullPass(true)) === RESTART) await fullPass(false);
+    const budget = { pages: MAX_PAGES };
+    if ((await fullPass(true, budget)) === RESTART) await fullPass(false, budget);
   }
 
   async function delta() {

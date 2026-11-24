@@ -452,6 +452,23 @@ test(`next с новыми документами дольше ${MAX_PAGES} ст
   assert.equal(reqs.length, MAX_PAGES, 'пауза, а не повтор через минуту');
 });
 
+test(`потолок ${MAX_PAGES} страниц — на весь полный список вместе с повтором после 410, а не на каждый проход`, async () => {
+  const reqs = [];
+  let restarted = false;
+  const get = async (p) => {
+    reqs.push(p);
+    const n = reqs.length;
+    if (!restarted && n === MAX_PAGES - 10) { restarted = true; throw Object.assign(new Error('Gone'), { status: 410 }); }
+    return { full: true, cursor: 'b1.1', collections: { items: { docs: [{ id: `d-${n}`, version: 1, data: {}, updatedAt: 1e6 - n }] } }, next: `p${n}` };
+  };
+  const logs = [];
+  const m = createDeltaMirror({ get, now: () => 1_000_000, log: (s) => logs.push(s) });
+  assert.equal(await m.list('items'), null);
+  assert.equal(reqs.length, MAX_PAGES, 'второй проход дошёл только до остатка потолка');
+  assert.match(logs[0], /повтор с первой/);
+  assert.match(logs[1], new RegExp(`полный список длиннее ${MAX_PAGES} страниц`));
+});
+
 test('сбой посреди страниц (503 на странице 2) — как выкатка: повтор через минуту; прежнее зеркало и курсор целы до последней страницы', async () => {
   const f = fakeConsole({ pageSize: 2 });
   for (let i = 1; i <= 3; i++) f.put('items', `d-${i}`, { title: `пункт ${i}` });
@@ -469,5 +486,7 @@ test('сбой посреди страниц (503 на странице 2) — �
   down = false;
   t += RETRY_MS;
   assert.deepEqual((await m.list('items')).docs.map((d) => d.id), ['d-4', 'd-3', 'd-2', 'd-1']);
-  assert.match(f.c.reqs.find((p) => p.includes('since=')), /since=b1\.3$/, 'после сбоя — дельта от старого курсора (зеркало не тронуто)');
+  const since = f.c.reqs.filter((p) => p.includes('since='));
+  assert.equal(since.length, 2, 'восстановление начинается дельтой: зеркало и курсор пережили сбой');
+  assert.match(since[1], /since=b1\.3$/, 'после сбоя — дельта от старого курсора (зеркало не тронуто)');
 });
