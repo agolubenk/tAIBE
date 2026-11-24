@@ -62,4 +62,14 @@ chmod 644 "$include_tmp"
 mv "$include_tmp" "$asset_include"
 rm -f "$changed_list"
 
+# nginx include (OPS-65): the Content-Security-Policy header. env.awk writes
+# the whole line and lets only validated http(s) origins into it.
+csp_include=${KANEO_CSP_INCLUDE:-/etc/nginx/conf.d/kaneo-csp.inc}
+csp_tmp=$(mktemp "${csp_include}.XXXXXX")
+trap 'rm -f "$csp_tmp"' EXIT HUP INT TERM
+LC_ALL=C awk -v mode=csp -f "$KANEO_ENV_RENDERER" > "$csp_tmp"
+chmod 644 "$csp_tmp"
+mv "$csp_tmp" "$csp_include"
+trap - EXIT HUP INT TERM
+
 echo "Public web configuration prepared."

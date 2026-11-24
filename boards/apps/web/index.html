@@ -32,27 +32,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="application-name" content="tAI-Boards">
   <link rel="canonical" href="https://kaneo.app">
-
-  <script>
-    if (window.location.hostname === 'demo.kaneo.app') {
-      const script = document.createElement('script');
-      script.defer = true;
-      script.setAttribute('data-domain', 'demo.kaneo.app');
-      script.src = 'https://plausible.kaneo.app/js/script.js';
-      document.head.appendChild(script);
-    }
-
-    if (window.location.hostname === 'cloud.kaneo.app') {
-      window.plausible = window.plausible || function () {
-        (window.plausible.q = window.plausible.q || []).push(arguments);
-      };
-      const script = document.createElement('script');
-      script.defer = true;
-      script.setAttribute('data-domain', 'cloud.kaneo.app');
-      script.src = 'https://plausible.kaneo.app/js/script.js';
-      document.head.appendChild(script);
-    }
-  </script>
+  <!-- OPS-65: no inline scripts, so the Content-Security-Policy keeps
+       script-src 'self'. Kaneo's analytics loader ran only on kaneo.app hosts. -->
 </head>
 
 <body>
