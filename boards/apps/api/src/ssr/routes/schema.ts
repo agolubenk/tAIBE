@@ -15,6 +15,8 @@ const versionSpec = z.union([
   z.string().regex(/^\d+$/),
 ]);
 
+const commitSha = z.string().regex(/^[0-9a-f]{6,40}$/i);
+
 // TB-129. The sync is the whole manifest (RU-13 archives what it leaves
 // out), so the corpus cannot be split into several syncs: the manifest
 // limit is the corpus limit. An entry without content is a path and a sha,
@@ -26,13 +28,16 @@ export const SYNC_CONTENT_MAX = 400;
 export const SYNC_PATH_MAX = 500;
 
 export const syncBody = z.object({
-  commitSha: z.string().regex(/^[0-9a-f]{6,40}$/i),
+  commitSha,
   files: z
     .array(
       z.object({
         path: z.string().min(1).max(SYNC_PATH_MAX),
         sha256: z.string().regex(/^[0-9a-f]{64}$/),
         content: z.string().max(600_000).optional(),
+        // TB-98: the commit of the checkout this file was read from, when it
+        // is not the sync's own (a product home's file read by its host).
+        commitSha: commitSha.optional(),
       }),
     )
     .max(SYNC_MANIFEST_MAX)
