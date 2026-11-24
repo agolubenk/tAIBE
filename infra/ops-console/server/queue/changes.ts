@@ -21,9 +21,9 @@ import { parseDoc, type Collection, type Doc } from './store'
  * перезапуска старый курсор даёт 410, клиент берёт полный список один раз. Консоль — один процесс на базу SQLite; два
  * процесса за балансировщиком давали бы 410 через раз (тогда метку — из базы).
  */
-const BOOT = Date.now().toString(36)
+export const BOOT = Date.now().toString(36)
 export const CURSOR = /^[0-9a-z]{1,12}\.\d{1,15}$/
-const cursorOf = (id: number) => `${BOOT}.${id}`
+export const cursorOf = (id: number) => `${BOOT}.${id}`
 
 /**
  * Потолки дельты: изменённых документов (по всем запрошенным коллекциям) и событий журнала после курсора. Больше —
