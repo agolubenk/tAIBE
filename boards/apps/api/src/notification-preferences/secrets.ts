@@ -5,13 +5,31 @@ import {
   randomBytes,
 } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
+import { resolveFileSecret } from "../utils/file-secret";
 
 const SECRET_PREFIX = "enc:v1:";
 const SECRET_ALGORITHM = "aes-256-gcm";
 const SECRET_IV_BYTES = 12;
 
+let reportedKeyProblem: string | undefined;
+
+// TB-19 (N-007): the key comes from NOTIFICATION_SECRET_ENCRYPTION_KEY or from
+// the file NOTIFICATION_SECRET_ENCRYPTION_KEY_FILE names. A file that is
+// missing, unreadable or empty counts as no key, so the channels that store
+// secrets stay off instead of failing the server; the reason is logged once
+// per reason and never holds the key.
 function getSecretEncryptionKey() {
-  const rawKey = process.env.NOTIFICATION_SECRET_ENCRYPTION_KEY?.trim();
+  let rawKey: string | undefined;
+  try {
+    rawKey = resolveFileSecret("NOTIFICATION_SECRET_ENCRYPTION_KEY")?.trim();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    if (reason !== reportedKeyProblem) {
+      reportedKeyProblem = reason;
+      console.warn(`Notification secrets are off: ${reason}`);
+    }
+    return null;
+  }
   if (!rawKey) {
     return null;
   }
@@ -24,7 +42,7 @@ function requireSecretEncryptionKey() {
   if (!key) {
     throw new HTTPException(500, {
       message:
-        "NOTIFICATION_SECRET_ENCRYPTION_KEY is required to store encrypted notification secrets",
+        "NOTIFICATION_SECRET_ENCRYPTION_KEY or NOTIFICATION_SECRET_ENCRYPTION_KEY_FILE is required to store encrypted notification secrets",
     });
   }
 
