@@ -148,6 +148,8 @@ export function bizSubsystem(metric: string): string | null {
 const BIZ_HINTS: Record<string, string> = {
   biz_stt_failed_1h:
     'Распознавание встреч падает (failed, «Распознавание не удалось/прервалось»). Причина — в логах: docker logs --tail 200 backend-whisper-1 и backend-backend-1.',
+  biz_stt_diarization_failed_1h:
+    'У готовых записей не выполнилась разметка говорящих: транскрипт есть, но без говорящих, в карточке встречи — пометка с причиной и кнопка «Переразметить». Причина — в пометке и в логах: docker logs --tail 200 backend-diarization-1 и backend-backend-1. Запись длиннее 2 часов sidecar не размечает — это предел, а не сбой.',
   biz_stt_stuck:
     'Записи висят в processing дольше 4 ч (файлы больше 1,5 ГБ — 6 ч): задача потеряна (перезапуск Redis, неудачная уборка зависшей задачи) или вызов без таймаута. Зависание whisper дольше 90 минут обычно видно раньше как сбой распознавания. Запись без живой задачи сама не вернётся: в базе status = \'uploaded\' для неё (where id = … and status = \'processing\'), затем «Распознать заново» в карточке встречи.',
   biz_stt_orphaned:
@@ -183,6 +185,7 @@ export function metricLabel(metric: string): string {
     nginx_rpm: 'Запросов в минуту',
     docker_ok: 'Docker отвечает',
     biz_stt_failed_1h: 'Сбоев расшифровки за час',
+    biz_stt_diarization_failed_1h: 'Записей без разметки говорящих за час',
     biz_stt_stuck: 'Застрявших записей',
     biz_stt_orphaned: 'Записей без задачи',
     biz_stt_queue_waiting: 'В очереди расшифровки',

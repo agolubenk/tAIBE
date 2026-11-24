@@ -1,7 +1,7 @@
 /**
  * agent/hrh-business.sh без сервера: docker, timeout и date подменены скриптами-заглушками, которые отдают
- * фикстуры журнала nginx и текста /metrics. Ключи с SQL здесь не проверяются — их прогон на проде описан в
- * docs/ops/p0-slo-alerts.md.
+ * фикстуры журнала nginx и текста /metrics. Ключи с SQL здесь проверяются только на контракт с текстами backend —
+ * их прогон на проде описан в docs/ops/p0-slo-alerts.md.
  */
 import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -261,5 +261,16 @@ describe('hrh-business.sh: метрики /metrics', () => {
 
   it('незнакомый ключ — код 2', () => {
     expect(run('nope').code).toBe(2)
+  })
+})
+
+describe('hrh-business.sh: разметка говорящих', () => {
+  it('готовые записи с пометкой разметки за час — по тем префиксам, что пишет backend (meeting-stt.constants.ts)', () => {
+    expect(run('stt_diarization_failed_1h', { FAKE_PG_VALUE: '2' })).toEqual({ code: 0, out: '2' })
+    const sql = readFileSync(join(dir, 'sql.log'), 'utf8')
+    expect(sql).toContain("status = 'ready'")
+    expect(sql).toContain("error_text like 'Разметка говорящих не выполнена%'")
+    expect(sql).toContain("error_text like 'Повторная диаризация%'")
+    expect(sql).toContain("updated_at > now() - interval '1 hour'")
   })
 })
