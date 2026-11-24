@@ -1593,7 +1593,20 @@
 			"titleOptional": "タイトル（任意）",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "{{title}} の AI レビューを依頼",
+				"requestHint": "AI レビューを依頼",
+				"running": "AI レビュー実行中",
+				"done": "AI レビュー完了 {{time}}",
+				"forkOnly": "リポジトリ内の PR のみ",
+				"errorRunning": "AI レビューはすでに実行中です。",
+				"errorFork": "AI レビューはリポジトリ内の PR でのみ実行されます。",
+				"errorClosed": "このプルリクエストはクローズされています。",
+				"errorNotPullRequest": "このリンクはプルリクエストではありません。",
+				"errorAppMissing": "このリポジトリに GitHub App がインストールされていません。",
+				"errorGeneric": "AI レビューを依頼できませんでした。"
+			}
 		},
 		"mattermostIntegration": {
 			"connect": "Connect Mattermost",

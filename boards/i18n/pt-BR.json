@@ -1611,7 +1611,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "Solicitar revisão por IA de {{title}}",
+				"requestHint": "Solicitar revisão por IA",
+				"running": "Revisão por IA em andamento",
+				"done": "Revisão por IA concluída {{time}}",
+				"forkOnly": "Apenas PRs do repositório",
+				"errorRunning": "Uma revisão por IA já está em andamento.",
+				"errorFork": "Revisões por IA rodam apenas para PRs do repositório.",
+				"errorClosed": "Este pull request está fechado.",
+				"errorNotPullRequest": "Este link não é um pull request.",
+				"errorAppMissing": "O GitHub App não está instalado neste repositório.",
+				"errorGeneric": "Não foi possível solicitar a revisão por IA."
+			}
 		},
 		"mattermostIntegration": {
 			"connect": "Connect Mattermost",

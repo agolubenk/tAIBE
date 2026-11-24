@@ -1357,7 +1357,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "Αίτημα ελέγχου ΤΝ για {{title}}",
+				"requestHint": "Αίτημα ελέγχου ΤΝ",
+				"running": "Ο έλεγχος ΤΝ εκτελείται",
+				"done": "Ο έλεγχος ΤΝ ολοκληρώθηκε {{time}}",
+				"forkOnly": "Μόνο PR από το αποθετήριο",
+				"errorRunning": "Ένας έλεγχος ΤΝ εκτελείται ήδη.",
+				"errorFork": "Οι έλεγχοι ΤΝ εκτελούνται μόνο για PR από το αποθετήριο.",
+				"errorClosed": "Αυτό το pull request είναι κλειστό.",
+				"errorNotPullRequest": "Αυτός ο σύνδεσμος δεν είναι pull request.",
+				"errorAppMissing": "Η GitHub App δεν είναι εγκατεστημένη για αυτό το αποθετήριο.",
+				"errorGeneric": "Δεν ήταν δυνατό το αίτημα ελέγχου ΤΝ."
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Ρόλοι",

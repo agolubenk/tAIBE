@@ -1173,7 +1173,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "AI-review aanvragen voor {{title}}",
+				"requestHint": "AI-review aanvragen",
+				"running": "AI-review loopt",
+				"done": "AI-review klaar {{time}}",
+				"forkOnly": "Alleen PR's uit de repository",
+				"errorRunning": "Er loopt al een AI-review.",
+				"errorFork": "AI-reviews draaien alleen voor PR's uit de repository.",
+				"errorClosed": "Deze pull request is gesloten.",
+				"errorNotPullRequest": "Deze link is geen pull request.",
+				"errorAppMissing": "De GitHub App is niet geïnstalleerd voor deze repository.",
+				"errorGeneric": "AI-review aanvragen is mislukt."
+			}
 		},
 		"notifications": "Meldingen",
 		"notificationsPage": {

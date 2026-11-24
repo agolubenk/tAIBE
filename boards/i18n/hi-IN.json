@@ -1602,7 +1602,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "{{title}} की AI समीक्षा का अनुरोध करें",
+				"requestHint": "AI समीक्षा का अनुरोध करें",
+				"running": "AI समीक्षा चल रही है",
+				"done": "AI समीक्षा पूरी हुई {{time}}",
+				"forkOnly": "केवल रिपॉज़िटरी के PR",
+				"errorRunning": "एक AI समीक्षा पहले से चल रही है।",
+				"errorFork": "AI समीक्षा केवल रिपॉज़िटरी के PR के लिए चलती है।",
+				"errorClosed": "यह pull request बंद है।",
+				"errorNotPullRequest": "यह लिंक pull request नहीं है।",
+				"errorAppMissing": "इस रिपॉज़िटरी के लिए GitHub App इंस्टॉल नहीं है।",
+				"errorGeneric": "AI समीक्षा का अनुरोध नहीं हो सका।"
+			}
 		},
 		"mattermostIntegration": {
 			"connect": "Connect Mattermost",

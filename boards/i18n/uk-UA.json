@@ -1373,7 +1373,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "Запросити ШІ-рев'ю: {{title}}",
+				"requestHint": "Запросити ШІ-рев'ю",
+				"running": "ШІ-рев'ю триває",
+				"done": "ШІ-рев'ю готове {{time}}",
+				"forkOnly": "Лише PR з репозиторію",
+				"errorRunning": "ШІ-рев'ю вже триває.",
+				"errorFork": "ШІ-рев'ю працює лише для PR з репозиторію.",
+				"errorClosed": "Цей PR закрито.",
+				"errorNotPullRequest": "Це посилання — не PR.",
+				"errorAppMissing": "GitHub App не встановлено для цього репозиторію.",
+				"errorGeneric": "Не вдалося запросити ШІ-рев'ю."
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Ролі",

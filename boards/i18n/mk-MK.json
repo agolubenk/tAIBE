@@ -1357,7 +1357,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "Побарај AI-преглед за {{title}}",
+				"requestHint": "Побарај AI-преглед",
+				"running": "AI-прегледот е во тек",
+				"done": "AI-прегледот е готов {{time}}",
+				"forkOnly": "Само PR од репозиториумот",
+				"errorRunning": "AI-преглед веќе е во тек.",
+				"errorFork": "AI-прегледи се прават само за PR од репозиториумот.",
+				"errorClosed": "Овој pull request е затворен.",
+				"errorNotPullRequest": "Оваа врска не е pull request.",
+				"errorAppMissing": "GitHub App не е инсталирана за овој репозиториум.",
+				"errorGeneric": "Барањето за AI-преглед не успеа."
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Улоги",

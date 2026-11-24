@@ -1365,7 +1365,20 @@
 			"titleOptional": "Titre (optionnel)",
 			"url": "URL",
 			"remove": "Supprimer {{title}}",
-			"removeError": "Échec de la suppression du lien de la ressource."
+			"removeError": "Échec de la suppression du lien de la ressource.",
+			"review": {
+				"request": "Demander une revue IA de {{title}}",
+				"requestHint": "Demander une revue IA",
+				"running": "Revue IA en cours",
+				"done": "Revue IA terminée {{time}}",
+				"forkOnly": "Uniquement les PR du dépôt",
+				"errorRunning": "Une revue IA est déjà en cours.",
+				"errorFork": "Les revues IA ne concernent que les PR du dépôt.",
+				"errorClosed": "Cette pull request est fermée.",
+				"errorNotPullRequest": "Ce lien n'est pas une pull request.",
+				"errorAppMissing": "La GitHub App n'est pas installée pour ce dépôt.",
+				"errorGeneric": "Impossible de demander une revue IA."
+			}
 		},
 		"workspaceRoles": {
 			"pageTitle": "Rôles",

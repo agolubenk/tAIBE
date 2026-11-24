@@ -9413,6 +9413,58 @@
 						},
 						"removeError": {
 							"type": "string"
+						},
+						"review": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"request": {
+									"type": "string"
+								},
+								"requestHint": {
+									"type": "string"
+								},
+								"running": {
+									"type": "string"
+								},
+								"done": {
+									"type": "string"
+								},
+								"forkOnly": {
+									"type": "string"
+								},
+								"errorRunning": {
+									"type": "string"
+								},
+								"errorFork": {
+									"type": "string"
+								},
+								"errorClosed": {
+									"type": "string"
+								},
+								"errorNotPullRequest": {
+									"type": "string"
+								},
+								"errorAppMissing": {
+									"type": "string"
+								},
+								"errorGeneric": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"request",
+								"requestHint",
+								"running",
+								"done",
+								"forkOnly",
+								"errorRunning",
+								"errorFork",
+								"errorClosed",
+								"errorNotPullRequest",
+								"errorAppMissing",
+								"errorGeneric"
+							]
 						}
 					},
 					"required": [
@@ -9429,7 +9481,8 @@
 						"adding",
 						"empty",
 						"remove",
-						"removeError"
+						"removeError",
+						"review"
 					]
 				},
 				"security": {

@@ -1178,7 +1178,20 @@
 			"titleOptional": "Title (optional)",
 			"url": "URL",
 			"remove": "Remove {{title}}",
-			"removeError": "Failed to remove the resource link."
+			"removeError": "Failed to remove the resource link.",
+			"review": {
+				"request": "Solicitar una revisión con IA de {{title}}",
+				"requestHint": "Solicitar una revisión con IA",
+				"running": "Revisión con IA en curso",
+				"done": "Revisión con IA lista {{time}}",
+				"forkOnly": "Solo PR del repositorio",
+				"errorRunning": "Ya hay una revisión con IA en curso.",
+				"errorFork": "Las revisiones con IA solo se ejecutan para PR del repositorio.",
+				"errorClosed": "Esta pull request está cerrada.",
+				"errorNotPullRequest": "Este enlace no es una pull request.",
+				"errorAppMissing": "La GitHub App no está instalada para este repositorio.",
+				"errorGeneric": "No se pudo solicitar la revisión con IA."
+			}
 		},
 		"notifications": "Notificaciones",
 		"notificationsPage": {
