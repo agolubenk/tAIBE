@@ -34,6 +34,7 @@ sys.path.insert(0, HERE)
 import actions  # noqa: E402
 import budget  # noqa: E402
 import gh_source  # noqa: E402
+import mem_health  # noqa: E402
 import digest  # noqa: E402
 import sources  # noqa: E402
 from journal import ALL, DIGEST, NERVOUS, Journal, addressed, now_iso, read_from  # noqa: E402
@@ -146,7 +147,7 @@ def peer_emit(peer, write):
 
 
 POLLS = [("github", gh_source.poll_github), ("queue", sources.poll_queue), ("system", sources.poll_system),
-         ("budget", actions.poll_budget)]
+         ("budget", actions.poll_budget), ("mem", mem_health.poll_mem_health)]
 
 
 def one_pass(ctx, polls=None, finish=True):
