@@ -1205,7 +1205,9 @@
 				},
 				"workspaceLabel": "Workspace",
 				"workspaceAll": "All my workspaces",
-				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings."
+				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "Read only",
+				"readOnlyDescription": "The key can read but not change anything. Agents and the MCP hub need write access, so turn this off for them."
 			},
 			"row": {
 				"created": "Created {{date}}",
@@ -1215,7 +1217,8 @@
 				"expiredBadge": "Expired",
 				"actions": "Actions for {{name}}",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "Read only"
 			}
 		},
 		"workspaceGeneral": {

@@ -915,6 +915,8 @@
 				},
 				"workspaceAll": "All my workspaces",
 				"workspaceDescription": "A key for one workspace can't see your other workspaces, notifications, or account settings.",
+				"readOnlyLabel": "केवल पढ़ने के लिए",
+				"readOnlyDescription": "यह कुंजी पढ़ सकती है, लेकिन कुछ भी बदल नहीं सकती। एजेंटों और MCP हब को लिखने की अनुमति चाहिए — उनके लिए इसे बंद करें।",
 				"workspaceLabel": "Workspace"
 			},
 			"row": {
@@ -925,7 +927,8 @@
 				"expires": "{{date}} को समाप्त होगी",
 				"neverExpires": "कभी समाप्त नहीं होगी",
 				"workspaceBadge": "{{workspace}} only",
-				"workspaceUnknown": "One workspace"
+				"workspaceUnknown": "One workspace",
+				"readOnlyBadge": "केवल पढ़ने के लिए"
 			}
 		},
 		"workspaceGeneral": {

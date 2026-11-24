@@ -12,6 +12,7 @@ import {
 import { alias } from "drizzle-orm/pg-core";
 import db, { schema } from "../database";
 import { evaluateApiKeyUsage } from "./api-key-usage";
+import { parseApiKeyAccess } from "./api-key-access";
 import { parseApiKeyWorkspaceScope } from "./api-key-workspace-scope";
 import { notBannedCondition } from "./user-ban";
 
@@ -141,6 +142,7 @@ async function checkApiKey(hashedKey: string) {
       permissions: parsePermissions(apiKey.permissions),
       metadata: null,
       workspaceScope: parseApiKeyWorkspaceScope(apiKey.metadata),
+      access: parseApiKeyAccess(apiKey.metadata),
       agent: keyAgent(row),
     },
   };
@@ -211,6 +213,7 @@ export async function verifyApiKey(
           ? (JSON.parse(apiKey.metadata) as Record<string, unknown>)
           : null,
         workspaceScope: parseApiKeyWorkspaceScope(apiKey.metadata),
+        access: parseApiKeyAccess(apiKey.metadata),
         agent: keyAgent(row),
       },
     };

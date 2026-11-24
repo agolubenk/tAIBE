@@ -4,7 +4,7 @@
 // Everything else (notifications, invitations, admin, integrations, WebSockets,
 // and Better Auth, where a key could mint or widen keys) is refused.
 // A new module under one of these prefixes must resolve its workspace too.
-const WORKSPACE_RESOLVED_PREFIXES = [
+export const WORKSPACE_RESOLVED_PREFIXES = [
   "/api/activity",
   "/api/column",
   "/api/comment",

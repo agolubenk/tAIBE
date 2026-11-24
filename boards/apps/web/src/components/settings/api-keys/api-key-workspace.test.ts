@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   ALL_WORKSPACES,
+  apiKeyMetadata,
   apiKeyWorkspaceMetadata,
+  isReadOnlyApiKey,
   readApiKeyWorkspace,
 } from "./api-key-workspace";
 
@@ -9,6 +11,46 @@ describe("apiKeyWorkspaceMetadata", () => {
   it("sends no metadata for an all-workspaces key", () => {
     expect(apiKeyWorkspaceMetadata(ALL_WORKSPACES)).toBeUndefined();
     expect(apiKeyWorkspaceMetadata("ws-a")).toEqual({ workspaceId: "ws-a" });
+  });
+});
+
+describe("apiKeyMetadata (TB-96)", () => {
+  it("adds access read only to a read-only key", () => {
+    expect(apiKeyMetadata(ALL_WORKSPACES, false)).toBeUndefined();
+    expect(apiKeyMetadata("ws-a", false)).toEqual({ workspaceId: "ws-a" });
+    expect(apiKeyMetadata(ALL_WORKSPACES, true)).toEqual({ access: "read" });
+    expect(apiKeyMetadata("ws-a", true)).toEqual({
+      workspaceId: "ws-a",
+      access: "read",
+    });
+  });
+});
+
+describe("isReadOnlyApiKey (TB-96)", () => {
+  it("is false for keys without the field", () => {
+    for (const metadata of [
+      null,
+      undefined,
+      "null",
+      {},
+      { workspaceId: "ws-a" },
+      { access: "full" },
+    ]) {
+      expect(isReadOnlyApiKey(metadata), JSON.stringify(metadata)).toBe(false);
+    }
+  });
+
+  it("is true for access read and, like the API, for unknown values", () => {
+    for (const metadata of [
+      { access: "read" },
+      JSON.stringify({ access: "read", workspaceId: "ws-a" }),
+      JSON.stringify(JSON.stringify({ access: "read" })),
+      { access: "write" },
+      "{oops",
+      "[]",
+    ]) {
+      expect(isReadOnlyApiKey(metadata), JSON.stringify(metadata)).toBe(true);
+    }
   });
 });
 
