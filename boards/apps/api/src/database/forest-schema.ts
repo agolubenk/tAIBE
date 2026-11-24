@@ -84,7 +84,8 @@ export const ownerApprovalTable = pgTable(
     doneReason: text("done_reason"),
     // The owner-queue item that asks for this «да» (R-1): its id, the item
     // version after the server's last own write (R-4) and the outcome the
-    // item already shows.
+    // item already shows («deferred:<n>» while a «Да» waits for its next
+    // apply try — TB-114).
     queueItemId: text("queue_item_id"),
     queueItemVersion: integer("queue_item_version"),
     queueSyncedStatus: text("queue_synced_status"),
