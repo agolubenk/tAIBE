@@ -20,17 +20,17 @@ export const FULL_EVERY_MS = 12 * 3600_000;
 export const BACKOFF_MS = 30 * 60_000;
 export const RETRY_MS = 60_000;
 /**
- * Потолок страниц одного полного списка — защита от консоли, которая отдаёт next по кругу. Потолок коллекции консоли
- * (list.ts) — 10 000 документов и 16 МБ, страница — 1 МБ: три коллекции дают до ~50 страниц. На проде 24.11 — 7
- * страниц по ~1,1 МБ (3850 документов, 7,7 МБ одним ответом).
+ * Потолок страниц одного полного списка. Потолок коллекции консоли (list.ts) — 10 000 документов и 16 МБ, страница —
+ * 1 МБ: три коллекции дают не больше 48 страниц. На проде 24.11 — 7 страниц по ~1,1 МБ (3850 документов, 7,7 МБ одним
+ * ответом). Консоль, которая отдаёт next по кругу, останавливает раньше проверка «страница без новых документов».
  */
-export const MAX_PAGES = 100;
+export const MAX_PAGES = 50;
 
 /**
  * Сбой, который пройдёт сам: 5xx, 429, сеть или недочитанное тело (у ошибок fetch и http.mjs bodyJson нет status, OPS-79);
- * ответ не по контракту — не он.
+ * ответ не по контракту — не он. transient: true — сбой, который пройдёт сам при любом status (второй 410 подряд).
  */
-const transient = (e) => !e?.contract && (e?.status === undefined ? true : e.status >= 500 || e.status === 429);
+const transient = (e) => e?.transient === true || (!e?.contract && (e?.status === undefined ? true : e.status >= 500 || e.status === 429));
 const contractError = (msg) => Object.assign(new Error(msg), { contract: true });
 /**
  * Разбор ответа, который консоль уже отдала: любая ошибка здесь — нарушение контракта (docs: 5, docs: [null] дают
@@ -74,7 +74,7 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
   /**
    * Один проход по страницам. Коллекция приходит на страницах, где есть её документы, и на той, где она кончилась
    * (там же потолок truncated); документы склеиваются по порядку страниц, повтор id — последняя версия.
-   * Токен страницы устарел (410: консоль перезапущена между страницами) или отвергнут (400) — RESTART, если можно.
+   * Токен страницы устарел (410: консоль перезапущена между страницами) — RESTART, если можно.
    */
   async function fullPass(mayRestart) {
     const docs = Object.fromEntries(cols.map((col) => [col, new Map()]));
@@ -88,7 +88,13 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
       try {
         j = await get(next === undefined ? `${base}&paged=1` : `${base}&page=${encodeURIComponent(next)}`);
       } catch (e) {
-        if (next !== undefined && mayRestart && (e?.status === 410 || e?.status === 400)) return RESTART;
+        // 410 — метка запуска консоли в токене устарела (OPS-70): повтор с первой страницы поможет. 400 — токен
+        // отвергнут по форме: повтор скачал бы те же страницы и упёрся в тот же отказ, это обычная ветка ошибки.
+        if (next !== undefined && e?.status === 410) {
+          if (!mayRestart) throw Object.assign(new Error(`страница ${page} снова устарела (консоль перезапущена дважды за проход)`), { transient: true });
+          log(`страница ${page} полного списка устарела (консоль перезапущена) — повтор с первой`);
+          return RESTART;
+        }
         throw e;
       }
       next = parsed(() => {
@@ -96,14 +102,22 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
         if (cursor === undefined) cursor = j.cursor;
         else if (j.cursor !== cursor) throw contractError(`страница ${page} полного списка — с другим курсором`);
         if (j.next !== undefined && (typeof j.next !== 'string' || j.next === '')) throw contractError('next — не непустая строка');
+        let added = 0;
         for (const col of cols) {
           const c = j.collections[col];
           if (c === undefined) continue;
           if (!Array.isArray(c?.docs)) throw contractError(`в полном списке нет коллекции ${col}`);
-          for (const d of c.docs) docs[col].set(...docEntry(d, `полный список ${col}`));
+          for (const d of c.docs) {
+            const [id, doc] = docEntry(d, `полный список ${col}`);
+            if (!docs[col].has(id)) added += 1;
+            docs[col].set(id, doc);
+          }
           seen.add(col);
           if (c.truncated === true) meta[col] = { truncated: true, total: c.total, limit: c.limit };
         }
+        // Страница с next всегда несёт хотя бы один новый документ (сервер идёт по ключу (updated_at, id) вниз):
+        // иначе консоль отдаёт next по кругу, и без этой проверки клиент качал бы страницы до MAX_PAGES.
+        if (j.next !== undefined && added === 0) throw contractError(`страница ${page} полного списка без новых документов, но с next`);
         return j.next;
       });
       if (next === undefined) break;
@@ -115,7 +129,10 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
     return null;
   }
 
-  /** Полный список; токен страницы устарел — один повтор с первой страницы, второй сбой — обычная ошибка. */
+  /**
+   * Полный список; токен страницы устарел (410) — один повтор с первой страницы. Второй 410 подряд — сбой, который
+   * пройдёт сам (выкатка с двумя перезапусками): повтор через RETRY_MS, а не пауза BACKOFF_MS — зеркало и курсор целы.
+   */
   async function full() {
     if ((await fullPass(true)) === RESTART) await fullPass(false);
   }

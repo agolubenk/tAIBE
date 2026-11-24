@@ -347,7 +347,7 @@ test('потолок коллекции (truncated) — со страницы, �
   assert.equal(isFirstPage(old.c.reqs[0]), true, 'просим страницы, консоль отдала весь список без next');
 });
 
-test('консоль перезапущена между страницами (410 на странице 2) — один повтор с первой; второй 410 — пауза 30 мин', async () => {
+test('консоль перезапущена между страницами (410 на странице 2) — один повтор с первой и строка в журнал; второй 410 — повтор через минуту, не пауза 30 мин', async () => {
   const f = fakeConsole({ pageSize: 2 });
   for (let i = 1; i <= 4; i++) f.put('items', `d-${i}`, { title: `пункт ${i}` });
   let restarts = 1;
@@ -357,18 +357,51 @@ test('консоль перезапущена между страницами (4
   const m = createDeltaMirror({ get, now: () => t, log: (s) => logs.push(s) });
   assert.deepEqual((await m.list('items')).docs.map((d) => d.id), ['d-4', 'd-3', 'd-2', 'd-1']);
   assert.deepEqual(f.c.reqs.map((p) => (isFirstPage(p) ? 'p1' : 'next')), ['p1', 'next', 'p1', 'next'], '410 → снова с первой');
-  assert.equal(logs.length, 0, 'один перезапуск — штатно');
+  assert.deepEqual(logs, ['страница 2 полного списка устарела (консоль перезапущена) — повтор с первой'], 'повтор виден в журнале');
 
   const g = fakeConsole({ pageSize: 2 });
   for (let i = 1; i <= 4; i++) g.put('items', `d-${i}`, { title: `пункт ${i}` });
+  let flaky = true;
   const logs2 = [];
-  const m2 = createDeltaMirror({ get: async (p) => { if (isNextPage(p)) g.restart(); return g.get(p); }, now: () => t, log: (s) => logs2.push(s) });
+  const m2 = createDeltaMirror({ get: async (p) => { if (flaky && isNextPage(p)) g.restart(); return g.get(p); }, now: () => t, log: (s) => logs2.push(s) });
   assert.equal(await m2.list('items'), null);
   assert.equal(g.c.reqs.length, 4, 'повтор — один, не по кругу');
-  assert.match(logs2[0], /дельта \/changes не работает .*30 мин прежний полный список/);
+  assert.match(logs2[1], /страница 2 снова устарела .*повтор дельты через 60 с/);
+  t += RETRY_MS - 1;
+  assert.equal(await m2.list('items'), null);
+  assert.equal(g.c.reqs.length, 4, 'до повтора консоль не дёргаем');
+  flaky = false;
+  t += 1;
+  assert.deepEqual((await m2.list('items')).docs.map((d) => d.id), ['d-4', 'd-3', 'd-2', 'd-1'], 'через минуту — полный список');
+});
+
+test('400 на странице 2 (токен отвергнут) — без повтора с первой: обычная ветка ошибки, пауза 30 мин', async () => {
+  const f = fakeConsole({ pageSize: 2 });
+  for (let i = 1; i <= 4; i++) f.put('items', `d-${i}`, { title: `пункт ${i}` });
+  let t = 1_000_000;
+  const logs = [];
+  const m = createDeltaMirror({ get: async (p) => f.get(isNextPage(p) ? p.replace(/page=[^&]*/, 'page=bad!') : p), now: () => t, log: (s) => logs.push(s) });
+  assert.equal(await m.list('items'), null);
+  assert.deepEqual(f.c.reqs.map((p) => (isFirstPage(p) ? 'p1' : 'next')), ['p1', 'next'], 'второго прохода нет');
+  assert.match(logs[0], /дельта \/changes не работает .*30 мин прежний полный список/);
   t += RETRY_MS;
-  assert.equal(await m2.list('items'), null, 'пауза, а не повтор через минуту');
-  assert.equal(g.c.reqs.length, 4);
+  assert.equal(await m.list('items'), null);
+  assert.equal(f.c.reqs.length, 2, 'пауза, а не повтор через минуту');
+});
+
+test('один id на двух страницах — в зеркале последняя версия', async () => {
+  const f = fakeConsole({ pageSize: 1 });
+  f.put('items', 'd-1', { title: 'один' });
+  f.put('items', 'd-2', { title: 'два' });
+  const again = { id: 'd-2', version: 2, data: { title: 'два, правка' }, updatedAt: 99, product: 'hr-helper' };
+  const get = async (p) => {
+    const j = await f.get(p);
+    if (isNextPage(p) && j.collections.items) j.collections.items.docs.push(again);
+    return j;
+  };
+  const m = createDeltaMirror({ get, now: () => 1_000_000, log: () => {} });
+  const docs = (await m.list('items')).docs;
+  assert.deepEqual(docs.map((d) => [d.id, d.data.title]), [['d-2', 'два, правка'], ['d-1', 'один']]);
 });
 
 test('страницы с разным курсором, next не строка, коллекция не пришла ни на одной странице — нарушение контракта, зеркало не собрано', async () => {
@@ -390,14 +423,33 @@ test('страницы с разным курсором, next не строка,
   }
 });
 
-test(`консоль отдаёт next по кругу — после ${MAX_PAGES} страниц нарушение контракта, а не бесконечный цикл`, async () => {
+test('консоль отдаёт next по кругу — первая страница без новых документов останавливает проход: нарушение контракта, пауза 30 мин', async () => {
   const reqs = [];
   const logs = [];
-  const get = async (p) => { reqs.push(p); return { full: true, cursor: 'b1.1', collections: { checks: { docs: [] }, items: { docs: [] }, work: { docs: [] } }, next: 'eA' }; };
-  const m = createDeltaMirror({ get, now: () => 1_000_000, log: (s) => logs.push(s) });
+  let t = 1_000_000;
+  const doc = { id: 'd-1', version: 1, data: { title: 'один' }, updatedAt: 1 };
+  const get = async (p) => { reqs.push(p); return { full: true, cursor: 'b1.1', collections: { items: { docs: [doc] } }, next: 'eA' }; };
+  const m = createDeltaMirror({ get, now: () => t, log: (s) => logs.push(s) });
+  assert.equal(await m.list('items'), null);
+  assert.equal(reqs.length, 2, 'вторая страница повторила первую — дальше не качаем');
+  assert.match(logs[0], /страница 2 полного списка без новых документов, но с next.*30 мин прежний полный список/);
+  t += RETRY_MS;
+  assert.equal(await m.list('items'), null);
+  assert.equal(reqs.length, 2, 'пауза, а не повтор через минуту');
+});
+
+test(`next с новыми документами дольше ${MAX_PAGES} страниц — нарушение контракта, пауза 30 мин, а не бесконечный цикл`, async () => {
+  const reqs = [];
+  const logs = [];
+  let t = 1_000_000;
+  const get = async (p) => { reqs.push(p); const n = reqs.length; return { full: true, cursor: 'b1.1', collections: { items: { docs: [{ id: `d-${n}`, version: 1, data: {}, updatedAt: 1e6 - n }] } }, next: `p${n}` }; };
+  const m = createDeltaMirror({ get, now: () => t, log: (s) => logs.push(s) });
   assert.equal(await m.list('items'), null);
   assert.equal(reqs.length, MAX_PAGES);
-  assert.match(logs[0], new RegExp(`полный список длиннее ${MAX_PAGES} страниц`));
+  assert.match(logs[0], new RegExp(`полный список длиннее ${MAX_PAGES} страниц.*30 мин прежний полный список`));
+  t += RETRY_MS;
+  assert.equal(await m.list('items'), null);
+  assert.equal(reqs.length, MAX_PAGES, 'пауза, а не повтор через минуту');
 });
 
 test('сбой посреди страниц (503 на странице 2) — как выкатка: повтор через минуту; прежнее зеркало и курсор целы до последней страницы', async () => {
