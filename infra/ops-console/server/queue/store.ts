@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { getDb } from '../db/client'
 import { oqDocs, oqEvents } from '../db/schema'
 import { apiError } from '../http-types'
+import { OWNER_FIELDS, stampCheck } from './check-stamps'
 import { removeItemFiles } from './files/remove'
 import { oqWrite, type OqWriter } from './oq-write'
 import { guardPlanEnd, moveToUnseen } from './plan-end'
@@ -42,7 +43,6 @@ export interface Doc {
 
 export const DOC_ID = /^[A-Za-z0-9_.~:@+-]{1,80}$/
 const MAX_DOC_BYTES = 48 * 1024
-const OWNER_FIELDS = ['done', 'choice', 'note', 'at'] as const
 const AGENT_STATUSES = ['taken', 'doing', 'blocked', 'done', 'planned'] as const
 
 const httpsLink = z.object({ href: z.string().regex(/^https:\/\/[^\s"<>]+$/).max(2000), text: z.string().max(200).optional() })
@@ -162,10 +162,10 @@ const checkSchema = z
   })
   .strict()
 
-/** Поля агента в checks: замена документа владельцем (PUT) их не стирает (ревью #324, п. 5). */
-export const AGENT_FIELDS = ['agentStatus', 'agentNote', 'agentBy', 'agentAt', 'blockedAt'] as const
 /** Поля checks, которые ставит сервер (stampCheck): присланные значения не принимаются. */
 const SERVER_CHECK_FIELDS = ['agentAt', 'ownerAt', 'blockedAt'] as const
+
+export { AGENT_FIELDS } from './check-stamps'
 
 const SCHEMAS: Record<Collection, z.ZodTypeAny> = { checks: checkSchema, items: itemSchema, work: workSchema }
 
@@ -186,31 +186,6 @@ export function parseDoc(row: typeof oqDocs.$inferSelect): Doc {
 export async function getDoc(collection: Collection, id: string, products: Visibility): Promise<Doc | null> {
   const row = await getDb().query.oqDocs.findFirst({ where: and(eq(oqDocs.collection, collection), eq(oqDocs.id, id)) })
   return row && canSee(products, row.product) ? parseDoc(row) : null
-}
-
-/**
- * Серверные поля checks: agentAt — время последней записи агента (от него снимается захват, CLAIM_TTL_MS); ownerAt —
- * время сохранения ответа владельца; blockedAt — переход сессии в blocked. Присланные значения не принимаются.
- * Замена документа владельцем сохраняет поля агента: старые вкладки стирали бы захват и возвращали прежний статус.
- */
-function stampCheck(
-  merged: Record<string, unknown>,
-  before: Record<string, unknown> | null,
-  data: Record<string, unknown>,
-  o: { owner: boolean; merge: boolean; at: string },
-): void {
-  for (const k of ['ownerAt', 'blockedAt'] as const) {
-    if (before?.[k] !== undefined) merged[k] = before[k]
-    else delete merged[k]
-  }
-  if (o.owner && !o.merge && before) {
-    for (const k of AGENT_FIELDS) if (before[k] !== undefined && !(k in data)) merged[k] = before[k]
-  }
-  if (o.owner && (OWNER_FIELDS as readonly string[]).some((k) => k in data)) merged.ownerAt = o.at
-  if (!o.owner) {
-    merged.agentAt = o.at
-    if (merged.agentStatus === 'blocked' && before?.agentStatus !== 'blocked') merged.blockedAt = o.at
-  }
 }
 
 /** Что именно меняется — для проверки прав по полям. */

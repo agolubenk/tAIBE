@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { api, freshApp, login } from './helpers'
-import { OPEN_RULE_JS } from '../server/queue/open-rule'
+import { OPEN_RULE_JS, oqItemState } from '../server/queue/open-rule'
 import { SHIM_JS } from '../server/queue/page-scripts'
 import { createToken, revokeToken } from '../server/queue/auth'
 import { mergePlan, mergeRequestBody, setGithubTransportForTests, type GithubResponse } from '../server/queue/github'
@@ -740,6 +740,33 @@ describe('ответ владельца со страницы не стирае�
     // Заметка поверх blocked — отметка не сдвигается: пункт не переоткрывается от любой записи агента.
     const note = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentNote: 'взял' } })
     expect(note.json.data.blockedAt).toBe(blocked.json.data.blockedAt)
+  })
+
+  it('blocked поверх blocked после нового ответа владельца — новая отметка, пункт «ждёт вас снова» (s-sentry-enable-1911, 20.11)', async () => {
+    const id = 's-reblock-2011'
+    expect((await bearer(agent).put(`/db/items/${id}`, { data: { kind: 'server', title: 'Повторная просьба' } })).status).toBe(200)
+    const tick = () => new Promise((r) => setTimeout(r, 5))
+    const first = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentStatus: 'blocked', agentNote: 'нужен вывод' } })
+    await tick()
+    // Повтор blocked до ответа владельца — отметка та же: просить снова не о чем.
+    const again = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentStatus: 'blocked', agentNote: 'всё ещё жду' } })
+    expect(again.json.data.blockedAt).toBe(first.json.data.blockedAt)
+    await tick()
+    expect((await bearer(owner).patch(`/db/checks/${id}`, { data: { done: true, at: '2026-11-20T08:15:33.088Z', note: 'разрешаю' } })).status).toBe(200)
+    const answered = (await bearer(agent).get(`/db/checks/${id}`)).json.data
+    expect(oqItemState('server', answered)).toBe('done')
+    await tick()
+    // Заметка без статуса после ответа — не просьба: пункт закрыт.
+    const note = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentNote: 'читаю ответ' } })
+    expect(note.json.data.blockedAt).toBe(first.json.data.blockedAt)
+    expect(oqItemState('server', note.json.data)).toBe('done')
+    await tick()
+    // blocked с новой просьбой после ответа — отметка новая, пункт снова у владельца: и сервер, и ?open=1.
+    const reblock = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentStatus: 'blocked', agentNote: 'запустите команду сами' } })
+    expect(Date.parse(reblock.json.data.blockedAt)).toBeGreaterThan(Date.parse(answered.ownerAt))
+    expect(oqItemState('server', reblock.json.data)).toBe('again')
+    const open = (await bearer(agent).get('/db/items?open=1')).json.docs.map((d: { id: string }) => d.id)
+    expect(open).toContain(id)
   })
 
   it('замена ответа владельцем (PUT) не стирает поля агента (ревью «Контроля» #324, п. 5)', async () => {

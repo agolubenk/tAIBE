@@ -1354,13 +1354,13 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
     var opt = t.closest && t.closest('.opt');
     if (opt) {
       var id = itemOf(opt); if (!id) return;
-      var e = entry(id); e.choice = opt.dataset.opt; e.done = true; e.at = new Date().toISOString();
+      var e = entry(id); e.choice = opt.dataset.opt; e.done = true; markOwnAnswer(e);
       markMelt(id); persist(id); render(); return;
     }
     var re = t.closest && t.closest('.reopen');
     if (re) {
       var rid = itemOf(re); if (!rid) return;
-      var r = entry(rid); r.choice = null; r.done = false; r.at = new Date().toISOString();
+      var r = entry(rid); r.choice = null; r.done = false; markOwnAnswer(r);
       persist(rid); render(); return;
     }
     var b = t.closest && t.closest('.copy');
@@ -1376,8 +1376,8 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
   document.addEventListener('change', function (ev) {
     var t = ev.target, id = itemOf(t); if (!id) return;
     var e = entry(id);
-    if (t.classList.contains('cb')) { e.done = t.checked; e.at = new Date().toISOString(); }
-    else if (t.classList.contains('field')) { e.note = t.value.slice(0, 20000); e.at = new Date().toISOString(); }
+    if (t.classList.contains('cb')) { e.done = t.checked; markOwnAnswer(e); }
+    else if (t.classList.contains('field')) { e.note = t.value.slice(0, 20000); markOwnAnswer(e); }
     else return;
     // persist до render: строка «Сохранено» показывает «Сохраняю…» (pending), а не время до записи (Claude-линза #337).
     markMelt(id); persist(id); render();
@@ -1421,10 +1421,7 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
       // Ответ владельца из снимка — только если здесь нет своей несохранённой правки: снимок, снятый до сохранения,
       // откатил бы заметку, и следующий persist отправил бы старую поверх новой (линза GLM #214, major).
       if (ownerSnapshotApplies(e, r.data, !!inflight[r.id] || !!dirty[r.id] || !!saveErr[r.id] || !!e.pending)) {
-        if (typeof r.data.done === 'boolean') e.done = r.data.done;
-        if (typeof r.data.choice === 'string' || r.data.choice === null) e.choice = r.data.choice;
-        if (typeof r.data.note === 'string') e.note = r.data.note;
-        if (typeof r.data.at === 'string') e.at = r.data.at;
+        ownerFieldsInto(e, r.data);
       }
       agentFieldsInto(e, r.data);
     });
@@ -1880,9 +1877,32 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
   // Поля агента из строки снимка checks (документ целиком) — в запись страницы. agentBy, которого нет в снимке,
   // стирается: release снимает захват (сервер удаляет agentBy, статус и заметку оставляет), и без этого метка
   // называла бы держателем сессию, которая пункт уже отпустила (линза фронтенда #414, N1).
+  // blockedAt — серверная отметка перехода в blocked (store.ts stampCheck): правило «ждёт вас снова» (oqItemState)
+  // сравнивает её, а не agentAt. Без неё страница брала agentAt любой записи агента — заметка поверх blocked после
+  // ответа владельца ложно открывала пункт снова, хотя API и MCP open_only считали его закрытым (s-sentry-enable-1911,
+  // 20.11). Нет в снимке (старый документ) — стирается: правило, как у сервера, падает на agentAt.
   function agentFieldsInto(e, data) {
     ['agentStatus', 'agentNote', 'agentAt'].forEach(function (k) { if (typeof data[k] === 'string') e[k] = data[k]; });
     if (typeof data.agentBy === 'string') e.agentBy = data.agentBy; else delete e.agentBy;
+    if (typeof data.blockedAt === 'string') e.blockedAt = data.blockedAt; else delete e.blockedAt;
+    return e;
+  }
+  // Ответ владельца из снимка checks — в запись страницы, вместе с ownerAt: серверное время сохранения ответа, его
+  // сравнивает правило «ждёт вас снова» (часы устройства в at — только у старых документов без отметки).
+  function ownerFieldsInto(e, data) {
+    if (typeof data.done === 'boolean') e.done = data.done;
+    if (typeof data.choice === 'string' || data.choice === null) e.choice = data.choice;
+    if (typeof data.note === 'string') e.note = data.note;
+    if (typeof data.at === 'string') e.at = data.at;
+    if (typeof data.ownerAt === 'string') e.ownerAt = data.ownerAt; else delete e.ownerAt;
+    return e;
+  }
+  // Свой ответ на этой странице: время — часы устройства, а серверный ownerAt прошлого ответа снимается, иначе правило
+  // сравнивало бы blocked со старым ответом, и пункт «ждёт вас снова» не закрывался бы до следующего снимка. Снимок
+  // после сохранения принесёт новый ownerAt.
+  function markOwnAnswer(e) {
+    e.at = new Date().toISOString();
+    delete e.ownerAt;
     return e;
   }
   function holderState(relay, e, now, product) {
