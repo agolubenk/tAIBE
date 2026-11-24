@@ -9,11 +9,22 @@
 // RETRY_MS, а не 30 мин прежнего пути (линза Claude #353, п. 1). Пока курсор несёт метку запуска консоли (OPS-70),
 // после выкатки с перезапуском это 410 и один полный список; без перезапуска — дельта от курсора.
 // Полный список ещё и раз в FULL_EVERY_MS — страховка от правки базы консоли мимо журнала событий (как у Нерва).
+//
+// Полный список — по страницам (OPS-27; сервер — OPS-22, консоль HR #837, queue/changes-pages.ts): ?paged=1, дальше
+// ?page=<next>, пока ответ несёт next. Каждая страница — около 1 МБ, а не 7,7 МБ одним телом: на медленной сети ответ не
+// упирается в таймаут, консоль не собирает весь список в памяти. Курсор один на все страницы, зеркало заменяется только
+// после последней. Консоль без страниц параметр не знает и отдаёт весь список одним ответом без next — это одна страница.
 
 export const DELTA_COLS = ['checks', 'items', 'work'];
 export const FULL_EVERY_MS = 12 * 3600_000;
 export const BACKOFF_MS = 30 * 60_000;
 export const RETRY_MS = 60_000;
+/**
+ * Потолок страниц одного полного списка — защита от консоли, которая отдаёт next по кругу. Потолок коллекции консоли
+ * (list.ts) — 10 000 документов и 16 МБ, страница — 1 МБ: три коллекции дают до ~50 страниц. На проде 24.11 — 7
+ * страниц по ~1,1 МБ (3850 документов, 7,7 МБ одним ответом).
+ */
+export const MAX_PAGES = 100;
 
 /**
  * Сбой, который пройдёт сам: 5xx, 429, сеть или недочитанное тело (у ошибок fetch и http.mjs bodyJson нет status, OPS-79);
@@ -34,6 +45,8 @@ const parsed = (fn) => {
 };
 
 const isObj = (x) => typeof x === 'object' && x !== null && !Array.isArray(x);
+/** Проход полного списка прерван устаревшим токеном страницы — начать с первой. */
+const RESTART = Symbol('restart');
 /**
  * Документ консоли — объект со строковым id и объектом data. Иначе он остался бы в зеркале, и каждый oq_list items
  * падал бы на d.data.kind до полного списка через 12 ч (линза Claude #380, NB1); прежний путь выздоравливал сразу.
@@ -58,20 +71,53 @@ export function createDeltaMirror({ get, cols = DELTA_COLS, now = Date.now, log 
   let restUntil = 0;
   let inflight = null;
 
-  async function full() {
-    const j = await get(base);
-    st = parsed(() => {
-      if (j?.full !== true || typeof j.cursor !== 'string' || !j.collections) throw contractError('ответ без full, cursor и collections');
-      const docs = {};
-      const meta = {};
-      for (const col of cols) {
-        const c = j.collections[col];
-        if (!Array.isArray(c?.docs)) throw contractError(`в полном списке нет коллекции ${col}`);
-        docs[col] = new Map(c.docs.map((d) => docEntry(d, `полный список ${col}`)));
-        meta[col] = c.truncated === true ? { truncated: true, total: c.total, limit: c.limit } : {};
+  /**
+   * Один проход по страницам. Коллекция приходит на страницах, где есть её документы, и на той, где она кончилась
+   * (там же потолок truncated); документы склеиваются по порядку страниц, повтор id — последняя версия.
+   * Токен страницы устарел (410: консоль перезапущена между страницами) или отвергнут (400) — RESTART, если можно.
+   */
+  async function fullPass(mayRestart) {
+    const docs = Object.fromEntries(cols.map((col) => [col, new Map()]));
+    const meta = Object.fromEntries(cols.map((col) => [col, {}]));
+    const seen = new Set();
+    let cursor;
+    let next;
+    for (let page = 1; ; page++) {
+      if (page > MAX_PAGES) throw contractError(`полный список длиннее ${MAX_PAGES} страниц`);
+      let j;
+      try {
+        j = await get(next === undefined ? `${base}&paged=1` : `${base}&page=${encodeURIComponent(next)}`);
+      } catch (e) {
+        if (next !== undefined && mayRestart && (e?.status === 410 || e?.status === 400)) return RESTART;
+        throw e;
       }
-      return { cursor: j.cursor, fullAt: now(), docs, meta };
+      next = parsed(() => {
+        if (j?.full !== true || typeof j.cursor !== 'string' || !isObj(j.collections)) throw contractError('ответ без full, cursor и collections');
+        if (cursor === undefined) cursor = j.cursor;
+        else if (j.cursor !== cursor) throw contractError(`страница ${page} полного списка — с другим курсором`);
+        if (j.next !== undefined && (typeof j.next !== 'string' || j.next === '')) throw contractError('next — не непустая строка');
+        for (const col of cols) {
+          const c = j.collections[col];
+          if (c === undefined) continue;
+          if (!Array.isArray(c?.docs)) throw contractError(`в полном списке нет коллекции ${col}`);
+          for (const d of c.docs) docs[col].set(...docEntry(d, `полный список ${col}`));
+          seen.add(col);
+          if (c.truncated === true) meta[col] = { truncated: true, total: c.total, limit: c.limit };
+        }
+        return j.next;
+      });
+      if (next === undefined) break;
+    }
+    parsed(() => {
+      for (const col of cols) if (!seen.has(col)) throw contractError(`в полном списке нет коллекции ${col}`);
     });
+    st = { cursor, fullAt: now(), docs, meta };
+    return null;
+  }
+
+  /** Полный список; токен страницы устарел — один повтор с первой страницы, второй сбой — обычная ошибка. */
+  async function full() {
+    if ((await fullPass(true)) === RESTART) await fullPass(false);
   }
 
   async function delta() {
