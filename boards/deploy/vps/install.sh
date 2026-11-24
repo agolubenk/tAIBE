@@ -119,12 +119,12 @@ write_files() {
   bash "$here/render-tls.sh" "$here/tls.conf.template" "$ROOT/tls.conf" \
     "$WG_ADDR:$TLS_PORT" "$DOMAIN" 127.0.0.1:5180 || die "tls.conf не отрендерился"
 
-  # Keep the mirror, notebook, claude-mem, owner-queue, mail and sign-in limit
-  # settings the owner already filled in.
+  # Keep the mirror, notebook, claude-mem, owner-queue, mail, sign-in limit and
+  # edge entry settings the owner already filled in.
   [ -f "$ROOT/.env" ] && cp -a "$ROOT/.env" "$ROOT/.env.prev"
   local kept=""
   if [ -f "$ROOT/.env.prev" ]; then
-    kept="$(grep -E '^((NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH|SMTP)_|DISABLE_AUTH_RATE_LIMIT=)' "$ROOT/.env.prev" || true)"
+    kept="$(grep -E '^((NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH|SMTP)_|DISABLE_AUTH_RATE_LIMIT=|TB_EDGE_BIND=)' "$ROOT/.env.prev" || true)"
   fi
   {
     echo "TB_IMAGE=t-boards:$TB_TAG"
@@ -250,7 +250,7 @@ main() {
   seed_admin
   seed_products
   smoke
-  log "готово: https://$DOMAIN (через WireGuard), вход admin / admin"
+  log "готово: https://$DOMAIN (через WireGuard; без него — если задан TB_EDGE_BIND и edge-nginx продукта), вход admin / admin"
   log "откат: cd $ROOT && cp .env.prev .env && docker compose -p t-boards up -d"
 }
 
