@@ -148,12 +148,16 @@ export function bizSubsystem(metric: string): string | null {
 const BIZ_HINTS: Record<string, string> = {
   biz_stt_failed_1h:
     'Распознавание встреч падает (failed, «Распознавание не удалось/прервалось»). Причина — в логах: docker logs --tail 200 backend-whisper-1 и backend-backend-1.',
+  biz_stt_diarization_failed_1h:
+    'У готовых записей не выполнилась разметка говорящих: транскрипт есть, но без говорящих, в карточке встречи — пометка с причиной и кнопка «Переразметить». Причина — в пометке и в логах: docker logs --tail 200 backend-diarization-1 и backend-backend-1. Запись длиннее 2 часов sidecar не размечает — это предел, а не сбой.',
   biz_stt_stuck:
     'Записи висят в processing дольше 4 ч (файлы больше 1,5 ГБ — 6 ч): задача потеряна (перезапуск Redis, неудачная уборка зависшей задачи) или вызов без таймаута. Зависание whisper дольше 90 минут обычно видно раньше как сбой распознавания. Запись без живой задачи сама не вернётся: в базе status = \'uploaded\' для неё (where id = … and status = \'processing\'), затем «Распознать заново» в карточке встречи.',
   biz_stt_orphaned:
     'Записи ждут распознавания (uploaded), а задач для них в очереди meeting-stt нет: постановка сорвалась или очередь потерялась при перезапуске Redis. Сами они не начнутся — «Распознать заново» в карточке встречи; найти: tenant_meeting_recordings со status = \'uploaded\' старше 30 минут.',
   biz_stt_queue_waiting:
     'Задачи копятся в очереди meeting-stt: распознавание не успевает или стоит. Проверьте контейнеры backend-whisper-1 и backend-backend-1.',
+  biz_stt_queue_stalled:
+    'Задачи распознавания ждут, а в работе ни одной — обработчик очереди meeting-stt их не берёт: backend перезапускается или упал воркер. Длинная очередь, которая разбирается, сюда не попадает; недоступный Redis очередей — тоже: тогда метрика не считается вовсе (правило «Бизнес-метрики не считаются»). Проверьте docker logs --tail 200 backend-backend-1 (MeetingSttProcessor).',
   biz_tg_api_5xx_pct:
     'Маршруты Telegram отвечают 500/502/504 (по журналу nginx): backend упал, не отвечает или падает с ошибкой кода. Проверьте контейнер backend-backend-1 и его логи: docker logs --tail 200 backend-backend-1.',
   biz_tg_api_503_pct: `Backend отказывает по Telegram с 503: у аккаунтов открыт circuit breaker Session Manager, FLOOD_WAIT, конфликт владения сессией или таймаут MTProto. Обычно это один-два аккаунта, а не платформа. ${SM_LOGS}.`,
@@ -183,9 +187,11 @@ export function metricLabel(metric: string): string {
     nginx_rpm: 'Запросов в минуту',
     docker_ok: 'Docker отвечает',
     biz_stt_failed_1h: 'Сбоев расшифровки за час',
+    biz_stt_diarization_failed_1h: 'Записей без разметки говорящих за час',
     biz_stt_stuck: 'Застрявших записей',
     biz_stt_orphaned: 'Записей без задачи',
     biz_stt_queue_waiting: 'В очереди расшифровки',
+    biz_stt_queue_stalled: 'Задач ждут, обработчик не берёт',
     biz_tg_api_5xx_pct: 'Ошибки API Telegram (кроме 503)',
     biz_tg_api_503_pct: 'Отказы Telegram (503)',
     biz_tg_evictions_1h: 'Выселений сессий за час',

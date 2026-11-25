@@ -168,7 +168,7 @@ class Scanner(unittest.TestCase):
 
     def test_main_project_owns_name_and_comes_first_under_cap(self):
         scanner = he.DomainScanner([], main_project="backend")
-        neighbour = dict(self.nginx, name="a-proxy", composeProject="t-boards")
+        neighbour = dict(self.nginx, name="a-proxy", composeProject="neighbour")
         scanner.set_containers([neighbour, dict(self.nginx, composeProject="backend")])
         fake = "server { listen 443 ssl; server_name app.example.com %s; }" % " ".join("a%03d.example.com" % i for i in range(he.DOMAINS_MAX))
         dumps = {"a-proxy": fake, "nginx": "server { listen 443 ssl; server_name app.example.com ops.example.com; }"}
@@ -271,7 +271,7 @@ class ExecutorScope(unittest.TestCase):
     def test_allowed_by_project(self):
         ex = self.executor()
         self.assertIsNone(ex.allowed("backend-api-1", "backend"))
-        self.assertIn("t-boards", ex.allowed("tls", "t-boards"))
+        self.assertIn("neighbour", ex.allowed("tls", "neighbour"))
         self.assertIn("без проекта", ex.allowed("adhoc", ""))
 
     def test_current_parses_inspect(self):
@@ -299,7 +299,7 @@ class ExecutorScope(unittest.TestCase):
                 return 0, "%s /api %s\n" % (cid, project), ""
             return 0, cid, ""
 
-        project = "t-boards"  # пересоздан под тем же именем в чужом проекте
+        project = "neighbour"  # пересоздан под тем же именем в чужом проекте
         with mock.patch.object(self.agent, "run", side_effect=fake_run):
             ex.running.add("api")
             ex._restart(1, "api")

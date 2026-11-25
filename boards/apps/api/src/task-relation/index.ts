@@ -13,6 +13,7 @@ import {
 import { assertProjectAccess } from "../project-access/assert-project-access";
 import { requireWorkspacePermission } from "../utils/require-workspace-permission";
 import { validateWorkspaceAccess } from "../utils/validate-workspace-access";
+import { maskForTokenCaller } from "../utils/token-caller-text";
 import { workspaceAccess } from "../utils/workspace-access-middleware";
 import createTaskRelation from "./controllers/create-task-relation";
 import deleteTaskRelation from "./controllers/delete-task-relation";
@@ -176,10 +177,13 @@ const deleteTaskRelationRoute = createRoute({
 const taskRelation = apiRouter<BaseVariables & { workspaceId: string }>()
   .openapi(getTaskRelationsRoute, async (c) =>
     c.json(
-      await getTaskRelations(
-        c.req.valid("param").taskId,
-        c.get("workspaceId"),
-        c.get("userId"),
+      maskForTokenCaller(
+        c,
+        await getTaskRelations(
+          c.req.valid("param").taskId,
+          c.get("workspaceId"),
+          c.get("userId"),
+        ),
       ),
       200,
     ),
@@ -188,23 +192,29 @@ const taskRelation = apiRouter<BaseVariables & { workspaceId: string }>()
     const { sourceTaskId, targetTaskId, relationType, replaceParent } =
       c.req.valid("json");
     return c.json(
-      await createTaskRelation({
-        sourceTaskId,
-        targetTaskId,
-        relationType,
-        replaceParent,
-        userId: c.get("userId"),
-        workspaceId: c.get("workspaceId"),
-      }),
+      maskForTokenCaller(
+        c,
+        await createTaskRelation({
+          sourceTaskId,
+          targetTaskId,
+          relationType,
+          replaceParent,
+          userId: c.get("userId"),
+          workspaceId: c.get("workspaceId"),
+        }),
+      ),
       200,
     );
   })
   .openapi(deleteTaskRelationRoute, async (c) =>
     c.json(
-      await deleteTaskRelation(
-        c.req.valid("param").id,
-        c.get("userId"),
-        c.get("workspaceId"),
+      maskForTokenCaller(
+        c,
+        await deleteTaskRelation(
+          c.req.valid("param").id,
+          c.get("userId"),
+          c.get("workspaceId"),
+        ),
       ),
       200,
     ),

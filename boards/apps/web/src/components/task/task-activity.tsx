@@ -1,6 +1,8 @@
 import { useTranslation } from "react-i18next";
 import Activity from "@/components/activity";
 import CommentInput from "@/components/activity/comment-input";
+import { groupDialogs } from "@/components/activity/group-dialogs";
+import { SessionDialog } from "@/components/activity/session-dialog";
 import useAuth from "@/components/providers/auth-provider/hooks/use-auth";
 import { Timeline } from "@/components/ui/timeline";
 import useGetActivitiesByTaskId from "@/hooks/queries/activity/use-get-activities-by-task-id";
@@ -20,7 +22,7 @@ export function TaskActivity({
   const { t } = useTranslation();
   const { user } = useAuth();
   const { data: newestFirst = [] } = useGetActivitiesByTaskId(taskId);
-  const activities = [...newestFirst].reverse();
+  const entries = groupDialogs([...newestFirst].reverse());
 
   return (
     <section
@@ -31,11 +33,19 @@ export function TaskActivity({
         {t("tasks:detail.activity")}
       </h2>
 
-      {activities.length > 0 ? (
+      {entries.length > 0 ? (
         <Timeline>
-          {activities.map((activity, index) => (
-            <Activity key={activity.id} activity={activity} step={index + 1} />
-          ))}
+          {entries.map((entry, index) =>
+            entry.kind === "dialog" ? (
+              <SessionDialog key={entry.key} dialog={entry} step={index + 1} />
+            ) : (
+              <Activity
+                key={entry.activity.id}
+                activity={entry.activity}
+                step={index + 1}
+              />
+            ),
+          )}
         </Timeline>
       ) : (
         <p className="px-2 py-1 text-muted-foreground text-xs">

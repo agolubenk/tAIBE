@@ -21,7 +21,8 @@ export type ReauthReply =
 
 type ErrorFields = { status?: number; code?: unknown; methods?: unknown };
 
-function methodsOf(value: unknown): ReauthMethod[] | undefined {
+/** The `methods` of an error body, if it is a list of known methods. */
+export function reauthMethodsOf(value: unknown): ReauthMethod[] | undefined {
   return Array.isArray(value) && value.every(isReauthMethod)
     ? value
     : undefined;
@@ -54,7 +55,7 @@ export async function postReauth(
       ok: false,
       status: fields.status ?? 0,
       code: typeof fields.code === "string" ? fields.code : "",
-      methods: methodsOf(fields.methods),
+      methods: reauthMethodsOf(fields.methods),
       retryAfter,
     };
   } catch {

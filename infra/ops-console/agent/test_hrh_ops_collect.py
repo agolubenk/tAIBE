@@ -258,10 +258,10 @@ class DockerContainersOom(unittest.TestCase):
         sick = {"Status": "running", "Health": {"Status": "unhealthy", "Log": [{"Output": "token=s3cr3t refused", "ExitCode": 1}]}}
         items = [
             {"Id": A, "Name": "/backend-api-1", "State": sick, "Config": {"Labels": {"com.docker.compose.project": "backend"}}},
-            {"Id": B, "Name": "/tb-api-1", "State": sick, "Config": {"Labels": {"com.docker.compose.project": "t-boards"}}},
+            {"Id": B, "Name": "/neighbour-api-1", "State": sick, "Config": {"Labels": {"com.docker.compose.project": "neighbour"}}},
         ]
         docker = lambda cmd, timeout=15: (0, A + "\n" + B, "") if cmd[1] == "ps" else (0, json.dumps(items), "") if cmd[1] == "inspect" else (1, "", "")
-        for main, expect in (("backend", {"backend-api-1": "token=s3cr3t refused", "tb-api-1": ""}), ("", {"backend-api-1": "token=s3cr3t refused", "tb-api-1": "token=s3cr3t refused"})):
+        for main, expect in (("backend", {"backend-api-1": "token=s3cr3t refused", "neighbour-api-1": ""}), ("", {"backend-api-1": "token=s3cr3t refused", "neighbour-api-1": "token=s3cr3t refused"})):
             cfg = mock.Mock(compose_project=main, stateful=[], container_exclude=[], oom=None)
             with mock.patch.object(hc, "run", side_effect=docker), mock.patch.object(hc, "cgroup_memory", return_value=(None, None)):
                 containers, _ = hc.docker_containers(cfg)

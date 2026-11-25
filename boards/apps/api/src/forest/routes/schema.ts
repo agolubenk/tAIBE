@@ -8,7 +8,10 @@ import {
   APPROVAL_ACTIONS,
   APPROVAL_STATUSES,
   DONE_REASONS,
+  GRANT_TASKS_MAX,
+  LABEL_GRANT_ACTIONS,
 } from "../approval/approval-params";
+import { BATCH_CLOSE_MAX } from "../approval/batch-close-params";
 import { LEASE_MAX_SECONDS } from "../lease/acquire-lease";
 import { PAGE_MAX } from "../read/page-cursor";
 
@@ -43,8 +46,7 @@ export const leaseGrantSchema = z
   .openapi("ForestLeaseGrant");
 
 // Approvals (N-011)
-export const requestApprovalBody = z.object({
-  action: z.enum(APPROVAL_ACTIONS),
+const approvalFields = {
   targetId: z.string(),
   value: z.string().min(1).max(64).optional().openapi({
     description:
@@ -61,10 +63,6 @@ export const requestApprovalBody = z.object({
       description:
         "create_label: the new workspace label (targetId is the workspace id).",
     }),
-  taskIds: z.array(z.string().min(1)).min(1).max(250).optional().openapi({
-    description:
-      "create_label and attach_label (targetId is the workspace label id): the cards that get the label, up to 20. close_task (targetId is the workspace id, no value): the cards to close, up to 250 — each goes to its project's final column (TB-108).",
-  }),
   doneRef: z.string().max(200).optional().openapi({
     description:
       "close_task: the commit or PR (github.com/agolubenk/HR_Helper-v2|tAIBE) with the docs/plans/done entry (R-9).",
@@ -73,7 +71,40 @@ export const requestApprovalBody = z.object({
     description:
       "close_task without a done entry: duplicate, obsolete or import (R-9).",
   }),
-});
+};
+
+// TB-114: the card limit depends on the action, so each limit is in
+// openapi.json — 20 for a label grant, 250 for a batch close.
+export const requestApprovalBody = z.discriminatedUnion("action", [
+  z.object({
+    action: z.enum(LABEL_GRANT_ACTIONS),
+    ...approvalFields,
+    taskIds: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(GRANT_TASKS_MAX, {
+        message: `a grant names at most ${GRANT_TASKS_MAX} cards`,
+      })
+      .optional()
+      .openapi({
+        description:
+          "create_label and attach_label (targetId is the workspace label id): the cards that get the label, up to 20.",
+      }),
+  }),
+  z.object({
+    action: z.enum(APPROVAL_ACTIONS).exclude([...LABEL_GRANT_ACTIONS]),
+    ...approvalFields,
+    taskIds: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(BATCH_CLOSE_MAX)
+      .optional()
+      .openapi({
+        description:
+          "close_task (targetId is the workspace id, no value): the cards to close, up to 250 — each goes to its project's final column (TB-108).",
+      }),
+  }),
+]);
 
 export const decideApprovalBody = z.object({
   decision: z.enum(["approved", "rejected"]),

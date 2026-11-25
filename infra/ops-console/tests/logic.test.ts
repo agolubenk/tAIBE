@@ -397,6 +397,7 @@ describe('P0: правила по бизнес-метрикам', () => {
     expect(bizSubsystem('biz_failed')).toBeNull()
     expect(bizSubsystem('cpu_pct')).toBeNull()
     expect(isMeasuredBizMetric('biz_stt_failed_1h')).toBe(true)
+    expect(bizSubsystem('biz_stt_diarization_failed_1h')).toBe('STT')
     expect(isMeasuredBizMetric('biz_companies')).toBe(false)
   })
 
@@ -419,11 +420,12 @@ describe('P0: правила по бизнес-метрикам', () => {
     const keys = new Set([...script.matchAll(/^ {2}([a-z0-9_]+(?: \| [a-z0-9_]+)*)\)/gm)].flatMap((m) => m[1]!.split(' | ')))
     expect(keys.has('hf_refresh_rejected') && keys.has('hf_refresh_errors_6h')).toBe(true)
     const p0 = BUILTIN_RULES.filter((r) => r.metric?.startsWith('biz_'))
-    expect(p0).toHaveLength(14)
+    expect(p0).toHaveLength(15)
+    const since: Record<string, number> = { biz_redis_queue_mem_pct: 4, biz_stt_diarization_failed_1h: 6 }
     for (const r of p0) {
       const metric = r.metric ?? ''
-      // v3 — P0 (STT, Telegram, Huntflow); v4 — Redis очередей.
-      expect(r.since).toBe(metric === 'biz_redis_queue_mem_pct' ? 4 : 3)
+      // v3 — P0 (STT, Telegram, Huntflow); v4 — Redis очередей; v6 — разметка говорящих.
+      expect(r.since).toBe(since[metric] ?? 3)
       if (metric !== 'biz_failed') expect(keys.has(metric.slice('biz_'.length))).toBe(true)
       expect(metricLabel(metric)).not.toBe(metric)
       expect(metricHint(metric)).not.toBe('')

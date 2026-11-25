@@ -25,14 +25,39 @@ export class KaneoClient {
     this.baseUrl = options.baseUrl;
     this.auth = options.auth;
     if (options.agentSessions) {
-      this.agentKeys = new AgentKeys(async (identity) =>
-        this.send(
-          "/api/agent-identity/session",
-          { method: "POST", body: JSON.stringify(identity) },
-          await this.auth.getAccessToken(),
-        ),
+      this.agentKeys = new AgentKeys((identity) =>
+        this.issueAgentKey(identity),
       );
     }
+  }
+
+  /**
+   * TB-31 R-5: the server issues agent keys to a device-flow session by its
+   * device mark. A session from before the mark is refused with
+   * SESSION_NOT_FRESH; one new device sign-in gets a marked session. A key
+   * has nothing to sign in again, so its refusal goes to the caller.
+   */
+  private async issueAgentKey(
+    identity: AgentIdentity,
+    didRetry = false,
+  ): Promise<Response> {
+    const token = await this.auth.getAccessToken();
+    const res = await this.send(
+      "/api/agent-identity/session",
+      { method: "POST", body: JSON.stringify(identity) },
+      token,
+    );
+    if (res.status !== 403 || didRetry || this.auth.usingApiKey) return res;
+    const body = (await res
+      .clone()
+      .json()
+      .catch(() => null)) as { code?: unknown } | null;
+    if (body?.code !== "SESSION_NOT_FRESH") return res;
+    // Another call may have signed in again already: clear only this token.
+    if ((await this.auth.getAccessToken()) === token) {
+      await this.auth.clearToken();
+    }
+    return this.issueAgentKey(identity, true);
   }
 
   get usingApiKey() {

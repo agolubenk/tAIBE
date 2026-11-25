@@ -1716,6 +1716,20 @@ def test_learning(tmp: Path) -> None:
                                and r["reliability"] == 0.5 for r in priors)
           and any(not r.get("prior") and r["observations"] > 0 for r in ld["reliability"]),
           f"приоров {len(priors)} из {len(ld['reliability'])}")
+    # AUTO-125: число в таблице — то же, что у совета и доски ролей (откат роль → модель → приор), с основанием.
+    # Без этого пара без наблюдений по роли показывала 0.50, а совет брал репутацию модели.
+    on_board = {(c["model"], role): (c["score"], c["basis"])
+                for role, cands in ld["role_board"]["roles"].items() for c in cands}
+    differs = [(r["model"], r["role"], r.get("score"), r.get("basis")) for r in ld["reliability"]
+               if (r["model"], r["role"]) in on_board
+               and (r.get("score"), r.get("basis")) != on_board[(r["model"], r["role"])]]
+    check("обучение: оценка в таблице надёжности равна оценке доски ролей, с основанием (AUTO-125)",
+          not differs and all("score" in r and r.get("basis") for r in ld["reliability"]), f"{differs[:3]}")
+    inherited = [r for r in priors if r["model"] == "model-b"]
+    check("обучение: пара без наблюдений по роли берёт репутацию модели, а не приор 0.50 (AUTO-125)",
+          bool(inherited) and all(r["basis"] == "model" and r["score"] > 0.5 for r in inherited)
+          and any(r["basis"] == "prior" and r["score"] == 0.5 for r in priors),
+          f"{[(r['role'], r['score'], r['basis']) for r in inherited[:3]]}")
 
 
 def test_rubric_dedup(tmp: Path) -> None:
@@ -2312,12 +2326,12 @@ def test_prisma_parser() -> None:
     """
     import graph_build
 
-    if not graph_build.PRISMA_SCHEMA.is_file():
-        # Хост без Prisma (дом слоя tAIBE: доски на Drizzle) — парсеру проверять нечего. В хосте с
-        # монорепо apps/ отсутствие схемы — сбой: её переместили, и граф молча потерял модели.
-        host_has_apps = (graph_build.REPO_ROOT / "apps").is_dir()
-        check("prisma-парсер: schema.prisma найден" if host_has_apps else "prisma-парсер: хост без Prisma — пропуск",
-              not host_has_apps, str(graph_build.PRISMA_SCHEMA))
+    if graph_build.PRISMA_SCHEMA is None or not graph_build.PRISMA_SCHEMA.is_file():
+        # У продукта нет поля council.prisma_schema (дом слоя tAIBE: доски на Drizzle) — парсеру проверять нечего. Поле
+        # есть, а файла нет — сбой: схему переместили, и граф молча потерял модели (Ф2 OPS-23).
+        declared = graph_build.PRISMA_SCHEMA is not None
+        check("prisma-парсер: schema.prisma найден" if declared else "prisma-парсер: у продукта нет схемы Prisma — пропуск",
+              not declared, str(graph_build.PRISMA_SCHEMA))
         return
 
     result = graph_build._parse_prisma_models()

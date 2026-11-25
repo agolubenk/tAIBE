@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import pwd
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +15,8 @@ import lineage_guard as G  # noqa: E402
 import lineage_guard_fs as GF  # noqa: E402
 import lineage_retire as LR  # noqa: E402
 from test_lineage import CHILD, PARENT, ST, Base, FakeSys, P, tree  # noqa: E402
+
+REAL_ENV_PROBLEM = G.env_problem  # Base подменяет её на «всё в порядке»: реестр теста — из окружения
 
 PRED = "11111111-aaaa-4bbb-8ccc-000000000300"
 SUCC = "22222222-aaaa-4bbb-8ccc-000000000400"
@@ -104,6 +107,26 @@ class HandoverTest(Base):
         self.assertIn(300, self.sx.p)
         self.assertIn("сбой записи", " ".join(self.lines))
         self.assertFalse((G.state_dir() / G.INTENT).exists(), "откат удался — журнал не нужен")
+
+    # SE-167, Claude-линза #457 B2: реестр сессий из окружения — поддельный; Контроль не передаётся никому.
+    def test_registry_from_environment_keeps_everything(self):
+        with mock.patch.object(G, "env_problem", REAL_ENV_PROBLEM):  # окружение Base: TAIBE_LINEAGE_DIR, CLAUDE_SESSIONS_DIR
+            self.assertEqual(self.run_watch(), 3, self.lines)
+        self.assert_untouched()
+        self.assertIn("CLAUDE_SESSIONS_DIR", " ".join(self.lines))
+
+    def test_env_problem_names_each_variable_and_foreign_home(self):
+        home = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+        keep = {k: v for k, v in os.environ.items() if k not in G.DIR_VARS}
+        with mock.patch.dict(os.environ, {**keep, "HOME": home}, clear=True):
+            self.assertIsNone(REAL_ENV_PROBLEM())
+            for var in G.DIR_VARS:
+                with self.subTest(var), mock.patch.dict(os.environ, {var: str(self.dir / "fake")}):
+                    self.assertIn(var, REAL_ENV_PROBLEM() or "")
+            with mock.patch.dict(os.environ, {"HOME": str(self.dir)}):
+                self.assertIn("HOME", REAL_ENV_PROBLEM() or "")
+            os.environ.pop("HOME")  # нет HOME — дом из учётной записи, это не подмена
+            self.assertIsNone(REAL_ENV_PROBLEM())
 
     def test_successor_not_in_spawned_window_keeps_everything(self):
         (L.ldir() / f"{CHILD}.json").unlink()

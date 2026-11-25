@@ -12,7 +12,11 @@ import { assertValidTaskStatus } from "../../task/validate-task-fields";
 import { assertAssignableUser } from "../../utils/assert-assignable-user";
 import type { ForestActor } from "../actor";
 import { ForestError } from "../forest-error";
-import { decideRollback, type HistoryChanges } from "./decide-rollback";
+import {
+  decideRollback,
+  type HistoryChanges,
+  withAutofill,
+} from "./decide-rollback";
 import {
   currentTaskFields,
   setHistoryActor,
@@ -55,13 +59,16 @@ export async function restoreTask(input: {
   taskId: string;
   workspaceId: string;
   changes: HistoryChanges;
+  // The autofill the edit caused, undone with it (TB-69).
+  autofill?: HistoryChanges;
   actor: ForestActor;
 }) {
   const { taskId, actor } = input;
   const { before, after } = await withLockedTask(taskId, async (tx, task) => {
+    const current = await currentTaskFields(tx, taskId);
     const decision = decideRollback(
-      input.changes,
-      await currentTaskFields(tx, taskId),
+      withAutofill(input.changes, input.autofill, current),
+      current,
       FIXED,
     );
     if (!decision.ok)

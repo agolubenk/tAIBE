@@ -151,11 +151,11 @@ fi
 case "$TERMINAL" in terminal|iterm|tmux|print) ;; *) die "--terminal: terminal, iterm, tmux или print" ;; esac
 
 # Номер — место ключа в team.roles instances/<slug>.json (тест сверяет): так роль 7 и в Нерве (emit 7), и в подписи линзы.
-ROLE_LIST="coord plan frontend backend release boards backend-2 frontend-2"
+ROLE_LIST="coord plan frontend backend release boards backend-2 frontend-2 backend-3"
 role_num() {
   case "$1" in
     coord) echo 1 ;; plan) echo 2 ;; frontend) echo 3 ;; backend) echo 4 ;; release) echo 5 ;; boards) echo 6 ;;
-    backend-2) echo 7 ;; frontend-2) echo 8 ;;
+    backend-2) echo 7 ;; frontend-2) echo 8 ;; backend-3) echo 9 ;;
     *) return 1 ;;
   esac
 }
@@ -428,8 +428,23 @@ launch_role() {
   if [ "$SPAWN_FAILED" = 1 ]; then note "$r — НЕ открыта: окно не открылось (--terminal print — вручную)"; return; fi
   if [ "$TERMINAL" = print ] || [ "$DRY" = 1 ]; then note "$r — команда напечатана"; return; fi
   echo "жду сессию $r (до ${SPAWN_WAIT:-90} с)…"
-  got="$(python3 -I "$TOOLS/team_status.py" wait --role "$r" --line "$SPAWNED_LINE" --timeout "${SPAWN_WAIT:-90}" 2>&1)" \
-    && note "$r — поднята: $got" || note "$r — открыта, сессия НЕ появилась: $got"
+  if got="$(python3 -I "$TOOLS/team_status.py" wait --role "$r" --line "$SPAWNED_LINE" --timeout "${SPAWN_WAIT:-90}" 2>&1)"; then
+    note "$r — поднята: $got"
+    [ "$r" != release ] || seat_control
+  else
+    note "$r — открыта, сессия НЕ появилась: $got"
+  fi
+}
+
+# Контроль новому release (SE-155): мёртвую запись Контроля продукта заменяет lineage.py seat. Вызов из агентской
+# сессии он отклоняет сам: вписывает только сторож команды или «ВКЛ». Итог — строкой в SUMMARY.
+seat_control() {
+  local g out
+  [ -n "$PRODUCT" ] || { note "release — Контроль: продукт не известен (нет instances/), списки не меняю"; return; }
+  g=$(cd "$TOOLS/../.." 2>/dev/null && pwd) || g=
+  out="$(python3 -I "$TOOLS/lineage.py" seat --product "$PRODUCT" --line "$SPAWNED_LINE" --succ-tty "$SPAWNED_TTY" \
+    --guard "$CWD" ${g:+--guard "$g"} 2>&1)" || true
+  note "release — $(printf '%s\n' "$out" | tail -n 1)"
 }
 
 case "${TMPDIR:-}$CWD" in *\"*|*\\*) die "кавычка или обратный слэш в пути — osascript не примет" ;; esac
