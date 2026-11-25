@@ -189,17 +189,15 @@ class ErrorsTest(unittest.TestCase):
         self.fails("wt_sweep_minutes")
 
     def test_body_verdicts_switch_is_a_product_field(self):
-        """#519: голоса тела PR (SE-50) — поле продукта; true или false, иначе ошибка; в _shared — ошибка."""
+        """#519: голоса тела PR (SE-50) — поле продукта; true или false, иначе ошибка; в _shared — ошибка.
+        SE-200: null — тоже ошибка: загрузка пропускала его как «нет поля», а gh_source читал как false."""
         edit(self.d, "taibe.json", lambda d: d["github"].update(body_verdicts=False))
         shared, products = P.load(self.d)
         self.assertIs(P.config_for("taibe", shared, products)["github"]["body_verdicts"], False)
         self.assertNotIn("body_verdicts", P.config_for("hr-helper", shared, products)["github"])
         for bad in ("false", 0, None):
             edit(self.d, "taibe.json", lambda d: d["github"].update(body_verdicts=bad))
-            if bad is None:
-                P.load(self.d)   # null — как нет поля: голоса тела по умолчанию
-            else:
-                self.fails("github.body_verdicts")
+            self.fails("github.body_verdicts")
         edit(self.d, "taibe.json", lambda d: d["github"].pop("body_verdicts"))
         edit(self.d, "_shared.json", lambda d: d.setdefault("github", {}).update(body_verdicts=False))
         self.fails("body_verdicts")

@@ -193,7 +193,8 @@ def load(instances=INSTANCES):
             if isinstance(value, str) and not value.strip():   # SE-172: `get` отдал бы "" с кодом 0
                 raise ProductError(f"instances/{name}: пустое обязательное поле {path}")
         _check_match(name, _get(data, "queue.match"))
-        if not isinstance(_get(data, "github.body_verdicts"), (bool, type(None))):   # 0 и "false" — ошибка
+        gh = data.get("github") if isinstance(data.get("github"), dict) else {}
+        if not isinstance(gh.get("body_verdicts", True), bool):   # 0, "false" и null — ошибка: null гасил голоса тела (SE-200)
             raise ProductError(f"instances/{name}: github.body_verdicts — true или false")
         products[slug] = data
     default = shared.get("default_product")
