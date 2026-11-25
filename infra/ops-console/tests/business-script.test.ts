@@ -184,6 +184,42 @@ describe('hrh-business.sh: метрики /metrics', () => {
     expect(run('stt_queue_waiting', { FAKE_METRICS_BACKEND: m })).toEqual({ code: 1, out: '' })
   })
 
+  it('очередь распознавания — waiting и prioritized: задачи с приоритетом BullMQ 5 держит отдельным списком', () => {
+    const m = file(
+      'backend.prom',
+      [
+        'hr_helper_bullmq_waiting_total{queue="meeting-stt",class="stt"} 2',
+        'hr_helper_bullmq_prioritized_total{queue="meeting-stt",class="stt"} 5',
+        'hr_helper_bullmq_prioritized_total{queue="resume-parse",class="ai"} 9',
+      ].join('\n') + '\n',
+    )
+    expect(run('stt_queue_waiting', { FAKE_METRICS_BACKEND: m })).toEqual({ code: 0, out: '7' })
+    // Одна серия prioritized без waiting — это не «backend прочитал очередь»: сбой чтения.
+    const only = file('backend2.prom', 'hr_helper_bullmq_prioritized_total{queue="meeting-stt",class="stt"} 5\n')
+    expect(run('stt_queue_waiting', { FAKE_METRICS_BACKEND: only })).toEqual({ code: 1, out: '' })
+  })
+
+  it('очередь стоит: ждут, а в работе ни одной — число ждущих; разбирается (active > 0) — 0; без серий — сбой', () => {
+    const q = (waiting: number, prioritized: number | null, active: number | null) =>
+      file(
+        'backend.prom',
+        [
+          `hr_helper_bullmq_waiting_total{queue="meeting-stt",class="stt"} ${waiting}`,
+          ...(prioritized === null ? [] : [`hr_helper_bullmq_prioritized_total{queue="meeting-stt",class="stt"} ${prioritized}`]),
+          ...(active === null ? [] : [`hr_helper_bullmq_active_total{queue="meeting-stt",class="stt"} ${active}`]),
+          'hr_helper_bullmq_waiting_total{queue="resume-parse",class="ai"} 50',
+          'hr_helper_bullmq_active_total{queue="resume-parse",class="ai"} 0',
+        ].join('\n') + '\n',
+      )
+    expect(run('stt_queue_stalled', { FAKE_METRICS_BACKEND: q(3, 2, 0) })).toEqual({ code: 0, out: '5' })
+    expect(run('stt_queue_stalled', { FAKE_METRICS_BACKEND: q(500, 0, 1) })).toEqual({ code: 0, out: '0' })
+    expect(run('stt_queue_stalled', { FAKE_METRICS_BACKEND: q(0, 0, 0) })).toEqual({ code: 0, out: '0' })
+    // backend до 22.10: prioritized нет — считаем по waiting.
+    expect(run('stt_queue_stalled', { FAKE_METRICS_BACKEND: q(4, null, 0) })).toEqual({ code: 0, out: '4' })
+    expect(run('stt_queue_stalled', { FAKE_METRICS_BACKEND: q(4, 0, null) })).toEqual({ code: 1, out: '' })
+    expect(run('stt_queue_stalled', { FAKE_DOCKER_FAIL: '1' })).toEqual({ code: 1, out: '' })
+  })
+
   it('покрытие подписок — к живым клиентам пула SM, не выше 100 %', () => {
     const backend = (active: number[]) =>
       file('backend.prom', active.map((v, i) => `hr_helper_telegram_subscriptions_active{user_id="u${i}"} ${v}`).join('\n') + '\n')
@@ -222,6 +258,13 @@ describe('hrh-business.sh: метрики /metrics', () => {
         ].join('\n') + '\n',
       )
     expect(run('stt_orphaned', { FAKE_METRICS_BACKEND: q(1, 1, 1), FAKE_PG_VALUE: '5' })).toEqual({ code: 0, out: '3' })
+    // Задачи с приоритетом — тоже задачи: запись не «без задачи».
+    const withPrio = file('backend3.prom', [
+      'hr_helper_bullmq_waiting_total{queue="meeting-stt",class="stt"} 1',
+      'hr_helper_bullmq_prioritized_total{queue="meeting-stt",class="stt"} 3',
+      'hr_helper_bullmq_delayed_total{queue="meeting-stt",class="stt"} 0',
+    ].join('\n') + '\n')
+    expect(run('stt_orphaned', { FAKE_METRICS_BACKEND: withPrio, FAKE_PG_VALUE: '5' })).toEqual({ code: 0, out: '1' })
     expect(run('stt_orphaned', { FAKE_METRICS_BACKEND: q(4, 2, 0), FAKE_PG_VALUE: '5' })).toEqual({ code: 0, out: '0' })
     expect(readFileSync(join(dir, 'sql.log'), 'utf8')).toContain("status = 'uploaded' and updated_at < now() - interval '30 minutes'")
     const noQueue = file('backend2.prom', 'hr_helper_http_requests_total{method="GET",route="/x",status="200"} 1\n')
