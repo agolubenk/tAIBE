@@ -497,7 +497,7 @@ settings = json.loads((Path(__file__).resolve().parents[1] / "settings.json").re
 if dup_keys:
     failures.append(f"settings.json: повторные ключи {dup_keys} — JSON оставит только последний")
 matchers = [m["matcher"] for m in settings["hooks"]["PreToolUse"]
-            if any("merge-guard" in h.get("command", "") for h in m["hooks"])]
+            if any(re.search(r"merge-guard|merge_guard_entry", h.get("command", "")) for h in m["hooks"])]  # SE-168
 covered = ["Bash", "Monitor", "Edit", "Write", "MultiEdit", "NotebookEdit", "mcp__github__merge_pull_request",
            "mcp__owner-queue__oq_put", "mcp__hub__owner-queue_1mcp_oq_patch", CTX + "ctx_execute", CTX + "ctx_batch_execute",
            CTX + "ctx_execute_file", "mcp__serena__replace_content", "mcp__plugin_serena_serena__create_text_file"]

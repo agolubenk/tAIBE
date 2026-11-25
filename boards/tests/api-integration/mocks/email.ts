@@ -49,3 +49,24 @@ export async function sendReauthCodeEmail(
 export function reauthCodeSubject(code: string, _locale?: string | null) {
   return `${code} is your Kaneo confirmation code`;
 }
+
+// TB-31 R-6: the «A passkey was added» email (passkey/passkey-alert.ts).
+export async function sendPasskeyAddedEmail(
+  _to: string,
+  _subject: string,
+  _data: unknown,
+): Promise<EmailResult> {
+  return { success: true };
+}
+
+export function passkeyDisplayName(
+  keyName: string | null,
+  addedAt: Date | string,
+  _locale?: string | null,
+) {
+  return keyName || `Passkey from ${new Date(addedAt).toISOString()}`;
+}
+
+export function passkeyAddedSubject(name: string, _locale?: string | null) {
+  return `A passkey was added to your Kaneo account: ${name}`;
+}

@@ -17,7 +17,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import team_plan as TP  # noqa: E402
 
-ROLES = {"hr-helper": list(TP.ORDER), "taibe": list(TP.ORDER)}
+# Как в instances/: у HR 9 ролей (backend-3, #477), у tAIBE 8.
+ROLES = {"hr-helper": list(TP.ORDER), "taibe": [r for r in TP.ORDER if r != "backend-3"]}
 TEAM = {**TP.DEFAULTS, "split": {"hr-helper": 6, "taibe": 6}}
 
 
@@ -31,7 +32,8 @@ class SplitTest(unittest.TestCase):
 
     def test_allocate_caps_by_roles_and_gives_rest_away(self):
         roles = {"a": ["coord", "release"], "b": list(TP.ORDER)}
-        self.assertEqual(TP.allocate({"a": 6, "b": 6}, roles), {"a": 2, "b": 8})
+        # b: своя доля 6 и остаток a (4), но не больше своих ролей — их 9 (backend-3, #477)
+        self.assertEqual(TP.allocate({"a": 6, "b": 6}, roles), {"a": 2, "b": 9})
 
     def test_plan_interleaves_by_rank(self):
         steps = TP.plan({"hr-helper": 3, "taibe": 2}, ROLES)
@@ -226,7 +228,7 @@ class QueuePauseTest(Base):
         self.choice = "2-10"  # у tAIBE 8 ролей: на деле 4-8
         self.run_up()
         self.assertEqual(self.published[-1]["alloc"], [["hr-helper", 4], ["taibe", 8]])
-        self.assertEqual(self.published[-1]["max"], [["hr-helper", 8], ["taibe", 8]])
+        self.assertEqual(self.published[-1]["max"], [["hr-helper", 9], ["taibe", 8]])
         self.choice, self.spawned = "6-6", []
         self.run_up()
         self.assertEqual(self.spawned, [])  # 12 работают: роли сверх доли не закрыты, новых не открыть

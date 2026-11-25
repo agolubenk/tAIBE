@@ -3,6 +3,7 @@ import {
   isValidSignInLogin,
   LOCAL_ADMIN_EMAIL,
   resolveSignInEmail,
+  signInRoute,
 } from "./local-admin-login";
 
 describe("resolveSignInEmail", () => {
@@ -18,10 +19,25 @@ describe("resolveSignInEmail", () => {
 });
 
 describe("isValidSignInLogin", () => {
-  it("accepts emails and the admin alias only", () => {
+  it("accepts emails, the admin alias and logins (TB-31 R-1)", () => {
     expect(isValidSignInLogin("admin")).toBe(true);
     expect(isValidSignInLogin("user@example.com")).toBe(true);
+    expect(isValidSignInLogin(" Ivan42 ")).toBe(true);
+  });
+
+  it("refuses reserved names, bad logins and bad emails", () => {
     expect(isValidSignInLogin("root")).toBe(false);
+    expect(isValidSignInLogin("ivan.k")).toBe(false);
+    expect(isValidSignInLogin("ab")).toBe(false);
+    expect(isValidSignInLogin("user@")).toBe(false);
     expect(isValidSignInLogin("")).toBe(false);
+  });
+});
+
+describe("signInRoute", () => {
+  it("sends a value with @ and the admin alias to the email route", () => {
+    expect(signInRoute("user@example.com")).toBe("email");
+    expect(signInRoute(" Admin ")).toBe("email");
+    expect(signInRoute("Ivan42")).toBe("username");
   });
 });

@@ -6,6 +6,7 @@ export type TurnstileResult = { ok: true } | { ok: false; reason: string };
 
 export const authCaptchaPaths = new Set([
   "/sign-in/email",
+  "/sign-in/username", // TB-31 R-1: a password guess by login, as by email
   "/sign-up/email",
   "/sign-in/social", // also the generic OAuth ("custom") provider since better-auth 1.7
   "/sign-in/anonymous",

@@ -1,5 +1,6 @@
 import db from "../../database";
 import { activityTable } from "../../database/schema";
+import { withoutDialogMark } from "../../forest/dialog/session-dialog";
 
 async function createActivity(
   taskId: string,
@@ -15,7 +16,7 @@ async function createActivity(
       type,
       userId,
       content,
-      eventData: eventData ?? null,
+      eventData: withoutDialogMark(eventData) ?? null,
     })
     .returning();
   return activity;

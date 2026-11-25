@@ -1202,18 +1202,27 @@ async function renderQuality() {
     const scopeOpts = Object.entries(SCOPE_LABELS).map(([v, label]) =>
       `<option value="${v}"${v === learnScope ? " selected" : ""}>${label}${
         v === "all" ? "" : ` (${relCounts[v]})`}</option>`).join("");
-    const rel = relRows.map((x) => `<tr${x.prior ? ' class="faint" title="наблюдений нет — приор 1/1"' : ""}>
+    // Число — оценка совета с откатом (score/basis): у пары без наблюдений по роли это репутация модели, а не
+    // приор 0.50. Старый шлюз без score — прежняя Beta по роли.
+    const rel = relRows.map((x) => {
+      const score = x.score ?? x.reliability;
+      const basis = x.basis || "role";
+      const title = !x.prior ? "" : basis === "prior" ? "наблюдений нет — приор 1/1"
+        : `по роли наблюдений нет — ${BASIS_NOTE[basis] || basis}`;
+      return `<tr${x.prior ? ` class="faint" title="${esc(title)}"` : ""}>
       <td class="mono">${esc(x.model)}</td>
       <td>${whereTag(x.cloud)}</td>
       <td>${esc(x.role)}</td>
-      <td class="mono">${num(x.reliability, 2)}</td>
-      <td>${reliabilityBar(x.reliability)}</td>
+      <td class="mono">${num(score, 2)}${basis === "role" ? ""
+        : ` <span class="faint">(${esc(BASIS_NOTE[basis] || basis)})</span>`}</td>
+      <td>${reliabilityBar(score)}</td>
       <td class="mono">${num(x.alpha, 1)} / ${num(x.beta, 1)}</td>
       <td class="mono ${x.observations >= cfg.min_observations ? "" : "faint"}">${
         num(x.observations, 0)}</td>
-    </tr>`).join("");
+    </tr>`;
+    }).join("");
 
-    const reviews = (ld.reviews || []).map((x) => `<tr>
+    const reviews =(ld.reviews || []).map((x) => `<tr>
       <td class="mono">${esc(x.model)}</td>
       <td>${esc(x.role)}</td>
       <td class="mono">${x.n}</td>
@@ -1363,9 +1372,11 @@ async function renderQuality() {
             <select id="learn-scope" ${scopeReady ? "" : "disabled"}>${scopeOpts}</select></label>
         </div>
         <div class="sub" style="padding:0 14px">Доля удачного из учтённого: вердикты
-          владельца плюс находки верификатора. Приор 1/1 даёт 0.50 без данных —
-          новая модель не наказана и не поощрена. Показаны все пары «модель × роль», из которых
-          выбирает совет; бледные строки — пары без наблюдений.</div>
+          владельца плюс находки верификатора. «Надёжность» — то число, которым пользуется совет:
+          по самой роли, а если по ней наблюдений меньше порога — по репутации модели (в скобках).
+          0.50 — только у модели без данных: она не наказана и не поощрена. α/β и «Наблюдений» —
+          по самой роли. Показаны все пары «модель × роль», из которых выбирает совет; бледные
+          строки — пары без наблюдений по роли.</div>
         ${!s.verdicts_counted && s.hallucinations_counted ? `<div class="sub warn-txt"
           style="padding:6px 14px 0">Вердиктов пока ноль: всё, что ниже, набрано
           выдуманными ссылками, которые поймал верификатор. Это не оценка полезности

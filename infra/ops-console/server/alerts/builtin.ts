@@ -3,13 +3,18 @@
  * `builtin_rules_vN` в настройках), дальше владелец меняет пороги или выключает. Новое
  * встроенное правило — следующая версия: оно появится и в уже работающих консолях.
  */
-import { and, eq, isNull } from 'drizzle-orm'
+import { and, eq, isNull, like, or } from 'drizzle-orm'
+import { logActivity } from '../activity'
 import { getDb } from '../db/client'
-import { alertRules } from '../db/schema'
+import { alertRules, alerts, ruleStreaks } from '../db/schema'
 import { readMarker, writeMarker } from '../settings/store'
+import { resolveAlert } from './store'
 
 type NewRule = typeof alertRules.$inferInsert & { since: number }
 type AlertRule = typeof alertRules.$inferSelect
+
+/** Имя правила «очередь распознавания стоит» — и в наборе, и в разовой правке старого правила. Расшифровка — в подсказке. */
+const STT_STALLED_NAME = 'STT: очередь распознавания стоит'
 
 /** Пакетные сервисы, которым «занят ≠ завис» (container-busy.ts): считают длинную задачу в одном процессе. */
 const BUSY_BATCH_SERVICES = 'diarization,whisper'
@@ -164,13 +169,15 @@ export const BUILTIN_RULES: NewRule[] = [
   },
   {
     since: 3,
-    name: 'STT: очередь распознавания не разбирается',
+    name: STT_STALLED_NAME,
     kind: 'host_metric',
-    metric: 'biz_stt_queue_waiting',
+    // Очередь стоит: задачи ждут, а в работе ни одной (load-design В8, шаг 1). Длинная, но разбирающаяся очередь —
+    // не тревога: правило «больше 5 ждут 30 минут» срабатывало бы на любой честной нагрузке.
+    metric: 'biz_stt_queue_stalled',
     op: 'gt',
-    threshold: 5,
-    // SLO — «не растёт 30 минут»: 7 замеров по 5 минут.
-    forSamples: 7,
+    threshold: 0,
+    // 15 минут: 3 замера по 5 минут. Дольше законной паузы — повтор после сбоя ждёт 60–240 с.
+    forSamples: 3,
     severity: 'warning',
   },
   {
@@ -286,14 +293,38 @@ export const BUILTIN_RULES: NewRule[] = [
   // минуты: обычный деплой идёт 15–45 мин, потолок задачи GitHub — 120 мин.
   { since: 5, name: 'Деплой идёт слишком долго', kind: 'deploy_slow', threshold: 60, forSamples: 1, severity: 'warning', repeatMin: 0 },
   { since: 5, name: 'Откат по rollback-prev недоступен', kind: 'deploy_rollback_prev', forSamples: 1, severity: 'warning', repeatMin: 0 },
+  // v6: у готовой записи не выполнилась разметка говорящих (транскрипт есть, говорящих нет) — раньше это было видно
+  // только в логе backend. Не 13 замеров, как у сбоев распознавания: записей мало, а одиночная пометка сама не уйдёт,
+  // пока запись не переразметят. Без повтора — одно сообщение на волну; закрывается, когда за час новых пометок нет.
+  {
+    since: 6,
+    name: 'STT: разметка говорящих не выполнена',
+    kind: 'host_metric',
+    metric: 'biz_stt_diarization_failed_1h',
+    op: 'gt',
+    threshold: 0,
+    forSamples: 1,
+    severity: 'warning',
+  },
 ]
 
 /**
  * Правка встроенной строки в уже работающих консолях — один раз, по своей отметке. Строку, которую владелец
  * уже менял (имя или правленое поле не те, что ставила консоль), не трогаем.
  */
-type UpgradeFields = Partial<Pick<AlertRule, 'severity' | 'threshold' | 'metric'>>
-type BuiltinUpgrade = { marker: string; kind: AlertRule['kind']; name: string; from: UpgradeFields; to: UpgradeFields }
+type UpgradeFields = Partial<Pick<AlertRule, 'severity' | 'threshold' | 'metric' | 'name' | 'forSamples'>>
+type BuiltinUpgrade = {
+  marker: string
+  kind: AlertRule['kind']
+  name: string
+  from: UpgradeFields
+  to: UpgradeFields
+  /**
+   * Правка меняет смысл правила (другая метрика): счётчики «подряд» и горящий алерт прежнего условия к новому не
+   * относятся — они сбрасываются и закрываются. Строку не тронули (владелец её менял) — в ленту пишется `skippedNote`.
+   */
+  replacesCondition?: { skippedNote: string }
+}
 const BUILTIN_UPGRADES: readonly BuiltinUpgrade[] = [
   { marker: 'builtin_upgrade_deploy_failed_critical', kind: 'deploy_failed', name: 'Деплой упал', from: { severity: 'warning' }, to: { severity: 'critical' } },
   // Занят ≠ завис: до 22.10 у unhealthy не было ни порога (0), ни списка — занятая расчётом диаризация подняла P0 #241.
@@ -304,8 +335,29 @@ const BUILTIN_UPGRADES: readonly BuiltinUpgrade[] = [
     from: { threshold: 0, metric: null },
     to: { threshold: 20, metric: BUSY_BATCH_SERVICES },
   },
+  // Очередь распознавания: «больше 5 ждут 30 минут» → «ждут, а в работе ни одной 15 минут» (load-design В8, шаг 1;
+  // решение владельца d-load-steps-1-3, 22.10). Строку, где владелец менял имя, метрику, порог или длительность, не трогаем.
+  {
+    marker: 'builtin_upgrade_stt_queue_stalled',
+    kind: 'host_metric',
+    name: 'STT: очередь распознавания не разбирается',
+    from: { metric: 'biz_stt_queue_waiting', threshold: 5, forSamples: 7 },
+    to: { name: STT_STALLED_NAME, metric: 'biz_stt_queue_stalled', threshold: 0, forSamples: 3 },
+    replacesCondition: {
+      skippedNote:
+        'Правило «STT: очередь распознавания не разбирается» не обновлено: вы его меняли. Оно по-прежнему считает ' +
+        'ждущие задачи и будит на любой пачке записей. Новое правило «очередь стоит» — тревога, только когда задачи ' +
+        'ждут, а в работе ни одной; проверьте, нужно ли старое.',
+    },
+  },
 ]
-const UPGRADE_COLUMNS = { severity: alertRules.severity, threshold: alertRules.threshold, metric: alertRules.metric } as const
+const UPGRADE_COLUMNS = {
+  severity: alertRules.severity,
+  threshold: alertRules.threshold,
+  metric: alertRules.metric,
+  name: alertRules.name,
+  forSamples: alertRules.forSamples,
+} as const
 
 export async function ensureBuiltinRules(): Promise<void> {
   const versions = [...new Set(BUILTIN_RULES.map((r) => r.since))].sort((a, b) => a - b)
@@ -325,10 +377,35 @@ export async function ensureBuiltinRules(): Promise<void> {
     const untouched = (Object.keys(u.from) as (keyof UpgradeFields)[]).map((k) =>
       u.from[k] === null ? isNull(UPGRADE_COLUMNS[k]) : eq(UPGRADE_COLUMNS[k], u.from[k] as never),
     )
-    await getDb()
+    const updated = await getDb()
       .update(alertRules)
       .set(u.to)
       .where(and(eq(alertRules.builtin, true), eq(alertRules.kind, u.kind), eq(alertRules.name, u.name), ...untouched))
+      .returning({ id: alertRules.id })
+    if (u.replacesCondition) {
+      for (const { id } of updated) await retireCondition(id)
+      if (!updated.length && (await builtinRowNamed(u.kind, u.name))) {
+        await logActivity('config', u.replacesCondition.skippedNote, 'system', '/alerts?tab=rules')
+      }
+    }
     await writeMarker(u.marker, Date.now())
   }
+}
+
+/** Условие правила заменено: счётчики «подряд» всех агентов сбрасываются, горящие алерты прежнего условия закрываются. */
+async function retireCondition(ruleId: number): Promise<void> {
+  const db = getDb()
+  await db
+    .delete(ruleStreaks)
+    .where(or(like(ruleStreaks.fingerprint, `rule:${ruleId}:%`), like(ruleStreaks.fingerprint, `ok:rule:${ruleId}:%`)))
+  const open = await db.query.alerts.findMany({ where: and(eq(alerts.ruleId, ruleId), eq(alerts.status, 'firing')), limit: 100 })
+  for (const a of open) await resolveAlert(a, 'правило заменено новым условием — прежнее больше не проверяется')
+}
+
+async function builtinRowNamed(kind: AlertRule['kind'], name: string): Promise<boolean> {
+  const row = await getDb().query.alertRules.findFirst({
+    where: and(eq(alertRules.builtin, true), eq(alertRules.kind, kind), eq(alertRules.name, name)),
+    columns: { id: true },
+  })
+  return Boolean(row)
 }

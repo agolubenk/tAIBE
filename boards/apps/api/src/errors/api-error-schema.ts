@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { REAUTH_METHODS } from "@kaneo/permissions";
 
 export const apiErrorSchema = z
   .object({
@@ -41,3 +42,22 @@ export const apiErrorSchema = z
     }),
   })
   .openapi("ApiError");
+
+// TB-31 R-5: SESSION_NOT_FRESH on an API route carries the same fields as the
+// guard's reply under /api/auth (`ReauthErrorBody` in @kaneo/permissions).
+export const reauthErrorSchema = apiErrorSchema
+  .extend({
+    methods: z
+      .array(z.enum(REAUTH_METHODS))
+      .optional()
+      .openapi({
+        description:
+          "On SESSION_NOT_FRESH: the ways this person can confirm it is them now. Empty when impersonated.",
+        example: ["password", "emailCode"],
+      }),
+    impersonated: z.literal(true).optional().openapi({
+      description:
+        "On SESSION_NOT_FRESH of an impersonated session: no confirmation is possible.",
+    }),
+  })
+  .openapi("ReauthError");

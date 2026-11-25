@@ -109,6 +109,8 @@ On the first tool call that needs Kaneo, the server:
 4. Polls `POST /api/auth/device/token` until approved
 5. Stores the access token at `~/.config/kaneo-mcp/credentials.json` with mode `0600`
 
+Approving the device asks you to confirm it is you (password or email code) unless you signed in within the last 5 minutes. A device session then gets agent keys without asking again. After the server update that added this (TB-31), a device session made before it is refused agent keys once: this version signs in on the device again by itself. An older `kaneo-mcp` shows an "agent key … Confirm it's you to continue." error: upgrade it, or delete `~/.config/kaneo-mcp/credentials.json` to sign in on the device again.
+
 ### Non-interactive (API key)
 
 For headless or sandboxed environments where opening a browser is impractical, set `KANEO_API_KEY` to a key created under Settings → Account → Developer. The server sends it as a Bearer token on every request and skips the device flow entirely, so no token is cached to disk.

@@ -1,3 +1,4 @@
+import { markDeviceSession } from "./device-session";
 import { markSessionFresh } from "./store";
 
 /**
@@ -14,6 +15,8 @@ const INTERACTIVE_EXACT = new Set([
   "/passkey/verify-authentication",
 ]);
 const INTERACTIVE_PREFIX = ["/callback/", "/oauth2/callback/"];
+/** The device flow's token route: its session gets the device mark. */
+const DEVICE_TOKEN = "/device/token";
 
 export function isInteractiveSignIn(path: string | undefined): boolean {
   if (!path) return false;
@@ -30,21 +33,28 @@ type CreatedSession = {
 };
 
 /**
- * `databaseHooks.session.create.after`: marks a session fresh only when an
- * interactive sign-in made it. No request context means not interactive.
- * Never throws: a failed mark costs one confirmation, a thrown error would
- * cost the sign-in.
+ * `databaseHooks.session.create.after`: marks a session fresh when an
+ * interactive sign-in made it, and as a device session when the device flow
+ * made it (agent keys, owner taibe-d-tb31-agent-key-1811 = A). No request
+ * context means neither. Never throws: a failed mark costs one confirmation,
+ * a thrown error would cost the sign-in.
  */
 export async function markInteractiveSession(
   session: CreatedSession,
   ctx: { path?: string } | null | undefined,
 ): Promise<void> {
-  if (!ctx || session.impersonatedBy || !isInteractiveSignIn(ctx.path)) return;
+  if (!ctx || session.impersonatedBy) return;
+  const mark = isInteractiveSignIn(ctx.path)
+    ? markSessionFresh
+    : ctx.path === DEVICE_TOKEN
+      ? markDeviceSession
+      : null;
+  if (!mark) return;
   try {
-    await markSessionFresh(session.id, session.userId);
+    await mark(session.id, session.userId);
   } catch (error) {
     console.error(
-      "[reauth] could not mark a new session fresh",
+      "[reauth] could not mark a new session",
       error instanceof Error ? error.message : error,
     );
   }

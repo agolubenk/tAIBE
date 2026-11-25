@@ -12,7 +12,10 @@ import {
   vi,
 } from "vite-plus/test";
 import db from "../../apps/api/src/database";
-import { ssrEntityTable } from "../../apps/api/src/database/ssr-schema";
+import {
+  ssrEntityTable,
+  ssrVersionTable,
+} from "../../apps/api/src/database/ssr-schema";
 import { runNightlySsrPush } from "../../apps/api/src/scheduler/ssr-nightly-push";
 import { approveDraft } from "../../apps/api/src/ssr/approve";
 import { pushChangeset } from "../../apps/api/src/ssr/pushback";
@@ -49,10 +52,17 @@ async function servedCorpus(forest: Forest) {
     .from(ssrEntityTable)
     .where(eq(ssrEntityTable.workspaceId, forest.workspace.id));
   if (!draft || !entity) throw new Error("the sync made no draft");
+  // TB-88 (#191): the owner approves the bytes the diff showed — the draft's
+  // stored aggregate sha, as in ssr-push-target.test.ts.
+  const [seen] = await db
+    .select({ blobSha: ssrVersionTable.blobSha })
+    .from(ssrVersionTable)
+    .where(eq(ssrVersionTable.id, draft.versionId));
+  if (!seen) throw new Error("the draft row is missing");
   await approveDraft(
     forest.workspace.id,
     entity.id,
-    draft.versionId,
+    { versionId: draft.versionId, blobSha: seen.blobSha },
     forest.ownerId,
   );
 }

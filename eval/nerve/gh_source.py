@@ -326,7 +326,7 @@ def _check_pr(ctx, n, p, head, viewed=False):
     if body is not None:
         p["author_line"] = quorum.body_author(body, roles)   # автор для кворума — только строка
         p["author"] = p["author_line"] or p["author"]   # строка, дописанная без push, — и адресат changes
-        p["body_verdicts"] = quorum.body_verdicts(body, g["lens_roles"], roles)
+        p["body_verdicts"] = quorum.body_verdicts(body, g["lens_roles"], roles) if g.get("body_verdicts", True) else []
     if head_changed:
         p["head_at"] = _iso_now(ctx)   # отсчёт «нет проверок» (SE-126) — только от новой головы
         p.pop("ci_at", None)   # интервал перечитывания упавшего CI — от старой головы: новая читается сразу
@@ -342,7 +342,8 @@ def _check_pr(ctx, n, p, head, viewed=False):
             ctx.emit(f"gh:verdict:{c['id']}", "pr.changes", DIGEST, to,
                      f"#{n}: changes от «{v['lens']}» на {v['sha'][:9]}", "github", pr=n, sha=v["sha"], lens=v["lens"])
     # Строки тела (SE-50) — без pr.changes: тело пишет автор PR. Комментарий линзы на голову главнее её строки тела.
-    verdicts = quorum.with_body(p.get("body_verdicts") or [], said, head)
+    # github.body_verdicts: false — тело не голосует (tAIBE, COMMON п. 4): строки, разобранные до выключения, — тоже.
+    verdicts = quorum.with_body((p.get("body_verdicts") or []) if g.get("body_verdicts", True) else [], said, head)
     author = p["author_line"]
     ok, approved, changes, ci = quorum.quorum(verdicts, head, _quorum_checks(ctx, p), g["min_lenses"], author)
     own = quorum.author_approved(quorum.last_on_head(verdicts, head), author)

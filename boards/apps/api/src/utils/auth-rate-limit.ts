@@ -1,4 +1,4 @@
-import { REAUTH_ROUTES } from "@kaneo/permissions";
+import { PASSKEY_ALERT_ROUTES, REAUTH_ROUTES } from "@kaneo/permissions";
 
 type Env = Record<string, string | undefined>;
 type Rule = { window: number; max: number };
@@ -6,15 +6,25 @@ type Rule = { window: number; max: number };
 // TB-31 R-8. better-auth keys a bucket by `ip|path`; the IP comes only from
 // `x-kaneo-client-ip`, which `client-ip.ts` sets from TRUSTED_PROXIES.
 // Its own rules stay under these: `/sign-in*` 3 per 10 s, password reset and
-// verification mail 3 per 60 s (`rate-limiter/index.mjs` 1.7.15).
+// verification mail 3 per 60 s (`rate-limiter/index.mjs` 1.7.15). A custom
+// rule replaces a plugin's own: `/sign-in/email-otp` keeps the email-otp
+// plugin's 3 per 60 s (`plugins/email-otp/index.mjs`), never looser.
 export const AUTH_RATE_LIMIT_RULES: Record<string, Rule> = {
   "/sign-up/email": { window: 60, max: 3 },
   "/sign-in/anonymous": { window: 60, max: 3 },
   "/organization/invite-member": { window: 60, max: 5 },
   "/sign-in/email": { window: 60, max: 5 },
   "/sign-in/username": { window: 60, max: 5 },
+  "/is-username-available": { window: 60, max: 10 },
+  // R-6: options are open without a session and write a `verification` row
+  // and a cookie on each call; verification checks a signature.
+  "/passkey/generate-authenticate-options": { window: 60, max: 20 },
+  "/passkey/verify-authentication": { window: 60, max: 10 },
+  // «This wasn't me»: open without a session, the token is the proof.
+  [PASSKEY_ALERT_ROUTES.inspect]: { window: 60, max: 10 },
+  [PASSKEY_ALERT_ROUTES.confirm]: { window: 60, max: 5 },
   "/sign-in/magic-link": { window: 60, max: 3 },
-  "/sign-in/email-otp": { window: 60, max: 5 },
+  "/sign-in/email-otp": { window: 60, max: 3 },
   [REAUTH_ROUTES.password]: { window: 60, max: 5 },
   [REAUTH_ROUTES.verifyCode]: { window: 60, max: 5 },
   [REAUTH_ROUTES.sendCode]: { window: 60, max: 3 },

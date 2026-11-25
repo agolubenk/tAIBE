@@ -52,6 +52,8 @@ class Base(unittest.TestCase):
             self.loaded.add(Path(cmd[3]).stem)
         elif cmd[:2] == ("launchctl", "bootout"):
             self.loaded.discard(cmd[2].split("/")[-1])
+        elif cmd[:2] == ("launchctl", "kickstart"):
+            rc = getattr(self, "kick_rc", 0)
         elif cmd[0] == "osascript":
             bundle = cmd[-1]
             if "is running" in cmd[4]:
@@ -180,14 +182,23 @@ class Attach(Base):
             return A.main(["--attach"])
 
     def test_team_in_background_then_attach(self):
+        """Роли открывает задача launchd входа (dev-up): release от неё получает Контроль (SE-155, Claude-линза #457 B1)."""
         self.up()
         self.assertEqual(self.team_up, [])  # не ждёт открытия ролей
-        (cmd, kw), = self.bg
-        self.assertEqual(cmd[-2:], [str(Path(A.__file__).resolve().parent / "team_plan.py"), "up"])
-        self.assertTrue(kw["start_new_session"])  # закрытое окно не обрывает открытие ролей
+        self.assertEqual([c for c in self.calls if c[:2] == ("launchctl", "kickstart")],
+                         [("launchctl", "kickstart", f"gui/{os.getuid()}/{D.LABEL_UP}")])  # без -k: работающую не рвёт
+        self.assertEqual(self.bg, [])
         self.assertEqual(self.execs, [[A.T.tmux_bin(), "-L", A.T.socket(), "attach"]])
         self.assertEqual(self.asked, [])
         self.assertTrue((self.home / "conf" / f"{A.T.socket()}.attach").exists())  # роли не откроют второе окно
+
+    def test_job_not_started_team_in_detached_background(self):
+        self.kick_rc = 113  # задачи dev-up нет (не установлена): роли всё равно открываются, Контроль — s-пунктом
+        self.up()
+        (cmd, kw), = self.bg
+        self.assertEqual(cmd[-2:], [str(Path(A.__file__).resolve().parent / "team_plan.py"), "up"])
+        self.assertTrue(kw["start_new_session"])  # закрытое окно не обрывает открытие ролей
+        self.assertEqual(len(self.execs), 1)
 
     def test_failed_summary_waits_for_enter(self):
         self.up(summary=1)

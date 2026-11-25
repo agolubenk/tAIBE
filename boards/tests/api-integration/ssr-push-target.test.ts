@@ -12,7 +12,10 @@ import {
   vi,
 } from "vite-plus/test";
 import db from "../../apps/api/src/database";
-import { ssrEntityTable } from "../../apps/api/src/database/ssr-schema";
+import {
+  ssrEntityTable,
+  ssrVersionTable,
+} from "../../apps/api/src/database/ssr-schema";
 import { runNightlySsrPush } from "../../apps/api/src/scheduler/ssr-nightly-push";
 import { approveDraft } from "../../apps/api/src/ssr/approve";
 import { pushChangeset } from "../../apps/api/src/ssr/pushback";
@@ -43,7 +46,18 @@ async function servedWorkspace(text: string) {
     .from(ssrEntityTable)
     .where(eq(ssrEntityTable.workspaceId, workspaceId));
   if (!entity || !draft) throw new Error("the sync made no draft");
-  await approveDraft(workspaceId, entity.id, draft.versionId, forest.ownerId);
+  const [version] = await db
+    .select({ blobSha: ssrVersionTable.blobSha })
+    .from(ssrVersionTable)
+    .where(eq(ssrVersionTable.id, draft.versionId));
+  if (!version) throw new Error("no draft row");
+  // TB-88: the owner approves the bytes the diff showed (id and blob sha).
+  await approveDraft(
+    workspaceId,
+    entity.id,
+    { versionId: draft.versionId, blobSha: version.blobSha },
+    forest.ownerId,
+  );
   return workspaceId;
 }
 

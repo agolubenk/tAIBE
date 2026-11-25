@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
-import { OPEN_RULE_JS } from '../server/queue/open-rule'
+import { OPEN_RULE_JS, oqItemState } from '../server/queue/open-rule'
 import { PRODUCTS_JS } from '../server/queue/page-products'
 import { SHIM_JS } from '../server/queue/page-scripts'
 
@@ -44,6 +44,8 @@ type Pure = {
   ownerSnapshotApplies: (local: Record<string, unknown> | undefined, snap: Record<string, unknown> | undefined, pending: boolean) => boolean
   holderState: (relay: unknown, e: Record<string, unknown> | undefined, now: number, product?: string) => null | { k: 'online' | 'silent'; session: string; hours?: number }
   agentFieldsInto: (e: Record<string, unknown>, data: Record<string, unknown>) => Record<string, unknown>
+  ownerFieldsInto: (e: Record<string, unknown>, data: Record<string, unknown>) => Record<string, unknown>
+  markOwnAnswer: (e: Record<string, unknown>) => Record<string, unknown>
   tipHtml: (s: string) => string
   roadmapLabelMode: (pxPerWeek: number) => 'weeks' | 'months'
   rmWindowWeeks: (laneW: number) => { total: number; back: number }
@@ -51,6 +53,8 @@ type Pure = {
   placeRoadmapLabels: (items: { x: number; prio: number }[], laneW: number, labelW: number, gap: number) => ('up' | 'dn' | null)[]
   roadmapBefore: <T extends Row>(late: T[], ms: T[], a: Date) => T[]
   targetFromHash: (hash: string) => string
+  lineTail: (s: string, max: number) => string
+  lineHtml: (s: string) => string
 }
 type FakeDb = { doc: (path: string) => { set: (data: unknown, opts?: { ifVersion?: number }) => Promise<unknown>; get: () => Promise<unknown> } }
 type Row = { id: string; status?: string; planEnd?: string; basePlanEnd?: string; end?: string }
@@ -79,8 +83,10 @@ function pure(): Pure {
     inboxConflictOutcome: fn('inboxConflictOutcome'), inboxCreateOnce: fn('inboxCreateOnce'), linkHostNote: fn('linkHostNote'),
     revealInvisible: fn('revealInvisible'), inboxHotkey: fn('inboxHotkey'), snapshotIsStale: fn('snapshotIsStale'),
     itemState: fn('itemState'), isDone: fn('isDone'), orderItems: fn('orderItems'), listOfKind: fn('listOfKind'), layoutOf: fn('layoutOf'), relayItemState: fn('relayItemState'), holderState: fn('holderState'), agentFieldsInto: fn('agentFieldsInto'), ownerSnapshotApplies: fn('ownerSnapshotApplies'),
+    ownerFieldsInto: fn('ownerFieldsInto'), markOwnAnswer: fn('markOwnAnswer'),
     tipHtml: fn('tipHtml'), roadmapLabelMode: fn('roadmapLabelMode'), rmWindowWeeks: fn('rmWindowWeeks'), roadmapMonthLabel: fn('roadmapMonthLabel'),
     placeRoadmapLabels: fn('placeRoadmapLabels'), roadmapBefore: fn('roadmapBefore'), targetFromHash: fn('targetFromHash'),
+    lineTail: fn('lineTail'), lineHtml: fn('lineHtml'),
   }
 }
 
@@ -387,6 +393,68 @@ describe('«ждёт вас снова»: страница решает тем �
     expect(html).toContain('markAgain(el, again);')
     expect(html).toContain('cb.checked = !!e.done && !again;')
     expect(html).toContain('<span class="chip chip-again">ждёт вас снова</span>')
+  })
+
+  // Запись страницы собирается из снимка checks (apply: ownerFieldsInto + agentFieldsInto) — состояние по ней должно
+  // совпадать с правилом сервера по самому документу, иначе /queue показывает одно, а ?open=1, MCP и бот — другое.
+  const pageEntry = (data: Record<string, unknown>) => {
+    const { ownerFieldsInto, agentFieldsInto } = pure()
+    const e: Record<string, unknown> = {}
+    ownerFieldsInto(e, data)
+    agentFieldsInto(e, data)
+    return e
+  }
+
+  it('заметка агента поверх blocked после ответа владельца — пункт закрыт и на странице, как у сервера (s-sentry-enable-1911, 20.11)', () => {
+    const { itemState } = pure()
+    // Форма живого документа 20.11: blocked в 05:56, ответ в 08:15, заметка в 08:17 без смены статуса.
+    const doc = {
+      done: true, choice: null, note: 'ответ', at: '2026-11-20T08:15:33.088Z',
+      agentStatus: 'blocked', agentNote: 'заметка', agentBy: 'r.w1k4', agentAt: '2026-11-20T08:17:07.149Z',
+      ownerAt: '2026-11-20T08:15:34.360Z', blockedAt: '2026-11-20T05:56:51.587Z',
+    }
+    expect(oqItemState('server', doc)).toBe('done')
+    expect(itemState({ kind: 'server' }, pageEntry(doc))).toBe('done')
+  })
+
+  it('страница и сервер — одно состояние по одному документу: отметки, старые документы без них, все виды', () => {
+    const { itemState } = pure()
+    const A = '2026-11-20T08:00:00.000Z', B = '2026-11-20T09:00:00.000Z', C = '2026-11-20T10:00:00.000Z'
+    const docs: [string, Record<string, unknown>][] = [
+      ['server', { done: true, at: A, ownerAt: A, agentStatus: 'blocked', blockedAt: B, agentAt: C }],
+      ['server', { done: true, at: B, ownerAt: B, agentStatus: 'blocked', blockedAt: A, agentAt: C }],
+      ['check', { done: true, at: A, agentStatus: 'blocked', agentAt: B }],
+      ['check', { done: true, at: B, agentStatus: 'blocked', agentAt: A }],
+      ['decision', { choice: 'yes', done: true, at: A, ownerAt: A, agentStatus: 'blocked', blockedAt: B, agentAt: B }],
+      ['decision', { choice: 'yes', done: true, at: C, ownerAt: A, agentStatus: 'blocked', blockedAt: B, agentAt: C }],
+      ['decision', { choice: null, done: false, at: A }],
+      ['merge', { done: true, at: A, ownerAt: A, agentStatus: 'doing', agentAt: C }],
+      ['inbox', { done: false, agentStatus: 'done', agentAt: B }],
+      ['inbox', { done: false, agentStatus: 'taken', agentBy: 'r.ab12', agentAt: B }],
+    ]
+    for (const [kind, doc] of docs) expect(itemState({ kind }, pageEntry(doc)), `${kind} ${JSON.stringify(doc)}`).toBe(oqItemState(kind, doc))
+  })
+
+  it('отметки, которых нет в новом снимке, не остаются в записи; свой ответ на странице снимает старый ownerAt', () => {
+    const { ownerFieldsInto, agentFieldsInto, markOwnAnswer, itemState } = pure()
+    const e: Record<string, unknown> = { ownerAt: T0, blockedAt: T1 }
+    ownerFieldsInto(e, { done: true, at: T0 })
+    agentFieldsInto(e, { agentStatus: 'blocked', agentAt: T1 })
+    expect(e).not.toHaveProperty('ownerAt')
+    expect(e).not.toHaveProperty('blockedAt')
+    // «Ждёт вас снова» (blocked после ответа) — владелец отвечает здесь: пункт закрыт сразу, до снимка с новым ownerAt.
+    const again: Record<string, unknown> = { done: true, at: T0, ownerAt: T0, agentStatus: 'blocked', blockedAt: T1, agentAt: T1 }
+    expect(itemState({ kind: 'check' }, again)).toBe('again')
+    again.done = true
+    markOwnAnswer(again)
+    expect(again).not.toHaveProperty('ownerAt')
+    expect(Date.parse(String(again.at))).toBeGreaterThan(Date.parse(T1))
+    expect(itemState({ kind: 'check' }, again)).toBe('done')
+    // Ответ из снимка и все свои ответы страницы идут через эти функции, а не мимо них.
+    expect(html).toContain('ownerFieldsInto(e, r.data);')
+    // Время своего ответа ставит только markOwnAnswer — одна такая строка на странице, в ней.
+    expect(html.match(/\.at = new Date\(\)\.toISOString\(\);/g) ?? []).toHaveLength(1)
+    expect(html).toContain('function markOwnAnswer(e) {\n    e.at = new Date().toISOString();\n    delete e.ownerAt;')
   })
 })
 
@@ -963,6 +1031,33 @@ describe('шапка, Гант и справка (просьба владель�
     expect(html).toContain('<p class="sec-note" id="dash-split" hidden></p>')
     expect(html).toContain("try { paintScope(ws); } catch (e)")
     expect(html).toMatch(/var HR_ONLY = \{ 'card-pr': 1 \};/)
+  })
+})
+
+describe('линия сессии в очереди: конец, а не начало (OPS-39)', () => {
+  const line = `r.62u1${'.ab12'.repeat(26)}.zz99`
+  it('длинная линия — «…» и два последних сегмента; короткая линия и имя не по линии — как раньше', () => {
+    const { lineTail } = pure()
+    expect(lineTail(line, 40)).toBe('…ab12.zz99')
+    expect(lineTail('r.62u1.ab12', 40)).toBe('r.62u1.ab12')
+    expect(lineTail('r.62u1.ab12.cd34', 40)).toBe('…ab12.cd34')
+    expect(lineTail('hr-helper-v2-43', 40)).toBe('hr-helper-v2-43')
+    expect(lineTail('x'.repeat(50), 40)).toBe(`${'x'.repeat(39)}…`)
+    // Не линия: заглавные, «r.» без сегмента, точка в конце — обычная обрезка.
+    expect(lineTail('R.62u1.ab12.cd34', 40)).toBe('R.62u1.ab12.cd34')
+    expect(lineTail('r.62u1.ab12.cd34.', 40)).toBe('r.62u1.ab12.cd34.')
+  })
+  it('полная линия — в подсказке и экранирована; без сокращения подсказки нет', () => {
+    const { lineHtml } = pure()
+    expect(lineHtml(line)).toBe(`<span title="${line}">…ab12.zz99</span>`)
+    expect(lineHtml('r.62u1.ab12')).toBe('r.62u1.ab12')
+    expect(lineHtml('<b>"x"</b>')).toBe('&lt;b&gt;&quot;x&quot;&lt;/b&gt;')
+  })
+  it('заметка автопередачи по продуктам (OPS-51) и метка держателя (#414) — хвост линии, полная — в подсказке', () => {
+    expect(html).toContain("сессии ' + lineTail(live.session, 120)")
+    expect(html).toContain("сессия ' + lineTail(last.session, 120)")
+    expect(html).toContain('note.title = lines.map(function (l) { return l.full; }).filter(Boolean)')
+    expect(html).toContain("who = x && x.session ? ' ' + lineHtml(x.session) : ''")
   })
 })
 
