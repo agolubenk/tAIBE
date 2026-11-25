@@ -44,6 +44,13 @@ bash("IFS=, — команда через запятую", "IFS=,; C=gh,pr,merge
 bash("IFS в кавычках — команда через двоеточие", "IFS=':'; C=gh:pr:merge; $C 1", True)
 bash("export IFS — команда через точку с запятой", "export IFS=';'; C='gh;pr;merge'; $C 1", True)
 bash("IFS неизвестен — делим по любому знаку", "IFS=$SEP; C=gh-pr-merge; $C 1", True)
+# #525 B1: IFS изменён невидимо; B2: неизвестный IFS — буква
+bash("IFS+= — команда через запятую", "IFS+=,; C=gh,pr,merge; $C 1", True)
+bash("read IFS — команда через запятую", "read IFS <<< ,; C=gh,pr,merge; $C 1", True)
+bash("printf -v IFS — команда через запятую", "printf -v IFS ,; C=gh,pr,merge; $C 1", True)
+bash("IFS=$'x' — команда через букву", "IFS=$'x'; C=ghxprxmerge; $C 1", True)
+bash("IFS=\\x — команда через букву", "IFS=\\x; C=ghxprxmerge; $C 1", True)
+bash("IFS=$SEP — команда через букву", "IFS=$SEP; C=ghxprxmerge; $C 1", True)
 bash("IFS=, — чтение без записи", "IFS=,; C=gh,pr,view; $C 1", False)
 bash("IFS= read — пустой IFS ничего не делит", "IFS= read -r x; C=gh-pr-view; $C 1", False)
 bash("деление слов: push в переменной", "P='git push origin main'; $P", True)
