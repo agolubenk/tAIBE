@@ -90,8 +90,11 @@ def poll_mem_health(ctx):
     if not fails or fails < 0:
         st.pop("seen", None)
         return
-    since = when(h["failingSinceAt"]) or when(st.get("seen"))
-    if since is None:                                 # начала сбоя в файле нет: с первого прохода, увидевшего сбой
+    start = when(h["failingSinceAt"])
+    since = start or when(st.get("seen"))
+    # Начала сбоя в файле нет: с первого прохода, увидевшего сбой. Успех после него и снова сбой — новый сбой:
+    # отсчёт заново, иначе _recovered навсегда глушит тревогу (SE-199).
+    if since is None or (start is None and _recovered(h, since)):
         st["seen"] = ctx.now.isoformat(timespec="seconds")
         return
     if ctx.now - since < ALERT_AFTER or _recovered(h, since):

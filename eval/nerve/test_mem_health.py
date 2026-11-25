@@ -197,6 +197,19 @@ class MemHealthTest(unittest.TestCase):
         self.at(46)
         self.assertEqual(len(self.events()), 1)
 
+    def test_no_start_time_success_between_passes_counts_again(self):
+        """SE-199: без failingSinceAt успех между проходами и новый сбой — отсчёт с прохода, что это увидел."""
+        self.health(consecutiveFailures=2, failingSinceAt=None, lastSuccessAt=ms(T0 - timedelta(days=1)))
+        self.at(0)                                        # отсчёт с T0
+        self.health(consecutiveFailures=1, failingSinceAt=None, lastSuccessAt=ms(T0 + timedelta(minutes=10)))
+        self.at(20)                                       # успех после T0, снова сбой: отсчёт заново с 20-й минуты
+        self.at(64)
+        self.assertEqual(self.events(), [], "45 мин от нового отсчёта ещё не прошли")
+        self.at(65)
+        ev = self.events()
+        self.assertEqual([e["key"] for e in ev], ["mem:down:2026-11-20T18:55:00+00:00"])
+        self.assertIn("с 20.11 21:55", ev[0]["text"])
+
     def test_iso_and_seconds_timestamps(self):
         self.assertEqual(mem_health.when("2026-11-20T18:35:00Z"), T0)
         self.assertEqual(mem_health.when("2026-11-20T18:35:00"), T0)
