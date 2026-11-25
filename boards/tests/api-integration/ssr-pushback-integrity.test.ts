@@ -12,6 +12,7 @@ import db from "../../apps/api/src/database";
 import {
   ssrBlobTable,
   ssrEntityTable,
+  ssrVersionTable,
 } from "../../apps/api/src/database/ssr-schema";
 import { approveDraft } from "../../apps/api/src/ssr/approve";
 import type { PushTarget } from "../../apps/api/src/ssr/push-target";
@@ -54,7 +55,19 @@ async function servedFile() {
     .from(ssrEntityTable)
     .where(eq(ssrEntityTable.workspaceId, workspaceId));
   if (!entity || !draft) throw new Error("the sync made no draft");
-  await approveDraft(workspaceId, entity.id, draft.versionId, forest.ownerId);
+  // The owner approves the bytes the diff showed (TB-88, #191): the draft's
+  // stored aggregate sha, not a sha the test computes on its own.
+  const [seen] = await db
+    .select({ blobSha: ssrVersionTable.blobSha })
+    .from(ssrVersionTable)
+    .where(eq(ssrVersionTable.id, draft.versionId));
+  if (!seen) throw new Error("the draft row is missing");
+  await approveDraft(
+    workspaceId,
+    entity.id,
+    { versionId: draft.versionId, blobSha: seen.blobSha },
+    forest.ownerId,
+  );
   return workspaceId;
 }
 
