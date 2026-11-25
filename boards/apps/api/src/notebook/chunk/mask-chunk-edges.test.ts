@@ -206,4 +206,27 @@ describe("maskPassage (boards #388 N1)", () => {
       expect(maskPassage("", text)).not.toContain(hidden);
     }
   });
+
+  // TB-210 (Claude lens #400, not blocking 1): the glue with the next chunk
+  // made a base64 hit of the token's tail. That hit was in the text masked
+  // for the second reading, so the second reading did not see the token
+  // whole, and the passage showed what redact(redact(text).text) hides.
+  it("hides what the text read twice alone hides, whatever the neighbours", () => {
+    const end = join("-----END ", "PRIVATE KEY-----");
+    const parts = [value(20, 7), value(40, 8), value(19, 9)];
+    const jwt = join("ey", "J", parts.join("."));
+    const pat = join("github", "_pat_", value(40, 10));
+    const next = value(60, 11, BASE64);
+    for (const [text, hidden] of [
+      [`${end}${jwt}`, parts],
+      [`${end}${pat}`, [pat.slice(-40)]],
+    ] as const) {
+      const twice = redact(redact(text).text).text;
+      for (const piece of hidden) expect(twice).not.toContain(piece);
+      for (const heading of ["", "Ключи"]) {
+        const passage = maskPassage(heading, text, "", next);
+        for (const piece of hidden) expect(passage).not.toContain(piece);
+      }
+    }
+  });
 });

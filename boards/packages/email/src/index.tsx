@@ -3,6 +3,7 @@ export {
   sendMagicLinkEmail,
   sendNotificationEmail,
   sendOtpEmail,
+  sendPasskeyAddedEmail,
   sendPasswordResetEmail,
   sendReauthCodeEmail,
   sendTrialReminderEmail,
@@ -10,6 +11,10 @@ export {
 } from "./send-email";
 export { isSmtpConfigured } from "./smtp-config";
 export type { EmailResult } from "./send-email";
+export {
+  passkeyAddedSubject,
+  passkeyDisplayName,
+} from "./templates/passkey-added";
 export { reauthCodeSubject } from "./templates/reauth-code";
 export type { BoardColumnIcon } from "./components/board-column";
 export type {

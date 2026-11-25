@@ -6,6 +6,9 @@ vi.hoisted(() => {
 });
 
 it.each([
+  ["/sign-in/email", "POST", { email: "a@example.com", password: "password" }],
+  // TB-31 R-1: the login is local sign-in too.
+  ["/sign-in/username", "POST", { username: "ivan42", password: "password" }],
   ["/request-password-reset", "POST", { email: "reset@example.com" }],
   ["/reset-password", "POST", { token: "token", newPassword: "new-password" }],
   [

@@ -21,6 +21,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lineage as L  # noqa: E402
+import lineage_guard as G  # noqa: E402
 import lineage_reap as R  # noqa: E402
 import lineage_retire as LR  # noqa: E402
 
@@ -128,9 +129,13 @@ class Base(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {"TAIBE_LINEAGE_DIR": str(self.dir / "lin"),
                                                 "CLAUDE_SESSIONS_DIR": str(self.dir / "sess")})
         self.env.start()
+        # папки выше — из окружения: в живом запуске hand_control на них отказывает (SE-167), тест — свой реестр
+        self.home_ok = mock.patch.object(G, "env_problem", lambda: None)
+        self.home_ok.start()
         self.lines = []
 
     def tearDown(self):
+        self.home_ok.stop()
         self.env.stop()
         self.tmp.cleanup()
 
@@ -429,6 +434,20 @@ class CommandsTest(Base):
         self.assertTrue(all(len(f.name) <= 40 for f in L.ldir().iterdir()), list(L.ldir().iterdir()))
         self.assertEqual(L.line_records(), [(LONG_CHILD, L.lfile(LONG_CHILD, ".json"))])
         self.assertEqual(L.child_acks(LONG_PARENT), [(LONG_CHILD, L.lfile(LONG_CHILD, ".ack"))])
+
+    def test_fake_h_record_is_not_a_second_record(self):
+        """SE-64: файл h<хэш>.<сегмент>.json с чужим полем line не дублирует запись линии. Запись засчитывается,
+        только если её имя — lfile(line), поэтому window_plan не обрабатывает линию дважды."""
+        L.ldir().mkdir(parents=True)
+        for line in ("r.a1", LONG_CHILD):
+            L.lfile(line, ".json").write_text(json.dumps({"line": line}), encoding="utf-8")
+        fakes = {"h0000000000000000.a1": "r.a1", L.line_hash("r.zz") + ".a1": "r.a1",
+                 "h1111111111111111.zz99": LONG_CHILD, L.line_hash(LONG_CHILD) + ".zz99": LONG_CHILD}
+        for stem, line in fakes.items():
+            (L.ldir() / f"{stem}.json").write_text(json.dumps({"line": line}), encoding="utf-8")
+        self.assertEqual(len(list(L.ldir().glob("*.json"))), 6)
+        self.assertEqual(L.line_records(), [(LONG_CHILD, L.lfile(LONG_CHILD, ".json")),
+                                            ("r.a1", L.ldir() / "r.a1.json")])
 
     def test_line_key_keeps_short_names(self):
         """Линия до 200 символов — имя прежнее; длиннее — h<хэш родителя>.<сегмент>, LINE_RE его не принимает."""

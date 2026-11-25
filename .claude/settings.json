@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-merge-guard.py\" || true",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/merge_guard_entry.py\" || true",
             "timeout": 10
           }
         ]

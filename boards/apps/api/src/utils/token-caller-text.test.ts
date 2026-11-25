@@ -18,6 +18,15 @@ const ROUTERS = [
   "comment/index.ts",
   "activity/index.ts",
   "search/index.ts",
+  // TB-178: label names, field values and link URLs are masked on their own
+  // routes too, so a key sees no secret in any answer.
+  "label/index.ts",
+  "custom-field/index.ts",
+  "external-link/index.ts",
+  // Reads that show card text and have no write-back of that text. The
+  // forest routes are masked by TB-204 (#403).
+  "notification/index.ts",
+  "task-relation/index.ts",
 ];
 const NO_TEXT = new Set([
   "stagedUploadRoute",

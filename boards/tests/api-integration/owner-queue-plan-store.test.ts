@@ -157,6 +157,51 @@ describe("API integration: owner-queue plan store (TB-106)", () => {
     );
   });
 
+  it("finds the cards the owner named by key in mapped workspaces (TB-107)", async () => {
+    const mine = await board();
+    const unmapped = await board();
+    await card(mine.project.id, 1, "to-do");
+    await card(mine.project.id, 2, "done", { completedAt: new Date() });
+    await card(unmapped.project.id, 3, "to-do");
+
+    const named = await planStore.named(
+      new Map([[mine.workspace.id, "hr-helper"]]),
+      ["TB-1", "TB-2", "TB-3", "TB-404"],
+    );
+
+    expect(named.map((c) => c.key).sort()).toEqual(["TB-1", "TB-2"]);
+    expect(named.find((c) => c.key === "TB-2")).toMatchObject({
+      ws: mine.workspace.slug,
+      product: "hr-helper",
+      final: true,
+    });
+  });
+
+  it("counts cards closed in 14 days per plan product (TB-112 pace)", async () => {
+    const mine = await board();
+    const other = await board();
+    const unmapped = await board();
+    const now = new Date();
+    const ago = (days: number) => new Date(now.getTime() - days * DAY);
+    await card(mine.project.id, 1, "done", { completedAt: ago(3) });
+    await card(mine.project.id, 2, "closed", { completedAt: ago(1) });
+    await card(mine.project.id, 3, "done", { completedAt: ago(20) });
+    await card(mine.project.id, 4, "to-do");
+    await card(mine.project.id, 5, "in-review");
+    await card(other.project.id, 1, "done", { completedAt: ago(2) });
+    await card(unmapped.project.id, 1, "done", { completedAt: ago(2) });
+
+    const closed = await planStore.closed(
+      new Map([
+        [mine.workspace.id, "taibe"],
+        [other.workspace.id, "hr-helper"],
+      ]),
+      ago(14),
+    );
+
+    expect(Object.fromEntries(closed)).toEqual({ taibe: 2, "hr-helper": 1 });
+  });
+
   it("keeps a card off the list while a comment or a work_state is younger than 24 h (SE-165)", async () => {
     const mine = await board();
     const now = new Date();

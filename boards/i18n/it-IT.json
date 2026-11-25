@@ -229,7 +229,10 @@
 			"passwordRequired": "Inserisci la tua password.",
 			"passwordTooShort": "Usa almeno 8 caratteri.",
 			"disposableEmail": "Usa un indirizzo email permanente. Con gli indirizzi usa e getta non è possibile creare account.",
-			"continueWithEmail": "Continua con l'email"
+			"continueWithEmail": "Continua con l'email",
+			"invalidLogin": "Enter a username (3–30 Latin letters and digits) or a full email address.",
+			"loginOrEmail": "Username or email",
+			"loginOrEmailPlaceholder": "ivan42 or me@example.com"
 		},
 		"checkEmail": {
 			"pageTitle": "Controlla la tua Email",
@@ -284,7 +287,11 @@
 			"sendFailed": "Invio del codice di verifica fallito"
 		},
 		"signInForm": {
-			"failedSignIn": "Accesso fallito"
+			"failedSignIn": "Accesso fallito",
+			"invalidCredentials": "Wrong username or password",
+			"offline": "No connection to the server",
+			"rateLimited": "Too many tries. Try again later.",
+			"rateLimitedFor": "Too many tries. Try again in {{seconds}} s."
 		},
 		"invitation": {
 			"pageTitleAccept": "Accetta Invito",
@@ -586,7 +593,10 @@
 				"rateLimited": "Too many tries. Wait a minute and try again.",
 				"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
 				"signedOut": "Your session has ended. Sign in again.",
-				"stillNotFresh": "The confirmation didn't apply. Try the action again."
+				"stillNotFresh": "The confirmation didn't apply. Try the action again.",
+				"userMismatch": "This passkey belongs to another account.",
+				"userVerificationRequired": "Use a passkey with a PIN or biometrics.",
+				"passkeyNotFound": "This passkey isn't linked to your account. Use another way to confirm."
 			},
 			"impersonated": "Not available while you act as another user.",
 			"lockedOut": "Too many failed tries: the password is off for up to an hour.",
@@ -597,7 +607,47 @@
 			},
 			"title": "Confirm it's you",
 			"useCode": "Use a code from your email instead",
-			"usePassword": "Use your password instead"
+			"usePassword": "Use your password instead",
+			"passkey": {
+				"explain": "Your browser will ask for the passkey's PIN or biometrics.",
+				"submit": "Confirm with a passkey"
+			},
+			"usePasskey": "Use a passkey instead"
+		},
+		"passkey": {
+			"errors": {
+				"failed": "Couldn't use the passkey. Try again.",
+				"limitReached": "You have the most passkeys allowed. Remove one you don't use.",
+				"notFound": "This passkey isn't linked to an account here. Sign in with your password.",
+				"offline": "No connection to the server. Check your network and try again.",
+				"previouslyRegistered": "This passkey is added already.",
+				"rateLimited": "Too many tries. Wait a minute and try again.",
+				"userVerificationRequired": "Use a passkey with a PIN or biometrics.",
+				"wrongAddress": "Passkeys work only at the main address of this site. Sign in with your password."
+			},
+			"signIn": "Sign in with a passkey"
+		},
+		"passkeyAlert": {
+			"confirm": "It wasn't me: remove the passkey",
+			"confirmRemoved": "It wasn't me: sign out everywhere",
+			"description": "Passkey «{{name}}» was added on {{date}}. If it wasn't you, remove it here.",
+			"descriptionRemoved": "Passkey «{{name}}», added on {{date}}, is removed already. If it wasn't you, sign out everywhere here.",
+			"doneDescription": "You are signed out on every device. Reset your password: whoever added the passkey may know it.",
+			"doneTitle": "Passkey removed",
+			"effect": "We will also sign you out on every device and remove the API keys made after this passkey.",
+			"errors": {
+				"failed": "Something went wrong. Try again.",
+				"offline": "No connection to the server. Check your network and try again.",
+				"rateLimited": "Too many tries. Wait a minute and try again."
+			},
+			"invalidDescription": "The link is wrong, used already or older than {{days}} days. Open the link from the latest email.",
+			"invalidTitle": "This link doesn't work",
+			"itWasMe": "It was me",
+			"pageTitle": "Passkey added",
+			"resetPassword": "Reset password",
+			"retry": "Try again",
+			"title": "A passkey was added to your account",
+			"toSignIn": "Go to sign-in"
 		}
 	},
 	"settings": {
@@ -642,7 +692,26 @@
 				"success": "Your account has been deleted",
 				"title": "Delete account"
 			},
-			"emailHint": "Usi questo indirizzo per accedere."
+			"emailHint": "Usi questo indirizzo per accedere.",
+			"login": {
+				"emptyHint": "Set a username to sign in without your email.",
+				"label": "Username",
+				"placeholder": "ivan42",
+				"problems": {
+					"failed": "Could not save the username.",
+					"invalid": "Use only Latin letters and digits.",
+					"offline": "No connection to the server.",
+					"rateLimited": "Too many tries. Try again later.",
+					"rateLimitedFor": "Too many tries. Try again in {{seconds}} s.",
+					"reserved": "This username is reserved.",
+					"taken": "This username is taken.",
+					"tooLong": "Use at most 30 characters.",
+					"tooShort": "Use at least 3 characters."
+				},
+				"save": "Save",
+				"saved": "Username saved",
+				"saveHint": "The username is saved with the button."
+			}
 		},
 		"notificationsPage": {
 			"pageTitle": "Notifiche",
@@ -2576,6 +2645,11 @@
 				"calls_one": "{{count}} request",
 				"calls_other": "{{count}} requests",
 				"empty": "No requests to the model yet today.",
+				"tokens": "Tokens: {{input}} in ({{cached}} cached) · {{output}} out",
+				"coverage_many": "over {{withUsage}} of {{count}} requests",
+				"coverage_one": "over {{withUsage}} of {{count}} request",
+				"coverage_other": "over {{withUsage}} of {{count}} requests",
+				"noProviderData": "No token data from the provider",
 				"title": "Today",
 				"total": "{{count}} of {{max}} model requests today"
 			},
@@ -2650,6 +2724,34 @@
 					"title": "Prompt brief by a cheap model"
 				}
 			}
+		},
+		"passkeys": {
+			"actions": "Actions for {{name}}",
+			"add": "Add passkey",
+			"added": "Added {{date}}",
+			"continue": "Continue",
+			"continueHint": "Confirmed. Press «Continue» to create the passkey.",
+			"delete": "Remove",
+			"deleteDescription": "You won't be able to sign in with this passkey. Also remove it from the device, in its passkey settings.",
+			"deleteError": "Couldn't remove the passkey. Try again.",
+			"deleteTitle": "Remove {{name}}?",
+			"description": "Sign in without a password: with your fingerprint, face or device PIN. Your password stays.",
+			"emptyDescription": "A passkey works only at this site's main address. At another address, sign in with your password.",
+			"emptyTitle": "No passkeys yet",
+			"limit": "You can have up to {{max}} passkeys. Remove one you don't use to add a new one.",
+			"loadError": "Couldn't load your passkeys.",
+			"multiDevice": "Syncs across your devices",
+			"nameLabel": "Name",
+			"rename": "Rename",
+			"renameError": "Couldn't rename the passkey. Try again.",
+			"renameTitle": "Rename passkey",
+			"save": "Save",
+			"singleDevice": "Only on this device",
+			"title": "Passkeys",
+			"toastAdded": "Passkey added",
+			"toastDeleted": "Passkey removed",
+			"toastRenamed": "Passkey renamed",
+			"unnamed": "Passkey from {{date}}"
 		}
 	},
 	"navigation": {
@@ -3052,7 +3154,13 @@
 			"importedBy": "Imported by {{name}}",
 			"commentedOnForge": "ha commentato su {{forge}}"
 		},
-		"movedFromOtherProject": "moved task from another project to \"{{to}}\""
+		"movedFromOtherProject": "moved task from another project to \"{{to}}\"",
+		"dialog": {
+			"title": "Dialogo delle sessioni collegate",
+			"live": "In corso",
+			"archived": "Archiviato",
+			"summary": "Sessioni: {{sessions}} · Messaggi: {{messages}}"
+		}
 	},
 	"tasks": {
 		"title": "Attività",
@@ -3673,14 +3781,17 @@
 				"saveError": "Could not save the card fields"
 			},
 			"memory": {
-				"empty": "No observations name this card among the latest {{total}}.",
+				"unavailable": "claude-mem is not reachable, and nothing was read from it yet.",
+				"stale": "claude-mem is not reachable: a copy from {{time}}.",
+				"empty": "No observations name this card.",
+				"count": "Observations: {{total}}",
 				"loadError": "Could not load the memory.",
 				"matched": {
-					"branch": "branch {{value}}",
-					"task-id": "names {{value}}"
+					"id": "card id",
+					"key": "card key",
+					"queue": "queue item"
 				},
-				"stale": "claude-mem is not reachable: a copy from {{time}}.",
-				"unavailable": "claude-mem is not reachable, and nothing was read from it yet."
+				"noProductMap": "Memory is off for this workspace: CLAUDE_MEM_PROJECTS names none of its claude-mem projects."
 			},
 			"worker": {
 				"executor": "Done by {{name}}",
@@ -3990,6 +4101,7 @@
 				"sectors": "A sector groups trees that are linked to each other. Find sectors after linking tasks, then fell a whole sector at once.",
 				"trees": "A tree is a task with its subtasks (branches); a project is a forest. Open a tree to see its branches, fell it when the work is finished.",
 				"mirror": "The board reads Notion on a schedule and compares the two. A clean run means every page has its card in the same status; the move off Notion waits for an unbroken streak of clean runs.",
+				"queue": "The owner's queue from the ops console, read only and for the owner alone. Answers are given in the console or through a card's «да» request.",
 				"graph": "Cards, the files they touched and the decisions they cite (D-records, ADRs), joined by their links; sectors are shaded rings."
 			},
 			"pulse": {
@@ -4065,6 +4177,7 @@
 				"sectors": "Sectors",
 				"trees": "Trees",
 				"mirror": "Notion mirror",
+				"queue": "Owner queue",
 				"graph": "Graph"
 			},
 			"trees": {
@@ -4126,6 +4239,59 @@
 				"trigger": {
 					"manual": "Manual",
 					"schedule": "Scheduled"
+				}
+			},
+			"queue": {
+				"openConsole": "Open in the console",
+				"collectionLabel": "Collection",
+				"collection": {
+					"items": "Items",
+					"checks": "Answers"
+				},
+				"stateLabel": "State",
+				"state": {
+					"open": "Open",
+					"answered": "Answered",
+					"all": "All"
+				},
+				"productLabel": "Product",
+				"allProducts": "All products",
+				"truncated": "The console capped the list at part of its {{total}} documents; the oldest are not shown.",
+				"truncatedNoTotal": "The console capped the list; the oldest documents are not shown.",
+				"empty": "Nothing here.",
+				"range": "{{first}}–{{last}} of {{total}}",
+				"order": {
+					"oldest": "oldest first",
+					"newest": "newest answer first"
+				},
+				"previous": "Previous",
+				"next": "Next",
+				"rowState": {
+					"open": "Open",
+					"done": "Answered"
+				},
+				"choice": "Answer: {{choice}}",
+				"answer": {
+					"title": "Owner's answer",
+					"none": "No answer yet.",
+					"done": "Done",
+					"notDone": "Not done"
+				},
+				"files": {
+					"title": "Files",
+					"open": "Open the files in the console"
+				},
+				"history": {
+					"item": "History",
+					"answer": "Answer history",
+					"empty": "No events.",
+					"older": "Older events: {{n}}. They are in the console."
+				},
+				"error": {
+					"forbidden": "Only the owner's own session can read the owner queue.",
+					"off": "The owner queue is not connected to this board.",
+					"notFound": "This document is no longer in the queue.",
+					"unavailable": "The ops console did not answer. Try again later."
 				}
 			},
 			"graph": {
@@ -4266,7 +4432,8 @@
 				"model": "Model {{model}} · {{calls}} of {{max}} answers today",
 				"noModel": "No model connected: answers come as sources without text",
 				"workerOffline": "Worker offline: search by words only",
-				"workerOnline": "Worker online"
+				"workerOnline": "Worker online",
+				"indexCapped": "Meaning search holds the newest {{indexed}} of {{embedded}}: older chunks are found by words only"
 			},
 			"tabs": {
 				"chat": "Questions",
@@ -4290,6 +4457,17 @@
 			"diffFrom": "from",
 			"empty": "Nothing synced yet.",
 			"loadError": "Failed to load SSR data.",
+			"kind": {
+				"skill": "Skill",
+				"rule": "Rule",
+				"agent": "Agent",
+				"genome": "Genome",
+				"prompt": "Prompt",
+				"nerve": "Nerve config",
+				"config": "Council config",
+				"product-prompt": "Product prompt",
+				"template": "Template"
+			},
 			"approveMatching": {
 				"button": "Approve matching ({{matching}})",
 				"buttonPartial": "Approve {{batch}} of {{matching}}",
@@ -4318,7 +4496,8 @@
 				"rest_other": "The other {{count}} drafts stay for per-item review with the diff.",
 				"summary": "Drafts: {{total}} · match a version you approved: {{matching}}",
 				"title": "Approve matching drafts?"
-			}
+			},
+			"draftChanged": "Nothing was decided: the draft changed after you opened the diff. The diff is refreshed; check it and decide again."
 		}
 	},
 	"team": {

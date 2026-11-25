@@ -9,6 +9,7 @@ import {
   lastLoginMethodClient,
   magicLinkClient,
   organizationClient,
+  usernameClient,
 } from "better-auth/client/plugins";
 import type { AccessControl } from "better-auth/plugins/access";
 import { createAuthClient } from "better-auth/react";
@@ -32,6 +33,8 @@ export const authClient = createAuthClient({
     lastLoginMethodClient(),
     magicLinkClient(),
     emailOTPClient(),
+    // TB-31 R-1: sign-in by login and the login check; well under 1 KB.
+    usernameClient(),
     organizationClient({
       // Same widening as the server plugin in `apps/api/src/auth.ts`: our
       // narrow `statement` shape makes `ac`'s inferred `newRole` generic

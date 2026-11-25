@@ -11,6 +11,8 @@ import { ReauthDialog, type ReauthRequest } from "./reauth-dialog";
  * fresh sign-in, the window opens. After the person confirms, the action runs
  * once more at once; if the person cancels, it throws ReauthCancelledError.
  * Render `dialog` inside the dialog that runs the action, so Base UI nests it.
+ * `confirm(error)` only opens the window: for an action that needs a new
+ * press after it, as a passkey ceremony does in Safari (R-6).
  */
 export function useFreshSession() {
   const [request, setRequest] = useState<ReauthRequest | null>(null);
@@ -19,17 +21,9 @@ export function useFreshSession() {
   // A window still open when its owner unmounts counts as cancelled.
   useEffect(() => () => resolveRef.current?.(false), []);
 
-  const run = useCallback(async <T,>(action: () => Promise<T>): Promise<T> => {
-    // Taken before the action: a pending button may lose focus.
-    const opener =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    try {
-      return await action();
-    } catch (error) {
-      if (!(error instanceof SessionNotFreshError)) throw error;
-      const confirmed = await new Promise<boolean>((resolve) => {
+  const ask = useCallback(
+    (error: SessionNotFreshError, opener: HTMLElement | null) =>
+      new Promise<boolean>((resolve) => {
         resolveRef.current = resolve;
         setRequest((prev) => ({
           id: (prev?.id ?? 0) + 1,
@@ -38,19 +32,37 @@ export function useFreshSession() {
           impersonated: error.impersonated,
           opener,
         }));
-      });
-      if (!confirmed) throw new ReauthCancelledError();
-    }
-    try {
-      return await action();
-    } catch (again) {
-      // Fresh for 5 minutes now; a second refusal is not a reason to ask again.
-      if (again instanceof SessionNotFreshError) {
-        throw new Error(i18n.t("auth:reauth.errors.stillNotFresh"));
+      }),
+    [],
+  );
+
+  const confirm = useCallback(
+    (error: SessionNotFreshError) => ask(error, activeElement()),
+    [ask],
+  );
+
+  const run = useCallback(
+    async <T,>(action: () => Promise<T>): Promise<T> => {
+      // Taken before the action: a pending button may lose focus.
+      const opener = activeElement();
+      try {
+        return await action();
+      } catch (error) {
+        if (!(error instanceof SessionNotFreshError)) throw error;
+        if (!(await ask(error, opener))) throw new ReauthCancelledError();
       }
-      throw again;
-    }
-  }, []);
+      try {
+        return await action();
+      } catch (again) {
+        // Fresh for 5 minutes now; a second refusal is not a reason to ask again.
+        if (again instanceof SessionNotFreshError) {
+          throw new Error(i18n.t("auth:reauth.errors.stillNotFresh"));
+        }
+        throw again;
+      }
+    },
+    [ask],
+  );
 
   const done = useCallback((confirmed: boolean) => {
     const resolve = resolveRef.current;
@@ -60,5 +72,15 @@ export function useFreshSession() {
     resolve?.(confirmed);
   }, []);
 
-  return { run, dialog: <ReauthDialog request={request} onDone={done} /> };
+  return {
+    run,
+    confirm,
+    dialog: <ReauthDialog request={request} onDone={done} />,
+  };
+}
+
+function activeElement(): HTMLElement | null {
+  return document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
 }

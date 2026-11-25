@@ -8,7 +8,8 @@
 < system.mem_warn — потолок system.team.floor (10); обратно к total — только от mem_warn + RAISE_GAP (запас, чтобы
 потолок не скакал). Свободно < mem_critical — новые роли не открываются. Потолок не даёт открыть роль — уведомление
 на Mac и пункт в очереди; вернулся — тоже.
-Роли продукта по приоритету: coord, release, backend, frontend, plan, boards, backend-2, frontend-2; продукты —
+Роли продукта по приоритету: coord, release, backend, frontend, plan, boards, backend-2, frontend-2, backend-3 (те из
+них, что есть в team.roles продукта); продукты —
 вперемешку по рангу роли, чтобы при потолке у каждого остались главные роли. Открывает spawn_session.sh --launch,
 по одной, с паузой; роль, чья сессия не поднялась, — снова через 10, 20, 40 мин… (не чаще раза в 6 ч), после
 трёх неудач — пункт владельцу. Не открывает: пока Нерв стоит на лимите аккаунта, пока молчит хаб MCP (:3050),
@@ -46,7 +47,7 @@ import queue_focus as Q  # noqa: E402
 import team_status as TS  # noqa: E402
 import tmux_host as T  # noqa: E402
 
-ORDER = ("coord", "release", "backend", "frontend", "plan", "boards", "backend-2", "frontend-2")
+ORDER = TS.ORDER  # один список ролей с team_status: роль, которой нет в нём, сторож не открыл бы (#477, backend-3)
 DEFAULTS = {"total": 12, "floor": 10, "min_per_product": 2, "split_item": "d-team-split"}
 SOURCE = "team_plan (сторож команды ролей на Mac, OPS-82)"
 PAUSE_CHOICE = "pause"  # ответ на пункт долей: кнопка «Пауза» в шапке /queue

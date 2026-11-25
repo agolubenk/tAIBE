@@ -1475,8 +1475,7 @@ class Api:
         with self._store() as store:
             modules = [row["module"] for row in store.q(
                 "SELECT DISTINCT module FROM model_stats ORDER BY module")]
-            table = learning_mod.reliability_table(store, module)
-            ledger = {row["kind"]: row["n"] for row in store.q(
+            ledger ={row["kind"]: row["n"] for row in store.q(
                 "SELECT kind, COUNT(*) n FROM learning_ledger GROUP BY kind")}
             verdicts = {row["decision"]: row["n"] for row in store.q(
                 "SELECT decision, COUNT(*) n FROM verdicts GROUP BY decision")}
@@ -1492,18 +1491,8 @@ class Api:
             rubric = learning_mod.suggestions(store)
 
             board = learning_mod.role_board(self.cfg, store, module)
-            # model_stats хранит только пары, по которым уже был сигнал, а на вкладке нужна вся сетка
-            # «модель × роль», из которой совет выбирает. Недостающие пары — строкой с приором 1/1:
-            # 0.50 и ноль наблюдений; в «общую массу» они ничего не добавляют.
-            seen = {(row["model"], row["role"]) for row in table}
-            for role, candidates in (board.get("roles") or {}).items():
-                for cand in candidates:
-                    if (cand["model"], role) in seen:
-                        continue
-                    seen.add((cand["model"], role))
-                    table.append({"model": cand["model"], "role": role, "module": module,
-                                  "alpha": 1.0, "beta": 1.0, "reliability": 0.5, "observations": 0.0,
-                                  "updated_at": None, "prior": True})
+            # Вся сетка «модель × роль» доски ролей, у каждой строки — оценка совета с откатом и её основание.
+            table = learning_mod.reliability_grid(self.cfg, store, board, module)
             clouds = set(board["cloud"])
             for row in table:
                 row["cloud"] = row["model"] in clouds

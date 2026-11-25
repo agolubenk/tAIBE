@@ -46,6 +46,11 @@ def start_budget(seconds=6.0):
     _seen.clear()
 
 
+def decision():
+    """Метка текущего решения хука (start_budget): предел масок merge_guard_files — на одно решение (IS-249)."""
+    return _deadline[0]
+
+
 def git_out(gdir, *args):
     key = (os.path.normpath(gdir), args)
     if key not in _seen:
@@ -101,6 +106,17 @@ def same_blob(path, data):
         return bool(want) and _common_dir(d) in home and want == blob_id(data, len(want))
     except GitTimeout:
         return False
+
+
+def head_blob(path, data):
+    """Байты data скрипта по пути path (realpath) — блоб HEAD его репозитория (любого, и worktree): скрипт закоммичен
+    без правки (IS-249 B1, coord 13:10). Нет — вне репозитория, пути в HEAD нет, файл правлен, git не ответил вовремя."""
+    d, base = os.path.split(path)
+    try:
+        want = git_out(d, "rev-parse", "-q", "--verify", "HEAD:./" + base)
+    except GitTimeout:
+        return False
+    return bool(want) and want == blob_id(data, len(want))
 
 
 # Тесты слоя (SE-127, решение владельца A, taibe-d-se127-hooktests-1511): в их тексте — образцы защищённых команд,

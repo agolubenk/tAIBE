@@ -1,11 +1,14 @@
 import { HTTPException } from "hono/http-exception";
+import { reauthErrorSchema } from "../errors/api-error-schema";
 import {
   apiRouter,
   createRoute,
   errorResponse,
   jsonResponse,
 } from "../openapi";
-import { MAX_AGENTS_PER_OWNER } from "./agent-limits";
+import { agentKeyRefusal } from "../reauth/agent-key";
+import { NOT_FRESH_MESSAGE } from "../reauth/guard";
+import { AGENT_IDLE_ARCHIVE_MS, MAX_AGENTS_PER_OWNER } from "./agent-limits";
 import { normalizeHarness, normalizeSession } from "./agent-naming";
 import { agentKeyIssuer } from "./issuer";
 import { issueAgentKey } from "./issue-agent-key";
@@ -28,8 +31,7 @@ const issueAgentKeyRoute = createRoute({
   path: "/session",
   tags: ["Agents"],
   summary: "Issue a key for an agent session",
-  description:
-    "Gets or creates the agent of the caller, harness and session — a user of its own that cannot sign in — copies the caller's workspace memberships onto it (owner becomes admin) and returns a key valid for a day. Cards, comments and the journal then show the agent's name, not the caller's. An agent idle for a day is in the archive; asking again brings it back with its name and history while the caller has fewer than 50 active agents. Only a person's session or unscoped key may call it.",
+  description: `Gets or creates the agent of the caller, harness and session — a user of its own that cannot sign in — copies the caller's workspace memberships onto it (owner becomes admin) and returns a key valid for a day. Cards, comments and the journal then show the agent's name, not the caller's. An agent idle for ${AGENT_IDLE_ARCHIVE_MS / 3_600_000} hours is in the archive; asking again brings it back with its name and history while the caller has fewer than ${MAX_AGENTS_PER_OWNER} active agents. Only a person's session or unscoped key may call it. A browser session needs a fresh sign-in (SESSION_NOT_FRESH otherwise); a session from the device flow (kaneo-cli, kaneo-mcp) and a key do not.`,
   request: {
     body: {
       required: true,
@@ -39,8 +41,9 @@ const issueAgentKeyRoute = createRoute({
   responses: {
     200: jsonResponse("The agent and its new key", issuedAgentKeySchema),
     400: errorResponse("Harness or session label not accepted"),
-    403: errorResponse(
-      `The caller is an agent or a one-workspace key, the agent is disabled, or the caller already has ${MAX_AGENTS_PER_OWNER} active agents`,
+    403: jsonResponse(
+      `The caller is an agent or a one-workspace key, the agent is disabled, the caller already has ${MAX_AGENTS_PER_OWNER} active agents, or a browser session must confirm it is the person (SESSION_NOT_FRESH)`,
+      reauthErrorSchema,
     ),
   },
 });
@@ -98,6 +101,13 @@ const toolSetsRoute = createRoute({
 const agentIdentity = apiRouter()
   .openapi(issueAgentKeyRoute, async (c) => {
     const issuer = agentKeyIssuer(c);
+    const refused = await agentKeyRefusal({
+      apiKey: c.get("apiKey"),
+      session: c.get("session"),
+      userId: issuer.ownerId,
+    });
+    // The handler answers itself: onError would drop `methods`.
+    if (refused) return c.json({ message: NOT_FRESH_MESSAGE, ...refused }, 403);
     const body = c.req.valid("json");
     const harness = normalizeHarness(body.harness);
     const session = normalizeSession(body.session);

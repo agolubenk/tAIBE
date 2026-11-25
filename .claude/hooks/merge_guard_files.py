@@ -3,16 +3,45 @@
 package.json, Makefile), и какие файлы команда пишет — защищённые пути и файлы, которые она может переписать раньше,
 чем их прочтут: тогда прочитанное хуком — не то, что выполнится.
 """
+import fnmatch
 import itertools
 import os
 import re
+import shlex
 import stat
+import time
 
-from merge_guard_vars import ASSIGN, DECLARE, computed
+from merge_guard_vars import ASSIGN, DECLARE, SUBST, computed
 
 
 WRITE_ALL = {"rm", "rmdir", "truncate", "touch", "chmod", "chown", "tee", "unlink", "shred", "mv", "sponge"}
 WRITE_LAST = {"cp", "install", "rsync", "ln", "ditto", "scp"}
+# IS-249. Второе имя пути: символьная и жёсткая ссылка; убирает или меняет путь целиком — и папку, где лежат законы.
+LINKS = {"ln", "link"}
+GONE = {"rm", "rmdir", "unlink", "shred", "truncate", "chmod", "chown", "chflags"}
+FAMILY = GONE | LINKS | WRITE_LAST | {"mv", "tar", "bsdtar", "unzip"}  # команды link_findings (и `git mv`/`git rm`)
+COPY_LINK = {"cp": "ls", "install": "l"}  # буква опции, с которой копия — ссылки (`cp -al`, `install -l s`)
+GNU = WRITE_ALL | WRITE_LAST | LINKS | GONE | {"dd", "tar"}  # `gmv`, `gln`, `grm`, `gtee` — coreutils из Homebrew
+GLOB = re.compile(r"[*?[]")
+# формы маски zsh, которых _glob не повторяет (`[^x]`, `[!x]`, `[[:alpha:]]`, `**`; `^`, `#`, `~` — EXTENDED_GLOB):
+# отказ, не подражание (coord 13:46, линза frontend #508); `(…)` в слове делит разбор — merge_guard_zsh
+ZSH_FORM = re.compile(r"\[[\^!]|\[:|\*\*")
+# `^`, `#`, `~` в середине слова — маска всегда: EXTENDED_GLOB включает и текст, которого разбор не видит (`setopt $(<f)`,
+# `source f`; линза frontend #512, coord 18:14). Буквы: `~` в конце (`a.map~`, `*~`) и сразу после `:`/`=` (`host:~/d`,
+# `--dir=~/x`; Контроль #508 N2)
+ZSH_EXT = re.compile(r"[\^#]|(?<=[^:=])~(?=.)")
+# опции, с которыми маска находит другое (zsh -f, bash): `nocaseglob` — `.CLAU*`, `braceccl` — `.{c}laude`, `globsubst`,
+# `kshglob`/`extglob` — `@(…)`, `emulate ksh`; любой способ — `setopt`, `set -o`, `options[…]`, `zsh --x`, `shopt -s`.
+# Страховка: имя собирают кавычками и берут из файла (`source`) — регистр и `{c}` закрыты и без имени (линза frontend #512)
+SHELL_OPTS = re.compile(r"caseglob|casepaths|braceccl|globsubst|kshglob|extglob")
+EMULATE = re.compile(r"\bemulate\s+(-\w+\s+)*(sh|ksh|csh|bash)\b")  # `npm run emulate` — не опция (coord 17:43)
+BRACE_CCL = re.compile(r"(?<![$@])\{(?![^{}]*\.\.)[^{},]+\}")  # `{c}`, `{k-m}`: с `braceccl` — буквы; `{}`, `{1..3}`,
+# `{a,b}`, `${x}`, `@{u}` — нет
+RSYNC_PATTERN = {"--exclude", "--include", "--filter"}  # значение через пробел — шаблон, не путь (`'**/x'`); и `-f`:
+RSYNC_F = re.compile(r"-[^-eBMTf@]*f")  # у `-ref`, `-rTf` f — значение `-e`/`-T`, слово за ним — источник (Контроль B1)
+UNSEEN = re.compile(rf"{SUBST}|[$`]")  # слово из `$(…)`, `` `…` `` или неизвестной переменной: путь разбору не виден
+SUBST_N = re.compile(rf"{SUBST}C(\d+)x")  # $(…) с номером текста в procs[SUBS] хука (merge_guard_shell.SUBST_AT)
+ENV_WORD = re.compile(r"\$(?:\{(TMPDIR|USER|LOGNAME|RANDOM)\}|(TMPDIR|USER|LOGNAME|RANDOM)(?!\w)|\$)")  # HOME — dir_vars
 ANY = "/"  # имя-джокер (в имени файла `/` не бывает): команда переписывает файлы, которых по её словам не назвать
 GH_MOVED = ANY + "\0gh"  # окружение gh сменено (config_moved): не файл, `\0` в имени тоже не бывает
 GH_WRITTEN = ANY + "\0gh-config"  # запись по пути конфига gh: `~/.config/gh/config.yml`, `$GH_CONFIG_DIR/…`
@@ -50,9 +79,14 @@ def open_regular(path):
     return os.fdopen(fd, "rb")
 
 
+def gnu(word):
+    """`gmv`, `gln`, `grm`, `gtee`… (GNU coreutils на Mac) — то же, что mv, ln, rm, tee (IS-249)."""
+    return word[1:] if word[:1] == "g" and word[1:] in GNU else word
+
+
 def write_targets(a):
     """Пути, которые команда пишет или удаляет (по первому слову)."""
-    cmd, args = a[0], [x for x in a[1:] if not x.startswith("-")]
+    cmd, args = gnu(a[0]), [x for x in a[1:] if not x.startswith("-")]
     if cmd in WRITE_ALL:
         return args
     if cmd in WRITE_LAST:
@@ -228,3 +262,229 @@ def command_writes(text, depth=0, alt=False, keep=False, raw=False):
     names |= command_writes(other, depth, True, keep) if other else set()
     names |= command_writes(source, depth, alt, keep, True) if keep and not raw else set()
     return names.union(*(command_writes(m, depth + 1, keep=keep) for m in more))
+
+
+# ---------- IS-249: второе имя, перенос и удаление защищённого пути или папки над ним ----------
+# protected_path хука защищает сами законы и настройки. Проходили (линза security на HR #684): `ln -s …/.claude/rules
+# /tmp/r && echo x > /tmp/r/01-base.md` — нового имени realpath в момент проверки ещё не знает; `ln …/settings.json
+# /tmp/h` — у жёсткой ссылки другой путь, а файл тот же; `mv .claude /tmp/c2` — законы уехали вместе с папкой. Так же
+# `mv /tmp/x/settings.json .claude/` (имя в папке-цели) и `rm -rf .claude`. Папка над защищённым здесь — защищённая.
+
+def guarded_dirs(roots, home):
+    """Папки с защищённым: .claude каждого корня, ~/.claude (реестр сессий), ~ и $ZDOTDIR (файлы запуска shell)."""
+    home = os.path.realpath(home)  # те же папки, что у home_protected
+    out = [os.path.join(os.path.realpath(r), ".claude") for r in roots] + [home, os.path.dirname(home), "~"]
+    return [os.path.realpath(os.path.expanduser(d)).casefold() for d in out + [os.environ.get("ZDOTDIR") or "~"]]
+
+
+PATHS_MAX, SCAN_MAX = 20_000, 500_000  # на решение: путей масок для проверок, прочтённых имён (coord 14:02: < 3 с на Mac)
+_scan = [None, 0, 0, {}]  # решение (merge_guard_git.decision), имён прочтено, путей отдано, пути масок этого решения
+
+
+class Unread(Exception):
+    """Отказ «назовите пути словами»: маска шире предела или срока решения (таймаут хука — пропуск) или форма zsh."""
+
+
+def _budget():
+    import merge_guard_git as g  # git импортирует shell, shell — этот модуль
+    if _scan[0] != g.decision():
+        _scan[:] = [g.decision(), 0, 0, {}]
+    if _scan[0] and time.monotonic() > _scan[0]:  # срок решения (start_budget, 6 с): путь глубиной 400 — 3 мс (realpath
+        raise Unread("разбор путей дольше срока решения")  # — lstat на часть), предел счёта время не держит (frontend #511)
+    return _scan
+
+
+def _glob(p):
+    """Пути маски p по частям пути (os.scandir), с именами с точкой (GLOB_DOTS). Папку читает потоком, в памяти — только
+    совпадения; каждое прочтённое имя — в предел решения SCAN_MAX; ту же маску решение раскрывает один раз."""
+    s = _budget()
+    if p in s[3]:
+        return s[3][p]
+    cur, parts = [os.sep if os.path.isabs(p) else ""], [x for x in p.split(os.sep) if x]
+    for k, part in enumerate(parts):
+        if not GLOB.search(part):
+            cur = [os.path.join(c, part) for c in cur]
+            continue
+        nxt, last, match = [], k == len(parts) - 1, re.compile(fnmatch.translate(part), re.I).match  # без регистра:
+        # надмножество `nocaseglob` в любой форме; APFS регистр не различает (линза frontend #512, coord 17:43)
+        for c in cur:
+            try:
+                with os.scandir(c or ".") as it:
+                    for e in it:
+                        s[1] += 1
+                        if s[1] > SCAN_MAX or len(nxt) > PATHS_MAX:
+                            raise Unread("маска раскрывается шире предела")
+                        if match(e.name) and (last or e.is_dir()):
+                            nxt.append(os.path.join(c, e.name))
+            except OSError:
+                continue
+        cur = nxt
+    s[3][p] = [c for c in cur if os.path.lexists(c)]
+    return s[3][p]
+
+
+def _paths(base, word):
+    """Пути слова от base; маску — и на имена с точкой (`mv .c* x`), не шире предела."""
+    if ZSH_FORM.search(word) or ZSH_EXT.search(word):
+        raise Unread("форма маски zsh, которую разбор не читает (`[^…]`, `[[:…:]]`, `**`, `^`, `#`, `~`)")
+    p = os.path.join(base, os.path.expanduser(word))
+    if not GLOB.search(word):
+        return [p]
+    got = _glob(p) or [p]
+    _scan[2] += len(got)  # каждый путь проверка прочтёт (realpath): предел — на все проверки решения
+    if _scan[2] > PATHS_MAX:
+        raise Unread("маска раскрывается шире предела")
+    return got
+
+
+def _hit(word, bases, roots, protected, dirs):
+    """Путь слова от одной из bases — защищённый или папка над защищённым: что назвать в отказе, иначе None."""
+    for base in bases:
+        for q in _paths(base, word):
+            f = _budget() and os.path.realpath(q).casefold()  # срок решения — на каждый путь: вышел — Unread
+            if p := protected(q, base, roots):
+                return p
+            if any(d == f or d.startswith(f.rstrip("/") + "/") for d in dirs):
+                return os.path.realpath(q)
+    return None
+
+
+class Disk(str):
+    """Путь скрипта с диска и текст, который хук прочёл (runs_code → whole[2]). reviewed — эти байты — блоб HEAD его
+    репозитория (любого, в том числе worktree): невидимый путь у mv/rm в нём — не отказ (IS-249 B1, coord 13:10). Скрипт
+    из scratchpad и правленый без коммита — отказ; обойти можно только коммитом, а его видно в git."""
+    def __new__(cls, path, text):
+        s = super().__new__(cls, path)
+        s.text, s.ok = text, None
+        return s
+
+    def reviewed(self):
+        if self.ok is None:  # git — только когда невидимый путь нашёлся; второго чтения файла нет
+            import merge_guard_git as g  # git импортирует shell, shell — этот модуль; тест подменяет head_blob
+            self.ok = g.head_blob(str(self), self.text.encode())
+        return self.ok
+
+
+def fresh(code, cwd):
+    """Путь из `$(mktemp …)` без -u — нового файла, которого до команды не было (coord 12:57, #508 B1), или None:
+    шаблон — от cwd, с -p/--tmpdir — в той папке, с -t и без шаблона — в папке временных файлов."""
+    try:
+        w = shlex.split(code)
+    except ValueError:
+        return None
+    w, tmp = w[1:] if w[:1] == ["command"] else w, os.environ.get("TMPDIR") or "/tmp"
+    if not w or w[0] not in ("mktemp", "gmktemp") or re.search(rf"[;&|<>`$\n]|{SUBST}", code) or any(
+            x == "--dry-run" or re.fullmatch(r"-[a-zA-Z]*u[a-zA-Z]*", x) for x in w[1:]):
+        return None
+    ops, at, it = [], None, iter(w[1:])
+    for x in it:
+        if x.startswith("--tmpdir"):
+            at = x.partition("=")[2] or tmp
+        elif re.fullmatch(r"-[a-zA-Z]*[pt]", x) or x == "--suffix":  # значение — следующее слово (`-t` у macOS тоже)
+            v = next(it, "")
+            at = v if x[-1] == "p" else tmp if x[-1] == "t" else at
+        elif re.fullmatch(r"-[a-zA-Z]*t[a-zA-Z]*", x):
+            at = tmp
+        elif not x.startswith("-"):
+            ops.append(x)
+    name = os.path.basename(ops[-1]) if ops else "tmp.is249"
+    if at:
+        return os.path.join(cwd, os.path.expanduser(at), name)
+    return os.path.join(cwd, os.path.expanduser(ops[-1])) if ops else os.path.join(tmp, name)
+
+
+def _env(m):
+    """`$$` и `$RANDOM` — число; $TMPDIR — значение или /tmp; $USER и $LOGNAME — значение, без него — как было."""
+    name = m.group(1) or m.group(2)
+    if name in (None, "RANDOM"):
+        return "1"
+    return os.environ.get(name) or ("/tmp" if name == "TMPDIR" else m[0])
+
+
+def seen_word(w, bodies, cwd, named=()):
+    """Слово с $TMPDIR/$USER/$LOGNAME — с их значением; `$(mktemp …)` и переменная из него — с путём от fresh. named —
+    имена, которые команда может поменять сама (`read USER`, `unset TMPDIR`, `printf -v USER`): остаются словом (Б2)."""
+    w = ENV_WORD.sub(lambda m: m[0] if (m.group(1) or m.group(2)) in named else _env(m), w)
+    path = lambda k: fresh(bodies[k], cwd) if k < len(bodies) else None  # noqa: E731
+    return SUBST_N.sub(lambda m: path(int(m.group(1))) or m[0], w)
+
+
+def link_findings(a, cwd, roots, protected, home, whole=("", "", False, None, ("", "")), bodies=(), hid=()):
+    """[(«file», что)]: команда даёт защищённому пути или папке над ним второе имя (ln, link, cp -l/-s, install -l,
+    rsync --link-dest), уносит его (mv, git mv), кладёт в папку законов файл с защищённым именем, удаляет или меняет
+    папку (rm, chmod, git rm) или переписывает её копией папки и распаковкой. protected — protected_path хука; whole —
+    как у classify_argv (whole[2] — Disk у скрипта с диска), bodies — тексты $(…), hid — BLIND. Невидимый путь: у
+    ссылки, mv и GONE — в команде, которую набрал агент, и в скрипте без коммита (B1). Маска шире предела — отказ."""
+    if gnu(a[0]) not in FAMILY | {"git"}:
+        return []
+    try:
+        return _links(a, cwd, roots, protected, home, whole, bodies, hid)
+    except Unread as e:  # `rm -rf <маска> <маска> .claude`, `rm -rf .cl(a)ude` (линза frontend #508)
+        return [("file", f"{' '.join(a)[:80]} ({a[0]}: {e} — назовите пути словами, IS-249)")]
+
+
+def _links(a, cwd, roots, protected, home, whole, bodies, hid):
+    disk, text = whole[2], whole[4][1] if len(whole) > 4 else whole[1]
+    named = {n for n in ("TMPDIR", "USER", "LOGNAME", "RANDOM") if n in hid or "*" in hid or (
+        n in text and re.search(rf"(?<![$\w{{]){n}(?!\w)|\$\{{{n}(\[[^]]*\])?:{{0,2}}=", text))}  # read, unset, printf -v,
+    # export, n=; `${n:=x}` и `${n::=x}` (zsh) — как mentioned в merge_guard_vars
+    a = [a[0]] + [seen_word(w, bodies, cwd, named) for w in a[1:]]
+    typed = lambda: not (isinstance(disk, Disk) and disk.reviewed())  # noqa: E731
+    cmd, opts, ops = gnu(a[0]), [x for x in a[1:] if x.startswith("-")], [x for x in a[1:] if not x.startswith("-")]
+    if cmd == "git":  # `git -C d mv .claude x`: пути — от d
+        k, sub = git_sub(a)
+        cwd = next((os.path.join(cwd, a[i + 1]) for i in range(k - 1) if a[i] == "-C"), cwd)
+        cmd, ops = {"mv": "mv", "rm": "rm"}.get(sub, ""), [x for x in a[k + 1:] if not x.startswith("-")]
+    if cmd not in FAMILY:  # остальным realpath папок не нужен
+        return []
+    if cmd == "rsync":  # `--exclude '**/node_modules'`: значение опции — шаблон, не путь (Контроль N2, #508)
+        val = {k + 1 for k, x in enumerate(a) if x in RSYNC_PATTERN or RSYNC_F.fullmatch(x)}
+        ops = [x for k, x in enumerate(a) if k and k not in val and not x.startswith("-")]
+    short, dirs, norm = "".join(x[1:] for x in opts if x[:2] != "--"), guarded_dirs(roots, home), [gnu(a[0])] + a[1:]
+    unq = re.sub(r"['\"\\]", "", text.casefold())  # zsh снимает кавычки и `\` до `setopt`: `no_case'_'glob` (#512)
+    low = re.sub(r"[_-]", "", unq)  # имя опции zsh — без регистра, `_` и `-` (`--no-case-glob`, zsh 5.9)
+    if (SHELL_OPTS.search(low) or EMULATE.search(unq)) and any(GLOB.search(w) or "{" in w for w in ops):  # coord 14:54
+        raise Unread("опция оболочки меняет, что находит маска (`nocaseglob`, `braceccl`, `emulate`, SE-194)")
+    if any(BRACE_CCL.search(w) for w in ops):  # опция могла прийти из файла: `{c}` — отказ и без имени (coord 17:43)
+        raise Unread("скобки `{…}` без `,` и `..` — с `braceccl` это буквы (`.{c}laude`, SE-194)")
+    hit = lambda w, bases: _hit(w, bases, roots, protected, dirs)  # noqa: E731
+    paths = _paths
+    say = lambda p, why: ("file", f"{p} ({a[0]} {why} — IS-249)")  # noqa: E731
+    unseen = say(" ".join(a)[:80], "называет путь, который разбор не видит: " + (
+        "закоммитьте скрипт или назовите путь словами" if isinstance(disk, Disk) else "назовите его словами"))
+    if cmd in GONE | {"mv"} and any(UNSEEN.search(w) for w in a[1:]) and typed():  # `rm -rf "$X"`, `mv "$(…)" x`
+        return [unseen]
+    if cmd in GONE:
+        return [say(p, "удаляет или меняет папку с законами и настройками") for w in ops if (p := hit(w, [cwd]))]
+    if cmd in ("tar", "bsdtar", "unzip"):  # `tar -x` без -C и `unzip` без -d — в текущую папку
+        listing = cmd == "unzip" and bool(set(short) & set("lvtZp"))  # `unzip -l`: только список
+        into = unpack_dirs(norm) or ([cwd] if blind(norm) and not listing else [])
+        why = "распаковывает в папку с законами и настройками (без -C/-d — в текущую: назовите другую папку)"
+        return [say(p, why) for d in into if (p := hit(d, [cwd]))]
+    link_dest = [x.split("=", 1)[1] for x in opts if x.startswith("--link-dest=")]
+    linking = cmd in LINKS or bool(set(short) & set(COPY_LINK.get(cmd, ""))) or cmd == "cp" and bool(
+        {"--link", "--symbolic-link"} & set(opts)) or cmd == "rsync" and any(x.startswith("--link-dest") for x in opts)
+    if not (linking or cmd == "mv" or cmd in WRITE_LAST):
+        return []
+    into = _values(norm, "t", "--target-directory") if cmd in ("ln", "mv", "cp", "install") else []
+    dest = into[0] if into else ops[-1] if len(ops) > 1 else None
+    srcs = ([x for x in ops if x != dest] if into else ops[:-1] if dest else ops) + link_dest
+    ats = paths(cwd, dest) if dest else [cwd]  # куда ляжет: папка-цель или новое имя; маску цели (`.cl*/`) — как shell
+    found = []
+    if linking and any(UNSEEN.search(w) for w in ops + link_dest) and typed():  # `ln -s "$(…)" /tmp/r && echo x > …`
+        found.append(unseen)  # закоммиченный скрипт — прежнее правило (install.sh, agent-comms-link.sh; coord 13:27)
+    if linking or cmd == "mv":  # символьная ссылка считается от своей папки, жёсткая и перенос — от cwd
+        bases = [cwd] + [b for at in ats for b in (at, os.path.dirname(at))] if linking and dest else [cwd]
+        found += [say(p, "даёт второе имя или уносит защищённое или папку над ним") for w in srcs if (p := hit(w, bases))]
+    found += [say(p, "кладёт файл с защищённым именем") for at in ats for w in srcs for q in paths(cwd, w)
+              if _budget() and (p := protected(os.path.join(at, os.path.basename(q.rstrip("/"))), cwd, roots))]  # срок — как в _hit
+    tree = cmd == "ditto" or cmd in ("cp", "rsync") and bool(
+        re.search(r"[rRa]" if cmd == "cp" else r"[ra]", short) or {"--recursive", "--archive"} & set(opts))
+    if tree and dest:  # содержимое (`x/.`, `x/`, ditto) и цель, которой нет, — в саму цель; иначе — в цель/имя источника
+        def land(at, w, q):  # `cp -R /tmp/fixtures .` из корня — новая папка ./fixtures; имя `"$X"` — как в саму цель
+            b = os.path.basename(q)
+            return at if cmd == "ditto" or w.endswith(("/", "/.")) or not os.path.isdir(at) or UNSEEN.search(b) else (
+                os.path.join(at, b))
+        into = [land(at, w, q) for at in ats for w in srcs for q in paths(cwd, w) if not GLOB.search(os.path.basename(q))]
+        found += [say(p, "копирует папку поверх папки с законами и настройками") for t in into if (p := hit(t, [cwd]))]
+    return found

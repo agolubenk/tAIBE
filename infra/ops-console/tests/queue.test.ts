@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createContext, runInContext } from 'node:vm'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { api, freshApp, login } from './helpers'
-import { OPEN_RULE_JS } from '../server/queue/open-rule'
+import { OPEN_RULE_JS, oqItemState } from '../server/queue/open-rule'
 import { SHIM_JS } from '../server/queue/page-scripts'
 import { createToken, revokeToken } from '../server/queue/auth'
 import { mergePlan, mergeRequestBody, setGithubTransportForTests, type GithubResponse } from '../server/queue/github'
@@ -159,11 +159,88 @@ describe('документы и права', () => {
     expect((await a.get('/db/items/d-created')).json.createdAt).toBe(put.json.createdAt)
   })
 
-  it('planEnd агент не переписывает без basePlanEnd', async () => {
-    const a = bearer(agent)
+  it('planEnd позже — только по ответу владельца «перенести» (dueRef) и не позже moveTo; один ответ — один сдвиг; basePlanEnd и dueRefs ведёт сервер (TB-112)', async () => {
+    // Свой токен: правило делает много записей, общий токен упёрся бы в предел 120 записей в минуту.
+    const a = bearer((await createToken('due-agent', ['read', 'agent'])).token)
+    const o = api(app, cookie)
+    const answer = (id: string, choice: string, at: string) => o.put(`/oq/v1/db/checks/${id}`, { data: { done: true, choice, note: '', at } })
     expect((await a.put('/db/work/w-t', { data: { title: 'Задача', track: 'ops', planEnd: '2026-10-20' } })).status).toBe(200)
-    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25' } })).status).toBe(409)
-    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', basePlanEnd: '2026-10-20', note: 'сдвиг: ждали ревью' } })).status).toBe(200)
+    // Прежний обход «basePlanEnd = прежняя дата» без ответа владельца больше не проходит.
+    const plain = await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', basePlanEnd: '2026-10-20', note: 'сдвиг: ждали ревью' } })
+    expect(plain.status).toBe(409)
+    expect(plain.json.error).toContain('d-<продукт>-due[-<тема>]')
+    const due = { kind: 'decision', title: 'Сроки: строки не успевают', body: 'Задача — перенести на 25.10', rows: ['w-t'], moveTo: { 'w-t': '2026-10-25' }, options: [{ id: 'keep', label: 'Держать срок' }, { id: 'move', label: 'Перенести' }] }
+    // Даты переноса нет в тексте — владелец её не видит: решение не принимается.
+    const hidden = await a.put('/db/items/d-t-due-0', { data: { ...due, body: 'Задача — перенести на прогноз' } })
+    expect(hidden.status).toBe(422)
+    expect(hidden.json.error).toContain('впиши дату переноса строки w-t в текст')
+    expect((await a.put('/db/items/d-t-due-0', { data: { ...due, body: 'Задача — перенести на 2026-10-25' } })).status).toBe(200)
+    expect((await a.put('/db/items/d-t-due-1', { data: due })).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1' } })).status).toBe(409) // ответа нет
+    expect((await answer('d-t-due-1', 'keep', '2026-10-18T10:00:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1' } })).status).toBe(409) // «держать срок»
+    expect((await answer('d-t-due-1', 'move', '2026-10-18T10:05:00.000Z')).status).toBe(200)
+    // Позже даты, которую видел владелец, — нет; снять срок — нет.
+    const late = await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-26', dueRef: 'd-t-due-1' } })
+    expect(late.status).toBe(409)
+    expect(late.json.error).toContain('не позже «2026-10-25»')
+    const { planEnd: _drop, ...noEnd } = { title: 'Задача', track: 'ops', planEnd: '' }
+    expect((await a.put('/db/work/w-t', { data: { ...noEnd, dueRef: 'd-t-due-1' } })).status).toBe(409)
+    const moved = await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1', note: 'сдвиг по ответу владельца' } })
+    expect(moved.status).toBe(200)
+    expect(moved.json.data).toMatchObject({ planEnd: '2026-10-25', basePlanEnd: '2026-10-20', dueRefs: ['d-t-due-1'] })
+    expect(moved.json.data.dueRef).toBeUndefined()
+    // Полная замена без серверных полей их не стирает; прислать другие — 409.
+    const put = await a.put('/db/work/w-t', { data: { title: 'Задача', track: 'ops', planEnd: '2026-10-25' } })
+    expect(put.status).toBe(200)
+    expect(put.json.data).toMatchObject({ basePlanEnd: '2026-10-20', dueRefs: ['d-t-due-1'] })
+    expect((await a.patch('/db/work/w-t', { data: { dueRefs: [] } })).status).toBe(409)
+    // null — «поле убрать»: серверное поле не убирается, остаётся прежним.
+    const nulled = await a.patch('/db/work/w-t', { data: { dueRefs: null, basePlanEnd: null } })
+    expect(nulled.status).toBe(200)
+    expect(nulled.json.data).toMatchObject({ basePlanEnd: '2026-10-20', dueRefs: ['d-t-due-1'] })
+    expect((await a.patch('/db/work/w-t', { data: { basePlanEnd: '2026-10-25' } })).status).toBe(409)
+    // Один ответ — один сдвиг; раньше срок — без ответа.
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-24', dueRef: 'd-t-due-1' } })).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-25', dueRef: 'd-t-due-1' } })).status).toBe(409)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-10-23' } })).status).toBe(200)
+    // Решение изменили после ответа — ответ не годится, пока владелец не ответит на новый текст.
+    expect((await a.put('/db/items/d-t-due-3', { data: { ...due, body: 'Задача — на 27.10', moveTo: { 'w-t': '2026-10-27' } } })).status).toBe(200)
+    expect((await answer('d-t-due-3', 'move', '2026-10-18T10:07:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/items/d-t-due-3', { data: { body: 'Задача — на 30.11', moveTo: { 'w-t': '2026-11-30' } } })).status).toBe(200)
+    const stale = await a.patch('/db/work/w-t', { data: { planEnd: '2026-11-30', dueRef: 'd-t-due-3' } })
+    expect(stale.status).toBe(409)
+    expect(stale.json.error).toContain('изменено после ответа владельца')
+    expect((await answer('d-t-due-3', 'move', '2026-10-18T10:08:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-11-30', dueRef: 'd-t-due-3' } })).status).toBe(200)
+    // Ответ по другой строке не сдвигает эту; решение без даты строки — тоже.
+    expect((await a.put('/db/items/d-t-due-2', { data: { ...due, body: 'Другая — на 30.12', rows: ['w-other'], moveTo: { 'w-other': '2026-12-30' } } })).status).toBe(200)
+    expect((await answer('d-t-due-2', 'move', '2026-10-18T10:10:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-12-01', dueRef: 'd-t-due-2' } })).status).toBe(409)
+    // Строка есть в moveTo, но не в rows — не сдвигается.
+    expect((await a.put('/db/items/d-t-due-5', { data: { ...due, rows: ['w-other'] } })).status).toBe(200)
+    expect((await answer('d-t-due-5', 'move', '2026-10-18T10:11:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-12-01', dueRef: 'd-t-due-5' } })).json.error).toContain('нет этой строки')
+    // Вариант move подписан не «Перенести…» — владелец выбирал по подписи: не сдвигается.
+    const swapped = [{ id: 'move', label: 'Держать срок' }, { id: 'keep', label: 'Перенести' }]
+    expect((await a.put('/db/items/d-t-due-6', { data: { ...due, options: swapped } })).status).toBe(200)
+    expect((await answer('d-t-due-6', 'move', '2026-10-18T10:12:00.000Z')).status).toBe(200)
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: '2026-12-01', dueRef: 'd-t-due-6' } })).json.error).toContain('владелец выбирал по подписи')
+    // Снять срок через null агент не может.
+    expect((await a.patch('/db/work/w-t', { data: { planEnd: null } })).status).toBe(409)
+    // Неверная форма moveTo и не день календаря — 422 на записи решения.
+    expect((await a.put('/db/items/d-t-due-4', { data: { ...due, moveTo: { 'w-t': '2026-13-01' } } })).status).toBe(422)
+    expect((await a.put('/db/items/d-t-due-4', { data: { ...due, moveTo: { 'w-t': '25.10.2026' } } })).status).toBe(422)
+    expect((await a.put('/db/items/d-t-due-4', { data: { ...due, moveTo: { 'w-t': '2026-10-2[' } } })).status).toBe(422)
+    // Новая строка агента: dueRefs нет, basePlanEnd — её planEnd или пусто.
+    expect((await a.put('/db/work/w-n1', { data: { title: 'Н', planEnd: '2026-10-20', dueRefs: ['d-t-due-1'] } })).status).toBe(409)
+    expect((await a.put('/db/work/w-n2', { data: { title: 'Н', planEnd: '2026-10-20', basePlanEnd: '2026-10-01' } })).status).toBe(409)
+    expect((await a.put('/db/work/w-n3', { data: { title: 'Н', planEnd: '2026-10-20', basePlanEnd: '2026-10-20' } })).status).toBe(200)
+    // Владелец сдвигает и снимает сам.
+    expect((await o.patch('/oq/v1/db/work/w-t', { data: { planEnd: '2027-01-05' } })).status).toBe(200)
+    const cleared = await o.patch('/oq/v1/db/work/w-t', { data: { planEnd: null } })
+    expect(cleared.status).toBe(200)
+    expect(cleared.json.data.planEnd).toBeUndefined()
   })
 
   it('цвет направления (work/track-<id>) — только токен палитры var(--c1)…var(--c6), как у страницы (OPS-72)', async () => {
@@ -663,6 +740,33 @@ describe('ответ владельца со страницы не стирае�
     // Заметка поверх blocked — отметка не сдвигается: пункт не переоткрывается от любой записи агента.
     const note = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentNote: 'взял' } })
     expect(note.json.data.blockedAt).toBe(blocked.json.data.blockedAt)
+  })
+
+  it('blocked поверх blocked после нового ответа владельца — новая отметка, пункт «ждёт вас снова» (s-sentry-enable-1911, 20.11)', async () => {
+    const id = 's-reblock-2011'
+    expect((await bearer(agent).put(`/db/items/${id}`, { data: { kind: 'server', title: 'Повторная просьба' } })).status).toBe(200)
+    const tick = () => new Promise((r) => setTimeout(r, 5))
+    const first = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentStatus: 'blocked', agentNote: 'нужен вывод' } })
+    await tick()
+    // Повтор blocked до ответа владельца — отметка та же: просить снова не о чем.
+    const again = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentStatus: 'blocked', agentNote: 'всё ещё жду' } })
+    expect(again.json.data.blockedAt).toBe(first.json.data.blockedAt)
+    await tick()
+    expect((await bearer(owner).patch(`/db/checks/${id}`, { data: { done: true, at: '2026-11-20T08:15:33.088Z', note: 'разрешаю' } })).status).toBe(200)
+    const answered = (await bearer(agent).get(`/db/checks/${id}`)).json.data
+    expect(oqItemState('server', answered)).toBe('done')
+    await tick()
+    // Заметка без статуса после ответа — не просьба: пункт закрыт.
+    const note = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentNote: 'читаю ответ' } })
+    expect(note.json.data.blockedAt).toBe(first.json.data.blockedAt)
+    expect(oqItemState('server', note.json.data)).toBe('done')
+    await tick()
+    // blocked с новой просьбой после ответа — отметка новая, пункт снова у владельца: и сервер, и ?open=1.
+    const reblock = await bearer(agent).patch(`/db/checks/${id}`, { data: { agentStatus: 'blocked', agentNote: 'запустите команду сами' } })
+    expect(Date.parse(reblock.json.data.blockedAt)).toBeGreaterThan(Date.parse(answered.ownerAt))
+    expect(oqItemState('server', reblock.json.data)).toBe('again')
+    const open = (await bearer(agent).get('/db/items?open=1')).json.docs.map((d: { id: string }) => d.id)
+    expect(open).toContain(id)
   })
 
   it('замена ответа владельцем (PUT) не стирает поля агента (ревью «Контроля» #324, п. 5)', async () => {

@@ -2,7 +2,9 @@
 `.claude/merge-guard.local.json` каждой папки --guard заменяется на sessionId проверенного наследника.
 
 Передать Контроль может только сам Контроль и только свой: сторож запускает предшественник (spawn_session.sh
---handoff), и меняется только запись с его sessionId. Сессия не в списке ничего не передаёт. Личность обеих сессий —
+--handoff), и меняется только запись с его sessionId. Сессия не в списке ничего не передаёт. Второй путь —
+lineage_seat.py (SE-155): мёртвую запись продукта новому release через hand_control вписывает только сторож команды
+или «ВКЛ», не агентская сессия. Личность обеих сессий —
 из реестра `~/.claude/sessions/<pid>.json` того же старта процесса: этот реестр, как и список Контроля, хук
 merge-guard закрывает от записи агентами. Наследник ещё и сверяется с окном, которое открыл spawn_session.sh: его tty
 (аргумент сторожа --succ-tty, не запись линии — папку линий правят агенты) и родитель — пусковой скрипт или shell этого
@@ -24,12 +26,15 @@ merge-guard закрывает от записи агентами. Наслед�
 полного отката; сторож убит — журнал остаётся, и следующая передача идёт, только если все списки в одном конце (все
 `old` или все `new`). Блокировка и журнал — в `~/.claude/sessions/lineage-guard/` (state_dir): реестр сессий хук
 закрывает от агентов. Прежний текст каждой папки — в `merge-guard.local.json.before-handover` (одна копия).
+Реестр, транскрипты и линии — только из дома пользователя (env_problem, SE-167): папки из окружения задают тесты, а в
+живом запуске ими подменили бы реестр и выдали Контроль сессии, которой в нём нет (Claude-линза #457, B2).
 Файловая часть (корень по .git, пины, чтение и запись через fd папки) — lineage_guard_fs.py.
 """
 import errno
 import fcntl
 import json
 import os
+import pwd
 import re
 import time
 
@@ -218,6 +223,21 @@ def new_control(ctl, pred_sid, succ_sid):
     return out
 
 
+DIR_VARS = ("TAIBE_LINEAGE_DIR", "CLAUDE_SESSIONS_DIR", "CLAUDE_PROJECTS_DIR")
+
+
+def env_problem():
+    """Причина не менять списки Контроля: реестр сессий, транскрипты или линии не из дома пользователя; None — из него.
+    Одна проверка для seat, retire и передачи: все они пишут списки только через hand_control."""
+    set_vars = [v for v in DIR_VARS if os.environ.get(v)]
+    if set_vars:
+        return f"заданы {', '.join(set_vars)} — реестр сессий не из дома пользователя"
+    home = os.environ.get("HOME")  # не задан — Path.home() берёт дом из учётной записи
+    if home is not None and os.path.realpath(home) != os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir):
+        return f"HOME ({home}) — не домашняя папка пользователя"
+    return None
+
+
 def hand_control(dirs, pred_sid, succ, suffix, log, lock_wait=LOCK_WAIT, *, pins):
     """succ — (sessionId наследника, причина отказа) или функция без аргументов, которая его возвращает: она
     вызывается под guard.lock прямо перед первой записью — наследник, упавший за ожидание блокировки, Контроль не
@@ -242,6 +262,10 @@ def hand_control(dirs, pred_sid, succ, suffix, log, lock_wait=LOCK_WAIT, *, pins
         return True
     if pins is None:
         log(f"Контроль: при старте сторожа папки guard не сняты (ссылка или нет прав) — {KEEP}")
+        return False
+    why = env_problem()
+    if why:
+        log(f"Контроль: {why} — {KEEP}")
         return False
     sd = state_dir()
     try:

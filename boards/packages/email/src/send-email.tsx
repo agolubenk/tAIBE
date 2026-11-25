@@ -14,6 +14,9 @@ import OtpEmail from "./templates/otp";
 import PasswordResetEmail, {
   type PasswordResetEmailProps,
 } from "./templates/password-reset";
+import PasskeyAddedEmail, {
+  type PasskeyAddedEmailProps,
+} from "./templates/passkey-added";
 import ReauthCodeEmail, {
   type ReauthCodeEmailProps,
 } from "./templates/reauth-code";
@@ -176,6 +179,39 @@ export const sendReauthCodeEmail = async (
   } catch (error) {
     console.error(
       "Error sending reauth code email",
+      getSmtpErrorDetails(error),
+    );
+    throw error;
+  }
+};
+
+/**
+ * TB-31 R-6: «A passkey was added». Without SMTP nothing is sent and the key
+ * stays (like «Password changed», R-3); the caller logs a failure.
+ */
+export const sendPasskeyAddedEmail = async (
+  to: string,
+  subject: string,
+  data: PasskeyAddedEmailProps,
+): Promise<EmailResult> => {
+  if (!isSmtpConfigured()) {
+    return { success: false, reason: "SMTP_NOT_CONFIGURED" };
+  }
+
+  try {
+    const emailTemplate = await render(
+      PasskeyAddedEmail({ email: to, instance: instanceHost(), ...data }),
+    );
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM,
+      to,
+      subject,
+      html: emailTemplate,
+    });
+    return { success: true };
+  } catch (error) {
+    console.error(
+      "Error sending passkey added email",
       getSmtpErrorDetails(error),
     );
     throw error;

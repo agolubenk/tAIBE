@@ -14,7 +14,6 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { authClient } from "@/lib/auth-client";
 import { toast } from "@/lib/toast";
 import { AuthCaptcha } from "./auth-captcha";
 import {
@@ -22,8 +21,9 @@ import {
   authLabelClassName,
   authMessageClassName,
 } from "./auth-form-styles";
-import { isValidSignInLogin, resolveSignInEmail } from "./local-admin-login";
+import { isValidSignInLogin } from "./local-admin-login";
 import { PasswordInput } from "./password-input";
+import { signInMessage, signInWithPassword } from "./password-sign-in";
 import type { AuthCaptcha as AuthCaptchaState } from "./use-auth-captcha";
 
 type PasswordSignInValues = { email: string; password: string };
@@ -50,7 +50,7 @@ export function PasswordSignInForm({
       z.object({
         email: z
           .string()
-          .refine(isValidSignInLogin, t("auth:forms.invalidEmail")),
+          .refine(isValidSignInLogin, t("auth:forms.invalidLogin")),
         password: z.string().min(1, t("auth:forms.passwordRequired")),
       }),
     [t],
@@ -63,27 +63,17 @@ export function PasswordSignInForm({
   const onSubmit = async ({ email, password }: PasswordSignInValues) => {
     if (captcha.pending) return;
     setIsPending(true);
-    try {
-      const result = await authClient.signIn.email(
-        { email: resolveSignInEmail(email), password },
-        { headers: captcha.headers },
-      );
-      if (result.error) {
-        toast.error(result.error.message || t("auth:signInForm.failedSignIn"));
-        setIsPending(false);
-        captcha.reset();
-        return;
-      }
+    const result = await signInWithPassword(email, password, captcha.headers);
+    if (result.ok) {
       onSuccess();
-    } catch (error) {
-      toast.error(
-        error instanceof Error && error.message
-          ? error.message
-          : t("auth:signInForm.failedSignIn"),
-      );
-      setIsPending(false);
-      captcha.reset();
+      return;
     }
+    const message = signInMessage(result);
+    toast.error(
+      "text" in message ? message.text : t(message.key, message.values),
+    );
+    setIsPending(false);
+    captcha.reset();
   };
 
   return (
@@ -99,16 +89,16 @@ export function PasswordSignInForm({
           render={({ field }) => (
             <FormItem className={authFieldClassName}>
               <FormLabel className={authLabelClassName}>
-                {t("auth:forms.email")}
+                {t("auth:forms.loginOrEmail")}
               </FormLabel>
               <FormControl>
                 <Input
                   size="lg"
                   type="text"
-                  inputMode="email"
                   autoCapitalize="none"
-                  autoComplete="username"
-                  placeholder={t("auth:forms.emailPlaceholder")}
+                  autoComplete="username webauthn"
+                  spellCheck={false}
+                  placeholder={t("auth:forms.loginOrEmailPlaceholder")}
                   {...field}
                 />
               </FormControl>

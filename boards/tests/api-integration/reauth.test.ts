@@ -185,6 +185,34 @@ describe("TB-31 R-5: fresh session", () => {
       ["password"],
     );
   });
+
+  it("tells a non-admin nothing about the target's email (release N14)", async () => {
+    const { app } = createApp();
+    // The first sign-up becomes the instance admin; the caller must not.
+    await person(app, "admin");
+    const caller = await person(app);
+    const target = await createWorkspaceMember({ role: "member" });
+    await staleSessions(caller.userId);
+    const [current] = await db
+      .select({ email: schema.userTable.email })
+      .from(schema.userTable)
+      .where(eq(schema.userTable.id, target.user.id));
+
+    // The same answer for the user's own email, another one and no user.
+    for (const [userId, email] of [
+      [target.user.id, current?.email],
+      [target.user.id, "renamed@example.com"],
+      [randomUUID(), "renamed@example.com"],
+    ]) {
+      await expectNotFresh(
+        await post(app, "/admin/update-user", caller.cookies, {
+          userId,
+          data: { email },
+        }),
+        ["password"],
+      );
+    }
+  });
 });
 
 describe("TB-31 R-5: password confirmation", () => {

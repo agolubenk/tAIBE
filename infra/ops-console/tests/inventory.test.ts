@@ -40,15 +40,15 @@ describe('контейнеры соседних стеков', () => {
 
   it('основной проект: без OPS_COMPOSE_PROJECT основным считается всё (как до 1.5)', () => {
     expect(isMainStack({ mainProject: 'backend' }, { composeProject: 'backend' })).toBe(true)
-    expect(isMainStack({ mainProject: 'backend' }, { composeProject: 't-boards' })).toBe(false)
+    expect(isMainStack({ mainProject: 'backend' }, { composeProject: 'neighbour' })).toBe(false)
     expect(isMainStack({ mainProject: 'backend' }, { composeProject: '' })).toBe(false)
-    expect(isMainStack({}, { composeProject: 't-boards' })).toBe(true)
+    expect(isMainStack({}, { composeProject: 'neighbour' })).toBe(true)
   })
 
   it('группы на странице хоста: стек продукта первым, «без compose» последним', () => {
     const groups = groupByProject([
       { name: 'x', composeProject: '', mainStack: false },
-      { name: 'b', composeProject: 't-boards', mainStack: false },
+      { name: 'b', composeProject: 'neighbour', mainStack: false },
       { name: 'a', composeProject: 'backend', mainStack: true },
       { name: 'c', composeProject: 'aiboards', mainStack: false },
       { name: 'a2', composeProject: 'backend', mainStack: true },
@@ -56,7 +56,7 @@ describe('контейнеры соседних стеков', () => {
     expect(groups.map((g) => [g.project, g.containers.length])).toEqual([
       ['backend', 2],
       ['aiboards', 1],
-      ['t-boards', 1],
+      ['neighbour', 1],
       ['', 1],
     ])
   })
@@ -170,7 +170,7 @@ describe('домены nginx: отчёт → таблица → алерт (ск
   })
   const at = (days: number) => Math.floor(Date.now() / 1000) + days * DAY
   const base = (domains: unknown[] | undefined, extra: Record<string, unknown> = {}) =>
-    report([ctr('nginx'), ctr('tb-tls', { composeProject: 't-boards', restartable: false })], {
+    report([ctr('nginx'), ctr('neighbour-tls', { composeProject: 'neighbour', restartable: false })], {
       agentVersion: '1.5.0',
       mainProject: 'backend',
       ...(domains ? { domains, domainsAt: Math.floor(Date.now() / 1000), domainsTotal: domains.length } : {}),
@@ -250,8 +250,8 @@ describe('домены nginx: отчёт → таблица → алерт (ск
   })
 
   it('перезапуск контейнера, который хост не перезапускает, консоль не ставит в очередь', async () => {
-    const res = await owner.post('/infra/agents/edge/containers/tb-tls/restart', { reason: 'проверка запрета' })
+    const res = await owner.post('/infra/agents/edge/containers/neighbour-tls/restart', { reason: 'проверка запрета' })
     expect(res.status).toBe(403)
-    expect(String(res.json.error ?? res.json.message ?? '')).toContain('t-boards')
+    expect(String(res.json.error ?? res.json.message ?? '')).toContain('neighbour')
   })
 })

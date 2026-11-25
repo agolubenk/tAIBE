@@ -188,8 +188,37 @@ class ErrorsTest(unittest.TestCase):
         edit(self.d, "_shared.json", lambda d: d.setdefault("github", {}).update(wt_sweep_minutes=0))
         self.fails("wt_sweep_minutes")
 
+    def test_body_verdicts_switch_is_a_product_field(self):
+        """#519: голоса тела PR (SE-50) — поле продукта; true или false, иначе ошибка; в _shared — ошибка."""
+        edit(self.d, "taibe.json", lambda d: d["github"].update(body_verdicts=False))
+        shared, products = P.load(self.d)
+        self.assertIs(P.config_for("taibe", shared, products)["github"]["body_verdicts"], False)
+        self.assertNotIn("body_verdicts", P.config_for("hr-helper", shared, products)["github"])
+        for bad in ("false", 0, None):
+            edit(self.d, "taibe.json", lambda d: d["github"].update(body_verdicts=bad))
+            if bad is None:
+                P.load(self.d)   # null — как нет поля: голоса тела по умолчанию
+            else:
+                self.fails("github.body_verdicts")
+        edit(self.d, "taibe.json", lambda d: d["github"].pop("body_verdicts"))
+        edit(self.d, "_shared.json", lambda d: d.setdefault("github", {}).update(body_verdicts=False))
+        self.fails("body_verdicts")
+
+    def test_live_instances_taibe_votes_by_comments_only(self):
+        shared, products = P.load()
+        self.assertIs(products["taibe"]["github"].get("body_verdicts"), False)
+        self.assertIn(products["hr-helper"]["github"].get("body_verdicts", True), (True,))
+
     def test_paths_are_not_secrets(self):
         self.assertIsNone(P.SECRET_RE.search("/Users/agolubenko/Desktop/Development/tAIBE/eval/nerve/state"))
+
+    def test_council_relative_paths_pass_and_keys_still_fail(self):  # Ф2 OPS-23
+        path = "apps/backend/src/modules/integrations/telegram"   # 46 знаков из букв и «/» — форма base64
+        edit(self.d, "hr-helper.json", lambda d: d.update(council={"modules": {"telegram": [path]}}))
+        P.load(self.d)
+        for key in ("AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcd/E", "ghp_" + "a1B2" * 9, "AKIA" + "ABCDEFGHIJKLMNOP"):
+            edit(self.d, "hr-helper.json", lambda d, k=key: d.update(council={"modules": {"x": [k]}}))
+            self.fails("похоже на ключ")
 
 
 class BaseRoleTest(unittest.TestCase):
@@ -198,10 +227,12 @@ class BaseRoleTest(unittest.TestCase):
                          ["backend", "frontend", "backend", "boards", "a-1", "x-10", ""])
 
     def test_both_products_have_second_sessions_after_the_six(self):
-        """Решения владельца 14.11: backend-2 (роль 7) и frontend-2 (роль 8) у tAIBE и HR."""
+        """Решения владельца 14.11: backend-2 (роль 7) и frontend-2 (роль 8) у tAIBE и HR; у HR ещё backend-3 (роль 9,
+        презентации, d-presentations-sessions-1811)."""
         _, products = P.load()
-        for slug in ("taibe", "hr-helper"):
-            self.assertEqual(products[slug]["team"]["roles"][6:], ["backend-2", "frontend-2"], slug)
+        want = {"taibe": ["backend-2", "frontend-2"], "hr-helper": ["backend-2", "frontend-2", "backend-3"]}
+        for slug, roles in want.items():
+            self.assertEqual(products[slug]["team"]["roles"][6:], roles, slug)
 
 
 class ProductDirTest(unittest.TestCase):

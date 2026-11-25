@@ -770,7 +770,7 @@ dialog.cards-dlg::backdrop { background: rgba(15, 19, 25, .45); }
 
   <details class="agent-howto">
     <summary>Для агентов: как добавить пункт владельцу и отметить свою работу</summary>
-    <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd без basePlanEnd — 409.</p>
+    <p>С 18.10.2026 очередь живёт в ops-консоли (переехала из артефакта claude.ai). Писать — MCP-инструментами <code>oq_*</code> из общего хаба или в API <code>/api/oq/v1/db/&lt;коллекция&gt;/&lt;id&gt;</code> (PUT — заменить, PATCH — дополнить; <code>Authorization: Bearer oq_…</code>). Перед правкой существующего документа прочитать его и передать <code>ifVersion</code>. Ответы владельца сервер агенту менять не даст (403), сдвиг planEnd позже без ответа владельца «перенести» (dueRef) — 409.</p>
     <pre>items/&lt;id&gt;  пункт владельцу (id: d-… решение, m-… мёрж, s-… сервер, c-… ручная проверка)
   Продукт — hr-helper (Lavaeon (HR Helper): id без префикса) или taibe (tAIBE: id начинается с «taibe-», taibe-m-93).
   Продукт пункта меняет только владелец (выбор «Продукт:» у пункта).
@@ -788,8 +788,11 @@ work/&lt;id&gt;  задача агента для отчёта, Ганта и р
    session, planStart, planEnd, start, end ('YYYY-MM-DD'), milestone: bool, note, link, linkText, order,
    cards: [{key: '&lt;ключ карточки t-boards, OPS-34&gt;', ws: '&lt;slug пространства, aiboards-eval&gt;', t: заголовок, k: 'bug'|'task',
             s: severity|priority, st: статус (колонка), c: код}]}
-  planEnd не переписывать: от него считается отставание. Сдвиг плана — новый planEnd
-  и basePlanEnd = прежняя дата, причина — в note. В строку коллеги — только своё поле (oq_patch, ifVersion).
+  planEnd позже — только по ответу владельца «перенести» в решении d-&lt;продукт&gt;-due[-&lt;тема&gt;]
+  (rows, moveTo: {строка: дата}, та же дата — в тексте: DD.MM или YYYY-MM-DD; вариант move подписан «Перенести…»).
+  id решения — в поле dueRef записи строки (dueRefs не слать: его ведёт сервер, как и basePlanEnd); срок не позже moveTo.
+  Ответ годен, пока пункт не меняли после него: сначала сдвинуть все строки, потом писать в пункт. Один ответ — один
+  сдвиг, у строки до 50 сдвигов, дальше — владелец. Снять planEnd может только владелец. Раньше срок — свободно. В строку коллеги — только своё поле (oq_patch, ifVersion).
 
 work/track-&lt;id&gt;  направление «Хода работ» {kind: 'track', name, color: 'var(--c1)'…'var(--c6)', order, archived}
   Пять базовых направлений вшиты в страницу, документ с их id меняет имя и порядок.
@@ -987,7 +990,7 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
 
   function chipHtml(c) {
     var cls = c[1] === 'deploy' ? 'chip chip-deploy' : c[1] === 'ssh' ? 'chip chip-ssh' : c[1] === 'wait' ? 'chip chip-wait' : 'chip';
-    return '<span class="' + cls + '">' + esc(c[0]) + '</span>';
+    return '<span class="' + cls + '"' + (c[2] ? ' title="' + esc(c[2]) + '"' : '') + '>' + esc(c[0]) + '</span>';
   }
   function cmdHtml(text) {
     return '<div class="cmd"><pre><code>' + esc(text) + '</code></pre><button class="copy" type="button">Копировать</button></div>';
@@ -1351,13 +1354,13 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
     var opt = t.closest && t.closest('.opt');
     if (opt) {
       var id = itemOf(opt); if (!id) return;
-      var e = entry(id); e.choice = opt.dataset.opt; e.done = true; e.at = new Date().toISOString();
+      var e = entry(id); e.choice = opt.dataset.opt; e.done = true; markOwnAnswer(e);
       markMelt(id); persist(id); render(); return;
     }
     var re = t.closest && t.closest('.reopen');
     if (re) {
       var rid = itemOf(re); if (!rid) return;
-      var r = entry(rid); r.choice = null; r.done = false; r.at = new Date().toISOString();
+      var r = entry(rid); r.choice = null; r.done = false; markOwnAnswer(r);
       persist(rid); render(); return;
     }
     var b = t.closest && t.closest('.copy');
@@ -1373,8 +1376,8 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
   document.addEventListener('change', function (ev) {
     var t = ev.target, id = itemOf(t); if (!id) return;
     var e = entry(id);
-    if (t.classList.contains('cb')) { e.done = t.checked; e.at = new Date().toISOString(); }
-    else if (t.classList.contains('field')) { e.note = t.value.slice(0, 20000); e.at = new Date().toISOString(); }
+    if (t.classList.contains('cb')) { e.done = t.checked; markOwnAnswer(e); }
+    else if (t.classList.contains('field')) { e.note = t.value.slice(0, 20000); markOwnAnswer(e); }
     else return;
     // persist до render: строка «Сохранено» показывает «Сохраняю…» (pending), а не время до записи (Claude-линза #337).
     markMelt(id); persist(id); render();
@@ -1418,10 +1421,7 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
       // Ответ владельца из снимка — только если здесь нет своей несохранённой правки: снимок, снятый до сохранения,
       // откатил бы заметку, и следующий persist отправил бы старую поверх новой (линза GLM #214, major).
       if (ownerSnapshotApplies(e, r.data, !!inflight[r.id] || !!dirty[r.id] || !!saveErr[r.id] || !!e.pending)) {
-        if (typeof r.data.done === 'boolean') e.done = r.data.done;
-        if (typeof r.data.choice === 'string' || r.data.choice === null) e.choice = r.data.choice;
-        if (typeof r.data.note === 'string') e.note = r.data.note;
-        if (typeof r.data.at === 'string') e.at = r.data.at;
+        ownerFieldsInto(e, r.data);
       }
       agentFieldsInto(e, r.data);
     });
@@ -1455,7 +1455,7 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
     var it = { id: id, kind: d.kind, title: d.title.slice(0, 300), added: typeof d.added === 'string' ? d.added.slice(0, 10) : '', fromDb: true };
     var chips = Array.isArray(d.chips) ? d.chips.filter(function (c) { return Array.isArray(c) && typeof c[0] === 'string'; })
       .map(function (c) { return [c[0].slice(0, 40), ['deploy', 'ssh', 'wait'].indexOf(c[1]) >= 0 ? c[1] : '']; }) : [];
-    if (typeof d.source === 'string' && d.source) chips.push(['от: ' + d.source.slice(0, 40), '']);
+    if (typeof d.source === 'string' && d.source) chips.push(['от: ' + lineTail(d.source, 40), '', d.source.slice(0, 1000)]);
     it.chips = chips.slice(0, 6);
     var links = Array.isArray(d.links) ? d.links.slice(0, 8).map(safeLink).filter(Boolean) : [];
     it.body = textToHtml(d.body) + (links.length ? '<p>' + links.join(' · ') + '</p>' : '');
@@ -1877,9 +1877,32 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
   // Поля агента из строки снимка checks (документ целиком) — в запись страницы. agentBy, которого нет в снимке,
   // стирается: release снимает захват (сервер удаляет agentBy, статус и заметку оставляет), и без этого метка
   // называла бы держателем сессию, которая пункт уже отпустила (линза фронтенда #414, N1).
+  // blockedAt — серверная отметка перехода в blocked (store.ts stampCheck): правило «ждёт вас снова» (oqItemState)
+  // сравнивает её, а не agentAt. Без неё страница брала agentAt любой записи агента — заметка поверх blocked после
+  // ответа владельца ложно открывала пункт снова, хотя API и MCP open_only считали его закрытым (s-sentry-enable-1911,
+  // 20.11). Нет в снимке (старый документ) — стирается: правило, как у сервера, падает на agentAt.
   function agentFieldsInto(e, data) {
     ['agentStatus', 'agentNote', 'agentAt'].forEach(function (k) { if (typeof data[k] === 'string') e[k] = data[k]; });
     if (typeof data.agentBy === 'string') e.agentBy = data.agentBy; else delete e.agentBy;
+    if (typeof data.blockedAt === 'string') e.blockedAt = data.blockedAt; else delete e.blockedAt;
+    return e;
+  }
+  // Ответ владельца из снимка checks — в запись страницы, вместе с ownerAt: серверное время сохранения ответа, его
+  // сравнивает правило «ждёт вас снова» (часы устройства в at — только у старых документов без отметки).
+  function ownerFieldsInto(e, data) {
+    if (typeof data.done === 'boolean') e.done = data.done;
+    if (typeof data.choice === 'string' || data.choice === null) e.choice = data.choice;
+    if (typeof data.note === 'string') e.note = data.note;
+    if (typeof data.at === 'string') e.at = data.at;
+    if (typeof data.ownerAt === 'string') e.ownerAt = data.ownerAt; else delete e.ownerAt;
+    return e;
+  }
+  // Свой ответ на этой странице: время — часы устройства, а серверный ownerAt прошлого ответа снимается, иначе правило
+  // сравнивало бы blocked со старым ответом, и пункт «ждёт вас снова» не закрывался бы до следующего снимка. Снимок
+  // после сохранения принесёт новый ownerAt.
+  function markOwnAnswer(e) {
+    e.at = new Date().toISOString();
+    delete e.ownerAt;
     return e;
   }
   function holderState(relay, e, now, product) {
@@ -1936,6 +1959,20 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   // Подсказка: первая строка — жирным, остальные — с новой строки (без <br> вторая прилипала к первой, 400dd…17f2).
   function tipHtml(s) { return String(s).split('\n').map(function (l, i) { return i ? esc(l) : '<b>' + esc(l) + '</b>'; }).join('<br>'); }
+  // Линия сессии растёт на сегмент за поколение (r.62u1 → r.62u1.ab12), а начало у сессий одной роли общее: обрезка
+  // конца делала их одинаковыми (OPS-39). Показ — «…» и два последних сегмента, полная линия — в подсказке; хранится
+  // линия целиком (по ней узнаётся наследник). Не линия (имя вроде hr-helper-v2-70) — как раньше, первые max знаков.
+  var SESSION_LINE = /^r(\.[a-z0-9]+)+$/;
+  function lineTail(s, max) {
+    s = String(s);
+    var seg = SESSION_LINE.test(s) ? s.split('.') : [];
+    if (seg.length > 3) return '…' + seg.slice(-2).join('.');
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  }
+  function lineHtml(s) {
+    var t = lineTail(s, 120);
+    return t === String(s) ? esc(t) : '<span title="' + esc(String(s).slice(0, 1000)) + '">' + esc(t) + '</span>';
+  }
 
   // Роадмап по неделям (400dd…fead): на горизонте в ~38 недель неделе достаётся 15–22 px, а подписи «5 окт – 11 окт»
   // нужно ~84 px — тогда шкала подписывается месяцами, а недели остаются линиями.
@@ -2926,9 +2963,9 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
   function relayHtml(id, product) {
     var x = relayItemState(relay, id, Date.now(), product);
     if (!x) return '';
-    if (x.k === 'wait') return '📨 Передано сессии ' + esc(x.session) + ' в ' + esc(fmtTime(x.at)) + ' — ждём «взял»';
-    if (x.k === 'sending') return '📨 Передаётся сессии ' + esc(x.session) + '…';
-    if (x.k === 'stuck') return '<span class="warn">📨 Передано сессии ' + esc(x.session) + ' в ' + esc(fmtTime(x.at)) + ', но «взял» нет' + (x.dead ? ', а автопередача не работает' : ' 10 минут') + ' — вставьте в сессию сами:</span> ' + relayCmd(id);
+    if (x.k === 'wait') return '📨 Передано сессии ' + lineHtml(x.session) + ' в ' + esc(fmtTime(x.at)) + ' — ждём «взял»';
+    if (x.k === 'sending') return '📨 Передаётся сессии ' + lineHtml(x.session) + '…';
+    if (x.k === 'stuck') return '<span class="warn">📨 Передано сессии ' + lineHtml(x.session) + ' в ' + esc(fmtTime(x.at)) + ', но «взял» нет' + (x.dead ? ', а автопередача не работает' : ' 10 минут') + ' — вставьте в сессию сами:</span> ' + relayCmd(id);
     return '<span class="warn">⚠️ Автопередача не работает — чтобы агент взял сейчас, вставьте в сессию:</span> ' + relayCmd(id);
   }
   // Строка у входящего без статуса агента (после «взял» — обычный статус агента).
@@ -2948,7 +2985,8 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
   function paintHolder(el, e, d, product) {
     var hl = el.querySelector('.holder-st');
     if (!hl) return;
-    var x = d ? null : holderState(relay, e, Date.now(), product), who = x && x.session ? ' ' + esc(x.session) : '';
+    // Линия держателя — хвостом, полная — в подсказке (OPS-39); бот берёт текст метки (frame-scripts.mjs) — тоже хвост.
+    var x = d ? null : holderState(relay, e, Date.now(), product), who = x && x.session ? ' ' + lineHtml(x.session) : '';
     var html = !x ? '' : x.k === 'online' ? '🟢 Держатель' + who + ' в сети'
       : '🔇 Держатель' + who + ' молчит ' + x.hours + ' ч — координатор передаст пункт живой сессии (проверка в 09:30)';
     if (hl.innerHTML !== html) hl.innerHTML = html;
@@ -2968,8 +3006,9 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
     var names = named ? productNames() || {} : {}, who = named ? (names[product] || product) + ': ' : '';
     // Консоль до автопередачи по продуктам (нет products): её сессии — только основного продукта (ревью #173).
     if (!relay.products && product !== window.__oqDefaultProduct) return { ok: false, text: '⚠️ ' + who + 'автопередачи для этого продукта пока нет' };
-    if (live) return { ok: true, text: '🔁 ' + who + (named ? 'н' : 'Н') + 'овые входящие сами уходят сессии ' + live.session + ' (отметка в ' + fmtTime(live.at) + ')' };
-    return { ok: false, text: '⚠️ ' + who + (last ? (named ? 'а' : 'А') + 'втопередача не работает: сессия ' + last.session + ' не отмечалась с ' + fmtDT(new Date(last.at)) : (named ? 'а' : 'А') + 'втопередача не включена') };
+    // Линия — хвостом (OPS-39), полная — в full для подсказки заметки.
+    if (live) return { ok: true, full: String(live.session), text: '🔁 ' + who + (named ? 'н' : 'Н') + 'овые входящие сами уходят сессии ' + lineTail(live.session, 120) + ' (отметка в ' + fmtTime(live.at) + ')' };
+    return { ok: false, full: last ? String(last.session) : '', text: '⚠️ ' + who + (last ? (named ? 'а' : 'А') + 'втопередача не работает: сессия ' + lineTail(last.session, 120) + ' не отмечалась с ' + fmtDT(new Date(last.at)) : (named ? 'а' : 'А') + 'втопередача не включена') };
   }
   function paintRelay() {
     var note = document.getElementById('relay-note');
@@ -2981,6 +3020,8 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
     note.textContent = !relay ? '' : lines.map(function (l) { return l.text; }).join(' · ') + (allOk
       ? ': «Возьми входящее» вставлять не нужно.'
       : '. Чтобы агент взял задачу сейчас, вставьте в сессию «Возьми входящее» с номером — команда и «Копировать» есть у пункта.');
+    // Текст заметки — textContent, подсказка с полными линиями — у всей заметки (OPS-39).
+    note.title = lines.map(function (l) { return l.full; }).filter(Boolean).join(' · ');
     allItems().forEach(function (it) {
       if (it.kind !== 'inbox') return;
       var el = document.querySelector('.item[data-id="' + it.id + '"]'), e = state[it.id] || {};
@@ -3080,7 +3121,7 @@ work/memo-&lt;id&gt;  памятка владельцу (окно «Памятк
         : up && up.done ? ', файлов: ' + up.done : '');
       var live = relayLive();
       status(live
-        ? saved + ' — передаю сессии ' + esc(live.session) + ': возьмёт в течение минуты, статус появится у пункта. Номер: <code>' + esc(id) + '</code>'
+        ? saved + ' — передаю сессии ' + lineHtml(live.session) + ': возьмёт в течение минуты, статус появится у пункта. Номер: <code>' + esc(id) + '</code>'
         : now
           ? saved + '. ' + (relay ? 'Автопередача сейчас не работает. ' : '') + 'Чтобы агент взял её сейчас, вставьте в сессию Claude: ' +
             '<span><code>Возьми входящее ' + esc(id) + '</code> <button type="button" class="copy">Копировать</button></span>'

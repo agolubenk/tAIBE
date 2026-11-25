@@ -24,7 +24,7 @@ const getCardMetaRoute = createRoute({
   tags: ["Forest"],
   summary: "Get a card's Notion and agent fields",
   description:
-    "A card nobody wrote fields for answers the defaults: kind task, not half-baked, empty lists.",
+    "A card nobody wrote fields for answers the defaults: kind task, not half-baked, empty lists. A caller with a token (API key, agent key, MCP) reads secrets in the text as [REDACTED:<kind>]; the web app's session reads the text as stored.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["read"] }),
@@ -44,7 +44,7 @@ const setCardMetaRoute = createRoute({
   tags: ["Forest"],
   summary: "Change a card's Notion and agent fields",
   description:
-    "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only.",
+    "Sends only the fields to change; null clears one. expectedMetaRevision (the revision from the read) refuses the write if the fields changed since. An agent writes under its lease (x-t-boards-session, x-t-boards-fence) and changes Notion fields only on cards it created. Half-baked moves only from the owner's own session. A card mirrored from Notion keeps its Notion fields read-only. A caller with a token sends report or context pack back with the [REDACTED:<kind>] markers it read: they get the stored values back. A marker in another field is stored as it came. The answer is masked as the read is.",
   middleware: [
     workspaceAccess.fromParam(),
     requireWorkspacePermission({ task: ["update"] }),
@@ -63,7 +63,7 @@ const setCardMetaRoute = createRoute({
     ),
     404: errorResponse("Task not found"),
     409: errorResponse(
-      "No live lease of this session, the Backlog ID is taken, or revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision)",
+      "No live lease of this session, the Backlog ID is taken, revision_conflict: the fields moved past expectedMetaRevision (the message names the current revision), or REDACTED_MARKERS_MISMATCH: a block with a [REDACTED:…] marker in report or context pack does not match the stored text",
     ),
   },
 });

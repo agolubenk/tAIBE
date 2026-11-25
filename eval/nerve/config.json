@@ -20,7 +20,8 @@
       "release",
       "boards",
       "backend-2",
-      "frontend-2"
+      "frontend-2",
+      "backend-3"
     ],
     "active_hours": 8
   },
@@ -214,6 +215,10 @@
         "frontend-2"
       ],
       [
+        "backend[- –]?3(?!\\d)|Бэкенд[- –]?3(?!\\d)|роль 9(?!\\d)",
+        "backend-3"
+      ],
+      [
         "Бэкенд|backend|Данные",
         "backend"
       ],
@@ -270,6 +275,9 @@
     "warn_at": 0.8,
     "batch_at": 0.6,
     "tail_bytes": 262144,
+    "unstick": true,
+    "unstick_pause_s": 180,
+    "wake_task_lookback_s": 14400,
     "week_reset": {
       "weekday": 3,
       "time": "19:00"

@@ -12,6 +12,8 @@ import json
 import secrets
 from pathlib import Path
 
+import product
+
 # evidence_kind: «hypothesis» первым в enum — при сэмплинге по схеме слабые модели чаще
 # берут первый вариант, а метка модели может только ПОНИЗИТЬ находку (опору считает код,
 # review_evidence.py). location — «путь:строка», по нему код ищет место в диффе.
@@ -146,9 +148,13 @@ SELECT_SCHEMA = {
     "required": ["agents"],
 }
 
-BASE_RULES = (
-    "Ты участник ревью-консилиума проекта HR Helper v2 (NestJS + Prisma, React + Vite, "
-    "Telegram SM, мобильные клиенты). Ревьюируется карточка t-boards в колонке ревью: "
+def base_rules(stack: str) -> str:
+    """Общие правила ревьюера. Стек проекта — поле `council.stack` продукта (Ф2 OPS-23); нет поля — без него."""
+    return f"Ты участник ревью-консилиума{' проекта ' + stack if stack else ''}." + _BASE_RULES_BODY
+
+
+_BASE_RULES_BODY = (
+    " Ревьюируется карточка t-boards в колонке ревью: "
     "исполнитель заявляет, что работа сделана. Твоя задача — проверить это заявление по "
     "уликам из досье, а не пересказать карточку.\n"
     "Правила:\n"
@@ -168,6 +174,7 @@ BASE_RULES = (
     "Не дублируй замечания ради количества.\n"
     "- Пиши по-русски, коротко. Верни только JSON по схеме."
 )
+BASE_RULES = base_rules(product.current().stack)
 
 FLAVOR_TEXT = {
     "divergent": "Режим дивергенции: ищи гипотезы и риски, которые другие ревьюеры скорее "

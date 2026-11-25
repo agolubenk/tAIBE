@@ -2,8 +2,9 @@
 // window «Подтвердите, что это вы». Spec: docs/impl/impl-tb119-profile-login.md,
 // R-5 and R-8. The API sets the codes and `methods`; the web reads them from here.
 
-// Slice B adds "passkey".
-export const REAUTH_METHODS = ["password", "emailCode"] as const;
+// In the window's order. "passkey" — slice B: the user has a key and the
+// install signs in locally (not DISABLE_LOGIN_FORM).
+export const REAUTH_METHODS = ["password", "passkey", "emailCode"] as const;
 export type ReauthMethod = (typeof REAUTH_METHODS)[number];
 
 // Paths under the better-auth base path (`/api/auth`), all POST with a session cookie.
@@ -28,6 +29,9 @@ export const REAUTH_ERRORS = {
   impersonated: "IMPERSONATION_NOT_ALLOWED",
   // 502: the code was not sent.
   emailDeliveryFailed: "EMAIL_DELIVERY_FAILED",
+  // 403 on /passkey/verify-authentication: the key belongs to another user
+  // than the session it should confirm. That session lives on; no new one.
+  userMismatch: "REAUTH_USER_MISMATCH",
 } as const;
 export type ReauthError = (typeof REAUTH_ERRORS)[keyof typeof REAUTH_ERRORS];
 

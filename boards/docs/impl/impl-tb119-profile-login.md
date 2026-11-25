@@ -91,6 +91,25 @@ Q-901…Q-906 по рекомендации; карточка TB-31, прожа�
   (`boards/apps/web/src/lib/auth-client.ts:27`, его импортируют 111 файлов `apps/web/src`). Иначе 4,6 КБ gzip попадут
   в основной бандл каждой страницы при любом ответе на Q-904. Клиент ключей грузится через `import()` — по кнопке на
   входе и на экране «Ключи входа».
+- **Б, ещё три действия под стражем R-5 (владелец 18.11, `taibe-d-tb31-scope-1811` = A):** админ задаёт пользователю
+  пароль (`/admin/set-user-password`) и входит от его имени (`/admin/impersonate-user`) — оба в списке стража всегда;
+  кнопок для них в web нет, окно не нужно.
+- **Б, ключ агента (владелец 18.11, `taibe-d-tb31-agent-key-1811` = A):** выдача ключа агента
+  (`POST /api/agent-identity/session`) сеансу браузера — только свежему, иначе 403 `SESSION_NOT_FRESH` с `methods`
+  (схема `ReauthError`), под подменой — `methods: []`, `impersonated: true`. Ключ API проходит (выпущен под стражем).
+  Сеанс device flow (kaneo-cli, kaneo-mcp) проходит без подтверждения: при создании на `/device/token` он получает
+  метку `tb-device:<sessionId>` в `verification` на 30 дней, каждая выдача её продлевает (`reauth/device-session.ts`).
+  Взамен подтверждение `/device/approve` — в списке стража всегда; страница `/device/approve` открывает окно R-5,
+  отказ (`/device/deny`) — без окна. В web кнопки выдачи ключа агента нет. Выкат: у сеанса device flow, созданного
+  до выката, метки нет — kaneo-mcp на такой отказ один раз заново проходит вход устройства
+  (`packages/mcp/src/kaneo/client.ts`); клиент с ключом API (`KANEO_API_KEY`) не затронут. Старый kaneo-mcp без этой
+  правки показывает ошибку ключа агента до нового входа устройства. Сеанс device flow, который 30 дней не выдавал
+  ключей агента, на следующую выдачу получает тот же отказ, и kaneo-mcp заново входит устройством; без использования
+  сам сеанс истекает раньше — через 7 дней (срок better-auth по умолчанию, `session.expiresIn` в `auth.ts` не задан).
+  Если и новый вход метки не получил (сбой записи — строка `[reauth] could not mark a new session` в журнале api),
+  kaneo-mcp пишет, что сервер отказал сеансу устройства и после нового входа, и предлагает `KANEO_API_KEY`.
+- **Б, N14 (Контроль 18.11):** `/admin/update-user` с email читает адрес цели только для роли с правом `user:update`
+  (правило `hasPermission` плагина admin); остальным — страж без чтения, ответ от цели не зависит.
 
 ### Вопросы владельцу (через координатора)
 
@@ -187,6 +206,10 @@ Q-902 и Q-906 приняты (17.11): миграция 0084 и `@better-auth/pa
   интерфейсе и письмах имя берётся из `name`.
 - Страж свежего входа на `/update-user` срабатывает, если в теле есть `username` **или** `displayUsername`: плагин
   выводит `username` из `displayUsername`.
+- Логин меняется, но не снимается: `/update-user` с `null` — `400 INVALID_DISPLAY_USERNAME`. Вход по email остаётся
+  всегда, поэтому снимать логин незачем (Контроль, #492 N2).
+- Админ логин не задаёт: `data.username` или `data.displayUsername` в `/admin/*` — `400 LOGIN_SET_BY_PERSON`. Там
+  плагин не проверяет ни правило, ни пару, и админ задал бы `root` или пару, которая расходится (Контроль, #492 N1).
 - У существующих пользователей логина нет: они входят по email, а в профиле видят подсказку «Задайте логин, чтобы
   входить без email». Миграция никому логин не назначает.
 
@@ -412,6 +435,37 @@ userId, 0))`. Затем — локи адресов `tb-email:<адрес>` (п
   действия нет; правило — для будущих).
 - Имя `rpID` доходит до туннеля только через `/etc/hosts` (`deploy/vps/README.md:13-14`). У телефона его нет, DNS в
   туннеле пока нет (`README.md:106`). Ключ на телефоне заработает вместе с DNS в туннеле — отдельная карточка.
+- **API среза Б (ветка `feature/tb31-slice-b3`, 20.11).** Контракт с web — `packages/permissions/src/passkey.ts`.
+  - Пакет `@better-auth/passkey` 1.7.15 (Q-906). `rpID` — `PASSKEY_RP_ID`, без него — имя хоста `KANEO_CLIENT_URL`
+    (`apps/api/src/passkey/passkey-options.ts`).
+  - UV: на регистрации и на входе без флага UV — `USER_VERIFICATION_REQUIRED` (400 и 401). На входе флаг берёт
+    `authentication.afterVerification` плагина 1.7.15 из `authenticationInfo.userVerified`, после проверки подписи и до
+    сеанса (`apps/api/src/passkey/passkey-confirm.ts`), а не хук `before` с разбором байтов. Предел 10 ключей —
+    `PASSKEY_LIMIT_REACHED`. Второй сеанс при регистрации — `PASSKEY_SESSION_NOT_ALLOWED`.
+  - Способ `passkey` в окне свежего входа — если у пользователя есть ключ и вход формой не выключен. После 10 неудач за
+    час способа нет, как и пароля.
+  - Лимитер в минуту по IP: options входа — 20, проверка входа — 10, `inspect` — 10, `confirm` — 5
+    (`apps/api/src/utils/auth-rate-limit.ts`).
+  - «Это не я»: `POST /api/auth/tb/passkey-alert/inspect` и `…/confirm`, тело `{token}`. Неверная, использованная и
+    просроченная ссылка дают одинаковый ответ: 400 `PASSKEY_ALERT_INVALID`. Строка ссылки читается `FOR UPDATE`.
+    Удаление ключа, ключей API, сеансов и строки идёт одной транзакцией. Сокеты закрываются у пользователя и у агентов,
+    чьи ключи удалены. Письмо не ушло — ключ добавлен, ссылка записана.
+  - Приёмка — api-integration `passkey.test.ts`, `passkey-alert.test.ts`, `auth-rate-limit.test.ts` (R-6).
+  - Web — отдельный PR: клиент ключей через `import()`, кнопка на входе, секция «Ключи входа»,
+    страница `/account/passkey-alert`.
+- **Web среза Б (ветка `feature/tb31-r6-web`, поверх `feature/tb31-slice-b3`, 20.11).**
+  - Церемонии (вход и добавление) — `apps/web/src/lib/passkey/passkey-client.ts`: `passkeyClient().getActions()` на
+    `$fetch` и `$store` общего `authClient`, модуль плагина и `@simplewebauthn/browser` — через `import()` по нажатию
+    (чанк ≈ 4 КБ gzip, в entry его нет). Вход ключом обновляет сеанс приложения тем же `$sessionSignal`.
+  - Список, переименование, удаление и «Это не я» — `lib/passkey/passkey-api.ts`, обычный `$fetch` без плагина.
+  - Закрытое системное окно (`NotAllowedError` → код simplewebauthn `ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY`,
+    `ERROR_CEREMONY_ABORTED`, `AUTH_CANCELLED` плагина) — без текста. Тексты кодов — `lib/passkey/passkey-message.ts`.
+  - Окно свежего входа: способ «ключ» — кнопка «Подтвердить ключом» (запрос ключа только по нажатию), ссылки на все
+    прочие способы; браузер без WebAuthn способа «ключ» не видит. `REAUTH_USER_MISMATCH` — «Это ключ другого аккаунта».
+  - «Добавить ключ»: отказ `SESSION_NOT_FRESH` открывает окно через `useFreshSession().confirm()`, действие само не
+    повторяется — кнопка становится «Продолжить» (жест для Safari и iOS). Удаление — `run()`, повтор сразу.
+  - `/account/passkey-alert`: токен из `#t=` читается один раз и сразу уходит из адресной строки
+    (`history.replaceState`); при 429 и обрыве токен остаётся в памяти для «Попробовать снова».
 
 ### R-7. Агенты и ключи API — сделано
 
@@ -550,7 +604,8 @@ i18n ru и en, включая 5 писем: «Подтвердите новый 
 - `user.username text unique null`, `user.display_username text null`;
 - таблица `passkey` по полям плагина: FK `user_id → user.id on delete cascade`, индекс `user_id`, **уникальный**
   индекс `credential_id` (иначе один credential ID у двух записей превращает вход ключом в выбор случайного
-  пользователя);
+  пользователя). `counter` — `bigint` (drizzle `mode: "number"`), не `integer`: счётчик подписи WebAuthn —
+  беззнаковое 32-битное число до 4 294 967 295, `integer` кончается на 2 147 483 647 (0088, таблица типов в PR #492);
 - частичный уникальный индекс `verification(identifier) WHERE identifier LIKE 'tb-email-%'`;
 - уникальный индекс по `lower(user.email)` — ставим: проба s-tb119-smtp-3010 показала 0 групп дублей email по
   регистру. Перед выкатом проба повторяется тем же s-пунктом (пункт 1 ниже).

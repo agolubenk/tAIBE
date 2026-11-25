@@ -16,6 +16,7 @@ import { Route as DeviceRouteImport } from './routes/device'
 import { Route as TestErrorRouteImport } from './routes/test-error'
 import { Route as LayoutAuthenticatedRouteImport } from './routes/_layout/_authenticated'
 import { Route as AccountSplatRouteImport } from './routes/account.$'
+import { Route as AccountPasskeyAlertRouteImport } from './routes/account.passkey-alert'
 import { Route as AuthCheckEmailRouteImport } from './routes/auth/check-email'
 import { Route as AuthForgotPasswordRouteImport } from './routes/auth/forgot-password'
 import { Route as AuthResetPasswordRouteImport } from './routes/auth/reset-password'
@@ -108,6 +109,11 @@ const LayoutAuthenticatedRoute = LayoutAuthenticatedRouteImport.update({
 const AccountSplatRoute = AccountSplatRouteImport.update({
   id: '/account/$',
   path: '/account/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountPasskeyAlertRoute = AccountPasskeyAlertRouteImport.update({
+  id: '/account/passkey-alert',
+  path: '/account/passkey-alert',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthCheckEmailRoute = AuthCheckEmailRouteImport.update({
@@ -499,6 +505,7 @@ export interface FileRoutesByFullPath {
   '/device': typeof DeviceRouteWithChildren
   '/test-error': typeof TestErrorRoute
   '/account/$': typeof AccountSplatRoute
+  '/account/passkey-alert': typeof AccountPasskeyAlertRoute
   '/auth/check-email': typeof AuthCheckEmailRoute
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/reset-password': typeof AuthResetPasswordRoute
@@ -565,6 +572,7 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRouteWithChildren
   '/test-error': typeof TestErrorRoute
   '/account/$': typeof AccountSplatRoute
+  '/account/passkey-alert': typeof AccountPasskeyAlertRoute
   '/auth/check-email': typeof AuthCheckEmailRoute
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/reset-password': typeof AuthResetPasswordRoute
@@ -633,6 +641,7 @@ export interface FileRoutesById {
   '/test-error': typeof TestErrorRoute
   '/_layout/_authenticated': typeof LayoutAuthenticatedRouteWithChildren
   '/account/$': typeof AccountSplatRoute
+  '/account/passkey-alert': typeof AccountPasskeyAlertRoute
   '/auth/check-email': typeof AuthCheckEmailRoute
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/reset-password': typeof AuthResetPasswordRoute
@@ -702,6 +711,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/test-error'
     | '/account/$'
+    | '/account/passkey-alert'
     | '/auth/check-email'
     | '/auth/forgot-password'
     | '/auth/reset-password'
@@ -768,6 +778,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/test-error'
     | '/account/$'
+    | '/account/passkey-alert'
     | '/auth/check-email'
     | '/auth/forgot-password'
     | '/auth/reset-password'
@@ -835,6 +846,7 @@ export interface FileRouteTypes {
     | '/test-error'
     | '/_layout/_authenticated'
     | '/account/$'
+    | '/account/passkey-alert'
     | '/auth/check-email'
     | '/auth/forgot-password'
     | '/auth/reset-password'
@@ -904,6 +916,7 @@ export interface RootRouteChildren {
   DeviceRoute: typeof DeviceRouteWithChildren
   TestErrorRoute: typeof TestErrorRoute
   AccountSplatRoute: typeof AccountSplatRoute
+  AccountPasskeyAlertRoute: typeof AccountPasskeyAlertRoute
   McpAuthorizeRoute: typeof McpAuthorizeRoute
   PublicProjectProjectIdRoute: typeof PublicProjectProjectIdRoute
   InvitationAcceptInviteIdRoute: typeof InvitationAcceptInviteIdRoute
@@ -958,6 +971,13 @@ declare module '@tanstack/react-router' {
       path: '/account/$'
       fullPath: '/account/$'
       preLoaderRoute: typeof AccountSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account/passkey-alert': {
+      id: '/account/passkey-alert'
+      path: '/account/passkey-alert'
+      fullPath: '/account/passkey-alert'
+      preLoaderRoute: typeof AccountPasskeyAlertRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth/check-email': {
@@ -1671,6 +1691,7 @@ const rootRouteChildren: RootRouteChildren = {
   DeviceRoute: DeviceRouteWithChildren,
   TestErrorRoute: TestErrorRoute,
   AccountSplatRoute: AccountSplatRoute,
+  AccountPasskeyAlertRoute: AccountPasskeyAlertRoute,
   McpAuthorizeRoute: McpAuthorizeRoute,
   PublicProjectProjectIdRoute: PublicProjectProjectIdRoute,
   InvitationAcceptInviteIdRoute: InvitationAcceptInviteIdRoute,
