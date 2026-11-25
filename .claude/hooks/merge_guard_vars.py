@@ -164,13 +164,36 @@ def substitute(t, env):
     return texts
 
 
+ANY_SEP = r"[\W_]+"  # IFS неизвестен (`IFS=$X`, `IFS=$'\t'`, `read IFS`): делим по любому знаку не буквы и не цифры
+
+
+def ifs_split(env):
+    """AUTO-178: `IFS=,; C=gh,pr,merge; $C 1` — bash делит подставленное по символам IFS, а не по пробелам. Регэксп
+    разделителя или None: IFS в команде не задан или пуст (`IFS= read`). Значение с `$` или `\\` — неизвестно."""
+    chars = set()
+    for v in env.get("IFS", []):
+        if "$" in v or "\\" in v:
+            return ANY_SEP
+        chars |= set(v) - set("'\"")
+    return "[" + re.escape("".join(sorted(chars))) + r"\s]+" if chars else None
+
+
+def ifs_words(text, sep):
+    """Слова text после деления по IFS (sep — из ifs_split); пустые части bash отбрасывает."""
+    return [w for w in re.split(sep, re.sub(r"[\"']", "", text)) if w]
+
+
 def expand_vars(argv, env):
     """Варианты argv после подстановки известных переменных (цикл даёт по варианту на значение) и признак, что
-    вариантов больше 16 и часть отброшена. Подставленное делится на слова, как без кавычек: `C="gh pr merge"; $C 1`."""
+    вариантов больше 16 и часть отброшена. Подставленное делится на слова, как без кавычек: `C="gh pr merge"; $C 1`;
+    если команда задала IFS — ещё вариант с делением по его символам (AUTO-178)."""
     out, overflow = [[]], False
+    sep = ifs_split(env)
     for i, t in enumerate(argv):
         texts = substitute(t, env)
         opts = [words(o) for o in texts] if texts != [t] else [[t]]
+        if sep and texts != [t]:
+            opts += [w for w in (ifs_words(o, sep) for o in texts) if w and w not in opts]
         if i and texts != [t] and CODE.search(t):  # `bash -c 'cd "a b"; $PWD/x'`: в кавычках `$PWD` раскроет вложенный
             opts = [[t]] + opts  # shell уже после своего cd — и слово как есть, первым: переполнение его не отбросит (SE-175)
         out = [x + o for x in out for o in opts]
