@@ -15,13 +15,19 @@ Calibration on the reference artifact (`CALIBRATION_ARTIFACT` with its cases): t
 tie in both orders (TIE, TIE — a judge that answers «X» twice reads positions, not texts); against its first 30 % and
 against itself with a harmful paragraph it must win in both orders. CALIBRATION_PER_KIND cases per kind, every ask
 right — the same canaries the run then repeats on each artifact. Stdlib only.
+
+An account limit at the start of the night (SE-49): when every candidate that did not pass was blocked by a limit
+that resets today by RETRY_LAST, `select_after_limit` sleeps until the reset + RETRY_PAUSE_S and calibrates those
+candidates once more (coord 25.11, variant A; the launchd job does not change).
 """
+import datetime
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ab  # noqa: E402
@@ -42,6 +48,14 @@ SYSTEM = 'You are a strict, impartial judge. Answer exactly as asked.'
 # Per call beyond the prompt: the system prompt, what the CLI adds and a reasoned answer (assumed; the real usage is
 # charged, and `Budget.overhead` adds the largest excess seen tonight to the next estimates — 3946 on 14.11, SE-49).
 CALL_EXTRA_TOKENS = 1000
+# SE-49: 5 of the 8 nights 15–25.11 met the account limit at 05:00 (every candidate «unavailable», resets 05:10–08:00);
+# «not measured» then waited for the next night, again in the limit. The CLI says «You've hit your 5-hour limit ·
+# resets 7am (Europe/Minsk)»; a reset with a date (a weekly limit days away) does not match.
+RESET_RE = re.compile(r'hit your [\w -]*?limit\W+resets (\d{1,2})(?::(\d\d))?\s*([ap]m)\b', re.I)
+RETRY_LAST = (7, 45)      # local: a later reset leaves too little of the night (daily.NIGHT ends at 08:00)
+RETRY_PAUSE_S = 300       # after the reset
+SLEEP = time.sleep        # tests replace both
+CLOCK = lambda: datetime.datetime.now().astimezone()  # noqa: E731
 
 
 def is_claude(name):
@@ -172,6 +186,48 @@ def select(names, factory, cases, text, want=WANT_JUDGES, limit=MAX_CANDIDATES, 
         if row['passed']:
             passed.append(name)
     return passed, rows
+
+
+def limit_reset(row, now):
+    """The local time today when the account limit that made a calibration row «unavailable» resets; None for a row
+    that passed, failed on its own, met another error, or names no reset time of day."""
+    why = (row.get('reasons') or [''])[0]
+    m = RESET_RE.search(why) if not row.get('passed') and why.startswith('unavailable') else None
+    if not m or not 1 <= int(m.group(1)) <= 12 or int(m.group(2) or 0) > 59:
+        return None
+    hour = int(m.group(1)) % 12 + (12 if m.group(3).lower() == 'pm' else 0)
+    return now.replace(hour=hour, minute=int(m.group(2) or 0), second=0, microsecond=0)
+
+
+def select_after_limit(names, factory, cases, text, log=lambda *a: None, deadline=None):
+    """(passed, rows, retry or None): `select`, then once more after the account limit resets (SE-49). The retry
+    runs only when fewer than WANT_JUDGES passed, every candidate that did not pass names a reset, the latest reset
+    is now or later today and not after RETRY_LAST, and the wake-up is before `deadline` (epoch seconds). The retried
+    candidates' rows are replaced by their new rows: one row per model, so the report counts stay true."""
+    stop = (lambda: CLOCK().timestamp() > deadline) if deadline else (lambda: False)
+    passed, rows = select(names, factory, cases, text, log=log, stop=stop)
+    blocked = [r for r in rows if not r['passed']]
+    t = CLOCK()
+    resets = [limit_reset(r, t) for r in blocked]
+    if len(passed) >= WANT_JUDGES or not blocked or None in resets:
+        return passed, rows, None
+    reset = max(resets)
+    wake = reset + datetime.timedelta(seconds=RETRY_PAUSE_S)
+    last = t.replace(hour=RETRY_LAST[0], minute=RETRY_LAST[1], second=0, microsecond=0)
+    if reset < t - datetime.timedelta(minutes=1) or reset > last or (deadline and wake.timestamp() > deadline):
+        log('account limit resets %s — no retry tonight (window up to %02d:%02d)' % (reset.strftime('%H:%M'),
+                                                                                    *RETRY_LAST))
+        return passed, rows, None
+    again = [r['model'] for r in blocked]
+    log('account limit: %s wait for the reset %s, calibration again at %s' % (
+        ', '.join(again), reset.strftime('%H:%M'), wake.strftime('%H:%M')))
+    SLEEP(max(0.0, (wake - t).total_seconds()))
+    more, new_rows = select(again, factory, cases, text, want=WANT_JUDGES - len(passed), log=log, stop=stop)
+    by_model = {r['model']: dict(r, retry=True) for r in new_rows}
+    rows = [by_model.get(r['model'], r) for r in rows]
+    passed = [n for n in names if n in passed or n in more]
+    return passed, rows, {'reset': reset.isoformat(timespec='minutes'), 'woke': CLOCK().isoformat(timespec='minutes'),
+                          'models': again, 'passed': more}
 
 
 def main(argv=None):

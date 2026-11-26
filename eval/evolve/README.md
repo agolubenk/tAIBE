@@ -99,7 +99,11 @@ Every verdict is `accepted`, `brak` or `insufficient`, with its reasons. Only `a
 
 A judge that is not reached (a limit message, a wrong answering model, an error, an empty answer, the budget, out
 of time) is «unavailable», never brak: the file stays pending and is judged again the next night against the same
-baseline. The headless session may append a `supersedes` line that marks an accepted
+baseline. An account limit at calibration waits once (SE-49, coord 25.11): when every candidate that did not pass
+names a reset of today, from now to 07:45, the run sleeps until the reset + 5 min and calibrates those candidates
+again (`judges.select_after_limit`; the report keeps it in `calibration.retry`). On such a night the session step
+may end after 08:00 (its own 45 min). A later reset, a reset with a date (a weekly limit days away) or any other
+error — no wait. The headless session may append a `supersedes` line that marks an accepted
 verdict brak; a revert PR whose verdict was superseded is closed, not merged. Nobody turns brak into accepted.
 The line lives in the run's worktree until its data PR merges, and the nightly refresh wipes it; so every `merge`
 step also keeps the marks it sees in `~/.claude/evolve/supersedes.json` and checks both (SE-49).
