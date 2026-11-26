@@ -128,6 +128,33 @@ function accepts(
   return (operator === ":=" || operator === "=>") && accept(`=${value}`, next);
 }
 
+// SE-205 (Control N1 on #539): the patterns glue a closing `)` to the value,
+// and DROPS_VALUE drops it before the value is judged
+// (f(CLIENT_SECRET=<words>), CLIENT_SECRET=<key>)). One final `)` is cut,
+// and the rest is the value that is judged; the hit ends before the `)`. In
+// an annotation the `)` is then the character after the value, a type
+// context (f(apiKey: ApiKeyRow), TB-193). The `)` is cut in every context:
+// with an annotation value judged whole, its inner value
+// (k: x_api_key==<v>), judged with the cut, was masked only on a second
+// pass (TB-201 test).
+function judged(value: string): string {
+  return value.length > 1 && value.endsWith(")") ? value.slice(0, -1) : value;
+}
+
+// The length of the accepted value, or -1. A value that the base accepted
+// keeps its whole mask, `)` included (passwordAssignment has no filter).
+function acceptedLength(
+  accept: (value: string, next: string) => boolean,
+  text: string,
+  start: number,
+  value: string,
+): number {
+  if (accepts(accept, text, start, value)) return value.length;
+  const rest = judged(value);
+  if (rest === value) return -1;
+  return accepts(accept, text, start, rest) ? rest.length : -1;
+}
+
 // Replaces only group 1 of each match, keeping the surrounding context
 // (header name, assignment key, quotes) readable. `accept` also gets the
 // character after the value ("" at the end of the text).
@@ -164,8 +191,9 @@ function collectGroup(
       const value = match[group];
       const start = match.indices?.[group]?.[0];
       if (value === undefined || start === undefined) continue;
-      if (!accepts(accept, text, start, value)) continue;
-      hits.push({ kind, start, end: start + value.length });
+      const length = acceptedLength(accept, text, start, value);
+      if (length < 0) continue;
+      hits.push({ kind, start, end: start + length });
     }
     return hits.concat(innerHits(text, search, kind, group, accept, resumeIn));
   };
@@ -191,9 +219,13 @@ function innerHits(
     const value = match[group];
     const start = match.indices?.[group]?.[0];
     if (value === undefined || start === undefined) continue;
-    const accepted = accepts(accept, text, start, value);
-    if (accepted) hits.push({ kind, start, end: start + value.length });
-    const dropping = accepted ? -1 : lastDropping(value);
+    const length = acceptedLength(accept, text, start, value);
+    const accepted = length >= 0;
+    if (accepted) hits.push({ kind, start, end: start + length });
+    // SE-205: the search goes on after the last DROPS_VALUE character of the
+    // judged value. With the final `)` the base went on after the value, and
+    // an inner name lost its value (A_TOKEN=x(B_TOKEN=<v>)).
+    const dropping = accepted ? -1 : lastDropping(judged(value));
     if (dropping >= 0) limit = Math.max(limit, pattern.lastIndex);
     const resume =
       dropping >= 0 ? afterDropping(value, dropping) : resumeIn(value);

@@ -26,9 +26,9 @@ export const DROPS_VALUE = /[(){}[\];,<>\\]|[^\x21-\x7e]/;
 // A type name is capitalized words with no digit. Since the value ends at `,`
 // and `;` (#283 B2), the comma no longer drops `apiKey: ApiKeyUsageRow,`.
 // TB-193: such a value is a type only if `,`, `;` or `)` comes right after
-// it (`next`), as in a parameter list or a type literal (today the value
-// patterns glue `)` to the value, and the punctuation rule drops it; the set
-// keeps it so the rule does not depend on a pattern). Elsewhere it may be
+// it (`next`), as in a parameter list or a type literal (the value patterns
+// glue `)` to the value; redact() cuts one final `)` before it judges, and
+// in an annotation the `)` is `next`, SE-205). Elsewhere it may be
 // a passphrase (CLIENT_SECRET=<capitalized words> at the end of a line) and
 // is masked. TB-213: redact() gives `next` only in an annotation (a bare `:`
 // before the value, `annotation` in index.ts); after `=`, `:=`, `=>` or a

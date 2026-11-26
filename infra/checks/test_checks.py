@@ -277,6 +277,26 @@ class ChecksTest(unittest.TestCase):
             with self.subTest(line):
                 self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [upper])
 
+    def test_secrets_value_before_a_closing_paren(self):
+        # SE-205 (Control N1 on #539), as redact: the value pattern glues a closing `)` to the value, and CODE_CHARS
+        # dropped it. One final `)` is cut; in an annotation it is the character after the value (TB-200).
+        upper = ''.join(('Correct', 'Horse', 'Battery', 'Staple'))
+        words = upper.lower()
+        key = ''.join(('Qz8Lm4', 'Rt7Wx2', 'Ny5Kp9Bv3'))
+        for line, secret in ((f'CLIENT_SECRET={upper})', upper), (f'f(CLIENT_SECRET={upper})', upper),
+                             (f'h(CLIENT_SECRET=>{upper})', upper), (f'f(CLIENT_SECRET := {upper})', upper),
+                             (f'run(JWT_SECRET={words})', words), (f'$(GITHUB_TOKEN={key})', key),
+                             (f'f(api_key={key})', key), (f'f(api_key: {key})', key),
+                             (f'A_TOKEN=x(B_TOKEN={key})', key)):
+            with self.subTest(line):
+                self.assertEqual([v for _, v in secrets_scan.scan_line(line)], [secret])
+        for line in ('f(password: PasswordCredential)', 'function f(apiKey: ApiKeyUsageRow)',
+                     'f(CLIENT_SECRET: SecretManagerValue)', 'f(GITHUB_TOKEN=getGithubToken())',
+                     'f(JWT_SECRET=jwtSecretValue)', 'f(CLIENT_SECRET=process.env.SECRET)',
+                     'f(API_TOKEN=${API_TOKEN:-changemechange})'):
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
     def test_secrets_validation_rules(self):
         # TB-200 item 4: Laravel rules are lowercase words joined by `|`, each with an optional `:argument`.
         for line in ("'password' => 'required|string|min:8|confirmed',", "password: 'required|string|min:8'",

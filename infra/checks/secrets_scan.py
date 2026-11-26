@@ -87,7 +87,7 @@ HUMPED_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)+$')
 # TB-200: for these names a type name is a type only in an annotation: after a bare `:` and before `,`, `;` or `)`
 # (password: PasswordCredential;), the context rule of redact (TB-193) narrowed by the separator. After `=` the same
 # shape is a passphrase (Password=<words>;Database=app, DB_PASSWORD=<words>; ./run). The value pattern keeps `)` in
-# the value, and CODE_CHARS drops it there.
+# the value; `judged` cuts one final `)`, and in an annotation it is the character after the value (SE-205).
 TYPE_CONTEXT = (',', ';', ')')
 # TB-200: Laravel validation rules, lowercase words joined by `|`, each with an optional `:argument`
 # ('password' => 'required|string|min:8|confirmed'). TB-214: a list counts as rules only if one of its rules is in
@@ -162,6 +162,26 @@ def validation_rules(value):
             return False
         names.add(name)
     return not names.isdisjoint(RULE_WORDS)
+
+
+def judged(value):
+    """SE-205, as `judged` of redact: the value patterns glue a closing `)` to the value, and CODE_CHARS dropped it
+    before it was judged (f(CLIENT_SECRET=<words>), CLIENT_SECRET=<key>)). One final `)` is cut, and the rest is the
+    value that is judged, also in an annotation: there the `)` is the character after it (f(password: <type>))."""
+    return value[:-1] if value.endswith(')') else value
+
+
+def assigned_shape(line, m, value):
+    """A value of an ASSIGNED or ENV_ASSIGNED match that looks like a secret: no placeholder, the filter of its name
+    and the entropy floor. `value` starts at the value of the match and may be shorter (`judged`)."""
+    if PASSWORD_NAME.search(m.group(1)):
+        annotation = line[m.end(1):m.start(2)].strip() == ':'
+        end = m.start(2) + len(value)
+        after = line[end:end + 1] if annotation else ''
+        shaped, floor = looks_like_password(value, after), 3.0 if PASSPHRASE.match(value) else 3.5
+    else:
+        shaped, floor = looks_like_secret(value), 3.5
+    return shaped and not PLACEHOLDER.search(value) and entropy(value) >= floor
 
 
 def shell_test(line, m):
@@ -253,19 +273,20 @@ def scan_line(line):
     for rx in (ASSIGNED, ENV_ASSIGNED):
         m = rx.search(line)
         while m:
-            value = m.group(2)
-            if PASSWORD_NAME.search(m.group(1)):
-                annotation = line[m.end(1):m.start(2)].strip() == ':'
-                after = line[m.end(2):m.end(2) + 1] if annotation else ''
-                shaped, floor = looks_like_password(value, after), 3.0 if PASSPHRASE.match(value) else 3.5
-            else:
-                shaped, floor = looks_like_secret(value), 3.5
-            reported = not (shell_test(line, m) or covered(m, 2) or PLACEHOLDER.search(value) or not shaped
-                            or entropy(value) < floor)
+            value, rest = m.group(2), judged(m.group(2))
+            secret = None
+            if not (shell_test(line, m) or covered(m, 2)):
+                if assigned_shape(line, m, value):
+                    secret = value
+                elif rest != value and assigned_shape(line, m, rest):
+                    secret = rest
+            reported = secret is not None
             if reported:
-                found.append(('literal %s' % m.group(1).lower(), value))
-                spans.append(m.span(2))
-            offset = resume_offset(value, reported)
+                found.append(('literal %s' % m.group(1).lower(), secret))
+                spans.append((m.start(2), m.start(2) + len(secret)))
+            # A rejected value: the search goes on after the last DROPS_VALUE character of the judged value (SE-205,
+            # A_TOKEN=x(B_TOKEN=<v>)); a reported one at the name that ends the whole value.
+            offset = resume_offset(value if reported else rest, reported)
             m = rx.search(line, m.end() if offset is None else max(m.start() + 1, m.start(2) + offset))
     for m in BASE64.finditer(line):
         if not covered(m, 0) and is_base64_key(line, m):
