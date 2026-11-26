@@ -174,13 +174,14 @@ function maskedBy(hits: RedactHit[], length: number): boolean[] {
 // `adds`: the head masks some values that the base does not (TB-198 against
 // 2dd520685, TB-199 against 221e381b4, TB-213 against be1b3ffe1). `only`:
 // every added case matches it. TB-201 adds none on these chains, so against
-// be1b3ffe1 only TB-213 adds: capitalized words with `;` right after them
-// outside an annotation (`"`, `=`, `:=`, `=>` before the value).
-const TB213_ADDS = new RegExp(`${VALUES[1]};$`);
+// be1b3ffe1 only TB-213 and SE-205 add outside an annotation (`"`, `=`, `:=`,
+// `=>` before the value): capitalized words with `;` right after them
+// (TB-213), any value with `)` right after it (SE-205).
+const BOARD_ADDS = new RegExp(`(?:${VALUES[1]};|(?:${VALUES.join("|")})\\))$`);
 const BASES = [
   { name: "2dd520685", redact: baseRedact, adds: true, only: null },
   { name: "221e381b4", redact: base378Redact, adds: true, only: null },
-  { name: "be1b3ffe1", redact: baseBoardRedact, adds: true, only: TB213_ADDS },
+  { name: "be1b3ffe1", redact: baseBoardRedact, adds: true, only: BOARD_ADDS },
 ];
 // The value search of be1b3ffe1 is the one of this PR: only its PEM masks
 // are compared.

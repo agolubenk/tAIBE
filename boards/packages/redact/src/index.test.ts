@@ -388,6 +388,47 @@ describe("@kaneo/redact", () => {
     });
   });
 
+  // SE-205 (Control N1 on #539): a final `)` glued to the value dropped it
+  // before it was judged. One `)` is cut off; in an annotation it is the
+  // type context after the value (TB-193).
+  describe("a value before a closing `)` (SE-205)", () => {
+    const phrase = join("Correct", "Horse", "Battery", "Staple");
+    const words = join("correct", "horse", "battery", "staple");
+    const key = join("Qz8Lm4", "Rt7Wx2", "Ny5Kp9Bv");
+
+    it.each([
+      ["capitalized words at the end", `CLIENT_SECRET=${phrase})`, phrase],
+      ["a named argument", `f(CLIENT_SECRET=${phrase})`, phrase],
+      ["a Ruby arrow", `h(CLIENT_SECRET=>${phrase})`, phrase],
+      ["a Go assignment", `f(CLIENT_SECRET := ${phrase})`, phrase],
+      ["lowercase words", `run(JWT_SECRET=${words})`, words],
+      ["a key of a TOKEN name", `$(GITHUB_TOKEN=${key})`, key],
+      ["a lowercase key name", `f(api_key=${key})`, key],
+      ["an inner name after `(` in a value", `A_TOKEN=x(B_TOKEN=${key})`, key],
+      ["a key after a bare colon", `f(api_key: ${key})`, key],
+      ["an inner value of an annotation", `k: x_api_key==${key})`, key],
+    ])("masks %s and keeps the `)`", (_name, input, secret) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(1);
+      expect(result.text).not.toContain(secret);
+      expect(result.text).toContain("])");
+      expect(redact(result.text).hits).toHaveLength(0);
+    });
+
+    it.each([
+      ["an annotation", "function f(apiKey: ApiKeyUsageRow)"],
+      ["an annotation of a SECRET name", "f(CLIENT_SECRET: SecretValue)"],
+      ["a call", "f(GITHUB_TOKEN=getToken())"],
+      ["a camelCase variable", "f(GITHUB_TOKEN=githubToken)"],
+      ["a dotted name", "f(CLIENT_SECRET=process.env.X)"],
+      ["a camelCase secret", "f(JWT_SECRET=jwtSecret)"],
+      ["undefined", "f(JWT_SECRET=undefined)"],
+      ["a short value", "f(api_key=abc)"],
+    ])("leaves %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+  });
+
   // TB-195: lowercase words joined together, shorter than 32 characters, were
   // read as a camelCase name after a SECRET or PASSWORD name too.
   describe("a passphrase of lowercase words (TB-195)", () => {
