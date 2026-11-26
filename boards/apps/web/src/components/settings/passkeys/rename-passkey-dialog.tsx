@@ -1,3 +1,4 @@
+import { PASSKEY_NAME_MAX } from "@kaneo/permissions";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -14,11 +15,7 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { PASSKEYS_QUERY_KEY } from "@/hooks/queries/passkey/use-passkeys";
-import {
-  PASSKEY_NAME_MAX,
-  type PasskeyItem,
-  renamePasskey,
-} from "@/lib/passkey/passkey-api";
+import { type PasskeyItem, renamePasskey } from "@/lib/passkey/passkey-api";
 import { toast } from "@/lib/toast";
 
 type Props = {

@@ -48,7 +48,6 @@ vi.mock("@/lib/passkey/passkey-client", () => ({
   addPasskey: m.add,
 }));
 vi.mock("@/lib/passkey/passkey-api", () => ({
-  PASSKEY_NAME_MAX: 64,
   listPasskeys: m.list,
   removePasskey: m.remove,
   renamePasskey: m.rename,

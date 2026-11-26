@@ -1,5 +1,9 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  PASSKEY_ERRORS,
+  PASSKEY_NAME_MAX,
+} from "../../packages/permissions/src";
 import db, { schema } from "../../apps/api/src/database";
 import { createApp } from "../../apps/api/src/index";
 import { failureCount } from "../../apps/api/src/reauth/store";
@@ -26,6 +30,14 @@ import { SoftPasskey } from "./helpers/soft-passkey";
 beforeEach(async () => {
   await resetTestDatabase();
 });
+
+async function keyNames(userId: string) {
+  const rows = await db
+    .select({ name: schema.passkeyTable.name })
+    .from(schema.passkeyTable)
+    .where(eq(schema.passkeyTable.userId, userId));
+  return rows.map((row) => row.name);
+}
 
 async function storedCounter(credentialId: string) {
   const [row] = await db
@@ -150,6 +162,47 @@ describe("TB-31 R-6: passkeys", () => {
       400,
       "PASSKEY_LIMIT_REACHED",
     );
+  });
+
+  it("refuses a key name over PASSKEY_NAME_MAX on registration and rename (TB-260)", async () => {
+    const { app } = createApp();
+    const ivan = await person(app);
+    const long = "x".repeat(PASSKEY_NAME_MAX + 1);
+
+    await expectError(
+      await register(app, ivan.cookies, new SoftPasskey(), {
+        body: { name: long },
+      }),
+      400,
+      PASSKEY_ERRORS.nameTooLong,
+    );
+    expect(await keyNames(ivan.userId)).toEqual([]);
+
+    // The limit counts the trimmed name, as the plugin stores it.
+    const fits = "y".repeat(PASSKEY_NAME_MAX);
+    const added = await register(app, ivan.cookies, new SoftPasskey(), {
+      body: { name: ` ${fits} ` },
+    });
+    expect(added.status, await added.clone().text()).toBe(200);
+    const { id } = (await added.json()) as { id: string };
+    expect(await keyNames(ivan.userId)).toEqual([fits]);
+
+    await expectError(
+      await post(app, "/passkey/update-passkey", ivan.cookies, {
+        id,
+        name: long,
+      }),
+      400,
+      PASSKEY_ERRORS.nameTooLong,
+    );
+    expect(await keyNames(ivan.userId)).toEqual([fits]);
+
+    const renamed = await post(app, "/passkey/update-passkey", ivan.cookies, {
+      id,
+      name: "z".repeat(PASSKEY_NAME_MAX),
+    });
+    expect(renamed.status, await renamed.clone().text()).toBe(200);
+    expect(await keyNames(ivan.userId)).toEqual(["z".repeat(PASSKEY_NAME_MAX)]);
   });
 
   it("confirms a stale session with the same user's key and replaces it (R-5)", async () => {

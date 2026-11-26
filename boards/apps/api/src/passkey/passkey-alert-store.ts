@@ -98,14 +98,18 @@ async function findAlert(
   return { rowId, passkeyId: row.identifier.slice(PREFIX.length), value };
 }
 
-/** What the page shows before the person presses the button. No change. */
+/**
+ * What the page shows before the person presses the button. No change. The
+ * name is the one in the email (TB-260): whoever added the key can rename it
+ * without a fresh sign-in, so the current name proves nothing.
+ */
 export async function inspectPasskeyAlert(
   token: string,
 ): Promise<PasskeyAlertInspect | null> {
   const found = await findAlert(db, token, false);
   if (!found) return null;
   const [key] = await db
-    .select({ name: schema.passkeyTable.name })
+    .select({ id: schema.passkeyTable.id })
     .from(schema.passkeyTable)
     .where(
       and(
@@ -115,7 +119,7 @@ export async function inspectPasskeyAlert(
     )
     .limit(1);
   return {
-    keyName: key ? key.name : found.value.keyName,
+    keyName: found.value.keyName,
     addedAt: found.value.addedAt,
     keyExists: Boolean(key),
   };
