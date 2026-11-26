@@ -806,10 +806,8 @@ describe("@kaneo/redact", () => {
       "Authorization:Bearer x,",
       "authorization: bearer authorization",
     ])("redacts 256 000 characters of %j in linear time", (unit) => {
-      const text = `Authorization: Bearer ${unit.repeat(Math.ceil(256_000 / unit.length))} x`;
-      const started = performance.now();
-      redact(text);
-      expect(performance.now() - started).toBeLessThan(250);
+      // TB-253: growth, not 250 ms of wall time (fixtures/linear-time.ts).
+      expectLinear((n) => `Authorization: Bearer ${repeated(unit)(n)} x`);
     });
 
     it("leaves the next header alone after an empty x-api-key", () => {
