@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import { restoreForTokenCaller } from "../../utils/token-caller-text";
-import { loadCardMeta } from "./card-meta";
+import type { CardMetaRow } from "./card-meta";
 import type { CardMetaPatch } from "./card-patch";
 
 const FREE_TEXT = ["report", "contextPack"] as const;
@@ -12,17 +12,15 @@ const FREE_TEXT = ["report", "contextPack"] as const;
  * block with a marker is refused (409). The short fields (severity,
  * executor, branch, links, files) are not restored: a marker there is
  * stored as it came.
+ *
+ * TB-239: `stored` is the row setCardMeta loaded after the lease check, so
+ * the markers are restored against the fields it decides on.
  */
 export async function restoreMetaText(
   c: Context,
-  taskId: string,
   patch: CardMetaPatch,
+  stored: CardMetaRow | undefined,
 ): Promise<CardMetaPatch> {
-  let stored: ReturnType<typeof loadCardMeta> | undefined;
-  const load = () => {
-    stored ??= loadCardMeta(taskId);
-    return stored;
-  };
   const restored = { ...patch };
   for (const field of FREE_TEXT) {
     const value = patch[field];
@@ -30,7 +28,7 @@ export async function restoreMetaText(
     restored[field] = await restoreForTokenCaller(
       c,
       value,
-      async () => (await load())?.[field],
+      async () => stored?.[field],
     );
   }
   return restored;

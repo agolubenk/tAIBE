@@ -10,6 +10,7 @@ import { requireWorkspacePermission } from "../../utils/require-workspace-permis
 import {
   isTokenCaller,
   maskForTokenCaller,
+  maskPageForTokenCaller,
 } from "../../utils/token-caller-text";
 import { workspaceAccess } from "../../utils/workspace-access-middleware";
 import { getLog } from "../read/get-log";
@@ -109,7 +110,7 @@ export const readRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       take,
       tokenCaller: isTokenCaller(c),
     });
-    return c.json({ ...page, items: maskForTokenCaller(c, page.items) }, 200);
+    return c.json(maskPageForTokenCaller(c, page), 200);
   })
   .openapi(getLogRoute, async (c) => {
     const { workspaceId, logId } = c.req.valid("param");
