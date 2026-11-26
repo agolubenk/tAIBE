@@ -423,6 +423,35 @@ describe("API integration: notebook PR and link sources", () => {
     });
   });
 
+  it("stores a token with no agent name and no session label as a nameless agent", async () => {
+    // Such a token is named by its internal id (key:<id>; forest/actor.ts),
+    // which means nothing to a member: the id stays in the journal only.
+    const nb = await notebook();
+    mocks.page.mockImplementation(
+      async () =>
+        new Response("<title>Аренда</title><p>Аренда истекает через час.</p>", {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+    );
+    const added = await nb.agentApi("POST", nb.path("/sources/link"), {
+      url: PAGE_URL,
+    });
+    expect(added.status).toBe(200);
+
+    const listed = await nb.owner("GET", "/sources");
+    const source = (
+      listed.body.sources as {
+        ref: string;
+        addedByKind: string | null;
+        addedBy: string | null;
+      }[]
+    ).find((row) => row.ref === PAGE_URL);
+    expect(
+      source && { kind: source.addedByKind, name: source.addedBy },
+    ).toEqual({ kind: "agent", name: null });
+    expect(JSON.stringify(listed.body)).not.toContain("key:");
+  });
+
   it("stores a member without a name as a nameless person, never their email", async () => {
     // The member's actor name falls back to the email (forest/actor.ts);
     // GET /sources shows the author to every member and agent.
