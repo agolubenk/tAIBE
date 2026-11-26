@@ -1,6 +1,7 @@
 import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import db from "../database";
 import { ssrEntityTable, ssrVersionTable } from "../database/ssr-schema";
+import { keepOneLatest, supersedeLatest } from "./one-latest";
 import {
   type DraftMatch,
   findApprovedTwins,
@@ -79,15 +80,7 @@ export async function approveMatchingDrafts(
     // message records which approval vouched for the bytes.
     const entityIds = [...entities];
     const now = new Date();
-    await tx
-      .update(ssrVersionTable)
-      .set({ status: "superseded" })
-      .where(
-        and(
-          inArray(ssrVersionTable.entityId, entityIds),
-          eq(ssrVersionTable.status, "latest"),
-        ),
-      );
+    await supersedeLatest(tx, entityIds);
     await tx
       .update(ssrVersionTable)
       .set({
@@ -115,6 +108,8 @@ export async function approveMatchingDrafts(
         updatedAt: now,
       })
       .where(inArray(ssrEntityTable.id, entityIds));
+    // TB-258: a version that went live while the batch waited (one-latest.ts).
+    await keepOneLatest(tx, entityIds, ids);
     return { approved: ids.length, versionIds: ids };
   });
 }
