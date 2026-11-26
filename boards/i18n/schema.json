@@ -18060,6 +18060,9 @@
 								"addedByMember": {
 									"type": "string"
 								},
+								"addedByNamelessAgent": {
+									"type": "string"
+								},
 								"addedByUnknown": {
 									"type": "string"
 								}
@@ -18079,6 +18082,7 @@
 								"addedByAgent",
 								"addedByPerson",
 								"addedByMember",
+								"addedByNamelessAgent",
 								"addedByUnknown"
 							]
 						}

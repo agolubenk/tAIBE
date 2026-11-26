@@ -6,20 +6,20 @@ type SourceAuthorProps = {
 };
 
 // TB-115: who added a link or a pull request. An agent's name carries its
-// session; a member without a name is «a member» (the server never stores
-// their email); a source added before authors were kept says «unknown».
+// session; an agent without a name is «an agent» (the server never stores a
+// token's internal id), a member without a name «a member» (nor their email);
+// a source added before authors were kept says «unknown».
 export function SourceAuthor({ kind, name }: SourceAuthorProps) {
   const { t } = useTranslation();
   const text =
-    kind && name
-      ? t(
-          kind === "agent"
-            ? "workspace:notebook.sources.addedByAgent"
-            : "workspace:notebook.sources.addedByPerson",
-          { name },
-        )
+    kind === "agent"
+      ? name
+        ? t("workspace:notebook.sources.addedByAgent", { name })
+        : t("workspace:notebook.sources.addedByNamelessAgent")
       : kind === "person"
-        ? t("workspace:notebook.sources.addedByMember")
+        ? name
+          ? t("workspace:notebook.sources.addedByPerson", { name })
+          : t("workspace:notebook.sources.addedByMember")
         : t("workspace:notebook.sources.addedByUnknown");
 
   return (

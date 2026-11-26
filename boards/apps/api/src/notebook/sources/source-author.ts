@@ -15,6 +15,11 @@ export function sourceAuthor<E extends { Variables: BaseVariables }>(
 ): SourceAuthor {
   const actor = resolveForestActor(c);
   if (actor.kind === "agent") {
+    // A token with no agent identity and no session label is named by its
+    // internal id (`key:<id>`, `bearer:<userId>`; forest/actor.ts). It means
+    // nothing to a member, so the source keeps a nameless agent; the id stays
+    // in the journal.
+    if (actor.name === actor.id) return { kind: "agent", name: null };
     return { kind: "agent", name: actor.name.slice(0, SOURCE_AUTHOR_MAX) };
   }
   // A member's actor name falls back to the email (forest/actor.ts). GET

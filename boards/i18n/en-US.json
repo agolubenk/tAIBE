@@ -4374,6 +4374,7 @@
 				"addedByAgent": "Added by agent {{name}}",
 				"addedByPerson": "Added by {{name}}",
 				"addedByMember": "Added by: a member",
+				"addedByNamelessAgent": "Added by: an agent",
 				"addedByUnknown": "Added by: unknown"
 			}
 		},
