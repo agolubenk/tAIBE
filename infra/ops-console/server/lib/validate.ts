@@ -18,6 +18,20 @@ export async function parseBody<T extends z.ZodTypeAny>(c: Context, schema: T): 
   return parsed.data
 }
 
+/**
+ * Схема частичного обновления (PATCH): все поля необязательны, `.default()` снят. В zod 4 `.partial()` подставляет
+ * значение по умолчанию в непереданное поле, и PATCH молча сбросил бы его (IS-261); здесь непереданное — не трогаем.
+ */
+export function patchOf<T extends z.ZodObject>(schema: T): z.ZodType<Partial<z.output<T>>> {
+  const shape: Record<string, z.ZodType> = {}
+  for (const [key, field] of Object.entries(schema.shape)) {
+    shape[key] = (field instanceof z.ZodDefault ? field.unwrap() : field).optional()
+  }
+  // Тип полей при сборке по ключам теряется; выход — тот же объект, только все поля необязательны.
+  const patch: z.ZodType = schema.extend(shape)
+  return patch as z.ZodType<Partial<z.output<T>>>
+}
+
 export function parseQuery<T extends z.ZodTypeAny>(c: Context, schema: T): z.infer<T> {
   const parsed = schema.safeParse(c.req.query())
   if (!parsed.success) {
