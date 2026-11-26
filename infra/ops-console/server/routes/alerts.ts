@@ -6,7 +6,7 @@ import { getDb } from '../db/client'
 import { ALERT_RULE_KINDS, alertNotes, alertRules, alerts, deliveries } from '../db/schema'
 import { apiError, type AppEnv } from '../http-types'
 import { requireRole } from '../auth/middleware'
-import { parseBody, parseId, parseQuery } from '../lib/validate'
+import { parseBody, parseId, parseQuery, patchOf } from '../lib/validate'
 import { logActivity } from '../activity'
 import { resolveAlert } from '../alerts/store'
 import { ackAlert, addAlertNote, refreshCardsAfterAction, silenceAlert } from '../alerts/actions'
@@ -139,7 +139,7 @@ export const alertRoutes = new Hono<AppEnv>()
   })
   .patch('/rules/:id', requireRole('operator'), async (c) => {
     const id = parseId(c.req.param('id'))
-    const body = await parseBody(c, ruleSchema.partial().omit({ kind: true }))
+    const body = await parseBody(c, patchOf(ruleSchema.omit({ kind: true })))
     if (body.metric?.includes(',')) {
       const current = await getDb().query.alertRules.findFirst({ where: eq(alertRules.id, id), columns: { kind: true } })
       if (current) assertMetricList(current.kind, body.metric)

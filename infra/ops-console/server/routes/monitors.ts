@@ -7,7 +7,7 @@ import { checkResults, checkRollups, DNS_RECORDS, MONITOR_TYPES, monitors, tlsCh
 import { apiError, type AppEnv } from '../http-types'
 import { requireRole } from '../auth/middleware'
 import { assertSafeUrl } from '../lib/http'
-import { parseBody, parseId, parseQuery } from '../lib/validate'
+import { parseBody, parseId, parseQuery, patchOf } from '../lib/validate'
 import { logActivity } from '../activity'
 import { parseHostPort, recordCheck, runCheck } from '../monitors/checks'
 import { checkTlsCertificates } from '../monitors/tls'
@@ -130,7 +130,7 @@ export const monitorRoutes = new Hono<AppEnv>()
   })
   .patch('/:id', requireRole('operator'), async (c) => {
     const id = parseId(c.req.param('id'))
-    const body = await parseBody(c, monitorBase.partial())
+    const body = await parseBody(c, patchOf(monitorBase))
     if (body.type !== undefined || body.url !== undefined) {
       const prev = await getDb().query.monitors.findFirst({ where: eq(monitors.id, id) })
       if (!prev) throw apiError(404, 'Монитор не найден')

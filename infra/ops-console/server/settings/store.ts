@@ -84,7 +84,7 @@ async function readRaw(key: string): Promise<unknown> {
   }
 }
 
-export async function readSetting<T>(key: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): Promise<T> {
+export async function readSetting<T>(key: string, schema: z.ZodType<T>): Promise<T> {
   const parsed = schema.safeParse((await readRaw(key)) ?? {})
   return parsed.success ? parsed.data : schema.parse({})
 }

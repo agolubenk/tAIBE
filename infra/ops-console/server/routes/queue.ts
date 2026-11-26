@@ -26,7 +26,7 @@ import { canSee, DEFAULT_PRODUCT, listProducts, PRODUCT_BOARDS, PRODUCT_SLUG, vi
 import { COLLECTIONS, SESSION_MAX, deleteDoc, docHistory, getDoc, isCollection, writeDoc, type Collection } from '../queue/store'
 
 const writeSchema = z.object({
-  data: z.record(z.unknown()),
+  data: z.record(z.string(), z.unknown()),
   ifVersion: z.number().int().nonnegative().optional(),
   ifAnswerAt: z.string().max(40).optional(),
   /** Входящее: перехват захвата у названной сессии (наследник) и отпуск своего захвата (queue/store.ts). */

@@ -7,7 +7,7 @@ import { CHANNEL_KINDS, channels, deliveries, type ChannelKind } from '../db/sch
 import { apiError, type AppEnv } from '../http-types'
 import { requireRole } from '../auth/middleware'
 import { decryptJson, encryptJson } from '../lib/crypto'
-import { parseBody, parseId } from '../lib/validate'
+import { parseBody, parseId, patchOf } from '../lib/validate'
 import { logActivity } from '../activity'
 import { channelConfigSchemas, channelSecretFields, channelSecretSchema } from '../notify/channel-config'
 import { deliverToChannel } from '../notify/dispatch'
@@ -18,7 +18,7 @@ import { serializeChannel } from './serialize'
 const baseSchema = z.object({
   kind: z.enum(CHANNEL_KINDS),
   name: z.string().trim().min(1).max(120),
-  config: z.record(z.unknown()).default({}),
+  config: z.record(z.string(), z.unknown()).default({}),
   secrets: channelSecretSchema.default({}),
   minSeverity: z.enum(['warning', 'critical']).default('warning'),
   digest: z.boolean().default(false),
@@ -128,7 +128,7 @@ export const channelRoutes = new Hono<AppEnv>()
     const db = getDb()
     const prev = await db.query.channels.findFirst({ where: eq(channels.id, id) })
     if (!prev) throw apiError(404, 'Канал не найден')
-    const body = await parseBody(c, baseSchema.omit({ kind: true }).partial())
+    const body = await parseBody(c, patchOf(baseSchema.omit({ kind: true })))
     const kind = prev.kind as ChannelKind
     const patch: Partial<typeof channels.$inferInsert> = {}
     if (body.name !== undefined) patch.name = body.name
