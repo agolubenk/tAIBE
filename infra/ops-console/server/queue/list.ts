@@ -24,6 +24,9 @@ export function setListLimitsForTests(v: Partial<typeof LIST_LIMITS_DEFAULT> | n
   listLimits = { ...LIST_LIMITS_DEFAULT, ...v }
 }
 
+/** Текущий потолок списка: постраничный /changes (queue/changes-pages.ts) режет коллекцию на том же документе. */
+export const listLimitsNow = (): Readonly<typeof LIST_LIMITS_DEFAULT> => listLimits
+
 /**
  * capped — список обрезан потолком: total — сколько видимых документов в коллекции, limit — сколько самых свежих
  * прочитано. У listOpenItems docs — открытые среди этих limit, поэтому docs.length может быть меньше limit.
@@ -35,8 +38,9 @@ const visible = (collection: Collection, products: Visibility) => and(eq(oqDocs.
 export async function listDocs(collection: Collection, products: Visibility): Promise<DocList> {
   const { max, bytes } = listLimits
   // Накопленный объём от самых свежих и размер коллекции — окном по узкому подзапросу (id и числа, без тел), одним
-  // запросом: тела читаются только у документов в пределах потолка, total согласован с выборкой. Второй ключ — id:
-  // у документов с одной миллисекундой иначе порядок решало бы хранилище (SQLite и Postgres — по-разному, TB-153).
+  // запросом: тела читаются только у документов в пределах потолка, total согласован с выборкой. Порядок — updated_at,
+  // при равенстве id: иначе порядок документов с одним временем решало бы хранилище (SQLite и Postgres — по-разному,
+  // TB-153), и потолок и страницы /changes резали бы коллекцию на разных документах.
   const w = getDb()
     .select({
       id: oqDocs.id,
@@ -55,8 +59,13 @@ export async function listDocs(collection: Collection, products: Visibility): Pr
     .limit(max)
   const docs = rows.map((r) => parseDoc(r.doc))
   // Пусто, а коллекция нет — самый свежий документ больше потолка объёма: total — отдельным count.
-  const total = rows.length ? Number(rows[0]!.total) : Number((await collectionStats(collection, products)).n)
+  const total = rows.length ? Number(rows[0]!.total) : await collectionCount(collection, products)
   return total > docs.length ? { docs, capped: { total, limit: docs.length } } : { docs }
+}
+
+/** Сколько документов коллекции видно актору — total обрезанного списка. */
+export async function collectionCount(collection: Collection, products: Visibility): Promise<number> {
+  return Number((await collectionStats(collection, products)).n)
 }
 
 async function collectionStats(collection: Collection, products: Visibility) {

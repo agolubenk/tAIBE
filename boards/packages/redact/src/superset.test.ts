@@ -172,11 +172,15 @@ function maskedBy(hits: RedactHit[], length: number): boolean[] {
 }
 
 // `adds`: the head masks some values that the base does not (TB-198 against
-// 2dd520685, TB-199 against 221e381b4). TB-201 adds none on these chains.
+// 2dd520685, TB-199 against 221e381b4, TB-213 against be1b3ffe1). `only`:
+// every added case matches it. TB-201 adds none on these chains, so against
+// be1b3ffe1 only TB-213 adds: capitalized words with `;` right after them
+// outside an annotation (`"`, `=`, `:=`, `=>` before the value).
+const TB213_ADDS = new RegExp(`${VALUES[1]};$`);
 const BASES = [
-  { name: "2dd520685", redact: baseRedact, adds: true },
-  { name: "221e381b4", redact: base378Redact, adds: true },
-  { name: "be1b3ffe1", redact: baseBoardRedact, adds: false },
+  { name: "2dd520685", redact: baseRedact, adds: true, only: null },
+  { name: "221e381b4", redact: base378Redact, adds: true, only: null },
+  { name: "be1b3ffe1", redact: baseBoardRedact, adds: true, only: TB213_ADDS },
 ];
 // The value search of be1b3ffe1 is the one of this PR: only its PEM masks
 // are compared.
@@ -188,6 +192,7 @@ describe("redact masks a superset of the base", () => {
     (b) => {
       const next = generator(SEED);
       const lost: string[] = [];
+      const addedElse: string[] = [];
       let baseMasks = 0;
       let added = 0;
       let glued = 0;
@@ -201,9 +206,13 @@ describe("redact masks a superset of the base", () => {
         if (base.includes(true)) baseMasks += 1;
         if (/[^=]==/.test(text)) glued += 1;
         if (base.some((on, at) => on && !head[at])) lost.push(text);
-        else if (head.some((on, at) => on && !base[at])) added += 1;
+        else if (head.some((on, at) => on && !base[at])) {
+          added += 1;
+          if (b.only && !b.only.test(text)) addedElse.push(text);
+        }
       }
       expect(lost.slice(0, 5)).toEqual([]);
+      expect(addedElse.slice(0, 5)).toEqual([]);
       // The generator is not vacuous: the base masks the value in 36-44 % of
       // the cases, the head masks it in some more (TB-198 against 2dd520685,
       // TB-199 against 221e381b4), and many cases hold a glued `==`.

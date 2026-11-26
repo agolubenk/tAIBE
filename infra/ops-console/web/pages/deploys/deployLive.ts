@@ -2,7 +2,7 @@
 import type { DeployCard, DeployCardCheck, DeployCardPhase } from '../../../shared/deploy-events-contract'
 import type { UiStatus } from '../../lib/types'
 
-export { DEPLOY_CHECK_LABEL as CHECK_LABEL, DEPLOY_PHASE_LABEL as PHASE_LABEL } from '../../../shared/deploy-events-contract'
+export { DEPLOY_CHECK_LABEL as CHECK_LABEL, DEPLOY_PHASE_LABEL as PHASE_LABEL } from '../../../shared/deploy-labels'
 
 export function deployBadge(card: DeployCard): [UiStatus, string] {
   if (card.status === 'running') return ['pending', 'Идёт']

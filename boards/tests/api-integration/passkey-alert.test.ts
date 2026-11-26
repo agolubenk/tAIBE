@@ -173,6 +173,23 @@ describe("TB-31 R-6: «This wasn't me» after a passkey was added", () => {
     expect(await countSessions(ivan.userId)).toBe(0);
   });
 
+  it("shows the name from the email after the key is renamed (TB-260)", async () => {
+    const { app } = createApp();
+    const { ivan, keyId } = await addKey(app);
+    const token = lastToken();
+    const renamed = await post(app, "/passkey/update-passkey", ivan.cookies, {
+      id: keyId,
+      name: "iPhone — это вы",
+    });
+    expect(renamed.status, await renamed.clone().text()).toBe(200);
+
+    const shown = await post(app, "/tb/passkey-alert/inspect", "", { token });
+    expect(await shown.json()).toMatchObject({
+      keyName: "Laptop",
+      keyExists: true,
+    });
+  });
+
   it("refuses a wrong secret, a broken token and an expired link the same way, and changes nothing", async () => {
     const { app } = createApp();
     const { ivan, keyId } = await addKey(app);

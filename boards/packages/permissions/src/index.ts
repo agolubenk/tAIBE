@@ -127,6 +127,7 @@ export {
   PASSKEY_ALERT_TTL_DAYS,
   PASSKEY_ERRORS,
   PASSKEY_MAX_PER_USER,
+  PASSKEY_NAME_MAX,
   type PasskeyAlertInspect,
   type PasskeyError,
 } from "./passkey.js";

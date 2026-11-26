@@ -9,6 +9,7 @@
  * Состояние общее для Mac (обе доли), продуктовых тайн в нём нет: видно любому актору с чтением очереди.
  */
 import { z } from 'zod'
+import { patchOf } from '../lib/validate'
 import { readSetting, writeSetting } from '../settings/store'
 import { DOC_ID, SESSION_MAX } from './store'
 
@@ -45,7 +46,7 @@ export const teamBeatSchema = z.object({
 })
 export type TeamBeat = z.infer<typeof teamBeatSchema>
 
-const storedSchema = teamBeatSchema.extend({ at: z.string() }).partial()
+const storedSchema = patchOf(teamBeatSchema.extend({ at: z.string() }))
 export type TeamView = Partial<TeamBeat> & { at?: string }
 
 /** Последняя отметка сторожа; до первой — пустой объект. Время отметки ставит сервер: часам Mac не верим. */

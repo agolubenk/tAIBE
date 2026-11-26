@@ -27,7 +27,7 @@ const MAX_RELAYED = 100
 
 const storedSchema = z.object({
   sessions: z
-    .record(z.object({ at: z.string(), relayed: z.record(z.string()).default({}), product: z.string().default(DEFAULT_PRODUCT) }))
+    .record(z.string(), z.object({ at: z.string(), relayed: z.record(z.string(), z.string()).default({}), product: z.string().default(DEFAULT_PRODUCT) }))
     .default({}),
 })
 type Stored = z.infer<typeof storedSchema>

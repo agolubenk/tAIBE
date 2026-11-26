@@ -15,9 +15,6 @@ const ROUTES = {
   remove: "/passkey/delete-passkey",
 } as const;
 
-// The longest name the «Rename» field takes.
-export const PASSKEY_NAME_MAX = 64;
-
 export type PasskeyItem = {
   id: string;
   // null: the server did not know the provider by `aaguid`.

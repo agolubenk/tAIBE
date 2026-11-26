@@ -30,24 +30,8 @@ export const DEPLOY_EVENT_TYPES = [
  */
 export const DEPLOY_PHASES = ['preflight', 'prepare', 'build', 'rollback_prev', 'cleanup', 'nginx', 'checks'] as const
 
-/** Подписи фаз и проверок — карточка «Деплоев» и текст алертов деплоя. */
-export const DEPLOY_PHASE_LABEL: Record<string, string> = {
-  preflight: 'Проверки перед сборкой',
-  prepare: 'Подготовка: снимок образов и чистка',
-  build: 'Сборка, миграции, подъём стека',
-  rollback_prev: 'Тег rollback-prev',
-  cleanup: 'Чистка образов и кэша сборки',
-  nginx: 'Конфиги nginx',
-  checks: 'Проверки по публичным адресам',
-}
-
-export const DEPLOY_CHECK_LABEL: Record<string, string> = {
-  api_ready: 'API: готовность',
-  spa: 'SPA',
-  site_config: 'site-config.js',
-  ops_health: 'Ops-консоль',
-  domain_root: 'Домен',
-}
+/** Подписи — в отдельном модуле без zod: их берёт web-бандл (web/pages/deploys/deployLive.ts). */
+export { DEPLOY_CHECK_LABEL, DEPLOY_PHASE_LABEL } from './deploy-labels'
 
 const unixSec = z.number().int().min(1_577_836_800).max(4_102_444_800)
 const exitCode = z.number().int().min(0).max(255)

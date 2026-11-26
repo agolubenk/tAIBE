@@ -10,6 +10,7 @@ import {
   cookieSession,
   replaceConfirmedSession,
 } from "./passkey-confirm";
+import { assertPasskeyNameFits, NAMED_PASSKEY_ROUTES } from "./passkey-name";
 
 const REGISTER_OPTIONS = "/passkey/generate-register-options";
 const VERIFY_REGISTRATION = "/passkey/verify-registration";
@@ -39,6 +40,15 @@ export function passkeyHooksPlugin({
           handler: createAuthMiddleware(async (ctx) => {
             const current = await cookieSession(ctx);
             if (current) await assertBelowPasskeyLimit(current.session.userId);
+          }),
+        },
+        {
+          // TB-260: before the plugin writes the name, on a rename and on a
+          // new key alike.
+          matcher: (ctx) =>
+            ctx.path !== undefined && NAMED_PASSKEY_ROUTES.has(ctx.path),
+          handler: createAuthMiddleware(async (ctx) => {
+            assertPasskeyNameFits(ctx.body);
           }),
         },
       ],

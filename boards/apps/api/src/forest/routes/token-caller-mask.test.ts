@@ -15,17 +15,14 @@ const NO_TEXT = new Set([
   "releaseLeaseRoute",
   "startMirrorRunRoute",
 ]);
-// TB-196 (#388) masks the logs of read-routes.ts; its sectors join this
-// check when that PR has merged (TB-204, part 2).
-const LATER = new Set(["read-routes.ts"]);
-
-const ROUTE_FILES = readdirSync(__dirname).filter(
-  (file) => file.endsWith("-routes.ts") && !LATER.has(file),
+const ROUTE_FILES = readdirSync(__dirname).filter((file) =>
+  file.endsWith("-routes.ts"),
 );
 
 describe("forest responses for callers with a token go through the mask (TB-204)", () => {
   it("checks every forest route file", () => {
-    expect(ROUTE_FILES.length).toBeGreaterThanOrEqual(14);
+    expect(ROUTE_FILES).toContain("read-routes.ts");
+    expect(ROUTE_FILES.length).toBeGreaterThanOrEqual(17);
   });
 
   for (const file of ROUTE_FILES) {

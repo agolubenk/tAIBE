@@ -86,7 +86,8 @@ export const cardRoutes = apiRouter<BaseVariables & { workspaceId: string }>()
       taskId,
       actor: resolveForestActor(c),
       headers: readAgentHeaders(c),
-      patch: await restoreMetaText(c, taskId, patch),
+      patch,
+      restore: (stored) => restoreMetaText(c, patch, stored),
       expectedRevision: expectedMetaRevision,
     });
     return c.json(maskForTokenCaller(c, meta), 200);
