@@ -21,6 +21,13 @@ describe("SourceAuthor (TB-115)", () => {
     ).toBeTruthy();
   });
 
+  it("says «an agent» for an agent without a name, not its token id", () => {
+    render(<SourceAuthor kind="agent" name={null} />);
+    expect(
+      screen.getByText("workspace:notebook.sources.addedByNamelessAgent"),
+    ).toBeTruthy();
+  });
+
   it("names a member", () => {
     render(<SourceAuthor kind="person" name="Ann" />);
     expect(

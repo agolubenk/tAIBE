@@ -4558,6 +4558,7 @@
 				"addedByAgent": "Кто добавил: агент {{name}}",
 				"addedByPerson": "Кто добавил: {{name}}",
 				"addedByMember": "Кто добавил: участник",
+				"addedByNamelessAgent": "Кто добавил: агент",
 				"addedByUnknown": "Кто добавил: неизвестно"
 			}
 		},
