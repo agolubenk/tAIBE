@@ -18,6 +18,7 @@ import { etagMatches } from '../queue/etag'
 import { acceptsGzip, GZIP_MIN_BYTES, gzipJson, gzipListOnce } from '../queue/list-gzip'
 import { collectionTag, listDocs, listOpenItems, openItemsTag, type DocList } from '../queue/list'
 import { changesSince, CURSOR, eventCursor, listsWithCursor } from '../queue/changes'
+import { changesPage } from '../queue/changes-pages'
 import { changeItemProduct } from '../queue/product-change'
 import { historyQuery, historyReplyBody } from '../queue/history-view'
 import { recentPrs } from '../queue/prs'
@@ -88,17 +89,45 @@ function collectionsOf(raw: string | undefined): Collection[] {
   return COLLECTIONS.filter((col) => want.includes(col))
 }
 
+const noStore = { 'Cache-Control': 'no-store', Vary: 'Accept-Encoding' }
+
+/** Ответ дельты и страницы: не кэшируется, от GZIP_MIN_BYTES сжимается, если клиент принимает gzip. */
+async function noStoreJson(c: Context<QueueEnv>, body: unknown) {
+  const json = JSON.stringify(body)
+  if (json.length < GZIP_MIN_BYTES || !acceptsGzip(c.req.header('accept-encoding'))) {
+    return c.body(json, 200, { ...noStore, 'Content-Type': 'application/json' })
+  }
+  return c.body(await gzipJson(json), 200, { ...noStore, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' })
+}
+
+/** Курсор или страница не годятся — 410, клиент начинает с полного списка. Строка лога: шторм 410 виден в логах. */
+function resyncResponse(c: Context<QueueEnv>, reason: string) {
+  console.warn(`[oq-changes] 410 ${c.get('oqActor').name}: ${reason}`)
+  return c.json({ resync: true, reason }, 410, noStore)
+}
+
 /**
  * Дельта очереди (OPS-50, queue/changes.ts). Без since — полные списки и курсор (full: true): тело сжимается один раз
  * на набор тегов, как у списка, но без ETag — 304 не вернул бы курсор. ?since=<курсор> — по каждой коллекции
  * изменённые документы и удалённые id, новый курсор; курсор не годится — 410, клиент берёт полный список. ?product= —
  * как у списка. Прежний GET /db/:col не меняется.
+ * ?paged=1 — тот же полный список по страницам (OPS-22, queue/changes-pages.ts): next — токен следующей страницы
+ * (?page=<next> с теми же col и product), нет next — последняя; документы коллекции склеиваются по порядку страниц.
  */
 queueRoutes.get('/changes', requireScope('read', 'agent'), async (c) => {
   const cols = collectionsOf(c.req.query('col'))
   const products = withProductFilter(c.get('oqActor').products, c.req.query('product'))
   const since = c.req.query('since')
-  const noStore = { 'Cache-Control': 'no-store', Vary: 'Accept-Encoding' }
+  const page = c.req.query('page')
+  const paged = c.req.query('paged')
+  if (paged !== undefined && paged !== '1') throw apiError(400, 'paged=1 — полный список по страницам')
+  if (page !== undefined || paged !== undefined) {
+    if (since !== undefined) throw apiError(400, 'since — дельта, paged/page — полный список: одно из двух')
+    const out = await changesPage(cols, products, page)
+    if ('resync' in out) return resyncResponse(c, out.resync)
+    const collections = Object.fromEntries(Object.entries(out.lists).map(([col, list]) => [col, listBody(list)]))
+    return noStoreJson(c, { full: true, cursor: out.cursor, collections, ...(out.next ? { next: out.next } : {}) })
+  }
   if (since === undefined) {
     const build = async () => {
       const { cursor, lists } = await listsWithCursor(cols, products)
@@ -113,16 +142,8 @@ queueRoutes.get('/changes', requireScope('read', 'agent'), async (c) => {
   }
   if (!CURSOR.test(since)) throw apiError(400, 'since — курсор из прошлого ответа /changes')
   const out = await changesSince(cols, products, since)
-  if ('resync' in out) {
-    // Строка лога на каждый 410: шторм полных списков (после деплоя, при потолке) виден в логах контейнера.
-    console.warn(`[oq-changes] 410 ${c.get('oqActor').name}: ${out.resync}`)
-    return c.json({ resync: true, reason: out.resync }, 410, noStore)
-  }
-  const json = JSON.stringify(out)
-  if (json.length < GZIP_MIN_BYTES || !acceptsGzip(c.req.header('accept-encoding'))) {
-    return c.body(json, 200, { ...noStore, 'Content-Type': 'application/json' })
-  }
-  return c.body(await gzipJson(json), 200, { ...noStore, 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' })
+  if ('resync' in out) return resyncResponse(c, out.resync)
+  return noStoreJson(c, out)
 })
 
 /** Продукт пункта меняет владелец (страница, бот): пункт и ответ — одной транзакцией (queue/product-change.ts). */
