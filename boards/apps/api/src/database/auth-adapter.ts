@@ -6,6 +6,7 @@ import {
 } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { count, sql } from "drizzle-orm";
+import { answerTakenLoginAdapter } from "../username/username-taken";
 import {
   hasInstanceAdminRole,
   instanceAdminRoleSql,
@@ -15,7 +16,8 @@ import db, { schema } from ".";
 export function authDatabaseAdapter(config: DrizzleAdapterConfig) {
   return (options: BetterAuthOptions): DBAdapter => {
     const adapter = drizzleAdapter(db, config)(options);
-    return {
+    // TB-248: a login taken by a parallel request is 400, not 500.
+    return answerTakenLoginAdapter({
       ...adapter,
       async update<T>(data: Parameters<DBAdapter["update"]>[0]) {
         if (
@@ -52,6 +54,6 @@ export function authDatabaseAdapter(config: DrizzleAdapterConfig) {
           return transactionAdapter.update<T>(data);
         });
       },
-    };
+    });
   };
 }

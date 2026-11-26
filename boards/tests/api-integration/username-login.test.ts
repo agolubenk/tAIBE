@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { auth } from "../../apps/api/src/auth";
 import db, { schema } from "../../apps/api/src/database";
 import { createApp } from "../../apps/api/src/index";
 import { resetTestDatabase } from "./helpers/database";
@@ -166,6 +167,79 @@ describe("TB-31 R-1: login", () => {
     expect((await setLogin(app, ivan.cookies, "ivan42")).status).toBe(200);
     expect((await setLogin(app, ivan.cookies, "ivan43")).status).toBe(200);
     expect((await setLogin(app, petr.cookies, "ivan42")).status).toBe(200);
+  });
+});
+
+// TB-248: the plugin checks a login with findOne, then writes. A login taken
+// between the two is refused by user_username_unique; the answer is 400.
+describe("TB-248: a login taken by a parallel request", () => {
+  async function codeOf(response: Response) {
+    if (response.status === 200) return 200;
+    const body = (await response.json()) as { code?: string };
+    return `${response.status} ${body.code}`;
+  }
+
+  it("is 400 USERNAME_IS_ALREADY_TAKEN when the index refuses the write", async () => {
+    const { app } = createApp();
+    const ivan = await person(app);
+    const petr = await person(app);
+    expect((await setLogin(app, ivan.cookies, "ivan42")).status).toBe(200);
+    const context = await auth.$context;
+    // The write /update-user makes after the plugin's check passed.
+    const error = (await context.internalAdapter
+      .updateUser(petr.userId, {
+        username: "ivan42",
+        displayUsername: "ivan42",
+      })
+      .catch((caught: unknown) => caught)) as {
+      statusCode?: number;
+      body?: { code?: string };
+    };
+    expect(error.statusCode).toBe(400);
+    expect(error.body?.code).toBe("USERNAME_IS_ALREADY_TAKEN");
+    expect(await storedLogin(petr.userId)).toEqual({
+      username: null,
+      displayUsername: null,
+    });
+  });
+
+  it("gives one of two parallel /update-user the login and the other 400", async () => {
+    const { app } = createApp();
+    const ivan = await person(app);
+    const petr = await person(app);
+    for (const login of ["race1", "race2", "race3", "race4", "race5"]) {
+      const answers = await Promise.all([
+        setLogin(app, ivan.cookies, login).then(codeOf),
+        setLogin(app, petr.cookies, login).then(codeOf),
+      ]);
+      expect(answers.sort()).toEqual([200, "400 USERNAME_IS_ALREADY_TAKEN"]);
+      const owners = await db
+        .select({ id: schema.userTable.id })
+        .from(schema.userTable)
+        .where(eq(schema.userTable.username, login));
+      expect(owners).toHaveLength(1);
+    }
+  });
+
+  it("gives one of two parallel sign-ups the login and the other 400", async () => {
+    const { app } = createApp();
+    const signUp = (login: string) =>
+      app
+        .request("/api/auth/sign-up/email", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email: `${crypto.randomUUID()}@example.com`,
+            password: PASSWORD,
+            name: "Person",
+            username: login,
+          }),
+        })
+        .then(codeOf);
+    for (const login of ["fresh1", "fresh2", "fresh3"]) {
+      const answers = await Promise.all([signUp(login), signUp(login)]);
+      expect(answers.sort()).toEqual([200, "400 USERNAME_IS_ALREADY_TAKEN"]);
+    }
   });
 });
 
