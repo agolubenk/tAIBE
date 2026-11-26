@@ -94,7 +94,7 @@ ensure_secrets() {
     chown 1001:1001 "$ROOT/secrets/$name"
     chmod 0400 "$ROOT/secrets/$name"
   done
-  for optional in notion_token notebook_llm_key claude_mem_proxy_token smtp_password; do
+  for optional in notion_token notebook_llm_key claude_mem_proxy_token ssr_push_github_token smtp_password; do
     if [ -f "$ROOT/secrets/$optional" ]; then
       chown 1001:1001 "$ROOT/secrets/$optional"
       chmod 0400 "$ROOT/secrets/$optional"
@@ -103,6 +103,9 @@ ensure_secrets() {
   # The Mac owns the memory proxy token (OPS-19): it is delivered, never made here.
   [ -s "$ROOT/secrets/claude_mem_proxy_token" ] ||
     log "ВНИМАНИЕ: нет secrets/claude_mem_proxy_token — app читает память без токена, это работает, только пока прокси Mac в режиме раскатки; доставка — mac/memory-token-push.sh"
+  # The owner delivers the SSR push-back token (TB-116); without it push-back stays off.
+  [ -s "$ROOT/secrets/ssr_push_github_token" ] ||
+    log "push-back SSR выключен: нет secrets/ssr_push_github_token (TB-116, README «SSR push-back»)"
 }
 
 write_files() {
@@ -119,19 +122,19 @@ write_files() {
   bash "$here/render-tls.sh" "$here/tls.conf.template" "$ROOT/tls.conf" \
     "$WG_ADDR:$TLS_PORT" "$DOMAIN" 127.0.0.1:5180 || die "tls.conf не отрендерился"
 
-  # Keep the mirror, notebook, claude-mem, owner-queue, mail, sign-in limit and
-  # edge entry settings the owner already filled in.
+  # Keep the mirror, notebook, claude-mem, owner-queue, mail, sign-in limit,
+  # edge entry and SSR push-back target settings the owner already filled in.
   [ -f "$ROOT/.env" ] && cp -a "$ROOT/.env" "$ROOT/.env.prev"
   local kept=""
   if [ -f "$ROOT/.env.prev" ]; then
-    kept="$(grep -E '^((NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH|SMTP)_|DISABLE_AUTH_RATE_LIMIT=|TB_EDGE_BIND=)' "$ROOT/.env.prev" || true)"
+    kept="$(grep -E '^((NOTION_MIRROR|NOTEBOOK_LLM|CLAUDE_MEM|OQ|WG_MAC_SSH|SMTP)_|(DISABLE_AUTH_RATE_LIMIT|TB_EDGE_BIND|SSR_PUSH_TARGETS)=)' "$ROOT/.env.prev" || true)"
   fi
   {
     echo "TB_IMAGE=t-boards:$TB_TAG"
     echo "TB_DOMAIN=$DOMAIN"
     echo "TB_LE_VOLUME=$LE_VOLUME"
     if [ -n "$kept" ]; then printf '%s\n' "$kept"; fi
-    for var in NOTION_MIRROR_WORKSPACE_ID NOTION_MIRROR_DATABASES; do
+    for var in NOTION_MIRROR_WORKSPACE_ID NOTION_MIRROR_DATABASES SSR_PUSH_TARGETS; do
       grep -q "^$var=" <<<"$kept" || echo "$var="
     done
     # The Mac's read-only claude-mem proxy listens on its tunnel address.

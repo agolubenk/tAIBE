@@ -490,6 +490,8 @@ def main():
     for q in (t, e, s):
         q.add_argument("--product", help="slug продукта из instances/ (OPS-25)")
     a = p.parse_args()
+    global STATE_DIR   # SE-171: emit, tap и status из worktree — состояние основного checkout
+    STATE_DIR = state_io.shared_state_dir(HERE, STATE_DIR, a.cmd)
     return {"run": cmd_run, "once": cmd_once, "tap": cmd_tap, "emit": cmd_emit, "status": cmd_status}[a.cmd](cfg, a)
 
 

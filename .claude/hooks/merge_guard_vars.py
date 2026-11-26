@@ -104,6 +104,7 @@ def note_vars(argv, env):
     """Значения после команды argv: `NAME=…` в начале команды, после export/local/… (declared), `for NAME in …`;
     «неизвестно» — переменным, которые команда может поменять иначе (mentioned), а всем — после `eval`, `source`,
     вычисленного имени (`read $n`, `${(P)n::=…}`)."""
+    note_ifs(argv, env)
     a = [t for t in argv if t not in SHELL_WORDS] if argv[:1] and argv[0] in SHELL_WORDS else argv
     if any(re.search(r"\$\{[#!][^}]*=", t) for t in argv):  # `${(P)n::=…}` (tokenize: `${(` → `${#`), `${!n=…}`
         return unknown(env, list(env))
@@ -164,13 +165,72 @@ def substitute(t, env):
     return texts
 
 
+ANY_SEP = r"[\W_]+"  # IFS неизвестен: делим по любому знаку не буквы и не цифры
+# IFS неизвестен и может быть буквой (`IFS=$'x'`, `IFS=$SEP`): слова защищённой команды остаются целыми, только если
+# в IFS нет ни одной их буквы. Значит, деление по всем знакам вне их алфавита даёт эти слова — надмножество (#525 B2)
+GUARDED_WORDS = ("gh pr merge", "gh workflow run", "gh run rerun", "git push")
+ALPHABET_SEPS = [rf"[^{re.escape(''.join(sorted(set(w) - {' '})))}]+" for w in GUARDED_WORDS]
+UNKNOWN = "unknown"
+IFS_TEXT = re.compile(r"\bIFS\b")
+IFS_PLAIN = re.compile(r"IFS=.*", re.S)
+
+
+def ifs_split(env):
+    """AUTO-178: `IFS=,; C=gh,pr,merge; $C 1` — bash делит подставленное по символам IFS, а не по пробелам. Регэксп
+    разделителя, UNKNOWN или None (IFS в команде не задан или пуст: `IFS= read`). Неизвестен IFS со значением с `$`
+    или `\\`, изменённый невидимо (`IFS+=`, `read IFS`, `printf -v IFS`) или после `eval`/`source` (#525 B1)."""
+    if {"IFS", "*"} & set(env.get(BLIND, [])):
+        return UNKNOWN
+    chars = set()
+    for v in env.get("IFS", []):
+        if "$" in v or "\\" in v:
+            return UNKNOWN
+        chars |= set(v)  # кавычки — тоже: bash делит и по `'` в IFS (#525 B5)
+    return "[" + re.escape("".join(sorted(chars))) + r"\s]+" if chars else None
+
+
+def ifs_words(text, sep):
+    """Варианты слов text после деления по IFS (sep — из ifs_split); пустые части bash отбрасывает. UNKNOWN — по
+    любому знаку не буквы и не цифры и по знакам вне алфавита каждой защищённой команды (GUARDED_WORDS). Догадка
+    верна только для слов команды, её аргументы (цель push: `originxmain` → `igi`, `i`; `board-agents` → `board`,
+    `agents`) она портит — поэтому в конце варианта-догадки слово `${IFS}`: цель неизвестна (#525 B3). Только если
+    догадка поделила текст не так, как пробелы: иначе аргументы целы (`IFS=$'\\t' read …; "$G" status`, #525 B4)."""
+    raw, text = text, re.sub(r"[\"']", "", text)
+    if sep != UNKNOWN:
+        return [list(p) for p in dict.fromkeys(tuple(_split(t, sep)) for t in (text, raw))]
+    plain, out = words(text), []
+    for s in [ANY_SEP] + ALPHABET_SEPS:
+        for part in map(list, dict.fromkeys(tuple(_split(t, s)) for t in (text, raw))):
+            out.append(part if part == plain else part + ["${IFS}"])
+    return out
+
+
+def _split(text, sep):
+    """Части text по sep, без кавычек и пустых. Деление и до удаления кавычек — ещё вариант: кавычка в IFS делит
+    подставленное (#525 B5), лишний вариант даёт только надмножество."""
+    return [w for w in (re.sub(r"[\"']", "", p) for p in re.split(sep, text, flags=re.I)) if w]
+
+
+def note_ifs(argv, env):
+    """IFS, который команда меняет не простым присваиванием (`IFS+=,`, `read IFS`, `printf -v IFS`, `unset IFS`), —
+    неизвестен: `unknown` его не отмечает, если IFS не было в env (#525 B1). Чтение `$IFS` — тоже: лишний вариант."""
+    if any(IFS_TEXT.search(t) for t in argv) and not any(IFS_PLAIN.fullmatch(t) for t in argv):
+        add(env, "IFS", ["${IFS}"])
+
+
 def expand_vars(argv, env):
     """Варианты argv после подстановки известных переменных (цикл даёт по варианту на значение) и признак, что
-    вариантов больше 16 и часть отброшена. Подставленное делится на слова, как без кавычек: `C="gh pr merge"; $C 1`."""
+    вариантов больше 16 и часть отброшена. Подставленное делится на слова, как без кавычек: `C="gh pr merge"; $C 1`;
+    если команда задала IFS — ещё вариант с делением по его символам (AUTO-178)."""
     out, overflow = [[]], False
+    sep = ifs_split(env)
     for i, t in enumerate(argv):
         texts = substitute(t, env)
         opts = [words(o) for o in texts] if texts != [t] else [[t]]
+        if sep and texts != [t]:
+            for w in (w for o in texts for w in ifs_words(o, sep)):
+                if w and w not in opts:
+                    opts.append(w)
         if i and texts != [t] and CODE.search(t):  # `bash -c 'cd "a b"; $PWD/x'`: в кавычках `$PWD` раскроет вложенный
             opts = [[t]] + opts  # shell уже после своего cd — и слово как есть, первым: переполнение его не отбросит (SE-175)
         out = [x + o for x in out for o in opts]

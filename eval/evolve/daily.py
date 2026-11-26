@@ -201,13 +201,13 @@ def judge_names(args, code_root):
 
 
 def calibrate_judges(args, wt, deadline, names):
-    """{candidates, passed, rows}: the candidates calibrated in turn until two pass."""
+    """{candidates, passed, rows[, retry]}: the candidates calibrated in turn until two pass (a limit: once more)."""
     with open(os.path.join(wt, judging.CALIBRATION_ARTIFACT), encoding='utf-8') as f:
         text = f.read()
     cases, _ = quality.read_cases(args.calibration_cases)
     factory = args.factory or judge_factory(args.budget)
-    passed, rows = judging.select(names, factory, cases, text, log=log, stop=lambda: time.time() > deadline)
-    return {'candidates': names, 'passed': passed, 'rows': rows}
+    passed, rows, retry = judging.select_after_limit(names, factory, cases, text, log=log, deadline=deadline)  # SE-49
+    return dict({'candidates': names, 'passed': passed, 'rows': rows}, **({'retry': retry} if retry else {}))
 
 
 def judge_factory(budget):
