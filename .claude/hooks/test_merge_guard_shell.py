@@ -57,6 +57,11 @@ bash("IFS=$SEP — push в main через букву", "IFS=$SEP; C=gitxpushxor
 bash("read IFS — push в main через букву", "read IFS < f; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
 bash("IFS=$SEP — цель с дефисом не делится", "IFS=$SEP; C=git:push:origin:feat-x; $C", True, cwd=on_branch)
 bash("IFS=, — push своей ветки", "IFS=,; C=git,push,origin,HEAD; $C", False, cwd=on_branch)
+# #525 B5: IFS из кавычки — bash делит по ней, деление до удаления кавычек
+bash("IFS=\"'\" — команда через апостроф", "IFS=\"'\"; C=\"gh'pr'merge\"; $C 1", True)
+bash("IFS='\"' — команда через двойную кавычку", "IFS='\"'; C='gh\"pr\"merge'; $C 1", True)
+bash("IFS=\",'\" — команда через апостроф", "IFS=\",'\"; C=\"gh'pr'merge\"; $C 1", True)
+bash("IFS=\"'\" — push в main через апостроф", "IFS=\"'\"; C=\"git'push'origin'main\"; $C", True, cwd=on_branch)
 # #525 B4: неизвестный IFS, а догадка ничего не делит — аргументы целы, проход (IFS=$'\t' read — как в скриптах репо)
 bash("IFS=$'\\t' read — git status из переменной", "IFS=$'\\t' read -r a b < f; G=git; \"$G\" status", False,
      cwd=on_branch)

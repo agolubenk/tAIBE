@@ -185,7 +185,7 @@ def ifs_split(env):
     for v in env.get("IFS", []):
         if "$" in v or "\\" in v:
             return UNKNOWN
-        chars |= set(v) - set("'\"")
+        chars |= set(v)  # кавычки — тоже: bash делит и по `'` в IFS (#525 B5)
     return "[" + re.escape("".join(sorted(chars))) + r"\s]+" if chars else None
 
 
@@ -195,14 +195,20 @@ def ifs_words(text, sep):
     верна только для слов команды, её аргументы (цель push: `originxmain` → `igi`, `i`; `board-agents` → `board`,
     `agents`) она портит — поэтому в конце варианта-догадки слово `${IFS}`: цель неизвестна (#525 B3). Только если
     догадка поделила текст не так, как пробелы: иначе аргументы целы (`IFS=$'\\t' read …; "$G" status`, #525 B4)."""
-    text = re.sub(r"[\"']", "", text)
+    raw, text = text, re.sub(r"[\"']", "", text)
     if sep != UNKNOWN:
-        return [[w for w in re.split(sep, text, flags=re.I) if w]]
+        return [list(p) for p in dict.fromkeys(tuple(_split(t, sep)) for t in (text, raw))]
     plain, out = words(text), []
     for s in [ANY_SEP] + ALPHABET_SEPS:
-        part = [w for w in re.split(s, text, flags=re.I) if w]
-        out.append(part if part == plain else part + ["${IFS}"])
+        for part in map(list, dict.fromkeys(tuple(_split(t, s)) for t in (text, raw))):
+            out.append(part if part == plain else part + ["${IFS}"])
     return out
+
+
+def _split(text, sep):
+    """Части text по sep, без кавычек и пустых. Деление и до удаления кавычек — ещё вариант: кавычка в IFS делит
+    подставленное (#525 B5), лишний вариант даёт только надмножество."""
+    return [w for w in (re.sub(r"[\"']", "", p) for p in re.split(sep, text, flags=re.I)) if w]
 
 
 def note_ifs(argv, env):
