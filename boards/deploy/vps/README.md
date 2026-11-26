@@ -104,6 +104,7 @@ environment variables (N-007).
 | `notion_token` | 0400, owner 1001. Optional: the owner puts it there |
 | `notebook_llm_key` | 0400, owner 1001. Optional: the model key for the server's own API address |
 | `oq_token` | 0400, owner 1001. The owner-queue agent token of t-boards (TB-102, «Owner queue» below). The owner issues it in the ops-console; `install.sh` never makes it. Read on every call |
+| `ssr_push_github_token` | 0400, owner 1001. Optional: the GitHub token of SSR push-back (TB-116, «SSR push-back» below). The owner puts it there; `install.sh` never makes it and logs one line while it is missing. Read on every push |
 | `smtp_password` | 0400, owner 1001. Optional: the SMTP password («Sign-in limits and mail» below). `install.sh` never makes it |
 | `claude_mem_proxy_token` | 0400, owner 1001. The Mac memory proxy token (OPS-19). The Mac owns it: `mac/memory-agent.sh token` makes it, `mac/memory-token-push.sh` delivers it. `install.sh` never makes it and warns while it is missing. The app reads it on every request |
 
@@ -197,6 +198,41 @@ applies the owner's answer itself. It is off until all four are set:
 `install.sh` keeps the `OQ_*` lines of `.env` on every update. Off again: remove the three lines and `up -d app`.
 While it is off, the journal has one `queue.skip` row per start and «да» works in the t-boards UI.
 
+## SSR push-back (TB-160, TB-116)
+
+The registry pushes approved versions back into the repo of their product (spec RU-9): at night (scheduler
+`10 3 * * *`), and at once after a rollback. Each workspace has its own repo and branch in `SSR_PUSH_TARGETS`; there is
+no default repo. A workspace that is not listed is not pushed, and its versions stay served. It is off until both the
+token file and `SSR_PUSH_TARGETS` are set:
+
+1. On GitHub, make a fine-grained token: repository access — only the repos listed in `SSR_PUSH_TARGETS`; permission
+   Contents — read and write. Nothing else.
+2. Put it into `/opt/t-boards/secrets/ssr_push_github_token` (0400, owner 1001), never on the command line or the
+   screen. In bash on the VPS run the line below, paste the token (it is not echoed) and press Enter:
+   `read -rs T && printf '%s\n' "$T" | install -m 0400 -o 1001 /dev/stdin /opt/t-boards/secrets/ssr_push_github_token; unset T`.
+   `printf` is a bash builtin, so the token is not in any process's arguments.
+3. Add to `/opt/t-boards/.env`: `SSR_PUSH_TARGETS=<workspaceId>=<owner>/<repo>@<branch>,…` — for example Lavaeon →
+   `HR_Helper-v2@main`, aiBoards&eval → `tAIBE@<branch>`. A malformed entry or a workspace named twice is left out,
+   with one log line.
+4. `cd /opt/t-boards && docker compose -p t-boards up -d app`.
+5. Check, without printing the token:
+   `docker compose -p t-boards exec -T app node -e 'let t = "", e = ""; try { t = require("fs").readFileSync(process.env.SSR_PUSH_GITHUB_TOKEN_FILE, "utf8").trim(); } catch (x) { e = x.code; } console.log(t ? "token: present" : "token: missing " + e, "| targets:", process.env.SSR_PUSH_TARGETS || "(none)")'`.
+   `EACCES` means the file is not owned by 1001: run the `install` line of step 2 again.
+   That the token may write to a repo (201; 401 — a wrong token, 403 or 404 — no write access to this repo). A read
+   check is not enough: a public repo answers 200 to any token. The call makes one empty blob, which nothing refers to:
+   `docker compose -p t-boards exec -T app node -e 'const t = require("fs").readFileSync(process.env.SSR_PUSH_GITHUB_TOKEN_FILE, "utf8").trim(); fetch("https://api.github.com/repos/<owner>/<repo>/git/blobs", { method: "POST", headers: { Authorization: "Bearer " + t }, body: JSON.stringify({ content: "", encoding: "utf-8" }) }).then(r => console.log(r.status))'`.
+6. If a token was ever put into `.env` by the earlier instructions, revoke it on GitHub: a copy stays in `.env.prev`
+   until the next `install.sh`.
+
+The app reads the token file on every push, so a rotation is a new file, with no restart. Without the file the nightly
+job logs one line `SSR push-back skipped: no GitHub token: …` and a rollback answers `push.reason: "not_configured"`.
+A file that is not one token line (a second line, a space or a control character inside, over 255 characters) counts
+as no token, with the same line.
+`install.sh` keeps the `SSR_PUSH_TARGETS` line of `.env` on every update and logs one line while the token file is
+missing. The old `SSR_PUSH_GITHUB_TOKEN` variable is ignored (the token is in the file only), and so are
+`SSR_PUSH_GITHUB_REPO` and `SSR_PUSH_GITHUB_BRANCH` (one repo for every workspace), each with a log line. Off again:
+delete the token file.
+
 ## Sign-in limits and mail (TB-31)
 
 **Limiter.** Sign-in, sign-up, magic link and the fresh sign-in window (`/tb/reauth/*`) are limited per client IP on
@@ -241,20 +277,6 @@ changes `boards/packages/mcp` (a new tool or field), do this after it on the Mac
 
 `npm run mcp-hub:status` and `mcp-hub:check` warn when the source is newer than the build or the running process is
 older than the build. On 12.11 a stale build dropped `doneRef`, and no agent could request `close_task`.
-
-## SSR push-back (TB-160)
-
-The registry pushes approved versions back into the repo of their product (spec RU-9): at night, and at once after
-a rollback. Each workspace has its own repo and branch; there is no default repo. A workspace that is not listed is
-not pushed, and its versions stay served.
-
-- `SSR_PUSH_GITHUB_TOKEN` — the GitHub token. Without it push-back is off.
-- `SSR_PUSH_TARGETS=<workspaceId>=<owner>/<repo>@<branch>,…` — for example Lavaeon → `HR_Helper-v2@main`,
-  aiBoards&eval → `tAIBE@<branch>`. A malformed entry or a workspace named twice is left out, with one log line.
-- `SSR_PUSH_GITHUB_REPO` and `SSR_PUSH_GITHUB_BRANCH` (one repo for every workspace) are ignored, with a log line.
-
-`compose.yml` does not pass these variables to the app yet, and `install.sh` does not keep them in `.env`, so
-push-back is off on the server. Turning it on is an owner item: the token, the targets and the two deploy lines.
 
 ## Products
 

@@ -1,17 +1,17 @@
 import db from "../database";
 import { workspaceTable } from "../database/schema";
 import { readPushTargets } from "../ssr/push-target";
-import { pushBackConfigured, runNightlyPush } from "../ssr/pushback";
+import { resolvePushToken } from "../ssr/push-token";
+import { runNightlyPush } from "../ssr/pushback";
 
 // Nightly push-back (spec RU-9): reconcile the served-latest files of every
 // workspace with a target (SSR_PUSH_TARGETS, TB-160) into its own repo.
-// Disabled without a token or a target — a missing config is a setup state,
-// not an error worth paging anyone for.
+// Disabled without the token file (TB-116) or a target — a missing config is
+// a setup state, not an error worth paging anyone for: one log line says why.
 export async function runNightlySsrPush(): Promise<{ degraded?: boolean }> {
-  if (!pushBackConfigured()) {
-    console.log(
-      "SSR push-back skipped: SSR_PUSH_GITHUB_TOKEN is not configured",
-    );
+  const { reason } = resolvePushToken();
+  if (reason) {
+    console.log(`SSR push-back skipped: no GitHub token: ${reason}`);
     return {};
   }
   const targets = readPushTargets();

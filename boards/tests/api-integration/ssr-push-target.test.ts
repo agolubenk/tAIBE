@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
   afterEach,
@@ -25,7 +28,7 @@ const sha256 = (text: string) =>
 // The same corpus path in two workspaces, as the layer files of two products.
 const path = ".claude/rules/01-base.md";
 const saved = {
-  token: process.env.SSR_PUSH_GITHUB_TOKEN,
+  tokenFile: process.env.SSR_PUSH_GITHUB_TOKEN_FILE,
   targets: process.env.SSR_PUSH_TARGETS,
 };
 
@@ -66,10 +69,15 @@ const restore = (name: string, value: string | undefined) => {
 describe("API integration: SSR push-back goes to the workspace's own repo (TB-160)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   const urls = () => fetchMock.mock.calls.map((call) => String(call[0]));
+  let directory: string;
 
   beforeEach(async () => {
     await resetTestDatabase();
-    process.env.SSR_PUSH_GITHUB_TOKEN = "test-token";
+    // The token comes from its file only (TB-116).
+    directory = mkdtempSync(join(tmpdir(), "tb160-push-target-"));
+    const tokenFile = join(directory, "ssr_push_github_token");
+    writeFileSync(tokenFile, "test-token\n", { mode: 0o400 });
+    process.env.SSR_PUSH_GITHUB_TOKEN_FILE = tokenFile;
     delete process.env.SSR_PUSH_TARGETS;
     fetchMock = vi.fn(
       async () => new Response("unavailable in tests", { status: 500 }),
@@ -83,7 +91,8 @@ describe("API integration: SSR push-back goes to the workspace's own repo (TB-16
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    restore("SSR_PUSH_GITHUB_TOKEN", saved.token);
+    restore("SSR_PUSH_GITHUB_TOKEN_FILE", saved.tokenFile);
+    rmSync(directory, { recursive: true, force: true });
     restore("SSR_PUSH_TARGETS", saved.targets);
   });
 
