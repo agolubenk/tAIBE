@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
   afterEach,
@@ -42,7 +45,17 @@ const path = ".claude/skills/integrity/NOTE.md";
 const text = "approved bytes";
 const repair =
   "run the Mac sync by hand (node boards/deploy/vps/mac/ssr-sync.mjs) to upload the bytes again; a file that left the checkout needs its version rolled back";
-const originalToken = process.env.SSR_PUSH_GITHUB_TOKEN;
+// Push-back is on with a token from either source: the env variable before
+// TB-116 (#239), the secret file after it. The test sets both, so it holds on
+// either side of #239 and the merge order does not matter (Control B1).
+const saved = {
+  token: process.env.SSR_PUSH_GITHUB_TOKEN,
+  tokenFile: process.env.SSR_PUSH_GITHUB_TOKEN_FILE,
+};
+const restore = (name: string, value: string | undefined) => {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+};
 
 let forest: Awaited<ReturnType<typeof createForest>>;
 
@@ -96,9 +109,14 @@ async function servedFile() {
 describe("API integration: SSR push-back checks blob bytes against their sha (TB-94)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let errorLog: ReturnType<typeof vi.spyOn>;
+  let directory: string;
 
   beforeEach(async () => {
     await resetTestDatabase();
+    directory = mkdtempSync(join(tmpdir(), "tb94-pushback-integrity-"));
+    const tokenFile = join(directory, "ssr_push_github_token");
+    writeFileSync(tokenFile, "test-token\n", { mode: 0o400 });
+    process.env.SSR_PUSH_GITHUB_TOKEN_FILE = tokenFile;
     process.env.SSR_PUSH_GITHUB_TOKEN = "test-token";
     fetchMock = vi.fn(
       async () => new Response("unavailable in tests", { status: 500 }),
@@ -110,8 +128,9 @@ describe("API integration: SSR push-back checks blob bytes against their sha (TB
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    if (originalToken === undefined) delete process.env.SSR_PUSH_GITHUB_TOKEN;
-    else process.env.SSR_PUSH_GITHUB_TOKEN = originalToken;
+    restore("SSR_PUSH_GITHUB_TOKEN", saved.token);
+    restore("SSR_PUSH_GITHUB_TOKEN_FILE", saved.tokenFile);
+    rmSync(directory, { recursive: true, force: true });
   });
 
   it("refuses bytes that do not hash to the version's sha, before any GitHub call", async () => {
