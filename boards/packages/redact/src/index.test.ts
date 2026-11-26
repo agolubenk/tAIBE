@@ -345,6 +345,49 @@ describe("@kaneo/redact", () => {
     });
   });
 
+  // TB-213: `,`, `;` or `)` after the words is a type context only in an
+  // annotation (a bare `:`), as in the CI scanner (TB-200). After `=`, `:=`,
+  // `=>` or a quote the words before `;` or `,` were left open.
+  describe("capitalized words before `;` or `,` outside an annotation (TB-213)", () => {
+    const phrase = join("Correct", "Horse", "Battery", "Staple");
+
+    it.each([
+      ["a shell line", `CLIENT_SECRET=${phrase}; ./run`],
+      ["an env pair before the next one", `CLIENT_SECRET=${phrase}, next`],
+      ["a TOKEN name", `GITHUB_TOKEN=${phrase};`],
+      ["a key with spaces around `=`", `api_key = ${phrase};`],
+      ["a Go assignment", `CLIENT_SECRET := ${phrase};`],
+      ["a Ruby hash", `{ CLIENT_SECRET => ${phrase}, n => 1 }`],
+      ["a quoted key", `{"access_token": ${phrase}, "n": 1}`],
+      ["a quoted value", `{ api_key: "${phrase}", n: 1 }`],
+    ])("masks %s", (_name, input) => {
+      const result = redact(input);
+      expect(result.hits).toHaveLength(1);
+      expect(result.text).not.toContain(phrase);
+      expect(redact(result.text).hits).toHaveLength(0);
+    });
+
+    it.each([
+      ["a SECRET name", "{ JWT_SECRET: SecretString, ttl: 60 }"],
+      ["an API_KEY name", "type T = { API_KEY: ApiKeyRow; };"],
+      ["spaces around the colon", "{ CLIENT_SECRET : SecretValue; }"],
+      ["a tab after the colon", "{ access_token:\tAccessTokenPayload; }"],
+    ])("leaves an annotation with %s untouched", (_name, input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    it("keeps a password annotation masked, as before (no filter)", () => {
+      expect(redact("password: PasswordCredential;").text).toBe(
+        "password: [REDACTED:password_assignment]",
+      );
+    });
+
+    it("judges a value after more than 64 spaces as after `=`", () => {
+      const input = `GITHUB_TOKEN:${" ".repeat(70)}${phrase};`;
+      expect(redact(input).text).not.toContain(phrase);
+    });
+  });
+
   // TB-195: lowercase words joined together, shorter than 32 characters, were
   // read as a camelCase name after a SECRET or PASSWORD name too.
   describe("a passphrase of lowercase words (TB-195)", () => {

@@ -83,6 +83,29 @@ function afterDropping(value: string, dropping: number): number {
 // value that goes on after the mask is a value (role 4 #401 N1).
 const SEPARATOR_BEFORE_MASK = /^[=>:]+[ \t]*["'`]?\[REDACTED:[a-z_]+\]/;
 
+// TB-213: the character after a value is a type context (value-shape.ts,
+// TB-193) only in an annotation: a bare `:` between the name and the value,
+// with spaces or tabs around it (apiKey: ApiKeyRow,). After `=`, `:=`, `=>`
+// or a quote the same capitalized words are a passphrase
+// (CLIENT_SECRET=<words>;), as in the CI scanner (TB-200, c900c20b8). The
+// patterns put only a quote, spaces and tabs between a name and its
+// separator. The scan back reads at most 65 characters (linear time): with
+// more spaces around the `:` the value is judged as after `=`.
+function annotation(text: string, start: number): boolean {
+  const stop = Math.max(-1, start - 66);
+  let i = start - 1;
+  const blank = () => {
+    while (i > stop && (text.charAt(i) === " " || text.charAt(i) === "\t")) {
+      i -= 1;
+    }
+  };
+  blank();
+  if (i <= stop || text.charAt(i) !== ":") return false;
+  i -= 1;
+  blank();
+  return i > stop && NAME_CHAR.test(text.charAt(i));
+}
+
 // TB-199: before the new separators the base took the `=` of a glued `:=`
 // into the value (A_TOKEN:=<v>), and a filter accepts any value with `=` in
 // it that is long enough. A value right after `:=` or `=>` is also judged as
@@ -98,7 +121,7 @@ function accepts(
 ): boolean {
   const mask = SEPARATOR_BEFORE_MASK.exec(text.slice(start, start + 64));
   if (mask && mask[0].length >= value.length) return false;
-  const next = text.charAt(start + value.length);
+  const next = annotation(text, start) ? text.charAt(start + value.length) : "";
   if (accept(value, next)) return true;
   const operator = text.slice(Math.max(0, start - 2), start);
   if (operator === "=>" && codeName(value)) return false;
