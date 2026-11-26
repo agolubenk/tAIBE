@@ -9,6 +9,7 @@ import {
 } from "../database/ssr-schema";
 import { entityOfPath, isCorpusPath } from "./corpus";
 import { knownShas } from "./known-shas";
+import { keepOneLatest, supersedeLatest } from "./one-latest";
 import { replaceOpenDraft } from "./replace-open-draft";
 import { scanSecrets } from "./secret-scan";
 
@@ -144,6 +145,8 @@ export async function syncCorpus(
   };
 
   await db.transaction(async (tx) => {
+    // Entities that got a new live version in this sync (TB-258).
+    const bumpedEntities: string[] = [];
     const newBlobs = [
       ...input.files
         .filter(
@@ -328,10 +331,8 @@ export async function syncCorpus(
             status: "draft",
           });
         } else {
-          await tx
-            .update(ssrVersionTable)
-            .set({ status: "superseded" })
-            .where(eq(ssrVersionTable.id, latest.id));
+          // TB-258: every live version of the entity (one-latest.ts).
+          await supersedeLatest(tx, [existing.id]);
           const number = latest.number + 1;
           const [version] = await tx
             .insert(ssrVersionTable)
@@ -362,8 +363,19 @@ export async function syncCorpus(
             versionId: version.id,
             number,
           });
+          bumpedEntities.push(existing.id);
         }
       }
+    }
+
+    // TB-258: the bumped entity rows are locked now; a version that went
+    // live meanwhile (one-latest.ts) is superseded, one statement for all.
+    if (bumpedEntities.length > 0) {
+      await keepOneLatest(
+        tx,
+        bumpedEntities,
+        result.bumped.map((bump) => bump.versionId),
+      );
     }
 
     // Entities whose files vanished from the manifest are archived (RU-13).

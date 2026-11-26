@@ -3,6 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import db from "../database";
 import { ssrEntityTable, ssrVersionTable } from "../database/ssr-schema";
 import { ApiError } from "../errors/api-error";
+import { keepOneLatest, supersedeLatest } from "./one-latest";
 
 // Owner decisions (spec RU-7, Q-015, D-005): approving a draft makes it the
 // served latest; rollback re-publishes an old snapshot as a new version and
@@ -52,6 +53,9 @@ export async function approveDraft(
         updatedAt: new Date(),
       })
       .where(eq(ssrEntityTable.id, entity.id));
+    // TB-258: a version that went live while this approve waited (a
+    // rollback) is not in the snapshot of the step above (one-latest.ts).
+    await keepOneLatest(tx, [entityId], [seen.versionId]);
     return { entityId, versionId: seen.versionId, number: approved.number };
   });
 }
@@ -95,12 +99,9 @@ export async function rollbackToVersion(
   }
   const number = (versions[0]?.number ?? 0) + 1;
   const restored = await db.transaction(async (tx) => {
-    if (latest) {
-      await tx
-        .update(ssrVersionTable)
-        .set({ status: "superseded" })
-        .where(eq(ssrVersionTable.id, latest.id));
-    }
+    // TB-258: every live version, not the one read above: an approve that
+    // committed after the read made another one live (one-latest.ts).
+    await supersedeLatest(tx, [entityId]);
     const inserted = await tx
       .insert(ssrVersionTable)
       .values({
@@ -122,6 +123,7 @@ export async function rollbackToVersion(
       .update(ssrEntityTable)
       .set({ latestVersionId: version.id, updatedAt: new Date() })
       .where(eq(ssrEntityTable.id, entity.id));
+    await keepOneLatest(tx, [entityId], [version.id]);
     return version;
   });
   return { entityId, versionId: restored.id, number, restoredFrom: toNumber };
