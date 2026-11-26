@@ -193,11 +193,16 @@ def ifs_words(text, sep):
     """Варианты слов text после деления по IFS (sep — из ifs_split); пустые части bash отбрасывает. UNKNOWN — по
     любому знаку не буквы и не цифры и по знакам вне алфавита каждой защищённой команды (GUARDED_WORDS). Догадка
     верна только для слов команды, её аргументы (цель push: `originxmain` → `igi`, `i`; `board-agents` → `board`,
-    `agents`) она портит — поэтому в конце каждого варианта-догадки слово `${IFS}`: цель неизвестна (#525 B3)."""
+    `agents`) она портит — поэтому в конце варианта-догадки слово `${IFS}`: цель неизвестна (#525 B3). Только если
+    догадка поделила текст не так, как пробелы: иначе аргументы целы (`IFS=$'\\t' read …; "$G" status`, #525 B4)."""
     text = re.sub(r"[\"']", "", text)
     if sep != UNKNOWN:
         return [[w for w in re.split(sep, text, flags=re.I) if w]]
-    return [[w for w in re.split(s, text, flags=re.I) if w] + ["${IFS}"] for s in [ANY_SEP] + ALPHABET_SEPS]
+    plain, out = words(text), []
+    for s in [ANY_SEP] + ALPHABET_SEPS:
+        part = [w for w in re.split(s, text, flags=re.I) if w]
+        out.append(part if part == plain else part + ["${IFS}"])
+    return out
 
 
 def note_ifs(argv, env):

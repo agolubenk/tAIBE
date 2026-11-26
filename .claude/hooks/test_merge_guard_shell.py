@@ -56,7 +56,14 @@ bash("IFS=x известен — push в main через букву", "IFS=x; C=
 bash("IFS=$SEP — push в main через букву", "IFS=$SEP; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
 bash("read IFS — push в main через букву", "read IFS < f; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
 bash("IFS=$SEP — цель с дефисом не делится", "IFS=$SEP; C=git:push:origin:feat-x; $C", True, cwd=on_branch)
-bash("IFS=, — push своей ветки", "IFS=,; C=git,push,origin,fix/a; $C", False, cwd=on_branch)
+bash("IFS=, — push своей ветки", "IFS=,; C=git,push,origin,HEAD; $C", False, cwd=on_branch)
+# #525 B4: неизвестный IFS, а догадка ничего не делит — аргументы целы, проход (IFS=$'\t' read — как в скриптах репо)
+bash("IFS=$'\\t' read — git status из переменной", "IFS=$'\\t' read -r a b < f; G=git; \"$G\" status", False,
+     cwd=on_branch)
+bash("IFS=$'\\t' в цикле — git log из переменной", "while IFS=$'\\t' read -r a b; do :; done < f; G=git; \"$G\" log -1",
+     False, cwd=on_branch)
+bash("IFS=$'\\t' read — gh pr view из переменной", "IFS=$'\\t' read -r a b < f; GH=gh; \"$GH\" pr view 1", False,
+     cwd=on_branch)
 bash("IFS=, — чтение без записи", "IFS=,; C=gh,pr,view; $C 1", False)
 bash("IFS= read — пустой IFS ничего не делит", "IFS= read -r x; C=gh-pr-view; $C 1", False)
 bash("деление слов: push в переменной", "P='git push origin main'; $P", True)
