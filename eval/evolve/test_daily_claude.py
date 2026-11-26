@@ -23,6 +23,7 @@ import judges as judging  # noqa: E402
 import quality  # noqa: E402
 import resources  # noqa: E402
 from test_daily import CASES, NEW, OLD, judge  # noqa: E402
+from test_daily_limit import START  # noqa: E402
 
 SONNET, HAIKU, OPUS = judging.CLAUDE_CANDIDATES
 
@@ -190,6 +191,9 @@ class NightTest(unittest.TestCase):
                         mock.patch.object(daily.g, 'since_day_ago', lambda *a: self.since),
                         mock.patch.object(steps, 'layer_metrics', lambda wt: {}),
                         mock.patch.object(steps, 'post_card', lambda line: 'not posted (test)')]
+        self.slept = []   # SE-49: the run waits for a limit reset — on a fixed 05:00 clock, never for real
+        self.patches += [mock.patch.object(judging, 'CLOCK', lambda: START),
+                         mock.patch.object(judging, 'SLEEP', self.slept.append)]
         for p in self.patches:
             p.start()
 
@@ -249,6 +253,25 @@ class NightTest(unittest.TestCase):
         self.assertEqual([j['status'] for j in judged], ['not measured'])
         self.assertIn('resets 5:10am', judged[0]['reasons'][0])  # the reset time is not cut off
         self.assertIn('A/B not measured 1', report['summary'])
+        self.assertEqual(self.slept, [880.0])  # SE-49: one wait for the reset, still the limit — still not measured
+        self.assertEqual(report['calibration']['retry']['passed'], [])
+
+    def test_limit_at_the_start_waits_for_the_reset_and_judges(self):  # SE-49, coord 25.11 variant A
+        def limited_until_the_wait(name):
+            honest = judge()
+
+            def call(system, user):
+                if not self.slept:
+                    raise OSError("claude -p exit 1: You've hit your 5-hour limit · resets 7am (Europe/Minsk)")
+                return honest(system, user)
+            return call
+        lines, state = self.run_night(limited_until_the_wait, judges=','.join(judging.CLAUDE_CANDIDATES))
+        self.assertEqual(self.slept, [7480.0])  # 05:00:20 → 07:05
+        self.assertEqual([v['status'] for v in lines], ['accepted'])
+        self.assertEqual((state['rev'], state['pending']), (self.head, []))
+        calibration = steps.load_json('runs/latest.json', {})['calibration']
+        self.assertEqual(calibration['passed'], [SONNET, HAIKU])
+        self.assertEqual(calibration['retry']['reset'], '2026-11-24T07:00+03:00')
 
     def test_one_judge_passed_and_the_rest_unreachable_keep_the_line(self):  # rule 5, SE-125
         def call_of(name):
