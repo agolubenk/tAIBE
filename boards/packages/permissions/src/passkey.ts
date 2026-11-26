@@ -5,9 +5,17 @@
 // A user keeps at most this many keys; the next one is refused.
 export const PASSKEY_MAX_PER_USER = 10;
 
+// TB-260: the longest key name, after trimming, in UTF-16 code units (as the
+// `maxLength` of an input counts). The API refuses a longer one on rename and
+// on registration; the web field stops at it.
+export const PASSKEY_NAME_MAX = 64;
+
 export const PASSKEY_ERRORS = {
   // 400 on registration: the user has PASSKEY_MAX_PER_USER keys.
   limitReached: "PASSKEY_LIMIT_REACHED",
+  // 400 on /passkey/update-passkey and /passkey/verify-registration: the name
+  // is longer than PASSKEY_NAME_MAX.
+  nameTooLong: "PASSKEY_NAME_TOO_LONG",
   // 401 on sign-in, 400 on registration: the key was used without a PIN or
   // biometrics (the UV flag is not set in the signed authenticator data).
   userVerificationRequired: "USER_VERIFICATION_REQUIRED",
@@ -34,6 +42,9 @@ export const PASSKEY_ALERT_TTL_DAYS = 7;
 export const PASSKEY_ALERT_PAGE = "/account/passkey-alert";
 
 export type PasskeyAlertInspect = {
+  // The name in the email, not the current one (TB-260): a rename needs no
+  // fresh sign-in, so whoever added the key could rename it before the link
+  // is opened.
   keyName: string | null;
   addedAt: string;
   // false — the person has removed the key already; confirm still signs out.
