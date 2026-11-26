@@ -39,6 +39,38 @@ many = " ".join(f"f/{i}" for i in range(16))
 bash("17-й вариант — main", f"for b in {many} main; do git push origin $b; done", True, cwd=on_branch)
 bash("17 веток без main", f"for b in {many} f/x; do git status; done", False, cwd=on_branch)
 bash("деление слов: команда в переменной", 'C="gh pr merge"; $C 1', True)
+# AUTO-178: подставленное bash делит по символам IFS
+bash("IFS=, — команда через запятую", "IFS=,; C=gh,pr,merge; $C 1", True)
+bash("IFS в кавычках — команда через двоеточие", "IFS=':'; C=gh:pr:merge; $C 1", True)
+bash("export IFS — команда через точку с запятой", "export IFS=';'; C='gh;pr;merge'; $C 1", True)
+bash("IFS неизвестен — делим по любому знаку", "IFS=$SEP; C=gh-pr-merge; $C 1", True)
+# #525 B1: IFS изменён невидимо; B2: неизвестный IFS — буква
+bash("IFS+= — команда через запятую", "IFS+=,; C=gh,pr,merge; $C 1", True)
+bash("read IFS — команда через запятую", "read IFS <<< ,; C=gh,pr,merge; $C 1", True)
+bash("printf -v IFS — команда через запятую", "printf -v IFS ,; C=gh,pr,merge; $C 1", True)
+bash("IFS=$'x' — команда через букву", "IFS=$'x'; C=ghxprxmerge; $C 1", True)
+bash("IFS=\\x — команда через букву", "IFS=\\x; C=ghxprxmerge; $C 1", True)
+bash("IFS=$SEP — команда через букву", "IFS=$SEP; C=ghxprxmerge; $C 1", True)
+# #525 B3: при неизвестном IFS догадка портит цель push — цель неизвестна, отказ
+bash("IFS=x известен — push в main через букву", "IFS=x; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
+bash("IFS=$SEP — push в main через букву", "IFS=$SEP; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
+bash("read IFS — push в main через букву", "read IFS < f; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
+bash("IFS=$SEP — цель с дефисом не делится", "IFS=$SEP; C=git:push:origin:feat-x; $C", True, cwd=on_branch)
+bash("IFS=, — push своей ветки", "IFS=,; C=git,push,origin,HEAD; $C", False, cwd=on_branch)
+# #525 B5: IFS из кавычки — bash делит по ней, деление до удаления кавычек
+bash("IFS=\"'\" — команда через апостроф", "IFS=\"'\"; C=\"gh'pr'merge\"; $C 1", True)
+bash("IFS='\"' — команда через двойную кавычку", "IFS='\"'; C='gh\"pr\"merge'; $C 1", True)
+bash("IFS=\",'\" — команда через апостроф", "IFS=\",'\"; C=\"gh'pr'merge\"; $C 1", True)
+bash("IFS=\"'\" — push в main через апостроф", "IFS=\"'\"; C=\"git'push'origin'main\"; $C", True, cwd=on_branch)
+# #525 B4: неизвестный IFS, а догадка ничего не делит — аргументы целы, проход (IFS=$'\t' read — как в скриптах репо)
+bash("IFS=$'\\t' read — git status из переменной", "IFS=$'\\t' read -r a b < f; G=git; \"$G\" status", False,
+     cwd=on_branch)
+bash("IFS=$'\\t' в цикле — git log из переменной", "while IFS=$'\\t' read -r a b; do :; done < f; G=git; \"$G\" log -1",
+     False, cwd=on_branch)
+bash("IFS=$'\\t' read — gh pr view из переменной", "IFS=$'\\t' read -r a b < f; GH=gh; \"$GH\" pr view 1", False,
+     cwd=on_branch)
+bash("IFS=, — чтение без записи", "IFS=,; C=gh,pr,view; $C 1", False)
+bash("IFS= read — пустой IFS ничего не делит", "IFS= read -r x; C=gh-pr-view; $C 1", False)
 bash("деление слов: push в переменной", "P='git push origin main'; $P", True)
 bash("неизвестная команда $GH", "$GH pr merge 1", True)
 bash("команда из $(…)", "$(echo gh) pr merge 1", True)
