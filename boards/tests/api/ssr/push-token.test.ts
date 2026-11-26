@@ -2,7 +2,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
-import { resolvePushToken } from "../../../apps/api/src/ssr/push-token";
+import {
+  MAX_FILE_BYTES,
+  resolvePushToken,
+} from "../../../apps/api/src/ssr/push-token";
 
 const FILE = "/run/tb-secrets/ssr_push_github_token";
 const SYNTHETIC = "ghp_synthetic_tb116_0123456789abcdef";
@@ -107,6 +110,29 @@ describe("resolvePushToken on a real file", () => {
     rmSync(file);
     writeFileSync(file, `${SYNTHETIC}-b\n`, { mode: 0o400 });
     expect(resolvePushToken({ env })).toEqual({ token: `${SYNTHETIC}-b` });
+  });
+
+  // SE-204: stat comes before the read, so the size limit is on bytes on disk.
+  it("reads a file of MAX_FILE_BYTES and refuses one byte more without a read", () => {
+    const env = { SSR_PUSH_GITHUB_TOKEN_FILE: file };
+    const line = `${SYNTHETIC}\n`;
+    writeFileSync(file, line + " ".repeat(MAX_FILE_BYTES - line.length));
+    expect(resolvePushToken({ env })).toEqual({ token: SYNTHETIC });
+
+    writeFileSync(file, line + " ".repeat(MAX_FILE_BYTES + 1 - line.length));
+    const refused = resolvePushToken({
+      env: { ...env, SSR_PUSH_GITHUB_TOKEN: SYNTHETIC },
+    });
+    expect(refused).toEqual({
+      reason: `${file} is over ${MAX_FILE_BYTES} bytes; SSR_PUSH_GITHUB_TOKEN is ignored since TB-116, put the token into the file`,
+    });
+    expect(refused.reason).not.toContain(SYNTHETIC);
+  });
+
+  it("refuses a path that is not a regular file without opening it", () => {
+    expect(
+      resolvePushToken({ env: { SSR_PUSH_GITHUB_TOKEN_FILE: directory } }),
+    ).toEqual({ reason: `${directory} is not a regular file` });
   });
 });
 
