@@ -26,6 +26,11 @@ import { redact, type RedactHit } from "./index.js";
 // 4 000 of 200 000 cases. The PR body has 4 seeds x 200 000.
 const CASES = 20_000;
 const SEED = 11;
+// TB-265: one case took over the default 5 s on a CI runner (the file: 17 s
+// there, 2.8 s on a Mac), and vp run then skipped the API unit. These tests
+// check masks, not time (linear-time.test.ts measures time), so the limit
+// only stops a hang.
+const FUZZ = { timeout: 60_000 };
 
 const NAMES = [
   "A_TOKEN",
@@ -186,7 +191,7 @@ const BASES = [
 // are compared.
 const PEM_BASES = [...BASES, { name: "be1b3ffe1", redact: baseBoardRedact }];
 
-describe("redact masks a superset of the base", () => {
+describe("redact masks a superset of the base", FUZZ, () => {
   it.each(BASES)(
     `keeps every $name value mask on ${CASES} seeded chains`,
     (b) => {
