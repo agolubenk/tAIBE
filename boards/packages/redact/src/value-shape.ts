@@ -30,7 +30,10 @@ export const DROPS_VALUE = /[(){}[\];,<>\\]|[^\x21-\x7e]/;
 // patterns glue `)` to the value, and the punctuation rule drops it; the set
 // keeps it so the rule does not depend on a pattern). Elsewhere it may be
 // a passphrase (CLIENT_SECRET=<capitalized words> at the end of a line) and
-// is masked. The price: a type with no punctuation after it is masked too
+// is masked. TB-213: redact() gives `next` only in an annotation (a bare `:`
+// before the value, `annotation` in index.ts); after `=`, `:=`, `=>` or a
+// quote `next` is "" and the words are masked (CLIENT_SECRET=<words>;). The
+// price: a type with no punctuation after it is masked too
 // (`apiKey: ApiKeyItem | null`, a type line with no `;`). The end of a line
 // is not a type context: an .env value ends there.
 const TYPE_NAME = /^(?:[A-Z][a-z]+)+$/;
