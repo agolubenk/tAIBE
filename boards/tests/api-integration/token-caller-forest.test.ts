@@ -193,4 +193,57 @@ describe("API integration: forest text for callers with a token (TB-204)", () =>
     expect(moved.status).toBe(409);
     expect(moved.body.code).toBe("REDACTED_MARKERS_MISMATCH");
   });
+
+  // TB-239: the owner changed the block with the secret after the agent's
+  // read. The agent's markers no longer match, but the cause is the revision:
+  // it reads again; a lease comes before both.
+  it("answers the revision conflict, not the markers, for a write over an older read", async () => {
+    const { forest, taskId } = await setup();
+    const ws = forest.workspace.id;
+    const path = `/forest/${ws}/cards/${taskId}/meta`;
+    const read = await forest.agent(`/cards/${taskId}/meta`);
+    const body = {
+      contextPack: `${read.body.contextPack}\n\nThen redeploy.`,
+      expectedMetaRevision: read.body.revision,
+    };
+
+    const edit = await forest.ownerApi("PUT", path, {
+      contextPack: `Context: rotated ${SECRET}\n\nRotate it first.`,
+    });
+    expect(edit.status).toBe(200);
+
+    const unleased = await forest.agentApi("PUT", path, body, {}, "dev-1");
+    expect(unleased.status).toBe(409);
+    expect(unleased.body.message).toMatch(/^lease_/);
+
+    const lease = await forest.agent("/leases", { taskId }, "dev-1");
+    expect(lease.status).toBe(200);
+    const fence = { "x-t-boards-fence": String(lease.body.fencingToken) };
+    const stale = await forest.agentApi("PUT", path, body, fence, "dev-1");
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).not.toBe("REDACTED_MARKERS_MISMATCH");
+    expect(stale.body.message).toContain("revision_conflict");
+    expect(stale.body.message).toContain(edit.body.revision);
+    expect(JSON.stringify(stale.body)).not.toContain(SECRET);
+
+    const fresh = await forest.agent(`/cards/${taskId}/meta`);
+    const again = await forest.agentApi(
+      "PUT",
+      path,
+      {
+        contextPack: `${fresh.body.contextPack}\n\nThen redeploy.`,
+        expectedMetaRevision: fresh.body.revision,
+      },
+      fence,
+      "dev-1",
+    );
+    expect(again.status).toBe(200);
+    const [row] = await db
+      .select({ contextPack: cardMetaTable.contextPack })
+      .from(cardMetaTable)
+      .where(eq(cardMetaTable.taskId, taskId));
+    expect(row?.contextPack).toBe(
+      `Context: rotated ${SECRET}\n\nRotate it first.\n\nThen redeploy.`,
+    );
+  });
 });
