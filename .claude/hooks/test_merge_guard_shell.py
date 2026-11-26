@@ -51,6 +51,12 @@ bash("printf -v IFS — команда через запятую", "printf -v IF
 bash("IFS=$'x' — команда через букву", "IFS=$'x'; C=ghxprxmerge; $C 1", True)
 bash("IFS=\\x — команда через букву", "IFS=\\x; C=ghxprxmerge; $C 1", True)
 bash("IFS=$SEP — команда через букву", "IFS=$SEP; C=ghxprxmerge; $C 1", True)
+# #525 B3: при неизвестном IFS догадка портит цель push — цель неизвестна, отказ
+bash("IFS=x известен — push в main через букву", "IFS=x; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
+bash("IFS=$SEP — push в main через букву", "IFS=$SEP; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
+bash("read IFS — push в main через букву", "read IFS < f; C=gitxpushxoriginxmain; $C", True, cwd=on_branch)
+bash("IFS=$SEP — цель с дефисом не делится", "IFS=$SEP; C=git:push:origin:feat-x; $C", True, cwd=on_branch)
+bash("IFS=, — push своей ветки", "IFS=,; C=git,push,origin,fix/a; $C", False, cwd=on_branch)
 bash("IFS=, — чтение без записи", "IFS=,; C=gh,pr,view; $C 1", False)
 bash("IFS= read — пустой IFS ничего не делит", "IFS= read -r x; C=gh-pr-view; $C 1", False)
 bash("деление слов: push в переменной", "P='git push origin main'; $P", True)
