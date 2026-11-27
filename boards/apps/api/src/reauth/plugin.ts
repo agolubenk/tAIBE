@@ -24,6 +24,7 @@ import {
   issueCode,
   markSessionFresh,
   recordFailure,
+  reserveTry,
   resetFailures,
 } from "./store";
 
@@ -73,14 +74,19 @@ async function requireMethod(userId: string, method: ReauthMethod) {
   }
 }
 
-/** A failed confirmation counts; the reply carries the methods left. */
-async function failed(userId: string, code: ReauthError) {
-  await recordFailure(userId);
+/** A refusal that carries the methods left. */
+async function refused(userId: string, code: ReauthError) {
   return reauthError(
     "BAD_REQUEST",
     code,
     await availableMethods(userId, false),
   );
+}
+
+/** A failed confirmation counts; the reply carries the methods left. */
+async function failed(userId: string, code: ReauthError) {
+  await recordFailure(userId);
+  return refused(userId, code);
 }
 
 async function confirmed(sessionId: string, userId: string) {
@@ -120,6 +126,11 @@ export const reauthPlugin = () =>
         async (ctx) => {
           const { session, user } = ownSession(ctx);
           await requireMethod(user.id, "password");
+          // TB-245: the try is counted before the check, so a burst of
+          // parallel wrong passwords gets at most the limit of checks.
+          if (!(await reserveTry(user.id))) {
+            throw await refused(user.id, REAUTH_ERRORS.methodUnavailable);
+          }
           const hash = await passwordHash(user.id);
           const ok =
             hash !== null &&
@@ -127,7 +138,8 @@ export const reauthPlugin = () =>
               hash,
               password: ctx.body.password,
             }));
-          if (!ok) throw await failed(user.id, REAUTH_ERRORS.invalidPassword);
+          // Counted already by reserveTry.
+          if (!ok) throw await refused(user.id, REAUTH_ERRORS.invalidPassword);
           return ctx.json(await confirmed(session.id, user.id));
         },
       ),
