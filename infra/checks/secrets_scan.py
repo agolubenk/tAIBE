@@ -71,7 +71,11 @@ PRINTABLE = re.compile(r'^[\x21-\x7e]+$')
 CODE_CHARS = re.compile(r'[(){}\[\];,<>\\]')
 DOTTED_NAME = re.compile(r'^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$')
 JOINED_WORDS = re.compile(r'^[A-Za-z]+(?:[_-][A-Za-z]+)+$')
-CAMEL_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)*$')
+# TB-217, as CAMEL_NAME of redact: a hump is a word, a capital and 2+ lowercase letters, then digits if any (jwtSecret,
+# accessTokenValue). With `[A-Z][a-z0-9]*` a random key of letters and digits that starts with a lowercase run read as
+# a name: 14 350 of 20 000 keys of 20 characters stayed open, now 4 (the rest of the misses is the entropy floor). On
+# `git ls-files` of tAIBE, HR_Helper-v2 and hr_hf_helper the rule adds one finding, a fake key in a test (a warning).
+CAMEL_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z]{2,}[0-9]*)*$')
 # A type name: capitalized words, no digit (apiKey: ApiKeyUsageRow,). Since the value ends at `,` and `;` (#283 B2),
 # the comma no longer drops it. Unlike redact, the scanner drops it in any context for key and token names: with the
 # context rule of redact (TB-193) a locale label ("accessToken": "<one German word>",) and a type line with no `;`
@@ -83,7 +87,7 @@ TYPE_NAME = re.compile(r'^(?:[A-Z][a-z]+)+$')
 # (jwtSecret) and `undefined` stay code. The passwordAssignment of redact has no filter, its passphrase rule drops the
 # same code.
 PASSWORD_NAME = re.compile(r'(?i)(?:password|passwd|pwd|secret)$')
-HUMPED_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z0-9]*)+$')
+HUMPED_WORD = re.compile(r'^[a-z]+(?:[A-Z][a-z]{2,}[0-9]*)+$')
 # TB-200: for these names a type name is a type only in an annotation: after a bare `:` and before `,`, `;` or `)`
 # (password: PasswordCredential;), the context rule of redact (TB-193) narrowed by the separator. After `=` the same
 # shape is a passphrase (Password=<words>;Database=app, DB_PASSWORD=<words>; ./run). The value pattern keeps `)` in

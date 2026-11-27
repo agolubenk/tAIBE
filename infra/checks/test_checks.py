@@ -5,7 +5,9 @@ import contextlib
 import io
 import json
 import os
+import random
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
@@ -126,6 +128,40 @@ class ChecksTest(unittest.TestCase):
         for line in quiet:
             with self.subTest(line):
                 self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_key_shaped_like_a_camel_case_name(self):
+        # TB-217: a hump of a camelCase name is a word (CAMEL_WORD). A key that starts with a lowercase run read as a
+        # name and stayed open: a capital with no lowercase after it, humps of one lowercase letter, a digit inside.
+        keys = ('aOeXGXnVAO' + 'Cbb1hL97O5', 'qwErTyUiOp' + 'AsDfGhJkLz', 'kmVxq7tRtp' + 'qLwz9nBsyh')
+        names = ('API_TOKEN=', 'CLIENT_SECRET=', 'password: ', 'api_key: ', '{"access_token": "',
+                 'export GITHUB_TOKEN=', 'DB_PASSWORD=')
+        for key in keys:
+            for before in names:
+                with self.subTest(before + key):
+                    self.assertEqual([v for _, v in secrets_scan.scan_line(before + key)], [key])
+        quiet = ['JWT_SECRET: jwtSecretFromConfig', 'API_TOKEN=accessTokenValue', 'api_key: options.apiKey',
+                 'GITHUB_TOKEN=githubTokenValue', 'CLIENT_SECRET=jwtSecretFromConfig', 'API_KEY=apiKey2ValueFrom']
+        for line in quiet:
+            with self.subTest(line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_random_keys_with_a_lowercase_start(self):
+        # TB-217: the base (4839e42b6) missed 1 436 of these 2 000 keys, 1 435 by the camelCase rule. Now a key is
+        # missed only below the entropy floor or with a placeholder word in it by chance (3 and 1 of 2 000).
+        alphabet = string.ascii_letters + string.digits
+        rnd = random.Random(217)
+        missed = []
+        made = 0
+        while made < 2000:
+            key = ''.join(rnd.choice(alphabet) for _ in range(20))
+            if not key[0].islower():
+                continue
+            made += 1
+            if not secrets_scan.scan_line(f'API_TOKEN={key}'):
+                missed.append(key)
+        other = [k for k in missed if secrets_scan.entropy(k) >= 3.5 and not secrets_scan.PLACEHOLDER.search(k)]
+        self.assertEqual(len(other), 0)
+        self.assertLessEqual(len(missed), 4)
 
     def test_secrets_key_after_underscore_or_dash(self):
         # OPS-71 (Claude lens #283): `\b` does not fire after `_`, so these keys passed; redact masks them.

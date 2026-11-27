@@ -38,9 +38,19 @@ export const DROPS_VALUE = /[(){}[\];,<>\\]|[^\x21-\x7e]/;
 // is not a type context: an .env value ends there.
 const TYPE_NAME = /^(?:[A-Z][a-z]+)+$/;
 const TYPE_CONTEXT = new Set([",", ";", ")"]);
-const CAMEL_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)*$/;
+// TB-217: a hump of a camelCase name is a word: a capital, 2+ lowercase
+// letters, then digits if any (jwtSecret, accessTokenValue, apiKey2). With
+// `[A-Z][a-z0-9]*` any key of letters and digits that starts with a lowercase
+// run read as a name (aOeXGXnVAOCbb1hL97O5): of 20 000 such random keys of 20
+// characters after API_TOKEN= or CLIENT_SECRET=, 14 396 stayed open, now 1
+// (passwordAssignment has no such filter). A capital with no
+// lowercase after it, a digit inside a hump or a hump of one lowercase letter
+// is a key. The price: a name with such a hump (tokenOrNull, apiKeyV2) after
+// a credential name is masked. On `git ls-files` of tAIBE, HR_Helper-v2 and
+// hr_hf_helper the rule adds one mask, a fake key in a test.
+const CAMEL_NAME = /^[a-z]+(?:[A-Z][a-z]{2,}[0-9]*)*$/;
 // TB-195: a camelCase name with at least one capital inside (jwtSecret).
-const HUMPED_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
+const HUMPED_NAME = /^[a-z]+(?:[A-Z][a-z]{2,}[0-9]*)+$/;
 const DOTTED_NAME = /^[A-Za-z_$]+(?:\.[A-Za-z_$]+)+$/;
 
 // A name of code: a dotted name (options.api_key) or a camelCase name with a
