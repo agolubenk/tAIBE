@@ -42,14 +42,14 @@ describe("rankVisible (TB-191)", () => {
       row("a", `Key ${KEY}`, "no match", 3),
       row("b", "plain", `see ${PREFIX}`, 2),
     ];
-    expect(rankVisible(rows, PREFIX, 10, taskFields).map((r) => r.id)).toEqual([
-      "b",
-    ]);
+    expect(
+      rankVisible(rows, [PREFIX], 10, taskFields).map((r) => r.id),
+    ).toEqual(["b"]);
   });
 
   it("scores a row by its visible text, not by the stored score", () => {
     const rows = [row("a", `Key ${KEY}`, `rotate ${PREFIX}`, 3)];
-    expect(rankVisible(rows, PREFIX, 10, taskFields)[0]?.relevanceScore).toBe(
+    expect(rankVisible(rows, [PREFIX], 10, taskFields)[0]?.relevanceScore).toBe(
       2,
     );
   });
@@ -61,9 +61,29 @@ describe("rankVisible (TB-191)", () => {
       row("mid-title", "deploy now", null, 3),
       row("old-desc", "y", "deploy later", 2),
     ];
-    expect(rankVisible(rows, "deploy", 3, taskFields).map((r) => r.id)).toEqual(
-      ["mid-title", "old-title", "new-desc"],
-    );
+    expect(
+      rankVisible(rows, ["deploy"], 3, taskFields).map((r) => r.id),
+    ).toEqual(["mid-title", "old-title", "new-desc"]);
+  });
+});
+
+describe("rankVisible with several words (TB-162)", () => {
+  it("keeps a row whose words are each visible in one of its fields", () => {
+    const rows = [
+      row("split", "rotate the deploy key", "after the release", 2),
+      row("title", "release: rotate the key", null, 1),
+      row("missing", "rotate the key", "no word here", 3),
+    ];
+    const found = rankVisible(rows, ["rotate", "release"], 10, taskFields);
+    expect(found.map((r) => [r.id, r.relevanceScore])).toEqual([
+      ["title", 3],
+      ["split", 1],
+    ]);
+  });
+
+  it("drops a row where one word is only inside a secret", () => {
+    const rows = [row("a", "rotate", `see ${KEY}`, 1)];
+    expect(rankVisible(rows, ["rotate", PREFIX], 10, taskFields)).toEqual([]);
   });
 });
 
@@ -71,19 +91,19 @@ describe("searchWindow (TB-191)", () => {
   const rows = [row("a", `Key ${KEY}`, null, 3)];
 
   it("keeps the owner's limit, SQL order, and rows", () => {
-    const owner = searchWindow(false, PREFIX, 20);
+    const owner = searchWindow(false, [PREFIX], 20);
     expect(owner.rows).toBe(20);
     expect(owner.pick(rows, taskFields)).toBe(rows);
   });
 
   it("scans the newest rows for a caller with a token and keeps the visible ones", () => {
-    const agent = searchWindow(true, PREFIX, 20);
+    const agent = searchWindow(true, [PREFIX], 20);
     expect(agent.rows).toBe(TOKEN_CALLER_SCAN_ROWS);
     expect(agent.pick(rows, taskFields)).toEqual([]);
   });
 
   it("does not scan a candidate that came back over the byte budget", () => {
-    const agent = searchWindow(true, "deploy", 20);
+    const agent = searchWindow(true, ["deploy"], 20);
     const old = { ...row("old", "deploy", null, 1), fits: false };
     const found = agent.pick([row("new", "deploy", null, 2), old], taskFields);
     expect(found.map((r) => r.id)).toEqual(["new"]);

@@ -686,7 +686,7 @@ export function registerTools(
     "search",
     {
       description:
-        "Search across tasks, projects, workspaces, comments, and activities in one workspace. A card key (DEP-23), a Notion page id or a Notion page link finds that card first. Descriptions and comment text come as an excerpt around the match; read the task for the whole text.",
+        "Search across tasks, projects, workspaces, comments, and activities in one workspace. Each word of q is matched on its own, in any order, so two or three key words find a card. A card key (DEP-23), a Notion page id or a Notion page link finds that card first. Descriptions and comment text come as an excerpt around the match; read the task for the whole text.",
       inputSchema: z.object({
         q: nonEmptyString.describe("Search query"),
         type: z

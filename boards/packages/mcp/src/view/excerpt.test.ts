@@ -16,6 +16,17 @@ describe("excerptAround", () => {
     expect(excerpt.length).toBeLessThanOrEqual(20 * 2 + "needle".length + 2);
   });
 
+  it("cuts the window at the first word when the words are apart (TB-162)", () => {
+    const excerpt = excerptAround(long, "here needle", 20);
+    expect(excerpt).toContain("The Needle sits here");
+    expect(excerpt.startsWith("…")).toBe(true);
+    expect(excerptAround(long, "absent here", 20)).toContain("sits here");
+    const apart = `${"a ".repeat(150)}Needle${" b".repeat(150)} later${" c".repeat(50)}`;
+    const first = excerptAround(apart, "later needle", 20);
+    expect(first).toContain("Needle");
+    expect(first).not.toContain("later");
+  });
+
   it("falls back to the start when the match is not in this text", () => {
     expect(excerptAround(long, "absent", 10)).toBe(`${"a ".repeat(10)}…`);
   });

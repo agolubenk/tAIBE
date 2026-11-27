@@ -33,18 +33,19 @@ export type VisibleFields<T> = (row: T) => ReadonlyArray<ScoredField>;
 
 /**
  * Candidates scored again on their visible text (`fields` in the order and
- * with the scores of the SQL `CASE`), without those that match only inside
- * a secret; the `limit` best, by score, then by createdAt descending.
+ * with the scores of the SQL `CASE`), without those where a word of the query
+ * is only inside a secret; the `limit` best, by score, then by createdAt
+ * descending.
  */
 export function rankVisible<T extends VisibleRow>(
   rows: T[],
-  query: string,
+  words: readonly string[],
   limit: number,
   fields: VisibleFields<T>,
 ): T[] {
   const kept: T[] = [];
   for (const row of rows) {
-    const relevanceScore = visibleScore(query, fields(row));
+    const relevanceScore = visibleScore(words, fields(row));
     if (relevanceScore !== null) kept.push({ ...row, relevanceScore });
   }
   return kept
@@ -62,7 +63,7 @@ export function rankVisible<T extends VisibleRow>(
  */
 export function searchWindow(
   tokenCaller: boolean,
-  query: string,
+  words: readonly string[],
   limit: number,
 ) {
   return {
@@ -95,7 +96,7 @@ export function searchWindow(
       tokenCaller
         ? rankVisible(
             found.filter((row) => row.fits),
-            query,
+            words,
             limit,
             fields,
           )
