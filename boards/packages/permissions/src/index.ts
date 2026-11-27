@@ -144,6 +144,8 @@ export {
   REAUTH_FRESH_SECONDS,
   REAUTH_METHODS,
   REAUTH_ROUTES,
+  REAUTH_SEND_CODE_LIMIT,
+  REAUTH_SEND_CODE_WINDOW_SECONDS,
   type ReauthError,
   type ReauthErrorBody,
   type ReauthMethod,
