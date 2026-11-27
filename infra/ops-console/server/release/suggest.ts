@@ -48,13 +48,14 @@ export function classifyCommit(message: string): ChangeKind {
 const FEAT_SCOPE_RE = /^feat\(([^)]*)\)!?:/
 
 /**
- * Модули коммита для B — scope conventional-заголовка feature: `feat(ats): …` → ats, `feat(ats, wiki): …` → ats и wiki.
+ * Модули коммита для B — scope conventional-заголовка feature: `feat(ats): …` → ats, `feat(ats, wiki): …` и
+ * `feat(home+telegram): …` → оба модуля (разделители «,» и «+», так пишут в истории main).
  * Без scope (`feat: …`) и merge-коммиты PR модуля не дают: такой feature растит только C.
  */
 export function commitModules(message: string): string[] {
   const subject = message.split('\n', 1)[0] ?? ''
   const scope = FEAT_SCOPE_RE.exec(subject)?.[1] ?? ''
-  return [...new Set(scope.split(',').map((m) => m.trim().toLowerCase()).filter(Boolean))]
+  return [...new Set(scope.split(/[,+]/).map((m) => m.trim().toLowerCase()).filter(Boolean))]
 }
 
 /** Коммит первой родительской линии: класс и модули feature. */

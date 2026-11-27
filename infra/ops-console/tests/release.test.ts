@@ -421,6 +421,8 @@ describe('модуль коммита для B', () => {
     expect(commitModules('feat(ats): APP-1 — фильтр (#900)')).toEqual(['ats'])
     expect(commitModules('feat(ATS, wiki)!: общий поиск')).toEqual(['ats', 'wiki'])
     expect(commitModules('feat(ats,ats): повтор')).toEqual(['ats'])
+    expect(commitModules('feat(home+telegram): APP-1 — чаты на главной')).toEqual(['home', 'telegram'])
+    expect(commitModules('feat(telegram + home, ats+home): порядок не важен')).toEqual(['telegram', 'home', 'ats'])
     expect(commitModules('feat: без модуля')).toEqual([])
     expect(commitModules('fix(ats): опечатка')).toEqual([])
     expect(commitModules('Merge pull request #12 from agolubenk/feature/x\n\nfeat(ats): тело')).toEqual([])
