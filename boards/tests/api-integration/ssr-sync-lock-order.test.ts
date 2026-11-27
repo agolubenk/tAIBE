@@ -175,4 +175,59 @@ describe("API integration: SSR sync locks drafts in the batch order (TB-149)", (
         .includes(low.id),
     ).toBe(true);
   });
+
+  // A rollback made v3 live above the open draft v2: the sync bumps v3 and
+  // has no reason to wait for v2, which a batch or an approve may hold.
+  it("a draft below a live version is not locked: the sync bumps without waiting for it", async () => {
+    const { forest, ws, low } = await twoDraftsInIdOrder();
+    await db
+      .update(ssrVersionTable)
+      .set({ status: "superseded" })
+      .where(
+        and(
+          eq(ssrVersionTable.entityId, low.entityId),
+          eq(ssrVersionTable.status, "latest"),
+        ),
+      );
+    const [restored] = await db
+      .insert(ssrVersionTable)
+      .values({
+        entityId: low.entityId,
+        number: 3,
+        blobSha: sha256(`${low.name} restored`),
+        files: [],
+        status: "latest",
+        origin: "rollback",
+      })
+      .returning({ id: ssrVersionTable.id });
+    if (!restored) throw new Error("no restored version");
+    await db
+      .update(ssrEntityTable)
+      .set({ latestVersionId: restored.id })
+      .where(eq(ssrEntityTable.id, low.entityId));
+
+    const synced = await db.transaction(async (tx) => {
+      expect(await lockOpenDrafts(tx, ws, [low.id])).toHaveLength(1);
+      const sync = forest.ownerApi("POST", `/ssr/${ws}/sync`, {
+        commitSha: COMMIT,
+        files: [file(low.name, `${low.name} v4`)],
+      });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waited = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("the sync waited for the draft below v3")),
+          5000,
+        );
+      });
+      try {
+        return await Promise.race([sync, waited]);
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+    expect(synced.status).toBe(200);
+    expect(synced.body.bumped).toEqual([
+      expect.objectContaining({ number: 4 }),
+    ]);
+  });
 });
