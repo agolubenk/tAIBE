@@ -32,11 +32,54 @@ export function compareReleaseVersions(a: ReleaseTuple, b: ReleaseTuple): number
   return 0
 }
 
-/** Модули, которых коснулись feature-коммиты: scope без повторов, по алфавиту. По их числу растёт B. */
-export function featureModules(commits: readonly { kind: ChangeKind; modules: readonly string[] }[]): string[] {
+/**
+ * Scope, которые не модули продукта: инфраструктура, сквозные слои и инструменты разработки (линза продукта HR #951,
+ * scope `main` 27.11). Feature с таким scope растит только C, как `feat:` без scope. Синонимы модулей (`ats`,
+ * `candidates`) не склеиваются: один это модуль или два, решает владелец правкой предложения.
+ */
+export const NON_MODULE_SCOPES: ReadonlySet<string> = new Set([
+  'backend',
+  'backup',
+  'ci',
+  'db',
+  'deps',
+  'dev',
+  'docs',
+  'dto',
+  'frontend',
+  'i18n',
+  'infra',
+  'layer',
+  'nginx',
+  'observability',
+  'ops-console',
+  'owner-queue',
+  'owner-queue-bot',
+  'palette',
+  'perf',
+  'release',
+  'review',
+])
+
+type ScopedCommit = { kind: ChangeKind; modules: readonly string[] }
+
+function featureScopes(commits: readonly ScopedCommit[], wantModule: boolean): string[] {
   const set = new Set<string>()
-  for (const c of commits) if (c.kind === 'feature') for (const m of c.modules) set.add(m)
+  for (const c of commits) {
+    if (c.kind !== 'feature') continue
+    for (const m of c.modules) if (NON_MODULE_SCOPES.has(m) !== wantModule) set.add(m)
+  }
   return [...set].sort()
+}
+
+/** Модули, которых коснулись feature-коммиты: scope без повторов и без `NON_MODULE_SCOPES`, по алфавиту. По их числу растёт B. */
+export function featureModules(commits: readonly ScopedCommit[]): string[] {
+  return featureScopes(commits, true)
+}
+
+/** Scope feature-коммитов из `NON_MODULE_SCOPES`: B они не растят, панель показывает их отдельно. */
+export function featureNonModuleScopes(commits: readonly ScopedCommit[]): string[] {
+  return featureScopes(commits, false)
 }
 
 /** Сколько коммитов меняют версию: «прочее» не считается. */
@@ -96,6 +139,8 @@ export interface ReleaseSuggestion {
   counts: Record<ChangeKind, number>
   /** Модули feature-коммитов (`featureModules`): по их числу вырос B. */
   modules: string[]
+  /** Scope feature-коммитов, которые B не растят (`NON_MODULE_SCOPES`). */
+  skippedScopes: string[]
 }
 
 export interface ReleaseResponse {

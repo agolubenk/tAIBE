@@ -13,6 +13,7 @@ import { deployStartedAt } from './binding'
 import {
   bumpReleaseVersion,
   featureModules,
+  featureNonModuleScopes,
   formatReleaseVersion,
   parseReleaseVersion,
   versionChangingCount,
@@ -157,7 +158,11 @@ function suggestionFrom(currentVersion: string, base: string, head: string, walk
   if (!next) return fail('Сегмент версии превысил бы 9999 — введите версию вручную')
   const counts: Record<ChangeKind, number> = { feature: 0, fix: 0, other: 0 }
   for (const k of kinds) counts[k] += 1
-  return { ok: true, suggestion: { version: formatReleaseVersion(next), base, head, commits: kinds.length, counts, modules } }
+  const skippedScopes = featureNonModuleScopes(walked)
+  return {
+    ok: true,
+    suggestion: { version: formatReleaseVersion(next), base, head, commits: kinds.length, counts, modules, skippedScopes },
+  }
 }
 
 /**
@@ -187,6 +192,7 @@ const cacheSchema = z.object({
           commits: z.number(),
           counts: z.object({ feature: z.number(), fix: z.number(), other: z.number() }),
           modules: z.array(z.string()),
+          skippedScopes: z.array(z.string()),
         }),
       }),
       z.object({ ok: z.literal(false), error: z.string(), transient: z.boolean() }),

@@ -22,6 +22,7 @@ import {
   bumpReleaseVersion,
   compareReleaseVersions,
   featureModules,
+  featureNonModuleScopes,
   formatReleaseVersion,
   parseReleaseVersion,
   RELEASE_VERSION_RE,
@@ -77,6 +78,15 @@ describe('формат, сравнение и шаг версии', () => {
     // fix со scope и feature без scope B не растят
     expect(featureModules([{ kind: 'fix', modules: ['ats'] }, { kind: 'feature', modules: [] }])).toEqual([])
     expect(bumpReleaseVersion(t('v.0.9999.1.1'), ['feature'], 1)).toBeNull()
+  })
+
+  it('scope инфраструктуры и слоёв B не растят: feat(nginx) → только C (линза продукта #951)', () => {
+    const feat = (m: string) => ({ kind: 'feature' as const, modules: [m] })
+    const changes = [feat('nginx'), feat('ats'), feat('frontend'), feat('ops-console'), feat('candidates')]
+    expect(featureModules(changes)).toEqual(['ats', 'candidates'])
+    expect(featureNonModuleScopes(changes)).toEqual(['frontend', 'nginx', 'ops-console'])
+    expect(featureNonModuleScopes([{ kind: 'fix', modules: ['nginx'] }])).toEqual([])
+    expect(bumpReleaseVersion(t('v.0.1.2.3'), ['feature'], featureModules([feat('nginx')]).length)).toEqual(t('v.0.1.3.3'))
   })
 
   it('сегмент больше 9999 — предложения нет', () => {
@@ -452,6 +462,7 @@ describe('предложение версии', () => {
         commits: 2,
         counts: { feature: 1, fix: 1, other: 0 },
         modules: [],
+        skippedScopes: [],
       },
       suggestionError: null,
     })
@@ -494,6 +505,25 @@ describe('предложение версии', () => {
       commits: 5,
       counts: { feature: 4, fix: 1, other: 0 },
       modules: ['ats', 'wiki'],
+      skippedScopes: [],
+    })
+  })
+
+  it('feat(nginx) и feat(frontend) B не растят, панель получает их отдельно', async () => {
+    const owner = await withCurrent()
+    commitPages = [
+      [
+        commit(sha40(2), 'feat(nginx): a (#3)', sha40(21)),
+        commit(sha40(21), 'feat(ats): b (#2)', sha40(22)),
+        commit(sha40(22), 'feat(frontend): c (#1)', sha40(1)),
+        commit(sha40(1), 'x', null),
+      ],
+    ]
+    expect((await suggest(owner)).suggestion).toMatchObject({
+      version: 'v.0.2.5.3',
+      counts: { feature: 3, fix: 0, other: 0 },
+      modules: ['ats'],
+      skippedScopes: ['frontend', 'nginx'],
     })
   })
 
