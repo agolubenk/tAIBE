@@ -425,6 +425,65 @@ describe("@kaneo/redact", () => {
     });
   });
 
+  // TB-217: a hump of a camelCase name is a word (value-shape.ts). A random
+  // key that starts with a lowercase run read as a name and stayed open.
+  describe("a key shaped like a camelCase name (TB-217)", () => {
+    const keys = [
+      [
+        "a capital with no lowercase after it",
+        join("aOeXGXnVAO", "Cbb1hL97O5"),
+      ],
+      ["humps of one lowercase letter", join("qwErTyUiOp", "AsDfGhJkLz")],
+      ["a digit inside a hump", join("kmVxq7tRtp", "qLwz9nBsyh")],
+    ];
+    const names = [
+      "API_TOKEN=",
+      "CLIENT_SECRET=",
+      "api_key: ",
+      '{"access_token": "',
+      "export GITHUB_TOKEN=",
+    ];
+
+    it.each(
+      keys.flatMap(([shape, key]) =>
+        names.map((before) => [shape, before, key] as const),
+      ),
+    )("masks a key with %s after %j", (_shape, before, key) => {
+      expect(redact(`${before}${key}`).text).toBe(
+        `${before}[REDACTED:password_assignment]`,
+      );
+    });
+
+    it.each([
+      "JWT_SECRET: jwtSecret",
+      "API_TOKEN=accessTokenValue",
+      "api_key: options.apiKey",
+      "GITHUB_TOKEN=githubToken",
+      "GITHUB_TOKEN=>githubToken",
+      "CLIENT_SECRET=jwtSecretFromConfig",
+      "API_KEY=apiKey2Value",
+    ])("leaves the code name in %j untouched", (input) => {
+      expect(redact(input).hits).toHaveLength(0);
+    });
+
+    // Measured: the base (4839e42b6) left 1 447 of these 2 000 keys open.
+    it("masks 2 000 random keys of 20 characters with a lowercase start", () => {
+      const alphabet =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+      let state = 217;
+      const next = () => (state = (state * 48_271) % 2_147_483_647);
+      let open = 0;
+      for (let made = 0; made < 2_000;) {
+        let key = "";
+        for (let i = 0; i < 20; i += 1) key += alphabet[next() % 62];
+        if (!/^[a-z]/.test(key)) continue;
+        made += 1;
+        if (redact(`API_TOKEN=${key}`).text.includes(key)) open += 1;
+      }
+      expect(open).toBe(0);
+    });
+  });
+
   // TB-198 (Claude lens #368, item 1): a value the filter rejected was
   // consumed whole, so a name inside it was never read and its value leaked.
   describe("a name inside a rejected value (TB-198)", () => {
