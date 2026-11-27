@@ -7,6 +7,7 @@ import {
 
 export { looksLikePassphrase, looksLikeSecret } from "./value-shape.js";
 
+import { NAME_PATTERNS } from "./names.js";
 import { pem } from "./pem.js";
 
 export type SecretKind =
@@ -341,6 +342,10 @@ const passphraseAssignment = collectGroup(
   1,
   looksLikePassphrase,
 );
+// TB-266: client_secret, SECRET_KEY, githubToken (names.ts).
+const nameAssignments = NAME_PATTERNS.map(({ pattern, accept }) =>
+  collectGroup(pattern, "password_assignment", 1, accept),
+);
 
 // Long runs of the base64 alphabet that mix upper/lower/digit and carry
 // high Shannon entropy are almost always encoded key material. Hex digests
@@ -419,6 +424,7 @@ const detectors: Detector[] = [
   credentialAssignment,
   secretAssignment,
   passphraseAssignment,
+  ...nameAssignments,
   base64Blob,
 ];
 

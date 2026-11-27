@@ -58,6 +58,38 @@ ASSIGNED = re.compile(r'(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]
 # characters: 12 s, TB-136 security lens).
 ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRET|PASSWORD))'
                           r'["\']?[ \t]*' + SEPARATOR + r'[ \t]*["\'`]?([^"\'`\s,;}]{12,})')
+# TB-266: a credential name with a prefix in any case, the pair of `NAME_PATTERNS` in redact (names.ts). ASSIGNED and
+# ENV_ASSIGNED missed client_secret, db_password, stripe_api_key, github_token (lowercase, `\b` does not fire after
+# `_`), clientSecret, dbPassword (camelCase), SECRET_KEY and AWS_SECRET_ACCESS_KEY (nothing may follow SECRET). A name
+# ends in a credential word that starts a word of the name: after a letter or a digit and `_` or `-`, in any case
+# (client_secret, X-Client-Secret); as a hump after a letter or a digit (clientSecret); secret_key, secret_access_key,
+# secret_key_base, secretKey, SecretKey also with nothing before them. A bare `secret` or `token` is not taken here.
+# At most 64 characters come before the credential word (redact has no bound): each start tries at most 64 positions.
+# NAMED runs after the other two, so a value they report keeps its message. Such names are mostly code and UI text: on
+# the three corpora the plain rule gave 35 new errors, none a secret. As in names.ts, a value is not taken if it starts
+# with `!`, is a dotted name (digits and `?.` included: settings.GOOGLE_OAUTH2_CLIENT_SECRET), is capitalized words
+# (then `?`, `!` or `:` if any) in any context (a locale label, a type), is a lowerCamel name of words with a credential
+# hump (navigateToFirstLoginPassword), is a path, or is in quotes that do not close before a space (a phrase).
+NAME_WORD = r'(?:secret|token|password|passwd|pwd|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)'
+NAME_HUMP = r'(?:Secret|Token|Password|Passwd|Pwd|ApiKey|PrivateKey)'
+NAME_END = r'(?:["\'`\s,;})]|$)'  # `)` too: a value ends before it (SE-205)
+NAME_OPEN = r'(?:"(?=[^"\s]*")|\'(?=[^\'\s]*\')|`(?=[^`\s]*`)|(?!["\'`]))'
+# A lowerCamel name of words with a credential hump is a variable, a random key is not words. The shape is checked
+# first, then the hump: each scan reads the value once.
+NAME_VARIABLE = (r'(?=[a-z]+(?:[A-Z][a-z]+)*[0-9]*' + NAME_END
+                 + r')[a-z]+(?:[A-Z][a-z]+)*?(?:Secret|Token|Passw(?:or)?d|Pwd|Key)')
+NAME_CODE = (r'(?!!|[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+' + NAME_END + r'|(?:[A-Z][a-z]+)+[?!:]*' + NAME_END
+             + r'|' + NAME_VARIABLE + r'|(?:\.{1,2}|~)?/(?:[a-z0-9._-]+/)+)')
+NAMED = re.compile(r'(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{0,64}(?:(?i:(?<=[A-Za-z0-9][_-])' + NAME_WORD
+                   + r'|(?:(?<=[A-Za-z0-9][_-])|(?<![A-Za-z0-9_-]))secret[_-](?:access[_-])?key(?:[_-]base)?)'
+                   r'|(?<=[A-Za-z0-9])' + NAME_HUMP
+                   + r'|(?:(?<=[A-Za-z0-9])S|(?<![A-Za-z0-9_-])[Ss])ecret(?:Access)?Key(?:Base)?))'
+                   r'["\']?[ \t]*' + SEPARATOR + r'[ \t]*' + NAME_OPEN + NAME_CODE + r'([^"\'`\s,;}]{12,})')
+# Each name of ASSIGNED, ENV_ASSIGNED and NAMED holds one of these words in any case. A line without them is not
+# searched: 1 line in 18 of tAIBE has one (1 in 36 and 73 in HR_Helper-v2 and hr_hf_helper), and NAMED alone took
+# 3.3 s on the lines of tAIBE, 1.2 s behind this check. `casefold` and not `lower`: `(?i)s` also matches `ſ`, and only
+# `casefold` makes it `s` (each letter of the words checked against every character).
+NAME_GATE = ('secret', 'token', 'passw', 'pwd', 'key')
 # Long runs of the base64 alphabet mixing upper, lower and digits with high entropy: encoded key material. The same
 # thresholds as the base64 rule in redact; hex digests are single-case and never reach it.
 BASE64 = re.compile(r'[A-Za-z0-9+/]{64,}={0,2}')
@@ -250,7 +282,8 @@ def scan_line(line):
     def covered(m, g):
         return any(m.start(g) < end and start < m.end(g) for start, end in spans)
 
-    for rx in (ASSIGNED, ENV_ASSIGNED):
+    folded = line.casefold()
+    for rx in (ASSIGNED, ENV_ASSIGNED, NAMED) if any(word in folded for word in NAME_GATE) else ():
         m = rx.search(line)
         while m:
             value = m.group(2)

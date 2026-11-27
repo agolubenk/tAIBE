@@ -19,6 +19,8 @@ import secrets_scan  # noqa: E402
 
 # TB-136: one corpus for both rule sets; boards/packages/redact/src/index.test.ts reads the same file.
 CORPUS = os.path.join(HERE, '..', '..', 'boards', 'packages', 'redact', 'fixtures', 'secrets-corpus.json')
+# TB-266: credential names with a prefix or a suffix; boards/packages/redact/src/names.test.ts reads the same file.
+NAMES = os.path.join(HERE, '..', '..', 'boards', 'packages', 'redact', 'fixtures', 'secret-names.json')
 
 # Fake values assembled at runtime, so this file itself holds no key-shaped literal.
 GH = 'gh' + 'p_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0'
@@ -320,6 +322,71 @@ class ChecksTest(unittest.TestCase):
                 long = best(unit * (64000 // len(unit)))
                 self.assertLess(long, 5.0)
                 self.assertLess(long / max(short, 0.01), 8)
+
+    def test_secrets_prefixed_names(self):
+        # TB-266: the cases of the shared fixture. On board-agents 4839e42b6 the scanner found 8 of the 164 keys.
+        with open(NAMES, encoding='utf-8') as f:
+            names = json.load(f)
+        key = ''.join(names['key'])
+        for name in names['masked']:
+            for form in names['forms']:
+                line = form.replace('{name}', name).replace('{key}', key).rstrip('\n')
+                with self.subTest(line=line.replace(key, '<key>')):
+                    self.assertEqual([value for _, value in secrets_scan.scan_line(line)], [key])
+        for line in names['quiet']:
+            with self.subTest(line=line):
+                self.assertEqual(secrets_scan.scan_line(line), [])
+
+    def test_secrets_prefixed_names_edges(self):
+        key = 'Qz8Lm4Rt7W' + 'x2Ny5Kp9Bv'
+        # A bare name is as before: ASSIGNED finds `secret`, nothing finds `token`.
+        for name, found in (('secret', 1), ('Secret', 1), ('token', 0), ('Token', 0)):
+            self.assertEqual(len(secrets_scan.scan_line('%s: %s' % (name, key))), found, name)
+        # The filter goes by the last word: a passphrase only under a name that ends in secret.
+        for name, found in (('client_secret', 1), ('clientSecret', 1), ('github_token', 0), ('githubToken', 0),
+                            ('secret_key', 0), ('secretKey', 0)):
+            self.assertEqual(len(secrets_scan.scan_line(name + '=correcthorsebatterystaple')), found, name)
+        # Known miss: capitalized words under a lowercase name. Under CLIENT_SECRET they are found.
+        words = 'CorrectHorse' + 'BatteryStaple'
+        self.assertEqual(secrets_scan.scan_line('client_secret=' + words), [])
+        self.assertEqual(len(secrets_scan.scan_line('CLIENT_SECRET=' + words)), 1)
+        # A variable is words; a random key with a credential hump is not.
+        for name in ('refresh_token', 'refreshToken', 'client_secret'):
+            for head in ('x2Key', 'q8Token'):
+                found = [value for _, value in secrets_scan.scan_line(name + ': ' + head + key)]
+                self.assertEqual(found, [head + key], name)
+        # A lowerCamel value with a credential hump is a variable, open under CLIENT_SECRET too.
+        for name in ('client_secret', 'CLIENT_SECRET'):
+            self.assertEqual(secrets_scan.scan_line(name + '=mySecret' + 'Key2024'), [], name)
+        self.assertEqual(secrets_scan.scan_line('onMustChangePassword = navigateToFirstLoginPassword,'), [])
+        # A path is not a value (a compose secret file).
+        self.assertEqual(secrets_scan.scan_line('postgres_password: /run/tb-secrets/postgres_password:ro'), [])
+        # `(?i)s` also matches `\u017f`: the word check before the rules folds it to `s`.
+        self.assertEqual([value for _, value in secrets_scan.scan_line('client_\u017fecret=' + key)], [key])
+
+    def test_secrets_prefixed_names_stay_linear(self):
+        # TB-266: units of NAMED names, 16 000 against 64 000 characters, as in test_secrets_inner_names_stay_linear.
+        # Measured: growth 1.0-4.4, at most 0.11 s on 64 000 characters (`x_secret=` * 35).
+        units = ['a_secret=a_secret=', 'aSecret=aSecret=', 'a_token:=', 'x_secret=' * 35 + ' ', 'a_secret:"',
+                 "a_secret='", 'a_secret=a.', 'a-Secret:', 'a_secret=fooB_secret: ', 'secret_key=',
+                 'a_secret=aSecretKey', 'a_token=aBcdeFghToken,',
+                 'a_' * 40 + 'secret=']
+
+        def best(line):
+            times = []
+            for _ in range(2):
+                started = time.perf_counter()
+                secrets_scan.scan_line(line)
+                times.append(time.perf_counter() - started)
+            return min(times)
+
+        for unit in units:
+            for end in ('', '!', '"'):
+                with self.subTest(unit=unit[:24], end=end):
+                    short = best(unit * (16000 // len(unit)) + end)
+                    long = best(unit * (64000 // len(unit)) + end)
+                    self.assertLess(long, 5.0)
+                    self.assertLess(long / max(short, 0.01), 8)
 
     def test_hygiene(self):
         write(self.root, '.env', 'A=1\n')
