@@ -68,14 +68,16 @@ ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRE
 # NAMED runs after the other two, so a value they report keeps its message. Such names are mostly code and UI text: on
 # the three corpora the plain rule gave 35 new errors, none a secret. As in names.ts, a value is not taken if it starts
 # with `!`, is a dotted name (digits and `?.` included: settings.GOOGLE_OAUTH2_CLIENT_SECRET), is capitalized words
-# (then `?`, `!` or `:` if any) in any context (a locale label, a type), is a lowerCamel name with a credential hump
-# (navigateToFirstLoginPassword), is a path, or is in quotes that do not close before a space (a phrase).
+# (then `?`, `!` or `:` if any) in any context (a locale label, a type), is a lowerCamel name of words with a credential
+# hump (navigateToFirstLoginPassword), is a path, or is in quotes that do not close before a space (a phrase).
 NAME_WORD = r'(?:secret|token|password|passwd|pwd|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)'
 NAME_HUMP = r'(?:Secret|Token|Password|Passwd|Pwd|ApiKey|PrivateKey)'
 NAME_END = r'(?:["\'`\s,;})]|$)'  # `)` too: a value ends before it (SE-205)
 NAME_OPEN = r'(?:"(?=[^"\s]*")|\'(?=[^\'\s]*\')|`(?=[^`\s]*`)|(?!["\'`]))'
-# A lowerCamel name with a credential hump is a variable: the end is checked first, then the hump, each scan once.
-NAME_VARIABLE = r'(?=[a-z][A-Za-z0-9]*' + NAME_END + r')[a-z][A-Za-z0-9]*?(?:Secret|Token|Passw(?:or)?d|Pwd|Key)'
+# A lowerCamel name of words with a credential hump is a variable, a random key is not words. The shape is checked
+# first, then the hump: each scan reads the value once.
+NAME_VARIABLE = (r'(?=[a-z]+(?:[A-Z][a-z]+)*[0-9]*' + NAME_END
+                 + r')[a-z]+(?:[A-Z][a-z]+)*?(?:Secret|Token|Passw(?:or)?d|Pwd|Key)')
 NAME_CODE = (r'(?!!|[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+' + NAME_END + r'|(?:[A-Z][a-z]+)+[?!:]*' + NAME_END
              + r'|' + NAME_VARIABLE + r'|(?:\.{1,2}|~)?/(?:[a-z0-9._-]+/)+)')
 NAMED = re.compile(r'(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{0,64}(?:(?i:(?<=[A-Za-z0-9][_-])' + NAME_WORD

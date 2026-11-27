@@ -350,6 +350,11 @@ class ChecksTest(unittest.TestCase):
         words = 'CorrectHorse' + 'BatteryStaple'
         self.assertEqual(secrets_scan.scan_line('client_secret=' + words), [])
         self.assertEqual(len(secrets_scan.scan_line('CLIENT_SECRET=' + words)), 1)
+        # A variable is words; a random key with a credential hump is not.
+        for name in ('refresh_token', 'refreshToken', 'client_secret'):
+            for head in ('x2Key', 'q8Token'):
+                found = [value for _, value in secrets_scan.scan_line(name + ': ' + head + key)]
+                self.assertEqual(found, [head + key], name)
         # A lowerCamel value with a credential hump is a variable, open under CLIENT_SECRET too.
         for name in ('client_secret', 'CLIENT_SECRET'):
             self.assertEqual(secrets_scan.scan_line(name + '=mySecret' + 'Key2024'), [], name)

@@ -66,6 +66,16 @@ describe("a secret or token name with a prefix or a suffix (TB-266)", () => {
     },
   );
 
+  // A variable is words (refreshTokenOrNull); a random key with a credential
+  // hump is not.
+  it.each(
+    ["refresh_token", "refreshToken", "client_secret"].flatMap((name) =>
+      ["x2Key", "q8Token"].map((head) => [name, `${head}${KEY}`]),
+    ),
+  )("masks a random key with a hump under %s: %s", (name, value) => {
+    expectMaskedValue(`${name}: ${value}\n`, value);
+  });
+
   it("known miss: capitalized words under a lowercase name are open", () => {
     const text = "client_secret=CorrectHorseBatteryStaple\n";
     expect(redact(text).text).toBe(text);

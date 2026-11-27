@@ -30,8 +30,8 @@
 // - is capitalized words, then `?`, `!` or `:` if any, in any context: a
 //   locale label ("refreshToken": "Actualizar"), a type (secret_key:
 //   KeyMask, Swift `String??`);
-// - is a lowerCamel name with a hump Secret, Token, Password, Passwd, Pwd
-//   or Key (refreshToken: refreshTokenOrNull);
+// - is a lowerCamel name of words, one of them Secret, Token, Password,
+//   Passwd, Pwd or Key (refreshToken: refreshTokenOrNull);
 // - is a path (/run/secrets/postgres_password);
 // - is in quotes that do not close before a space: a phrase
 //   ("hideSecret": "Hide secret"), not a key.
@@ -52,10 +52,11 @@ const AFTER_WORD = "[A-Za-z0-9][_-]";
 // `)` too: a value ends before it (SE-205, fn(client_secret=settings.KEY)).
 const END = String.raw`(?:["'\x60\s,;})]|$)`;
 const OPEN = String.raw`(?:"(?=[^"\s]*")|'(?=[^'\s]*')|\x60(?=[^\x60\s]*\x60)|(?!["'\x60]))`;
-// A lowerCamel name with a credential hump is a variable
-// (navigateToFirstLoginPassword, refreshTokenOrNull). The end is checked
-// first, then the hump: each scan reads the value once.
-const VARIABLE = String.raw`(?=[a-z][A-Za-z0-9]*${END})[a-z][A-Za-z0-9]*?(?:Secret|Token|Passw(?:or)?d|Pwd|Key)`;
+// A lowerCamel name of words with a credential hump is a variable
+// (navigateToFirstLoginPassword, refreshTokenOrNull); a random key is not
+// words (x2KeyNy5Kp9Bv). The shape is checked first, then the hump: each scan
+// reads the value once.
+const VARIABLE = String.raw`(?=[a-z]+(?:[A-Z][a-z]+)*[0-9]*${END})[a-z]+(?:[A-Z][a-z]+)*?(?:Secret|Token|Passw(?:or)?d|Pwd|Key)`;
 const CODE = String.raw`(?!!|[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+${END}|(?:[A-Z][a-z]+)+[?!:]*${END}|${VARIABLE}|(?:\.{1,2}|~)?\/(?:[a-z0-9._-]+\/)+)`;
 // The separator and the value, as in `secretAssignment` of index.ts.
 const VALUE = String.raw`["']?[ \t]*(?::=|=>|=(?!=+(?:[\s"'\x60]|$))|:)[ \t]*${OPEN}(?!\[REDACTED|\$)${CODE}([^"'\x60\s,;]+)`;
