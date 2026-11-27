@@ -10,7 +10,14 @@ import { decryptSecret } from '../lib/crypto'
 import { httpRequest } from '../lib/http'
 import { getGithubSettings, readSetting, writeSetting } from '../settings/store'
 import { deployStartedAt } from './binding'
-import { bumpReleaseVersion, formatReleaseVersion, parseReleaseVersion, type ChangeKind, type ReleaseSuggestion } from '../../shared/release'
+import {
+  bumpReleaseVersion,
+  formatReleaseVersion,
+  parseReleaseVersion,
+  versionChangingCount,
+  type ChangeKind,
+  type ReleaseSuggestion,
+} from '../../shared/release'
 
 export const SUGGESTION_KEY = 'release:hr-helper:suggestion'
 const PER_PAGE = 100
@@ -124,6 +131,7 @@ function suggestionFrom(currentVersion: string, base: string, head: string, kind
   const tuple = parseReleaseVersion(currentVersion)
   if (!tuple) return fail('Текущая версия не в формате v.A.B.C.D')
   if (kinds.length === 0) return fail('Новых коммитов после текущей версии нет')
+  if (versionChangingCount(kinds) === 0) return fail(`Коммитов, меняющих версию, нет: после текущей версии только «прочее» (${kinds.length})`)
   const next = bumpReleaseVersion(tuple, kinds)
   if (!next) return fail('Сегмент версии превысил бы 9999 — введите версию вручную')
   const counts: Record<ChangeKind, number> = { feature: 0, fix: 0, other: 0 }

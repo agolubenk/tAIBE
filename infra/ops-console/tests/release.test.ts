@@ -24,7 +24,6 @@ import {
   formatReleaseVersion,
   parseReleaseVersion,
   RELEASE_VERSION_RE,
-  type ChangeKind,
   type ReleaseTuple,
 } from '../shared/release'
 
@@ -53,37 +52,28 @@ describe('формат, сравнение и шаг версии', () => {
     expect(compareReleaseVersions(t('v.0.1.2.3'), t('v.0.1.2.3'))).toBe(0)
   })
 
-  it('счёт по PR: каждая feature +1 к B, каждый fix +1 к C; рост старшего сегмента обнуляет младшие; A не меняется', () => {
+  it('счётчики растут: C += feature, D += fix; «прочее» не меняет; A и B не меняются, сбросов нет (IS-263)', () => {
     const cur = t('v.3.1.2.3')
-    expect(bumpReleaseVersion(cur, ['fix', 'feature', 'other'])).toEqual([3, 2, 1, 0])
-    expect(bumpReleaseVersion(cur, ['feature', 'feature', 'fix'])).toEqual([3, 3, 1, 0])
-    expect(bumpReleaseVersion(cur, ['other', 'fix', 'fix'])).toEqual([3, 1, 4, 0])
-    expect(bumpReleaseVersion(cur, ['other', 'other'])).toEqual([3, 1, 2, 5])
+    expect(bumpReleaseVersion(cur, ['fix', 'feature', 'other'])).toEqual([3, 1, 3, 4])
+    expect(bumpReleaseVersion(cur, ['other', 'fix', 'fix'])).toEqual([3, 1, 2, 5])
+    expect(bumpReleaseVersion(cur, ['feature', 'feature'])).toEqual([3, 1, 4, 3])
+    expect(bumpReleaseVersion(cur, ['other', 'other'])).toBeNull()
     expect(bumpReleaseVersion(cur, [])).toBeNull()
   })
 
-  it('OPS-84: 33 коммита main (12 feature, 16 fix, 5 прочих) → v.0.13.16.0, порядок не важен', () => {
-    const kinds: ChangeKind[] = [
-      ...Array<ChangeKind>(12).fill('feature'),
-      ...Array<ChangeKind>(16).fill('fix'),
-      ...Array<ChangeKind>(5).fill('other'),
-    ]
-    expect(kinds).toHaveLength(33)
-    const mixed = kinds.map((k, i) => ({ k, key: (i * 17) % 33 })).sort((x, y) => x.key - y.key).map((x) => x.k)
-    for (const from of ['v.0.1.0.0', 'v.0.1.2.3']) {
-      expect(formatReleaseVersion(bumpReleaseVersion(t(from), kinds)!)).toBe('v.0.13.16.0')
-      expect(formatReleaseVersion(bumpReleaseVersion(t(from), mixed)!)).toBe('v.0.13.16.0')
-    }
+  it('пример владельца: v.0.1.17.48 + 16 fix + 2 прочих → v.0.1.17.64; сверка 78 коммитов после d4def5f', () => {
+    const kinds = (feature: number, fix: number, other: number) =>
+      [...Array<'feature'>(feature).fill('feature'), ...Array<'fix'>(fix).fill('fix'), ...Array<'other'>(other).fill('other')]
+    expect(bumpReleaseVersion(t('v.0.1.17.48'), kinds(0, 16, 2))).toEqual(t('v.0.1.17.64'))
+    expect(bumpReleaseVersion(t('v.0.1.0.0'), kinds(17, 48, 13))).toEqual(t('v.0.1.17.48'))
   })
 
   it('сегмент больше 9999 — предложения нет', () => {
-    expect(bumpReleaseVersion(t('v.0.9999.5.5'), ['feature'])).toBeNull()
-    expect(bumpReleaseVersion(t('v.0.1.9999.0'), ['fix'])).toBeNull()
-    expect(bumpReleaseVersion(t('v.0.1.0.9999'), ['other'])).toBeNull()
-    expect(bumpReleaseVersion(t('v.0.1.9999.0'), ['feature'])).toEqual([0, 2, 0, 0])
-    expect(bumpReleaseVersion(t('v.0.9998.0.0'), ['feature', 'feature'])).toBeNull()
-    expect(bumpReleaseVersion(t('v.0.1.9998.0'), ['fix', 'fix'])).toBeNull()
-    expect(bumpReleaseVersion(t('v.0.1.0.9998'), ['other', 'other'])).toBeNull()
+    expect(bumpReleaseVersion(t('v.0.1.9999.5'), ['feature'])).toBeNull()
+    expect(bumpReleaseVersion(t('v.0.1.5.9999'), ['fix'])).toBeNull()
+    expect(bumpReleaseVersion(t('v.0.1.9998.9998'), ['fix', 'feature', 'fix'])).toBeNull()
+    expect(bumpReleaseVersion(t('v.0.9999.9999.9999'), ['other'])).toBeNull()
+    expect(bumpReleaseVersion(t('v.0.1.9998.9999'), ['feature', 'other'])).toEqual([0, 1, 9999, 9999])
   })
 })
 
@@ -421,7 +411,7 @@ describe('предложение версии', () => {
   }
   const suggest = async (o: Api) => (await o.get('/release/suggestion')).json
 
-  it('по первой родительской линии от деплоя до текущей версии: feature → B+1, fix → C с нуля +1; кэш', async () => {
+  it('по первой родительской линии от деплоя до текущей версии: feature → C+1, fix → D+1; кэш', async () => {
     const owner = await withCurrent()
     commitPages = [
       [
@@ -432,7 +422,7 @@ describe('предложение версии', () => {
       ],
     ]
     expect(await suggest(owner)).toEqual({
-      suggestion: { version: 'v.0.2.1.0', base: SHA1, head: sha40(2).slice(0, 12), commits: 2, counts: { feature: 1, fix: 1, other: 0 } },
+      suggestion: { version: 'v.0.1.3.4', base: SHA1, head: sha40(2).slice(0, 12), commits: 2, counts: { feature: 1, fix: 1, other: 0 } },
       suggestionError: null,
     })
     expect(commitCalls[0]).toContain(`sha=${sha40(2).slice(0, 12)}`)
@@ -453,8 +443,15 @@ describe('предложение версии', () => {
     expect(commitCalls[1]).toContain(`sha=${sha40(3).slice(0, 12)}`)
     await deploy(owner, 4)
     commitPages = [[commit(sha40(4), 'fix: d', sha40(21)), commit(sha40(21), 'chore: e', sha40(1)), commit(sha40(1), 'x', null)]]
-    expect((await suggest(owner)).suggestion).toMatchObject({ version: 'v.0.1.3.0', commits: 2, counts: { feature: 0, fix: 1, other: 1 } })
+    expect((await suggest(owner)).suggestion).toMatchObject({ version: 'v.0.1.2.4', commits: 2, counts: { feature: 0, fix: 1, other: 1 } })
     expect(commitCalls).toHaveLength(4)
+  })
+
+  it('после текущей версии только «прочее» — предложения нет с причиной, ручной ввод работает', async () => {
+    const owner = await withCurrent()
+    commitPages = [[commit(sha40(2), 'chore: a', sha40(20)), commit(sha40(20), 'docs: b', sha40(1)), commit(sha40(1), 'x', null)]]
+    expect(await suggest(owner)).toEqual({ suggestion: null, suggestionError: expect.stringMatching(/меняющих версию, нет.*\(2\)/) })
+    expect((await put(owner, { version: 'v.0.1.2.4', ...(await seenBy(owner)) })).status).toBe(200)
   })
 
   it('base не найден — предложения нет, ручной ввод работает', async () => {
