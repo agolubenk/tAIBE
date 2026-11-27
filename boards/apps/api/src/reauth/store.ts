@@ -197,8 +197,14 @@ export function isLockedOut(count: number): boolean {
   return count >= REAUTH_FAILURE_LIMIT;
 }
 
-/** One more failed confirmation; returns the count in the current hour. */
-export async function recordFailure(userId: string): Promise<number> {
+/**
+ * One more failure under the lock of the counter. With `refuseAtLimit` and
+ * the hour's limit already used up, nothing is counted (`counted: false`).
+ */
+async function countFailure(
+  userId: string,
+  refuseAtLimit: boolean,
+): Promise<{ counted: boolean; count: number }> {
   return db.transaction(async (tx) => {
     const id = failId(userId);
     await lock(tx, id);
@@ -207,6 +213,9 @@ export async function recordFailure(userId: string): Promise<number> {
     const state = parseFail(row?.value);
     const inWindow =
       state && now - state.windowStart < REAUTH_FAILURE_WINDOW_SECONDS * 1000;
+    if (refuseAtLimit && inWindow && isLockedOut(state.count)) {
+      return { counted: false, count: state.count };
+    }
     const next: FailState = inWindow
       ? { count: state.count + 1, windowStart: state.windowStart }
       : { count: 1, windowStart: now };
@@ -214,8 +223,23 @@ export async function recordFailure(userId: string): Promise<number> {
       (next.windowStart + REAUTH_FAILURE_WINDOW_SECONDS * 1000 - now) / 1000,
     );
     await replaceRow(tx, id, JSON.stringify(next), Math.max(ttl, 1));
-    return next.count;
+    return { counted: true, count: next.count };
   });
+}
+
+/** One more failed confirmation; returns the count in the current hour. */
+export async function recordFailure(userId: string): Promise<number> {
+  return (await countFailure(userId, false)).count;
+}
+
+/**
+ * TB-245: takes one try of a password check before the check runs. The try
+ * counts as a failure at once, under the same lock as the limit, so parallel
+ * wrong passwords cannot pass REAUTH_FAILURE_LIMIT; a success resets the
+ * counter (`resetFailures`). False — the limit is used up, check nothing.
+ */
+export async function reserveTry(userId: string): Promise<boolean> {
+  return (await countFailure(userId, true)).counted;
 }
 
 export async function resetFailures(userId: string) {
