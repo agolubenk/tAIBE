@@ -89,6 +89,16 @@ describe('формат, сравнение и шаг версии', () => {
     expect(bumpReleaseVersion(t('v.0.1.2.3'), ['feature'], featureModules([feat('nginx')]).length)).toEqual(t('v.0.1.3.3'))
   })
 
+  it('инструменты разработки B не растят, workflow и workflows — один модуль (заметка backend-2 к #951)', () => {
+    const feat = (m: string) => ({ kind: 'feature' as const, modules: [m] })
+    const tools = ['skills', 'merge-guard', 'rules', 'dev-ai'].map(feat)
+    expect(featureModules(tools)).toEqual([])
+    expect(featureNonModuleScopes(tools)).toEqual(['dev-ai', 'merge-guard', 'rules', 'skills'])
+    const flows = [feat('workflow'), feat('workflows'), feat('ats')]
+    expect(featureModules(flows)).toEqual(['ats', 'workflow'])
+    expect(bumpReleaseVersion(t('v.0.1.2.3'), flows.map((c) => c.kind), featureModules(flows).length)).toEqual(t('v.0.3.5.3'))
+  })
+
   it('сегмент больше 9999 — предложения нет', () => {
     expect(bumpReleaseVersion(t('v.0.1.9999.5'), ['feature'])).toBeNull()
     expect(bumpReleaseVersion(t('v.0.1.5.9999'), ['fix'])).toBeNull()

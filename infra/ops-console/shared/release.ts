@@ -34,8 +34,9 @@ export function compareReleaseVersions(a: ReleaseTuple, b: ReleaseTuple): number
 
 /**
  * Scope, которые не модули продукта: инфраструктура, сквозные слои и инструменты разработки (линза продукта HR #951,
- * scope `main` 27.11). Feature с таким scope растит только C, как `feat:` без scope. Синонимы модулей (`ats`,
- * `candidates`) не склеиваются: один это модуль или два, решает владелец правкой предложения.
+ * scope `main` 27.11; `dev-ai`, `merge-guard`, `rules`, `skills` — заметка backend-2 к #951, 28.11). Feature с таким
+ * scope растит только C, как `feat:` без scope. Синонимы модулей (`ats`, `candidates`) не склеиваются: один это модуль
+ * или два, решает владелец правкой предложения. Склеиваются только формы одного слова — `SCOPE_ALIASES`.
  */
 export const NON_MODULE_SCOPES: ReadonlySet<string> = new Set([
   'backend',
@@ -44,12 +45,14 @@ export const NON_MODULE_SCOPES: ReadonlySet<string> = new Set([
   'db',
   'deps',
   'dev',
+  'dev-ai',
   'docs',
   'dto',
   'frontend',
   'i18n',
   'infra',
   'layer',
+  'merge-guard',
   'nginx',
   'observability',
   'ops-console',
@@ -59,7 +62,12 @@ export const NON_MODULE_SCOPES: ReadonlySet<string> = new Set([
   'perf',
   'release',
   'review',
+  'rules',
+  'skills',
 ])
+
+/** Формы одного scope → каноническая: в истории `main` `feat(workflow)` 18 раз, `feat(workflows)` 3 раза (28.11). */
+export const SCOPE_ALIASES: Readonly<Record<string, string>> = { workflows: 'workflow' }
 
 type ScopedCommit = { kind: ChangeKind; modules: readonly string[] }
 
@@ -67,7 +75,10 @@ function featureScopes(commits: readonly ScopedCommit[], wantModule: boolean): s
   const set = new Set<string>()
   for (const c of commits) {
     if (c.kind !== 'feature') continue
-    for (const m of c.modules) if (NON_MODULE_SCOPES.has(m) !== wantModule) set.add(m)
+    for (const raw of c.modules) {
+      const m = SCOPE_ALIASES[raw] ?? raw
+      if (NON_MODULE_SCOPES.has(m) !== wantModule) set.add(m)
+    }
   }
   return [...set].sort()
 }
