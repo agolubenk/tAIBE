@@ -104,7 +104,9 @@ function SuggestionView({ data, onAccept }: { data: ReleaseResponse; onAccept: (
         Предложение: <strong>{sg.version}</strong>
       </span>
       <span className={cx(ui.small, ui.faint)}>
-        {plural(sg.commits, ['коммит', 'коммита', 'коммитов'])} main после {short(sg.base)}: feature {sg.counts.feature} · fix {sg.counts.fix} · прочее {sg.counts.other}
+        {plural(sg.commits, ['коммит', 'коммита', 'коммитов'])} main после {short(sg.base)}: feature {sg.counts.feature} · fix {sg.counts.fix} · прочее {sg.counts.other} · модули: {sg.modules.length}
+        {sg.modules.length > 0 ? ` (${sg.modules.join(', ')})` : ''}
+        {sg.skippedScopes.length > 0 ? ` · без модуля: ${sg.skippedScopes.join(', ')}` : ''}
       </span>
       <Button small icon="check" onClick={() => onAccept(sg.version)}>
         Принять

@@ -33,19 +33,83 @@ export function compareReleaseVersions(a: ReleaseTuple, b: ReleaseTuple): number
 }
 
 /**
- * Счёт по PR (OPS-84, решение владельца taibe-d-ops84-version-1711 = B): каждая feature +1 к B, каждый fix +1 к C.
- * Рост B обнуляет C до счёта fix; рост B или C обнуляет D. Прочие PR дают +1 к D, только если в выпуске нет feature
- * и fix. Пример: v.0.1.2.3 и 33 коммита (12 feature, 16 fix, 5 прочих) → v.0.13.16.0.
- * A не меняется никогда. Нет изменений или сегмент вышел бы за 9999 — предложения нет (null).
+ * Scope, которые не модули продукта: инфраструктура, сквозные слои и инструменты разработки (линза продукта HR #951,
+ * scope `main` 27.11; `dev-ai`, `merge-guard`, `rules`, `skills` — заметка backend-2 к #951, 28.11). Feature с таким
+ * scope растит только C, как `feat:` без scope. Синонимы модулей (`ats`, `candidates`) не склеиваются: один это модуль
+ * или два, решает владелец правкой предложения. Склеиваются только формы одного слова — `SCOPE_ALIASES`.
  */
-export function bumpReleaseVersion(t: ReleaseTuple, kinds: readonly ChangeKind[]): ReleaseTuple | null {
-  if (kinds.length === 0) return null
+export const NON_MODULE_SCOPES: ReadonlySet<string> = new Set([
+  'backend',
+  'backup',
+  'ci',
+  'db',
+  'deps',
+  'dev',
+  'dev-ai',
+  'docs',
+  'dto',
+  'frontend',
+  'i18n',
+  'infra',
+  'layer',
+  'merge-guard',
+  'nginx',
+  'observability',
+  'ops-console',
+  'owner-queue',
+  'owner-queue-bot',
+  'palette',
+  'perf',
+  'release',
+  'review',
+  'rules',
+  'skills',
+])
+
+/** Формы одного scope → каноническая: в истории `main` `feat(workflow)` 18 раз, `feat(workflows)` 3 раза (28.11). */
+export const SCOPE_ALIASES: Readonly<Record<string, string>> = { workflows: 'workflow' }
+
+type ScopedCommit = { kind: ChangeKind; modules: readonly string[] }
+
+function featureScopes(commits: readonly ScopedCommit[], wantModule: boolean): string[] {
+  const set = new Set<string>()
+  for (const c of commits) {
+    if (c.kind !== 'feature') continue
+    for (const raw of c.modules) {
+      const m = SCOPE_ALIASES[raw] ?? raw
+      if (NON_MODULE_SCOPES.has(m) !== wantModule) set.add(m)
+    }
+  }
+  return [...set].sort()
+}
+
+/** Модули, которых коснулись feature-коммиты: scope без повторов и без `NON_MODULE_SCOPES`, по алфавиту. По их числу растёт B. */
+export function featureModules(commits: readonly ScopedCommit[]): string[] {
+  return featureScopes(commits, true)
+}
+
+/** Scope feature-коммитов из `NON_MODULE_SCOPES`: B они не растят, панель показывает их отдельно. */
+export function featureNonModuleScopes(commits: readonly ScopedCommit[]): string[] {
+  return featureScopes(commits, false)
+}
+
+/** Сколько коммитов меняют версию: «прочее» не считается. */
+export const versionChangingCount = (kinds: readonly ChangeKind[]): number => kinds.filter((k) => k !== 'other').length
+
+/**
+ * Правило владельца для версии Lavaeon (IS-263, B — d-version-b-rule-2711 = a, 27.11): счётчики только растут.
+ * B += число разных модулей (scope заголовка `feat(ats): …`), которых коснулись feature-коммиты; C += число feature;
+ * D += число fix; «прочее» версию не меняет. A меняет только владелец, сбросов нет. Пример: 3 feat(ats) + 1 feat(wiki)
+ * → B + 2, C + 4; v.0.1.17.48 и 16 fix + 2 прочих → v.0.1.17.64. Нет feature и fix или сегмент вышел бы за 9999 —
+ * предложения нет (null). `modules` — число модулей feature (`featureModules`), без него B не меняется.
+ */
+export function bumpReleaseVersion(t: ReleaseTuple, kinds: readonly ChangeKind[], modules = 0): ReleaseTuple | null {
+  if (versionChangingCount(kinds) === 0) return null
   const [a, b, c, d] = t
-  const n = { feature: 0, fix: 0, other: 0 }
-  for (const k of kinds) n[k] += 1
-  const next: ReleaseTuple =
-    n.feature > 0 ? [a, b + n.feature, n.fix, 0] : n.fix > 0 ? [a, b, c + n.fix, 0] : [a, b, c, d + n.other]
-  return next.some((x) => x > RELEASE_SEGMENT_MAX) ? null : next
+  const features = kinds.filter((k) => k === 'feature').length
+  const fixes = kinds.filter((k) => k === 'fix').length
+  const next: ReleaseTuple = [a, b + modules, c + features, d + fixes]
+  return next.some((n) => n > RELEASE_SEGMENT_MAX) ? null : next
 }
 
 // ── Контракт ответов ──────────────────────────────────────────────────────────
@@ -84,6 +148,10 @@ export interface ReleaseSuggestion {
   /** Коммиты первой родительской линии main от base (не включая) до head. */
   commits: number
   counts: Record<ChangeKind, number>
+  /** Модули feature-коммитов (`featureModules`): по их числу вырос B. */
+  modules: string[]
+  /** Scope feature-коммитов, которые B не растят (`NON_MODULE_SCOPES`). */
+  skippedScopes: string[]
 }
 
 export interface ReleaseResponse {
