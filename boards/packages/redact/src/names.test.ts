@@ -97,8 +97,8 @@ describe("a secret or token name with a prefix or a suffix (TB-266)", () => {
     );
   });
 
-  // Measured on board-agents 4839e42b6: ×3.3–4.6 for a text 4 times longer,
-  // at most 21 ms on 256 000 characters (the base: 7 ms).
+  // Measured on board-agents 4839e42b6: ×3.3–4.9 for a text 4 times longer,
+  // at most 21 ms on 256 000 characters (the base: 8 ms).
   it.each(
     [
       "a_secret=",

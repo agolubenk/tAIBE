@@ -18,7 +18,7 @@
 // filter. Each starts with the credential word and looks back over at most
 // 2 characters before it, so the search stops only where the word is: the
 // two take 24 and 44 ms on the 51 MB of tAIBE, one start-anchored uppercase
-// rule of index.ts 164 ms. Redact of the three corpora below takes 7-9 %
+// rule of index.ts 164 ms. Redact of the three corpora below takes 8-10 %
 // longer than on board-agents 4839e42b6.
 //
 // Such names are mostly code and UI text: on `git ls-files` of tAIBE,
