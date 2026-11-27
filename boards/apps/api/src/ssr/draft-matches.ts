@@ -130,6 +130,34 @@ export function lockOpenDrafts(
     .for("update", { of: ssrVersionTable });
 }
 
+// TB-149: a sync locks the drafts it may replace before it replaces one, in
+// the same id order. It replaces only a draft that is the highest version of
+// its entity, and its manifest is the whole corpus (an entity missing from it
+// is archived), so these are the highest open drafts of the workspace.
+// Replaced one at a time in path order, a sync and a batch that shared two
+// drafts locked them in opposite orders and one of them got 40P01. A draft
+// that a batch holds is waited for before the sync holds any other draft or
+// any live version. A draft below a live version is not locked: the sync
+// bumps that live version, and waits for it there (TB-258).
+export async function lockWorkspaceDrafts(
+  tx: Tx,
+  workspaceId: string,
+): Promise<void> {
+  await tx
+    .select({ id: ssrVersionTable.id })
+    .from(ssrVersionTable)
+    .innerJoin(ssrEntityTable, eq(ssrEntityTable.id, ssrVersionTable.entityId))
+    .where(
+      and(
+        eq(ssrEntityTable.workspaceId, workspaceId),
+        eq(ssrVersionTable.status, "draft"),
+        isHighest,
+      ),
+    )
+    .orderBy(asc(ssrVersionTable.id))
+    .for("update", { of: ssrVersionTable });
+}
+
 const twinKey = (path: string, blobSha: string) => `${path}\u0000${blobSha}`;
 
 // The twin of every eligible draft, keyed by the draft's version id.

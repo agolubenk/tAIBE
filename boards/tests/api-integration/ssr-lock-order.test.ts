@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import db from "../../apps/api/src/database";
 import {
@@ -10,6 +10,7 @@ import { approveDraft } from "../../apps/api/src/ssr/approve";
 import { lockOpenDrafts } from "../../apps/api/src/ssr/draft-matches";
 import { resetTestDatabase } from "./helpers/database";
 import { createForest } from "./helpers/forest";
+import { untilSomeoneWaitsOnALock } from "./helpers/lock-wait";
 
 // TB-89: the batch approve (approve-matching.ts) locks the draft rows first
 // and the live version after them. The single approve took the live version
@@ -17,17 +18,6 @@ import { createForest } from "./helpers/forest";
 // deadlocked (Postgres 40P01). Both paths now take draft → live → entity.
 const sha256 = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
-
-async function untilSomeoneWaitsOnALock() {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const waiting = await db.execute<{ n: number }>(
-      sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted`,
-    );
-    if ((waiting.rows[0]?.n ?? 0) > 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("the single approve never waited on a row lock");
-}
 
 describe("API integration: SSR single and batch approve share one lock order", () => {
   beforeEach(async () => {
@@ -111,7 +101,7 @@ describe("API integration: SSR single and batch approve share one lock order", (
           cause?: { code?: string };
         }) => error.cause?.code ?? error.code ?? `status ${error.status}`,
       );
-      await untilSomeoneWaitsOnALock();
+      await untilSomeoneWaitsOnALock("the single approve");
       await tx
         .update(ssrVersionTable)
         .set({ status: "superseded" })
