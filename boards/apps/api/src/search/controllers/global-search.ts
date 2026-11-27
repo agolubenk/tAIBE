@@ -13,6 +13,7 @@ import { projectAccessCondition } from "../../project-access/project-access-cond
 import { isMarkerQuery } from "../../utils/visible-match";
 import type { SearchResult } from "../search-result";
 import { getActivitySearchContent } from "./activity-content";
+import { searchableActivityText } from "./activity-search-text";
 import { exactTaskMatches } from "./exact-task-match";
 import { queryWords, wordConditions } from "../query-words";
 import { searchWindow } from "./visible-rows";
@@ -269,11 +270,8 @@ async function globalSearch(params: SearchParams): Promise<{
         relevanceScore: workspaceRelevanceScore.as("relevanceScore"),
         fits: workspacesFit.fits,
       })
+      // TB-197: no join with the members; it gave one row per member.
       .from(workspaceTable)
-      .leftJoin(
-        workspaceUserTable,
-        eq(workspaceTable.id, workspaceUserTable.workspaceId),
-      )
       .where(
         and(
           inArray(workspaceTable.id, accessibleWorkspaceIds),
@@ -303,7 +301,6 @@ async function globalSearch(params: SearchParams): Promise<{
   }
 
   if (type === "all" || type === "comments" || type === "activities") {
-    const searchableActivityText = sql<string>`COALESCE(${activityTable.content}, CAST(${activityTable.eventData} AS text), '')`;
     const activityRelevanceScore = sql<number>`
       CASE
         WHEN ${match.allIn(searchableActivityText)} THEN 2
