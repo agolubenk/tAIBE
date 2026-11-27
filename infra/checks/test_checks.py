@@ -350,6 +350,10 @@ class ChecksTest(unittest.TestCase):
         words = 'CorrectHorse' + 'BatteryStaple'
         self.assertEqual(secrets_scan.scan_line('client_secret=' + words), [])
         self.assertEqual(len(secrets_scan.scan_line('CLIENT_SECRET=' + words)), 1)
+        # A lowerCamel value with a credential hump is a variable, open under CLIENT_SECRET too.
+        for name in ('client_secret', 'CLIENT_SECRET'):
+            self.assertEqual(secrets_scan.scan_line(name + '=mySecret' + 'Key2024'), [], name)
+        self.assertEqual(secrets_scan.scan_line('onMustChangePassword = navigateToFirstLoginPassword,'), [])
         # A path is not a value (a compose secret file).
         self.assertEqual(secrets_scan.scan_line('postgres_password: /run/tb-secrets/postgres_password:ro'), [])
         # `(?i)s` also matches `\u017f`: the word check before the rules folds it to `s`.
@@ -360,6 +364,7 @@ class ChecksTest(unittest.TestCase):
         # Measured: growth 1.0-4.4, at most 0.11 s on 64 000 characters (`x_secret=` * 35).
         units = ['a_secret=a_secret=', 'aSecret=aSecret=', 'a_token:=', 'x_secret=' * 35 + ' ', 'a_secret:"',
                  "a_secret='", 'a_secret=a.', 'a-Secret:', 'a_secret=fooB_secret: ', 'secret_key=',
+                 'a_secret=aSecretKey', 'a_token=aBcdeFghToken,',
                  'a_' * 40 + 'secret=']
 
         def best(line):

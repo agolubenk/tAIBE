@@ -69,6 +69,18 @@ describe("a secret or token name with a prefix or a suffix (TB-266)", () => {
   it("known miss: capitalized words under a lowercase name are open", () => {
     const text = "client_secret=CorrectHorseBatteryStaple\n";
     expect(redact(text).text).toBe(text);
+  });
+
+  // As under CLIENT_SECRET=: the uppercase rules leave it open too.
+  it.each(["client_secret", "CLIENT_SECRET"])(
+    "known miss: a lowerCamel value with a credential hump under %s is open",
+    (name) => {
+      const text = `${name}=mySecretKey2024\n`;
+      expect(redact(text).text).toBe(text);
+    },
+  );
+
+  it("masks capitalized words under an uppercase name", () => {
     expectMaskedValue(
       "CLIENT_SECRET=CorrectHorseBatteryStaple\n",
       "CorrectHorseBatteryStaple",
@@ -91,6 +103,8 @@ describe("a secret or token name with a prefix or a suffix (TB-266)", () => {
       "a_secret=A",
       "x_secret=!",
       "a_secret=/a/",
+      "a_secret=aSecret",
+      "a_token=aBToken,",
     ].flatMap((unit) => ["", "!", '"'].map((end) => [unit, end])),
   )(
     "redacts 256 000 characters of %j and a final %j in linear time",
