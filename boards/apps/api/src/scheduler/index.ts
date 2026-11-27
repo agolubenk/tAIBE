@@ -2,6 +2,7 @@ import { archiveIdleAgents } from "../agent-identity/archive-idle-agents";
 import { retryStorageCleanup } from "../storage/cleanup-queue";
 import { cleanupDraftUploads } from "./draft-upload-cleanup";
 import { replayDeferredIssueEdits } from "../plugins/github/services/deferred-issue-edits";
+import { deleteExpiredReauthRows } from "../reauth/row-cleanup";
 import * as Sentry from "@sentry/node";
 import { Cron } from "croner";
 import {
@@ -129,6 +130,14 @@ export function initializeScheduler(): void {
       "41 * * * *",
       { protect: true },
       withCheckIn("agent-archive", () => archiveIdleAgents()),
+    ),
+  );
+  // TB-246: expired reauth rows (fresh marks, codes, counters), hourly.
+  jobs.push(
+    new Cron(
+      "53 * * * *",
+      { protect: true },
+      withCheckIn("reauth-row-cleanup", () => deleteExpiredReauthRows()),
     ),
   );
   jobs.push(
