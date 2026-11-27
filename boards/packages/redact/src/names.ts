@@ -45,7 +45,8 @@ const SECRET = anyCase("secret");
 const TOKEN = anyCase("token");
 const AFTER_WORD = "[A-Za-z0-9][_-]";
 
-const END = String.raw`(?:["'\x60\s,;}]|$)`;
+// `)` too: a value ends before it (SE-205, fn(client_secret=settings.KEY)).
+const END = String.raw`(?:["'\x60\s,;})]|$)`;
 const OPEN = String.raw`(?:"(?=[^"\s]*")|'(?=[^'\s]*')|\x60(?=[^\x60\s]*\x60)|(?!["'\x60]))`;
 const CODE = String.raw`(?!!|[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+${END}|(?:[A-Z][a-z]+)+[?!:]*${END}|(?:\.{1,2}|~)?\/(?:[a-z0-9._-]+\/)+)`;
 // The separator and the value, as in `secretAssignment` of index.ts.

@@ -72,7 +72,7 @@ ENV_ASSIGNED = re.compile(r'(?<![A-Z0-9_])([A-Z0-9_]{0,64}(?:API_KEY|TOKEN|SECRE
 # before a space (a phrase).
 NAME_WORD = r'(?:secret|token|password|passwd|pwd|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)'
 NAME_HUMP = r'(?:Secret|Token|Password|Passwd|Pwd|ApiKey|PrivateKey)'
-NAME_END = r'(?:["\'`\s,;}]|$)'
+NAME_END = r'(?:["\'`\s,;})]|$)'  # `)` too: a value ends before it (SE-205)
 NAME_OPEN = r'(?:"(?=[^"\s]*")|\'(?=[^\'\s]*\')|`(?=[^`\s]*`)|(?!["\'`]))'
 NAME_CODE = (r'(?!!|[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+' + NAME_END + r'|(?:[A-Z][a-z]+)+[?!:]*' + NAME_END
              + r'|(?:\.{1,2}|~)?/(?:[a-z0-9._-]+/)+)')
