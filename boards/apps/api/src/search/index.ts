@@ -25,7 +25,7 @@ const globalSearchRoute = createRoute({
     "Search across tasks, projects, workspaces, comments, and activities in one workspace. Results are ranked by relevance and returned as a single flat list, each entry tagged with its `type`.\n\n" +
     `A row matches when each word of \`q\` (split on white space, the first ${MAX_QUERY_WORDS}) is in one of its fields, in any order and case; \`_\` and \`%\` are literal characters. All words in the title or name rank first, then all words in the description or text, then words split between fields.\n\n` +
     "A caller with an API key reads text with secrets masked, so a match counts only in that text: a query with a word found only inside a secret returns nothing, and a query with a `[REDACTED:` marker returns an empty list. " +
-    `Such a caller gets the matches among the ${TOKEN_CALLER_SCAN_ROWS} newest candidates of each type, at most ${TOKEN_CALLER_SCAN_BYTES / 1024 / 1024} MiB of their text, so a page shorter than \`limit\` does not mean that no other matches exist; narrow the query to find older ones.`,
+    `Such a caller gets the matches among the ${TOKEN_CALLER_SCAN_ROWS} newest candidates of each type, at most ${TOKEN_CALLER_SCAN_BYTES / 1024 / 1024} MiB of their text, so a page shorter than \`limit\` does not mean that no other matches exist; narrow the query to find older ones. A candidate with more text than that alone is matched on its title or name only and comes back without its description or text: read the task to get it.`,
   middleware: [workspaceAccess.fromQuery()] as const,
   request: { query: searchQuery },
   responses: {

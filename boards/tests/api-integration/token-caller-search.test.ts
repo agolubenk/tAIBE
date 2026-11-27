@@ -211,6 +211,38 @@ describe("API integration: search for callers with a token (TB-191)", () => {
     expect(ids).not.toContain(huge.id);
   });
 
+  // TB-197 p.1: a row over the scan budget alone is still found by its
+  // title, without the text that was not read and masked.
+  it("finds a card over the byte budget by its title, without its description", async () => {
+    const { forest, longVisible, search } = await setup();
+    const [huge] = await db
+      .insert(schema.taskTable)
+      .values({
+        projectId: longVisible.projectId,
+        title: "Huge qzx card",
+        description: `deepwrd ${"w ".repeat(600 * 1024)}`,
+        status: "to-do",
+        number: 9,
+        userId: forest.ownerId,
+      })
+      .returning();
+    if (!huge) throw new Error("fixture");
+    type Found = { id: string; description?: string };
+    const found = (body: unknown) =>
+      (body as { results: Found[] }).results.find((r) => r.id === huge.id);
+
+    const byTitle = await search(forest.agentApi, "qzx");
+    expect(byTitle.status).toBe(200);
+    expect(found(byTitle.body)).toBeDefined();
+    expect(found(byTitle.body)?.description).toBeUndefined();
+
+    // A word only in the text that was not read is not found for a token.
+    const byText = await search(forest.agentApi, "deepwrd");
+    expect(found(byText.body)).toBeUndefined();
+    const owner = await search(forest.ownerApi, "deepwrd");
+    expect(found(owner.body)).toBeDefined();
+  });
+
   // TB-197 p.2: the filter reads the rendered event, not only the stored
   // JSON, where the template words are absent and quotes are escaped.
   it("finds an activity by the words it shows, for an API key and the owner", async () => {

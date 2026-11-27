@@ -126,10 +126,11 @@ async function globalSearch(params: SearchParams): Promise<{
       END
     `;
 
-    const tasksFit = budget(taskTable.createdAt, [
-      taskTable.title,
-      taskTable.description,
-    ]);
+    const tasksFit = budget(
+      taskTable.createdAt,
+      [taskTable.title],
+      [taskTable.description],
+    );
     const taskQuery = db
       .select({
         id: taskTable.id,
@@ -200,10 +201,11 @@ async function globalSearch(params: SearchParams): Promise<{
       END
     `;
 
-    const projectsFit = budget(projectTable.createdAt, [
-      projectTable.name,
-      projectTable.description,
-    ]);
+    const projectsFit = budget(
+      projectTable.createdAt,
+      [projectTable.name],
+      [projectTable.description],
+    );
     const projectQuery = db
       .select({
         id: projectTable.id,
@@ -257,10 +259,11 @@ async function globalSearch(params: SearchParams): Promise<{
       END
     `;
 
-    const workspacesFit = budget(workspaceTable.createdAt, [
-      workspaceTable.name,
-      workspaceTable.description,
-    ]);
+    const workspacesFit = budget(
+      workspaceTable.createdAt,
+      [workspaceTable.name],
+      [workspaceTable.description],
+    );
     const workspaceQuery = db
       .select({
         id: workspaceTable.id,
@@ -312,11 +315,11 @@ async function globalSearch(params: SearchParams): Promise<{
     // The event is shown only when the activity has no text of its own
     // (getActivitySearchContent), so it is read, and counted, only then.
     const shownEventData = sql`CASE WHEN COALESCE(${activityTable.content}, '') = '' THEN ${activityTable.eventData} END`;
-    const activitiesFit = budget(activityTable.createdAt, [
-      activityTable.content,
-      sql`CAST(${shownEventData} AS text)`,
-      taskTable.title,
-    ]);
+    const activitiesFit = budget(
+      activityTable.createdAt,
+      [taskTable.title],
+      [activityTable.content, sql`CAST(${shownEventData} AS text)`],
+    );
     const activityQuery = db
       .select({
         id: activityTable.id,

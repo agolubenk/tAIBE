@@ -20,7 +20,9 @@ export const TOKEN_CALLER_SCAN_ROWS = 200;
  * TB-191: the stored text of the candidates of one result type that a caller
  * with a token scans, newest first. Older candidates come back without their
  * text and are not scanned, so memory and redact time stay bounded: redact
- * reads 1 MiB of text dense with secrets in about 25 ms.
+ * reads 1 MiB of text dense with secrets in about 25 ms. TB-197: a candidate
+ * whose text alone is over this is scanned on its title or name only, and
+ * comes back without the rest of its text.
  */
 export const TOKEN_CALLER_SCAN_BYTES = 1024 * 1024;
 
@@ -71,24 +73,37 @@ export function searchWindow(
     order: (score: SQL, createdAt: AnyColumn) =>
       tokenCaller ? [desc(createdAt)] : [desc(score), desc(createdAt)],
     /**
-     * `fits`: the candidate, with all newer candidates that fit, holds no
-     * more than the scan budget in `sizes`. A candidate bigger than the
-     * budget alone does not fit and is not counted, so older ones still can.
-     * `text`: a field, null for a candidate that does not fit. For the owner
+     * What a caller with a token reads of each candidate: all of `small`
+     * (title, name) and `large` if they fit the scan budget alone, else only
+     * `small` if that does (TB-197: a big card is still found by its title),
+     * else nothing. `fits`: the candidate is scanned; what it reads, with
+     * what all newer candidates read, holds no more than the budget. A
+     * candidate that reads nothing is not counted, so older ones still can.
+     * `text`: a `large` field, null where only `small` is read. For the owner
      * both leave the query as it was.
      */
-    budget: (createdAt: AnyColumn, sizes: SQLWrapper[]) => {
-      const size = sql`(${sql.join(
-        sizes.map((field) => sql`coalesce(octet_length(${field}), 0)`),
-        sql` + `,
-      )})`;
+    budget: (
+      createdAt: AnyColumn,
+      small: SQLWrapper[],
+      large: SQLWrapper[],
+    ) => {
+      const bytes = (fields: SQLWrapper[]) =>
+        sql`(${sql.join(
+          fields.map((field) => sql`coalesce(octet_length(${field}), 0)`),
+          sql` + `,
+        )})`;
       const max = TOKEN_CALLER_SCAN_BYTES;
+      const smallSize = bytes(small);
+      const wholeSize = sql`(${smallSize} + ${bytes(large)})`;
+      const read = sql`case when ${wholeSize} <= ${max} then ${wholeSize} when ${smallSize} <= ${max} then ${smallSize} else 0 end`;
+      const inBudget = sql`sum(${read}) over (order by ${createdAt} desc rows unbounded preceding) <= ${max}`;
       const fits = tokenCaller
-        ? sql<boolean>`(${size} <= ${max} and sum(case when ${size} <= ${max} then ${size} else 0 end) over (order by ${createdAt} desc rows unbounded preceding) <= ${max})`
+        ? sql<boolean>`(${smallSize} <= ${max} and ${inBudget})`
         : sql<boolean>`true`;
+      const whole = sql<boolean>`(${wholeSize} <= ${max} and ${inBudget})`;
       const text = <T>(field: SQLWrapper) =>
         tokenCaller
-          ? sql<T | null>`case when ${fits} then ${field} end`
+          ? sql<T | null>`case when ${whole} then ${field} end`
           : sql<T | null>`${field}`;
       return { fits, text };
     },
