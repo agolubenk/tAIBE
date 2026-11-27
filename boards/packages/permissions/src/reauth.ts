@@ -52,6 +52,9 @@ export const REAUTH_CODE_MAX_TRIES = 5;
 // Failed tries of all methods per user per hour; after them only emailCode stays.
 export const REAUTH_FAILURE_LIMIT = 10;
 export const REAUTH_FAILURE_WINDOW_SECONDS = 60 * 60;
+// TB-244: code emails per user per hour, from all IPs and sessions together.
+export const REAUTH_SEND_CODE_LIMIT = 5;
+export const REAUTH_SEND_CODE_WINDOW_SECONDS = 60 * 60;
 
 export function isReauthMethod(value: unknown): value is ReauthMethod {
   return (REAUTH_METHODS as readonly unknown[]).includes(value);

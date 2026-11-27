@@ -6,6 +6,8 @@ import {
   REAUTH_FAILURE_LIMIT,
   REAUTH_FAILURE_WINDOW_SECONDS,
   REAUTH_FRESH_SECONDS,
+  REAUTH_SEND_CODE_LIMIT,
+  REAUTH_SEND_CODE_WINDOW_SECONDS,
 } from "@kaneo/permissions";
 import { and, eq, gt, sql } from "drizzle-orm";
 import db, { schema } from "../database";
@@ -19,6 +21,7 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export const freshId = (sessionId: string) => `tb-reauth:${sessionId}`;
 export const codeId = (sessionId: string) => `tb-reauth-code:${sessionId}`;
 export const failId = (userId: string) => `tb-reauth-fail:${userId}`;
+export const sendId = (userId: string) => `tb-reauth-send:${userId}`;
 
 function lock(tx: Tx, key: string) {
   return tx.execute(
@@ -167,65 +170,82 @@ export async function checkCode(
   });
 }
 
-// ---- failure counter per user -------------------------------------------
+// ---- counters per user in a window --------------------------------------
 
-type FailState = { count: number; windowStart: number };
+type WindowState = { count: number; windowStart: number };
 
-function parseFail(value: string | undefined): FailState | null {
+function parseWindow(value: string | undefined): WindowState | null {
   if (!value) return null;
   try {
     const parsed: unknown = JSON.parse(value);
     if (
       parsed &&
       typeof parsed === "object" &&
-      Number.isInteger((parsed as FailState).count) &&
-      Number.isFinite((parsed as FailState).windowStart)
+      Number.isInteger((parsed as WindowState).count) &&
+      Number.isFinite((parsed as WindowState).windowStart)
     )
-      return parsed as FailState;
+      return parsed as WindowState;
   } catch {
     /* a broken row counts as none */
   }
   return null;
 }
 
+type Counted = { counted: boolean; count: number; retryAfter: number };
+
+/**
+ * One more event of the counter `id` under its lock, in a window that starts
+ * with the first event. With `refuseAtLimit` and `limit` already reached in
+ * the window, nothing is counted (`counted: false`). `retryAfter`: seconds to
+ * the end of the window.
+ */
+async function countInWindow(
+  id: string,
+  limit: number,
+  windowSeconds: number,
+  refuseAtLimit: boolean,
+): Promise<Counted> {
+  return db.transaction(async (tx) => {
+    await lock(tx, id);
+    const now = Date.now();
+    const state = parseWindow((await liveRow(tx, id))?.value);
+    const inWindow = state && now - state.windowStart < windowSeconds * 1000;
+    const secondsLeft = (start: number) =>
+      Math.max(Math.ceil((start + windowSeconds * 1000 - now) / 1000), 1);
+    if (refuseAtLimit && inWindow && state.count >= limit) {
+      return {
+        counted: false,
+        count: state.count,
+        retryAfter: secondsLeft(state.windowStart),
+      };
+    }
+    const next: WindowState = inWindow
+      ? { count: state.count + 1, windowStart: state.windowStart }
+      : { count: 1, windowStart: now };
+    const retryAfter = secondsLeft(next.windowStart);
+    await replaceRow(tx, id, JSON.stringify(next), retryAfter);
+    return { counted: true, count: next.count, retryAfter };
+  });
+}
+
+// ---- failure counter per user -------------------------------------------
+
 export async function failureCount(userId: string): Promise<number> {
   const row = await liveRow(db, failId(userId));
-  return parseFail(row?.value)?.count ?? 0;
+  return parseWindow(row?.value)?.count ?? 0;
 }
 
 export function isLockedOut(count: number): boolean {
   return count >= REAUTH_FAILURE_LIMIT;
 }
 
-/**
- * One more failure under the lock of the counter. With `refuseAtLimit` and
- * the hour's limit already used up, nothing is counted (`counted: false`).
- */
-async function countFailure(
-  userId: string,
-  refuseAtLimit: boolean,
-): Promise<{ counted: boolean; count: number }> {
-  return db.transaction(async (tx) => {
-    const id = failId(userId);
-    await lock(tx, id);
-    const now = Date.now();
-    const row = await liveRow(tx, id);
-    const state = parseFail(row?.value);
-    const inWindow =
-      state && now - state.windowStart < REAUTH_FAILURE_WINDOW_SECONDS * 1000;
-    if (refuseAtLimit && inWindow && isLockedOut(state.count)) {
-      return { counted: false, count: state.count };
-    }
-    const next: FailState = inWindow
-      ? { count: state.count + 1, windowStart: state.windowStart }
-      : { count: 1, windowStart: now };
-    const ttl = Math.ceil(
-      (next.windowStart + REAUTH_FAILURE_WINDOW_SECONDS * 1000 - now) / 1000,
-    );
-    await replaceRow(tx, id, JSON.stringify(next), Math.max(ttl, 1));
-    return { counted: true, count: next.count };
-  });
-}
+const countFailure = (userId: string, refuseAtLimit: boolean) =>
+  countInWindow(
+    failId(userId),
+    REAUTH_FAILURE_LIMIT,
+    REAUTH_FAILURE_WINDOW_SECONDS,
+    refuseAtLimit,
+  );
 
 /** One more failed confirmation; returns the count in the current hour. */
 export async function recordFailure(userId: string): Promise<number> {
@@ -244,4 +264,39 @@ export async function reserveTry(userId: string): Promise<boolean> {
 
 export async function resetFailures(userId: string) {
   await db.delete(table).where(eq(table.identifier, failId(userId)));
+}
+
+// ---- code emails per user -----------------------------------------------
+
+/**
+ * TB-244: takes one code email of the user's hour before the code is made
+ * and sent, under the lock of the counter, so parallel requests from many
+ * IPs and sessions cannot pass REAUTH_SEND_CODE_LIMIT. Null — go on; else
+ * the seconds to the end of the hour.
+ */
+export async function reserveSend(userId: string): Promise<number | null> {
+  const result = await countInWindow(
+    sendId(userId),
+    REAUTH_SEND_CODE_LIMIT,
+    REAUTH_SEND_CODE_WINDOW_SECONDS,
+    true,
+  );
+  return result.counted ? null : result.retryAfter;
+}
+
+/** The email was not sent: its place in the hour is given back. */
+export async function releaseSend(userId: string) {
+  await db.transaction(async (tx) => {
+    const id = sendId(userId);
+    await lock(tx, id);
+    const state = parseWindow((await liveRow(tx, id))?.value);
+    if (!state || state.count <= 0) return;
+    await tx
+      .update(table)
+      .set({
+        value: JSON.stringify({ ...state, count: state.count - 1 }),
+        updatedAt: new Date(),
+      })
+      .where(eq(table.identifier, id));
+  });
 }

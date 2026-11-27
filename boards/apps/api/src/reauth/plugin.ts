@@ -16,6 +16,7 @@ import {
 import { eq } from "drizzle-orm";
 import * as z from "zod";
 import db, { schema } from "../database";
+import { errorCodeForStatus } from "../errors/error-code";
 import { getEmailRequestContext } from "../utils/email-request-context";
 import { availableMethods, passwordHash } from "./methods";
 import {
@@ -24,6 +25,8 @@ import {
   issueCode,
   markSessionFresh,
   recordFailure,
+  releaseSend,
+  reserveSend,
   reserveTry,
   resetFailures,
 } from "./store";
@@ -89,6 +92,21 @@ async function failed(userId: string, code: ReauthError) {
   return refused(userId, code);
 }
 
+/**
+ * TB-244: the user's code emails of the hour are used up, from all IPs and
+ * sessions. The same 429 as the limit per IP: the web shows the wait.
+ */
+function tooManyCodes(retryAfter: number) {
+  return new APIError(
+    "TOO_MANY_REQUESTS",
+    {
+      code: errorCodeForStatus(429),
+      message: "Too many codes were sent. Try again later.",
+    },
+    { "Retry-After": String(retryAfter) },
+  );
+}
+
 async function confirmed(sessionId: string, userId: string) {
   await markSessionFresh(sessionId, userId);
   await resetFailures(userId);
@@ -149,6 +167,8 @@ export const reauthPlugin = () =>
         async (ctx) => {
           const { session, user } = ownSession(ctx);
           await requireMethod(user.id, "emailCode");
+          const wait = await reserveSend(user.id);
+          if (wait !== null) throw tooManyCodes(wait);
           const code = await issueCode(session.id);
           const locale = await userLocale(user.id);
           let sent = false;
@@ -173,6 +193,7 @@ export const reauthPlugin = () =>
           }
           if (!sent) {
             await dropCode(session.id, code);
+            await releaseSend(user.id);
             throw reauthError("BAD_GATEWAY", REAUTH_ERRORS.emailDeliveryFailed);
           }
           return ctx.json({ status: true as const });
