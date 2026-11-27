@@ -12,6 +12,7 @@ import { getGithubSettings, readSetting, writeSetting } from '../settings/store'
 import { deployStartedAt } from './binding'
 import {
   bumpReleaseVersion,
+  featureModules,
   formatReleaseVersion,
   parseReleaseVersion,
   versionChangingCount,
@@ -41,6 +42,24 @@ export function classifyCommit(message: string): ChangeKind {
   if (/^feat[(:!]/.test(subject)) return 'feature'
   if (/^fix[(:!]/.test(subject)) return 'fix'
   return 'other'
+}
+
+const FEAT_SCOPE_RE = /^feat\(([^)]*)\)!?:/
+
+/**
+ * Модули коммита для B — scope conventional-заголовка feature: `feat(ats): …` → ats, `feat(ats, wiki): …` → ats и wiki.
+ * Без scope (`feat: …`) и merge-коммиты PR модуля не дают: такой feature растит только C.
+ */
+export function commitModules(message: string): string[] {
+  const subject = message.split('\n', 1)[0] ?? ''
+  const scope = FEAT_SCOPE_RE.exec(subject)?.[1] ?? ''
+  return [...new Set(scope.split(',').map((m) => m.trim().toLowerCase()).filter(Boolean))]
+}
+
+/** Коммит первой родительской линии: класс и модули feature. */
+export interface WalkedCommit {
+  kind: ChangeKind
+  modules: string[]
 }
 
 const pageSchema = z.array(
@@ -99,11 +118,11 @@ async function fetchPage(input: WalkInput, page: number): Promise<z.infer<typeof
   }
 }
 
-/** Классы коммитов первой родительской линии от head (включая) до base (не включая). */
-export async function walkFirstParents(input: WalkInput): Promise<ChangeKind[] | WalkFailure> {
+/** Классы и модули коммитов первой родительской линии от head (включая) до base (не включая). */
+export async function walkFirstParents(input: WalkInput): Promise<WalkedCommit[] | WalkFailure> {
   const commits = new Map<string, Commit>()
   const baseKey = input.base.slice(0, 12)
-  const kinds: ChangeKind[] = []
+  const kinds: WalkedCommit[] = []
   let cursor: string | null = null
   let started = false
   for (let page = 1; page <= MAX_PAGES; page += 1) {
@@ -118,7 +137,7 @@ export async function walkFirstParents(input: WalkInput): Promise<ChangeKind[] |
       if (cursor.startsWith(baseKey)) return kinds
       const commit = commits.get(cursor)
       if (!commit) break
-      kinds.push(classifyCommit(commit.subject))
+      kinds.push({ kind: classifyCommit(commit.subject), modules: commitModules(commit.subject) })
       cursor = commit.parent
     }
     // Дошли до корня без base или страницы кончились (окно since) — base в этой истории нет.
@@ -127,24 +146,29 @@ export async function walkFirstParents(input: WalkInput): Promise<ChangeKind[] |
   return fail(`Коммит текущей версии ${input.base.slice(0, 7)} не найден в истории main (до ${MAX_PAGES * PER_PAGE} коммитов) — введите версию вручную`)
 }
 
-function suggestionFrom(currentVersion: string, base: string, head: string, kinds: ChangeKind[]): SuggestOutcome {
+function suggestionFrom(currentVersion: string, base: string, head: string, walked: WalkedCommit[]): SuggestOutcome {
   const tuple = parseReleaseVersion(currentVersion)
+  const kinds = walked.map((c) => c.kind)
   if (!tuple) return fail('Текущая версия не в формате v.A.B.C.D')
   if (kinds.length === 0) return fail('Новых коммитов после текущей версии нет')
   if (versionChangingCount(kinds) === 0) return fail(`Коммитов, меняющих версию, нет: после текущей версии только «прочее» (${kinds.length})`)
-  const next = bumpReleaseVersion(tuple, kinds)
+  const modules = featureModules(walked)
+  const next = bumpReleaseVersion(tuple, kinds, modules.length)
   if (!next) return fail('Сегмент версии превысил бы 9999 — введите версию вручную')
   const counts: Record<ChangeKind, number> = { feature: 0, fix: 0, other: 0 }
   for (const k of kinds) counts[k] += 1
-  return { ok: true, suggestion: { version: formatReleaseVersion(next), base, head, commits: kinds.length, counts } }
+  return { ok: true, suggestion: { version: formatReleaseVersion(next), base, head, commits: kinds.length, counts, modules } }
 }
 
-/** Последний законченный обход: классы коммитов base...head для текущей версии. */
+/**
+ * Последний законченный обход: классы и модули коммитов base...head для текущей версии. Кэш прежнего формата
+ * (`kinds` без модулей) схему не проходит — `readSetting` отдаёт пустой кэш, и обход идёт заново один раз.
+ */
 const walkSchema = z.object({
   base: z.string(),
   version: z.string(),
   head: z.string(),
-  kinds: z.array(z.enum(['feature', 'fix', 'other'])),
+  commits: z.array(z.object({ kind: z.enum(['feature', 'fix', 'other']), modules: z.array(z.string()) })),
 })
 type WalkCache = z.infer<typeof walkSchema>
 
@@ -162,6 +186,7 @@ const cacheSchema = z.object({
           head: z.string(),
           commits: z.number(),
           counts: z.object({ feature: z.number(), fix: z.number(), other: z.number() }),
+          modules: z.array(z.string()),
         }),
       }),
       z.object({ ok: z.literal(false), error: z.string(), transient: z.boolean() }),
@@ -187,12 +212,12 @@ interface RepoAccess {
  * Классы коммитов base...head. Есть обход той же base и версии — читаем только коммиты от нового head до его head
  * (окно — от деплоя того head) и добавляем к сохранённым. Его head не на линии нового (откат, force-push) — полный обход.
  */
-async function walkKinds(access: RepoAccess, input: SuggestInput, prior: WalkCache | null): Promise<ChangeKind[] | WalkFailure> {
-  if (prior?.head === input.head) return prior.kinds
+async function walkKinds(access: RepoAccess, input: SuggestInput, prior: WalkCache | null): Promise<WalkedCommit[] | WalkFailure> {
+  if (prior?.head === input.head) return prior.commits
   const priorAt = prior ? await deployStartedAt(prior.head) : null
   if (prior && priorAt !== null) {
     const fresh = await walkFirstParents({ ...access, base: prior.head, head: input.head, since: priorAt - DAY_MS })
-    if (Array.isArray(fresh)) return [...fresh, ...prior.kinds]
+    if (Array.isArray(fresh)) return [...fresh, ...prior.commits]
     if (fresh.transient) return fresh
   }
   return walkFirstParents({ ...access, base: input.base, head: input.head, since: input.baseAt - DAY_MS })
@@ -220,7 +245,7 @@ export async function suggestRelease(input: SuggestInput, now = Date.now()): Pro
   const kinds = await walkKinds({ repo: gh.repo, auth }, input, prior)
   const walked = Array.isArray(kinds)
   const outcome = walked ? suggestionFrom(input.currentVersion, input.base, input.head, kinds) : kinds
-  const walk: WalkCache | null = walked ? { base: input.base, version: input.currentVersion, head: input.head, kinds } : prior
+  const walk: WalkCache | null = walked ? { base: input.base, version: input.currentVersion, head: input.head, commits: kinds } : prior
   await writeSetting(SUGGESTION_KEY, { key, at: now, outcome, walk })
   return outcome
 }

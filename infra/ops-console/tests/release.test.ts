@@ -3,7 +3,7 @@
  * свой merge); привязка к SHA деплоя (успех, новее ручной, упавший, идущий, перезапуск, not_started не в счёт, деплоев
  * нет); PUT — только владелец, 409 на чужую ревизию, новый деплой и новый ручной запуск, 400 на понижение без
  * подтверждения; хранилище (длинный автор, копия битой строки); один опрос GitHub; подвал; предложение отдельно и
- * пошаговым обходом; публичный ответ без sha, автора и заметки, кэш 60 с.
+ * пошаговым обходом, B по модулям feature, кэш прежнего формата; публичный ответ без sha, автора и заметки, кэш 60 с.
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { api, freshApp, login } from './helpers'
@@ -17,10 +17,11 @@ import { MANUAL_RUN_TITLE, NOT_STARTED } from '../server/deploys/github'
 import { syncGithubDeploysOnce } from '../server/deploys/sync-once'
 import { computeBinding, type DeployRow } from '../server/release/binding'
 import { nextReleaseState, readRelease, RELEASE_BACKUP_KEY, RELEASE_KEY, writeRelease } from '../server/release/store'
-import { classifyCommit } from '../server/release/suggest'
+import { classifyCommit, commitModules, SUGGESTION_KEY } from '../server/release/suggest'
 import {
   bumpReleaseVersion,
   compareReleaseVersions,
+  featureModules,
   formatReleaseVersion,
   parseReleaseVersion,
   RELEASE_VERSION_RE,
@@ -66,6 +67,16 @@ describe('формат, сравнение и шаг версии', () => {
       [...Array<'feature'>(feature).fill('feature'), ...Array<'fix'>(fix).fill('fix'), ...Array<'other'>(other).fill('other')]
     expect(bumpReleaseVersion(t('v.0.1.17.48'), kinds(0, 16, 2))).toEqual(t('v.0.1.17.64'))
     expect(bumpReleaseVersion(t('v.0.1.0.0'), kinds(17, 48, 13))).toEqual(t('v.0.1.17.48'))
+  })
+
+  it('B += число модулей feature (d-version-b-rule-2711): 3 feat(ats) + 1 feat(wiki) → B + 2, C + 4', () => {
+    const feat = (m: string) => ({ kind: 'feature' as const, modules: [m] })
+    const changes = [feat('ats'), feat('ats'), feat('ats'), feat('wiki'), { kind: 'fix' as const, modules: ['billing'] }]
+    expect(featureModules(changes)).toEqual(['ats', 'wiki'])
+    expect(bumpReleaseVersion(t('v.0.1.30.92'), changes.map((c) => c.kind), featureModules(changes).length)).toEqual(t('v.0.3.34.93'))
+    // fix со scope и feature без scope B не растят
+    expect(featureModules([{ kind: 'fix', modules: ['ats'] }, { kind: 'feature', modules: [] }])).toEqual([])
+    expect(bumpReleaseVersion(t('v.0.9999.1.1'), ['feature'], 1)).toBeNull()
   })
 
   it('сегмент больше 9999 — предложения нет', () => {
@@ -395,6 +406,18 @@ describe('опрос GitHub при чтении', () => {
   })
 })
 
+describe('модуль коммита для B', () => {
+  it('scope заголовка feature; без scope, fix и merge PR — модуля нет', () => {
+    expect(commitModules('feat(ats): APP-1 — фильтр (#900)')).toEqual(['ats'])
+    expect(commitModules('feat(ATS, wiki)!: общий поиск')).toEqual(['ats', 'wiki'])
+    expect(commitModules('feat(ats,ats): повтор')).toEqual(['ats'])
+    expect(commitModules('feat: без модуля')).toEqual([])
+    expect(commitModules('fix(ats): опечатка')).toEqual([])
+    expect(commitModules('Merge pull request #12 from agolubenk/feature/x\n\nfeat(ats): тело')).toEqual([])
+    expect(commitModules('docs(ats): журнал')).toEqual([])
+  })
+})
+
 describe('предложение версии', () => {
   async function withCurrent() {
     runs = [ghRun(1)]
@@ -411,7 +434,7 @@ describe('предложение версии', () => {
   }
   const suggest = async (o: Api) => (await o.get('/release/suggestion')).json
 
-  it('по первой родительской линии от деплоя до текущей версии: feature → C+1, fix → D+1; кэш', async () => {
+  it('по первой родительской линии от деплоя до текущей версии: feature → C+1, fix → D+1, merge PR без модуля; кэш', async () => {
     const owner = await withCurrent()
     commitPages = [
       [
@@ -422,7 +445,14 @@ describe('предложение версии', () => {
       ],
     ]
     expect(await suggest(owner)).toEqual({
-      suggestion: { version: 'v.0.1.3.4', base: SHA1, head: sha40(2).slice(0, 12), commits: 2, counts: { feature: 1, fix: 1, other: 0 } },
+      suggestion: {
+        version: 'v.0.1.3.4',
+        base: SHA1,
+        head: sha40(2).slice(0, 12),
+        commits: 2,
+        counts: { feature: 1, fix: 1, other: 0 },
+        modules: [],
+      },
       suggestionError: null,
     })
     expect(commitCalls[0]).toContain(`sha=${sha40(2).slice(0, 12)}`)
@@ -445,6 +475,40 @@ describe('предложение версии', () => {
     commitPages = [[commit(sha40(4), 'fix: d', sha40(21)), commit(sha40(21), 'chore: e', sha40(1)), commit(sha40(1), 'x', null)]]
     expect((await suggest(owner)).suggestion).toMatchObject({ version: 'v.0.1.2.4', commits: 2, counts: { feature: 0, fix: 1, other: 1 } })
     expect(commitCalls).toHaveLength(4)
+  })
+
+  it('B по модулям feature: 3 feat(ats) + 1 feat(wiki) + fix(ats) → B + 2, C + 4, D + 1', async () => {
+    const owner = await withCurrent()
+    commitPages = [
+      [
+        commit(sha40(2), 'feat(ats): a (#5)', sha40(21)),
+        commit(sha40(21), 'feat(ats): b (#4)', sha40(22)),
+        commit(sha40(22), 'feat(wiki): c (#3)', sha40(23)),
+        commit(sha40(23), 'fix(ats): d (#2)', sha40(24)),
+        commit(sha40(24), 'feat(ats)!: e (#1)', sha40(1)),
+        commit(sha40(1), 'x', null),
+      ],
+    ]
+    expect((await suggest(owner)).suggestion).toMatchObject({
+      version: 'v.0.3.6.4',
+      commits: 5,
+      counts: { feature: 4, fix: 1, other: 0 },
+      modules: ['ats', 'wiki'],
+    })
+  })
+
+  it('кэш прежнего формата (классы без модулей) не читается — обход заново, B по модулям', async () => {
+    const owner = await withCurrent()
+    const head = sha40(2).slice(0, 12)
+    await writeSetting(SUGGESTION_KEY, {
+      key: `v.0.1.2.3:${SHA1}...${head}`,
+      at: Date.now(),
+      walk: { base: SHA1, version: 'v.0.1.2.3', head, kinds: ['feature'] },
+      outcome: { ok: true, suggestion: { version: 'v.0.1.3.3', base: SHA1, head, commits: 1, counts: { feature: 1, fix: 0, other: 0 } } },
+    })
+    commitPages = [[commit(sha40(2), 'feat(wiki): a', sha40(1)), commit(sha40(1), 'x', null)]]
+    expect((await suggest(owner)).suggestion).toMatchObject({ version: 'v.0.2.3.3', modules: ['wiki'] })
+    expect(commitCalls).toHaveLength(1)
   })
 
   it('после текущей версии только «прочее» — предложения нет с причиной, ручной ввод работает', async () => {

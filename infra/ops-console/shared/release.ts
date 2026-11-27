@@ -32,20 +32,29 @@ export function compareReleaseVersions(a: ReleaseTuple, b: ReleaseTuple): number
   return 0
 }
 
+/** Модули, которых коснулись feature-коммиты: scope без повторов, по алфавиту. По их числу растёт B. */
+export function featureModules(commits: readonly { kind: ChangeKind; modules: readonly string[] }[]): string[] {
+  const set = new Set<string>()
+  for (const c of commits) if (c.kind === 'feature') for (const m of c.modules) set.add(m)
+  return [...set].sort()
+}
+
 /** Сколько коммитов меняют версию: «прочее» не считается. */
 export const versionChangingCount = (kinds: readonly ChangeKind[]): number => kinds.filter((k) => k !== 'other').length
 
 /**
- * Правило владельца (IS-263): счётчики только растут — C += число feature, D += число fix; «прочее» версию не
- * меняет. A и B не меняются никогда: их меняет владелец вручную, и сбросов C/D тоже нет. Пример: v.0.1.17.48 и
- * 16 fix + 2 прочих → v.0.1.17.64. Нет feature и fix или сегмент вышел бы за 9999 — предложения нет (null).
+ * Правило владельца для версии Lavaeon (IS-263, B — d-version-b-rule-2711 = a, 27.11): счётчики только растут.
+ * B += число разных модулей (scope заголовка `feat(ats): …`), которых коснулись feature-коммиты; C += число feature;
+ * D += число fix; «прочее» версию не меняет. A меняет только владелец, сбросов нет. Пример: 3 feat(ats) + 1 feat(wiki)
+ * → B + 2, C + 4; v.0.1.17.48 и 16 fix + 2 прочих → v.0.1.17.64. Нет feature и fix или сегмент вышел бы за 9999 —
+ * предложения нет (null). `modules` — число модулей feature (`featureModules`), без него B не меняется.
  */
-export function bumpReleaseVersion(t: ReleaseTuple, kinds: readonly ChangeKind[]): ReleaseTuple | null {
+export function bumpReleaseVersion(t: ReleaseTuple, kinds: readonly ChangeKind[], modules = 0): ReleaseTuple | null {
   if (versionChangingCount(kinds) === 0) return null
   const [a, b, c, d] = t
   const features = kinds.filter((k) => k === 'feature').length
   const fixes = kinds.filter((k) => k === 'fix').length
-  const next: ReleaseTuple = [a, b, c + features, d + fixes]
+  const next: ReleaseTuple = [a, b + modules, c + features, d + fixes]
   return next.some((n) => n > RELEASE_SEGMENT_MAX) ? null : next
 }
 
@@ -85,6 +94,8 @@ export interface ReleaseSuggestion {
   /** Коммиты первой родительской линии main от base (не включая) до head. */
   commits: number
   counts: Record<ChangeKind, number>
+  /** Модули feature-коммитов (`featureModules`): по их числу вырос B. */
+  modules: string[]
 }
 
 export interface ReleaseResponse {
