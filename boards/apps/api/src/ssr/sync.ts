@@ -8,6 +8,7 @@ import {
   ssrVersionTable,
 } from "../database/ssr-schema";
 import { entityOfPath, isCorpusPath } from "./corpus";
+import { lockWorkspaceDrafts } from "./draft-matches";
 import { knownShas } from "./known-shas";
 import { replaceOpenDraft } from "./replace-open-draft";
 import { scanSecrets } from "./secret-scan";
@@ -213,6 +214,9 @@ export async function syncCorpus(
     const byPath = new Map(
       existingEntities.map((entity) => [entity.path, entity]),
     );
+
+    // TB-149: drafts first, in id order, as the batch and single approve.
+    await lockWorkspaceDrafts(tx, workspaceId);
 
     for (const [path, group] of groups) {
       const snapshot = group.files
