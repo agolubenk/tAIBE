@@ -3,6 +3,7 @@ import {
   isMarkerQuery,
   matchesVisibleText,
   visibleScore,
+  visibleWords,
 } from "./visible-match";
 
 // Fake secrets assembled at runtime, so this file holds no key-shaped literal.
@@ -60,9 +61,39 @@ describe("visibleScore (TB-191)", () => {
       [`Key ${KEY}`, 3],
       [`rotate ${PREFIX} soon`, 2],
     ] as const;
-    expect(visibleScore(PREFIX, fields)).toBe(2);
-    expect(visibleScore("key", fields)).toBe(3);
-    expect(visibleScore("absent", fields)).toBeNull();
+    expect(visibleScore([PREFIX], fields)).toBe(2);
+    expect(visibleScore(["key"], fields)).toBe(3);
+    expect(visibleScore(["absent"], fields)).toBeNull();
+  });
+});
+
+describe("visibleWords and visibleScore with several words (TB-162)", () => {
+  it("checks each word outside the redact hits, in any case", () => {
+    expect(
+      visibleWords(`Deploy token ${KEY} today`, ["TODAY", "deploy", PREFIX]),
+    ).toEqual([true, true, false]);
+    expect(visibleWords(null, ["x", "y"])).toEqual([false, false]);
+    expect(visibleWords("plain", ["x", "y"])).toEqual([false, false]);
+  });
+
+  it("gives the first field with every word, else 1 when the words are split", () => {
+    const fields = [
+      ["rotate the key", 3],
+      ["before the release", 2],
+    ] as const;
+    expect(visibleScore(["key", "rotate"], fields)).toBe(3);
+    expect(visibleScore(["release", "before"], fields)).toBe(2);
+    expect(visibleScore(["rotate", "release"], fields)).toBe(1);
+    expect(visibleScore(["rotate", "release"], fields, 0)).toBe(0);
+    expect(visibleScore(["rotate", "absent"], fields)).toBeNull();
+  });
+
+  it("does not take a word that is only inside a secret", () => {
+    const fields = [
+      [`Key ${KEY}`, 3],
+      ["rotate soon", 2],
+    ] as const;
+    expect(visibleScore(["rotate", PREFIX], fields)).toBeNull();
   });
 });
 

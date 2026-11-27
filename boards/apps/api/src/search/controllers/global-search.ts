@@ -1,4 +1,4 @@
-import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import db from "../../database";
 import {
   activityTable,
@@ -14,6 +14,7 @@ import { isMarkerQuery } from "../../utils/visible-match";
 import type { SearchResult } from "../search-result";
 import { getActivitySearchContent } from "./activity-content";
 import { exactTaskMatches } from "./exact-task-match";
+import { queryWords, wordConditions } from "../query-words";
 import { searchWindow } from "./visible-rows";
 
 type SearchParams = {
@@ -53,9 +54,12 @@ async function globalSearch(params: SearchParams): Promise<{
   if (tokenCaller && isMarkerQuery(query)) {
     return { results: [], totalCount: 0, searchQuery: query };
   }
+  // TB-162: each word of the query in any field, in any order.
+  const words = queryWords(query);
+  const match = wordConditions(words);
   // TB-191: a caller with a token gets the newest candidates, scored again
   // on the text it reads; the owner keeps the SQL ranking.
-  const { rows, order, budget, pick } = searchWindow(tokenCaller, query, limit);
+  const { rows, order, budget, pick } = searchWindow(tokenCaller, words, limit);
 
   let resolvedUserId = userId;
   if (!resolvedUserId && userEmail) {
@@ -91,7 +95,6 @@ async function globalSearch(params: SearchParams): Promise<{
   }
 
   const results: SearchResult[] = [];
-  const searchPattern = `%${query.toLowerCase()}%`;
 
   const workspaceFilter = and(
     workspaceId
@@ -116,8 +119,8 @@ async function globalSearch(params: SearchParams): Promise<{
     // Also run text search for tasks
     const taskRelevanceScore = sql<number>`
       CASE
-        WHEN LOWER(${taskTable.title}) LIKE ${searchPattern} THEN 3
-        WHEN LOWER(${taskTable.description}) LIKE ${searchPattern} THEN 2
+        WHEN ${match.allIn(taskTable.title)} THEN 3
+        WHEN ${match.allIn(taskTable.description)} THEN 2
         ELSE 1
       END
     `;
@@ -153,10 +156,7 @@ async function globalSearch(params: SearchParams): Promise<{
         and(
           workspaceFilter,
           projectId ? eq(taskTable.projectId, projectId) : undefined,
-          or(
-            ilike(taskTable.title, searchPattern),
-            ilike(taskTable.description, searchPattern),
-          ),
+          match.inAnyField([taskTable.title, taskTable.description]),
         ),
       )
       .orderBy(...order(taskRelevanceScore, taskTable.createdAt))
@@ -193,8 +193,8 @@ async function globalSearch(params: SearchParams): Promise<{
   if (type === "all" || type === "projects") {
     const projectRelevanceScore = sql<number>`
       CASE
-        WHEN LOWER(${projectTable.name}) LIKE ${searchPattern} THEN 3
-        WHEN LOWER(${projectTable.description}) LIKE ${searchPattern} THEN 2
+        WHEN ${match.allIn(projectTable.name)} THEN 3
+        WHEN ${match.allIn(projectTable.description)} THEN 2
         ELSE 1
       END
     `;
@@ -220,10 +220,7 @@ async function globalSearch(params: SearchParams): Promise<{
       .where(
         and(
           workspaceFilter,
-          or(
-            ilike(projectTable.name, searchPattern),
-            ilike(projectTable.description, searchPattern),
-          ),
+          match.inAnyField([projectTable.name, projectTable.description]),
         ),
       )
       .orderBy(...order(projectRelevanceScore, projectTable.createdAt))
@@ -253,8 +250,8 @@ async function globalSearch(params: SearchParams): Promise<{
   if (type === "all" || type === "workspaces") {
     const workspaceRelevanceScore = sql<number>`
       CASE
-        WHEN LOWER(${workspaceTable.name}) LIKE ${searchPattern} THEN 3
-        WHEN LOWER(${workspaceTable.description}) LIKE ${searchPattern} THEN 2
+        WHEN ${match.allIn(workspaceTable.name)} THEN 3
+        WHEN ${match.allIn(workspaceTable.description)} THEN 2
         ELSE 1
       END
     `;
@@ -280,10 +277,7 @@ async function globalSearch(params: SearchParams): Promise<{
       .where(
         and(
           inArray(workspaceTable.id, accessibleWorkspaceIds),
-          or(
-            ilike(workspaceTable.name, searchPattern),
-            ilike(workspaceTable.description, searchPattern),
-          ),
+          match.inAnyField([workspaceTable.name, workspaceTable.description]),
         ),
       )
       .orderBy(...order(workspaceRelevanceScore, workspaceTable.createdAt))
@@ -312,8 +306,8 @@ async function globalSearch(params: SearchParams): Promise<{
     const searchableActivityText = sql<string>`COALESCE(${activityTable.content}, CAST(${activityTable.eventData} AS text), '')`;
     const activityRelevanceScore = sql<number>`
       CASE
-        WHEN LOWER(${searchableActivityText}) LIKE ${searchPattern} THEN 2
-        WHEN LOWER(${taskTable.title}) LIKE ${searchPattern} THEN 1
+        WHEN ${match.allIn(searchableActivityText)} THEN 2
+        WHEN ${match.allIn(taskTable.title)} THEN 1
         ELSE 1
       END
     `;
@@ -355,10 +349,7 @@ async function globalSearch(params: SearchParams): Promise<{
         and(
           workspaceFilter,
           projectId ? eq(taskTable.projectId, projectId) : undefined,
-          or(
-            ilike(searchableActivityText, searchPattern),
-            ilike(taskTable.title, searchPattern),
-          ),
+          match.inAnyField([searchableActivityText, taskTable.title]),
           type === "comments" ? eq(activityTable.type, "comment") : undefined,
         ),
       )
